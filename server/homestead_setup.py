@@ -125,20 +125,20 @@ def https_check(url, fetch=None):
     url = str(url or "").strip().rstrip("/")
     parts = urllib.parse.urlsplit(url)
     if parts.scheme != "https" or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
-        raise ValueError("give the address as https://name, as your phone would open it")
+        raise ValueError("Enter an HTTPS address without credentials, a query or a fragment, for example https://homestead.example.com")
     if not re.fullmatch(r"[A-Za-z0-9.-]{1,253}", parts.hostname):
-        raise ValueError("that is not a host name")
+        raise ValueError("Enter a valid hostname")
     fetch = fetch or (lambda target: urllib.request.urlopen(urllib.request.Request(target, headers={"Accept": "application/json"}), timeout=8))
     try:
         with fetch(f"{parts.scheme}://{parts.netloc}{parts.path}/healthz") as answer:
             raw = answer.read(4096).decode("utf-8", "replace")
     except Exception as error:
-        raise ValueError(f"{url} did not answer: {str(error)[:160]}") from None
+        raise ValueError(f"Could not reach {url}: {str(error)[:160]}") from None
     try:
         body = json.loads(raw or "{}")
     except ValueError:
         body = None      # a login page, a parked domain, someone else's site
     if not isinstance(body, dict) or not body.get("ok"):
-        raise ValueError(f"{url} answered, but not as Homestead")
+        raise ValueError(f"{url} did not return a Homestead health response. If Cloudflare Access protects this address, open it in your browser, sign in and reopen the setup guide there.")
     note("https_url", url)
     return {"ok": True, "url": url, "at": int(time.time())}

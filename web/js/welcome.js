@@ -11,12 +11,12 @@
    The book button stays available on real clusters after completion too. */
 
 const SETUP_CHAPTERS = [
-  ["Is it healthy?", ["health", "quorum", "probe", "clocks"]],
-  ["Reach it", ["address", "https", "hostname"]],
-  ["Keep data safe", ["disks", "storage", "backups", "config", "osupdates"]],
-  ["Make it yours", ["appearance", "phone", "notifications", "people"]],
-  ["Connect", ["unifi", "unraid", "homeassistant", "linked"]],
-  ["First apps", ["starter", "console"]],
+  ["Cluster health", ["health", "quorum", "probe", "clocks"]],
+  ["Access", ["address", "https", "hostname"]],
+  ["Storage and backups", ["disks", "storage", "backups", "config", "osupdates"]],
+  ["Preferences and users", ["appearance", "phone", "notifications", "people"]],
+  ["Connections", ["unifi", "unraid", "homeassistant", "linked"]],
+  ["Applications and console", ["starter", "console"]],
 ];
 const SETUP_PERSONAL = ["appearance", "phone", "notifications"];
 const setupDemoVisit = window.HOMESTEAD_DEMO === true || new URLSearchParams(location.search).get("demo") === "1";
@@ -87,9 +87,9 @@ function setupIntroHtml(ids, status) {
     <div class="settings-card-head"><div><div class="ctitle">Welcome to Homestead</div><div class="csub">A guide to your cluster and your own preferences</div></div></div>
     ${UI.lead("Work through the basics, or pick a step from the list. Optional steps can be skipped and revisited later.")}
     ${UI.steps([
-      { title: "See what is checked", detailHtml: "Each step explains the evidence Homestead uses. Configured services may still need testing." },
-      { title: "Make your changes", detailHtml: "When a step opens another page, use Return to setup to come back. Next only moves through the guide; it does not mark a step complete." },
-      { title: "Come back any time", detailHtml: "The book icon in the top bar always opens this guide, even after completion. It is also in Settings › Homestead. The dashboard toggle only hides or shows your progress shortcut." },
+      { title: "Review the checks", detailHtml: "Automatic checks use cluster reports. Each step explains what is checked; some choices need your confirmation." },
+      { title: "Configure your cluster", detailHtml: "Use Return to setup after visiting a configuration page. Next moves to the following step without marking the current one complete." },
+      { title: "Return when needed", detailHtml: "Open this guide from the book icon in the top bar or Settings › Homestead. The dashboard option controls the progress shortcut, so you can keep using the guide after completion." },
     ])}
     ${UI.actions(UI.button(next ? `Begin: ${SETUP_STEPS[next].title}` : "Back to the Dashboard", next ? `setupOpen(${jsArg(next)})` : "go('dash')", { kind: "pri" }))}
   </section>`;
@@ -122,10 +122,11 @@ function setupStatusLabel(id, status, facts = {}) {
     if (id === "appearance") return "Confirmed by you";
     if (id === "https" && !facts.here) return "Previously checked";
     if (id === "config") return "Export recorded";
-    return "Checked by Homestead";
+    if (["backups", "osupdates", "unifi", "unraid", "homeassistant", "linked", "starter", "console"].includes(id)) return "Configuration found";
+    return "Check passed";
   }
   if (status === "skipped") return "Skipped by choice";
-  if (status === "attention") return "Needs a look";
+  if (status === "attention") return "Needs attention";
   return id === "appearance" ? "Your confirmation" : "Not yet complete";
 }
 
@@ -137,39 +138,39 @@ function setupVisible(state) {
 /* ---------------- the steps ---------------- */
 const SETUP_STEPS = {
   health: {
-    title: "Cluster check", lead: s => s.done ? "Every node, workload and attached volume is healthy." :
-      "Something needs a look before the rest: a node, a workload or a volume that is not healthy.",
-    body: s => s.done ? "" : `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>What</th><th>How bad</th><th>Why</th></tr></thead><tbody>
+    title: "Cluster check", lead: s => s.done ? "No health issues are reported for nodes, workloads or attached volumes." :
+      "Review the reported issues before continuing with setup.",
+    body: s => s.done ? "" : `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Resource</th><th>Severity</th><th>Details</th></tr></thead><tbody>
       ${(s.issues || []).map(i => `<tr><td><b>${esc(i.name || i.kind)}</b><div class="dim xs">${esc(i.kind)}</div></td>
-        <td data-label="How bad"><span class="pill ${i.severity === "critical" ? "crit" : "med"}">${esc(i.severity)}</span></td>
-        <td data-label="Why" class="small">${esc(i.reason)}</td></tr>`).join("")}</tbody></table></div>`,
+        <td data-label="Severity"><span class="pill ${i.severity === "critical" ? "crit" : "med"}">${esc(i.severity)}</span></td>
+        <td data-label="Details" class="small">${esc(i.reason)}</td></tr>`).join("")}</tbody></table></div>`,
     actions: () => [{ label: "Open the cluster check", run: "go('cluster')", pri: true }],
-    more: "<p>The same checks run on the Cluster page and raise alerts in the bell. Fixing one here is fixing it there.</p>",
+    more: "<p>The Cluster page shows these checks in detail. Reported issues also appear in notifications.</p>",
   },
   quorum: {
     title: "Nodes and quorum", lead: s => s.servers === 2
-      ? "Kubernetes carries on while more than half its servers agree. With two, losing either stops the cluster, so the second adds risk and no safety until there is a third."
-      : s.servers >= 3 ? `With ${s.servers} servers, ${Math.max(0, s.servers - (Math.floor(s.servers / 2) + 1))} can fail and the cluster carries on.`
-      : "One server: simple and fine for a lab, with nothing to fail over to. A third server later gives it room to lose one.",
+      ? "The control plane needs a majority of its servers. With two servers, both must be available. Use three to tolerate one server failure."
+      : s.servers >= 3 ? `The control plane has ${s.servers} servers and can tolerate ${Math.max(0, s.servers - (Math.floor(s.servers / 2) + 1))} server failures while maintaining a majority.`
+      : "A single server is suitable for a lab, but has no control-plane failover. Use three servers for redundancy.",
     body: s => window.Diagram ? Diagram.quorum((s.members?.length ? s.members : (s.nodes || []).map(n => n.name)).map(name =>
       ({ name, ready: (s.ready || []).includes(name) || (s.nodes || []).some(n => n.name === name && n.ready) }))) : "",
     actions: () => [{ label: "Add a node", run: "platformJoinGuide()", pri: true }],
-    more: "<p>A second machine can join as a worker instead of a server: it runs apps and holds Longhorn copies, without a vote. Then the cluster is no more fragile than with one server.</p>",
+    more: "<p>Worker nodes run applications and can hold Longhorn replicas. They do not count towards the control-plane majority.</p>",
   },
   probe: {
-    title: "Node probe", lead: () => "Temperatures, drive health and each host's devices and network cards. It runs a small privileged pod on every node.",
+    title: "Node probe", lead: () => "The node probe reports temperatures, drive health, hardware and network interfaces. It requires a privileged pod on each node.",
     actions: s => s.done ? [] : [{ label: "Install the node probe", run: "probeInstallConfirm()", pri: true }],
   },
   clocks: {
-    title: "Clocks in sync", lead: s => s.done ? "Every node's clock is kept in time." :
-      `Certificates and etcd fail on clocks that drift. Not in sync: ${esc((s.unsynced || []).join(", ") || "unknown")}.`,
+    title: "Time synchronisation", lead: s => s.done ? "Available host reports show synchronised clocks." :
+      `Accurate clocks are required for certificates and cluster coordination. Hosts without confirmed time synchronisation: ${esc((s.unsynced || []).join(", ") || "unknown")}.`,
     actions: () => [{ label: "Open Nodes", run: "go('nodes')", pri: true }],
-    more: "<p>Each host's page shows its OS, and the installer's doctor turns on time synchronisation where it is off.</p>",
+    more: "<p>Review time synchronisation on the host's Nodes page. The installer's diagnostic tool can enable it where it is disabled.</p>",
   },
   address: {
-    title: "An address", lead: s => s.done ? `Homestead is at <span class="mono">${esc(s.url)}</span>, on a VIP that moves to another node if one goes down. New apps share it, each on its own port.`
-      : s.harvester ? "Harvester gave Homestead its address when it was installed."
-      : "A VIP moves to another node when one goes down; a node's own address does not. Reserve one address outside your router's DHCP range: Homestead and new apps share it.",
+    title: "Cluster address", lead: s => s.done ? `Homestead uses <span class="mono">${esc(s.url)}</span>. Its virtual IP (VIP) can move between nodes for failover. Applications can share the VIP on separate ports.`
+      : s.harvester ? "Harvester assigned Homestead an address during installation."
+      : "Reserve a virtual IP (VIP) outside your router's DHCP range. It provides an address that can move between nodes for failover and can be shared by Homestead and applications.",
     body: s => window.Diagram ? Diagram.vip(s.done ? (s.url || "").replace(/^https?:\/\//, "").replace(/:\d+$/, "") : "",
       [{ port: (s.url || "").match(/:(\d+)$/)?.[1] || "8080", app: "Homestead" }]) : "",
     actions: s => s.done ? [] : ["kube-vip", "metallb"].includes(s.load_balancer)
@@ -178,28 +179,28 @@ const SETUP_STEPS = {
       : [{ label: "Install kube-vip", run: "settingsTab('hardware');go('settings')", pri: true }],
   },
   https: {
-    title: "From anywhere, over HTTPS", lead: s => s.done
-      ? `Homestead answers over HTTPS${s.url ? ` at <span class="mono">${esc(s.url)}</span>` : ""}, so a phone can install it and get notifications.`
-      : "A phone installs Homestead as an app and gets notifications only over HTTPS. A Cloudflare Tunnel gives it an HTTPS name with no ports opened at home; Tailscale reaches it privately from your own devices.",
+    title: "HTTPS and remote access", lead: s => s.done
+      ? s.here ? "This browser is using HTTPS. You can install Homestead as an app and enable notifications on supported devices."
+        : `An HTTPS address was checked previously: <span class="mono">${esc(s.url)}</span>. Open it to confirm access from your device.`
+      : "HTTPS enables app installation and notifications. Use Cloudflare Tunnel for a public hostname without router port forwarding, or Tailscale for private access from your devices.",
     body: s => `${window.Diagram ? Diagram.remote(s.done ? (s.tunnels?.length ? "your tunnel" : "HTTPS") : "", s.url || (s.here ? location.origin : ""), location.host) : ""}
-      ${s.done && s.url ? "" : `<div class="ui-field" style="margin-top:10px"><label>Already have one? Check it reaches Homestead</label>
+      ${s.done && s.url ? "" : `<div class="ui-field" style="margin-top:10px"><label>Check an existing HTTPS address</label>
         <div class="row" style="gap:8px;flex-wrap:nowrap"><input id="setup_https" class="mono" placeholder="https://homestead.example.com" value="${esc(s.url || "")}">
         <button class="btn" onclick="setupHttpsCheck(this)">Check</button></div></div>`}
-      ${(s.tunnels || []).length ? `<div class="dim xs" style="margin-top:6px">Running: ${esc(s.tunnels.join(", "))}</div>` : ""}`,
+      <p class="small dim">If Cloudflare Access protects the address, open it and sign in, then reopen this guide there. The server check cannot sign in through Access.</p>
+      ${(s.tunnels || []).length ? `<div class="dim xs" style="margin-top:6px">Configured connectors: ${esc(s.tunnels.join(", "))}</div>` : ""}`,
     actions: () => [{ label: "Set up a Cloudflare Tunnel", run: "setupTunnel('cloudflare')", pri: true }, { label: "Set up Tailscale", run: "setupTunnel('tailscale')" }],
-    more: `<p><b>Cloudflare Tunnel</b>: make a tunnel in Cloudflare's Zero Trust dashboard (Networks › Tunnels), point a public hostname at
-      <span class="mono">${esc(location.host)}</span>, and copy its token. Homestead runs the connector. Put Cloudflare Access in front of it if anyone outside should be kept out.</p>
-      <p><b>Tailscale</b>: an auth key from the admin console's Keys page. The node joins your tailnet, so your own devices reach Homestead privately; for HTTPS with a name, turn on HTTPS certificates in Tailscale and use <span class="mono">tailscale serve</span>.</p>`,
+    more: "<p><b>Cloudflare Tunnel</b> needs a Cloudflare account and a domain on Cloudflare. Select Set up a Cloudflare Tunnel for the account, domain, connector and access steps.</p><p><b>Tailscale</b> needs a reusable auth key from its admin console. Your devices must join the same tailnet. Enable HTTPS certificates and configure <span class=\"mono\">tailscale serve</span> for an HTTPS address.</p>",
   },
   hostname: {
-    title: "A name", lead: s => s.done ? `You are using a name, <span class="mono">${esc(s.host)}</span>, rather than an address.`
-      : `You opened Homestead at an address, <span class="mono">${esc(s.host)}</span>. A name survives the address changing, and HTTPS needs one.`,
+    title: "Hostname", lead: s => s.done ? `This browser opened Homestead at <span class="mono">${esc(s.host)}</span>.`
+      : `This browser opened Homestead at <span class="mono">${esc(s.host)}</span>. A hostname makes the address easier to remember and supports HTTPS certificates.`,
     actions: () => [],
-    more: "<p>Give the VIP a name on your router or local DNS (homestead.lan, say), or use the tunnel's public name from the step before. Nothing in Homestead needs changing.</p>",
+    more: "<p>Add a DNS record for the VIP on your router or local DNS server, for example homestead.lan, or use your tunnel's public hostname. Update the DNS record if the VIP changes.</p>",
   },
   disks: {
-    title: "Disks for Longhorn", lead: s => s.done ? "Every disk is in use: Longhorn has the room your nodes can give it."
-      : `${(s.unused || []).length} disk${(s.unused || []).length === 1 ? " is" : "s are"} not used yet. Given to Longhorn, each is tagged by what it is - hdd, ssd or nvme - for storage classes to choose by.`,
+    title: "Disks for Longhorn", lead: s => s.done ? "No unused non-system disks are reported in the inventory."
+      : `${(s.unused || []).length} unused non-system disk${(s.unused || []).length === 1 ? " is" : "s are"} reported. Review each disk before assigning it to Longhorn. Disk tags let storage classes select HDD, SSD or NVMe storage.`,
     body: s => (s.unused || []).length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Disk</th><th>Node</th><th>Size</th><th></th></tr></thead><tbody>
       ${s.unused.map(d => `<tr><td><b class="mono">${esc(d.device)}</b> ${d.kind ? `<span class="tag">${esc(d.kind)}</span>` : ""}</td><td data-label="Node">${esc(d.node)}</td>
         <td class="mono" data-label="Size">${esc(d.size_gb ?? "?")} GB</td>
@@ -207,38 +208,38 @@ const SETUP_STEPS = {
     actions: () => [],
   },
   storage: {
-    title: "Default storage", lead: s => s.done ? `New volumes use <b>${esc(s.default)}</b>, with ${s.copies} cop${s.copies === 1 ? "y" : "ies"}: one on each of ${s.target === s.nodes ? "your" : s.target} nodes.`
-      : !s.default ? "No storage class is the default, so a new volume has to name one."
-      : s.provisioner !== "driver.longhorn.io" ? `The default, ${esc(s.default)}, keeps volumes on one node's disk: a failed node takes its data with it. A Longhorn class keeps copies on several.`
-      : `The default, ${esc(s.default)}, keeps ${s.copies} cop${s.copies === 1 ? "y" : "ies"} with ${s.nodes} node${s.nodes === 1 ? "" : "s"}: ${s.copies > s.nodes ? "some copies can never be placed" : "fewer than the nodes could hold"}. ${s.target} fits.`,
+    title: "Default storage", lead: s => s.done ? `New volumes default to <b>${esc(s.default)}</b>, configured for ${s.copies} replica${s.copies === 1 ? "" : "s"}.`
+      : !s.default ? "Choose a default storage class, or specify a class whenever you create a volume."
+      : s.provisioner !== "driver.longhorn.io" ? `The default class, ${esc(s.default)}, uses a different storage provider. Review that provider's redundancy, or choose a Longhorn class.`
+      : `The default class, ${esc(s.default)}, requests ${s.copies} replica${s.copies === 1 ? "" : "s"} across ${s.nodes} ready node${s.nodes === 1 ? "" : "s"}. ${s.copies > s.nodes ? "There are not enough ready nodes for that replica count." : "Additional replicas could improve redundancy."} The suggested count is ${s.target}.`,
     body: s => window.Diagram && s.default ? Diagram.copies(Array.from({ length: s.nodes }, (_, i) => `node ${i + 1}`), s.copies || 1) : "",
     actions: s => s.done ? [] : s.candidates?.length ? [{ label: `Make ${s.candidates[0]} the default`, run: `storageClassDefault(${jsArg(s.candidates[0])}).then(() => viewSetup())`, pri: true }]
-      : [{ label: `A class with ${s.target} copies`, run: "settingsTab('hardware');go('settings');setTimeout(() => window.storageClassCreate && storageClassCreate(), 900)", pri: true }],
-    more: "<p>Changing the default affects new volumes only. A volume already made keeps its class; Volumes moves one to another class.</p>",
+      : [{ label: `Create a class with ${s.target} replicas`, run: "settingsTab('hardware');go('settings');setTimeout(() => window.storageClassCreate && storageClassCreate(), 900)", pri: true }],
+    more: "<p>Changing the default affects new volumes only. Use Volumes to move an existing volume to another class.</p>",
   },
   backups: {
-    title: "Backups", lead: s => s.done ? "Longhorn copies volumes to backup storage off the cluster." :
-      "Longhorn's copies survive a failed disk, not a failed house. Backups go somewhere else: the built-in backup storage, or an S3 or NFS target you have.",
+    title: "Backups", lead: s => s.done ? "A backup destination is configured. Set a backup schedule and test a restore before relying on it." :
+      "Choose the built-in backup storage or an S3 or NFS destination. Longhorn replicas provide redundancy; backups also need a separate destination to protect against loss of the cluster or site.",
     actions: s => s.done ? [] : [{ label: "Set up backups", run: "go('protect');setTimeout(() => window.objectStoreSetup && objectStoreSetup(), 600)", pri: true }],
   },
   config: {
-    title: "Homestead's own settings", lead: s => s.done ? `Exported ${esc(agoText(s.at))}. Export again after big changes.` :
-      "Users, VIPs, IP records, the portal and the rest, in one file encrypted with a passphrase you choose: what a rebuild needs that a volume backup does not.",
+    title: "Settings backup", lead: s => s.done ? `Settings were exported ${esc(agoText(s.at))}. Export again after significant changes.` :
+      "Export Homestead's users, network settings, IP records and portal configuration to an encrypted file. Keep the file and its passphrase available for recovery.",
     actions: () => [{ label: "Export settings", run: "settingsTab('homestead');go('settings');setTimeout(() => window.configBackup && configBackup(), 900)", pri: true }],
   },
   osupdates: {
-    title: "OS updates", lead: s => s.done ? "Each host updates in a weekly window, one at a time." :
-      "Each host's own OS updates, one host at a time in a window you choose, draining and restarting a host when an update needs it.",
-    actions: s => s.done ? [] : [{ label: "Choose a window", run: "osUpdates()", pri: true }],
+    title: "OS updates", lead: s => s.done ? "The host OS update schedule is enabled. Review host status and recent update results." :
+      "Schedule host OS updates during a maintenance window. Hosts update one at a time, with workload draining and a restart when required.",
+    actions: () => [{ label: "Review the update schedule", run: "osUpdates()", pri: true }],
   },
   appearance: {
-    title: "Appearance", lead: () => "Light or dark, how dense the pages are, and cards or rows. Yours alone, on this device.",
+    title: "Appearance", lead: () => "Choose a theme, page density and card or row layout. These preferences apply to this device.",
     actions: s => [{ label: "Open appearance", run: "settingsTab('you');go('settings')", pri: !s.done }, { label: s.done ? "Undo my confirmation" : "Mark as done on this device", run: `setupLocalDone('appearance', ${!s.done})` }],
   },
   phone: {
-    title: "On your phone", lead: s => s.installed ? "This is the installed app." : s.secure
-      ? "Install Homestead as an app: its own icon, full screen, and notifications."
-      : "On this address a phone can open Homestead but not install it: that needs HTTPS (Reach it, From anywhere).",
+    title: "Install the app", lead: s => s.installed ? "This browser is running Homestead as an installed app." : s.secure
+      ? "Install Homestead for a home-screen icon, a full-screen view and notifications on supported devices."
+      : "Open Homestead over HTTPS to install it as an app. Configure HTTPS in the Access section first.",
     body: s => `<div class="tblwrap"><table class="tbl stack dense"><tbody>
       <tr><td><b>iPhone and iPad</b></td><td class="small">In Safari: Share, then Add to Home Screen. Notifications need iOS 16.4 or later, and the app opened from the home screen.</td></tr>
       <tr><td><b>Android</b></td><td class="small">In Chrome: the menu, then Install app.</td></tr>
@@ -246,46 +247,46 @@ const SETUP_STEPS = {
     actions: s => s.installed ? [] : s.secure ? [{ label: "Install now", run: "pwaInstall()", pri: true }] : [{ label: "Get HTTPS", run: "setupOpen('https')", pri: true }],
   },
   notifications: {
-    title: "Notifications", lead: s => s.done ? "This account gets notifications on at least one device." : !s.secure
-      ? "Notifications reach a phone or computer only over HTTPS. Set that up first (Reach it), then turn them on here."
-      : s.permission === "denied" ? "This browser was told to block Homestead's notifications. Allow them in the browser's site settings, then come back."
-      : "A failed disk, a node down, an update waiting: on your phone or computer as it happens. You choose which.",
-    actions: s => s.done ? [{ label: "Choose what you hear about", run: "pwaCategories()" }] : s.secure && s.permission !== "denied" ? [{ label: "Turn on notifications", run: "pwaEnable().then(() => viewSetup())", pri: true }] : [],
+    title: "Notifications", lead: s => s.done ? "At least one notification device is registered for this account. Send a test from Settings to confirm delivery." : !s.secure
+      ? "Open Homestead over HTTPS before enabling notifications on this device."
+      : s.permission === "denied" ? "This browser blocks notifications. Allow them in the browser's site settings, then return here."
+      : "Receive alerts for disk failures, unavailable nodes and pending updates. Choose which notifications to receive.",
+    actions: s => s.done ? [{ label: "Choose notification types", run: "pwaCategories()" }] : s.secure && s.permission !== "denied" ? [{ label: "Enable notifications", run: "pwaEnable().then(() => viewSetup())", pri: true }] : [],
   },
   people: {
-    title: "People", lead: s => s.done ? "More than one person can administer Homestead." :
-      "One admin account is one forgotten password from a locked door. Add a second admin, and accounts of their own for anyone else - an operator, or a viewer for the TV.",
+    title: "Users", lead: s => s.done ? "At least two administrator accounts exist." :
+      "Add a second administrator to reduce the risk of losing access. Give other users their own operator or viewer accounts with the permissions they need.",
     actions: () => [{ label: "Manage users", run: "manageUsers()", pri: true }],
   },
   unifi: {
-    title: "UniFi", lead: s => s.done ? "UniFi Network fills in devices and addresses." :
-      "If your network is UniFi: devices, their names and fixed addresses come into IP addresses, and new VIPs avoid the DHCP range.",
+    title: "UniFi", lead: s => s.done ? "A UniFi Network address is configured. Check the connection in Settings." :
+      "Connect UniFi Network to import devices and address reservations and help avoid DHCP conflicts when assigning VIPs.",
     actions: s => s.done ? [] : [{ label: "Connect UniFi", run: "settingsTab('connections');go('settings')", pri: true }],
   },
   unraid: {
-    title: "Coming from Unraid", lead: s => s.done ? "An Unraid server is added: its containers and VMs can be imported." :
-      "Containers with their settings and appdata, and VMs with their disks: brought across from your Unraid server, mapped for you.",
+    title: "Unraid imports", lead: s => s.done ? "An import source has been added. Review its connection before importing containers or VMs." :
+      "Add an Unraid server to import containers with their settings and app data, or VMs with their disks. Review the destination settings before starting an import.",
     actions: s => s.done ? [{ label: "Import containers", run: "go('imports')" }, { label: "Import VMs", run: "go('vmimport')" }] : [{ label: "Add your Unraid server", run: "go('imports');setTimeout(() => window.srcAdd && srcAdd(), 700)", pri: true }],
   },
   homeassistant: {
-    title: "Home Assistant", lead: s => s.done ? "An API key exists for something that talks to Homestead." :
-      "An API key lets Home Assistant read Homestead's status and start or stop containers, limited to what you allow and to its own address.",
-    actions: () => [{ label: "Make an API key", run: "settingsTab('access');go('settings');setTimeout(() => window.apiKeyNew && apiKeyNew(), 900)", pri: true }],
+    title: "Home Assistant", lead: s => s.done ? "An unexpired API key is available. Configure the integration in Home Assistant and test the connection." :
+      "Create an API key for Home Assistant to read cluster status or control workloads. Limit its permissions and allowed source addresses to what the integration needs.",
+    actions: () => [{ label: "Create an API key", run: "settingsTab('access');go('settings');setTimeout(() => window.apiKeyNew && apiKeyNew(), 900)", pri: true }],
   },
   linked: {
-    title: "Other Homesteads", lead: s => s.done ? "This Homestead is linked with others: one sign-in, and the view of them all." :
-      "Another cluster - a second site, a test cluster - linked here: one sign-in, every cluster's pages, and moving apps between them.",
+    title: "Linked clusters", lead: s => s.done ? "Another cluster is linked. Review its connection and access from Settings." :
+      "Link another Homestead cluster to view its pages and move applications between clusters.",
     actions: s => s.done ? [] : [{ label: "Link a cluster", run: "settingsTab('fleet');go('settings')" }],
   },
   starter: {
-    title: "Your first apps", lead: s => s.done ? "Apps of your own are running." :
-      "The App Store has Unraid's community catalogue. To start with: an uptime monitor, a dashboard of your services, a password manager.",
+    title: "Applications", lead: s => s.done ? "An application other than Homestead has been added. Check its status on the Containers page." :
+      "Browse the App Store to deploy an application. An uptime monitor or service dashboard is a useful place to start.",
     actions: () => [{ label: "Uptime monitor", run: "setupStore('uptime-kuma')", pri: true }, { label: "Dashboard", run: "setupStore('homepage')" }, { label: "Open the App Store", run: "go('store')" }],
   },
   console: {
-    title: "A screen on each machine", lead: s => s.done ? "Each host's own screen shows its health, before the login prompt." :
-      "A machine's own screen shows CPU, memory, disks, its addresses and the cluster's health, before the login prompt.",
-    actions: s => s.done ? [] : [{ label: "Turn on the host console", run: "settingsTab('hardware');go('settings')", pri: true }],
+    title: "Host console", lead: s => s.done ? "The host console is enabled. Review each host's installation status in Settings." :
+      "Show CPU, memory, disks, addresses and cluster status on each host's local screen. You can exit the console to reach the login prompt.",
+    actions: () => [{ label: "Review the host console", run: "settingsTab('hardware');go('settings')", pri: true }],
   },
 };
 
@@ -307,7 +308,7 @@ async function viewSetup() {
   const nav = `<button class="setup-step${open === "intro" ? " on" : ""}" data-step="intro" onclick="setupOpen('intro')">${mark("todo")}<span>Start here</span></button>` + chapters.map(([title, list], c) => `<div class="setup-chapter">${c + 1} · ${esc(title)}</div>${list.map(id =>
     `<button class="setup-step${id === open ? " on" : ""}" data-step="${id}" aria-label="${esc(SETUP_STEPS[id].title + ': ' + setupStatusLabel(id, status[id], state.steps[id]))}" onclick="setupOpen(${jsq(id)})">${mark(status[id], id)}<span>${esc(SETUP_STEPS[id].title)}</span></button>`).join("")}`).join("");
   paint(`<div class="phead"><div><h2>Setup</h2>
-      <p>${done} of ${ids.length} complete${state.admin ? "" : " · the steps that are yours"} · ${state.hidden ? "Dashboard progress hidden" : "Progress shortcut on Dashboard"}</p></div>
+      <p>${done} of ${ids.length} complete${state.admin ? "" : " · your preferences"} · ${state.hidden ? "Dashboard progress hidden" : "Progress shortcut on Dashboard"}</p></div>
       <div class="row"><span class="setup-meter" aria-hidden="true"><span style="width:${ids.length ? Math.round(done / ids.length * 100) : 0}%"></span></span>
         ${actionBar([{ label: state.hidden ? "Show setup progress on Dashboard" : "Hide setup progress from Dashboard", run: `setupHide(${!state.hidden})` }])}</div></div>
     <div class="settings-layout setup-layout" id="setupPage">
@@ -320,6 +321,7 @@ window.viewSetup = viewSetup;
 
 function setupStepHtml(id, state, status, ids) {
   if (id === "intro" || !ids.includes(id)) return setupIntroHtml(ids, status);
+  if (id === "https" && setupCloudflareStage() !== null) return setupCloudflareHtml(state);
   const step = SETUP_STEPS[id], s = state.steps[id] || {}, st = status[id];
   const next = ids[ids.indexOf(id) + 1];
   const actions = (step.actions(s) || []).filter(Boolean);
@@ -335,7 +337,7 @@ function setupStepHtml(id, state, status, ids) {
       ${s.error ? UI.callout("warn", "Homestead could not check this just now", esc(s.error)) : ""}
       ${step.body ? `<div class="setup-body">${step.body(s)}</div>` : ""}
       ${step.more ? UI.more("How this works", step.more) : ""}
-      <p class="small dim">Next moves through the guide without marking this step done.</p>
+      <p class="small dim">Next does not mark this step complete.</p>
       ${UI.actions(rest + main + (next ? UI.button(`Next: ${SETUP_STEPS[next].title}`, `setupOpen(${jsArg(next)})`) : UI.button("Back to the Dashboard", "go('dash')")), skip)}
     </section>`;
 }
@@ -354,6 +356,7 @@ window.setupOpen = id => {
   if ($("#setupSelect")) $("#setupSelect").value = id;
   $$("#setupPage .setup-step").forEach(b => b.classList.toggle("on", b.dataset.step === id));
   if (matchMedia("(max-width: 900px)").matches) $("#setupStep").scrollIntoView({ block: "start" });
+  $("#setupStep .stepper-chip.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   if (window.applyRole) applyRole();
 };
 
@@ -386,13 +389,66 @@ window.setupHttpsCheck = async button => {
   } catch (e) { toast(e.message, "bad"); button.disabled = false; button.textContent = "Check"; }
 };
 
-/* The two ways in from outside, as a deploy already filled in - the review
-   and capacity check are the Deploy page's own. */
-window.setupTunnel = kind => {
+// Remember only the guide position in this tab, never account details or tokens.
+let setupCloudflareMemory = null;
+function setupCloudflareStage(value) {
+  const key = `homestead.setup.cloudflare.${setupDemo() ? "demo" : "live"}`;
+  try {
+    if (value === undefined) {
+      const saved = sessionStorage.getItem(key);
+      return /^[0-5]$/.test(saved || "") ? Number(saved) : null;
+    }
+    setupCloudflareMemory = value;
+    if (value === null) sessionStorage.removeItem(key);
+    else if (Number.isInteger(value) && value >= 0 && value <= 5) sessionStorage.setItem(key, String(value));
+  } catch (_) { if (value === undefined) return setupCloudflareMemory; setupCloudflareMemory = value; }
+  return value;
+}
+
+window.setupCloudflareOpen = stage => { setupCloudflareStage(stage); setupOpen("https"); };
+
+function setupCloudflareHtml(state) {
+  const stage = setupCloudflareStage() ?? 0;
+  const link = (url, label) => `<a class="linkish" href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+  const dashboard = link("https://dash.cloudflare.com/", "Open Cloudflare");
+  const origin = state.steps.address?.service_url || state.steps.address?.url || "";
+  const steps = [
+    { title: "Account and domain", lead: "You need a Cloudflare account and a domain you own. Cloudflare's Free plan is sufficient for this setup; registering or renewing a domain is a separate cost.",
+      body: `<ol><li>Create an account or sign in to Cloudflare.</li><li>Add your domain and select the Free plan. Review its DNS records, including mail records.</li><li>At your domain registrar, replace the nameservers with the ones Cloudflare provides. Wait until the domain is Active.</li></ol><p>${dashboard} · ${link("https://developers.cloudflare.com/dns/zone-setups/full-setup/setup/", "Domain setup instructions")}</p>` },
+    { title: "Create the tunnel", lead: "Create a tunnel and copy its connector token. Homestead will run the connector for you.",
+      body: `<ol><li>In Cloudflare, open Networking › Tunnels and create a tunnel named Homestead.</li><li>Under Setup Environment, select Docker.</li><li>Copy only the token after <span class="mono">--token</span> in the command. Keep it private; paste it into the deployment form in the next step.</li></ol><p>${dashboard} · ${link("https://developers.cloudflare.com/tunnel/get-started/", "Tunnel setup instructions")}</p>` },
+    { title: "Deploy the connector", lead: "Open the prepared deployment, paste your tunnel token and review the settings before deploying.",
+      body: "<p>Use Return to setup to come back here. In Cloudflare, wait for the tunnel to show Healthy. The connector needs outbound internet access on port 7844; router port forwarding is not required.</p>",
+      action: UI.button("Open connector deployment", "setupTunnelDeploy('cloudflare')", { kind: "pri" }) },
+    { title: "Control access", lead: "Configure Cloudflare Access before publishing the hostname to limit who can reach Homestead.",
+      body: `<ol><li>Open Zero Trust and choose the Free plan if asked. Cloudflare may request payment details for account setup.</li><li>Go to Access controls › Applications. Create a Self-hosted and private application, and add the public hostname you will use, for example <span class="mono">homestead.example.com</span>.</li><li>Add an Allow policy with the specific email addresses you want to admit. One-time PIN lets those users sign in with an emailed code.</li></ol><p>You will still sign in to Homestead with your Homestead account.</p><p>${link("https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/self-hosted-public-app/", "Access setup instructions")} · ${link("https://developers.cloudflare.com/cloudflare-one/integrations/identity-providers/one-time-pin/", "Email sign-in instructions")}</p>${UI.more("Additional protection", `<p>Homestead can also validate Cloudflare Access tokens. See the ${link("https://github.com/wjcloudy/homestead/blob/main/docs/reference.md#publishing-through-a-cloudflare-tunnel", "deployment security guide")} for the required settings.</p>`)}` },
+    { title: "Publish the hostname", lead: "Add a route from your public hostname to Homestead's address inside the cluster.",
+      body: `<ol><li>In Networking › Tunnels, select your tunnel. Under Routes, add a Published application.</li><li>Use the same hostname as your Access application.</li><li>Set the Service URL to ${origin ? `<span class="mono">${esc(origin)}</span>` : "the VIP address and port shown in Cluster address"}, then save the route.</li></ol>
+        ${origin ? "" : `<p>Configure Homestead's cluster address before publishing the route. ${UI.button("Review cluster address", "setupOpen('address')")}</p>`}
+        <p>The service address must be reachable from the connector. Use the cluster Service address above, including its port; a cluster VIP also works. <span class="mono">localhost</span> refers to the connector itself.</p>` },
+    { title: "Test in your browser", lead: "Open your new HTTPS hostname, sign in through Cloudflare Access, then sign in to Homestead.",
+      body: "<p>Reopen this guide from the book icon at the new address. The HTTPS step checks that your browser is using HTTPS. Also test from a device outside your home network.</p><p>The server's address check cannot sign in through Cloudflare Access. Use the browser test with Access enabled.</p>",
+      action: UI.button("Return to HTTPS overview", "setupCloudflareOpen(null)", { kind: "pri" }) },
+  ];
+  const current = steps[stage];
+  return `<section class="card flat setup-card" data-step="https" data-cloudflare-stage="${stage}">
+    <div class="settings-card-head"><div><div class="ctitle">Set up Cloudflare Tunnel</div><div class="csub">Step ${stage + 1} of ${steps.length} · ${esc(current.title)}</div></div></div>
+    <nav class="stepper-head" aria-label="Cloudflare setup steps">${steps.map((step, i) => `<button type="button" class="stepper-chip${i === stage ? " on" : ""}"${i === stage ? ' aria-current="step"' : ""} onclick="setupCloudflareOpen(${i})"><span>${i + 1}</span>${esc(step.title)}</button>`).join("")}</nav>
+    ${UI.lead(current.lead)}<div class="setup-body small">${current.body}</div>
+    <p class="small dim">These steps guide changes in Cloudflare. Homestead does not verify or mark them complete when you select Next.</p>
+    ${UI.actions((current.action || "") + (stage > 0 ? UI.button("Back", `setupCloudflareOpen(${stage - 1})`) : "") + (stage < steps.length - 1 ? UI.button(`Next: ${steps[stage + 1].title}`, `setupCloudflareOpen(${stage + 1})`) : ""), UI.button("Back to HTTPS options", "setupCloudflareOpen(null)"))}
+  </section>`;
+}
+
+window.setupTunnel = kind => kind === "cloudflare" ? setupCloudflareOpen(0) : setupTunnelDeploy(kind);
+
+// The Deploy page provides its normal review and capacity checks.
+window.setupTunnelDeploy = kind => {
+  if (kind === "cloudflare") setupCloudflareStage(2);
   const pre = kind === "cloudflare"
     ? { name: "cloudflared", image: "cloudflare/cloudflared:latest", args: ["tunnel", "--no-autoupdate", "run"], network_mode: "internal",
         cpu: "50m", memory: "64Mi", env: { TUNNEL_TOKEN: "" },
-        env_meta: [{ key: "TUNNEL_TOKEN", label: "Tunnel token (from Cloudflare Zero Trust › Networks › Tunnels)", required: true, masked: true }] }
+        env_meta: [{ key: "TUNNEL_TOKEN", label: "Tunnel connector token (from Cloudflare Networking › Tunnels)", required: true, masked: true }] }
     // Its state kept in the container, not a Kubernetes Secret it may not
     // write: a reusable auth key joins it again after a restart.
     : { name: "tailscale", image: "tailscale/tailscale:latest", network_mode: "internal", cpu: "50m", memory: "128Mi",
