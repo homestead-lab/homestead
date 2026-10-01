@@ -29,7 +29,7 @@ def _ready(node):
                for c in ((node.get("status") or {}).get("conditions") or []))
 
 
-def plan(node, action, force=False):
+def plan(node, action, force=False, volume_names=()):
     """What rebooting or shutting a host down would do, and what stops it.
 
     Some stops are checks an admin may override - quorum on a one-node
@@ -60,8 +60,9 @@ def plan(node, action, force=False):
                 status.get("currentState") == "running" and not spec.get("failedAt")))
     volume_obj = {row.get("metadata", {}).get("name"): row for row in volumes or []}
     affected = []
-    for name, copies in by_volume.items():
-        if not any(host == node for host, _ in copies):
+    for name in sorted(set(by_volume) | set(volume_names)):
+        copies = by_volume.get(name, [])
+        if name not in volume_names and not any(host == node for host, _ in copies):
             continue
         # Two replicas on one host are not two failure domains. A stale
         # running replica on an offline host is not a verified surviving copy.
@@ -104,6 +105,8 @@ def plan(node, action, force=False):
         soft.append("Storage replica inventory is unavailable; volume impact cannot be verified")
     blockers = hard if force else hard + soft
     warnings = []
+    if not force:
+        warnings.extend(maintenance.get("waiting", []))
     if force and soft:
         warnings.append("Forced: no cordon or drain - pods and VMs on it stop with the host, and come back when it does "
                         "(or, on other hosts, once Kubernetes gives up on this one). Overridden: " + "; ".join(soft))
@@ -154,13 +157,21 @@ def recheck_forced(original):
 
 def recheck_after_drain(original):
     """Never send power using the pre-drain storage/quorum/VM snapshot."""
-    fresh = plan(original["node"], original["action"])
+    # Eviction may remove the local replica entirely. Keep checking every
+    # reviewed volume, even when it no longer appears on the drained host.
+    fresh = plan(original["node"], original["action"], volume_names=[v["name"] for v in original["volumes"]])
     if not fresh["ready"]:
         raise ValueError("Host remains cordoned; power was not sent: " + "; ".join(fresh["blockers"]))
     before = {v["name"]: v for v in original["volumes"]}
     for volume in fresh["volumes"]:
         old = before.get(volume["name"])
-        if not old or volume["healthy_elsewhere"] < old["healthy_elsewhere"] or volume["robustness"] != old["robustness"]:
+        # Stopping this host's replica can make a healthy volume degraded.
+        # That reviewed redundancy loss is expected only if its verified
+        # surviving copies remain available on other Ready hosts.
+        expected_degradation = (old and old["healthy_elsewhere"] > 0 and old["robustness"] == "healthy" and
+                                volume["robustness"] == "degraded")
+        if (not old or volume["healthy_elsewhere"] < old["healthy_elsewhere"] or
+                (volume["robustness"] != old["robustness"] and not expected_degradation)):
             raise ValueError("Host remains cordoned; volume impact changed during drain. Power was not sent; review again")
     if fresh["boot_id"] != original["boot_id"] or fresh["node_uid"] != original["node_uid"]:
         raise ValueError("Host identity changed during drain; power was not sent")
