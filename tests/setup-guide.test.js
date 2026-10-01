@@ -94,3 +94,13 @@ test("Cloudflare guide stores only its position, keeps demo separate and rejects
   ctx.setupCloudflareStage(null);
   assert.equal(saved.size, 0);
 });
+
+test("LAN setup precedes workloads, distinguishes configuration from connectivity and links to networking", () => {
+  const { ctx } = fixture();
+  const order = vm.runInContext("SETUP_CHAPTERS.flatMap(([, ids]) => ids)", ctx);
+  assert.ok(order.indexOf("lan") < order.indexOf("starter"));
+  assert.equal(ctx.setupStatusLabel("lan", "done"), "Configuration found");
+  assert.equal(ctx.setupStatus("lan", { lan: { done: false } }, ["lan"]), "skipped");
+  assert.match(vm.runInContext("SETUP_CHECKS.lan", ctx), /does not test/);
+  assert.match(vm.runInContext("SETUP_STEPS.lan.actions()[0].run", ctx), /section: 'lan'/);
+});

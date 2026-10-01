@@ -12,6 +12,7 @@
 const SETUP_CHAPTERS = [
   ["Cluster health", ["health", "quorum", "clocks"]],
   ["Access", ["address", "https", "hostname"]],
+  ["LAN networking", ["lan"]],
   ["Storage and backups", ["disks", "storage", "backups", "config", "osupdates"]],
   ["Preferences and users", ["appearance", "phone", "notifications", "people"]],
   ["Connections", ["unifi", "unraid", "homeassistant", "linked"]],
@@ -62,6 +63,7 @@ const SETUP_CHECKS = {
   address: "Checks whether Homestead is using a registered VIP.",
   https: "Uses HTTPS in this browser or an address you previously checked. A saved address is not retested automatically.",
   hostname: "Checks whether this browser opened Homestead by name.",
+  lan: "Checks for saved LAN network definitions that support VMs and containers. It does not test host interfaces, DHCP or connectivity.",
   disks: "Checks for unused non-system disks in the disk inventory.",
   storage: "Checks the default storage class and its replica count against ready nodes.",
   backups: "Checks that a backup target is configured. This does not verify a backup or restore.",
@@ -120,7 +122,7 @@ function setupStatusLabel(id, status, facts = {}) {
     if (id === "appearance") return "Confirmed by you";
     if (id === "https" && !facts.here) return "Previously checked";
     if (id === "config") return "Export recorded";
-    if (["backups", "osupdates", "unifi", "unraid", "homeassistant", "linked", "starter", "console"].includes(id)) return "Configuration found";
+    if (["lan", "backups", "osupdates", "unifi", "unraid", "homeassistant", "linked", "starter", "console"].includes(id)) return "Configuration found";
     return "Check passed";
   }
   if (status === "skipped") return "Skipped by choice";
@@ -191,6 +193,17 @@ const SETUP_STEPS = {
       : `This browser opened Homestead at <span class="mono">${esc(s.host)}</span>. A hostname makes the address easier to remember and supports HTTPS certificates.`,
     actions: () => [],
     more: "<p>Add a DNS record for the VIP on your router or local DNS server, for example homestead.lan, or use your tunnel's public hostname. Update the DNS record if the VIP changes.</p>",
+  },
+  lan: {
+    title: "LAN for VMs and containers",
+    lead: () => "A LAN network gives a VM or container its own address on your local network. Set one up before creating workloads that need direct LAN access. Containers that only need published ports can use a workload VIP instead.",
+    body: s => `${UI.steps([
+      { title: "Choose the host interface", detailHtml: "Select the interface or bridge connected to your LAN. It must be available on every host that will run these workloads." },
+      { title: "Choose the network and addresses", detailHtml: "Use an untagged network for your usual LAN, or a VLAN configured on your switch. VMs can use your router’s DHCP; reserve static addresses outside its DHCP range when assigning addresses yourself." },
+      { title: "Create and test the network", detailHtml: "A host bridge supports both VMs and containers. Separate VM-only or container-only networks are also supported. After saving, test a workload’s address and connectivity before relying on it." },
+    ])}<div class="about-grid"><div><span>VM networks</span><b>${esc((s.vms || []).join(", ") || "Not configured")}</b></div><div><span>Container networks</span><b>${esc((s.containers || []).join(", ") || "Not configured")}</b></div></div>`,
+    actions: () => [{ label: "Configure LAN networks", run: "go('network', { params: { section: 'lan' } })", pri: true }],
+    more: "<p>VM-only macvtap networks cannot be used by containers, and container-only macvlan networks cannot be used by VMs. With either, the host may be unable to reach its own guests directly. A host bridge avoids that limitation. Creating a bridge can briefly interrupt host networking; review the network page’s checks before applying it.</p>",
   },
   disks: {
     title: "Disks for Longhorn", lead: s => s.done ? "No unused non-system disks are reported in the inventory."
