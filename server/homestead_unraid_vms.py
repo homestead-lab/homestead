@@ -408,12 +408,17 @@ def copy_script(src, vm, path, size):
     ssh = lambda remote: IMP._ssh_script(src, remote)
     return "\n".join([
         "set -eu", "set -o pipefail",
+        # The name is Unraid's free text: a shell variable, never part of a command.
+        f"vm={shlex.quote(vm)}",
         "apk add --no-cache openssh-client sshpass curl pv >/dev/null 2>&1 || apk add --no-cache openssh-client sshpass curl >/dev/null",
         IMP.SOURCE_SSH.setup(src).rstrip("\n"),
         f"state=$({ssh('virsh domstate --domain ' + shlex.quote(vm))} | head -n 1)",
-        f"[ \"$state\" = 'shut off' ] || {{ echo \"HSVM-FAILED {vm} is $state on Unraid again; its disk was not copied\"; exit 5; }}",
+        "[ \"$state\" = 'shut off' ] || { echo \"HSVM-FAILED $vm is $state on Unraid again; its disk was not copied\"; exit 5; }",
         "meter() { if command -v pv >/dev/null 2>&1; then pv -n -i 10 -s " + str(int(size)) + "; else cat; fi; }",
-        f"{ssh('cat -- ' + shlex.quote(path))} | meter | curl -sS --fail-with-body --cacert /ca/ca.crt -X POST -T - "
+        # Compressed on the wire: a raw vdisk is mostly empty space, which
+        # crosses as almost nothing; pv counts the disk's own bytes after SSH
+        # has unpacked them, so progress is unchanged.
+        f"{IMP.SOURCE_SSH.command(src, 'cat -- ' + shlex.quote(path), compress=True)} | meter | curl -sS --fail-with-body --cacert /ca/ca.crt -X POST -T - "
         "-H \"Authorization: Bearer $TOKEN\" -H 'Content-Type: application/octet-stream' \"$UPLOAD_URL\"",
         "echo HSVM-DONE",
     ])

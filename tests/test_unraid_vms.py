@@ -121,6 +121,10 @@ class FakeImports:
 
     class SOURCE_SSH:
         @staticmethod
+        def command(src, remote, compress=False):
+            return "ssh " + ("-o Compression=yes " if compress else "") + "root@192.0.2.10 " + repr(remote)
+
+        @staticmethod
         def setup(src):
             return "printf known > /tmp/k\n"
 
@@ -205,9 +209,16 @@ class ImportTests(unittest.TestCase):
         self.assertIn("virsh domstate --domain 'Windows 11'", script)
         self.assertIn("exit 5", script)
         self.assertIn("cat -- '/mnt/user/domains/Windows 11/vdisk1.img'", script)
+        cat = next(line for line in script.splitlines() if "cat -- " in line)
+        self.assertIn("Compression=yes", cat, "a raw disk's empty space crosses as almost nothing")
         self.assertIn("--cacert /ca/ca.crt", script)
         self.assertIn('Bearer $TOKEN', script)
         self.assertNotIn("tok", script, "the token comes from a Secret, never the script")
+
+    def test_an_unraid_name_never_becomes_part_of_a_command(self):
+        script = UVMS.copy_script(self.imp._source("nas"), 'x$(touch /tmp/owned)"`id`', PATH1, 1)
+        self.assertIn("vm='x$(touch /tmp/owned)\"`id`'", script)
+        self.assertNotIn("HSVM-FAILED x$(", script)
 
     def test_progress_is_what_pv_last_said(self):
         self.assertEqual(42, UVMS.progress("7\n19\n42\n"))

@@ -102,9 +102,12 @@ def transport(src):
             "-o PreferredAuthentications=password -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1")
 
 
-def command(src, remote):
+def command(src, remote, compress=False):
+    """compress: SSH's own compression, for a stream with much to gain - a VM
+    disk's empty space crosses as almost nothing."""
     endpoint = connection(src)
-    return "sshpass -e " + transport(src) + " " + shlex.quote(endpoint["user"] + "@" + endpoint["host"]) + " " + shlex.quote(remote)
+    return ("sshpass -e " + transport(src) + (" -o Compression=yes" if compress else "") + " "
+            + shlex.quote(endpoint["user"] + "@" + endpoint["host"]) + " " + shlex.quote(remote))
 
 
 def scan_script(src):
