@@ -36,6 +36,16 @@ try {
     assert.match(await card.locator(".meter.split").getAttribute("data-tip"),/Longhorn allowance left 30 GB/);
     const widths=await card.locator(".meter.split>span").evaluateAll(spans=>spans.map(s=>Number.parseFloat(s.style.width)));
     assert.deepEqual(widths,[30,10,30]);
+    for(const group of await card.locator(".badgegroup").all()) {
+      const caption=await group.locator(".badgecap").boundingBox();
+      const values=await group.locator(".badge-values").boundingBox();
+      assert.ok(values.y>=caption.y+caption.height,"node tags sit below their heading");
+      assert.ok(Math.abs(values.x-caption.x)<1,"wrapped tags align with their heading");
+      for(const tag of await group.locator(".tag").all()) {
+        const bounds=await tag.boundingBox();
+        assert.ok(bounds.x+bounds.width<=values.x+values.width+1,"node tags fit their group");
+      }
+    }
     for(const ranking of await page.locator(".consumer-card").all()) {
       assert.equal(await ranking.locator("tbody .consumer-row").count(),5);
       assert.ok((await ranking.boundingBox()).height<=320,"five ranked workloads fit a compact card");
@@ -48,6 +58,16 @@ try {
     await page.locator(".consumer-grid").screenshot({path:`release-assets/pages/dashboard-storage/rankings-${size.width}.png`});
     await card.screenshot({path:`release-assets/pages/dashboard-storage/host-${size.width}.png`});
     console.log(`Disk capacity and compact rankings passed at ${size.width}px`);
+    if(size.width<900) {
+      await page.evaluate(()=>go("settings"));
+      await page.locator(".settings-layout").waitFor();
+      await page.evaluate(()=>settingsGo("you"));
+      const back=page.getByRole("button",{name:"‹ Back to Settings",exact:true});
+      await back.waitFor();
+      await page.screenshot({path:`release-assets/pages/dashboard-storage/settings-${size.width}.png`});
+      await back.click();
+      assert.equal(await page.locator(".settings-layout").getAttribute("data-open"),"0");
+    }
   }
   assert.deepEqual(errors,[]);
   await context.close();

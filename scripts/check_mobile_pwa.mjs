@@ -23,6 +23,8 @@ try {
     await page.goto(`${base}/?demo=1`,{waitUntil:"networkidle"});
     await page.locator("#views .phead").waitFor();
     assert.equal(await page.evaluate(()=>document.documentElement.dataset.display),installed?"standalone":"browser");
+    assert.equal(await page.locator("#demoBanner").evaluate(el=>el.parentElement===document.body),true,"demo banner stays above the whole site");
+    assert.equal(await page.evaluate(()=>document.querySelector("#demoBanner").getBoundingClientRect().bottom<=document.querySelector("#app").getBoundingClientRect().top),true,"demo banner sits above both navigation and content");
     if(!installed) {
       assert.equal(await page.evaluate(()=>getComputedStyle(document.body).overflowY),"visible");
       assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector(".main")).overflowY),"visible");
@@ -45,15 +47,16 @@ try {
             paneHeight:main.clientHeight,paneWidth:main.clientWidth,scrollWidth:main.scrollWidth,
             left:main.scrollLeft,top:main.scrollTop,paneScrollHeight:main.scrollHeight,
             overscroll:getComputedStyle(main).overscrollBehavior,
+            bannerHeight:document.querySelector("#demoBanner").getBoundingClientRect().height,
             headerTop:document.querySelector(".top").getBoundingClientRect().top,
             navBottom:document.querySelector("#bottombar").getBoundingClientRect().bottom};
         });
         assert.equal(metrics.x,0);assert.equal(metrics.y,0);
         assert.equal(metrics.rootWidth,metrics.width);assert.equal(metrics.rootHeight,metrics.height);
-        assert.equal(metrics.paneHeight,metrics.height);
+        assert.ok(Math.abs(metrics.paneHeight+metrics.bannerHeight-metrics.height)<1,"app fills the space below the demo banner");
         assert.equal(metrics.scrollWidth,metrics.paneWidth);assert.equal(metrics.left,0);
         assert.equal(metrics.overscroll,"none");
-        assert.ok(Math.abs(metrics.headerTop)<1,`header stays visible when content scrolls: ${view} ${JSON.stringify(metrics)}`);
+        assert.ok(Math.abs(metrics.headerTop-metrics.bannerHeight)<1,`header stays below the site banner when content scrolls: ${view} ${JSON.stringify(metrics)}`);
         assert.ok(Math.abs(metrics.navBottom-metrics.height)<1,"bottom navigation stays in the viewport");
         if(view==="dash") assert.ok(metrics.top>0,"long content remains scrollable");
         await page.evaluate(()=>scrollPageTop());
@@ -86,13 +89,17 @@ try {
     // Short pages do not create a phantom scroll below the app chrome.
     await page.setViewportSize({width:412,height:839});
     await page.evaluate(()=>{document.querySelector("#views").innerHTML='<div class="phead"><h2>Short page</h2></div>';scrollPageTop();});
-    assert.equal(await page.locator(".main").evaluate(el=>el.scrollHeight),839);
+    assert.equal(await page.locator(".main").evaluate(el=>el.scrollHeight===el.clientHeight),true);
     await page.evaluate(()=>go("dash"));
     await page.locator("#views .phead").waitFor();
     await page.locator(".main").evaluate(el=>el.scrollTop=300);
     await page.evaluate(()=>go("vms"));
     await page.locator("#views h2").filter({hasText:/Virtual machines/}).waitFor();
     assert.equal(await page.locator(".main").evaluate(el=>el.scrollTop),0,"changing pages resets the content pane");
+    // The installed product has no demo banner and still fills its viewport.
+    await page.locator("#demoBanner").evaluate(el=>el.remove());
+    assert.equal(await page.locator(".main").evaluate(el=>el.clientHeight),839);
+    assert.equal(await page.locator(".top").evaluate(el=>el.getBoundingClientRect().top),0);
     assert.deepEqual(errors,[]);
     await context.close();
   }

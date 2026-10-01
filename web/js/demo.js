@@ -2146,7 +2146,7 @@ ssh_pwauth: true
       bar.className = "demobanner";
       bar.innerHTML = `Live demo · ${scenario === "healthy" ? "healthy cluster" : scenario + " scenario"}: made-up data, and nothing you do here is saved. `
         + '<a href="https://github.com/wjcloudy/homestead" target="_blank" rel="noopener">Homestead on GitHub</a>';
-      document.querySelector(".top").after(bar);
+      document.body.prepend(bar);
     };
     if (document.body) banner(); else document.addEventListener("DOMContentLoaded", banner);
   }

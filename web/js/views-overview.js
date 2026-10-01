@@ -268,16 +268,16 @@ function nodeCard(n) {
       <b>${n.pods}</b> <span class="dim">pods${n.vms ? ` · <b>${n.vms}</b> VM${n.vms === 1 ? "" : "s"}` : ""}</span></span>
       <div class="podgrid">${dots}</div></div>
     <div class="nodebadges">
-      ${nodeAddressTags(n) ? `<div class="badgegroup"><span class="badgecap">ADDRESSES</span>${nodeAddressTags(n)}</div>` : ""}
-      ${duties ? `<div class="badgegroup"><span class="badgecap">DUTIES</span>${duties}</div>` : ""}
-      <div class="badgegroup"><span class="badgecap">HARDWARE</span>
-        ${hardwareTags(nodeHardwareIds(n)) || '<span class="dim xs">none defined</span>'}</div>
-      <div class="badgegroup"><span class="badgecap">WORKLOADS</span>
+      ${nodeAddressTags(n) ? `<div class="badgegroup"><span class="badgecap">ADDRESSES</span><div class="badge-values">${nodeAddressTags(n)}</div></div>` : ""}
+      ${duties ? `<div class="badgegroup"><span class="badgecap">DUTIES</span><div class="badge-values">${duties}</div></div>` : ""}
+      <div class="badgegroup"><span class="badgecap">HARDWARE</span><div class="badge-values">
+        ${hardwareTags(nodeHardwareIds(n)) || '<span class="dim xs">none defined</span>'}</div></div>
+      <div class="badgegroup"><span class="badgecap">WORKLOADS</span><div class="badge-values">
         ${n.workloads.length ? n.workloads.slice(0, 5).map(w =>
             `<span class="tag movable" title="Move ${esc(w)} to another host"
                onclick="event.stopPropagation();moveWorkload(${jsq(w)})">${esc(w)} <span class="mv">⇄</span></span>`).join("")
             + (n.workloads.length > 5 ? `<span class="tag more" data-tip="${esc(n.workloads.slice(5).join(", "))}">+${n.workloads.length - 5}</span>` : "")
-          : '<span class="dim xs">none</span>'}</div>
+          : '<span class="dim xs">none</span>'}</div></div>
     </div></div>`;
 }
 

@@ -104,8 +104,8 @@ a{color:inherit;text-decoration:none}
    main pane, so edge gestures cannot move the surrounding document. */
 @media(max-width:900px){
   html[data-display="standalone"]{height:100%;overflow:hidden;overscroll-behavior:none}
-  html[data-display="standalone"] body{height:100vh;height:100dvh;overflow:hidden;overscroll-behavior:none}
-  html[data-display="standalone"] #app{height:100%;min-height:0;overflow:hidden}
+  html[data-display="standalone"] body{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;overscroll-behavior:none}
+  html[data-display="standalone"] #app{flex:1;min-height:0;overflow:hidden}
   html[data-display="standalone"] .main{min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:none}
   html[data-display="standalone"] .side{height:100vh;height:100dvh;overscroll-behavior:contain}
   html[data-display="standalone"] #gate{display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;overscroll-behavior:contain}
@@ -1112,7 +1112,8 @@ html[data-theme="light"] #net_editor .net-access-choice:has(input:checked),html[
 .podprogress>div>span:first-child{display:flex;flex-direction:column;gap:2px;min-width:0}
 @media(max-width:650px){.updatebar{align-items:flex-start}.rollout-steps{grid-template-columns:1fr}.update-image>div:not(.between){grid-template-columns:1fr}}
 .nodebadges{display:flex;flex-direction:column;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid rgba(255,255,255,.05)}
-.badgegroup{display:flex;align-items:center;gap:5px;flex-wrap:wrap}.badgecap{width:72px;flex:0 0 auto;color:var(--dim);font:650 10px/1.2 "JetBrains Mono",monospace;letter-spacing:.08em}
+.badgegroup{display:grid;gap:5px}.badgecap{color:var(--mut);font:650 10px/1.2 "JetBrains Mono",monospace;letter-spacing:.08em}
+.badge-values{display:flex;align-items:center;gap:5px;flex-wrap:wrap;min-width:0}
 .importapps{grid-template-columns:repeat(auto-fill,minmax(230px,1fr))}.importapp{padding:13px}
 
 /* ---------------- responsive ---------------- */
@@ -2639,7 +2640,8 @@ html[data-theme="light"] .settings-nav button.on{background:rgba(0,0,0,.06)}
   .settings-nav button i{display:block;font-size:18px}
   .settings-layout[data-open="0"] .settings-main{display:none}
   .settings-layout[data-open="1"] .settings-nav{display:none}
-  .settings-back{display:inline-flex;border:0;background:none;color:var(--low);font:600 13px "Inter Tight",sans-serif;padding:2px 0 12px;cursor:pointer}
+  .settings-back{display:flex;align-items:center;width:100%;border:0;border-radius:10px;background:var(--ok);color:#062a1b;
+    font:650 13px "Inter Tight",sans-serif;padding:10px 12px;margin-bottom:12px;cursor:pointer}
 }
 /* Containers: the count and the group chips share the line under the tabs. */
 .phead>div:first-child:has(.wgroup-bar){display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;column-gap:16px;row-gap:8px;min-width:0}
@@ -2802,7 +2804,10 @@ html[data-theme="light"] .setup-meter{background:rgba(0,0,0,.08)}
 @keyframes setuppulse{0%,100%{opacity:1;color:var(--tx)}50%{opacity:.4;color:var(--mut)}}
 @media(prefers-reduced-motion:reduce){.iconbtn.setupbtn.pulse svg{animation:none}}
 html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
-.setup-return{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 26px;border-bottom:1px solid var(--line);background:var(--surf);position:sticky;top:var(--hdr);z-index:20}
+.setup-return{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 26px;border-bottom:1px solid #1f8758;background:var(--ok);color:#062a1b;position:sticky;top:var(--hdr);z-index:20}
+.setup-return .btn{background:#0b3524;border-color:#0b3524;color:#fff}
+.setup-return .btn:hover{background:#104d35;border-color:#104d35}
+.setup-return .iconbtn{color:#062a1b;background:rgba(0,0,0,.06);border-color:rgba(0,0,0,.15)}
 .setup-return-copy{min-width:0;font-size:13px}
 .setup-return .row{flex-shrink:0;gap:8px}
 .setup-return .iconbtn{width:32px;height:32px}
