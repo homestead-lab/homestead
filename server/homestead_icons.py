@@ -11,6 +11,9 @@ import base64
 import os
 import re
 import socket
+import ssl
+import http.client
+import time
 import tempfile
 import urllib.parse
 import urllib.request
@@ -28,7 +31,7 @@ MIME_EXTENSIONS = {
 }
 
 
-def _validate_public_url(url):
+def _public_target(url):
     try:
         parsed = urllib.parse.urlparse(url)
     except ValueError as exc:
@@ -38,18 +41,51 @@ def _validate_public_url(url):
     if parsed.username or parsed.password:
         raise ValueError("logo URL must not contain credentials")
     try:
-        addresses = {item[4][0] for item in socket.getaddrinfo(
+        addresses = socket.getaddrinfo(
             parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80),
-            type=socket.SOCK_STREAM)}
+            type=socket.SOCK_STREAM)
     except OSError as exc:
         raise ValueError("logo host could not be resolved") from exc
     if not addresses:
         raise ValueError("logo host could not be resolved")
-    for address in addresses:
+    for _, _, _, _, sockaddr in addresses:
+        address = sockaddr[0]
         ip = ipaddress.ip_address(address.split("%", 1)[0])
         if not ip.is_global:
             raise ValueError("logo host must resolve only to public addresses")
+    return parsed, addresses
+
+
+def _validate_public_url(url):
+    _public_target(url)
     return url
+
+
+class _PinnedConnection(http.client.HTTPConnection):
+    """No second DNS lookup, environmental proxy, or unverified TLS peer."""
+    def __init__(self, parsed, addresses, timeout):
+        super().__init__(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80), timeout=timeout)
+        self.parsed, self.addresses = parsed, addresses
+
+    def connect(self):
+        deadline = time.monotonic() + self.timeout
+        last = None
+        for family, kind, protocol, _, sockaddr in self.addresses:
+            raw = socket.socket(family, kind, protocol)
+            try:
+                raw.settimeout(max(0.01, deadline - time.monotonic()))
+                raw.connect(sockaddr)
+                if raw.getpeername()[0] != sockaddr[0]:
+                    raise OSError("logo peer does not match the approved address")
+                self.sock = (ssl.create_default_context().wrap_socket(raw, server_hostname=self.host)
+                             if self.parsed.scheme == "https" else raw)
+                return
+            except OSError as error:
+                raw.close()
+                last = error
+                if time.monotonic() >= deadline:
+                    break
+        raise OSError("logo host could not be reached") from last
 
 
 class _SafeRedirect(urllib.request.HTTPRedirectHandler):
@@ -73,16 +109,38 @@ def _sniff_mime(data):
 
 
 def _download(url):
-    _validate_public_url(url)
-    opener = urllib.request.build_opener(_SafeRedirect())
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "Homestead icon cache",
-        "Accept": "image/png,image/jpeg,image/gif,image/webp,image/x-icon",
-    })
-    with opener.open(req, timeout=15) as response:
-        _validate_public_url(response.geturl())
-        declared = (response.headers.get_content_type() or "").lower()
-        data = response.read(MAX_ICON_BYTES + 1)
+    deadline = time.monotonic() + 15
+    for redirect in range(6):
+        parsed, addresses = _public_target(url)
+        connection = _PinnedConnection(parsed, addresses, max(0.01, deadline - time.monotonic()))
+        try:
+            connection.request("GET", urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, "")), headers={
+                "User-Agent": "Homestead icon cache", "Accept": "image/png,image/jpeg,image/gif,image/webp,image/x-icon"})
+            transport = connection.sock
+            response = connection.getresponse()
+            if response.status in (301, 302, 303, 307, 308):
+                location = response.headers.get("Location")
+                if not location or redirect == 5:
+                    raise ValueError("logo has too many or invalid redirects")
+                url = urllib.parse.urljoin(url, location)
+                continue
+            if response.status != 200:
+                raise ValueError("logo server did not return a successful response")
+            declared = (response.headers.get_content_type() or "").lower()
+            chunks = bytearray()
+            while len(chunks) <= MAX_ICON_BYTES:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("logo download timed out")
+                transport.settimeout(remaining)
+                part = response.read1(min(16384, MAX_ICON_BYTES + 1 - len(chunks)))
+                if not part:
+                    break
+                chunks.extend(part)
+            data = bytes(chunks)
+            break
+        finally:
+            connection.close()
     if len(data) > MAX_ICON_BYTES:
         raise ValueError("logo is too large (maximum 256 KiB)")
     mime = _sniff_mime(data)

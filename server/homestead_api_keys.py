@@ -189,7 +189,7 @@ def _allowed_from(rec, addr):
 FRESH_FOR = 2
 
 
-def verify(token, addr, now=None):
+def verify(token, addr, now=None, force=False):
     """The key a bearer token is, as {id, name, owner, scopes, expires}.
     Raises PermissionError with what to tell the caller.
 
@@ -208,7 +208,7 @@ def verify(token, addr, now=None):
 
     match = TOKEN.fullmatch(str(token or "").strip())
     kid, secret = (match.group(1), match.group(2)) if match else ("", "")
-    data = AUTH._load(max_age=FRESH_FOR)
+    data = AUTH._load(max_age=FRESH_FOR, force=force, allow_stale=not force)
     rec = (data.get("api_keys") or {}).get(kid) if kid else None
     # The digest is worked out whether or not the key exists, so a wrong id
     # and a wrong secret take the same time.

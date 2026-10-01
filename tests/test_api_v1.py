@@ -144,7 +144,7 @@ class DoorTests(unittest.TestCase):
         with mock.patch.object(server.API_KEYS, "verify", return_value=key), \
                 mock.patch.object(server, "require_self_data_write", return_value=None):
             self.assertIsNone(h._guard("/api/v1/containers/lab/x/stop"))
-        self.assertEqual(("api-key:ha", None), (h.user, h.role))
+        self.assertEqual(("api-key:ha", "viewer"), (h.user, h.role))
         self.assertEqual(["read"], h.api_key["scopes"])
 
     def test_a_refused_key_is_a_401_and_too_many_a_429(self):

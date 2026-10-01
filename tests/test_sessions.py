@@ -106,12 +106,12 @@ class SessionTests(unittest.TestCase):
 
         self.assertIsNone(auth.verify_token(f"{raw}.not-a-real-signature"))
 
-    def test_a_session_from_before_the_absolute_cap_existed_still_works(self):
+    def test_a_session_missing_its_absolute_clock_requires_sign_in(self):
         claims = self._claims(auth.issue_token("ada"))
         claims.pop("iat")
         claims.pop("rem")
 
-        self.assertEqual("ada", auth.verify_token(self._resign(claims))["user"])
+        self.assertIsNone(auth.verify_token(self._resign(claims)))
 
     def _resign(self, claims):
         raw = base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")

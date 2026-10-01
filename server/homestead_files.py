@@ -10,6 +10,7 @@ length is checked against what was sent, and only then does it replace the
 original - a half-delivered stream can never truncate a config file.
 """
 import base64
+import hashlib
 import json
 import os
 import posixpath
@@ -30,7 +31,7 @@ SYSTEM_NAMESPACES = set()
 
 POD_PREFIX = "homestead-files-"
 MOUNT = "/data"
-IMAGE = os.environ.get("FILES_IMAGE", "alpine:3.20")
+IMAGE = os.environ.get("FILES_IMAGE", "alpine:3.24")
 # A helper pod is cheap but it holds a ReadWriteOnce claim, so it gives itself
 # a deadline rather than relying on anyone remembering to close the browser.
 SESSION_SECONDS = int(os.environ.get("FILES_SESSION_SECONDS", "1800"))
@@ -263,38 +264,54 @@ def read_file(namespace, pvc, path):
         raise ValueError(err[:200])
     if b"\x00" in out:
         raise ValueError(f"{relative} looks like a binary file, so it is not editable here")
-    return {"path": relative, "size": size, "content": out.decode("utf-8", "replace")}
+    if len(out) > MAX_EDIT_BYTES:
+        raise ValueError("the file changed size; open it again")
+    return {"path": relative, "size": len(out), "content": out.decode("utf-8", "replace"),
+            "revision": hashlib.sha256(out).hexdigest()}
 
 
-def write_file(namespace, pvc, path, content):
+def write_file(namespace, pvc, path, content, revision=None):
     """Replace a file, keeping one backup and verifying what arrived."""
     relative = safe_path(path)
     if not relative:
         raise ValueError("choose a file to save")
+    if not re.fullmatch(r"[0-9a-f]{64}", str(revision or "")):
+        raise ValueError("open the file again before saving; its revision is required")
     payload = str(content if content is not None else "").encode("utf-8")
     if len(payload) > MAX_EDIT_BYTES:
         raise ValueError(f"the file is larger than {MAX_EDIT_BYTES // 1024} KB")
     session = open_session(namespace, pvc)
     namespace, pod = session["namespace"], session["pod"]
     target = _full(path)
-    temporary = target + ".homestead-tmp"
-    _sh(namespace, pod, f"cat > {_quote(temporary)}", stdin=payload or b"", timeout=60)
-    # Only a complete write replaces the original.
-    check, _ = _sh(namespace, pod, f"wc -c < {_quote(temporary)} 2>/dev/null || echo -1")
+    lock = target + ".homestead-lock"
+    temporary = target + ".homestead-" + secrets.token_hex(16)
+    backup = temporary + ".bak"
+    t, tmp, lk, bak = map(_quote, (target, temporary, lock, backup))
+    acquired, err = _sh(namespace, pod,
+        f"umask 077; mkdir {lk} && printf locked")
+    if acquired != b"locked":
+        raise ValueError("another save holds this file; try again or inspect its .homestead-lock directory")
+    digest = hashlib.sha256(payload).hexdigest()
     try:
-        written = int(check.decode().strip() or -1)
-    except ValueError:
-        written = -1
-    if written != len(payload):
-        _sh(namespace, pod, f"rm -f {_quote(temporary)}")
-        raise ValueError(f"only {max(0, written)} of {len(payload)} bytes arrived; "
-                         "the file was left unchanged")
-    _, err = _sh(namespace, pod,
-                 f"[ -f {_quote(target)} ] && cp -p {_quote(target)} {_quote(target + '.homestead-bak')}; "
-                 f"cat {_quote(temporary)} > {_quote(target)} && rm -f {_quote(temporary)}")
-    if err:
-        raise ValueError(err[:200])
+        _, err = _sh(namespace, pod, f"umask 077; set -C; head -c {len(payload)} > {tmp}", stdin=payload or b"", timeout=60)
+        if err:
+            raise ValueError(err[:200])
+        # Marker only follows a complete, verified, durable replacement.
+        script = (f"set -e; [ -f {t} ] && [ ! -L {t} ]; "
+            f"[ \"$(sha256sum {t} | cut -d ' ' -f1)\" = {_quote(revision)} ] || "
+            "{ echo 'file changed; reopen it before saving' >&2; exit 1; }; "
+            f"[ \"$(sha256sum {tmp} | cut -d ' ' -f1)\" = {_quote(digest)} ]; "
+            f"cp -p {t} {bak}; chmod \"$(stat -c %a {t})\" {tmp}; chown \"$(stat -c %u:%g {t})\" {tmp}; "
+            f"sync -f {tmp}; sync -f {bak}; "
+            f"mv -fT {bak} {_quote(target + '.homestead-bak')}; mv -fT {tmp} {t}; "
+            f"sync -f {_quote(posixpath.dirname(target))}; printf saved")
+        answer, err = _sh(namespace, pod, script, timeout=60)
+        if answer != b"saved":
+            raise ValueError(err[:200] or "save failed; the original or its backup is retained")
+    finally:
+        _sh(namespace, pod, f"rm -f {tmp} {bak}; rmdir {lk}")
     return {"ok": True, "path": relative, "bytes": len(payload),
+            "revision": digest,
             "message": f"Saved {relative} ({len(payload)} bytes); previous contents kept as "
                        f"{posixpath.basename(relative)}.homestead-bak"}
 

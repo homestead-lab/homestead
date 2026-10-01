@@ -1,0 +1,30 @@
+name: Security inventory
+
+on:
+  pull_request:
+    paths: ['server/**', 'web/vendor/**', 'Dockerfile', 'requirements*.txt', 'scripts/security_scan.sh', '.github/workflows/security.yml']
+  push:
+    branches: [main, dev]
+    paths: ['server/**', 'web/vendor/**', 'Dockerfile', 'requirements*.txt', 'scripts/security_scan.sh', '.github/workflows/security.yml']
+  schedule:
+    - cron: '17 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Scan both candidate architectures
+        run: sh scripts/security_scan.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: security-image-inventory
+          path: release-assets/security/*.json

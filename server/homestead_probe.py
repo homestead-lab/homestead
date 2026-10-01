@@ -10,6 +10,7 @@ Homestead installs itself cannot drift apart. A test regenerates the file and
 compares it.
 """
 import os
+import base64
 import time
 import urllib.error
 
@@ -23,11 +24,13 @@ NAME = "homestead-nodeprobe"
 PROBE_PORT = 9099
 SMART_PORT = 9100
 LAST = {"state": "pending", "detail": "the node probe has not been checked yet"}
+_helper_key = None
 
 
-def bind(_kget, _ksend, namespace):
-    global kget, ksend, NS
+def bind(_kget, _ksend, namespace, helper_key=None):
+    global kget, ksend, NS, _helper_key
     kget, ksend, NS = _kget, _ksend, namespace
+    _helper_key = helper_key
     NAMES.bind(_kget)
 
 
@@ -40,6 +43,11 @@ def shipped_scripts(directory=None):
                 found[name] = handle.read()
         except OSError:
             return {}
+    try:
+        with open(os.path.join(os.path.dirname(directory or SCRIPTS), "homestead_http.py"), encoding="utf-8") as handle:
+            found["homestead_http.py"] = handle.read()
+    except OSError:
+        return {}
     return found
 
 
@@ -115,7 +123,7 @@ def manifest(version="dev", namespace=None, scripts=None):
                         {"name": "dev", "hostPath": {"path": "/dev", "type": "Directory"}},
                         {"name": "proc", "hostPath": {"path": "/proc", "type": "Directory"}},
                         {"name": "auth",
-                         "secret": {"secretName": "homestead-auth", "optional": True}},
+                         "secret": {"secretName": "homestead-smart-key"}},
                     ],
                 },
             },
@@ -153,11 +161,10 @@ def install(version="dev"):
         raise ValueError("the node probe is already installed")
     if not shipped_scripts():
         raise ValueError("this image carries no probe scripts")
+    ensure_helper_key()
     configmap, daemonset = manifest(version)
-    # The Secret the smart sidecar reads is optional, so its name only has to
-    # match whatever this install already calls it.
-    daemonset["spec"]["template"]["spec"]["volumes"][-1]["secret"]["secretName"] = \
-        NAMES.object_name("auth", NS, kind="secrets")
+    # The helper receives its own key, separate from the account store.
+    daemonset["spec"]["template"]["spec"]["volumes"][-1]["secret"]["secretName"] = NAMES.object_name("smart-key", NS, kind="secrets")
     for body, path in ((configmap, "/api/v1/namespaces/" + NS + "/configmaps"),
                        (daemonset, "/apis/apps/v1/namespaces/" + NS + "/daemonsets")):
         try:
@@ -195,6 +202,13 @@ def reconcile(version=""):
         # Not installed, and not Homestead's to install unasked: the SMART
         # sidecar is privileged, which is the operator's decision to make.
         return _note({"state": "absent", "detail": "the node probe is not installed"})
+    ensure_helper_key()
+    if _helper_key:
+        ds_path = "/apis/apps/v1/namespaces/" + NS + "/daemonsets/" + name
+        ds = kget(ds_path)
+        volumes = ds.get("spec", {}).get("template", {}).get("spec", {}).get("volumes", [])
+        if any(v.get("name") == "auth" and v.get("secret", {}).get("secretName") != NAMES.object_name("smart-key") for v in volumes):
+            ksend("PATCH", ds_path, {"spec": {"template": {"spec": {"volumes": [{"name": "auth", "secret": {"secretName": NAMES.object_name("smart-key"), "optional": False}}]}}}}, ctype="application/strategic-merge-patch+json")
     try:
         current = kget("/api/v1/namespaces/" + NS + "/configmaps/" + name)
     except Exception as error:
@@ -217,3 +231,23 @@ def reconcile(version=""):
           ctype="application/strategic-merge-patch+json")
     return _note({"state": "updated", "detail": name + " updated to this release's scripts",
                   "restarted_at": stamp})
+
+
+def ensure_helper_key():
+    if _helper_key is None:
+        return
+    data = {"key": base64.b64encode(_helper_key()).decode()}
+    path = f"/api/v1/namespaces/{NS}/secrets/{NAMES.object_name('smart-key')}"
+    try:
+        current = kget(path)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        current = {}
+    if current.get("data") == data:
+        return
+    meta = {"name": NAMES.object_name("smart-key"), "namespace": NS}
+    if current.get("metadata", {}).get("resourceVersion"):
+        meta["resourceVersion"] = current["metadata"]["resourceVersion"]
+    body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "metadata": meta, "data": data}
+    ksend("PUT" if current else "POST", path if current else path.rsplit("/", 1)[0], body)

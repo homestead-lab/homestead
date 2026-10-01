@@ -2,6 +2,7 @@
 """Read host sensors, devices and disk counters and serve them as JSON."""
 import json, os, platform, re, socket, stat, threading, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from homestead_http import BoundedHTTPServer, LimitedHandler
 
 SYS = "/host/sys"
 DEV = "/host/dev"
@@ -475,7 +476,7 @@ def payload():
             "default_interface": default_interface(),
             "v2": v2_facts(), "nfs": nfs_facts(), "numa": numa_facts()}
 
-class H(BaseHTTPRequestHandler):
+class H(LimitedHandler):
     protocol_version = "HTTP/1.1"
     def log_message(self, *a): pass
     def do_GET(self):
@@ -491,4 +492,4 @@ if __name__ == "__main__":
     # host shutting down would wait out its whole stop timeout for this.
     import signal
     signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
-    ThreadingHTTPServer(("0.0.0.0", 9099), H).serve_forever()
+    BoundedHTTPServer(("0.0.0.0", 9099), H, max_connections=8).serve_forever()

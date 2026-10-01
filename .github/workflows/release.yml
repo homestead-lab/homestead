@@ -114,6 +114,11 @@ jobs:
         # Isolated Docker k3s only; fail before pushing any container or chart.
         if: steps.checks.outputs.here == 'true'
         run: python3 tests/integration/self_data_cluster.py
+      - name: Scan the candidate before publication
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REVISION: ${{ github.sha }}
+        run: sh scripts/security_scan.sh
       - name: Push the image
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         id: build
