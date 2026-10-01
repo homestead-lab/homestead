@@ -900,6 +900,20 @@ requires a fresh host review, not a repeat of the previous request. A helper in
 image-pull backoff may still start later: inspect it before sending anything else.
 Missing creation receipts and replacement helpers are not treated as the original.
 
+Longhorn instance-manager budgets may allow zero disruptions before maintenance
+starts. The review explains that Homestead will cordon the host, evict workload
+pods first, and wait up to two minutes for Longhorn to permit storage pod eviction.
+It uses the Kubernetes Eviction API throughout; it does not delete these pods or
+change their budgets. A refusal or timeout sends no power and leaves the host
+cordoned. Inspect Longhorn volume replicas, pod events and Recent jobs before
+reviewing again. Other zero-disruption budgets, stale budget status and ambiguous
+ownership still block the review.
+
+Before sending power, Homestead checks quorum, VMs, remaining pods and the
+reviewed volumes again, including volumes whose local replicas were evicted.
+Expected degradation from stopping a local replica is allowed only while the
+reviewed healthy copies on other Ready hosts remain available.
+
 An administrator may override the quorum, VM, disruption-budget and inventory
 checks (`force: true`, after a review made with `force=1`). A forced action skips
 cordon and drain and is still refused when power control is off, the host is not

@@ -90,6 +90,23 @@ test("Host review names budgets and local data with escaped content", async () =
 });
 
 const hostReview = {node:'host1',action:'reboot',review_token:'review',ready:true,pods:1,vms:[],workloads:[],volumes:[]};
+test('Longhorn protection explains the bounded drain wait and allows reviewed maintenance', async () => {
+  const t = setup({...hostReview, warnings: ['Wait up to 2 minutes; power will not be sent if Longhorn keeps it protected'],
+    maintenance: {budgets: [{pod: 'longhorn-system/<manager>', budget: 'longhorn-system/manager', allowed: 0, wait_for_drain: true}]}});
+  await t.c.window.nodePowerReview('host1', 'reboot');
+  assert.match(t.html(), /0 disruption\(s\) allowed · waits for Longhorn during drain/);
+  assert.match(t.html(), /Wait up to 2 minutes/);
+  assert.match(t.html(), /power will not be sent/);
+  assert.match(t.html(), /&lt;manager&gt;/);
+  assert.match(t.html(), /id="pw_execute"/);
+});
+test('forced review never promises a Longhorn drain wait', async () => {
+  const t = setup({...hostReview, force:true,
+    maintenance: {budgets: [{pod:'longhorn-system/manager',budget:'longhorn-system/manager',allowed:0,wait_for_drain:true}]}});
+  await t.c.window.nodePowerReview('host1', 'reboot', true);
+  assert.match(t.html(), /does not cordon or drain/);
+  assert.doesNotMatch(t.html(), /waits for Longhorn during drain/);
+});
 function hostFields(t) {
   t.fields['#pw_confirm']={value:'host1'}; t.fields['#pw_execute']={};
 }
