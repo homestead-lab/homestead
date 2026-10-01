@@ -99,6 +99,11 @@ column headings are the one small upper-case label.
   Running now, each with its progress - then Needs you: a new Homestead,
   container updates, failed image checks and failed jobs. All jobs opens every
   job with its log. Nothing floats over the page.
+- **On a phone**, refresh replaces the gear in the top bar; Settings stays in
+  the drawer and on the account button. Installed apps also refresh by pulling
+  down at the top of the content pane. Refresh updates the current page;
+  **Reload app** in the drawer reloads the whole app. Neither refresh action
+  replaces unsaved settings, form pages, open dialogs or editors.
 
 ### Detail pages
 

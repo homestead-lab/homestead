@@ -3,6 +3,7 @@
 import {chromium, devices} from "playwright";
 import assert from "node:assert/strict";
 import {mkdir} from "node:fs/promises";
+import {checkMobileRefresh} from "./check_mobile_refresh.mjs";
 const base=process.env.HOMESTEAD_URL || "http://127.0.0.1:4173";
 await mkdir("release-assets/pages/mobile-pwa",{recursive:true});
 const browser=await chromium.launch({headless:true});
@@ -25,6 +26,7 @@ try {
     assert.equal(await page.evaluate(()=>document.documentElement.dataset.display),installed?"standalone":"browser");
     assert.equal(await page.locator("#demoBanner").evaluate(el=>el.parentElement===document.body),true,"demo banner stays above the whole site");
     assert.equal(await page.evaluate(()=>document.querySelector("#demoBanner").getBoundingClientRect().bottom<=document.querySelector("#app").getBoundingClientRect().top),true,"demo banner sits above both navigation and content");
+    await checkMobileRefresh(page,context,installed);
     if(!installed) {
       assert.equal(await page.evaluate(()=>getComputedStyle(document.body).overflowY),"visible");
       assert.equal(await page.evaluate(()=>getComputedStyle(document.querySelector(".main")).overflowY),"visible");
