@@ -1312,6 +1312,48 @@ def self_stop_warning():
             "on the cluster. Restart it instead if it needs a fresh start.")
 
 
+class WorkloadRefused(Exception):
+    """A start the capacity check will not allow as asked: 409, with its plan."""
+    def __init__(self, message, plan):
+        super().__init__(message)
+        self.plan = plan
+
+
+def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
+    """A Deployment to n replicas, after the checks the app makes: never the
+    SMB server's, never Homestead's own unless confirmed, and a start only
+    where the capacity check allows it."""
+    if n < 0 or n > 100:
+        raise ValueError("replicas must be between 0 and 100")
+    guard_managed_smb(ns, name)
+    guard_self(ns, name, stopping=n == 0, confirmed=confirm_self)
+    plan = None
+    if n > 0:
+        plan = workload_start_plan(ns, name, n)
+        if plan["blocked"]:
+            raise WorkloadRefused("not enough eligible capacity for the requested replicas", plan)
+        if plan["requires_confirmation"] and not confirm_capacity:
+            raise WorkloadRefused("review node memory before starting", plan)
+    if n:
+        clear_unstarted_pods(ns, name, stopping=False)
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",
+          {"spec": {"replicas": n}}, ctype="application/merge-patch+json")
+    if not n:
+        clear_unstarted_pods(ns, name, stopping=True)
+    _cache.pop("wl", None)
+    return {"ok": True, "plan": plan}
+
+
+def restart_workload(ns, name):
+    guard_managed_smb(ns, name)
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
+          {"spec": {"template": {"metadata": {"annotations":
+           {NAMES.key("restartedAt"): time.strftime("%Y-%m-%dT%H:%M:%SZ")}}}}},
+          ctype="application/merge-patch+json")
+    _cache.pop("wl", None)
+    return {"ok": True}
+
+
 def guard_self(ns, name, stopping=False, confirmed=False, renaming=False, deleting=False, moving=False):
     """Changes that would take Homestead down from its own page.
 
@@ -4057,6 +4099,40 @@ def reviewed_vm_power(body):
         lambda: VMS.power(ns, name, action, raw_errors=True), before_send)
 
 
+def api_vm_power(ns, name, action):
+    """Start, stop or restart a VM for /api/v1: stop as the app does; start and
+    restart through the same capacity review, taken as acknowledged when it
+    is not blocked - the key's scope is the consent the app asks a person for.
+    A start that needs a person (missing TPM or EFI state) is refused."""
+    if action not in ("start", "stop", "restart"):
+        raise ValueError("start, stop or restart")
+    body = {"ns": _dns_name(ns, "namespace"), "name": _dns_name(name, "VM name"), "action": action}
+    if action == "stop":
+        result = reviewed_vm_power(body)
+        _cache.pop("vms", None)
+        return {"warnings": [], "job": ((result or {}).get("operation") or {}).get("id") if isinstance(result, dict) else None}
+    preview = preview_vm_power(body)
+    plan = preview["capacity"]
+    if plan.get("blocked"):
+        raise API_V1.ApiError(409, "it cannot start: " + "; ".join(plan.get("blockers") or ["not enough room"]),
+                              blockers=list(plan.get("blockers") or []))
+    if (plan.get("vm") or {}).get("state_initialization"):
+        raise API_V1.ApiError(409, "starting it needs its TPM or EFI state set up first; do that in the app")
+    result = reviewed_vm_power({**body, "capacity_token": preview["capacity_token"], "confirm_capacity": True})
+    _cache.pop("vms", None)
+    job = (result.get("operation") or {}).get("id") if isinstance(result, dict) else None
+    return {"warnings": list(plan.get("warnings") or []), "job": job}
+
+
+def api_scale(ns, name, n):
+    """Start or stop a container for /api/v1, under the app's own checks."""
+    try:
+        result = scale_workload(ns, name, n, confirm_capacity=True, confirm_self=False)
+    except WorkloadRefused as refused:
+        raise API_V1.ApiError(409, str(refused), blockers=list((refused.plan or {}).get("blockers") or [])) from None
+    return {"warnings": list((result.get("plan") or {}).get("warnings") or []), "job": None}
+
+
 def vm_edit_capacity(prepared):
     """Admit proposed edits, not the old VMI's resource requirements.
 
@@ -6608,6 +6684,14 @@ def _config_restored(parts):
 
 
 SIGNINS.bind(DATA_DIR)
+import homestead_api_keys as API_KEYS
+import homestead_api_v1 as API_V1
+API_KEYS.bind(DATA_DIR)
+API_V1.bind(nodes=lambda: cached("nodes", 5, get_nodes), workloads=lambda: cached("wl", 5, get_workloads),
+            vms=lambda: cached("vms", 5, VMS.list_vms),
+            alerts=lambda: [a for a in ALERTS.active() if a.get("announced", 0) > 0],
+            jobs=OPS.snapshot, scale=api_scale, restart=restart_workload, vm_power=api_vm_power,
+            version=lambda: HOMESTEAD_VERSION)
 
 
 # Homestead's own configuration, part by part, for its backup and restore.
@@ -6980,6 +7064,8 @@ def is_app_identity(path):
 # but a viewer who hand-crafts the request still gets a 403.
 ADMIN_ROUTES = {
     "/api/auth/users", "/api/auth/users/delete", "/api/auth/role",
+    # API keys: made, listed and revoked by administrators only.
+    "/api/auth/keys", "/api/auth/keys/revoke",
     # Who signed in, from where: other people's addresses and devices.
     "/api/auth/history",
     "/api/node/power", "/api/node/drain", "/api/node/cordon", "/api/node/hardware",
@@ -7161,6 +7247,9 @@ def fleet_all(what, user, role):
 
 
 # ---------------------------------------------------------------- HTTP
+_key_refusals = {}      # address -> when a refused API key was last written down
+
+
 class H(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -7371,6 +7460,9 @@ class H(BaseHTTPRequestHandler):
         if (is_spa_route(path) or is_page_path(path) or is_public_path(path) or is_vendor_path(path) or
                 (path.startswith("/js/") and path.endswith(".js"))):
             return None
+        authorization = self.headers.get("Authorization", "")
+        if authorization[:7].lower() == "bearer ":
+            return self._api_key_guard(path, authorization[7:].strip())
         who = self._who()
         if not who:
             self._send(401, {"error": "not signed in", "auth": False})
@@ -7397,8 +7489,46 @@ class H(BaseHTTPRequestHandler):
             return True
         return None
 
+    def _api_key_guard(self, path, token):
+        """An API key: for /api/v1 alone, checked, and the request let through
+        with the key's scopes - which /api/v1 enforces per endpoint. No cookie
+        is involved, so there is no cross-site form to guard against."""
+        if not path.startswith("/api/v1/"):
+            self._send(401, {"error": "API keys work only on /api/v1; GET /api/v1/openapi.json lists what they can do"})
+            return True
+        try:
+            key = API_KEYS.verify(token, self._client_ip())
+        except PermissionError as error:
+            message = str(error)
+            limited = message.startswith("too many")
+            # One line per address a minute at most: a client retrying a bad
+            # key must not wash every other entry out of the history.
+            addr = self._client_ip()
+            if time.time() - _key_refusals.get(addr, 0) > 60:
+                _key_refusals[addr] = time.time()
+                self._signin("key-refused", "", ok=False, detail=message)
+            self._send(429 if limited else 401, {"error": message})
+            return True
+        except AUTH.StoreUnavailable as error:
+            self._send(503, {"error": str(error)})
+            return True
+        self.api_key = {**key, "kind": "key"}
+        self.user, self.role = f"api-key:{key['name']}", None
+        HOSTACCESS.set_role(None)
+        return None
+
+    def _api_v1(self, method, path, query, body):
+        """One /api/v1 request, for a key or for someone signed in."""
+        auth = self.api_key or {"name": self.user, "kind": "session", "expires": None,
+                                "scopes": API_KEYS.scopes_for_role(self.role)}
+        if path == "/api/v1/openapi.json" and method == "GET":
+            return self._send(200, API_V1.openapi(HOMESTEAD_VERSION, {s: text for s, (_, text) in API_KEYS.SCOPES.items()}))
+        code, answer = API_V1.handle(method, path, query, body, auth)
+        return self._send(code, answer)
+
     def _begin(self):
         """Per request: a connection can carry several, and the handler stays."""
+        self.api_key = None
         self._extra_headers = []
         self._raw = None
         self._fleet_who = False
@@ -7430,7 +7560,8 @@ class H(BaseHTTPRequestHandler):
         query parameter.
         """
         headers = getattr(self, "headers", None) or {}
-        if FLEET.signed(headers) or FLEET.local_path(path):
+        # /api/v1 answers for this cluster alone: an API key never travels.
+        if FLEET.signed(headers) or FLEET.local_path(path) or path.startswith("/api/v1/"):
             return ""
         query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         named = headers.get("X-Homestead-Cluster") or (query.get("hs_cluster") or [""])[0]
@@ -7529,6 +7660,8 @@ class H(BaseHTTPRequestHandler):
         try:
             if self._guard(p):
                 return
+            if p.startswith("/api/v1/"):
+                return self._api_v1("GET", p, q, None)
             if p == "/api/console":
                 return CONSOLE_PROXY.handle(self, self.user, q)
             if p == "/api/node/shell":
@@ -7620,6 +7753,10 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, rows)
             if p == "/api/auth/users":
                 return self._send(200, AUTH.list_users())
+            if p == "/api/auth/keys":
+                return self._send(200, {"keys": API_KEYS.list_keys(),
+                                        "scopes": {s: text for s, (_, text) in API_KEYS.SCOPES.items()},
+                                        "min_ttl": API_KEYS.MIN_TTL, "max_ttl": API_KEYS.MAX_TTL})
             if p == "/api/auth/history":
                 return self._send(200, SIGNINS.history((q.get("user") or [""])[0],
                                                        (q.get("failures") or [""])[0] == "1"))
@@ -8039,6 +8176,22 @@ class H(BaseHTTPRequestHandler):
                 return self._send(413, {"error": "that request is larger than Homestead accepts"})
             b = self._body()
             addr = self._client_ip()
+            if p.startswith("/api/v1/"):
+                return self._api_v1("POST", p, urllib.parse.parse_qs(u.query), b)
+            if p == "/api/auth/keys":
+                # Made in this Homestead's own app, by someone signed in to it:
+                # never relayed from a linked cluster.
+                if self._fleet_from:
+                    return self._send(403, {"error": "make API keys in this Homestead's own app"})
+                made = API_KEYS.create(b.get("name"), b.get("scopes"), b.get("ttl_seconds"), b.get("networks"), self.user)
+                self._signin("key-added", self.user, detail=f"{made['key']['name']}: {', '.join(made['key']['scopes'])}")
+                return self._send(200, {"ok": True, **made})
+            if p == "/api/auth/keys/revoke":
+                if self._fleet_from:
+                    return self._send(403, {"error": "revoke API keys in this Homestead's own app"})
+                done = API_KEYS.revoke(b.get("id"))
+                self._signin("key-revoked", self.user, detail=done["name"])
+                return self._send(200, done)
             if p.startswith("/api/fleet/"):
                 return self._fleet_post(p, b)
             if p in ("/api/config/backup", "/api/config/inspect", "/api/config/restore"):
@@ -8296,34 +8449,15 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/workloads/group":
                 return self._send(200, set_workload_groups(b))
             if p == "/api/scale":
-                ns, name, n = b["ns"], b["name"], int(b["replicas"])
-                if n < 0 or n > 100:
-                    raise ValueError("replicas must be between 0 and 100")
-                guard_managed_smb(ns, name)
-                guard_self(ns, name, stopping=n == 0, confirmed=b.get("confirm_self") is True)
-                if n > 0:
-                    plan = workload_start_plan(ns, name, n)
-                    if plan["blocked"]:
-                        return self._send(409, {"error": "not enough eligible capacity for the requested replicas", "plan": plan})
-                    if plan["requires_confirmation"] and b.get("confirm_capacity") is not True:
-                        return self._send(409, {"error": "review node memory before starting", "plan": plan})
-                if n:
-                    clear_unstarted_pods(ns, name, stopping=False)
-                ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}/scale",
-                      {"spec": {"replicas": n}}, ctype="application/merge-patch+json")
-                if not n:
-                    clear_unstarted_pods(ns, name, stopping=True)
-                _cache.pop("wl", None)
+                try:
+                    scale_workload(b["ns"], b["name"], int(b["replicas"]),
+                                   confirm_capacity=b.get("confirm_capacity") is True,
+                                   confirm_self=b.get("confirm_self") is True)
+                except WorkloadRefused as refused:
+                    return self._send(409, {"error": str(refused), "plan": refused.plan})
                 return self._send(200, {"ok": True})
             if p == "/api/restart":
-                ns, name = b["ns"], b["name"]
-                guard_managed_smb(ns, name)
-                ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
-                      {"spec": {"template": {"metadata": {"annotations":
-                       {NAMES.key("restartedAt"): time.strftime("%Y-%m-%dT%H:%M:%SZ")}}}}},
-                      ctype="application/merge-patch+json")
-                _cache.pop("wl", None)
-                return self._send(200, {"ok": True})
+                return self._send(200, restart_workload(b["ns"], b["name"]))
             if p == "/api/image-updates/preview":
                 return self._send(200, preview_image_update(b))
             if p == "/api/image-updates/apply":

@@ -16,7 +16,8 @@ DATA_DIR = "/data"
 FILE = "signins.jsonl"
 KEEP = 5000
 EVENTS = ("signin", "signin-failed", "signin-blocked", "signout", "signout-everywhere", "password",
-          "password-failed", "setup", "user-added", "user-removed", "role")
+          "password-failed", "setup", "user-added", "user-removed", "role",
+          "key-added", "key-revoked", "key-refused")
 _lock = threading.Lock()
 _writes = {"n": 0}
 

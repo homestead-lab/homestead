@@ -153,6 +153,10 @@ and UniFi sync.
 **Imports** - containers and VMs from an Unraid server, a Docker Compose file,
 or a VM disk image (qcow2, VMDK).
 
+**API** - scoped, expiring API keys for Home Assistant, scripts and AI agents,
+on a versioned, self-describing API ([OpenAPI](docs/api/openapi.json),
+[guide](https://github.com/wjcloudy/homestead/wiki/API)).
+
 </td>
 <td width="50%" valign="top">
 

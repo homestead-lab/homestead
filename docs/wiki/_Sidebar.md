@@ -21,6 +21,7 @@
 - [Moving between clusters](Moving-between-clusters)
 - [Helm and Resources](Helm-and-resources)
 - [Settings](Settings)
+- [API](API)
 
 **Help**
 - [Troubleshooting](Troubleshooting)

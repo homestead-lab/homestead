@@ -334,3 +334,90 @@ window.setRole = async (name, role) => {
     toast(name + " is now " + role, "ok"); manageUsers();
   } catch (e) { toast(e.message, "bad"); manageUsers(); }
 };
+
+/* ---------------- API keys ----------------
+   Settings › Users and access: keys for Home Assistant, scripts and AI
+   agents. Each expires, holds only the scopes it is given and works on
+   /api/v1 alone; the token is shown once, when it is made. */
+const API_DOCS = "https://github.com/wjcloudy/homestead/wiki/API";
+const API_TTLS = [["1 day", 86400], ["7 days", 7 * 86400], ["30 days", 30 * 86400], ["90 days", 90 * 86400], ["1 year", 365 * 86400]];
+const keyAgo = t => t ? fmtAgo(Math.max(0, Math.round(Date.now() / 1000 - t))) : "";
+const keyUntil = t => {
+  const left = t - Date.now() / 1000;
+  if (left <= 0) return "expired";
+  const days = Math.floor(left / 86400), hours = Math.floor(left / 3600);
+  return days >= 2 ? `expires in ${days} days` : hours >= 2 ? `expires in ${hours} hours` : "expires within 2 hours";
+};
+
+window.apiKeysPaint = async () => {
+  const card = $("#apiKeysCard");
+  if (!card || !can("admin")) return;
+  let found;
+  try { found = await api("/api/auth/keys"); }
+  catch (e) { card.innerHTML = `<div class="ctitle">API keys</div><div class="dim small">${esc(e.message)}</div>`; return; }
+  STATE.data.apiKeys = found;
+  const rows = found.keys.map(k => {
+    const state = k.expired ? '<span class="pill crit">expired</span>' : "";
+    const scopes = k.scopes.map(s => `<span class="tag">${esc(s)}</span>`).join(" ");
+    const detail = [keyUntil(k.expires), k.last_used ? `used ${keyAgo(k.last_used)}${k.last_ip ? ` from ${k.last_ip}` : ""}` : "never used",
+      `made by ${k.owner}`, k.networks.length ? `only from ${k.networks.join(", ")}` : ""].filter(Boolean).map(esc).join(" · ");
+    return serviceRow(esc(k.name), state, `${scopes}<br>${detail}`,
+      `<button class="btn sm danger" onclick="apiKeyRevoke(${jsq(k.id)},${jsq(k.name)})">Revoke</button>`);
+  }).join("");
+  card.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">API keys</div>
+      <div class="csub">For Home Assistant, scripts and AI agents. Each key expires, can do only what it is given, and works only on the API</div></div>
+      <div class="row"><a class="btn sm" href="${API_DOCS}" target="_blank" rel="noopener">API guide</a>
+        <button class="btn sm pri" onclick="apiKeyNew()">＋ New key</button></div></div>
+    ${rows ? `<div class="settings-list">${rows}</div>` : '<div class="dim small">No keys yet.</div>'}
+    <div class="dim xs" style="margin-top:8px">A key cannot manage users or keys, reach a host's shell, or change settings, whatever its scopes.
+      Its full description is at <span class="mono">/api/v1/openapi.json</span> on this Homestead.</div>`;
+};
+
+window.apiKeyNew = () => {
+  const scopes = STATE.data.apiKeys?.scopes || {};
+  modal("New API key", UI.lead("A key can do only what its scopes allow, and stops working when it expires or is revoked. You see it once.")
+    + UI.field("Name", '<input id="ak_name" placeholder="Home Assistant" maxlength="60">', { help: "What uses it, so you know which to revoke." })
+    + `<div class="sec">What it may do</div>`
+    + Object.entries(scopes).map(([scope, text]) => settingRow(`<span class="mono">${esc(scope)}</span>`, esc(text),
+      `<label class="toggle"><input type="checkbox" class="ak-scope" value="${esc(scope)}" ${scope === "read" ? "checked" : ""}><span></span></label>`)).join("")
+    + UI.fields(UI.field("Expires after", `<select id="ak_ttl">${API_TTLS.map(([label, s]) => `<option value="${s}" ${s === 90 * 86400 ? "selected" : ""}>${label}</option>`).join("")}</select>`),
+      UI.field("Only from (optional)", '<input id="ak_nets" placeholder="192.0.2.20, 198.51.100.0/24">', { help: "Addresses or networks it may be used from; anywhere if empty." }))
+    + UI.actions(UI.cancel() + UI.button("Make key", "apiKeyMake(this)", { kind: "pri" })));
+};
+
+window.apiKeyMake = async button => {
+  const body = { name: $("#ak_name").value.trim(), scopes: $$(".ak-scope").filter(c => c.checked).map(c => c.value),
+    ttl_seconds: +$("#ak_ttl").value, networks: $("#ak_nets").value.split(/[\s,]+/).filter(Boolean) };
+  if (!body.name) return toast("give the key a name", "bad");
+  if (!body.scopes.length) return toast("choose at least one thing it may do", "bad");
+  button.disabled = true;
+  let made;
+  try {
+    made = await api("/api/auth/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  } catch (e) { button.disabled = false; return toast(e.message, "bad"); }
+  const example = `curl -H "Authorization: Bearer ${made.token}" ${location.origin}/api/v1/status`;
+  window.__apiToken = made.token;
+  modal(`Key for ${made.key.name}`, UI.callout("warn", "Copy it now: it is not shown again.", "Homestead keeps only a hash of it. If it is lost, revoke it and make another.")
+    + `<div class="f"><label>The key</label><div class="row" style="gap:8px;flex-wrap:nowrap"><input class="mono" readonly value="${esc(made.token)}" onclick="this.select()">
+      <button class="btn" onclick="copyText(window.__apiToken).then(ok => toast(ok ? 'Copied' : 'Select it and copy', ok ? 'ok' : 'bad'))">Copy</button></div></div>`
+    + UI.field("Try it", `<pre class="mono small" style="white-space:pre-wrap;word-break:break-all;margin:0">${esc(example)}</pre>`)
+    + UI.more("Using it from Home Assistant", `<p>A REST sensor, for example, in configuration.yaml:</p>
+      <pre class="mono small" style="white-space:pre-wrap">sensor:
+  - platform: rest
+    name: Homestead alerts
+    resource: ${esc(location.origin)}/api/v1/status
+    headers:
+      Authorization: !secret homestead_api_key
+    value_template: "{{ value_json.alerts.active }}"</pre>
+      <p>with <span class="mono">homestead_api_key: "Bearer hsk_…"</span> in secrets.yaml. The <a href="${API_DOCS}" target="_blank" rel="noopener">API guide</a> has more.</p>`)
+    + UI.actions(UI.button("Done", "window.__apiToken='';closeModal();apiKeysPaint()", { kind: "pri" })));
+};
+
+window.apiKeyRevoke = async (id, name) => {
+  if (!(await ask(`Revoke ${name}? Anything using it is refused from now on.`, { danger: true, ok: "Revoke" }))) return;
+  try {
+    await api("/api/auth/keys/revoke", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    toast(`${name} revoked`, "ok");
+    apiKeysPaint();
+  } catch (e) { toast(e.message, "bad"); }
+};

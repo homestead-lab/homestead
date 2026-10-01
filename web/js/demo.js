@@ -1998,6 +1998,21 @@ ssh_pwauth: true
     "/api/config/restore": { ok: true, restored: ["ipam", "vips", "portal"], skipped: [], detail: "restored IP addresses, VIPs, Portal" },
   });
   const ago = minutes => Math.floor(Date.now() / 1000) - minutes * 60;
+  const demoKeys = { scopes: { read: "Read status: the cluster, nodes, containers, VMs, alerts and jobs",
+      "containers:control": "Start, stop and restart containers", "vms:control": "Start, stop and restart virtual machines" },
+    min_ttl: 3600, max_ttl: 366 * 86400,
+    keys: [{ id: "3f9a1c0b7d2e", name: "Home Assistant", owner: "demo", scopes: ["read", "containers:control"], networks: ["192.0.2.20"],
+             created: ago(60 * 24 * 12), expires: ago(-60 * 24 * 78), expired: false, last_used: ago(2), last_ip: "192.0.2.20" },
+           { id: "8c41e07a9b55", name: "Ops agent", owner: "demo", scopes: ["read"], networks: [],
+             created: ago(60 * 24 * 40), expires: ago(60 * 24), expired: true, last_used: ago(60 * 30), last_ip: "198.51.100.7" }] };
+  responses["/api/auth/keys"] = (url, init) => {
+    if (init?.method !== "POST") return demoKeys;
+    const body = JSON.parse(init.body || "{}");
+    return { ok: true, token: "hsk_0123456789ab_DEMO-ONLY-not-a-real-key-it-works-nowhere-x",
+      key: { id: "0123456789ab", name: body.name || "New key", owner: "demo", scopes: body.scopes || ["read"], networks: body.networks || [],
+             created: ago(0), expires: ago(-(body.ttl_seconds || 86400) / 60), expired: false, last_used: null, last_ip: "" } };
+  };
+  responses["/api/auth/keys/revoke"] = { ok: true, name: "Home Assistant" };
   responses["/api/auth/users"] = [{ name: "demo", role: "admin", last_login: "2026-09-28 07:40" },
     { name: "alex", role: "operator", last_login: "2026-09-28 07:06" }, { name: "kiosk", role: "viewer", last_login: "" }];
   responses["/api/auth/history"] = [

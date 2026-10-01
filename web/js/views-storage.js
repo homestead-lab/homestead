@@ -1324,11 +1324,12 @@ const SIGNIN_WORDS = {
   signout: ["Signed out", "low"], "signout-everywhere": ["Signed out everywhere", "low"], password: ["Password changed", "low"],
   "password-failed": ["Password change refused", "med"], setup: ["Set Homestead up", "low"], "user-added": ["User added", "low"],
   "user-removed": ["User removed", "med"], role: ["Role changed", "low"],
+  "key-added": ["API key made", "low"], "key-revoked": ["API key revoked", "low"], "key-refused": ["API key refused", "med"],
 };
 const SIGNIN_GROUPS = {
   signins: x => x.event === "signin", failures: x => !x.ok,
   signouts: x => ["signout", "signout-everywhere"].includes(x.event),
-  account: x => ["password", "password-failed", "setup", "user-added", "user-removed", "role"].includes(x.event),
+  account: x => ["password", "password-failed", "setup", "user-added", "user-removed", "role", "key-added", "key-revoked", "key-refused"].includes(x.event),
 };
 const EVENT_SINCE = { "1h": 3600, "24h": 86400, "7d": 604800 };
 
