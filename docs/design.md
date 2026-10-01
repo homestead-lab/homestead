@@ -68,6 +68,11 @@ column headings are the one small upper-case label.
    or `menuButton()` when the main action is a choice (＋ Import). Filters
    that belong to the list, such as Containers' group chips, share the
    subtitle's line.
+   On a phone, Containers keeps its page tabs above one toolbar: group picker,
+   Options, Deploy. The count and image-update state share one line below.
+   `listOptions()` puts sorting, layout and platform visibility inside the
+   standard action menu; preferences never add permanent toolbar rows. With
+   no groups, a plain scope label replaces the picker.
 2. **Summary** (`summaryLine()`) - one line that answers "is it well?", with
    its tiles (`UI.stats`, `.statgrid`) behind Details.
 3. **Tabs** (`.seg`), if the page itself has views.

@@ -194,13 +194,22 @@ if (typeof MutationObserver === "function" && typeof document.querySelector === 
    items are left out, and
    with none left there is no menu. A header shows one main button and this
    beside it, so it fits on one line at any width. */
+function menuItems(items) {
+  return (items || []).filter(Boolean).map(item => `<button type="button"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.danger ? ' class="danger"' : ""}
+      onclick="this.closest('details').open=false;${item.run}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`).join("");
+}
 function moreMenu(items, label = "More actions", summaryClass = "btn") {
   const rows = (items || []).filter(Boolean);
   if (!rows.length) return "";
   const dots = summaryClass === "btn";
   return `<details class="actionmenu headmenu"><summary class="${summaryClass}"${dots ? ` aria-label="${esc(label)}"` : ""}>${dots ? "⋯" : esc(label)}</summary>
-    <div class="actionmenu-pop">${rows.map(item => `<button type="button"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.danger ? ' class="danger"' : ""}
-      onclick="this.closest('details').open=false;${item.run}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`).join("")}</div></details>`;
+    <div class="actionmenu-pop">${menuItems(rows)}</div></details>`;
+}
+/* Collection preferences share the action menu's placement, dismissal and
+   role checks. Controls stay inside it rather than adding toolbar rows. */
+function listOptions(controls, items) {
+  return `<details class="actionmenu headmenu list-options"><summary class="btn" aria-label="List options"><span class="list-options-label">Options</span>${icon("sliders")}</summary>
+    <div class="actionmenu-pop list-options-pop">${controls}${menuItems(items)}</div></details>`;
 }
 /* The top of a page: one line saying how things stand, and the numbers
    behind it a tap away. Items are HTML; the detail stays open across the
@@ -328,6 +337,7 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
     shell.remove();
     if (details.open) details.open = false;
   };
+  window.closeActionMenu = details => lower(details.owner || details);
   // A page repaint can take a row away with its menu open.
   const sweep = () => document.querySelectorAll("details.actionmenu-portal").forEach(shell => {
     if (!shell.owner?.isConnected || !shell.owner.open) { if (shell.owner) shell.owner.shell = null; shell.remove(); }
@@ -345,8 +355,11 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
     if (!details.shell) lift(details);
   }, true);
   document.addEventListener("click", event => {
+    const path = event.composedPath();
     document.querySelectorAll("details.actionmenu[open]").forEach(d => {
-      if (!d.contains(event.target) && !d.shell?.contains(event.target)) d.open = false;
+      // A control can redraw itself while this click is still bubbling
+      // (sorting does). Its original event path still belongs to the menu.
+      if (!d.contains(event.target) && !d.shell?.contains(event.target) && !path.includes(d) && !path.includes(d.shell)) d.open = false;
     });
   });
   document.addEventListener("keydown", event => {
