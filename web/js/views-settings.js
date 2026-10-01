@@ -312,7 +312,7 @@ window.replicasMoveData = async (jobId = "") => {
         <div class="row"><button class="btn sm" onclick="selfDataWatch(${i})">${j.prepared ? "Review move" : j.status === "succeeded" ? "View record" : "View progress"}</button>
         ${j.archivable ? `<button class="btn sm" data-need="admin" onclick="selfDataArchiveReview(${jsq(j.id)})">Archive record</button>` : ""}</div></div>`).join("")}</div>` : ""}
       ${state.blocking_jobs?.length ? UI.section("Jobs that block preparation", UI.table([{label:"Job"},{label:"State"}], state.blocking_jobs.map(j => [
-        `<b>${esc(j.title)}</b><p class="small">${esc(j.message)}</p><button class="btn sm" onclick="openOperation(${jsq(j.href)},${jsq(j.id)})">Open job</button><button class="btn sm" onclick="operationLog(${jsq(j.id)})">Log</button>`,
+        `<b>${esc(j.title)}</b><p class="small">${esc(j.message)}</p><button class="btn sm" onclick="selfDataOpenJob(${jsq(j.id)})">${j.status === "failed" && j.mutation_recovery && j.kind === "k3s-cluster" ? "Review batch outcome" : "Open job"}</button><button class="btn sm" onclick="operationLog(${jsq(j.id)})">Log</button>`,
         `${esc(j.status)}${j.recovery ? " · requires recovery" : ""}`])) + '<p class="ui-help">Finish or review these jobs before preparing another volume. Archiving a completed preparation does not clear a running or recovery job.</p>') : ""}
       ${UI.fields(UI.field("Destination storage", `<select aria-label="Destination storage" id="selfDataClass" onchange="selfDataClassChanged()">${(state.classes || []).map(c =>
         `<option value="${esc(c.name)}" data-shareable="${c.shareable ? 1 : 0}" ${c.name === picked ? "selected" : ""}>${esc(c.name)} · ${c.shareable ? "every host can use it" : "lives on one host's disk"}</option>`).join("")}</select>`),
@@ -321,6 +321,12 @@ window.replicasMoveData = async (jobId = "") => {
       <div id="selfDataReview"></div><div id="selfDataActions">${UI.actions(UI.cancel("Close") + UI.button("Check", "selfDataPrepareReview()", { kind: "pri", id: "selfDataCheck", disabled: !(state.classes?.length && state.nodes?.some(n => n.ready)) || !!state.blocking_jobs?.length }))}</div>`;
     selfDataClassChanged();
   } catch (e) { if (selfDataDialog === request && $("#selfDataFlow")) $("#selfDataFlow").innerHTML = `<p role="alert">${esc(e.message)}</p>`; }
+};
+window.selfDataOpenJob = id => {
+  const job = selfDataDialog?.state?.blocking_jobs?.find(item => item.id === id);
+  if (!job) return;
+  selfDataClose();
+  openOperation(job.href, job.id, job);
 };
 /* The host only matters for storage that lives on one host's disk. */
 window.selfDataClassChanged = () => {
