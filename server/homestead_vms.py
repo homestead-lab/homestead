@@ -72,12 +72,27 @@ def _memory(dom):
                or (res.get("requests") or {}).get("memory") or "")
 
 
-def _status(vm, vmi):
+def _stopped_after_crash(vm, vmi, instance_known=True):
+    """Clear a previous boot's backoff only after the VM is confirmed off."""
+    spec, status = vm.get("spec") or {}, vm.get("status") or {}
+    if not instance_known or status.get("printableStatus") != "CrashLoopBackOff":
+        return False
+    strategy = spec.get("runStrategy")
+    stopped_strategy = strategy in ("Halted", "Manual") or (not strategy and spec.get("running") is False)
+    # A queued power request or a live/unfinished instance is still in flight.
+    # Automatic restart strategies must retain their backoff between attempts.
+    return bool(stopped_strategy and not status.get("stateChangeRequests")
+                and (not vmi or (vmi.get("status") or {}).get("phase") in ("Succeeded", "Failed")))
+
+
+def _status(vm, vmi, instance_known=True):
     if (vm.get("metadata") or {}).get("deletionTimestamp"):
         # Deleted in the foreground: it stays until its instance and the
         # disks it owns are gone, and says so rather than looking stuck.
         return "Deleting"
     printable = ((vm.get("status") or {}).get("printableStatus") or "")
+    if _stopped_after_crash(vm, vmi, instance_known):
+        return "Stopped"
     if printable:
         return printable
     phase = (vmi.get("status") or {}).get("phase", "")
@@ -103,7 +118,7 @@ def actions_for(status, migratable=False):
     return ["stop", "force-stop"]
 
 
-def _problem(vm, vmi):
+def _problem(vm, vmi, instance_known=True):
     """What is wrong, if anything. Failure is True when something failed -
     a DataVolume CDI refused, say - while Ready, PodScheduled and
     Synchronized are False. A stopped VM's Ready says only that it has no
@@ -129,8 +144,9 @@ def _problem(vm, vmi):
             message = text(condition)
             if "VMI does not exist" in message:
                 continue
-            status = _status(vm, vmi)
-            if condition_type == "Ready" and status in ("Starting", "Provisioning", "WaitingForVolumeBinding") \
+            status = _status(vm, vmi, instance_known)
+            if condition_type == "Ready" and (status in ("Starting", "Provisioning", "WaitingForVolumeBinding")
+                                              or _stopped_after_crash(vm, vmi, instance_known)) \
                     and "not reported as running" in message.lower():
                 continue
             return message
@@ -277,12 +293,12 @@ def _filling(vm, dvs, explain=False):
     return out
 
 
-def _row(vm, vmi, claims=None, dvs=None):
+def _row(vm, vmi, claims=None, dvs=None, instance_known=True):
     meta, spec = vm.get("metadata") or {}, vm.get("spec") or {}
     tspec = (spec.get("template") or {}).get("spec") or {}
     dom = tspec.get("domain") or {}
     istatus = vmi.get("status") or {}
-    status = _status(vm, vmi)
+    status = _status(vm, vmi, instance_known)
     conditions = istatus.get("conditions") or []
     migratable = any(c.get("type") == "LiveMigratable" and c.get("status") == "True" for c in conditions)
     volumes = {v.get("name"): v for v in tspec.get("volumes") or []}
@@ -328,7 +344,7 @@ def _row(vm, vmi, claims=None, dvs=None):
             "os": guest.get("prettyName") or labels.get(OS_LABEL, ""), "hostname": guest.get("hostname") or istatus.get("guestOSInfo", {}).get("name", ""),
             "description": annotations.get(DESCRIPTION, ""), "created": meta.get("creationTimestamp", ""),
             "uid": meta.get("uid", ""), "migratable": migratable, "restart_required": restart_required,
-            "problem": _problem(vm, vmi) or _stuck_problem(filling),
+            "problem": _problem(vm, vmi, instance_known) or _stuck_problem(filling),
             "filling": filling,
             "actions": actions_for(status, migratable)}
 
@@ -338,15 +354,19 @@ def list_vms():
         vms = kget(f"{API}/virtualmachines").get("items", [])
     except Exception:
         return []
+    instance_known = False
     try:
-        vmis = {(v["metadata"]["namespace"], v["metadata"]["name"]): v for v in kget(f"{API}/virtualmachineinstances").get("items", [])}
+        inventory = kget(f"{API}/virtualmachineinstances")
+        vmis = {(v["metadata"]["namespace"], v["metadata"]["name"]): v for v in inventory["items"]}
+        instance_known = isinstance(inventory["items"], list) and not (inventory.get("metadata") or {}).get("continue")
     except Exception:
         vmis = {}
+    # An unreadable or partial inventory cannot prove that an instance is gone.
     claims = {}
     for ns in {v["metadata"]["namespace"] for v in vms}:
         claims.update(_claims(ns))
     dvs = _datavolumes()
-    rows = sorted((_row(v, vmis.get((v["metadata"]["namespace"], v["metadata"]["name"]), {}), claims, dvs) for v in vms),
+    rows = sorted((_row(v, vmis.get((v["metadata"]["namespace"], v["metadata"]["name"]), {}), claims, dvs, instance_known) for v in vms),
                   key=lambda r: (r["ns"], r["name"]))
     try:
         measured, note = VMUSAGE.usage()
@@ -378,9 +398,11 @@ def detail(ns, name, include_sensitive=True):
     vm = _get(ns, name)
     try:
         vmi = kget(f"{API}/namespaces/{ns}/virtualmachineinstances/{name}")
-    except urllib.error.HTTPError:
+        instance_known = bool(vmi.get("metadata"))
+    except urllib.error.HTTPError as exc:
         vmi = {}
-    row = _row(vm, vmi, _claims(ns), _datavolumes(ns))
+        instance_known = exc.code == 404
+    row = _row(vm, vmi, _claims(ns), _datavolumes(ns), instance_known)
     row["resource_profile"] = copy.deepcopy(vm["spec"].get("instancetype") or {})
     row["preference_profile"] = copy.deepcopy(vm["spec"].get("preference") or {})
     row["profile_error"] = ""

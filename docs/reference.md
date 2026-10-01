@@ -1535,6 +1535,11 @@ that will not shut down. Harvester's run strategy is honoured, not the older
 network interfaces (network, MAC, addresses), guest OS as its guest agent
 reports it, conditions and events. A VM whose disk is still downloading
 shows how far CDI has got, and one whose disk could not be made says why.
+A previous `CrashLoopBackOff` clears to **Stopped** after a Halted or Manual
+VM is confirmed off (or an older VM has `running: false`), with **Start**
+available again. Automatic retries, queued power requests and unfinished
+shutdowns keep the warning. Conditions and events remain available; disk
+failures still show their reason.
 
 **Edit** covers what the VM is made of. General: CPU cores, memory, run
 strategy, description, and a host to keep it on. Disks: boot order, bus,

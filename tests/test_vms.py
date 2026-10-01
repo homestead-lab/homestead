@@ -84,6 +84,108 @@ class VmTests(unittest.TestCase):
                          [(d["name"], d["kind"], d["claim"], d["size"]) for d in v["disks"]])
         self.assertEqual("default/vlan1", v["nics"][0]["network"])
 
+    def crashed(self):
+        c = self.use()
+        c.vm["spec"]["runStrategy"] = "Halted"
+        c.vm["status"] = {"printableStatus": "CrashLoopBackOff",
+                          "startFailure": {"consecutiveFailCount": 3},
+                          "conditions": [{"type": "Ready", "status": "False", "reason": "",
+                                          "message": "Guest VM is not reported as running"}]}
+        return c
+
+    def test_a_crashed_vm_clears_backoff_when_switched_off_without_erasing_history(self):
+        c = self.crashed()
+        before = copy.deepcopy(c.vm)
+        row, detail = VMS.list_vms()[0], VMS.detail("default", "win11")
+        for view in (row, detail):
+            self.assertEqual(("Stopped", ["start"], False, ""),
+                             (view["status"], view["actions"], view["running"], view["problem"]))
+        self.assertEqual(before["status"]["conditions"], detail["conditions"])
+        self.assertEqual("Started", detail["events"][0]["reason"])
+        self.assertEqual(before, c.vm, "displaying the VM must not rewrite KubeVirt status or retry history")
+        self.assertEqual([], c.sent)
+
+    def test_manual_and_legacy_stopped_vms_clear_previous_backoff(self):
+        for strategy, running in (("Manual", None), (None, False)):
+            with self.subTest(strategy=strategy, running=running):
+                c = self.crashed()
+                c.vm["spec"].pop("runStrategy")
+                if strategy:
+                    c.vm["spec"]["runStrategy"] = strategy
+                else:
+                    c.vm["spec"]["running"] = running
+                self.assertEqual("Stopped", VMS.list_vms()[0]["status"])
+                self.assertEqual(["start"], VMS.detail("default", "win11")["actions"])
+
+    def test_completed_instances_are_off_but_live_and_unfinished_instances_keep_backoff(self):
+        for phase in ("Succeeded", "Failed", "Running", "Pending", "Scheduling", "Scheduled", "Unknown", ""):
+            with self.subTest(phase=phase):
+                c = self.crashed()
+                c.vmi = {"metadata": {"name": "win11", "namespace": "default", "deletionTimestamp": "2026-10-01T00:00:00Z"},
+                         "status": {"phase": phase}}
+                expected = "Stopped" if phase in ("Succeeded", "Failed") else "CrashLoopBackOff"
+                self.assertEqual(expected, VMS.list_vms()[0]["status"])
+                self.assertEqual(expected, VMS.detail("default", "win11")["status"])
+
+    def test_automatic_retries_missing_policy_and_queued_power_keep_backoff(self):
+        for strategy in ("Always", "RerunOnFailure", "Once", "Unknown", None):
+            with self.subTest(strategy=strategy):
+                c = self.crashed()
+                c.vm["spec"].pop("runStrategy")
+                if strategy:
+                    c.vm["spec"]["runStrategy"] = strategy
+                self.assertEqual("CrashLoopBackOff", VMS.list_vms()[0]["status"])
+                self.assertEqual(["stop", "force-stop"], VMS.detail("default", "win11")["actions"])
+        for request in ("Start", "Stop"):
+            with self.subTest(request=request):
+                c = self.crashed()
+                c.vm["status"]["stateChangeRequests"] = [{"action": request}]
+                self.assertEqual("CrashLoopBackOff", VMS.list_vms()[0]["status"])
+                self.assertEqual("CrashLoopBackOff", VMS.detail("default", "win11")["status"])
+        c = self.crashed()
+        c.vm["metadata"]["deletionTimestamp"] = "2026-10-01T00:00:00Z"
+        self.assertEqual(("Deleting", []), (VMS.list_vms()[0]["status"], VMS.detail("default", "win11")["actions"]))
+
+    def test_failed_incomplete_or_malformed_instance_inventory_cannot_prove_off(self):
+        for inventory in (None, {}, {"items": None}, {"items": {}}, {"items": [{}]},
+                          {"items": [], "metadata": {"continue": "next-page"}}):
+            with self.subTest(inventory=inventory):
+                c = self.crashed()
+                def get(path):
+                    if path.endswith("/virtualmachineinstances"):
+                        if inventory is None:
+                            raise OSError("API unavailable")
+                        return inventory
+                    return c.get(path)
+                VMS.bind(get, c.send, lambda *a: [])
+                self.assertEqual("CrashLoopBackOff", VMS.list_vms()[0]["status"])
+
+    def test_only_not_found_proves_an_instance_is_absent_on_the_vm_page(self):
+        for code in (403, 404, 500):
+            with self.subTest(code=code):
+                c = self.crashed()
+                def get(path):
+                    if path.endswith("/virtualmachineinstances/win11"):
+                        raise urllib.error.HTTPError(path, code, "unavailable", None, None)
+                    return c.get(path)
+                VMS.bind(get, c.send, lambda *a: [])
+                self.assertEqual("Stopped" if code == 404 else "CrashLoopBackOff", VMS.detail("default", "win11")["status"])
+        c = self.crashed()
+        VMS.bind(lambda path: {} if path.endswith("/virtualmachineinstances/win11") else c.get(path), c.send, lambda *a: [])
+        self.assertEqual("CrashLoopBackOff", VMS.detail("default", "win11")["status"])
+
+    def test_stopping_after_a_crash_keeps_real_disk_failures_visible(self):
+        c = self.crashed()
+        c.vm["status"]["conditions"].append({"type": "Failure", "status": "True", "message": "DataVolume refused the disk source"})
+        for row in (VMS.list_vms()[0], VMS.detail("default", "win11")):
+            self.assertEqual("Stopped", row["status"])
+            self.assertIn("DataVolume refused", row["problem"])
+        c.vm["status"]["conditions"] = []
+        dv = {"metadata": {"namespace": "default", "name": "win11-disk-0"}, "status": {"phase": "Failed"}}
+        row = VMS._row(c.vm, {}, dvs={("default", "win11-disk-0"): dv})
+        self.assertEqual("Stopped", row["status"])
+        self.assertIn("disk win11-disk-0 has been Failed", row["problem"])
+
     def test_a_running_vm_shows_its_guest_and_offers_stop_restart_pause(self):
         self.use(running=True)
         v = VMS.list_vms()[0]
