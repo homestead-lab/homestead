@@ -1204,6 +1204,8 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
    The left block previously had no flex sizing, so space-between gave it 0px
    and the hamburger + title vanished on narrow screens. */
 .topleft{display:flex;align-items:center;gap:12px;flex:1 1 auto;min-width:0}
+.topleft>div{min-width:0}
+.topleft>#hamburger{flex:0 0 auto}
 .topleft h1{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .topright{flex:0 0 auto}
 #searchbtn{display:none}
@@ -1241,12 +1243,27 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
   .iconbtn svg{width:15px;height:15px}
   h1{font-size:16px}
   .crumb{font-size:10px;letter-spacing:.09em}
+  /* The account and drawer still open Settings; leave room for refresh. */
+  #opensettings{display:none}
 
   /* avatar only — the name and role live in the drawer */
   .whoami{padding:3px;gap:0}
   .whoami .nm,.whoami .rolechip{display:none}
   .av{width:28px;height:28px;font-size:10px}
 }
+
+/* The gesture indicator floats below the header without moving the page. */
+.pull-refresh{position:fixed;left:50%;transform:translateX(-50%);z-index:29;pointer-events:none;
+  display:flex;align-items:center;gap:8px;max-width:calc(100vw - 24px);padding:10px 16px;
+  border:1px solid var(--line2);border-radius:99px;background:var(--surf);color:var(--tx);
+  box-shadow:0 6px 24px rgba(0,0,0,.18);font-size:12.5px}
+.pull-refresh[hidden]{display:none}
+.pull-refresh svg{width:16px;height:16px}
+.pull-refresh[data-state="ready"]{border-color:var(--low)}
+.pull-refresh[data-state="loading"] svg,#refresh[aria-busy="true"] svg{animation:refreshspin .8s linear infinite}
+#refresh:disabled{cursor:wait}
+@keyframes refreshspin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.pull-refresh svg,#refresh[aria-busy="true"] svg{animation:none}}
 @media(max-width:420px){
   .top{padding:0 10px}
   .topleft{gap:8px}
