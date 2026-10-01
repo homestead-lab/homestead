@@ -134,5 +134,64 @@
     return figure(svg(516, h, b, label), opts.caption || "");
   }
 
-  root.Diagram = Object.freeze({ node, vip, mapping, vmImport });
+  /* Quorum: each server a column with its vote; the cluster carries on while
+     more than half agree. servers: [{ name, ready }]. With two, a third is
+     drawn dashed - the one that would make losing either survivable. */
+  function quorum(servers) {
+    const list = (servers || []).slice(0, 5);
+    const ghost = list.length === 2;
+    const cols = list.length + (ghost ? 1 : 0), w = 150, gap = 14;
+    const width = Math.max(320, cols * (w + gap) + 8);
+    let b = "";
+    list.forEach((s, i) => {
+      const x = 6 + i * (w + gap);
+      b += box(x, 8, w, 60, s.ready ? "dg-node" : "dg-node dg-bad", 8) + text(x + 12, 28, clip(s.name, 20), "dg-b")
+        + text(x + 12, 44, s.ready ? "server · ready" : "server · down", "dg-xs dg-dim")
+        + box(x + w - 58, 40, 48, 18, s.ready ? "dg-vol-box" : "dg-vol-box dg-dash", 5) + text(x + w - 34, 53, "vote", "dg-xs", "middle");
+    });
+    if (ghost) {
+      const x = 6 + 2 * (w + gap);
+      b += box(x, 8, w, 60, "dg-node dg-dash", 8) + text(x + 12, 28, "a third server", "dg-dim")
+        + box(x + w - 58, 40, 48, 18, "dg-vol-box dg-dash", 5) + text(x + w - 34, 53, "vote", "dg-xs dg-dim", "middle");
+    }
+    const n = list.length, need = Math.floor(n / 2) + 1, lose = Math.max(0, n - need);
+    const said = n <= 1 ? "one server: simple, and nothing to fail over to"
+      : lose ? `${n} servers: ${need} must agree, so ${lose} can fail and the cluster carries on`
+      : `${n} servers: ${need} must agree, so losing either stops the cluster`;
+    b += text(6, 92, said, "dg-s") + (ghost ? text(6, 108, "with a third: lose one and 2 of 3 carry on", "dg-xs dg-dim") : "");
+    return figure(svg(width, ghost ? 116 : 100, b, said));
+  }
+
+  /* A volume's copies across nodes: one per node, the ones no node can hold
+     dashed. nodes: [names]; copies: how many the default class keeps. */
+  function copies(nodes, count) {
+    const names = (nodes || []).slice(0, 5), want = Math.max(1, +count || 1);
+    const cols = Math.max(names.length, Math.min(5, want)), w = 110, gap = 12;
+    let b = "";
+    for (let i = 0; i < cols; i++) {
+      const x = 6 + i * (w + gap), has = i < names.length, held = has && i < want;
+      b += box(x, 8, w, 64, has ? "dg-node" : "dg-node dg-dash", 8) + text(x + 10, 26, has ? clip(names[i], 15) : "no node", has ? "dg-b" : "dg-dim");
+      if (i < want) b += box(x + 10, 38, w - 20, 22, held ? "dg-vol-box" : "dg-vol-box dg-dash", 5)
+        + text(x + 18, 53, `copy ${i + 1}`, held ? "dg-xs" : "dg-xs dg-dim");
+    }
+    const placed = Math.min(want, names.length);
+    const said = placed < want ? `${want} copies wanted, ${names.length} node${names.length === 1 ? "" : "s"} to hold them: ${want - placed} never placed`
+      : `${want} cop${want === 1 ? "y" : "ies"} of each volume, each on a node of its own`;
+    return figure(svg(Math.max(320, cols * (w + gap) + 8), 96, b + text(6, 90, said, "dg-s"), said));
+  }
+
+  /* From a phone, over HTTPS, to Homestead: through a tunnel or Tailscale,
+     with nothing opened at home. via: "Cloudflare Tunnel" | "Tailscale" | "". */
+  function remote(via, url, address) {
+    let b = box(6, 20, 46, 70, "dg-node", 9) + text(29, 60, "phone", "dg-xs", "middle");
+    b += line("M54 55H118", url ? "dg-line" : "dg-line dg-dash-line") + text(86, 46, url ? "HTTPS" : "no HTTPS yet", "dg-xxs dg-dim", "middle");
+    b += box(122, 32, 112, 46, via ? "dg-vip" : "dg-vip dg-dash", 12) + text(178, 52, via || "a tunnel", "dg-s", "middle")
+      + text(178, 67, via ? "outbound only" : "or Tailscale", "dg-xxs dg-dim", "middle");
+    b += line("M236 55H262") + box(266, 24, 120, 62, "dg-node", 8) + text(276, 44, "Homestead", "dg-b") + text(276, 62, clip(address || "", 20), "dg-xs dg-mono dg-dim");
+    const said = url ? `Your phone reaches ${url} over HTTPS, so it can install Homestead and get notifications`
+      : "Without HTTPS a phone can open Homestead on your network, but not install it as an app with notifications";
+    return figure(svg(392, 112, b + text(6, 106, clip(url ? url : "needed for notifications on a phone", 64), "dg-xs dg-dim"), said));
+  }
+
+  root.Diagram = Object.freeze({ node, vip, mapping, vmImport, quorum, copies, remote });
 })(typeof window !== "undefined" ? window : globalThis);

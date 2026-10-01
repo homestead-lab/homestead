@@ -22,6 +22,7 @@ const VIEWS = {
   resources: ["Resources",      "system",    viewResources, true],
   cluster:   ["Cluster",        "system",    viewCluster,   true],
   settings:  ["Settings",       "system",    viewSettings,  false],
+  setup:     ["Setup",          "system",    () => viewSetup(), false],
 };
 
 const FILTERABLE_VIEWS = new Set(["workloads", "storage", "images", "events", "store", "network", "portal", "helm"]);

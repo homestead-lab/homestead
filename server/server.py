@@ -2150,6 +2150,12 @@ def build_deployment(cfg):
               "protocol": str(p.get("protocol", "TCP")).upper()}
              for p in cfg.get("ports") or []]
     c = {"name": container_name, "image": UPDATES.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
+    # Arguments to the image's own entrypoint - cloudflared's "tunnel run",
+    # say. A list of plain strings, passed as they are; never a shell.
+    args = cfg.get("args") or []
+    if not isinstance(args, list) or len(args) > 32 or any(not isinstance(a, str) or len(a) > 512 or "\x00" in a for a in args):
+        raise ValueError("arguments are a list of up to 32 short strings")
+    if args: c["args"] = list(args)
     if env: c["env"] = env
     if ports: c["ports"] = ports
     if mounts: c["volumeMounts"] = mounts
@@ -3883,6 +3889,98 @@ def welcome_state(role="admin"):
                         "done": bool((OS_ROLLOUT.settings().get("schedule") or {}).get("enabled"))}
     return {"show": role == "admin" and not done, "done": done, "harvester": bool(p.get("harvester")),
             "load_balancer": p.get("load_balancer", ""), "steps": steps}
+
+
+TUNNEL_IMAGES = ("cloudflare/cloudflared", "tailscale/tailscale")
+
+
+def setup_state(user, role):
+    """The setup guide: each step and whether the cluster shows it done.
+    Looked at fresh each time; only skips are remembered. A person who is not
+    an admin gets their own steps alone."""
+    p = PLATFORM.detect() or {}
+    kube = not p.get("harvester") and p.get("distribution") in ("k3s", "rke2")
+    store = SETUP.load()
+    steps = {}
+
+    def step(name, compute):
+        try:
+            steps[name] = compute()
+        except Exception as error:
+            steps[name] = {"done": False, "applies": True, "error": str(error)[:160]}
+
+    if role == "admin":
+        def health():
+            ov = cached("ov", 5, get_overview)
+            issues = ov.get("health_issues") or []
+            return {"done": not issues, "applies": True, "summary": ov.get("health_summary", ""),
+                    "issues": [{k: x.get(k, "") for k in ("severity", "kind", "name", "reason")} for x in issues[:6]]}
+        step("health", health)
+
+        def quorum():
+            q = LC.quorum_report()
+            nodes = [{"name": n["name"], "ready": n.get("status") == "Ready", "roles": n.get("roles") or []}
+                     for n in cached("nodes", 5, get_nodes)]
+            servers = q["total"] or sum(1 for n in nodes if any(r in ("control-plane", "master", "etcd") for r in n["roles"])) or 1
+            return {"done": servers != 2, "applies": True, "servers": servers, "members": q["members"],
+                    "ready": q["ready"], "can_lose": q["can_lose"], "nodes": nodes}
+        step("quorum", quorum)
+        step("probe", lambda: {"done": bool(PROBE.installed()), "applies": True})
+
+        def clocks():
+            known = {n["name"]: (HOST_OS.stored(n["name"]) or {}).get("ntp") for n in cached("nodes", 5, get_nodes)}
+            told = {k: v for k, v in known.items() if v is not None}
+            return {"done": bool(told) and all(told.values()), "applies": kube and bool(told),
+                    "unsynced": sorted(k for k, v in told.items() if v is False)}
+        step("clocks", clocks)
+
+        def address():
+            report = SELF_ADDRESS.report(cached("network", 5, NETWORK.inventory))
+            return {"done": bool(report["on_vip"]), "applies": True, "url": report["url"],
+                    "shared_vip": report.get("shared_vip"), "vips": len(NETWORK.registered()),
+                    "load_balancer": p.get("load_balancer", ""), "harvester": bool(p.get("harvester"))}
+        step("address", address)
+
+        def https():
+            tunnels = sorted({w["name"] for w in cached("wl", 5, get_workloads)
+                              if any(t in image for image in w.get("images") or [] for t in TUNNEL_IMAGES)})
+            return {"done": bool(store.get("https_url")), "applies": True, "url": store.get("https_url", ""), "tunnels": tunnels}
+        step("https", https)
+        step("hostname", lambda: {"done": False, "applies": True})       # the browser can tell; see the page
+
+        def disks():
+            unused = [{"node": node, "device": r["device"], "size_gb": r.get("size_gb"), "kind": r.get("kind", "")}
+                      for node, rows in DISKS.inventory()["nodes"].items() for r in rows
+                      if r.get("role") == "unused" and not r.get("system")]
+            return {"done": not unused, "applies": bool(p.get("longhorn", True)) and not p.get("harvester"), "unused": unused[:12]}
+        step("disks", disks)
+
+        def storage():
+            classes = storage_classes()
+            default = next((c for c in classes if c.get("default")), None)
+            ready = sum(1 for n in cached("nodes", 5, get_nodes) if n.get("status") == "Ready")
+            target = max(1, min(3, ready))
+            copies = int(default["replicas"]) if default and str(default.get("replicas") or "").isdigit() else None
+            fits = bool(default) and default.get("provisioner") == "driver.longhorn.io" and copies is not None and copies == target
+            return {"done": fits, "applies": True, "default": (default or {}).get("name", ""), "copies": copies,
+                    "provisioner": (default or {}).get("provisioner", ""), "nodes": ready, "target": target,
+                    "candidates": [c["name"] for c in classes if c.get("provisioner") == "driver.longhorn.io"
+                                   and str(c.get("replicas")) == str(target) and not c.get("made_for") and not c.get("internal")]}
+        step("storage", storage)
+        step("backups", lambda: {"done": bool(LH.backup_target().get("configured")), "applies": True})
+        step("config", lambda: {"done": bool(store.get("config_backup_at")), "applies": True, "at": store.get("config_backup_at")})
+        step("osupdates", lambda: {"done": bool((OS_ROLLOUT.settings().get("schedule") or {}).get("enabled")), "applies": kube})
+        step("people", lambda: {"done": sum(1 for u in AUTH.list_users() if u["role"] == "admin") >= 2, "applies": True,
+                                "users": len(AUTH.list_users())})
+        step("unifi", lambda: {"done": bool((IPAM.load().get("unifi") or {}).get("url")), "applies": True})
+        step("unraid", lambda: {"done": bool(IMP.list_sources()), "applies": True})
+        step("homeassistant", lambda: {"done": any(not k["expired"] for k in API_KEYS.list_keys()), "applies": True})
+        step("linked", lambda: {"done": bool(FLEET.summary().get("linked")), "applies": True})
+        step("starter", lambda: {"done": any(not w.get("homestead") for w in cached("wl", 5, get_workloads)), "applies": True})
+        step("console", lambda: {"done": bool(HOST_CONSOLE.inventory().get("enabled")), "applies": kube})
+    step("notifications", lambda: {"done": bool(PUSH.devices(user)), "applies": True})
+    return {"steps": steps, "skips": SETUP.skips(user), "hidden": SETUP.hidden(user),
+            "opened": SETUP.opened(), "admin": role == "admin", "personal": list(SETUP.PERSONAL)}
 
 
 def own_node():
@@ -6689,7 +6787,9 @@ def _config_restored(parts):
 SIGNINS.bind(DATA_DIR)
 import homestead_api_keys as API_KEYS
 import homestead_api_v1 as API_V1
+import homestead_setup as SETUP
 API_KEYS.bind(DATA_DIR)
+SETUP.bind(DATA_DIR)
 API_V1.bind(nodes=lambda: cached("nodes", 5, get_nodes), workloads=lambda: cached("wl", 5, get_workloads),
             vms=lambda: cached("vms", 5, VMS.list_vms),
             alerts=lambda: [a for a in ALERTS.active() if a.get("announced", 0) > 0],
@@ -6976,7 +7076,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
 SPA_ROUTES = frozenset({
     "/", "/architecture", "/nodes", "/deploy", "/containers", "/vms",
     "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection", "/portal", "/helm", "/resources",
-    "/schedules", "/import", "/vms/import", "/events", "/networking", "/system/cluster", "/settings",
+    "/schedules", "/import", "/vms/import", "/events", "/networking", "/system/cluster", "/settings", "/setup",
 })
 
 
@@ -7069,6 +7169,8 @@ ADMIN_ROUTES = {
     "/api/auth/users", "/api/auth/users/delete", "/api/auth/role",
     # API keys: made, listed and revoked by administrators only.
     "/api/auth/keys", "/api/auth/keys/revoke",
+    # The setup guide's checks that reach out, and its first opening.
+    "/api/setup/https-check", "/api/setup/opened",
     # Who signed in, from where: other people's addresses and devices.
     "/api/auth/history",
     "/api/node/power", "/api/node/drain", "/api/node/cordon", "/api/node/hardware",
@@ -7183,6 +7285,10 @@ def needed_role(path, method):
         return "admin"
     if path in ("/api/console", "/api/vm/console"):
         return "operator"
+    # The setup guide: anyone may skip their own steps or hide it for
+    # themselves; the handler keeps cluster steps for admins.
+    if path in ("/api/setup/skip", "/api/setup/hide"):
+        return "viewer"
     if path in ADMIN_ROUTES:
         return "admin"
     return "viewer" if method == "GET" else "operator"
@@ -7758,6 +7864,9 @@ class H(BaseHTTPRequestHandler):
                 return self._send(200, rows)
             if p == "/api/auth/users":
                 return self._send(200, AUTH.list_users())
+            if p == "/api/setup":
+                # Many checks: kept for each person half a minute.
+                return self._send(200, cached(f"setup:{self.role}:{self.user}", 30, lambda: setup_state(self.user, self.role)))
             if p == "/api/auth/keys":
                 return self._send(200, {"keys": API_KEYS.list_keys(),
                                         "scopes": {s: text for s, (_, text) in API_KEYS.SCOPES.items()},
@@ -8191,6 +8300,17 @@ class H(BaseHTTPRequestHandler):
                 made = API_KEYS.create(b.get("name"), b.get("scopes"), b.get("ttl_seconds"), b.get("networks"), self.user)
                 self._signin("key-added", self.user, detail=f"{made['key']['name']}: {', '.join(made['key']['scopes'])}")
                 return self._send(200, {"ok": True, **made})
+            if p.startswith("/api/setup/"):
+                for key in [k for k in _cache if k.startswith("setup:")]:
+                    _cache.pop(key, None)
+            if p == "/api/setup/skip":
+                return self._send(200, SETUP.skip(str(b.get("step") or ""), bool(b.get("skip", True)), self.user, self.role == "admin"))
+            if p == "/api/setup/hide":
+                return self._send(200, SETUP.hide(self.user, b.get("hidden", True)))
+            if p == "/api/setup/opened":
+                return self._send(200, SETUP.mark_opened())
+            if p == "/api/setup/https-check":
+                return self._send(200, SETUP.https_check(b.get("url")))
             if p == "/api/auth/keys/revoke":
                 if self._fleet_from:
                     return self._send(403, {"error": "revoke API keys in this Homestead's own app"})
@@ -8202,7 +8322,9 @@ class H(BaseHTTPRequestHandler):
             if p in ("/api/config/backup", "/api/config/inspect", "/api/config/restore"):
                 try:
                     if p == "/api/config/backup":
-                        return self._send(200, CONFIG.backup(b.get("parts"), str(b.get("passphrase") or "")))
+                        made = CONFIG.backup(b.get("parts"), str(b.get("passphrase") or ""))
+                        SETUP.note("config_backup_at", int(time.time()))
+                        return self._send(200, made)
                     if p == "/api/config/inspect":
                         return self._send(200, CONFIG.inspect(b.get("file"), str(b.get("passphrase") or "")))
                     return self._send(200, CONFIG.restore(b.get("file"), str(b.get("passphrase") or ""), b.get("parts") or []))

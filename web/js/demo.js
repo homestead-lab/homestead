@@ -2013,6 +2013,30 @@ ssh_pwauth: true
              created: ago(0), expires: ago(-(body.ttl_seconds || 86400) / 60), expired: false, last_used: null, last_ip: "" } };
   };
   responses["/api/auth/keys/revoke"] = { ok: true, name: "Home Assistant" };
+  // The setup guide, part way through, as a cluster a few weeks in would be.
+  const demoSetup = { skips: [], hidden: false, opened: true, admin: true, personal: ["appearance", "phone", "notifications"], steps: {
+    health: { done: false, applies: true, summary: "One workload is not ready",
+      issues: [{ severity: "degraded", kind: "Workload", name: "lab/doublecommander", reason: "only 0/1 replicas ready after 12m" }] },
+    quorum: { done: true, applies: true, servers: 3, members: ["harvester-node1", "harvester-node2", "harvester-node3"],
+      ready: ["harvester-node1", "harvester-node2", "harvester-node3"], can_lose: 1, nodes: [] },
+    probe: { done: true, applies: true }, clocks: { done: true, applies: false },
+    address: { done: true, applies: true, url: "http://192.0.2.245:8080", vips: 3, load_balancer: "kube-vip", harvester: true },
+    https: { done: false, applies: true, url: "", tunnels: [] }, hostname: { done: false, applies: true },
+    disks: { done: false, applies: true, unused: [{ node: "harvester-node2", device: "sdb", size_gb: 4000, kind: "HDD" }] },
+    storage: { done: true, applies: true, default: "harvester-longhorn", copies: 3, provisioner: "driver.longhorn.io", nodes: 3, target: 3, candidates: [] },
+    backups: { done: true, applies: true }, config: { done: false, applies: true, at: null }, osupdates: { done: false, applies: false },
+    notifications: { done: false, applies: true }, people: { done: false, applies: true, users: 3 },
+    unifi: { done: true, applies: true }, unraid: { done: true, applies: true }, homeassistant: { done: true, applies: true },
+    linked: { done: true, applies: true }, starter: { done: true, applies: true }, console: { done: false, applies: false } } };
+  responses["/api/setup"] = () => ({ ...demoSetup, skips: [...demoSetup.skips] });
+  responses["/api/setup/skip"] = (url, init) => {
+    const body = JSON.parse(init?.body || "{}");
+    demoSetup.skips = body.skip ? [...new Set([...demoSetup.skips, body.step])] : demoSetup.skips.filter(x => x !== body.step);
+    return { ok: true, skips: demoSetup.skips };
+  };
+  responses["/api/setup/hide"] = (url, init) => { demoSetup.hidden = !!JSON.parse(init?.body || "{}").hidden; return { ok: true, hidden: demoSetup.hidden }; };
+  responses["/api/setup/https-check"] = (url, init) => ({ ok: true, url: JSON.parse(init?.body || "{}").url || "https://homestead.example.com", at: Math.floor(Date.now() / 1000) });
+  responses["/api/setup/opened"] = { ok: true };
   responses["/api/auth/users"] = [{ name: "demo", role: "admin", last_login: "2026-09-28 07:40" },
     { name: "alex", role: "operator", last_login: "2026-09-28 07:06" }, { name: "kiosk", role: "viewer", last_login: "" }];
   responses["/api/auth/history"] = [

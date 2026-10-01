@@ -27,6 +27,7 @@ async function viewDash() {
     loadHealthSettings(),
     api("/api/nodes/uptime").catch(() => null),
   ]);
+  const setupLine = window.setupDashItem ? await setupDashItem() : "";
   STATE.data.uptime = up || STATE.data.uptime;
   STATE.data.ov = o; STATE.data.stor = st; STATE.data.lhcap = cap || STATE.data.lhcap;
   // A node near its allocation limit takes no new replicas: said before it bites.
@@ -58,7 +59,7 @@ async function viewDash() {
 
   paint(`
   <div class="phead">
-    <div><h2>Cluster overview</h2><p>Live health, capacity and placement across ${o.nodes_total} node${o.nodes_total > 1 ? "s" : ""}</p></div>
+    <div><h2>Cluster overview</h2><p>Live health, capacity and placement across ${o.nodes_total} node${o.nodes_total > 1 ? "s" : ""}${setupLine ? ` · ${setupLine}` : ""}</p></div>
     <div class="row hide-sm">
       <button class="btn pri" onclick="go('deploy')">＋ Deploy</button>
     </div>

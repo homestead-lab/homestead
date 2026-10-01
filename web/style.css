@@ -2723,3 +2723,31 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 }
 .node-drives{display:flex;flex-direction:column;gap:12px;min-width:0}
 .node-drives[hidden]{display:none}
+
+/* The setup guide: Settings' layout, its rail of chapters and steps with
+   each step's state, and the step open beside them. On a phone the rail is
+   a list above the step, which opening a step scrolls to. */
+.setup-nav{gap:1px;max-height:calc(100vh - var(--hdr) - 40px);overflow:auto}
+.setup-chapter{font:600 10.5px "JetBrains Mono",monospace;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);padding:12px 12px 4px}
+.setup-chapter:first-child{padding-top:2px}
+.settings-nav button.setup-step{justify-content:flex-start;padding:7px 12px;font-size:13px;color:var(--mut)}
+.settings-nav button.setup-step.on{color:var(--tx);font-weight:650}
+.setup-mark{width:16px;height:16px;flex:0 0 16px;border-radius:50%;border:1.5px solid var(--line2,rgba(255,255,255,.18));display:grid;place-items:center;font-size:10px;font-weight:700;line-height:1}
+.setup-mark.done{background:var(--ok);border-color:var(--ok);color:#06140c}
+.setup-mark.attention{border-color:var(--med);color:var(--med)}
+.setup-mark.skipped{border-style:dashed;opacity:.6}
+.setup-card .ui-lead{max-width:72ch}
+.setup-body{margin:12px 0 4px;overflow-x:auto}
+.setup-body .diagram{margin:0}
+.setup-meter{display:inline-block;width:120px;height:6px;border-radius:3px;background:rgba(255,255,255,.08);overflow:hidden;vertical-align:middle}
+.setup-meter span{display:block;height:100%;background:var(--ok)}
+html[data-theme="light"] .setup-meter{background:rgba(0,0,0,.08)}
+@media(max-width:900px){
+  .setup-nav{max-height:none}
+  .settings-nav button.setup-step{padding:11px 14px}
+}
+/* The live demo's offer of the guide: a ring that breathes until opened. */
+.iconbtn.setupbtn{position:relative;color:var(--ok)}
+.iconbtn.setupbtn.pulse::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:2px solid var(--ok);animation:setuppulse 1.8s ease-out infinite}
+@keyframes setuppulse{0%{transform:scale(.9);opacity:.9}100%{transform:scale(1.45);opacity:0}}
+@media(prefers-reduced-motion:reduce){.iconbtn.setupbtn.pulse::after{animation:none;opacity:.8}}
