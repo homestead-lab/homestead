@@ -470,7 +470,6 @@ window.welcomeCheck = async (force = false) => {
   if (force) return go("setup");
   let state;
   try { state = await api("/api/setup"); } catch (e) { return; }
-  STATE.data.setup = state;
   setupOffer(state);
 };
 

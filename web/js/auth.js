@@ -324,7 +324,7 @@ async function afterAuth() {
   startLoop();
   if (window.startOperationChecks) window.startOperationChecks();
   if (window.startUpdateChecks) window.startUpdateChecks();
-  // A new cluster's first-run checklist, for an admin until it is done.
+  // Load this user's guide reminder choice without opening or replacing a page.
   if (window.welcomeCheck) setTimeout(() => welcomeCheck(), 900);
 }
 

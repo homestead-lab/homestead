@@ -2057,7 +2057,9 @@ ssh_pwauth: true
   if (scenario === "healthy") {
     nodes[2].roles = ["control-plane", "etcd"];
     for (const node of nodes) for (const disk of node.temps.disks) {
-      Object.assign(disk.smart, { reallocated: disk.kind === "NVMe" ? null : 0, pending: 0, uncorrectable: 0, media_errors: 0 });
+      const nvme = disk.kind === "NVMe";
+      Object.assign(disk.smart, { reallocated: nvme ? null : 0, pending: nvme ? null : 0,
+        uncorrectable: nvme ? null : 0, media_errors: nvme ? 0 : null });
       withHealth(disk);
     }
     for (const workload of workloads.filter(row => row.desired > 0 && row.ready < row.desired)) {

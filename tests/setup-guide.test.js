@@ -48,6 +48,17 @@ test("the probe and dashboard shortcut are absent from the guide", () => {
   assert.equal(ctx.setupDashLine, undefined);
 });
 
+test("a background reminder refresh does not overwrite an open guide's browser facts", async () => {
+  const { ctx, classes } = fixture();
+  const current = { steps: { appearance: { done: false } }, skips: ["appearance"] };
+  ctx.STATE.data.setup = current;
+  ctx.api = async () => ({ steps: {}, completed: true });
+  await ctx.welcomeCheck();
+  assert.equal(ctx.STATE.data.setup, current);
+  assert.equal(ctx.STATE.data.setup.steps.appearance.done, false);
+  assert.equal(classes.has("pulse"), false);
+});
+
 test("a skipped check remains unchecked and a later observed success replaces skip", () => {
   const { ctx } = fixture();
   assert.equal(ctx.setupStatus("disks", { disks: { done: false } }, ["disks"]), "skipped");
