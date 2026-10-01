@@ -418,9 +418,10 @@ def copy_script(src, vm, path, size):
         # Compressed on the wire: a raw vdisk is mostly empty space, which
         # crosses as almost nothing; pv counts the disk's own bytes after SSH
         # has unpacked them, so progress is unchanged.
-        f"{IMP.SOURCE_SSH.command(src, 'cat -- ' + shlex.quote(path), compress=True)} | meter | curl -sS --fail-with-body --cacert /ca/ca.crt -X POST -T - "
+        f"if {IMP.SOURCE_SSH.command(src, 'cat -- ' + shlex.quote(path), compress=True)} | meter | curl -sS --fail-with-body --cacert /ca/ca.crt -X POST -T - "
         "-H \"Authorization: Bearer $TOKEN\" -H 'Content-Type: application/octet-stream' \"$UPLOAD_URL\"",
-        "echo HSVM-DONE",
+        "then echo HSVM-DONE",
+        "else code=$?; echo \"HSVM-FAILED Disk stream or CDI upload exited with status $code; see the disk copy output\"; exit \"$code\"; fi",
     ])
 
 
@@ -448,7 +449,8 @@ def _job(ref, disk, index, token, ca):
                          "volumeMounts": [{"name": "ca", "mountPath": "/ca", "readOnly": True}],
                          "resources": {"requests": {"cpu": "100m", "memory": "64Mi"}, "limits": {"memory": "256Mi"}}}],
                      "volumes": [{"name": "ca", "secret": {"secretName": secret, "items": [{"key": "ca.crt", "path": "ca.crt"}]}}]}}}}
-    ksend("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", body)
+    made = ksend("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", body)
+    disk["job_uid"] = (made or {}).get("metadata", {}).get("uid", "")
     return job, secret
 
 
@@ -478,7 +480,7 @@ def _job_logs(ns, job):
         if not pods:
             return ""
         from homestead_shim import raw_get
-        return raw_get(f"/api/v1/namespaces/{ns}/pods/{pods[0]['metadata']['name']}/log?tailLines=40") or ""
+        return raw_get(f"/api/v1/namespaces/{ns}/pods/{pods[0]['metadata']['name']}/log?tailLines=200") or ""
     except Exception:
         return ""
 
@@ -489,9 +491,84 @@ def progress(log):
     return min(100, numbers[-1]) if numbers else 0
 
 
+def failure_reason(log, fallback="the copy stopped; inspect its disk copy output"):
+    """A percentage is progress, never an error. Keep the actual transport error."""
+    lines = [line.strip() for line in str(log or "").splitlines() if line.strip()
+             and not line.strip().isdigit() and line.strip() != "HSVM-DONE"]
+    errors = [line for line in lines if re.search(
+        r"curl:|no space|not enough space|too large|permission denied|host key|connection.*(?:failed|refused|reset)|"
+        r"timed? out|out of memory|oomkilled|unauthorized|forbidden|certificate|error|failed", line, re.I)
+        and not line.startswith("HSVM-FAILED ")]
+    markers = [line[len("HSVM-FAILED "):] for line in lines if line.startswith("HSVM-FAILED ")]
+    return (errors[-1] if errors else markers[-1] if markers else fallback)[-300:]
+
+
+def log_sources(item):
+    """Live disk copy/upload output, or bounded evidence saved before cleanup."""
+    ref = item["ref"]
+    if "diagnostics" in ref:
+        return ref["diagnostics"]
+    if ref.get("phase") == "failed":
+        return [{"title": "Disk copy", "text": "", "note": "This older failed import kept no copy output before cleanup. Its earlier error cannot be recovered from a new attempt."}]
+    ns, out = ref["namespace"], []
+    from homestead_joblogs import _pod_source, _events
+    for index, disk in enumerate(ref.get("disks") or []):
+        title = f"Disk {index + 1} · {disk['dv']}"
+        if disk.get("job"):
+            try:
+                pods = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=job-name%3D{disk['job']}").get("items") or []
+                if disk.get("job_uid"):
+                    pods = [p for p in pods if any(o.get("uid") == disk["job_uid"] and o.get("kind") == "Job"
+                            and o.get("controller") is True for o in p.get("metadata", {}).get("ownerReferences", []))]
+                else:
+                    pods = []  # an older attempt may share this name with a retry
+                for pod in pods[:1]:
+                    source = _pod_source(ns, pod, title + " · copy")
+                    status = pod.get("status") or {}
+                    stopped = [c.get("state", {}).get("terminated") or {} for c in status.get("containerStatuses") or []]
+                    source["note"] = "; ".join(f"{s.get('reason', 'exited')} (exit {s.get('exitCode', '?')})" for s in stopped) or source["note"]
+                    out.append(source)
+                if not pods:
+                    out.append({"title": title + " · copy", "text": "", "note": "The confirmed copy pod is unavailable, or this older import recorded no Job identity."})
+            except Exception:
+                out.append({"title": title + " · copy", "text": "", "note": "Copy output is unavailable or was already cleaned up."})
+        # CDI upload pods are tied to the destination PVC, including prime PVCs.
+        try:
+            targets = {disk["dv"]}
+            pvc = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{disk['dv']}")
+            prime = pvc.get("metadata", {}).get("annotations", {}).get("cdi.kubevirt.io/storage.populator.pvcPrime")
+            if prime:
+                targets.add(prime)
+            out.append({"title": title + " · storage", "text": _events(ns, disk["dv"], pvc.get("metadata", {}).get("uid", "")),
+                        "note": f"Requested {pvc.get('spec', {}).get('resources', {}).get('requests', {}).get('storage', '?')}; capacity {pvc.get('status', {}).get('capacity', {}).get('storage', '?')}; phase {pvc.get('status', {}).get('phase', 'unknown')}"})
+        except Exception:
+            targets = {disk["dv"]}
+        try:
+            pods = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=cdi.kubevirt.io%3Dcdi-upload-server").get("items") or []
+            for pod in pods:
+                claims = [v.get("persistentVolumeClaim", {}).get("claimName") for v in pod.get("spec", {}).get("volumes", [])]
+                if not targets.intersection(claims):
+                    continue
+                out.append(_pod_source(ns, pod, title + " · CDI upload"))
+                out.append({"title": title + " · upload events", "text": _events(ns, pod["metadata"]["name"], pod["metadata"].get("uid", "")), "note": ""})
+        except Exception:
+            pass
+    return out or [{"title": "Disk copy", "text": "", "note": "The import has no retained copy output yet, or its pods were cleaned up by an older release."}]
+
+
 def _fail(ref, message):
     """Clear what this import made, so it can simply be run again."""
     ns = ref["namespace"]
+    # Save before deleting Jobs and DataVolumes: their pods disappear with them.
+    remaining, saved = 60000, []
+    for source in log_sources({"ref": ref}):
+        if remaining <= 0:
+            break
+        text = str(source.get("text") or "")[-min(20000, remaining):]
+        remaining -= len(text) + len(str(source.get("note") or "")) + 300
+        saved.append({"title": str(source.get("title") or "Output")[:200], "text": text,
+                      "note": str(source.get("note") or "")[:500]})
+    ref["diagnostics"] = saved
     for disk in ref["disks"]:
         if disk.get("job"):
             _delete(f"/apis/batch/v1/namespaces/{ns}/jobs/{disk['job']}")
@@ -530,8 +607,9 @@ def status(item):
             if any(c.get("type") == "Failed" and c.get("status") == "True" for c in st.get("conditions") or []) or (
                     st.get("failed") and not st.get("active")):
                 log = _job_logs(ns, disk["job"])
-                said = next((l[len("HSVM-FAILED "):] for l in log.splitlines() if l.startswith("HSVM-FAILED ")), "")
-                failed = said or (log.strip().splitlines() or ["the copy stopped"])[-1][-240:]
+                reason = next((c.get("message") or c.get("reason") for c in st.get("conditions") or []
+                               if c.get("type") == "Failed" and c.get("status") == "True"), "")
+                failed = failure_reason(log, reason or "the copy stopped; inspect its disk copy output")
                 break
             if st.get("succeeded"):
                 disk["pct"] = 100

@@ -2,6 +2,7 @@ import base64
 import json
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -223,6 +224,62 @@ class ImportTests(unittest.TestCase):
     def test_progress_is_what_pv_last_said(self):
         self.assertEqual(42, UVMS.progress("7\n19\n42\n"))
         self.assertEqual(0, UVMS.progress("fetch https://dl-cdn\n"))
+
+    def test_a_meter_line_does_not_hide_the_transport_or_upload_error(self):
+        for error in ("curl: (22) The requested URL returned error: 413", "Permission denied", "No space left on device"):
+            with self.subTest(error=error):
+                self.assertEqual(error, UVMS.failure_reason(error + "\n0\n"))
+        self.assertIn("copy stopped", UVMS.failure_reason("0\n"))
+        self.assertEqual("VM started again", UVMS.failure_reason("HSVM-FAILED VM started again\n0\n"))
+
+    def test_failure_keeps_bounded_evidence_before_removing_resources(self):
+        ref = {"namespace": "lab", "disks": [{"dv": "desktop-disk", "job": "copy", "bytes": 1}]}
+        evidence = [{"title": "CDI upload", "text": "No space left on device\n" + "x" * 70000, "note": "upload failed"}]
+        with mock.patch.object(UVMS, "log_sources", return_value=evidence), mock.patch.object(UVMS, "_delete") as delete:
+            delete.side_effect = lambda path: self.assertIn("diagnostics", ref)
+            state, _, _ = UVMS._fail(ref, "Upload failed")
+        self.assertEqual("failed", state)
+        self.assertLessEqual(len(ref["diagnostics"][0]["text"]), 20000)
+        self.assertEqual(ref["diagnostics"], UVMS.log_sources({"ref": ref}))
+
+    def test_a_failed_copy_reports_an_error_instead_of_the_last_percentage(self):
+        ref = {"namespace": "lab", "vm": "Desktop VM", "phase": "copy", "disks": [{"dv": "desktop-disk", "job": "copy", "bytes": 1}]}
+        self.objects[f"{UVMS.CDI_API}/namespaces/lab/datavolumes/desktop-disk"] = {"status": {"phase": "UploadReady"}}
+        self.imp._get_or_none = lambda path: {"status": {"failed": 1, "conditions": [{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]}}
+        with mock.patch.object(UVMS, "_job_logs", return_value="curl: (22) The requested URL returned error: 500\n0\n"):
+            state, _, message = UVMS.status({"ref": ref})
+        self.assertEqual("failed", state)
+        self.assertIn("curl: (22)", message)
+        self.assertNotIn("failed: 0", message)
+
+    def test_logs_follow_the_confirmed_job_and_prime_upload_pvc(self):
+        ref = {"namespace": "lab", "phase": "copy", "disks": [{"dv": "desktop-disk", "job": "copy", "job_uid": "job-current"}]}
+        pod = {"metadata": {"name": "copy-current", "ownerReferences": [{"kind": "Job", "uid": "job-current", "controller": True}]},
+               "status": {"containerStatuses": [{"state": {"terminated": {"reason": "OOMKilled", "exitCode": 137}}}]}}
+        stale = {"metadata": {"name": "copy-previous", "ownerReferences": [{"kind": "Job", "uid": "job-previous", "controller": True}]}}
+        upload = {"metadata": {"name": "upload-prime", "uid": "upload-uid"},
+                  "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "prime-pvc"}}]}}
+        unrelated = {"metadata": {"name": "upload-other"}, "spec": {"volumes": [{"persistentVolumeClaim": {"claimName": "other-pvc"}}]}}
+        self.objects["/api/v1/namespaces/lab/pods?labelSelector=job-name%3Dcopy"] = {"items": [stale, pod]}
+        self.objects["/api/v1/namespaces/lab/pods?labelSelector=cdi.kubevirt.io%3Dcdi-upload-server"] = {"items": [unrelated, upload]}
+        self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/desktop-disk"] = {
+            "metadata": {"uid": "pvc-uid", "annotations": {"cdi.kubevirt.io/storage.populator.pvcPrime": "prime-pvc"}},
+            "spec": {"resources": {"requests": {"storage": "200Gi"}}}, "status": {"phase": "Bound", "capacity": {"storage": "200Gi"}}}
+        import homestead_joblogs as logs
+        with mock.patch.object(logs, "_pod_source", side_effect=lambda ns, p, title: {"title": title, "text": p["metadata"]["name"], "note": ""}), \
+                mock.patch.object(logs, "_events", return_value="storage event") as events:
+            sources = UVMS.log_sources({"ref": ref})
+        self.assertEqual(["copy-current", "storage event", "upload-prime", "storage event"], [s["text"] for s in sources])
+        self.assertEqual("OOMKilled (exit 137)", sources[0]["note"])
+        events.assert_any_call("lab", "desktop-disk", "pvc-uid")
+        events.assert_any_call("lab", "upload-prime", "upload-uid")
+
+    def test_an_old_failed_import_never_reads_output_from_a_retry(self):
+        ref = {"namespace": "lab", "phase": "failed", "disks": [{"dv": "desktop-disk", "job": "copy"}]}
+        with mock.patch.object(UVMS, "kget") as get:
+            sources = UVMS.log_sources({"ref": ref})
+        get.assert_not_called()
+        self.assertIn("earlier error cannot be recovered", sources[0]["note"])
 
     def test_the_job_waits_for_cdi_then_starts_one_copy_per_disk(self):
         op = UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})
