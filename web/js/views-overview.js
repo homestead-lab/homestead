@@ -119,24 +119,30 @@ async function viewDash() {
   <div class="nodegrid stagger">${o.nodes.map(nodeCard).join("")}</div>
 
   <div class="sec">Top consumers</div>
-  <div class="grid g2">
-    <div class="card flat pad0">
+  <div class="grid g2 consumer-grid">
+    <div class="card flat pad0 consumer-card">
       <div class="cardhd"><div class="ctitle">Top CPU</div></div>
-      <div class="tblwrap"><table class="tbl stack"><thead><tr><th>Workload</th><th>Node</th><th style="width:130px">CPU</th></tr></thead><tbody>
-      ${o.top_cpu.slice(0, 5).map(w => `<tr><td class="cell-name"><b title="${esc(w.name)}">${esc(w.name)}</b><div class="dim xs">${esc(w.ns)}</div></td>
-        <td class="small muted cell-nodes" title="${esc(w.nodes.join(", "))}">${esc(w.nodes.join(", ") || "—")}</td>
-        <td>${meter(Math.min(100, Number(w.cpu || 0) * 100))}<div class="dim xs mono" style="margin-top:4px" title="100% equals one CPU core">${workloadCpuPercent(w.cpu)}</div></td></tr>`).join("")}
-      </tbody></table></div></div>
-    <div class="card flat pad0">
+      ${consumerTable(o.top_cpu, "cpu")}</div>
+    <div class="card flat pad0 consumer-card">
       <div class="cardhd"><div class="ctitle">Top memory</div></div>
-      <div class="tblwrap"><table class="tbl stack"><thead><tr><th>Workload</th><th>Node</th><th style="width:90px">RAM</th></tr></thead><tbody>
-      ${o.top_mem.slice(0, 5).map(w => `<tr><td class="cell-name"><b title="${esc(w.name)}">${esc(w.name)}</b><div class="dim xs">${esc(w.ns)}</div></td>
-        <td class="small muted cell-nodes" title="${esc(w.nodes.join(", "))}">${esc(w.nodes.join(", ") || "—")}</td>
-        <td class="mono nowrap"><b>${workloadMemory(w.mem_mb)}</b></td></tr>`).join("")}
-      </tbody></table></div></div>
+      ${consumerTable(o.top_mem, "memory")}</div>
   </div>
   <section class="card flat history-card" id="historyCard">${STATE.data.historyHtml || ""}</section>`);
   historyPaint();
+}
+
+function consumerTable(workloads, metric) {
+  return `<div class="tblwrap"><table class="tbl stack compact consumer-table"><thead><tr><th>Workload</th><th>${metric === "cpu" ? "CPU" : "RAM"}</th></tr></thead>
+    <tbody>${workloads.slice(0, 5).map(w => consumerRow(w, metric)).join("")}</tbody></table></div>`;
+}
+
+function consumerRow(workload, metric) {
+  const details = [workload.ns, (workload.nodes || []).join(", ")].filter(Boolean).join(" · ");
+  const cpu = metric === "cpu";
+  return `<tr class="consumer-row"><td class="consumer-identity"><b title="${esc(workload.name)}">${esc(workload.name)}</b>
+    <div class="consumer-meta dim" title="${esc(details)}">${esc(details || "—")}</div></td>
+    <td class="consumer-value mono" data-status${cpu ? ' title="100% equals one CPU core"' : ""}><b>${cpu ? workloadCpuPercent(workload.cpu) : workloadMemory(workload.mem_mb)}</b>
+      ${cpu ? meter(Math.min(100, Number(workload.cpu || 0) * 100)) : ""}</td></tr>`;
 }
 
 /* How long a node has been up, and how much of the last while. The host's
@@ -298,12 +304,13 @@ function nodeUptimeStrip(n) {
    system drive shows on that drive's line, not as a disk of its own. */
 /* A drive's bar in parts: the system's use, Longhorn's data, and Longhorn's
    remaining room on it, each its own colour, the rest free. */
-function driveBar(drive, sysGb, lhUsed, lhRoom) {
-  const w = gb => drive ? Math.max(0, Math.min(100, gb / drive * 100)).toFixed(2) : 0;
-  const tip = [sysGb ? `system ${sizeText(sysGb)}` : "", lhUsed || lhRoom ? `Longhorn ${sizeText(lhUsed)} used, ${sizeText(lhRoom)} more it may use` : "",
-    `${sizeText(Math.max(0, drive - sysGb - lhUsed - lhRoom))} free`].filter(Boolean).join(" · ");
-  return `<div class="meter split" data-tip="${esc(tip)}">${sysGb ? `<span class="seg-sys" style="width:${w(sysGb)}%"></span>` : ""}${
-    lhUsed ? `<span class="seg-lh" style="width:${w(lhUsed)}%"></span>` : ""}${lhRoom ? `<span class="seg-lhroom" style="width:${w(lhRoom)}%"></span>` : ""}</div>`;
+function driveBar(usage) {
+  const w = gb => (gb / usage.capacity * 100).toFixed(2);
+  const tip = [`Filesystem use ${sizePair(usage.used, usage.capacity)}`, usage.host ? `host files ${sizeText(usage.host)}` : "",
+    usage.longhorn ? `Longhorn used ${sizeText(usage.longhorn)}` : "", usage.room ? `Longhorn allowance left ${sizeText(usage.room)}` : "",
+    usage.remaining ? `other filesystem space ${sizeText(usage.remaining)}` : ""].filter(Boolean).join(" · ");
+  return `<div class="meter split" data-tip="${esc(tip)}">${usage.host ? `<span class="seg-sys" style="width:${w(usage.host)}%"></span>` : ""}${
+    usage.longhorn ? `<span class="seg-lh" style="width:${w(usage.longhorn)}%"></span>` : ""}${usage.room ? `<span class="seg-lhroom" style="width:${w(usage.room)}%"></span>` : ""}</div>`;
 }
 
 function nodeDiskLines(n) {
@@ -313,16 +320,8 @@ function nodeDiskLines(n) {
     ${meter(n.fs_pct || 0, "", "disk")}</div>`;
   return disks.map(d => {
     const lh = d.lh_size_gb > 0, system = !!d.system || d.role === "system";
-    // Against the whole drive: the system's own use, Longhorn's data, and the
-    // rest of Longhorn's room. Longhorn's folder on / is inside the root
-    // filesystem's use too, so it is taken out of the system's share.
-    const drive = Math.max(d.size_gb || 0, d.lh_size_gb || 0, system ? (n.fs_cap_gb || 0) : 0);
-    const sysGb = system ? Math.max(0, (n.fs_used_gb || 0) - (d.lh_root_used_gb || 0)) : 0;
-    const lhUsed = lh ? d.lh_used_gb || 0 : 0;
-    // Longhorn's room on a shared filesystem is only what the system leaves free.
-    const lhRoom = lh ? Math.max(0, Math.min((d.lh_size_gb || 0) - lhUsed, drive - sysGb - lhUsed)) : 0;
-    const pct = drive ? Math.round((sysGb + lhUsed) / drive * 100) : 0;
-    const used = lh || system ? sizePair(sysGb + lhUsed, drive) : sizeText(d.size_gb);
+    const usage = diskUsage(n, d);
+    const used = usage.capacity ? sizePair(usage.used, usage.capacity) : sizeText(d.size_gb);
     const folder = d.device === "longhorn";
     const label = d.name || (folder ? "Longhorn folder" : d.device.toUpperCase());
     const where = [d.name && !folder ? d.device : "", d.model, ...(d.lh_paths || [])].filter(Boolean).join(" · ");
@@ -330,9 +329,10 @@ function nodeDiskLines(n) {
       lh ? '<span class="tag ok slimtag">Longhorn</span>' : "",
       !lh && !d.system ? `<span class="tag slimtag ${d.role === "unused" ? "info" : ""}">${esc(d.role)}</span>` : ""].join("");
     return `<div><div class="between diskline-head"><span class="dim xs disklabel-row"><span title="${esc(where || d.device)}">${esc(label)}</span>${tags}</span>
-      <span class="small mono">${lh || d.role === "system" ? `<b>${pct}%</b> ` : ""}<span class="dim">${esc(used)}</span></span></div>
-      ${lh || system ? driveBar(drive, sysGb, lhUsed, lhRoom) : ""}
-      ${lh && system ? `<div class="dim xs mono drivesplit"><i class="k-sys"></i>system ${sizeText(sysGb)} <i class="k-lh"></i>Longhorn ${sizePair(lhUsed, d.lh_size_gb)}</div>` : ""}</div>`;
+      <span class="small mono">${usage.capacity ? `<b>${usage.pct}%</b> ` : ""}<span class="dim">${esc(used)}</span></span></div>
+      ${usage.capacity ? `${driveBar(usage)}<div class="dim xs disk-usage-caption">Filesystem use${usage.physical ? ` · ${sizeText(usage.physical)} disk` : ""}</div>`
+        : lh || system ? '<div class="dim xs disk-usage-caption">Usage unavailable</div>' : ""}
+      ${lh && system && usage.capacity ? `<div class="dim xs mono drivesplit"><i class="k-sys"></i>host ${sizeText(usage.host)} <i class="k-lh"></i>Longhorn ${sizePair(usage.longhorn, d.lh_size_gb)}</div>` : ""}</div>`;
   }).join("");
 }
 

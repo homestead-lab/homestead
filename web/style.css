@@ -524,6 +524,25 @@ b.uptime-ok{color:var(--ok)}b.uptime-warn{color:var(--med)}b.uptime-bad{color:va
 .drivesplit{display:flex;align-items:center;gap:5px;margin-top:3px;flex-wrap:wrap}
 .drivesplit i{display:inline-block;width:8px;height:8px;border-radius:2px}
 .drivesplit .k-lh{margin-left:6px}
+.disk-usage-caption{margin-top:3px}
+
+/* Dashboard rankings stay compact on phones as well as on wide screens. */
+.consumer-card .cardhd{padding:12px 14px 4px}
+.consumer-table{table-layout:fixed}.consumer-table th{padding:6px 14px}.consumer-table th:last-child{width:94px}
+.consumer-table td{padding:7px 14px;height:46px}
+.consumer-identity{min-width:0}.consumer-identity>b{display:block;font-size:12.5px;line-height:1.3;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.consumer-meta{font-size:11px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.consumer-table .consumer-value{text-align:right;font-size:12.5px;white-space:nowrap}
+.consumer-value .meter{width:68px;margin-top:4px;height:3px}
+@media(max-width:560px){
+  .tbl.stack.compact.consumer-table tr{grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;padding:7px 14px;min-height:46px}
+  .tbl.stack.compact.consumer-table td{height:auto;padding:0}
+  .tbl.stack.compact.consumer-table td.consumer-identity{padding:0}
+  .tbl.stack.compact.consumer-table .consumer-identity>b{display:block}
+  .tbl.stack.compact.consumer-table .consumer-meta{display:block;font-size:11px}
+  .tbl.stack.compact.consumer-table .meter{display:block}
+}
 
 .nodegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:12px}
 .podgrid{display:flex;flex-wrap:wrap;gap:3px;margin-top:11px}

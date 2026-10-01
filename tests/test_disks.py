@@ -70,10 +70,46 @@ class DiskTests(unittest.TestCase):
         self.assertEqual(("sdb", "unused", True, True), (spare["device"], spare["role"], spare["can_add"], spare["needs_wipe"]))
         self.assertEqual([{"device": "nvme0n1", "name": "", "size_gb": 465.8, "role": "longhorn", "system": True,
                            "model": "Samsung", "lh_paths": ["/var/lib/harvester/defaultdisk"],
+                           "root_fs": True, "node_fs": True, "lh_filesystems": [{"capacity_gb": 117.0, "used_gb": 27.0,
+                               "available_gb": 90.0, "reserved_gb": 0.0, "on_root": False, "on_node_fs": False, "data_gb": 27.0}],
                            "lh_used_gb": 27.0, "lh_size_gb": 117.0, "lh_root_used_gb": 0},
                           {"device": "sdb", "name": "", "size_gb": 1863, "role": "unused", "system": False,
-                           "model": "IronWolf", "lh_paths": [], "lh_used_gb": 0, "lh_size_gb": 0, "lh_root_used_gb": 0}],
+                           "model": "IronWolf", "lh_paths": [], "root_fs": False, "node_fs": False, "lh_filesystems": [],
+                           "lh_used_gb": 0, "lh_size_gb": 0, "lh_root_used_gb": 0}],
                          DISKS.summary()["node1"])
+
+    def test_shared_longhorn_folders_keep_one_capacity_and_the_reserved_space(self):
+        node = lh_node({"disk-a": {"path": "/var/lib/longhorn/a", "storageReserved": 30 * GiB},
+                        "disk-b": {"path": "/var/lib/longhorn/b", "storageReserved": 30 * GiB}},
+                       {name: {"storageMaximum": 100 * GiB, "storageAvailable": 60 * GiB,
+                               "scheduledReplica": {replica: 1}}
+                        for name, replica in [("disk-a", "replica-a"), ("disk-b", "replica-b")]})
+        Cluster(harvester=False, lh=node)
+        with mock.patch.object(DISKS, "_replica_sizes", return_value={"replica-a": 4 * GiB, "replica-b": 6 * GiB}):
+            disk = DISKS.summary()["node1"][0]
+        self.assertTrue(disk["root_fs"])
+        self.assertEqual([{"capacity_gb": 100.0, "used_gb": 40.0, "available_gb": 60.0,
+                           "reserved_gb": 30.0, "on_root": True, "on_node_fs": True, "data_gb": 10.0}], disk["lh_filesystems"])
+        self.assertEqual((70.0, 10.0), (disk["lh_size_gb"], disk["lh_root_used_gb"]))
+
+    def test_kubelet_filesystem_is_identified_when_it_is_on_another_disk(self):
+        c = Cluster(harvester=False, lh=lh_node({"disk-a": {"path": "/var/lib/kubelet/longhorn"}},
+            {"disk-a": {"storageMaximum": 200 * GiB, "storageAvailable": 150 * GiB,
+                        "scheduledReplica": {"replica-a": 1}}}))
+        probe = copy.deepcopy(PROBE)
+        probe["node1"]["mounts"] = [{"disk": "nvme0n1", "device": "nvme0n1p2", "mountpoint": "/"},
+                                    {"disk": "sdb", "device": "sdb1", "mountpoint": "/var/lib/kubelet"}]
+        DISKS.bind(c.get, c.send, lambda: probe)
+        with mock.patch.object(DISKS, "_replica_sizes", return_value={"replica-a": 10 * GiB}):
+            disks = DISKS.summary()["node1"]
+        self.assertTrue(disks[0]["root_fs"])
+        self.assertFalse(disks[0]["node_fs"])
+        self.assertTrue(disks[1]["node_fs"])
+        self.assertFalse(disks[1]["root_fs"])
+        usage = disks[1]["lh_filesystems"][0]
+        self.assertTrue(usage["on_node_fs"])
+        self.assertFalse(usage["on_root"])
+        self.assertEqual(10.0, usage["data_gb"], "replica data is also separated on a non-root kubelet filesystem")
 
     def test_harvester_adds_a_disk_by_provisioning_its_blockdevice(self):
         c = Cluster()

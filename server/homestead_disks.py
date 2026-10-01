@@ -89,11 +89,13 @@ def _lh_disks(node):
     for disk_id, d in (spec.get("disks") or {}).items():
         st = (status.get("diskStatus") or {}).get(disk_id) or {}
         maximum, available = st.get("storageMaximum") or 0, st.get("storageAvailable") or 0
+        reserved = d.get("storageReserved") or 0
         ready = next((c for c in st.get("conditions") or [] if c.get("type") == "Ready"), {})
         out.append({"id": disk_id, "path": d.get("path", ""), "type": d.get("diskType", "filesystem"),
                     "scheduling": d.get("allowScheduling", True) is not False,
                     "evicting": bool(d.get("evictionRequested")),
-                    "size_gb": _gb(maximum - (d.get("storageReserved") or 0)), "used_gb": _gb(maximum - available),
+                    "size_gb": _gb(max(0, maximum - reserved)), "used_gb": _gb(maximum - available),
+                    "capacity_gb": _gb(maximum), "reserved_gb": _gb(reserved),
                     "allocated_gb": _gb(st.get("storageScheduled")), "free_gb": _gb(available),
                     "replicas": len(st.get("scheduledReplica") or {}),
                     "replica_names": sorted(st.get("scheduledReplica") or {}),
@@ -261,17 +263,25 @@ def inventory():
                 mounts = [dict(m, disk=booting[0]) if m["disk"] == root["disk"] else m for m in mounts]
         unplaced = []
         system_devs = {m["disk"] for m in mounts if m["mountpoint"] in SYSTEM_MOUNTS}
+        node_point = _mount_point("/var/lib/kubelet", mounts)
+        node_mount = next((m for m in mounts if m["mountpoint"] == node_point), {})
+        node_key = node_mount.get("device") or node_point
         for disk in _lh_disks(lh.get(name) or {}):
             bd = next((b for b in node_bds if b["name"] == disk["id"] or (b["mountpoint"] and b["mountpoint"] == disk["path"])), None)
             dev = (_disk_of(bd["path"]) if bd else "") or (_disk_of(disk["path"]) if disk["type"] == "block" else _mount_disk(disk["path"], mounts))
             disk["missing"] = _missing(disk, bd, harvester, dev, system_devs, bool(mounts))
             # A folder on / (Longhorn's default /var/lib/longhorn): its data is
             # counted in the root filesystem's use as well.
-            disk["on_root"] = disk["type"] != "block" and _mount_point(disk["path"], mounts) == "/"
-            # Longhorn's "used" there is the whole filesystem's, the system's
-            # own files too; its data is what its replicas hold.
+            point = _mount_point(disk["path"], mounts) if disk["type"] != "block" else ""
+            mounted = next((m for m in mounts if m["mountpoint"] == point), {})
+            disk["on_root"] = disk["type"] != "block" and (point == "/" or bool(
+                mounted.get("device") and root and mounted["device"] == root.get("device")))
+            disk["filesystem_key"] = mounted.get("device") or point or disk["path"]
+            disk["on_node_fs"] = disk["type"] != "block" and bool(node_key) and disk["filesystem_key"] == node_key
+            # A shared host filesystem includes the host's own files; its
+            # Longhorn data is what the replicas hold.
             disk["data_gb"] = disk["used_gb"]
-            if disk["on_root"]:
+            if disk["on_root"] or disk["on_node_fs"]:
                 if not sizes:
                     sizes.append(_replica_sizes())
                 if sizes[0] is not None:
@@ -283,6 +293,7 @@ def inventory():
                 unplaced.append(disk)
         disks = []
         for row in rows.values():
+            row["node_fs"] = row["device"] == node_mount.get("disk")
             row["system"] = any(point in SYSTEM_MOUNTS for point in row["mounts"]) or (
                 harvester and row["blockdevice"] is None and bool(row["mounts"]))
             bd = row["blockdevice"]
@@ -296,7 +307,7 @@ def inventory():
         if unplaced:
             disks.append({"device": "", "path": "", "size_gb": sum(d["size_gb"] for d in unplaced), "model": "",
                           "kind": "", "serial": "", "longhorn": unplaced, "blockdevice": None, "mounts": [],
-                          "system": False, "role": "longhorn", "can_add": False, "needs_wipe": False})
+                          "system": False, "node_fs": False, "role": "longhorn", "can_add": False, "needs_wipe": False})
         out[name] = sorted(disks, key=lambda r: (not r["system"], r["device"] or "~"))
     node_tags = {name: list(((lh.get(name) or {}).get("spec") or {}).get("tags") or []) for name in lh}
     disk_tags = sorted({t for disks in out.values() for d in disks for x in d["longhorn"] for t in x["tags"]})
@@ -364,18 +375,45 @@ def _named(inv):
     return inv
 
 
+def _usage_filesystems(disks):
+    """Count a filesystem once, even if several Longhorn folders share it."""
+    groups = {}
+    for disk in disks:
+        key = disk["filesystem_key"]
+        capacity = disk["capacity_gb"]
+        if key not in groups:
+            groups[key] = {"capacity_gb": capacity, "used_gb": disk["used_gb"],
+                           "available_gb": disk["free_gb"], "reserved_gb": disk["reserved_gb"],
+                           "on_root": disk["on_root"], "on_node_fs": disk["on_node_fs"], "data_gb": disk["data_gb"]}
+        else:
+            row = groups[key]
+            row["capacity_gb"] = max(row["capacity_gb"], capacity)
+            row["used_gb"] = max(row["used_gb"], disk["used_gb"])
+            row["available_gb"] = min(row["available_gb"], disk["free_gb"])
+            row["reserved_gb"] = max(row["reserved_gb"], disk["reserved_gb"])
+            row["on_root"] = row["on_root"] or disk["on_root"]
+            row["on_node_fs"] = row["on_node_fs"] or disk["on_node_fs"]
+            row["data_gb"] = (round(row["data_gb"] + disk["data_gb"], 1) if row["on_root"] or row["on_node_fs"]
+                              else max(row["data_gb"], disk["data_gb"]))
+    return list(groups.values())
+
+
 def summary():
     """A line per disk for the node cards: its name or device, and - for a
     Longhorn disk on the system drive - that it is both."""
     inv = _named(inventory())
-    return {node: [{"device": d["device"] or "longhorn", "name": d.get("name", ""), "size_gb": d["size_gb"],
-                    "role": d["role"], "system": bool(d.get("system")), "model": d.get("model", ""),
-                    "lh_paths": [x.get("path", "") for x in d["longhorn"]],
-                    "lh_used_gb": round(sum(x["data_gb"] for x in d["longhorn"]), 1),
-                    "lh_size_gb": round(sum(x["size_gb"] for x in d["longhorn"]), 1),
-                    "lh_root_used_gb": round(sum(x["data_gb"] for x in d["longhorn"] if x.get("on_root")), 1)}
-                   for d in disks]
-            for node, disks in inv["nodes"].items()}
+    return {node: [_disk_summary(d) for d in disks] for node, disks in inv["nodes"].items()}
+
+
+def _disk_summary(d):
+    filesystems = _usage_filesystems(d["longhorn"])
+    return {"device": d["device"] or "longhorn", "name": d.get("name", ""), "size_gb": d["size_gb"],
+            "role": d["role"], "system": bool(d.get("system")), "model": d.get("model", ""),
+            "root_fs": "/" in d["mounts"], "node_fs": bool(d.get("node_fs")), "lh_filesystems": filesystems,
+            "lh_paths": [x.get("path", "") for x in d["longhorn"]],
+            "lh_used_gb": round(sum(x["data_gb"] for x in filesystems), 1),
+            "lh_size_gb": round(sum(max(0, x["capacity_gb"] - x["reserved_gb"]) for x in filesystems), 1),
+            "lh_root_used_gb": round(sum(x["data_gb"] for x in filesystems if x["on_root"]), 1)}
 
 
 # ---- changing what Longhorn uses ---------------------------------------------
