@@ -144,7 +144,7 @@ async function viewNetworking() {
     ${(data.registered_vips || []).length ? `<div class="vip-cards">${data.registered_vips.map(v => networkVipCard(v, data)).join("")}</div>`
       : '<div class="card flat empty small">No saved VIPs. Start with <b>Add VIP</b> above. Adding an address does not change your router or start a workload.</div>'}
     </section>
-    <div class="between"><div class="sec">LAN networks ${tip("Networks bridged to the LAN - Harvester calls them VM networks. A VM, or a container given an address of its own, joins one to be on the LAN like any machine there.")}</div>
+    <div class="between" id="lanNetworks" style="scroll-margin-top:150px"><div class="sec">LAN networks ${tip("Networks bridged to the LAN - Harvester calls them VM networks. A VM, or a container given an address of its own, joins one to be on the LAN like any machine there.")}</div>
       <button class="btn sm" data-need="admin" onclick="vmNetworkAdd()">＋ LAN network</button></div>
     <div id="netVmNets">${window.__vmCreateOptions ? networkVmNetsHtml(window.__vmCreateOptions) : '<div class="dim small">reading LAN networks…</div>'}</div>
     ${networkAddressesHtml(data)}
@@ -161,7 +161,8 @@ async function viewNetworking() {
         <td>${row.system ? "" : actionBar([{ label: row.orphaned ? "Release" : "Remove", icon: "trash", run: `networkServiceDelete(${jsq(row.namespace)},${jsq(row.name)})`,
       need: "admin", danger: row.orphaned, tip: row.orphaned ? "Release this listener" : "Remove this Service and take its workload off the LAN" }])}</td></tr>`).join("") || '<tr><td colspan="5" class="empty">No matching services</td></tr>'}</tbody></table></div></div>
     ${data.ingresses.length ? `<div class="sec" style="margin-top:22px">Ingress routes</div><div class="card flat pad0"><div class="tblwrap"><table data-sort="ingresses" class="tbl stack dense"><thead><tr><th>Ingress</th><th>Address</th><th>Route</th><th>Backend</th></tr></thead><tbody>${data.ingresses.filter(x => showSystem || !x.system).flatMap(row => row.rules.map(rule => `<tr><td>${esc(row.namespace)}/${esc(row.name)}</td><td class="mono">${esc(row.addresses.join(", ") || "pending")}</td><td>${esc(rule.host)}${esc(rule.path)}</td><td>${esc(rule.service)}:${esc(rule.port)}</td></tr>`)).join("")}</tbody></table></div></div>` : ""}`);
-  networkVmNetsPaint();
+  await networkVmNetsPaint();
+  if (!STATE.busy && new URLSearchParams(location.search).get("section") === "lan") $("#lanNetworks")?.scrollIntoView({ block: "start" });
   selfAddressPaint();
 }
 
