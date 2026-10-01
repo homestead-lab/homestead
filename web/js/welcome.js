@@ -3,11 +3,12 @@
    in two lines why it matters, shows the cluster as it is (a diagram where
    the idea is spatial), and offers one thing to do. Homestead decides what is
    done by looking, every time, so a step done and since undone shows again;
-   only skipping is remembered. Admins see every chapter; everyone sees the
+   appearance is a person's confirmation on their device. Admins see every chapter; everyone sees the
    steps that are theirs - how it looks, their phone, their notifications.
 
    It opens itself once, the first time an administrator signs in. On the
-   live demo it never does: a pulsing button in the top bar offers it. */
+   live demo it never does: a pulsing button in the top bar offers it.
+   The book button stays available on real clusters after completion too. */
 
 const SETUP_CHAPTERS = [
   ["Is it healthy?", ["health", "quorum", "probe", "clocks"]],
@@ -18,7 +19,8 @@ const SETUP_CHAPTERS = [
   ["First apps", ["starter", "console"]],
 ];
 const SETUP_PERSONAL = ["appearance", "phone", "notifications"];
-const setupDemo = () => window.HOMESTEAD_DEMO === true || new URLSearchParams(location.search).get("demo") === "1";
+const setupDemoVisit = window.HOMESTEAD_DEMO === true || new URLSearchParams(location.search).get("demo") === "1";
+const setupDemo = () => setupDemoVisit;
 const setupLocal = (key, value) => {
   try {
     if (value === undefined) return localStorage.getItem(`homestead.setup.${key}`);
@@ -27,6 +29,71 @@ const setupLocal = (key, value) => {
   return null;
 };
 const isAddress = host => /^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes(":") || host === "localhost";
+
+// A configuration visit belongs to this tab, including across a reload.
+// Keep demo visits separate from a real cluster on the same origin.
+function setupVisit(value) {
+  const key = `homestead.setup.visit.${setupDemo() ? "demo" : "live"}`;
+  try {
+    if (value === undefined) return sessionStorage.getItem(key);
+    if (value) sessionStorage.setItem(key, value); else sessionStorage.removeItem(key);
+  } catch (_) { /* storage may be unavailable */ }
+  return value;
+}
+
+window.setupNavigation = view => {
+  if (STATE.view === "setup" && view !== "setup" && view !== "dash") {
+    const step = new URLSearchParams(location.search).get("step");
+    if (SETUP_STEPS[step]) setupVisit(step);
+  }
+  if (view === "setup" || view === "dash") setupVisit("");
+  const step = setupVisit(), host = $("#setupReturn");
+  if (!host) return;
+  host.classList.toggle("hidden", !SETUP_STEPS[step]);
+  host.innerHTML = SETUP_STEPS[step] ? `<div class="setup-return-copy"><b>Setup in progress</b><div>${esc(SETUP_STEPS[step].title)}</div></div>
+    <div class="row">${UI.button("Return to setup", `setupOpen(${jsArg(step)})`)}<button class="iconbtn" type="button" onclick="setupDismissVisit()" aria-label="Dismiss setup return bar" title="Dismiss"><svg aria-hidden="true"><use href="#i-x"/></svg></button></div>` : "";
+};
+window.setupDismissVisit = () => { setupVisit(""); $("#setupReturn")?.classList.add("hidden"); };
+
+// Say exactly what is observed; configuration is not proof of end-to-end health.
+const SETUP_CHECKS = {
+  health: "Checks the current node, workload and volume health reports.",
+  quorum: "Checks the number of control-plane servers; one server is accepted for a lab.",
+  probe: "Checks whether the node probe is installed.",
+  clocks: "Checks the time-sync reports available from hosts.",
+  address: "Checks whether Homestead is using a registered VIP.",
+  https: "Uses HTTPS in this browser or an address you previously checked. A saved address is not retested automatically.",
+  hostname: "Checks whether this browser opened Homestead by name.",
+  disks: "Checks for unused non-system disks in the disk inventory.",
+  storage: "Checks the default storage class and its replica count against ready nodes.",
+  backups: "Checks that a backup target is configured. This does not verify a backup or restore.",
+  config: "Records a settings export. Homestead cannot check where you saved the file.",
+  osupdates: "Checks that the OS update schedule is enabled, not that every host has updated.",
+  appearance: "Your choice, saved on this device. Homestead does not check how it looks.",
+  phone: "Checks whether this browser is running as an installed app; other devices are not checked.",
+  notifications: "Checks for a registered notification device on this account, not delivery.",
+  people: "Checks that at least two administrator accounts exist.",
+  unifi: "Checks that a UniFi address is configured, not that the connection is healthy.",
+  unraid: "Checks that an import source is added, not that an import has succeeded.",
+  homeassistant: "Checks for an unexpired API key, not a working Home Assistant connection.",
+  linked: "Checks that another cluster is linked.",
+  starter: "Checks that an app other than Homestead exists, not that it is healthy.",
+  console: "Checks that the host console is enabled, not that every host screen is working.",
+};
+
+function setupIntroHtml(ids, status) {
+  const next = ids.find(id => ["attention", "todo"].includes(status[id])) || ids[0];
+  return `<section class="card flat setup-card" data-step="intro">
+    <div class="settings-card-head"><div><div class="ctitle">Welcome to Homestead</div><div class="csub">A guide to your cluster and your own preferences</div></div></div>
+    ${UI.lead("Work through the basics, or pick a step from the list. Optional steps can be skipped and revisited later.")}
+    ${UI.steps([
+      { title: "See what is checked", detailHtml: "Each step explains the evidence Homestead uses. Configured services may still need testing." },
+      { title: "Make your changes", detailHtml: "When a step opens another page, use Return to setup to come back. Next only moves through the guide; it does not mark a step complete." },
+      { title: "Come back any time", detailHtml: "The book icon in the top bar always opens this guide, even after completion. It is also in Settings › Homestead. The dashboard toggle only hides or shows your progress shortcut." },
+    ])}
+    ${UI.actions(UI.button(next ? `Begin: ${SETUP_STEPS[next].title}` : "Back to the Dashboard", next ? `setupOpen(${jsArg(next)})` : "go('dash')", { kind: "pri" }))}
+  </section>`;
+}
 
 /* What the browser alone can tell, laid over what the cluster said. */
 function setupFacts(state) {
@@ -48,6 +115,18 @@ function setupStatus(id, steps, skips) {
   if (s.done) return "done";
   if (skips.includes(id)) return "skipped";
   return s.error || ["health", "quorum", "disks", "storage"].includes(id) ? "attention" : "todo";
+}
+
+function setupStatusLabel(id, status, facts = {}) {
+  if (status === "done") {
+    if (id === "appearance") return "Confirmed by you";
+    if (id === "https" && !facts.here) return "Previously checked";
+    if (id === "config") return "Export recorded";
+    return "Checked by Homestead";
+  }
+  if (status === "skipped") return "Skipped by choice";
+  if (status === "attention") return "Needs a look";
+  return id === "appearance" ? "Your confirmation" : "Not yet complete";
 }
 
 function setupVisible(state) {
@@ -133,7 +212,7 @@ const SETUP_STEPS = {
       : s.provisioner !== "driver.longhorn.io" ? `The default, ${esc(s.default)}, keeps volumes on one node's disk: a failed node takes its data with it. A Longhorn class keeps copies on several.`
       : `The default, ${esc(s.default)}, keeps ${s.copies} cop${s.copies === 1 ? "y" : "ies"} with ${s.nodes} node${s.nodes === 1 ? "" : "s"}: ${s.copies > s.nodes ? "some copies can never be placed" : "fewer than the nodes could hold"}. ${s.target} fits.`,
     body: s => window.Diagram && s.default ? Diagram.copies(Array.from({ length: s.nodes }, (_, i) => `node ${i + 1}`), s.copies || 1) : "",
-    actions: s => s.done ? [] : s.candidates?.length ? [{ label: `Make ${s.candidates[0]} the default`, run: `storageClassDefault(${jsq(s.candidates[0])}).then(() => viewSetup())`, pri: true }]
+    actions: s => s.done ? [] : s.candidates?.length ? [{ label: `Make ${s.candidates[0]} the default`, run: `storageClassDefault(${jsArg(s.candidates[0])}).then(() => viewSetup())`, pri: true }]
       : [{ label: `A class with ${s.target} copies`, run: "settingsTab('hardware');go('settings');setTimeout(() => window.storageClassCreate && storageClassCreate(), 900)", pri: true }],
     more: "<p>Changing the default affects new volumes only. A volume already made keeps its class; Volumes moves one to another class.</p>",
   },
@@ -154,7 +233,7 @@ const SETUP_STEPS = {
   },
   appearance: {
     title: "Appearance", lead: () => "Light or dark, how dense the pages are, and cards or rows. Yours alone, on this device.",
-    actions: s => [{ label: "Open appearance", run: "settingsTab('you');go('settings')", pri: !s.done }, s.done ? null : { label: "It looks right", run: "setupLocalDone('appearance')" }],
+    actions: s => [{ label: "Open appearance", run: "settingsTab('you');go('settings')", pri: !s.done }, { label: s.done ? "Undo my confirmation" : "Mark as done on this device", run: `setupLocalDone('appearance', ${!s.done})` }],
   },
   phone: {
     title: "On your phone", lead: s => s.installed ? "This is the installed app." : s.secure
@@ -217,20 +296,22 @@ async function viewSetup() {
   catch (e) { paint(`<div class="empty">${esc(e.message)}</div>`); return; }
   state.steps = setupFacts(state);
   STATE.data.setup = state;
+  STATE.data.setupDash = null;
   const chapters = setupVisible(state);
   const ids = chapters.flatMap(([, list]) => list);
   const status = Object.fromEntries(ids.map(id => [id, setupStatus(id, state.steps, state.skips)]));
   const done = ids.filter(id => status[id] === "done").length;
   const wanted = new URLSearchParams(location.search).get("step");
-  const open = ids.includes(wanted) ? wanted : ids.find(id => ["attention", "todo"].includes(status[id])) || ids[0];
-  const mark = s => `<span class="setup-mark ${s}" aria-hidden="true">${s === "done" ? "✓" : s === "attention" ? "!" : ""}</span>`;
-  const nav = chapters.map(([title, list], c) => `<div class="setup-chapter">${c + 1} · ${esc(title)}</div>${list.map(id =>
-    `<button class="setup-step${id === open ? " on" : ""}" data-step="${id}" onclick="setupOpen(${jsq(id)})">${mark(status[id])}<span>${esc(SETUP_STEPS[id].title)}</span></button>`).join("")}`).join("");
+  const open = ids.includes(wanted) ? wanted : "intro";
+  const mark = (s, id) => `<span class="setup-mark ${s}${id === "appearance" && s === "done" ? " confirmed" : ""}" aria-hidden="true">${s === "done" ? "✓" : s === "attention" ? "!" : ""}</span>`;
+  const nav = `<button class="setup-step${open === "intro" ? " on" : ""}" data-step="intro" onclick="setupOpen('intro')">${mark("todo")}<span>Start here</span></button>` + chapters.map(([title, list], c) => `<div class="setup-chapter">${c + 1} · ${esc(title)}</div>${list.map(id =>
+    `<button class="setup-step${id === open ? " on" : ""}" data-step="${id}" aria-label="${esc(SETUP_STEPS[id].title + ': ' + setupStatusLabel(id, status[id], state.steps[id]))}" onclick="setupOpen(${jsq(id)})">${mark(status[id], id)}<span>${esc(SETUP_STEPS[id].title)}</span></button>`).join("")}`).join("");
   paint(`<div class="phead"><div><h2>Setup</h2>
-      <p>${done} of ${ids.length} done${state.admin ? "" : " · the steps that are yours"}</p></div>
+      <p>${done} of ${ids.length} complete${state.admin ? "" : " · the steps that are yours"} · ${state.hidden ? "Dashboard progress hidden" : "Progress shortcut on Dashboard"}</p></div>
       <div class="row"><span class="setup-meter" aria-hidden="true"><span style="width:${ids.length ? Math.round(done / ids.length * 100) : 0}%"></span></span>
-        ${actionBar([{ label: state.hidden ? "Show on the Dashboard" : "Hide from the Dashboard", run: `setupHide(${!state.hidden})` }])}</div></div>
+        ${actionBar([{ label: state.hidden ? "Show setup progress on Dashboard" : "Hide setup progress from Dashboard", run: `setupHide(${!state.hidden})` }])}</div></div>
     <div class="settings-layout setup-layout" id="setupPage">
+      <label class="setup-picker">Setup step<select id="setupSelect" onchange="setupOpen(this.value)"><option value="intro"${open === "intro" ? " selected" : ""}>Start here</option>${chapters.map(([title, list]) => `<optgroup label="${esc(title)}">${list.map(id => `<option value="${id}"${id === open ? " selected" : ""}>${esc(SETUP_STEPS[id].title)} · ${esc(setupStatusLabel(id, status[id], state.steps[id]))}</option>`).join("")}</optgroup>`).join("")}</select></label>
       <nav class="settings-nav setup-nav" aria-label="Setup steps">${nav}</nav>
       <div class="settings-main" id="setupStep">${setupStepHtml(open, state, status, ids)}</div>
     </div>`);
@@ -238,33 +319,39 @@ async function viewSetup() {
 window.viewSetup = viewSetup;
 
 function setupStepHtml(id, state, status, ids) {
+  if (id === "intro" || !ids.includes(id)) return setupIntroHtml(ids, status);
   const step = SETUP_STEPS[id], s = state.steps[id] || {}, st = status[id];
   const next = ids[ids.indexOf(id) + 1];
   const actions = (step.actions(s) || []).filter(Boolean);
   const main = actions.filter(a => a.pri).map(a => UI.button(a.label, a.run, { kind: "pri" })).join("");
   const rest = actions.filter(a => !a.pri).map(a => UI.button(a.label, a.run)).join("");
   const skip = st === "done" ? "" : st === "skipped"
-    ? UI.button("Bring it back", `setupSkip(${jsq(id)}, false)`) : UI.button("Skip", `setupSkip(${jsq(id)}, true)`);
+    ? UI.button("Undo skip", `setupSkip(${jsArg(id)}, false)`) : UI.button("Skip this step", `setupSkip(${jsArg(id)}, true)`);
   return `<section class="card flat setup-card" data-step="${id}">
       <div class="settings-card-head"><div><div class="ctitle">${esc(step.title)}</div>
-        <div class="csub">${st === "done" ? UI.chip("done", "ok") : st === "skipped" ? UI.chip("skipped") : st === "attention" ? UI.chip("needs a look", "warn") : ""}</div></div></div>
+        <div class="csub">${UI.chip(setupStatusLabel(id, st, s), st === "done" && id !== "appearance" ? "ok" : st === "attention" ? "warn" : "")}</div></div></div>
+      <p class="small dim">${esc(SETUP_CHECKS[id])}${st === "skipped" ? " Skipping leaves it unchecked." : ""}</p>
       ${UI.lead(step.lead(s))}
       ${s.error ? UI.callout("warn", "Homestead could not check this just now", esc(s.error)) : ""}
       ${step.body ? `<div class="setup-body">${step.body(s)}</div>` : ""}
       ${step.more ? UI.more("How this works", step.more) : ""}
-      ${UI.actions(rest + main + (next ? UI.button(`Next: ${SETUP_STEPS[next].title}`, `setupOpen(${jsq(next)})`) : UI.button("Back to the Dashboard", "go('dash')")), skip)}
+      <p class="small dim">Next moves through the guide without marking this step done.</p>
+      ${UI.actions(rest + main + (next ? UI.button(`Next: ${SETUP_STEPS[next].title}`, `setupOpen(${jsArg(next)})`) : UI.button("Back to the Dashboard", "go('dash')")), skip)}
     </section>`;
 }
 
 window.setupOpen = id => {
   const state = STATE.data.setup;
   if (STATE.view !== "setup" || !state) return go("setup", { params: { step: id } });
+  const visible = setupVisible(state).flatMap(([, list]) => list);
+  if (id !== "intro" && !visible.includes(id)) id = "intro";
   const url = new URL(location.href);
   url.searchParams.set("step", id);
   history.replaceState(history.state, "", url.pathname + url.search);
   const ids = setupVisible(state).flatMap(([, list]) => list);
   const status = Object.fromEntries(ids.map(x => [x, setupStatus(x, state.steps, state.skips)]));
   $("#setupStep").innerHTML = setupStepHtml(id, state, status, ids);
+  if ($("#setupSelect")) $("#setupSelect").value = id;
   $$("#setupPage .setup-step").forEach(b => b.classList.toggle("on", b.dataset.step === id));
   if (matchMedia("(max-width: 900px)").matches) $("#setupStep").scrollIntoView({ block: "start" });
   if (window.applyRole) applyRole();
@@ -282,12 +369,12 @@ window.setupHide = async hidden => {
   try {
     await api("/api/setup/hide", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ hidden }) });
     STATE.data.setupDash = null;
-    toast(hidden ? "Setup is off the Dashboard; Settings › Homestead has it" : "Setup is on the Dashboard again", "ok");
+    toast(hidden ? "Progress shortcut hidden; the book icon still opens setup" : "Setup progress shortcut shown on Dashboard", "ok");
     viewSetup();
   } catch (e) { toast(e.message, "bad"); }
 };
 
-window.setupLocalDone = id => { setupLocal(id, "1"); viewSetup().then(() => setupOpen(id)); };
+window.setupLocalDone = (id, done = true) => { if (id !== "appearance") return; setupLocal(id, done ? "1" : "0"); STATE.data.setupDash = null; viewSetup().then(() => setupOpen(id)); };
 
 window.setupHttpsCheck = async button => {
   const url = $("#setup_https").value.trim();
@@ -335,12 +422,12 @@ function setupOffer() {
   const button = $("#setupbtn");
   if (!button) return;
   button.classList.remove("hidden");
-  button.classList.toggle("pulse", setupLocal("offered") !== "1");
+  button.classList.toggle("pulse", setupDemo() && setupLocal("offered") !== "1");
   button.onclick = () => { setupLocal("offered", "1"); button.classList.remove("pulse"); go("setup"); };
 }
 window.setupOffer = setupOffer;
 
-/* The Dashboard's line: "Setup: 9 of 21", until done or hidden. */
+/* The Dashboard's optional progress shortcut, including after completion. */
 // Asked again at most every five minutes: the Dashboard repaints often.
 window.setupDashItem = async () => {
   const cached = STATE.data.setupDash;
@@ -357,5 +444,5 @@ function setupDashLine(state) {
   const ids = setupVisible(state).flatMap(([, list]) => list);
   const done = ids.filter(id => setupStatus(id, state.steps, state.skips) === "done").length;
   const left = ids.filter(id => ["attention", "todo"].includes(setupStatus(id, state.steps, state.skips))).length;
-  return left ? `<a class="linkish" onclick="go('setup')">Setup: ${done} of ${ids.length}</a>` : "";
+  return `<a class="linkish" href="${esc(HomesteadRouter.urlFor('setup'))}" onclick="event.preventDefault();go('setup')">${left ? `Setup progress: ${done} of ${ids.length} complete` : "Setup reviewed · Reopen guide"}</a>`;
 }

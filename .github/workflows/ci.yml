@@ -164,6 +164,7 @@ jobs:
           PORT=4173 WEBROOT=web DATA_DIR=/tmp/homestead-demo-data python server/server.py >/tmp/homestead-demo.log 2>&1 &
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:4173/ >/dev/null && break; sleep 1; done
           node scripts/audit_${{ matrix.audit }}.mjs
+          if [ "${{ matrix.audit }}" = pages ]; then node scripts/check_setup_guide.mjs; fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

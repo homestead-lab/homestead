@@ -110,15 +110,23 @@ Storage, Hardware, Network and Host OS. A drive opens inside Storage.
 
 ### The setup guide
 
-`/setup` (`welcome.js`) is laid out as Settings is: chapters and their steps
-down the side with each step's state, one step open. A step is a two-line
+`/setup` (`welcome.js`) opens with an introduction, then chapters and their steps
+down the side with each step's state, one step open. On a phone, a step picker
+keeps the introduction and current step visible above the fold. A step is a two-line
 lead, the live state (a `Diagram` where the idea is spatial - `quorum`,
 `vip`, `copies`, `remote`, `node`), one main action and the rest folded under
 "How this works". Whether a step is done is never stored: the server looks
 (`setup_state()`), and only skips are kept (`homestead_setup.py`). Cluster
 steps are an admin's; appearance, phone and notifications are everyone's.
 It opens itself once for the first admin; the live demo never opens it and
-pulses a button in the top bar instead.
+pulses the book icon within its top-bar button instead, respecting reduced motion.
+The book button stays available for everyone after completion; Settings › Homestead
+also opens the guide. The dashboard toggle names the setup progress shortcut,
+which remains available after all steps are complete unless that person hides it.
+Each step names what is checked and its limits. Appearance is explicitly a
+confirmation on this device and can be undone; skipping and Next never mark a
+step done. Configuration visits retain a return bar naming the setup step, even
+after reloading the page. Returning rechecks the facts.
 
 ### Settings
 
