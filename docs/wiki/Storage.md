@@ -71,8 +71,9 @@ reclaim policy; finalizers are never forced. External backups are kept.
 ## Storage classes
 
 A storage class is the recipe for new volumes: how many copies, which engine,
-whether VM disks on it can live-migrate. The **Storage classes** card creates
-them and picks the default. Kubernetes cannot edit a class once made, so change
+whether VM disks on it can live-migrate. The **Storage classes** card, under
+**Settings → Hardware and storage** beside Longhorn's own settings (and from
+**Volumes ⋯ → Storage classes**), creates them and picks the default. Kubernetes cannot edit a class once made, so change
 means create a new one.
 
 **Copies go on** decides where a class's copies may be. **Different hosts**

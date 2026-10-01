@@ -345,7 +345,8 @@ async function viewStorage() {
   paint(`<div class="phead"><div><h2>Volumes</h2>
       <p>${v.length} Longhorn volume${v.length === 1 ? "" : "s"} · replicated block storage${onlySpare ? ` · <a class="linkish" onclick="STATE.volSpare=false;viewStorage()">showing ${spare.length} unused · show all</a>` : ""}</p></div>
       <div class="row">${moreMenu([spare.length ? { label: onlySpare ? "Show all volumes" : `Show the ${spare.length} unused`, icon: "list", run: "STATE.volSpare=!STATE.volSpare;viewStorage()",
-          tip: "Volumes nothing is defined to use - no container, VM or job - and ones kept after their claim went: the ones to look at when freeing space" } : null])}
+          tip: "Volumes nothing is defined to use - no container, VM or job - and ones kept after their claim went: the ones to look at when freeing space" } : null,
+        { label: "Storage classes", icon: "disk", run: "settingsTab('hardware');go('settings')", tip: "What new volumes are made from: in Settings › Hardware and storage" }])}
       <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button></div></div>
   ${st ? summaryLine("volumes", [
       `<b>${st.avail_gb} GB</b> free of ${st.cap_gb}`, `<b>${st.provisioned_gb} GB</b> provisioned`,
@@ -396,7 +397,6 @@ async function viewStorage() {
     <div class="card flat pad0"><div class="tblwrap"><table class="tbl dense"><thead><tr><th>Was</th><th>Class</th><th>Size</th><th></th></tr></thead><tbody>
     ${oldCopies.map(o => `<tr><td><b>${esc(o.was)}</b><div class="dim xs mono">${esc(o.pv)}</div></td><td>${esc(o.storage_class)}</td><td class="mono">${esc(o.size)}</td>
       <td><button class="btn sm danger" data-need="admin" onclick="reclassRemoveOld(${jsq(o.pv)})">Remove</button></td></tr>`).join("")}</tbody></table></div></div>` : ""}
-  ${storageClassCard(classes, v2)}
   ${otherVolumesHtml(others)}`);
   volumeProgressWatch();
 }
@@ -595,6 +595,21 @@ window.v2Details = async (fresh = false) => {
   if (window.applyRole) applyRole();
 };
 
+/* Settings › Hardware and storage: the storage classes, beside Longhorn's
+   own settings - what new volumes are made from is cluster configuration,
+   not a list of volumes. */
+async function storageClassesPaint() {
+  const host = $("#storageClassesCard");
+  if (!host) return;
+  const [classes, v2] = await Promise.all([api("/api/storage/classes").catch(() => []), api("/api/storage/v2").catch(() => null)]);
+  STATE.data.storageClasses = classes;
+  STATE.data.v2 = v2;
+  host.innerHTML = storageClassCard(classes, v2);
+  host.hidden = !host.innerHTML;
+  if (window.applyRole) applyRole();
+}
+window.storageClassesPaint = storageClassesPaint;
+
 function storageClassCard(classes, v2 = null) {
   const every = classes || [];
   if (!every.length) return "";
@@ -606,9 +621,9 @@ function storageClassCard(classes, v2 = null) {
   const specialLine = special.length ? `<div class="dim xs" style="padding:10px 16px">${special.length} class${special.length === 1 ? "" : "es"} made for
       ${[special.length - restores.length ? `${special.length - restores.length} Harvester image${special.length - restores.length === 1 ? "" : "s"}` : "", restores.length ? `${restores.length} restore${restores.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ")}
       ${STATE.showSpecialClasses ? "shown" : "hidden"}, and never offered when choosing a class.
-      <a style="cursor:pointer;text-decoration:underline" onclick="STATE.showSpecialClasses=!STATE.showSpecialClasses;viewStorage()">${STATE.showSpecialClasses ? "Hide" : "Show"} them</a>
+      <a style="cursor:pointer;text-decoration:underline" onclick="STATE.showSpecialClasses=!STATE.showSpecialClasses;storageClassesPaint()">${STATE.showSpecialClasses ? "Hide" : "Show"} them</a>
       ${restores.length ? ` · <button class="btn sm" data-need="admin" onclick="storageClassCleanup()">Remove the restore ones</button>` : ""}</div>` : "";
-  return `<div class="card flat pad0" style="margin-top:18px">
+  return `<div class="card flat pad0">
     <div class="between storage-class-head">
       <div><div class="ctitle">Storage classes</div>
         <div class="csub">What a new volume is built from. Kubernetes fixes a class at creation, so Homestead creates and removes them rather than editing them in place.</div>
@@ -639,7 +654,7 @@ function storageClassCard(classes, v2 = null) {
 window.storageClassCleanup = async () => {
   try {
     const r = await api("/api/storage/classes/cleanup", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-    toast(r.detail, "ok"); viewStorage();
+    toast(r.detail, "ok"); storageClassesPaint();
   } catch (e) { toast(e.message, "bad"); }
 };
 window.storageClassCreate = () => {
@@ -737,14 +752,14 @@ window.storageClassSave = async button => {
         engine: $("#sc_engine").value, default: $("#sc_default").checked,
         disk_tags: $$("#sc_disktags input:checked").map(b => b.value),
         node_tags: $$("#sc_nodetags input:checked").map(b => b.value) }) });
-    toast(result.message || `storage class "${name}" created`, "ok"); closeModal(); resetPaint(); viewStorage();
+    toast(result.message || `storage class "${name}" created`, "ok"); closeModal(); storageClassesPaint();
   } catch (e) { if (button) { button.disabled = false; button.textContent = "Create class"; } toast(e.message, "bad"); }
 };
 window.storageClassDefault = async name => {
   try {
     const result = await api("/api/storage/classes/default", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
-    toast(result.message || `${name} is now the default`, "ok"); resetPaint(); viewStorage();
+    toast(result.message || `${name} is now the default`, "ok"); storageClassesPaint();
   } catch (e) { toast(e.message, "bad"); }
 };
 window.storageClassDelete = async name => {
@@ -754,7 +769,7 @@ Volumes already built from it keep working and keep their data. New volumes can 
   try {
     const result = await api("/api/storage/classes/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
-    toast(result.message || `storage class "${name}" deleted`, "ok"); resetPaint(); viewStorage();
+    toast(result.message || `storage class "${name}" deleted`, "ok"); storageClassesPaint();
   } catch (e) { toast(e.message, "bad"); }
 };
 

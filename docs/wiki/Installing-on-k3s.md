@@ -185,8 +185,8 @@ since losing either stops the cluster.
 The script sets Longhorn up with one copy of each volume, which is all one
 machine can hold. As machines join, Homestead raises the default for new
 volumes with them, up to three - while it is still the installer's one copy, so
-a number you chose is kept. Existing volumes keep their count: **Volumes →
-Storage classes** makes a class with three copies the default. **Volumes** shows each volume's copies - `×1` in orange is a
+a number you chose is kept. Existing volumes keep their count: **Settings →
+Hardware and storage → Storage classes** makes a class with three copies the default. **Volumes** shows each volume's copies - `×1` in orange is a
 volume a single failed disk would lose - and
 [Changing a volume's storage class](Storage#changing-a-volumes-storage-class)
 moves an existing one onto the new class.
