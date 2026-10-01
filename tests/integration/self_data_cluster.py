@@ -3,8 +3,14 @@
 Run: python tests/integration/self_data_cluster.py
 Requires Docker (privileged containers), ~4 GiB for k3s, and network for images.
 No kubeconfig or host ports are used. This is not a CSI detach/host-loss test.
+
+k3s starts first and boots while the image builds. On failure it prints what
+a person would look at - every pod, recent events, Homestead's log and each
+move helper's - and every wait has a limit inside the CI job's own, so a
+stall fails here with that picture rather than hanging the runner.
 """
 import json
+import os
 import subprocess
 import tempfile
 import threading
@@ -23,16 +29,30 @@ def run(*args, data=None, timeout=300):
     return result.stdout.strip()
 
 
+def log(*words):
+    print(f"[{time.monotonic() - STARTED:6.1f}s]", *words, flush=True)
+
+
+STARTED = time.monotonic()
+
+
 def main():
-    run("docker", "build", "-t", IMAGE, str(ROOT), timeout=600)
     with tempfile.TemporaryDirectory(prefix="homestead-release-") as directory:
         archive = Path(directory, "image.tar")
-        run("docker", "save", "-o", str(archive), IMAGE)
+        # k3s boots (a minute or so) while the image builds and is saved.
         cid = run("docker", "run", "-d", "--privileged", "--memory", "4g", "--cpus", "3",
                   "--label", "homestead.release-test=true", "--mount", f"type=bind,source={ROOT},target=/repo,readonly",
                   "--mount", f"type=bind,source={directory},target=/fixture,readonly", K3S,
-                  "server", "--disable", "traefik", "--disable", "servicelb", "--node-name", "release-test")
-        print("Disposable k3s fixture:", cid, flush=True)
+                  "server", "--disable", "traefik", "--disable", "servicelb", "--node-name", "release-test", timeout=180)
+        log("Disposable k3s fixture:", cid)
+        try:
+            if not os.environ.get("HOMESTEAD_TEST_IMAGE_BUILT"):
+                run("docker", "build", "-t", IMAGE, str(ROOT), timeout=600)
+            run("docker", "save", "-o", str(archive), IMAGE)
+            log("Image built and saved")
+        except Exception:
+            run("docker", "rm", "-f", "-v", cid)
+            raise
         stop_watch = threading.Event()
         def kube(*args, data=None): return run("docker", "exec", "-i", cid, "kubectl", *args, data=data)
         try:
@@ -44,6 +64,7 @@ def main():
                 except RuntimeError:
                     if time.monotonic() >= deadline: raise
                     time.sleep(2)
+            log("Node ready")
             run("docker", "exec", cid, "ctr", "images", "import", "/fixture/image.tar")
             ref = "docker.io/library/" + IMAGE
             rows = run("docker", "exec", cid, "ctr", "images", "list").splitlines()
@@ -74,7 +95,8 @@ def main():
             items.append({"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass", "metadata": {"name": "fixture-target"},
                           "provisioner": "rancher.io/local-path", "volumeBindingMode": "WaitForFirstConsumer", "reclaimPolicy": "Retain"})
             kube("apply", "-f", "-", data=json.dumps({"apiVersion": "v1", "kind": "List", "items": items}))
-            kube("-n", "lab", "wait", "--for=condition=available", "deployment/homestead", "--timeout=120s")
+            kube("-n", "lab", "wait", "--for=condition=available", "deployment/homestead", "--timeout=180s")
+            log("Homestead available")
             def watch_controllers():
                 previous = {}
                 def differences(a, b, path=""):
@@ -96,23 +118,48 @@ def main():
             service = json.loads(kube("-n", "lab", "get", "service", "homestead", "-o", "json"))
             url = "http://" + service["spec"]["clusterIP"] + ":8088"
             subprocess.run(["docker", "run", "--rm", "--network", "container:" + cid, "--read-only", "--tmpfs", "/tmp",
-                         "--env", "FIXTURE_URL=" + url, "--mount", f"type=bind,source={ROOT},target=/repo,readonly",
-                         "--entrypoint", "python3", IMAGE, "/repo/tests/integration/self-data-http.py"], timeout=900, check=True)
+                         "--env", "FIXTURE_URL=" + url, "--env", "FIXTURE_BUDGET=600", "--mount", f"type=bind,source={ROOT},target=/repo,readonly",
+                         "--entrypoint", "python3", IMAGE, "-u", "/repo/tests/integration/self-data-http.py"], timeout=660, check=True)
             pvcs = json.loads(kube("-n", "lab", "get", "pvc", "-o", "json"))["items"]
             assert len(pvcs) == 3 and all(p["status"]["phase"] == "Bound" for p in pvcs), "Both old data volumes must be retained"
             helpers = json.loads(kube("-n", "lab", "get", "pods", "-l", "homestead.io/self-data-handoff", "-o", "json"))
             assert not helpers["items"], "Temporary move helpers must be retired"
-            print("PASS: three retained PVCs; no move helper pods remain", flush=True)
-        except Exception:
-            for args in (("-n", "lab", "get", "pods", "-o", "wide"), ("-n", "lab", "logs", "deployment/homestead", "--tail=35")):
-                try: print(kube(*args), flush=True)
-                except Exception: pass
+            log("PASS: three retained PVCs; no move helper pods remain")
+        except BaseException:
+            log("FAILED: what the cluster looked like")
+            diagnose(kube)
             raise
         finally:
             stop_watch.set()
             # Only the exact container just created, including its disposable
             # anonymous storage. No host kubeconfig or user cluster is touched.
             run("docker", "rm", "-f", "-v", cid)
+
+
+def diagnose(kube):
+    """What a person would look at: pods, events, Homestead's log, and each
+    move helper's and any pod that is stuck."""
+    def show(title, *args):
+        try:
+            print(f"--- {title}", flush=True)
+            print(kube(*args), flush=True)
+        except Exception as error:
+            print(f"(could not read: {str(error)[:200]})", flush=True)
+    show("pods", "get", "pods", "-A", "-o", "wide")
+    show("persistent volume claims", "-n", "lab", "get", "pvc", "-o", "wide")
+    show("recent events", "get", "events", "-A", "--sort-by=.lastTimestamp")
+    show("Homestead's log", "-n", "lab", "logs", "deployment/homestead", "--all-containers", "--tail=80")
+    try:
+        pods = json.loads(kube("-n", "lab", "get", "pods", "-o", "json"))["items"]
+    except Exception:
+        pods = []
+    for pod in pods:
+        name, phase = pod["metadata"]["name"], (pod.get("status") or {}).get("phase")
+        labels = pod["metadata"].get("labels") or {}
+        if "homestead.io/self-data-handoff" in labels or any("self-data" in str(v) for v in labels.values()):
+            show(f"helper {name} log", "-n", "lab", "logs", name, "--all-containers", "--tail=60")
+        if phase not in ("Running", "Succeeded"):
+            show(f"{name} ({phase})", "-n", "lab", "describe", "pod", name)
 
 
 if __name__ == "__main__": main()

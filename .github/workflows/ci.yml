@@ -62,11 +62,13 @@ jobs:
     needs: changes
     if: needs.changes.outputs.self_data == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The test stops itself well inside this, with what the cluster looked
+    # like; this is only the backstop.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Two real data moves with retained volumes and helper cleanup
-        run: python3 tests/integration/self_data_cluster.py
+        run: python3 -u tests/integration/self_data_cluster.py
   source-copy:
     needs: changes
     if: needs.changes.outputs.code == 'true'
