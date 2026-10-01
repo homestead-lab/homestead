@@ -388,5 +388,5 @@ function comparisonTable(columns, rows, caption) {
    actionBar. A native button makes the whole title keyboard accessible. */
 function collectionDisclosure({ label, bodyHtml, expanded, controls, run, id }) {
   return `<button type="button" class="collection-disclosure" id="${esc(id)}" aria-label="${esc(label)}"
-    aria-expanded="${!!expanded}" aria-controls="${esc(controls)}" onclick="${run}">${bodyHtml}<span class="collection-chevron" aria-hidden="true">⌄</span></button>`;
+    aria-expanded="${!!expanded}" aria-controls="${esc(controls)}" onclick="${run}">${bodyHtml}<span class="collection-chevron" aria-hidden="true">${icon("chevron-down")}</span></button>`;
 }
