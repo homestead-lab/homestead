@@ -77,7 +77,8 @@
       sum + Math.max(0,number(f.available_gb)-number(f.reserved_gb)),0));
     for (const fs of filesystems.filter(f => !sharedFilesystem(f))) {
       const cap = number(fs.capacity_gb), used = Math.min(cap,number(fs.used_gb));
-      capacity += cap;longhorn += used;
+      const data = fs.on_root ? Math.min(used,number(fs.data_gb)) : used;
+      capacity += cap;host += used-data;longhorn += data;
       room += Math.min(cap-used,Math.max(0,number(fs.available_gb)-number(fs.reserved_gb)));
     }
     const used = host + longhorn;

@@ -34,6 +34,9 @@ test("a separate kubelet filesystem uses its counters without duplicating them o
     lh_filesystems:[{capacity_gb:200,used_gb:50,data_gb:10,available_gb:150,reserved_gb:20,on_root:false,on_node_fs:true}]});
   assert.equal(usage.capacity,200);assert.equal(usage.host,40);assert.equal(usage.longhorn,10);
   assert.equal(usage.room,130);assert.equal(usage.pct,25);
+  const otherRoot=ctx.diskUsage({fs_cap_gb:200,fs_used_gb:50},{...root,node_fs:false,
+    lh_filesystems:root.lh_filesystems.map(f=>({...f,on_node_fs:false}))});
+  assert.equal(otherRoot.capacity,100);assert.equal(otherRoot.host,30);assert.equal(otherRoot.longhorn,10);
 });
 
 test("incomplete and inconsistent reports cannot fill beyond the filesystem",()=>{
