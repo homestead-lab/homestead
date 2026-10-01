@@ -555,7 +555,34 @@ function accessPorts(ports) {
 /* Where a workload's pods would go, host by host: memory now and after the
    start, what the scheduler has already reserved, and why a host is out.
    Shared by the start review and anything else that places pods. */
-function capacityHosts(candidates, { unavailable = "live RAM unavailable", reserved = "Already reserved" } = {}) {
+function capacityPlacementHtml(plan) {
+  const placement = plan.placement || {}, hosts = (plan.candidates || []).filter(host => host.eligible);
+  const resident = placement.resident || plan.vm?.resident_node;
+  let title, detail;
+  if (resident) {
+    title = `Resumes on ${resident}`;
+    detail = "The paused VM keeps its current host.";
+  } else if (placement.pinned) {
+    title = `Required host: ${placement.pinned}`;
+    detail = "This workload is pinned to this host. It cannot launch on another host.";
+  } else if (placement.preferred) {
+    const available = hosts.some(host => host.name === placement.preferred);
+    title = `${available ? "Preferred host" : "Preferred host currently unavailable"}: ${placement.preferred}`;
+    detail = "Kubernetes can choose another eligible host if needed.";
+  } else if (hosts.length === 1) {
+    title = `Only eligible host: ${hosts[0].name}`;
+    detail = "Kubernetes can schedule it here if these constraints still hold at launch.";
+  } else {
+    title = hosts.length ? "Host selected at launch" : "Launch host not determined";
+    detail = hosts.length ? "Kubernetes chooses from the eligible hosts below when the workload starts." : "No eligible host has been confirmed by this review.";
+  }
+  if (plan.blocked) detail += " Launch is blocked until the issues below are resolved.";
+  const names = hosts.length > 1 || placement.preferred ? `<p>Eligible hosts: <b>${hosts.map(host => esc(host.name)).join(", ") || "none"}</b>.</p>` : "";
+  return `<div class="capacity-placement">${UI.section("Launch host", `<b>${esc(title)}</b><p class="ui-help">${esc(detail)}</p>${names}`)}</div>`;
+}
+window.capacityPlacementHtml = capacityPlacementHtml;
+
+function capacityHosts(candidates, { unavailable = "live RAM unavailable", reserved = "Already reserved", placement = {} } = {}) {
   const eligible = candidates.filter(x => x.eligible);
   const rejected = candidates.filter(x => !x.eligible);
   const memory = host => {
@@ -567,8 +594,10 @@ function capacityHosts(candidates, { unavailable = "live RAM unavailable", reser
   const about = host => `<span class="mono">${esc(host.name)}</span><span class="sub">${host.metrics_available ? `Live RAM ${esc(host.used_gb)} GiB` : esc(unavailable)}${host.reservations_known
     ? ` · ${esc(reserved)}: ${esc(host.reserved_gb)} / ${esc(host.allocatable_gb)} GiB RAM · ${esc(host.reserved_cpu_percent)}% CPU`
     : " · Scheduler reservations unavailable."}</span>`;
-  const status = host => host.warnings?.length ? UI.chip(host.projected_pods ? "Tight" : "Warning", "warn")
-    : host.projected_pods ? UI.chip("Chosen", "ok") : UI.chip("Room", "");
+  const status = host => (placement.resident === host.name ? UI.chip("Current host", "info")
+    : placement.pinned === host.name ? UI.chip("Pinned", "info")
+    : placement.preferred === host.name ? UI.chip("Preferred", "info") : UI.chip("Eligible", ""))
+    + (host.warnings?.length ? UI.chip("Warning", "warn") : "");
   let html = "";
   if (eligible.length) html += UI.section("Hosts that can run it", UI.table(
     [{ label: "Host" }, { label: "Memory", className: "grow" }, { label: "" }],
@@ -601,7 +630,8 @@ window.wlScale = async (ns, name, n) => {
           plan.blocked
             ? UI.callout("bad", "Not enough eligible capacity for the requested replicas.", concernHtml)
             : UI.callout("warn", "Placement and memory need review.", concernHtml),
-          capacityHosts(plan.candidates || []),
+          capacityPlacementHtml(plan),
+          capacityHosts(plan.candidates || [], { placement: plan.placement }),
           UI.facts([
             ["Each pod requests", `${esc(plan.pod_request_gb ?? "unknown")} GiB RAM · ${esc(plan.pod_cpu_request_percent ?? "unknown")}% CPU`],
             ["Estimated peak memory", plan.pod_memory_gb ? `${esc(plan.pod_memory_gb)} GiB` : "unknown"],
@@ -1598,12 +1628,13 @@ function deployCapacityHtml(plan, overlap = false, imageChange = false) {
     ${plan.rollout.strategy === "RollingUpdate" ? `<p>Up to ${esc(plan.rollout.max_surge)} extra pod(s), ${esc(plan.rollout.max_unavailable)} unavailable replica(s). Intermediate rollout steps remain unverified.</p>` : ""}` : "";
   const requests = `${esc(plan.additional)} ${plan.vm ? "VM launcher" : "pod(s)"}, ${plan.vm?.request_is_lower_bound ? "requesting at least" : "each requesting"} ${esc(plan.pod_request_gb)} GiB RAM; ${plan.vm?.cpu_request_is_estimate ? "conservative CPU allowance" : "CPU request"}: ${esc(plan.pod_cpu_request_percent)}% (100% = one core). Memory estimate: ${esc(plan.pod_memory_gb)} GiB ${plan.vm ? "for the VM and launcher" : "per pod, including init stages"}.`;
   return `<div class="deploy-capacity ui-stack">
+    ${overlap ? "" : capacityPlacementHtml(plan)}
     ${UI.section(title, [
       plan.blocked ? UI.callout("bad", blocked, `${concerns}${overlap ? "" : "<p>This is a placement blocker, not just a capacity warning. Resolve the listed scheduler, hardware or storage constraints before proceeding.</p>"}`)
         : concerns ? UI.callout("warn", "Placement and memory need review.", concerns) : "",
       plan.pod_request_gb !== undefined && plan.pod_request_gb !== null ? `<p class="ui-help">${requests}</p>` : "",
       capacityHosts(plan.candidates || [], { unavailable: "Live RAM unavailable",
-        reserved: plan.rollout ? "Reserved RAM after planned termination" : "Reserved RAM" }),
+        reserved: plan.rollout ? "Reserved RAM after planned termination" : "Reserved RAM", placement: plan.placement }),
     ].join(""))}
     ${UI.more("How this is estimated", `${rollout}
       ${caveats.length && !plan.blocked ? `<p>What it cannot check yet, as for any new ${plan.vm ? "VM" : "workload"}:</p><ul class="ui-list">${caveats.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}

@@ -48,6 +48,21 @@ class StartCapacityTests(unittest.TestCase):
         plan = self.plan()
         self.assertTrue(plan["blocked"])
         self.assertEqual([], [row for row in plan["candidates"] if row["eligible"]])
+        self.assertEqual("node1", plan["placement"]["pinned"])
+
+    def test_placement_preserves_pin_preference_and_automatic_assignment(self):
+        spec = self.dep["spec"]["template"]["spec"]
+        self.assertEqual({"pinned": None, "preferred": None, "resident": None}, self.plan()["placement"])
+        spec["nodeName"] = "node1"
+        self.assertEqual("node1", self.plan()["placement"]["pinned"])
+        del spec["nodeName"]
+        spec["affinity"] = {"nodeAffinity": {"preferredDuringSchedulingIgnoredDuringExecution": [
+            {"weight": 100, "preference": {"matchExpressions": [{"key": "kubernetes.io/hostname", "operator": "In", "values": ["node1"]}]}}]}}
+        placement = self.plan()["placement"]
+        self.assertEqual("node1", placement["preferred"])
+        self.assertIsNone(placement["pinned"], "a preference must never be presented as a pin")
+        spec["affinity"]["nodeAffinity"]["preferredDuringSchedulingIgnoredDuringExecution"][0]["preference"]["matchExpressions"][0]["values"].append("node2")
+        self.assertIsNone(self.plan()["placement"]["preferred"], "a multi-host preference must not nominate one arbitrarily")
 
     def test_safe_start_uses_memory_limit_and_no_warning(self):
         self.nodes[0]["mem_used_gb"] = 2

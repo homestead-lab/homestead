@@ -160,6 +160,11 @@ html[data-theme="light"] .jobchev{background:rgba(0,0,0,.04)}
 .oplog-steps li{display:grid;grid-template-columns:62px 1fr auto;gap:10px;font-size:12.5px;padding:4px 0;border-bottom:1px solid var(--line)}
 .oplog-steps li.oplog-failed>span:nth-child(2){color:var(--crit)}.oplog-steps li.oplog-succeeded>span:nth-child(2){color:var(--ok)}
 .logview.oplog-pre{height:auto;max-height:340px;margin-top:6px}
+.logview.oplog-copy{max-height:120px}
+.oplog-copy-progress{display:flex;align-items:baseline;gap:10px;margin:6px 0;font-size:12px}
+.oplog-copy-progress>span{color:var(--mut);min-width:0}
+.capacity-placement{padding:12px 14px;border:1px solid var(--line2);border-radius:12px;background:rgba(74,158,255,.05)}
+.capacity-placement .ui-section{margin:0}
 .jobitem{padding:11px;border-bottom:1px solid var(--line)}.jobitem:last-child{border-bottom:0}.jobitemtop,.jobfoot,.jobactions{display:flex;align-items:center;justify-content:space-between;gap:10px}.jobitemtop>div{display:flex;flex-direction:column;min-width:0}.jobitemtop b{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.jobitemtop span:not(.pill),.jobfoot{font-size:10px;color:var(--dim)}
 .jobmeter{height:5px;margin:9px 0 7px;overflow:hidden;border-radius:99px;background:rgba(255,255,255,.07)}.jobmeter span{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,var(--med),var(--ok));transition:width .35s var(--e)}.jobmeter span.failed{background:var(--crit)}
 .jobfoot>span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.jobfoot>span:last-child{flex:0 0 auto}.jobactions{justify-content:flex-end;margin-top:8px}
