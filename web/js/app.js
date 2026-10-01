@@ -185,10 +185,11 @@ window.go = go;
 /* quiet refresh — repaints in place, never rebuilds the view */
 async function refresh(force) {
   const [, , fn, live] = VIEWS[STATE.view];
-  if (!live && !force) return;
-  if (STATE.busy) return;
+  if (!live && !force) return false;
+  if (STATE.busy) return false;
   STATE.busy = true;
-  try { await fn(); } catch (e) { /* keep the last good render */ }
+  try { await fn(); return true; }
+  catch (e) { if (force) toast(e.message || "Could not refresh this page", "bad"); return false; }
   finally { STATE.busy = false; }
 }
 window.refresh = refresh;
