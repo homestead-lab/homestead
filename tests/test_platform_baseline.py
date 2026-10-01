@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -188,12 +189,38 @@ class BaselineTests(unittest.TestCase):
         BASELINE.tick()
         self.assertEqual(["2.8.235"], made, "asked once: a probe removed later stays removed")
 
-    def test_no_node_probe_unless_asked(self):
+    def test_node_probe_is_automatic_on_existing_clusters_and_all_distributions(self):
         made = []
-        probe = type("P", (), {"installed": staticmethod(lambda: ""), "install": staticmethod(made.append)})
+        probe = type("P", (), {"installed": staticmethod(lambda: ""),
+                               "install": staticmethod(lambda version: made.append(version) or {"detail": "installed"})})
+        self.request = None
+        for distribution in ("k3s", "rke2", "harvester", "kubernetes"):
+            with self.subTest(distribution=distribution), tempfile.TemporaryDirectory() as directory:
+                self.platform = {"distribution": distribution, "harvester": distribution == "harvester"}
+                BASELINE.bind(self.get, self.addons, lambda force=False: self.platform, "lab", directory, None, probe, "2.8.283")
+                self.assertTrue(BASELINE.probe_tick()["ok"])
+                self.assertIsNone(BASELINE.probe_tick(), "a later intentional removal stays removed")
+        self.assertEqual(["2.8.283"] * 4, made)
+
+    def test_node_probe_retries_failed_installation_and_respects_explicit_opt_out(self):
+        attempts = []
+        def install(version):
+            attempts.append(version)
+            if len(attempts) == 1:
+                raise ValueError("API temporarily unavailable")
+            return {"detail": "installed"}
+        probe = type("P", (), {"installed": staticmethod(lambda: ""), "install": staticmethod(install)})
         BASELINE.bind(self.get, self.addons, lambda force=False: self.platform, "lab", self.tmp.name, None, probe)
-        BASELINE.tick()
-        self.assertEqual([], made)
+        with patch.dict(BASELINE.os.environ, {"HOMESTEAD_NODEPROBE_AUTO_INSTALL": "false"}):
+            self.assertIsNone(BASELINE.probe_tick(), "Helm opt-out is preserved")
+        self.request["data"]["node-probe"] = "no"
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual([], attempts)
+        self.request["data"].pop("node-probe")
+        self.assertFalse(BASELINE.probe_tick()["ok"])
+        self.assertTrue(BASELINE.probe_tick()["ok"])
+        self.assertIsNone(BASELINE.probe_tick())
+        self.assertEqual(2, len(attempts))
 
     def test_a_failed_install_is_recorded_with_its_reason(self):
         def refuse(cfg):

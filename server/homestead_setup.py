@@ -22,7 +22,7 @@ import homestead_shared as SHARED
 DATA_DIR = "/data"
 # Steps that are each person's own; the rest are the cluster's, for admins.
 PERSONAL = ("appearance", "phone", "notifications")
-STEPS = ("health", "quorum", "probe", "clocks", "address", "https", "hostname", "disks", "storage",
+STEPS = ("health", "quorum", "clocks", "address", "https", "hostname", "disks", "storage",
          "backups", "config", "osupdates", "appearance", "phone", "notifications", "people",
          "unifi", "unraid", "homeassistant", "linked", "starter", "console")
 _lock = threading.Lock()
@@ -94,6 +94,16 @@ def hidden(user):
 def hide(user, value):
     _change(lambda state: state.setdefault("users", {}).setdefault(user, {}).update(hidden=bool(value)))
     return {"ok": True, "hidden": bool(value)}
+
+
+def completed(user):
+    return bool(((load().get("users") or {}).get(user) or {}).get("completed"))
+
+
+def complete(user, value=True):
+    """Record a person's guide completion, without changing cluster checks."""
+    _change(lambda state: state.setdefault("users", {}).setdefault(user, {}).update(completed=bool(value)))
+    return {"ok": True, "completed": bool(value)}
 
 
 def opened():

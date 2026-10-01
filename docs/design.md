@@ -118,11 +118,13 @@ lead, the live state (a `Diagram` where the idea is spatial - `quorum`,
 "How this works". Whether a step is done is never stored: the server looks
 (`setup_state()`), and only skips are kept (`homestead_setup.py`). Cluster
 steps are an admin's; appearance, phone and notifications are everyone's.
-It opens itself once for the first admin; the live demo never opens it and
-pulses the book icon within its top-bar button instead, respecting reduced motion.
+The guide opens from its book icon on real clusters and in the demo. The icon
+pulses within its top-bar button, respecting reduced motion, until the person
+finishes the guide or chooses Don't show again. Guide completion and reminder
+preferences are stored per user without marking cluster checks as passed.
 The book button stays available for everyone after completion; Settings › Homestead
-also opens the guide. The dashboard toggle names the setup progress shortcut,
-which remains available after all steps are complete unless that person hides it.
+also opens the guide. There is no dashboard progress shortcut or probe step;
+the node probe is installed automatically.
 Each step names what is checked and its limits. Appearance is explicitly a
 confirmation on this device and can be undone; skipping and Next never mark a
 step done. Configuration visits retain a return bar naming the setup step, even

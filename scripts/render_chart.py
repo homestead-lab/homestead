@@ -268,6 +268,8 @@ spec:
               value: {{ .Values.storageClass | quote }}
             - name: LB_IP
               value: {{ .Values.service.loadBalancerIP | quote }}
+            - name: HOMESTEAD_NODEPROBE_AUTO_INSTALL
+              value: {{ .Values.nodeprobe.enabled | quote }}
             - name: CF_ACCESS_TEAM_DOMAIN
               value: {{ .Values.cloudflareAccess.teamDomain | quote }}
             - name: CF_ACCESS_AUD

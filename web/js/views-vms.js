@@ -841,7 +841,10 @@ function uvmCopiesPaint() {
     <th>Import</th><th>Progress</th><th></th></tr></thead><tbody>${ops.map(op => `<tr><td><b>${esc(op.title)}</b><div><span class="pill ${operationTone(op.status)}">${esc(op.status)}</span></div></td>
       <td data-label="Progress" style="min-width:200px"><div class="small">${esc(op.message || "")}</div>
         <span class="jobmeter" style="display:block;margin-top:6px"><span style="width:${Math.max(2, Math.min(100, op.progress || 0))}%"></span></span></td>
-      <td>${actionBar([{ label: "Job details", icon: "log", run: `operationLog(${jsq(op.id)})` }])}</td></tr>`).join("")}</tbody></table></div></div>` : "";
+      <td>${actionBar([{ label: "Job details", icon: "log", run: `operationLog(${jsq(op.id)})` },
+        ...(!operationActive(op) && op.dismissible !== false ? [{ label: "Dismiss", need: "operator",
+          run: `dismissOperation(${jsq(op.id)})`, tip: "Remove this job from history. VMs and disk data are kept." }] : [])])}</td></tr>`).join("")}</tbody></table></div></div>` : "";
+  if (window.applyRole) applyRole();
 }
 window.uvmCopiesPaint = uvmCopiesPaint;
 

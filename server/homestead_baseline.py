@@ -16,10 +16,9 @@ What was done is kept in /data, so a part someone removes on purpose is not
 put back. An installation from before this asks once, on Add-ons and the
 Networking page, rather than changing every node's network by itself.
 
-The node probe is asked for the same way. It is not a chart and needs no
-Helm controller: its DaemonSet is made as Settings > Cluster > Add-ons makes
-it (homestead_probe), once, when the installer asked - the person installing
-chose it there, since its SMART reader runs privileged.
+The node probe is installed by default, including on existing clusters and
+Harvester. It needs no Helm controller. An explicit installer opt-out or a
+probe removed after successful installation stays removed.
 """
 import json
 import os
@@ -148,19 +147,16 @@ def vip_tick():
 
 
 def probe_tick():
-    """The node probe, installed once if the installer asked. Returns what
-    happened, or None when there was nothing to do."""
-    if probe is None or str(_request().get(PROBE, "")).lower() not in YES:
-        return None
-    p = platform(True) or {}
-    if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
+    """Install the default node probe once, retrying unsuccessful attempts."""
+    if (probe is None or os.environ.get("HOMESTEAD_NODEPROBE_AUTO_INSTALL", "true").lower() in ("no", "false", "0")
+            or str(_request().get(PROBE, "yes")).lower() in ("no", "false", "0", "skip")):
         return None
     with _lock:
         state = _load()
         done = state.setdefault("done", {})
-        if PROBE in done:
+        if PROBE in done and not done[PROBE].get("error"):
             return None
-        row = {"at": int(time.time()), "version": probe_version, "reason": "installer", "error": ""}
+        row = {"at": int(time.time()), "version": probe_version, "reason": "automatic", "error": ""}
         try:
             if probe.installed():
                 row["reason"], detail = "present", "the node probe is installed already"
@@ -219,7 +215,7 @@ def tick():
     tried: install it. A part tried before, or already there, is left be."""
     asked = probe_tick()
     if asked:
-        print(f"platform: node probe (requested at installation): "
+        print(f"platform: node probe (automatic installation): "
               f"{'installing' if asked['ok'] else 'installation failed'}: {asked['detail']}", flush=True)
     placed = vip_tick()
     if placed:

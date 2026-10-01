@@ -143,8 +143,8 @@ what to do next.
   See [Networking](Networking).
 - **Give Longhorn your other disks.** Each node's card on **Nodes** lists disks
   nothing uses yet, with **Add to Longhorn**. See [Storage](Storage).
-- **Turn on drive health.** The Helm chart installs the node probe; with the
-  manifest, **Settings → Hardware and storage → Add-ons → Install node probe** does. See
+- **Check drive health.** Homestead installs the node probe automatically with
+  either the Helm chart or manifest. See
   [Dashboard and nodes](Dashboard-and-nodes).
 - **Plan backups.** [Data protection](Data-protection) sets up snapshots and
   backups in one go.
