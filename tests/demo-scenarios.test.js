@@ -29,6 +29,22 @@ test("public and local demos start with consistent healthy cluster data", async 
     assert.ok(volumes.every(row => row.state !== "attached" || (row.robustness === "healthy" && row.copies.length === row.replicas)));
     assert.ok(capacity.nodes.every(row => row.level === "ok"));
     assert.ok(workloads.every(row => row.ready === row.desired));
+    const vms = await api("/api/vms");
+    assert.ok(vms.every(row => ["Running", "Stopped"].includes(row.status) && !row.problem && !row.restart_required));
+    for (const v of vms) {
+      const detail = await api(`/api/vm?ns=${v.ns}&name=${v.name}`);
+      assert.equal(detail.status, v.status);
+      assert.equal(detail.problem, "");
+      assert.ok(detail.disks.every(d => d.made));
+      assert.ok(detail.conditions.every(c => !c.reason && !c.message));
+      if (!v.running) {
+        assert.equal(v.run_strategy, "Halted");
+        assert.deepEqual(v.actions, ["start"]);
+      }
+    }
+    const stopped = vms.find(v => v.name === "ubuntu-test");
+    assert.equal(stopped.cores, 2);
+    assert.equal(stopped.memory, "4Gi");
     const imageUpdates = await api("/api/image-updates");
     assert.equal(imageUpdates.errors, 0);
     assert.ok(imageUpdates.workloads.every(row => row.images.every(image => !image.error)));
@@ -53,6 +69,10 @@ test("explicit incident and critical scenarios retain unhealthy evaluation cases
     const imageUpdates = await api("/api/image-updates");
     assert.equal(imageUpdates.errors, 1);
     assert.ok(imageUpdates.workloads.some(row => row.images.some(image => image.error)));
+    const broken = await api("/api/vm?ns=lab&name=ubuntu-test");
+    assert.equal(broken.status, "ErrorUnschedulable");
+    assert.match(broken.problem, /Insufficient memory/);
+    assert.equal(broken.disks[0].made, false);
     if (scenario === "critical") assert.equal(overview.nodes_ready, 2);
   }
 });
