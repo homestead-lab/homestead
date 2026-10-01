@@ -1,6 +1,8 @@
 /* Sign-in gate, account controls, and the 401 handler that wraps every call */
 
 let ME = null, ROLE = null;
+// A response sent by an old session must not sign out a newly signed-in user.
+let authGeneration = 0;
 const RANK = { viewer: 0, operator: 1, admin: 2 };
 window.can = need => RANK[ROLE] >= RANK[need];
 
@@ -105,7 +107,20 @@ function gate(html) {
   $("#gatebox").innerHTML = html;
   $("#gate").classList.remove("hidden");
 }
-function ungate() { $("#gate").classList.add("hidden"); }
+function ungate() {
+  authGeneration++;
+  clearTimeout(window.__authRetry);
+  $("#gate").classList.add("hidden");
+}
+
+function stopAuthenticatedWork() {
+  authGeneration++;
+  ME = null; ROLE = null;
+  clearInterval(window.__loopTimer);
+  clearInterval(window.__imageUpdateLoop);
+  clearTimeout(window.__imageUpdateStart);
+  clearTimeout(window.__operationTimer);
+}
 
 function loginForm(err, setup) {
   gate(`
@@ -133,7 +148,11 @@ function loginForm(err, setup) {
     const el = $("#" + id);
     if (el) el.addEventListener("keydown", e => { if (e.key === "Enter") go(); });
   });
-  setTimeout(() => $("#lg_user").focus(), 60);
+  const username = $("#lg_user");
+  setTimeout(() => {
+    if ($("#lg_user") === username && !$("#gate").classList.contains("hidden") &&
+        !$("#gatebox").contains(document.activeElement)) username.focus();
+  }, 60);
 }
 
 async function doLogin() {
@@ -172,10 +191,7 @@ async function doSetup() {
 window.doLogout = async () => {
   try { await pwaForgetDevice(); } catch (e) { }
   try { await fetch("/api/auth/logout", { method: "POST" }); } catch (e) { }
-  ME = null;
-  clearInterval(window.__loopTimer);
-  clearInterval(window.__imageUpdateLoop);
-  clearTimeout(window.__operationTimer);
+  stopAuthenticatedWork();
   loginForm();
 };
 
@@ -266,9 +282,15 @@ window.delUser = async name => {
 /* any 401 anywhere drops straight back to the sign-in gate */
 const _api = window.api;
 window.api = async (path, opts) => {
+  const generation = authGeneration;
   try { return await _api(path, opts); }
   catch (e) {
-    if (/not signed in/i.test(e.message)) { ME = null; loginForm("Session expired — sign in again"); }
+    if (/not signed in/i.test(e.message)) {
+      if (ME && generation === authGeneration) {
+        stopAuthenticatedWork();
+        loginForm("Session expired — sign in again");
+      }
+    }
     else if (/cannot do this/i.test(e.message)) toast(e.message, "bad");
     throw e;
   }
@@ -297,6 +319,7 @@ $("#whoami").onclick = () => go("settings");
 
 /* boot: decide between setup, sign-in, and running the app */
 async function boot() {
+  clearTimeout(window.__authRetry);
   const st = await authState();
   if (st.unavailable) return clusterUnavailable(st.error);
   if (st.data_handoff) return dataHandoffStarting(st);
@@ -307,10 +330,12 @@ async function boot() {
 boot();
 
 async function afterAuth() {
+  const generation = authGeneration;
   paintWho();
   if (window.setupOffer) setupOffer();
   await Promise.all([loadHealthSettings(), window.loadPlatform ? loadPlatform() : null,
     window.fleetLoad ? fleetLoad() : null]);
+  if (!ME || generation !== authGeneration) return;
   const route = HomesteadRouter.resolve(window.location.pathname);
   if (!route.known) {
     // A mistyped or outdated address: land on the dashboard, and say so.

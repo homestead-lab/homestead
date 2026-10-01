@@ -92,6 +92,7 @@ async function refreshOperations(immediate = false) {
     STATE.data.operations = await api("/api/operations", { keep: true });
     renderOperations();
   } catch (_) { /* retain the last known state during API interruptions */ }
+  if (!ME) return;
   const active = (STATE.data.operations || []).some(operationActive);
   operationTimer = setTimeout(refreshOperations, immediate || active ? 3000 : 15000);
   window.__operationTimer = operationTimer;

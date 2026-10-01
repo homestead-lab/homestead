@@ -184,6 +184,8 @@ window.go = go;
 
 /* quiet refresh — repaints in place, never rebuilds the view */
 async function refresh(force) {
+  // Phone resume/visibility events also run while the sign-in gate is open.
+  if (!$("#gate").classList.contains("hidden")) return false;
   const [, , fn, live] = VIEWS[STATE.view];
   if (!live && !force) return false;
   if (STATE.busy) return false;
