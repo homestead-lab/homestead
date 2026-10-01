@@ -119,11 +119,18 @@ Storage, Hardware, Network and Host OS. A drive opens inside Storage.
   `views-settings.js` and the rules in `style.css` say which topics a section
   shows, and `tests/settings-sections.test.js` keeps the two in step and
   every card in a section. `settingsTab()` takes a section or a topic.
+- **Every card opens with the standard head**: `settings-card-head` holding
+  the title (`ctitle`), one line under it (`csub`), and the card's buttons on
+  the right (`btn sm`, the main one `pri`). No card brings its own header,
+  padding or nested card - not even one moved in from another page.
 - **Four kinds of setting, and nothing else**: a setting row
   (`settingRow()`), a threshold pair (`thresholdEditor()`), a service row
   (`serviceRow()` - something Homestead runs or talks to, its buttons an
   `actionBar()`), and lists of things (`tbl stack` with `actionBar()`).
-  Status is a checklist behind a summary line.
+  Status is a checklist behind a summary line. Several of one kind of thing -
+  keys, classes, namespaces, users - is a list, never a column of service
+  rows; a wide list keeps its columns few (fold related yes/no facts into one
+  column of tags) so it fits the Settings column.
 - **A section saves once.** A card whose fields save marks itself
   `data-save` ("app" for Homestead's own settings, sent as one request); a
   change shows the section's save bar - Save or Discard - and leaving the
@@ -145,7 +152,12 @@ Storage, Hardware, Network and Host OS. A drive opens inside Storage.
 
 A table marked `stack` needs nothing else: its cells are labelled from its
 headings, and long ones are laid across the card automatically. Keep the
-first column the item's name.
+first column the item's name, and the last its buttons - always an
+`actionBar()`, never buttons written into the cell. Every table is a `stack`
+table, in a dialog as on a page.
+
+The one exception: a button that edits a form laid out as a table - the ✕
+that removes a row being typed - is a plain button marked `data-form-row`.
 
 ### Phones
 
@@ -311,6 +323,21 @@ Older markup - `.note`, `.sec`, `.row` and `.modalactions` in dialogs,
 work uses the components.
 
 ## Checking
+
+### Rules the tests hold you to
+
+`tests/design-rules.test.js` reads the web app's code and fails, naming the
+file and line, when it finds:
+
+- a button written into a table cell instead of an `actionBar()` (unless it
+  is marked `data-form-row`);
+- a list made by mapping items to `serviceRow()` - a list of like things is a
+  `tbl stack` table;
+- a table that is not `tbl stack`;
+- a Settings card with a title but no `settings-card-head`.
+
+It also checks this file still states those rules. Change a rule in both
+places at once; never quiet the test for one screen.
 
 With the demo running (`PORT=4173 WEBROOT=web python server/server.py`):
 

@@ -84,8 +84,8 @@ window.vmStore = async (check = false) => {
       ${s.own.map(o => `<tr><td><b>${esc(o.display)}</b><div class="dim xs mono">${esc(o.image)}</div></td>
         <td class="small" data-label="From">${esc(o.from)}${o.created ? `<div class="dim xs">${esc(day(o.created))}</div>` : ""}</td>
         <td class="mono small" data-label="Size">${o.ready ? `${o.size_gb} GB` : o.failed ? '<span class="pill slim crit">failed</span>' : `<span class="pill slim med">${Math.round(o.progress || 0)}%</span>`}</td>
-        <td><div class="row nowrap" style="gap:6px;justify-content:flex-end">${o.ready ? `<button class="btn sm pri" data-need="operator" onclick="vmStoreNew(${jsq("image:" + o.image)})">New VM</button>` : ""}
-          <button class="btn sm" onclick="closeModal();go('images')" title="Sizes, copies and deleting are on the Image cache page">Image cache</button></div></td></tr>`).join("")}
+        <td>${actionBar([o.ready ? { label: "New VM", run: `vmStoreNew(${jsq("image:" + o.image)})`, need: "operator", pri: true } : null,
+          { label: "Image cache", run: "closeModal();go('images')", tip: "Sizes, copies and deleting are on the Image cache page" }])}</td></tr>`).join("")}
       </tbody></table></div></div>` : ""}
     <div class="between" style="margin-top:14px;gap:10px;flex-wrap:wrap"><div class="sec" style="margin:0">From their publishers</div>
       <input id="vmStoreFilter" type="search" placeholder="Filter: minimal, debian, lvm..." value="${esc(STATE.vmStoreFilter || "")}"
@@ -523,7 +523,7 @@ window.vmAddNic = () => {
   $("#ve_nics").insertAdjacentHTML("beforeend", `<tr class="vn-add"><td><b>new</b></td>
     <td><select class="vn_model">${VM_MODELS.map(m => vmOpt(m, m, "virtio")).join("")}</select></td>
     <td><select class="vn_net">${vmJoinable(o).map(x => vmOpt(x, vmNetLabel(o, x), vmJoinable(o)[1] || "pod")).join("")}</select></td>
-    <td class="dim xs">automatic</td><td><button class="btn sm" onclick="this.closest('tr').remove()">✕</button></td></tr>`);
+    <td class="dim xs">automatic</td><td><button class="btn sm" data-form-row aria-label="Remove this row" onclick="this.closest('tr').remove()">✕</button></td></tr>`);
 };
 window.vmEditSave = async () => {
   const { ns, name, v } = window.__vmEdit;
@@ -818,12 +818,15 @@ async function viewVmImport() {
           '<button class="btn pri" data-need="admin" onclick="srcAdd()">＋ Add an Unraid server</button>')}</div>`}
     <div id="uvmCopies"></div>
     <div class="sec">Disk images ${tip("Disks brought in from a web address or from Unraid. A finished one no VM uses yet can become a VM.")}</div>
-    ${disks.length ? `<div class="card flat">${disks.map(d => {
+    ${disks.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr>
+      <th>Disk</th><th>State</th><th>Size</th><th>Attached to</th><th></th></tr></thead><tbody>${disks.map(d => {
       const done = d.phase === "Succeeded", failed = ["Failed", "Error", "Unknown"].includes(d.phase);
-      return serviceRow(esc(d.name), `<span class="pill ${done ? "ok" : failed ? "crit" : "med"}">${esc(done ? "ready" : String(d.phase || "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase())}</span>`,
-        `${esc(d.capacity || "")} · ${d.in_use ? `used by ${esc((d.used_by || []).join(", "))}` : "not attached"}${failed && d.message ? ` · ${esc(d.message)}` : ""}`,
-        done && !d.in_use ? `<button class="btn" data-need="operator" onclick="vmNew(${jsq(d.name)},${jsq(d.namespace)})">Create VM</button>` : "");
-    }).join("")}</div>` : '<div class="dim small">None yet. ＋ Import brings one from a web address: qcow2, vmdk, raw, vdi, vhd or vhdx.</div>'}`);
+      return `<tr><td><b>${esc(d.name)}</b><div class="dim xs mono">${esc(d.namespace)}</div></td>
+        <td data-label="State"><span class="pill ${done ? "ok" : failed ? "crit" : "med"}">${esc(done ? "ready" : String(d.phase || "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase())}</span>${failed && d.message ? `<div class="dim xs">${esc(d.message)}</div>` : ""}</td>
+        <td class="mono" data-label="Size">${esc(d.capacity || "—")}</td>
+        <td data-label="Attached to">${d.in_use ? esc((d.used_by || []).join(", ")) : '<span class="dim">not attached</span>'}</td>
+        <td>${done && !d.in_use ? actionBar([{ label: "Create VM", run: `vmNew(${jsq(d.name)},${jsq(d.namespace)})`, need: "operator" }]) : ""}</td></tr>`;
+    }).join("")}</tbody></table></div></div>` : '<div class="dim small">None yet. ＋ Import brings one from a web address: qcow2, vmdk, raw, vdi, vhd or vhdx.</div>'}`);
   uvmCopiesPaint();
   servers.filter(s => s.ssh_trust).forEach(s => uvmLoad(s.name));
 }
@@ -834,9 +837,11 @@ function uvmCopiesPaint() {
   const host = $("#uvmCopies");
   if (!host) return;
   const ops = (STATE.data.operations || []).filter(op => op.kind === "unraid-vm-import" && (window.operationActive ? operationActive(op) : op.status === "running"));
-  host.innerHTML = ops.length ? `<div class="sec">Copying</div><div class="card flat">${ops.map(op => serviceRow(esc(op.title), "",
-    `${esc(op.message || "")}<span class="jobmeter" style="display:block;margin-top:6px"><span style="width:${Math.max(2, Math.min(100, op.progress || 0))}%"></span></span>`,
-    `<button class="btn sm" onclick="openOperation(${jsq(op.href || "/vms/import")},${jsq(op.id)})">Details</button>`)).join("")}</div>` : "";
+  host.innerHTML = ops.length ? `<div class="sec">Copying</div><div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr>
+    <th>Import</th><th>Progress</th><th></th></tr></thead><tbody>${ops.map(op => `<tr><td><b>${esc(op.title)}</b></td>
+      <td data-label="Progress" style="min-width:200px"><div class="small">${esc(op.message || "")}</div>
+        <span class="jobmeter" style="display:block;margin-top:6px"><span style="width:${Math.max(2, Math.min(100, op.progress || 0))}%"></span></span></td>
+      <td>${actionBar([{ label: "Details", run: `openOperation(${jsq(op.href || "/vms/import")},${jsq(op.id)})` }])}</td></tr>`).join("")}</tbody></table></div></div>` : "";
 }
 window.uvmCopiesPaint = uvmCopiesPaint;
 
@@ -852,17 +857,20 @@ window.uvmLoad = async name => {
   }
   STATE.data.uvms[name] = found;
   if (!found.virsh) { host.innerHTML = '<div class="dim small">This server runs no VMs: its VM manager (libvirt) is not there.</div>'; return; }
-  host.innerHTML = found.vms.length ? found.vms.map(vm => {
-    const off = vm.shut_off;
-    const state = `<span class="pill ${off ? "" : "ok"}">${esc(vm.state || "unknown")}</span>`;
-    const disk = vm.disks[0];
-    const detail = [vm.os, `${vm.cores} cores`, vm.memory.replace("Gi", " GiB").replace("Mi", " MiB"), vm.firmware === "uefi" ? "UEFI" : "BIOS",
-      disk ? `${disk.path.split("/").pop()} · ${disk.size_gb} GB ${disk.format}${vm.disks.length > 1 ? ` + ${vm.disks.length - 1} more` : ""}` : ""].filter(Boolean).map(esc).join(" · ");
+  // A list of like things: a stacked table, each row's buttons an actionBar.
+  host.innerHTML = found.vms.length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr>
+      <th>VM</th><th>State</th><th>Machine</th><th>Disk</th><th></th></tr></thead><tbody>${found.vms.map(vm => {
+    const off = vm.shut_off, disk = vm.disks[0];
+    const machine = [`${vm.cores} cores`, vm.memory.replace("Gi", " GiB").replace("Mi", " MiB"), vm.firmware === "uefi" ? "UEFI" : "BIOS"].map(esc).join(" · ");
     const action = !vm.ready ? `<span class="dim small">${esc(vm.problem)}</span>`
-      : off ? `<button class="btn pri" data-need="admin" onclick="uvmImport(${jsq(name)},${jsq(vm.name)})">Import</button>`
-      : `<button class="btn" data-need="admin" title="Shut it down on Unraid, so its disk is copied as it was left" onclick="uvmShutdown(${jsq(name)},${jsq(vm.name)},this)">Shut down</button>`;
-    return serviceRow(esc(vm.name), state, detail + (off || !vm.ready ? "" : '<br><span class="med-t">Shut it down on Unraid to import it</span>'), action);
-  }).join("") : '<div class="dim small">No VMs on this server.</div>';
+      : actionBar([off ? { label: "Import", run: `uvmImport(${jsq(name)},${jsq(vm.name)})`, need: "admin", pri: true }
+        : { label: "Shut down", run: `uvmShutdown(${jsq(name)},${jsq(vm.name)},this)`, need: "admin", tip: "Shut it down on Unraid, so its disk is copied as it was left" }]);
+    return `<tr><td><b>${esc(vm.name)}</b>${vm.os ? `<div class="dim xs">${esc(vm.os)}</div>` : ""}</td>
+      <td data-label="State"><span class="pill ${off ? "" : "ok"}">${esc(vm.state || "unknown")}</span>${off || !vm.ready ? "" : '<div class="med-t xs">shut it down to import it</div>'}</td>
+      <td data-label="Machine" class="small">${machine}</td>
+      <td data-label="Disk" class="small mono">${disk ? `${esc(disk.path.split("/").pop())} · ${esc(disk.size_gb)} GB ${esc(disk.format)}${vm.disks.length > 1 ? ` + ${vm.disks.length - 1} more` : ""}` : "—"}</td>
+      <td>${action}</td></tr>`;
+  }).join("")}</tbody></table></div>` : '<div class="dim small">No VMs on this server.</div>';
   if (window.applyRole) applyRole();
 };
 
