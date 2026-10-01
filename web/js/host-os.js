@@ -118,6 +118,13 @@ function hostOsRole(p) {
   return p.fstype ? "other" : "free";
 }
 function hostOsBytes(bytes) { return sizeText((Number(bytes) || 0) / 1024 ** 3); }
+function hostOsFilesystem(type) { return type === "LVM2_member" ? "LVM physical volume" : type; }
+
+function hostPhysicalLayouts(node, facts) {
+  // Cached OS reports predate transport metadata; use live hardware when known.
+  const hardware = new Set((STATE.data.disks?.nodes?.[node] || []).map(d => d.device).filter(Boolean));
+  return (facts?.disks || []).filter(d => d.size > 0 && (!hardware.size || hardware.has(d.name)));
+}
 
 function partitionMap(d) {
   const size = d.size || 1, segs = [];
@@ -129,13 +136,13 @@ function partitionMap(d) {
   }
   if (!(d.partitions || []).length) segs.push(d.fstype ? { name: d.name, size, fstype: d.fstype, mounts: d.mount ? [d.mount] : [] } : { size });
   else if (size - at > size * 0.004) segs.push({ size: size - at });
-  const label = s => s.name ? `${s.name} · ${hostOsBytes(s.size)}${s.fstype ? ` · ${s.fstype}` : ""}${(s.mounts || []).length ? ` · ${s.mounts.join(", ")}` : (s.holds || []).length ? ` · holds ${s.holds.join(", ")}` : ""}`
+  const label = s => s.name ? `${s.name} · ${hostOsBytes(s.size)}${s.fstype ? ` · ${hostOsFilesystem(s.fstype)}` : ""}${(s.mounts || []).length ? ` · ${s.mounts.join(", ")}` : (s.holds || []).length ? ` · holds ${s.holds.join(", ")}` : ""}`
     : `unallocated · ${hostOsBytes(s.size)}`;
   return `<div class="pmap-disk"><div class="between"><span class="small"><b class="mono">${esc(d.name)}</b>
-      <span class="dim xs">${hostOsBytes(d.size)} · ${d.table ? esc(d.table.toUpperCase()) : (d.partitions || []).length ? "partitioned" : d.fstype ? "no partition table" : "blank"}</span></span></div>
+      <span class="dim xs">${hostOsBytes(d.size)} · ${d.table ? esc(d.table.toUpperCase()) : (d.partitions || []).length ? "partitioned" : d.fstype ? `whole-disk ${esc(hostOsFilesystem(d.fstype))} filesystem` : "blank"}</span></span></div>
     <div class="pmap" role="img" aria-label="${esc(`${d.name}: ${segs.map(label).join("; ")}`)}">${segs.map(s =>
       `<span class="pmap-seg ${hostOsRole(s)}" style="flex:${Math.max(s.size / size, 0.012)} 1 0" data-tip="${esc(label(s))}">
-        ${s.size / size >= 0.08 ? `<span>${esc(s.name ? (s.mounts?.[0] || s.fstype || s.name) : "free")}</span>` : ""}</span>`).join("")}</div>
+        ${s.size / size >= 0.08 ? `<span>${esc(s.name ? (s.mounts?.[0] || hostOsFilesystem(s.fstype) || s.name) : "free")}</span>` : ""}</span>`).join("")}</div>
     ${segs.length > 1 ? `<div class="dim xs mono pmap-list">${segs.map(s => esc(label(s))).join("<br>")}</div>` : ""}</div>`;
 }
 
@@ -143,7 +150,7 @@ window.nodePartitionsPaint = async node => {
   const host = $("#nodeDisks");
   if (!host) return;
   const f = HOST_OS.cache[node]?.facts;
-  const disks = (f?.disks || []).filter(d => d.size > 0);
+  const disks = hostPhysicalLayouts(node, f);
   host.querySelector(".pmaps")?.remove();
   if (!disks.length) return;
   host.insertAdjacentHTML("beforeend", `<div class="pmaps">${UI.more(`Partition tables · ${disks.length} disk${disks.length === 1 ? "" : "s"}`,

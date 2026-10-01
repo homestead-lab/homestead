@@ -532,7 +532,8 @@ def log_sources(item):
                 for pod in pods[:1]:
                     source = _pod_source(ns, pod, title + " · copy")
                     status = pod.get("status") or {}
-                    stopped = [c.get("state", {}).get("terminated") or {} for c in status.get("containerStatuses") or []]
+                    stopped = [c["state"]["terminated"] for c in status.get("containerStatuses") or []
+                               if c.get("state", {}).get("terminated")]
                     source["note"] = "; ".join(f"{s.get('reason', 'exited')} (exit {s.get('exitCode', '?')})" for s in stopped) or source["note"]
                     out.append(source)
                 if not pods:
@@ -582,7 +583,8 @@ def _fail(ref, message):
             _delete(f"/api/v1/namespaces/{ns}/secrets/{disk['job']}-upload")
         _delete(f"{CDI_API}/namespaces/{ns}/datavolumes/{disk['dv']}")
     ref["phase"] = "failed"
-    return "failed", 100, message + "; its part-copied disks were removed, and the VM on Unraid is as it was"
+    return "failed", 100, (message + "; destination disk cleanup was requested. A Retain storage policy keeps backing data; "
+                           "review disconnected volumes in Volumes. The VM on Unraid is unchanged")
 
 
 def status(item):

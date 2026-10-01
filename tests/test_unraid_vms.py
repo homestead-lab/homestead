@@ -294,6 +294,10 @@ class ImportTests(unittest.TestCase):
         self.assertEqual("OOMKilled (exit 137)", sources[0]["note"])
         events.assert_any_call("lab", "desktop-disk", "pvc-uid")
         events.assert_any_call("lab", "upload-prime", "upload-uid")
+        pod["status"]["containerStatuses"][0]["state"] = {"running": {"startedAt": "2026-01-01T12:00:00Z"}}
+        with mock.patch.object(logs, "_pod_source", return_value={"title": "Copy", "text": "4\n4\n", "note": ""}), \
+                mock.patch.object(logs, "_events", return_value=""):
+            self.assertEqual("", UVMS.log_sources({"ref": ref})[0]["note"], "a running copy must not be labelled exited")
 
     def test_an_old_failed_import_never_reads_output_from_a_retry(self):
         ref = {"namespace": "lab", "phase": "failed", "disks": [{"dv": "desktop-disk", "job": "copy"}]}
@@ -319,14 +323,16 @@ class ImportTests(unittest.TestCase):
         secrets = [body for method, path, body in self.sent if path.endswith("/secrets")]
         self.assertEqual({"token": "tok", "ca.crt": "CA"}, secrets[0]["stringData"])
 
-    def test_a_failed_copy_removes_what_it_made(self):
+    def test_a_failed_copy_requests_cleanup_and_explains_retained_data(self):
         op = UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})
         item = {"ref": op["ref"]}
         for dv in ("win11-disk", "win11-disk-2"):
             self.objects[f"{UVMS.CDI_API}/namespaces/lab/datavolumes/{dv}"] = {"status": {"phase": "Failed"}}
         state, _, message = UVMS.status(item)
         self.assertEqual("failed", state)
-        self.assertIn("VM on Unraid is as it was", message)
+        self.assertIn("VM on Unraid is unchanged", message)
+        self.assertIn("Retain storage policy keeps backing data", message)
+        self.assertNotIn("disks were removed", message)
         deleted = [path for method, path, body in self.sent if method == "DELETE"]
         self.assertIn(f"{UVMS.CDI_API}/namespaces/lab/datavolumes/win11-disk", deleted)
 
