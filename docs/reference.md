@@ -229,6 +229,15 @@ Homestead works without either probe container. When the SMART sidecar is not
 installed or cannot read a drive, the UI reports that state without degrading
 the whole cluster.
 
+### Guided setup
+
+Open the book icon to work through setup. **LAN networks** under Access opens
+Networking; **SMB** under Storage and backups opens its server settings and network
+shares. These optional admin steps can be skipped for the cluster and revisited.
+Completion is observed from a configured LAN attachment or an installed, enabled
+SMB server; it does not prove client connectivity. Next advances without marking
+a step complete, and Return to setup brings you back after configuring it.
+
 ### Import qcow2 and vmdk VM disks
 
 Virtual machines → Import → **A disk image from a URL** uses KubeVirt CDI to stream an HTTP(S) disk image into a
