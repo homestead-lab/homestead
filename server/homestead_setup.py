@@ -22,10 +22,19 @@ import homestead_shared as SHARED
 DATA_DIR = "/data"
 # Steps that are each person's own; the rest are the cluster's, for admins.
 PERSONAL = ("appearance", "phone", "notifications")
-STEPS = ("health", "quorum", "clocks", "address", "https", "hostname", "disks", "storage",
+STEPS = ("health", "quorum", "clocks", "address", "https", "hostname", "lan", "disks", "storage",
          "backups", "config", "osupdates", "appearance", "phone", "notifications", "people",
          "unifi", "unraid", "homeassistant", "linked", "starter", "console")
 _lock = threading.Lock()
+
+
+def lan_state(networks):
+    """Configured LAN attachments, not a test of bridges or connectivity."""
+    lan = [n for n in networks if n.get("lan")]
+    vms = sorted(n["name"] for n in lan if n.get("vms"))
+    containers = sorted(n["name"] for n in lan if n.get("containers"))
+    return {"done": bool(vms and containers), "applies": True,
+            "vms": vms, "containers": containers}
 
 
 def bind(data_dir):

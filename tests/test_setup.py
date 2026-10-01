@@ -30,6 +30,25 @@ class SetupTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             SETUP.skip("nonsense", True, "ada", admin=True)
 
+    def test_lan_configuration_needs_both_workload_types(self):
+        bridge = {"name": "default/lan", "lan": True, "vms": True, "containers": True}
+        vm = {"name": "default/guests", "lan": True, "vms": True, "containers": False}
+        container = {"name": "default/apps", "lan": True, "vms": False, "containers": True}
+        for networks in ([], [vm], [container], [{**bridge, "lan": False}]):
+            self.assertFalse(SETUP.lan_state(networks)["done"])
+        self.assertTrue(SETUP.lan_state([bridge])["done"])
+        state = SETUP.lan_state([vm, container])
+        self.assertTrue(state["done"])
+        self.assertEqual(["default/guests"], state["vms"])
+        self.assertEqual(["default/apps"], state["containers"])
+        self.assertFalse(SETUP.lan_state([])["done"], "removing configuration reopens the step")
+
+    def test_lan_is_an_optional_cluster_step(self):
+        with self.assertRaises(PermissionError):
+            SETUP.skip("lan", True, "kiosk", admin=False)
+        SETUP.skip("lan", True, "ada", admin=True)
+        self.assertIn("lan", SETUP.skips("kiosk"))
+
     def test_hiding_is_each_persons_and_opening_happens_once(self):
         SETUP.hide("ada", True)
         self.assertTrue(SETUP.hidden("ada"))
