@@ -374,7 +374,7 @@ def _get(ns, name):
     return kget(f"{API}/namespaces/{_name(ns, 'namespace')}/virtualmachines/{_name(name, 'VM name')}")
 
 
-def detail(ns, name):
+def detail(ns, name, include_sensitive=True):
     vm = _get(ns, name)
     try:
         vmi = kget(f"{API}/namespaces/{ns}/virtualmachineinstances/{name}")
@@ -402,7 +402,10 @@ def detail(ns, name):
     claims = _claims(ns)
     for disk in row["disks"]:
         disk.update(_disk_source(vm, ns, disk["claim"], claims))
-    row["cloud_init"] = _read_cloud_init(vm, ns)
+    if include_sensitive:
+        row["cloud_init"] = _read_cloud_init(vm, ns)
+    else:
+        row["sensitive_hidden"] = True
     import homestead_passthrough as PASSTHROUGH
     row["host_devices"] = PASSTHROUGH.vm_devices(vm)
     row["node_selector"] = ((vm["spec"]["template"].get("spec") or {}).get("nodeSelector") or {}).get(HOST, "")
@@ -923,6 +926,9 @@ def prepare_edit(ns, name, cfg, current=None):
     if cfg.get("nics") or cfg.get("add_nics"):
         changed_hardware |= _edit_nics(tspec, cfg.get("nics") or [], cfg.get("add_nics") or [])
     if cfg.get("cloud_init") is not None:
+        import homestead_host_access as HOSTACCESS
+        if HOSTACCESS.role() not in (None, "admin"):
+            raise PermissionError("only an admin can edit cloud-init")
         changed_hardware |= _edit_cloud_init(vm, ns, cfg["cloud_init"], effects)
     if cfg.get("host_devices"):
         # PCI and USB devices of a host, and a GPU's ROM (homestead_passthrough).

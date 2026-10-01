@@ -40,7 +40,7 @@ kget = ksend = ktext = None
 storage_classes = lambda: []
 capacity = None                      # Longhorn's per-node room, when there is Longhorn
 OWN_NS = ""
-IMAGE = "alpine:3.20"
+IMAGE = "alpine:3.24"
 OLD_COPY = NAMES.key("reclass-old")  # on a released original: namespace/claim it was
 TEMP_SUFFIX = "-reclass"
 # A copy that has not begun by then never will: the new volume could not be

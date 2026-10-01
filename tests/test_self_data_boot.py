@@ -123,7 +123,7 @@ class BootTests(unittest.TestCase):
     def test_a_signed_out_admin_can_sign_in_to_recover_without_anything_written(self):
         self.fence.inspect.return_value = {"mode": "recovery", "writable": False, "operation": "a" * 24}
         h = object.__new__(server.H)
-        h.command, h.path, h.headers = "POST", "/api/auth/login", {"X-Homestead-Auth": "1", "Content-Length": "40"}
+        h.command, h.path, h.headers = "POST", "/api/auth/login", {"X-Homestead-Auth": "1", "Content-Type": "application/json", "Content-Length": "40"}
         h._send, h._who, h._set_cookie = mock.Mock(), mock.Mock(return_value=None), mock.Mock()
         h._body = mock.Mock(return_value={"username": "admin", "password": "right"})
         h._client_ip, h._cookies = mock.Mock(return_value="192.0.2.7"), mock.Mock(return_value={})
@@ -145,7 +145,7 @@ class BootTests(unittest.TestCase):
 
     def test_read_only_sign_in_checks_the_password_and_saves_nothing(self):
         salt = "c2FsdHNhbHRzYWx0c2FsdA=="
-        users = {"users": {"admin": {"salt": salt, "hash": server.AUTH._hash("right", salt), "role": "admin"}}}
+        users = {"users": {"admin": {"id": "fixture-admin", "salt": salt, "hash": server.AUTH._hash("right", salt), "role": "admin"}}}
         with mock.patch.object(server.AUTH, "_load", return_value=users), \
                 mock.patch.object(server.AUTH, "_save", side_effect=AssertionError("saved")), \
                 mock.patch.object(server.AUTH, "issue_token", return_value="token"), \

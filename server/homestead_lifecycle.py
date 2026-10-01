@@ -859,7 +859,7 @@ def _send_power(node, action, steps, rep, report):
             "tolerations": [{"operator": "Exists"}],
             "containers": [{
                 "name": "power",
-                "image": "busybox",
+                "image": "alpine:3.24",
                 "command": ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--",
                             "sh", "-c", f"sleep 3; {cmd}"],
                 "securityContext": {"privileged": True},
