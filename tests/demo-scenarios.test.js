@@ -29,6 +29,10 @@ test("public and local demos start with consistent healthy cluster data", async 
     assert.ok(volumes.every(row => row.state !== "attached" || (row.robustness === "healthy" && row.copies.length === row.replicas)));
     assert.ok(capacity.nodes.every(row => row.level === "ok"));
     assert.ok(workloads.every(row => row.ready === row.desired));
+    const imageUpdates = await api("/api/image-updates");
+    assert.equal(imageUpdates.errors, 0);
+    assert.ok(imageUpdates.workloads.every(row => row.images.every(image => !image.error)));
+    assert.equal(imageUpdates.updates, 2, "available updates are compatible with healthy checks");
     assert.ok(operations.every(row => row.status !== "failed"));
     assert.ok(events.every(row => row.type !== "Warning"));
     assert.deepEqual(alerts.active, []);
@@ -46,6 +50,9 @@ test("explicit incident and critical scenarios retain unhealthy evaluation cases
     assert.ok((await api("/api/storage")).degraded > 0);
     assert.ok((await api("/api/events")).some(row => row.type === "Warning"));
     assert.ok((await api("/api/operations")).some(row => row.status === "failed"));
+    const imageUpdates = await api("/api/image-updates");
+    assert.equal(imageUpdates.errors, 1);
+    assert.ok(imageUpdates.workloads.some(row => row.images.some(image => image.error)));
     if (scenario === "critical") assert.equal(overview.nodes_ready, 2);
   }
 });
