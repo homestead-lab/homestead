@@ -176,6 +176,7 @@ async function viewSettings() {
         </div>
         ${users.length ? `<div class="sec">Users</div><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>User</th><th>Role</th><th>Last sign-in</th></tr></thead><tbody>${userRows}</tbody></table></div>` : ""}
       </section>
+      ${can("admin") ? '<section class="card flat" data-tab="access" id="apiKeysCard"><div class="empty small"><span class="spin2"></span>reading keys</div></section>' : ""}
 
       ${pwaCard()}
 
@@ -236,6 +237,7 @@ async function viewSettings() {
   mqttPaint();
   lhSettingsPaint();
   if (window.addonsPaint) addonsPaint();
+  if (window.apiKeysPaint) apiKeysPaint();
   if (window.fleetSettingsPaint) fleetSettingsPaint();
   if (window.homesteadUpdateCardPaint) {
     homesteadUpdateCardPaint();

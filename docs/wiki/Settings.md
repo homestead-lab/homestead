@@ -11,7 +11,7 @@ Settings has eight sections: seven that change the cluster for everyone, and
 | **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space and the V2 engine; namespaces |
 | **Linked clusters** | other Homesteads managed from this one, and moving workloads between them |
 | **Connections** | UniFi Network, the App Store catalogue |
-| **Users and access** | users and their roles |
+| **Users and access** | users and their roles, and [API keys](API) |
 | **You** | appearance, notifications on this device, refresh rate, your password and signing out |
 
 A section saves once: change what you like and a bar at its foot offers
