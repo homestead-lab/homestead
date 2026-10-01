@@ -129,8 +129,15 @@ class ReaderTests(unittest.TestCase):
         ops = type("Ops", (), {"LOGGERS": {}})()
         JL.register(ops)
         for kind in ("import", "protect-run", "helm", "restructure", "reclass", "self-data-move",
-                     "vm-disk-import", "image-cleanup", "deployment", "image-update", "k3s-cluster", "node-power"):
+                     "vm-disk-import", "unraid-vm-import", "image-cleanup", "deployment", "image-update", "k3s-cluster", "node-power"):
             self.assertIn(kind, ops.LOGGERS)
+
+    def test_unraid_import_log_includes_saved_output_after_cleanup(self):
+        ops = type("Ops", (), {"LOGGERS": {}})()
+        JL.register(ops)
+        saved = [{"title": "Disk 1 · CDI upload", "text": "No space left on device", "note": "Saved before cleanup"}]
+        out = ops.LOGGERS["unraid-vm-import"]({"ref": {"namespace": "lab", "diagnostics": saved}})
+        self.assertEqual(saved, out)
 
     def test_power_helper_shows_uid_scoped_events_and_container_log(self):
         pod = self.pod("power-helper", ("power",))

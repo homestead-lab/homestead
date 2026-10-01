@@ -836,12 +836,12 @@ window.viewVmImport = viewVmImport;
 function uvmCopiesPaint() {
   const host = $("#uvmCopies");
   if (!host) return;
-  const ops = (STATE.data.operations || []).filter(op => op.kind === "unraid-vm-import" && (window.operationActive ? operationActive(op) : op.status === "running"));
-  host.innerHTML = ops.length ? `<div class="sec">Copying</div><div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr>
-    <th>Import</th><th>Progress</th><th></th></tr></thead><tbody>${ops.map(op => `<tr><td><b>${esc(op.title)}</b></td>
+  const ops = (STATE.data.operations || []).filter(op => op.kind === "unraid-vm-import").slice(0, 10);
+  host.innerHTML = ops.length ? `<div class="sec">Recent imports</div><div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr>
+    <th>Import</th><th>Progress</th><th></th></tr></thead><tbody>${ops.map(op => `<tr><td><b>${esc(op.title)}</b><div><span class="pill ${operationTone(op.status)}">${esc(op.status)}</span></div></td>
       <td data-label="Progress" style="min-width:200px"><div class="small">${esc(op.message || "")}</div>
         <span class="jobmeter" style="display:block;margin-top:6px"><span style="width:${Math.max(2, Math.min(100, op.progress || 0))}%"></span></span></td>
-      <td>${actionBar([{ label: "Details", run: `openOperation(${jsq(op.href || "/vms/import")},${jsq(op.id)})` }])}</td></tr>`).join("")}</tbody></table></div></div>` : "";
+      <td>${actionBar([{ label: "Job details", icon: "log", run: `operationLog(${jsq(op.id)})` }])}</td></tr>`).join("")}</tbody></table></div></div>` : "";
 }
 window.uvmCopiesPaint = uvmCopiesPaint;
 
