@@ -358,7 +358,7 @@ class HttpTests(unittest.TestCase):
     def test_control_api_key_cannot_bypass_management_target_checks(self):
         obj = {"metadata": {"name": "target", "namespace": "lab"}, "spec": {"template": {"spec": {"serviceAccountName": "homestead"}}}}
         key = {"name": "fixture-key", "scopes": ["containers:control"]}
-        with mock.patch.object(server.API_KEYS, "verify", return_value=key), mock.patch.dict(server.API_V1.ctx, {"workloads": lambda: [{"ns": "lab", "name": "target"}]}), mock.patch.object(server, "kget", return_value=obj), mock.patch.object(server, "ksend") as send:
+        with mock.patch.object(server.API_KEYS, "verify", return_value=key), mock.patch.dict(server.API_V1.ctx, {"workloads": lambda: [{"ns": "lab", "name": "target"}], "restart": server.restart_workload}), mock.patch.object(server, "kget", return_value=obj), mock.patch.object(server, "ksend") as send:
             self.assertEqual(409, self.request("{}", {"Authorization": "Bearer fixture-token", "Content-Type": "application/json"}, "/api/v1/containers/lab/target/restart"))
             send.assert_not_called()
 

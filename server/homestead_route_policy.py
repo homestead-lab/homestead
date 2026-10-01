@@ -670,3 +670,9 @@ def role(path, method):
     if method == "GET" and path in ("/api/fleet/all/workloads", "/api/fleet/all/vms", "/api/fleet/all/nodes", "/api/fleet/all/volumes"):
         return "viewer"
     return POLICY.get((method, path))
+
+
+POLICY.update({
+    ('POST', '/api/self/data/prepare/archive'): 'admin',
+    ('POST', '/api/self/data/prepare/archive/preview'): 'admin',
+})
