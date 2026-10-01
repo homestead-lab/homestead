@@ -223,8 +223,11 @@ shows in the bell and under **Recent imports**, where **Job details** opens
 the copy log. **Follow latest** keeps the newest step and disk output visible;
 turn it off to read earlier entries without losing your place on refresh.
 Each disk shows its percentage, transferred bytes, speed and estimated time
-remaining in a compact copy box. Older percentage-only logs also show readable
-progress; an ETA needs timing samples. Transferring the stream still leaves CDI
+remaining in a compact copy box. Jobs started on older versions report whole
+percentages, so their progress and byte totals are approximate. An unchanged
+percentage does not prove a stalled copy; speed and ETA are unavailable from
+those coarse samples, even when timestamps are present. Upgrading Homestead
+does not replace the script of an import already running. Transferring the stream still leaves CDI
 to finish the disk.
 
 **Dismiss** removes a finished import from job history; it keeps

@@ -505,11 +505,11 @@ def _copy_sample(line, size):
     if timed and size > 0:
         elapsed, copied = float(timed[1]), min(size, int(timed[2]))
         return {"percent": min(100, copied / size * 100), "bytes": copied, "elapsed": elapsed,
-                "time": timestamp if timestamp is not None else elapsed, "clock": clock}
+                "time": timestamp if timestamp is not None else elapsed, "clock": clock, "coarse": False}
     if text.isdigit() and 0 <= int(text) <= 100:
         percent = int(text)
         return {"percent": percent, "bytes": size * percent / 100 if size > 0 else None,
-                "elapsed": None, "time": timestamp, "clock": clock}
+                "elapsed": None, "time": timestamp, "clock": clock, "coarse": True}
     return None
 
 
@@ -529,8 +529,8 @@ def copy_output(source, disk):
             continue
         samples.append(sample)
         rate = None
-        if sample["time"] is not None and sample["bytes"] is not None:
-            recent = [old for old in samples[:-1] if old["time"] is not None and old["bytes"] is not None
+        if not sample["coarse"] and sample["time"] is not None and sample["bytes"] is not None:
+            recent = [old for old in samples[:-1] if not old["coarse"] and old["time"] is not None and old["bytes"] is not None
                       and 0 < sample["time"] - old["time"] <= 60]
             if recent:
                 old = recent[0]
@@ -539,21 +539,27 @@ def copy_output(source, disk):
                 rate = sample["bytes"] / sample["elapsed"]
         eta = max(0, math.ceil((size - sample["bytes"]) / rate)) if rate and size else None
         sample.update(total_bytes=size or None, bytes_per_second=rate, eta_seconds=eta)
-        parts = [f"{sample['percent']:.1f}%"]
+        approximate = "~" if sample["coarse"] and sample["percent"] < 100 else ""
+        parts = [f"{approximate}{sample['percent']:.1f}%"]
         if size:
-            parts.append(f"{sample['bytes'] / 1e9:.1f} / {size / 1e9:.1f} GB")
+            parts.append(f"{approximate}{sample['bytes'] / 1e9:.1f} / {size / 1e9:.1f} GB")
         if rate is not None:
             parts.append(f"{rate / 1e6:.1f} MB/s")
         if sample["percent"] >= 100:
             parts.append("Stream transferred; waiting for CDI to finish")
         elif eta is not None:
             parts.append(f"ETA {eta // 3600}h {(eta % 3600) // 60}m {eta % 60}s")
+        elif sample["coarse"]:
+            parts.append("Speed / ETA unavailable (1% progress)")
         else:
             parts.append("ETA estimating")
         lines.append((sample["clock"] + " · " if sample["clock"] else "") + " · ".join(parts))
     result = {**source, "kind": "disk-copy", "text": "\n".join(lines)}
     if samples:
-        result["progress"] = {key: samples[-1][key] for key in ("percent", "bytes", "total_bytes", "bytes_per_second", "eta_seconds")}
+        result["progress"] = {key: samples[-1][key] for key in ("percent", "bytes", "total_bytes", "bytes_per_second", "eta_seconds", "coarse")}
+        if samples[-1]["coarse"]:
+            result["note"] = " ".join(filter(None, [source.get("note"),
+                "This older job reports whole percentages. Repeated values do not confirm a stalled copy; speed and ETA cannot be measured from this output."]))
     return result
 
 

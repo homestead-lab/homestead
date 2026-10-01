@@ -439,15 +439,16 @@ window.operationLog = async id => {
 function operationCopyProgress(progress, active) {
   if (!progress || !Number.isFinite(progress.percent)) return '<p class="dim small">Waiting for disk-copy progress…</p>';
   const percent = Math.max(0, Math.min(100, progress.percent));
+  const approximate = progress.coarse && percent < 100 ? "~" : "";
   const size = Number.isFinite(progress.bytes) && progress.total_bytes > 0
-    ? `${(progress.bytes / 1e9).toFixed(1)} / ${(progress.total_bytes / 1e9).toFixed(1)} GB` : "";
-  const speed = Number.isFinite(progress.bytes_per_second) ? `${(progress.bytes_per_second / 1e6).toFixed(1)} MB/s` : "";
+    ? `${approximate}${(progress.bytes / 1e9).toFixed(1)} / ${(progress.total_bytes / 1e9).toFixed(1)} GB` : "";
+  const speed = !progress.coarse && Number.isFinite(progress.bytes_per_second) ? `${(progress.bytes_per_second / 1e6).toFixed(1)} MB/s` : "";
   const remaining = progress.eta_seconds;
   const seconds = Math.ceil(remaining || 0), hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60);
   const duration = [hours ? `${hours}h` : "", minutes ? `${minutes}m` : "", `${seconds % 60}s`].filter(Boolean).join(" ");
   const eta = !active ? percent >= 100 ? "Stream transferred" : "Copy stopped" : percent >= 100 ? "Stream transferred; waiting for CDI to finish"
-    : Number.isFinite(remaining) && remaining >= 0 ? `ETA ${duration}` : "ETA estimating";
-  return `<div class="oplog-copy-progress"><b class="mono">${percent.toFixed(1)}%</b><span>${esc([size, speed, eta].filter(Boolean).join(" · "))}</span></div>
+    : progress.coarse ? "Speed / ETA unavailable (1% progress)" : Number.isFinite(remaining) && remaining >= 0 ? `ETA ${duration}` : "ETA estimating";
+  return `<div class="oplog-copy-progress"><b class="mono">${approximate}${percent.toFixed(1)}%</b><span>${esc([size, speed, eta].filter(Boolean).join(" · "))}</span></div>
     <div class="jobmeter"><span style="width:${percent}%"></span></div>`;
 }
 

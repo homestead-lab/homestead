@@ -39,6 +39,17 @@ test('Finished jobs do not start polling and failed copies have no live ETA',asy
   assert.match(t.ctx.operationCopyProgress({percent:100},true),/waiting for CDI/);
   assert.match(t.ctx.operationCopyProgress({percent:3,eta_seconds:null},true),/ETA estimating/);
 });
+test('whole-percentage progress cannot imply measured zero speed or an accurate ETA',()=>{
+  const {ctx}=setup();
+  const progress={percent:36,bytes:360000000,total_bytes:1000000000,coarse:true,bytes_per_second:0,eta_seconds:80};
+  const html=ctx.operationCopyProgress(progress,true);
+  assert.match(html,/~36\.0%/);
+  assert.match(html,/~0\.4 \/ 1\.0 GB/);
+  assert.match(html,/Speed \/ ETA unavailable \(1% progress\)/);
+  assert.doesNotMatch(html,/MB\/s|ETA 1m/);
+  assert.match(ctx.operationCopyProgress({...progress,percent:100},true),/waiting for CDI/);
+  assert.match(ctx.operationCopyProgress(progress,false),/Copy stopped/);
+});
 test('Events and output from the same pod retain separate scroll positions',async()=>{
   const t=setup();t.frame({...t.getFrame(),sources:[...t.getFrame().sources,{title:'Pod events',pod:'copy-pod',text:'event'}]});
   await t.ctx.operationLog('import');t.fields['#oplogFollow'].checked=false;
