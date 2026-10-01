@@ -1352,6 +1352,13 @@ the plain volume, as a moved VM is; a DaemonSet, a bare pod, or a volume a
 StatefulSet's template made cannot be stopped or recreated safely, and is
 said so up front. Homestead's own data moves from Settings › Redundancy.
 
+Completed destination preparations can be archived from Move data or Jobs.
+Archiving hides the record while retaining both volumes and their creation
+receipts; it never copies or deletes data. Preparations for an earlier source
+volume are labelled as historical, and a preparation for the current data
+volume says that Homestead now uses it. Running and recovery jobs remain
+visible, and Move data names the jobs that block another preparation.
+
 Finish upgrading every Homestead replica before starting a move. Homestead verifies
 capability records against the live pod UID and container runtime ID of processes
 sharing its data claim. Its own update/restart/replica changes are blocked while

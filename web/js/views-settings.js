@@ -289,15 +289,16 @@ async function replicasPaint() {
 // Two explicit stages: prepare while online, then separately review downtime.
 // Keep review tokens in this dialog only; never put them in links or local storage.
 let selfDataDialog = null;
-window.selfDataClose = () => { selfDataDialog = null; };
+window.selfDataClose = () => { selfDataDialog = null; selfDataArchiveDialog = null; };
 const selfDataPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 const selfDataId = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), n => n.toString(16).padStart(2, "0")).join("");
 const selfDataHostOptions = (nodes, selected = "") => nodes.map(n => `<option value="${esc(n.name)}" ${n.name === selected ? "selected" : ""} ${n.ready ? "" : "disabled"}>${esc(n.name)}${n.ready ? "" : " · unavailable"}</option>`).join("");
 window.replicasMoveData = async (jobId = "") => {
   // The class picked beside the button is the one the dialog starts with.
   const picked = $("#rep_class")?.value || "";
+  selfDataArchiveDialog = null;
   const request = {}; selfDataDialog = request;
-  modal("Move Homestead data", '<div id="selfDataFlow" class="ui-stack"><p>Reading volumes and hosts…</p></div>', true);
+  modal("Move Homestead data", '<div id="selfDataFlow" class="ui-stack"><p>Reading volumes and hosts…</p></div>', true, "operation-review");
   try {
     const state = await api("/api/self/data/prepare");
     if (selfDataDialog !== request || !$("#selfDataFlow")) return;
@@ -308,12 +309,16 @@ window.replicasMoveData = async (jobId = "") => {
     if (selected >= 0) return selfDataWatch(selected);
     $("#selfDataFlow").innerHTML = `${UI.lead(`Two steps: make the new volume (Homestead stays online), then copy to it (a short outage). <b>${esc(state.source)}</b> is kept either way.`)}
       ${jobs.length ? `<div class="ui-stack">${jobs.map((j, i) => `<div class="note"><b>${esc(j.destination)}</b><p class="small">${esc(j.message || j.status)}</p>
-        <button class="btn sm" onclick="selfDataWatch(${i})">${j.prepared ? "Review move" : "View progress"}</button></div>`).join("")}</div>` : ""}
+        <div class="row"><button class="btn sm" onclick="selfDataWatch(${i})">${j.prepared ? "Review move" : j.status === "succeeded" ? "View record" : "View progress"}</button>
+        ${j.archivable ? `<button class="btn sm" data-need="admin" onclick="selfDataArchiveReview(${jsq(j.id)})">Archive record</button>` : ""}</div></div>`).join("")}</div>` : ""}
+      ${state.blocking_jobs?.length ? UI.section("Jobs that block preparation", UI.table([{label:"Job"},{label:"State"}], state.blocking_jobs.map(j => [
+        `<b>${esc(j.title)}</b><p class="small">${esc(j.message)}</p><button class="btn sm" onclick="openOperation(${jsq(j.href)},${jsq(j.id)})">Open job</button><button class="btn sm" onclick="operationLog(${jsq(j.id)})">Log</button>`,
+        `${esc(j.status)}${j.recovery ? " · requires recovery" : ""}`])) + '<p class="ui-help">Finish or review these jobs before preparing another volume. Archiving a completed preparation does not clear a running or recovery job.</p>') : ""}
       ${UI.fields(UI.field("Destination storage", `<select aria-label="Destination storage" id="selfDataClass" onchange="selfDataClassChanged()">${(state.classes || []).map(c =>
         `<option value="${esc(c.name)}" data-shareable="${c.shareable ? 1 : 0}" ${c.name === picked ? "selected" : ""}>${esc(c.name)} · ${c.shareable ? "every host can use it" : "lives on one host's disk"}</option>`).join("")}</select>`),
         `<div id="selfDataHostField">${UI.field("Which host's disk", `<select aria-label="Host whose disk holds the volume" id="selfDataHost" onchange="selfDataInvalidate()">${selfDataHostOptions(state.nodes || [])}</select>`,
           { help: "This storage keeps the volume on one host's own disk, so Homestead then runs only on that host." })}</div>`)}
-      <div id="selfDataReview"></div><div id="selfDataActions">${UI.actions(UI.cancel("Close") + UI.button("Check", "selfDataPrepareReview()", { kind: "pri", id: "selfDataCheck", disabled: !(state.classes?.length && state.nodes?.some(n => n.ready)) }))}</div>`;
+      <div id="selfDataReview"></div><div id="selfDataActions">${UI.actions(UI.cancel("Close") + UI.button("Check", "selfDataPrepareReview()", { kind: "pri", id: "selfDataCheck", disabled: !(state.classes?.length && state.nodes?.some(n => n.ready)) || !!state.blocking_jobs?.length }))}</div>`;
     selfDataClassChanged();
   } catch (e) { if (selfDataDialog === request && $("#selfDataFlow")) $("#selfDataFlow").innerHTML = `<p role="alert">${esc(e.message)}</p>`; }
 };
@@ -327,11 +332,11 @@ window.selfDataClassChanged = () => {
 window.selfDataInvalidate = () => {
   if (selfDataDialog) { selfDataDialog.review = null; selfDataDialog.request = null; }
   if ($("#selfDataReview")) $("#selfDataReview").innerHTML = "";
-  if ($("#selfDataActions")) $("#selfDataActions").innerHTML = UI.actions(UI.cancel("Close") + UI.button("Check", "selfDataPrepareReview()", { kind: "pri", id: "selfDataCheck" }));
+  if ($("#selfDataActions")) $("#selfDataActions").innerHTML = UI.actions(UI.cancel("Close") + UI.button("Check", "selfDataPrepareReview()", { kind: "pri", id: "selfDataCheck", disabled: !!selfDataDialog?.state?.blocking_jobs?.length }));
 };
 window.selfDataPrepareReview = async () => {
   const flow = selfDataDialog;
-  if (!flow || flow.busy) return;
+  if (!flow || flow.busy || flow.state?.blocking_jobs?.length) return;
   selfDataInvalidate();
   const body = { operation: selfDataId(), storage_class: $("#selfDataClass").value, node: $("#selfDataHost").value };
   flow.request = body;
@@ -349,7 +354,7 @@ window.selfDataPrepareReview = async () => {
 };
 window.selfDataReady = () => {
   const flow = selfDataDialog, saved = flow?.review;
-  const ready = !!(saved && !flow.busy && $("#selfDataConsent")?.checked && saved.body.storage_class === $("#selfDataClass")?.value && saved.body.node === $("#selfDataHost")?.value);
+  const ready = !!(saved && !flow.busy && !flow.state?.blocking_jobs?.length && $("#selfDataConsent")?.checked && saved.body.storage_class === $("#selfDataClass")?.value && saved.body.node === $("#selfDataHost")?.value);
   if ($("#selfDataPrepare")) $("#selfDataPrepare").disabled = !ready;
   return ready;
 };
@@ -388,11 +393,46 @@ window.selfDataWatch = async index => {
         ${current.prepared ? UI.more("Hosts", UI.fields(
           UI.field("Move coordinator host", `<select aria-label="Move coordinator host" id="selfDataWorker" onchange="selfDataFinalInvalidate()">${selfDataHostOptions(state.nodes, current.node)}</select>`, { help: "Stays running while Homestead is stopped." }),
           UI.field("Copy host", `<select aria-label="Copy host" id="selfDataCopy" onchange="selfDataFinalInvalidate()">${selfDataHostOptions(state.nodes, current.node)}</select>`, { help: "Must be able to mount both volumes." }))) : ""}
-        <div id="selfDataFinal"></div><div id="selfDataReviewActions">${UI.actions(UI.cancel("Close") + (current.prepared ? UI.button("Review the move", "selfDataFinalReview()", { kind: "pri" }) : UI.button("Back", "replicasMoveData()")))}</div>`;
+        <div id="selfDataFinal"></div><div id="selfDataReviewActions">${UI.actions(UI.cancel("Close") + (current.prepared ? UI.button("Review the move", "selfDataFinalReview()", { kind: "pri" }) : UI.button("Back", "replicasMoveData()")) +
+          (current.archivable ? UI.button("Archive record", `selfDataArchiveReview(${jsArg(current.id)})`, {attrs:'data-need="admin"'}) : ""))}</div>`;
       if (!["succeeded", "failed", "cancelled"].includes(current.status)) setTimeout(paint, 3000);
     } catch (e) { if (selfDataDialog === flow && flow.watch === watch && $("#selfDataFlow")) $("#selfDataFlow").innerHTML = `<p role="alert">${esc(e.message)}</p><button class="btn" onclick="replicasMoveData()">Check again</button>`; }
   };
   await paint();
+};
+let selfDataArchiveDialog = null;
+window.selfDataArchiveReview = async id => {
+  const request = {}; selfDataArchiveDialog = request;
+  selfDataDialog = null;
+  try {
+    const review = await selfDataPost("/api/self/data/prepare/archive/preview", {id});
+    if (selfDataArchiveDialog !== request) return;
+    if (review.id !== id || !review.capacity_token || !review.destination) throw Error("The archive review is incomplete. Check saved jobs again.");
+    request.review = review;
+    modal("Archive preparation record", UI.lead(esc(review.detail)) +
+      UI.facts([["Prepared volume", esc(review.destination)], ["Original volume", esc(review.source)]]) +
+      UI.ack("selfDataArchiveConsent", "Hide this preparation and retain its volumes", {onchange:"selfDataArchiveReady()"}) +
+      UI.actions(UI.cancel("Close") + UI.button("Archive record", "selfDataArchiveStart()", {kind:"pri",id:"selfDataArchiveGo",disabled:true})), true, "operation-review");
+  } catch (e) { if (selfDataArchiveDialog === request) modal("Archive preparation record", `<p role="alert">${esc(e.message)}</p>` + UI.actions(UI.cancel("Close")), true, "operation-review"); }
+};
+window.selfDataArchiveReady = () => {
+  const ready = !!(selfDataArchiveDialog?.review && $("#selfDataArchiveConsent")?.checked);
+  if ($("#selfDataArchiveGo")) $("#selfDataArchiveGo").disabled = !ready;
+  return ready;
+};
+window.selfDataArchiveStart = async () => {
+  if (!selfDataArchiveReady()) return;
+  const request = selfDataArchiveDialog, saved = request.review;
+  request.review = null; selfDataArchiveReady();
+  try {
+    await selfDataPost("/api/self/data/prepare/archive", {id:saved.id,capacity_token:saved.capacity_token,confirm_archive:true});
+    if (STATE.data.operations) STATE.data.operations = STATE.data.operations.filter(job => job.id !== saved.id);
+    window.renderOperations?.();
+    if (selfDataArchiveDialog === request) { selfDataArchiveDialog = null; await replicasMoveData(); }
+  } catch (e) {
+    if (selfDataArchiveDialog === request) modal("Archive preparation record", `<p role="alert">${esc(e.message)}</p><p>Check saved jobs before reviewing again. The volumes are retained.</p>` +
+      UI.actions(UI.cancel("Close") + UI.button("Check saved jobs", "replicasMoveData()")), true, "operation-review");
+  }
 };
 window.selfDataFinalInvalidate = () => {
   if (selfDataDialog) { selfDataDialog.finalRequest = null; selfDataDialog.approvedMove = null; }

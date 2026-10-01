@@ -254,9 +254,9 @@ class ReviewTests(unittest.TestCase):
 
     def test_api_holds_busy_or_recovery_jobs_without_reading_cluster(self):
         import server
-        for job in ({"status": "running"}, {"status": "failed", "ref": {"retain_resources": True}}):
+        for job in ({"id": "busy-job", "title": "Busy job", "status": "running"}, {"id": "recovery-job", "title": "Recovery job", "status": "failed", "ref": {"retain_resources": True}}):
             with mock.patch.object(server.OPS, "_read", return_value=[job]), mock.patch.object(server, "kget") as read:
-                with self.assertRaisesRegex(Held, "jobs"): server.preview_self_data_move(self.body, "admin")
+                with self.assertRaisesRegex(Held, job["id"]): server.preview_self_data_move(self.body, "admin")
                 read.assert_not_called()
 
     def test_api_sanitizes_unavailable_inventory_without_starting_anything(self):
