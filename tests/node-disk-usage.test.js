@@ -57,6 +57,7 @@ test("host cards and the node diagram use the same filesystem scale",()=>{
   const html=ctx.nodeDiskLines({...node,disks:[root]});
   assert.match(html,/<b>40%<\/b>/);assert.match(html,/40\/100 GB/);
   assert.match(html,/Filesystem use · 500 GB disk/);assert.doesNotMatch(html,/40\/500/);
+  assert.match(html,/Longhorn 10 GB · 30 GB room/);
   const picture=ctx.Diagram.node({...node,name:"node-a",status:"Ready",disks:[root]});
   assert.match(picture,/Filesystem 40\/100 GB · 40%/);
   assert.match(picture,/width="54" height="9" rx="0" class="dg-sys"/);

@@ -332,7 +332,7 @@ function nodeDiskLines(n) {
       <span class="small mono">${usage.capacity ? `<b>${usage.pct}%</b> ` : ""}<span class="dim">${esc(used)}</span></span></div>
       ${usage.capacity ? `${driveBar(usage)}<div class="dim xs disk-usage-caption">Filesystem use${usage.physical ? ` · ${sizeText(usage.physical)} disk` : ""}</div>`
         : lh || system ? '<div class="dim xs disk-usage-caption">Usage unavailable</div>' : ""}
-      ${lh && system && usage.capacity ? `<div class="dim xs mono drivesplit"><i class="k-sys"></i>host ${sizeText(usage.host)} <i class="k-lh"></i>Longhorn ${sizePair(usage.longhorn, d.lh_size_gb)}</div>` : ""}</div>`;
+      ${lh && system && usage.capacity ? `<div class="dim xs mono drivesplit"><i class="k-sys"></i>host ${sizeText(usage.host)} <i class="k-lh"></i>Longhorn ${sizeText(usage.longhorn)} · ${sizeText(usage.room)} room</div>` : ""}</div>`;
   }).join("");
 }
 
