@@ -309,6 +309,7 @@ class VMCapacityTests(unittest.TestCase):
         self.assertEqual(5.0, result["candidates"][0]["reserved_gb"])
         self.assertEqual(10.0, result["candidates"][0]["projected_gb"])
         self.assertFalse(result["vm"]["request_is_lower_bound"])
+        self.assertEqual("node1", result["placement"]["resident"])
 
     def test_restart_reclaims_only_owned_reservation_not_observed_ram(self):
         self.running()

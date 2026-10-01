@@ -31,16 +31,16 @@ def _pods(ns, selector):
     return sorted(items, key=lambda p: (p.get("metadata") or {}).get("creationTimestamp", ""), reverse=True)
 
 
-def _tail(ns, pod, container="", lines=TAIL):
-    query = f"?tailLines={lines}" + (f"&container={_q(container)}" if container else "")
+def _tail(ns, pod, container="", lines=TAIL, *, timestamps=False):
+    query = f"?tailLines={lines}" + (f"&container={_q(container)}" if container else "") + ("&timestamps=true" if timestamps else "")
     return str(ktext(f"/api/v1/namespaces/{_q(ns)}/pods/{_q(pod)}/log{query}") or "")
 
 
-def _pod_source(ns, pod, title, container=""):
+def _pod_source(ns, pod, title, container="", *, timestamps=False):
     name = (pod.get("metadata") or {}).get("name", "")
     phase = (pod.get("status") or {}).get("phase", "")
     try:
-        text = _tail(ns, name, container)
+        text = _tail(ns, name, container, timestamps=timestamps)
         note = "" if text.strip() else f"{name} has printed nothing yet ({phase or 'starting'})"
     except Exception as error:
         text, note = "", f"{name}'s log could not be read ({phase or 'not started'}): {error}"[:300]

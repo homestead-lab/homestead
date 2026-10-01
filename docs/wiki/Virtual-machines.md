@@ -190,6 +190,10 @@ High or unknown RAM usage can be acknowledged. Missing hardware, storage conflic
 changed resource identities and insufficient scheduler capacity cannot be bypassed.
 The server rechecks before writing; the review is not a scheduler reservation.
 
+**Launch host** identifies a required host, a preferred host, or the eligible
+hosts Kubernetes can choose from at launch. A preference allows another eligible
+host. Resuming a paused VM keeps its current host; restarting can reschedule it.
+
 For NUMA VMs, enable **Settings → Hardware and storage → Add-ons → Node probe → VM placement
 checks**. The short dialog explains host access and the monitoring restart; socket
 settings are under **Advanced**. It uses an additional 32–96 MiB per probe node.

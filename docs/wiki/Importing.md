@@ -220,7 +220,14 @@ The disks are read over SSH and streamed into CDI's upload proxy, which turns
 raw or qcow2 into a VM disk as it arrives. SSH compression reduces network
 traffic for empty space; progress counts the original disk bytes. Progress
 shows in the bell and under **Recent imports**, where **Job details** opens
-the copy log. **Dismiss** removes a finished import from job history; it keeps
+the copy log. **Follow latest** keeps the newest step and disk output visible;
+turn it off to read earlier entries without losing your place on refresh.
+Each disk shows its percentage, transferred bytes, speed and estimated time
+remaining in a compact copy box. Older percentage-only logs also show readable
+progress; an ETA needs timing samples. Transferring the stream still leaves CDI
+to finish the disk.
+
+**Dismiss** removes a finished import from job history; it keeps
 the VM and disk data. Running imports cannot be dismissed. Each disk uses a
 filesystem volume on the storage class you choose, with CDI allowing for
 filesystem overhead. This avoids inheriting a

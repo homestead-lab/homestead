@@ -64,6 +64,7 @@ def exercise(src, env, root):
             assert Upload.digest == expected, "compressed transfer changed the disk bytes"
             if code == 201:
                 assert result.returncode == 0 and "HSVM-DONE" in result.stdout
+                assert vms.progress(result.stderr, disk.stat().st_size) == 100, "elapsed/byte meter output must reach 100%"
             else:
                 assert result.returncode != 0 and "HSVM-DONE" not in result.stdout
                 assert "HSVM-FAILED" in result.stdout

@@ -217,6 +217,7 @@ class ImportTests(unittest.TestCase):
         cat = next(line for line in script.splitlines() if "cat -- " in line)
         self.assertIn("Compression=yes", cat, "a raw disk's empty space crosses as almost nothing")
         self.assertIn("--cacert /ca/ca.crt", script)
+        self.assertIn("pv -n -t -b -i 10", script, "progress records elapsed time and bytes, not bare percentages")
         self.assertIn('Bearer $TOKEN', script)
         self.assertNotIn("tok", script, "the token comes from a Secret, never the script")
 
@@ -228,6 +229,40 @@ class ImportTests(unittest.TestCase):
     def test_progress_is_what_pv_last_said(self):
         self.assertEqual(42, UVMS.progress("7\n19\n42\n"))
         self.assertEqual(0, UVMS.progress("fetch https://dl-cdn\n"))
+
+    def test_byte_samples_update_progress_and_keep_upload_errors(self):
+        log = "10.0 100000000\n20.0 250000000\ncurl: (22) HTTP 500\nHSVM-FAILED upload failed\n"
+        self.assertEqual(25, UVMS.progress(log, 1000000000))
+        source = UVMS.copy_output({"text": log}, {"bytes": 1000000000})
+        self.assertIn("25.0% · 0.2 / 1.0 GB · 15.0 MB/s · ETA 0h 0m 50s", source["text"])
+        self.assertIn("curl: (22) HTTP 500", source["text"])
+        self.assertEqual(50, source["progress"]["eta_seconds"])
+        self.assertIn("HTTP 500", UVMS.failure_reason(log))
+
+    def test_old_percentage_logs_get_labels_and_eta_from_real_timestamps(self):
+        source = UVMS.copy_output({"text": "2026-01-01T12:00:10Z 10\n2026-01-01T12:00:20Z 20\n"}, {"bytes": 1000000000})
+        self.assertIn("12:00:20 · 20.0% · 0.2 / 1.0 GB · 10.0 MB/s · ETA 0h 1m 20s", source["text"])
+        self.assertEqual(80, source["progress"]["eta_seconds"])
+        unstamped = UVMS.copy_output({"text": "10\n20\n"}, {"bytes": 1000000000})
+        self.assertIn("20.0% · 0.2 / 1.0 GB · ETA estimating", unstamped["text"])
+        self.assertIsNone(unstamped["progress"]["eta_seconds"], "missing timing cannot invent an ETA")
+
+    def test_stalled_copy_has_no_countdown_and_full_stream_still_waits_for_cdi(self):
+        source = UVMS.copy_output({"text": "10.0 100\n20.0 100\n"}, {"bytes": 1000})
+        self.assertEqual(0, source["progress"]["bytes_per_second"])
+        self.assertIsNone(source["progress"]["eta_seconds"])
+        complete = UVMS.copy_output({"text": "30.0 1000\n"}, {"bytes": 1000})
+        self.assertIn("100.0%", complete["text"])
+        self.assertIn("waiting for CDI", complete["text"])
+
+    def test_retained_old_logs_are_readable_without_reading_retry_pods(self):
+        ref = {"disks": [{"dv": "desktop-disk", "bytes": 1000}], "diagnostics": [
+            {"title": "Disk 1 · desktop-disk · copy", "text": "0\n10\nPermission denied", "note": "Error (exit 22)"}]}
+        with mock.patch.object(UVMS, "kget") as get:
+            source = UVMS.log_sources({"ref": ref})[0]
+        get.assert_not_called()
+        self.assertIn("10.0%", source["text"])
+        self.assertIn("Permission denied", source["text"])
 
     def test_a_meter_line_does_not_hide_the_transport_or_upload_error(self):
         for error in ("curl: (22) The requested URL returned error: 413", "Permission denied", "No space left on device"):
@@ -287,11 +322,12 @@ class ImportTests(unittest.TestCase):
             "metadata": {"uid": "pvc-uid", "annotations": {"cdi.kubevirt.io/storage.populator.pvcPrime": "prime-pvc"}},
             "spec": {"resources": {"requests": {"storage": "200Gi"}}}, "status": {"phase": "Bound", "capacity": {"storage": "200Gi"}}}
         import homestead_joblogs as logs
-        with mock.patch.object(logs, "_pod_source", side_effect=lambda ns, p, title: {"title": title, "text": p["metadata"]["name"], "note": ""}), \
+        with mock.patch.object(logs, "_pod_source", side_effect=lambda ns, p, title, **kw: {"title": title, "text": p["metadata"]["name"], "note": ""}) as pod_source, \
                 mock.patch.object(logs, "_events", return_value="storage event") as events:
             sources = UVMS.log_sources({"ref": ref})
         self.assertEqual(["copy-current", "storage event", "upload-prime", "storage event"], [s["text"] for s in sources])
         self.assertEqual("OOMKilled (exit 137)", sources[0]["note"])
+        pod_source.assert_any_call("lab", pod, "Disk 1 · desktop-disk · copy", timestamps=True)
         events.assert_any_call("lab", "desktop-disk", "pvc-uid")
         events.assert_any_call("lab", "upload-prime", "upload-uid")
         pod["status"]["containerStatuses"][0]["state"] = {"running": {"startedAt": "2026-01-01T12:00:00Z"}}

@@ -387,17 +387,32 @@ window.operationLog = async id => {
   operationPanelOpen = false;
   renderOperations();
   const title = (STATE.data.operations || []).find(o => o.id === id)?.title || "Job";
+  const sequence = window.__logSequence = (window.__logSequence || 0) + 1;
   modal(`Log · ${title}`, `<div class="logtools"><span id="oplogState"><span class="spin2"></span> loading</span>
       <label class="switch"><input type="checkbox" id="oplogFollow" checked> Follow latest</label></div>
     <div id="oplogBody"></div>`, true);
   const stamp = t => { const d = new Date(t); return isNaN(d) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }); };
+  const followLatest = () => {
+    if (!$("#oplogFollow")?.checked) return;
+    const steps = $("#oplogBody .oplog-steps");
+    if (steps) steps.scrollTop = steps.scrollHeight;
+    $$("#oplogBody pre").forEach(pre => { pre.scrollTop = pre.scrollHeight; });
+  };
+  $("#oplogFollow").onchange = followLatest;
+  let polling = false, active = true;
   const poll = async () => {
     if ($("#modal").classList.contains("hidden") || !$("#oplogBody")) return clearInterval(window.__logTimer);
+    if (polling || window.__logSequence !== sequence) return;
+    polling = true;
     let d;
     try { d = await api(`/api/operations/log?id=${encodeURIComponent(id)}`); }
-    catch (e) { $("#oplogState").textContent = e.message; return; }
+    catch (e) { if (window.__logSequence === sequence && $("#oplogState")) $("#oplogState").textContent = e.message; return; }
+    finally { polling = false; }
+    if (window.__logSequence !== sequence || $("#modal").classList.contains("hidden") || !$("#oplogBody")) return;
     const follow = $("#oplogFollow")?.checked;
-    const kept = [...$$("#oplogBody pre")].map(pre => pre.scrollTop);
+    const box = $(".modalbox"), outerScroll = box?.scrollTop || 0;
+    const stepScroll = $("#oplogBody .oplog-steps")?.scrollTop || 0;
+    const kept = new Map([...$$("#oplogBody pre")].map(pre => [pre.dataset.source, pre.scrollTop]));
     $("#oplogBody").innerHTML = `<div class="between oplog-head"><span class="pill ${operationTone(d.status)}">${esc(d.status)}</span>
         <span class="small">${esc(d.message || "")}</span><b class="mono">${Math.round(d.progress || 0)}%</b></div>
       <div class="jobmeter"><span class="${d.status === "failed" ? "failed" : ""}" style="width:${Math.max(2, Math.min(100, d.progress || 0))}%"></span></div>
@@ -406,16 +421,35 @@ window.operationLog = async id => {
         <span>${esc(h.m)}</span>${h.p ? `<span class="mono dim xs">${Math.round(h.p)}%</span>` : ""}</li>`).join("") || '<li class="dim">Nothing recorded yet.</li>'}</ol>
       ${(d.sources || []).map(src => `<div class="ctitle" style="margin-top:14px">${esc(src.title)}</div>
         ${src.note ? `<div class="dim small">${esc(src.note)}</div>` : ""}
-        ${src.text ? `<pre class="logview oplog-pre">${esc(src.text)}</pre>` : ""}`).join("")}
+        ${src.kind === "disk-copy" ? operationCopyProgress(src.progress, operationActive(d)) : ""}
+        ${src.text ? `<pre class="logview oplog-pre${src.kind === "disk-copy" ? " oplog-copy" : ""}" data-source="${esc(src.pod || src.title)}">${esc(src.text)}</pre>` : ""}`).join("")}
       ${d.sources?.length ? "" : '<p class="dim xs" style="margin-top:12px">This kind of job runs no pod of its own; its steps above are its log.</p>'}`;
-    $$("#oplogBody pre").forEach((pre, i) => { pre.scrollTop = follow ? pre.scrollHeight : (kept[i] || 0); });
-    const active = operationActive(d);
+    const steps = $("#oplogBody .oplog-steps");
+    if (steps) steps.scrollTop = follow ? steps.scrollHeight : stepScroll;
+    $$("#oplogBody pre").forEach(pre => { pre.scrollTop = follow ? pre.scrollHeight : (kept.get(pre.dataset.source) || 0); });
+    if (box) box.scrollTop = outerScroll;
+    active = operationActive(d);
     $("#oplogState").innerHTML = active ? '<span class="ld"></span> live · refreshes every 3s' : `${esc(d.status)} · ${esc(stamp(d.finished_at || d.updated_at))}`;
     if (!active) clearInterval(window.__logTimer);
   };
   await poll();
-  window.__logTimer = setInterval(poll, 3000);
+  if (active && window.__logSequence === sequence && $("#oplogBody")) window.__logTimer = setInterval(poll, 3000);
 };
+
+function operationCopyProgress(progress, active) {
+  if (!progress || !Number.isFinite(progress.percent)) return '<p class="dim small">Waiting for disk-copy progress…</p>';
+  const percent = Math.max(0, Math.min(100, progress.percent));
+  const size = Number.isFinite(progress.bytes) && progress.total_bytes > 0
+    ? `${(progress.bytes / 1e9).toFixed(1)} / ${(progress.total_bytes / 1e9).toFixed(1)} GB` : "";
+  const speed = Number.isFinite(progress.bytes_per_second) ? `${(progress.bytes_per_second / 1e6).toFixed(1)} MB/s` : "";
+  const remaining = progress.eta_seconds;
+  const seconds = Math.ceil(remaining || 0), hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60);
+  const duration = [hours ? `${hours}h` : "", minutes ? `${minutes}m` : "", `${seconds % 60}s`].filter(Boolean).join(" ");
+  const eta = !active ? percent >= 100 ? "Stream transferred" : "Copy stopped" : percent >= 100 ? "Stream transferred; waiting for CDI to finish"
+    : Number.isFinite(remaining) && remaining >= 0 ? `ETA ${duration}` : "ETA estimating";
+  return `<div class="oplog-copy-progress"><b class="mono">${percent.toFixed(1)}%</b><span>${esc([size, speed, eta].filter(Boolean).join(" · "))}</span></div>
+    <div class="jobmeter"><span style="width:${percent}%"></span></div>`;
+}
 
 window.dismissOperation = async id => {
   try {
