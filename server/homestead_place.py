@@ -494,12 +494,19 @@ def manifest_plan(dep, ns, name, replicas=1, warning_percent=88, *, current=0, p
     insufficient = bool(additional and total_bound < additional)
     if insufficient and eligible:
         warnings.append(f"the requested {additional} additional replicas exceed the {total_bound} slots allowed by checked resources, ports, storage and topology")
+    preferred_hosts = {host for term in (pod_spec.get("affinity") or {}).get("nodeAffinity", {}).get("preferredDuringSchedulingIgnoredDuringExecution") or []
+                       if term.get("weight", 0) > 0
+                       for expr in term.get("preference", {}).get("matchExpressions") or []
+                       if expr.get("key") == "kubernetes.io/hostname" and expr.get("operator") == "In"
+                       for host in expr.get("values") or []}
     return {"namespace": ns, "name": name, "current": current, "requested": wanted,
             "additional": additional, "pod_memory_gb": round(memory / 1024**3, 2),
             "pod_request_gb": round(_pod_request(pod_spec, "memory") / 1024**3, 2),
             "pod_cpu_request_percent": round(_pod_request(pod_spec, "cpu") / 10, 1),
             "reservations_known": reservations_known, "resource_slots": total_slots,
             "topology_status": topology_status,
+            "placement": {"pinned": pod_spec.get("nodeName") or reqs["pinned"],
+                          "preferred": next(iter(preferred_hosts)) if len(preferred_hosts) == 1 else None, "resident": resident_node},
             "unbounded": unbounded, "warning_percent": warning_percent,
             "candidates": candidates, "warnings": warnings,
             "requires_confirmation": bool(additional and warnings),

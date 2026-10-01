@@ -22,6 +22,7 @@ import json
 import math
 import re
 import shlex
+from datetime import datetime
 import xml.etree.ElementTree as ET
 
 import homestead_names as NAMES
@@ -418,7 +419,7 @@ def copy_script(src, vm, path, size):
         IMP.SOURCE_SSH.setup(src).rstrip("\n"),
         f"state=$({ssh('virsh domstate --domain ' + shlex.quote(vm))} | head -n 1)",
         "[ \"$state\" = 'shut off' ] || { echo \"HSVM-FAILED $vm is $state on Unraid again; its disk was not copied\"; exit 5; }",
-        "meter() { if command -v pv >/dev/null 2>&1; then pv -n -i 10 -s " + str(int(size)) + "; else cat; fi; }",
+        "meter() { if command -v pv >/dev/null 2>&1; then pv -n -t -b -i 10 -s " + str(int(size)) + "; else cat; fi; }",
         # Compressed on the wire: a raw vdisk is mostly empty space, which
         # crosses as almost nothing; pv counts the disk's own bytes after SSH
         # has unpacked them, so progress is unchanged.
@@ -489,16 +490,77 @@ def _job_logs(ns, job):
         return ""
 
 
-def progress(log):
-    """pv -n prints the percentage done, one line every ten seconds."""
-    numbers = [int(line) for line in log.splitlines() if line.strip().isdigit()]
-    return min(100, numbers[-1]) if numbers else 0
+def _copy_sample(line, size):
+    """Read old percentage-only pv output and elapsed/byte samples, with optional pod timestamps."""
+    text, timestamp, clock = str(line).strip(), None, ""
+    stamped = re.match(r"^(\d{4}-\d\d-\d\dT\S+)\s+(.*)$", text)
+    if stamped:
+        try:
+            timestamp = datetime.fromisoformat(stamped[1].replace("Z", "+00:00")).timestamp()
+            clock = stamped[1][11:19]
+        except ValueError:
+            pass
+        text = stamped[2].strip()
+    timed = re.fullmatch(r"(\d+(?:\.\d+)?)\s+(\d+)", text)
+    if timed and size > 0:
+        elapsed, copied = float(timed[1]), min(size, int(timed[2]))
+        return {"percent": min(100, copied / size * 100), "bytes": copied, "elapsed": elapsed,
+                "time": timestamp if timestamp is not None else elapsed, "clock": clock}
+    if text.isdigit() and 0 <= int(text) <= 100:
+        percent = int(text)
+        return {"percent": percent, "bytes": size * percent / 100 if size > 0 else None,
+                "elapsed": None, "time": timestamp, "clock": clock}
+    return None
+
+
+def progress(log, size=0):
+    samples = [_copy_sample(line, size) for line in str(log or "").splitlines()]
+    return next((sample["percent"] for sample in reversed(samples) if sample), 0)
+
+
+def copy_output(source, disk):
+    """Readable progress lines and a live summary; transport errors remain in the output."""
+    size = max(0, int(disk.get("bytes") or 0))
+    samples, lines = [], []
+    for line in str(source.get("text") or "").splitlines():
+        sample = _copy_sample(line, size)
+        if not sample:
+            lines.append(line)
+            continue
+        samples.append(sample)
+        rate = None
+        if sample["time"] is not None and sample["bytes"] is not None:
+            recent = [old for old in samples[:-1] if old["time"] is not None and old["bytes"] is not None
+                      and 0 < sample["time"] - old["time"] <= 60]
+            if recent:
+                old = recent[0]
+                rate = max(0, (sample["bytes"] - old["bytes"]) / (sample["time"] - old["time"]))
+            elif sample["elapsed"] and sample["elapsed"] > 0:
+                rate = sample["bytes"] / sample["elapsed"]
+        eta = max(0, math.ceil((size - sample["bytes"]) / rate)) if rate and size else None
+        sample.update(total_bytes=size or None, bytes_per_second=rate, eta_seconds=eta)
+        parts = [f"{sample['percent']:.1f}%"]
+        if size:
+            parts.append(f"{sample['bytes'] / 1e9:.1f} / {size / 1e9:.1f} GB")
+        if rate is not None:
+            parts.append(f"{rate / 1e6:.1f} MB/s")
+        if sample["percent"] >= 100:
+            parts.append("Stream transferred; waiting for CDI to finish")
+        elif eta is not None:
+            parts.append(f"ETA {eta // 3600}h {(eta % 3600) // 60}m {eta % 60}s")
+        else:
+            parts.append("ETA estimating")
+        lines.append((sample["clock"] + " · " if sample["clock"] else "") + " · ".join(parts))
+    result = {**source, "kind": "disk-copy", "text": "\n".join(lines)}
+    if samples:
+        result["progress"] = {key: samples[-1][key] for key in ("percent", "bytes", "total_bytes", "bytes_per_second", "eta_seconds")}
+    return result
 
 
 def failure_reason(log, fallback="the copy stopped; inspect its disk copy output"):
     """A percentage is progress, never an error. Keep the actual transport error."""
     lines = [line.strip() for line in str(log or "").splitlines() if line.strip()
-             and not line.strip().isdigit() and line.strip() != "HSVM-DONE"]
+             and not _copy_sample(line, 1) and line.strip() != "HSVM-DONE"]
     errors = [line for line in lines if re.search(
         r"curl:|no space|not enough space|too large|permission denied|host key|connection.*(?:failed|refused|reset)|"
         r"timed? out|out of memory|oomkilled|unauthorized|forbidden|certificate|error|failed", line, re.I)
@@ -514,7 +576,9 @@ def log_sources(item):
     """Live disk copy/upload output, or bounded evidence saved before cleanup."""
     ref = item["ref"]
     if "diagnostics" in ref:
-        return ref["diagnostics"]
+        disks = {f"Disk {index + 1} · {disk['dv']} · copy": disk for index, disk in enumerate(ref.get("disks") or [])}
+        return [copy_output(source, disks[source["title"]]) if source.get("title") in disks else source
+                for source in ref["diagnostics"]]
     if ref.get("phase") == "failed":
         return [{"title": "Disk copy", "text": "", "note": "This older failed import kept no copy output before cleanup. Its earlier error cannot be recovered from a new attempt."}]
     ns, out = ref["namespace"], []
@@ -530,12 +594,12 @@ def log_sources(item):
                 else:
                     pods = []  # an older attempt may share this name with a retry
                 for pod in pods[:1]:
-                    source = _pod_source(ns, pod, title + " · copy")
+                    source = _pod_source(ns, pod, title + " · copy", timestamps=True)
                     status = pod.get("status") or {}
                     stopped = [c["state"]["terminated"] for c in status.get("containerStatuses") or []
                                if c.get("state", {}).get("terminated")]
                     source["note"] = "; ".join(f"{s.get('reason', 'exited')} (exit {s.get('exitCode', '?')})" for s in stopped) or source["note"]
-                    out.append(source)
+                    out.append(copy_output(source, disk))
                 if not pods:
                     out.append({"title": title + " · copy", "text": "", "note": "The confirmed copy pod is unavailable, or this older import recorded no Job identity."})
             except Exception:
@@ -575,7 +639,8 @@ def _fail(ref, message):
         text = str(source.get("text") or "")[-min(20000, remaining):]
         remaining -= len(text) + len(str(source.get("note") or "")) + 300
         saved.append({"title": str(source.get("title") or "Output")[:200], "text": text,
-                      "note": str(source.get("note") or "")[:500]})
+                      "note": str(source.get("note") or "")[:500],
+                      **({"kind": "disk-copy", "progress": source.get("progress")} if source.get("kind") == "disk-copy" else {})})
     ref["diagnostics"] = saved
     for disk in ref["disks"]:
         if disk.get("job"):
@@ -624,7 +689,7 @@ def status(item):
                 disk["pct"] = 100
                 done += 1
             else:
-                disk["pct"] = progress(_job_logs(ns, disk["job"]))
+                disk["pct"] = progress(_job_logs(ns, disk["job"]), disk["bytes"])
                 running += 1
         if failed:
             return _fail(ref, f"Copying {ref['vm']} failed: {failed}")

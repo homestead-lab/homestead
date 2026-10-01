@@ -961,7 +961,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.284/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.285/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -972,7 +972,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.284 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.285 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1595,6 +1595,12 @@ Deployment, so it needs no list of its own and exists while something is in it.
 
 ## Placement rules
 
+Start and deployment reviews show **Launch host** above the capacity estimates.
+Required hosts are pins; preferred hosts allow failover. With automatic placement,
+Kubernetes chooses from the eligible hosts when the workload launches. Per-host
+memory projections do not mean that a host has already been selected. Resuming
+a paused VM identifies the host of its existing launcher.
+
 A container's editor has a **Where it runs** section - also reached from
 **Placement** in its menu - at the three levels there are. The containers in
 one pod always run together on one node; that is what a pod is, so to run one
@@ -1834,10 +1840,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.284`, the workflow publishes:
+For a release such as `v2.8.285`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.284
+ghcr.io/wjcloudy/homestead:2.8.285
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1848,8 +1854,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.284
-git push origin v2.8.284
+git tag v2.8.285
+git push origin v2.8.285
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.
