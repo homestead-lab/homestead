@@ -183,14 +183,29 @@ first column the item's name, and the last its buttons - always an
 `actionBar()`, never buttons written into the cell. Every table is a `stack`
 table, in a dialog as on a page.
 
-The one exception: a button that edits a form laid out as a table - the ✕
+A small comparison uses `comparisonTable()`: hosts are columns and metrics
+are rows, with row and column headings for screen readers. It stays a matrix
+on a phone, with four hosts visible at once. A larger fleet scrolls inside
+the comparison, keeping the metric labels pinned; the page never scrolls
+sideways. A single host uses a card. Uptime bars and pod dots stay visible.
+Only short metrics remain in the phone matrix; selecting a host shows its
+storage and facts beneath it. Full host names remain in accessible labels and in the selected host heading.
+
+Compact container rows use `collectionDisclosure()` for their title. This
+native button expands facts and runtime objects directly under the row;
+`actionBar()` still holds the workload actions. Sorting moves the detail with
+its parent, and refreshing keeps the disclosure state. A disclosure is a
+view control, separate from a row's workload actions.
+
+The form exception: a button that edits a form laid out as a table - the ✕
 that removes a row being typed - is a plain button marked `data-form-row`.
 
 ### Phones
 
 Pages are designed for a phone as much as a desktop:
 
-- **Nothing scrolls sideways.** A wide table stacks; a long name wraps.
+- **The page never scrolls sideways.** A wide item table stacks; a long name
+  wraps. A node comparison can scroll within its own labelled region.
 - **Use the width.** Pair short things - stats, facts, tiles, short table
   values - two to a line. A short value alone on a full-width line, or a
   label at one edge and its value at the other, wastes the screen.
@@ -340,7 +355,7 @@ tables become cards and field grids one column on their own.
 | `UI.button(label, onclick, { kind })` / `UI.cancel()` | Buttons | - |
 | `UI.actions(buttons, start)` | A dialog's buttons | Buttons that act on one row |
 
-Menu and bar items are `{ label, run, icon, need, tip, danger }`. `run` goes
+Menu and bar items are `{ label, run, icon, need, tip, danger, ariaLabel }`. `run` goes
 into the `onclick` attribute as it is, so values in it go through `jsq()`
 like any other handler's; `tests/handler-escaping.test.js` sends hostile
 values through them.
