@@ -51,7 +51,7 @@ try {
         assert.equal(metrics.rootWidth,metrics.width);assert.equal(metrics.rootHeight,metrics.height);
         assert.equal(metrics.paneHeight,metrics.height);
         assert.equal(metrics.scrollWidth,metrics.paneWidth);assert.equal(metrics.left,0);
-        assert.equal(metrics.overscroll,"contain");
+        assert.equal(metrics.overscroll,"none");
         assert.ok(Math.abs(metrics.headerTop)<1,"header stays visible when content scrolls");
         assert.ok(Math.abs(metrics.navBottom-metrics.height)<1,"bottom navigation stays in the viewport");
         if(view==="dash") assert.ok(metrics.top>0,"long content remains scrollable");
