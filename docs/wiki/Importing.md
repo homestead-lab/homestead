@@ -225,7 +225,11 @@ choose, with CDI allowing for filesystem overhead. This avoids inheriting a
 block-device mode that the host runtime may not let CDI access.
 When every disk has arrived the VM is made,
 **stopped**, for you to start. The VM on Unraid is never changed or deleted; if
-a copy fails, its part-copied disks are removed so it can simply be run again.
+a copy fails, cleanup of its destination disks is requested. A storage class
+with **Retain** keeps the backing volumes, including CDI scratch volumes,
+after their claims are removed. Review those disconnected volumes in
+**Volumes** before choosing **Permanently delete data**. The failed import can
+be retried without changing the source VM.
 
 This needs CDI, which Harvester includes.
 

@@ -204,8 +204,9 @@ def alert_facts(cap):
         if node["level"] == "ok":
             continue
         facts.append({"key": f"capacity:{node['name']}", "category": "degraded", "severity": "degraded",
-                      "title": f"{node['name']} is nearly out of Longhorn space",
-                      "resolved": f"{node['name']} has Longhorn space again",
+                      "title": (f"Longhorn scheduling is blocked on {node['name']}" if node["blocked"] else
+                                f"Longhorn allocation limit is nearly reached on {node['name']}"),
+                      "resolved": f"Longhorn allocation capacity is available on {node['name']}",
                       "body": (node["blocked"] or f"{node['allocated_gb']} of {node['limit_gb']} GB allocated ({node['pct']}%); "
                                f"a new replica there can be at most {node['room_gb']} GB"),
                       "href": "/volumes"})

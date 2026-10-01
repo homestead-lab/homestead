@@ -44,6 +44,7 @@ class CapacityTests(unittest.TestCase):
         one, two = cap["nodes"]
         self.assertEqual((99.0, 117.0, 18.0, "warn"), (one["allocated_gb"], one["limit_gb"], one["room_gb"], one["level"]))
         self.assertEqual((236.0, "ok"), (two["room_gb"], two["level"]))
+        self.assertIn("allocation limit", LHCAP.alert_facts(cap)[0]["title"])
         # Two copies need two nodes with room: node1's is the limit.
         self.assertEqual({"1": 236.0, "2": 18.0, "3": 0.0}, cap["largest"])
 
@@ -81,6 +82,7 @@ class CapacityTests(unittest.TestCase):
         self.assertIn("scheduling is off", two["blocked"])
         facts = LHCAP.alert_facts(LHCAP.status())
         self.assertEqual(["capacity:node1", "capacity:node2"], [f["key"] for f in facts])
+        self.assertTrue(all("scheduling is blocked" in f["title"] for f in facts))
 
     def test_saving_settings(self):
         c = Cluster()

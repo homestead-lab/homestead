@@ -61,6 +61,16 @@ class ParseTests(unittest.TestCase):
     def test_an_unfinished_read_is_not_taken_as_a_healthy_host(self):
         self.assertFalse(HOST_OS.parse("OS Ubuntu\n")["complete"])
 
+    def test_workload_iscsi_attachments_do_not_appear_as_local_disks(self):
+        extra = '\n'.join([
+            'BLK NAME="sdc" TYPE="disk" SIZE="10737418240" FSTYPE="ext4" TRAN="iscsi" VENDOR="" MODEL=""',
+            'BLK NAME="sdd" TYPE="disk" SIZE="10737418240" FSTYPE="" TRAN="" VENDOR="IET" MODEL="VIRTUAL-DISK"',
+            'BLK NAME="nvme0n1" TYPE="disk" SIZE="512110190592" FSTYPE="" TRAN="nvme" VENDOR="" MODEL="Local SSD"',
+        ])
+        disks = {d["name"]: d for d in HOST_OS.parse(UBUNTU.replace("END", extra + "\nEND"))["disks"]}
+        self.assertEqual({"sda", "sdb", "nvme0n1"}, set(disks))
+        self.assertEqual(["/"], disks["sda"]["partitions"][2]["mounts"], "keep the LVM root partition")
+
     def test_dnf_security_advisories_mark_their_packages(self):
         facts = HOST_OS.parse("PKG dnf\nSEC kernel.x86_64\nUPD kernel.x86_64|\nUPD vim.x86_64|\nEND\n")
         self.assertEqual((2, 1), (len(facts["updates"]), facts["security"]))

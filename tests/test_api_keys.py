@@ -6,6 +6,7 @@ import tempfile
 import time
 import unittest
 import urllib.error
+from unittest.mock import patch
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -44,11 +45,13 @@ class KeyTests(unittest.TestCase):
         return keys.create(name, list(scopes), ttl, list(networks), owner)
 
     def test_a_key_is_shown_once_and_kept_only_as_a_hash(self):
-        made = self.make()
+        # URL-safe secrets may contain underscores, including near the end.
+        with patch.object(keys.secrets, "token_urlsafe", return_value="A" * 41 + "_E"):
+            made = self.make()
         token = made["token"]
         self.assertRegex(token, r"^hsk_[0-9a-f]{12}_[A-Za-z0-9_-]{43}$")
         stored = json.dumps(self.store)
-        self.assertNotIn(token.rsplit("_", 1)[1], stored, "the secret is never written down")
+        self.assertNotIn(token.split("_", 2)[2], stored, "the secret is never written down")
         self.assertNotIn("hash", json.dumps(keys.list_keys()), "nor its hash shown")
         self.assertEqual({"id", "name", "owner", "scopes", "expires"}, set(keys.verify(token, "192.0.2.5")))
 
