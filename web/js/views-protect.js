@@ -243,10 +243,8 @@ async function viewProtect() {
     <td>${(v.protected_by || []).map(j => `<span class="tag ok">${esc(j)}</span>`).join("")
       || '<span class="tag warn" data-tip="No snapshot or backup job covers it">nothing</span>'}</td>
     <td class="small dim">${v.last_backup_at ? esc(v.last_backup_at.replace("T", " ").replace("Z", "")) : "never"}</td>
-    <td><div class="row" style="gap:6px">
-      <button class="btn sm" onclick="lhSnaps(${jsq(v.name)},${jsq(v.pvc || v.name)})">Snapshots</button>
-      <button class="btn sm" data-need="operator" onclick="lhAssign(${jsq(v.name)},${jsq(v.pvc || v.name)})">Protect</button>
-    </div></td></tr>`).join("")}
+    <td>${actionBar([{ label: "Snapshots", run: `lhSnaps(${jsq(v.name)},${jsq(v.pvc || v.name)})` },
+      { label: "Protect", run: `lhAssign(${jsq(v.name)},${jsq(v.pvc || v.name)})`, need: "operator" }])}</td></tr>`).join("")}
   </tbody></table></div></div>
 
   <div class="sec">Backups</div>
@@ -258,7 +256,7 @@ async function viewProtect() {
       <td class="mono">${b.count}</td>
       <td class="small dim">${b.last_backup_at ? esc(b.last_backup_at.replace("T", " ").replace("Z", "")) : "—"}</td>
       <td class="mono">${b.size_mb ? (b.size_mb >= 1024 ? `${(b.size_mb / 1024).toFixed(1)} GB` : `${b.size_mb} MB`) : "—"}</td>
-      <td><button class="btn sm" onclick="lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})">Backups</button></td></tr>`).join("")}
+      <td>${actionBar([{ label: "Backups", run: `lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})` }])}</td></tr>`).join("")}
   </tbody></table></div></div>`
   : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`);
 }
@@ -669,11 +667,9 @@ function backupTable(bks, vol, label) {
           ${b.error ? `<div class="dim xs">${esc(b.error.slice(0, 80))}</div>` : ""}</td>
       <td class="mono">${b.size_mb} MB</td>
       <td class="small dim">${esc((b.created || "").replace("T", " ").replace("Z", ""))}</td>
-      <td><div class="row" style="gap:6px">${b.restorable ? `<button class="btn sm" data-need="admin"
-        onclick="lhRestore(${jsq(b.name)})">${icon("rollback")}Restore</button>`
-        : '<span class="dim xs">not ready</span>'}
-        <button class="btn sm danger" data-need="admin" data-tip="Delete it from the backup target"
-          onclick="lhBackupDel(${jsq(b.name)},${jsq(vol)},${jsq(label)})">✕</button></div></td></tr>`).join("")
+      <td>${b.restorable ? "" : '<span class="dim xs">not ready</span> '}${actionBar([
+        b.restorable ? { label: "Restore", icon: "rollback", run: `lhRestore(${jsq(b.name)})`, need: "admin" } : null,
+        { label: "Delete", run: `lhBackupDel(${jsq(b.name)},${jsq(vol)},${jsq(label)})`, need: "admin", danger: true, tip: "Delete it from the backup target" }])}</td></tr>`).join("")
       || `<tr><td colspan=5 class="empty">no backups — needs a backup target</td></tr>`}
   </tbody></table></div></div>`;
 }
