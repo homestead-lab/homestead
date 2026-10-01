@@ -193,6 +193,10 @@ class ImportTests(unittest.TestCase):
         self.assertEqual({"upload": {}}, dvs[0]["spec"]["source"])
         self.assertEqual(("80Gi", "longhorn-r2"), (dvs[0]["spec"]["storage"]["resources"]["requests"]["storage"],
                                                    dvs[0]["spec"]["storage"]["storageClassName"]))
+        for dv in dvs:
+            self.assertEqual("Filesystem", dv["spec"]["storage"]["volumeMode"],
+                             "CDI must not inherit Block mode and require access to a root-owned device")
+            self.assertEqual(["ReadWriteOnce"], dv["spec"]["storage"]["accessModes"])
         cfg = op["ref"]["vm_cfg"]
         self.assertFalse(cfg["start"])
         self.assertEqual(("win11-disk", "sata", [{"name": "win11-disk-2", "bus": "virtio"}], "52:54:00:3a:1c:07"),
@@ -231,6 +235,23 @@ class ImportTests(unittest.TestCase):
                 self.assertEqual(error, UVMS.failure_reason(error + "\n0\n"))
         self.assertIn("copy stopped", UVMS.failure_reason("0\n"))
         self.assertEqual("VM started again", UVMS.failure_reason("HSVM-FAILED VM started again\n0\n"))
+
+    def test_upload_body_explains_the_http_failure(self):
+        cause = "Saving stream failed: blockdev: cannot open /dev/cdi-block-volume: Permission denied"
+        log = cause + "\ncurl: (22) The requested URL returned error: 500\n0\nHSVM-FAILED Disk stream or CDI upload exited with status 22\n"
+        self.assertEqual(cause, UVMS.failure_reason(log))
+
+    def test_filesystem_upload_keeps_the_selected_class_and_default_choice(self):
+        for selected in ("", "longhorn-ssd", "longhorn-hdd"):
+            with self.subTest(selected=selected):
+                self.sent.clear()
+                UVMS.start({"source": "nas", "vm": "Windows 11", "storage_class": selected})
+                disks = [body["spec"]["storage"] for method, path, body in self.sent if path.endswith("/datavolumes")]
+                self.assertEqual(2, len(disks))
+                for disk in disks:
+                    self.assertEqual("Filesystem", disk["volumeMode"])
+                    self.assertEqual(["ReadWriteOnce"], disk["accessModes"])
+                    self.assertEqual(selected or None, disk.get("storageClassName"))
 
     def test_failure_keeps_bounded_evidence_before_removing_resources(self):
         ref = {"namespace": "lab", "disks": [{"dv": "desktop-disk", "job": "copy", "bytes": 1}]}
