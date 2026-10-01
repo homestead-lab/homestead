@@ -186,7 +186,7 @@ is fine for a homelab; three survive one failing; two are worse than one,
 since losing either stops the cluster.
 
 Longhorn starts with one copy of each volume. Once there are three machines,
-**Volumes → Storage classes** creates a class with three copies and makes it
+**Settings → Hardware and storage → Storage classes** creates a class with three copies and makes it
 the default; see [Storage](Storage).
 
 ## 4. Addresses for apps

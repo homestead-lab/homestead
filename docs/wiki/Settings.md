@@ -8,7 +8,7 @@ Settings has eight sections: seven that change the cluster for everyone, and
 | **Homestead** | its version and site name, its own health, how many copies run and where its data lives, configuration backup |
 | **Updates** | Homestead's releases (and linked clusters' in the same update); the container image update policy and its update window |
 | **Monitoring** | when bars and node cards turn amber or red; drive health; publishing stats to MQTT and Home Assistant |
-| **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space and the V2 engine; namespaces |
+| **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space, replica rebuilds and the V2 engine; storage classes; namespaces |
 | **Linked clusters** | other Homesteads managed from this one, and moving workloads between them |
 | **Connections** | UniFi Network, the App Store catalogue |
 | **Users and access** | users and their roles, and [API keys](API) |
