@@ -2849,7 +2849,8 @@ html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
 .node-comparison-detail{display:none}
 .collection-disclosure{display:flex;align-items:center;gap:9px;width:100%;min-width:0;padding:0;border:0;background:none;color:var(--tx);text-align:left;font:inherit;cursor:pointer}
 .collection-disclosure .wtitle{flex:1;min-width:0;line-height:1.4;overflow-wrap:anywhere;white-space:normal}
-.collection-chevron{flex:0 0 auto;font-size:17px;color:var(--mut);transition:transform .15s var(--e)}
+.collection-chevron{display:grid;place-items:center;flex:0 0 20px;width:20px;height:20px;color:var(--mut);transition:transform .15s var(--e)}
+.collection-chevron .btnicon{width:16px;height:16px}
 .collection-disclosure[aria-expanded=true] .collection-chevron{transform:rotate(180deg)}
 .wltable .wl-row-meta{margin:3px 0 0 37px;overflow-wrap:anywhere;white-space:normal}
 .wltable .wl-name{max-width:none;min-width:160px;width:27%}
@@ -2946,7 +2947,6 @@ html[data-theme="light"] .wl-mobile-summary .pillbtn.crit{color:#a1242a}
   .tbl.stack.compact.wltable tr.wl-off>.wl-cpu,.tbl.stack.compact.wltable tr.wl-off>.wl-ram,.wltable .wl-row-meta{display:none}
   .wltable .collection-disclosure .av{width:24px;height:24px;flex:0 0 24px}
   .wltable .collection-disclosure .wtitle{font-size:13px}
-  .wltable .collection-chevron{font-size:15px}
   .tbl.stack.compact.wltable tr.wl-detail-row{display:block;padding:0}
   .tbl.stack.compact.wltable tr.wl-detail-row>td{display:block;padding:0;width:100%;text-align:left}
   .tbl.stack.compact.wltable .wl-inline-detail{display:block;padding:10px 12px 12px}
