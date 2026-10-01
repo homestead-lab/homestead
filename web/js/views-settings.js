@@ -219,7 +219,7 @@ async function viewSettings() {
             <b>${esc(probeWord(info.node_probe?.state))}</b><small>${esc(info.node_probe?.detail || "")}</small></div>
           ${permissionsCell(info.permissions)}
         </div>
-        ${can("admin") ? '<div class="row" style="margin-top:12px"><button class="btn sm" onclick="welcomeCheck(true)">Setup checklist</button></div>' : ""}
+        ${can("admin") ? '<div class="row" style="margin-top:12px"><button class="btn sm" onclick="welcomeCheck(true)">Setup guide</button></div>' : ""}
       </section>
 
       <section class="card flat settings-wide" data-tab="updates" id="homesteadUpdateCard"></section>

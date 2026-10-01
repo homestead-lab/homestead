@@ -71,7 +71,6 @@ const DIALOGS = [
   ["vm-placement-checks", "nodes", "allocationProbeSettings()"],
   ["hardware-features", "nodes", "hardwareFeatureSettings()"],
   ["os-updates", "nodes", "osUpdates()"],
-  ["welcome", "dash", "welcomeCheck(true)"],
   ["self-address", "network", "selfAddressMove()"],
   ["vip-change", "network", "vipChange('192.0.2.242')"],
   ["os-space", "nodes", "diskOsSpace('harvester-node1')"],

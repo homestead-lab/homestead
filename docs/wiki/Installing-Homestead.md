@@ -118,7 +118,33 @@ everywhere.
 
 ![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.jpg)
 
+## The setup guide
+
+The first time an administrator signs in, Homestead opens its **setup guide**
+(`/setup`): six chapters - *Is it healthy?*, *Reach it*, *Keep data safe*,
+*Make it yours*, *Connect* and *First apps* - each step a sentence on why it
+matters, the cluster as it is now (a diagram where it helps: quorum, the VIP,
+copies across nodes, the HTTPS path from a phone), and one thing to do.
+
+- Homestead **checks each step itself**, every time: a VIP set, backups
+  configured, disks in use, the default storage class matching the nodes,
+  notifications on. A step done and since undone shows again. **Skip** puts
+  one aside; **Bring it back** returns it.
+- **Admins** see every chapter. Everyone else sees the steps that are theirs:
+  appearance, installing it on their phone, and notifications.
+- It covers what new clusters most often miss: two servers (no node can fail
+  until there is a third), getting **HTTPS** - needed to install Homestead on a
+  phone and get notifications - with a **Cloudflare Tunnel** or **Tailscale**
+  set up from the step, disks Longhorn is not using yet, a default class with
+  too many or too few copies, an encrypted export of Homestead's own settings,
+  and a second administrator.
+- Until it is done, the Dashboard says **Setup: 9 of 21**; **Hide from the
+  Dashboard** removes that, and **Settings → Homestead → Setup guide** always
+  opens it.
+
 ## Things worth doing first
+
+The setup guide walks through all of these; in short:
 
 1. **Settings → Homestead** - check Homestead's own health: every background task,
    the node probe, Samba, backup storage. See [Settings](Settings).

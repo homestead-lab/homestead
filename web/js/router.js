@@ -43,6 +43,7 @@
     events:    Object.freeze({ path: "/events",          label: "Events",          section: "System", parent: "cluster" }),
     resources: Object.freeze({ path: "/resources",       label: "Resources",       section: "System", parent: "cluster" }),
     settings:  Object.freeze({ path: "/settings",        label: "Settings",        section: "System" }),
+    setup:     Object.freeze({ path: "/setup",           label: "Setup",           section: "System", parent: "settings" }),
   });
 
   /* The tabs across the top of a page and the pages folded into it. */
