@@ -297,7 +297,13 @@ def channel_release(current, tags, channel):
             releases.append((version + (int(match[4] or 0),), tag))
     if not releases:
         raise ValueError(f"No {channel} release is published for this Homestead major version")
-    return max(releases)[1]
+    newest, tag = max(releases)
+    installed_version = tuple(int(installed[i]) for i in (1, 2, 3)) + (int(installed[4] or 0),)
+    # A partial registry listing must not offer a downgrade within a channel.
+    # Returning from dev to prod intentionally selects that channel's newest.
+    if (channel == "dev") == (installed[4] is not None) and newest < installed_version:
+        return current
+    return tag
 
 
 def _pod_digest(pods, container):

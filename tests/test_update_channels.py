@@ -19,6 +19,10 @@ class ChannelTests(unittest.TestCase):
     def test_returning_to_prod_can_offer_an_older_stable_version(self):
         self.assertEqual("2.8.289", updates.channel_release("2.8.290-dev.1", ["2.8.288", "2.8.289", "2.8.290-dev.1"], "prod"))
 
+    def test_a_partial_registry_listing_does_not_downgrade_within_a_channel(self):
+        self.assertEqual("2.8.290", updates.channel_release("2.8.290", ["2.8.289"], "prod"))
+        self.assertEqual("2.8.291-dev.10", updates.channel_release("2.8.291-dev.10", ["2.8.291-dev.2"], "dev"))
+
     def test_a_missing_dev_release_is_an_error_and_never_falls_back_to_prod(self):
         with self.assertRaisesRegex(ValueError, "No dev release"):
             updates.channel_release("2.8.289", ["2.8.289", "3.0.0-dev.1"], "dev")
