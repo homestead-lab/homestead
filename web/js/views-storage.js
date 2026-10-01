@@ -618,38 +618,41 @@ function storageClassCard(classes, v2 = null) {
   const special = every.filter(row => row.made_for);
   const restores = special.filter(row => row.made_for === "restore");
   const rows = STATE.showSpecialClasses ? every : every.filter(row => !row.made_for);
-  const specialLine = special.length ? `<div class="dim xs" style="padding:10px 16px">${special.length} class${special.length === 1 ? "" : "es"} made for
+  const specialLine = special.length ? `<div class="dim xs" style="margin-top:8px">${special.length} class${special.length === 1 ? "" : "es"} made for
       ${[special.length - restores.length ? `${special.length - restores.length} Harvester image${special.length - restores.length === 1 ? "" : "s"}` : "", restores.length ? `${restores.length} restore${restores.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ")}
       ${STATE.showSpecialClasses ? "shown" : "hidden"}, and never offered when choosing a class.
-      <a style="cursor:pointer;text-decoration:underline" onclick="STATE.showSpecialClasses=!STATE.showSpecialClasses;storageClassesPaint()">${STATE.showSpecialClasses ? "Hide" : "Show"} them</a>
-      ${restores.length ? ` · <button class="btn sm" data-need="admin" onclick="storageClassCleanup()">Remove the restore ones</button>` : ""}</div>` : "";
-  return `<div class="card flat pad0">
-    <div class="between storage-class-head">
-      <div><div class="ctitle">Storage classes</div>
-        <div class="csub">What a new volume is built from. Kubernetes fixes a class at creation, so Homestead creates and removes them rather than editing them in place.</div>
-        ${v2Summary(v2, rows)}</div>
-      <button class="btn pri" data-need="admin" onclick="storageClassCreate()">＋ New storage class</button></div>
-    <div class="tblwrap"><table data-sort="storage-classes" class="tbl stack storage-class-table"><thead><tr>
-      <th>Class</th><th>Engine</th><th>Replicas</th><th>Shared (RWX)</th><th>Encryption</th><th>Expansion</th><th>Volumes</th><th></th>
+      <a class="linkish" onclick="STATE.showSpecialClasses=!STATE.showSpecialClasses;storageClassesPaint()">${STATE.showSpecialClasses ? "Hide" : "Show"} them</a>
+      ${restores.length ? ` · <a class="linkish" data-need="admin" onclick="storageClassCleanup()">Remove the restore ones</a>` : ""}</div>` : "";
+  // What a volume on it can do, as tags: one column, not three.
+  const features = row => [
+    row.migratable ? '<span class="tag" data-tip="Live-migratable volumes for VM disks. Longhorn cannot mount those into a pod, so it cannot back shared storage.">VM disks only</span>'
+      : '<span class="tag ok" data-tip="Volumes can be shared between pods (RWX)">shareable</span>',
+    row.encrypted ? '<span class="tag info">encrypted</span>' : "",
+    row.expandable ? '<span class="tag">can grow</span>' : '<span class="tag" data-tip="Volumes keep the size they were made with">fixed size</span>',
+  ].filter(Boolean).join(" ");
+  const kind = row => row.made_for === "image" ? '<span class="tag" data-tip="Harvester made it for one image: disks from that image are made on it">image</span>'
+    : row.made_for === "restore" ? '<span class="tag warn" data-tip="Made to read one backup into a new volume; not needed once that volume exists">restore</span>'
+    : row.made_for === "iso" ? '<span class="tag" data-tip="ISO copies Homestead made for VM CD-ROM drives: one replica, since the originals are on your shares">ISO copies</span>' : "";
+  return `<div class="settings-card-head"><div><div class="ctitle">Storage classes</div>
+      <div class="csub">What a new volume is made from. Kubernetes fixes a class once it is made, so a change means a new class.</div>
+      ${v2Summary(v2, rows)}</div>
+    <button class="btn sm pri" data-need="admin" onclick="storageClassCreate()">＋ New storage class</button></div>
+    <div class="tblwrap"><table data-sort="storage-classes" class="tbl stack dense"><thead><tr>
+      <th>Class</th><th>Engine</th><th>Copies</th><th data-nosort>Its volumes</th><th>In use</th><th data-nosort></th>
     </tr></thead><tbody>${rows.map(row => `<tr>
-      <td><b>${esc(row.name)}</b>${row.default ? '<span class="tag ok">default</span>' : ""}${row.internal ? '<span class="tag">Harvester internal</span>' : ""}${row.made_for === "image" ? '<span class="tag" data-tip="Harvester made it for one image: disks from that image are made on it">image</span>' : row.made_for === "restore" ? '<span class="tag warn" data-tip="Made to read one backup into a new volume; not needed once that volume exists">restore</span>'
-        : row.made_for === "iso" ? '<span class="tag" data-tip="ISO copies Homestead made for VM CD-ROM drives: one replica, since the originals are on your shares">ISO copies</span>' : ""}
+      <td><b>${esc(row.name)}</b> ${row.default ? '<span class="tag ok">default</span>' : ""}${row.internal ? '<span class="tag">Harvester internal</span>' : ""}${kind(row)}
         <div class="dim xs mono">${esc(row.provisioner || "")}</div>
         ${(row.disk_tags || []).length || (row.node_tags || []).length ? `<div class="row" style="gap:4px;margin-top:4px">
           ${(row.disk_tags || []).map(t => `<span class="tag info" data-tip="Only on disks tagged ${esc(t)}">disk: ${esc(t)}</span>`).join("")}
           ${(row.node_tags || []).map(t => `<span class="tag" data-tip="Only on nodes tagged ${esc(t)}">node: ${esc(t)}</span>`).join("")}</div>` : ""}</td>
       <td data-label="Engine">${row.engine === "v2" ? '<span class="tag info" data-tip="Longhorn V2 (SPDK)">V2</span>' : row.engine ? '<span class="tag">V1</span>' : '<span class="dim">—</span>'}</td>
-      <td class="mono" data-label="Replicas">${esc(row.replicas || "—")}</td>
-      <td data-label="Shared (RWX)">${row.migratable
-        ? '<span class="pill low" data-tip="This class creates live-migratable volumes for VM disks. Longhorn cannot mount those into a pod, so it cannot back shared storage.">VM disks only</span>'
-        : '<span class="pill ok">usable</span>'}</td>
-      <td data-label="Encryption">${row.encrypted ? '<span class="tag info">encrypted</span>' : '<span class="dim">—</span>'}</td>
-      <td data-label="Expansion">${row.expandable ? '<span class="tag ok">can grow</span>' : '<span class="tag">fixed size</span>'}</td>
-      <td class="mono" data-label="Volumes">${row.in_use ?? 0}</td>
-      <td><div class="row" style="gap:6px;flex-wrap:nowrap">
-        ${row.default || row.internal || row.made_for ? "" : `<button class="btn sm" data-need="admin" title="Use this class when nothing else is chosen" onclick="storageClassDefault(${jsq(row.name)})">Make default</button>`}
-        ${row.internal || row.default || row.in_use ? "" : `<button class="btn sm danger" data-need="admin" onclick="storageClassDelete(${jsq(row.name)})">${icon("trash")}Delete</button>`}
-      </div></td></tr>`).join("")}</tbody></table></div>${specialLine}</div>`;
+      <td class="mono" data-label="Copies">${esc(row.replicas || "—")}</td>
+      <td data-label="Its volumes">${features(row)}</td>
+      <td class="mono" data-label="In use">${row.in_use ?? 0}</td>
+      <td>${actionBar([
+        row.default || row.internal || row.made_for ? null : { label: "Make default", run: `storageClassDefault(${jsq(row.name)})`, need: "admin", tip: "Use this class when nothing else is chosen" },
+        row.internal || row.default || row.in_use ? null : { label: "Delete", icon: "trash", run: `storageClassDelete(${jsq(row.name)})`, need: "admin", danger: true },
+      ], { shown: 1 })}</td></tr>`).join("")}</tbody></table></div>${specialLine}`;
 }
 window.storageClassCleanup = async () => {
   try {

@@ -1026,12 +1026,6 @@ html[data-theme="light"] #net_editor .net-access-choice:has(input:checked),html[
 .import-advanced>summary::-webkit-details-marker{display:none}
 .import-advanced>summary::before{content:"› ";display:inline-block;transition:transform .2s var(--e)}
 .import-advanced[open]>summary::before{transform:rotate(90deg)}
-.storage-class-head{padding:15px 16px 12px;gap:12px;flex-wrap:wrap}
-.storage-class-head .csub{max-width:62ch}
-/* class facts are single-line chips: wrapping one mid-phrase reads as damage */
-.storage-class-table td .pill,.storage-class-table td .tag{white-space:nowrap}
-.storage-class-table td:first-child{min-width:190px}
-.storage-class-table td:first-child .tag{margin-left:6px}
 .vclass-badges{display:flex;flex-wrap:wrap;gap:5px;margin-top:7px}
 .vclass-badges .tag{white-space:nowrap}
 .note.bad{border-color:rgba(255,77,79,.28);background:rgba(255,77,79,.07);color:#ffb4b8}
