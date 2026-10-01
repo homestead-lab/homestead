@@ -63,6 +63,18 @@ class SetupTests(unittest.TestCase):
         SETUP.note("config_backup_at", 1700000000)
         self.assertNotIn("done", json.dumps(SETUP.load()))
 
+    def test_guide_completion_is_per_user_and_does_not_pass_cluster_checks(self):
+        SETUP.skip("backups", True, "ada", admin=True)
+        SETUP.complete("ada")
+        self.assertTrue(SETUP.completed("ada"))
+        self.assertFalse(SETUP.completed("bob"))
+        self.assertEqual(["backups"], SETUP.skips("ada"))
+        self.assertNotIn("steps", SETUP.load())
+        SETUP.bind(self.dir)
+        self.assertTrue(SETUP.completed("ada"), "completion survives a restart")
+        SETUP.complete("ada", False)
+        self.assertFalse(SETUP.completed("ada"))
+
 
 
 class DeployArgsTests(unittest.TestCase):

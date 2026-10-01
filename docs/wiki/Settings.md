@@ -30,6 +30,12 @@ backups, imports or connection health. Appearance requires your confirmation.
 **Next** moves through the guide without completing a step. When you visit a
 configuration page, **Return to setup** brings you back to the current step.
 
+The book icon stays available on real clusters and in the demo. It pulses until
+you choose **Finish guide** or **Don’t show again**. These choices are saved for
+your account and do not change the checks. **Show reminders again** starts the
+reminder again. The guide has no dashboard shortcut or node-probe step: Homestead
+installs the node probe automatically, unless installation was explicitly declined.
+
 **Access → HTTPS and remote access → Set up a Cloudflare Tunnel** opens six
 steps: account and domain, tunnel token, connector deployment, access policy,
 hostname route and browser testing. A Cloudflare account and a domain on

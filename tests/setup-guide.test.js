@@ -17,31 +17,35 @@ function fixture(demo = false) {
   return { ctx, button, classes, saved };
 }
 
-test("real clusters keep the guide shortcut after completion without a demo pulse", () => {
+test("real clusters keep the guide shortcut and pulse until the guide is completed", () => {
   const { ctx, classes, button } = fixture();
   ctx.setupOffer();
   assert.equal(classes.has("hidden"), false);
-  assert.equal(classes.has("pulse"), false);
+  assert.equal(classes.has("pulse"), true);
   assert.equal(typeof button.onclick, "function");
+  button.onclick();
+  assert.equal(classes.has("pulse"), true, "opening alone does not complete the guide");
+  ctx.setupOffer({ completed: true });
+  assert.equal(classes.has("pulse"), false);
+  assert.equal(classes.has("hidden"), false);
 });
 
-test("demo offer stays contained and stops pulsing when opened", () => {
+test("demo offers stop pulsing when reminders are dismissed and stay available", () => {
   const { ctx, classes, button } = fixture(true);
   ctx.setupOffer();
   assert.equal(classes.has("pulse"), true);
   button.onclick();
-  ctx.setupOffer();
+  assert.equal(classes.has("pulse"), true);
+  ctx.setupOffer({ hidden: true });
   assert.equal(classes.has("pulse"), false);
+  assert.equal(classes.has("hidden"), false);
 });
 
-test("dashboard shortcut remains after completion and hiding only removes the shortcut", () => {
+test("the probe and dashboard shortcut are absent from the guide", () => {
   const { ctx } = fixture();
-  ctx.localStorage.setItem("homestead.setup.appearance", "1");
-  ctx.matchMedia = () => ({ matches: true });
-  const state = { admin: false, skips: [], hidden: false, steps: { notifications: { done: true } } };
-  assert.match(ctx.setupDashLine(state), /Setup reviewed · Reopen guide/);
-  assert.equal(ctx.setupDashLine({ ...state, hidden: true }), "");
-  ctx.setupOffer();
+  assert.equal(vm.runInContext("Object.hasOwn(SETUP_STEPS, 'probe')", ctx), false);
+  assert.equal(ctx.setupDashItem, undefined);
+  assert.equal(ctx.setupDashLine, undefined);
 });
 
 test("a skipped check remains unchecked and a later observed success replaces skip", () => {

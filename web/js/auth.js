@@ -325,7 +325,7 @@ async function afterAuth() {
   if (window.startOperationChecks) window.startOperationChecks();
   if (window.startUpdateChecks) window.startUpdateChecks();
   // A new cluster's first-run checklist, for an admin until it is done.
-  if (ROLE === "admin" && window.welcomeCheck) setTimeout(() => welcomeCheck(), 900);
+  if (window.welcomeCheck) setTimeout(() => welcomeCheck(), 900);
 }
 
 window.setRole = async (name, role) => {

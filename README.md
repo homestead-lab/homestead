@@ -212,6 +212,11 @@ notifications for outages, degraded storage, failed jobs and image updates.
 </tr>
 </table>
 
+The live demo opens with a healthy cluster. For warning and failure examples,
+use `?demo-scenario=incidents` or `?demo-scenario=critical` on the demo URL.
+Local demos add these to `?demo=1`. Page audits check the healthy default,
+dialog audits use the incident scenario, and CI checks all three health states.
+
 Every screenshot is taken from Homestead's demo data by each release, so they
 always show the current version. The same demo runs live at
 **[wjcloudy.github.io/homestead](https://wjcloudy.github.io/homestead/)**, updated with each release.

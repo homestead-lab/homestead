@@ -4,6 +4,9 @@
 (function () {
   const live = window.HOMESTEAD_DEMO === true;
   if (!live && new URLSearchParams(location.search).get("demo") !== "1") return;
+  const requestedScenario = new URLSearchParams(location.search).get("demo-scenario");
+  const scenario = ["incidents", "critical"].includes(requestedScenario) ? requestedScenario : "healthy";
+  window.HOMESTEAD_DEMO_SCENARIO = scenario;
 
   /* What the counters add up to, the way the server computes it. */
   const diskHealth = smart => {
@@ -1613,9 +1616,9 @@ ssh_pwauth: true
       return { range, step, t, samples: points, since: t[0],
         cpu: t.map((_, i) => wave(i, 18, 8, range === "24h" ? 288 : 24)), mem: t.map((_, i) => wave(i, 42, 3, 96)),
         rx: t.map((_, i) => wave(i, 14, 9, 48)), tx: t.map((_, i) => wave(i, 4, 2, 48)), pods: t.map(() => 12),
-        vol_bad: t.map((_, i) => (i > points * 0.6 && i < points * 0.62 ? 1 : 0)), nodes_ready: t.map(() => 3), nodes_total: t.map(() => 3),
+        vol_bad: t.map((_, i) => (scenario !== "healthy" && i > points * 0.6 && i < points * 0.62 ? 1 : 0)), nodes_ready: t.map(() => 3), nodes_total: t.map(() => 3),
         cpu_max: 41.5, mem_max: 49.2,
-        nodes: [{ name: "harvester-node1", cpu: 21.4, mem: 44.1, availability: 100 }, { name: "harvester-node2", cpu: 17.9, mem: 39.8, availability: 99.31 },
+        nodes: [{ name: "harvester-node1", cpu: 21.4, mem: 44.1, availability: 100 }, { name: "harvester-node2", cpu: 17.9, mem: 39.8, availability: scenario === "healthy" ? 100 : 99.31 },
           { name: "harvester-node3", cpu: 12.2, mem: 35.0, availability: 100 }] };
     },
     // ?platform=k3s is a bare k3s; ?platform=kubevirt is k3s with KubeVirt but no CDI.
@@ -2021,7 +2024,7 @@ ssh_pwauth: true
       issues: [{ severity: "degraded", kind: "Workload", name: "lab/doublecommander", reason: "only 0/1 replicas ready after 12m" }] },
     quorum: { done: true, applies: true, servers: 3, members: ["harvester-node1", "harvester-node2", "harvester-node3"],
       ready: ["harvester-node1", "harvester-node2", "harvester-node3"], can_lose: 1, nodes: [] },
-    probe: { done: true, applies: true }, clocks: { done: true, applies: false },
+    clocks: { done: true, applies: false },
     address: { done: true, applies: true, url: "http://192.0.2.245:8088", service_url: "http://homestead.lab.svc:8088", vips: 3, load_balancer: "kube-vip", harvester: true },
     https: { done: false, applies: true, url: "", tunnels: [] }, hostname: { done: false, applies: true },
     disks: { done: false, applies: true, unused: [{ node: "harvester-node2", device: "sdb", size_gb: 4000, kind: "HDD" }] },
@@ -2037,6 +2040,7 @@ ssh_pwauth: true
     return { ok: true, skips: demoSetup.skips };
   };
   responses["/api/setup/hide"] = (url, init) => { demoSetup.hidden = !!JSON.parse(init?.body || "{}").hidden; return { ok: true, hidden: demoSetup.hidden }; };
+  responses["/api/setup/complete"] = (url, init) => { demoSetup.completed = !!JSON.parse(init?.body || "{}").completed; return { ok: true, completed: demoSetup.completed }; };
   responses["/api/setup/https-check"] = (url, init) => ({ ok: true, url: JSON.parse(init?.body || "{}").url || "https://homestead.example.com", at: Math.floor(Date.now() / 1000) });
   responses["/api/setup/opened"] = { ok: true };
   responses["/api/auth/users"] = [{ name: "demo", role: "admin", last_login: "2026-09-28 07:40" },
@@ -2048,6 +2052,75 @@ ssh_pwauth: true
     { at: ago(180), event: "role", user: "alex", ok: true, ip: "192.0.2.20", device: "Chrome on Windows", via: "", detail: "now operator, by demo" },
     { at: ago(600), event: "signin-blocked", user: "admin", ok: false, ip: "203.0.113.7", device: "a script", via: "", detail: "too many attempts — wait a few minutes" },
     { at: ago(1440), event: "password", user: "demo", ok: true, ip: "192.0.2.20", device: "Chrome on Windows", via: "", detail: "" }];
+  // Public demos start healthy. Incident fixtures remain explicit and deterministic
+  // for UI audits and evaluations; action previews still enforce their constraints.
+  if (scenario === "healthy") {
+    nodes[2].roles = ["control-plane", "etcd"];
+    for (const node of nodes) for (const disk of node.temps.disks) {
+      Object.assign(disk.smart, { reallocated: disk.kind === "NVMe" ? null : 0, pending: 0, uncorrectable: 0, media_errors: 0 });
+      withHealth(disk);
+    }
+    for (const workload of workloads.filter(row => row.desired > 0 && row.ready < row.desired)) {
+      workload.ready = workload.desired;
+      workload.uptime = 3600;
+      workload.pods = [pod(workload.name, workload.nodes[0], workload.images[0])];
+      workload.pod_count = workload.container_count = 1;
+    }
+    for (const volume of volumes.filter(row => row.state === "attached")) {
+      Object.assign(volume, { robustness: "healthy", health_reason: "", conditions: [], scheduling_error: "" });
+      delete volume.rebuild; delete volume.restore;
+      const existing = new Set((volume.copies || []).map(row => row.node));
+      volume.copies = (volume.copies || []).map(row => ({ ...row, healthy: true, state: "running" }));
+      for (const node of nodes) if (volume.copies.length < volume.replicas && !existing.has(node.name)) {
+        volume.copies.push({ node: node.name, disk: "nvme1n1", healthy: true, state: "running" });
+        existing.add(node.name);
+      }
+    }
+    Object.assign(storage, { volumes: volumes.length, healthy: volumes.filter(row => row.robustness === "healthy").length,
+      degraded: 0, faulted: 0, unknown: volumes.filter(row => row.robustness === "unknown").length,
+      detached: volumes.filter(row => row.state === "detached").length,
+      attached: volumes.filter(row => row.state === "attached").length, reasons: [] });
+    const cluster = responses["/api/cluster"];
+    Object.assign(cluster, { state: "healthy", summary: "Cluster services and all three control-plane nodes are healthy", warnings: [] });
+    Object.assign(cluster.control_plane, { total: 3, ready: 3, etcd_total: 3, etcd_ready: 3, quorum_needed: 2, quorum_margin: 1, state: "healthy" });
+    cluster.nodes[2].roles = [...nodes[2].roles];
+    cluster.onboarding.reason = "Three control-plane nodes provide a one-node failure margin.";
+    demoSetup.steps.health = { done: true, applies: true, summary: cluster.summary, issues: [] };
+    const capacity = responses["/api/longhorn/capacity"], first = capacity.nodes[0];
+    Object.assign(first, { allocated_gb: 60, pct: 51.4, room_gb: 56.8, level: "ok" });
+    Object.assign(first.disks[0], { allocated_gb: 60, pct: 51.4, room_gb: 56.8 });
+    capacity.largest = { 1: 236.3, 2: 56.8, 3: 36.8 };
+    network.services = network.services.filter(row => !row.orphaned);
+    network.addresses.problems = 0;
+    network.addresses.nodes[2].control_plane = true;
+    for (const address of network.addresses.addresses.filter(row => row.state === "unrouted")) {
+      Object.assign(address, { state: "ok", reason: "", unrouted: [] });
+    }
+    const events = responses["/api/events"];
+    responses["/api/events"] = (...args) => events(...args).filter(row => row.type !== "Warning");
+    const operations = responses["/api/operations"];
+    responses["/api/operations"] = (...args) => operations(...args).map(row => row.id === "op2"
+      ? { ...row, status: "succeeded", progress: 100, message: "Image cached" } : row);
+    const moves = responses["/api/move/moves"];
+    responses["/api/move/moves"] = (...args) => moves(...args).filter(row => row.status !== "failed");
+    for (const site of demoSites.filter(row => !row.reachable)) Object.assign(site, { reachable: true, version: "2.8.283", error: "" });
+    const mqtt = responses["/api/mqtt/preview"].states[0].payload;
+    Object.assign(mqtt, { health: "healthy", vol_total: storage.volumes, vol_degraded: 0, vol_faulted: 0 });
+  } else {
+    const overview = responses["/api/overview"];
+    Object.assign(overview, { health: "degraded", health_state: "degraded", health_summary: "A workload and storage replicas need attention",
+      health_issues: [...demoSetup.steps.health.issues, { kind: "Volume", name: "lab/arr-dashboard-data", severity: "degraded", reason: storage.reasons[0].reason }] });
+    if (scenario === "critical") {
+      nodes[2].status = "NotReady";
+      Object.assign(overview, { health: "critical", health_state: "critical", nodes_ready: 2, health_summary: "One node is unavailable" });
+      overview.health_issues.unshift({ kind: "Node", name: nodes[2].name, severity: "critical", reason: "Node is not ready" });
+      Object.assign(responses["/api/cluster"], { state: "critical", summary: overview.health_summary });
+      Object.assign(responses["/api/cluster"].nodes[2], { status: "NotReady", ready: false });
+      network.addresses.nodes[2].ready = false;
+      demoSetup.steps.health = { done: false, applies: true, summary: overview.health_summary, issues: overview.health_issues };
+    }
+  }
+  responses["/api/alerts"] = { devices: [], active: scenario === "healthy" ? [] : responses["/api/overview"].health_issues };
   // On the live demo, say so on every page.
   if (live) {
     const banner = () => {
@@ -2055,7 +2128,7 @@ ssh_pwauth: true
       const bar = document.createElement("div");
       bar.id = "demoBanner";
       bar.className = "demobanner";
-      bar.innerHTML = 'Live demo: made-up data, and nothing you do here is saved. '
+      bar.innerHTML = `Live demo · ${scenario === "healthy" ? "healthy cluster" : scenario + " scenario"}: made-up data, and nothing you do here is saved. `
         + '<a href="https://github.com/wjcloudy/homestead" target="_blank" rel="noopener">Homestead on GitHub</a>';
       document.body.prepend(bar);
     };

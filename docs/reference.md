@@ -196,11 +196,11 @@ and create a `docker-registry` secret using a classic GitHub token with only
 `read:packages`. GitHub documents this in
 [Working with the Container registry](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
-### 3. Optional node telemetry and drive health
+### 3. Node telemetry and drive health
 
 Kubernetes does not expose physical temperatures, host device inventory,
-per-disk throughput, or SMART health. Install the node probe to enable those
-views:
+per-disk throughput, or SMART health. Homestead installs the node probe
+automatically. To install it manually after an explicit opt-out:
 
 ```bash
 kubectl apply -f deploy/nodeprobe.yaml
@@ -1734,9 +1734,10 @@ The probe's scripts travel inside the Homestead image. On start, Homestead
 compares them with the ones the installed probe is running and replaces them if
 they differ, restarting the DaemonSet — so upgrading Homestead upgrades the
 probe, with no manifest to re-apply. It updates whichever name the probe already
-has, and never installs one that is not there: the SMART sidecar is privileged,
-so installing one is asked for: **Install node probe** on a node with no
-thermal data, or from **Settings → Hardware and storage → Add-ons**. **Settings → Homestead**
+has. The leader installs a missing probe automatically, including on existing
+clusters, and retries unsuccessful installations. An explicit installer opt-out
+or removal after successful installation is preserved. Administrators can retry
+from **Settings → Hardware and storage → Add-ons**. **Settings → Homestead**
 still shows what the last check decided. `kubectl apply -f
 deploy/nodeprobe.yaml` still works for anyone who prefers it.
 
@@ -1810,7 +1811,7 @@ web/assets/                   Homestead SVG identity
 web/icons/                    installed-app icons (from scripts/render_icons.py)
 web/sw.js, manifest.webmanifest  the installable app's service worker and manifest
 deploy/deploy.yaml            namespace, RBAC, Longhorn PVC, Deployment, Service
-deploy/nodeprobe.yaml         optional per-node telemetry and device inventory
+deploy/nodeprobe.yaml         automatically installed per-node telemetry and device inventory
 deploy/rbac.yaml              Homestead's permissions alone, for existing installs
 charts/homestead/             the Helm chart (from scripts/render_chart.py)
 .github/workflows/ci.yml      tests and container build validation
