@@ -1809,9 +1809,13 @@ ssh_pwauth: true
       }
       return { source: "homestead-data", classes: [{ name: "longhorn", shareable: true }], execution_ready: false,
         nodes: [{ name: "harvester-node1", ready: true }, { name: "harvester-node2", ready: true }],
-        preparations: window.__demoDataPrepared ? [{ id: "demo-data-prepare", operation: "a".repeat(24), destination: "homestead-data-prepared", node: "harvester-node1", status: "succeeded", progress: 100, prepared: true,
+        preparations: window.__demoDataPrepared ? [{ id: "demo-data-prepare", operation: "a".repeat(24), destination: "homestead-data-prepared", node: "harvester-node1", status: "succeeded", progress: 100, prepared: true, archivable: true,
           message: "Destination prepared. Review the move when you are ready for downtime." }] : [] };
     },
+    "/api/self/data/prepare/archive/preview": (url, init) => ({ id: JSON.parse(init.body).id,
+      destination: "homestead-data-prepared", source: "homestead-data", capacity_token: "demo-only",
+      detail: "Hides this completed preparation from Move data and Jobs. Both volumes are retained; no data is copied or deleted." }),
+    "/api/self/data/prepare/archive": () => { window.__demoDataPrepared = false; return {ok: true}; },
     "/api/self/data/prepare/preview": { size: "2Gi", storage_class: "longhorn", capacity_token: "demo-only", capacity: {
       blocked: false, warnings: ["Storage capacity is not reserved until provisioning completes."], candidates: [] } },
     "/api/self/data/move/preview": { capacity_token: "demo-only", downtime: "Homestead will be unavailable while data is copied and checked. Both volumes are retained.",
