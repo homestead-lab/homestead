@@ -187,6 +187,7 @@ async function viewSettings() {
       <section class="card flat settings-wide" data-tab="fleet" id="fleetMovesCard" hidden></section>
       <section class="card flat settings-wide" data-tab="cluster" id="addonsCard" hidden></section>
       <section class="card flat settings-wide" data-tab="cluster" id="lhSettingsCard" data-save="lh"><div class="empty small"><span class="spin2"></span>reading Longhorn</div></section>
+      <section class="card flat settings-wide" data-tab="cluster" id="storageClassesCard" hidden></section>
 
       <section class="card flat settings-wide" data-tab="connections">
         <div class="settings-card-head"><div><div class="ctitle">App Store catalogue</div>
@@ -236,6 +237,7 @@ async function viewSettings() {
   replicasPaint();
   mqttPaint();
   lhSettingsPaint();
+  if (window.storageClassesPaint) storageClassesPaint();
   if (window.addonsPaint) addonsPaint();
   if (window.apiKeysPaint) apiKeysPaint();
   if (window.fleetSettingsPaint) fleetSettingsPaint();

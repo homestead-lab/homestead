@@ -32,7 +32,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error) {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.273" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.274" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     <p class="dim small">This page tries again every few seconds.</p>
@@ -109,7 +109,7 @@ function ungate() { $("#gate").classList.add("hidden"); }
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.273" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.274" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -355,19 +355,19 @@ window.apiKeysPaint = async () => {
   try { found = await api("/api/auth/keys"); }
   catch (e) { card.innerHTML = `<div class="ctitle">API keys</div><div class="dim small">${esc(e.message)}</div>`; return; }
   STATE.data.apiKeys = found;
-  const rows = found.keys.map(k => {
-    const state = k.expired ? '<span class="pill crit">expired</span>' : "";
-    const scopes = k.scopes.map(s => `<span class="tag">${esc(s)}</span>`).join(" ");
-    const detail = [keyUntil(k.expires), k.last_used ? `used ${agoText(k.last_used)}${k.last_ip ? ` from ${k.last_ip}` : ""}` : "never used",
-      `made by ${k.owner}`, k.networks.length ? `only from ${k.networks.join(", ")}` : ""].filter(Boolean).map(esc).join(" · ");
-    return serviceRow(esc(k.name), state, `${scopes}<br>${detail}`,
-      `<button class="btn sm danger" onclick="apiKeyRevoke(${jsq(k.id)},${jsq(k.name)})">Revoke</button>`);
-  }).join("");
+  // A list of like things: a stacked table, its buttons an actionBar.
+  const rows = found.keys.map(k => `<tr>
+      <td><b>${esc(k.name)}</b> ${k.expired ? '<span class="tag bad">expired</span>' : ""}<div class="dim xs">made by ${esc(k.owner)}${k.networks.length ? ` · only from ${esc(k.networks.join(", "))}` : ""}</div></td>
+      <td data-label="May">${k.scopes.map(s => `<span class="tag">${esc(s)}</span>`).join(" ")}</td>
+      <td data-label="Expires" class="small">${esc(keyUntil(k.expires))}</td>
+      <td data-label="Last used" class="small">${k.last_used ? `${esc(agoText(k.last_used))}${k.last_ip ? `<div class="dim xs mono">${esc(k.last_ip)}</div>` : ""}` : '<span class="dim">never</span>'}</td>
+      <td>${actionBar([{ label: "Revoke", run: `apiKeyRevoke(${jsq(k.id)},${jsq(k.name)})`, danger: true }], { shown: 1 })}</td></tr>`).join("");
   card.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">API keys</div>
       <div class="csub">For Home Assistant, scripts and AI agents. Each key expires, can do only what it is given, and works only on the API</div></div>
       <div class="row"><a class="btn sm" href="${API_DOCS}" target="_blank" rel="noopener">API guide</a>
         <button class="btn sm pri" onclick="apiKeyNew()">＋ New key</button></div></div>
-    ${rows ? `<div class="settings-list">${rows}</div>` : '<div class="dim small">No keys yet.</div>'}
+    ${rows ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Key</th><th>May</th><th>Expires</th><th>Last used</th><th></th></tr></thead>
+      <tbody>${rows}</tbody></table></div>` : '<div class="dim small">No keys yet.</div>'}
     <div class="dim xs" style="margin-top:8px">A key cannot manage users or keys, reach a host's shell, or change settings, whatever its scopes.
       Its full description is at <span class="mono">/api/v1/openapi.json</span> on this Homestead.</div>`;
 };
