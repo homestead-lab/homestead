@@ -58,6 +58,7 @@ probe - and your first sign-in.
 - [Linked clusters](Linked-clusters) - several clusters from one sign-in, switched or shown together
 - [Moving between clusters](Moving-between-clusters) - bring workloads from one cluster to another
 - [Helm and Resources](Helm-and-resources) - charts, and every Kubernetes object
+- [API](API) - scoped, expiring API keys for Home Assistant, scripts and AI agents
 - [Settings](Settings) - cluster add-ons, hardware, users, MQTT, Homestead updates and health
 - [Troubleshooting](Troubleshooting) - the problems people actually hit
 
