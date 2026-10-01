@@ -56,7 +56,7 @@ class SpaRouteTests(unittest.TestCase):
         self.assertEqual(set(server.SPA_ROUTES), routed)
         tabbed = {path for path in routed - hrefs if re.search(r'path: "%s",[^\n]*parent: "' % re.escape(path), router)}
         self.assertEqual(routed - hrefs, tabbed, "every page is in the sidebar or a tab of a page that is")
-        self.assertRegex(html, r'<script src="/js/router\.js\?v=\d+\.\d+\.\d+"></script>')
+        self.assertRegex(html, r'<script src="/js/router\.js\?v=\d+\.\d+\.\d+(?:-dev\.\d+)?"></script>')
 
     def test_bundled_svg_assets_are_public_without_allowing_traversal(self):
         self.assertTrue(server.is_asset_path("/assets/homestead-mark.svg"))
