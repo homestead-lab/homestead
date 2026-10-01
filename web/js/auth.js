@@ -214,7 +214,7 @@ window.manageUsers = async () => {
   try {
     const us = await api("/api/auth/users");
     $("#mbody").innerHTML = `
-      <div class="card flat pad0" style="margin-bottom:16px"><div class="tblwrap"><table class="tbl">
+      <div class="card flat pad0" style="margin-bottom:16px"><div class="tblwrap"><table class="tbl stack">
         <thead><tr><th>User</th><th>Role</th><th>Last sign-in</th><th></th></tr></thead><tbody>
         ${us.map(u => `<tr><td><div class="row" style="gap:9px">
             <div class="av">${esc(u.name.slice(0, 2).toUpperCase())}</div><b>${esc(u.name)}</b>
@@ -227,7 +227,7 @@ window.manageUsers = async () => {
           <td class="dim small mono">${esc(u.last_login || "never")}
             <div><a class="linkish xs" onclick="userSignins(${jsq(u.name)})">Sign-in history</a></div></td>
           <td>${u.name === ME || us.length === 1 ? '<span class="dim xs">—</span>'
-            : `<button class="btn sm danger" onclick="delUser(${jsq(u.name)})">Remove</button>`}</td>
+            : actionBar([{ label: "Remove", run: `delUser(${jsq(u.name)})`, danger: true }])}</td>
         </tr>`).join("")}</tbody></table></div></div>
       <div class="sec">Add a user</div>
       <div class="f2">

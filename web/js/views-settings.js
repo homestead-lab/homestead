@@ -205,7 +205,7 @@ async function viewSettings() {
       </section>
 
       <section class="card flat settings-wide" data-tab="about" data-save="app">
-        <div class="ctitle">About this installation</div><div class="csub">What runs here, and what it is called</div>
+        <div class="settings-card-head"><div><div class="ctitle">About this installation</div><div class="csub">What runs here, and what it is called</div></div></div>
         <div class="srows">${settingRow(`Site name ${tip("Shown under the Homestead wordmark and at the foot of the page; leave it blank to show nothing.")}`, "",
           `<input type="text" id="set_site_name" maxlength="40" placeholder="e.g. Main site" value="${esc(STATE.data.appSettings?.site_name || "")}" ${can("admin") ? "" : "disabled"}>`)}</div>
         <div class="about-grid">
@@ -466,8 +466,8 @@ async function namespacesPaint() {
       <td class="small">${esc(what(r))}</td>
       <td class="dim xs">${r.created ? esc(new Date(r.created).toLocaleDateString()) : ""}</td>
       <td class="right">${can("admin") ? (r.protected ? `<span class="dim xs" title="${esc(r.protected)}">kept</span>`
-        : `<button class="btn sm danger" ${r.empty ? "" : `disabled title="Move or delete what it holds first"`}
-            onclick="namespaceDelete(${jsq(r.name)})">Delete</button>`) : ""}</td></tr>`).join("")}</tbody></table></div>
+        : actionBar([{ label: "Delete", run: `namespaceDelete(${jsq(r.name)})`, danger: true, disabled: !r.empty,
+            tip: r.empty ? "" : "Move or delete what it holds first" }])) : ""}</td></tr>`).join("")}</tbody></table></div>
     <div class="dim xs" style="margin-top:8px">${inv.system_hidden} platform namespace${inv.system_hidden === 1 ? "" : "s"} hidden.</div>`;
   sortTables(host);
 }

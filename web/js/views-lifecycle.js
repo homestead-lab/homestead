@@ -973,8 +973,9 @@ async function viewImages() {
         <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
             ${missing.map(n => `<span class="tag">${esc(n.replace("harvester-", ""))} ✕</span>`).join("")}</td>
         <td><div class="row" style="gap:5px">${retention}</div></td>
-        <td><div class="row" style="gap:6px">${missing.length ? `<button class="btn sm" onclick="prepull(${jsq(i.name)})">Pre-pull</button>` : '<span class="dim xs">everywhere</span>'}
-          ${!i.protected && !i.system && i.digest ? `<button class="btn sm danger" data-need="admin" onclick="imageCleanupReview(${jsq(i.digest)})">Clean up</button>` : ""}</div></td></tr>`;
+        <td>${missing.length ? "" : '<span class="dim xs">everywhere</span> '}${actionBar([
+          missing.length ? { label: "Pre-pull", run: `prepull(${jsq(i.name)})` } : null,
+          !i.protected && !i.system && i.digest ? { label: "Clean up", run: `imageCleanupReview(${jsq(i.digest)})`, need: "admin", danger: true } : null])}</td></tr>`;
       }).join("") || `<tr><td colspan=5 class="empty">none</td></tr>`}
     </tbody></table></div></div>
     ${vmImagesSection(vm, d.node_names)}`);
@@ -1010,7 +1011,7 @@ function vmImagesSection(vm, nodeNames) {
           <td>${i.nodes.map(n => `<span class="tag ok">${esc(n.replace("harvester-", ""))}</span>`).join("")}
             ${missing.map(n => `<span class="tag">${esc(n.replace("harvester-", ""))} ✕</span>`).join("")}</td>
           <td><div class="row" style="gap:5px">${used}</div></td>
-          <td>${!i.disks.length && !i.deleting ? `<button class="btn sm danger" data-need="admin" onclick="vmImageDelete(${jsq(i.namespace)},${jsq(i.name)})">Delete</button>` : ""}</td></tr>`;
+          <td>${!i.disks.length && !i.deleting ? actionBar([{ label: "Delete", run: `vmImageDelete(${jsq(i.namespace)},${jsq(i.name)})`, need: "admin", danger: true }]) : ""}</td></tr>`;
       }).join("") || `<tr><td colspan=5 class="empty">No VM images: an image is kept here when a VM is made from a download address.</td></tr>`}
     </tbody></table></div></div>`;
 }
@@ -1166,8 +1167,9 @@ async function viewImport() {
         <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "med"}">${esc(j.state)}</span></td>
         <td style="min-width:150px">${importProgressCell(j)}</td>
         <td class="small dim">${esc((j.start || "").replace("T", " ").replace("Z", ""))}</td>
-        <td><div class="row" style="gap:6px;flex-wrap:nowrap"><button class="btn sm" onclick="jobLogs('lab',${jsq(j.name)})">Logs</button>
-          <button class="btn sm ${j.state === "failed" ? "danger" : ""}" data-need="admin" title="${j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone"}" onclick="importRemove(${jsq(j.name)},${jsq(j.state)})">${j.state === "running" ? "Cancel" : "Remove"}</button></div></td></tr>`).join("")}
+        <td>${actionBar([{ label: "Logs", run: `jobLogs('lab',${jsq(j.name)})` },
+          { label: j.state === "running" ? "Cancel" : "Remove", run: `importRemove(${jsq(j.name)},${jsq(j.state)})`, need: "admin", danger: j.state === "failed",
+            tip: j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone" }])}</td></tr>`).join("")}
     </tbody></table></div></div>` : ""}
 
 `);
@@ -1982,7 +1984,7 @@ window.clusterInventory = report => {
   <div class="dim xs" style="margin-bottom:10px">${esc(report.cluster)} runs Homestead
     ${theirs ? `<b class="mono">v${esc(theirs)}</b>` : "an older release that does not say which"};
     this one runs <b class="mono">v${esc(HOMESTEAD_VERSION)}</b>.</div>
-  ${rows.length ? `<div class="tblwrap"><table class="tbl dense"><thead><tr>
+  ${rows.length ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr>
     <th>Workload</th><th>Runs</th><th>Volumes</th><th>State</th><th></th></tr></thead><tbody>
     ${rows.map(w => `<tr>
       <td><b>${esc(w.name)}</b> ${w.kind === "vm" ? '<span class="tag">VM</span>' : ""}
@@ -1994,7 +1996,7 @@ window.clusterInventory = report => {
         : '<span class="dim">none</span>'}</td>
       <td><span class="tag ${w.running ? "ok" : ""}">${w.running ? "running" : "stopped"}</span></td>
       <td>${w.movable
-        ? `<button class="btn sm" data-need="admin" onclick="moveReview(${jsq(report.cluster)},${jsq(w.kind)},${jsq(w.name)})">Move to this cluster</button>`
+        ? actionBar([{ label: "Move to this cluster", run: `moveReview(${jsq(report.cluster)},${jsq(w.kind)},${jsq(w.name)})`, need: "admin" }])
           + ((w.warnings || []).length ? `<div class="dim xs" style="max-width:240px;margin-top:4px">${w.warnings.map(esc).join("; ")}</div>` : "")
         : `<span class="tag bad">cannot move</span><div class="dim xs" style="max-width:240px">${w.blockers.map(esc).join("; ")}</div>`}</td>
     </tr>`).join("")}</tbody></table></div>`
@@ -2010,7 +2012,7 @@ function clusterVolumesHtml(report) {
   if (!volumes.length) return "";
   return `<h3 style="margin:18px 0 8px">Volumes</h3>
   <div class="dim xs" style="margin-bottom:8px">A volume moves on its own when nothing is using it. Moving an app or VM brings its volumes with it.</div>
-  <div class="tblwrap"><table class="tbl dense"><thead><tr>
+  <div class="tblwrap"><table class="tbl stack dense"><thead><tr>
     <th>Volume</th><th>Size</th><th>Used by</th><th></th></tr></thead><tbody>
     ${volumes.map(v => `<tr>
       <td><b class="mono">${esc(v.name)}</b>${v.volume_mode === "Block" ? ' <span class="tag">disk</span>' : ""}
@@ -2018,7 +2020,7 @@ function clusterVolumesHtml(report) {
       <td class="mono small">${v.size_gb} GB</td>
       <td class="small">${v.used_by.length ? v.used_by.map(esc).join(", ") : '<span class="dim">nothing</span>'}</td>
       <td>${v.movable
-        ? `<button class="btn sm" data-need="admin" onclick="moveReview(${jsq(report.cluster)},'volume',${jsq(v.name)})">Move to this cluster</button>`
+        ? actionBar([{ label: "Move to this cluster", run: `moveReview(${jsq(report.cluster)},'volume',${jsq(v.name)})`, need: "admin" }])
           + ((v.warnings || []).length ? `<div class="dim xs" style="max-width:240px;margin-top:4px">${v.warnings.map(esc).join("; ")}</div>` : "")
         : `<span class="tag bad">cannot move</span><div class="dim xs" style="max-width:240px">${v.blockers.map(esc).join("; ")}</div>`}</td>
     </tr>`).join("")}</tbody></table></div>`;
@@ -2107,7 +2109,7 @@ function moveVolumesTable(plan, cluster, kind, name) {
         : `<span class="dim xs">${c.action === "move" ? `${c.size_gb} GB, as it is` : "as it is here"}</span>`}</td></tr>`;
   }).join("");
   return `<div class="f"><label>Volumes ${tip("Move its data backs the volume up there and restores it here. Create blank makes an empty volume, the size you choose - for a cache, say. Skip uses a volume of the same name that is already here. A moved volume needs a Longhorn class; a blank one can use any.")}</label>
-    <div class="tblwrap"><table class="tbl dense"><thead><tr><th>Volume</th><th>Bring</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    <div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Volume</th><th>Bring</th><th>Storage class here</th><th>Size here</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
 window.movePlan = async (cluster, kind, name) => {
