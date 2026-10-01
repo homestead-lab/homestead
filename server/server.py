@@ -5,6 +5,8 @@ Pure Python stdlib: no pip install at runtime, so it starts even with no interne
 """
 import copy, html, json, os, re, secrets, signal, ssl, sys, time, threading, urllib.request, urllib.parse, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import homestead_http as HTTP
+import homestead_route_policy as ROUTE_POLICY
 from contextlib import nullcontext
 from functools import wraps
 
@@ -53,7 +55,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.291")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.292-dev.1")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -193,8 +195,27 @@ def kget(path, timeout=10):
 def ksend(method, path, body=None, ctype="application/json", timeout=15):
     with self_data_activity():
         require_self_data_write()
+        authorize_workload_write(method, path, body)
         return STORAGE_GUARD.send(method, path, body, lambda: _ksend(method, path, body, ctype, timeout), OPS, kget,
                                   own_controller=(SELF.NS, NAMES.BRAND))
+
+
+def authorize_workload_write(method, path, body):
+    if HOSTACCESS.role() in (None, "admin"):
+        return
+    match = re.fullmatch(r"(/(?:api/v1|apis/apps/v1|apis/batch/v1)/namespaces/([^/]+)/(deployments|statefulsets|daemonsets|pods|jobs))(?:/([^/?]+)(?:/[^?]+)?)?", path.split("?", 1)[0])
+    if not match:
+        return
+    base, ns, _, name = match.groups()
+    if name:
+        HOSTACCESS.require_target(kget(base + "/" + name), ns)
+    if isinstance(body, dict) and (body.get("spec", {}).get("template") or method == "POST"):
+        HOSTACCESS.require_target(body, ns)
+
+
+def require_workload_target(ns, name):
+    if HOSTACCESS.role() not in (None, "admin"):
+        HOSTACCESS.require_target(kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"), ns)
 
 
 def _ksend(method, path, body=None, ctype="application/json", timeout=15):
@@ -1332,6 +1353,7 @@ def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
     if n < 0 or n > 100:
         raise ValueError("replicas must be between 0 and 100")
     guard_managed_smb(ns, name)
+    require_workload_target(ns, name)
     guard_self(ns, name, stopping=n == 0, confirmed=confirm_self)
     plan = None
     if n > 0:
@@ -1352,6 +1374,7 @@ def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
 
 def restart_workload(ns, name):
     guard_managed_smb(ns, name)
+    require_workload_target(ns, name)
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
           {"spec": {"template": {"metadata": {"annotations":
            {NAMES.key("restartedAt"): time.strftime("%Y-%m-%dT%H:%M:%SZ")}}}}},
@@ -1369,6 +1392,8 @@ def guard_self(ns, name, stopping=False, confirmed=False, renaming=False, deleti
     """
     if not is_self(ns, name):
         return
+    if HOSTACCESS.role() not in (None, "admin"):
+        raise PermissionError("only an admin can change Homestead itself")
     if deleting:
         raise ValueError("Homestead cannot delete itself from its own page - that removes this page for good. "
                          "Use helm uninstall, or kubectl, if that is what you want")
@@ -2176,7 +2201,7 @@ def build_deployment(cfg):
     if cfg.get("privileged"): c["securityContext"] = {"privileged": True}
     apply_container_settings(c, cfg)
 
-    podspec = {"containers": [c]}
+    podspec = {"containers": [c], "automountServiceAccountToken": False}
     if volumes: podspec["volumes"] = volumes
     if owned:
         # A new volume is root's; the image may run as a user of its own.
@@ -2799,6 +2824,7 @@ def edit_capacity_plan(config):
     """Build the exact edit before seed/PVC/icon or workload writes."""
     ns, name = LC.dns_label(config["ns"], "namespace"), LC.dns_label(config["name"], "workload name")
     current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    HOSTACCESS.require_target(current, ns)
     if config.get("workload_name") and config["workload_name"] != name:
         new_name = LC.dns_label(config["workload_name"], "new workload name")
         if (config["ns"], config["name"], config["workload_name"]) != (ns, name, new_name):
@@ -3163,6 +3189,7 @@ def _unique_volume_name(base, used):
 
 
 def build_sidecar_deployment(cfg, current):
+    HOSTACCESS.require_target(current, cfg.get("namespace") or DEFAULT_NS)
     """Add one container to an existing Deployment pod template.
 
     Kubernetes cannot modify a running Pod. Updating the controller template causes a
@@ -5245,6 +5272,7 @@ import homestead_objectstore as OBJECTS
 import homestead_move as MOVE
 import homestead_fleet as FLEET
 import homestead_host_access as HOSTACCESS
+HOSTACCESS.bind_targets(SYS_NS)
 import homestead_signins as SIGNINS
 import homestead_config_backup as CONFIG
 import homestead_move_source as MOVE_SOURCE
@@ -5287,7 +5315,7 @@ import homestead_disks as DISKS
 import homestead_power as POWER
 import homestead_privileges as PRIV
 NAMES.bind(kget)
-PROBE.bind(kget, ksend, DEFAULT_NS)
+PROBE.bind(kget, ksend, DEFAULT_NS, AUTH.smart_signing_key)
 def allocation_probe_capacity(obj, template):
     listing = kget("/api/v1/pods")
     if not isinstance(listing.get("items"), list) or (listing.get("metadata") or {}).get("continue"):
@@ -5341,7 +5369,7 @@ UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
              channel=lambda: cached("settings", 15, get_app_settings)["updates"]["channel"])
 UPDATES.PART = homestead_part
 UPDATES.VERSION = lambda: HOMESTEAD_VERSION
-SMART.bind(kget, DEFAULT_NS, AUTH.internal_signing_key)
+SMART.bind(kget, DEFAULT_NS, AUTH.smart_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
 RESTRUCTURE.bind(kget, ksend, raw_get)
 AFFINITY.bind(kget)
@@ -5646,6 +5674,7 @@ OPS.RESOLVERS["multus"] = ADDONS.multus_progress
 def delete_workload(ns, name):
     """A workload deleted, with every Service that points at it and its own
     LAN network; the Services removed are returned."""
+    require_workload_target(ns, name)
     guard_self(ns, name, deleting=True)
     guard_managed_smb(ns, name)
     try:
@@ -7172,10 +7201,8 @@ def is_app_identity(path):
     """What a browser reads to install the app: its manifest and icons."""
     return path == "/manifest.webmanifest" or is_icon_png(path)
 
-# Role needed per route. Rules:
-#   * any GET needs at least "viewer"
-#   * any mutation defaults to "operator"
-#   * routes below override that, and everything sensitive is "admin"
+# Policies are explicitly declared in homestead_route_policy.py. These sets
+# document the sensitive routes and the user-owned account routes.
 # Enforced here, server-side. The UI hides what you cannot do as a courtesy,
 # but a viewer who hand-crafts the request still gets a 403.
 ADMIN_ROUTES = {
@@ -7261,50 +7288,10 @@ SELF_ROUTES = {"/api/auth/logout", "/api/auth/password", "/api/auth/signout-ever
 
 
 def needed_role(path, method):
-    if path in SELF_ROUTES:
-        return "viewer"
-    if path == "/api/hardware/features" and method != "GET":
-        return "admin"
-    if path in ("/api/settings", "/api/image-updates/channel") and method != "GET":
-        return "admin"
-    if path == "/api/storage/classes" and method != "GET":
-        return "admin"
-    if path in ("/api/portal", "/api/self/replicas", "/api/self/data/move", "/api/self/data/abandon", "/api/self/data/move/preview", "/api/self/data/prepare", "/api/self/data/prepare/preview", "/api/self/data/prepare/archive", "/api/self/data/prepare/archive/preview", "/api/ipam/unifi", "/api/mqtt", "/api/mqtt/test") and method != "GET":
-        return "admin"
-    # A chart can make anything anywhere in the cluster, and so can raw YAML;
-    # a secret's values are for admins only.
-    if path in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall", "/api/resources/save", "/api/vm/delete",
-                "/api/longhorn/settings", "/api/disks/add", "/api/disks/scheduling", "/api/disks/evict", "/api/disks/remove",
-                # Looking at a disk on its host, and formatting and mounting it there.
-                "/api/disks/inspect", "/api/disks/setup", "/api/disks/os-space", "/api/disks/os-space/use",
-                # Moving a host's network interface into a bridge.
-                "/api/node/bridge/inspect", "/api/node/bridge",
-                # A host's package manager: refreshing its lists, installing updates.
-                "/api/node/os/check", "/api/node/os/upgrade",
-                "/api/host-console",
-                # Every host's OS, one at a time: updates, drains and restarts.
-                "/api/os-updates/settings", "/api/os-updates/start", "/api/os-updates/stop",
-                # A host's devices to VMs: vfio-pci, IOMMU in GRUB, KubeVirt's permitted devices.
-                "/api/passthrough/inspect", "/api/passthrough/iommu", "/api/passthrough/pci", "/api/passthrough/usb",
-                # Homestead's own services onto a VIP, and a VIP moved with everything on it.
-                "/api/self/address/plan", "/api/self/address", "/api/network/vips/change", "/api/welcome/done",
-                "/api/disks/tags", "/api/disks/node-tags", "/api/disks/name",
-                # Replacing a failed disk deletes replicas and takes the disk out.
-                "/api/disks/retire", "/api/disks/retire/plan",
-                "/api/resources/delete", "/api/resources/create", "/api/resources/reveal"):
-        return "admin"
-    # A shell on a node is root on that host.
-    if path in ("/api/node/shell", "/api/node/shell/prepare"):
-        return "admin"
-    if path in ("/api/console", "/api/vm/console"):
-        return "operator"
-    # The setup guide: anyone may skip their own steps or hide it for
-    # themselves; the handler keeps cluster steps for admins.
-    if path in ("/api/setup/skip", "/api/setup/hide", "/api/setup/complete"):
-        return "viewer"
-    if path in ADMIN_ROUTES:
-        return "admin"
-    return "viewer" if method == "GET" else "operator"
+    declared = ROUTE_POLICY.role(path, method)
+    if declared is None:
+        raise PermissionError("this route has no declared authorization policy")
+    return declared
 
 
 def persist_icon_config(cfg):
@@ -7372,8 +7359,12 @@ def fleet_all(what, user, role):
 _key_refusals = {}      # address -> when a refused API key was last written down
 
 
-class H(BaseHTTPRequestHandler):
+class H(HTTP.LimitedHandler):
     protocol_version = "HTTP/1.1"
+    timeout = HTTP.IDLE_SECONDS
+    max_body = MAX_BODY
+
+
 
     def log_message(self, fmt, *a):
         pass
@@ -7381,6 +7372,8 @@ class H(BaseHTTPRequestHandler):
     _extra_headers = None
 
     def _send(self, code, body, ctype="application/json"):
+        if code >= 400:
+            self.close_connection = True
         if isinstance(body, (dict, list)):
             body = json.dumps(body).encode()
         elif isinstance(body, str):
@@ -7388,6 +7381,8 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        if self.close_connection:
+            self.send_header("Connection", "close")
         # A file that says how it may be cached says so alone: two Cache-Control
         # headers are read together, and no-store beside max-age wins.
         if not any(k.lower() == "cache-control" for k, _ in (self._extra_headers or [])):
@@ -7492,7 +7487,16 @@ class H(BaseHTTPRequestHandler):
     def _who(self):
         if FLEET.signed(self.headers):
             return self._fleet_identity()
-        return AUTH.verify_token(self._cookies().get(AUTH.COOKIE))
+        return AUTH.verify_token(self._cookies().get(AUTH.COOKIE), force=self.command in ("POST", "PUT", "PATCH", "DELETE"))
+
+    def _console_authorizer(self, needed):
+        token = self._cookies().get(AUTH.COOKIE)
+        if self._fleet_from:
+            return FLEET.console_authorizer(self._fleet_from)
+        def check():
+            who = AUTH.verify_token(token, force=True)
+            return bool(who and AUTH.allows(who["role"], needed))
+        return check
 
     def _fleet_identity(self):
         """A request relayed by a linked Homestead, checked once: for a person
@@ -7548,6 +7552,9 @@ class H(BaseHTTPRequestHandler):
                 if self.headers.get("X-Homestead-Auth") != "1":
                     self._send(403, {"error": "missing X-Homestead-Auth header"})
                     return True
+                if self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+                    self._send(415, {"error": "application/json required"})
+                    return True
                 if int(self.headers.get("Content-Length") or 0) > 4096:
                     self._send(413, {"error": "that request is larger than Homestead accepts"})
                     return True
@@ -7578,6 +7585,18 @@ class H(BaseHTTPRequestHandler):
                     except Exception:
                         pass
                 self._send(503, {"error": str(error), "data_handoff": True})
+                return True
+        if self.command in ("POST", "PUT", "PATCH", "DELETE") and path in ("/api/auth/login", "/api/auth/setup", "/api/fleet/home"):
+            if self.headers.get("X-Homestead-Auth") != "1":
+                self._send(403, {"error": "missing X-Homestead-Auth header"})
+                return True
+            if path in ("/api/auth/login", "/api/auth/setup") and self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "application/json":
+                self._send(415, {"error": "application/json required"})
+                return True
+            origin = self.headers.get("Origin")
+            host = self.headers.get("Host", "").lower()
+            if origin and urllib.parse.urlparse(origin).netloc.lower() != host:
+                self._send(403, {"error": "request origin rejected"})
                 return True
         if (is_spa_route(path) or is_page_path(path) or is_public_path(path) or is_vendor_path(path) or
                 (path.startswith("/js/") and path.endswith(".js"))):
@@ -7619,7 +7638,7 @@ class H(BaseHTTPRequestHandler):
             self._send(401, {"error": "API keys work only on /api/v1; GET /api/v1/openapi.json lists what they can do"})
             return True
         try:
-            key = API_KEYS.verify(token, self._client_ip())
+            key = API_KEYS.verify(token, self._client_ip(), force=self.command in ("POST", "PUT", "PATCH", "DELETE"))
         except PermissionError as error:
             message = str(error)
             limited = message.startswith("too many")
@@ -7637,8 +7656,11 @@ class H(BaseHTTPRequestHandler):
             self._send(503, {"error": str(error)})
             return True
         self.api_key = {**key, "kind": "key"}
-        self.user, self.role = f"api-key:{key['name']}", None
-        HOSTACCESS.set_role(None)
+        # API control scopes carry operator authority, never an internal/admin
+        # bypass of workload target checks, even when an admin issued the key.
+        self.user = f"api-key:{key['name']}"
+        self.role = "operator" if any(scope.endswith(":control") for scope in key["scopes"]) else "viewer"
+        HOSTACCESS.set_role(self.role)
         return None
 
     def _api_v1(self, method, path, query, body):
@@ -7663,7 +7685,17 @@ class H(BaseHTTPRequestHandler):
         """The request body, read once: a signature covers it before it is parsed."""
         if self._raw is None:
             n = int(self.headers.get("Content-Length") or 0)
-            self._raw = self.rfile.read(n) if 0 < n <= MAX_BODY else b""
+            if n < 0 or n > MAX_BODY or self.headers.get("Transfer-Encoding"):
+                self.close_connection = True
+                raise ValueError("invalid request size or framing")
+            if n:
+                with HTTP.deadline(self.connection, HTTP.BODY_SECONDS):
+                    self._raw = self.rfile.read(n)
+                if len(self._raw) != n:
+                    self.close_connection = True
+                    raise ValueError("incomplete request body")
+            else:
+                self._raw = b""
         return self._raw
 
     def _signin(self, event, user, ok=True, detail=""):
@@ -7959,7 +7991,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/helm":
                 return self._send(200, cached("helm", 10, HELM.releases))
             if p == "/api/helm/release":
-                return self._send(200, HELM.release((q.get("ns") or [""])[0], (q.get("name") or [""])[0]))
+                return self._send(200, HELM.release((q.get("ns") or [""])[0], (q.get("name") or [""])[0], include_sensitive=self.role == "admin"))
             if p == "/api/helm/search":
                 return self._send(200, HELM.search((q.get("q") or [""])[0]))
             if p == "/api/helm/chart":
@@ -8124,7 +8156,7 @@ class H(BaseHTTPRequestHandler):
             if p == "/api/vms":
                 return self._send(200, cached("vms", 5, VMS.list_vms))
             if p == "/api/vm":
-                return self._send(200, VMS.detail((q.get("ns") or [""])[0], (q.get("name") or [""])[0]))
+                return self._send(200, VMS.detail((q.get("ns") or [""])[0], (q.get("name") or [""])[0], include_sensitive=self.role == "admin"))
             if p == "/api/vm/isos":
                 return self._send(200, ISOS.library())
             if p == "/api/vm/isos/browse":
@@ -8302,6 +8334,10 @@ class H(BaseHTTPRequestHandler):
             if int(self.headers.get("Content-Length") or 0) > MAX_BODY:
                 return self._send(413, {"error": "that request is larger than Homestead accepts"})
             b = self._body()
+            if not isinstance(b, dict):
+                return self._send(400, {"error": "a JSON object is required"})
+            if p in ("/api/move", "/api/move/preview", "/api/image-updates/apply", "/api/image-updates/rollback", "/api/image-updates/preview"):
+                require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "")
             addr = self._client_ip()
             if p.startswith("/api/v1/"):
                 return self._api_v1("POST", p, urllib.parse.parse_qs(u.query), b)
@@ -8638,7 +8674,7 @@ class H(BaseHTTPRequestHandler):
                 if warning and not b.get("ignore_syntax"):
                     return self._send(400, {"error": warning, "syntax": True})
                 return self._send(200, FILES.write_file(
-                    b.get("namespace") or DEFAULT_NS, b.get("pvc"), b.get("path"), b.get("content")))
+                    b.get("namespace") or DEFAULT_NS, b.get("pvc"), b.get("path"), b.get("content"), b.get("revision")))
             if p == "/api/files/close":
                 return self._send(200, FILES.close_session(
                     b.get("namespace") or DEFAULT_NS, b.get("pvc")))
@@ -9625,7 +9661,7 @@ def finish_self_data_boot():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
-    http_server = ThreadingHTTPServer(("0.0.0.0", port), H)
+    http_server = HTTP.BoundedHTTPServer(("0.0.0.0", port), H)
     if _self_data_boot_pending:
         threading.Thread(target=finish_self_data_boot, name="data-move-startup", daemon=True).start()
     else:

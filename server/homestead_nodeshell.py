@@ -1,7 +1,7 @@
 """A shell on a node itself, from the browser.
 
 Kubernetes reaches a node only through a pod on it. So a shell is a small
-privileged helper pod pinned to the node - busybox, which carries nsenter -
+privileged helper pod pinned to the node - Alpine, which carries nsenter -
 sharing the host's process, network and IPC namespaces; the console then
 runs nsenter into PID 1's namespaces, which is the host as SSH would give
 it: its own files, its tools, its login shell.
@@ -19,7 +19,7 @@ import homestead_names as NAMES
 
 kget = ksend = None
 NS = "lab"
-IMAGE = "busybox"
+IMAGE = "alpine:3.24"
 LIFETIME = 8 * 3600
 TASK = "node-shell"
 _sessions, _lock = {}, threading.Lock()

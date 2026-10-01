@@ -31,7 +31,7 @@ IMP = kget = ksend = OPS = None
 platform = lambda: {}
 KIND = "unraid-vm-import"
 TASK = "vm-import"
-IMAGE = "alpine:3.20"
+IMAGE = "alpine:3.24"
 UPLOAD_API = "/apis/upload.cdi.kubevirt.io/v1beta1"
 CDI_API = "/apis/cdi.kubevirt.io/v1beta1"
 # What Unraid's templates name a card, and what KubeVirt calls it.

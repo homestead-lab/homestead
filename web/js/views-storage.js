@@ -927,6 +927,7 @@ window.fileOpen = async (path) => {
   try {
     const file = await api(`/api/files/read?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path)}`);
     FILEVIEW.file = file.path;
+    FILEVIEW.revision = file.revision;
     FILEVIEW.dirty = false;
     $("#mbody").innerHTML = `<div class="filecrumbs">${fileCrumbs(FILEVIEW.path)}<span class="dim">/</span><b>${esc(file.path.split("/").pop())}</b></div>
       <div class="between fileeditbar"><span class="dim xs">${fileSize(file.size)} · saving keeps the previous contents as <span class="mono">${esc(file.path.split("/").pop())}.homestead-bak</span></span>
@@ -978,7 +979,8 @@ window.fileSave = async (ignoreSyntax = false) => {
   if (button) { button.disabled = true; button.textContent = "Saving…"; }
   try {
     const result = await api("/api/files/write", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ namespace, pvc, path: file, content, ignore_syntax: ignoreSyntax }) });
+      body: JSON.stringify({ namespace, pvc, path: file, content, revision: FILEVIEW.revision, ignore_syntax: ignoreSyntax }) });
+    FILEVIEW.revision = result.revision;
     FILEVIEW.dirty = false;
     const state = $("#file_state");
     if (state) state.textContent = `saved ${new Date().toLocaleTimeString()}`;

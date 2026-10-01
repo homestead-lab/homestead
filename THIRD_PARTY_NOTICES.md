@@ -39,9 +39,8 @@ bundled or modified.
 
 | Image | Used for | Licence |
 |---|---|---|
-| `alpine:3.20` | file browsing, import copies, ownership changes | MIT (Alpine base) and package licences |
+| `alpine:3.24` | file browsing, import copies, ownership changes, node power and terminal helpers | MIT (Alpine base) and package licences |
 | `python:3.12-alpine` | the node probe, image cache cleanup | PSF License and package licences |
-| `busybox` | the node power helper, and a node's terminal | GPL-2.0 |
 | `registry.k8s.io/pause:3.9` | image pre-pulls | Apache-2.0 |
 | `quay.io/minio/minio` | optional backup storage | AGPL-3.0 - run unmodified as a separate service |
 

@@ -121,6 +121,5 @@ spec:
             type: Directory
         - name: auth
           secret:
-            secretName: homestead-auth
-            optional: true
+            secretName: homestead-smart-key
 {{- end }}

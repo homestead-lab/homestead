@@ -116,8 +116,9 @@ class AccessTokenTests(unittest.TestCase):
 def handler(path="/", method="GET", headers=None, body=b""):
     h = object.__new__(server.H)
     h.path, h.command = path, method
-    h.headers = {"Content-Length": str(len(body)), **(headers or {})}
+    h.headers = {"Content-Length": str(len(body)), "Content-Type": "application/json", "X-Homestead-Auth": "1", **(headers or {})}
     h.client_address = ("192.0.2.50", 40000)
+    h.connection = None
     h.rfile = io.BytesIO(body)
     sent = []
     h._send = lambda code, payload, ctype="application/json": sent.append((code, payload))
@@ -196,10 +197,11 @@ class ThrottleTests(unittest.TestCase):
         self.assertTrue(auth._rate_ok("ip:10.0.0.250"), "a fresh address alone would have passed")
 
     def test_the_record_of_attempts_cannot_grow_without_bound(self):
-        for n in range(auth.MAX_TRACKED + 50):
+        for n in range(auth.MAX_TRACKED):
             auth._rate_hit(f"ip:{n}")
-
-        self.assertLessEqual(len(auth._attempts), auth.MAX_TRACKED + 1)
+        with self.assertRaises(PermissionError):
+            auth._rate_hit("ip:overflow")
+        self.assertEqual(len(auth._attempts), auth.MAX_TRACKED)
 
 
 class HeaderTests(unittest.TestCase):

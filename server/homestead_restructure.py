@@ -23,7 +23,7 @@ import homestead_names as NAMES
 import homestead_copy_checks as COPY_CHECKS
 
 kget = ksend = ktext = None
-IMAGE = "alpine:3.20"
+IMAGE = "alpine:3.24"
 HELD = NAMES.key("restructure-replicas")
 CLAIM = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$")
 FOLDER = re.compile(r"^[A-Za-z0-9._ -]+(/[A-Za-z0-9._ -]+)*$")

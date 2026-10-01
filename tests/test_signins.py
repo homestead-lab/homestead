@@ -64,7 +64,7 @@ class LoginRouteTests(unittest.TestCase):
         h = object.__new__(self.server.H)
         raw = json.dumps(body).encode()
         h.path, h.command = "/api/auth/login", "POST"
-        h.headers = {"Content-Length": str(len(raw)), "User-Agent": "curl/8.4.0"}
+        h.headers = {"Content-Length": str(len(raw)), "User-Agent": "curl/8.4.0", "Content-Type": "application/json", "X-Homestead-Auth": "1"}
         h.rfile, h.wfile = io.BytesIO(raw), io.BytesIO()
         h.client_address, h.connection = ("192.0.2.50", 1), None
         h._send = mock.Mock()

@@ -140,7 +140,7 @@ def _objects(manifest):
     return out
 
 
-def release(namespace, name):
+def release(namespace, name, include_sensitive=True):
     secrets = kget(f"/api/v1/namespaces/{urllib.parse.quote(namespace)}/secrets?labelSelector="
                    f"{urllib.parse.quote(f'owner=helm,name={name}')}").get("items", [])
     if not secrets:
@@ -150,7 +150,7 @@ def release(namespace, name):
     charts = _chart_index(helmcharts())
     row = _row(latest, {}, charts)
     helmchart = charts.get((namespace, name))
-    return {**row, "notes": (latest.get("info") or {}).get("notes", "")[:20000],
+    result = {**row, "notes": (latest.get("info") or {}).get("notes", "")[:20000],
             "values": _yaml_dump(latest.get("config") or {}),
             "chart_values_keys": sorted((latest.get("chart") or {}).get("values", {}) or {})[:60],
             "history": [{"revision": int(r.get("version") or 0), "status": (r.get("info") or {}).get("status", ""),
@@ -163,6 +163,15 @@ def release(namespace, name):
                         "chart": (helmchart.get("spec") or {}).get("chart", ""),
                         "version": (helmchart.get("spec") or {}).get("version", ""),
                         "values": (helmchart.get("spec") or {}).get("valuesContent", "")} if helmchart else None)}
+    if not include_sensitive:
+        for key in ("notes", "values", "chart_values_keys"):
+            result.pop(key, None)
+        for item in result["history"]:
+            item.pop("description", None)
+        if result["source"]:
+            result["source"].pop("values", None)
+        result["sensitive_hidden"] = True
+    return result
 
 
 def _yaml_dump(value, indent=0):
