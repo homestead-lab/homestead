@@ -35,6 +35,8 @@ const PAGES = [
   // The setup guide is a page now (it was the Welcome dialog).
   ["setup", "setup"],
   ["setup-phone", "setup", "setupOpen('phone')"],
+  ["setup-appearance", "setup", "setupOpen('appearance')"],
+  ["setup-disks", "setup", "setupOpen('disks')"],
   ["app-store", "store"],
   ["helm", "helm"],
   ["shares", "shares"],

@@ -2734,9 +2734,12 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 .settings-nav button.setup-step.on{color:var(--tx);font-weight:650}
 .setup-mark{width:16px;height:16px;flex:0 0 16px;border-radius:50%;border:1.5px solid var(--line2,rgba(255,255,255,.18));display:grid;place-items:center;font-size:10px;font-weight:700;line-height:1}
 .setup-mark.done{background:var(--ok);border-color:var(--ok);color:#06140c}
+.setup-mark.done.confirmed{background:var(--surf3);border-color:var(--mut);color:var(--tx)}
 .setup-mark.attention{border-color:var(--med);color:var(--med)}
 .setup-mark.skipped{border-style:dashed;opacity:.6}
 .setup-card .ui-lead{max-width:72ch}
+.setup-picker{display:none}
+#setupStep{scroll-margin-top:calc(var(--hdr) + 12px)}
 .setup-body{margin:12px 0 4px;overflow-x:auto}
 .setup-body .diagram{margin:0}
 .setup-meter{display:inline-block;width:120px;height:6px;border-radius:3px;background:rgba(255,255,255,.08);overflow:hidden;vertical-align:middle}
@@ -2744,10 +2747,19 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 html[data-theme="light"] .setup-meter{background:rgba(0,0,0,.08)}
 @media(max-width:900px){
   .setup-nav{max-height:none}
+  .setup-layout .setup-nav{display:none}
+  .setup-picker{display:flex;flex-direction:column;gap:6px;font-size:12px;color:var(--mut)}
+  .setup-picker select{width:100%;min-height:44px}
   .settings-nav button.setup-step{padding:11px 14px}
 }
-/* The live demo's offer of the guide: a ring that breathes until opened. */
-.iconbtn.setupbtn{position:relative;color:var(--ok)}
-.iconbtn.setupbtn.pulse::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:2px solid var(--ok);animation:setuppulse 1.8s ease-out infinite}
-@keyframes setuppulse{0%{transform:scale(.9);opacity:.9}100%{transform:scale(1.45);opacity:0}}
-@media(prefers-reduced-motion:reduce){.iconbtn.setupbtn.pulse::after{animation:none;opacity:.8}}
+/* The demo's offer pulses within the book icon, clear of notification badges. */
+.iconbtn.setupbtn{color:var(--mut);font:inherit}
+.iconbtn.setupbtn.pulse svg{animation:setuppulse 1.8s ease-in-out infinite}
+@keyframes setuppulse{0%,100%{opacity:1;color:var(--tx)}50%{opacity:.4;color:var(--mut)}}
+@media(prefers-reduced-motion:reduce){.iconbtn.setupbtn.pulse svg{animation:none}}
+html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
+.setup-return{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 26px;border-bottom:1px solid var(--line);background:var(--surf);position:sticky;top:var(--hdr);z-index:20}
+.setup-return-copy{min-width:0;font-size:13px}
+.setup-return .row{flex-shrink:0;gap:8px}
+.setup-return .iconbtn{width:32px;height:32px}
+@media(max-width:900px){.setup-return{padding:10px 12px;gap:8px}.setup-return-copy{font-size:12px}.setup-return .btn{padding:8px 10px}}
