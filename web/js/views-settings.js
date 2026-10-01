@@ -94,7 +94,7 @@ async function viewSettings() {
     <nav class="settings-nav" role="tablist" aria-label="Settings sections">${SETTINGS_SECTIONS.map(([id, label, sub, , group], i) =>
       `${i === 0 || SETTINGS_SECTIONS[i - 1][4] !== group ? `<div class="settings-nav-group">${esc(group)}</div>` : ""}<button type="button" role="tab" data-tab="${id}" class="${id === tab ? "on" : ""}" aria-selected="${id === tab}" onclick="settingsGo(${jsq(id)})"><span><b>${esc(label)}</b><small>${esc(sub)}</small></span><i aria-hidden="true">›</i></button>`).join("")}</nav>
     <div class="settings-main">
-    <button type="button" class="settings-back" onclick="settingsGo('')">‹ All settings</button>
+    <button type="button" class="settings-back" onclick="settingsGo('')">‹ Back to Settings</button>
     <div class="settings-grid" data-tab="${tab}">
       <section class="card flat settings-wide" data-tab="you"><div class="settings-card-head"><div><div class="ctitle">Appearance</div>
         <div class="csub">This browser only; it changes as you choose</div></div></div>
