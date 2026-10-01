@@ -72,6 +72,15 @@ class SelfAddressTests(unittest.TestCase):
         self.assertFalse(report["on_vip"])
         self.assertFalse(next(c for c in report["components"] if c["id"] == "smb")["present"], "no shares, nothing to move")
 
+    def test_tunnel_origin_uses_service_dns_and_service_port_without_a_vip(self):
+        network = Network()
+        network.state["services"][0].update(type="ClusterIP", external_ips=[])
+        network.state["services"][0]["ports"][0].update(port=9088, target_port=8080)
+        self.bind(network)
+        self.assertEqual("http://homestead.lab.svc:9088", SELF_ADDRESS.report()["service_url"])
+        network.state["services"] = []
+        self.assertEqual("", SELF_ADDRESS.report()["service_url"], "do not invent an origin when no Service exists")
+
     def test_each_service_gets_a_second_connection_on_the_vip_with_its_ports(self):
         network = Network()
         self.bind(network)
