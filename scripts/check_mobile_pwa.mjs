@@ -10,6 +10,7 @@ try {
   for(const installed of [true,false]) {
     const context=await browser.newContext({...devices["Pixel 7"],viewport:{width:412,height:839}});
     await context.addInitScript(installed=>{
+      window.HOMESTEAD_DEMO=true;
       const original=window.matchMedia.bind(window);
       window.matchMedia=query=>{
         const result=original(query);
@@ -52,7 +53,7 @@ try {
         assert.equal(metrics.paneHeight,metrics.height);
         assert.equal(metrics.scrollWidth,metrics.paneWidth);assert.equal(metrics.left,0);
         assert.equal(metrics.overscroll,"none");
-        assert.ok(Math.abs(metrics.headerTop)<1,"header stays visible when content scrolls");
+        assert.ok(Math.abs(metrics.headerTop)<1,`header stays visible when content scrolls: ${view} ${JSON.stringify(metrics)}`);
         assert.ok(Math.abs(metrics.navBottom-metrics.height)<1,"bottom navigation stays in the viewport");
         if(view==="dash") assert.ok(metrics.top>0,"long content remains scrollable");
         await page.evaluate(()=>scrollPageTop());
