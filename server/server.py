@@ -3741,12 +3741,19 @@ def vm_networks():
     return ["pod"] + sorted(f"{i['metadata']['namespace']}/{i['metadata']['name']}" for i in items)
 
 
-def vm_network_details():
+def vm_network_details(strict=False):
     """Each VM network, and whether it puts a VM on the LAN with an address
-    of its own - a bridge, as Harvester's VM networks are."""
+    of its own - a bridge, as Harvester's VM networks are. Strict reads let
+    setup distinguish unavailable inventory from no configured networks."""
     try:
         items = kget("/apis/k8s.cni.cncf.io/v1/network-attachment-definitions").get("items", [])
+    except urllib.error.HTTPError as error:
+        if strict and error.code != 404:
+            raise
+        items = []
     except Exception:
+        if strict:
+            raise
         items = []
     out = []
     for item in items:
@@ -3973,6 +3980,12 @@ def setup_state(user, role):
                     "load_balancer": p.get("load_balancer", ""), "harvester": bool(p.get("harvester"))}
         step("address", address)
 
+        def lan():
+            networks = [row for row in vm_network_details(strict=True) if row["lan"]]
+            return {"done": bool(networks), "applies": True,
+                    "networks": [{key: row[key] for key in ("name", "type", "vms", "containers")} for row in networks]}
+        step("lan", lan)
+
         def https():
             tunnels = sorted({w["name"] for w in cached("wl", 5, get_workloads)
                               if any(t in image for image in w.get("images") or [] for t in TUNNEL_IMAGES)})
@@ -3999,6 +4012,14 @@ def setup_state(user, role):
                     "candidates": [c["name"] for c in classes if c.get("provisioner") == "driver.longhorn.io"
                                    and str(c.get("replicas")) == str(target) and not c.get("made_for") and not c.get("internal")]}
         step("storage", storage)
+
+        def smb():
+            report = samba_state()
+            return {"done": bool(report.get("installed") and report.get("enabled") and not report.get("error")),
+                    "applies": True, "installed": bool(report.get("installed")), "enabled": bool(report.get("enabled")),
+                    "address": report.get("address", ""), "shares": report.get("shares", 0),
+                    **({"error": report["error"]} if report.get("error") else {})}
+        step("smb", smb)
         step("backups", lambda: {"done": bool(LH.backup_target().get("configured")), "applies": True})
         step("config", lambda: {"done": bool(store.get("config_backup_at")), "applies": True, "at": store.get("config_backup_at")})
         step("osupdates", lambda: {"done": bool((OS_ROLLOUT.settings().get("schedule") or {}).get("enabled")), "applies": kube})

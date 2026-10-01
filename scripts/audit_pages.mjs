@@ -40,6 +40,8 @@ const PAGES = [
   ["setup-phone", "setup", "setupOpen('phone')"],
   ["setup-appearance", "setup", "setupOpen('appearance')"],
   ["setup-disks", "setup", "setupOpen('disks')"],
+  ["setup-lan", "setup", "setupOpen('lan')"],
+  ["setup-smb", "setup", "setupOpen('smb')"],
   ["app-store", "store"],
   ["helm", "helm"],
   ["shares", "shares"],
