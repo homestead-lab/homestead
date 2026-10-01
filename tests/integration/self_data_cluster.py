@@ -122,8 +122,15 @@ def main():
                          "--entrypoint", "python3", IMAGE, "-u", "/repo/tests/integration/self-data-http.py"], timeout=660, check=True)
             pvcs = json.loads(kube("-n", "lab", "get", "pvc", "-o", "json"))["items"]
             assert len(pvcs) == 3 and all(p["status"]["phase"] == "Bound" for p in pvcs), "Both old data volumes must be retained"
-            helpers = json.loads(kube("-n", "lab", "get", "pods", "-l", "homestead.io/self-data-handoff", "-o", "json"))
-            assert not helpers["items"], "Temporary move helpers must be retired"
+            # Helpers are retired in the background once a move is done: they
+            # must be gone within a minute, not at the instant the move ends.
+            deadline = time.monotonic() + 60
+            while True:
+                helpers = json.loads(kube("-n", "lab", "get", "pods", "-l", "homestead.io/self-data-handoff", "-o", "json"))["items"]
+                if not helpers or time.monotonic() >= deadline:
+                    break
+                time.sleep(2)
+            assert not helpers, "Temporary move helpers must be retired: " + ", ".join(p["metadata"]["name"] for p in helpers)
             log("PASS: three retained PVCs; no move helper pods remain")
         except BaseException:
             log("FAILED: what the cluster looked like")
