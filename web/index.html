@@ -150,6 +150,7 @@
       <a href="/settings" data-view="settings"><svg><use href="#i-gear"/></svg>Settings</a>
     </nav>
     <div class="sidefoot">
+      <button class="btn sm" id="reloadApp" type="button" title="Reload the whole app">Reload app</button>
       <div id="healthPill" class="pill neutral" style="justify-content:center">···</div>
       <div class="dim xs" id="lbinfo"></div>
     </div>
@@ -165,6 +166,7 @@
         <h1 id="title">Dashboard</h1>
       </div></div>
       <div class="topright">
+        <button class="iconbtn only-sm" id="refresh" type="button" title="Refresh this page" aria-label="Refresh this page"><svg aria-hidden="true"><use href="#i-refresh"/></svg></button>
         <div class="iconbtn only-sm" id="searchbtn" title="Search"><svg><use href="#i-search"/></svg></div>
         <div class="searchwrap" id="searchwrap">
           <span class="sicon"><svg width="14" height="14"><use href="#i-search"/></svg></span>
@@ -182,6 +184,7 @@
           <span class="nm" id="whonm">—</span><span class="pill neutral rolechip" id="whorole">—</span></div>
       </div>
     </header>
+    <div class="pull-refresh" id="pullRefresh" role="status" aria-live="polite" aria-atomic="true" hidden><svg aria-hidden="true"><use href="#i-refresh"/></svg><span></span></div>
     <aside id="setupReturn" class="setup-return hidden" aria-label="Setup in progress"></aside>
     <div class="page" id="views"></div>
     <!-- On a phone, the pages used most, and More for the rest. -->
@@ -249,6 +252,7 @@
 <script src="/js/onboard.js?v=2.8.290"></script>
 <script src="/js/pwa.js?v=2.8.290"></script>
 <script src="/js/app.js?v=2.8.290"></script>
+<script src="/js/mobile-refresh.js?v=2.8.290"></script>
 <script src="/js/auth.js?v=2.8.290"></script>
 </body>
 </html>
