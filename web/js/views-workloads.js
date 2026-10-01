@@ -130,7 +130,8 @@ async function loadImageUpdates(force = false, quiet = false, only = "") {
 window.loadImageUpdates = loadImageUpdates;
 window.startUpdateChecks = () => {
   clearInterval(window.__imageUpdateLoop);
-  setTimeout(() => loadImageUpdates(false, false), 3500);
+  clearTimeout(window.__imageUpdateStart);
+  window.__imageUpdateStart = setTimeout(() => loadImageUpdates(false, false), 3500);
   window.__imageUpdateLoop = setInterval(() => {
     if (!document.hidden) loadImageUpdates(false, false);
   }, 15 * 60 * 1000);
