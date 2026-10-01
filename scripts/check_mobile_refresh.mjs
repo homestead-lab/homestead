@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 // Exercise both trusted Android touch events and the cancellation cases.
 export async function checkMobileRefresh(page, context, installed) {
+  const chromium = context.browser().browserType().name() === "chromium";
   await page.evaluate(() => {
     window.__refreshCalls = 0;
     window.__originalRefreshView = VIEWS.dash[2];
@@ -13,9 +14,14 @@ export async function checkMobileRefresh(page, context, installed) {
   const pull = async (distance = 110, options = {}) => {
     await page.evaluate(({ distance, options }) => {
       const target = options.selector ? document.querySelector(options.selector) : document.querySelector("#views .phead");
-      const touch = (y, x = 80, id = 1) => new Touch({ identifier: id, target, clientX: x, clientY: y });
-      const dispatch = (type, touches, changedTouches = touches) => target.dispatchEvent(new TouchEvent(type,
-        { bubbles: true, cancelable: true, touches, targetTouches: touches, changedTouches }));
+      const touch = (y, x = 80, id = 1) => ({ identifier: id, target, clientX: x, clientY: y });
+      // Safari supplies Touch objects for real input but does not expose the
+      // Touch constructor. A fixture uses the same fields in either engine.
+      const dispatch = (type, touches, changedTouches = touches) => {
+        const event = new Event(type, { bubbles: true, cancelable: true });
+        Object.defineProperties(event, { touches: { value: touches }, targetTouches: { value: touches }, changedTouches: { value: changedTouches } });
+        return target.dispatchEvent(event);
+      };
       dispatch("touchstart", [touch(180)]);
       dispatch("touchmove", options.multi ? [touch(180 + distance), touch(180 + distance, 100, 2)]
         : [touch(180 + distance, 80 + (options.dx || 0))]);
@@ -80,24 +86,26 @@ export async function checkMobileRefresh(page, context, installed) {
   assert.equal(await calls(), count, "controls keep their gestures");
 
   // These are actual Chromium input events, including its scroll negotiation.
-  const client = await context.newCDPSession(page);
+  const client = chromium ? await context.newCDPSession(page) : null;
   await page.evaluate(() => { document.activeElement.blur(); scrollPageTop(); document.querySelector("#toast").replaceChildren(); });
   const top = await page.locator("#views").boundingBox();
   const point = { x: top.x + 6, y: top.y + 6 };
   for (const theme of ["dark", "light"]) {
     await page.evaluate(theme => document.documentElement.dataset.theme = theme, theme);
-    await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
-    for (const distance of [15, 45, 90, 110]) {
-      await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: point.x, y: point.y + distance }] });
-    }
-    await page.locator("#pullRefresh").filter({ hasText: "Release to refresh" }).waitFor();
-    await page.screenshot({ path: `release-assets/pages/mobile-pwa/pull-refresh-${theme}.png` });
-    await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    if (client) {
+      await client.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [point] });
+      for (const distance of [15, 45, 90, 110]) {
+        await client.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ x: point.x, y: point.y + distance }] });
+      }
+      await page.locator("#pullRefresh").filter({ hasText: "Release to refresh" }).waitFor();
+      await page.screenshot({ path: `release-assets/pages/mobile-pwa/pull-refresh-${theme}.png` });
+      await client.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+    } else await pull();
     await idle();
-    assert.equal(await calls(), ++count, "trusted Android touch input refreshes once on release");
+    assert.equal(await calls(), ++count, `${client ? "trusted Android input" : "WebKit gesture fixture"} refreshes once on release`);
     assert.equal(await page.evaluate(() => scrollY), 0, "the surrounding page remains locked");
   }
-  await client.detach();
+  await client?.detach();
   await page.evaluate(() => {
     window.__pendingCalls = 0;
     VIEWS.dash[2] = () => { window.__pendingCalls++; return new Promise(resolve => window.__finishRefresh = resolve); };
@@ -139,5 +147,5 @@ export async function checkMobileRefresh(page, context, installed) {
   await Promise.all([page.waitForEvent("load"), page.locator("#reloadApp").click()]);
   await page.locator("#views .phead").waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.dataset.display), "standalone", "Reload app loads the installed shell again");
-  console.log("Mobile refresh button, Android gesture, guards, failure and reload checks passed");
+  console.log(`${chromium ? "Chromium/Android" : "WebKit/iOS"} refresh button, gesture, guards, failure and reload checks passed`);
 }

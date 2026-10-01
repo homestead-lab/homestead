@@ -1,24 +1,26 @@
 // Headless browsers cannot open an OS-installed app window. Simulate its
 // display-mode signal, then exercise the actual viewport CSS and navigation.
-import {chromium, devices} from "playwright";
+import {chromium, webkit, devices} from "playwright";
 import assert from "node:assert/strict";
 import {mkdir} from "node:fs/promises";
 import {checkMobileRefresh} from "./check_mobile_refresh.mjs";
 const base=process.env.HOMESTEAD_URL || "http://127.0.0.1:4173";
 await mkdir("release-assets/pages/mobile-pwa",{recursive:true});
-const browser=await chromium.launch({headless:true});
+const safari=process.env.HOMESTEAD_TEST_BROWSER === "webkit";
+const browser=await (safari?webkit:chromium).launch({headless:true});
 try {
   for(const installed of [true,false]) {
-    const context=await browser.newContext({...devices["Pixel 7"],viewport:{width:412,height:839}});
-    await context.addInitScript(installed=>{
+    const context=await browser.newContext({...devices[safari?"iPhone 13":"Pixel 7"],viewport:{width:412,height:839}});
+    await context.addInitScript(({installed,safari})=>{
       window.HOMESTEAD_DEMO=true;
+      if(safari) Object.defineProperty(navigator,"standalone",{value:installed});
       const original=window.matchMedia.bind(window);
       window.matchMedia=query=>{
         const result=original(query);
-        if(query==="(display-mode: standalone)") Object.defineProperty(result,"matches",{value:installed});
+        if(query==="(display-mode: standalone)") Object.defineProperty(result,"matches",{value:installed&&!safari});
         return result;
       };
-    },installed);
+    },{installed,safari});
     const page=await context.newPage(), errors=[];
     page.on("pageerror",error=>errors.push(error.message));
     await page.goto(`${base}/?demo=1`,{waitUntil:"networkidle"});
@@ -49,6 +51,7 @@ try {
             paneHeight:main.clientHeight,paneWidth:main.clientWidth,scrollWidth:main.scrollWidth,
             left:main.scrollLeft,top:main.scrollTop,paneScrollHeight:main.scrollHeight,
             overscroll:getComputedStyle(main).overscrollBehavior,
+            overscrollSupported:CSS.supports("overscroll-behavior","none"),
             bannerHeight:document.querySelector("#demoBanner").getBoundingClientRect().height,
             headerTop:document.querySelector(".top").getBoundingClientRect().top,
             navBottom:document.querySelector("#bottombar").getBoundingClientRect().bottom};
@@ -57,7 +60,11 @@ try {
         assert.equal(metrics.rootWidth,metrics.width);assert.equal(metrics.rootHeight,metrics.height);
         assert.ok(Math.abs(metrics.paneHeight+metrics.bannerHeight-metrics.height)<1,"app fills the space below the demo banner");
         assert.equal(metrics.scrollWidth,metrics.paneWidth);assert.equal(metrics.left,0);
-        assert.equal(metrics.overscroll,"none");
+        // Windows WebKit omits native overscroll behavior. Safari has
+        // supported it since iOS 16; the viewport bounds are checked here
+        // on every engine, and Chromium still checks the CSS value too.
+        if(metrics.overscrollSupported) assert.equal(metrics.overscroll,"none");
+        else assert.ok(safari && process.platform==="win32","overscroll CSS is required outside Windows WebKit");
         assert.ok(Math.abs(metrics.headerTop-metrics.bannerHeight)<1,`header stays below the site banner when content scrolls: ${view} ${JSON.stringify(metrics)}`);
         assert.ok(Math.abs(metrics.navBottom-metrics.height)<1,"bottom navigation stays in the viewport");
         if(view==="dash") assert.ok(metrics.top>0,"long content remains scrollable");
