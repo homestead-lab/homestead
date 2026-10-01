@@ -125,6 +125,54 @@ try {
     await page.locator('.collection-disclosure[aria-expanded=true]').click();
     assert.equal(await page.locator('.wl-detail-row').first().isVisible(),false);
 
+    if(width<=560) {
+      const header=page.locator('.wl-mobile-head'), toolbar=header.locator('.wl-mobile-toolbar');
+      assert.equal(await page.locator('.containers-page .pagetabs>a:visible').count(),4);
+      assert.equal(await page.locator('.containers-page>.phead>.row').isVisible(),false);
+      assert.equal(await page.locator('.containers-page>.sortbar').count(),0,'sorting lives inside Options');
+      const bounds=await toolbar.locator(':scope>*').evaluateAll(items=>items.map(e=>e.getBoundingClientRect()));
+      assert.ok(bounds.every(b=>Math.abs(b.y-bounds[0].y)<2),'group, Options and Deploy share one row');
+      const picker=header.getByRole('combobox',{name:'Container group'});
+      const home=await picker.locator('option').filter({hasText:'Home'}).getAttribute('value');
+      const all=await picker.locator('option').filter({hasText:'All groups'}).getAttribute('value');
+      await picker.selectOption(home);
+      assert.equal(await page.locator('.wl-row').count(),2,'group picker filters the existing list');
+      await header.getByLabel('List options',{exact:true}).click();
+      const menu=page.locator('.actionmenu-portal .list-options-pop');
+      await menu.waitFor();
+      const menuBox=await menu.boundingBox();
+      assert.ok(menuBox.x>=0&&menuBox.x+menuBox.width<=width,'Options fits the phone');
+      await menu.locator('[data-sort-for="containers"]').selectOption('3');
+      assert.deepEqual(await page.evaluate(()=>sortState('containers')),{col:3,dir:-1});
+      await menu.locator('[data-sort-flip]').click();
+      assert.deepEqual(await page.evaluate(()=>sortState('containers')),{col:3,dir:1});
+      await menu.getByLabel('Show platform containers').check();
+      assert.equal(await page.evaluate(()=>platformShown()),true);
+      await page.evaluate(()=>renderWorkloads());
+      assert.equal(await page.locator('.actionmenu-portal .list-options-pop').count(),1,'refresh keeps one open menu');
+      assert.ok(await menu.getByLabel('Show platform containers').isChecked());
+      await menu.getByLabel('Show platform containers').uncheck();
+      await menu.locator('[data-sort-for="containers"]').selectOption('');
+      await page.waitForFunction(()=>sortState('containers')===null);
+      await page.keyboard.press('Escape');
+      await menu.waitFor({state:'hidden'});
+      await picker.selectOption(all);
+      await header.getByLabel('List options',{exact:true}).click();
+      await menu.getByLabel('Container layout').selectOption('cards');
+      await page.locator('.wcard').first().waitFor();
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')),'List options');
+      await page.keyboard.press('Enter');
+      await menu.waitFor();
+      assert.equal(await menu.locator('[data-sort-for]').count(),0,'cards do not offer inactive table sorting');
+      await menu.getByLabel('Container layout').selectOption('rows');
+      await page.locator('.wl-row').first().waitFor();
+      await page.keyboard.press('Enter');
+      await page.screenshot({path:`${output}/containers-options-${width}-${theme}.png`,fullPage:true});
+      await page.keyboard.press('Escape');
+      assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    }
+
     // Same namespace/name on two clusters must expand and route independently.
     await page.evaluate(()=>{
       localStorage.setItem('homestead.fleet.mode','all');

@@ -287,6 +287,29 @@ function workloadGroupBar(all, pick) {
       chip(name, name, all.filter(w => w.group === name).length)).join("")}${loose ? chip(NO_GROUP, "Ungrouped", loose) : ""}</div>` : ""}</div>`;
 }
 
+function workloadGroupSelect(all, pick) {
+  const names = workloadGroupNames(all), loose = all.filter(w => !w.group).length;
+  if (!names.length) return '<span class="wl-mobile-scope">All containers</span>';
+  const option = (value, label, count) => `<option value="${groupKeyIndex(value)}"${pick === value ? " selected" : ""}>${esc(label)} · ${count}</option>`;
+  return `<select class="wl-group-select" aria-label="Container group" title="${esc(pick === NO_GROUP ? "Ungrouped" : pick || "All groups")}" onchange="pickWorkloadGroup(+this.value)">
+    ${option("", "All groups", all.length)}${names.map(name => option(name, name, all.filter(w => w.group === name).length)).join("")}${loose ? option(NO_GROUP, "Ungrouped", loose) : ""}</select>`;
+}
+
+function workloadListOptions(platform, layout, items) {
+  const controls = `${layout === "rows" ? '<div class="sortbar" data-sort-controls="containers"></div>' : ""}
+    ${platform.length ? `<label class="list-option-setting">Show platform containers <input type="checkbox"${platformShown() ? " checked" : ""} onchange="togglePlatformContainers()"></label>` : ""}
+    <label class="list-option-setting">Layout <select aria-label="Container layout" onchange="workloadListLayout(this)">
+      <option value="rows"${layout === "rows" ? " selected" : ""}>Rows</option><option value="cards"${layout === "cards" ? " selected" : ""}>Cards</option></select></label>`;
+  return listOptions(controls, items);
+}
+window.workloadListLayout = select => {
+  const layout = select.value;
+  closeActionMenu(select.closest("details"));
+  // Keep the header and focus in place while only the list changes shape.
+  document.querySelector(".wl-mobile-toolbar .list-options>summary")?.focus({preventScroll:true});
+  setViewLayout("containers", "renderWorkloads", layout, {preservePaint:true});
+};
+
 /* Put one workload in a group: pick one it could join, or name a new one. */
 window.wlGroup = (ns, name) => {
   const w = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) || {};
@@ -361,23 +384,27 @@ function renderWorkloads() {
   const updateErrors = report?.errors || 0;
   const unchecked = (report?.workloads || []).filter(w => w.unchecked && !w.homestead).length;
   const layout = viewLayout("containers");
-  paint(`<div class="phead">
+  const items = [{ label: "Check for image updates", icon: "refresh", run: "checkImageUpdates()", tip: "Ask the registries for newer images" },
+    { label: "Manage groups", icon: "list", run: "manageWorkloadGroups()", need: "operator" },
+    { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" }];
+  const updateButtons = `${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
+    ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} check${updateErrors === 1 ? "" : "s"} failed</button>` : ""}`.trim();
+  const deploy = '<button class="btn pri" data-need="operator" onclick="go(\'deploy\')">＋ Deploy</button>';
+  paint(`<div class="containers-page" data-collection="containers"><div class="phead">
       <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · ${platform.length
         ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="Homestead and the helpers it runs - updated under Settings › Updates - and KubeVirt, CDI and the like, run by their own operators and upgraded under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
         : "system pods hidden"}${unchecked ? ` · <span data-tip="Marked ? in the list: stopped since Homestead started, so not yet compared with their registries">${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? " · images current" : ""}</p>
         ${all.length ? workloadGroupBar(all, group) : ""}</div>
-      <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>
-      ${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
-      ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} <span class="hide-sm">check${updateErrors === 1 ? "" : "s"} </span>failed</button>` : ""}
+      <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>${updateButtons}
       ${layoutSwitch("containers", "renderWorkloads")}
-      ${moreMenu([{ label: "Check for image updates", icon: "refresh", run: "checkImageUpdates()", tip: "Ask the registries for newer images" },
-        { label: workloadGroupNames(all).length ? "Groups" : "Group workloads", icon: "list", run: "manageWorkloadGroups()", need: "operator" },
-        {label:layout === "cards" ? "Show as rows" : "Show as cards",run:`setViewLayout('containers','renderWorkloads',${jsq(layout === "cards" ? "rows" : "cards")})`},
-        { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" }])}
-      <button class="btn pri" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div></div>
+      ${moreMenu([items[0],items[1],{label:layout === "cards" ? "Show as rows" : "Show as cards",run:`setViewLayout('containers','renderWorkloads',${jsq(layout === "cards" ? "rows" : "cards")})`},items[2]])}
+      ${deploy}</div></div>
+    <div class="wl-mobile-head"><div class="wl-mobile-toolbar">${workloadGroupSelect(all, group)}${workloadListOptions(platform, layout, items)}${deploy}</div>
+      <div class="wl-mobile-summary"><span>${rows.length} container${rows.length === 1 ? "" : "s"}</span>${updateButtons ? `<span aria-hidden="true">·</span>${updateButtons}` : ""}
+        ${unchecked ? `<span class="dim" data-tip="Stopped or still starting; not yet compared with their registries">· ${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? '<span class="dim">· images current</span>' : ""}</div></div>
 
     ${rows.length ? workloadSections(rows, layout, group)
-      : `<div class="empty">${q || group ? "Nothing matches that search." : "Nothing deployed yet."}</div>`}`);
+      : `<div class="empty">${q || group ? "Nothing matches that search." : "Nothing deployed yet."}</div>`}</div>`);
 }
 
 /* An image with no tag is Docker's latest; saying so is clearer than leaving it off. */
@@ -484,7 +511,7 @@ function workloadTable(rows, sections = null, folded = new Set()) {
     return `<tbody class="grouphead"><tr><td colspan="7">${workloadGroupHead(name, members, shut)}</td></tr></tbody>
       <tbody${shut ? " hidden" : ""}>${workloadTableRows(members)}</tbody>`;
   }).join("") : `<tbody>${workloadTableRows(rows)}</tbody>`;
-  return `<div class="card flat pad0 wltable-wrap"><table class="tbl dense stack compact wltable" data-sort="containers"><thead><tr>
+  return `<div class="card flat pad0 wltable-wrap"><table class="tbl dense stack compact wltable" data-sort="containers" data-sort-controls="containers"><thead><tr>
     <th>Workload</th><th>Status</th><th class="wl-image">Image</th><th>CPU</th><th>RAM</th><th class="wl-access">Access</th><th data-nosort>Actions</th></tr></thead>
     ${bodies}</table></div>`;
 }
