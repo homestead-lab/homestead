@@ -87,7 +87,14 @@ Tests fail when the two disagree.
 
 ## Releases
 
-Maintainers release from `main`:
+`main` is the prod channel. `dev` is the preview channel. Both branches run
+the same CI, and publication waits for that commit's successful CI. Existing
+installs default to prod; admins change a cluster's channel in **Settings →
+Updates**. Changing channel does not install anything. The normal review and
+update policy still apply, including when returning from dev to an older prod
+version. Helpers and app images keep their own update policies.
+
+Maintainers release stable versions from `main`:
 
 ```bash
 python scripts/bump_version.py 2.8.80
@@ -96,6 +103,32 @@ git tag v2.8.80 && git push origin main v2.8.80
 ```
 
 The tag runs the tests and publishes a multi-architecture image to GHCR.
+
+For a dev release, merge the desired changes into `dev`, then bump and commit
+the preview version before tagging:
+
+```bash
+git switch dev
+python scripts/bump_version.py 2.8.81-dev.1
+git commit -am "Release Homestead 2.8.81-dev.1"
+git tag v2.8.81-dev.1
+git push origin dev v2.8.81-dev.1
+```
+
+Increase the numeric dev suffix for each preview of a planned stable version:
+`-dev.1`, `-dev.2`, and so on. Tags are immutable. To promote the code, merge
+`dev` into `main`, bump to the stable version without the suffix, commit and
+tag the stable release. Merge `main` back into `dev` before starting the next
+preview line. A release tag must match the version in source and its commit
+must belong to the corresponding branch.
+
+Every release publishes its exact image version and a versioned Helm chart.
+Prod alone updates `latest`, `prod`, and the major/minor image aliases. Dev
+alone updates the `dev` image alias; its GitHub release is a prerelease and
+never GitHub Latest. Updates discover numbered tags and install by digest,
+so mutable aliases cannot change an approved rollout or its rollback image.
+The release cleanup keeps the newest five dev release pages independently of
+prod retention, while retaining all Git tags and registry images.
 
 ## Security
 

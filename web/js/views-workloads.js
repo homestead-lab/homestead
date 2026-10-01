@@ -91,6 +91,8 @@ async function loadImageUpdates(force = false, quiet = false, only = "") {
     // Homestead's own parts and leaves every app's answer as it was.
     const query = force ? `?force=1${only ? `&only=${encodeURIComponent(only)}` : ""}` : "";
     let report = await api(`/api/image-updates${query}`, force ? { keep: true } : undefined);
+    const selectedChannel = STATE.data.appSettings?.updates?.channel;
+    if (selectedChannel && report.channel && report.channel !== selectedChannel) return STATE.data.imageUpdates;
     // The page's quiet refresh asks every few seconds and can land before or
     // after a forced check. Which report is newer is the server's to say, by
     // when it was checked - never by which request happened to be sent last.
@@ -98,7 +100,7 @@ async function loadImageUpdates(force = false, quiet = false, only = "") {
     if (report.partial && existing?.workloads) {
       // Homestead's parts alone, the server having no full report yet: laid
       // over the apps' answers this page already has.
-      report = { ...existing, homestead: report.homestead, policy: report.policy || existing.policy,
+      report = { ...existing, channel: report.channel, homestead: report.homestead, policy: report.policy || existing.policy,
         workloads: [...existing.workloads.filter(w => !w.homestead), ...(report.workloads || [])] };
     }
     if (HomesteadUpdateState.isStale(existing, report)) {

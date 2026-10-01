@@ -344,7 +344,7 @@ class ImageUpdateTests(unittest.TestCase):
         seen = []
         original = updates._check_deployment
 
-        def slow(dep, pods, force=False):
+        def slow(dep, pods, force=False, channel=None):
             seen.append(updates.scan_progress())
             return {"ns": "lab", "name": dep["metadata"]["name"], "images": [],
                     "available": False, "can_rollback": False, "last_action": ""}
@@ -465,7 +465,7 @@ class ImageUpdateTests(unittest.TestCase):
     def test_one_odd_deployment_does_not_sink_the_scan(self):
         original = updates._check_deployment
 
-        def check(dep, pods, force=False):
+        def check(dep, pods, force=False, channel=None):
             if dep["metadata"]["name"] == "odd":
                 raise KeyError("template")
             return {"ns": "lab", "name": dep["metadata"]["name"], "images": [],
@@ -489,7 +489,7 @@ class ImageUpdateTests(unittest.TestCase):
     def test_homesteads_own_updates_are_counted_apart_from_apps(self):
         original, original_get, original_part = updates._check_deployment, updates.kget, updates.PART
 
-        def check(dep, pods, force=False):
+        def check(dep, pods, force=False, channel=None):
             name = dep["metadata"]["name"]
             return {"ns": "lab", "name": name, "available": True, "can_rollback": False, "last_action": "",
                     "images": [{"container": name, "available": True,
