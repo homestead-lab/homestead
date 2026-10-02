@@ -40,7 +40,10 @@ try {
       if (action==='back') await page.evaluate(()=>modalBack());
       if (action==='pagehide') await page.evaluate(()=>window.dispatchEvent(new Event('pagehide')));
       assert.equal(await closes(),before+1,`${action} releases one helper at ${width}px`);
-      if(action==='pagehide') assert.equal(await page.evaluate(()=>filesRequests.at(-1).options.keepalive),true);
+      if(action==='pagehide') {
+        assert.equal(await page.evaluate(()=>filesRequests.at(-1).options.keepalive),true);
+        assert.equal(await page.locator('#modal').evaluate(n=>n.classList.contains('hidden')),true);
+      }
       await page.evaluate(()=>closeModal());
       assert.equal(await closes(),before+1,'closing again is idempotent');
     }

@@ -953,7 +953,13 @@ window.filesDismiss = (keepalive = false) => {
   Object.assign(FILEVIEW, { namespace: "", pvc: "", path: "", file: "", dirty: false });
   return filesRelease(session, keepalive);
 };
-window.addEventListener?.("pagehide", () => filesDismiss(true));
+window.addEventListener?.("pagehide", () => {
+  if (!FILEVIEW.liveSession) return;
+  filesDismiss(true);
+  // A page restored from the back/forward cache must not display a browser
+  // whose helper was released when the page left.
+  closeModal(false);
+});
 
 function filesCurrent(session, namespace, pvc) {
   return FILEVIEW.liveSession === session && FILEVIEW.namespace === namespace && FILEVIEW.pvc === pvc;
