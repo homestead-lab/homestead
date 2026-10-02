@@ -8,13 +8,14 @@
 const VOLUME_KIND_LABELS = {
   "new-rwo": "New Longhorn volume · RWO",
   "new-rwx": "New shared volume · RWX",
+  planned: "Reuse new volume in this form",
   existing: "Existing PVC · keep data",
   ephemeral: "Temporary pod storage · emptyDir",
   memory: "Memory scratch · RAM-backed",
   shm: "Shared memory · /dev/shm",
   host: "Host path · advanced",
 };
-const VOLUME_KINDS = ["new-rwo", "new-rwx", "existing", "pod", "ephemeral", "memory", "shm", "host"];
+const VOLUME_KINDS = ["new-rwo", "new-rwx", "planned", "existing", "pod", "ephemeral", "memory", "shm", "host"];
 const SHM_PATH = "/dev/shm";
 
 const VOLUME_PICKER_DEFAULTS = {
@@ -41,6 +42,7 @@ const VOLUME_PICKER_DEFAULTS = {
 };
 
 function volumeKind(v) {
+  if (v.reuse_new) return "planned";
   // A memory volume already mounted at /dev/shm is shared memory, whoever
   // described it: the server reads one back as plain "memory".
   const atShm = String(v.path || "").replace(/\/+$/, "") === SHM_PATH;
@@ -67,7 +69,10 @@ function volumeRowIssue(v) {
   const path = String((v && v.path) || "").trim();
   if (!path) return "every storage mapping needs a container mount path";
   if (!path.startsWith("/")) return `mount path "${path}" must start with /`;
-  const kind = volumeKind(v || {});
+  // Resolved references carry the creator's ordinary PVC kind for the server;
+  // reuse_new only remembers the picker's choice when the form is drawn again.
+  const kind = v?.reuse_new && ["new-rwo", "new-rwx"].includes(v.kind) ? v.kind : volumeKind(v || {});
+  if (kind === "planned") return `${path} needs a new volume defined in another mapping in this form`;
   if (!["ephemeral", "memory", "shm"].includes(kind) && !String((v && v.source) || "").trim()) {
     return `${path} needs a storage source`;
   }
@@ -89,7 +94,7 @@ function volumeMove(row) {
   const claim = row.dataset.originClaim;
   if (!claim) return "";
   const kind = $(".vk", row).value;
-  if (!["existing", "new-rwo", "new-rwx"].includes(kind)) return "";
+  if (!["existing", "new-rwo", "new-rwx", "planned"].includes(kind)) return "";
   const folder = row.dataset.originFolder || "", now = $(".vsub", row).value.trim().replace(/^\/+|\/+$/g, "");
   if (volumeSourceValue(row) === claim && now === folder) return "";
   return folder ? `${claim}/${folder}` : claim;
@@ -102,11 +107,11 @@ function volumeHasFolders(kind) { return !["ephemeral", "memory", "shm", "host"]
    another folder in it rather than a volume of its own. */
 function sharedVolumeRow(row) {
   const kind = $(".vk", row).value;
-  if (!kind.startsWith("new-")) return null;
-  const name = $(".vs", row).value.trim();
+  if (!kind.startsWith("new-") && kind !== "planned") return null;
+  const name = volumeSourceValue(row);
   if (!name) return null;
   for (const other of $$(".deploy-volume", row.parentNode)) {
-    if (other === row) return null;
+    if (other === row) { if (kind === "planned") continue; return null; }
     if ($(".vk", other).value.startsWith("new-") && $(".vs", other).value.trim() === name) return other;
   }
   return null;
@@ -201,14 +206,24 @@ function volumeSourceList(row, kind) {
     label: claimSummary(v) }));
   if (kind === "pod") values = (ctx.podVolumes() || []).map(v => ({ value: v.name,
     label: `${v.kind}${v.source ? ` · ${v.source}` : ""}` }));
+  if (kind === "planned") {
+    const seen = new Set();
+    values = $$(".deploy-volume", row.parentNode).filter(other => other !== row && $(".vk", other).value.startsWith("new-"))
+      .flatMap(other => {
+        const name = $(".vs", other).value.trim();
+        if (!name || seen.has(name)) return [];
+        seen.add(name);
+        return [{ value: name, label: `${$(".vk", other).value === "new-rwx" ? "RWX" : "RWO"} · created with this workload` }];
+      });
+  }
   const choice = $(".vselect", row), requested = String(choice.value || $(".vs", row).value).trim();
   // A source that is already mounted but missing from the inventory stays
   // selectable, so opening the editor can never silently drop it.
   if (requested && !values.some(v => v.value === requested)) {
-    values = [{ value: requested, label: "currently mounted" }, ...values];
+    values = [{ value: requested, label: kind === "planned" ? "not defined in this form" : "currently mounted" }, ...values];
   }
-  const emptyLabel = kind === "pod" ? ctx.podEmpty : "Choose an existing PVC…";
-  const unavailable = kind === "pod" ? ctx.podUnavailable : "No existing PVCs in this namespace";
+  const emptyLabel = kind === "planned" ? "Choose a new volume from another mapping…" : kind === "pod" ? ctx.podEmpty : "Choose an existing PVC…";
+  const unavailable = kind === "planned" ? "Define a new volume in another mapping first" : kind === "pod" ? ctx.podUnavailable : "No existing PVCs in this namespace";
   choice.innerHTML = values.length
     ? `<option value="">${emptyLabel}</option>` + values.map(v => `<option value="${esc(v.value)}">${esc(v.value)} · ${esc(v.label)}</option>`).join("")
     : `<option value="">${unavailable}</option>`;
@@ -243,6 +258,7 @@ function syncVolumeRow(row) {
   const pathInput = $(".vp", row);
   if (shm) pathInput.value = SHM_PATH;
   pathInput.disabled = shm;
+  volumeSourceList(row, actual);
   const first = sharedVolumeRow(row);
   const moved = volumeMove(row);
   $(".vcopy", row).style.display = moved ? "flex" : "none";
@@ -261,18 +277,18 @@ function syncVolumeRow(row) {
     badges.innerHTML = isNew ? storageClassBadges(facts) : "";
     badges.style.display = isNew && badges.innerHTML ? "flex" : "none";
   }
-  volumeSourceList(row, actual);
-  const source = $(".vs", row), choice = $(".vselect", row), selectable = actual === "existing" || actual === "pod";
+  const source = $(".vs", row), choice = $(".vselect", row), selectable = ["existing", "pod", "planned"].includes(actual);
   $(".vsource", row).style.display = actual === "ephemeral" || ram ? "none" : "block";
   source.style.display = selectable ? "none" : "block";
   choice.style.display = selectable ? "block" : "none";
   source.disabled = actual === "ephemeral" || ram;
   source.placeholder = actual === "host" ? "/mnt/storage or /dev/…" : "new PVC name";
-  $(".vsource-label", row).textContent = actual === "host" ? "Host path" : actual === "pod" ? "Pod volume" : actual === "existing" ? "Existing PVC" : "New PVC name";
+  $(".vsource-label", row).textContent = actual === "host" ? "Host path" : actual === "pod" ? "Pod volume" : actual === "planned" ? "New volume in this form" : actual === "existing" ? "Existing PVC" : "New PVC name";
   const selectedSource = volumeSourceValue(row);
   const selectedPvc = actual === "existing" ? (ctx.pvcs() || []).find(v => v.name === selectedSource) : null;
   const selectedPodVolume = actual === "pod" ? (ctx.podVolumes() || []).find(v => v.name === selectedSource) : null;
-  $(".vhelp", row).textContent = first ? `Another folder in ${$(".vs", row).value.trim()}, created once with the size and class set above.`
+  $(".vhelp", row).textContent = first ? `Shares ${selectedSource}, created once using the original mapping's size and storage class. Choose a folder here, or leave blank to mount the whole volume.`
+    : actual === "planned" ? "Choose a new volume defined in another storage mapping. It does not need to exist yet."
     : actual === "new-rwo" ? (ctx.newSourceHelp || "Creates a Longhorn claim for this workload (single-node attachment).")
     : actual === "new-rwx" ? (ctx.newSourceHelp || "Creates shared Longhorn storage that several pods can mount at once.") +
         (hidden ? ` ${hidden} storage class${hidden === 1 ? "" : "es"} hidden: they create live-migratable VM volumes, which Longhorn cannot mount into a pod.` : "")
@@ -315,22 +331,38 @@ function addVolumeRow(host, v = {}) {
     <label class="switch vcopy" style="display:none"><input class="vcopy-on" type="checkbox" checked><span class="vcopy-text"></span></label>
     <div class="volume-foot"><span class="dim small vhelp"></span><label class="switch" ${ctx.readOnlyToggle ? "" : 'style="display:none"'}><input class="vro" type="checkbox" ${v.read_only ? "checked" : ""}>Read-only</label></div>
     ${v.template_source && v.template_source !== v.source ? `<div class="template-source">${esc(v.template_origin || "Unraid")} source: <span class="mono">${esc(v.template_source)}</span> · choose its Kubernetes backing above</div>` : ""}`;
-  host.appendChild(d); syncVolumeRow(d);
+  d.dataset.newSource = kind.startsWith("new-") ? String(v.source || "").trim() : "";
+  host.appendChild(d); syncVolumeRows(host);
   // A row's name decides whether later rows are folders in its volume.
-  d.addEventListener("input", event => { if (event.target.matches(".vs,.vselect,.vsub")) syncVolumeRows(host); ctx.onChange(); });
-  d.addEventListener("change", event => { if (event.target.matches(".vk,.vs,.vselect,.vsc")) syncVolumeRows(host); ctx.onChange(); });
+  const sync = event => {
+    if (event.target.matches(".vselect")) $(".vs", d).value = event.target.value;
+    const name = $(".vs", d).value.trim(), previous = d.dataset.newSource;
+    if ($(".vk", d).value.startsWith("new-") && name) {
+      if (previous && previous !== name) $$(".deploy-volume", host).forEach(other => {
+        if ($(".vk", other).value === "planned" && volumeSourceValue(other) === previous) {
+          $(".vs", other).value = name; $(".vselect", other).value = "";
+        }
+      });
+      d.dataset.newSource = name;
+    } else if (!$(".vk", d).value.startsWith("new-")) d.dataset.newSource = "";
+    syncVolumeRows(host);
+  };
+  d.addEventListener("input", event => { if (event.target.matches(".vs,.vselect,.vsub,.vz")) sync(event); ctx.onChange(); });
+  d.addEventListener("change", event => { if (event.target.matches(".vk,.vs,.vselect,.vsc")) sync(event); ctx.onChange(); });
   return d;
 }
 
 function readVolumeRow(row) {
-  const kind = $(".vk", row).value, inRam = kind === "memory" || kind === "shm";
-  const size = +$(".vz", row).value || (inRam ? 1024 : 5);
+  const chosen = $(".vk", row).value, first = sharedVolumeRow(row), settings = first || row;
+  const kind = first ? $(".vk", first).value : chosen, inRam = kind === "memory" || kind === "shm";
+  const size = +$(".vz", settings).value || (inRam ? 1024 : 5);
   return { path: kind === "shm" ? SHM_PATH : $(".vp", row).value.trim(), source: volumeSourceValue(row), kind,
+    ...(chosen === "planned" ? { reuse_new: true } : {}),
     type: volumeType(kind),
     medium: inRam ? "memory" : "",
     size_limit: inRam ? `${size}Mi` : "",
-    create: kind === "new-rwo" || kind === "new-rwx", size_gb: +$(".vz", row).value || 5,
-    storage_class: $(".vsc", row).value, access_mode: kind === "new-rwx" ? "ReadWriteMany" : "ReadWriteOnce",
+    create: kind === "new-rwo" || kind === "new-rwx", size_gb: +$(".vz", settings).value || 5,
+    storage_class: $(".vsc", settings).value, access_mode: kind === "new-rwx" ? "ReadWriteMany" : "ReadWriteOnce",
     sub_path: volumeHasFolders(kind) ? $(".vsub", row).value.trim().replace(/^\/+|\/+$/g, "") : "",
     read_only: $(".vro", row).checked, label: row.dataset.label || "", description: row.dataset.description || "",
     required: row.dataset.required === "true", template_source: row.dataset.templateSource || "",
