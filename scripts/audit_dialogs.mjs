@@ -21,6 +21,10 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // "click:<fn>" (the first control whose onclick calls fn), or "text:<label>"
 // (the first button in the dialog with that label).
 const DIALOGS = [
+  ["cluster-shutdown-review", "cluster", "window.__demoShutdown=null;window.__demoShutdownBlocked=false;clusterShutdown()"],
+  ["cluster-shutdown-blocked", "cluster", "window.__demoShutdown=null;window.__demoShutdownBlocked=true;clusterShutdown()"],
+  ["cluster-shutdown-progress", "cluster", "api('/api/cluster/shutdown',{method:'POST'}).then(r=>clusterShutdownProgress(r.state))"],
+  ["cluster-shutdown-disconnected", "cluster", "api('/api/cluster/shutdown',{method:'POST'}).then(r=>{clusterShutdownProgress(r.state);clearTimeout(shutdownTimer);shutdownPaint(r.state,true)})"],
   ["bug-record", "settings", "bugStart()"],
   ["bug-comment", "settings", "bugDescribe('0123456789abcdef0123456789abcdef')"],
   ["bug-review", "settings", "bugReview('0123456789abcdef0123456789abcdef')"],

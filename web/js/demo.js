@@ -1432,6 +1432,19 @@ ssh_pwauth: true
         detail: gone ? `cleared ${gone} finished job${gone === 1 ? "" : "s"}; 1 still running`
           : "nothing finished to clear" };
     },
+    "/api/cluster/shutdown/plan": () => ({ready: !window.__demoShutdownBlocked, blockers: window.__demoShutdownBlocked ? ['Gracefully stop these VMs first: default/home-assistant-os', 'lab/paperless: disruption budget permits no verified eviction'] : [],
+      confirm:'SHUT DOWN CLUSTER', review_token:'demo-shutdown', nodes: nodes.map(n => ({name:n.name, cordoned:false})), pods:12, volumes:8, homestead_node:nodes[0].name, local_storage:[]}),
+    "/api/cluster/shutdown": (url, init) => {
+      if (init?.method === 'POST') window.__demoShutdown = {run:'demo-shutdown', phase:'draining', progress:35, deadline:Date.now()/1000+1800,
+        hosts:nodes.map(n=>({name:n.name,state:'Helper ready'})),
+        message:'Waiting for graceful eviction: lab/paperless, lab/frigate. Homestead stays online.', plan:{own:['lab','homestead','demo'], own_node:nodes[0].name, nodes:nodes.map(n=>({name:n.name}))}};
+      return {state:window.__demoShutdown || null};
+    },
+    "/api/cluster/shutdown/cancel": () => {
+      if (window.__demoShutdown) Object.assign(window.__demoShutdown, {phase:'failed', message:'Shutdown cancelled. Original scheduling restored; check workloads.'});
+      return {ok:true};
+    },
+    "/api/cluster/shutdown/recover": () => { window.__demoShutdown = null; return {ok:true}; },
     "/api/workloads": workloads, "/api/network": network,
     // Rebooting a host: one app has nowhere else to go, one volume keeps a
     // single copy elsewhere while the host is down.
