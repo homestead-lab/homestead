@@ -143,3 +143,95 @@ test("lost final move response consumes consent and never blindly retries", asyn
   await t.ctx.selfDataMoveStart(); await t.ctx.selfDataMoveStart();
   assert.equal(calls, 1); assert.match(t.fields["#selfDataFinal"].innerHTML, /may already have started/);
 });
+
+
+test("completed historical preparations offer archive and identify actual blocking jobs", async () => {
+  const t = setup();
+  t.state.preparations = [{id:"old", destination:"old-volume", status:"succeeded", prepared:false, archivable:true, message:"Prepared for an earlier source volume"}];
+  t.state.blocking_jobs = [{id:"recovery",title:"Recover <backup>",status:"failed",message:"Inspect helper",href:"/protect"}];
+  await t.ctx.replicasMoveData(); t.form();
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /Archive record/);
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /View record/);
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /Recover &lt;backup>/);
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /Open job/);
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /id="selfDataCheck"[^>]*disabled/);
+  const count = t.sent.length;
+  await t.ctx.selfDataPrepareReview();
+  assert.equal(t.sent.length, count, "a blocker prevents programmatic preparation too");
+});
+
+function archiveApi(t, submit) {
+  const original = t.ctx.api;
+  t.ctx.api = async (path, options) => {
+    if (!path.includes("/archive")) return original(path, options);
+    const body = JSON.parse(options.body); t.sent.push({path,body});
+    if (path.endsWith("/preview")) return {id:body.id,source:"source",destination:"target",capacity_token:"archive-token",detail:"Both volumes are retained"};
+    if (submit) return submit();
+    return {ok:true};
+  };
+}
+
+test("archiving requires its own consent and sends the exact signed record once", async () => {
+  const t = setup(); archiveApi(t);
+  t.ctx.STATE.data.operations = [{id:"job"},{id:"other"}];
+  t.ctx.refreshOperations = () => {throw Error("Archive must not advance unrelated jobs");};
+  await t.ctx.selfDataArchiveReview("job");
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /Both volumes are retained/);
+  Object.assign(t.fields, {"#selfDataArchiveConsent":{checked:false},"#selfDataArchiveGo":{disabled:true}});
+  await t.ctx.selfDataArchiveStart(); assert.equal(t.sent.length, 1);
+  t.fields["#selfDataArchiveConsent"].checked = true;
+  assert.equal(t.ctx.selfDataArchiveReady(), true);
+  await t.ctx.selfDataArchiveStart(); await t.ctx.selfDataArchiveStart();
+  const writes = t.sent.filter(s => s.path === "/api/self/data/prepare/archive");
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].body, {id:"job",capacity_token:"archive-token",confirm_archive:true});
+  assert.equal(t.ctx.STATE.data.operations.length, 1);
+  assert.equal(t.ctx.STATE.data.operations[0].id, "other");
+});
+
+test("lost archive submission keeps volumes and consumes its confirmation", async () => {
+  const t = setup(); archiveApi(t, () => {throw new Error("Connection lost");});
+  await t.ctx.selfDataArchiveReview("job");
+  t.fields["#selfDataArchiveConsent"] = {checked:true};
+  await t.ctx.selfDataArchiveStart(); await t.ctx.selfDataArchiveStart();
+  assert.equal(t.sent.filter(s => s.path === "/api/self/data/prepare/archive").length, 1);
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /Check saved jobs/);
+  assert.equal(t.ctx.selfDataArchiveReady(), false);
+});
+
+test("closing or reopening move data invalidates a late archive preview", async () => {
+  for (const close of [t => t.ctx.selfDataClose(), t => t.ctx.replicasMoveData()]) {
+    const t = setup(); let respond; const original = t.ctx.api;
+    t.ctx.api = (path, options) => path.includes("/archive") ? new Promise(r => respond=r) : original(path, options);
+    const pending = t.ctx.selfDataArchiveReview("job");
+    await close(t);
+    respond({id:"job",destination:"target",capacity_token:"late"}); await pending;
+    assert.equal(t.ctx.selfDataArchiveReady(), false);
+    assert.doesNotMatch(t.fields["#selfDataFlow"]?.innerHTML || "", /selfDataArchiveConsent/);
+  }
+});
+
+
+test("a retained k3s blocker opens its own recovery review without relying on the jobs cache", async () => {
+  const t = setup(), opened = [];
+  const job = {id:"old-batch",title:"k3s cluster k3s-demo",kind:"k3s-cluster",status:"failed",
+    message:"Guest verification timed out",href:"/vms?find=k3s-demo",recovery:true,mutation_recovery:true};
+  t.state.blocking_jobs = [job];
+  t.ctx.openOperation = (...args) => opened.push(args);
+  await t.ctx.replicasMoveData();
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /selfDataOpenJob/);
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /Review batch outcome/);
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /requires recovery/);
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /id="selfDataCheck"[^>]*disabled/);
+  t.ctx.selfDataOpenJob("old-batch");
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0][0], job.href);
+  assert.equal(opened[0][1], job.id);
+  assert.equal(opened[0][2].mutation_recovery, true);
+  assert.equal(opened[0][2].kind, "k3s-cluster");
+  const count = t.sent.length;
+  await t.ctx.selfDataPrepareReview();
+  t.ctx.selfDataOpenJob("old-batch");
+  assert.equal(t.sent.length, count, "opening recovery invalidates the preparation dialog and approval");
+  assert.equal(opened.length, 1);
+});

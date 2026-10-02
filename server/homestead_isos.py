@@ -33,7 +33,7 @@ pick_class = None        # () -> (storage class, supports ReadWriteMany)
 share_node = None        # () -> the node the SMB server runs on, for a ReadWriteOnce share
 SHARE_NS = "lab"
 DEFAULT_NS = "lab"
-IMAGE = "alpine:3.20"
+IMAGE = "alpine:3.24"
 CONFIGMAP = "homestead-iso-library"
 LABEL = "homestead.io/iso"
 SOURCE = "homestead.io/iso-source"
@@ -48,7 +48,7 @@ GIB = 1024 ** 3
 
 
 def bind(_kget, _ksend, _shares, _list_files, _pick_class, _share_node, share_ns="lab", default_ns="lab",
-         image="alpine:3.20"):
+         image="alpine:3.24"):
     global kget, ksend, shares, list_files, pick_class, share_node, SHARE_NS, DEFAULT_NS, IMAGE
     kget, ksend, shares, list_files = _kget, _ksend, _shares, _list_files
     pick_class, share_node, SHARE_NS, DEFAULT_NS, IMAGE = _pick_class, _share_node, share_ns, default_ns, image

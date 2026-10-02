@@ -91,7 +91,11 @@ test("batch recovery lists unsent VMs and confirms the batch name, not a single 
   };
   await t.ctx.powerRecoveryReview('batch-job',true);
   const html=t.fields['#mbody'].innerHTML;
-  assert.match(html,/planned VMs and retained resources/);assert.match(html,/agent-1/);assert.match(html,/not dispatched/);
+  assert.match(html,/planned VMs and retained resources/);assert.match(html,/agent-1/);assert.match(html,/Not sent/);
+  assert.match(html,/Stop tracking batch/);assert.match(html,/releases this job's block on moving Homestead data/);
+  assert.match(html,/does not retry the batch, stop its VMs, delete data/);
+  assert.equal((html.match(/class="ui-callout(?: |")/g)||[]).length, 1);
+  assert.match(html,/Identity checks and recovery limits/);
   t.fields['#powerRecoveryAck'].checked=true;t.fields['#powerRecoveryName'].value='server-1';
   await t.ctx.powerRecoveryResolve();assert.equal(t.sent.length,1);
   t.fields['#powerRecoveryName'].value='cluster';await t.ctx.powerRecoveryResolve();

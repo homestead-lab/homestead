@@ -229,6 +229,15 @@ Homestead works without either probe container. When the SMART sidecar is not
 installed or cannot read a drive, the UI reports that state without degrading
 the whole cluster.
 
+### Guided setup
+
+Open the book icon to work through setup. **LAN networks** under Access opens
+Networking; **SMB** under Storage and backups opens its server settings and network
+shares. These optional admin steps can be skipped for the cluster and revisited.
+Completion is observed from a configured LAN attachment or an installed, enabled
+SMB server; it does not prove client connectivity. Next advances without marking
+a step complete, and Return to setup brings you back after configuring it.
+
 ### Import qcow2 and vmdk VM disks
 
 Virtual machines → Import → **A disk image from a URL** uses KubeVirt CDI to stream an HTTP(S) disk image into a
@@ -762,6 +771,12 @@ old approval stays consumed, and a new change requires its own review. Until
 inspection resolves tracking, another reviewed save/start/restart/resume for that
 VM is blocked; emergency stop remains available independently.
 
+New k3s clusters default to the Ubuntu 26.04.1 LTS minimal amd64 cloud image,
+using Canonical's released `20260827` build with UEFI firmware. The browser and
+API use the same default; cached images remain available for explicit selection.
+An existing Ubuntu image does not override the default merely because of its name.
+Other image URLs and Harvester image choices retain their existing boot defaults.
+
 New reviewed k3s VM batches use the same journal across all their resource writes.
 **Inspect batch outcome** lists every planned VM (including ones never sent),
 plus the image, Secret and claim targets that were attempted. Confirm the batch
@@ -900,6 +915,20 @@ requires a fresh host review, not a repeat of the previous request. A helper in
 image-pull backoff may still start later: inspect it before sending anything else.
 Missing creation receipts and replacement helpers are not treated as the original.
 
+Longhorn instance-manager budgets may allow zero disruptions before maintenance
+starts. The review explains that Homestead will cordon the host, evict workload
+pods first, and wait up to two minutes for Longhorn to permit storage pod eviction.
+It uses the Kubernetes Eviction API throughout; it does not delete these pods or
+change their budgets. A refusal or timeout sends no power and leaves the host
+cordoned. Inspect Longhorn volume replicas, pod events and Recent jobs before
+reviewing again. Other zero-disruption budgets, stale budget status and ambiguous
+ownership still block the review.
+
+Before sending power, Homestead checks quorum, VMs, remaining pods and the
+reviewed volumes again, including volumes whose local replicas were evicted.
+Expected degradation from stopping a local replica is allowed only while the
+reviewed healthy copies on other Ready hosts remain available.
+
 An administrator may override the quorum, VM, disruption-budget and inventory
 checks (`force: true`, after a review made with `force=1`). A forced action skips
 cordon and drain and is still refused when power control is off, the host is not
@@ -961,7 +990,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.291/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.292-dev.2/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -972,7 +1001,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.291 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.292-dev.2 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1338,6 +1367,18 @@ the plain volume, as a moved VM is; a DaemonSet, a bare pod, or a volume a
 StatefulSet's template made cannot be stopped or recreated safely, and is
 said so up front. Homestead's own data moves from Settings › Redundancy.
 
+Completed destination preparations can be archived from Move data or Jobs.
+Archiving hides the record while retaining both volumes and their creation
+receipts; it never copies or deletes data. Preparations for an earlier source
+volume are labelled as historical, and a preparation for the current data
+volume says that Homestead now uses it. Running and recovery jobs remain
+visible, and Move data names the jobs that block another preparation.
+**Review batch outcome** on a failed k3s blocker opens its retained-resource
+review directly. Inspect the listed VMs, type the batch name and acknowledge
+the unknown outcome to **Stop tracking batch**. This releases its preparation
+block without deleting or stopping VMs, disks or Secrets, retrying the batch,
+or claiming that guest verification passed. Reopen Move data for a fresh check.
+
 Finish upgrading every Homestead replica before starting a move. Homestead verifies
 capability records against the live pod UID and container runtime ID of processes
 sharing its data claim. Its own update/restart/replica changes are blocked while
@@ -1514,6 +1555,11 @@ that will not shut down. Harvester's run strategy is honoured, not the older
 network interfaces (network, MAC, addresses), guest OS as its guest agent
 reports it, conditions and events. A VM whose disk is still downloading
 shows how far CDI has got, and one whose disk could not be made says why.
+A previous `CrashLoopBackOff` clears to **Stopped** after a Halted or Manual
+VM is confirmed off (or an older VM has `running: false`), with **Start**
+available again. Automatic retries, queued power requests and unfinished
+shutdowns keep the warning. Conditions and events remain available; disk
+failures still show their reason.
 
 **Edit** covers what the VM is made of. General: CPU cores, memory, run
 strategy, description, and a host to keep it on. Disks: boot order, bus,
@@ -1840,10 +1886,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.291`, the workflow publishes:
+For a release such as `v2.8.292-dev.2`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.291
+ghcr.io/wjcloudy/homestead:2.8.292-dev.2
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1854,8 +1900,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.291
-git push origin v2.8.291
+git tag v2.8.292-dev.2
+git push origin v2.8.292-dev.2
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

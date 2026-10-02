@@ -1,6 +1,7 @@
 import copy
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -26,6 +27,175 @@ class MaintenanceSafetyTests(unittest.TestCase):
 
     def with_budget(self):
         self.objects["/apis/policy/v1/poddisruptionbudgets"]["items"] = [self.budget]
+
+    def with_longhorn_manager(self):
+        manager = copy.deepcopy(self.pod)
+        manager["metadata"].update(namespace="longhorn-system", name="instance-manager-test", uid="im-pod",
+            labels={"longhorn.io/component": "instance-manager", "longhorn.io/managed-by": "longhorn-manager",
+                    "longhorn.io/node": "node1"},
+            ownerReferences=[{"apiVersion": "longhorn.io/v1beta2", "kind": "InstanceManager",
+                              "name": "instance-manager-test", "uid": "im-owner", "controller": True}])
+        self.objects["/api/v1/pods"]["items"].insert(0, manager)
+        self.budget["metadata"].update(namespace="longhorn-system", name="instance-manager-test")
+        self.budget["spec"]["selector"] = {"matchLabels": {"longhorn.io/component": "instance-manager"}}
+        self.budget["status"]["disruptionsAllowed"] = 0
+        self.with_budget()
+        return manager
+
+    def test_longhorn_zero_budget_can_wait_during_reviewed_drain(self):
+        self.with_longhorn_manager()
+        for action in ("reboot", "poweroff"):
+            plan = power.plan("node1", action)
+            self.assertTrue(plan["ready"])
+            self.assertTrue(plan["maintenance"]["budgets"][0]["wait_for_drain"])
+            self.assertIn("power will not be sent", " ".join(plan["warnings"]))
+        original = power.plan("node1", "reboot")
+        with self.assertRaisesRegex(ValueError, "pods remain"):
+            power.recheck_after_drain(original)
+
+    def test_longhorn_exception_requires_owned_pod_and_its_fresh_single_budget(self):
+        self.with_longhorn_manager()
+        original = copy.deepcopy(self.objects)
+        mutations = [
+            lambda p: p["metadata"]["ownerReferences"][0].update(kind="ReplicaSet"),
+            lambda p: p["metadata"]["ownerReferences"][0].update(apiVersion="apps/v1"),
+            lambda p: p["metadata"]["ownerReferences"][0].update(controller=False),
+            lambda p: p["metadata"]["labels"].update({"longhorn.io/node": "node2"}),
+            lambda p: p["metadata"]["labels"].update({"longhorn.io/managed-by": "other"}),
+            lambda p: p["metadata"].update(uid=""),
+        ]
+        for mutate in mutations:
+            self.objects = copy.deepcopy(original)
+            mutate(self.objects["/api/v1/pods"]["items"][0])
+            self.assertFalse(power.plan("node1", "reboot")["ready"])
+        for field, value in (("observedGeneration", 1), ("disruptionsAllowed", None)):
+            self.objects = copy.deepcopy(original)
+            self.objects["/apis/policy/v1/poddisruptionbudgets"]["items"][0]["status"][field] = value
+            self.assertFalse(power.plan("node1", "reboot")["ready"])
+        self.objects = copy.deepcopy(original)
+        budgets = self.objects["/apis/policy/v1/poddisruptionbudgets"]["items"]
+        budgets[0]["metadata"]["name"] = "other-budget"
+        self.assertFalse(power.plan("node1", "reboot")["ready"])
+        self.objects = copy.deepcopy(original)
+        budgets = self.objects["/apis/policy/v1/poddisruptionbudgets"]["items"]
+        budgets.append(copy.deepcopy(budgets[0]))
+        self.assertFalse(power.plan("node1", "reboot")["ready"])
+
+    def test_power_drains_workloads_before_retrying_longhorn_and_final_checks(self):
+        self.with_longhorn_manager()
+        original = power.plan("node1", "poweroff")
+        calls, phases = [], []
+        def send(method, path, body):
+            name = body["metadata"]["name"]
+            calls.append(name)
+            if name == "instance-manager-test" and calls.count(name) == 1:
+                raise urllib.error.HTTPError(path, 429, "budget prevents eviction", {}, None)
+            self.objects["/api/v1/pods"]["items"] = [p for p in self.objects["/api/v1/pods"]["items"]
+                                                       if p["metadata"]["name"] != name]
+        def checked():
+            calls.append("final-check")
+            power.recheck_after_drain(original)
+        with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), \
+                mock.patch.object(lifecycle, "node_action_check", return_value=(True, "", {})), \
+                mock.patch.object(lifecycle, "set_cordon", side_effect=lambda *a: calls.append("cordon")), \
+                mock.patch.object(lifecycle, "kget", side_effect=self.get), \
+                mock.patch.object(lifecycle, "ksend", side_effect=send) as evict, \
+                mock.patch.object(lifecycle.time, "sleep"), \
+                mock.patch.object(lifecycle, "_send_power", side_effect=lambda *a: calls.append("power") or {}) as helper:
+            lifecycle.node_power("node1", "poweroff", reviewed_pods=original["drain_pods"],
+                                 before_send=checked, progress=lambda *a: phases.append(a))
+        self.assertEqual(["cordon", "app-a", "instance-manager-test", "instance-manager-test", "final-check", "power"], calls)
+        self.assertTrue(all(c.args[1].endswith("/eviction") for c in evict.call_args_list))
+        self.assertEqual({"uid": "im-pod"}, evict.call_args.args[2]["deleteOptions"]["preconditions"])
+        self.assertTrue(any("Waiting for Longhorn" in row[2] for row in phases))
+        helper.assert_called_once()
+
+    def test_longhorn_timeout_keeps_host_cordoned_without_power(self):
+        self.with_longhorn_manager()
+        original = power.plan("node1", "reboot")
+        def send(method, path, body):
+            if body["metadata"]["name"] == "instance-manager-test":
+                raise urllib.error.HTTPError(path, 429, "last replica", {}, None)
+            self.objects["/api/v1/pods"]["items"] = [self.objects["/api/v1/pods"]["items"][0]]
+        with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), \
+                mock.patch.object(lifecycle, "node_action_check", return_value=(True, "", {})), \
+                mock.patch.object(lifecycle, "set_cordon") as cordon, \
+                mock.patch.object(lifecycle, "kget", side_effect=self.get), \
+                mock.patch.object(lifecycle, "ksend", side_effect=send), \
+                mock.patch.object(lifecycle.time, "monotonic", side_effect=[0, 121]), \
+                mock.patch.object(lifecycle, "_send_power") as helper:
+            with self.assertRaisesRegex(ValueError, "Longhorn still prevents eviction.*Power was not sent"):
+                lifecycle.node_power("node1", "reboot", reviewed_pods=original["drain_pods"], before_send=lambda: None)
+        cordon.assert_called_once_with("node1", True)
+        helper.assert_not_called()
+
+    def test_retry_never_evicts_replacement_or_new_unreviewed_pod(self):
+        self.with_longhorn_manager()
+        original = copy.deepcopy(self.objects)
+        for replacement in (False, True):
+            self.objects = copy.deepcopy(original)
+            def send(method, path, body):
+                if body["metadata"]["name"] == "instance-manager-test":
+                    if replacement:
+                        self.objects["/api/v1/pods"]["items"][0]["metadata"]["uid"] = "replacement"
+                    else:
+                        new = copy.deepcopy(self.pod)
+                        new["metadata"].update(name="new-pod", uid="new-uid")
+                        self.objects["/api/v1/pods"]["items"].append(new)
+                    raise urllib.error.HTTPError(path, 429, "budget", {}, None)
+            snapshot = power.plan("node1", "reboot")["drain_pods"]
+            with mock.patch.object(lifecycle, "kget", side_effect=self.get), \
+                    mock.patch.object(lifecycle, "ksend", side_effect=send) as evict:
+                with self.assertRaisesRegex(ValueError, "pods changed during drain"):
+                    lifecycle.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
+                self.assertEqual(2, evict.call_count)
+
+    def test_non_budget_refusal_is_not_retried_or_followed_by_power(self):
+        self.with_longhorn_manager()
+        snapshot = power.plan("node1", "reboot")["drain_pods"]
+        for code in (403, 409, 500):
+            with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), \
+                    mock.patch.object(lifecycle, "node_action_check", return_value=(True, "", {})), \
+                    mock.patch.object(lifecycle, "set_cordon"), \
+                    mock.patch.object(lifecycle, "kget", side_effect=self.get), \
+                    mock.patch.object(lifecycle, "ksend", side_effect=urllib.error.HTTPError("eviction", code, "refused", {}, None)) as evict, \
+                    mock.patch.object(lifecycle.time, "sleep") as sleep, \
+                    mock.patch.object(lifecycle, "_send_power") as helper:
+                with self.assertRaisesRegex(ValueError, "drain was refused"):
+                    lifecycle.node_power("node1", "reboot", reviewed_pods=snapshot, before_send=lambda: None)
+                self.assertEqual(2, evict.call_count)
+                sleep.assert_not_called()
+                helper.assert_not_called()
+
+    def test_generic_budget_refusal_is_not_retried_during_drain(self):
+        with mock.patch.object(lifecycle, "kget", side_effect=self.get), \
+                mock.patch.object(lifecycle, "ksend", side_effect=urllib.error.HTTPError("eviction", 429, "budget", {}, None)) as send, \
+                mock.patch.object(lifecycle.time, "sleep") as sleep:
+            result = lifecycle.drain("node1", wait=True)
+        self.assertEqual(["lab/app-a (HTTP 429)"], result["skipped"])
+        send.assert_called_once()
+        sleep.assert_not_called()
+
+    def test_accepted_eviction_is_not_repeated_while_pod_terminates(self):
+        self.with_longhorn_manager()
+        snapshot = power.plan("node1", "reboot")["drain_pods"]
+        def send(method, path, body):
+            self.objects["/api/v1/pods"]["items"] = [p for p in self.objects["/api/v1/pods"]["items"]
+                                                       if p["metadata"]["name"] == "app-a"]
+        with mock.patch.object(lifecycle, "kget", side_effect=self.get), \
+                mock.patch.object(lifecycle, "ksend", side_effect=send) as evict, \
+                mock.patch.object(lifecycle.time, "sleep", side_effect=lambda _: self.objects["/api/v1/pods"].update(items=[])):
+            result = lifecycle.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
+        self.assertEqual(2, evict.call_count)
+        self.assertEqual(["lab/app-a", "longhorn-system/instance-manager-test"], result["evicted"])
+
+    def test_pod_not_found_only_finishes_drain_when_inventory_confirms_departure(self):
+        def send(method, path, body):
+            self.objects["/api/v1/pods"]["items"] = []
+            raise urllib.error.HTTPError(path, 404, "gone", {}, None)
+        snapshot = power.plan("node1", "reboot")["drain_pods"]
+        with mock.patch.object(lifecycle, "kget", side_effect=self.get), mock.patch.object(lifecycle, "ksend", side_effect=send):
+            self.assertEqual([], lifecycle.drain("node1", reviewed_pods=snapshot, wait=True)["skipped"])
 
     def test_zero_budget_blocks_before_drain(self):
         self.with_budget()
@@ -107,6 +277,32 @@ class MaintenanceSafetyTests(unittest.TestCase):
         original = power.plan("node1", "reboot")
         self.objects["/api/v1/pods"]["items"] = []
         self.objects[f"{power.LH}/replicas"]["items"][1]["status"]["currentState"] = "stopped"
+        with self.assertRaisesRegex(ValueError, "volume impact changed"):
+            power.recheck_after_drain(original)
+
+    def test_expected_degradation_after_local_replica_stops_allows_final_check(self):
+        original = power.plan("node1", "reboot")
+        self.objects["/api/v1/pods"]["items"] = []
+        self.objects[f"{power.LH}/replicas"]["items"][0]["status"]["currentState"] = "stopped"
+        volume = self.objects[f"{power.LH}/volumes"]["items"][0]
+        volume["status"]["robustness"] = "degraded"
+        power.recheck_after_drain(original)
+        volume["status"]["robustness"] = "faulted"
+        with self.assertRaisesRegex(ValueError, "volume impact changed"):
+            power.recheck_after_drain(original)
+
+    def test_evicted_local_replica_does_not_hide_survivor_loss_or_missing_volume(self):
+        original = power.plan("node1", "reboot")
+        self.objects["/api/v1/pods"]["items"] = []
+        replicas = self.objects[f"{power.LH}/replicas"]["items"]
+        replicas.pop(0)
+        self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "degraded"
+        power.recheck_after_drain(original)
+        replicas[0]["status"]["currentState"] = "stopped"
+        with self.assertRaisesRegex(ValueError, "volume impact changed"):
+            power.recheck_after_drain(original)
+        replicas[0]["status"]["currentState"] = "running"
+        self.objects[f"{power.LH}/volumes"]["items"].pop(0)
         with self.assertRaisesRegex(ValueError, "volume impact changed"):
             power.recheck_after_drain(original)
 

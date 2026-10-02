@@ -161,6 +161,27 @@ def _credential(auths, parsed):
     return None
 
 
+class _NoAuthRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise PermissionError("registry authentication redirects are disabled")
+
+
+def _auth_realm(request_url, realm, credential):
+    source, target = urllib.parse.urlparse(request_url), urllib.parse.urlparse(realm)
+    if target.scheme != "https" or not target.hostname or target.username or target.password:
+        raise PermissionError("registry authentication requires an HTTPS realm without URL credentials")
+    if credential:
+        if source.scheme != "https":
+            raise PermissionError("registry credentials require HTTPS")
+        allowed = {source.netloc.lower()}
+        if source.hostname in ("registry-1.docker.io", "docker.io"):
+            allowed.add("auth.docker.io")
+        allowed.update(x.strip().lower() for x in os.environ.get("REGISTRY_AUTH_HOSTS", "").split(",") if x.strip())
+        if target.netloc.lower() not in allowed:
+            raise PermissionError("registry authentication realm is not trusted; configure REGISTRY_AUTH_HOSTS for a separate auth server")
+    return realm
+
+
 def _open(req, credential=None, timeout=12):
     ctx = ssl.create_default_context()
     try:
@@ -175,14 +196,16 @@ def _open(req, credential=None, timeout=12):
         realm = fields.get("realm")
         if not realm:
             raise
+        _auth_realm(req.full_url, realm, credential)
         query = {k: v for k, v in fields.items() if k in ("service", "scope") and v}
         separator = "&" if "?" in realm else "?"
         token_req = urllib.request.Request(realm + (separator + urllib.parse.urlencode(query) if query else ""),
                                            headers={"Accept": "application/json"})
         if credential:
             raw = base64.b64encode(f"{credential[0]}:{credential[1]}".encode()).decode()
-            token_req.add_header("Authorization", "Basic " + raw)
-        with urllib.request.urlopen(token_req, context=ctx, timeout=timeout) as response:
+            token_req.add_unredirected_header("Authorization", "Basic " + raw)
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), _NoAuthRedirect())
+        with opener.open(token_req, timeout=timeout) as response:
             token_body = json.loads(response.read().decode())
         token = token_body.get("token") or token_body.get("access_token")
         if not token:

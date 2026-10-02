@@ -189,7 +189,9 @@ class RedirectTests(unittest.TestCase):
         for srv in (storage, registry):
             threading.Thread(target=srv.serve_forever, daemon=True).start()
             self.addCleanup(srv.shutdown)
-        with mock.patch.dict(os.environ, {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}):
+        # The transport fixture is HTTP loopback; realm trust/TLS policy has
+        # separate tests. This check concerns stripping the bearer on redirects.
+        with mock.patch.dict(os.environ, {"NO_PROXY": "127.0.0.1", "no_proxy": "127.0.0.1"}), mock.patch.object(UPDATES, "_auth_realm"):
             url = f"http://127.0.0.1:{registry.server_port}/v2/x/blobs/sha256:a"
             with UPDATES._open(urllib.request.Request(url)) as response:
                 self.assertEqual(b"blob", response.read())

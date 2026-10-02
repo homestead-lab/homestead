@@ -170,6 +170,36 @@ class VMBatchJournalTests(unittest.TestCase):
             self.dispatch()
         self.assertEqual(4, len(self.sent))
 
+    def test_reviewing_timed_out_batch_releases_data_preparation_without_cluster_changes(self):
+        import homestead_self_data_prepare as data
+        self.dispatch()
+        items = ops._read()
+        item = items[0]
+        ops._finish(item, "failed", 10, "Guest verification timed out (0/2 ready). Resources are retained; inspect the batch outcome.")
+        ops._write(items)
+        before, sent = copy.deepcopy(self.objects), list(self.sent)
+        with mock.patch.object(ops, "_refresh", side_effect=AssertionError("inspection must not advance jobs")):
+            blockers = data.blocking_jobs(ops)
+            self.assertEqual([item["id"]], [row["id"] for row in blockers])
+            self.assertTrue(blockers[0]["mutation_recovery"])
+            self.assertTrue(blockers[0]["recovery"])
+            self.assertEqual("k3s-cluster", blockers[0]["kind"])
+            self.assertNotIn("ref", blockers[0])
+            self.assertNotIn("writes", blockers[0])
+            good = self.approved(item["id"])
+            with self.assertRaisesRegex(ValueError, "Type the reviewed"):
+                recovery.resolve({**good, "confirm": "batch-server-1"}, ops, self.read, "admin")
+            self.assertEqual(1, len(data.blocking_jobs(ops)))
+            recovery.resolve(good, ops, self.read, "admin")
+            self.assertEqual([], data.blocking_jobs(ops))
+        self.assertEqual(before, self.objects)
+        self.assertEqual(sent, self.sent, "stopping tracking cannot send a cluster write")
+        saved = ops._read()[0]
+        self.assertEqual("failed", saved["status"])
+        self.assertEqual("unknown", saved["ref"]["recovery"]["outcome"])
+        self.assertEqual(item["ref"]["writes"], saved["ref"]["writes"])
+        self.assertTrue(saved["tracking_stopped"])
+
     def test_changed_resource_or_actor_invalidates_recovery_approval(self):
         ident = self.fail_second()
         good = self.approved(ident)

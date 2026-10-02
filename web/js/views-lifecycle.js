@@ -533,7 +533,7 @@ window.nodePowerReview = async (node, action, force = false) => {
       ? UI.table([{ label: "Volume" }, { label: "Copies" }], volumes.map(v => [`<span class="mono">${esc(v.claim)}</span>`, UI.chip(...(risk[v.risk] || risk.resync))]))
       : `<div class="ui-empty">No Longhorn replica on this host was found.</div>`),
     budgets.length ? UI.section("Disruption budgets", UI.table([{ label: "Pod" }, { label: "Budget" }], budgets.map(b => [`<span class="mono">${esc(b.pod)}</span>`,
-      `${esc(b.budget)} · ${b.allowed == null ? "status unknown" : `${b.allowed} disruption(s) allowed`}${b.unhealthy_allowed ? " · unhealthy eviction allowed" : ""}`]))) : "",
+      `${esc(b.budget)} · ${b.allowed == null ? "status unknown" : `${b.allowed} disruption(s) allowed`}${b.unhealthy_allowed ? " · unhealthy eviction allowed" : ""}${b.wait_for_drain && !forced ? " · waits for Longhorn during drain" : ""}`]))) : "",
     local.length ? UI.section("Local and external storage", `<p class="ui-help">Drain deletes emptyDir data. Host-local paths do not move with pods. External storage may depend on this host; verify availability before proceeding.</p>`
       + UI.table([{ label: "Pod" }, { label: "Storage" }], local.map(v => [`<span class="mono">${esc(v.pod)}</span>`, `${esc(v.kind)} · ${esc(v.source)}`]))) : "",
     plan.ready ? UI.field(`Type ${node} to confirm`, `<input type="text" id="pw_confirm" autocomplete="off" placeholder="${esc(node)}">`) : "",

@@ -486,7 +486,7 @@ window.vmEdit = async (ns, name) => {
       <div class="note small" style="margin-top:8px"><b>Direct LAN interface</b><p>A bridge/VLAN interface gets its IP from the LAN's DHCP server or the guest OS. The MAC field only identifies the NIC: it does not set an IP. For a stable guest IP, reserve the MAC in your DHCP server or configure networking inside the guest. Cloud-init network data is for initial provisioning and may not rerun on an existing VM.</p></div></div>
     <div class="ve-pane" data-pane="devices" hidden style="margin-top:12px">${window.vmDevicesPane ? window.vmDevicesPane(v, res) : ""}</div>
     <div class="ve-pane" data-pane="cloud" hidden style="margin-top:12px">
-      ${ci.source === "unreadable" ? `<div class="note bad">This VM's cloud-init is in a secret Homestead cannot read, so it is left as it is.</div>` : `
+      ${v.sensitive_hidden ? `<div class="note">An administrator can view and edit cloud-init. It is preserved when you save other changes.</div>` : ci.source === "unreadable" ? `<div class="note bad">This VM's cloud-init is in a secret Homestead cannot read, so it is left as it is.</div>` : `
       ${ci.source === "secret" ? '<div class="dim xs" style="margin-bottom:8px">Kept in the VM\'s own secret, as Harvester does.</div>' : ""}
       <div class="f"><label>User data</label><textarea id="ve_user" class="mono helm-values" spellcheck="false" placeholder="#cloud-config">${esc(ci.user_data || "")}</textarea></div>
       <div class="f"><label>Network data</label><textarea id="ve_netdata" class="mono helm-values" spellcheck="false" style="min-height:90px" placeholder="optional">${esc(ci.network_data || "")}</textarea></div>
@@ -657,7 +657,7 @@ window.vmDeleteGo = async (ns, name) => {
    single VM is made. */
 const K3S_SETUPS = { homestead: "k3s, Longhorn and Homestead - what a new install gets",
   local: "k3s and Homestead, on local-path storage", k3s: "k3s alone" };
-const K3S_UBUNTU = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img";
+const K3S_UBUNTU = "https://cloud-images.ubuntu.com/minimal/releases/resolute/release-20260827/ubuntu-26.04-minimal-cloudimg-amd64.img";
 
 window.k3sCluster = async () => {
   modal("New k3s cluster", '<div class="empty"><span class="spin2"></span></div>', true);
@@ -683,8 +683,8 @@ window.k3sCluster = async () => {
     <div class="f2"><div class="f"><label>Disk each (GB) ${tip("Longhorn inside the cluster keeps its volumes here, so leave room for your apps.")}</label><input id="k_disk" type="number" min="20" value="40"></div>
       <div class="f"><label>Login password ${tip("For the ubuntu user on every node, at the console or over SSH.")}</label><input id="k_pass" type="password" autocomplete="new-password"></div></div>
     <div class="f"><label>Image ${tip("The operating system every node starts from. An Ubuntu cloud image works best: it runs cloud-init, which sets up the address, login and k3s.")}</label><select id="k_image">
-      ${images.map(i => `<option value="image:${esc(i.namespace)}/${esc(i.name)}" ${/noble|24\.04|ubuntu/i.test(i.display) ? "selected" : ""}>Harvester image · ${esc(i.display)}</option>`).join("")}
-      <option value="url" ${images.some(i => /noble|24\.04|ubuntu/i.test(i.display)) ? "" : "selected"}>Ubuntu 24.04 cloud image (downloaded${opts.harvester ? " as a Harvester image" : ""})</option></select></div>
+      ${images.map(i => `<option value="image:${esc(i.namespace)}/${esc(i.name)}">Harvester image · ${esc(i.display)}</option>`).join("")}
+      <option value="url" selected>Ubuntu 26.04.1 LTS minimal cloud image (downloaded${opts.harvester ? " as a Harvester image" : ""})</option></select></div>
     ${(opts.storage_classes || []).length ? `<div class="f"><label>Storage class ${tip("Where each node's disk lives on this cluster.")}</label><select id="k_sc">${opts.storage_classes.map(c => `<option ${c === opts.default_class ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></div>` : ""}
     <div class="sec">Network</div>
     <div class="f"><label>LAN network ${tip("The network bridged to your LAN the nodes join, so each has an address of its own there.")}</label><select id="k_net">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}</option>`).join("") || '<option value="">none reaches the LAN</option>'}</select></div>

@@ -29,7 +29,7 @@
 </script>
 <title>Homestead</title>
 <meta name="description" content="Homestead is a friendly homelab control plane for Harvester, Rancher, Longhorn, Fleet and Kubernetes workloads.">
-<link rel="icon" type="image/svg+xml" href="/assets/homestead-mark.svg?v=2.8.291">
+<link rel="icon" type="image/svg+xml" href="/assets/homestead-mark.svg?v=2.8.292-dev.2">
 <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <meta name="theme-color" content="#070708">
@@ -40,7 +40,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="/style.css?v=2.8.291">
+<link rel="stylesheet" href="/style.css?v=2.8.292-dev.2">
 </head>
 <body>
 
@@ -76,6 +76,8 @@
     <symbol id="i-disk" viewBox="0 0 24 24"><ellipse cx="12" cy="6.2" rx="7.8" ry="3.1"/><path d="M4.2 6.2v11.6c0 1.7 3.5 3.1 7.8 3.1s7.8-1.4 7.8-3.1V6.2"/><path d="M4.2 12c0 1.7 3.5 3.1 7.8 3.1s7.8-1.4 7.8-3.1"/></symbol>
     <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2.2"/><path d="M15.5 8.5V6.7A2.2 2.2 0 0 0 13.3 4.5H6.7A2.2 2.2 0 0 0 4.5 6.7v6.6a2.2 2.2 0 0 0 2.2 2.2h1.8"/></symbol>
     <symbol id="i-list" viewBox="0 0 24 24"><path d="M8.5 6.5h11M8.5 12h11M8.5 17.5h11"/><circle cx="4.6" cy="6.5" r="1.2"/><circle cx="4.6" cy="12" r="1.2"/><circle cx="4.6" cy="17.5" r="1.2"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M3 7h4m4 0h10M3 17h10m4 0h4"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="17" r="2"/></symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.8" cy="10.8" r="6.6"/><path d="M15.6 15.6 20.5 20.5"/></symbol>
     <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20.3 12a8.3 8.3 0 1 1-2.6-6"/><path d="M20.3 4v5.2h-5.2"/></symbol>
     <symbol id="i-vm" viewBox="0 0 24 24"><rect x="2.6" y="4.2" width="18.8" height="12.4" rx="2"/><path d="M8.5 20.4h7M12 16.6v3.8"/><rect x="7" y="8" width="10" height="4.8" rx="1"/></symbol>
@@ -128,8 +130,8 @@
 <div id="app">
   <aside class="side">
     <div class="brand">
-      <img class="brandmark" src="/assets/homestead-mark.svg?v=2.8.291" alt="">
-      <div><div class="bname">Homestead</div><div class="bver" data-version="2.8.291">v2.8.291</div></div>
+      <img class="brandmark" src="/assets/homestead-mark.svg?v=2.8.292-dev.2" alt="">
+      <div><div class="bname">Homestead</div><div class="bver" data-version="2.8.292-dev.2">v2.8.292-dev.2</div></div>
     </div>
     <nav id="nav">
       <div class="navlbl">Overview</div>
@@ -212,47 +214,47 @@
     <div id="mbody"></div>
   </div>
 </div>
-<script src="/js/router.js?v=2.8.291"></script>
-<script src="/js/demo.js?v=2.8.291"></script>
-<script src="/js/metrics-utils.js?v=2.8.291"></script>
-<script src="/js/core.js?v=2.8.291"></script>
-<script src="/js/ui.js?v=2.8.291"></script>
-<script src="/js/diagrams.js?v=2.8.291"></script>
-<script src="/js/fleet.js?v=2.8.291"></script>
-<script src="/js/ipam-picker.js?v=2.8.291"></script>
-<script src="/js/config-backup.js?v=2.8.291"></script>
-<script src="/js/operations.js?v=2.8.291"></script>
-<script src="/js/update-state.js?v=2.8.291"></script>
-<script src="/js/volume-picker.js?v=2.8.291"></script>
-<script src="/js/views-overview.js?v=2.8.291"></script>
-<script src="/js/appstore-utils.js?v=2.8.291"></script>
-<script src="/js/views-workloads.js?v=2.8.291"></script>
-<script src="/js/homestead-update.js?v=2.8.291"></script>
-<script src="/js/views-storage.js?v=2.8.291"></script>
-<script src="/js/compose.js?v=2.8.291"></script>
-<script src="/js/views-network.js?v=2.8.291"></script>
-<script src="/js/views-ipam.js?v=2.8.291"></script>
-<script src="/js/views-helm.js?v=2.8.291"></script>
-<script src="/js/views-stats.js?v=2.8.291"></script>
-<script src="/js/platform.js?v=2.8.291"></script>
-<script src="/js/views-resources.js?v=2.8.291"></script>
-<script src="/js/move.js?v=2.8.291"></script>
-<script src="/js/views-lifecycle.js?v=2.8.291"></script>
-<script src="/js/views-vms.js?v=2.8.291"></script>
-<script src="/js/vm-hardware.js?v=2.8.291"></script>
-<script src="/js/cron.js?v=2.8.291"></script>
-<script src="/js/views-protect.js?v=2.8.291"></script>
-<script src="/js/views-portal.js?v=2.8.291"></script>
-<script src="/js/vm-console.js?v=2.8.291"></script>
-<script src="/js/host-os.js?v=2.8.291"></script>
-<script src="/js/passthrough.js?v=2.8.291"></script>
-<script src="/js/welcome.js?v=2.8.291"></script>
-<script src="/js/views-settings.js?v=2.8.291"></script>
-<script src="/js/views-cluster.js?v=2.8.291"></script>
-<script src="/js/onboard.js?v=2.8.291"></script>
-<script src="/js/pwa.js?v=2.8.291"></script>
-<script src="/js/app.js?v=2.8.291"></script>
-<script src="/js/mobile-refresh.js?v=2.8.291"></script>
-<script src="/js/auth.js?v=2.8.291"></script>
+<script src="/js/router.js?v=2.8.292-dev.2"></script>
+<script src="/js/demo.js?v=2.8.292-dev.2"></script>
+<script src="/js/metrics-utils.js?v=2.8.292-dev.2"></script>
+<script src="/js/core.js?v=2.8.292-dev.2"></script>
+<script src="/js/ui.js?v=2.8.292-dev.2"></script>
+<script src="/js/diagrams.js?v=2.8.292-dev.2"></script>
+<script src="/js/fleet.js?v=2.8.292-dev.2"></script>
+<script src="/js/ipam-picker.js?v=2.8.292-dev.2"></script>
+<script src="/js/config-backup.js?v=2.8.292-dev.2"></script>
+<script src="/js/operations.js?v=2.8.292-dev.2"></script>
+<script src="/js/update-state.js?v=2.8.292-dev.2"></script>
+<script src="/js/volume-picker.js?v=2.8.292-dev.2"></script>
+<script src="/js/views-overview.js?v=2.8.292-dev.2"></script>
+<script src="/js/appstore-utils.js?v=2.8.292-dev.2"></script>
+<script src="/js/views-workloads.js?v=2.8.292-dev.2"></script>
+<script src="/js/homestead-update.js?v=2.8.292-dev.2"></script>
+<script src="/js/views-storage.js?v=2.8.292-dev.2"></script>
+<script src="/js/compose.js?v=2.8.292-dev.2"></script>
+<script src="/js/views-network.js?v=2.8.292-dev.2"></script>
+<script src="/js/views-ipam.js?v=2.8.292-dev.2"></script>
+<script src="/js/views-helm.js?v=2.8.292-dev.2"></script>
+<script src="/js/views-stats.js?v=2.8.292-dev.2"></script>
+<script src="/js/platform.js?v=2.8.292-dev.2"></script>
+<script src="/js/views-resources.js?v=2.8.292-dev.2"></script>
+<script src="/js/move.js?v=2.8.292-dev.2"></script>
+<script src="/js/views-lifecycle.js?v=2.8.292-dev.2"></script>
+<script src="/js/views-vms.js?v=2.8.292-dev.2"></script>
+<script src="/js/vm-hardware.js?v=2.8.292-dev.2"></script>
+<script src="/js/cron.js?v=2.8.292-dev.2"></script>
+<script src="/js/views-protect.js?v=2.8.292-dev.2"></script>
+<script src="/js/views-portal.js?v=2.8.292-dev.2"></script>
+<script src="/js/vm-console.js?v=2.8.292-dev.2"></script>
+<script src="/js/host-os.js?v=2.8.292-dev.2"></script>
+<script src="/js/passthrough.js?v=2.8.292-dev.2"></script>
+<script src="/js/welcome.js?v=2.8.292-dev.2"></script>
+<script src="/js/views-settings.js?v=2.8.292-dev.2"></script>
+<script src="/js/views-cluster.js?v=2.8.292-dev.2"></script>
+<script src="/js/onboard.js?v=2.8.292-dev.2"></script>
+<script src="/js/pwa.js?v=2.8.292-dev.2"></script>
+<script src="/js/app.js?v=2.8.292-dev.2"></script>
+<script src="/js/mobile-refresh.js?v=2.8.292-dev.2"></script>
+<script src="/js/auth.js?v=2.8.292-dev.2"></script>
 </body>
 </html>

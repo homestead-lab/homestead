@@ -22,6 +22,9 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // (the first button in the dialog with that label).
 const DIALOGS = [
   ["self-data-prepare", "settings", "window.__demoDataPrepared=false;replicasMoveData()", "selfDataPrepareReview()"],
+  ["self-data-blocked-k3s", "settings", "window.__demoOps=(window.__demoOps||[]).filter(x=>x.id!=='data-batch-recovery');window.__demoDataBatchRecovery=true;replicasMoveData()"],
+  ["self-data-batch-recovery", "settings", "window.__demoOps=(window.__demoOps||[]).filter(x=>x.id!=='data-batch-recovery');window.__demoDataBatchRecovery=true;replicasMoveData()", "selfDataOpenJob('data-batch-recovery')"],
+  ["self-data-archive-review", "settings", "window.__demoDataPrepared=true;replicasMoveData()", "selfDataArchiveReview('demo-data-prepare')"],
   ["self-data-final-review", "settings", "window.__demoDataPrepared=true;replicasMoveData('demo-data-prepare')", "selfDataFinalReview()"],
   ["change-password", "dash", "pwChange()"],
   ["storage-recovery-ready", "storage", "window.__demoStorageState='ready';storageRecoveryReview('op4')"],
@@ -177,6 +180,7 @@ async function audit([label, width, height, mobile], items) {
   await page.addStyleTag({ content: "#jobTray{display:none!important}" });
 
   for (const [name, view, ...steps] of items) {
+    await page.evaluate(() => { window.__demoDataBatchRecovery = false; });
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } });
       await page.evaluate((v) => go(v), view);

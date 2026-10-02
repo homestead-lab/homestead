@@ -30,6 +30,7 @@ FORMAT = "homestead-config-backup"
 FILE_VERSION = 1
 SCRYPT = {"n": 2 ** 15, "r": 8, "p": 1}
 MIN_PASSPHRASE = 8
+MAX_BACKUP_BYTES = 8 * 1024 * 1024
 _site = lambda: ""
 _after_restore = lambda parts: None
 
@@ -119,10 +120,13 @@ def unseal(doc, passphrase):
     try:
         kdf = doc["kdf"]
         params = {"n": int(kdf["n"]), "r": int(kdf["r"]), "p": int(kdf["p"])}
-        if kdf.get("name") != "scrypt" or params["n"] > 2 ** 20 or params["r"] > 16 or params["p"] > 4:
+        if (kdf.get("name") != "scrypt" or params != SCRYPT or
+                len(doc["data"]) > (MAX_BACKUP_BYTES * 4 // 3 + 8)):
             raise ValueError
         salt, nonce = base64.b64decode(kdf["salt"]), base64.b64decode(doc["nonce"])
         cipher, tag = base64.b64decode(doc["data"]), base64.b64decode(doc["tag"])
+        if len(salt) != 16 or len(nonce) != 16 or len(tag) != 32 or len(cipher) > MAX_BACKUP_BYTES:
+            raise ValueError
         enc_key, mac_key = _keys(passphrase or "", salt, params)
         expected = hmac.new(mac_key, _header(doc) + nonce + cipher, hashlib.sha256).digest()
     except (KeyError, TypeError, ValueError) as error:
@@ -130,7 +134,11 @@ def unseal(doc, passphrase):
     if not hmac.compare_digest(expected, tag):
         raise PermissionError("wrong passphrase, or the file was changed since it was made")
     plain = bytes(a ^ b for a, b in zip(cipher, _stream(enc_key, nonce, len(cipher))))
-    return json.loads(zlib.decompress(plain).decode())
+    decoder = zlib.decompressobj()
+    expanded = decoder.decompress(plain, MAX_BACKUP_BYTES + 1)
+    if len(expanded) > MAX_BACKUP_BYTES or decoder.unconsumed_tail or not decoder.eof or decoder.unused_data:
+        raise ValueError("backup contents exceed the size limit or are damaged")
+    return json.loads(expanded.decode())
 
 
 # ------------------------------------------------------------------ backup

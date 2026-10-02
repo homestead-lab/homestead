@@ -130,7 +130,8 @@ async function loadImageUpdates(force = false, quiet = false, only = "") {
 window.loadImageUpdates = loadImageUpdates;
 window.startUpdateChecks = () => {
   clearInterval(window.__imageUpdateLoop);
-  setTimeout(() => loadImageUpdates(false, false), 3500);
+  clearTimeout(window.__imageUpdateStart);
+  window.__imageUpdateStart = setTimeout(() => loadImageUpdates(false, false), 3500);
   window.__imageUpdateLoop = setInterval(() => {
     if (!document.hidden) loadImageUpdates(false, false);
   }, 15 * 60 * 1000);
@@ -287,6 +288,29 @@ function workloadGroupBar(all, pick) {
       chip(name, name, all.filter(w => w.group === name).length)).join("")}${loose ? chip(NO_GROUP, "Ungrouped", loose) : ""}</div>` : ""}</div>`;
 }
 
+function workloadGroupSelect(all, pick) {
+  const names = workloadGroupNames(all), loose = all.filter(w => !w.group).length;
+  if (!names.length) return '<span class="wl-mobile-scope">All containers</span>';
+  const option = (value, label, count) => `<option value="${groupKeyIndex(value)}"${pick === value ? " selected" : ""}>${esc(label)} · ${count}</option>`;
+  return `<select class="wl-group-select" aria-label="Container group" title="${esc(pick === NO_GROUP ? "Ungrouped" : pick || "All groups")}" onchange="pickWorkloadGroup(+this.value)">
+    ${option("", "All groups", all.length)}${names.map(name => option(name, name, all.filter(w => w.group === name).length)).join("")}${loose ? option(NO_GROUP, "Ungrouped", loose) : ""}</select>`;
+}
+
+function workloadListOptions(platform, layout, items) {
+  const controls = `${layout === "rows" ? '<div class="sortbar" data-sort-controls="containers"></div>' : ""}
+    ${platform.length ? `<label class="list-option-setting">Show platform containers <input type="checkbox"${platformShown() ? " checked" : ""} onchange="togglePlatformContainers()"></label>` : ""}
+    <label class="list-option-setting">Layout <select aria-label="Container layout" onchange="workloadListLayout(this)">
+      <option value="rows"${layout === "rows" ? " selected" : ""}>Rows</option><option value="cards"${layout === "cards" ? " selected" : ""}>Cards</option></select></label>`;
+  return listOptions(controls, items);
+}
+window.workloadListLayout = select => {
+  const layout = select.value;
+  closeActionMenu(select.closest("details"));
+  // Keep the header and focus in place while only the list changes shape.
+  document.querySelector(".wl-mobile-toolbar .list-options>summary")?.focus({preventScroll:true});
+  setViewLayout("containers", "renderWorkloads", layout, {preservePaint:true});
+};
+
 /* Put one workload in a group: pick one it could join, or name a new one. */
 window.wlGroup = (ns, name) => {
   const w = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) || {};
@@ -361,22 +385,27 @@ function renderWorkloads() {
   const updateErrors = report?.errors || 0;
   const unchecked = (report?.workloads || []).filter(w => w.unchecked && !w.homestead).length;
   const layout = viewLayout("containers");
-  paint(`<div class="phead">
+  const items = [{ label: "Check for image updates", icon: "refresh", run: "checkImageUpdates()", tip: "Ask the registries for newer images" },
+    { label: "Manage groups", icon: "list", run: "manageWorkloadGroups()", need: "operator" },
+    { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" }];
+  const updateButtons = `${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
+    ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} check${updateErrors === 1 ? "" : "s"} failed</button>` : ""}`.trim();
+  const deploy = '<button class="btn pri" data-need="operator" onclick="go(\'deploy\')">＋ Deploy</button>';
+  paint(`<div class="containers-page" data-collection="containers"><div class="phead">
       <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · ${platform.length
         ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="Homestead and the helpers it runs - updated under Settings › Updates - and KubeVirt, CDI and the like, run by their own operators and upgraded under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
         : "system pods hidden"}${unchecked ? ` · <span data-tip="Marked ? in the list: stopped since Homestead started, so not yet compared with their registries">${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? " · images current" : ""}</p>
         ${all.length ? workloadGroupBar(all, group) : ""}</div>
-      <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>
-      ${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
-      ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} <span class="hide-sm">check${updateErrors === 1 ? "" : "s"} </span>failed</button>` : ""}
+      <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>${updateButtons}
       ${layoutSwitch("containers", "renderWorkloads")}
-      ${moreMenu([{ label: "Check for image updates", icon: "refresh", run: "checkImageUpdates()", tip: "Ask the registries for newer images" },
-        { label: workloadGroupNames(all).length ? "Groups" : "Group workloads", icon: "list", run: "manageWorkloadGroups()", need: "operator" },
-        { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" }])}
-      <button class="btn pri" data-need="operator" onclick="go('deploy')">＋ Deploy</button></div></div>
+      ${moreMenu([items[0],items[1],{label:layout === "cards" ? "Show as rows" : "Show as cards",run:`setViewLayout('containers','renderWorkloads',${jsq(layout === "cards" ? "rows" : "cards")})`},items[2]])}
+      ${deploy}</div></div>
+    <div class="wl-mobile-head"><div class="wl-mobile-toolbar">${workloadGroupSelect(all, group)}${workloadListOptions(platform, layout, items)}${deploy}</div>
+      <div class="wl-mobile-summary"><span>${rows.length} container${rows.length === 1 ? "" : "s"}</span>${updateButtons ? `<span aria-hidden="true">·</span>${updateButtons}` : ""}
+        ${unchecked ? `<span class="dim" data-tip="Stopped or still starting; not yet compared with their registries">· ${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? '<span class="dim">· images current</span>' : ""}</div></div>
 
     ${rows.length ? workloadSections(rows, layout, group)
-      : `<div class="empty">${q || group ? "Nothing matches that search." : "Nothing deployed yet."}</div>`}`);
+      : `<div class="empty">${q || group ? "Nothing matches that search." : "Nothing deployed yet."}</div>`}</div>`);
 }
 
 /* An image with no tag is Docker's latest; saying so is clearer than leaving it off. */
@@ -414,47 +443,30 @@ function platformTag(w) {
 
 /* The same actions for a card and a row: a row shows them as icons. */
 function workloadActions(w, update, off, compact = false) {
-  const label = (text, iconName) => compact ? icon(iconName) : `${icon(iconName)}${text}`;
-  const cls = compact ? "btn sm iconic" : "btn sm";
-  if (w.managed_smb || w.managed_nfs) {
-    return `<button class="${cls}" title="View managed share server logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs(${jsq(w.ns)},${jsq(w.pods[0] ? w.pods[0].name : "")},${jsq(w.name)})">${label("Logs", "log")}</button>
-      <button class="${cls}" title="Manage shares and server settings" aria-label="Manage ${esc(w.name)} in Network Shares" onclick="go('shares')">${label("Network Shares", "edit")}</button>`;
-  }
-  // Homestead and its object store: logs, a fresh start, and where each is
-  // looked after. Updates are Homestead's, on the top bar and under About.
-  if (w.homestead === "self" || w.homestead === "objectstore") {
-    const self = w.homestead === "self";
-    return `<button class="${cls}" title="View live container logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs(${jsq(w.ns)},${jsq(w.pods[0] ? w.pods[0].name : "")},${jsq(w.name)})">${label("Logs", "log")}</button>
-      <button class="${cls}" title="${self ? "Restart Homestead: this page reconnects when it is back" : "Restart: replace every pod with a fresh one"}" aria-label="Restart ${esc(w.name)}" data-need="operator" onclick="wlRestart(${jsq(w.ns)},${jsq(w.name)})">${label("Restart", "restart")}</button>
-      <button class="${cls}" title="${self ? "Version, copies and data: Settings › Homestead" : "Migration from this cluster: Settings › Linked clusters"}" aria-label="Manage ${esc(w.name)}" onclick="homesteadPartManage(${jsq(w.homestead)})">${label(self ? "Settings" : "Migration", "gear")}</button>`;
-  }
-  // A platform container's operator owns it: logs and a fresh start only.
-  if (w.platform) {
-    return `<button class="${cls}" title="View live container logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs(${jsq(w.ns)},${jsq(w.pods[0] ? w.pods[0].name : "")},${jsq(w.name)})">${label("Logs", "log")}</button>
-      <button class="${cls}" title="Restart: replace every pod with a fresh one" aria-label="Restart ${esc(w.name)}" data-need="operator" onclick="wlRestart(${jsq(w.ns)},${jsq(w.name)})">${label("Restart", "restart")}</button>`;
-  }
-  // Update comes first: the actions are right-aligned, so the ones every row
-  // has stay put whether or not an update is waiting.
-  return `${update?.available ? `<button class="btn sm pri" title="Review and install the available image update" aria-label="Update ${esc(w.name)}" data-need="operator" onclick="imageUpdateReview(${jsq(w.ns)},${jsq(w.name)})">${icon("update")}<span class="wl-label">Update</span></button>` : ""}
-          <button class="${cls}" title="View live container logs" aria-label="Logs for ${esc(w.name)}" onclick="wlLogs(${jsq(w.ns)},${jsq(w.pods[0] ? w.pods[0].name : "")},${jsq(w.name)})">${label("Logs", "log")}</button>
-          ${off ? "" : `<button class="${cls} sm-more" title="Restart: replace every pod in this workload with a fresh one" aria-label="Restart ${esc(w.name)}" data-need="operator" onclick="wlRestart(${jsq(w.ns)},${jsq(w.name)})">${label("Restart", "restart")}</button>`}
-          ${off ? `<button class="${cls}" title="Start this workload" aria-label="Start ${esc(w.name)}" onclick="wlScale(${jsq(w.ns)},${jsq(w.name)},1)">${label("Start", "play")}</button>`
-                : `<button class="${cls} sm-more" title="Scale this workload to zero" aria-label="Stop ${esc(w.name)}" onclick="${w.self ? `wlStopSelf(${jsq(w.ns)},${jsq(w.name)})` : `wlScale(${jsq(w.ns)},${jsq(w.name)},0)`}">${label("Stop", "stop")}</button>`}
-          <details class="actionmenu"><summary class="btn sm" title="More actions" aria-label="More actions for ${esc(w.name)}">⋯</summary>
-            <div class="actionmenu-pop">
-              ${off ? "" : `<button class="sm-only" data-need="operator" onclick="this.closest('details').open=false;wlRestart(${jsq(w.ns)},${jsq(w.name)})">${icon("restart")}Restart</button>
-              <button class="sm-only" onclick="this.closest('details').open=false;${w.self ? `wlStopSelf(${jsq(w.ns)},${jsq(w.name)})` : `wlScale(${jsq(w.ns)},${jsq(w.name)},0)`}">${icon("stop")}Stop</button>`}
-              <button aria-label="Console for ${esc(w.name)}" title="Open an audited interactive shell in a running container" data-need="operator" onclick="this.closest('details').open=false;wlConsole(${jsq(w.ns)},${jsq(w.name)})">${icon("console")}Console</button>
-              <button aria-label="Edit ${esc(w.name)}" title="Edit image, resources, environment, storage and hardware" onclick="this.closest('details').open=false;wlEdit(${jsq(w.ns)},${jsq(w.name)})">${icon("edit")}Edit</button>
-              ${FLEET.view?.linked && !w.self ? `<button data-need="admin" title="Move it to another linked cluster, volumes and all" onclick="this.closest('details').open=false;moveToCluster('container',${jsq(w.name)},${jsq(w.site?.handle || "")})">${icon("move")}Move to cluster</button>` : ""}
-              ${(w.ports || []).length > 1 ? `<button aria-label="Main port of ${esc(w.name)}" title="Which port the card links to first - usually its web UI" onclick="this.closest('details').open=false;wlPrimaryPort(${jsq(w.ns)},${jsq(w.name)})">${icon("ext")}Main port</button>` : ""}
-              <button aria-label="Placement of ${esc(w.name)}" title="Where it runs: copies, spreading, and nodes shared with or kept apart from other workloads" onclick="this.closest('details').open=false;wlPlacement(${jsq(w.ns)},${jsq(w.name)})">${icon("node")}Placement</button>
-              <button aria-label="Group ${esc(w.name)}" title="Put this workload in a group on the Containers page" data-need="operator" onclick="this.closest('details').open=false;wlGroup(${jsq(w.ns)},${jsq(w.name)})">${icon("list")}Group${w.group ? ` · ${esc(w.group)}` : ""}</button>
-              <button aria-label="Move ${esc(w.name)}" title="Move this workload to another eligible host" data-need="operator" onclick="this.closest('details').open=false;moveWorkload(${jsq(w.name)},${jsq(w.ns)})">${icon("move")}Move</button>
-              ${update?.can_rollback ? `<button aria-label="Rollback ${esc(w.name)}" title="Restore the exact image digest saved before the last update" data-need="operator" onclick="this.closest('details').open=false;imageRollback(${jsq(w.ns)},${jsq(w.name)})">${icon("rollback")}Rollback</button>` : ""}
-              <button class="danger" aria-label="Delete ${esc(w.name)}" title="Delete the workload; persistent volumes are kept" onclick="this.closest('details').open=false;wlDelete(${jsq(w.ns)},${jsq(w.name)})">${icon("trash")}Delete</button>
-            </div>
-          </details>`;
+  const ns = jsq(w.ns), name = jsq(w.name);
+  const item = (label, run, iconName, options = {}) => ({label, run, icon:iconName, ariaLabel:`${label} ${w.name}`, ...options});
+  const bar = items => actionBar(items, {label:`More actions for ${w.name}`,iconOnly:compact});
+  const logs = item("Logs", `wlLogs(${ns},${jsq(w.pods?.[0]?.name || "")},${name})`, "log", {tip:"View live container logs"});
+  const restart = item("Restart", `wlRestart(${ns},${name})`, "restart", {need:"operator",tip:"Replace every pod with a fresh one"});
+  if (w.managed_smb || w.managed_nfs) return bar([logs, item("Network Shares", "go('shares')", "edit")]);
+  if (w.homestead === "self" || w.homestead === "objectstore") return bar([logs, restart,
+    item(w.homestead === "self" ? "Settings" : "Migration", `homesteadPartManage(${jsq(w.homestead)})`, "gear")]);
+  if (w.platform) return bar([logs, restart]);
+  return bar([
+    update?.available && item("Update", `imageUpdateReview(${ns},${name})`, "update", {pri:true,need:"operator"}),
+    logs,
+    off ? item("Start", `wlScale(${ns},${name},1)`, "play", {need:"operator"}) : restart,
+    !off && item("Stop", w.self ? `wlStopSelf(${ns},${name})` : `wlScale(${ns},${name},0)`, "stop", {need:"operator"}),
+    item("Console", `wlConsole(${ns},${name})`, "console", {need:"operator",tip:"Open an audited shell in a running container"}),
+    item("Edit", `wlEdit(${ns},${name})`, "edit", {need:"operator"}),
+    FLEET.view?.linked && !w.self && item("Move to cluster", `moveToCluster('container',${name},${jsq(w.site?.handle || "")})`, "move", {need:"admin"}),
+    (w.ports || []).length > 1 && item("Main port", `wlPrimaryPort(${ns},${name})`, "ext"),
+    item("Placement", `wlPlacement(${ns},${name})`, "node"),
+    item("Group", `wlGroup(${ns},${name})`, "list", {need:"operator"}),
+    item("Move", `moveWorkload(${name},${ns})`, "move", {need:"operator"}),
+    update?.can_rollback && item("Rollback", `imageRollback(${ns},${name})`, "rollback", {need:"operator"}),
+    item("Delete", `wlDelete(${ns},${name})`, "trash", {danger:true,need:"operator"})
+  ]);
 }
 
 function workloadCard(w) {
@@ -497,11 +509,11 @@ function workloadTable(rows, sections = null, folded = new Set()) {
   // orders the rows within each group rather than mixing them.
   const bodies = sections ? sections.map(([name, members]) => {
     const shut = folded.has(name || NO_GROUP);
-    return `<tbody class="grouphead"><tr><td colspan="7">${workloadGroupHead(name, members, shut)}</td></tr></tbody>
+    return `<tbody class="grouphead"><tr><td colspan="8">${workloadGroupHead(name, members, shut)}</td></tr></tbody>
       <tbody${shut ? " hidden" : ""}>${workloadTableRows(members)}</tbody>`;
   }).join("") : `<tbody>${workloadTableRows(rows)}</tbody>`;
-  return `<div class="card flat pad0 wltable-wrap"><table class="tbl dense stack wltable" data-sort="containers"><thead><tr>
-    <th>Workload</th><th>Status</th><th class="wl-image">Image</th><th>CPU</th><th>RAM</th><th class="wl-access">Access</th><th></th></tr></thead>
+  return `<div class="card flat pad0 wltable-wrap"><table class="tbl dense stack compact wltable" data-sort="containers" data-sort-controls="containers"><thead><tr>
+    <th>Workload</th><th>Status</th><th class="wl-image">Image</th><th>CPU</th><th>RAM</th><th class="wl-access">Access</th><th class="wl-uptime">Uptime</th><th data-nosort>Actions</th></tr></thead>
     ${bodies}</table></div>`;
 }
 
@@ -515,29 +527,58 @@ function uncheckedMark(update) {
   return `<span class="tip unchecked-tip" tabindex="0" role="img" aria-label="${tip}" data-tip="${tip}">?</span>`;
 }
 
+const workloadExpanded = new Set();
+const workloadRowKey = w => JSON.stringify([w.site?.id || "", w.ns, w.name]);
 function workloadTableRows(rows) {
-  return `${rows.map(w => {
-      const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
-      const update = w.platform || w.managed_smb || w.managed_nfs || remoteRow(w) ? null : workloadUpdate(w.ns, w.name);
-      const updateError = update?.images?.find(x => x.error);
-      // Stopped with nothing to report: on a phone the row is its name alone.
-      const quiet = off && !update?.unchecked && !updateError && !workloadPull(w) && !workloadBlocked(w);
-      return `<tr class="${off ? "wl-off" : ""}${quiet ? " wl-quiet" : ""}"${clusterAttr(w)}>
-        <td class="wl-name" data-sort="${esc(w.name)}"><div class="row nowrap" style="gap:9px">${appAvatar(w.name, w.icon)}
-          <div class="wtitle"><div><b>${esc(w.name)}</b></div>
-            <div class="dim xs">${w.platform ? `${platformTag(w)} ` : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info">managed ${w.managed_nfs ? "NFS" : "SMB"}</span> ` : ""}${esc(w.ns)} · ${off ? "stopped" : `${w.managed_smb || w.managed_nfs ? esc(w.nodes.join(", ") || "unscheduled") : `<span class="nodelink" onclick="moveWorkload(${jsq(w.name)},${jsq(w.ns)})">${esc(w.nodes.join(", ") || "unscheduled")}</span>`}${w.uptime ? ` · up ${esc(fmtUp(w.uptime))}` : " · starting"}`}</div></div></div></td>
-        <td class="wl-status" data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row nowrap" style="gap:5px"><span class="pill slim wl-ready ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${w.ready}/${w.desired}</span>${uncheckedMark(update)}
-          ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}</div>${workloadPull(w) ? pullBar(workloadPull(w)) : ""}
-          ${workloadBlocked(w) ? `<div class="wblocked" title="${esc(workloadBlocked(w))}">${esc(workloadBlocked(w))}</div>` : ""}</td>
-        <td class="wl-image"><div class="mono xs wl-imagetext" title="${esc(w.images.map(imageLabel).join(" · "))}">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</div>
-          ${(w.hardware || []).length || w.gpu ? `<div>${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div>` : ""}</td>
-        <td class="mono small nowrap wl-cpu" data-sort="${off ? "" : w.cpu}" data-tip="Live usage. 100% equals one fully used CPU core.">${workloadCpuPercent(w.cpu)}</td>
-        <td class="mono small nowrap wl-ram" data-sort="${off ? "" : w.mem_mb}">${workloadMemory(w.mem_mb)}</td>
-        <td class="wl-access"><div class="waccess">${accessPorts(w.ports)}</div></td>
-        <td class="wl-actions"><div class="row nowrap wacts">${workloadActions(w, update, off, true)}</div></td>
-      </tr>`;
-    }).join("")}`;
+  return rows.map(w => {
+    const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
+    const key = workloadRowKey(w), id = `wl-detail-${encodeURIComponent(key)}`, open = workloadExpanded.has(key);
+    const uptime = !off && Number.isFinite(w.uptime) && w.uptime > 0 ? w.uptime : null;
+    const update = w.platform || w.managed_smb || w.managed_nfs || remoteRow(w) ? null : workloadUpdate(w.ns, w.name);
+    const updateError = update?.images?.find(x => x.error), pull = workloadPull(w), blocked = workloadBlocked(w);
+    const quiet = off && !update?.unchecked && !updateError && !update?.available && !pull && !blocked;
+    const disclosure = collectionDisclosure({label:`Details for ${w.name}`,id:`wl-toggle-${encodeURIComponent(key)}`,controls:id,expanded:open,
+      run:`workloadToggleDetails(${jsq(key)},this)`,bodyHtml:`${appAvatar(w.name, w.icon)}<span class="wtitle"><b>${esc(w.name)}</b> ${clusterTag(w)}</span>`});
+    return `<tr class="wl-row${off ? " wl-off" : ""}${quiet ? " wl-quiet" : ""}${open ? " wl-expanded" : ""}" data-row-key="${esc(key)}"${clusterAttr(w)}>
+      <td class="wl-name" data-sort="${esc(w.name)}">${disclosure}
+        <div class="wl-row-meta dim xs">${w.platform ? `${platformTag(w)} ` : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info">managed ${w.managed_nfs ? "NFS" : "SMB"}</span> ` : ""}${esc(w.ns)} · ${esc(off ? "stopped" : (w.nodes || []).join(", ") || "unscheduled")}</div></td>
+      <td class="wl-status" data-status data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row wl-state-tags">
+        <span class="pill slim wl-ready ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${off ? "Stopped" : `${w.ready}/${w.desired}`}</span>
+        ${update?.available ? '<span class="tag warn">Update</span>' : ""}${uncheckedMark(update)}
+        ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
+        ${pull ? `<span class="tag" title="Fetching ${esc(pull.image || "image")}">Pulling ${Math.min(100, pull.percent || 0)}%</span>` : ""}
+        ${blocked ? `<span class="tag bad" data-tip="${esc(blocked)}">Blocked</span>` : ""}</div></td>
+      <td class="wl-image" data-sm-hide><div class="mono xs wl-imagetext" title="${esc(w.images.map(imageLabel).join(" · "))}">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</div>
+        ${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</td>
+      <td class="mono small nowrap wl-cpu" data-sort="${off ? "" : w.cpu}" data-tip="Live usage. 100% equals one fully used CPU core.">${off ? "—" : workloadCpuPercent(w.cpu)}</td>
+      <td class="mono small nowrap wl-ram" data-sort="${off ? "" : w.mem_mb}">${off ? "—" : workloadMemory(w.mem_mb)}</td>
+      <td class="wl-access" data-sm-hide><div class="waccess">${accessPorts(w.ports)}</div></td>
+      <td class="mono small nowrap wl-uptime" data-sm-hide data-sort="${uptime ?? ""}">${uptime === null ? "—" : esc(fmtUp(uptime))}</td>
+      <td class="wl-actions" data-actions><div class="wacts">${workloadActions(w, update, off, true)}</div></td>
+    </tr>
+    <tr class="wl-detail-row" data-detail-for="${esc(key)}"${clusterAttr(w)}${open ? "" : " hidden"}><td colspan="8">
+      <div class="wl-inline-detail" id="${esc(id)}">
+        ${blocked ? `<div class="wblocked">${esc(blocked)}</div>` : ""}${pull ? pullBar(pull) : ""}
+        <div class="about-grid">
+          <div><span>Host</span><b>${esc((w.nodes || []).join(", ") || "Unscheduled")}</b></div>
+          <div><span>Namespace · uptime</span><b>${esc(w.ns)} · ${esc(off ? "Stopped" : w.uptime ? fmtUp(w.uptime) : "Starting")}</b></div>
+          <div class="wl-detail-image"><span>Image</span><b class="mono small">${w.images.map(esc).join("<br>") || "—"}</b><div class="wl-detail-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div></div>
+          <div class="wl-detail-access"><span>Access</span><b class="waccess">${accessPorts(w.ports)}</b></div>
+        </div>
+        ${workloadHierarchy(w)}
+        <div class="wl-detail-actions">${workloadActions(w, update, off)}</div>
+      </div></td></tr>`;
+  }).join("");
 }
+window.workloadToggleDetails = (key, button) => {
+  const open = !workloadExpanded.has(key);
+  if (open) workloadExpanded.add(key); else workloadExpanded.delete(key);
+  button.setAttribute("aria-expanded", String(open));
+  const row = button.closest("tr");
+  row?.classList.toggle("wl-expanded", open);
+  const detail = row?.nextElementSibling;
+  if (detail?.dataset.detailFor === key) detail.hidden = !open;
+};
 
 
 function accessPorts(ports) {

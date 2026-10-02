@@ -22,7 +22,7 @@ import homestead_shared as SHARED
 DATA_DIR = "/data"
 # Steps that are each person's own; the rest are the cluster's, for admins.
 PERSONAL = ("appearance", "phone", "notifications")
-STEPS = ("health", "quorum", "clocks", "address", "https", "hostname", "lan", "disks", "storage",
+STEPS = ("health", "quorum", "clocks", "address", "lan", "https", "hostname", "disks", "storage", "smb",
          "backups", "config", "osupdates", "appearance", "phone", "notifications", "people",
          "unifi", "unraid", "homeassistant", "linked", "starter", "console")
 _lock = threading.Lock()

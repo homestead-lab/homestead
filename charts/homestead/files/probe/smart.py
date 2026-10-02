@@ -3,10 +3,11 @@
 import hashlib, hmac, json, os, re, subprocess, time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
+from homestead_http import BoundedHTTPServer, LimitedHandler, deadline, BODY_SECONDS
 
 SYS = "/host/sys"
 DEV = "/host/dev"
-AUTH_STORE = "/auth/store.json"
+AUTH_STORE = "/auth/key"
 NODE = os.environ.get("NODE_NAME", "")
 
 def read(path):
@@ -243,14 +244,14 @@ def signature_ok(raw, stamp, supplied):
     try:
         if abs(time.time() - int(stamp)) > 30:
             return False
-        with open(AUTH_STORE) as handle:
-            key = json.load(handle).get("signing_key", "").encode()
+        with open(AUTH_STORE, "rb") as handle:
+            key = handle.read()
         expected = hmac.new(key, stamp.encode() + b"." + raw, hashlib.sha256).hexdigest()
         return bool(key and hmac.compare_digest(expected, supplied or ""))
     except Exception:
         return False
 
-class H(BaseHTTPRequestHandler):
+class H(LimitedHandler):
     protocol_version = "HTTP/1.1"
     def log_message(self, *args): pass
     def send_json(self, code, value):
@@ -273,7 +274,11 @@ class H(BaseHTTPRequestHandler):
             return self.send_json(400, {"error": str(error)[:500]})
     def do_POST(self):
         length = min(4096, int(self.headers.get("Content-Length") or 0))
-        raw = self.rfile.read(length)
+        with deadline(self.connection, BODY_SECONDS):
+            raw = self.rfile.read(length)
+        if len(raw) != length:
+            self.close_connection = True
+            return self.send_json(400, {"error": "incomplete body"})
         if not signature_ok(raw, self.headers.get("X-Homestead-Time", ""),
                             self.headers.get("X-Homestead-Signature", "")):
             return self.send_json(403, {"error": "request signature is invalid"})
@@ -318,4 +323,4 @@ if __name__ == "__main__":
     # host shutting down would wait out its whole stop timeout for this.
     import signal
     signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
-    ThreadingHTTPServer(("0.0.0.0", 9100), H).serve_forever()
+    BoundedHTTPServer(("0.0.0.0", 9100), H, max_connections=8).serve_forever()

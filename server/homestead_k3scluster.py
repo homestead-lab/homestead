@@ -31,7 +31,8 @@ import urllib.parse
 
 BOOTSTRAP = "https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh"
 K3S = "https://get.k3s.io"
-UBUNTU = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+# Pin the released 26.04.1 minimal build; later point releases must be chosen explicitly.
+UBUNTU = "https://cloud-images.ubuntu.com/minimal/releases/resolute/release-20260827/ubuntu-26.04-minimal-cloudimg-amd64.img"
 LABEL = "homestead.io/k3s-cluster"
 ROLE = "homestead.io/k3s-role"
 LOG = "/var/log/homestead-k3s.log"
@@ -195,6 +196,9 @@ def prepare(cfg, token=None, guest_checks=False):
               # Its console kept as a log, so the job's Log shows the install.
               "log_console": True,
               "ipam_note": f"k3s cluster {built['name']}, {node['role']}"}
+        # Resolute minimal disks are UEFI/GPT images, unlike the old BIOS default.
+        if vm["image_url"] == UBUNTU:
+            vm["hardware"] = {"firmware": "uefi", "secure_boot": False}
         if (cfg.get("macs") or {}).get(node["name"]):
             vm["mac"] = cfg["macs"][node["name"]]
         configs.append(vm)

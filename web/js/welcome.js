@@ -13,7 +13,7 @@ const SETUP_CHAPTERS = [
   ["Cluster health", ["health", "quorum", "clocks"]],
   ["Access", ["address", "https", "hostname"]],
   ["LAN networking", ["lan"]],
-  ["Storage and backups", ["disks", "storage", "backups", "config", "osupdates"]],
+  ["Storage and backups", ["disks", "storage", "smb", "backups", "config", "osupdates"]],
   ["Preferences and users", ["appearance", "phone", "notifications", "people"]],
   ["Connections", ["unifi", "unraid", "homeassistant", "linked"]],
   ["Applications and console", ["starter", "console"]],
@@ -61,9 +61,10 @@ const SETUP_CHECKS = {
   quorum: "Checks the number of control-plane servers; one server is accepted for a lab.",
   clocks: "Checks the time-sync reports available from hosts.",
   address: "Checks whether Homestead is using a registered VIP.",
+  smb: "Checks that the SMB server is installed and enabled, not that clients can access its shares.",
   https: "Uses HTTPS in this browser or an address you previously checked. A saved address is not retested automatically.",
   hostname: "Checks whether this browser opened Homestead by name.",
-  lan: "Checks for saved LAN network definitions that support VMs and containers. It does not test host interfaces, DHCP or connectivity.",
+  lan: "Checks for saved LAN network definitions that support VMs and containers. It does not test host interfaces or DHCP; it confirms configuration, not connectivity.",
   disks: "Checks for unused non-system disks in the disk inventory.",
   storage: "Checks the default storage class and its replica count against ready nodes.",
   backups: "Checks that a backup target is configured. This does not verify a backup or restore.",
@@ -122,7 +123,7 @@ function setupStatusLabel(id, status, facts = {}) {
     if (id === "appearance") return "Confirmed by you";
     if (id === "https" && !facts.here) return "Previously checked";
     if (id === "config") return "Export recorded";
-    if (["lan", "backups", "osupdates", "unifi", "unraid", "homeassistant", "linked", "starter", "console"].includes(id)) return "Configuration found";
+    if (["lan", "smb", "backups", "osupdates", "unifi", "unraid", "homeassistant", "linked", "starter", "console"].includes(id)) return "Configuration found";
     return "Check passed";
   }
   if (status === "skipped") return "Skipped by choice";
@@ -195,7 +196,7 @@ const SETUP_STEPS = {
     more: "<p>Add a DNS record for the VIP on your router or local DNS server, for example homestead.lan, or use your tunnel's public hostname. Update the DNS record if the VIP changes.</p>",
   },
   lan: {
-    title: "LAN for VMs and containers",
+    title: "LAN networks",
     lead: () => "A LAN network gives a VM or container its own address on your local network. Set one up before creating workloads that need direct LAN access. Containers that only need published ports can use a workload VIP instead.",
     body: s => `${UI.steps([
       { title: "Choose the host interface", detailHtml: "Select the interface or bridge connected to your LAN. It must be available on every host that will run these workloads." },
@@ -223,6 +224,16 @@ const SETUP_STEPS = {
     actions: s => s.done ? [] : s.candidates?.length ? [{ label: `Make ${s.candidates[0]} the default`, run: `storageClassDefault(${jsArg(s.candidates[0])}).then(() => viewSetup())`, pri: true }]
       : [{ label: `Create a class with ${s.target} replicas`, run: "settingsTab('hardware');go('settings');setTimeout(() => window.storageClassCreate && storageClassCreate(), 900)", pri: true }],
     more: "<p>Changing the default affects new volumes only. Use Volumes to move an existing volume to another class.</p>",
+  },
+  smb: {
+    title: "SMB", lead: s => s.error ? "Review the SMB server and share configuration in Settings and Network shares." : s.done ? "The SMB server is installed and enabled. Add or review shares, then check access from a client on your LAN."
+      : s.installed ? "The SMB server is installed but switched off. Enable it in Settings to serve your network shares."
+      : "Enable SMB so computers on your LAN can access network shares. Choose its address, then add a share.",
+    body: s => s.installed ? UI.facts([["Server", s.enabled ? "Enabled" : "Off"], ["Configured shares", esc(s.shares ?? 0)],
+      ["Address", s.address ? `<span class="mono">${esc(s.address)}</span>` : "Not reported"]]) : "",
+    actions: () => [{ label: "Network shares", run: "go('shares')" },
+      { label: "Configure SMB", run: "settingsTab('hardware');go('settings')", pri: true }],
+    more: "<p>Settings → Hardware and storage → Add-ons controls the SMB server. Creating the first share can also install it. Network shares lets you add a volume and choose SMB users or guest access. Review the address and permissions before connecting a client.</p>",
   },
   backups: {
     title: "Backups", lead: s => s.done ? "A backup destination is configured. Set a backup schedule and test a restore before relying on it." :
