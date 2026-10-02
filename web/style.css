@@ -603,6 +603,8 @@ html[data-theme="light"] select{color-scheme:light}
 .edit-container-chevron{font-size:21px;color:var(--dim);transition:transform .2s var(--e)}.edit-container[open] .edit-container-chevron{transform:rotate(90deg)}
 .edit-container-title{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1}.edit-container-title b,.edit-container-title small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.edit-container-title small{color:var(--dim);font-size:10.5px}
 .edit-container-body{padding:14px;border-top:1px solid var(--line)}.subsec{margin:15px 0 9px;color:var(--mut);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+#e_containers .stepper-chip{flex-shrink:0;white-space:nowrap}
+.modalbox:has(#e_containers){background:var(--surf);color:var(--tx)}
 .managed-env-list{display:grid;gap:6px;margin-bottom:7px}.managed-env-list>div{display:grid;grid-template-columns:minmax(100px,1fr) minmax(130px,1.5fr) auto;gap:8px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:rgba(74,158,255,.05);font-size:11px}.managed-env-list>div>span:nth-child(2){color:var(--mut);overflow-wrap:anywhere}.managed-env-note,.edit-mount-note{margin:0 0 10px}
 .edit-port-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(88px,.62fr) minmax(88px,.62fr) minmax(84px,.5fr) auto auto;gap:10px;align-items:end;margin-bottom:11px}
 .edit-port-row .switch{margin:0 0 9px;white-space:nowrap}
