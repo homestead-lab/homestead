@@ -133,6 +133,47 @@ Settings → Hardware and storage) opens them all.
   device, as Harvester's dashboard does, because Harvester writes the Longhorn
   disk from it and would undo tags set on Longhorn alone.
 
+### Prepare an existing V1 disk for V2
+
+After setting up V2 on the host, open its **Storage** section. On a healthy
+V1 disk, choose **… > Prepare for V2**. An administrator completes two
+separate reviews:
+
+1. **Evacuate V1.** Homestead checks volume health, full replica sizes, free
+   space, tags and placement rules. Confirm disabling new replicas and moving
+   existing ones off. Longhorn chooses their destinations. The filesystem
+   remains mounted; this approval does not allow an erase.
+2. **Review erase.** Continue only after Longhorn has removed the old replicas
+   and their replacements are healthy and writable. Check the host and
+   device, type its exact name, and confirm erasing it. Homestead removes the
+   V1 entry, unmounts the filesystem normally, removes its fstab entry and
+   clears its signatures. It registers the device using its stable hardware
+   ID and waits for Longhorn to report a ready, schedulable V2 block disk.
+
+Other **V1** disks need room for these replicas. V2 space cannot receive them.
+With three replicas across three hosts, clearing a host's only V1 disk
+requires a spare V1 disk on that host or another eligible V1 host. The review
+checks capacity; it does not reserve it while evacuation runs.
+
+This guided preparation supports dedicated whole disks with ext4 or XFS.
+System disks, shared filesystems, partitions and LVM require separate disk
+planning. Harvester manages its own disks. Resolve backing-image copies
+before starting, and attach affected volumes so their writable replicas can
+be checked.
+
+Open **V2 preparation** on the disk or its saved task in **Jobs** to return.
+You can stop evacuation before approving the erase; replacement replicas
+remain and the old disk stays disabled for new replicas. A preparation
+helper continues through a Homestead restart. Successful helpers are removed;
+their output stays in the task log. A failed or missing helper is never
+automatically recreated. Keep the task and inspect its log, the device and
+the host receipt in `/var/lib/homestead/disk-v2` before recovering partial
+changes; unresolved tasks cannot be dismissed.
+
+Preparing a physical disk does not convert its volumes. Create a V2 storage
+class, then use **Change storage class** on each volume you want to move.
+That copies the volume and stops its workloads for the copy.
+
 ## When a drive fails
 
 A volume keeps running on its other copies when a drive dies, and Longhorn

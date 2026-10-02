@@ -251,6 +251,10 @@ def _public(item):
         item.get("status") != CANCELLING or _cancel_stale(item))
     out["cleanable"] = _cleanable(item)
     out["dismissible"] = item.get("status") in TERMINAL and not _receipt_needed(item) and not _recovery_needed(item)
+    if item.get("kind") == "disk-v2-convert":
+        out["disk_v2_preparation"] = True
+        out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("evacuating", "awaiting-erase", "cancelled")
+        out["cleanable"] = False
     if item.get("kind") == "k3s-cluster":
         out["tracking_only"] = True
     if item.get("kind") == "vm-power":
