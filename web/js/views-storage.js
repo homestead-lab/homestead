@@ -1647,23 +1647,24 @@ function diskRowsHtml(node, disks, harvester) {
           <button class="linkish xs" data-need="admin" data-tags="${esc(JSON.stringify(x.tags || []))}"
             onclick="diskTags(${jsq(node)},${jsq(x.id)},JSON.parse(this.dataset.tags))">${(x.tags || []).length ? "Edit tags" : "Add tags"}</button></div>
         <div class="row disk-lh-acts">
-          ${!x.ready ? `<span class="tag bad" data-tip="${esc(x.problem)}">${x.missing ? "drive missing" : "failed"}</span>
-            <button class="btn sm pri" data-need="admin" onclick="diskRetire(${jsq(node)},${jsq(x.id)})"
-              title="Let go of its failed replicas so they rebuild from healthy copies, and take it out of Longhorn for a new drive">Replace failed disk</button>` : ""}
-          ${x.evicting ? '<span class="tag warn">moving replicas off</span>' : !x.scheduling ? '<span class="tag">no new replicas</span>' : ""}
-          <button class="btn sm" data-need="admin" onclick="diskAction('scheduling',${jsq(node)},${jsq(x.id)},${!x.scheduling})">${x.scheduling ? "Stop new replicas" : "Allow new replicas"}</button>
-          ${x.ready && x.replicas && !x.evicting ? `<button class="btn sm" data-need="admin" onclick="diskAction('evict',${jsq(node)},${jsq(x.id)},true)" title="Rebuild every replica on this disk somewhere else">Move replicas off</button>` : ""}
-          ${x.evicting ? `<button class="btn sm" data-need="admin" onclick="diskAction('evict',${jsq(node)},${jsq(x.id)},false)">Stop moving</button>` : ""}
-          ${!x.replicas && !x.scheduling ? `<button class="btn sm danger" data-need="admin" onclick="diskAction('remove',${jsq(node)},${jsq(x.id)})">Remove from Longhorn</button>` : ""}</div></div>`;
+          ${x.evicting ? '<span class="tag warn">moving replicas off</span>' : !x.scheduling ? '<span class="tag">no new replicas</span>' : ''}
+          ${d.v2_preparation ? UI.button('V2 preparation',`diskV2Watch(${jsq(d.v2_preparation.id)})`,{kind:'pri',attrs:'data-need="admin"'}) : actionBar([
+            !x.ready && {label:'Replace failed disk',need:'admin',run:`diskRetire(${jsq(node)},${jsq(x.id)})`},
+            {label:x.scheduling?'Stop new replicas':'Allow new replicas',need:'admin',run:`diskAction('scheduling',${jsq(node)},${jsq(x.id)},${!x.scheduling})`},
+            x.ready && x.replicas && !x.evicting && {label:'Move replicas off',need:'admin',run:`diskAction('evict',${jsq(node)},${jsq(x.id)},true)`},
+            x.evicting && {label:'Stop moving',need:'admin',run:`diskAction('evict',${jsq(node)},${jsq(x.id)},false)`},
+            !harvester && !d.system && x.ready && x.type!=='block' && v2 && {label:'Prepare for V2',need:'admin',run:`diskV2Open(${jsq(node)},${jsq(x.id)})`},
+            !x.replicas && !x.scheduling && {label:'Remove from Longhorn',need:'admin',kind:'danger',run:`diskAction('remove',${jsq(node)},${jsq(x.id)})`}
+          ],{shown:1,label:'Disk actions'})}</div></div>`;
     }).join("");
     return `<div class="disk-card">
       <div class="between"><div><b class="mono">${esc(d.device || "Longhorn")}</b> <span class="dim xs">${esc(d.model || "")}</span>
           <div class="dim xs">${esc(sizeText(d.size_gb))}${d.kind ? ` · ${esc(d.kind)}` : ""}${d.mounts.length ? ` · ${esc(d.mounts.slice(0, 3).join(", "))}` : ""}</div></div>
         <div class="row">${d.system ? '<span class="tag">system</span>' : ""}<span class="tag ${tone}">${esc(word)}</span>
-          ${d.can_add ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd(${jsq(node)},${jsq(d.blockdevice.name)},${jsq(d.path)},${d.needs_wipe})">Add to Longhorn</button>` : ""}
-          ${!harvester && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskSetup(${jsq(node)},${jsq("/dev/" + d.device)})">Add to Longhorn</button>` : ""}
+          ${d.can_add && !d.v2_preparation ? `<button class="btn sm pri" data-need="admin" onclick="diskAdd(${jsq(node)},${jsq(d.blockdevice.name)},${jsq(d.path)},${d.needs_wipe})">Add to Longhorn</button>` : ""}
+          ${!harvester && !d.v2_preparation && d.role === "unused" && d.device ? `<button class="btn sm pri" data-need="admin" onclick="diskSetup(${jsq(node)},${jsq("/dev/" + d.device)})">Add to Longhorn</button>` : ""}
           ${!harvester && d.system ? `<button class="btn sm" data-need="admin" onclick="diskOsSpace(${jsq(node)})" title="Give Longhorn space nothing uses - free LVM space, or unallocated space on a disk - for V1 or V2">Use free space</button>` : ""}</div></div>
-      ${lh}</div>`;
+      ${lh}${d.v2_preparation && !d.longhorn.length ? UI.actions(UI.button('V2 preparation',`diskV2Watch(${jsq(d.v2_preparation.id)})`,{kind:'pri',attrs:'data-need="admin"'})) : ''}</div>`;
   }).join("") + (harvester ? "" : `<button class="btn sm" data-need="admin" style="margin-top:8px" onclick="diskAdd(${jsq(node)})">＋ Add a disk to Longhorn</button>`)
     + (harvester && !disks.some(d => d.can_add) ? '<div class="dim xs" style="margin-top:8px">Every disk Harvester found here is in use. A new disk shows up once it is plugged in and Harvester has scanned it.</div>' : "");
 }

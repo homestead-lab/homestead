@@ -5796,6 +5796,7 @@ import homestead_self_address as SELF_ADDRESS
 import homestead_host_bridge as HOST_BRIDGE
 import homestead_manifests as MANIFESTS
 import homestead_disk_setup as DISK_SETUP
+import homestead_disk_v2 as DISK_V2
 import homestead_hvimage as HVIMAGE
 import homestead_revert as REVERT
 OPS.RESOLVERS["reclass"] = storage_move_progress
@@ -5975,6 +5976,11 @@ OPS.RESOLVERS["share-remove"] = SHARES.removal_progress
 OPS.CANCELLERS["snapshot-revert"] = (REVERT.cancel_plan,
     lambda item, options: storage_volume_action(item["ref"]["volume"], lambda: REVERT.cancel_run(item, options)))
 DISKS.bind(kget, ksend, node_temps)
+DISK_V2.bind(kget, ksend, PLATFORM.detect, OPS, DEFAULT_NS, _diagnostic_read)
+DISK_V2.protect_mutations(DISKS)
+OPS.RESOLVERS[DISK_V2.KIND] = DISK_V2.progress
+OPS.CANCELLERS[DISK_V2.KIND] = (DISK_V2.cancel_plan, DISK_V2.cancel_run)
+OPS.LOGGERS[DISK_V2.KIND] = DISK_V2.logs
 OPS.RESOLVERS["disk-retire"] = DISKS.retire_step
 OPS.RESUMABLE["disk-retire"] = DISKS.retire_resumable
 OPS.RESOLVERS["helm"] = HELM.job_status
@@ -7541,6 +7547,8 @@ def is_app_identity(path):
 # Enforced here, server-side. The UI hides what you cannot do as a courtesy,
 # but a viewer who hand-crafts the request still gets a 403.
 ADMIN_ROUTES = {
+    "/api/disks/v2/plan", "/api/disks/v2/start", "/api/disks/v2/status",
+    "/api/disks/v2/prepare-review", "/api/disks/v2/prepare",
     "/api/longhorn/v2/plan", "/api/longhorn/v2/prepare", "/api/longhorn/v2/enable",
     "/api/auth/users", "/api/auth/users/delete", "/api/auth/role",
     # API keys: made, listed and revoked by administrators only.
@@ -8635,6 +8643,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, v2_engine_status())
             if p == "/api/longhorn/v2/plan":
                 return self._send(200, LHV2_SETUP.plan())
+            if p == "/api/disks/v2/status":
+                return self._send(200, DISK_V2.status(q.get("id", [""])[0]))
             if p == "/api/disks":
                 return self._send(200, cached("disks", 10, DISKS.inventory))
             if p == "/api/longhorn/capacity":
@@ -9453,6 +9463,14 @@ class H(HTTP.LimitedHandler):
             if p == "/api/vm/delete":
                 _cache.pop("vms", None)
                 return self._send(200, VMS.delete(b.get("ns", DEFAULT_NS), b.get("name", ""), bool(b.get("disks"))))
+            if p == "/api/disks/v2/plan":
+                return self._send(200, DISK_V2.review(b))
+            if p == "/api/disks/v2/start":
+                return self._send(200, DISK_V2.start(b))
+            if p == "/api/disks/v2/prepare-review":
+                return self._send(200, DISK_V2.prepare_review(b.get("id", "")))
+            if p == "/api/disks/v2/prepare":
+                return self._send(200, DISK_V2.prepare(b))
             if p == "/api/disks/retire/plan":
                 return self._send(200, DISKS.retire_plan(b.get("node", ""), b.get("disk", "")))
             if p == "/api/disks/retire":
@@ -9549,7 +9567,10 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, result)
             if p == "/api/longhorn/settings":
                 _cache.pop("lhcap", None)
-                return self._send(200, LHCAP.save(b))
+                with OPS._lock:
+                    if b.get("v2") is False and DISK_V2.tasks():
+                        raise ValueError("Finish or stop the saved V2 disk preparation task before disabling V2")
+                    return self._send(200, LHCAP.save(b))
             if p == "/api/longhorn/v2/prepare":
                 return self._send(200, LHV2_SETUP.prepare(b))
             if p == "/api/longhorn/v2/enable":

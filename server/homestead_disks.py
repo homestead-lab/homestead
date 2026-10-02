@@ -226,6 +226,9 @@ def _mount_disk(path, mounts):
     return best["disk"] if best else ""
 
 
+v2_tasks = lambda: []
+
+
 def inventory():
     """{node: [disk rows]}: every physical disk, what it is used for, and the
     Longhorn disks on it."""
@@ -309,6 +312,11 @@ def inventory():
                           "kind": "", "serial": "", "longhorn": unplaced, "blockdevice": None, "mounts": [],
                           "system": False, "node_fs": False, "role": "longhorn", "can_add": False, "needs_wipe": False})
         out[name] = sorted(disks, key=lambda r: (not r["system"], r["device"] or "~"))
+    for task in v2_tasks():
+        rows = out.get(task['node'], [])
+        row = next((r for r in rows if r['path'] == task['device'] or any(d['id'] == task['disk'] for d in r['longhorn'])), None)
+        if row is not None:
+            row['v2_preparation'] = {'id': task['id'], 'phase': task['phase']}
     node_tags = {name: list(((lh.get(name) or {}).get("spec") or {}).get("tags") or []) for name in lh}
     disk_tags = sorted({t for disks in out.values() for d in disks for x in d["longhorn"] for t in x["tags"]})
     return {"harvester": harvester, "nodes": out, "node_tags": node_tags, "disk_tags": disk_tags,
