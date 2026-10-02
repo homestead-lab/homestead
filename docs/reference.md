@@ -1404,6 +1404,14 @@ and delete rather than an edit button that would silently do nothing. Deleting
 a class is refused while any claim still references it, and volumes already
 built from it keep working and keep their data.
 
+Setup → Default storage suggests classes with one, two or three replicas,
+plus SSD and HDD tag selectors. Review a suggestion to adjust its name,
+replicas, placement, tags or default status before creating it. These recipes
+use Longhorn V1, allow expansion, keep data when a claim is deleted and leave
+VM live migration off. Tagged recipes use up to the suggested replica count,
+limited by eligible tagged hosts; missing tags and insufficient hosts are
+shown explicitly. A matching existing class can be reused as the default.
+
 A volume that is not healthy says why, taken from Longhorn's own conditions:
 most often that a replica cannot be scheduled because no node has room for it.
 A volume that is merely rebuilding says so too, along with the fact that it is

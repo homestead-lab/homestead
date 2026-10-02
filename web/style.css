@@ -2796,8 +2796,16 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 .setup-mark.attention{border-color:var(--med);color:var(--med)}
 .setup-mark.skipped{border-style:dashed;opacity:.6}
 .setup-card .ui-lead{max-width:72ch}
+html[data-theme="light"] .setup-card .ctitle{color:var(--tx)}
 .setup-layout .settings-main,.setup-card{min-width:0}
 .setup-card .stepper-chip{flex-shrink:0;white-space:nowrap}
+.setup-storage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,230px),1fr));gap:12px;margin:14px 0}
+.setup-storage-recipe{display:flex;flex-direction:column;min-width:0;padding:16px;border:1px solid var(--line);border-radius:12px;background:var(--surf2)}
+.setup-storage-recipe .row{flex-wrap:wrap;gap:8px}
+.setup-storage-name{display:block;overflow-wrap:anywhere;color:var(--mut);margin-top:8px}
+.setup-storage-recipe p{margin:10px 0 0}
+.setup-storage-action{margin-top:auto;padding-top:16px}
+.setup-storage-action .btn{max-width:100%;white-space:normal}
 .setup-picker{display:none}
 #setupStep{scroll-margin-top:calc(var(--hdr) + 12px)}
 .setup-body{margin:12px 0 4px;overflow-x:auto}

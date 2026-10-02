@@ -690,7 +690,7 @@ window.storageClassCleanup = async () => {
     toast(r.detail, "ok"); storageClassesPaint();
   } catch (e) { toast(e.message, "bad"); }
 };
-window.storageClassCreate = () => {
+window.storageClassCreate = async (prefill = {}, onSaved = null) => {
   modal("New storage class", `
     <p class="muted small">A storage class is a recipe Longhorn follows when it creates a volume:
       how many replicas to keep, whether the volume can grow, and what happens to the data when its
@@ -718,34 +718,50 @@ window.storageClassCreate = () => {
     <label class="switch"><input type="checkbox" id="sc_default"> Make this the default class</label>
     <div class="row" style="margin-top:18px"><button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>`);
-  storageClassTags();
+  for (const [id, key] of [["sc_name", "name"], ["sc_reps", "replicas"], ["sc_copies", "copies"],
+    ["sc_reclaim", "reclaim_policy"], ["sc_engine", "engine"]]) {
+    if (prefill[key] !== undefined) $("#" + id).value = prefill[key];
+  }
+  for (const [id, key] of [["sc_expand", "expandable"], ["sc_migratable", "migratable"], ["sc_default", "default"]]) {
+    if (prefill[key] !== undefined) $("#" + id).checked = !!prefill[key];
+  }
+  storageClassHint();
+  const button = $("#sc_go");
+  button.__storageSaved = onSaved;
+  button.disabled = true;
+  await storageClassTags(prefill, button);
+  if ($("#sc_go") === button) button.disabled = false;
 };
 /* The tags disks and nodes have, to choose from, and which nodes a choice
    leaves - a class needs one node per replica. */
-async function storageClassTags() {
+async function storageClassTags(prefill = {}, button = $("#sc_go")) {
   const inv = await loadDisks().catch(() => null);
-  const box = (id, tags, empty) => {
+  if ($("#sc_go") !== button) return;
+  const box = (id, available, selected, empty) => {
     const host = $(id);
     if (!host) return;
-    host.innerHTML = tags.length ? tags.map(t => `<label class="daychip"><input type="checkbox" value="${esc(t)}" onchange="storageClassReach()"><span>${esc(t)}</span></label>`).join("")
+    const tags = [...new Set([...available, ...selected])];
+    host.innerHTML = tags.length ? tags.map(t => `<label class="daychip"><input type="checkbox" value="${esc(t)}"${selected.includes(t) ? " checked" : ""} onchange="storageClassReach()"><span>${esc(t)}${available.includes(t) ? "" : " · not reported"}</span></label>`).join("")
       : `<span class="dim xs">${empty}</span>`;
   };
-  if (!inv) { box("#sc_disktags", [], "Could not read the disks' tags."); return; }
   STATE.data.scInv = inv;
-  box("#sc_disktags", inv.disk_tags || [], "No disk has a tag yet: add them to disks under Nodes, or Volumes → Disks.");
-  box("#sc_nodetags", inv.all_node_tags || [], "No node has a tag yet.");
+  box("#sc_disktags", inv?.disk_tags || [], prefill.disk_tags || [], "No disk has a tag yet: add them to disks under Nodes, or Volumes → Disks.");
+  box("#sc_nodetags", inv?.all_node_tags || [], prefill.node_tags || [], "No node has a tag yet.");
   // One host: only "different disks" can place a second copy.
-  if (Object.keys(inv.nodes || {}).length === 1 && $("#sc_copies")) $("#sc_copies").value = "disks";
+  if (inv && prefill.copies === undefined && Object.keys(inv.nodes || {}).length === 1 && $("#sc_copies")) $("#sc_copies").value = "disks";
   storageClassReach();
 }
 window.storageClassReach = () => {
   const inv = STATE.data.scInv, out = $("#sc_reach");
-  if (!inv || !out) return;
+  if (!out) return;
+  if (!inv) { out.className = "xs badtext"; out.textContent = "Could not read disk availability. Review tags and placement before creating this class."; return; }
   const disk = $$("#sc_disktags input:checked").map(b => b.value), node = $$("#sc_nodetags input:checked").map(b => b.value);
   const reps = +($("#sc_reps").value || 1), byDisk = $("#sc_copies")?.value === "disks";
-  const fits = (name, x) => x.scheduling && node.every(t => ((inv.node_tags || {})[name] || []).includes(t)) && disk.every(t => (x.tags || []).includes(t));
+  const fits = (name, x) => x.scheduling && x.ready !== false && !x.missing && !x.failed
+    && ($("#sc_engine")?.value === "v2" ? x.type === "block" : x.type !== "block")
+    && node.every(t => ((inv.node_tags || {})[name] || []).includes(t)) && disk.every(t => (x.tags || []).includes(t));
   const places = Object.entries(inv.nodes || {}).flatMap(([name, disks]) =>
-    disks.flatMap(d => d.longhorn.filter(x => fits(name, x)).map(x => ({ name, disk: x.id }))));
+    disks.flatMap(d => (d.longhorn || []).filter(x => fits(name, x)).map(x => ({ name, disk: x.id }))));
   const hosts = [...new Set(places.map(p => p.name))];
   const count = byDisk ? places.length : hosts.length, unit = byDisk ? "disk" : "host";
   out.className = count >= reps ? "dim xs" : "xs badtext";
@@ -754,6 +770,7 @@ window.storageClassReach = () => {
       + (count < reps ? ` - fewer than ${reps}, so volumes would run a copy short${!byDisk && places.length >= reps ? '. Choose "Different disks" to place them on one host' : ""}.` : ".");
 };
 window.storageClassEngine = async () => {
+  storageClassReach();
   const note = $("#sc_engine_note");
   if ($("#sc_engine").value !== "v2") { note.hidden = true; return; }
   note.hidden = false;
@@ -785,14 +802,16 @@ window.storageClassSave = async button => {
         engine: $("#sc_engine").value, default: $("#sc_default").checked,
         disk_tags: $$("#sc_disktags input:checked").map(b => b.value),
         node_tags: $$("#sc_nodetags input:checked").map(b => b.value) }) });
-    toast(result.message || `storage class "${name}" created`, "ok"); closeModal(); storageClassesPaint();
+    const after = button?.__storageSaved;
+    toast(result.message || `storage class "${name}" created`, "ok"); closeModal();
+    if (after) await after(); else await storageClassesPaint();
   } catch (e) { if (button) { button.disabled = false; button.textContent = "Create class"; } toast(e.message, "bad"); }
 };
 window.storageClassDefault = async name => {
   try {
     const result = await api("/api/storage/classes/default", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
-    toast(result.message || `${name} is now the default`, "ok"); storageClassesPaint();
+    toast(result.message || `${name} is now the default`, "ok"); storageClassesPaint(); return result;
   } catch (e) { toast(e.message, "bad"); }
 };
 window.storageClassDelete = async name => {
