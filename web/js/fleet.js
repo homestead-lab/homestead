@@ -532,8 +532,14 @@ window.moveToCluster = (kind, name, sourceHandle = "", transferMode = "move", so
 };
 
 window.moveToClusterGo = async (id, from, kind, name, transferMode = "move", sourceNamespace = "") => {
-  setFleetMode("one");
   try {
+    if (transferMode === "copy") {
+      const hello = await api("/api/move/hello", { headers: { "X-Homestead-Cluster": id } });
+      if (!hello.capabilities?.includes("copy-destination")) {
+        return toast("Update Homestead on the destination before copying. It only supports moves.", "bad");
+      }
+    }
+    setFleetMode("one");
     await api("/api/fleet/switch", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }) });
     try { localStorage.setItem("homestead.settings.tab", "fleet"); } catch (e) { /* the page still opens */ }
