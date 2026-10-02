@@ -4872,6 +4872,7 @@ def edit_volume(cfg):
             options = volume_edit_options(ns, name, pvc)
             if not options["can_expand"]:
                 raise ValueError(options["reason"])
+            STORAGE_RESIZE.check_upgrade(pvc, kget)
             ksend("PATCH", pvc_path,
                   {"spec": {"resources": {"requests": {"storage": f"{wanted}Gi"}}}},
                   ctype="application/merge-patch+json")
@@ -5846,6 +5847,10 @@ ADDONS.bind(kget, ksend, PLATFORM.detect, node_temps)
 MACVTAP.bind(kget, ksend, ADDONS, PLATFORM.detect)
 BASELINE.bind(kget, ADDONS, PLATFORM.detect, DEFAULT_NS, DATA_DIR, MACVTAP, PROBE, HOMESTEAD_VERSION)
 COMPONENTS.bind(kget, ksend, PLATFORM.detect, lambda cfg: HELM.upgrade(cfg), ADDONS)
+import homestead_lhv2_upgrade as LHV2_UPGRADE
+LHV2_UPGRADE.bind(kget, ksend, PLATFORM.detect, COMPONENTS.longhorn_version, COMPONENTS.parse)
+STORAGE_RESIZE.upgrade_guard = LHV2_UPGRADE.ensure_resize_idle
+LC.vm_migration_guard = LHV2_UPGRADE.ensure_vm_idle
 OPS.RESOLVERS["platform-upgrade"] = COMPONENTS.status
 OPS.CANCELLERS["platform-upgrade"] = (COMPONENTS.cancel_plan, COMPONENTS.cancel_run)
 
@@ -7619,6 +7624,7 @@ ADMIN_ROUTES = {
     "/api/vm/isos/folders", "/api/vm/isos/delete", "/api/vm/isos/browse", "/api/vm/isos/keep",
     # Upgrading the platform: the cluster, Longhorn, KubeVirt, CDI.
     "/api/cluster/components/upgrade", "/api/cluster/upgrades/start",
+    "/api/longhorn/v2/upgrade/review", "/api/longhorn/v2/upgrade/settings",
     # The VM image store downloads gigabytes into the cluster.
     "/api/vm/store/keep", "/api/vm/store/auto", "/api/vm/store/forget", "/api/vm/store/refresh",
     # Homestead's own permissions, and the namespaces apps live in.
@@ -8643,6 +8649,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, v2_engine_status())
             if p == "/api/longhorn/v2/plan":
                 return self._send(200, LHV2_SETUP.plan())
+            if p == "/api/longhorn/v2/upgrade":
+                return self._send(200, LHV2_UPGRADE.plan(q.get("to", [""])[0]))
             if p == "/api/disks/v2/status":
                 return self._send(200, DISK_V2.status(q.get("id", [""])[0]))
             if p == "/api/disks":
@@ -8958,7 +8966,7 @@ class H(HTTP.LimitedHandler):
                 except SELF_DATA_FENCE.Held as error:
                     return self._send(409, {"error": str(error), "review_required": True})
             if p == "/api/cluster/components/upgrade":
-                result = COMPONENTS.upgrade(str(b.get("component") or ""), str(b.get("to") or ""))
+                result = COMPONENTS.upgrade(str(b.get("component") or ""), str(b.get("to") or ""), b)
                 for key in ("components", "helm", "platform"):
                     _cache.pop(key, None)
                 result["operation"] = OPS.start(
@@ -8967,7 +8975,8 @@ class H(HTTP.LimitedHandler):
                      "namespace": ""}, "/system/cluster",
                     {"component": result["component"], "name": result["name"], "from": result["from"],
                      "to": result["to"], "started": time.time(),
-                     "phase": "controller" if result["component"] == "cluster" else ""},
+                     "phase": "controller" if result["component"] == "cluster" else "",
+                     **({"v2_mode": result["v2_mode"]} if result.get("v2_mode") else {})},
                     result["detail"])
                 return self._send(200, result)
             if p == "/api/cluster/upgrades/start":
@@ -9573,6 +9582,10 @@ class H(HTTP.LimitedHandler):
                     return self._send(200, LHCAP.save(b))
             if p == "/api/longhorn/v2/prepare":
                 return self._send(200, LHV2_SETUP.prepare(b))
+            if p == "/api/longhorn/v2/upgrade/review":
+                return self._send(200, LHV2_UPGRADE.settings_review(b.get("enabled"), b.get("timeout"))[0])
+            if p == "/api/longhorn/v2/upgrade/settings":
+                return self._send(200, LHV2_UPGRADE.configure(b, OPS))
             if p == "/api/longhorn/v2/enable":
                 result = LHV2_SETUP.enable(b)
                 _cache.pop("lhcap", None)

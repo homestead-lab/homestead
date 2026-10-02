@@ -77,6 +77,36 @@ detached, unclaimed backing data can be removed, with a fresh identity check
 and exact-name confirmation. A Released PV is handed to CSI's normal Delete
 reclaim policy; finalizers are never forced. External backups are kept.
 
+## Upgrading Longhorn V2
+
+Open **Settings → Updates → Platform versions** (also on **Cluster**) and choose
+Longhorn's **Upgrade** or **V2 upgrade status**. The upgrade dialog checks hosts,
+Kubernetes versions, volume health and actual RW replica placement before starting.
+
+**Live** upgrades keep V2 volumes attached. Longhorn 1.13 requires Kubernetes 1.34+
+and a source installation of Longhorn 1.12.2 or later, including its V2 instance
+managers. Each affected volume needs healthy replicas on at least two eligible
+hosts, with running V2 instance managers and schedulable block disks. Single-host,
+ublk and sharded configurations use **Offline**: stop workloads, detach V2 volumes
+and wait for their replicas to stop. Homestead does not stop workloads for you.
+
+Back up the volumes and leave space for replica rebuilding. After the manager
+rollout completes, Homestead enables Longhorn's V2 rolling controller for a live
+upgrade and follows each host through engine relocation, instance-manager update,
+engine restoration and volume recovery. Success requires ready V2 pods on the new
+image and healthy volumes. V1 volumes retain Longhorn's existing engine-upgrade policy.
+
+**V2 upgrade status** offers pause/resume and the host timeout (normally 60 minutes).
+Pausing allows the current host to finish; it does not roll back versions. Enabling
+live upgrades also applies to later manager upgrades. The timeout does not apply
+while waiting for healthy volumes. Volume expansion and VM live migration using
+V2 disks are blocked until every host upgrade finishes, including paused or failed upgrades. Resolve failed replica
+recovery or full disks before resuming. Homestead leaves resetting an exhausted
+retry controller to Longhorn's manual recovery procedure. Harvester-managed
+Longhorn is upgraded through Harvester.
+
+See [Longhorn's V2 upgrade guide](https://longhorn.io/docs/1.13.0/deploy/upgrade/v2-instance-upgrade/).
+
 ## Storage classes
 
 A storage class is the recipe for new volumes: how many copies, which engine,
