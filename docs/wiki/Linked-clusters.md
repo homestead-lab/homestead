@@ -109,9 +109,19 @@ from, with whether it is ready and **Browse workloads**.
 The move review includes a **Destination storage class** picker. It offers
 regular Longhorn classes on the destination and uses the selected class's
 replica count, disk and node tags, filesystem and mount settings when restoring
-the volumes. Restore-specific classes are created from that selection so
-Longhorn can read the backup. Their binding is immediate so the restore can
-finish before the workload starts.
+the volumes. The restored PVC names that configured class directly. Homestead
+imports the backup as a CSI snapshot, with Retain policy, and removes its
+import metadata after the PVC binds. The backup itself is kept.
+
+Migrations require an Immediate binding class so disks can restore before the
+workload starts. Filesystem volumes need a class with migratable disabled;
+block VM disks may use a migratable class. The review checks these settings.
+Homestead checks the snapshot controller, snapshot APIs and Longhorn CSI
+snapshotter before stopping the source. On k3s/RKE2 with a Helm controller,
+missing snapshot support is installed automatically on Kubernetes 1.25 or newer.
+Existing platform controllers are used without replacement; Harvester manages
+its own snapshot support. Installation waits and failures remain in the move log.
+The chosen class and snapshot request identity survive Homestead restarts.
 
 If a backup fails, use **Retry failed backups** on the failed move. Homestead
 requests a fresh snapshot and backup for failed or missing recorded backups,

@@ -446,7 +446,8 @@
       created: lhBackups[0].created, backup_size_mb: lhBackups[0].size_mb,
       volume_size_bytes: 21474836480, minimum_size_gb: 20,
       suggested_name: "pvc-demo-frigate-restore", namespace: ns, pvc_name: name,
-      conflict, ready: !conflict, target: "default" };
+      conflict, ready: !conflict, target: "default", storage_class: "longhorn-r2",
+      storage_classes: ["longhorn-r2", "longhorn-fast"] };
   };
   const volumeDeletePlan = url => {
     const name = url.searchParams.get("name") || "scratch-test";
@@ -618,6 +619,10 @@
       const disk = node?.temps?.disks?.find(d => d.name === url.searchParams.get("disk"));
       if (!disk?.smart) return { error: "Demo disk not found" };
       return { ...disk.smart, health_assessment: disk.health };
+    },
+    "/api/volumes/edit-options": url => {
+      const volume = volumes.find(v => v.namespace === (url.searchParams.get("ns") || "lab") && v.pvc_name === url.searchParams.get("name"));
+      return { can_expand: true, requested_gb: Math.ceil(volume?.size_gb || 5), storage_class: volume?.storage_class || "longhorn", reason: "" };
     },
     "/api/volumes/delete-plan": volumeDeletePlan, "/api/hardware/features": hardware,
     "/api/namespaces": ["default", "lab", "monitoring"],
