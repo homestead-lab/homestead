@@ -17,6 +17,7 @@ window.clusterShutdown = async () => {
       UI.callout(plan.ready ? 'warn' : 'bad', plan.ready ? 'The entire cluster will be offline' : 'Resolve these before shutdown', plan.ready
         ? 'Applications and storage become unavailable. You will need console or physical access to power hosts on and restore scheduling.'
         : `<ul class="ui-list">${(plan.blockers || []).map(p => `<li>${esc(p)}</li>`).join('')}</ul>`) +
+      (plan.warnings?.length ? UI.callout('info', 'Temporary helpers', `<ul class="ui-list">${plan.warnings.map(p => `<li>${esc(p)}</li>`).join('')}</ul>`) : '') +
       UI.section('Shutdown order', UI.table([{label:'Stage'}, {label:'What happens'}], [
         ['Prepare', 'Verify an independent power helper on every host; cordon all hosts.'],
         ['Drain', `${esc(plan.pods)} application pods stop through graceful eviction. Disruption budgets can block shutdown.`],

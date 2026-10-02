@@ -73,6 +73,8 @@ def bind(_kget, _ksend, _platform, _helm_upgrade, _addons, _fetch_json=None):
     global kget, ksend, platform, helm_upgrade, addons, fetch_json
     kget, ksend, platform, helm_upgrade, addons = _kget, _ksend, _platform, _helm_upgrade, _addons
     fetch_json = _fetch_json or _get_json
+    import homestead_lhv2_upgrade as V2
+    V2.bind(_kget, _ksend, _platform, longhorn_version, parse)
 
 
 def _get_json(url):
@@ -350,7 +352,7 @@ def _component(component):
     return found
 
 
-def upgrade(component, target):
+def upgrade(component, target, options=None):
     """Start moving a component on to its next version. Only that version:
     skipping a minor is what these projects warn against."""
     found = _component(component)
@@ -360,8 +362,15 @@ def upgrade(component, target):
     if component == "cluster":
         detail = _start_cluster(target)
     elif component == "longhorn":
+        import homestead_lhv2_upgrade as V2
+        mode = (options or {}).get("v2_mode", "offline")
+        V2.require_upgrade(target, mode)
+        if mode == "live" and (options or {}).get("confirm_backup") is not True:
+            raise ValueError("Confirm that V2 volumes have been backed up before starting a live upgrade")
+        if mode == "offline" and parse(found["installed"])[:3] >= (1, 13, 0):
+            V2._set(V2.AUTO, "false")
         helm_upgrade({"namespace": "longhorn-system", "name": CHARTS["longhorn"], "version": target.lstrip("v")})
-        detail = f"Longhorn is moving to {target}; its volumes stay attached while its parts restart"
+        detail = f"Upgrading Longhorn managers to {target}; V2 instance managers use the {mode} upgrade method"
     elif component == "macvtap":
         import homestead_macvtap as MACVTAP
         detail = MACVTAP.upgrade(target)
@@ -374,7 +383,8 @@ def upgrade(component, target):
     else:
         detail = _start_operator(component, target)
     return {"ok": True, "component": component, "name": found["name"], "from": found["installed"],
-            "to": target, "detail": detail}
+            "to": target, "detail": detail,
+            **({"v2_mode": mode} if component == "longhorn" else {})}
 
 
 def _start_operator(component, target):
@@ -598,6 +608,12 @@ def status(item):
     if component in CHART_INDEX:
         return _network_upgrade_status(item)
     if component == "longhorn":
+        if ref.get("v2_mode"):
+            job = _get(f"/apis/batch/v1/namespaces/{HELM_NS}/jobs/helm-install-longhorn") or {}
+            if (job.get("status") or {}).get("failed") and not (job.get("status") or {}).get("active") and _elapsed(item) > 120:
+                return "failed", 20, "Helm could not apply Longhorn; inspect its install job in kube-system"
+            import homestead_lhv2_upgrade as V2
+            return V2.progress(item)
         now = longhorn_version()
     elif component == "kubevirt":
         now = kubevirt_version()[0]
@@ -619,6 +635,10 @@ def status(item):
 
 
 def cancel_plan(item):
+    if item["ref"].get("component") == "longhorn" and item["ref"].get("v2_mode") == "live":
+        return {"mode": "stop", "undo": ["Pause V2 live upgrades before the next host"],
+                "keeps": ["The manager upgrade and current host upgrade continue. No version is rolled back."],
+                "severity": "low", "needs": "admin"}
     if item["ref"].get("component") == "cluster":
         return {"mode": "stop", "undo": ["The upgrade Plans are removed, so no further node is upgraded"],
                 "keeps": ["Nodes already upgraded stay on the new version; a node part-way through finishes"],
@@ -628,6 +648,11 @@ def cancel_plan(item):
 
 
 def cancel_run(item, _options):
+    if item["ref"].get("component") == "longhorn" and item["ref"].get("v2_mode") == "live":
+        import homestead_lhv2_upgrade as V2
+        if parse(longhorn_version()) and parse(longhorn_version())[:3] >= (1, 13, 0):
+            V2._set(V2.AUTO, "false")
+        return "Paused before the next V2 host; the manager and current host upgrade can still finish"
     if item["ref"].get("component") == "cluster":
         remove_plans()
         return "Stopped: no further node is upgraded"

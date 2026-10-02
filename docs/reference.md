@@ -995,7 +995,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.295/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.296/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -1006,7 +1006,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.295 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.296 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1470,6 +1470,11 @@ and a V2 storage class remain separate reviewed steps. On Harvester, Homestead
 changes Harvester's `longhorn-v2-data-engine-enabled` setting; Harvester owns
 host preparation and restarts. See [the setup workflow](wiki/Storage.md#what-the-v2-engine-needs).
 
+**Settings → Updates → Platform versions** also reviews Longhorn V2 live and offline
+upgrades. Live upgrade requires a 1.12.2+ source, Kubernetes 1.34+, and healthy
+replicas on at least two eligible hosts. The status view shows each host and offers
+pause/resume and timeout controls. See [V2 upgrades](wiki/Storage.md#upgrading-longhorn-v2).
+
 ## Network shares
 
 Network Shares manages the `homestead-smb` Deployment and Longhorn-backed claims
@@ -1911,10 +1916,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.295`, the workflow publishes:
+For a release such as `v2.8.296`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.295
+ghcr.io/wjcloudy/homestead:2.8.296
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1925,8 +1930,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.295
-git push origin v2.8.295
+git tag v2.8.296
+git push origin v2.8.296
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

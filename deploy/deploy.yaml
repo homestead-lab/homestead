@@ -84,8 +84,16 @@ rules:
     # fromBackup parameter points at the selected Longhorn backup.
     verbs: [get, list, create]
   - apiGroups: ["longhorn.io"]
-    resources: [engines, settings, backupvolumes]
+    resources: [engines, settings, backupvolumes, instancemanagers, instancemanagerupgradecontrols]
     verbs: [get, list, watch]
+  # Observe V2 live upgrades; Longhorn owns the rolling controller and pods.
+  - apiGroups: ["longhorn.io"]
+    resources: [instancemanagers, instancemanagerupgrades, instancemanagerupgradecontrols]
+    verbs: [get, list, watch]
+  - apiGroups: ["longhorn.io"]
+    resources: [settings]
+    resourceNames: [allow-instance-manager-automatic-upgrade, instance-manager-upgrade-timeout]
+    verbs: [get, patch]
   # Image cache: which nodes hold a copy of each VM image.
   - apiGroups: ["longhorn.io"]
     resources: [backingimages]
@@ -282,7 +290,7 @@ metadata:
   labels:
     app: homestead
   annotations:
-    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.295"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/wjcloudy/homestead:2.8.296"}'
 spec:
   replicas: 1
   strategy:
@@ -317,7 +325,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/wjcloudy/homestead:2.8.295
+          image: ghcr.io/wjcloudy/homestead:2.8.296
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -334,7 +342,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/wjcloudy/homestead:2.8.295
+          image: ghcr.io/wjcloudy/homestead:2.8.296
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT

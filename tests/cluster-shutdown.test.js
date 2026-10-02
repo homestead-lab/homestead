@@ -2,7 +2,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), vm = require('node:vm');
 
-function setup() {
+function setup(warnings = []) {
   let html = '', lastTimer, lost = false;
   const sent = [], fields = {'#shutdownConfirm': {value:''}, '#shutdownStart': {}, '#shutdownLive': {innerHTML:''}};
   const state = {run:'run', phase:'draining', progress:35, deadline:Date.now()/1000+1800, message:'Waiting for pods',
@@ -11,7 +11,7 @@ function setup() {
     modal:(_, body)=>{html=body;}, toast(){}, setTimeout:f=>{lastTimer=f;return 1;}, clearTimeout(){},
     jsArg:s=>JSON.stringify(s), api:async(path,opts)=>{
       if (opts?.method==='POST') { sent.push({path, body:JSON.parse(opts.body)}); if(lost) throw Error('Connection lost'); return {state}; }
-      if (path.endsWith('/plan')) return {ready:true, review_token:'review', confirm:'SHUT DOWN CLUSTER', nodes:state.plan.nodes, pods:5, volumes:2, homestead_node:'a'};
+      if (path.endsWith('/plan')) return {ready:true, review_token:'review', confirm:'SHUT DOWN CLUSTER', nodes:state.plan.nodes, pods:5, volumes:2, homestead_node:'a', warnings};
       if (lost) throw Error('Connection lost');
       return {state:null};
     }};
@@ -54,4 +54,14 @@ test('handoff has no cancel action and reopening progress escapes cluster string
   assert.doesNotMatch(t.html(),/Cancel shutdown/);
   assert.match(t.fields['#shutdownLive'].innerHTML,/&lt;script&gt;/);
   assert.doesNotMatch(t.fields['#shutdownLive'].innerHTML,/<script>/);
+});
+
+test('shutdown review explains observer removal and escapes helper names', async () => {
+  const t = setup(['lab/<watch>: temporary image-pull progress watcher will be evicted; only its report is lost']);
+  await t.c.clusterShutdown();
+  assert.match(t.html(), /Temporary helpers/);
+  assert.match(t.html(), /only its report is lost/);
+  assert.match(t.html(), /&lt;watch&gt;/);
+  assert.doesNotMatch(t.html(), /<watch>/);
+  assert.equal(t.sent.length, 0);
 });
