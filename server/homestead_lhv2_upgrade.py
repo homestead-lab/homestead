@@ -314,6 +314,8 @@ def progress(item):
     matching = obs["target_image"] == image
     if (managers or not volumes) and image and image.rsplit(":", 1)[-1].lstrip("v") == target.lstrip("v") and all(ready_manager(m) for m in managers) and healthy and not obs["active"] and (not obs["nodes"] or matching and done == len(obs["nodes"])):
         return "succeeded", 100, f"Longhorn {target}: all V2 instance managers upgraded and volumes healthy"
+    if ref.get("v2_mode") == "offline":
+        return "running", 40, "Waiting for the offline V2 instance-manager rollout and healthy volumes"
     node = next((n for n in obs["nodes"] if n["node"] == obs["current_node"]), None)
     message = f"{done} of {len(obs['nodes'])} V2 hosts upgraded"
     exhausted = [n for n in obs["nodes"] if n["state"] == "failed" and n["retries"] >= 5]

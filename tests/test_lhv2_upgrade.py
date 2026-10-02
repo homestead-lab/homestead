@@ -146,6 +146,10 @@ class UpgradeTests(unittest.TestCase):
         for r in self.c.replicas:
             r['status']['currentState'] = r['spec']['desiredState'] = 'stopped'
         self.assertTrue(V.plan('v1.13.0')['offline_ready'])
+        self.c.installed = 'v1.13.0'
+        detail = V.progress({'ref': {'to': 'v1.13.0', 'from': 'v1.12.2', 'v2_mode': 'offline'}})[2]
+        self.assertIn('offline', detail)
+        self.assertNotIn('paused', detail)
 
     def test_inventory_failure_does_not_allow_empty_cluster(self):
         for code in (403, 404, 503):
