@@ -271,11 +271,16 @@ class CleanupTests(unittest.TestCase):
         self.assertEqual([], self.api.writes)
 
     def test_terminating_import_worker_must_disappear_before_reclamation(self):
-        self.promote()
-        self.api.hold_deletes.add(NS + "/pods/upload")
-        self.assertFalse(self.clean())
-        self.assertIn(NS + "/persistentvolumeclaims/" + self.prime_name + "-scratch", self.api.objects)
-        self.assertEqual("Retain", self.api.objects[PV + "/pv-scratch"]["spec"]["persistentVolumeReclaimPolicy"])
+        for keep in (True, False):
+            with self.subTest(keep=keep):
+                self.setUp()
+                self.promote()
+                self.api.hold_deletes.add(NS + "/pods/upload")
+                self.assertFalse(self.clean(keep))
+                self.assertIn(DV + "/guest-disk", self.api.objects)
+                self.assertIn(NS + "/persistentvolumeclaims/guest-disk", self.api.objects)
+                self.assertIn(NS + "/persistentvolumeclaims/" + self.prime_name + "-scratch", self.api.objects)
+                self.assertEqual("Retain", self.api.objects[PV + "/pv-scratch"]["spec"]["persistentVolumeReclaimPolicy"])
 
     def test_recreated_scratch_of_the_same_import_reclaims_both_backing_volumes(self):
         self.observe()
