@@ -342,6 +342,10 @@ spec:
               value: "lab"
             - name: SMB_NAMESPACE
               value: "lab"
+            - name: SAMBA_UID
+              value: "100"
+            - name: SAMBA_GID
+              value: "101"
             - name: STORAGE_CLASS
               value: "longhorn-r2"
             - name: LB_IP
