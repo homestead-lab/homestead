@@ -53,7 +53,8 @@ def read(directory, namespace, deployment):
                 raise Held("The saved original-volume recovery does not prove completion")
             binding = value["source_binding"]
             A._keys(binding, ("data_volume", "destination_pvc", "destination_pv"))
-            if binding["data_volume"] != "data" or binding["destination_pvc"] != {"name": state["source"]["name"], "uid": state["source"]["uid"]}: raise ValueError()
+            volume = state["plan"]["data_volume"] if original_recovered else "data"
+            if binding["data_volume"] != volume or binding["destination_pvc"] != {"name": state["source"]["name"], "uid": state["source"]["uid"]}: raise ValueError()
             A._keys(binding["destination_pv"], ("name", "uid"))
             A._name(binding["destination_pv"]["name"])
             if not isinstance(binding["destination_pv"]["uid"], str) or not binding["destination_pv"]["uid"]: raise ValueError()
