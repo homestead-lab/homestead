@@ -33,6 +33,7 @@ import homestead_copy_job as COPY_JOB
 import homestead_import_job as IMPORT_JOB
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_operations as OPS
+import homestead_cluster_shutdown as CLUSTER_SHUTDOWN
 import homestead_diagnostics as DIAGNOSTICS
 import homestead_storage_guard as STORAGE_GUARD
 import homestead_storage_resize as STORAGE_RESIZE
@@ -220,9 +221,17 @@ def require_workload_target(ns, name):
         HOSTACCESS.require_target(kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"), ns)
 
 
-def _ksend(method, path, body=None, ctype="application/json", timeout=15):
+def _ksend(method, path, body=None, ctype="application/json", timeout=15, *, shutdown_bypass=False):
+    path = api_path(path)
+    # Fence the common Kubernetes transport, including callers that already
+    # own another feature's write lock. Local navigation and recovery reviews
+    # remain available. Only the shutdown coordinator's binding bypasses this.
+    if not shutdown_bypass and "SELF" in globals():
+        shutdown = cluster_shutdown().state()
+        if shutdown and shutdown["phase"] not in ("released", "failed"):
+            raise ValueError("Cluster shutdown is active; open Cluster → Shut down cluster for progress or recovery")
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(API + api_path(path), data=data, method=method,
+    req = urllib.request.Request(API + path, data=data, method=method,
                                  headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": ctype})
     with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
         raw = r.read().decode()
@@ -5528,6 +5537,7 @@ def _remove_cluster_vm(ns, node):
 K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: vm_address_problem(ip), _remove_cluster_vm)
 OPS.RESOLVERS["k3s-cluster"] = K3SC.status
 OPS.RESOLVERS["node-power"] = POWER.status
+OPS.RESOLVERS["cluster-shutdown"] = lambda item: cluster_shutdown().progress(item)
 OPS.RESOLVERS["vm-power"] = lambda item: VM_POWER_JOB.status(item, kget)
 OPS.CANCELLERS["vm-power"] = (VM_POWER_JOB.cancel_plan, VM_POWER_JOB.cancel_run)
 OPS.RESOLVERS[RENAME.KIND] = lambda item: RENAME.status(item, OPS)
@@ -6368,6 +6378,16 @@ def abandon_self_data_preparation(body):
     if not _self_data_boot_pending:
         threading.Thread(target=finish_self_data_helpers, name="data-move-cleanup", daemon=True).start()
     return {"ok": True, "message": "Preparation abandoned. Both volumes are retained."}
+
+
+def cluster_shutdown(review=False):
+    image = _self_data_helper_image(kget, SELF.NS)[1] if review else ""
+    def busy():
+        with OPS._lock:
+            return ["Finish or recover job: " + j["title"] for j in SELF_DATA_PREPARE.blocking_jobs(OPS)
+                    if j["kind"] != "cluster-shutdown"]
+    return CLUSTER_SHUTDOWN.Shutdown(kget, lambda *a, **kw: _ksend(*a, **kw, shutdown_bypass=True), SELF.NS, SELF.POD, image,
+                                      enabled=LC.NODE_POWER_ENABLED, busy=busy)
 
 
 def _self_data_helper_image(read, ns):
@@ -8356,6 +8376,10 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, POWER.plan((q.get("node") or [""])[0],
                                                   (q.get("action") or [""])[0],
                                                   force=(q.get("force") or [""])[0] == "1"))
+            if p == "/api/cluster/shutdown/plan":
+                return self._send(200, cluster_shutdown(review=True).review())
+            if p == "/api/cluster/shutdown":
+                return self._send(200, {"state": cluster_shutdown().public_state()})
             if p == "/api/workloads/start-plan":
                 return self._send(200, workload_start_plan(
                     (q.get("ns") or [""])[0], (q.get("name") or [""])[0],
@@ -9214,6 +9238,12 @@ class H(HTTP.LimitedHandler):
                     return self._send(200, send_reviewed_power(power_plan, force))
                 except PowerNotSent as e:
                     return self._send(409, {"error": str(e), "operation": e.operation})
+            if p == "/api/cluster/shutdown":
+                return self._send(202, cluster_shutdown(review=True).start(b, OPS))
+            if p == "/api/cluster/shutdown/cancel":
+                return self._send(200, cluster_shutdown().cancel())
+            if p == "/api/cluster/shutdown/recover":
+                return self._send(200, cluster_shutdown().recover(b.get("run")))
             if p == "/api/vm/migrate":
                 ns = b.get("ns", DEFAULT_NS)
                 result = LC.vm_migrate(ns, b["name"], b.get("target"))

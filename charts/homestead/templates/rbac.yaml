@@ -44,6 +44,11 @@ rules:
   - apiGroups: ["policy"]
     resources: [poddisruptionbudgets]
     verbs: [get, list]
+  # Whole-cluster shutdown keeps admission webhook backends alive until the
+  # host power handoff, so eviction and recovery requests can still be admitted.
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: [mutatingwebhookconfigurations, validatingwebhookconfigurations]
+    verbs: [get, list]
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, list, create, update, delete]
