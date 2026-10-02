@@ -77,7 +77,12 @@ try {
     await page.waitForTimeout(750);
     assert.equal(await page.evaluate(()=>STATE.busy),false,"saved history must not keep the live poll busy");
     assert.notEqual(await page.evaluate(()=>streamRefs.path.getAttribute("d")),settled,"live charts update while saved history is stalled");
-    await page.evaluate(async()=>{window.stallHistory=false;await refresh(true)});
+    await page.evaluate(async()=>{
+      window.stallHistory=false;await refresh(true);
+      // The deliberate stalled request is reused until it times out. Let it
+      // settle, then fetch the recovery response before changing test data.
+      await historyPaint();await historyPaint();
+    });
     await page.waitForTimeout(750);
     await page.screenshot({path:`${output}/dashboard-${theme}-${width}.png`,fullPage:true});
     for(const preference of ["off","reduced"]){
@@ -88,10 +93,14 @@ try {
       assert.ok(durations.every(duration=>duration==="0s"),"motion preference applies to split storage bars too");
     }
     await page.emulateMedia({reducedMotion:"no-preference"});
-    await page.evaluate(async()=>{SET.motion="on";applySettings();window.historySize=2160;await viewDash()});
+    await page.evaluate(async()=>{SET.motion="on";applySettings();window.historySize=2160;await viewDash();await historyPaint()});
+    assert.equal(await page.evaluate(()=>[...document.querySelectorAll("#historyCard .spark")]
+      .every(el=>JSON.parse(el.getAttribute("data-spark-times") || "[]").length===2160)),true,"dense history response is painted before testing its refresh");
     await page.waitForTimeout(750);
-    await page.evaluate(async()=>{window.streamSample++;await viewDash()});
-    await page.waitForTimeout(750);
+    await page.evaluate(async()=>{window.streamSample++;await viewDash();await historyPaint()});
+    assert.equal(await page.evaluate(()=>[...document.querySelectorAll("#historyCard .spark path")]
+      .some(el=>sparkAnimations.has(el))),false,"dense history refreshes do not schedule animation");
+    await page.waitForFunction(()=>![...document.querySelectorAll(".spark path")].some(el=>sparkAnimations.has(el)),null,{timeout:3000});
     assert.equal(await page.evaluate(()=>[...document.querySelectorAll(".spark path")].some(el=>sparkAnimations.has(el))),false);
     assert.deepEqual(errors,[]);console.log(`Dashboard streaming passed: ${theme}, ${width}px, motion on/off/reduced, long history`);
     await context.close();
