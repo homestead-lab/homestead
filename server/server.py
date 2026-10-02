@@ -9398,6 +9398,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, {"ok": True, "operation": op})
             if p == "/api/passthrough/inspect":
                 return self._send(200, PASSTHROUGH.inspect(str(b.get("node") or "")))
+            if p == "/api/passthrough/vbios/capture":
+                return self._send(200, PASSTHROUGH.capture_vbios(str(b.get("node") or ""), str(b.get("address") or "")))
             if p == "/api/passthrough/iommu":
                 return self._send(200, PASSTHROUGH.enable_iommu(str(b.get("node") or "")))
             if p == "/api/passthrough/pci":

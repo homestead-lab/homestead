@@ -80,12 +80,40 @@ test("reopening the host restores a retained inspection and groups every compani
   for (const name of ["Named GPU", "GPU audio", "PCI bridge", "IOMMU group 0"]) assert.ok(t.body.innerHTML.includes(name));
   assert.match(t.body.innerHTML, /Refresh devices/);
   assert.match(t.body.innerHTML, /Last inspected/);
+  assert.equal((t.body.innerHTML.match(/Capture vBIOS/g) || []).length, 2, "capture is offered for GPUs only");
   await t.ctx.nodeDevicesPaint("node1");
   assert.equal(t.requests.length, 1, "reopening does not rerun a host helper or hide inventory");
   assert.ok(!t.requests.some(r => r.opts), "restoring the inventory performs only a GET");
   await t.ctx.ptPci("node1", "0000:01:00.0", true);
   assert.match(t.questions[0], /GPU audio \(0000:01:00.1\)/);
   assert.ok(!t.questions[0].includes("PCI bridge"), "bridge is not handed over");
+});
+
+test("capture downloads exact ROM bytes and restores the button after success or failure", async () => {
+  const t = setup(), downloads = [], blobs = [], notices = [], revoked = [];
+  t.ctx.atob = atob;
+  t.ctx.Blob = Blob;
+  t.ctx.URL = {createObjectURL: blob => {blobs.push(blob); return "blob:rom"; }, revokeObjectURL: url => revoked.push(url)};
+  t.ctx.setTimeout = fn => fn();
+  t.ctx.toast = (text, tone) => notices.push({text, tone});
+  t.ctx.document = {body: {appendChild(){}}, createElement: () => {
+    const link = {click() {downloads.push(this.download);}, remove(){}};
+    return link;
+  }};
+  t.answers["/api/passthrough/vbios/capture"] = {data: "VaoA", filename: "gpu.rom"};
+  const button = {disabled: false, textContent: "Capture vBIOS"};
+  await t.ctx.ptCaptureVbios("node1", "0000:01:00.0", button);
+  assert.deepEqual(downloads, ["gpu.rom"]);
+  assert.deepEqual([...new Uint8Array(await blobs[0].arrayBuffer())], [0x55, 0xaa, 0]);
+  assert.deepEqual(JSON.parse(t.requests[0].opts.body), {node: "node1", address: "0000:01:00.0"});
+  assert.deepEqual(revoked, ["blob:rom"]);
+  assert.equal(button.disabled, false);
+  t.answers["/api/passthrough/vbios/capture"] = () => {throw new Error("Stop VM busy");};
+  await t.ctx.ptCaptureVbios("node1", "0000:01:00.0", button);
+  assert.equal(notices.at(-1).text, "Stop VM busy");
+  assert.equal(button.textContent, "Capture vBIOS");
+  assert.equal(button.disabled, false);
+  assert.equal(downloads.length, 1);
 });
 
 test("a blocked group companion explains why its GPU cannot be offered", async () => {
