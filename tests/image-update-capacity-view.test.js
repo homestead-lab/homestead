@@ -122,3 +122,50 @@ test("a change outside the pod template does not stop the queue; an outside chan
   // An older Homestead that does not report the stamp: strict, as before.
   assert.equal(ctx.rolloutChanged({ ...accepted, rollout_at: undefined }, { ...accepted, generation: 23 }), true);
 });
+
+function cordonedPlan() {
+  return {blocked:true, requires_confirmation:true, candidates:[{name:"node-1",eligible:false,reasons:["cordoned"]}],
+    warnings:["no ready host satisfies this workload's placement requirements",
+      "no scheduling order fits all requested replicas under the observed pod affinity and topology spread rules",
+      "updated pod estimates include every container, not only the added container",
+      "memory is not limited for data-permissions"],
+    rollout:{strategy:"RollingUpdate",replicas:1,ownership_known:true,owned_pods:["old-pod"],release_request_gb:.1,max_surge:1,max_unavailable:0,start_blocked:true}};
+}
+test("a cordoned single host leads with one actionable error and keeps the review blocked", async () => {
+  const t=setup({capacity:cordonedPlan()});
+  await t.ctx.imageUpdateReview("lab","homestead");
+  const html=t.fields["#mbody"].innerHTML, visible=html.split('<details')[0];
+  assert.match(visible,/Update blocked/);
+  assert.match(visible,/The only host is cordoned\. Uncordon it before updating\./);
+  assert.doesNotMatch(visible,/scheduling order|placement requirements|data-permissions|updated pod estimates|Resolve the placement/);
+  assert.doesNotMatch(html.match(/<details[^>]*>/)[0],/\bopen\b/,"Details starts collapsed even when blocked");
+  assert.match(html,/The estimate covers all containers/);
+  assert.match(html,/No memory limit is set for: data-permissions/);
+  t.fields["#imageCapacityApprove"].checked=true;
+  await t.ctx.imageReviewedApply();
+  assert.equal(t.sent.filter(row=>row.path.endsWith('/apply')).length,0);
+});
+test("shared cordon blockers are grouped once and unrelated app warnings stay in Details", () => {
+  const {ctx}=setup();
+  const blocked=cordonedPlan();
+  const shared=ctx.groupedConcerns([{config:{name:"homestead",clusterName:"Site A"},preview:{capacity:blocked}},
+    {config:{name:"homestead",clusterName:"Site B"},preview:{capacity:blocked}}]);
+  assert.equal(shared.length,1);
+  assert.match(shared[0],/all 2 updates/);
+  const mixed=ctx.groupedConcerns([{config:{name:"homestead",clusterName:"Site A"},preview:{capacity:blocked}},
+    {config:{name:"app"},preview:{capacity:{blocked:false,warnings:["projected RAM reaches 95%"]}}}]);
+  assert.equal(mixed.length,1);
+  assert.match(mixed[0],/Site A · homestead/);
+  assert.doesNotMatch(mixed[0],/projected RAM/);
+});
+test("cordon summaries distinguish all-host, mixed-host and healthy-host cases", () => {
+  const {ctx}=setup(), plan=cordonedPlan();
+  plan.candidates.push({name:"node-2",eligible:false,reasons:["cordoned"]});
+  assert.match(ctx.imagePlacementBlocker(plan),/^All hosts are cordoned/);
+  plan.candidates[1]={name:"node-2",eligible:false,reasons:["missing label pool=fast"]};
+  assert.doesNotMatch(ctx.imagePlacementBlocker(plan),/cordoned/);
+  plan.candidates=[{name:"node-1",eligible:false,reasons:["node is NotReady"]}];
+  assert.match(ctx.imagePlacementBlocker(plan),/^The only host is not ready/);
+  plan.candidates=[{name:"node-1",eligible:true,reasons:[]}];
+  assert.match(ctx.imagePlacementBlocker(plan),/^A replacement pod cannot fit/);
+});

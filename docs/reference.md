@@ -255,6 +255,18 @@ may contain signed query parameters) are intentionally excluded from Homestead's
 inventory and operation-history responses; Kubernetes administrators can still
 read the source from the DataVolume itself.
 
+URL disk imports and Unraid VM imports reclaim their own CDI staging and
+scratch volumes, including work space provisioned by a `Retain` storage class.
+The job stays active while Kubernetes finalizers and Longhorn finish removal;
+its ownership record survives a Homestead restart. Completed VM disks keep
+their selected storage policy. If disk copying succeeds but VM creation fails,
+the completed disks are kept so you can create the VM from them.
+
+An import cannot be retried with the same disk names until its cleanup finishes.
+Homestead preserves storage if another workload uses it or ownership changes.
+Volumes left by older imports without ownership records need a separate review
+in **Volumes**; upgrading does not automatically delete them.
+
 CDI must be installed in the cluster. Harvester includes it, and the supplied
 RBAC permits Homestead to create and monitor DataVolumes while ordinary HTTP
 credentials remain in namespace-scoped Kubernetes Secrets.
@@ -995,7 +1007,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.296/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.297/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -1006,7 +1018,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.296 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.297 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1916,10 +1928,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.296`, the workflow publishes:
+For a release such as `v2.8.297`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.296
+ghcr.io/wjcloudy/homestead:2.8.297
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1930,8 +1942,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.296
-git push origin v2.8.296
+git tag v2.8.297
+git push origin v2.8.297
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

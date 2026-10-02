@@ -1,6 +1,9 @@
 import base64
 import json
 import sys
+import contextlib
+import copy
+import urllib.error
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -164,6 +167,13 @@ class ImportTests(unittest.TestCase):
             self.sent.append((method, path, body))
             if path.endswith("/uploadtokenrequests"):
                 return {"status": {"token": "tok"}}
+            if method == "POST" and body and body.get("metadata", {}).get("name"):
+                obj = copy.deepcopy(body)
+                obj["metadata"].update(uid="uid-" + body["metadata"]["name"], resourceVersion="1")
+                self.objects[path + "/" + body["metadata"]["name"]] = obj
+                return obj
+            if method == "DELETE":
+                self.objects.pop(path, None)
             return {}
 
         class Ops:
@@ -172,10 +182,28 @@ class ImportTests(unittest.TestCase):
                 self.started.append((kind, title, ref))
                 return {"id": "op1", "ref": ref}
 
+            @staticmethod
+            def dispatch_guard():
+                return contextlib.nullcontext()
+
+            @staticmethod
+            def checkpoint(item):
+                pass
+
+            @staticmethod
+            def record_phase(operation_id, phase, progress, message, **updates):
+                ref = self.started[-1][2]
+                ref.update(updates, phase=phase)
+                return {"id": operation_id, "ref": ref}
+
         def kget(path):
             if "services?" in path:
                 return {"items": [{"metadata": {"namespace": "cdi"}}]}
-            return self.objects.get(path, {})
+            if path in self.objects:
+                return self.objects[path]
+            if path.endswith(("/persistentvolumeclaims", "/pods", "/persistentvolumes", "/virtualmachines", "/virtualmachineinstances")):
+                return {"items": []}
+            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
 
         UVMS.bind(self.imp, kget, ksend, Ops)
 
@@ -298,6 +326,7 @@ class ImportTests(unittest.TestCase):
         for selected in ("", "longhorn-ssd", "longhorn-hdd"):
             with self.subTest(selected=selected):
                 self.sent.clear()
+                self.objects.clear()
                 UVMS.start({"source": "nas", "vm": "Windows 11", "storage_class": selected})
                 disks = [body["spec"]["storage"] for method, path, body in self.sent if path.endswith("/datavolumes")]
                 self.assertEqual(2, len(disks))
@@ -306,13 +335,14 @@ class ImportTests(unittest.TestCase):
                     self.assertEqual(["ReadWriteOnce"], disk["accessModes"])
                     self.assertEqual(selected or None, disk.get("storageClassName"))
 
-    def test_failure_keeps_bounded_evidence_before_removing_resources(self):
+    def test_legacy_failure_keeps_diagnostics_and_never_deletes_a_retry_by_name(self):
         ref = {"namespace": "lab", "disks": [{"dv": "desktop-disk", "job": "copy", "bytes": 1}]}
         evidence = [{"title": "CDI upload", "text": "No space left on device\n" + "x" * 70000, "note": "upload failed"}]
-        with mock.patch.object(UVMS, "log_sources", return_value=evidence), mock.patch.object(UVMS, "_delete") as delete:
-            delete.side_effect = lambda path: self.assertIn("diagnostics", ref)
-            state, _, _ = UVMS._fail(ref, "Upload failed")
+        with mock.patch.object(UVMS, "log_sources", return_value=evidence):
+            state, _, message = UVMS._fail(ref, "Upload failed")
         self.assertEqual("failed", state)
+        self.assertIn("no cleanup receipt", message)
+        self.assertEqual([], self.sent)
         self.assertLessEqual(len(ref["diagnostics"][0]["text"]), 20000)
         self.assertEqual(ref["diagnostics"], UVMS.log_sources({"ref": ref}))
 
@@ -364,10 +394,10 @@ class ImportTests(unittest.TestCase):
         op = UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})
         item = {"ref": op["ref"]}
         for dv in ("win11-disk", "win11-disk-2"):
-            self.objects[f"{UVMS.CDI_API}/namespaces/lab/datavolumes/{dv}"] = {"status": {"phase": "UploadScheduled"}}
+            self.objects[f"{UVMS.CDI_API}/namespaces/lab/datavolumes/{dv}"]["status"] = {"phase": "UploadScheduled"}
         self.assertEqual(("running", 2), UVMS.status(item)[:2])
         for dv in ("win11-disk", "win11-disk-2"):
-            self.objects[f"{UVMS.CDI_API}/namespaces/lab/datavolumes/{dv}"] = {"status": {"phase": "UploadReady"}}
+            self.objects[f"{UVMS.CDI_API}/namespaces/lab/datavolumes/{dv}"]["status"] = {"phase": "UploadReady"}
         self.objects["/api/v1/namespaces/cdi/configmaps/cdi-uploadproxy-signer-bundle"] = {"data": {"ca-bundle.crt": "CA"}}
         self.imp._get_or_none = lambda path: self.objects.get(path)
         self.assertEqual("running", UVMS.status(item)[0])
@@ -377,15 +407,15 @@ class ImportTests(unittest.TestCase):
         secrets = [body for method, path, body in self.sent if path.endswith("/secrets")]
         self.assertEqual({"token": "tok", "ca.crt": "CA"}, secrets[0]["stringData"])
 
-    def test_a_failed_copy_requests_cleanup_and_explains_retained_data(self):
+    def test_a_failed_copy_confirms_cleanup_instead_of_claiming_retained_data(self):
         op = UVMS.start({"source": "nas", "vm": "Windows 11", "name": "win11"})
         item = {"ref": op["ref"]}
         for dv in ("win11-disk", "win11-disk-2"):
-            self.objects[f"{UVMS.CDI_API}/namespaces/lab/datavolumes/{dv}"] = {"status": {"phase": "Failed"}}
+            self.objects[f"{UVMS.CDI_API}/namespaces/lab/datavolumes/{dv}"]["status"] = {"phase": "Failed"}
         state, _, message = UVMS.status(item)
         self.assertEqual("failed", state)
         self.assertIn("VM on Unraid is unchanged", message)
-        self.assertIn("Retain storage policy keeps backing data", message)
+        self.assertIn("temporary import storage cleared", message)
         self.assertNotIn("disks were removed", message)
         deleted = [path for method, path, body in self.sent if method == "DELETE"]
         self.assertIn(f"{UVMS.CDI_API}/namespaces/lab/datavolumes/win11-disk", deleted)

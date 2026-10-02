@@ -31,6 +31,7 @@ import homestead_operations as OPS
 import homestead_source_ssh as SOURCE_SSH
 import homestead_capacity_review as SOURCE_REVIEW
 import homestead_passthrough as PASSTHROUGH
+import homestead_vm_network as VMNETWORK
 
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
@@ -2028,7 +2029,7 @@ def _http_disk_source(cfg):
     return source
 
 
-def import_vm_disk(cfg):
+def import_vm_disk(cfg, ops=OPS):
     """Import a qemu-supported disk image into a new PVC through CDI."""
     namespace = _required_name(cfg.get("namespace") or NS, "namespace")
     name = _required_name(cfg.get("name"), "disk name")
@@ -2063,10 +2064,13 @@ def import_vm_disk(cfg):
             },
         },
     }
-    ksend("POST", f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{namespace}/datavolumes", body)
+    import homestead_cdi_cleanup as CDI_CLEANUP
+    operation = CDI_CLEANUP.dispatch(kget, ksend, ops, "vm-disk-import", f"Import VM disk {name}",
+        {"kind": "DataVolume", "name": name, "namespace": namespace}, "/import",
+        {"namespace": namespace, "name": name}, [body], "import")
     _bust("vms", "vol")
     return {"ok": True, "namespace": namespace, "name": name, "pvc": name,
-            "size_gb": size_gb,
+            "size_gb": size_gb, "operation": operation,
             "message": f"CDI import into {namespace}/{name} started"}
 
 
@@ -2443,37 +2447,43 @@ def prepare_vm(cfg, platform=None, default_class=""):
 
     # Which network: the pod network (reached through a Service), or a VM
     # network bridged to the LAN, where the VM has an address of its own.
+    network_isolated = VMNETWORK.isolation_requested(cfg)
+    if network_isolated and any(cfg.get(key) for key in ("network", "static_ip", "nic_model", "mac", "add_nics", "nics")):
+        raise ValueError("An isolated VM cannot have a network card or network address")
     network = str(cfg.get("network") or "pod").strip()
-    mac = str(cfg.get("mac") or _vm_mac()).lower()
-    if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac) or int(mac.split(":")[0], 16) & 1:
-        raise ValueError("MAC must be a unicast hardware address like 52:54:00:12:34:56")
-    # The card the guest sees: VirtIO unless asked, but a Windows guest has
-    # no driver for it until its guest tools are in, so it came up offline.
-    nic_model = str(cfg.get("nic_model") or "virtio").strip()
-    if nic_model not in ("virtio", "e1000", "e1000e", "rtl8139"):
-        raise ValueError("the network card is one of virtio, e1000, e1000e, rtl8139")
-    if network == "pod":
+    interface = net = None
+    network_data = address = mac = ""
+    if not network_isolated:
+        mac = str(cfg.get("mac") or _vm_mac()).lower()
+        if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac) or int(mac.split(":")[0], 16) & 1:
+            raise ValueError("MAC must be a unicast hardware address like 52:54:00:12:34:56")
+        # The card the guest sees: VirtIO unless asked, but a Windows guest has
+        # no driver for it until its guest tools are in, so it came up offline.
+        nic_model = str(cfg.get("nic_model") or "virtio").strip()
+        if nic_model not in ("virtio", "e1000", "e1000e", "rtl8139"):
+            raise ValueError("the network card is one of virtio, e1000, e1000e, rtl8139")
+        if network == "pod":
+            if cfg.get("static_ip"):
+                raise ValueError("an address of its own needs a LAN network (bridged), not the pod network")
+            interface, net = {"name": "default", "masquerade": {}, "model": nic_model, "macAddress": mac}, {"name": "default", "pod": {}}
+        else:
+            if not re.fullmatch(r"[a-z0-9-]+/[a-z0-9.-]+", network):
+                raise ValueError(f"{network} is not a LAN network like default/vlan1")
+            nad_ns, nad = network.split("/", 1)
+            found = _get_or_none(f"/apis/k8s.cni.cncf.io/v1/namespaces/{nad_ns}/network-attachment-definitions/{nad}")
+            if not found:
+                raise ValueError(f"there is no LAN network {network}")
+            config_text = (found.get("spec") or {}).get("config") or ""
+            if '"macvlan"' in config_text:
+                raise ValueError(f"{network} is a macvlan network, which carries containers only: "
+                                 "a VM needs a macvtap network or one on a host bridge")
+            # macvtap is joined through KubeVirt's binding for it, a bridge directly.
+            binding = {"binding": {"name": "macvtap"}} if '"macvtap"' in config_text else {"bridge": {}}
+            interface = {"name": "default", **binding, "model": nic_model, "macAddress": mac}
+            net = {"name": "default", "multus": {"networkName": network}}
+        network_data, address = ("", "")
         if cfg.get("static_ip"):
-            raise ValueError("an address of its own needs a LAN network (bridged), not the pod network")
-        interface, net = {"name": "default", "masquerade": {}, "model": nic_model, "macAddress": mac}, {"name": "default", "pod": {}}
-    else:
-        if not re.fullmatch(r"[a-z0-9-]+/[a-z0-9.-]+", network):
-            raise ValueError(f"{network} is not a LAN network like default/vlan1")
-        nad_ns, nad = network.split("/", 1)
-        found = _get_or_none(f"/apis/k8s.cni.cncf.io/v1/namespaces/{nad_ns}/network-attachment-definitions/{nad}")
-        if not found:
-            raise ValueError(f"there is no LAN network {network}")
-        config_text = (found.get("spec") or {}).get("config") or ""
-        if '"macvlan"' in config_text:
-            raise ValueError(f"{network} is a macvlan network, which carries containers only: "
-                             "a VM needs a macvtap network or one on a host bridge")
-        # macvtap is joined through KubeVirt's binding for it, a bridge directly.
-        binding = {"binding": {"name": "macvtap"}} if '"macvtap"' in config_text else {"bridge": {}}
-        interface = {"name": "default", **binding, "model": nic_model, "macAddress": mac}
-        net = {"name": "default", "multus": {"networkName": network}}
-    network_data, address = ("", "")
-    if cfg.get("static_ip"):
-        network_data, address = static_network(cfg["static_ip"], mac)
+            network_data, address = static_network(cfg["static_ip"], mac)
 
     # The bus the guest was installed on: Windows set up on SATA has no
     # virtio driver to find its own boot disk with.
@@ -2544,10 +2554,11 @@ def prepare_vm(cfg, platform=None, default_class=""):
             "resources": {"requests": {"memory": mem}},
             "devices": {
                 "disks": disks,
-                "interfaces": [interface],
+                "interfaces": [interface] if interface else [],
+                "autoattachPodInterface": False,
             },
         },
-        "networks": [net],
+        "networks": [net] if net else [],
         "volumes": volumes,
     }
     if cfg.get("log_console"):
@@ -2577,6 +2588,7 @@ def prepare_vm(cfg, platform=None, default_class=""):
             },
         },
     }
+    VMNETWORK.apply_isolation(vm, cfg)
     effects = []
     if cfg.get("host_devices"):
         PASSTHROUGH.edit_vm(vm, ns, cfg["host_devices"], effects)

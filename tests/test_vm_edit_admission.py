@@ -75,6 +75,22 @@ class VMEditAdmissionTests(unittest.TestCase):
         writes.assert_not_called()
         return {**self.body, "capacity_token": result[1]["capacity_token"], "confirm_capacity": True}
 
+    def test_reviewed_isolation_disables_fallback_without_restart_and_rejects_tampering(self):
+        self.body = {"ns": "lab", "name": "guest", "isolated": True, "restart": False}
+        body = self.reviewed()
+        rejected, writes = self.call("/api/vm/edit", {**body, "isolated": False})
+        self.assertEqual(409, rejected[0], rejected)
+        writes.assert_not_called()
+        result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(200, result[0], result)
+        saved = next(call.args[2] for call in writes.call_args_list if call.args[1] == self.vm_path)
+        spec = saved["spec"]["template"]["spec"]
+        self.assertIs(False, spec["domain"]["devices"]["autoattachPodInterface"])
+        self.assertEqual([], spec["domain"]["devices"]["interfaces"])
+        self.assertEqual([], spec["networks"])
+        self.assertEqual("true", saved["metadata"]["annotations"]["homestead.io/network-isolated"])
+        self.assertFalse(any(call.args[1].endswith("/restart") for call in writes.call_args_list))
+
     def test_unsigned_edit_writes_nothing(self):
         for body in (self.body, {**self.body, "confirm_capacity": True}):
             result, writes = self.call("/api/vm/edit", body)

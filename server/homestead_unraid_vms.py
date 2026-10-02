@@ -26,6 +26,7 @@ from datetime import datetime
 import xml.etree.ElementTree as ET
 
 import homestead_names as NAMES
+import homestead_cdi_cleanup as CDI_CLEANUP
 
 IMP = kget = ksend = OPS = None
 platform = lambda: {}
@@ -372,40 +373,25 @@ def start(body, actor=""):
         vm_cfg["mac"] = mac
     if found["cpu_model"]:
         vm_cfg["cpu_model"] = found["cpu_model"]
-    created = []
-    try:
-        for dv, disk in zip(names, disks):
-            # Match the disk-image importer: CDI writes disk.img on a filesystem.
-            # An omitted mode can inherit Block from the StorageProfile, whose
-            # device requires runtime ownership support for CDI's non-root user.
-            storage = {"accessModes": ["ReadWriteOnce"], "volumeMode": "Filesystem",
-                       "resources": {"requests": {"storage": f"{disk['size_gb']}Gi"}}}
-            if storage_class:
-                storage["storageClassName"] = storage_class
-            ksend("POST", f"{CDI_API}/namespaces/{ns}/datavolumes", {
-                "apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume",
-                "metadata": {"name": dv, "namespace": ns,
-                             "labels": {NAMES.key("managed"): "true", IMP.VM_DISK_LABEL: "true"},
-                             "annotations": {"homestead.io/import-source": "unraid",
-                                             "homestead.io/disk-format": disk["format"]}},
-                "spec": {"source": {"upload": {}}, "contentType": "kubevirt", "storage": storage}})
-            created.append(dv)
-    except Exception:
-        for dv in created:
-            _delete(f"{CDI_API}/namespaces/{ns}/datavolumes/{dv}")
-        raise
-    ref = {"source": source, "vm": found["name"], "namespace": ns, "name": name, "url": url, "phase": "disks",
+    bodies = []
+    for dv, disk in zip(names, disks):
+        # Filesystem mode avoids raw block-device ownership requirements.
+        storage = {"accessModes": ["ReadWriteOnce"], "volumeMode": "Filesystem",
+                   "resources": {"requests": {"storage": f"{disk['size_gb']}Gi"}}}
+        if storage_class:
+            storage["storageClassName"] = storage_class
+        bodies.append({
+            "apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume",
+            "metadata": {"name": dv, "namespace": ns,
+                         "labels": {NAMES.key("managed"): "true", IMP.VM_DISK_LABEL: "true"},
+                         "annotations": {"homestead.io/import-source": "unraid",
+                                         "homestead.io/disk-format": disk["format"]}},
+            "spec": {"source": {"upload": {}}, "contentType": "kubevirt", "storage": storage}})
+    ref = {"source": source, "vm": found["name"], "namespace": ns, "name": name, "url": url,
            "disks": [{"dv": dv, "path": d["path"], "bytes": d["size"], "job": ""} for dv, d in zip(names, disks)],
            "vm_cfg": vm_cfg, "by": actor}
-    return OPS.start(KIND, f"Import {found['name']} from {source}", {"kind": "VirtualMachine", "name": name, "namespace": ns},
-                     "/vms/import", ref, "Making its disks")
-
-
-def _delete(path):
-    try:
-        ksend("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background"})
-    except Exception:
-        pass
+    return CDI_CLEANUP.dispatch(kget, ksend, OPS, KIND, f"Import {found['name']} from {source}",
+        {"kind": "VirtualMachine", "name": name, "namespace": ns}, "/vms/import", ref, bodies, "disks")
 
 
 def copy_script(src, vm, path, size):
@@ -430,18 +416,27 @@ def copy_script(src, vm, path, size):
     ])
 
 
-def _job(ref, disk, index, token, ca):
+def _job(ref, disk, index, token, ca, item=None):
     src = _source(ref["source"])
-    job = f"homestead-vmimport-{ref['name']}"[:55].rstrip("-") + f"-{index + 1}"
+    work = ref.get("cdi_cleanup")
+    suffix = f"-{work['id'][:8]}-{index + 1}" if work else f"-{index + 1}"
+    job = f"homestead-vmimport-{ref['name']}"[:63 - len(suffix)].rstrip("-") + suffix
     secret = job + "-upload"
     ns = ref["namespace"]
-    ksend("POST", f"/api/v1/namespaces/{ns}/secrets", {
+    stamp = {CDI_CLEANUP.STAMP: work["id"]} if work else {}
+    disk["job"] = job
+    aux = [{"path": f"/api/v1/namespaces/{ns}/secrets/{secret}"},
+           {"path": f"/apis/batch/v1/namespaces/{ns}/jobs/{job}"}]
+    if work:
+        work.setdefault("aux", []).extend(aux)
+        OPS.checkpoint(item)
+    made_secret = ksend("POST", f"/api/v1/namespaces/{ns}/secrets", {
         "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-        "metadata": {"name": secret, "namespace": ns, "labels": NAMES.labels(TASK)},
+        "metadata": {"name": secret, "namespace": ns, "labels": NAMES.labels(TASK), "annotations": stamp},
         "stringData": {"token": token, "ca.crt": ca}})
     body = {
         "apiVersion": "batch/v1", "kind": "Job",
-        "metadata": {"name": job, "namespace": ns, "labels": NAMES.labels(TASK)},
+        "metadata": {"name": job, "namespace": ns, "labels": NAMES.labels(TASK), "annotations": stamp},
         "spec": {"backoffLimit": 0, "ttlSecondsAfterFinished": 3600, "template": {
             "metadata": {"labels": NAMES.labels(TASK)},
             "spec": {"restartPolicy": "Never", "automountServiceAccountToken": False,
@@ -456,6 +451,10 @@ def _job(ref, disk, index, token, ca):
                      "volumes": [{"name": "ca", "secret": {"secretName": secret, "items": [{"key": "ca.crt", "path": "ca.crt"}]}}]}}}}
     made = ksend("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", body)
     disk["job_uid"] = (made or {}).get("metadata", {}).get("uid", "")
+    aux[0]["uid"] = (made_secret or {}).get("metadata", {}).get("uid", "")
+    aux[1]["uid"] = disk["job_uid"]
+    if work:
+        OPS.checkpoint(item)
     return job, secret
 
 
@@ -634,9 +633,8 @@ def log_sources(item):
     return out or [{"title": "Disk copy", "text": "", "note": "The import has no retained copy output yet, or its pods were cleaned up by an older release."}]
 
 
-def _fail(ref, message):
+def _fail(ref, message, item=None):
     """Clear what this import made, so it can simply be run again."""
-    ns = ref["namespace"]
     # Save before deleting Jobs and DataVolumes: their pods disappear with them.
     remaining, saved = 60000, []
     for source in log_sources({"ref": ref}):
@@ -648,14 +646,14 @@ def _fail(ref, message):
                       "note": str(source.get("note") or "")[:500],
                       **({"kind": "disk-copy", "progress": source.get("progress")} if source.get("kind") == "disk-copy" else {})})
     ref["diagnostics"] = saved
-    for disk in ref["disks"]:
-        if disk.get("job"):
-            _delete(f"/apis/batch/v1/namespaces/{ns}/jobs/{disk['job']}")
-            _delete(f"/api/v1/namespaces/{ns}/secrets/{disk['job']}-upload")
-        _delete(f"{CDI_API}/namespaces/{ns}/datavolumes/{disk['dv']}")
+    if ref.get("cdi_cleanup"):
+        ref.update(phase="cleanup", cleanup_outcome="failed",
+                   cleanup_detail=message + "; the VM on Unraid is unchanged")
+        return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
+    # Older jobs lack identity receipts. Never delete a retry's disks by name.
     ref["phase"] = "failed"
-    return "failed", 100, (message + "; destination disk cleanup was requested. A Retain storage policy keeps backing data; "
-                           "review disconnected volumes in Volumes. The VM on Unraid is unchanged")
+    return "failed", 100, (message + "; this older import has no cleanup receipt; review its disconnected volumes. "
+                           "The VM on Unraid is unchanged")
 
 
 def status(item):
@@ -666,17 +664,35 @@ def status(item):
         return "succeeded", 100, ref.get("detail", "Imported")
     if ref["phase"] == "failed":
         return "failed", 100, item.get("message", "Import failed")
-    dvs = [kget(f"{CDI_API}/namespaces/{ns}/datavolumes/{d['dv']}") for d in ref["disks"]]
+    if ref.get("cdi_cleanup"):
+        if ref["phase"] == "creating":
+            ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_detail="Import setup was interrupted")
+        if ref["phase"] == "cleanup":
+            return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
+        hold = CDI_CLEANUP.track(item, kget, OPS.checkpoint)
+        if hold:
+            return hold
+    if ref.get("cdi_cleanup"):
+        dvs = [CDI_CLEANUP.RESOURCES.optional(kget, f"{CDI_API}/namespaces/{ns}/datavolumes/{d['dv']}") for d in ref["disks"]]
+        if any(dv is None for dv in dvs):
+            return _fail(ref, "An import disk was removed before completion", item)
+    else:
+        dvs = [kget(f"{CDI_API}/namespaces/{ns}/datavolumes/{d['dv']}") for d in ref["disks"]]
     phases = [((dv.get("status") or {}).get("phase") or "Pending") for dv in dvs]
     if any(p in ("Failed", "Error") for p in phases):
-        return _fail(ref, "CDI could not take the disk")
+        return _fail(ref, "CDI could not take the disk", item)
     if ref["phase"] == "disks":
         if not all(p in ("UploadReady", "Succeeded") for p in phases):
             return "running", 2, "Waiting for CDI to be ready to receive the disks"
         _, proxy_ns = _upload_url()
         ca = _ca(proxy_ns)
-        for index, disk in enumerate(ref["disks"]):
-            disk["job"], _ = _job(ref, disk, index, _token(ns, disk["dv"]), ca)
+        try:
+            for index, disk in enumerate(ref["disks"]):
+                if disk.get("job"):
+                    return _fail(ref, "Copy setup was interrupted", item)
+                disk["job"], _ = _job(ref, disk, index, _token(ns, disk["dv"]), ca, item)
+        except Exception:
+            return _fail(ref, "Could not start the disk copy", item)
         ref["phase"] = "copy"
         return "running", 3, "Copying from " + ref["source"]
     if ref["phase"] == "copy":
@@ -698,13 +714,11 @@ def status(item):
                 disk["pct"] = progress(_job_logs(ns, disk["job"]), disk["bytes"])
                 running += 1
         if failed:
-            return _fail(ref, f"Copying {ref['vm']} failed: {failed}")
+            return _fail(ref, f"Copying {ref['vm']} failed: {failed}", item)
         pct = sum(max(1, d["bytes"]) * d.get("pct", 0) for d in ref["disks"]) / total
         if done < len(ref["disks"]):
             gb = sum(d["bytes"] * d.get("pct", 0) / 100 for d in ref["disks"]) / 1e9
             return "running", max(3, min(94, round(pct * 0.94))), f"Copying from {ref['source']}: {gb:.1f} of {total / 1e9:.1f} GB"
-        for disk in ref["disks"]:
-            _delete(f"/api/v1/namespaces/{ns}/secrets/{disk['job']}-upload")
         ref["phase"] = "convert"
         return "running", 95, "CDI is finishing the disk"
     if ref["phase"] == "convert":
@@ -716,11 +730,18 @@ def status(item):
             IMP.commit_vm(prepared, send=ksend)
         except ValueError as error:
             # The disks are whole: keep them, and say how to finish by hand.
+            detail = (f"The disks arrived, but the VM could not be made: {error}. They are kept as "
+                      f"{', '.join(d['dv'] for d in ref['disks'])}; make the VM from them under Import")
+            if ref.get("cdi_cleanup"):
+                ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_keep_disks=True, cleanup_detail=detail)
+                return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
             ref["phase"] = "failed"
-            return "failed", 100, (f"The disks arrived, but the VM could not be made: {error}. They are kept as "
-                                   f"{', '.join(d['dv'] for d in ref['disks'])}; make the VM from them under Import")
+            return "failed", 100, detail
         ref["phase"] = "done"
         ref["detail"] = (f"{ref['name']} is ready, stopped: start it in Virtual machines. "
                          f"{ref['vm']} on {ref['source']} is untouched")
+        if ref.get("cdi_cleanup"):
+            ref.update(phase="cleanup", cleanup_outcome="succeeded", cleanup_detail=ref["detail"])
+            return CDI_CLEANUP.finish(item, kget, ksend, OPS.checkpoint)
         return "succeeded", 100, ref["detail"]
     return "failed", 100, "Unknown import step"
