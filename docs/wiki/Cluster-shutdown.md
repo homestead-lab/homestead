@@ -39,7 +39,7 @@ If the coordinator itself fails or the API is unavailable, scheduling may remain
 cordoned. The journal is retained even when submission has an uncertain outcome:
 
 ```sh
-kubectl -n lab get configmap homestead-cluster-shutdown -o yaml
+kubectl -n lab get secret homestead-cluster-shutdown -o jsonpath={.data.state} | base64 -d
 kubectl -n lab get pods -l homestead.io/task=cluster-shutdown
 kubectl -n lab logs <helper-pod> -c shutdown
 ```
@@ -47,6 +47,17 @@ kubectl -n lab logs <helper-pod> -c shutdown
 Use your Homestead namespace if it differs from `lab`. Do not delete the journal
 to retry a shutdown: pending helpers may still exist. The UI refuses another
 shutdown until recovery releases the journal.
+
+The authoritative journal is a Kubernetes Secret. Its approved image, host
+identities, readiness and final power commit require Secret access; ConfigMap
+writers cannot authorize shutdown helpers. Secret write access in Homestead's
+namespace is privileged, just like access to its account Secret. No additional
+RBAC permissions are needed by this change.
+
+An older preview's ConfigMap journal is never migrated automatically. If one is
+found without the Secret journal, inspect the original run from a cluster console,
+wait for its helper deadlines and verify that all helpers have terminated before
+retiring that old journal. Do not treat editing its phase as recovery.
 
 ## Starting again
 
@@ -59,6 +70,10 @@ requires all original hosts to be Ready, all shutdown helpers to have terminated
 and (after a power handoff) every host to have a new boot ID. If a host stayed on,
 inspect it and restart it through its console before recovery. Recovery restores only scheduling that was
 allowed before shutdown. It never replays the power request.
+
+Sign-in, password changes and session revocation remain available during shutdown
+and recovery. Login attempt limits still persist across restarts; ordinary
+workload and Secret edits remain held by the shutdown guard.
 
 Inspect application and storage health, then start VMs explicitly. A recovered
 job means scheduling was restored, not that physical shutdown was verified.

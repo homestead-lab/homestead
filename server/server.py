@@ -196,11 +196,32 @@ def kget(path, timeout=10):
 
 
 def ksend(method, path, body=None, ctype="application/json", timeout=15):
+    return _guarded_ksend(method, path, body, ctype, timeout)
+
+
+def _guarded_ksend(method, path, body=None, ctype="application/json", timeout=15, *, shutdown_bypass=False):
     with self_data_activity():
         require_self_data_write()
         authorize_workload_write(method, path, body)
-        return STORAGE_GUARD.send(method, path, body, lambda: _ksend(method, path, body, ctype, timeout), OPS, kget,
+        return STORAGE_GUARD.send(method, path, body,
+                                  lambda: _ksend(method, path, body, ctype, timeout, shutdown_bypass=shutdown_bypass), OPS, kget,
                                   own_controller=(SELF.NS, NAMES.BRAND))
+
+
+def _auth_ksend(method, path, body=None, ctype="application/json", timeout=15):
+    # Only AUTH receives this binding. Login rate limits and session revocation
+    # must remain durable while workloads are fenced for shutdown/recovery.
+    base = f"/api/v1/namespaces/{AUTH.NS}/secrets"
+    name = AUTH.SECRET_NAME()
+    metadata = body.get("metadata", {}) if isinstance(body, dict) else {}
+    if (method not in ("POST", "PUT") or path != (base if method == "POST" else base + "/" + name)
+            or not isinstance(body, dict) or body.get("apiVersion") != "v1" or body.get("kind") != "Secret"
+            or body.get("type") != "Opaque" or not isinstance(metadata, dict)
+            or metadata.get("name") != name or metadata.get("namespace") != AUTH.NS
+            or not isinstance(body.get("data"), dict) or set(body["data"]) != {"store.json"}
+            or "stringData" in body or ctype != "application/json"):
+        raise ValueError("Authentication transport only writes the account Secret")
+    return _guarded_ksend(method, path, body, ctype, timeout, shutdown_bypass=True)
 
 
 def authorize_workload_write(method, path, body):
@@ -225,7 +246,8 @@ def _ksend(method, path, body=None, ctype="application/json", timeout=15, *, shu
     path = api_path(path)
     # Fence the common Kubernetes transport, including callers that already
     # own another feature's write lock. Local navigation and recovery reviews
-    # remain available. Only the shutdown coordinator's binding bypasses this.
+    # remain available. The shutdown coordinator and the narrowly scoped AUTH
+    # binding bypass this fence; authentication still uses the other guards.
     if not shutdown_bypass and "SELF" in globals():
         shutdown = cluster_shutdown().state()
         if shutdown and shutdown["phase"] not in ("released", "failed"):
@@ -5503,7 +5525,7 @@ STORAGE_CLASS = _resolve_storage_class()
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
 IMP.bind(kget, ksend, create_pvc, build_deployment, DEFAULT_NS, _cache, HW.features)
 IMP.SCAN_DIR = DATA_DIR       # each node's full image list, kept for every replica
-AUTH.bind(kget, ksend, DEFAULT_NS)
+AUTH.bind(kget, _auth_ksend, DEFAULT_NS)
 CAPACITY_REVIEW.bind(AUTH.review_signing_key)
 LH.bind(kget, ksend, _cache, STORAGE_CLASS)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)

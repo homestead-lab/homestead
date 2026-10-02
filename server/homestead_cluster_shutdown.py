@@ -1,9 +1,10 @@
 """Reviewed cluster shutdown, coordinated independently of Homestead's data disk.
 
-The ConfigMap is both a singleton lock and a durable journal. Power helpers only
+The Secret is both a singleton lock and a durable journal. Power helpers only
 act on a short-lived commit for their own boot, after every consumer has left.
 Neither a missing API nor an expired worker is evidence that a host is off.
 """
+import base64
 import hashlib
 import json
 import os
@@ -19,6 +20,7 @@ import uuid
 import homestead_maintenance as M
 
 NAME = "homestead-cluster-shutdown"
+JOURNAL_TYPE = "homestead.io/cluster-shutdown"
 ANNOTATION = "homestead.io/cluster-shutdown"
 KIND = "cluster-shutdown"
 CONFIRM = "SHUT DOWN CLUSTER"
@@ -64,7 +66,7 @@ def node_row(node):
 
 
 def helper(pod, uid):
-    return bool(uid) and any(o.get("kind") == "ConfigMap" and o.get("uid") == uid
+    return bool(uid) and any(o.get("kind") == "Secret" and o.get("uid") == uid
                             for o in pod.get("metadata", {}).get("ownerReferences", []))
 
 
@@ -98,24 +100,43 @@ class Shutdown:
         self.get, self.send, self.ns, self.pod = get, send, namespace, pod
         self.image, self.enabled, self.busy = image, enabled, busy
         self.clock, self.sleep = clock, sleep
-        self.path = f"/api/v1/namespaces/{namespace}/configmaps/{NAME}"
+        self.path = f"/api/v1/namespaces/{namespace}/secrets/{NAME}"
 
     def read(self):
-        return optional(self.get, self.path)
+        journal = optional(self.get, self.path)
+        if journal is None:
+            # Never migrate power authority from the old, lower-trust journal.
+            # An unfinished preview installation needs manual inspection first.
+            legacy = optional(self.get, f"/api/v1/namespaces/{self.ns}/configmaps/{NAME}")
+            if legacy is not None:
+                raise ValueError("Legacy shutdown ConfigMap found; inspect and retire its helpers and journal from a cluster console before starting another shutdown")
+            return None
+        if journal.get("kind") != "Secret" or journal.get("type") != JOURNAL_TYPE:
+            raise ValueError("Unexpected shutdown journal type; power was not authorized")
+        journal["data"] = {key: base64.b64decode(value, validate=True).decode("utf-8")
+                           for key, value in journal["data"].items()}
+        return journal
+
+    def write(self, method, path, journal):
+        # Keep the entire authority (plan, phase, readiness, cancellation and
+        # power commit) behind Secret RBAC, never ConfigMap write permission.
+        body = {**journal, "data": {key: base64.b64encode(value.encode("utf-8")).decode("ascii")
+                                   for key, value in journal["data"].items()}}
+        return self.send(method, path, body)
 
     def state(self):
-        cm = self.read()
-        return json.loads(cm["data"]["state"]) if cm else None
+        journal = self.read()
+        return json.loads(journal["data"]["state"]) if journal else None
 
     def change(self, fn, uid=None):
         # Compare-and-swap also serializes cancellation against final commit.
         for _ in range(8):
-            cm = self.read()
-            if not cm or (uid and cm["metadata"]["uid"] != uid):
+            journal = self.read()
+            if not journal or (uid and journal["metadata"]["uid"] != uid):
                 raise ValueError("Shutdown journal identity changed; power was not authorized")
-            fn(cm["data"])
+            fn(journal["data"])
             try:
-                return self.send("PUT", self.path, cm)
+                return self.write("PUT", self.path, journal)
             except urllib.error.HTTPError as error:
                 if error.code != 409:
                     raise
@@ -193,7 +214,7 @@ class Shutdown:
         return {"apiVersion": "v1", "kind": "Pod",
                 "metadata": {"name": f"homestead-shutdown-{state['run']}-{suffix}", "namespace": self.ns,
                              "labels": {"homestead.io/task": KIND},
-                             "ownerReferences": [{"apiVersion": "v1", "kind": "ConfigMap", "name": NAME, "uid": uid}]},
+                             "ownerReferences": [{"apiVersion": "v1", "kind": "Secret", "name": NAME, "uid": uid}]},
                 "spec": spec}
 
     def start(self, body, ops):
@@ -208,14 +229,15 @@ class Shutdown:
                  "message": "Preparing independent shutdown helpers; no host power sent",
                  "deadline": self.clock() + LIFETIME, "plan": plan["snapshot"], "review_token": plan["review_token"]}
         previous = self.read()
-        cm = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": NAME, "namespace": self.ns},
+        journal = {"apiVersion": "v1", "kind": "Secret", "type": JOURNAL_TYPE,
+              "metadata": {"name": NAME, "namespace": self.ns},
               "data": {"state": encode(state)}}
         if previous:
             if json.loads(previous["data"]["state"])["phase"] != "released":
                 raise ValueError("A shutdown already exists; inspect it before retrying")
-            cm["metadata"]["resourceVersion"] = previous["metadata"]["resourceVersion"]
-        cm = self.send("PUT" if previous else "POST", self.path if previous else self.path.rsplit("/", 1)[0], cm)
-        uid = cm["metadata"]["uid"]
+            journal["metadata"]["resourceVersion"] = previous["metadata"]["resourceVersion"]
+        journal = self.write("PUT" if previous else "POST", self.path if previous else self.path.rsplit("/", 1)[0], journal)
+        uid = journal["metadata"]["uid"]
         op = ops.start(KIND, "Shut down cluster", {"kind": "Cluster", "name": "cluster"}, "/cluster",
                        {"run": state["run"], "namespace": self.ns}, state["message"])
         # The singleton journal is retained even if submission/its reply is lost.
@@ -259,8 +281,8 @@ class Shutdown:
             self.send("PATCH", "/api/v1/nodes/" + n["name"], changes, ctype="application/json-patch+json")
 
     def recover(self, run):
-        cm = self.read()
-        state = json.loads(cm["data"]["state"])
+        journal = self.read()
+        state = json.loads(journal["data"]["state"])
         if run != state["run"] or state["phase"] == "released":
             raise ValueError("Shutdown changed; refresh its progress")
         # A timed-out helper can never consume an old commit after recovery.
@@ -269,10 +291,10 @@ class Shutdown:
         live = [node_row(self.get("/api/v1/nodes/" + n["name"])) for n in state["plan"]["nodes"]]
         if any(not n["ready"] for n in live):
             raise ValueError("Every original host must be Ready before recovering scheduling")
-        if "commit" in cm["data"] and any(n["boot_id"] == old["boot_id"] for n, old in zip(live, state["plan"]["nodes"])):
+        if "commit" in journal["data"] and any(n["boot_id"] == old["boot_id"] for n, old in zip(live, state["plan"]["nodes"])):
             raise ValueError("A committed shutdown requires every host to return with a new boot ID. Inspect hosts that stayed on before recovery")
         pods = inventory(self.get, "/api/v1/pods")
-        if any(helper(p, cm["metadata"]["uid"]) and self.run_pod(p, run)
+        if any(helper(p, journal["metadata"]["uid"]) and self.run_pod(p, run)
                and p.get("status", {}).get("phase") not in ("Succeeded", "Failed") for p in pods):
             raise ValueError("Shutdown helpers have not all terminated; inspect their status before recovering scheduling")
         self.restore(state["plan"], run)
@@ -282,7 +304,7 @@ class Shutdown:
                 raise ValueError("Shutdown identity changed")
             current.update(phase="released", message="Scheduling restored; inspect workload and storage health", progress=100)
             data["state"] = encode(current)
-        self.change(release, cm["metadata"]["uid"])
+        self.change(release, journal["metadata"]["uid"])
         return {"ok": True}
 
     @staticmethod
@@ -290,12 +312,12 @@ class Shutdown:
         return pod["metadata"]["name"].startswith("homestead-shutdown-" + run + "-")
 
     def public_state(self):
-        cm = self.read()
-        if not cm:
+        journal = self.read()
+        if not journal:
             return None
-        state = json.loads(cm["data"]["state"])
-        state["hosts"] = [{"name": n["name"], "state": "Power timer accepted" if cm["data"].get("sent-" + str(i)) else
-                           "Helper ready" if cm["data"].get("ready-" + str(i)) == n["boot_id"] else "Waiting for helper"}
+        state = json.loads(journal["data"]["state"])
+        state["hosts"] = [{"name": n["name"], "state": "Power timer accepted" if journal["data"].get("sent-" + str(i)) else
+                           "Helper ready" if journal["data"].get("ready-" + str(i)) == n["boot_id"] else "Waiting for helper"}
                           for i, n in enumerate(state["plan"]["nodes"])]
         return state
 
@@ -317,15 +339,15 @@ class Coordinator:
         self.plan = None
 
     def current(self):
-        cm = self.s.read()
-        if not cm or cm["metadata"]["uid"] != self.uid:
+        journal = self.s.read()
+        if not journal or journal["metadata"]["uid"] != self.uid:
             raise ValueError("Shutdown journal was replaced")
-        state = json.loads(cm["data"]["state"])
+        state = json.loads(journal["data"]["state"])
         if state["run"] != self.run or self.s.clock() >= state["deadline"]:
             raise ValueError("Shutdown expired; power was not authorized")
-        if cm["data"].get("cancel"):
+        if journal["data"].get("cancel"):
             raise ValueError("Shutdown cancelled before final power handoff")
-        return cm, state
+        return journal, state
 
     def report(self, phase, percent, message, commit=False):
         def update(data):
@@ -386,10 +408,10 @@ class Coordinator:
             self.s.sleep(2)
 
     def execute(self):
-        cm = self.s.read()
-        if not cm or cm["metadata"]["uid"] != self.uid:
+        journal = self.s.read()
+        if not journal or journal["metadata"]["uid"] != self.uid:
             raise ValueError("Shutdown journal was replaced")
-        state = json.loads(cm["data"]["state"])
+        state = json.loads(journal["data"]["state"])
         if state["run"] != self.run:
             raise ValueError("Shutdown identity changed")
         self.plan = state["plan"]
@@ -404,8 +426,8 @@ class Coordinator:
                             self.s.pod_body(state, self.uid, "agent", node["name"], i))
             until = self.s.clock() + 180
             while True:
-                cm, _ = self.current()
-                waiting = [n["name"] for i, n in enumerate(self.plan["nodes"]) if cm["data"].get("ready-" + str(i)) != n["boot_id"]]
+                journal, _ = self.current()
+                waiting = [n["name"] for i, n in enumerate(self.plan["nodes"]) if journal["data"].get("ready-" + str(i)) != n["boot_id"]]
                 if not waiting:
                     break
                 self.report("preparing", 10, "Checking independent power helper on " + ", ".join(waiting))
@@ -447,8 +469,8 @@ class Coordinator:
                 raise ValueError("A Longhorn volume reattached before power handoff")
             self.report("handoff", 90, "Power handoff committed. Host timers request power-off in 30 seconds; Homestead's host in 90 seconds. Physical power is unverified", commit=True)
         except Exception as error:
-            cm = self.s.read()
-            if not cm or cm["metadata"]["uid"] != self.uid or "commit" in cm["data"]:
+            journal = self.s.read()
+            if not journal or journal["metadata"]["uid"] != self.uid or "commit" in journal["data"]:
                 raise  # A lost commit response must never trigger recovery.
             message = str(error)
             try:
@@ -482,7 +504,7 @@ def agent(shutdown, uid, run, index, execute=subprocess.check_output):
     shutdown.change(ready, uid)
     while True:
         try:
-            cm, state = coordinator.current()
+            journal, state = coordinator.current()
         except (OSError, urllib.error.URLError):
             if shutdown.clock() >= state["deadline"]:
                 return
@@ -490,7 +512,7 @@ def agent(shutdown, uid, run, index, execute=subprocess.check_output):
             continue
         if state["phase"] in ("failed", "released"):
             return
-        commit = json.loads(cm["data"].get("commit", "null"))
+        commit = json.loads(journal["data"].get("commit", "null"))
         if commit:
             if commit["run"] != run or shutdown.clock() >= commit["until"]:
                 return
