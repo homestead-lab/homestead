@@ -32,7 +32,7 @@ window.diskV2Open = async (node,disk) => {
       (!plan.blockers.length?UI.ack('diskV2Confirm','Disable new replicas and move existing replicas off this disk',{onchange:"$('#diskV2Begin').disabled=!this.checked"}):'') +
       UI.actions(UI.cancel('Close')+UI.button('Move replicas off','diskV2Begin()',{kind:'pri',id:'diskV2Begin',disabled:true,attrs:'data-need="admin"'}),UI.button('Check again',`diskV2Open(${jsq(node)},${jsq(disk)})`));
     window.applyRole?.();
-  } catch(e) {if(sequence===diskV2Sequence && $('#diskV2Review')===host) host.innerHTML=UI.callout('warn','Disk review unavailable',esc(e.message))+UI.actions(UI.button('Check again',`diskV2Open(${jsq(node)},${jsq(disk)})`));}
+  } catch(e) {if(sequence===diskV2Sequence && $('#diskV2Review')===host) host.innerHTML=UI.callout('warn','Disk review unavailable',esc(e.message))+UI.actions(UI.button('Check again',`diskV2Open(${jsq(node)},${jsq(disk)})`) + (e.message.startsWith('Set up V2')?UI.button('Set up V2','lhV2Setup()',{kind:'pri',attrs:'data-need="admin"'}):''));}
 };
 window.diskV2Begin = async () => {
   if(diskV2Busy || !diskV2Approval || !$('#diskV2Confirm')?.checked || !$('#diskV2Review') || $('#modal')?.classList.contains('hidden')) return;
@@ -69,7 +69,7 @@ function diskV2Paint(item) {
   const stage=done?3:item.phase==='evacuating'?0:item.phase==='awaiting-erase'?1:2;
   const label=done?'Ready for V2':item.status==='failed'?'Preparation stopped':item.status==='cancelled'?'Evacuation stopped':item.needs_erase_review?'Ready for erase review':'In progress';
   host.innerHTML=UI.lead(esc(item.message)) + UI.steps([{title:'Evacuate V1'},{title:'Review erase'},{title:'V2 ready'}],stage) +
-    UI.facts([['Host',esc(item.node)],['Device',`<span class="mono">${esc(item.device)}</span>`],['State',UI.chip(label,done?'ok':stopped?'warn':'info')],['V1 replicas on disk',esc(item.remaining)]]) +
+    UI.facts([['Host',esc(item.node)],['Device',`<span class="mono">${esc(item.device)}</span>`],['State',UI.chip(label,done || item.needs_erase_review?'ok':stopped?'warn':'')],['V1 replicas on disk',esc(item.remaining)]]) +
     (!stopped && !item.needs_erase_review?UI.progress(item.progress,{label:'Disk preparation',detail:'Reopen this saved task from Jobs.'}):'') +
     (item.needs_erase_review?UI.callout('info','Evacuation finished','Healthy replacement replicas are confirmed. Nothing is erased until you complete a fresh device review.'):item.status==='failed'?UI.callout('warn','Inspect before continuing','Preparation is not retried automatically. Keep this task and its log while checking the device and host receipt; partial changes may remain.'):done?UI.callout('ok','Block disk ready','Longhorn has verified the V2 disk. Existing volumes keep their engine. Use Change storage class on a volume to copy it into a V2 class. This stops its workloads.'):item.status==='cancelled'?UI.callout('info','Filesystem retained','Replacement replicas remain. This disk stays disabled for new replicas; allow them again from the disk’s actions when ready.'):'') +
     diskV2Volumes(item.volumes) +

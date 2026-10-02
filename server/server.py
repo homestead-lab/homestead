@@ -9568,7 +9568,7 @@ class H(HTTP.LimitedHandler):
             if p == "/api/longhorn/settings":
                 _cache.pop("lhcap", None)
                 with OPS._lock:
-                    if b.get("v2") is False and DISK_V2.tasks():
+                    if "v2" in b and not b["v2"] and DISK_V2.tasks():
                         raise ValueError("Finish or stop the saved V2 disk preparation task before disabling V2")
                     return self._send(200, LHCAP.save(b))
             if p == "/api/longhorn/v2/prepare":

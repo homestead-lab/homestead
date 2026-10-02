@@ -60,3 +60,13 @@ test('failed and completed tasks stop polling and escape cluster messages',async
     assert.doesNotMatch(html,/diskV2EraseReview/);
   }
 });
+
+test('a direct node visit offers preparation without cached engine settings and retains the task link after removal',()=>{
+  const t=setup();t.c.STATE={data:{}};t.c.sizePair=()=>'';t.c.sizeText=()=>'';t.c.meter=()=>'';
+  vm.runInContext(fs.readFileSync('web/js/views-storage.js','utf8'),t.c);
+  const disk={device:'sdb',mounts:['/mnt/data'],role:'longhorn',longhorn:[{id:'data',type:'filesystem',ready:true,scheduling:true,tags:[],replicas:1}]};
+  const html=t.c.diskRowsHtml('node-1',[disk],false);assert.match(html,/Prepare for V2/);
+  assert.doesNotMatch(t.c.diskRowsHtml('node-1',[disk],true),/Prepare for V2/);
+  Object.assign(disk,{role:'unused',longhorn:[],v2_preparation:{id:'task-1',phase:'preparing'}});
+  const active=t.c.diskRowsHtml('node-1',[disk],false);assert.match(active,/V2 preparation/);assert.doesNotMatch(active,/diskSetup/);
+});

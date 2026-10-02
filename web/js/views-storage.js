@@ -1632,7 +1632,6 @@ const DISK_ROLE = { longhorn: ["Longhorn", "ok"], system: ["system", ""], provis
   "in use": ["in use", ""], unused: ["unused", "info"] };
 
 function diskRowsHtml(node, disks, harvester) {
-  const v2 = STATE.data.lhcap?.v2?.enabled;
   return disks.map(d => {
     const [word, tone] = DISK_ROLE[d.role] || [d.role, ""];
     const lh = d.longhorn.map(x => {
@@ -1653,7 +1652,7 @@ function diskRowsHtml(node, disks, harvester) {
             {label:x.scheduling?'Stop new replicas':'Allow new replicas',need:'admin',run:`diskAction('scheduling',${jsq(node)},${jsq(x.id)},${!x.scheduling})`},
             x.ready && x.replicas && !x.evicting && {label:'Move replicas off',need:'admin',run:`diskAction('evict',${jsq(node)},${jsq(x.id)},true)`},
             x.evicting && {label:'Stop moving',need:'admin',run:`diskAction('evict',${jsq(node)},${jsq(x.id)},false)`},
-            !harvester && !d.system && x.ready && x.type!=='block' && v2 && {label:'Prepare for V2',need:'admin',run:`diskV2Open(${jsq(node)},${jsq(x.id)})`},
+            !harvester && !d.system && x.ready && x.type!=='block' && {label:'Prepare for V2',need:'admin',run:`diskV2Open(${jsq(node)},${jsq(x.id)})`},
             !x.replicas && !x.scheduling && {label:'Remove from Longhorn',need:'admin',kind:'danger',run:`diskAction('remove',${jsq(node)},${jsq(x.id)})`}
           ],{shown:1,label:'Disk actions'})}</div></div>`;
     }).join("");
