@@ -26,6 +26,8 @@ import urllib.parse
 
 import homestead_icons as ICONS
 import homestead_names as NAMES
+import homestead_passthrough as PASSTHROUGH
+import homestead_vm_transfer_devices as VM_DEVICES
 
 kget = ksend = None
 LH = CLIENT = NETWORK = OPS = None
@@ -286,7 +288,7 @@ def storage_choices():
 
 
 def plan(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class="", volumes=None,
-         transfer_mode="move", source_namespace=""):
+         transfer_mode="move", source_namespace="", host_devices=None):
     """Everything that would stop a move, or surprise someone, before it starts.
 
     Asks both clusters, and reports blockers and warnings separately: a blocker
@@ -295,6 +297,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
     """
     namespace = namespace or NS
     blockers, warnings, fixes = [], [], []
+    device_rows, device_resources, device_hosts = [], [], []
     if kind not in KINDS:
         raise ValueError("kind must be container, vm or volume")
     if transfer_mode not in ("move", "copy") or transfer_mode == "copy" and kind == "volume":
@@ -330,6 +333,18 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
     if transfer_mode == "copy" and not definition.get("source_uid"):
         blockers.append("Could not verify the source workload identity; refresh before copying")
     if kind == "vm":
+        device_rows = PASSTHROUGH.vm_devices(definition["object"])
+        try:
+            if device_rows:
+                device_resources = PASSTHROUGH.resources()["resources"]
+            _, effects, _, device_hosts = VM_DEVICES.prepare(definition, namespace, host_devices)
+            for effect in effects:
+                if effect["kind"] == "configmap" and effect["body"] and _get(effect["path"]):
+                    blockers.append("The destination vBIOS ConfigMap already exists; choose another namespace")
+            if device_rows:
+                warnings.append("Review GPU compatibility before starting the destination VM. Its devices use the selected destination hardware; the source hostname selector is removed and other placement rules are retained")
+        except ValueError as error:
+            blockers.append(str(error))
         # A halted copy still needs the VM API; discovering this after backup
         # would needlessly stop the source on a destination without KubeVirt.
         if not _get("/apis/kubevirt.io/v1"):
@@ -421,7 +436,9 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         if pick["action"] == "blank":
             warnings.append(f"volume {claim['claim']} starts empty here; its data stays on {cluster}")
 
-    selector = definition.get("node_selector") or {}
+    selector = dict(definition.get("node_selector") or {})
+    if device_rows:
+        selector.pop("kubernetes.io/hostname", None)
     if selector:
         try:
             nodes = kget("/api/v1/nodes").get("items", [])
@@ -467,6 +484,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         "source_namespace": definition.get("namespace", ""),
         "joined": joined, "will_run": bool(will_run) and transfer_mode != "copy", "addresses": addresses,
         "transfer_mode": transfer_mode,
+        "host_devices": device_rows, "device_resources": device_resources, "device_hosts": device_hosts,
         "versions": versions,
         "storage_class": chosen_class, "storage_classes": storage_choices(),
         "claims": [{**{k: c.get(k) for k in ("claim", "size_gb", "access_mode", "volume_mode",
@@ -481,9 +499,9 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
 
 
 def start(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class="", volumes=None,
-          transfer_mode="move", source_namespace=""):
+          transfer_mode="move", source_namespace="", host_devices=None):
     namespace = namespace or NS
-    checked = plan(cluster, kind, name, namespace, address_mode, address, storage_class, volumes, transfer_mode, source_namespace)
+    checked = plan(cluster, kind, name, namespace, address_mode, address, storage_class, volumes, transfer_mode, source_namespace, host_devices)
     if not checked["ok"]:
         raise ValueError(checked["blockers"][0])
     active = [m for m in _read() if m.get("status") == "running"
@@ -491,11 +509,15 @@ def start(cluster, kind, name, namespace=None, address_mode="shared", address=""
     if active:
         raise ValueError(f"{name} is already being moved")
     definition = _definition({"cluster": cluster, "kind": kind, "name": name, "source_namespace": source_namespace})
+    if kind == "vm":
+        VM_DEVICES.prepare(definition, namespace, host_devices)
     choices = _choices(definition.get("claims", []), volumes, kind)
     move = {
         "id": secrets.token_hex(6), "cluster": cluster, "kind": kind, "name": name,
         "source_namespace": definition.get("namespace", ""), "namespace": namespace,
         "transfer_mode": transfer_mode, "source_uid": definition.get("source_uid", ""),
+        "host_devices": json.loads(json.dumps(host_devices or {})),
+        "device_signature": VM_DEVICES.signature(definition) if kind == "vm" else "",
         "address_mode": address_mode, "address": address,
         "storage_class": checked["storage_class"],
         "status": "running", "phase": "joining", "progress": 1,
@@ -585,6 +607,12 @@ def _joining(move):
 def _quiescing(move):
     flags = move.setdefault("flags", {})
     if not flags.get("quiesced"):
+        if move["kind"] == "vm":
+            # Revalidate inventory immediately before interrupting the source.
+            definition = _definition(move)
+            if move.get("device_signature") and VM_DEVICES.signature(definition) != move["device_signature"]:
+                raise ValueError("The source passthrough devices or vBIOS changed; cancel and review this transfer again")
+            VM_DEVICES.prepare(definition, move["namespace"], move.get("host_devices"))
         if move.get("transfer_mode") == "copy":
             flags["quiesce_requested"] = True
             _store(move)  # A lost reply must still offer source recovery.
@@ -597,8 +625,10 @@ def _quiescing(move):
         return _note(move, 6, f"Waiting for {move['name']} to stop on {move['cluster']}")
     if move["kind"] == "volume":
         return _advance(move, "backing-up", 10, f"{move['name']} is held on {move['cluster']}")
-    if move.get("transfer_mode") == "copy" and not move.get("definition"):
+    if (move.get("transfer_mode") == "copy" or move.get("host_devices")) and not move.get("definition"):
         definition = _definition(move)
+        if move["kind"] == "vm" and move.get("device_signature") and VM_DEVICES.signature(definition) != move["device_signature"]:
+            raise ValueError("The source passthrough devices or vBIOS changed; cancel and review this transfer again")
         keys = ("claim", "volume", "size_gb", "access_mode", "volume_mode")
         if [tuple(c.get(k) for k in keys) for c in definition["claims"]] != [tuple(c.get(k) for k in keys) for c in move["claims"]]:
             raise ValueError("The source disks changed; cancel this copy and review it again")
@@ -894,6 +924,15 @@ def carry_icon(cluster, annotations):
 def _creating(move):
     namespace, name = move["namespace"], move["name"]
     definition = _definition(move)
+    if move["kind"] == "vm":
+        definition["object"], effects, _, _ = VM_DEVICES.prepare(definition, namespace, move.get("host_devices"))
+        for effect in effects:
+            if effect["kind"] == "configmap" and effect["body"]:
+                body = effect["body"]
+                _stamp(body["metadata"], move, namespace)
+                _post_ours(effect["path"], effect["path"].rsplit("/", 1)[0], body, move)
+            elif effect["kind"] == "kubevirt-gates":
+                PASSTHROUGH.ensure_gates(*effect["gates"], send=ksend)
     for secret in definition.get("secrets", []):
         _stamp(secret["metadata"], move, namespace)
         _post_ours(f"/api/v1/namespaces/{namespace}/secrets/{secret['metadata']['name']}",
@@ -1150,7 +1189,7 @@ def _remove_created(move):
         ksend("DELETE", _object_path(move["kind"], namespace, move["name"])
               + "?propagationPolicy=Background")
         removed.append(move["name"])
-    for kind in ("services", "secrets"):
+    for kind in ("services", "secrets", "configmaps"):
         try:
             items = kget(f"/api/v1/namespaces/{namespace}/{kind}").get("items", [])
         except urllib.error.HTTPError as error:

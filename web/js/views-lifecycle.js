@@ -729,10 +729,11 @@ window.vmNetChanged = () => {
 
 window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
   window.__vmNetworkReopen = "vm";
-  const [opts, disks, vipOptions] = await Promise.all([
+  const [opts, disks, vipOptions, devices] = await Promise.all([
     api("/api/vm/create-options").catch(() => ({ harvester: !!STATE.platform?.harvester, cdi: true, storage_classes: [], images: [] })),
     api("/api/vm-disks").catch(() => []),
     vipChoices(),
+    api("/api/passthrough/resources").catch(error => ({ resources: [], error: error.message })),
   ]);
   // Imports are CDI DataVolumes, so without CDI there are none to attach.
   const readyDisks = opts.cdi ? disks.filter(d => d.phase === "Succeeded" && !d.in_use) : [];
@@ -773,7 +774,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       <select id="v_preset" onchange="vmCreatePreset(this.value)">
         <option value="">Default</option>${Object.entries(VM_PRESETS).map(([id, p]) => `<option value="${esc(id)}">${esc(p.name)}</option>`).join("")}</select>
       <div class="dim xs" id="v_preset_about" style="margin-top:4px">KubeVirt defaults: BIOS, UTC, a display and serial console</div></div>
-    ${opts.hardware_base ? `<details class="ui-more" id="v_hw"><summary>Hardware - CPU model, firmware, TPM, devices, memory</summary>
+    ${opts.hardware_base ? `<details class="ui-more" id="v_hw"><summary>Hardware - CPU model, firmware, TPM, virtual devices</summary>
       ${vmHardwareFields(opts.hardware_base, opts, false, true)}</details>` : ""}
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
 `;
@@ -807,8 +808,9 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
         To download or import disk images, install CDI (the containerized data importer) from kubevirt.io.`}
     ${readyDisks.length ? " Imported disks are attached directly and remain visible on the Import page." : ""}</p>`)}`;
   modal("New virtual machine", stepper("v_steps", [{ title: "Machine", html: vmMachine }, { title: "Boot disk", html: vmDisk },
-    { title: "Network", html: vmNetwork }, { title: "Storage", html: vmStorage }],
-    `<button class="btn pri" onclick="doVmCreate()">Review VM</button>`), true);
+    { title: "Network", html: vmNetwork }, { title: "Storage", html: vmStorage },
+    { title: "Passthrough", html: window.vmDevicesPane ? vmDevicesPane({}, devices) : "" }],
+    `<button class="btn pri" onclick="doVmCreate()">Review VM</button>`), true, "vm-config");
   window.__vmPreset = "";
   vmBootChanged();
   vmHardwareChanged();
@@ -851,6 +853,10 @@ window.doVmCreate = async () => {
   const base = window.__vmCreateOptions?.hardware_base;
   const hardware = base && $("#vh") ? vmHardwareChanges(base) : vmPresetSettings($("#v_preset")?.value || "");
   if (hardware) body.hardware = hardware;
+  try {
+    const devices = window.vmDevicesChanges ? await vmDevicesChanges() : null;
+    if (devices) body.host_devices = devices;
+  } catch (error) { return toast(error.message, "bad"); }
   if (body.install_iso) body.password = "";
   if (!body.disk_import && !body.install_iso && body.password.length < 10) return toast("root password must be at least 10 characters", "bad");
   if (boot === "url" && !body.image_url) return toast("image URL is required", "bad");
@@ -878,6 +884,7 @@ window.vmCreateReview = async (body, network = {}) => {
       <div class="reviewbox"><b>${esc(cfg.namespace)}/${esc(cfg.name)}</b><p class="small">${esc(cfg.cores || 2)} virtual CPUs · ${esc(cfg.memory || "2Gi")} guest memory · ${esc(cfg.start === false ? "Created stopped" : "Starts after disk preparation")}</p>
         <p class="small muted">${esc(cfg.network || "pod")} · MAC ${esc(cfg.mac)}${cfg.static_ip?.address ? ` · ${esc(cfg.static_ip.address)}` : ""}. Guest login settings are included in this review but are not displayed.</p></div>
       <div class="reviewbox"><b>Disks to create</b>${review.volumes?.length ? review.volumes.map(v=>`<p class="small"><b>${esc(v.name)}</b> · ${esc(v.size)} · ${esc(v.access_mode)} · ${esc(v.volume_mode)}<br><span class="muted">${esc(v.storage_class)}</span></p>`).join("") : '<p class="small muted">Uses the selected existing imported disk; no new disk claim.</p>'}</div>
+      ${cfg.host_devices?.add?.length ? `<div class="reviewbox"><b>Passthrough</b>${cfg.host_devices.add.map(d => `<p class="small">${esc(d.name)} · ${esc(d.resource)}${cfg.host_devices.roms?.[d.name] ? " · supplied vBIOS" : ""}</p>`).join("")}</div>` : ""}
       ${review.capacity.blockers?.length ? `<div class="note bad">${review.capacity.blockers.map(esc).join(" · ")}</div>` : ""}
       ${deployCapacityHtml(review.capacity)}
       ${!review.capacity.blocked && capacityNotes(review.capacity).concerns.length ? '<label class="check"><input id="vmCreateApprove" type="checkbox" onchange="vmCreateReviewReady()"> Create it anyway, accepting the warnings above</label>' : ""}
@@ -2035,9 +2042,11 @@ let MOVE_PLAN_SEQUENCE = 0;
 let MOVE_VOLUMES = {};
 let MOVE_TRANSFER_MODE = "move";
 let MOVE_SOURCE_NAMESPACE = "";
+let MOVE_DEVICES = {}, MOVE_ROM_NAMES = {};
 window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace = "") => {
   ++MOVE_PLAN_SEQUENCE;
   MOVE_VOLUMES = {};
+  MOVE_DEVICES = {}; MOVE_ROM_NAMES = {};
   MOVE_TRANSFER_MODE = transferMode === "copy" && kind !== "volume" ? "copy" : "move";
   MOVE_SOURCE_NAMESPACE = sourceNamespace;
   const copy = MOVE_TRANSFER_MODE === "copy", verb = copy ? "Copy" : "Move";
@@ -2084,7 +2093,49 @@ const moveBody = (cluster, kind, name) => ({
   cluster, kind, name, namespace: $("#mv_ns")?.value.trim() || "lab",
   address_mode: $("#mv_mode")?.value || "shared", address: $("#mv_ip")?.value.trim() || "",
   storage_class: $("#mv_sc")?.value || "", volumes: MOVE_VOLUMES, transfer_mode: MOVE_TRANSFER_MODE,
-  source_namespace: MOVE_SOURCE_NAMESPACE });
+  source_namespace: MOVE_SOURCE_NAMESPACE, host_devices: MOVE_DEVICES });
+
+window.moveDeviceSet = (cluster, kind, name, device, field, value) => {
+  MOVE_DEVICES[device] = { ...(MOVE_DEVICES[device] || {}), [field]: value };
+  if (field === "rom") delete MOVE_ROM_NAMES[device];
+  if ($("#mv_go")) $("#mv_go").disabled = true;
+  movePlan(cluster, kind, name);
+};
+window.moveDeviceRom = async (cluster, kind, name, device, input) => {
+  const file = input.files?.[0];
+  if (!file) return;
+  const sequence = ++MOVE_PLAN_SEQUENCE;
+  if ($("#mv_go")) $("#mv_go").disabled = true;
+  try {
+    const data = await vmReadRom(file);
+    if (sequence !== MOVE_PLAN_SEQUENCE) return;
+    MOVE_DEVICES[device] = { ...(MOVE_DEVICES[device] || {}), rom: data };
+    MOVE_ROM_NAMES[device] = file.name;
+    movePlan(cluster, kind, name);
+  } catch (error) { toast(error.message, "bad"); }
+};
+function moveDevicesTable(plan, cluster, kind, name) {
+  if (!plan.host_devices?.length) return "";
+  const args = [cluster, kind, name].map(jsq).join(",");
+  const rows = plan.host_devices.map(d => {
+    const choice = MOVE_DEVICES[d.name] || {}, resources = (plan.device_resources || []).filter(r => !d.gpu || r.kind === "pci");
+    const handler = esc(`${args},${jsq(d.name)}`);
+    const uploaded = choice.rom && !["source", ""].includes(choice.rom);
+    return `<tr><td data-label="Source device"><b>${esc(d.name)}</b><div class="dim xs mono">${esc(d.resource)}</div></td>
+      <td data-label="Destination device" data-wide><select aria-label="Destination device for ${esc(d.name)}" onchange="moveDeviceSet(${handler},'resource',this.value)">
+        <option value="" disabled ${!("resource" in choice) ? "selected" : ""}>Choose a device</option>
+        <option value="" ${choice.resource === "" ? "selected" : ""}>Leave out</option>
+        ${resources.map(r => `<option value="${esc(r.resource)}" ${r.resource === choice.resource ? "selected" : ""}>${esc(r.label || r.resource)} · ${esc(r.nodes?.join(", ") || "unavailable")}</option>`).join("")}</select></td>
+      <td data-label="vBIOS" data-wide><select aria-label="vBIOS for ${esc(d.name)}" onchange="moveDeviceSet(${handler},'rom',this.value)" ${choice.resource === "" ? "disabled" : ""}>
+        ${d.rom ? `<option value="source" ${!("rom" in choice) || choice.rom === "source" ? "selected" : ""}>Keep source vBIOS</option>` : ""}
+        <option value="" ${choice.rom === "" || !d.rom && !uploaded ? "selected" : ""}>Use device default ROM</option>
+        ${uploaded ? `<option selected disabled>${esc(MOVE_ROM_NAMES[d.name] || "Supplied vBIOS")}</option>` : ""}</select>
+        <input type="file" class="pd_rom" aria-label="Upload destination vBIOS for ${esc(d.name)}" accept=".rom,.bin,application/octet-stream" onchange="moveDeviceRom(${handler},this)" ${choice.resource === "" ? "disabled" : ""}></td></tr>`;
+  }).join("");
+  return `<div class="f"><label>Passthrough on this cluster</label><p class="dim small">Map each source device to hardware here, or leave it out. Prepare IOMMU and devices under Nodes → Hardware first. A different GPU may need a different vBIOS.</p>
+    <div class="tblwrap"><table class="tbl stack dense vm-passthrough-table"><colgroup><col style="width:25%"><col style="width:40%"><col style="width:35%"></colgroup><thead><tr><th>Source device</th><th>Destination device</th><th>vBIOS</th></tr></thead><tbody>${rows}</tbody></table></div>
+    ${plan.device_hosts?.length ? `<p class="dim small">Hosts offering all selected devices: ${plan.device_hosts.map(esc).join(", ")}.</p>` : ""}</div>`;
+}
 
 /* One volume's choice changed: remembered, and the move checked again. */
 window.moveVolumeSet = (cluster, kind, name, claim, field, value) => {
@@ -2163,7 +2214,7 @@ window.movePlan = async (cluster, kind, name) => {
           : "It has no volumes, so only its definition travels."}
         ${plan.addresses?.length ? `<br>Reachable here at ${plan.addresses.map(esc).join(", ")}.` : ""}
         ${MOVE_TRANSFER_MODE === "copy" || plan.will_run || kind === "volume" ? "" : `<br>It is stopped on ${esc(cluster)}, and will arrive stopped.`}</div>` : ""}
-      ${moveVolumesTable(plan, cluster, kind, name)}`;
+      ${moveVolumesTable(plan, cluster, kind, name)}${moveDevicesTable(plan, cluster, kind, name)}`;
     if (go) go.disabled = !plan.ok;
   } catch (e) {
     if (sequence !== MOVE_PLAN_SEQUENCE || $("#mv_plan") !== host) return;

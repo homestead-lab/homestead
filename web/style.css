@@ -946,6 +946,8 @@ html[data-motion="off"] .uptime .ld{animation:none}
 html[data-theme="light"] .modalbox:has(#net_editor){background:var(--surf);color:var(--tx)}
 html[data-theme="light"] .modalbox:has(.update-review),html[data-theme="light"] .modalbox:has(#imageQueue){background:var(--surf);color:var(--tx)}
 html[data-theme="light"] .modalbox[data-context="operation-review"]{background:var(--surf);color:var(--tx)}
+html[data-theme="light"] .modalbox[data-context="vm-config"]{background:var(--surf);color:var(--tx)}
+.modalbox[data-context="vm-config"] .dim{color:var(--mut)}
 html[data-theme="light"] .modalbox[data-context="operation-review"] .note.warn{color:#824600}
 .modalbox[data-context="operation-review"] .modalhead{background:var(--surf)}
 .modalbox:has(#allocationProbeDirectory) .dim{color:var(--mut)}
@@ -1942,6 +1944,11 @@ div.ipam-line.dim{display:block}
 .vm-filling{display:grid;grid-template-columns:1fr auto;gap:4px 10px;margin:10px 0 2px;font-size:12px}.vm-filling .rollout-meter{grid-column:1/-1;margin:0}
 .ve-table td{vertical-align:top}.ve-table select,.ve-table input{min-width:0}.ve-table .vd_bus,.ve-table .vn_model{min-width:92px}
 .vm-edit-tabs{flex-wrap:wrap}.vm-edit-tabs .seg{flex-wrap:wrap;max-width:100%;min-width:0;border-radius:18px}
+.vm-passthrough-table{table-layout:fixed}
+.vm-passthrough-table td{vertical-align:top;overflow-wrap:anywhere}
+.pd-add.reviewbox{border-color:color-mix(in srgb,var(--vio) 35%,transparent);background:color-mix(in srgb,var(--vio) 7%,transparent)}
+.pd_rom{display:block;width:100%;max-width:100%;min-width:0;margin-top:8px;font:inherit;font-size:12px;color:var(--mut)}
+.pd_rom::file-selector-button{margin-right:8px;padding:7px 10px;border:1px solid var(--line2);border-radius:8px;background:var(--surf3);color:var(--tx);font:inherit;cursor:pointer}
 .vd-add{margin-top:10px;padding:12px}.vd-add .f2{margin-top:8px}
 .lh-node{margin-top:10px;display:grid;gap:4px}.lh-largest{gap:6px;flex-wrap:wrap;margin-top:4px}
 .lh-nodes{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:4px 18px;margin-top:6px}
@@ -2714,7 +2721,7 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 .dg-empty{fill:none;stroke:var(--line2);stroke-width:1.2}
 /* A long form in steps. */
 .stepper-head{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px}
-.stepper-chip{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--line2);background:transparent;color:var(--mut);border-radius:99px;padding:5px 12px 5px 5px;font:600 12.5px "Inter Tight",sans-serif;cursor:pointer}
+.stepper-chip{display:inline-flex;align-items:center;flex-shrink:0;white-space:nowrap;gap:7px;border:1px solid var(--line2);background:transparent;color:var(--mut);border-radius:99px;padding:5px 12px 5px 5px;font:600 12.5px "Inter Tight",sans-serif;cursor:pointer}
 .stepper-chip span{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--surf3);font-size:11px}
 .stepper-chip.on{color:var(--tx);border-color:var(--tx)}.stepper-chip.on span{background:var(--tx);color:var(--bg)}
 .stepper-chip.done span{background:color-mix(in srgb,var(--ok) 30%,transparent);color:var(--tx)}
