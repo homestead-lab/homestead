@@ -202,14 +202,6 @@ def cleanup(read, send, ns, work, keep_disks=True):
         if keep_disks and (not target or (target.get("status") or {}).get("phase") != "Bound"):
             raise ValueError("Completed disk claim is not bound; its storage was preserved")
         protected_pv = (target.get("spec") or {}).get("volumeName") if target and keep_disks else None
-        if not keep_disks:
-            dv_path = f"{API}/namespaces/{ns}/datavolumes/{name}"
-            dv = RESOURCES.optional(read, dv_path)
-            if dv:
-                if dv["metadata"].get("uid") != disk.get("dv_uid") or (
-                        dv["metadata"].get("annotations") or {}).get(STAMP) != work["id"]:
-                    raise ValueError("Import disk was replaced; cleanup stopped")
-                pending |= not RESOURCES.delete(read, send, dv_path, dv)
         for uid, pod_name in disk["pods"].items():
             path = f"/api/v1/namespaces/{ns}/pods/{pod_name}"
             pod = RESOURCES.optional(read, path)
@@ -220,6 +212,17 @@ def cleanup(read, send, ns, work, keep_disks=True):
         # Re-read after requesting worker deletion. Even a terminating pod can
         # hold a mount; do not change the storage policy until it has disappeared.
         pods = RESOURCES.items(read, f"/api/v1/namespaces/{ns}/pods")
+        if any(pod["metadata"].get("uid") in disk["pods"] for pod in pods):
+            pending = True
+            continue
+        if not keep_disks:
+            dv_path = f"{API}/namespaces/{ns}/datavolumes/{name}"
+            dv = RESOURCES.optional(read, dv_path)
+            if dv:
+                if dv["metadata"].get("uid") != disk.get("dv_uid") or (
+                        dv["metadata"].get("annotations") or {}).get(STAMP) != work["id"]:
+                    raise ValueError("Import disk was replaced; cleanup stopped")
+                pending |= not RESOURCES.delete(read, send, dv_path, dv)
         for uid, row in disk["claims"].items():
             if row["role"] == "target" and keep_disks:
                 continue
