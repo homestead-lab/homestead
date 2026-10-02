@@ -27,6 +27,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         for patch in (mock.patch.object(server, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
+                      mock.patch.object(server.VMS, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
                       mock.patch.object(server.OPS, "DATA_DIR", self.tmp.name),
                       mock.patch.object(server.PLACE, "get_nodes", side_effect=lambda: copy.deepcopy(self.nodes)),
                       mock.patch.object(server.PLACE, "hardware_features", return_value=[]),
@@ -310,6 +311,17 @@ class VMPowerAdmissionTests(unittest.TestCase):
                 result, writes = self.call("/api/vm/power", {**self.body, "action": action})
             self.assertEqual(200, result[0], result)
             writes.assert_called_once()
+
+    def test_stop_crash_retries_uses_same_power_route_without_capacity_admission(self):
+        self.vm["spec"]["runStrategy"] = "RerunOnFailure"
+        self.vm["status"] = {"printableStatus": "CrashLoopBackOff"}
+        with mock.patch.object(server, "vm_power_capacity_plan", side_effect=AssertionError("must not check capacity")):
+            result, writes = self.call("/api/vm/power", {**self.body, "action": "stop"})
+        self.assertEqual(200, result[0], result)
+        self.assertIn("Boot retries stopped", result[1]["detail"])
+        writes.assert_called_once()
+        self.assertEqual("PATCH", writes.call_args.args[0])
+        self.assertEqual("Halted", writes.call_args.args[2][-1]["value"])
 
     def test_same_approved_power_is_consumed_across_http_requests(self):
         body = self.reviewed()
