@@ -68,8 +68,10 @@ column headings are the one small upper-case label.
    or `menuButton()` when the main action is a choice (＋ Import). Filters
    that belong to the list, such as Containers' group chips, share the
    subtitle's line.
-   On a phone, Containers keeps its page tabs above one toolbar: group picker,
-   Options, Deploy. The count and image-update state share one line below.
+   On a phone, Containers and Virtual machines keep their page tabs above one
+   compact toolbar. Containers has a group picker, Options and Deploy; Virtual
+   machines has an All VMs scope label, Options and New VM. The count and
+   image-update or running state share one line below.
    `listOptions()` puts sorting, layout and platform visibility inside the
    standard action menu; preferences never add permanent toolbar rows. With
    no groups, a plain scope label replaces the picker.

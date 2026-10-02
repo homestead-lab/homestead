@@ -140,8 +140,14 @@ volumes that have since been deleted - which is when you most need them.
 from the backup target; it cannot be restored afterwards).
 
 A completed backup has **Restore**. It always restores into a **new** volume -
-it never overwrites one - at least as big as the backup, with the copies you
-choose. Point the app at the restored volume (**Edit** on its container), or
+it never overwrites one - using the configured Longhorn storage class you
+choose. Its replica count and other provisioning settings come from that class,
+and the PVC keeps the same class after restoring. The backup is imported through
+a retained CSI snapshot; cleanup removes import metadata, never the backup.
+A larger destination restores at the original size first, then expands after
+the data is healthy. Its class must allow expansion. If filesystem resizing
+needs a mount, the job says that it will finish when the volume is next used.
+Point the app at the restored volume (**Edit** on its container), or
 restore under the original name once the old volume is deleted.
 
 ### Rolling back to a snapshot

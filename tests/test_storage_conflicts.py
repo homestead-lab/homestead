@@ -84,7 +84,8 @@ class StorageConflictsTests(unittest.TestCase):
             thread = threading.Thread(target=move); workers.append(thread); thread.start()
             self.assertTrue(attempting.wait(2))
             self.assertFalse(finished.wait(.1), "move must wait until restore creation AND its record are complete")
-            return {"name": "data", "namespace": "lab", "backup": "backup-1"}
+            return {"name": "data", "namespace": "lab", "backup": "backup-1",
+                    "source_size_bytes": 1073741824, "created": True, "message": "Restore started"}
         handler = object.__new__(server.H)
         handler.path, handler.command = "/api/lh/restore", "POST"
         handler.headers = {"X-Homestead-Auth": "1"}

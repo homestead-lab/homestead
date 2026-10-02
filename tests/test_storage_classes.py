@@ -35,6 +35,23 @@ class StorageClassTests(unittest.TestCase):
         self.assertEqual(["harvester-longhorn", "longhorn", "longhorn-r2"],
                          server.selectable_storage_classes())
 
+    def test_class_deletion_refuses_incomplete_claim_inventory(self):
+        self.claims["metadata"] = {"continue": "next"}
+        with self.assertRaisesRegex(ValueError, "every claim"):
+            server.delete_storage_class("longhorn")
+        self.assertEqual([], self.sent)
+
+    def test_class_deletion_keeps_retained_volumes_without_claims(self):
+        original = server.kget
+        def read(path, **kwargs):
+            if path == "/api/v1/persistentvolumes":
+                return {"items": [{"spec": {"storageClassName": "longhorn", "persistentVolumeReclaimPolicy": "Retain"}}]}
+            return original(path, **kwargs)
+        server.kget = read
+        with self.assertRaisesRegex(ValueError, "retained data"):
+            server.delete_storage_class("longhorn")
+        self.assertEqual([], self.sent)
+
     def test_only_non_migratable_classes_can_serve_rwx(self):
         self.assertEqual(["longhorn"], server.shared_storage_classes())
 

@@ -126,7 +126,7 @@ try {
     assert.equal(await page.locator('.wl-detail-row').first().isVisible(),false);
 
     if(width<=560) {
-      const header=page.locator('.wl-mobile-head'), toolbar=header.locator('.wl-mobile-toolbar');
+      const header=page.locator('.collection-mobile-head'), toolbar=header.locator('.collection-mobile-toolbar');
       assert.equal(await page.locator('.containers-page .pagetabs>a:visible').count(),4);
       assert.equal(await page.locator('.containers-page>.phead>.row').isVisible(),false);
       assert.equal(await page.locator('.containers-page>.sortbar').count(),0,'sorting lives inside Options');
@@ -205,6 +205,77 @@ try {
     });
     await page.locator('.wl-off').getByText('Stopped',{exact:true}).waitFor();
     await page.locator('.wl-row').getByText('Blocked',{exact:true}).waitFor();
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    await page.evaluate(()=>go('vms'));
+    await page.locator('.vm-table').waitFor();
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+    await page.screenshot({path:`${output}/vms-${width}-${theme}.png`,fullPage:true});
+    if(width<=560) {
+      const header=page.locator('.vms-page .collection-mobile-head');
+      const toolbar=header.locator('.collection-mobile-toolbar');
+      assert.equal(await page.locator('.vms-page .pagetabs>a:visible').count(),2);
+      assert.equal(await page.locator('.vms-page>.phead>.row').isVisible(),false);
+      assert.equal(await page.locator('.vms-page>.sortbar').count(),0);
+      const bounds=await toolbar.locator(':scope>*').evaluateAll(items=>items.map(e=>e.getBoundingClientRect()));
+      assert.ok(bounds.every(b=>Math.abs(b.y+b.height/2-bounds[0].y-bounds[0].height/2)<2),'VM scope, Options and New VM align on one row');
+      const vmCount=await page.locator('.vm-table tbody tr').count();
+      assert.match(await header.locator('.collection-mobile-summary').textContent(),new RegExp(`${vmCount} VMs? · \\d+ running`));
+      await header.getByLabel('List options',{exact:true}).click();
+      const menu=page.locator('.actionmenu-portal .list-options-pop');
+      await menu.waitFor();
+      const box=await menu.boundingBox();
+      assert.ok(box.x>=0&&box.x+box.width<=width,'VM Options fits the phone');
+      await menu.locator('[data-sort-for="vms"]').selectOption('3');
+      assert.deepEqual(await page.evaluate(()=>sortState('vms')),{col:3,dir:-1});
+      await menu.locator('[data-sort-flip]').click();
+      assert.deepEqual(await page.evaluate(()=>sortState('vms')),{col:3,dir:1});
+      await page.evaluate(()=>viewVMs());
+      assert.equal(await page.locator('.actionmenu-portal .list-options-pop').count(),1,'VM refresh preserves the open Options menu');
+      await menu.locator('[data-sort-for="vms"]').selectOption('');
+      await page.waitForFunction(()=>sortState('vms')===null);
+      await menu.getByLabel('VM layout').selectOption('cards');
+      await page.locator('.vm-card').first().waitFor();
+      assert.equal(await page.evaluate(()=>document.activeElement?.getAttribute('aria-label')),'List options');
+      await page.keyboard.press('Enter');
+      await menu.waitFor();
+      assert.equal(await menu.locator('[data-sort-for]').count(),0);
+      await menu.getByLabel('VM layout').selectOption('rows');
+      await page.locator('.vm-table').waitFor();
+      await page.keyboard.press('Enter');
+      await menu.waitFor();
+      await page.screenshot({path:`${output}/vms-options-${width}-${theme}.png`,fullPage:true});
+      await page.evaluate(()=>{
+        window.__vmToolbarCalls=[];
+        for(const name of ['vmStore','vmIsoLibrary','k3sCluster','vmNew'])window[name]=()=>window.__vmToolbarCalls.push(name);
+      });
+      for(const [label,call] of [['Image store','vmStore'],['ISO library','vmIsoLibrary'],['New k3s cluster','k3sCluster']]) {
+        if(!await menu.isVisible()) {
+          await header.getByLabel('List options',{exact:true}).focus();
+          await page.keyboard.press('Enter');
+        }
+        await menu.waitFor();
+        await menu.getByRole('button',{name:label,exact:true}).click();
+        assert.equal(await page.evaluate(()=>window.__vmToolbarCalls.at(-1)),call);
+        await menu.waitFor({state:'hidden'});
+        await page.waitForFunction(()=>!document.querySelector('.vms-page .list-options').open&&!document.querySelector('.vms-page .list-options').shell);
+      }
+      await header.getByRole('button',{name:'＋ New VM',exact:true}).click();
+      assert.equal(await page.evaluate(()=>window.__vmToolbarCalls.at(-1)),'vmNew');
+      await page.evaluate(()=>{ROLE='viewer';paintWho()});
+      assert.equal(await header.getByRole('button',{name:'＋ New VM',exact:true}).count(),0,'viewer cannot create a VM');
+      await header.getByLabel('List options',{exact:true}).focus();
+      await page.keyboard.press('Enter');
+      await menu.waitFor();
+      assert.equal(await menu.getByRole('button',{name:'New k3s cluster',exact:true}).count(),0,'viewer cannot create a cluster');
+      assert.equal(await menu.getByRole('button',{name:'Image store',exact:true}).isVisible(),true);
+      await page.keyboard.press('Escape');
+      await page.evaluate(()=>{ROLE='admin';paintWho();STATE.q='no-matching-vm-example';return viewVMs()});
+      await page.getByText('Nothing matches that search.',{exact:true}).waitFor();
+      assert.match(await header.locator('.collection-mobile-summary').textContent(),/0 VMs · 0 running/);
+    } else {
+      assert.equal(await page.locator('.vms-page .collection-mobile-head').isVisible(),false);
+      assert.equal(await page.locator('.vms-page>.phead>.row').isVisible(),true);
+    }
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     assert.deepEqual(errors,[]);
     console.log(`Collection layouts and interactions passed: ${width}px ${theme}`);
