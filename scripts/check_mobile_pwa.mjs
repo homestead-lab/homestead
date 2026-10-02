@@ -28,6 +28,47 @@ try {
     assert.equal(await page.evaluate(()=>document.documentElement.dataset.display),installed?"standalone":"browser");
     assert.equal(await page.locator("#demoBanner").evaluate(el=>el.parentElement===document.body),true,"demo banner stays above the whole site");
     assert.equal(await page.evaluate(()=>document.querySelector("#demoBanner").getBoundingClientRect().bottom<=document.querySelector("#app").getBoundingClientRect().top),true,"demo banner sits above both navigation and content");
+    // More must scroll its entire drawer, including the footer, clear of the
+    // fixed bottom bar in browser and installed modes, even held sideways.
+    for(const viewport of [{width:412,height:839},{width:360,height:640},{width:844,height:390}]) {
+      await page.setViewportSize(viewport);
+      await page.locator('#bottombar [data-more]').click();
+      await page.waitForFunction(()=>{
+        const side=document.querySelector('.side').getBoundingClientRect();
+        return Math.abs(side.left)<1;
+      });
+      const side=page.locator('.side');
+      assert.equal(await side.evaluate(el=>getComputedStyle(el).overflowY),'auto');
+      assert.equal(await page.locator('#nav').evaluate(el=>getComputedStyle(el).overflowY),'visible');
+      for(const link of await page.locator('#nav a:visible').all()) {
+        await link.scrollIntoViewIfNeeded();
+        assert.equal(await link.evaluate(el=>{
+          const b=el.getBoundingClientRect();
+          return el.contains(document.elementFromPoint(b.left+b.width/2,b.top+b.height/2));
+        }),true,'each navigation item stays above the page header while scrolling');
+      }
+      await side.evaluate(el=>el.scrollTop=el.scrollHeight);
+      const footer=await page.locator('.sidefoot').boundingBox();
+      const bar=await page.locator('#bottombar').boundingBox();
+      assert.ok(footer.y>=0&&footer.y+footer.height<=bar.y,'the whole footer sits above the bottom menu');
+      const reload=page.locator('#reloadApp');
+      assert.equal(await reload.evaluate(el=>{
+        const b=el.getBoundingClientRect();
+        return el.contains(document.elementFromPoint(b.left+b.width/2,b.top+b.height/2));
+      }),true,'Reload app can be tapped without the bottom bar intercepting it');
+      await page.locator('#nav [data-view="settings"]').scrollIntoViewIfNeeded();
+      assert.equal(await page.locator('#nav [data-view="settings"]').evaluate(el=>{
+        const b=el.getBoundingClientRect();
+        return el.contains(document.elementFromPoint(b.left+b.width/2,b.top+b.height/2));
+      }),true,'the final navigation item can be tapped');
+      await page.screenshot({path:`release-assets/pages/mobile-pwa/more-${installed?'installed':'browser'}-${viewport.width}.png`});
+      await page.locator('#nav [data-view="settings"]').click();
+      assert.equal(await page.evaluate(()=>document.body.classList.contains('navopen')),false);
+      await page.locator('#views .settings-layout').waitFor();
+      await page.evaluate(()=>go('dash'));
+      await page.locator('#views .phead').waitFor();
+    }
+    await page.setViewportSize({width:412,height:839});
     await checkMobileRefresh(page,context,installed);
     if(!installed) {
       assert.equal(await page.evaluate(()=>getComputedStyle(document.body).overflowY),"visible");

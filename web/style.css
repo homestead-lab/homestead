@@ -107,7 +107,6 @@ a{color:inherit;text-decoration:none}
   html[data-display="standalone"] body{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;overscroll-behavior:none}
   html[data-display="standalone"] #app{flex:1;min-height:0;overflow:hidden}
   html[data-display="standalone"] .main{min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:none}
-  html[data-display="standalone"] .side{height:100vh;height:100dvh;overscroll-behavior:contain}
   html[data-display="standalone"] #gate{display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;overscroll-behavior:contain}
   html[data-display="standalone"] .gatebox{width:min(400px,100%);margin-block:auto;flex:0 0 auto}
 }
@@ -1129,10 +1128,15 @@ html[data-theme="light"] #net_editor .net-access-choice:has(input:checked),html[
   .flowwrap{overflow-x:visible}
 }
 @media(max-width:900px){
-  .side{position:fixed;left:0;top:0;bottom:0;transform:translateX(-100%);z-index:25;
+  .side{position:fixed;left:0;top:0;bottom:calc(70px + env(safe-area-inset-bottom,0px));
+    height:calc(100vh - 70px - env(safe-area-inset-bottom,0px));height:calc(100dvh - 70px - env(safe-area-inset-bottom,0px));
+    transform:translateX(-100%);z-index:35;overflow-y:auto;overscroll-behavior:contain;
     transition:transform .32s var(--e);box-shadow:24px 0 60px rgba(0,0,0,.5)}
+  /* One scroll area reaches Settings and the footer above the bottom bar. */
+  .side #nav{flex:1 0 auto;overflow:visible}
+  .sidefoot{flex-shrink:0}
   body.navopen .side{transform:none}
-  body.navopen #navscrim{opacity:1;pointer-events:auto}
+  body.navopen #navscrim{z-index:34;opacity:1;pointer-events:auto}
   .only-sm{display:grid!important}
   .hide-sm{display:none!important}
   .page{padding:18px 16px 70px}
