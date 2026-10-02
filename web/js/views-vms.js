@@ -32,16 +32,33 @@ async function viewVMs() {
   const rows = vms.filter(v => !q || [v.name, v.ns, v.os, v.ip, v.node, v.description].join(" ").toLowerCase().includes(q));
   const running = vms.filter(v => v.status === "Running").length;
   const layout = viewLayout("vms");
-  paint(`<div class="phead"><div><h2>Virtual machines</h2>
+  const items = [{ label: "Image store", icon: "store", run: "vmStore()", tip: "Cloud images from their publishers - Ubuntu, Debian, Fedora, Rocky and more - to start VMs from" },
+    { label: "ISO library", icon: "disk", run: "vmIsoLibrary()", tip: "ISO images from folders on your Network Shares, for VMs' CD-ROM drives" },
+    { label: "New k3s cluster", icon: "plus", run: "k3sCluster()", need: "operator", tip: "A k3s cluster made of VMs here, each with an address of its own" }];
+  const create = '<button class="btn pri" data-need="operator" onclick="vmNew()">＋ New VM</button>';
+  paint(`<div class="vms-page collection-page" data-collection="vms"><div class="phead"><div><h2>Virtual machines</h2>
       <p>${vms.length} VM${vms.length === 1 ? "" : "s"} · ${running} running · ${STATE.platform?.harvester === false ? `KubeVirt on ${esc(platformName(STATE.platform))}${STATE.platform.cdi ? "" : " · no CDI"}` : "KubeVirt on Harvester"}</p></div>
       <div class="row">${layoutSwitch("vms", "viewVMs")}
-      ${moreMenu([{ label: "Image store", icon: "store", run: "vmStore()", tip: "Cloud images from their publishers - Ubuntu, Debian, Fedora, Rocky and more - to start VMs from" },
-        { label: "ISO library", icon: "disk", run: "vmIsoLibrary()", tip: "ISO images from folders on your Network Shares, for VMs' CD-ROM drives" },
-        { label: "New k3s cluster", icon: "plus", run: "k3sCluster()", need: "operator", tip: "A k3s cluster made of VMs here, each with an address of its own" }])}
-      <button class="btn pri" data-need="operator" onclick="vmNew()">＋ New VM</button></div></div>
+      ${moreMenu(items)}${create}</div></div>
+    <div class="collection-mobile-head"><div class="collection-mobile-toolbar"><span class="collection-mobile-scope">All VMs</span>${vmListOptions(layout, items)}${create}</div>
+      <div class="collection-mobile-summary"><span>${rows.length} VM${rows.length === 1 ? "" : "s"} · ${rows.filter(v => v.status === "Running").length} running</span>
+        ${STATE.platform?.harvester === false && !STATE.platform.cdi ? '<span class="pill slim warn">No CDI</span>' : ""}</div></div>
     ${!rows.length ? `<div class="empty">${q ? "Nothing matches that search." : "No virtual machines yet — create one to get started."}</div>`
-      : layout === "rows" ? vmTable(rows) : `<div class="vm-grid">${rows.map(vmCard).join("")}</div>`}`);
+      : layout === "rows" ? vmTable(rows) : `<div class="vm-grid">${rows.map(vmCard).join("")}</div>`}</div>`);
 }
+
+function vmListOptions(layout, items) {
+  const controls = `${layout === "rows" ? '<div class="sortbar" data-sort-controls="vms"></div>' : ""}
+    <label class="list-option-setting">Layout <select aria-label="VM layout" onchange="vmListLayout(this)">
+      <option value="rows"${layout === "rows" ? " selected" : ""}>Rows</option><option value="cards"${layout === "cards" ? " selected" : ""}>Cards</option></select></label>`;
+  return listOptions(controls, items);
+}
+window.vmListLayout = select => {
+  const layout = select.value;
+  closeActionMenu(select.closest("details"));
+  document.querySelector(".vms-page .list-options>summary")?.focus({preventScroll:true});
+  setViewLayout("vms", "viewVMs", layout, {preservePaint:true});
+};
 
 /* ---------------- the image store ----------------
    Cloud images from the people who make them. On Harvester one is kept as a
@@ -203,7 +220,7 @@ function vmActions(v, compact = false) {
 
 /* The same VMs as rows: everything a card says, one VM a line. */
 function vmTable(rows) {
-  return `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact vm-table" data-sort="vms"><thead><tr>
+  return `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact vm-table" data-sort="vms" data-sort-controls="vms"><thead><tr>
     <th>VM</th><th>Status</th><th>Address</th><th>CPU</th><th>RAM</th><th>Disk IO</th><th data-nosort></th></tr></thead><tbody>
     ${rows.map(v => `<tr class="clickable"${clusterAttr(v)} onclick="if(!event.target.closest('button,details,a'))vmOpen(${jsq(v.ns)},${jsq(v.name)})">
       <td class="cell-name" data-sort="${esc(v.name)}"><b>${esc(v.name)}</b> ${clusterTag(v)}${vmClusterTag(v)}

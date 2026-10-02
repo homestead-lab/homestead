@@ -9,6 +9,7 @@ import homestead_specs as SPECS
 import base64
 import homestead_names as NAMES
 import homestead_smb_recovery as RECOVERY
+import homestead_storage_resize as RESIZE
 import copy
 import hashlib
 import json
@@ -845,6 +846,8 @@ def edit_share(name, size_gb, user, password, public, read_only=False):
         size_gb = _size(size_gb)
         if old_size and size_gb < old_size:
             raise ValueError(f"Longhorn volumes cannot shrink; choose at least {old_size} GB")
+        if not old_size or size_gb > old_size:
+            RESIZE.require(pvc, kget)
     previous = (bool(row.get("public")), str(row.get("user") or "lab"),
                 bool(row.get("read_only", False)))
     row.update(size_gb=size_gb, user=user, public=bool(public),

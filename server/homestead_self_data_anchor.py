@@ -100,7 +100,7 @@ def _journal(job, operation, namespace):
 
 def _validate(state, namespace):
     _keys(state, ("protocol", "operation", "deployment", "source", "destination", "replicas", "phase", "journal"),
-          ("plan", "copy_receipt", "pointer_receipt", "runtime", "setup", "setup_aborted"))
+          ("plan", "copy_receipt", "pointer_receipt", "runtime", "setup", "setup_aborted", "recovery"))
     if type(state["protocol"]) is not int or state["protocol"] != 1:
         raise Held("The data handoff protocol is unsupported")
     if not isinstance(state["operation"], str) or not re.fullmatch(r"[a-f0-9]{24}", state["operation"]):
@@ -115,6 +115,30 @@ def _validate(state, namespace):
     if state["phase"] not in PHASES:
         raise Held("The data handoff phase is invalid")
     _journal(state["journal"], state["operation"], namespace)
+    if "recovery" in state:
+        recovery = state["recovery"]
+        _keys(recovery, ("action", "review", "previous_hold", "reviewed_at"), ("restart",))
+        _hash(recovery["review"])
+        if (recovery["action"] not in ("resume", "return-original") or type(recovery["reviewed_at"]) is not int
+                or recovery["reviewed_at"] < 0 or not isinstance(recovery["previous_hold"], str)
+                or not 0 < len(recovery["previous_hold"]) <= 512 or "pointer_receipt" not in state):
+            raise Held("The data move recovery receipt is invalid")
+        if recovery["action"] == "return-original":
+            entries = state["journal"]["ref"]["storage_writes"]
+            if (state["phase"] not in ("quiesce", "copy", "verify", "switch", "done")
+                    or any(e["step"] in ("switch", "start") for e in entries)):
+                raise Held("Returning to the original volume is prohibited after cutover")
+            if state["phase"] == "done" and (any(e["state"] != "accepted" for e in entries)
+                    or not any(e["step"] == "recover-start" for e in entries)
+                    or any(e["step"] == "copy-job" for e in entries) and not any(
+                        e["step"] in ("release-copy", "recover-release-copy") for e in entries)):
+                raise Held("Original-volume recovery completion has incomplete evidence")
+            if "restart" in recovery:
+                from homestead_self_data_admission import validate_policy
+                validate_policy({"threshold": state["plan"]["admission"]["threshold"],
+                                 "reviews": {"copy": recovery["restart"], "restart": recovery["restart"]}})
+        elif "restart" in recovery:
+            raise Held("Resume cannot replace the reviewed restart approval")
     if "setup_aborted" in state and (state["setup_aborted"] is not True or state["phase"] != "prepare"
             or "pointer_receipt" in state or state["journal"]["ref"]["storage_writes"]):
         raise Held("Only unpublished setup can be abandoned")
@@ -409,6 +433,29 @@ class Anchor:
             raise Held("The move has already been handed over; automatic rollback is not safe")
         state = copy.deepcopy(self.state)
         state["setup_aborted"] = True
+        self._replace(state)
+
+    def recover(self, review, checked_at):
+        """Operator-reviewed CAS transition; callers must revalidate live proof."""
+        self.handle()
+        if (self.state.get("runtime", {}).get("state") != "held" or self.state["phase"] == "done"
+                or any(e["state"] != "accepted" for e in self.state["journal"]["ref"]["storage_writes"])):
+            raise Held("Only a held move with known request outcomes can be recovered")
+        state = copy.deepcopy(self.state)
+        state["recovery"] = {"action": review["action"], "review": review["fingerprint"],
+                             "previous_hold": state["runtime"]["message"], "reviewed_at": checked_at}
+        if "restart" in review: state["recovery"]["restart"] = copy.deepcopy(review["restart"])
+        state["runtime"].update(state="running", checked_at=checked_at, message="Reviewed recovery accepted")
+        self._replace(state)
+
+    def recovered(self):
+        self.handle()
+        entries = self.state["journal"]["ref"]["storage_writes"]
+        if (self.state.get("recovery", {}).get("action") != "return-original"
+                or not any(e["step"] == "recover-start" for e in entries)
+                or any(e["state"] != "accepted" for e in entries)):
+            raise Held("Original-volume recovery has no verified restart")
+        state = copy.deepcopy(self.state); state["phase"] = "done"
         self._replace(state)
 
     def copy_started(self):

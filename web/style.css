@@ -107,7 +107,6 @@ a{color:inherit;text-decoration:none}
   html[data-display="standalone"] body{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden;overscroll-behavior:none}
   html[data-display="standalone"] #app{flex:1;min-height:0;overflow:hidden}
   html[data-display="standalone"] .main{min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:none}
-  html[data-display="standalone"] .side{height:100vh;height:100dvh;overscroll-behavior:contain}
   html[data-display="standalone"] #gate{display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;overscroll-behavior:contain}
   html[data-display="standalone"] .gatebox{width:min(400px,100%);margin-block:auto;flex:0 0 auto}
 }
@@ -459,7 +458,7 @@ b.uptime-ok{color:var(--ok)}b.uptime-warn{color:var(--med)}b.uptime-bad{color:va
 .drow .dv{font-size:12.5px;font-weight:620;flex:1;min-width:auto;text-align:right;overflow-wrap:anywhere}
 
 /* sparkline */
-.spark{width:100%;height:78px;display:block;overflow:visible}
+.spark{width:100%;height:78px;display:block;overflow:hidden}
 .spark .ln{fill:none;stroke:#fff;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;
   filter:drop-shadow(0 0 8px rgba(255,255,255,.4))}
 .spark .fl{fill:url(#sg);opacity:.55}
@@ -1129,10 +1128,15 @@ html[data-theme="light"] #net_editor .net-access-choice:has(input:checked),html[
   .flowwrap{overflow-x:visible}
 }
 @media(max-width:900px){
-  .side{position:fixed;left:0;top:0;bottom:0;transform:translateX(-100%);z-index:25;
+  .side{position:fixed;left:0;top:0;bottom:calc(70px + env(safe-area-inset-bottom,0px));
+    height:calc(100vh - 70px - env(safe-area-inset-bottom,0px));height:calc(100dvh - 70px - env(safe-area-inset-bottom,0px));
+    transform:translateX(-100%);z-index:35;overflow-y:auto;overscroll-behavior:contain;
     transition:transform .32s var(--e);box-shadow:24px 0 60px rgba(0,0,0,.5)}
+  /* One scroll area reaches Settings and the footer above the bottom bar. */
+  .side #nav{flex:1 0 auto;overflow:visible}
+  .sidefoot{flex-shrink:0}
   body.navopen .side{transform:none}
-  body.navopen #navscrim{opacity:1;pointer-events:auto}
+  body.navopen #navscrim{z-index:34;opacity:1;pointer-events:auto}
   .only-sm{display:grid!important}
   .hide-sm{display:none!important}
   .page{padding:18px 16px 70px}
@@ -2868,9 +2872,9 @@ html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
 .wl-inline-detail .workloadtree{margin:10px 0 0}
 .wl-detail-actions{display:none}
 .wl-detail-hardware{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
-.wl-mobile-head{display:none}
-html[data-theme="light"] .wl-mobile-summary .pillbtn.warn{color:#8a5200}
-html[data-theme="light"] .wl-mobile-summary .pillbtn.crit{color:#a1242a}
+.collection-mobile-head{display:none}
+html[data-theme="light"] .collection-mobile-summary .pillbtn.warn{color:#8a5200}
+html[data-theme="light"] .collection-mobile-summary .pillbtn.crit{color:#a1242a}
 /* Mobile collection controls use the existing portalled action menu. */
 .list-options>summary.btn{min-height:44px;height:auto;padding:8px 12px!important;font-size:13px;line-height:1.4;gap:6px}
 .list-options-pop{top:calc(100% + 6px);bottom:auto;min-width:min(310px,calc(100vw - 16px));max-width:calc(100vw - 16px);padding:8px 12px;background:var(--surf);color:var(--tx)}
@@ -2885,22 +2889,22 @@ html[data-theme="light"] .wl-mobile-summary .pillbtn.crit{color:#a1242a}
 .list-options-pop>button{min-height:44px;padding-inline:0;font-size:13px}
 @media(max-width:560px){
   /* Tabs, one toolbar, one status line. Rows keep their existing layout. */
-  .containers-page>.phead{display:block;margin-bottom:8px}
-  .containers-page>.phead>div:first-child{width:100%;min-width:0}
-  .containers-page>.phead>div:first-child>p,.containers-page>.phead .wgroup-bar,.containers-page>.phead>.row{display:none}
-  .containers-page .pagetabs{display:flex;width:100%;margin:0}
-  .containers-page .pagetabs>a{flex:1;min-width:0;min-height:40px;display:flex;align-items:center;justify-content:center;padding:6px 8px}
-  .wl-mobile-head{display:block;margin-bottom:12px}
-  .wl-mobile-toolbar{position:relative;display:flex;align-items:center;flex-wrap:nowrap;gap:7px}
-  .wl-group-select,.wl-mobile-scope{flex:1;min-width:0}
+  .collection-page>.phead{display:block;margin-bottom:8px}
+  .collection-page>.phead>div:first-child{width:100%;min-width:0}
+  .collection-page>.phead>div:first-child>p,.collection-page>.phead .wgroup-bar,.collection-page>.phead>.row{display:none}
+  .collection-page .pagetabs{display:flex;width:100%;margin:0}
+  .collection-page .pagetabs>a{flex:1;min-width:0;min-height:40px;display:flex;align-items:center;justify-content:center;padding:6px 8px}
+  .collection-mobile-head{display:block;margin-bottom:12px}
+  .collection-mobile-toolbar{position:relative;display:flex;align-items:center;flex-wrap:nowrap;gap:7px}
+  .wl-group-select,.collection-mobile-scope{flex:1;min-width:0}
   .wl-group-select{width:0;min-height:44px;padding:7px 10px;font-size:13px;font-weight:600;text-overflow:ellipsis}
-  .wl-mobile-scope{font-size:13px;color:var(--mut)}
-  .wl-mobile-toolbar>.btn{min-height:44px}
-  .wl-mobile-toolbar .list-options{position:static;margin:0;flex:0 0 auto}
-  .wl-mobile-summary{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:7px;min-height:26px;font-size:12.5px;color:var(--mut)}
-  .wl-mobile-summary .pillbtn{padding:3px 0;border:0;border-radius:0;background:transparent;box-shadow:none;font-size:12.5px}
-  .wl-mobile-summary .pillbtn.warn{color:var(--med)}
-  .wl-mobile-summary .pillbtn.crit{color:var(--crit)}
+  .collection-mobile-scope{font-size:13px;color:var(--mut)}
+  .collection-mobile-toolbar>.btn{min-height:44px}
+  .collection-mobile-toolbar .list-options{position:static;margin:0;flex:0 0 auto}
+  .collection-mobile-summary{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:7px;min-height:26px;font-size:12.5px;color:var(--mut)}
+  .collection-mobile-summary .pillbtn{padding:3px 0;border:0;border-radius:0;background:transparent;box-shadow:none;font-size:12.5px}
+  .collection-mobile-summary .pillbtn.warn{color:var(--med)}
+  .collection-mobile-summary .pillbtn.crit{color:var(--crit)}
   /* A matrix is the deliberate exception to stacked item rows: four compact
      host columns remain visible together; long fields move below it. */
   .tbl.stack.comparison-table{display:table;width:100%;min-width:calc(56px + var(--comparison-columns)*clamp(56px,(100vw - 82px)/4,86px))}
@@ -2962,6 +2966,10 @@ html[data-theme="light"] .wl-mobile-summary .pillbtn.crit{color:#a1242a}
   .wl-detail-actions .actionbar{justify-content:flex-end}
 }
 @media(max-width:350px){
-  .wl-mobile-toolbar .list-options-label{display:none}
-  .wl-mobile-toolbar .list-options>summary.btn{width:44px;justify-content:center;padding:8px!important}
+  .collection-mobile-toolbar .list-options-label{display:none}
+  .collection-mobile-toolbar .list-options>summary.btn{width:44px;justify-content:center;padding:8px!important}
 }
+
+/* Metrics settle into new observations; motion preferences apply to bars too. */
+html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition:none}
+@media(prefers-reduced-motion:reduce){.meter>span,.meter.split>span,.ui-bar i{transition:none}}

@@ -82,6 +82,20 @@ class FakeLonghorn:
         self.made = []
         self.restored = []
 
+    def restore_support(self):
+        return {"ready": True, "can_install": False}
+
+    ensure_restore_support = restore_support
+
+    @staticmethod
+    def validate_restore_class(*args, **kwargs):
+        import homestead_longhorn
+        return homestead_longhorn.validate_restore_class(*args, **kwargs)
+
+    @staticmethod
+    def restore_problem(pvc):
+        return ""
+
     def backup_target(self):
         return dict(self.target)
 
@@ -116,7 +130,7 @@ class FakeLonghorn:
             "metadata": {"name": name, "annotations": dict(cfg.get("annotations") or {})},
             "spec": {"volumeName": f"pvc-{name}-{ns}"}, "status": {"phase": "Bound"}})
         self.cluster.put(f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/"
-                         f"pvc-{name}-{ns}", {"status": {"restoreRequired": False,
+                         f"pvc-{name}-{ns}", {"status": {"restoreInitiated": True, "restoreRequired": False,
                                                           "state": "detached"}})
         return {"ok": True}
 
@@ -463,6 +477,37 @@ class EngineTests(unittest.TestCase):
             engine.tick_all()
         return next((m for m in engine.moves() if m["id"] == move_id), engine.moves()[0])
 
+    def test_snapshot_installation_does_not_stop_source_and_survives_engine_restart(self):
+        with mock.patch.object(self.lh, "ensure_restore_support", return_value={"ready": False, "message": "Installing snapshots"}):
+            move = engine.start("shed", "container", "frigate", "moved", "automatic")
+            engine.tick_all()
+            self.assertEqual("joining", engine._find(move["id"])["phase"])
+            self.assertEqual(1, self.cluster.objects["/apis/apps/v1/namespaces/lab/deployments/frigate"]["spec"]["replicas"])
+            self.assertNotIn("/api/move/source", self.remote_calls)
+        engine.bind(self.cluster.get, self.cluster.send, self.lh, client, FakeNetwork(), self.ops, self.tmp.name, "lab")
+        finished = self.run_until_settled(move_id=move["id"])
+        self.assertEqual("succeeded", finished["status"], finished["message"])
+
+    def test_plan_rejects_wait_for_consumer_and_filesystem_migratable_classes(self):
+        klass = self.cluster.objects["/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"]
+        klass["volumeBindingMode"] = "WaitForFirstConsumer"
+        planned = engine.plan("shed", "container", "frigate", "moved", "automatic")
+        self.assertFalse(planned["ok"])
+        self.assertTrue(any("Immediate" in reason for reason in planned["blockers"]))
+        klass.pop("volumeBindingMode")
+        klass.setdefault("parameters", {})["migratable"] = "true"
+        planned = engine.plan("shed", "container", "frigate", "moved", "automatic")
+        self.assertFalse(planned["ok"])
+        self.assertTrue(any("migratable disabled" in reason for reason in planned["blockers"]))
+
+    def test_effective_destination_class_is_frozen_when_default_changes(self):
+        move = engine.start("shed", "container", "frigate", "moved", "automatic")
+        self.assertEqual("longhorn-r2", move["storage_class"])
+        with mock.patch.object(self.lh, "STORAGE_CLASS", "missing-new-default"):
+            finished = self.run_until_settled(move_id=move["id"])
+        self.assertEqual("succeeded", finished["status"], finished["message"])
+        self.assertEqual("longhorn-r2", self.lh.restored[0]["storage_class"])
+
     def fail_backup(self):
         move = engine.start("shed", "container", "frigate", "moved", "automatic")
         self.cluster.objects.pop("/api/v1/namespaces/lab/pods/frigate-1", None)
@@ -537,7 +582,7 @@ class EngineTests(unittest.TestCase):
         self.assertEqual("succeeded", move["status"], move["message"])
         self.assertEqual("fast", move["storage_class"])
         self.assertEqual("fast", self.lh.restored[0]["storage_class"])
-        self.assertIsNone(self.lh.restored[0]["replicas"], "chosen class supplies replicas")
+        self.assertNotIn("replicas", self.lh.restored[0], "chosen class supplies replicas")
 
     def test_a_clean_plan_has_no_blockers(self):
         planned = engine.plan("shed", "container", "frigate", "moved", "automatic")

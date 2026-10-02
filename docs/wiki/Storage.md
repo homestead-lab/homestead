@@ -48,7 +48,16 @@ A volume opens to its usage over time, snapshots and backups, and what mounts
 it. From the row:
 
 - **Grow** - volumes can grow, never shrink. Most apps see the new size
-  without a restart.
+  without a restart. The claim must be bound and its StorageClass must allow
+  expansion. Edit checks these before enabling the size field. Replica count
+  can still be changed when expansion is unavailable.
+  If an older Homestead release removed a restored volume's class, an admin
+  can use **Repair resize support** in Edit. Homestead checks the bound
+  Longhorn volumes and recreates their class before you resize. It does not
+  change the volume size or copy its data. Restore cleanup keeps classes
+  while any claim or retained backing volume references them. VM disk and
+  share edits use the same expansion checks; a disk with an expansion
+  pending cannot be reduced to its old reported capacity.
 - **Files** - browse and edit the files on it, in the same editor VS Code uses.
   A helper pod mounts it for up to 30 minutes; a ReadWriteOnce volume in use
   must be stopped first. Saves keep the old file as `<name>.homestead-bak`.
