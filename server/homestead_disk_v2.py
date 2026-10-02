@@ -7,6 +7,7 @@ second erase. Unknown inventories and identities always stop the workflow.
 import copy
 import hashlib
 import functools
+from contextlib import contextmanager
 import json
 import re
 import secrets
@@ -799,6 +800,12 @@ def logs(item):
 
 def protect_mutations(disks):
     """Keep the saved approval and ordinary disk writes mutually exclusive."""
+    @contextmanager
+    def scope(node, disk, device):
+        with ops._lock:
+            mutation_guard(node, disk, device)
+            yield
+    disks.mutation_scope = scope
     def protect(fn, mode):
         @functools.wraps(fn)
         def guarded(*args, **kwargs):
@@ -809,8 +816,10 @@ def protect_mutations(disks):
                 node = args[0] if args else kwargs.get('node')
                 disk = (args[1] if len(args) > 1 else kwargs.get('disk_id')) if mode == 'disk' else None
                 device = None
-            with ops._lock:
-                mutation_guard(node, disk, device)
+            current_scope = disks.mutation_scope
+            if current_scope is None:
+                return fn(*args, **kwargs)
+            with current_scope(node, disk, device):
                 return fn(*args, **kwargs)
         return guarded
     for name in ('set_disk_tags', 'set_scheduling', 'evict', 'remove'):

@@ -23,6 +23,8 @@ import homestead_names as NAMES
 
 kget = ksend = None
 temps = lambda: {}
+mutation_scope = None
+v2_tasks = lambda: []
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 BD = "/apis/harvesterhci.io/v1beta1/namespaces/longhorn-system/blockdevices"
 GiB = 1024 ** 3
@@ -31,8 +33,11 @@ SYSTEM_MOUNTS = ("/", "/usr/local", "/var/lib/rancher", "/var/lib/kubelet", "/oe
 
 
 def bind(_kget, _ksend, _temps):
-    global kget, ksend, temps
+    global kget, ksend, temps, mutation_scope, v2_tasks
     kget, ksend, temps = _kget, _ksend, _temps
+    # A fresh reader binding has its own workflow context. The server installs
+    # its shared disk guards after binding; standalone clients supply no store.
+    mutation_scope, v2_tasks = None, lambda: []
 
 
 def _gb(value):
@@ -224,9 +229,6 @@ def _mount_disk(path, mounts):
             if not best or len(point) > len(best["mountpoint"].rstrip("/") or "/"):
                 best = m
     return best["disk"] if best else ""
-
-
-v2_tasks = lambda: []
 
 
 def inventory():

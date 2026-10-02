@@ -15,6 +15,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
 import homestead_capacity_review as REVIEW
 import homestead_disk_v2 as V
+import homestead_disks as DISKS
 import homestead_operations as OPS
 import homestead_storage_conflicts as CONFLICTS
 
@@ -150,6 +151,9 @@ class Cluster:
 
 class DiskV2Tests(unittest.TestCase):
     def setUp(self):
+        for module, names in ((V, ('kget', 'ksend', 'platform', 'ops', 'NS', 'read_log')), (REVIEW, ('_key',))):
+            for name in names:
+                saved = patch.object(module, name, getattr(module, name)); saved.start(); self.addCleanup(saved.stop)
         self.c = Cluster()
         p = patch.object(V.HOST, 'run', self.c.host); p.start(); self.addCleanup(p.stop)
     def test_review_is_read_only_and_v2_capacity_does_not_count(self):
@@ -330,14 +334,29 @@ class DiskV2Tests(unittest.TestCase):
         self.assertFalse(writes)
         disks.set_up({'node': 'node-1', 'device': '/dev/sdc'})
         disks.remove('node-2', 'data'); self.assertEqual(len(writes), 2)
+    def test_standalone_reader_rebinding_clears_inherited_store_and_server_reinstalls_guards(self):
+        names = ('kget', 'ksend', 'temps', 'mutation_scope', 'v2_tasks', 'set_disk_tags', 'set_scheduling',
+                 'evict', 'remove', 'set_node_tags', 'add', 'set_up', 'use_os_space', 'retire_start')
+        for name in names:
+            saved = patch.object(DISKS, name, getattr(DISKS, name)); saved.start(); self.addCleanup(saved.stop)
+        self.c.awaiting(); V.protect_mutations(DISKS)
+        self.assertTrue(DISKS.v2_tasks())
+        writes = []
+        DISKS.bind(self.c.get, lambda *args, **kw: writes.append(args), lambda: {})
+        self.assertEqual(DISKS.v2_tasks(), [])
+        with patch.object(V, 'ops', None):
+            DISKS.evict('node-1', 'data', False)  # no inherited production /data store
+        self.assertEqual(len(writes), 1)
+        V.protect_mutations(DISKS)
+        with self.assertRaisesRegex(ValueError, 'saved V2'): DISKS.evict('node-1', 'data', False)
+        self.assertEqual(len(writes), 1)
     def test_json_patch_protects_unreviewed_disk_changes(self):
         self.c.start(); self.c.lh['node-1']['spec']['disks']['data']['tags'] = ['changed']
         self.assertIn('configuration changed', self.c.tick()['message']); self.assertFalse(self.c.writes)
     def test_persisted_phases_survive_process_restart_without_repeated_erase(self):
         directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
-        with patch.object(OPS, 'DATA_DIR', directory.name), patch.object(OPS, 'WRITE_GUARD', None):
+        with patch.object(OPS, 'DATA_DIR', directory.name), patch.object(OPS, 'WRITE_GUARD', None), patch.dict(OPS.RESOLVERS, {V.KIND: V.progress}):
             V.bind(self.c.get, self.c.send, lambda force=False: {}, OPS, 'lab', lambda path: 'helper log')
-            OPS.RESOLVERS[V.KIND] = V.progress; self.addCleanup(lambda: OPS.RESOLVERS.pop(V.KIND, None))
             self.c.ops = OPS
             item = self.c.start(); operation_id = item['id']
             V.status(operation_id); self.c.evacuate(); V.status(operation_id)
