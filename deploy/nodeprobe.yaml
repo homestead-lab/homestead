@@ -995,7 +995,7 @@ spec:
               mountPath: "/host/proc"
               readOnly: true
         - name: smart
-          image: ghcr.io/wjcloudy/homestead:2.8.294
+          image: ghcr.io/wjcloudy/homestead:2.8.295-dev.1
           imagePullPolicy: IfNotPresent
           command:
             - python3
