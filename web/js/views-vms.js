@@ -240,7 +240,9 @@ function vmTable(rows) {
 window.viewVMs = viewVMs;
 
 function vmActionButton(v, action, primary = false, iconOnly = false, extra = "") {
-  const [label, iconName, title] = VM_ACTIONS[action];
+  const [label, iconName, title] = action === "stop" && v.stop_retries
+    ? ["Stop retries", "power", "Stop automatic boot retries and keep the VM off until you start it"]
+    : VM_ACTIONS[action];
   return `<button class="btn sm ${primary ? "pri" : ""} ${iconOnly ? "vm-iconbtn" : ""} ${extra}" data-need="operator" title="${esc(iconOnly ? `${label}: ${title}` : title)}"
     aria-label="${esc(label)}" onclick="vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(action)})">${icon(iconName)}${iconOnly ? "" : label}</button>`;
 }
