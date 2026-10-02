@@ -166,6 +166,7 @@ jobs:
           node scripts/audit_${{ matrix.audit }}.mjs
           if [ "${{ matrix.audit }}" = dialogs ] && [ "${{ matrix.shard }}" = 0 ]; then
             EDIT_SCREENSHOTS=release-assets/dialogs/container-edit node tests/integration/container-edit-steps.mjs
+            CONTAINER_SET_SCREENSHOTS=release-assets/dialogs/container-set node tests/integration/container-set.mjs
           fi
           if [ "${{ matrix.audit }}" = pages ]; then
             node scripts/check_setup_guide.mjs

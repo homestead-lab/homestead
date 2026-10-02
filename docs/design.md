@@ -325,6 +325,10 @@ Hardware and access (resources, devices, privileges and ports), Environment valu
 (variables, managed references and startup configuration), Storage, Where it runs,
 and Address. Each step groups its fields by container. Changing a name or image
 updates that container's heading throughout the form; each field is rendered once.
+Basics places Add container above the list, with Remove container on each card.
+Removing a card stages its removal in every step and offers Undo removal. Saving
+reviews the complete container set and keeps persistent data. Pod copies remain
+separate from adding different containers inside each pod.
 
 **One explanation box at most**, and only for a risk. A field's explanation
 is a `tip()` beside its label; what the whole dialog needs you to know is one
