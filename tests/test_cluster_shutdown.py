@@ -1,4 +1,5 @@
 """Shutdown tests use an in-memory API; they never enter a host namespace."""
+import base64
 import copy
 import json
 import os
@@ -25,7 +26,8 @@ def pod(name, node="a", namespace="lab", kind="ReplicaSet"):
 class Fake:
     def __init__(self):
         self.now = 1000
-        self.cm = None
+        self.journal = None
+        self.configmap = None
         self.calls = []
         self.blocked = False
         self.detach = True
@@ -48,9 +50,13 @@ class Fake:
 
     def get(self, path):
         if path == self.s.path:
-            if not self.cm:
+            if not self.journal:
                 raise missing()
-            result = self.cm
+            result = copy.deepcopy(self.journal)
+            result["data"] = {k: base64.b64encode(v.encode()).decode() for k, v in result["data"].items()}
+        elif path == f"/api/v1/namespaces/lab/configmaps/{S.NAME}":
+            if self.configmap is None: raise missing()
+            result = self.configmap
         elif path == "/api/v1/nodes": result = {"items": self.nodes}
         elif path.startswith("/api/v1/nodes/"): result = next(n for n in self.nodes if n["metadata"]["name"] == path.split("/")[-1])
         elif path == "/api/v1/pods": result = {"items": self.pods}
@@ -70,18 +76,19 @@ class Fake:
     def send(self, method, path, body, **kwargs):
         self.calls.append((method, path, copy.deepcopy(body)))
         if path == self.s.path or path == self.s.path.rsplit("/", 1)[0]:
-            if method == "POST" and self.cm: raise missing(409)
-            if method == "PUT" and body["metadata"].get("resourceVersion") != self.cm["metadata"]["resourceVersion"]: raise missing(409)
-            self.cm = copy.deepcopy(body)
-            self.cm["metadata"].update(uid="journal-uid", resourceVersion=str(int(self.cm["metadata"].get("resourceVersion", "0")) + 1))
-            return copy.deepcopy(self.cm)
+            if method == "POST" and self.journal: raise missing(409)
+            if method == "PUT" and body["metadata"].get("resourceVersion") != self.journal["metadata"]["resourceVersion"]: raise missing(409)
+            self.journal = copy.deepcopy(body)
+            self.journal["data"] = {k: base64.b64decode(v, validate=True).decode() for k, v in body["data"].items()}
+            self.journal["metadata"].update(uid="journal-uid", resourceVersion=str(int(self.journal["metadata"].get("resourceVersion", "0")) + 1))
+            return copy.deepcopy(self.journal)
         if method == "POST" and path.endswith("/pods"):
             p = copy.deepcopy(body)
             p["metadata"]["uid"] = p["metadata"]["name"] + "-uid"
             self.pods.append(p)
             if self.auto_ready and "agent" in p["spec"]["containers"][0]["command"]:
                 i = int(p["spec"]["containers"][0]["command"][-1])
-                self.cm["data"]["ready-" + str(i)] = self.nodes[i]["status"]["nodeInfo"]["bootID"]
+                self.journal["data"]["ready-" + str(i)] = self.nodes[i]["status"]["nodeInfo"]["bootID"]
             return p
         if path.endswith("/eviction"):
             if self.blocked: raise missing(429)
@@ -112,11 +119,82 @@ class Fake:
         ops = Mock()
         ops.start.return_value = {"id": "job"}
         self.s.start({"confirm": S.CONFIRM, "review_token": plan["review_token"]}, ops)
-        return S.Coordinator(self.s, self.cm["metadata"]["uid"], self.s.state()["run"])
+        return S.Coordinator(self.s, self.journal["metadata"]["uid"], self.s.state()["run"])
 
 
 class ShutdownTests(unittest.TestCase):
     def setUp(self): self.f = Fake()
+
+    def test_configmap_writer_cannot_replace_the_approved_image_or_release_the_fence(self):
+        c = self.f.start()
+        forged = self.f.s.state()
+        forged["plan"]["image"] = "untrusted.example/payload@sha256:" + "b" * 64
+        forged["review_token"] = S.hashlib.sha256(S.encode(forged["plan"]).encode()).hexdigest()
+        forged["phase"] = "released"
+        self.f.configmap = {"kind": "ConfigMap", "metadata": {"uid": "journal-uid"},
+                            "data": {"state": S.encode(forged)}}
+        self.assertEqual(self.f.s.state()["phase"], "preparing")
+        # Match the independent worker's bootstrap: its image comes from the journal.
+        self.f.s.image = self.f.s.state()["plan"]["image"]
+        c.execute()
+        helpers = [p for p in self.f.pods if p["spec"].get("hostPID")]
+        self.assertEqual(len(helpers), 3)
+        for p in helpers:
+            self.assertEqual(p["spec"]["containers"][0]["image"], "repo/image@sha256:" + "a" * 64)
+            self.assertEqual(p["metadata"]["ownerReferences"][0]["kind"], "Secret")
+        self.assertEqual(self.f.s.state()["phase"], "handoff")
+        self.assertTrue(all("/configmaps/" not in path for _, path, _ in self.f.calls))
+
+    def test_forged_configmap_commit_cannot_power_a_host_before_drain(self):
+        self.f.start()
+        state = self.f.s.state()
+        command = Mock(return_value=b"b-boot\n")
+        def forge():
+            self.f.configmap = {"data": {"state": S.encode(state),
+                "commit": S.encode({"run": state["run"], "until": state["deadline"] + 30})}}
+            self.f.now = state["deadline"]
+        self.f.on_sleep = forge
+        with self.assertRaisesRegex(ValueError, "expired"):
+            S.agent(self.f.s, "journal-uid", state["run"], 1, command)
+        self.assertEqual(command.call_count, 1, "only the read-only host preflight ran")
+        self.assertNotIn("commit", self.f.journal["data"])
+        self.assertFalse(any(path.endswith("/eviction") or method == "PATCH" for method, path, _ in self.f.calls))
+
+    def test_legacy_configmap_is_never_migrated_into_power_authority(self):
+        self.f.configmap = {"data": {"state": S.encode({"phase": "released"})}}
+        with self.assertRaisesRegex(ValueError, "Legacy shutdown ConfigMap"):
+            self.f.start()
+        self.assertFalse(self.f.calls)
+        self.assertIsNone(self.f.journal)
+
+    def test_missing_replaced_or_mistyped_secret_disarms_existing_helpers(self):
+        self.f.start()
+        original = copy.deepcopy(self.f.journal)
+        state = self.f.s.state()
+        changed = copy.deepcopy(original)
+        changed["metadata"]["uid"] = "replacement"
+        mistyped = copy.deepcopy(original)
+        mistyped["type"] = "Opaque"
+        for journal in (None, changed, mistyped):
+            self.f.journal = journal
+            command = Mock()
+            with self.assertRaises(ValueError):
+                S.agent(self.f.s, "journal-uid", state["run"], 1, command)
+            command.assert_not_called()
+
+    def test_unreadable_secret_never_falls_back_to_a_configmap(self):
+        self.f.start()
+        state = self.f.s.state()
+        self.f.configmap = {"data": {"state": S.encode(state)}}
+        get = self.f.s.get
+        def forbidden(path):
+            if path == self.f.s.path: raise missing(403)
+            return get(path)
+        self.f.s.get = forbidden
+        command = Mock()
+        with self.assertRaises(urllib.error.HTTPError):
+            S.agent(self.f.s, "journal-uid", state["run"], 1, command)
+        command.assert_not_called()
 
     def test_every_host_is_drained_before_homestead_and_power_commit(self):
         c = self.f.start()
@@ -125,7 +203,7 @@ class ShutdownTests(unittest.TestCase):
         evictions = [path for _, path, _ in self.f.calls if path.endswith("eviction")]
         self.assertEqual(evictions, ["/api/v1/namespaces/lab/pods/app/eviction", "/api/v1/namespaces/lab/pods/homestead/eviction"])
         self.assertTrue(all(n["spec"]["unschedulable"] for n in self.f.nodes))
-        self.assertIn("commit", self.f.cm["data"])
+        self.assertIn("commit", self.f.journal["data"])
 
     def test_typed_confirmation_and_changed_review_have_no_effect(self):
         for body in ({"confirm": "yes"}, {"confirm": S.CONFIRM, "review_token": "old"}):
@@ -148,7 +226,7 @@ class ShutdownTests(unittest.TestCase):
         self.f.blocked = True
         c.execute()
         self.assertEqual(self.f.s.state()["phase"], "failed")
-        self.assertNotIn("commit", self.f.cm["data"])
+        self.assertNotIn("commit", self.f.journal["data"])
         self.assertTrue(any(p["metadata"]["name"] == "homestead" for p in self.f.pods))
         self.assertTrue(all(not n["spec"]["unschedulable"] for n in self.f.nodes))
 
@@ -156,14 +234,14 @@ class ShutdownTests(unittest.TestCase):
         c = self.f.start()
         self.f.detach = False
         c.execute()
-        self.assertNotIn("commit", self.f.cm["data"])
+        self.assertNotIn("commit", self.f.journal["data"])
         self.assertIn("did not detach", self.f.s.state()["message"])
 
     def test_power_helpers_must_be_ready_before_any_host_is_cordoned(self):
         self.f.auto_ready = False
         self.f.start().execute()
         self.assertFalse(any(method == "PATCH" for method, _, _ in self.f.calls))
-        self.assertNotIn("commit", self.f.cm["data"])
+        self.assertNotIn("commit", self.f.journal["data"])
 
     def test_cancel_during_drain_restores_only_originally_allowed_scheduling(self):
         self.f.nodes[2]["spec"]["unschedulable"] = True
@@ -172,7 +250,7 @@ class ShutdownTests(unittest.TestCase):
         self.f.on_sleep = self.f.s.cancel
         c.execute()
         self.assertEqual([n["spec"]["unschedulable"] for n in self.f.nodes], [False, False, True])
-        self.assertNotIn("commit", self.f.cm["data"])
+        self.assertNotIn("commit", self.f.journal["data"])
 
     def test_cancel_after_commit_is_refused(self):
         self.f.start().execute()
@@ -182,21 +260,21 @@ class ShutdownTests(unittest.TestCase):
         c = self.f.start()
         self.f.nodes[0]["status"]["nodeInfo"]["bootID"] = "different"
         c.execute()
-        self.assertNotIn("commit", self.f.cm["data"])
+        self.assertNotIn("commit", self.f.journal["data"])
         self.assertFalse(any(path.endswith("eviction") for _, path, _ in self.f.calls))
 
     def test_a_new_bound_pod_during_drain_stops_shutdown(self):
         c = self.f.start()
         self.f.on_sleep = lambda: self.f.pods.append(pod("surprise"))
         c.execute()
-        self.assertNotIn("commit", self.f.cm["data"])
+        self.assertNotIn("commit", self.f.journal["data"])
 
     def test_disappearing_volume_inventory_is_not_detached_storage(self):
         c = self.f.start()
         self.f.on_sleep = lambda: self.f.volumes.clear()
         self.f.detach = False
         c.execute()
-        self.assertNotIn("commit", self.f.cm["data"])
+        self.assertNotIn("commit", self.f.journal["data"])
         self.assertIn("inventory changed", self.f.s.state()["message"])
 
     def test_unrelated_cordon_is_not_removed_when_helpers_fail(self):
@@ -225,7 +303,7 @@ class ShutdownTests(unittest.TestCase):
         state = self.f.s.state()
         command = Mock(return_value=b"b-boot\n")
         def commit():
-            self.f.cm["data"]["commit"] = S.encode({"run": state["run"], "until": self.f.now + 30})
+            self.f.journal["data"]["commit"] = S.encode({"run": state["run"], "until": self.f.now + 30})
         self.f.on_sleep = commit
         S.agent(self.f.s, "journal-uid", state["run"], 1, command)
         self.assertEqual(command.call_count, 2)
@@ -235,7 +313,7 @@ class ShutdownTests(unittest.TestCase):
         self.f.start()
         state = self.f.s.state()
         command = Mock(return_value=b"a-boot\n")
-        self.f.on_sleep = lambda: self.f.cm["data"].update(commit=S.encode({"run":state["run"], "until":self.f.now+30}))
+        self.f.on_sleep = lambda: self.f.journal["data"].update(commit=S.encode({"run":state["run"], "until":self.f.now+30}))
         S.agent(self.f.s, "journal-uid", state["run"], 0, command)
         self.assertIn("--on-active=90s", command.call_args.args[0][-1])
 
@@ -246,7 +324,7 @@ class ShutdownTests(unittest.TestCase):
         with self.assertRaises(ValueError): S.agent(self.f.s, "journal-uid", state["run"], 1, command)
         self.assertEqual(command.call_count, 1)
         command = Mock(return_value=b"b-boot\n")
-        self.f.on_sleep = lambda: self.f.cm["data"].update(commit=S.encode({"run":state["run"], "until":self.f.now-1}))
+        self.f.on_sleep = lambda: self.f.journal["data"].update(commit=S.encode({"run":state["run"], "until":self.f.now-1}))
         S.agent(self.f.s, "journal-uid", state["run"], 1, command)
         self.assertEqual(command.call_count, 1)
 
@@ -283,7 +361,7 @@ class ShutdownTests(unittest.TestCase):
             return result
         self.f.s.send = lost
         with self.assertRaises(OSError): c.execute()
-        self.assertIn("commit", self.f.cm["data"])
+        self.assertIn("commit", self.f.journal["data"])
         self.assertTrue(all(n["spec"]["unschedulable"] for n in self.f.nodes))
 
     def test_still_attached_csi_volume_prevents_power(self):
@@ -292,7 +370,7 @@ class ShutdownTests(unittest.TestCase):
         self.f.s.get = lambda path: ({"items":[{"metadata":{"name":"external"},"status":{"attached":True}}]}
                                     if path.endswith("volumeattachments") else get(path))
         c.execute()
-        self.assertNotIn("commit", self.f.cm["data"])
+        self.assertNotIn("commit", self.f.journal["data"])
 
     def test_missing_longhorn_api_with_longhorn_pv_is_blocked(self):
         get = self.f.s.get
