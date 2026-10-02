@@ -623,7 +623,7 @@ def harvester_usb(node, name, claim):
 
 # ---- what VMs can use, and what a VM has --------------------------------------
 
-def resources():
+def resources(with_usage=False):
     """Every device resource a VM may ask for, and the hosts offering it now."""
     offered = {}
     nodes = (kget("/api/v1/nodes") or {}).get("items", [])
@@ -641,6 +641,7 @@ def resources():
                     "resource": status.get("resourceName", ""),
                     "name": status.get("description") or (device.get("metadata") or {}).get("name", ""),
                     "address": status.get("address") if kind == "pci" else status.get("devicePath"),
+                    "class": str(status.get("classId") or "").lower().removeprefix("0x"),
                     "group": status.get("iommuGroup") if kind == "pci" else None})
     for n in nodes:
         for key, value in ((n.get("status") or {}).get("allocatable") or {}).items():
@@ -663,14 +664,30 @@ def resources():
                                any(selector == f"{s.get('vendor')}:{s.get('product')}".lower() for s in row.get("selectors") or []))
                     if device.get("resource") == name or matches:
                         detail = {"node": node, "name": device.get("name", ""),
+                                  "class": device.get("class", ""),
                                   "address": device.get("address") or device.get("port", ""), "group": device.get("group")}
                         if detail not in devices:
                             devices.append(detail)
             names = sorted({d["name"] for d in devices if d["name"]})
             out.append({"resource": name, "kind": kind, "label": " / ".join(names) or label, "selector": label,
+                        "gpu": kind == "pci" and bool(devices) and all(str(d["class"]).startswith("03") for d in devices),
                         "devices": devices, "nodes": sorted(offered.get(name, []))})
-    return {"resources": out, "sidecar": "Sidecar" in (((((kv or {}).get("spec") or {}).get("configuration") or {})
+    result = {"resources": out, "sidecar": "Sidecar" in (((((kv or {}).get("spec") or {}).get("configuration") or {})
                                                        .get("developerConfiguration") or {}).get("featureGates") or [])}
+    if with_usage:
+        import homestead_vm_device_usage as USAGE
+        try:
+            inventories = [kget(f"/apis/kubevirt.io/v1/{kind}") for kind in ("virtualmachines", "virtualmachineinstances")]
+            if any(not isinstance(v.get("items"), list) or (v.get("metadata") or {}).get("continue") for v in inventories):
+                raise ValueError("Incomplete VM inventory")
+            for row in out:
+                row["configured_vms"] = sorted({f"{vm['metadata']['namespace']}/{vm['metadata']['name']}" for vm in inventories[0]["items"]
+                    if row["resource"] in USAGE.requests(((vm.get("spec") or {}).get("template") or {}).get("spec") or {})})
+                row["active_vms"] = sorted({f"{vmi['metadata']['namespace']}/{vmi['metadata']['name']}" for vmi in inventories[1]["items"]
+                    if vmi.get("status", {}).get("phase") not in USAGE.TERMINAL and row["resource"] in USAGE.requests(vmi.get("spec") or {})})
+        except Exception:
+            result["usage_error"] = "VM device use could not be loaded. Availability will be checked again before Start."
+    return result
 
 
 def vm_devices(vm):

@@ -1022,6 +1022,8 @@ def prepare_edit(ns, name, cfg, current=None):
         if "cores" in cfg and any(k in (cfg["hardware"].get("cpu") or {}) for k in ("sockets", "cores", "threads")):
             raise ValueError("set the CPU count or its topology, not both")
         changed_hardware |= HARDWARE.apply(vm, cfg["hardware"], locked_cpu=bool(spec.get("instancetype")))
+    elif cfg.get("host_devices"):
+        HARDWARE.validate_boot_output(vm)
     if "cores" in cfg:
         cores = int(cfg["cores"])
         if not 1 <= cores <= 128:

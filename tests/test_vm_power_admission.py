@@ -62,6 +62,77 @@ class VMPowerAdmissionTests(unittest.TestCase):
         self.assertEqual("Always", result[1]["capacity"]["vm"]["policy_after"])
         writes.assert_not_called()
 
+    def gpu(self):
+        import test_vm_device_usage as devices
+        devices.DeviceAdmissionTests.setUp(self)
+        self.objects["/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/guest"] = self.vm
+
+    def test_device_acquired_after_review_returns_holder_and_sends_no_start(self):
+        import test_vm_device_usage as devices
+        self.gpu()
+        signed = self.reviewed()
+        devices.DeviceAdmissionTests.holder(self)
+        result, writes = self.call("/api/vm/power", signed)
+        self.assertEqual(409, result[0], result)
+        self.assertIn("VM lab/other", result[1]["error"])
+        writes.assert_not_called()
+
+    def test_second_start_is_blocked_by_first_durable_intent_before_instance_exists(self):
+        self.gpu()
+        second = copy.deepcopy(self.vm)
+        second["metadata"].update(name="second", uid="vm-second")
+        self.objects["/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/second"] = second
+        second_body = {**self.body, "name": "second"}
+        preview, _ = self.call("/api/vm/power/preview", second_body)
+        signed_second = {**second_body, "capacity_token": preview[1]["capacity_token"], "confirm_capacity": True}
+        result, writes = self.call("/api/vm/power", self.reviewed())
+        self.assertEqual(200, result[0], result)
+        writes.assert_called_once()
+        result, writes = self.call("/api/vm/power", signed_second)
+        self.assertEqual(409, result[0], result)
+        self.assertIn("VM lab/guest (start pending)", result[1]["error"])
+        writes.assert_not_called()
+
+    def test_device_acquired_during_final_admission_sends_no_start(self):
+        import test_vm_device_usage as devices
+        self.gpu()
+        signed = self.reviewed()
+        start = server.OPS.start
+        def begin(*args, **kwargs):
+            result = start(*args, **kwargs)
+            devices.DeviceAdmissionTests.holder(self)
+            return result
+        with mock.patch.object(server.OPS, "start", side_effect=begin):
+            result, writes = self.call("/api/vm/power", signed)
+        self.assertEqual(409, result[0], result)
+        self.assertIn("VM lab/other", result[1]["error"])
+        writes.assert_not_called()
+        self.assertFalse(server.OPS._read()[0]["ref"]["retain_resources"])
+
+    def test_concurrent_approved_starts_send_only_one_request_for_one_device(self):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        self.gpu()
+        signed = [self.reviewed()]
+        second = copy.deepcopy(self.vm)
+        second["metadata"].update(name="second", uid="vm-second")
+        self.objects["/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/second"] = second
+        self.body["name"] = "second"
+        signed.append(self.reviewed())
+        gate = threading.Barrier(2)
+        def attempt(body):
+            gate.wait(timeout=5)
+            try:
+                return server.reviewed_vm_power(body)
+            except review.Rejected as error:
+                return str(error)
+        with mock.patch.object(server.VMS, "ksend", return_value={}) as writes, ThreadPoolExecutor(2) as executor:
+            outcomes = list(executor.map(attempt, signed))
+        writes.assert_called_once()
+        self.assertEqual(1, sum(isinstance(result, dict) for result in outcomes), outcomes)
+        self.assertIn("start pending", str(outcomes))
+        self.assertEqual(1, len(server.OPS._read()))
+
     def test_start_requires_signed_review_not_just_checkbox(self):
         for body in (self.body, {**self.body, "confirm_capacity": True}):
             result, writes = self.call("/api/vm/power", body)

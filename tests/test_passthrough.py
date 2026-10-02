@@ -69,6 +69,9 @@ class PassthroughTests(unittest.TestCase):
     def setUp(self):
         self.data = tempfile.mkdtemp()
         self.cluster, self.host = Cluster(), Host()
+        storage = mock.patch.object(PASS, "longhorn_block_paths", return_value=[])
+        storage.start()
+        self.addCleanup(storage.stop)
         self.bind()
 
     def bind(self, harvester=False):
@@ -88,6 +91,22 @@ class PassthroughTests(unittest.TestCase):
         self.assertFalse(rows["0000:00:00.0"]["offered"], "the chipset is not offered")
         self.assertEqual({"0bda:8153", "1a6e:089a"}, {f"{u['vendor']}:{u['product']}" for u in facts["usb"]},
                          "root hubs are left out")
+
+    def test_resource_usage_distinguishes_saved_configurations_and_active_instances(self):
+        self.cluster.kv["spec"]["configuration"]["permittedHostDevices"] = {"pciHostDevices": [
+            {"resourceName": "example/gpu", "pciVendorSelector": "10DE:1E87"}]}
+        spec = {"domain": {"devices": {"hostDevices": [{"deviceName": "example/gpu"}]}}}
+        self.cluster.objects["/apis/kubevirt.io/v1/virtualmachines"] = {"items": [
+            {"metadata": {"namespace": "lab", "name": name}, "spec": {"template": {"spec": spec}}}
+            for name in ("running", "stopped")]}
+        self.cluster.objects["/apis/kubevirt.io/v1/virtualmachineinstances"] = {"items": [
+            {"metadata": {"namespace": "lab", "name": name}, "spec": spec, "status": {"phase": phase}}
+            for name, phase in (("running", "Running"), ("pending", "Pending"), ("stopped", "Failed"))]}
+        row = PASS.resources(with_usage=True)["resources"][0]
+        self.assertEqual(["lab/running", "lab/stopped"], row["configured_vms"])
+        self.assertEqual(["lab/pending", "lab/running"], row["active_vms"])
+        self.cluster.objects["/apis/kubevirt.io/v1/virtualmachineinstances"]["metadata"] = {"continue": "more"}
+        self.assertIn("usage_error", PASS.resources(with_usage=True))
 
     def test_a_gpu_goes_to_vfio_with_its_group_but_not_the_bridge_and_kubevirt_is_told(self):
         result = PASS.give("node-1", "0000:01:00.0")
@@ -157,6 +176,8 @@ class PassthroughTests(unittest.TestCase):
         gpu, usb = PASS.resources()["resources"]
         self.assertEqual("NVIDIA Corporation TU104 [GeForce RTX 2080]", gpu["label"])
         self.assertEqual("10DE:1E87", gpu["selector"])
+        self.assertTrue(gpu["gpu"])
+        self.assertFalse(usb["gpu"])
         self.assertEqual("0000:01:00.0", gpu["devices"][0]["address"])
         self.assertEqual("12", gpu["devices"][0]["group"])
         self.assertEqual([], gpu["nodes"], "a custom resource is not allocated merely because its hardware matches")
@@ -210,6 +231,7 @@ class PassthroughTests(unittest.TestCase):
         self.assertEqual(["0000:01:00.1"], facts["pci"][0]["group_members"])
         gpu = PASS.resources()["resources"][0]
         self.assertEqual("Named GPU", gpu["label"])
+        self.assertTrue(gpu["gpu"])
         self.assertEqual(0, gpu["devices"][0]["group"])
         self.cluster.objects[path]["items"] = []
         self.assertEqual([], PASS.resources()["resources"][0]["devices"], "old Harvester snapshots do not override live CRs")
