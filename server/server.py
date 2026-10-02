@@ -6,6 +6,7 @@ Pure Python stdlib: no pip install at runtime, so it starts even with no interne
 import copy, html, json, os, re, secrets, signal, ssl, sys, time, threading, urllib.request, urllib.parse, urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import homestead_http as HTTP
+import homestead_api_errors as API_ERRORS
 import homestead_route_policy as ROUTE_POLICY
 from contextlib import nullcontext
 from functools import wraps
@@ -8490,7 +8491,7 @@ class H(HTTP.LimitedHandler):
             # Not an empty account store: the cluster did not answer.
             return self._send(503, {"error": str(e), "unavailable": True})
         except urllib.error.HTTPError as e:
-            return self._send(e.code, {"error": e.read().decode("utf-8", "replace")[:500]})
+            return self._send(e.code, {"error": API_ERRORS.message(e, 500)})
         except Exception as e:
             return self._send(500, {"error": str(e)})
 
@@ -9636,7 +9637,7 @@ class H(HTTP.LimitedHandler):
             # Not an empty account store: the cluster did not answer.
             return self._send(503, {"error": str(e), "unavailable": True})
         except urllib.error.HTTPError as e:
-            return self._send(e.code, {"error": e.read().decode("utf-8", "replace")[:600]})
+            return self._send(e.code, {"error": API_ERRORS.message(e)})
         except Exception as e:
             return self._send(500, {"error": str(e)})
 
@@ -9660,7 +9661,7 @@ class H(HTTP.LimitedHandler):
         except ValueError as e:
             return self._send(400, {"error": str(e)})
         except urllib.error.HTTPError as e:
-            return self._send(e.code, {"error": e.read().decode("utf-8", "replace")[:500]})
+            return self._send(e.code, {"error": API_ERRORS.message(e, 500)})
         except Exception as e:
             return self._send(500, {"error": str(e)})
 
