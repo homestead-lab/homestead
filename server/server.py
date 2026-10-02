@@ -8193,10 +8193,12 @@ class H(HTTP.LimitedHandler):
             if p == "/api/move/moves":
                 return self._send(200, MOVE_ENGINE.moves())
             if p == "/api/move/definition":
-                return self._move(lambda: MOVE_SOURCE.definition(
+                return self._move(lambda: MOVE_SOURCE.in_namespace(
+                    (q.get("namespace") or [""])[0], MOVE_SOURCE.definition,
                     (q.get("kind") or [""])[0], (q.get("name") or [""])[0]))
             if p == "/api/move/source-status":
-                return self._move(lambda: MOVE_SOURCE.status(
+                return self._move(lambda: MOVE_SOURCE.in_namespace(
+                    (q.get("namespace") or [""])[0], MOVE_SOURCE.status,
                     (q.get("kind") or [""])[0], (q.get("name") or [""])[0]))
             if p == "/api/move/target":
                 return self._move(MOVE_SOURCE.target)
@@ -9082,7 +9084,7 @@ class H(HTTP.LimitedHandler):
                                b.get("claims") if isinstance(b.get("claims"), list) else None)}
                 if action not in actions:
                     return self._send(400, {"error": "unknown move action"})
-                return self._move(actions[action])
+                return self._move(lambda: MOVE_SOURCE.in_namespace(b.get("namespace"), actions[action]))
             if p in ("/api/move/plan", "/api/move/start"):
                 if p.endswith("/start") and (b.get("kind") or "container") == "container":
                     guard_managed_smb(b.get("namespace") or DEFAULT_NS, b.get("name"))
@@ -9092,7 +9094,7 @@ class H(HTTP.LimitedHandler):
                     b.get("namespace") or DEFAULT_NS, b.get("address_mode") or "shared",
                     b.get("address") or "", b.get("storage_class") or "",
                     b.get("volumes") if isinstance(b.get("volumes"), dict) else None,
-                    b.get("transfer_mode") or "move"))
+                    b.get("transfer_mode") or "move", b.get("source_namespace") or ""))
             if p == "/api/move/moves/retry":
                 return self._move(lambda: MOVE_ENGINE.retry(b.get("id")))
             if p == "/api/move/moves/abandon":

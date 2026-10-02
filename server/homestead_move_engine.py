@@ -171,19 +171,20 @@ def _definition(move):
     if move.get("definition"):
         return json.loads(json.dumps(move["definition"]))
     return CLIENT.remote(move["cluster"], "/api/move/definition"
-                         + _q(kind=move["kind"], name=move["name"]))
+                         + _q(kind=move["kind"], name=move["name"], namespace=move.get("source_namespace", "")))
 
 
 def _source_status(move):
     return CLIENT.remote(move["cluster"], "/api/move/source-status"
-                         + _q(kind=move["kind"], name=move["name"]))
+                         + _q(kind=move["kind"], name=move["name"], namespace=move.get("source_namespace", "")))
 
 
 def _source_action(move, action, **extra):
     if move.get("transfer_mode") == "copy":
         extra.update(transfer_id=move["id"], expected_uid=move["source_uid"])
     return CLIENT.remote(move["cluster"], "/api/move/source",
-                         dict({"action": action, "kind": move["kind"], "name": move["name"]},
+                         dict({"action": action, "kind": move["kind"], "name": move["name"],
+                               "namespace": move.get("source_namespace", "")},
                               **extra))
 
 
@@ -285,7 +286,7 @@ def storage_choices():
 
 
 def plan(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class="", volumes=None,
-         transfer_mode="move"):
+         transfer_mode="move", source_namespace=""):
     """Everything that would stop a move, or surprise someone, before it starts.
 
     Asks both clusters, and reports blockers and warnings separately: a blocker
@@ -311,7 +312,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
             "Update Homestead on the source cluster before copying workloads; this version cannot protect and release a copy's source"],
             "warnings": [], "claims": [], "versions": versions}
     try:
-        definition = CLIENT.remote(cluster, "/api/move/definition" + _q(kind=kind, name=name))
+        definition = _definition({"cluster": cluster, "kind": kind, "name": name, "source_namespace": source_namespace})
         there = CLIENT.remote(cluster, "/api/move/target")
     except CLIENT.Unreachable as error:
         return {"ok": False, "transfer_mode": transfer_mode, "blockers": [str(error)], "warnings": [], "claims": []}
@@ -322,6 +323,8 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         return {"ok": False, "transfer_mode": transfer_mode, "blockers": [str(error)], "warnings": [], "claims": [], "fixes": fixes}
 
     here = LH.backup_target()
+    if source_namespace and definition.get("namespace") != source_namespace:
+        blockers.append("Update Homestead on the source cluster; it did not return the selected source namespace")
     if transfer_mode == "copy" and (definition.get("held") or definition.get("transfer_owner")):
         blockers.append("The source is held by another transfer; finish or put back that transfer first")
     if transfer_mode == "copy" and not definition.get("source_uid"):
@@ -333,9 +336,12 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
             blockers.append("Install KubeVirt on the destination before transferring a VM")
         if transfer_mode == "copy":
             warnings.append("The VM copy gets new MAC addresses and a firmware UUID. Review guest static IP and network settings before starting it")
+            vm = (definition.get("object") or {}).get("spec") or {}
+            if vm.get("instancetype") or vm.get("preference"):
+                blockers.append("This VM uses an external instance type or preference; expand those settings into the VM before copying")
             if (definition.get("origin") or {}).get("runStrategy") == "Once":
                 blockers.append("A VM with the Once run strategy cannot safely resume after copying. Change its run strategy before copying")
-            template = ((definition.get("object") or {}).get("spec") or {}).get("template") or {}
+            template = vm.get("template") or {}
             vm_spec = template.get("spec") or {}
             for volume in vm_spec.get("volumes") or []:
                 portable = ("persistentVolumeClaim", "cloudInitNoCloud", "cloudInitConfigDrive", "containerDisk",
@@ -458,6 +464,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         "ok": not blockers, "blockers": blockers, "fixes": fixes,
         "warnings": list(dict.fromkeys(warnings)),
         "cluster": cluster, "kind": kind, "name": name, "namespace": namespace,
+        "source_namespace": definition.get("namespace", ""),
         "joined": joined, "will_run": bool(will_run) and transfer_mode != "copy", "addresses": addresses,
         "transfer_mode": transfer_mode,
         "versions": versions,
@@ -474,16 +481,16 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
 
 
 def start(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class="", volumes=None,
-          transfer_mode="move"):
+          transfer_mode="move", source_namespace=""):
     namespace = namespace or NS
-    checked = plan(cluster, kind, name, namespace, address_mode, address, storage_class, volumes, transfer_mode)
+    checked = plan(cluster, kind, name, namespace, address_mode, address, storage_class, volumes, transfer_mode, source_namespace)
     if not checked["ok"]:
         raise ValueError(checked["blockers"][0])
     active = [m for m in _read() if m.get("status") == "running"
               and (m["cluster"], m["kind"], m["name"]) == (cluster, kind, name)]
     if active:
         raise ValueError(f"{name} is already being moved")
-    definition = _definition({"cluster": cluster, "kind": kind, "name": name})
+    definition = _definition({"cluster": cluster, "kind": kind, "name": name, "source_namespace": source_namespace})
     choices = _choices(definition.get("claims", []), volumes, kind)
     move = {
         "id": secrets.token_hex(6), "cluster": cluster, "kind": kind, "name": name,
