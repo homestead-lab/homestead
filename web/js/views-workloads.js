@@ -998,15 +998,35 @@ function imageChangeWords(before, after, beforeTag = "", afterTag = "") {
 }
 window.imageChangeWords = imageChangeWords;
 
-/* The same warning for several apps is said once, with the apps it is about. */
+/* Lead with the constraint someone can resolve; estimates stay in Details. */
+function imagePlacementBlocker(plan) {
+  const hosts = plan.candidates || [];
+  if (hosts.length && hosts.every(host => !host.eligible && (host.reasons || []).includes("cordoned"))) {
+    return hosts.length === 1 ? "The only host is cordoned. Uncordon it before updating."
+      : "All hosts are cordoned. Uncordon a suitable host before updating.";
+  }
+  if (hosts.length && hosts.every(host => !host.eligible && (host.reasons || []).some(reason => reason.startsWith("node is ")))) {
+    return hosts.length === 1 ? "The only host is not ready. Restore its health before updating."
+      : "No host is ready. Restore a host's health before updating.";
+  }
+  if (plan.rollout?.start_blocked) return "A replacement pod cannot fit while the current pods are running. Free capacity or review the rollout policy in Details.";
+  return "No host can accept this update. Review the host, storage and placement requirements in Details.";
+}
+/* The same concern for several updates is said once. A blocked review leads
+   only with blockers; warnings for otherwise eligible apps remain in Details. */
 function groupedConcerns(rows) {
   const byText = new Map();
-  rows.forEach(({config, preview}) => (preview.capacity.blocked ? preview.capacity.warnings || [] : capacityNotes(preview.capacity).concerns).forEach(text => {
-    if (!byText.has(text)) byText.set(text, []);
-    byText.get(text).push(config.name);
-  }));
+  const blocked = rows.some(row => row.preview.capacity.blocked);
+  rows.forEach(({config, preview}) => {
+    const messages = blocked ? (preview.capacity.blocked ? [imagePlacementBlocker(preview.capacity)] : [])
+      : capacityNotes(preview.capacity).concerns;
+    messages.forEach(text => {
+      if (!byText.has(text)) byText.set(text, []);
+      byText.get(text).push(config.clusterName ? `${config.clusterName} · ${config.name}` : config.name);
+    });
+  });
   return [...byText].map(([text, names]) => rows.length > 1
-    ? `${text.replace(/\.$/, "")} - ${names.length === rows.length ? `all ${rows.length} apps` : names.join(", ")}` : text);
+    ? `${text.replace(/\.$/, "")} - ${names.length === rows.length ? `all ${rows.length} updates` : names.join(", ")}` : text);
 }
 
 let IMAGE_REVIEW = null, IMAGE_REVIEW_SEQUENCE = 0;
@@ -1061,7 +1081,7 @@ async function reviewImageActions(items, action = "update") {
     }).join("");
     $("#mbody").innerHTML = `<div class="update-review ui-stack">
       <p class="ui-lead">${many ? "Apps update one at a time, with Homestead last. " : ""}${items.some(restartsHomestead) ? "Homestead will be briefly unavailable while it restarts. " : ""}${many ? "Each app restarts" : "The app restarts"} to ${rollback ? "return to its previous image" : "use the new image"}.</p>
-      ${blocked ? UI.callout("bad", "Placement blocks this change.", `${list}<p>Resolve the placement blockers before starting.</p>`)
+      ${blocked ? UI.callout("bad", "Update blocked", list)
         : concerns.length ? UI.callout("warn", "", list) : ""}
       <ul class="upd-apps">${apps}</ul>
       ${UI.more("Details: capacity, exact images, how it runs", `
@@ -1070,7 +1090,7 @@ async function reviewImageActions(items, action = "update") {
             [`${i.container} ${rollback ? "back to" : "new"}`, `<code>${esc(i.after)}</code>`], [`${i.container} recovery`, `<code>${esc(i.rollback)}</code>`]]))}
           ${deployCapacityHtml(preview.capacity, false, true)}`).join("")}
         <p>Exact image digests and full-pod capacity are checked again before each change. Failure, lost contact or an expired review stops the remaining queue.
-        Closing this dialog stops unstarted updates; a rollout already submitted continues.</p>`, blocked)}
+        Closing this dialog stops unstarted updates; a rollout already submitted continues.</p>`)}
       ${UI.actions(UI.cancel() + UI.button(rollback ? "Start rollback" : many ? `Update ${rows.length}` : "Update", "imageReviewedApply()", { kind: "pri", id: "imageCapacityApply", disabled: true }),
         blocked ? "" : `<label class="upd-ok"><input type="checkbox" id="imageCapacityApprove" onchange="imageReviewReady()"> ${concerns.length ? "Accept the restart and the notes above" : "Accept the restart"}</label>`)}
     </div>`;
@@ -1730,8 +1750,7 @@ function deployCapacityHtml(plan, overlap = false, imageChange = false) {
   const blocked = overlap ? "This overlap does not fit while old pods remain. Progress may depend on old-pod removal within the rollout policy."
     : plan.rollout?.start_blocked ? "The rollout cannot start within its current availability policy. Review the overlap blockers below."
     : "This deployment cannot fit the checked placement constraints. Change its resources, volumes or host selection before deploying.";
-  // Blocked, everything shows: the reason may be among them.
-  const shown = plan.blocked ? plan.warnings || [] : needs;
+  const shown = needs;
   const concerns = shown.length ? `<ul class="ui-list">${shown.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
   const rollout = plan.rollout ? `<p>${esc(plan.rollout.strategy)} · ${esc(plan.rollout.replicas)} desired replica(s) · ${plan.rollout.ownership_known
       ? `${esc(plan.rollout.owned_pods.length)} existing pod(s) identified by controller ownership; ${esc(plan.rollout.release_request_gb)} GiB of requests would be released only after termination.`
@@ -1748,7 +1767,7 @@ function deployCapacityHtml(plan, overlap = false, imageChange = false) {
         reserved: plan.rollout ? "Reserved RAM after planned termination" : "Reserved RAM", placement: plan.placement }),
     ].join(""))}
     ${UI.more("How this is estimated", `${rollout}
-      ${caveats.length && !plan.blocked ? `<p>Estimate assumptions:</p><ul class="ui-list">${caveats.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
+      ${caveats.length ? `<p>Estimate assumptions:</p><ul class="ui-list">${caveats.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
       ${!overlap && !plan.blocked ? "<p>Capacity warnings can be overridden, including high projected RAM and missing usage metrics. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</p>" : ""}
       <p>This is a snapshot, not a reservation or an OOM guarantee. ${plan.vm ? "The server checks again before sending the VM action. Guest readiness and successful rescheduling are not guaranteed." : imageChange ? "The server checks again before changing the workload or its recovery metadata." : "The server checks again before creating anything. Planned volumes have not been provisioned."}</p>`, !!plan.blocked)}
     ${plan.rollout?.overlap ? UI.more(`Overlap while old pods remain${plan.rollout.start_blocked ? " - rollout cannot start" : ""}`, deployCapacityHtml(plan.rollout.overlap, true), !!plan.rollout.start_blocked) : ""}
