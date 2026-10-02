@@ -28,7 +28,10 @@ import json
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+
+import homestead_helm as HELM
 
 kget = ksend = None
 platform = None        # force -> what the cluster has, from homestead_platform
@@ -499,6 +502,73 @@ def _elapsed(item):
         return 0
 
 
+def _network_upgrade_status(item):
+    ref = item["ref"]
+    component, target = ref["component"], ref.get("to", "")
+    name = ref.get("name") or next(label for key, label, _ in NETWORK_PARTS if key == component)
+    chart = _helmchart(CHARTS[component])
+    if not chart:
+        return "running", 20, f"Waiting to read {name}'s HelmChart"
+    namespace = (chart.get("spec") or {}).get("targetNamespace") or HELM_NS
+    # spec.version is desired state. Only the newest Helm release proves
+    # which chart was applied, including chart revisions with the same app.
+    path = (f"/api/v1/namespaces/{namespace}/secrets?labelSelector="
+            + urllib.parse.quote(f"owner=helm,name={CHARTS[component]}", safe=""))
+    try:
+        secrets = kget(path).get("items", [])
+        latest = max(secrets, key=lambda secret: int((secret.get("metadata", {}).get("labels") or {}).get("version", 0)), default=None)
+        release = HELM.decode(latest) if latest else None
+        if release and (release.get("name") != CHARTS[component] or release.get("namespace") != namespace):
+            raise ValueError("release identity mismatch")
+        release_chart = ((release or {}).get("chart") or {}).get("metadata") or {}
+        if release and release_chart.get("name") != (chart.get("spec") or {}).get("chart"):
+            raise ValueError("release chart mismatch")
+    except Exception:
+        return "running", 20, f"Cannot verify {name}'s deployed Helm release; inspect the release and API access"
+    metadata = ((release or {}).get("chart") or {}).get("metadata") or {}
+    now = metadata.get("version") or "unknown"
+    state = ((release or {}).get("info") or {}).get("status", "")
+    if now.lstrip("v") != target.lstrip("v") or state != "deployed":
+        job_name = (chart.get("status") or {}).get("jobName") or f"helm-install-{CHARTS[component]}"
+        job = _get(f"/apis/batch/v1/namespaces/{HELM_NS}/jobs/{job_name}") or {}
+        job_status = job.get("status") or {}
+        if now.lstrip("v") == target.lstrip("v") and state == "failed" and not job_status.get("active"):
+            return "failed", 50, f"Helm could not deploy {name} chart {target}; inspect its Helm release and install job"
+        if job_status.get("failed") and not job_status.get("active") and _elapsed(item) > 120:
+            return "failed", 50, f"Helm could not apply {name} chart {target}; inspect {job_name} in {HELM_NS}"
+        return "running", 50 if job_status.get("active") else 20, f"{name} chart {now} → {target}; waiting for Helm deployment"
+    paths = next(paths for key, _, paths in NETWORK_PARTS if key == component)
+    agents = []
+    try:
+        for path in paths:
+            # Network charts installed by Homestead target kube-system.
+            # Keep their recognised agent names when a target namespace was set.
+            if f"/namespaces/{HELM_NS}/" not in path:
+                continue
+            try:
+                agents.append(kget(path.replace(f"/namespaces/{HELM_NS}/", f"/namespaces/{namespace}/")))
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+        if component == "multus":
+            kget("/apis/k8s.cni.cncf.io/v1/network-attachment-definitions")
+    except Exception:
+        return "running", 70, f"{name} chart {target} deployed; waiting to verify network agents and APIs"
+    desired = sum((ds.get("status") or {}).get("desiredNumberScheduled", 0) for ds in agents)
+    available = sum((ds.get("status") or {}).get("numberAvailable", 0) for ds in agents)
+    ready = bool(agents) and desired > 0 and all(
+        not (ds.get("metadata") or {}).get("deletionTimestamp")
+        and (ds.get("status") or {}).get("observedGeneration", 0) >= (ds.get("metadata") or {}).get("generation", 1)
+        and (ds.get("status") or {}).get("updatedNumberScheduled", 0) == (ds.get("status") or {}).get("desiredNumberScheduled", 0)
+        and (ds.get("status") or {}).get("numberAvailable", 0) == (ds.get("status") or {}).get("desiredNumberScheduled", 0)
+        for ds in agents)
+    app = metadata.get("appVersion") or ""
+    version = f"{name} chart {target}" + (f" ({app})" if app else "")
+    if ready:
+        return "succeeded", 100, f"{version} deployed; available on all {desired} scheduled nodes"
+    return "running", 75, f"{version} deployed; agents available on {available}/{desired} scheduled nodes; rollout pending"
+
+
 def status(item):
     """The job tray's view of an upgrade: (status, progress, message)."""
     ref = item["ref"]
@@ -525,6 +595,8 @@ def status(item):
         waiting = sorted(name for name, v in versions.items() if v != target)
         return ("running", 5 + int(90 * done / max(1, len(versions))),
                 f"{done} of {len(versions)} nodes on {target}; next {', '.join(waiting[:3])}")
+    if component in CHART_INDEX:
+        return _network_upgrade_status(item)
     if component == "longhorn":
         now = longhorn_version()
     elif component == "kubevirt":
@@ -533,8 +605,10 @@ def status(item):
         import homestead_macvtap as MACVTAP
         state = MACVTAP.inspect()
         now = state["version"] if state["ready"] else ""
-    else:
+    elif component == "cdi":
         now = cdi_version()[0]
+    else:
+        return "failed", 100, "Unknown platform component; inspect this upgrade before retrying"
     if now == target:
         return "succeeded", 100, f"{ref.get('name', component)} runs {target}"
     job = _get(f"/apis/batch/v1/namespaces/{HELM_NS}/jobs/helm-install-{CHARTS.get(component, component)}") or {}
