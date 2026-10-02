@@ -279,7 +279,7 @@ class Fence:
         completed = read_completed(self.directory, self.namespace, self.deployment)
         if completed:
             receipt, saved = completed
-            aborted = saved.state.get("setup_aborted") is True
+            aborted = saved.state.get("setup_aborted") is True or saved.state.get("recovery", {}).get("action") == "return-original"
             pointer = A.pointer(self.namespace, saved.state, saved.handle()["uid"]) if "plan" in saved.state else None
             if marker is None or marker == pointer:
                 live = None
@@ -332,6 +332,25 @@ class Fence:
         entries = state["journal"]["ref"]["storage_writes"]
         if any(e["state"] != "accepted" for e in entries):
             raise Held("The data handoff has an unresolved request; no jobs will be resumed")
+        if state.get("recovery", {}).get("action") == "return-original":
+            starts = [e for e in entries if e["step"] == "recover-start" and e["method"] == "PUT"
+                      and e["target"]["path"] == f"/apis/apps/v1/namespaces/{self.namespace}/deployments/{self.deployment}"]
+            if len(starts) != 1 or any(e["step"] in ("switch", "start") for e in entries):
+                raise Held("Original-volume recovery has no verified restart or has crossed cutover")
+            if any(e["step"] == "copy-job" for e in entries) and not any(
+                    e["step"] in ("release-copy", "recover-release-copy") and e["method"] == "DELETE" for e in entries):
+                raise Held("Original-volume recovery has no copy mount release receipt")
+            dep = self.read(f"/apis/apps/v1/namespaces/{self.namespace}/deployments/{self.deployment}")
+            if identity(dep)["uid"] != state["deployment"]["uid"] or dep["metadata"].get("deletionTimestamp"):
+                raise Held("Original-volume recovery Deployment was replaced")
+            if state["phase"] != "done" and shape(dep) != starts[0]["shape"]:
+                raise Held("Homestead changed before original-volume recovery was verified")
+            binding = {"data_volume": plan["data_volume"], "destination_pvc": {"name": state["source"]["name"], "uid": state["source"]["uid"]},
+                       "destination_pv": {k: plan["source_pv"][k] for k in ("name", "uid")}}
+            self._mounted_destination({"destination": state["source"]["name"]}, binding, dep)
+            self.checked = True
+            return {"mode": "recovery", "writable": state["phase"] == "done", "operation": state["operation"],
+                    "anchor_uid": marker["anchor_uid"], "source_binding": binding}
         phase = state["phase"]
         if phase not in ("start", "done") or state.get("copy_receipt", {}).get("state") != "verified":
             raise Held("Homestead is held while its data is being moved; the coordinator owns progress")

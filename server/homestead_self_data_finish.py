@@ -47,13 +47,18 @@ def read(directory, namespace, deployment):
         state = anchor._decode(obj, operation, identity(obj)["uid"])
         anchor.obj, anchor.state = copy.deepcopy(obj), state
         from homestead_self_data_worker import progress
-        if state.get("setup_aborted"):
+        original_recovered = state.get("recovery", {}).get("action") == "return-original"
+        if state.get("setup_aborted") or original_recovered:
+            if original_recovered and progress(anchor, 0)["status"] != "cancelled":
+                raise Held("The saved original-volume recovery does not prove completion")
             binding = value["source_binding"]
             A._keys(binding, ("data_volume", "destination_pvc", "destination_pv"))
             if binding["data_volume"] != "data" or binding["destination_pvc"] != {"name": state["source"]["name"], "uid": state["source"]["uid"]}: raise ValueError()
             A._keys(binding["destination_pv"], ("name", "uid"))
             A._name(binding["destination_pv"]["name"])
             if not isinstance(binding["destination_pv"]["uid"], str) or not binding["destination_pv"]["uid"]: raise ValueError()
+            if original_recovered and binding["destination_pv"] != {k: state["plan"]["source_pv"][k] for k in ("name", "uid")}:
+                raise Held("The recovered original-volume receipt names a different PV")
         elif progress(anchor, 0)["status"] != "done": raise Held("The saved data move does not prove completion")
         expected = {r["target"]["path"]: r for r in state.get("setup", {}).get("resources", [])}
         expected[anchor.path] = None
@@ -106,7 +111,8 @@ def finish(fence, read_api, send):
             from homestead_self_data_worker import progress
             if progress(anchor, 0)["status"] not in ("done", "cancelled"): raise Held("Completion evidence is not ready for cleanup")
             value = {"protocol": 1, "anchor": anchor.obj, "cleanup": {}}
-            if anchor.state.get("setup_aborted"): value["source_binding"] = state["source_binding"]
+            if anchor.state.get("setup_aborted") or anchor.state.get("recovery", {}).get("action") == "return-original":
+                value["source_binding"] = state["source_binding"]
             _save(directory, value)
             saved = read(directory, fence.namespace, fence.deployment)
         value, anchor = saved

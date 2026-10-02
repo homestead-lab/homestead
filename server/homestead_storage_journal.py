@@ -76,6 +76,10 @@ def shape(obj):
     """Ignore status/managedFields, but do not overlook edits to storage or holds."""
     meta = obj.get("metadata") or {}
     annotations = pod_annotations(obj)
+    if obj.get("kind") == "PersistentVolume":
+        # Longhorn updates this diagnostic while attaching/rebuilding replicas.
+        # It does not change the claim, CSI handle, placement or reclaim policy.
+        annotations.pop("longhorn.io/volume-scheduling-error", None)
     if obj.get("kind") in ("Deployment", "ReplicaSet") and obj.get("apiVersion") == "apps/v1":
         # The Deployment controller increments this asynchronously after our
         # acknowledged template update. It is status bookkeeping, not a new
