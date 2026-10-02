@@ -5515,6 +5515,7 @@ import homestead_cancel as CANCEL
 import homestead_joblogs as JOBLOGS
 import homestead_console as CONSOLE
 import homestead_files as FILES
+import homestead_snapshot_files as SNAPSHOT_FILES
 import homestead_icons as ICONS
 import homestead_volumes as VOLUMES
 import homestead_smart as SMART
@@ -6186,6 +6187,19 @@ def _storage_pending_loop():
             except Exception as error:
                 beat("storage-pending", 15, error, leader_only=True)
         time.sleep(15)
+
+
+def _snapshot_files_loop():
+    while True:
+        if LEADER.is_leader():
+            try:
+                with self_data_activity():
+                    require_self_data_write()
+                    SNAPSHOT_FILES.cleanup()
+                beat("snapshot-files", 30, leader_only=True)
+            except Exception as error:
+                beat("snapshot-files", 30, error, leader_only=True)
+        time.sleep(30)
 
 
 def _host_console_loop():
@@ -7190,6 +7204,7 @@ CLUSTER.bind(kget, SYS_NS, lambda: cached("nodes", 5, get_nodes))
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
 VM_CONSOLE = VMCONSOLE.VmConsole(CONSOLE_PROXY, SYS_NS, kget)
 FILES.bind(kget, ksend, urllib.parse.urlparse(API), TOKEN, CTX, SYS_NS)
+SNAPSHOT_FILES.bind(kget, ksend, lambda: _self_data_helper_image(kget, SELF.NS)[1], SYS_NS)
 
 
 ISO_CLASS = NAMES.object_name("isos")
@@ -7559,6 +7574,8 @@ ADMIN_ROUTES = {
     "/api/operations/storage-recovery/preview", "/api/operations/storage-recovery/act",
     "/api/network/vips/add", "/api/network/vips/remove", "/api/network/vips/label", "/api/network/vips/default", "/api/network/vm-networks",
     "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
+    "/api/snapshot-files/plan", "/api/snapshot-files/status", "/api/snapshot-files/list",
+    "/api/snapshot-files/download", "/api/snapshot-files/start", "/api/snapshot-files/close",
     "/api/node/smart/test",
     # Installing the probe stands a privileged container on every node.
     "/api/node/probe/install", "/api/node/probe/remove",
@@ -7730,6 +7747,29 @@ class H(HTTP.LimitedHandler):
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         if self._over_tls():
             self.send_header("Strict-Transport-Security", "max-age=31536000")
+
+    def _snapshot_file_download(self, namespace, session, path):
+        info = SNAPSHOT_FILES.read(namespace, session, "stat", path)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(info["size"]))
+        self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + urllib.parse.quote(path.rsplit("/", 1)[-1], safe=""))
+        self.send_header("Cache-Control", "no-store")
+        self._security_headers()
+        self.end_headers()
+        try:
+            offset = 0
+            while offset < info["size"]:
+                chunk = SNAPSHOT_FILES.read(namespace, session, "chunk", path, offset)
+                data = chunk["data"]
+                if chunk["size"] != info["size"] or not data or offset + len(data) > info["size"]:
+                    raise ValueError("Snapshot file changed during download")
+                self.wfile.write(data)
+                offset += len(data)
+        except Exception:
+            # Headers were sent: close the partial response, never append JSON
+            # to a file or claim a complete download after losing the helper.
+            self.close_connection = True
 
     def _via_cloudflare(self):
         """Whether this request came in through Cloudflare, which always says so."""
@@ -8477,6 +8517,16 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, FILES.list_files(
                     (q.get("namespace") or [DEFAULT_NS])[0], (q.get("pvc") or [""])[0],
                     (q.get("path") or [""])[0]))
+            if p == "/api/snapshot-files/plan":
+                return self._send(200, SNAPSHOT_FILES.review((q.get("volume") or [""])[0], (q.get("snapshot") or [""])[0]))
+            if p in ("/api/snapshot-files/status", "/api/snapshot-files/list", "/api/snapshot-files/download"):
+                ns, session = (q.get("namespace") or [""])[0], (q.get("session") or [""])[0]
+                if p.endswith("/status"):
+                    return self._send(200, SNAPSHOT_FILES.status(ns, session))
+                path = (q.get("path") or [""])[0]
+                if p.endswith("/download"):
+                    return self._snapshot_file_download(ns, session, path)
+                return self._send(200, SNAPSHOT_FILES.read(ns, session, "list", path))
             if p == "/api/files/read":
                 return self._send(200, FILES.read_file(
                     (q.get("namespace") or [DEFAULT_NS])[0], (q.get("pvc") or [""])[0],
@@ -9051,6 +9101,10 @@ class H(HTTP.LimitedHandler):
                     return self._send(400, {"error": warning, "syntax": True})
                 return self._send(200, FILES.write_file(
                     b.get("namespace") or DEFAULT_NS, b.get("pvc"), b.get("path"), b.get("content"), b.get("revision")))
+            if p == "/api/snapshot-files/start":
+                return self._send(200, storage_volume_action(b.get("volume"), lambda: SNAPSHOT_FILES.start(b)))
+            if p == "/api/snapshot-files/close":
+                return self._send(200, SNAPSHOT_FILES.close(b.get("namespace"), b.get("session")))
             if p == "/api/files/close":
                 return self._send(200, FILES.close_session(
                     b.get("namespace") or DEFAULT_NS, b.get("pvc")))
@@ -10002,6 +10056,7 @@ def start_background_tasks():
     threading.Thread(target=_host_fix_loop, daemon=True).start()
     threading.Thread(target=_host_console_loop, daemon=True).start()
     threading.Thread(target=_storage_pending_loop, daemon=True).start()
+    threading.Thread(target=_snapshot_files_loop, daemon=True).start()
     threading.Thread(target=_os_updates_loop, daemon=True).start()
     threading.Thread(target=_baseline_loop, daemon=True).start()
     threading.Thread(target=_vip_loop, daemon=True).start()

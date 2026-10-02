@@ -143,7 +143,8 @@ presets (UEFI, Secure Boot, TPM, CPU model and pinning); a console, power
 actions and live migration.
 
 **Data protection** - snapshots, recurring backups, restores, and moving
-containers and VMs between clusters.
+containers and VMs between clusters. [Browse snapshot files](docs/snapshot-browsing.md)
+read-only and download them while the live container or SMB volume stays online.
 
 **Networking** - a virtual IP per app, collision-free port exposure, which
 node answers for each address and whether it is reachable (with kube-vip's
