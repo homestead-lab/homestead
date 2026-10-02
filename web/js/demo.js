@@ -1981,7 +1981,7 @@ ssh_pwauth: true
     // Paced so the progress readout is visible rather than a flash.
     "/api/image-updates/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
-      return {capacity_token: "demo-image-review", action: body.action || "update",
+      const review = {capacity_token: "demo-image-review", action: body.action || "update",
         // As the server sends them: images pinned to their digests, which
         // carry no tag, and the releases Homestead tracks for them beside.
         images: [{container: body.name, before: "ghcr.io/example/app@sha256:" + "a".repeat(64),
@@ -1994,6 +1994,17 @@ ssh_pwauth: true
             reservations_known: true, reserved_gb: 5, request_slots: 4}],
           warnings: ["Recreate stops the old pod before its replacement starts.", "Projected RAM is above the configured warning level."],
           rollout: {strategy: "Recreate", replicas: 1, ownership_known: true, owned_pods: ["app-old"], release_request_gb: 0.5, max_surge: 0, max_unavailable: 1}}};
+      if (window.__demoImageReviewCordoned) {
+        window.__demoImageReviewCordoned = false;
+        review.capacity.blocked = true;
+        review.capacity.candidates = [{...review.capacity.candidates[0], name:"node-1", eligible:false, reasons:["cordoned"]}];
+        review.capacity.warnings = ["no ready host satisfies this workload's placement requirements",
+          "no scheduling order fits all requested replicas under the observed pod affinity and topology spread rules",
+          "updated pod estimates include every container, not only the added container",
+          "post-stop capacity assumes old pods have fully terminated and released ports and volumes; termination and storage detach are not guaranteed",
+          "memory is not limited for data-permissions"];
+      }
+      return review;
     },
     "/api/image-updates/apply": {uid: "demo-rollout", generation: 4, phase: "progressing", desired: 1, ready: 0},
     "/api/image-updates/rollback": {uid: "demo-rollout", generation: 4, phase: "progressing", desired: 1, ready: 0},
