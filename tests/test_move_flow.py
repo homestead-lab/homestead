@@ -62,7 +62,13 @@ class FakeCluster:
         if method == "PATCH":
             if path not in self.objects:
                 raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+            meta = self.objects[path].get("metadata") or {}
+            version = (body.get("metadata") or {}).get("resourceVersion")
+            if version and meta.get("resourceVersion") != version:
+                raise urllib.error.HTTPError(path, 409, "changed", {}, None)
             merge(self.objects[path], body)
+            if meta.get("resourceVersion"):
+                self.objects[path]["metadata"]["resourceVersion"] = str(int(meta["resourceVersion"]) + 1)
             return copy.deepcopy(self.objects[path])
         if method == "DELETE":
             if path not in self.objects:
@@ -442,17 +448,24 @@ class EngineTests(unittest.TestCase):
                 return {"url": self.lh.target["url"], "endpoint": "", "credentials": {},
                         "reachable_off_cluster": True}
             if route == "/api/move/definition":
-                return source.definition(query["kind"], query["name"])
+                return source.in_namespace(query.get("namespace"), source.definition, query["kind"], query["name"])
             if route == "/api/move/source-status":
-                return source.status(query["kind"], query["name"])
+                return source.in_namespace(query.get("namespace"), source.status, query["kind"], query["name"])
             if route == "/api/move/source":
+                identity = {key: body[key] for key in ("transfer_id", "expected_uid") if key in body}
+                if body["action"] == "quiesce":
+                    identity["expected_version"] = body.get("expected_version", "")
                 if body["action"] == "backup":
-                    return source.backup(body["kind"], body["name"], body.get("retry_failed", False), body.get("claims"))
+                    return source.in_namespace(body.get("namespace"), source.backup, body["kind"], body["name"], body.get("retry_failed", False), body.get("claims"), **identity)
                 action = {"quiesce": source.quiesce, "backup": source.backup,
                           "release": source.release}.get(body["action"])
                 if body["action"] == "remove":
-                    return source.remove(body["kind"], body["name"], body.get("volumes"), body.get("claims"))
-                return action(body["kind"], body["name"])
+                    return source.in_namespace(body.get("namespace"), source.remove, body["kind"], body["name"], body.get("volumes"), body.get("claims"))
+                try:
+                    return source.in_namespace(body.get("namespace"), action, body["kind"], body["name"], **identity)
+                except source.PendingRecovery as error:
+                    # The real source returns HTTP 503, mapped by remote().
+                    raise client.Unreachable(str(error)) from error
             raise AssertionError(route)
 
         client.remote = remote

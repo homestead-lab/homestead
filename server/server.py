@@ -4194,7 +4194,8 @@ def vm_creation_capacity(prepared):
                 borrowed_users.append(owner["metadata"]["name"])
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
     plan = VM_CAPACITY.plan(prepared["vm"], read, PLACE.get_nodes(), action="create", warning_percent=threshold,
-                           planned_claims=claims)
+                           planned_claims=claims, planned_configmaps={e["path"]: e["body"] for e in prepared.get("effects", [])
+                                                                      if e["kind"] == "configmap" and e["body"]})
     plan["requires_confirmation"] = True
     if borrowed_users:
         plan["blockers"].append("Selected disk is referenced by existing VM(s), including stopped VMs: " + ", ".join(sorted(borrowed_users)))
@@ -4378,7 +4379,8 @@ def vm_edit_capacity(prepared):
         expanded_spec = VM_PROFILES.expand(vm, kget, ksend)
         threshold = get_app_settings()["thresholds"]["memory"]["critical"]
         plan = VM_CAPACITY.plan(vm, read, PLACE.get_nodes(), action="edit", current=current,
-                               warning_percent=threshold, planned_claims=claims, expanded_spec=expanded_spec)
+                               warning_percent=threshold, planned_claims=claims, expanded_spec=expanded_spec,
+                               planned_configmaps={e["path"]: e["body"] for e in prepared["effects"] if e["kind"] == "configmap" and e["body"]})
         plan["warnings"].append("Template and restart-policy changes may take effect immediately through KubeVirt. Saving is not a promise that the guest remains stopped or unchanged.")
         if after == "Halted":
             plan["warnings"].append("The requested policy is Halted. Resource placement shown is conservative; a separate reviewed Start is required to run it again.")
@@ -7713,6 +7715,8 @@ class H(HTTP.LimitedHandler):
         """
         try:
             return self._send(200, call())
+        except MOVE_SOURCE.PendingRecovery as error:
+            return self._send(503, {"error": str(error)})
         except (ValueError, PermissionError) as error:
             return self._send(409, {"error": str(error)})
         except MOVE.Unreachable as error:
@@ -8271,10 +8275,12 @@ class H(HTTP.LimitedHandler):
             if p == "/api/move/moves":
                 return self._send(200, MOVE_ENGINE.moves())
             if p == "/api/move/definition":
-                return self._move(lambda: MOVE_SOURCE.definition(
+                return self._move(lambda: MOVE_SOURCE.in_namespace(
+                    (q.get("namespace") or [""])[0], MOVE_SOURCE.definition,
                     (q.get("kind") or [""])[0], (q.get("name") or [""])[0]))
             if p == "/api/move/source-status":
-                return self._move(lambda: MOVE_SOURCE.status(
+                return self._move(lambda: MOVE_SOURCE.in_namespace(
+                    (q.get("namespace") or [""])[0], MOVE_SOURCE.status,
                     (q.get("kind") or [""])[0], (q.get("name") or [""])[0]))
             if p == "/api/move/target":
                 return self._move(MOVE_SOURCE.target)
@@ -9169,16 +9175,20 @@ class H(HTTP.LimitedHandler):
                 return self._move(lambda: ONBOARD.cleanup(b.get("kind"), b.get("name") or "", bool(b.get("force"))))
             if p == "/api/move/source":
                 action, kind, name = b.get("action"), b.get("kind"), b.get("name")
-                actions = {"quiesce": lambda: MOVE_SOURCE.quiesce(kind, name),
+                identity = {"transfer_id": str(b.get("transfer_id") or ""),
+                            "expected_uid": str(b.get("expected_uid") or "")}
+                actions = {"quiesce": lambda: MOVE_SOURCE.quiesce(kind, name, **identity,
+                                                                 expected_version=str(b.get("expected_version") or "")),
                            "backup": lambda: MOVE_SOURCE.backup(kind, name, bool(b.get("retry_failed")),
-                                                                 b.get("claims") if isinstance(b.get("claims"), list) else None),
-                           "release": lambda: MOVE_SOURCE.release(kind, name),
+                                                                 b.get("claims") if isinstance(b.get("claims"), list) else None,
+                                                                 **identity),
+                           "release": lambda: MOVE_SOURCE.release(kind, name, **identity),
                            "remove": lambda: MOVE_SOURCE.remove(
                                kind, name, bool(b.get("volumes")),
                                b.get("claims") if isinstance(b.get("claims"), list) else None)}
                 if action not in actions:
                     return self._send(400, {"error": "unknown move action"})
-                return self._move(actions[action])
+                return self._move(lambda: MOVE_SOURCE.in_namespace(b.get("namespace"), actions[action]))
             if p in ("/api/move/plan", "/api/move/start"):
                 if p.endswith("/start") and (b.get("kind") or "container") == "container":
                     guard_managed_smb(b.get("namespace") or DEFAULT_NS, b.get("name"))
@@ -9187,7 +9197,8 @@ class H(HTTP.LimitedHandler):
                     b.get("cluster"), b.get("kind") or "container", b.get("name"),
                     b.get("namespace") or DEFAULT_NS, b.get("address_mode") or "shared",
                     b.get("address") or "", b.get("storage_class") or "",
-                    b.get("volumes") if isinstance(b.get("volumes"), dict) else None))
+                    b.get("volumes") if isinstance(b.get("volumes"), dict) else None,
+                    b.get("transfer_mode") or "move", b.get("source_namespace") or "", b.get("host_devices")))
             if p == "/api/move/moves/retry":
                 return self._move(lambda: MOVE_ENGINE.retry(b.get("id")))
             if p == "/api/move/moves/abandon":

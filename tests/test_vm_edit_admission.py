@@ -1,4 +1,5 @@
 import copy
+import base64
 import tempfile
 import unittest
 import urllib.error
@@ -7,6 +8,7 @@ from unittest import mock
 import test_vm_capacity as fixtures
 import server
 import homestead_capacity_review as review
+import homestead_passthrough as passthrough
 
 
 class VMEditAdmissionTests(unittest.TestCase):
@@ -78,6 +80,66 @@ class VMEditAdmissionTests(unittest.TestCase):
             result, writes = self.call("/api/vm/edit", body)
             self.assertEqual(409, result[0], result)
             writes.assert_not_called()
+
+    def passthrough_setup(self):
+        resource = "example.test/gpu"
+        self.nodes[0]["allocatable"][resource] = "1"
+        self.config["spec"]["configuration"].update(
+            permittedHostDevices={"pciHostDevices": [{"resourceName": resource}]},
+            developerConfiguration={"featureGates": ["Sidecar"]})
+        self.body["host_devices"] = {"add": [{"name": "gpu", "resource": resource}],
+            "roms": {"gpu": base64.b64encode(b"\x55\xaa" + b"\x00" * 1022).decode()}}
+        for patch in (mock.patch.object(passthrough, "resources", return_value={"resources": [{"resource": resource}]}),
+                      mock.patch.object(passthrough, "kget", side_effect=lambda path: copy.deepcopy(self.read(path))),
+                      mock.patch.object(passthrough, "_kubevirt", side_effect=lambda: copy.deepcopy(self.config))):
+            patch.start(); self.addCleanup(patch.stop)
+
+    def test_add_device_and_rom_in_one_reviewed_edit(self):
+        self.passthrough_setup()
+        result, writes = self.call("/api/vm/edit", self.reviewed())
+        self.assertEqual(200, result[0], result)
+        vm = next(c.args[2] for c in writes.call_args_list if "/virtualmachines/" in c.args[1])
+        cm = next(c.args[2] for c in writes.call_args_list if c.args[1].endswith("/configmaps"))
+        self.assertEqual({"gpu"}, set(passthrough.roms_from_configmap(vm, cm)))
+
+    def test_vbios_collision_after_edit_review_does_not_write(self):
+        self.passthrough_setup()
+        body = self.reviewed()
+        self.objects["/api/v1/namespaces/lab/configmaps/guest-vbios"] = {
+            "metadata": {"name": "guest-vbios", "namespace": "lab", "uid": "other", "resourceVersion": "1"}}
+        result, writes = self.call("/api/vm/edit", body)
+        self.assertIn(result[0], (400, 409), result)
+        writes.assert_not_called()
+
+    def test_missing_rom_can_be_replaced_explicitly_but_not_silently_dropped(self):
+        self.passthrough_setup()
+        self.vm["spec"]["template"]["spec"]["domain"].setdefault("devices", {})["hostDevices"] = [{"name": "gpu", "deviceName": "example.test/gpu"}]
+        self.vm["spec"]["template"].setdefault("metadata", {})["annotations"] = {"homestead.io/vbios": '["gpu"]'}
+        self.body["host_devices"].pop("add")
+        roms = self.body["host_devices"].pop("roms")
+        self.body["host_devices"]["map"] = {"gpu": "example.test/gpu"}
+        refused, writes = self.call("/api/vm/edit/preview", self.body)
+        self.assertEqual(400, refused[0], refused)
+        writes.assert_not_called()
+        self.body["host_devices"]["roms"] = roms
+        result, writes = self.call("/api/vm/edit", self.reviewed())
+        self.assertEqual(200, result[0], result)
+        self.assertTrue(any(c.args[1].endswith("/configmaps") for c in writes.call_args_list))
+
+    def test_clearing_rom_empties_owned_configmap_with_version_check(self):
+        self.passthrough_setup()
+        effects = []
+        passthrough.edit_vm(self.vm, "lab", self.body["host_devices"], effects)
+        cm = next(e["body"] for e in effects if e["kind"] == "configmap")
+        cm["metadata"].update(uid="rom-cm-uid", resourceVersion="old-version")
+        self.objects["/api/v1/namespaces/lab/configmaps/guest-vbios"] = cm
+        self.body["host_devices"] = {"roms": {"gpu": ""}}
+        result, writes = self.call("/api/vm/edit", self.reviewed())
+        self.assertEqual(200, result[0], result)
+        saved = next(c.args[2] for c in writes.call_args_list if "/configmaps/" in c.args[1])
+        self.assertEqual({}, saved["data"])
+        self.assertEqual("old-version", saved["metadata"]["resourceVersion"])
+        self.assertNotIn("DELETE", [c.args[0] for c in writes.call_args_list])
 
     def test_missing_state_edit_requires_typed_initialization_consent(self):
         self.fresh_state()

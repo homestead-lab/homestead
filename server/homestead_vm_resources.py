@@ -88,7 +88,7 @@ def _positive(value, label):
     return number
 
 
-def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_version=None, cold_start=True):
+def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_version=None, cold_start=True, planned_configmaps=None):
     """Project the proposed VMI into placement input with explicit uncertainty.
 
     configuration is the *observed* KubeVirt spec.configuration, or None when
@@ -110,7 +110,7 @@ def project(vm, configuration=None, *, expanded_spec=None, read=None, kubevirt_v
     domain = spec.get("domain") or {}
     cpu, memory, devices = (domain.get(key) or {} for key in ("cpu", "memory", "devices"))
     network = NETWORK.evidence(spec, vm["metadata"]["namespace"], config, read)
-    support = SUPPORT.project(vm, spec, config, network, read)
+    support = SUPPORT.project(vm, spec, config, network, read, planned_configmaps)
     security = SECURITY.evidence(spec, config, kubevirt_version)
     numa = NUMA.policy(spec, config, kubevirt_version)
     blockers.extend(network["blockers"] + support["blockers"])

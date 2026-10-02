@@ -516,38 +516,48 @@ window.fleetSaveAddress = async () => {
 /* ---------------------------------------------------------------- moving */
 /* Moves are started by the cluster a workload goes to, so "move to" opens
    that cluster at its review of this workload. */
-window.moveToCluster = (kind, name, sourceHandle = "") => {
+window.moveToCluster = (kind, name, sourceHandle = "", transferMode = "move", sourceNamespace = "") => {
   const view = FLEET.view;
   const me = view?.members.find(m => m.self);
   const from = sourceHandle || me?.handle || "";
   const choices = (view?.members || []).filter(m => m.handle !== from);
   if (!choices.length) return fleetLink();
-  modal(`Move to cluster · ${name}`, `<div class="ui-stack">
-    ${UI.lead(`Opens the cluster you pick at its review of this move. Nothing stops until you start it there.`)}
+  const verb = transferMode === "copy" ? "Copy" : "Move";
+  modal(`${verb} to cluster · ${name}`, `<div class="ui-stack">
+    ${UI.lead(`Choose the destination, then review the ${verb.toLowerCase()} there. Nothing stops until you confirm.`)}
     <div class="fleet-pick">${choices.map(m => `<button type="button" class="btn" ${m.reachable ? "" : "disabled"}
-      onclick="moveToClusterGo(${jsq(m.id)},${jsq(from)},${jsq(kind)},${jsq(name)})">
+      onclick="moveToClusterGo(${jsq(m.id)},${jsq(from)},${jsq(kind)},${jsq(name)},${jsq(transferMode)},${jsq(sourceNamespace)})">
       <span class="fleet-dot ${m.reachable ? "ok" : "bad"}"></span><b>${esc(m.name)}</b>
       <span class="dim xs">${m.reachable ? `v${esc(m.version)}` : "not answering"}</span></button>`).join("")}</div>
-    ${UI.actions(UI.cancel())}</div>`);
+    ${UI.actions(UI.cancel())}</div>`, false, "operation-review");
 };
 
-window.moveToClusterGo = async (id, from, kind, name) => {
-  setFleetMode("one");
+window.moveToClusterGo = async (id, from, kind, name, transferMode = "move", sourceNamespace = "") => {
   try {
+    if (transferMode === "copy") {
+      const hello = await api("/api/move/hello", { headers: { "X-Homestead-Cluster": id } });
+      if (!hello.capabilities?.includes("copy-destination")) {
+        return toast("Update Homestead on the destination before copying. It only supports moves.", "bad");
+      }
+    }
+    setFleetMode("one");
     await api("/api/fleet/switch", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }) });
     try { localStorage.setItem("homestead.settings.tab", "fleet"); } catch (e) { /* the page still opens */ }
-    window.location.href = HomesteadRouter.urlFor("settings", { move: `${from}:${kind}:${name}` });
+    window.location.href = HomesteadRouter.urlFor("settings", { move: `${from}:${kind}:${name}`, transfer_mode: transferMode,
+      source_namespace: sourceNamespace });
   } catch (e) { toast(e.message, "bad"); }
 };
 
 /* Arriving from "move to": open the review the other cluster asked for. */
 window.fleetPendingMove = () => {
-  const wanted = new URLSearchParams(window.location.search).get("move");
+  const query = new URLSearchParams(window.location.search);
+  const wanted = query.get("move");
   if (!wanted) return;
   window.history.replaceState(window.history.state, "", window.location.pathname);
   const [cluster, kind, ...rest] = wanted.split(":");
   const name = rest.join(":");
   // With no dialog open, the review opens on its own and Cancel closes it.
-  if (cluster && kind && name && window.moveReview) moveReview(cluster, kind, name);
+  if (cluster && kind && name && window.moveReview) moveReview(cluster, kind, name,
+    query.get("transfer_mode") === "copy" ? "copy" : "move", query.get("source_namespace") || "");
 };

@@ -5,6 +5,7 @@ virtiofs implementations (v1.3.1/v1.9.0). These supplement, not replace, the
 planning allowance and observed launcher evidence. Webhook injection is unknown.
 """
 import json
+import urllib.error
 from decimal import Decimal, ROUND_CEILING
 from urllib.parse import quote
 
@@ -14,7 +15,7 @@ from homestead_vm_network import DNS
 MIB = 1024**2
 
 
-def project(vm, spec, config, network, read=None):
+def project(vm, spec, config, network, read=None, planned_configmaps=None):
     domain = spec.get("domain") or {}
     devices = domain.get("devices") or {}
     resource = domain.get("resources") or {}
@@ -91,15 +92,24 @@ def project(vm, spec, config, network, read=None):
                 continue
             path = f"/api/v1/namespaces/{quote(namespace, safe='')}/{api}/{quote(name, safe='')}"
             try:
-                value = read(path) if callable(read) else {}
-                meta = value.get("metadata") or {}
-                if (meta.get("namespace") != namespace or meta.get("name") != name or not meta.get("uid")
+                proposed = (planned_configmaps or {}).get(path) if key == "configMap" else None
+                try:
+                    value = read(path) if callable(read) else {}
+                except urllib.error.HTTPError as error:
+                    if error.code != 404 or proposed is None:
+                        raise
+                    value = None
+                meta = (value or {}).get("metadata") or {}
+                if value is not None and (meta.get("namespace") != namespace or meta.get("name") != name or not meta.get("uid")
                         or not meta.get("resourceVersion") or meta.get("deletionTimestamp")):
                     raise ValueError()
+                result["dependencies"][path] = {field: meta.get(field) for field in ("namespace", "name", "uid", "resourceVersion")} if value else None
+                if proposed is not None:
+                    value = proposed
+                    result["warnings"].append(f"VM hook ConfigMap {name} will be created or updated before saving the VM")
                 if key == "configMap" and (hook[key].get("key") not in (value.get("data") or {}) and
                                             hook[key].get("key") not in (value.get("binaryData") or {})):
                     raise ValueError()
-                result["dependencies"][path] = {field: meta.get(field) for field in ("namespace", "name", "uid", "resourceVersion")}
                 if key == "pvc":
                     result["volumes"].append({"name": f"hook-claim-{index}", "persistentVolumeClaim": {"claimName": name}})
             except Exception:

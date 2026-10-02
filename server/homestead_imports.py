@@ -30,6 +30,7 @@ import homestead_import_job as IMPORT_JOB
 import homestead_operations as OPS
 import homestead_source_ssh as SOURCE_SSH
 import homestead_capacity_review as SOURCE_REVIEW
+import homestead_passthrough as PASSTHROUGH
 
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
@@ -2579,7 +2580,10 @@ def prepare_vm(cfg, platform=None, default_class=""):
         # Firmware, TPM and the rest, as the Hardware tab sets them later.
         import homestead_vm_hardware as HARDWARE
         HARDWARE.apply(vm, cfg["hardware"])
-    return {"namespace": ns, "name": name, "vm": vm, "claims": claims, "secrets": secrets,
+    effects = []
+    if cfg.get("host_devices"):
+        PASSTHROUGH.edit_vm(vm, ns, cfg["host_devices"], effects)
+    return {"namespace": ns, "name": name, "vm": vm, "claims": claims, "secrets": secrets, "effects": effects,
             "downloads": downloads, "secret_name": secret_name,
             "result": {"ok": True, "vm": name, "datavolume": dv, "address": address,
                        "mac": mac}}
@@ -2588,6 +2592,7 @@ def prepare_vm(cfg, platform=None, default_class=""):
 def _recheck_vm_creation(prepared):
     ns, name = prepared["namespace"], prepared["name"]
     targets = [f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}"]
+    targets.extend(effect["path"] for effect in prepared.get("effects", []) if effect["kind"] == "configmap" and effect["body"])
     for kind, rows in (("persistentvolumeclaims", prepared["claims"]), ("secrets", prepared["secrets"])):
         targets.extend(f"/api/v1/namespaces/{ns}/{kind}/{row['metadata']['name']}" for row in rows)
     # Controller-made claims need the same collision protection as claims we
@@ -2628,6 +2633,14 @@ def commit_vm(prepared, before_save=None, send=None):
     _recheck_vm_creation(prepared)
     if before_save:
         before_save(prepared)
+    created_roms = {}
+    for effect in prepared.get("effects", []):
+        if effect["kind"] == "configmap" and effect["body"]:
+            # Creation never adopts or overwrites an existing ROM ConfigMap.
+            receipt = send("POST", effect["path"].rsplit("/", 1)[0], effect["body"])
+            created_roms[effect["body"]["metadata"]["name"]] = (receipt or {}).get("metadata") or {}
+        elif effect["kind"] == "kubevirt-gates":
+            PASSTHROUGH.ensure_gates(*effect["gates"], send=send)
     for claim in prepared["claims"]:
         send("POST", f"/api/v1/namespaces/{ns}/persistentvolumeclaims", claim)
     created_secrets = {}
@@ -2665,6 +2678,15 @@ def commit_vm(prepared, before_save=None, send=None):
                   ctype="application/merge-patch+json")
         except Exception:
             prepared["result"]["warning"] = "VM created, but its login Secret ownership could not be recorded. Keep the Secret and inspect it before cleanup."
+    for rom_name, identity in created_roms.items():
+        if not uid or not identity.get("uid") or not identity.get("resourceVersion"):
+            prepared["result"]["warning"] = " ".join(filter(None, [prepared["result"].get("warning"),
+                "VM created, but vBIOS ConfigMap ownership needs inspection before cleanup."]))
+            continue
+        send("PATCH", f"/api/v1/namespaces/{ns}/configmaps/{rom_name}",
+             {"metadata": {"uid": identity["uid"], "resourceVersion": identity["resourceVersion"],
+                           "ownerReferences": [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "name": name, "uid": uid}]}},
+             ctype="application/merge-patch+json")
     _bust("flow", "ov")
     return prepared["result"]
 

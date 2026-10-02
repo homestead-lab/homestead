@@ -13,17 +13,23 @@ exactly where it was. Data moves take as long as data takes; nothing here has
 a timeout that would abandon a large volume halfway.
 """
 import base64
+import hashlib
+import uuid
 import homestead_shared as SHARED
 import json
 import os
+import re
 import secrets
 import threading
 import time
 import urllib.error
 import urllib.parse
+import weakref
 
 import homestead_icons as ICONS
 import homestead_names as NAMES
+import homestead_passthrough as PASSTHROUGH
+import homestead_vm_transfer_devices as VM_DEVICES
 
 kget = ksend = None
 LH = CLIENT = NETWORK = OPS = None
@@ -48,9 +54,28 @@ PHASES = ("joining", "quiescing", "backing-up", "syncing", "restoring",
           "creating", "starting", "done")
 # A volume on its own arrives once it is restored: nothing to create or start.
 VOLUME_PHASES = ("joining", "quiescing", "backing-up", "syncing", "restoring", "done")
+COPY_PHASES = ("joining", "quiescing", "backing-up", "releasing-source", "syncing", "restoring",
+               "creating", "starting", "done")
 KINDS = ("container", "vm", "volume")
 # Shared with any other Homestead replica on the same data volume.
 _lock = SHARED.SharedLock("moves")
+
+
+def _step_lock(move_id):
+    """Keep transfer effects and cancellation exclusive across replicas."""
+    if not isinstance(move_id, str) or not re.fullmatch(r"[0-9a-f]{12}", move_id):
+        raise ValueError("Invalid transfer identity")
+    return SHARED.SharedLock("move-step-" + move_id, strict=True, directory=lambda: DATA_DIR, timeout=60)
+
+
+_step_locks = weakref.WeakValueDictionary()
+_step_locks_guard = threading.Lock()
+
+
+def _serialized(move_id):
+    # SharedLock's thread mutex must be shared by callers in this process too.
+    with _step_locks_guard:
+        return _step_locks.setdefault(move_id, _step_lock(move_id))
 
 
 def bind(_kget, _ksend, longhorn, client, network, operations, data_dir, namespace):
@@ -79,7 +104,7 @@ def _read():
 
 
 def _write(rows):
-    SHARED.write_json(_path(), rows[-MAX_MOVES:], durable=True, separators=(",", ":"))
+    SHARED.write_json(_path(), rows[-MAX_MOVES:], durable=True, mode=0o600, separators=(",", ":"))
 
 
 def _find(move_id):
@@ -100,10 +125,11 @@ def _public(move):
     return {key: move.get(key) for key in (
         "id", "cluster", "kind", "name", "source_namespace", "namespace", "status", "phase",
         "progress", "message", "created_at", "updated_at", "finished_at", "previous_target",
-        "source_removed", "address", "address_mode", "storage_class")} | {
+        "source_removed", "address", "address_mode", "storage_class", "transfer_mode")} | {
         # Nothing has stopped on the source yet: undoing it is a cancel, not a
         # "put back".
-        "source_stopped": bool((move.get("flags") or {}).get("quiesced")),
+        "source_stopped": _source_held(move),
+        "cleanup_pending": bool((move.get("flags") or {}).get("cancelling")) and move.get("status") == "failed",
         "claims": [{**{k: c.get(k) for k in ("claim", "size_gb", "backup", "created", "restored")},
                     "action": c.get("action", "move"), "storage_class": c.get("target_class") or move.get("storage_class") or ""}
                    for c in move.get("claims", [])],
@@ -113,7 +139,14 @@ def _public(move):
 
 
 def _phases(move):
+    if move.get("transfer_mode") == "copy":
+        return COPY_PHASES
     return VOLUME_PHASES if move.get("kind") == "volume" else PHASES
+
+
+def _source_held(move):
+    flags = move.get("flags") or {}
+    return bool(flags.get("quiesced") or flags.get("quiesce_requested")) and not flags.get("source_released")
 
 
 def moves():
@@ -156,18 +189,25 @@ def _same_target(here, there):
 
 
 def _definition(move):
+    if move.get("definition"):
+        return json.loads(json.dumps(move["definition"]))
     return CLIENT.remote(move["cluster"], "/api/move/definition"
-                         + _q(kind=move["kind"], name=move["name"]))
+                         + _q(kind=move["kind"], name=move["name"], namespace=move.get("source_namespace", "")))
 
 
 def _source_status(move):
     return CLIENT.remote(move["cluster"], "/api/move/source-status"
-                         + _q(kind=move["kind"], name=move["name"]))
+                         + _q(kind=move["kind"], name=move["name"], namespace=move.get("source_namespace", "")))
 
 
 def _source_action(move, action, **extra):
+    if move.get("transfer_mode") == "copy":
+        extra.update(transfer_id=move["id"], expected_uid=move["source_uid"])
+        if action == "quiesce":
+            extra["expected_version"] = move.get("flags", {}).get("quiesce_version", "")
     return CLIENT.remote(move["cluster"], "/api/move/source",
-                         dict({"action": action, "kind": move["kind"], "name": move["name"]},
+                         dict({"action": action, "kind": move["kind"], "name": move["name"],
+                               "namespace": move.get("source_namespace", "")},
                               **extra))
 
 
@@ -268,7 +308,8 @@ def storage_choices():
                   and not any((c.get("parameters") or {}).get(k) for k in ("fromBackup", "backingImage")))
 
 
-def plan(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class="", volumes=None):
+def plan(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class="", volumes=None,
+         transfer_mode="move", source_namespace="", host_devices=None):
     """Everything that would stop a move, or surprise someone, before it starts.
 
     Asks both clusters, and reports blockers and warnings separately: a blocker
@@ -277,28 +318,82 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
     """
     namespace = namespace or NS
     blockers, warnings, fixes = [], [], []
+    device_rows, device_resources, device_hosts = [], [], []
     if kind not in KINDS:
         raise ValueError("kind must be container, vm or volume")
+    if transfer_mode not in ("move", "copy") or transfer_mode == "copy" and kind == "volume":
+        raise ValueError("Choose move or copy; copy supports containers and VMs")
     if address_mode not in ("shared", "automatic", "manual"):
         raise ValueError("address must be shared, automatic or manual")
     versions = CLIENT.check_cluster(cluster)
     if versions.get("compatible") is False:
-        return {"ok": False, "blockers": [versions["message"]], "warnings": [], "claims": [],
+        return {"ok": False, "transfer_mode": transfer_mode, "blockers": [versions["message"]], "warnings": [], "claims": [],
                 "versions": versions}
     if versions.get("state") == "differs":
         warnings.append(versions["message"])
+    if transfer_mode == "copy" and not {"copy-source-lease", "copy-source-fence"}.issubset(versions.get("capabilities", [])):
+        return {"ok": False, "transfer_mode": "copy", "blockers": [
+            "Update Homestead on the source cluster before copying workloads; this version cannot protect and release a copy's source"],
+            "warnings": [], "claims": [], "versions": versions}
     try:
-        definition = CLIENT.remote(cluster, "/api/move/definition" + _q(kind=kind, name=name))
+        definition = _definition({"cluster": cluster, "kind": kind, "name": name, "source_namespace": source_namespace})
         there = CLIENT.remote(cluster, "/api/move/target")
     except CLIENT.Unreachable as error:
-        return {"ok": False, "blockers": [str(error)], "warnings": [], "claims": []}
+        return {"ok": False, "transfer_mode": transfer_mode, "blockers": [str(error)], "warnings": [], "claims": []}
     except ValueError as error:
         # No backup storage over there is the usual first hurdle, and this
         # side can clear it: say so, so the page can offer to.
         fixes = [{"kind": "source-storage", "cluster": cluster}] if "backup target" in str(error) else []
-        return {"ok": False, "blockers": [str(error)], "warnings": [], "claims": [], "fixes": fixes}
+        return {"ok": False, "transfer_mode": transfer_mode, "blockers": [str(error)], "warnings": [], "claims": [], "fixes": fixes}
 
     here = LH.backup_target()
+    if source_namespace and definition.get("namespace") != source_namespace:
+        blockers.append("Update Homestead on the source cluster; it did not return the selected source namespace")
+    if transfer_mode == "copy" and (definition.get("held") or definition.get("transfer_owner")):
+        blockers.append("The source is held by another transfer; finish or put back that transfer first")
+    if transfer_mode == "copy" and (not definition.get("source_uid") or not definition.get("source_version")):
+        blockers.append("Could not verify the source workload identity; refresh before copying")
+    if kind == "vm":
+        device_rows = PASSTHROUGH.vm_devices(definition["object"])
+        try:
+            if device_rows:
+                device_resources = PASSTHROUGH.resources()["resources"]
+            _, effects, _, device_hosts = VM_DEVICES.prepare(definition, namespace, host_devices)
+            for effect in effects:
+                if effect["kind"] == "configmap" and effect["body"] and _get(effect["path"]):
+                    blockers.append("The destination vBIOS ConfigMap already exists; choose another namespace")
+            if device_rows:
+                warnings.append("Review GPU compatibility before starting the destination VM. Its devices use the selected destination hardware; the source hostname selector is removed and other placement rules are retained")
+        except ValueError as error:
+            blockers.append(str(error))
+        # A halted copy still needs the VM API; discovering this after backup
+        # would needlessly stop the source on a destination without KubeVirt.
+        if not _get("/apis/kubevirt.io/v1"):
+            blockers.append("Install KubeVirt on the destination before transferring a VM")
+        if transfer_mode == "copy":
+            warnings.append("The VM copy gets new MAC addresses and a firmware UUID. Review guest static IP and network settings before starting it")
+            vm = (definition.get("object") or {}).get("spec") or {}
+            if vm.get("instancetype") or vm.get("preference"):
+                blockers.append("This VM uses an external instance type or preference; expand those settings into the VM before copying")
+            if (definition.get("origin") or {}).get("runStrategy") == "Once":
+                blockers.append("A VM with the Once run strategy cannot safely resume after copying. Change its run strategy before copying")
+            template = vm.get("template") or {}
+            vm_spec = template.get("spec") or {}
+            for volume in vm_spec.get("volumes") or []:
+                portable = ("persistentVolumeClaim", "cloudInitNoCloud", "cloudInitConfigDrive", "containerDisk",
+                            "emptyDisk", "downwardMetrics")
+                if not any(key in volume for key in portable):
+                    blockers.append(f"Disk {volume.get('name', '?')} has an external source that cannot be copied; use a Longhorn PVC")
+            if vm_spec.get("accessCredentials"):
+                blockers.append("VM access credentials use additional Secrets; copy those dependencies separately before using this transfer")
+            domain = vm_spec.get("domain") or {}
+            persistent_efi = (((domain.get("firmware") or {}).get("bootloader") or {}).get("efi") or {}).get("persistent")
+            persistent_tpm = (((domain.get("devices") or {}).get("tpm") or {}).get("persistent"))
+            if persistent_efi or persistent_tpm:
+                blockers.append("This VM has persistent firmware or TPM state outside its disks; copying that state is not supported yet")
+        for secret in definition.get("secrets", []):
+            if _get(f"/api/v1/namespaces/{namespace}/secrets/{secret['metadata']['name']}"):
+                blockers.append(f"Secret {secret['metadata']['name']} already exists in {namespace}; choose another destination namespace")
     joined = bool(_same_target(here, there))
     if not joined:
         if not there.get("reachable_off_cluster"):
@@ -362,7 +457,9 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         if pick["action"] == "blank":
             warnings.append(f"volume {claim['claim']} starts empty here; its data stays on {cluster}")
 
-    selector = definition.get("node_selector") or {}
+    selector = dict(definition.get("node_selector") or {})
+    if device_rows:
+        selector.pop("kubernetes.io/hostname", None)
     if selector:
         try:
             nodes = kget("/api/v1/nodes").get("items", [])
@@ -405,7 +502,10 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         "ok": not blockers, "blockers": blockers, "fixes": fixes,
         "warnings": list(dict.fromkeys(warnings)),
         "cluster": cluster, "kind": kind, "name": name, "namespace": namespace,
-        "joined": joined, "will_run": bool(will_run), "addresses": addresses,
+        "source_namespace": definition.get("namespace", ""),
+        "joined": joined, "will_run": bool(will_run) and transfer_mode != "copy", "addresses": addresses,
+        "transfer_mode": transfer_mode,
+        "host_devices": device_rows, "device_resources": device_resources, "device_hosts": device_hosts,
         "versions": versions,
         "storage_class": chosen_class, "storage_classes": storage_choices(),
         "claims": [{**{k: c.get(k) for k in ("claim", "size_gb", "access_mode", "volume_mode",
@@ -419,20 +519,26 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
     }
 
 
-def start(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class="", volumes=None):
+def start(cluster, kind, name, namespace=None, address_mode="shared", address="", storage_class="", volumes=None,
+          transfer_mode="move", source_namespace="", host_devices=None):
     namespace = namespace or NS
-    checked = plan(cluster, kind, name, namespace, address_mode, address, storage_class, volumes)
+    checked = plan(cluster, kind, name, namespace, address_mode, address, storage_class, volumes, transfer_mode, source_namespace, host_devices)
     if not checked["ok"]:
         raise ValueError(checked["blockers"][0])
     active = [m for m in _read() if m.get("status") == "running"
               and (m["cluster"], m["kind"], m["name"]) == (cluster, kind, name)]
     if active:
         raise ValueError(f"{name} is already being moved")
-    definition = _definition({"cluster": cluster, "kind": kind, "name": name})
+    definition = _definition({"cluster": cluster, "kind": kind, "name": name, "source_namespace": source_namespace})
+    if kind == "vm":
+        VM_DEVICES.prepare(definition, namespace, host_devices)
     choices = _choices(definition.get("claims", []), volumes, kind)
     move = {
         "id": secrets.token_hex(6), "cluster": cluster, "kind": kind, "name": name,
         "source_namespace": definition.get("namespace", ""), "namespace": namespace,
+        "transfer_mode": transfer_mode, "source_uid": definition.get("source_uid", ""),
+        "host_devices": json.loads(json.dumps(host_devices or {})),
+        "device_signature": VM_DEVICES.signature(definition) if kind == "vm" else "",
         "address_mode": address_mode, "address": address,
         "storage_class": checked["storage_class"],
         "status": "running", "phase": "joining", "progress": 1,
@@ -451,7 +557,8 @@ def start(cluster, kind, name, namespace=None, address_mode="shared", address=""
 
 
 def _operation(move):
-    item = OPS.start("move", f"Move {move['name']} from {move['cluster']}",
+    verb = "Copy" if move.get("transfer_mode") == "copy" else "Move"
+    item = OPS.start("move", f"{verb} {move['name']} from {move['cluster']}",
                      {"kind": {"vm": "VirtualMachine", "volume": "PersistentVolumeClaim"}.get(move["kind"], "Deployment"),
                       "name": move["name"], "namespace": move["namespace"]},
                      "/import", {"move": move["id"]}, message="Queued")
@@ -521,13 +628,36 @@ def _joining(move):
 def _quiescing(move):
     flags = move.setdefault("flags", {})
     if not flags.get("quiesced"):
-        _source_action(move, "quiesce")
+        definition = None
+        if move["kind"] == "vm":
+            # Revalidate inventory immediately before interrupting the source.
+            definition = _definition(move)
+            if move.get("device_signature") and VM_DEVICES.signature(definition) != move["device_signature"]:
+                raise ValueError("The source passthrough devices or vBIOS changed; cancel and review this transfer again")
+            VM_DEVICES.prepare(definition, move["namespace"], move.get("host_devices"))
+        if move.get("transfer_mode") == "copy":
+            if not flags.get("quiesce_requested"):
+                definition = definition or _definition(move)
+                flags["quiesce_version"] = definition.get("source_version", "")
+            flags["quiesce_requested"] = True
+            _store(move)  # A lost reply must still offer source recovery.
+        stopped = _source_action(move, "quiesce")
+        if stopped.get("origin"):
+            move["origin"] = stopped["origin"]
         flags["quiesced"] = True
     status = _source_status(move)
     if status.get("running"):
         return _note(move, 6, f"Waiting for {move['name']} to stop on {move['cluster']}")
     if move["kind"] == "volume":
         return _advance(move, "backing-up", 10, f"{move['name']} is held on {move['cluster']}")
+    if (move.get("transfer_mode") == "copy" or move.get("host_devices")) and not move.get("definition"):
+        definition = _definition(move)
+        if move["kind"] == "vm" and move.get("device_signature") and VM_DEVICES.signature(definition) != move["device_signature"]:
+            raise ValueError("The source passthrough devices or vBIOS changed; cancel and review this transfer again")
+        keys = ("claim", "volume", "size_gb", "access_mode", "volume_mode")
+        if [tuple(c.get(k) for k in keys) for c in definition["claims"]] != [tuple(c.get(k) for k in keys) for c in move["claims"]]:
+            raise ValueError("The source disks changed; cancel this copy and review it again")
+        move["definition"] = definition
     return _advance(move, "backing-up", 10, f"{move['name']} stopped on {move['cluster']}")
 
 
@@ -537,7 +667,8 @@ def _backing_up(move):
     # remembers its backups. Repair failed references on the first pass too.
     moving = _moving(move)
     if not moving:
-        return _advance(move, "restoring", 55, "No volume is moved; nothing to back up")
+        return _advance(move, "releasing-source" if move.get("transfer_mode") == "copy" else "restoring",
+                        50, "No volume data to back up")
     names = [c["claim"] for c in moving]
     extra = {} if len(moving) == len(move["claims"]) else {"claims": names}
     made = _source_action(move, "backup", retry_failed=bool(flags.get("retry_backups")) or not flags.get("backed_up"),
@@ -564,10 +695,19 @@ def _backing_up(move):
                  or str((r.get("image") or {}).get("state", "")).lower() in ("completed", "ready"))]
     average = sum(int(r.get("progress") or 0) for r in rows) / max(1, len(rows))
     if len(done) == len(moving):
-        return _advance(move, "syncing", 50, "Every volume moved is backed up")
+        return _advance(move, "releasing-source" if move.get("transfer_mode") == "copy" else "syncing",
+                        50, "Every selected volume is backed up")
     return _note(move, 10 + 40 * average / 100,
                  f"Backing up {len(rows)} volume{'' if len(rows) == 1 else 's'} on "
                  f"{move['cluster']}: {int(average)}%")
+
+
+def _releasing_source(move):
+    flags = move.setdefault("flags", {})
+    if not flags.get("source_released"):
+        _source_action(move, "release")
+        flags["source_released"] = True
+    return _advance(move, "syncing", 50, "Source running state restored; restoring the stopped copy here")
 
 
 def _request_sync(move):
@@ -809,6 +949,15 @@ def carry_icon(cluster, annotations):
 def _creating(move):
     namespace, name = move["namespace"], move["name"]
     definition = _definition(move)
+    if move["kind"] == "vm":
+        definition["object"], effects, _, _ = VM_DEVICES.prepare(definition, namespace, move.get("host_devices"))
+        for effect in effects:
+            if effect["kind"] == "configmap" and effect["body"]:
+                body = effect["body"]
+                _stamp(body["metadata"], move, namespace)
+                _post_ours(effect["path"], effect["path"].rsplit("/", 1)[0], body, move)
+            elif effect["kind"] == "kubevirt-gates":
+                PASSTHROUGH.ensure_gates(*effect["gates"], send=ksend)
     for secret in definition.get("secrets", []):
         _stamp(secret["metadata"], move, namespace)
         _post_ours(f"/api/v1/namespaces/{namespace}/secrets/{secret['metadata']['name']}",
@@ -844,6 +993,12 @@ def _creating(move):
             move["flags"]["vip"] = chosen
         _post_ours(path, f"/api/v1/namespaces/{namespace}/services", service, move)
     body = definition["object"]
+    if move.get("transfer_mode") == "copy" and move["kind"] == "vm":
+        domain = body["spec"]["template"]["spec"].setdefault("domain", {})
+        domain.setdefault("firmware", {})["uuid"] = str(uuid.uuid5(uuid.NAMESPACE_URL, move["id"] + ":firmware"))
+        for index, interface in enumerate(domain.get("devices", {}).get("interfaces", [])):
+            raw = hashlib.sha256(f"{move['id']}:interface:{index}".encode()).digest()
+            interface["macAddress"] = "02:" + ":".join(f"{byte:02x}" for byte in raw[:5])
     _stamp(body["metadata"], move, namespace)
     carry_icon(move["cluster"], body["metadata"]["annotations"])
     _post_ours(_object_path(move["kind"], namespace, name),
@@ -857,6 +1012,8 @@ def _creating(move):
 def _starting(move):
     namespace, name, origin = move["namespace"], move["name"], move.get("origin") or {}
     path = _object_path(move["kind"], namespace, name)
+    if move.get("transfer_mode") == "copy":
+        return _finish(move, "succeeded", f"{name} copied here, stopped. The original on {move['cluster']} keeps its previous running state")
     if move["kind"] == "vm":
         stopped = (origin.get("runStrategy") == "Halted"
                    or ("running" in origin and not origin.get("running")))
@@ -891,6 +1048,7 @@ def _starting(move):
 
 
 HANDLERS = {"joining": _joining, "quiescing": _quiescing, "backing-up": _backing_up,
+            "releasing-source": _releasing_source,
             "syncing": _syncing, "restoring": _restoring, "creating": _creating,
             "starting": _starting}
 
@@ -903,6 +1061,7 @@ def _finish(move, status, message):
     move.update(status=status, message=message, finished_at=_now())
     if status == "succeeded":
         move.update(phase="done", progress=100)
+        move.pop("definition", None)
     if after_finish:
         try:
             after_finish()
@@ -960,16 +1119,16 @@ def _tick_all():
     with _lock:
         running = [m["id"] for m in _read() if m.get("status") == "running"]
     for move_id in running:
-        move = _find(move_id)
-        if not move or move.get("status") != "running":
-            continue
-        _tick(move)
-        with _lock:
-            current = _find(move_id)
-            # Someone put it back or retried it while this step ran: theirs wins.
-            if current and current.get("status") == "running" and \
-                    current.get("updated_at") <= move.get("updated_at"):
-                _store(move)
+        with _serialized(move_id):
+            move = _find(move_id)
+            if not move or move.get("status") != "running":
+                continue
+            _tick(move)
+            with _lock:
+                current = _find(move_id)
+                if current and current.get("status") == "running" and \
+                        current.get("updated_at") <= move.get("updated_at"):
+                    _store(move)
 
 
 def run():
@@ -984,11 +1143,18 @@ def run():
 
 # ------------------------------------------------------------ what people do
 def retry(move_id):
+    with _serialized(move_id):
+        return _retry(move_id)
+
+
+def _retry(move_id):
     move = _find(move_id)
     if not move:
         raise ValueError("no such move")
     if move["status"] != "failed":
         raise ValueError("only a failed move can be retried")
+    if move.get("transfer_mode") == "copy" and move.get("flags", {}).get("cancelling"):
+        return abandon(move_id)
     if move.get("phase") == "backing-up":
         move.setdefault("flags", {})["retry_backups"] = True
     if move.get("phase") == "joining":
@@ -1001,6 +1167,11 @@ def retry(move_id):
 
 
 def abandon(move_id):
+    with _serialized(move_id):
+        return _abandon(move_id)
+
+
+def _abandon(move_id):
     """Put the workload back where it came from, and remove what arrived here.
 
     Only what this move made is removed - each object carries the move's id -
@@ -1012,24 +1183,55 @@ def abandon(move_id):
     if move.get("source_removed"):
         raise ValueError(f"{move['name']} was already removed from {move['cluster']}; "
                          "there is nothing to put back")
-    stopped = bool((move.get("flags") or {}).get("quiesced"))
+    stopped = _source_held(move)
     move.update(status="cancelled", message="Putting it back" if stopped else "Cancelling", updated_at=_now())
+    if move.get("transfer_mode") == "copy":
+        move.setdefault("flags", {})["cancelling"] = True
     _store(move)
     # Nothing stopped there yet means nothing to start again there - and no
     # need for the source to answer before this move can be cancelled.
-    released = CLIENT.remote(move["cluster"], "/api/move/source",
-                             {"action": "release", "kind": move["kind"], "name": move["name"]}) if stopped         else {"detail": f"Cancelled; nothing had stopped on {move['cluster']}"}
-    namespace, removed = move["namespace"], []
+    try:
+        if stopped and move.get("transfer_mode") == "copy":
+            status = _source_status(move)
+            # An unowned source still needs a version fence: an HTTP request
+            # may have timed out before its stop patch was applied.
+            stopped = status.get("source_uid") == move.get("source_uid") and status.get("transfer_owner") in ("", move["id"])
+        released = _source_action(move, "release") if stopped else {"detail": f"Source on {move['cluster']} kept as it was"}
+    except Exception:
+        move.update(status="failed", message="Source recovery failed; retry cancellation to restore its running state")
+        _store(move)
+        raise
+    if stopped or move.get("transfer_mode") == "copy":
+        move.setdefault("flags", {})["source_released"] = True
+        _store(move)
+    try:
+        removed = _remove_created(move)
+    except Exception:
+        move.update(status="failed", message="Transfer cleanup failed; retry cleanup to remove its remaining destination objects")
+        _store(move)
+        raise
+    move.update(message=(released.get("detail") or "Running on the source again")
+                + (f"; removed {', '.join(removed)} here" if removed else ""),
+                finished_at=_now())
+    move.pop("definition", None)
+    _store(move)
+    return _public(move)
+
+
+def _remove_created(move):
+    namespace, removed, move_id = move["namespace"], [], move["id"]
     # A volume is its own claim, removed with the claims below.
     obj = None if move["kind"] == "volume" else _get(_object_path(move["kind"], namespace, move["name"]))
     if obj and _ours(obj, move_id):
         ksend("DELETE", _object_path(move["kind"], namespace, move["name"])
               + "?propagationPolicy=Background")
         removed.append(move["name"])
-    for kind in ("services", "secrets"):
+    for kind in ("services", "secrets", "configmaps"):
         try:
             items = kget(f"/api/v1/namespaces/{namespace}/{kind}").get("items", [])
-        except Exception:
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
             items = []
         for item in items:
             if _ours(item, move_id):
@@ -1040,11 +1242,7 @@ def abandon(move_id):
         if pvc and _ours(pvc, move_id):
             ksend("DELETE", f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}")
             removed.append(claim["claim"])
-    move.update(message=(released.get("detail") or "Running on the source again")
-                + (f"; removed {', '.join(removed)} here" if removed else ""),
-                finished_at=_now())
-    _store(move)
-    return _public(move)
+    return removed
 
 
 DISMISSABLE = ("succeeded", "cancelled")
@@ -1066,17 +1264,20 @@ def dismiss(move_id=None):
             if not match:
                 raise ValueError("no such move")
             raise ValueError("a move still running cannot be cleared; cancel it, or wait for it to finish or fail")
+        if any(m.get("transfer_mode") == "copy" and _source_held(m) for m in gone):
+            raise ValueError("Cancel the failed copy to restore its source before dismissing it")
         _write([m for m in rows if m not in gone])
     failed = [m for m in gone if m.get("status") == "failed"]
     if failed:
         m = failed[0]
-        stopped = bool((m.get("flags") or {}).get("quiesced")) and not m.get("source_removed")
+        stopped = _source_held(m) and not m.get("source_removed")
         made = [c["claim"] for c in m.get("claims") or [] if c.get("created")]
         created = bool((m.get("flags") or {}).get("created_at"))
         left = ([f"{m['name']} stays stopped on {m['cluster']}; start it there from its page"] if stopped else []) +                ([f"what it made here stays ({', '.join(([m['name']] if created else []) + made)})"] if made or created else [])
         return {"ok": True, "dismissed": 1,
                 "detail": f"cleared the failed move of {m['name']}" + (f"; {'; '.join(left)}" if left else "")}
-    kept = [m for m in gone if m.get("status") == "succeeded" and not m.get("source_removed")]
+    kept = [m for m in gone if m.get("status") == "succeeded" and not m.get("source_removed")
+            and m.get("transfer_mode") != "copy"]
     return {"ok": True, "dismissed": len(gone),
             "detail": f"cleared {len(gone)} move{'s' if len(gone) != 1 else ''}"
                       + (f"; {', '.join(sorted({m['cluster'] for m in kept}))} still "
@@ -1089,11 +1290,14 @@ def finish(move_id, volumes=False):
     move = _find(move_id)
     if not move:
         raise ValueError("no such move")
+    if move.get("transfer_mode") == "copy":
+        raise ValueError("A copy keeps its source. Remove the original separately from its own cluster if intended")
     if move["status"] != "succeeded":
         raise ValueError("only a finished move's source can be removed")
     if move.get("source_removed"):
         return _public(move)
-    body = {"action": "remove", "kind": move["kind"], "name": move["name"], "volumes": bool(volumes)}
+    body = {"action": "remove", "kind": move["kind"], "name": move["name"], "volumes": bool(volumes),
+            "namespace": move.get("source_namespace", "")}
     moved = [c["claim"] for c in _moving(move)]
     if volumes and len(moved) != len(move["claims"]):
         # Skipped and blank volumes are the only copy of their data there. A

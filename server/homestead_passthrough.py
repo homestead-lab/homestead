@@ -35,6 +35,7 @@ so a ROM can be up to 640 KB - GPU ROMs are 64 KB to 256 KB once any dump
 header is trimmed; one that does not start 55 AA is refused.
 """
 import base64
+import copy
 import json
 import re
 
@@ -413,6 +414,7 @@ def _permitted(kv=None):
 
 def ensure_gates(*gates, send=None):
     """KubeVirt's feature gates, with these on."""
+    reviewed = send is not None
     send = send or ksend
     kv = _kubevirt()
     if not kv:
@@ -421,7 +423,11 @@ def ensure_gates(*gates, send=None):
     current = list(developer.get("featureGates") or [])
     missing = [g for g in gates if g not in current]
     if missing:
-        send("PATCH", _kv_path(kv), {"spec": {"configuration": {"developerConfiguration": {"featureGates": current + missing}}}},
+        meta = kv.get("metadata") or {}
+        if reviewed and not all(meta.get(key) for key in ("uid", "resourceVersion")):
+            raise ValueError("KubeVirt identity/version is unavailable; review the device settings again")
+        identity = {key: meta[key] for key in ("uid", "resourceVersion") if meta.get(key)}
+        send("PATCH", _kv_path(kv), {"metadata": identity, "spec": {"configuration": {"developerConfiguration": {"featureGates": current + missing}}}},
               ctype="application/merge-patch+json")
     return missing
 
@@ -621,7 +627,20 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
         if devices.get("gpus") is not None:
             devices["gpus"] = gpus
     names = {d.get("name") for d in hostdevs} | {d.get("name") for d in devices.get("gpus") or []}
-    known = {r["resource"] for r in resources()["resources"]}
+    offered = resources()["resources"]
+    known = {r["resource"] for r in offered}
+    kinds = {r["resource"]: r.get("kind") for r in offered}
+    for name, resource in (cfg.get("map") or {}).items():
+        if name not in names:
+            raise ValueError(f"{name} is not one of this VM's devices")
+        if not isinstance(resource, str) or resource not in known:
+            raise ValueError(f"{resource or 'that device'} is not a device VMs may use; hand it over from its host first")
+        if kinds.get(resource) == "usb" and any(d.get("name") == name for d in devices.get("gpus") or []):
+            raise ValueError(f"GPU {name} needs a PCI device")
+        for device in hostdevs + list(devices.get("gpus") or []):
+            if device.get("name") == name and device.get("deviceName") != resource:
+                device["deviceName"] = resource
+                changed = True
     for add in cfg.get("add") or []:
         resource = str(add.get("resource") or "")
         if resource not in known:
@@ -629,7 +648,9 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
         index = 0
         while f"hostdev-{index}" in names:
             index += 1
-        name = f"hostdev-{index}"
+        name = add.get("name") or f"hostdev-{index}"
+        if not isinstance(name, str) or not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}", name) or name in names:
+            raise ValueError("Each passthrough device needs a unique valid name")
         names.add(name)
         hostdevs.append({"name": name, "deviceName": resource})
         changed = True
@@ -646,6 +667,9 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
         if name not in names:
             raise ValueError(f"{name} is not one of this VM's devices")
         if data:
+            resource = next(d.get("deviceName") for d in hostdevs + list(devices.get("gpus") or []) if d.get("name") == name)
+            if kinds.get(resource) == "usb":
+                raise ValueError("USB devices cannot use a vBIOS file; clear the ROM or choose a PCI device")
             roms[name] = check_rom(data)
         else:
             roms.pop(name, None)
@@ -653,6 +677,8 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
     for name in list(roms):
         if name not in names:
             roms.pop(name)
+        elif kinds.get(next(d.get("deviceName") for d in hostdevs + list(devices.get("gpus") or []) if d.get("name") == name)) == "usb":
+            raise ValueError("USB devices cannot use a vBIOS file; clear the ROM or choose a PCI device")
     if set(roms) != have or cfg.get("roms"):
         cm = f"{vm['metadata']['name']}-vbios"
         path = f"/api/v1/namespaces/{ns}/configmaps/{cm}"
@@ -663,6 +689,11 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
                     "metadata": {"name": cm, "namespace": ns, "labels": {"homestead.io/managed": "true",
                                                                            "app": vm["metadata"]["name"]}},
                     "data": {HOOK_KEY: hook_script(roms)}}
+            if vm["metadata"].get("uid"):
+                body["metadata"]["ownerReferences"] = [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
+                    "name": vm["metadata"]["name"], "uid": vm["metadata"]["uid"]}]
+            if len(json.dumps(body["data"]).encode()) > 1024 * 1024:
+                raise ValueError("The combined vBIOS files exceed the ConfigMap's 1 MiB limit; use smaller ROM files")
             effects.append({"kind": "configmap", "path": path, "body": body})
             sidecars.append({"args": ["--version", "v1alpha2"],
                              "configMap": {"name": cm, "key": HOOK_KEY, "hookPath": "/usr/bin/onDefineDomain"}})
@@ -681,22 +712,48 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
     return changed
 
 
-def current_roms(vm, ns):
+def current_roms(vm, ns, replaced=()):
     """The ROMs already in a VM's ConfigMap, so a save keeps the ones not changed."""
+    if not any(d["rom"] for d in vm_devices(vm)):
+        return {}
     cm = _get(f"/api/v1/namespaces/{ns}/configmaps/{vm['metadata']['name']}-vbios")
+    return roms_from_configmap(vm, cm, replaced)
+
+
+def roms_from_configmap(vm, cm, replaced=()):
+    """Refuse a missing or incomplete managed ROM instead of silently losing it."""
     script = ((cm or {}).get("data") or {}).get(HOOK_KEY, "")
-    return {name: base64.b64decode(data) for name, data in re.findall(r'^\s+"([^"]+)": "([A-Za-z0-9+/=]+)"', script, re.M)}
+    replaced = set(replaced)
+    roms = {name: check_rom(data) for name, data in re.findall(r'^\s+"([^"]+)": "([A-Za-z0-9+/=]+)"', script, re.M) if name not in replaced}
+    expected = {d["name"] for d in vm_devices(vm) if d["rom"]}
+    if set(roms) != expected - replaced:
+        raise ValueError("The VM's vBIOS ConfigMap is missing or incomplete; restore its ROM files before editing or transferring devices")
+    return roms
 
 
 def write_configmap(effect, send):
     """The ROMs' ConfigMap made, replaced or removed."""
     path, body = effect["path"], effect["body"]
-    exists = _get(path) is not None
+    existing = _get(path)
+    exists = existing is not None
+    identity = {key: (existing.get("metadata") or {}).get(key) for key in ("uid", "resourceVersion")} if exists else None
+    if "identity" in effect and identity != effect["identity"]:
+        raise ValueError("The vBIOS ConfigMap changed; review the edit again")
     if body is None:
         if exists:
-            send("DELETE", path)
+            # Save's journal never deletes dependencies. Clearing the data
+            # removes the ROM while retaining an inspectable, reusable object.
+            cleared = copy.deepcopy(existing)
+            cleared["data"] = {}
+            cleared.pop("binaryData", None)
+            send("PUT", path, cleared)
         return
     if exists:
+        body = copy.deepcopy(body)
+        body["metadata"].update(identity)
+        for key in ("ownerReferences",):
+            if (existing.get("metadata") or {}).get(key):
+                body["metadata"][key] = existing["metadata"][key]
         send("PUT", path, body)
     else:
         send("POST", path.rsplit("/", 1)[0], body)
