@@ -180,6 +180,7 @@ jobs:
             VOLUME_SCREENSHOTS=release-assets/pages/planned-volumes node tests/integration/planned-container-volumes.mjs
             node scripts/check_dashboard_storage.mjs
             node scripts/check_dashboard_stream.mjs
+            node tests/integration/volume-files-cleanup.mjs
             node scripts/check_update_channels.mjs
             node scripts/check_troubleshooting.mjs
           fi
