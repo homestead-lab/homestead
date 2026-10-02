@@ -134,6 +134,12 @@ The guide opens from its book icon on real clusters and in the demo. The icon
 pulses within its top-bar button, respecting reduced motion, until the person
 finishes the guide or chooses Don't show again. Guide completion and reminder
 preferences are stored per user without marking cluster checks as passed.
+
+Default storage offers one-, two- and three-replica recipes and SSD/HDD tag
+recipes. Each opens the editable class form before any write. Matching existing
+classes can be made default; conflicting names get a fresh name. Placement
+warnings come from disk inventory, and absent tags remain selected for review.
+Suggestions never change the current default merely by opening the guide.
 The book button stays available for everyone after completion; Settings › Homestead
 also opens the guide. There is no dashboard progress shortcut or probe step;
 the node probe is installed automatically.
