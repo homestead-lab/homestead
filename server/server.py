@@ -5881,6 +5881,9 @@ VMS.bind(kget, ksend, RESOURCES.events_for)
 VMUSAGE.bind(kget)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
 LHCAP.bind(kget, ksend, v2_engine_status)
+import homestead_lhv2_setup as LHV2_SETUP
+LHV2_SETUP.bind(kget, ksend, v2_engine_status, OPS, DEFAULT_NS)
+OPS.RESOLVERS["longhorn-v2-prepare"] = LHV2_SETUP.progress
 RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace())
 REVERT.bind(kget, ksend, RECLASS, is_self)
 NODESHELL.bind(kget, ksend, DEFAULT_NS)
@@ -7527,6 +7530,7 @@ def is_app_identity(path):
 # Enforced here, server-side. The UI hides what you cannot do as a courtesy,
 # but a viewer who hand-crafts the request still gets a 403.
 ADMIN_ROUTES = {
+    "/api/longhorn/v2/plan", "/api/longhorn/v2/prepare", "/api/longhorn/v2/enable",
     "/api/auth/users", "/api/auth/users/delete", "/api/auth/role",
     # API keys: made, listed and revoked by administrators only.
     "/api/auth/keys", "/api/auth/keys/revoke",
@@ -8581,6 +8585,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, RECLASS.old_copies())
             if p == "/api/storage/v2":
                 return self._send(200, v2_engine_status())
+            if p == "/api/longhorn/v2/plan":
+                return self._send(200, LHV2_SETUP.plan())
             if p == "/api/disks":
                 return self._send(200, cached("disks", 10, DISKS.inventory))
             if p == "/api/longhorn/capacity":
@@ -9489,6 +9495,12 @@ class H(HTTP.LimitedHandler):
             if p == "/api/longhorn/settings":
                 _cache.pop("lhcap", None)
                 return self._send(200, LHCAP.save(b))
+            if p == "/api/longhorn/v2/prepare":
+                return self._send(200, LHV2_SETUP.prepare(b))
+            if p == "/api/longhorn/v2/enable":
+                result = LHV2_SETUP.enable(b)
+                _cache.pop("lhcap", None)
+                return self._send(200, result)
             if p == "/api/vm/k3s-cluster/plan":
                 return self._send(200, preview_vm_cluster(b))
             if p == "/api/vm/k3s-cluster":

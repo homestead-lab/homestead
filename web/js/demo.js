@@ -1745,6 +1745,20 @@ ssh_pwauth: true
       v2: { enabled: false, harvester_setting: false, ready_nodes: 0, total_nodes: 3,
         nodes: ["harvester-node1", "harvester-node2", "harvester-node3"].map(name => ({ name, ready: false, block_disks: 0, hugepages_mb: 0,
           missing: ["a V2 (block) disk", "2 GiB of hugepages (has 0 MiB)"] })) } },
+    "/api/longhorn/v2/plan": () => {
+      const state=window.__demoV2State || 'missing', harvester=state==='harvester';
+      const configured=['reboot','ready','enabled','complete'].includes(state), capacity=['ready','enabled','complete'].includes(state)?2048:0;
+      const nodes=['k3s-test','k3s-server-2','k3s-server-3'].map((node,i)=>({node, required_mib:2048,target_pages:1024,
+        review_token:'host-review-'+i,capacity_mib:capacity,allocatable_mib:capacity,configured,
+        can_prepare:!harvester&&!configured&&state!=='running',needs_reboot:state==='reboot',engine_ready:state==='complete',
+        problems:configured&&capacity?[]:[capacity?'':'Kubernetes reports 0 MiB capacity; V2 needs 2048 MiB',configured?'':'Run host preparation to verify tools and persistent configuration'].filter(Boolean),
+        job:state==='missing'||harvester?null:{name:'homestead-v2-demo-'+i,state:state==='running'?'running':state==='failed'?'failed':'succeeded'}}));
+      return {namespace:'lab',enabled:['enabled','complete'].includes(state),harvester,harvester_requested:false,
+        distribution:harvester?'harvester':'k3s',required_mib:2048,nodes,review_token:'enable-review',
+        blockers:harvester?[]:nodes.flatMap(n=>n.problems.map(p=>n.node+': '+p)),can_enable:harvester||state==='ready',engine_ready:state==='complete'};
+    },
+    "/api/longhorn/v2/prepare": () => {window.__demoV2State='running';return {operation:{id:'demo-v2',kind:'longhorn-v2-prepare',title:'Prepare Longhorn V2',status:'running',progress:25,message:'Preparing host prerequisites'}};},
+    "/api/longhorn/v2/enable": () => {window.__demoV2State='enabled';return {ok:true};},
     "/api/longhorn/settings": { ok: true, detail: "Saved: over-provisioning 150%" },
     "/api/disks": { harvester: true, nodes: demoDisks, disk_tags: ["hdd", "nvme", "ssd"], all_node_tags: ["rack-a"],
       node_tags: { "harvester-node1": ["rack-a"], "harvester-node2": [], "harvester-node3": ["rack-a"] } },
