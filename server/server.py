@@ -113,10 +113,6 @@ PLATFORM_NS = {"kubevirt": "KubeVirt", "cdi": "CDI", "system-upgrade": "system-u
 _cache = {}
 _lock = threading.Lock()
 
-# rolling time-series so the UI can draw real sparklines (not decoration)
-HIST_MAX = 120
-HIST = {"t": [], "cpu": [], "mem": [], "wl_pods": [], "sys_pods": [], "vol_bad": [],
-        "net_rx": [], "net_tx": []}
 _RATE = {}   # key -> (counter, timestamp) for per-node byte counters
 
 
@@ -150,29 +146,20 @@ def beat(name, every, error=None, leader_only=False):
 
 def _sampler():
     while True:
+        started = time.monotonic()
         try:
             o = get_overview()
-            with _lock:
-                HIST["t"].append(int(time.time()))
-                HIST["cpu"].append(o["cpu_pct"])
-                HIST["mem"].append(o["mem_pct"])
-                HIST["wl_pods"].append(o["workload_pods"])
-                HIST["sys_pods"].append(o["system_pods"])
-                HIST["vol_bad"].append(o["vol_degraded"] + o["vol_faulted"])
-                HIST["net_rx"].append(round(sum(n.get("rx_mbps", 0) for n in o["nodes"]), 2))
-                HIST["net_tx"].append(round(sum(n.get("tx_mbps", 0) for n in o["nodes"]), 2))
-                for k in HIST:
-                    if len(HIST[k]) > HIST_MAX:
-                        HIST[k] = HIST[k][-HIST_MAX:]
+            if LEADER.is_leader():
+                HISTORY.record_live(o)
             # Each VM's disk traffic is a count, and a rate needs two readings.
             try:
                 VMUSAGE.sample()
             except Exception:
                 pass
-            beat("sampler", 30)
+            beat("sampler", 30, leader_only=True)
         except Exception as error:
-            beat("sampler", 30, error)
-        time.sleep(30)
+            beat("sampler", 30, error, leader_only=True)
+        time.sleep(max(1, 30 - (time.monotonic() - started)))
 
 
 # A dot segment, plain or percent-encoded, anywhere in a path.
@@ -8369,8 +8356,8 @@ class H(HTTP.LimitedHandler):
             if p == "/api/history/long":
                 return self._send(200, HISTORY.series((q.get("range") or ["24h"])[0]))
             if p == "/api/history":
-                with _lock:
-                    return self._send(200, {k: list(v) for k, v in HIST.items()})
+                # Never hold the global cache mutex while writing to a client.
+                return self._send(200, HISTORY.live_series())
             if p == "/api/flow":
                 return self._send(200, cached("flow2", 8, get_flow2))
             if p == "/api/shares":

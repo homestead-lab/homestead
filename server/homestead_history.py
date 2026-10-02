@@ -1,8 +1,9 @@
 """Long-term stats: how the cluster has been, kept whether or not anyone looks.
 
-The dashboard's charts cover the last hour, in memory. This keeps the longer
-view on the data volume, recorded by the leading replica in the background:
+The dashboard's charts and longer view are kept on the data volume,
+recorded by the leading replica in the background:
 
+* thirty-second live samples, kept for an hour;
 * a sample every five minutes, kept for two days;
 * hourly averages and peaks, kept for ninety days.
 
@@ -21,10 +22,15 @@ import homestead_shared as SHARED
 
 DATA_DIR = "/data"
 FILE = "history.json"
+LIVE_FILE = "history-live.json"
 STEP = 300
+LIVE_STEP = 30
+LIVE_KEEP = 3600
 FINE_KEEP = 2 * 86400
 COARSE_KEEP = 90 * 86400
 FIELDS = ("cpu", "mem", "rx", "tx", "pods", "vol_bad", "nodes_ready", "nodes_total")
+LIVE_FIELDS = {"cpu": "cpu", "mem": "mem", "wl_pods": "pods", "sys_pods": "sys_pods",
+               "vol_bad": "vol_bad", "net_rx": "rx", "net_tx": "tx"}
 _lock = SHARED.SharedLock("history")
 
 
@@ -48,6 +54,47 @@ def _read():
     except (OSError, ValueError):
         pass
     return {"fine": [], "coarse": [], "boots": {}, "events": []}
+
+
+def _read_live():
+    import json
+    try:
+        with open(os.path.join(DATA_DIR, LIVE_FILE), encoding="utf-8") as handle:
+            rows = json.load(handle)
+        return rows if isinstance(rows, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def record_live(overview, now=None):
+    """Keep a small live buffer without rewriting ninety days every thirty seconds."""
+    now = int(time.time() if now is None else now)
+    sample = sample_from(overview, now)
+    sample["t"] = now - now % LIVE_STEP
+    sample["sys_pods"] = overview.get("system_pods", 0)
+    # The live charts don't need each node's breakdown; the fine tier has it.
+    sample.pop("nodes", None)
+    with _lock:
+        rows = [s for s in _read_live() if now - LIVE_KEEP < s["t"] <= now and s["t"] != sample["t"]]
+        rows = sorted(rows + [sample], key=lambda s: s["t"])[-(LIVE_KEEP // LIVE_STEP):]
+        SHARED.write_json(os.path.join(DATA_DIR, LIVE_FILE), rows, separators=(",", ":"))
+    return sample
+
+
+def live_series(now=None):
+    now = int(time.time() if now is None else now)
+    rows = [s for s in _read_live() if now - LIVE_KEEP < s["t"] <= now]
+    step = LIVE_STEP
+    # Existing installations can show their real five-minute observations
+    # until their first live sample is recorded after upgrading.
+    if not rows:
+        rows = [s for s in _read()["fine"] if now - LIVE_KEEP < s["t"] <= now]
+        step = STEP
+    out = {"t": [s["t"] for s in rows], "step": step,
+           "last_sample": rows[-1]["t"] if rows else 0}
+    for public, field in LIVE_FIELDS.items():
+        out[public] = [s.get(field, 0) for s in rows]
+    return out
 
 
 def sample_from(overview, now=None):
@@ -123,9 +170,15 @@ def series(range_name="24h", now=None):
     now = int(now or time.time())
     span, tier = RANGES.get(range_name, RANGES["24h"])
     data = _read()
-    rows = [r for r in data[tier] if r["t"] > now - span]
-    if tier == "coarse" and not rows:
-        rows = [r for r in data["fine"] if r["t"] > now - span]
+    rows = [r for r in data[tier] if now - span < r["t"] <= now]
+    if tier == "coarse":
+        rolled = {r["t"] for r in rows}
+        recent = {}
+        for sample in data["fine"]:
+            hour = sample["t"] - sample["t"] % 3600
+            if now - span < sample["t"] <= now and hour not in rolled:
+                recent.setdefault(hour, []).append(sample)
+        rows = sorted(rows + [_rollup(samples, hour) for hour, samples in recent.items()], key=lambda r: r["t"])
     out = {"range": range_name, "step": STEP if tier == "fine" else 3600, "t": [r["t"] for r in rows]}
     for field in FIELDS:
         out[field] = [r.get(field, 0) for r in rows]
