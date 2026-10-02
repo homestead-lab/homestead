@@ -340,6 +340,54 @@ error. `lookup ghcr.io` means host DNS, not a missing app configuration. Check
 Fix the host's persistent DNS/network configuration before retrying; do not remove
 the old serving pod or its volume just to clear an image-pull error.
 
+## Disk imports fail with a block-device permission error
+
+If a VM disk stays in `ImportInProgress` and its importer reports
+`blockdev: cannot open /dev/cdi-block-volume: Permission denied`, the importer
+cannot access the block device allocated to its pod. This is a node runtime
+setting, before the image can download. See [CDI's device ownership guidance](https://github.com/kubevirt/containerized-data-importer/blob/main/doc/block_cri_ownership_config.md).
+
+New Homestead k3s and RKE2 installs enable `nonroot-devices` for servers and
+workers. On an existing cluster, add or update this setting in
+`/etc/rancher/k3s/config.yaml` **on every node**, preserving the other settings:
+
+```yaml
+nonroot-devices: true
+```
+
+Check that the installed version supports it with `k3s agent --help`. Restart
+the matching service, one node at a time; restarting a node service can
+interrupt workloads on that node:
+
+```bash
+# Server node:
+sudo systemctl restart k3s
+# Worker node instead:
+sudo systemctl restart k3s-agent
+```
+
+For RKE2, use `/etc/rancher/rke2/config.yaml`, check `rke2 agent --help`, and
+restart `rke2-server` or `rke2-agent`. Check that the node is Ready and that its
+generated containerd configuration has `device_ownership_from_security_context = true`
+before proceeding to the next node. Editing the generated `config.toml` itself
+does not persist across restarts. Older versions without the flag need an
+upgrade or the version-specific containerd template described in CDI's guide.
+
+After the nodes are ready, inspect the affected importer and recreate only
+that failed pod. CDI will retry against the existing disk. For example:
+
+```bash
+kubectl -n lab get pods -o wide
+kubectl -n lab delete pod 'importer-prime-<PVC-UID>'
+kubectl -n lab get datavolume k3s-demo-server-1-disk -w
+```
+
+Use the actual importer name shown in your VM's events. Keep the PVC,
+DataVolume, and VM; deleting the disk is not part of this recovery. A failed
+Homestead cluster-build job will not turn successful retroactively: after the
+disks finish, inspect the retained VMs and bootstrap status before deciding
+whether another action is needed.
+
 ## If the installer stops before showing a menu
 
 The last message can say `Installing whiptail` even when that package has
