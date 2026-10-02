@@ -1,5 +1,10 @@
 """Explicit HTTP authorization declarations. New routes must declare a policy."""
 POLICY = {
+    ('GET', '/api/disks/v2/status'): 'admin',
+    ('POST', '/api/disks/v2/plan'): 'admin',
+    ('POST', '/api/disks/v2/start'): 'admin',
+    ('POST', '/api/disks/v2/prepare-review'): 'admin',
+    ('POST', '/api/disks/v2/prepare'): 'admin',
     ('GET', '/api/cluster/shutdown'): 'admin',
     ('GET', '/api/cluster/shutdown/plan'): 'admin',
     ('POST', '/api/cluster/shutdown'): 'admin',

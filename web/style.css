@@ -3011,3 +3011,9 @@ html[data-theme="light"] .collection-mobile-summary .pillbtn.crit{color:#a1242a}
 /* Metrics settle into new observations; motion preferences apply to bars too. */
 html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition:none}
 @media(prefers-reduced-motion:reduce){.meter>span,.meter.split>span,.ui-bar i{transition:none}}
+
+/* Three short milestones keep the disk preparation flow compact on phones. */
+.modalbox[data-context="disk-v2"] .ui-steps{grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}
+.modalbox[data-context="disk-v2"] .ui-steps li{gap:7px;padding:6px 0;grid-template-columns:24px minmax(0,1fr);align-items:center}
+.modalbox[data-context="disk-v2"] .ui-steps li::before{display:none}
+.modalbox[data-context="disk-v2"] .ui-step-num{width:24px;height:24px}

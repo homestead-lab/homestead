@@ -84,7 +84,7 @@ rules:
     # fromBackup parameter points at the selected Longhorn backup.
     verbs: [get, list, create]
   - apiGroups: ["longhorn.io"]
-    resources: [engines, settings, backupvolumes]
+    resources: [engines, settings, backupvolumes, instancemanagers, instancemanagerupgradecontrols]
     verbs: [get, list, watch]
   # Observe V2 live upgrades; Longhorn owns the rolling controller and pods.
   - apiGroups: ["longhorn.io"]

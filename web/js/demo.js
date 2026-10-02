@@ -1767,6 +1767,23 @@ ssh_pwauth: true
       v2: { enabled: false, harvester_setting: false, ready_nodes: 0, total_nodes: 3,
         nodes: ["harvester-node1", "harvester-node2", "harvester-node3"].map(name => ({ name, ready: false, block_disks: 0, hugepages_mb: 0,
           missing: ["a V2 (block) disk", "2 GiB of hugepages (has 0 MiB)"] })) } },
+    "/api/disks/v2/plan": (url,init) => {
+      const body=JSON.parse(init?.body||'{}');
+      return {node:body.node||'node-1',disk:body.disk||'disk-data',device:'/dev/sdb',size_bytes:1073741824000,
+        request_id:'a'.repeat(24),capacity_token:'demo-evacuate',volumes:[{volume:'volume-media',size_bytes:107374182400,replicas:3,destination:'node-1 / spare-v1'}],
+        blockers:window.__demoDiskV2State==='blocked'?['No other eligible V1 disk has room. Add a spare V1 disk on this host or another eligible V1 host.']:[]};
+    },
+    "/api/disks/v2/start": () => {window.__demoDiskV2State='evacuating';return responses['/api/disks/v2/status']();},
+    "/api/disks/v2/status": () => {
+      const phase=window.__demoDiskV2State||'awaiting-erase',done=phase==='complete',failed=phase==='failed';
+      return {id:'demo-disk-v2',kind:'disk-v2-convert',title:'Prepare /dev/sdb for V2',node:'node-1',disk:'disk-data',device:'/dev/sdb',
+        phase,status:done?'succeeded':failed?'failed':'running',progress:done?100:phase==='evacuating'?35:phase==='awaiting-erase'?70:80,
+        message:done?'The V2 block disk is ready.':failed?'Preparation helper failed. Inspect the saved log.':phase==='awaiting-erase'?'Replicas are healthy elsewhere. Review the device erase to continue.':phase==='evacuating'?'Longhorn is moving replicas to other V1 disks.':'Preparing the evacuated device.',
+        remaining:phase==='evacuating'?1:0,needs_erase_review:phase==='awaiting-erase',cancellable:['evacuating','awaiting-erase'].includes(phase),dismissible:done,
+        volumes:[{volume:'volume-media',size_bytes:107374182400,replicas:3,destination:'node-1 / spare-v1'}]};
+    },
+    "/api/disks/v2/prepare-review": {operation_id:'demo-disk-v2',node:'node-1',device:'/dev/sdb',size_bytes:1073741824000,request_id:'b'.repeat(24),capacity_token:'demo-prepare'},
+    "/api/disks/v2/prepare": () => {window.__demoDiskV2State='preparing';return responses['/api/disks/v2/status']();},
     "/api/longhorn/v2/plan": () => {
       const state=window.__demoV2State || 'missing', harvester=state==='harvester';
       const configured=['reboot','ready','enabled','complete'].includes(state), capacity=['ready','enabled','complete'].includes(state)?2048:0;

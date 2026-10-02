@@ -76,3 +76,14 @@ test("explicit incident and critical scenarios retain unhealthy evaluation cases
     if (scenario === "critical") assert.equal(overview.nodes_ready, 2);
   }
 });
+
+test("disk preparation demo mutations return concrete saved tasks without contacting a cluster", async () => {
+  const api = await fixture("", true);
+  const plan = await api("/api/disks/v2/plan", {node:"node-1",disk:"data"});
+  assert.equal(plan.device,"/dev/sdb");
+  const started = await api("/api/disks/v2/start", {capacity_token:plan.capacity_token});
+  assert.equal(started.id,"demo-disk-v2");assert.equal(started.phase,"evacuating");
+  const prepared = await api("/api/disks/v2/prepare", {operation_id:started.id});
+  assert.equal(prepared.id,started.id);assert.equal(prepared.phase,"preparing");
+  assert.equal((await api("/api/disks/v2/status?id="+started.id)).phase,"preparing");
+});
