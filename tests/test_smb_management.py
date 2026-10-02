@@ -110,6 +110,21 @@ class SmbMigrationTests(unittest.TestCase):
         self.assertEqual(["media"], state["served_shares"])
         self.assertFalse(state["in_sync"])
 
+    def test_status_accepts_kubernetes_omission_of_empty_permission_override(self):
+        rows = [{"name": "media", "pvc": "share-media", "path": "/shares/media",
+                 "user": "lab", "public": False}]
+        creds = {"media": {"user": "lab", "password": "pw"}}
+        dep = server._smb_new_object(self.objects[self.old_dep], server.SMB_NAME)
+        dep = server.SHARES.configured_deployment(dep, rows, creds)
+        for item in dep["spec"]["template"]["spec"]["containers"][0]["env"]:
+            if item["name"] == "PERMISSIONS":
+                item.pop("value")
+        self.objects[self.new_dep] = dep
+        with mock.patch.object(server, "kget", self.get), \
+                mock.patch.object(server.SHARES, "_state", return_value=(rows, creds, None, None, dep)):
+            state = server.samba_state()
+        self.assertTrue(state["in_sync"])
+
     def test_general_workload_mutations_reject_managed_names(self):
         for name in ("samba", server.SMB_NAME):
             with self.assertRaisesRegex(ValueError, "Network Shares"):

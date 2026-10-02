@@ -225,3 +225,11 @@ jobs:
             --env HOMESTEAD_TEST_SERVER_DIR=/srv \
             --mount "type=bind,source=$PWD,target=/repo,readonly" \
             --entrypoint python3 homestead:ci -m unittest discover -s /repo/tests -p 'test_self_data*.py' -v
+      - name: Verify shared-group access without rewriting existing SMB data
+        run: |
+          docker run --rm --network none --read-only --tmpfs /tmp \
+            --user 0:0 --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add FSETID \
+            --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges \
+            --env HOMESTEAD_TEST_SERVER_DIR=/srv \
+            --mount "type=bind,source=$PWD,target=/repo,readonly" \
+            --entrypoint python3 homestead:ci -m unittest discover -s /repo/tests -p 'test_shares_filesystem.py' -v
