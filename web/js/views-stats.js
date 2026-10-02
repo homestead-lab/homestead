@@ -67,34 +67,38 @@ function historyRange(pick) {
 }
 window.historyRange = historyRange;
 
-function historyStat(label, values, unit, peak) {
+function historyStat(label, values, unit, peak, times, key) {
   const nums = values.filter(v => typeof v === "number");
   const avg = nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : 0;
   const max = peak ?? (nums.length ? Math.max(...nums) : 0);
   return `<div class="hist-chart"><div class="between"><span class="dim xs">${esc(label)}</span>
       <span class="mono xs">avg ${avg.toFixed(1)}${unit} · peak ${(+max).toFixed(1)}${unit}</span></div>
-    ${sparkline(nums.length > 1 ? nums : [0, 0], { w: 300, h: 56 })}</div>`;
+    ${sparkline(nums.length > 1 ? nums : [0, 0], { w: 300, h: 56, times, key })}</div>`;
 }
 
+let historyRequest = 0;
 async function historyPaint() {
   const host = $("#historyCard");
   if (!host) return;
-  const range = historyRange();
+  const range = historyRange(), request = ++historyRequest;
   let h;
   try { h = await api(`/api/history/long?range=${range}`); } catch (e) { return; }
+  if (request !== historyRequest || host !== $("#historyCard") || range !== historyRange()) return;
   const since = h.since ? new Date(h.since * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "";
   STATE.data.historyHtml = `<div class="between"><div><div class="ctitle">Over time</div>
       <div class="csub">${h.samples ? `Recorded every ${h.step === 300 ? "5 minutes" : "hour"} by Homestead, open or not${since ? ` · since ${esc(since)}` : ""}` : "Homestead records a sample every 5 minutes; the first appears shortly."}</div></div>
       <div class="seg">${["24h", "7d", "30d", "90d"].map(r => `<button class="${r === range ? "on" : ""}" onclick="historyRange(${jsq(r)})">${r}</button>`).join("")}</div></div>
     ${h.samples > 1 ? `<div class="hist-grid">
-      ${historyStat("Cluster CPU", h.cpu, "%", h.cpu_max)}
-      ${historyStat("Cluster RAM", h.mem, "%", h.mem_max)}
-      <div class="hist-chart"><div class="between"><span class="dim xs">Network in / out</span><span class="mono xs">Mbit/s</span></div>${dualSpark(h.rx, h.tx, { w: 300, h: 56 })}</div>
-      ${historyStat("Workload pods", h.pods, "")}</div>
+      ${historyStat("Cluster CPU", h.cpu, "%", h.cpu_max, h.t, range)}
+      ${historyStat("Cluster RAM", h.mem, "%", h.mem_max, h.t, range)}
+      <div class="hist-chart"><div class="between"><span class="dim xs">Network in / out</span><span class="mono xs">Mbit/s</span></div>${dualSpark(h.rx, h.tx, { w: 300, h: 56, times: h.t, key: range })}</div>
+      ${historyStat("Workload pods", h.pods, "", undefined, h.t, range)}</div>
       <div class="hist-nodes">${h.nodes.map(n => `<div class="hist-node"><b>${esc(n.name)}</b>
         <span class="pill slim ${n.availability >= 99.9 ? "ok" : n.availability >= 99 ? "med" : "crit"}" data-tip="Share of samples in which the node was Ready">${n.availability.toFixed(n.availability >= 99.95 ? 0 : 2)}% up</span>
         <span class="dim xs">cpu ${n.cpu}% · ram ${n.mem}%</span></div>`).join("")}</div>
       ${h.vol_bad.some(v => v > 0) ? `<div class="note" style="margin-top:8px">Volumes were degraded or faulted for part of this period (peak ${Math.max(...h.vol_bad)}).</div>` : ""}` : ""}`;
-  host.innerHTML = STATE.data.historyHtml;
+  const next = document.createElement("section");
+  next.innerHTML = STATE.data.historyHtml;
+  morph(host, next);
 }
 window.historyPaint = historyPaint;

@@ -171,6 +171,7 @@ jobs:
             node scripts/check_mobile_pwa.mjs
             node scripts/check_collection_layouts.mjs
             node scripts/check_dashboard_storage.mjs
+            node scripts/check_dashboard_stream.mjs
             node scripts/check_update_channels.mjs
           fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

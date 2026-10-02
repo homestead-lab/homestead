@@ -75,7 +75,7 @@ async function viewDash() {
     <div class="card glow dashcard ${worstMetricClass([{ value: o.cpu_pct, metric: "cpu" }, { value: o.mem_pct, metric: "memory" }])}">
       <div class="between"><div><div class="ctitle">Compute</div>
         <div class="csub">CPU and memory across the cluster</div></div>${trend(H.cpu)}</div>
-      ${dualSpark((H.cpu || []).slice(-40), (H.mem || []).slice(-40))}
+      ${dualSpark((H.cpu || []).slice(-40), (H.mem || []).slice(-40), { times: (H.t || []).slice(-40) })}
       <div class="row dashnums">
         <div><div class="bignum">${o.cpu_pct}<span class="unit">%</span></div>
           <div class="csub"><span class="kdot s1"></span>CPU · ${o.cpu_cap} cores capacity</div></div>
@@ -87,7 +87,7 @@ async function viewDash() {
     <div class="card glow g-info dashcard">
       <div class="between"><div><div class="ctitle">Throughput</div>
         <div class="csub">Network and local disk</div></div>${trend(rx)}</div>
-      ${dualSpark(rx, tx)}
+      ${dualSpark(rx, tx, { times: (H.t || []).slice(-40) })}
       <div class="row dashnums">
         <div><div class="bignum">${rateParts(netNow)[0]}<span class="unit">${rateParts(netNow)[1]}</span></div>
           <div class="csub"><span class="kdot s1"></span>in · ${rateParts(txNow).join(" ")} out</div></div>
@@ -128,7 +128,7 @@ async function viewDash() {
       ${consumerTable(o.top_mem, "memory")}</div>
   </div>
   <section class="card flat history-card" id="historyCard">${STATE.data.historyHtml || ""}</section>`);
-  historyPaint();
+  await historyPaint();
 }
 
 function consumerTable(workloads, metric) {
