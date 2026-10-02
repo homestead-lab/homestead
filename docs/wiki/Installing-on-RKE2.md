@@ -240,3 +240,7 @@ hand:
 - Longhorn pods crash-looping usually means `open-iscsi` is missing or
   `iscsid` is not running: `sudo systemctl enable --now iscsid`.
 - More in [Troubleshooting](Troubleshooting).
+
+If a VM's CDI importer cannot open `/dev/cdi-block-volume`, see the
+[block-device recovery steps](Installing-on-k3s#disk-imports-fail-with-a-block-device-permission-error).
+RKE2 also needs `nonroot-devices: true` on every server and worker.
