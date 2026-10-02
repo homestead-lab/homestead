@@ -327,6 +327,15 @@ destination. It removes the source hostname selector; other placement rules
 remain. Custom hook sidecars require separate dependency setup and are refused
 by this transfer flow. The source's device settings are unchanged.
 
+The **Passthrough** picker shows inspected device models, vendor/product IDs,
+hosts, PCI addresses and IOMMU groups. On k3s/RKE2, devices offered before
+Homestead retained inventories may initially show only their IDs: inspect or
+refresh that host under **Hardware → Devices for VMs** once to populate their
+names. Harvester device names come directly from its inventory. Names and
+addresses describe the hardware; the selection still requests a KubeVirt
+resource, which can represent matching devices on several hosts. Current host
+availability comes from the cluster, independently of the retained names.
+
 ## ISO library
 
 **ISO library** (on the VMs page) lists the `.iso` files in folders you pick

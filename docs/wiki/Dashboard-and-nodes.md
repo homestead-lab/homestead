@@ -287,3 +287,18 @@ step is offered once that one is done.
   kube-vip's settings, Multus's CNI paths - are kept.
 - **On Harvester**, Longhorn, KubeVirt, kube-vip and Multus come with Harvester
   and are upgraded with it, so they are shown but not upgraded apart from it.
+
+### Devices for VMs
+
+Under a host's **Hardware → Devices for VMs**, **Look at its devices** reads
+PCI and USB hardware once. The last complete inspection is retained when you
+leave the page or reload Homestead; its timestamp is shown. **Refresh devices**
+reads the host again. This display is a snapshot, and PCI handoffs still check
+the host before changing its drivers.
+
+PCI devices are listed together under their **IOMMU group**, including GPU
+audio functions and PCI bridges. Each group explains how many devices move
+together. On k3s/RKE2, the other functions move to vfio-pci with the selected
+device; PCI bridges stay with the host. A group containing the host's network
+or a disk in use cannot be handed over. On Harvester, its controller manages
+the individual device claims.
