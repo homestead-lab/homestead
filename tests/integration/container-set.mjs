@@ -86,6 +86,39 @@ try {
     assert.equal(helper.env.MODE, 'metrics'); assert.equal(helper.volumes[0].read_only, true);
     assert.ok(!edited.containers.some(c => c.original_name === originals[1].name));
     assert.ok(!(await page.evaluate(() => containerRequests)).some(r => r.url === '/api/edit'), 'nothing saved before confirmation');
+    await page.evaluate(() => {
+      const original = window.api;
+      window.appliedContainerEdit = null;
+      window.api = async (url, opts) => {
+        if (url === '/api/edit') {
+          appliedContainerEdit = JSON.parse(opts.body);
+          containerRequests.push({url,body:appliedContainerEdit});
+          throw new Error('Service lab/home-assistant already exists');
+        }
+        const result = await original(url, opts);
+        if (url.startsWith('/api/workload?') && appliedContainerEdit) {
+          return {...result,containers:appliedContainerEdit.containers.map(c=>({...c,new:false,original_name:c.name}))};
+        }
+        return result;
+      };
+    });
+    await page.locator('#editCapacityConfirm').check();
+    await page.getByRole('button', {name:'Save reviewed changes',exact:true}).click();
+    await page.getByRole('button', {name:'Reload saved workload',exact:true}).waitFor();
+    assert.equal(await page.locator('#editGo').isDisabled(),true);
+    assert.match(await page.locator('#mbody').innerText(), /Some changes may already be saved/);
+    assert.match(await page.locator('#mbody').innerText(), /does not need a new name/);
+    const beforeRetry = await page.evaluate(()=>containerRequests.length);
+    await page.evaluate(()=>editReview({ns:'lab',name:'home-assistant',containers:[{new:true,name:'metrics'}]}));
+    assert.equal(await page.evaluate(()=>containerRequests.length),beforeRetry,'stale additions cannot be reviewed again');
+    await page.screenshot({path:`${output}/edit-uncertain-${width}-${theme}.png`});
+    await page.getByRole('button',{name:'Reload saved workload',exact:true}).click();
+    await page.locator('#e_workload_name').waitFor();
+    assert.equal(await page.locator('#e_workload_name').inputValue(),'home-assistant');
+    assert.equal(await page.locator('#e_basics_containers .edit-container[data-new="1"]').count(),0);
+    const savedNames = await page.locator('#e_basics_containers .edit-container').evaluateAll(cards=>cards.map(c=>c.dataset.originalName));
+    assert.ok(savedNames.includes('metrics'),'saved sidecar is loaded as an existing container');
+    await page.evaluate(()=>{appliedContainerEdit=null;});
     await page.evaluate(async () => { closeModal(); await wlEdit('lab', 'frigate', true); });
     assert.equal(await page.locator('#e_basics_containers [data-container-remove]').isDisabled(), true, 'last container stays');
     await page.evaluate(async () => { closeModal(); await go('deploy'); });
