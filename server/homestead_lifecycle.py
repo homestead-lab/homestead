@@ -905,6 +905,9 @@ def _send_power(node, action, steps, rep, report):
 # --------------------------------------------------------------- VM actions
 def vm_migrate(ns, name, target=None):
     """Live-migrate a running VM. KubeVirt picks the target unless one is given."""
+    guard = globals().get("vm_migration_guard")
+    if guard:
+        guard(ns, name)
     body = {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachineInstanceMigration",
             "metadata": {"generateName": f"{name}-mig-", "namespace": ns},
             "spec": {"vmiName": name}}

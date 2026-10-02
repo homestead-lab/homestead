@@ -1570,6 +1570,18 @@ ssh_pwauth: true
             notes_url: "https://github.com/k3s-io/k3s/releases/tag/v1.31.12+k3s1", nodes: { "node-1": "v1.31.4+k3s1" } },
           ...(demoPlatform === "kubevirt" ? [{ id: "kubevirt", name: "KubeVirt", installed: "v1.6.0", newest: "v1.6.0", next: "", behind: false,
             how: "helmchart", phase: "Deployed", note: "" }] : [])] },
+    "/api/longhorn/v2/upgrade": () => {
+      const state=window.__demoV2UpgradeState || 'ready', running=['running','failed'].includes(state), blocked=state==='blocked';
+      return {installed:running?'v1.13.0':'v1.12.2',target:'v1.13.0',v2_volumes:4,harvester:false,live_ready:!blocked,
+        offline_ready:false,live_blockers:blocked?['disk-data: needs healthy RW replicas on at least two eligible hosts.','Upgrade Kubernetes to 1.34 or newer on every host first.']:[],
+        offline_blockers:[...(blocked?['Upgrade Kubernetes to 1.34 or newer on every host first.']:[]),'Stop workloads, detach V2 volumes and wait for replicas to stop.'],
+        upgrade:{enabled:running,timeout:60,current_node:state==='running'?'node-2':'',active:state==='running',pending:running,nodes:running?[
+          {node:'node-1',state:'completed',stage:'completed',error:'',retries:0},
+          {node:'node-2',state:state==='failed'?'failed':'in-progress',stage:state==='failed'?'failed':'waiting-for-healthy-volumes',error:state==='failed'?'Not enough space to rebuild a replica':'',retries:state==='failed'?5:0},
+          {node:'node-3',state:'pending',stage:'pending',error:'',retries:0}]:[]}};
+    },
+    "/api/longhorn/v2/upgrade/review": () => ({capacity_token:'demo-v2-upgrade-review'}),
+    "/api/longhorn/v2/upgrade/settings": () => ({ok:true,detail:'V2 upgrade settings updated in this demo'}),
     "/api/cluster/components/upgrade": { ok: true, component: "cluster", name: "k3s", from: "v1.31.4+k3s1", to: "v1.31.12+k3s1",
       detail: "Installing Rancher's system-upgrade-controller first; then the servers move to v1.31.12+k3s1 one at a time, and the agents after them" },
     "/api/cluster/upgrades/start": { ok: true, upgrade: "hvst-upgrade-demo", detail: "Harvester is upgrading to v1.9.0" },
