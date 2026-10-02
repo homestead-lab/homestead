@@ -52,7 +52,7 @@ test("a newer target cancels old frames, and detached charts stop scheduling wor
   path.isConnected=false;step(1000);assert.equal(frames.size,0);
 });
 test("a late history response cannot overwrite a new range or a different page",async()=>{
-  const core=fs.readFileSync("web/js/views-stats.js","utf8");const ctx={STATE:{data:{}},host:{},api:()=>new Promise(resolve=>ctx.resolve=resolve),historyRange:()=>ctx.range,$:()=>ctx.host};
+  const core=fs.readFileSync("web/js/views-stats.js","utf8");const ctx={AbortController,setTimeout,clearTimeout,STATE:{data:{}},host:{},api:()=>new Promise(resolve=>ctx.resolve=resolve),historyRange:()=>ctx.range,$:()=>ctx.host};
   vm.createContext(ctx);vm.runInContext(core.slice(core.indexOf("let historyRequest"),core.indexOf("window.historyPaint")),ctx);
   ctx.range="24h";let pending=ctx.historyPaint();ctx.range="7d";ctx.resolve({});await pending;
   assert.deepEqual(ctx.STATE.data,{});
@@ -66,11 +66,31 @@ test("dense history refreshes retain their exact geometry without scheduling hea
 });
 
 test("an older history request cannot repaint over a newer observation of the same range",async()=>{
-  const requests=[],painted=[],ctx={STATE:{data:{}},host:{},historyRange:()=>"24h",esc:String,jsq:JSON.stringify,
+  const requests=[],painted=[],ctx={AbortController,setTimeout,clearTimeout,STATE:{data:{}},host:{},historyRange:()=>"24h",esc:String,jsq:JSON.stringify,
     document:{createElement:()=>({})},morph:(_,next)=>painted.push(next.innerHTML),api:()=>new Promise(resolve=>requests.push(resolve))};
   ctx.$=()=>ctx.host;vm.createContext(ctx);
   const code=fs.readFileSync("web/js/views-stats.js","utf8");vm.runInContext(code.slice(code.indexOf("let historyRequest"),code.indexOf("window.historyPaint")),ctx);
   const older=ctx.historyPaint(),newer=ctx.historyPaint();requests[1]({samples:0});await newer;
   const latest=ctx.STATE.data.historyHtml;requests[0]({samples:2});await older;
   assert.equal(ctx.STATE.data.historyHtml,latest);assert.equal(painted.length,1);
+});
+
+test("single observed CPU and RAM samples both render without inventing zero-valued data",()=>{
+  const {ctx}=fixture();const html=ctx.dualSpark([20],[80]);
+  assert.match(html,/class="ln s1"/);assert.match(html,/class="ln s2"/);
+  assert.equal(html,ctx.dualSpark([20,20],[80,80]));
+});
+
+test("a timed out history request retains existing charts and shows an error",async()=>{
+  const note={},host={querySelector:()=>null,appendChild:el=>{host.note=el}};
+  let timeout,cleared=false;
+  const ctx={AbortController,setTimeout:fn=>{timeout=fn;return 1},clearTimeout:()=>{cleared=true},
+    STATE:{data:{historyHtml:"saved charts"}},historyRange:()=>"24h",$:()=>host,
+    document:{createElement:()=>note},api:(_path,opts)=>new Promise((_resolve,reject)=>{
+      opts.signal.addEventListener("abort",()=>reject(new Error("timeout")));})};
+  vm.createContext(ctx);const code=fs.readFileSync("web/js/views-stats.js","utf8");
+  vm.runInContext(code.slice(code.indexOf("let historyRequest"),code.indexOf("window.historyPaint")),ctx);
+  const pending=ctx.historyPaint();timeout();await pending;
+  assert.equal(ctx.STATE.data.historyHtml,"saved charts");assert.match(host.note.textContent,/could not refresh/);
+  assert.equal(cleared,true);
 });

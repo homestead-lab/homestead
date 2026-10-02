@@ -856,7 +856,8 @@ function sparkMeta(times, key) {
   return ` data-spark-times="${esc(JSON.stringify(times || []))}" data-spark-key="${esc(key || "")}"`;
 }
 function sparkline(vals, { w = 300, h = 74, times, key } = {}) {
-  if (!vals || vals.length < 2) vals = [0, 0];
+  if (!vals?.length) vals = [0, 0];
+  else if (vals.length === 1) vals = [vals[0], vals[0]];
   const n = vals.length, mn = Math.min(...vals), mx = Math.max(...vals);
   const pad = (mx - mn) * .25 || 1, lo = mn - pad, hi = mx + pad;
   const d = sparkPath(vals.map((v, i) => [(i / (n - 1)) * w, h - ((v - lo) / (hi - lo)) * h]));
@@ -864,6 +865,8 @@ function sparkline(vals, { w = 300, h = 74, times, key } = {}) {
     <path class="fl" d="${d} L ${w},${h} L 0,${h} Z"/><path class="ln" d="${d}"/></svg>`;
 }
 function dualSpark(a, b, { w = 300, h = 74, times, key } = {}) {
+  if (a?.length === 1) a = [a[0], a[0]];
+  if (b?.length === 1) b = [b[0], b[0]];
   const all = [...(a || []), ...(b || [])];
   if (all.length < 2) return sparkline([0, 0], { w, h, times, key });
   const mn = Math.min(...all), mx = Math.max(...all);
