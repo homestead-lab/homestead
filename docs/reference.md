@@ -255,6 +255,18 @@ may contain signed query parameters) are intentionally excluded from Homestead's
 inventory and operation-history responses; Kubernetes administrators can still
 read the source from the DataVolume itself.
 
+URL disk imports and Unraid VM imports reclaim their own CDI staging and
+scratch volumes, including work space provisioned by a `Retain` storage class.
+The job stays active while Kubernetes finalizers and Longhorn finish removal;
+its ownership record survives a Homestead restart. Completed VM disks keep
+their selected storage policy. If disk copying succeeds but VM creation fails,
+the completed disks are kept so you can create the VM from them.
+
+An import cannot be retried with the same disk names until its cleanup finishes.
+Homestead preserves storage if another workload uses it or ownership changes.
+Volumes left by older imports without ownership records need a separate review
+in **Volumes**; upgrading does not automatically delete them.
+
 CDI must be installed in the cluster. Harvester includes it, and the supplied
 RBAC permits Homestead to create and monitor DataVolumes while ordinary HTTP
 credentials remain in namespace-scoped Kubernetes Secrets.

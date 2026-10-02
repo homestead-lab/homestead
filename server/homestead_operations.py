@@ -9,6 +9,7 @@ are deliberately excluded.
 import homestead_shared as SHARED
 import homestead_vm_power_receipts as POWER_RECEIPTS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
+import homestead_cdi_cleanup as CDI_CLEANUP
 from homestead_storage_journal import Held as StorageHeld
 import json
 import copy
@@ -21,6 +22,7 @@ import urllib.parse
 
 
 kget = None
+cdi_send = None
 deployment_progress = None
 smart_progress = None
 DATA_DIR = "/data"
@@ -150,6 +152,11 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
     }
     with _lock:
         items = _read()
+        import_targets = _cdi_targets(kind, ref)
+        if import_targets and any(import_targets & _cdi_targets(i.get("kind"), i.get("ref") or {}) and
+                                  (i.get("status") not in TERMINAL or i.get("ref", {}).get("retain_resources"))
+                                  for i in items):
+            raise ValueError("An import for this disk is still active or cleaning up; inspect its job before retrying")
         if POWER_RECEIPTS.protected(kind, ref):
             consumed = POWER_RECEIPTS.find(DATA_DIR, ref.get("review_digest"))
             if consumed:
@@ -195,6 +202,16 @@ def start(kind, title, resource, href, ref, message="Waiting for Kubernetes"):
     return _public(item)
 
 
+def _cdi_targets(kind, ref):
+    if kind == "vm-disk-import":
+        names = [ref.get("name")]
+    elif kind == "unraid-vm-import":
+        names = [row.get("dv") for row in ref.get("disks") or []]
+    else:
+        return set()
+    return {(ref.get("namespace"), name) for name in names if name}
+
+
 def _vm_targets(kind, ref):
     if kind == "reclass":
         ns = ref.get("namespace")
@@ -227,6 +244,11 @@ def record_phase(operation_id, phase, progress, message, **ref_updates):
         return _public(item)
 
 
+def dispatch_guard():
+    """Serialize journaled synchronous dispatch with resolvers and cancellation."""
+    return _lock
+
+
 def checkpoint(item):
     """Durably save a resolver's intent before its single upstream write.
 
@@ -249,6 +271,8 @@ def _public(item):
     # separately, as it reads Kubernetes and the tray is polled often.
     out["cancellable"] = item.get("kind") != "self-data-handoff" and item.get("status") not in TERMINAL and (
         item.get("status") != CANCELLING or _cancel_stale(item))
+    if item.get("ref", {}).get("cdi_cleanup"):
+        out["cancellable"] = False
     out["cleanable"] = _cleanable(item)
     out["dismissible"] = item.get("status") in TERMINAL and not _receipt_needed(item) and not _recovery_needed(item)
     if item.get("kind") == "disk-v2-convert":
@@ -438,9 +462,21 @@ def _migration(item):
 
 def _vm_disk_import(item):
     ref = item["ref"]
-    obj = kget(
-        f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ref['namespace']}"
-        f"/datavolumes/{ref['name']}")
+    work = ref.get("cdi_cleanup")
+    if work:
+        if ref.get("phase") == "creating":
+            ref.update(phase="cleanup", cleanup_outcome="failed",
+                       cleanup_detail="Import setup was interrupted")
+        if ref.get("phase") == "cleanup":
+            return CDI_CLEANUP.finish(item, kget, cdi_send, checkpoint)
+        hold = CDI_CLEANUP.track(item, kget, checkpoint)
+        if hold:
+            return hold
+    path = f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{ref['namespace']}/datavolumes/{ref['name']}"
+    obj = CDI_CLEANUP.RESOURCES.optional(kget, path) if work else kget(path)
+    if obj is None:
+        ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_detail="Import disk was removed before completion")
+        return CDI_CLEANUP.finish(item, kget, cdi_send, checkpoint)
     status = obj.get("status", {}) or {}
     phase = str(status.get("phase", "Pending") or "Pending")
     raw_progress = str(status.get("progress", "") or "").rstrip("%")
@@ -455,8 +491,15 @@ def _vm_disk_import(item):
                    if condition.get("status") == "False" and
                    (condition.get("message") or condition.get("reason"))), "")
     if phase == "Succeeded":
+        if work:
+            ref.update(phase="cleanup", cleanup_outcome="succeeded",
+                       cleanup_detail="Disk image imported and PVC is ready")
+            return CDI_CLEANUP.finish(item, kget, cdi_send, checkpoint)
         return "succeeded", 100, "Disk image imported and PVC is ready"
     if phase in failed_phases:
+        if work:
+            ref.update(phase="cleanup", cleanup_outcome="failed", cleanup_detail=detail or f"CDI import {phase.lower()}")
+            return CDI_CLEANUP.finish(item, kget, cdi_send, checkpoint)
         return "failed", progress, detail or f"CDI import {phase.lower()}"
     if phase == "WaitForFirstConsumer":
         return "running", progress, "Waiting for a VM to request this disk"
@@ -821,6 +864,9 @@ def _plan_for(item):
                       "and only stops showing here."],
             "confirm": "", "needs": "operator", "options": []}
     entry = CANCELLERS.get(item.get("kind"))
+    if item.get("ref", {}).get("cdi_cleanup"):
+        plan.update(can=False, why_not="The import must finish reclaiming its temporary storage before its job can be dismissed.")
+        return plan
     if item.get("kind") == "self-data-handoff":
         plan.update(can=False, why_not="A data move cannot be safely cancelled after handoff. Both volumes and its progress record are retained.")
         return plan
