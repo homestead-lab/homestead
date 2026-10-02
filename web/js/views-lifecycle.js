@@ -1996,8 +1996,8 @@ window.clusterInventory = report => {
         : '<span class="dim">none</span>'}</td>
       <td><span class="tag ${w.running ? "ok" : ""}">${w.running ? "running" : "stopped"}</span></td>
       <td>${w.movable
-        ? actionBar([{ label: "Copy to this cluster", run: `moveReview(${jsq(report.cluster)},${jsq(w.kind)},${jsq(w.name)},'copy')`, need: "admin" },
-                     { label: "Move to this cluster", run: `moveReview(${jsq(report.cluster)},${jsq(w.kind)},${jsq(w.name)})`, need: "admin" }])
+        ? actionBar([{ label: "Copy to this cluster", run: `moveReview(${jsq(report.cluster)},${jsq(w.kind)},${jsq(w.name)},'copy',${jsq(w.namespace || "")})`, need: "admin" },
+                     { label: "Move to this cluster", run: `moveReview(${jsq(report.cluster)},${jsq(w.kind)},${jsq(w.name)},'move',${jsq(w.namespace || "")})`, need: "admin" }])
           + ((w.warnings || []).length ? `<div class="dim xs" style="max-width:240px;margin-top:4px">${w.warnings.map(esc).join("; ")}</div>` : "")
         : `<span class="tag bad">cannot move</span><div class="dim xs" style="max-width:240px">${w.blockers.map(esc).join("; ")}</div>`}</td>
     </tr>`).join("")}</tbody></table></div>`
@@ -2034,12 +2034,14 @@ let MOVE_PLAN_SEQUENCE = 0;
    blank or skip, and its storage class here. Kept across re-checks. */
 let MOVE_VOLUMES = {};
 let MOVE_TRANSFER_MODE = "move";
-window.moveReview = (cluster, kind, name, transferMode = "move") => {
+let MOVE_SOURCE_NAMESPACE = "";
+window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace = "") => {
   ++MOVE_PLAN_SEQUENCE;
   MOVE_VOLUMES = {};
   MOVE_TRANSFER_MODE = transferMode === "copy" && kind !== "volume" ? "copy" : "move";
+  MOVE_SOURCE_NAMESPACE = sourceNamespace;
   const copy = MOVE_TRANSFER_MODE === "copy", verb = copy ? "Copy" : "Move";
-  childModal(`${verb} ${name} from ${cluster}`, `
+  childModal(`${verb} ${name} from ${cluster}${sourceNamespace ? ` · ${sourceNamespace}` : ""}`, `
   <p class="muted small">${kind === "volume"
     ? `Holds ${esc(name)} on ${esc(cluster)} while nothing uses it, backs it up to the shared backup storage,
       and restores it here. The original stays on ${esc(cluster)} until you remove it, so nothing is lost if
@@ -2081,7 +2083,8 @@ window.moveAddressMode = value => {
 const moveBody = (cluster, kind, name) => ({
   cluster, kind, name, namespace: $("#mv_ns")?.value.trim() || "lab",
   address_mode: $("#mv_mode")?.value || "shared", address: $("#mv_ip")?.value.trim() || "",
-  storage_class: $("#mv_sc")?.value || "", volumes: MOVE_VOLUMES, transfer_mode: MOVE_TRANSFER_MODE });
+  storage_class: $("#mv_sc")?.value || "", volumes: MOVE_VOLUMES, transfer_mode: MOVE_TRANSFER_MODE,
+  source_namespace: MOVE_SOURCE_NAMESPACE });
 
 /* One volume's choice changed: remembered, and the move checked again. */
 window.moveVolumeSet = (cluster, kind, name, claim, field, value) => {

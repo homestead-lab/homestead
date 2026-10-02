@@ -38,11 +38,12 @@ test("review and submission carry the chosen destination storage class",async()=
 
 test("VM copy review and start retain copy mode and storage selection", async () => {
   const t = setup();
-  t.ctx.moveReview("source", "vm", "desktop", "copy");
+  t.ctx.moveReview("source", "vm", "desktop", "copy", "guests");
   assert.match(t.ctx.modalTitle, /^Copy desktop/);
   assert.match(t.ctx.modalHtml, /Creates a stopped copy here/);
   assert.match(t.ctx.modalHtml, /Start copy/);
   assert.equal(t.calls[0].body.transfer_mode, "copy");
+  assert.equal(t.calls[0].body.source_namespace, "guests");
   t.replies.shift()({ok:true,transfer_mode:"copy",storage_class:"fast",storage_classes:["fast"],
     claims:[{claim:"os-disk",size_gb:40,volume_mode:"Block"}],total_gb:40,will_run:false});
   await new Promise(resolve=>setImmediate(resolve));
@@ -51,6 +52,7 @@ test("VM copy review and start retain copy mode and storage selection", async ()
   const start=t.ctx.moveStart("source","vm","desktop");
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(t.calls[1].body.transfer_mode,"copy");
+  assert.equal(t.calls[1].body.source_namespace,"guests");
   assert.equal(t.calls[1].body.storage_class,"fast");
   t.replies.shift()({}); await start;
 });

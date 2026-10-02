@@ -16,6 +16,7 @@ import base64
 import json
 import secrets
 import re
+from contextvars import ContextVar
 import time
 import urllib.error
 
@@ -31,6 +32,7 @@ LH_API = "/apis/longhorn.io/v1beta2"
 ORIGIN = "move-origin"
 BACKUPS = "move-backups"
 OWNER = "move-owner"
+_SOURCE_NAMESPACE = ContextVar("move_source_namespace", default="")
 # Annotations that describe this cluster's copy of an object rather than the
 # thing itself, and would be wrong or meaningless on the far side.
 DROP_ANNOTATIONS = {
@@ -53,6 +55,22 @@ def bind(_kget, _ksend, longhorn, namespace):
     NAMES.bind(_kget)
 
 
+def _namespace():
+    return _SOURCE_NAMESPACE.get() or NS
+
+
+def in_namespace(namespace, call, *args, **kwargs):
+    """Scope one source request without changing another request's namespace."""
+    namespace = str(namespace or NS)
+    if len(namespace) > 63 or not re.fullmatch(r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", namespace):
+        raise ValueError("Choose a valid source namespace")
+    token = _SOURCE_NAMESPACE.set(namespace)
+    try:
+        return call(*args, **kwargs)
+    finally:
+        _SOURCE_NAMESPACE.reset(token)
+
+
 def _get(path):
     try:
         return kget(path)
@@ -73,17 +91,17 @@ def _kind(kind):
 
 def _path(kind, name):
     if kind == "vm":
-        return f"/apis/kubevirt.io/v1/namespaces/{NS}/virtualmachines/{name}"
+        return f"/apis/kubevirt.io/v1/namespaces/{_namespace()}/virtualmachines/{name}"
     if kind == "volume":
-        return f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{name}"
-    return f"/apis/apps/v1/namespaces/{NS}/deployments/{name}"
+        return f"/api/v1/namespaces/{_namespace()}/persistentvolumeclaims/{name}"
+    return f"/apis/apps/v1/namespaces/{_namespace()}/deployments/{name}"
 
 
 def _users(claim):
     """The pods mounting a claim, terminating ones included: a pod on its way
     out still holds the volume."""
     try:
-        pods = kget(f"/api/v1/namespaces/{NS}/pods").get("items", [])
+        pods = kget(f"/api/v1/namespaces/{_namespace()}/pods").get("items", [])
     except Exception as error:
         # Unknown is not "unused": a volume moved while written would arrive torn.
         raise ValueError(f"could not tell whether {claim} is in use: {str(error)[:120]}") from error
@@ -149,7 +167,7 @@ def _claims_of(kind, obj):
 
 def _longhorn_volume(claim):
     """The Longhorn volume behind a claim, or a reason there is not one."""
-    pvc = _get(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{claim}")
+    pvc = _get(f"/api/v1/namespaces/{_namespace()}/persistentvolumeclaims/{claim}")
     if not pvc:
         raise ValueError(f"claim {claim} does not exist")
     pv_name = (pvc.get("spec", {}) or {}).get("volumeName", "")
@@ -186,7 +204,7 @@ def _claim_row(claim):
 def _services_for(pod_labels):
     """Services whose selector picks out this workload's pods."""
     try:
-        services = kget(f"/api/v1/namespaces/{NS}/services").get("items", [])
+        services = kget(f"/api/v1/namespaces/{_namespace()}/services").get("items", [])
     except Exception:
         return []
     found = []
@@ -250,7 +268,7 @@ def definition(kind, name):
     origin = _origin(obj) or _run_state(kind, obj)
     if kind == "volume":
         # The claim is rebuilt from its backup; nothing else travels.
-        return {"kind": kind, "name": name, "namespace": NS, "object": {}, "origin": origin,
+        return {"kind": kind, "name": name, "namespace": _namespace(), "object": {}, "origin": origin,
                 "services": [], "secrets": [], "claims": [_claim_row(name)],
                 "node_selector": {}, "pull_secrets": [], "networks": []}
     template = ((obj.get("spec", {}) or {}).get("template", {}) or {})
@@ -271,7 +289,7 @@ def definition(kind, name):
                 for ref in ("userDataSecretRef", "networkDataSecretRef"):
                     secret_name = ((volume.get(source) or {}).get(ref) or {}).get("name")
                     if secret_name:
-                        secret = _get(f"/api/v1/namespaces/{NS}/secrets/{secret_name}")
+                        secret = _get(f"/api/v1/namespaces/{_namespace()}/secrets/{secret_name}")
                         if not secret:
                             raise ValueError(f"Cloud-init Secret {secret_name} is missing on the source; restore it before transferring this VM")
                         secrets.append({"apiVersion": "v1", "kind": "Secret",
@@ -283,7 +301,7 @@ def definition(kind, name):
     else:
         body.setdefault("spec", {})["replicas"] = 0
     return {
-        "kind": kind, "name": name, "namespace": NS,
+        "kind": kind, "name": name, "namespace": _namespace(),
         "source_uid": obj.get("metadata", {}).get("uid", ""),
         "transfer_owner": NAMES.read(_annotations(obj), OWNER),
         "held": bool(_origin(obj)),
@@ -306,7 +324,7 @@ def _remaining(kind, obj):
     if kind == "volume":
         return len(_users(obj["metadata"]["name"]))
     if kind == "vm":
-        vmi = _get(f"/apis/kubevirt.io/v1/namespaces/{NS}/virtualmachineinstances/"
+        vmi = _get(f"/apis/kubevirt.io/v1/namespaces/{_namespace()}/virtualmachineinstances/"
                    f"{obj['metadata']['name']}")
         active = bool(vmi) and (vmi.get("status") or {}).get("phase") not in ("Succeeded", "Failed")
         return 1 if active else sum(len(_users(claim)) for claim in _claims_of(kind, obj))
@@ -315,7 +333,7 @@ def _remaining(kind, obj):
         return 0
     selector = ",".join(f"{k}={v}" for k, v in sorted(labels.items()))
     try:
-        pods = kget(f"/api/v1/namespaces/{NS}/pods?labelSelector={selector}").get("items", [])
+        pods = kget(f"/api/v1/namespaces/{_namespace()}/pods?labelSelector={selector}").get("items", [])
     except Exception:
         return 0
     # A terminating pod still holds its claim until it is gone, so it counts.
@@ -336,7 +354,7 @@ def quiesce(kind, name, transfer_id="", expected_uid=""):
     if not origin:
         origin = _run_state(kind, obj)
         if transfer_id and kind == "vm":
-            vmi = _get(f"/apis/kubevirt.io/v1/namespaces/{NS}/virtualmachineinstances/{name}")
+            vmi = _get(f"/apis/kubevirt.io/v1/namespaces/{_namespace()}/virtualmachineinstances/{name}")
             origin["_copy_running"] = bool(vmi) and (vmi.get("status") or {}).get("phase") not in ("Succeeded", "Failed")
             origin["_copy_completed"] = bool(vmi) and (vmi.get("status") or {}).get("phase") == "Succeeded" and origin.get("runStrategy") in ("Once", "RerunOnFailure")
             if origin.get("runStrategy") == "Once" and not origin["_copy_completed"]:
@@ -506,8 +524,8 @@ def release(kind, name, transfer_id="", expected_uid=""):
         _owner(current, transfer_id, expected_uid)
         pending = any(req.get("action") == "Start" for req in
                       (current.get("status") or {}).get("stateChangeRequests") or [])
-        if not pending and not _get(f"/apis/kubevirt.io/v1/namespaces/{NS}/virtualmachineinstances/{name}"):
-            ksend("PUT", f"/apis/subresources.kubevirt.io/v1/namespaces/{NS}/virtualmachines/{name}/start", {})
+        if not pending and not _get(f"/apis/kubevirt.io/v1/namespaces/{_namespace()}/virtualmachineinstances/{name}"):
+            ksend("PUT", f"/apis/subresources.kubevirt.io/v1/namespaces/{_namespace()}/virtualmachines/{name}/start", {})
         if current.get("metadata", {}).get("resourceVersion"):
             patch["metadata"]["resourceVersion"] = _object(kind, name)["metadata"]["resourceVersion"]
     _merge(kind, name, patch)
@@ -537,7 +555,7 @@ def remove(kind, name, volumes=False, claims=None):
         for service in _services_for((template.get("metadata", {}) or {}).get("labels", {}) or {}):
             service_name = service["metadata"]["name"]
             try:
-                ksend("DELETE", f"/api/v1/namespaces/{NS}/services/{service_name}")
+                ksend("DELETE", f"/api/v1/namespaces/{_namespace()}/services/{service_name}")
                 removed.append(f"service {service_name}")
             except urllib.error.HTTPError as error:
                 if error.code != 404:
@@ -549,7 +567,7 @@ def remove(kind, name, volumes=False, claims=None):
         # skipped or made blank there is the only copy of that data.
         for claim in [c for c in claims_of if only is None or c in only]:
             try:
-                ksend("DELETE", f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{claim}")
+                ksend("DELETE", f"/api/v1/namespaces/{_namespace()}/persistentvolumeclaims/{claim}")
                 removed.append(f"volume {claim}")
             except urllib.error.HTTPError as error:
                 if error.code != 404:

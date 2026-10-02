@@ -129,7 +129,9 @@ choose **Copy to this cluster** when browsing a linked cluster's workloads.
 Both clusters must run a release with copy support; the review identifies
 which side needs updating.
 
-Pick the destination namespace and storage class. Each disk or volume can
+The source namespace follows the VM or container you selected, including
+workloads outside the default namespace. Pick the destination namespace and
+storage class. Each disk or volume can
 use its own class, or be created blank. Existing VM, claim and cloud-init
 Secret names are checked before the source stops; choose another namespace
 if those names are already in use on the destination.
@@ -149,7 +151,8 @@ offers **Retry cleanup**. A failed copy still holding the source must be
 cancelled before it can be dismissed.
 
 VM data disks must be Longhorn PVCs. Container-image disks and cloud-init travel with the
-VM definition. Host disks, additional access-credential Secrets and persistent
+VM definition. External instance types and preferences must first be expanded
+into the VM's settings. Host disks, additional access-credential Secrets and persistent
 firmware/TPM state are not copied; the review blocks these rather than making
 an incomplete VM. Change a VM's `Once` run strategy before copying it, since
 that strategy cannot safely resume after being stopped for the backup.

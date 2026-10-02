@@ -2,6 +2,8 @@
 import copy
 import unittest
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from unittest import mock
 
 import test_move_flow as fixtures
@@ -50,7 +52,8 @@ class ClusterCopyTests(unittest.TestCase):
             if current["status"] != "running" or until == current["phase"]:
                 return engine._public(current)
             if current["phase"] == "quiescing" and current.get("flags", {}).get("quiesced"):
-                self.cluster.objects.pop(self.vmi_path(), None)
+                ns = current.get("source_namespace") or "lab"
+                self.cluster.objects.pop(f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachineinstances/desktop", None)
                 self.cluster.objects.pop("/api/v1/namespaces/lab/pods/frigate-1", None)
             engine.tick_all()
         self.fail("Copy did not settle")
@@ -172,11 +175,59 @@ class ClusterCopyTests(unittest.TestCase):
         self.assertEqual("Halted", self.cluster.get(self.vm_path())["spec"]["runStrategy"])
         self.assertEqual("Always", self.cluster.get(self.vm_path("moved"))["spec"]["runStrategy"])
 
+    def test_copy_selects_source_namespace_without_touching_same_named_vm(self):
+        self.seed_vm()
+        paths = [self.vm_path(), self.vmi_path(), "/api/v1/namespaces/lab/secrets/desktop-init"]
+        paths += [f"/api/v1/namespaces/lab/persistentvolumeclaims/{name}" for name in ("os-disk", "data-disk")]
+        for path in paths:
+            body = copy.deepcopy(self.cluster.objects[path])
+            body.setdefault("metadata", {})["namespace"] = "guests"
+            if path == self.vm_path():
+                body["metadata"]["uid"] = "guest-vm-uid"
+                body["spec"]["template"]["spec"]["domain"]["cpu"]["cores"] = 6
+            if "/persistentvolumeclaims/" in path:
+                pv = "guest-" + body["spec"]["volumeName"]
+                body["spec"]["volumeName"] = pv
+                self.cluster.put("/api/v1/persistentvolumes/" + pv, {"spec": {
+                    "csi": {"driver": "driver.longhorn.io", "volumeHandle": pv}}})
+            self.cluster.put(path.replace("/lab/", "/guests/"), body)
+        move = engine.start("shed", "vm", "desktop", "copied", transfer_mode="copy", source_namespace="guests")
+        self.assertEqual("succeeded", self.settle(move["id"])["status"])
+        self.assertEqual("guests", engine._find(move["id"])["source_namespace"])
+        self.assertEqual("Running", self.cluster.get(self.vmi_path())["status"]["phase"])
+        self.assertEqual(4, self.cluster.get(self.vm_path())["spec"]["template"]["spec"]["domain"]["cpu"]["cores"])
+        self.assertEqual(6, self.cluster.get(self.vm_path("copied"))["spec"]["template"]["spec"]["domain"]["cpu"]["cores"])
+        self.assertEqual("Always", self.cluster.get(self.vm_path("guests"))["spec"]["runStrategy"])
+        self.assertEqual({"guest-pv-os-disk", "guest-pv-data-disk"}, {backup["volume"] for backup in self.lh.made})
+
+    def test_namespace_scope_is_isolated_and_resets_after_failure(self):
+        barrier = Barrier(2)
+        def read():
+            barrier.wait(timeout=5)
+            return source._namespace()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            calls = [pool.submit(source.in_namespace, ns, read) for ns in ("guests", "apps")]
+            self.assertEqual(["guests", "apps"], [call.result() for call in calls])
+        with self.assertRaisesRegex(ValueError, "failed"):
+            source.in_namespace("guests", lambda: (_ for _ in ()).throw(ValueError("failed")))
+        self.assertEqual("lab", source._namespace())
+        with self.assertRaisesRegex(ValueError, "valid source namespace"):
+            source.in_namespace("../other", source.definition, "vm", "desktop")
+
+    def test_old_source_ignoring_requested_namespace_is_blocked_before_quiesce(self):
+        self.seed_vm()
+        with mock.patch.object(source, "in_namespace", side_effect=lambda ns, call, *args, **kwargs: call(*args, **kwargs)):
+            with self.assertRaisesRegex(ValueError, "selected source namespace"):
+                engine.start("shed", "vm", "desktop", "copied", transfer_mode="copy", source_namespace="guests")
+        self.assertNotIn("/api/move/source", self.remote_calls)
+
     def test_vm_api_and_external_state_are_checked_before_stopping(self):
         self.seed_vm()
         for change, expected in [
             (lambda: self.cluster.objects.pop("/apis/kubevirt.io/v1"), "Install KubeVirt"),
             (lambda: self.cluster.objects[self.vm_path()]["spec"].update(runStrategy="Once"), "Once run strategy"),
+            (lambda: self.cluster.objects[self.vm_path()]["spec"].update(instancetype={"name": "external-size"}), "external instance type or preference"),
+            (lambda: self.cluster.objects[self.vm_path()]["spec"].update(preference={"name": "external-preference"}), "external instance type or preference"),
             (lambda: self.cluster.objects[self.vm_path()]["spec"]["template"]["spec"]["domain"]["devices"].update(tpm={"persistent": True}), "persistent firmware or TPM"),
             (lambda: self.cluster.objects[self.vm_path()]["spec"]["template"]["spec"]["volumes"].append({"name": "host", "hostDisk": {"path": "/external/disk"}}), "external source"),
         ]:

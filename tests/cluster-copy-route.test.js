@@ -18,21 +18,22 @@ function setup() {
 }
 
 test("VM copy destination selection preserves mode through the cluster switch",async()=>{
-  const t=setup();t.ctx.moveToCluster("vm","desktop","source","copy");
+  const t=setup();t.ctx.moveToCluster("vm","desktop","source","copy","guests");
   assert.match(t.ctx.title,/Copy to cluster/);
-  assert.match(t.ctx.html,/moveToClusterGo\("b","source","vm","desktop","copy"\)/);
-  await t.ctx.moveToClusterGo("b","source","vm","desktop","copy");
+  assert.match(t.ctx.html,/moveToClusterGo\("b","source","vm","desktop","copy","guests"\)/);
+  await t.ctx.moveToClusterGo("b","source","vm","desktop","copy","guests");
   assert.equal(t.sent[0].body.id,"b");
   const url=new URL(t.ctx.location.href,"https://example.invalid");
   assert.equal(url.searchParams.get("transfer_mode"),"copy");
   assert.equal(url.searchParams.get("move"),"source:vm:desktop");
+  assert.equal(url.searchParams.get("source_namespace"),"guests");
 });
 
 test("arrival opens a copy review while old move links still open a move",()=>{
   for(const mode of ["copy","move"]){
     const t=setup(),calls=[];t.ctx.moveReview=(...args)=>calls.push(args);
-    t.ctx.location.search="?move=source%3Avm%3Adesktop"+(mode==="copy"?"&transfer_mode=copy":"");
+    t.ctx.location.search="?move=source%3Avm%3Adesktop"+(mode==="copy"?"&transfer_mode=copy&source_namespace=guests":"");
     t.ctx.fleetPendingMove();
-    assert.deepEqual(calls[0],["source","vm","desktop",mode]);
+    assert.deepEqual(calls[0],["source","vm","desktop",mode,mode==="copy"?"guests":""]);
   }
 });
