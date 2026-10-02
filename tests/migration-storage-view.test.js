@@ -8,6 +8,7 @@ function setup() {
   const ctx = {console, URLSearchParams, Map, Set, Date, Promise, encodeURIComponent, clearTimeout,
     document:{addEventListener(){}}, STATE:{data:{}}, $:key=>fields[key], $$:()=>[],
     esc:String, toast:()=>{}, ask:async()=>true, closeModal:()=>{}, movesRepaint:()=>{}, tip:t=>t,
+    childModal:(title,html)=>{ctx.modalTitle=title;ctx.modalHtml=html;},
     api:(path,opts)=> { calls.push({path,body:JSON.parse(opts.body)}); return new Promise(resolve=>replies.push(resolve)); }};
   ctx.window=ctx; vm.createContext(ctx); ctx.jsq=JSON.stringify;
   vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js","utf8"),ctx);
@@ -33,6 +34,42 @@ test("review and submission carry the chosen destination storage class",async()=
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal(t.calls[2].body.storage_class,"longhorn-r2");
   t.replies.shift()({}); await starting;
+});
+
+test("VM copy review and start retain copy mode and storage selection", async () => {
+  const t = setup();
+  t.ctx.moveReview("source", "vm", "desktop", "copy");
+  assert.match(t.ctx.modalTitle, /^Copy desktop/);
+  assert.match(t.ctx.modalHtml, /Creates a stopped copy here/);
+  assert.match(t.ctx.modalHtml, /Start copy/);
+  assert.equal(t.calls[0].body.transfer_mode, "copy");
+  t.replies.shift()({ok:true,transfer_mode:"copy",storage_class:"fast",storage_classes:["fast"],
+    claims:[{claim:"os-disk",size_gb:40,volume_mode:"Block"}],total_gb:40,will_run:false});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(t.fields["#mv_plan"].innerHTML, /Copy its data/);
+  assert.match(t.fields["#mv_plan"].innerHTML, /Ready to copy/);
+  const start=t.ctx.moveStart("source","vm","desktop");
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(t.calls[1].body.transfer_mode,"copy");
+  assert.equal(t.calls[1].body.storage_class,"fast");
+  t.replies.shift()({}); await start;
+});
+
+test("a destination without copy support cannot enable Start copy", async () => {
+  const t=setup(); t.ctx.moveReview("source","vm","desktop","copy");
+  t.replies.shift()({ok:true,will_run:true,claims:[]});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(t.fields["#mv_go"].disabled,true);
+  assert.match(t.fields["#mv_plan"].innerHTML,/Update Homestead on this destination/);
+});
+
+test("copy activity has cleanup actions and never offers source removal", () => {
+  const t=setup();
+  const html=t.ctx.movesHtml([{id:"copy-job",name:"desktop",cluster:"source",kind:"vm",namespace:"lab",
+    transfer_mode:"copy",status:"succeeded",phases:["releasing-source","starting","done"],phase_index:2,
+    progress:100,source_stopped:false,created_at:new Date().toISOString()}]);
+  assert.match(html,/Resume source/); assert.match(html,/Keep copy stopped/);
+  assert.match(html,/Remove copy/); assert.doesNotMatch(html,/moveFinish\(|Put back|keeps its stopped copy/);
 });
 
 test("late plan response cannot replace the newer choice or enable a blocked move",async()=>{

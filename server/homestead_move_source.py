@@ -15,6 +15,7 @@ therefore loses nothing, and the workload can always be put back as it was.
 import base64
 import json
 import secrets
+import re
 import time
 import urllib.error
 
@@ -29,6 +30,7 @@ LHNS = "longhorn-system"
 LH_API = "/apis/longhorn.io/v1beta2"
 ORIGIN = "move-origin"
 BACKUPS = "move-backups"
+OWNER = "move-owner"
 # Annotations that describe this cluster's copy of an object rather than the
 # thing itself, and would be wrong or meaningless on the far side.
 DROP_ANNOTATIONS = {
@@ -114,7 +116,7 @@ def _clean_metadata(meta, namespace=None):
     annotations = {
         key: value for key, value in (meta.get("annotations") or {}).items()
         if key not in DROP_ANNOTATIONS
-        and key not in (NAMES.key(ORIGIN), NAMES.key(BACKUPS))}
+        and key not in (NAMES.key(ORIGIN), NAMES.key(BACKUPS), NAMES.key(OWNER))}
     if annotations:
         meta["annotations"] = annotations
     else:
@@ -226,6 +228,16 @@ def _run_state(kind, obj):
     return {"replicas": int(spec.get("replicas", 1) if spec.get("replicas") is not None else 1)}
 
 
+def _owner(obj, transfer_id="", expected_uid=""):
+    if transfer_id and not re.fullmatch(r"[0-9a-f]{12}", transfer_id):
+        raise ValueError("Invalid copy request identity")
+    if expected_uid and obj.get("metadata", {}).get("uid") != expected_uid:
+        raise ValueError("The source workload was replaced; review the copy again")
+    owner = NAMES.read(_annotations(obj), OWNER)
+    if (owner and owner != transfer_id) or (transfer_id and _origin(obj) and owner != transfer_id):
+        raise ValueError("The source is held by another transfer; finish or put back that transfer first")
+
+
 def definition(kind, name):
     """Everything the far side needs to rebuild this workload.
 
@@ -260,17 +272,21 @@ def definition(kind, name):
                     secret_name = ((volume.get(source) or {}).get(ref) or {}).get("name")
                     if secret_name:
                         secret = _get(f"/api/v1/namespaces/{NS}/secrets/{secret_name}")
-                        if secret:
-                            secrets.append({"apiVersion": "v1", "kind": "Secret",
-                                            "type": secret.get("type", "Opaque"),
-                                            "metadata": _clean_metadata(secret.get("metadata")),
-                                            "data": secret.get("data", {}) or {}})
+                        if not secret:
+                            raise ValueError(f"Cloud-init Secret {secret_name} is missing on the source; restore it before transferring this VM")
+                        secrets.append({"apiVersion": "v1", "kind": "Secret",
+                                        "type": secret.get("type", "Opaque"),
+                                        "metadata": _clean_metadata(secret.get("metadata")),
+                                        "data": secret.get("data", {}) or {}})
         spec.pop("running", None)
         spec["runStrategy"] = "Halted"
     else:
         body.setdefault("spec", {})["replicas"] = 0
     return {
         "kind": kind, "name": name, "namespace": NS,
+        "source_uid": obj.get("metadata", {}).get("uid", ""),
+        "transfer_owner": NAMES.read(_annotations(obj), OWNER),
+        "held": bool(_origin(obj)),
         "object": body, "origin": origin,
         "services": [_clean_service(s) for s in _services_for(pod_labels)] if kind == "container" else [],
         "secrets": secrets,
@@ -292,7 +308,8 @@ def _remaining(kind, obj):
     if kind == "vm":
         vmi = _get(f"/apis/kubevirt.io/v1/namespaces/{NS}/virtualmachineinstances/"
                    f"{obj['metadata']['name']}")
-        return 1 if vmi else 0
+        active = bool(vmi) and (vmi.get("status") or {}).get("phase") not in ("Succeeded", "Failed")
+        return 1 if active else sum(len(_users(claim)) for claim in _claims_of(kind, obj))
     labels = ((obj.get("spec", {}) or {}).get("selector", {}) or {}).get("matchLabels", {}) or {}
     if not labels:
         return 0
@@ -305,7 +322,7 @@ def _remaining(kind, obj):
     return len(pods)
 
 
-def quiesce(kind, name):
+def quiesce(kind, name, transfer_id="", expected_uid=""):
     """Stop the workload so its data is at rest, remembering how it was running.
 
     Asked twice, it does not overwrite what it remembered the first time -
@@ -314,20 +331,33 @@ def quiesce(kind, name):
     """
     kind = _kind(kind)
     obj = _object(kind, name)
+    _owner(obj, transfer_id, expected_uid)
     origin = _origin(obj)
     if not origin:
         origin = _run_state(kind, obj)
+        if transfer_id and kind == "vm":
+            vmi = _get(f"/apis/kubevirt.io/v1/namespaces/{NS}/virtualmachineinstances/{name}")
+            origin["_copy_running"] = bool(vmi) and (vmi.get("status") or {}).get("phase") not in ("Succeeded", "Failed")
+            origin["_copy_completed"] = bool(vmi) and (vmi.get("status") or {}).get("phase") == "Succeeded" and origin.get("runStrategy") in ("Once", "RerunOnFailure")
+            if origin.get("runStrategy") == "Once" and not origin["_copy_completed"]:
+                raise ValueError("A VM with the Once run strategy cannot safely resume after copying. Change its run strategy before copying")
     if kind == "volume":
         users = _users(name)
         if users:
             raise ValueError(f"{name} is in use by {', '.join(users[:3])}; stop what uses it, "
                              "or move that app or VM instead, which brings the volume with it")
     patch = {"metadata": {"annotations": {NAMES.key(ORIGIN): json.dumps(origin)}}}
+    if transfer_id:
+        patch["metadata"]["annotations"][NAMES.key(OWNER)] = transfer_id
+        if obj.get("metadata", {}).get("resourceVersion"):
+            patch["metadata"]["resourceVersion"] = obj["metadata"]["resourceVersion"]
     if kind == "volume":
         _merge(kind, name, patch)
         return {"ok": True, "origin": origin, "detail": f"{name} is held for the move"}
     if kind == "vm":
-        if "runStrategy" in (obj.get("spec", {}) or {}):
+        if transfer_id and origin.get("_copy_completed"):
+            pass  # Keep the completed VMI: its presence prevents another run.
+        elif "runStrategy" in (obj.get("spec", {}) or {}):
             patch["spec"] = {"runStrategy": "Halted"}
         else:
             patch["spec"] = {"running": False}
@@ -360,16 +390,21 @@ def _backup_backing_image(image):
             raise
 
 
-def backup(kind, name, retry_failed=False, claims=None):
+def backup(kind, name, retry_failed=False, claims=None, transfer_id="", expected_uid=""):
     """Back up the claims the workload mounts - all of them, or those named
     (the ones a move brings; the rest are skipped or made blank there).
     Refuses while it still runs."""
     kind = _kind(kind)
     obj = _object(kind, name)
+    _owner(obj, transfer_id, expected_uid)
     if not _origin(obj):
         raise ValueError(f"{name} has not been stopped for a move")
     if _remaining(kind, obj):
         raise ValueError(f"{name} is still running; its data is not at rest yet")
+    if transfer_id:
+        for claim in _claims_of(kind, obj):
+            if _users(claim):
+                raise ValueError(f"Volume {claim} is still in use; stop its other users before copying")
     recorded = _recorded_backups(obj)
     states = {row["claim"]: row for row in status(kind, name)["backups"]} if recorded else {}
     def save():
@@ -438,22 +473,43 @@ def status(kind, name):
                             progress=int(found.get("progress", 0) or 0),
                             error=found.get("error", ""), image=image_state))
     return {"kind": kind, "name": name, "stopped_for_move": bool(_origin(obj)),
+            "transfer_owner": NAMES.read(_annotations(obj), OWNER),
+            "source_uid": obj.get("metadata", {}).get("uid", ""),
             "origin": _origin(obj), "running": _remaining(kind, obj), "backups": backups}
 
 
 # ------------------------------------------------------------ putting it back
-def release(kind, name):
+def release(kind, name, transfer_id="", expected_uid=""):
     """Undo a quiesce: run the workload exactly as it was before the move."""
     kind = _kind(kind)
     obj = _object(kind, name)
+    _owner(obj, transfer_id, expected_uid)
     origin = _origin(obj)
     if not origin:
         return {"ok": True, "detail": f"{name} was not stopped for a move"}
-    patch = {"metadata": {"annotations": {NAMES.key(ORIGIN): None, NAMES.key(BACKUPS): None}}}
+    patch = {"metadata": {"annotations": {NAMES.key(ORIGIN): None, NAMES.key(BACKUPS): None,
+                                           NAMES.key(OWNER): None}}}
+    if transfer_id and obj.get("metadata", {}).get("resourceVersion"):
+        patch["metadata"]["resourceVersion"] = obj["metadata"]["resourceVersion"]
     if kind == "volume":
         _merge(kind, name, patch)
         return {"ok": True, "detail": f"{name} is no longer held for a move"}
-    patch["spec"] = dict(origin)
+    patch["spec"] = {key: value for key, value in origin.items() if not key.startswith("_copy_")}
+    if transfer_id and kind == "vm" and origin.get("_copy_running") and origin.get("runStrategy") == "Manual":
+        # Manual does not boot merely by restoring its run strategy. Retain
+        # the lease until the start request succeeds, including lost replies.
+        restore = {"spec": patch["spec"]}
+        if obj.get("metadata", {}).get("resourceVersion"):
+            restore["metadata"] = {"resourceVersion": obj["metadata"]["resourceVersion"]}
+        _merge(kind, name, restore)
+        current = _object(kind, name)
+        _owner(current, transfer_id, expected_uid)
+        pending = any(req.get("action") == "Start" for req in
+                      (current.get("status") or {}).get("stateChangeRequests") or [])
+        if not pending and not _get(f"/apis/kubevirt.io/v1/namespaces/{NS}/virtualmachineinstances/{name}"):
+            ksend("PUT", f"/apis/subresources.kubevirt.io/v1/namespaces/{NS}/virtualmachines/{name}/start", {})
+        if current.get("metadata", {}).get("resourceVersion"):
+            patch["metadata"]["resourceVersion"] = _object(kind, name)["metadata"]["resourceVersion"]
     _merge(kind, name, patch)
     return {"ok": True, "detail": f"{name} is running here again, as it was"}
 
@@ -466,6 +522,7 @@ def remove(kind, name, volumes=False, claims=None):
     """
     kind = _kind(kind)
     obj = _object(kind, name)
+    _owner(obj)
     if not _origin(obj):
         raise ValueError(f"{name} was not stopped for a move, so it is not this move's to remove")
     if _remaining(kind, obj):

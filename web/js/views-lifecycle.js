@@ -1996,7 +1996,8 @@ window.clusterInventory = report => {
         : '<span class="dim">none</span>'}</td>
       <td><span class="tag ${w.running ? "ok" : ""}">${w.running ? "running" : "stopped"}</span></td>
       <td>${w.movable
-        ? actionBar([{ label: "Move to this cluster", run: `moveReview(${jsq(report.cluster)},${jsq(w.kind)},${jsq(w.name)})`, need: "admin" }])
+        ? actionBar([{ label: "Copy to this cluster", run: `moveReview(${jsq(report.cluster)},${jsq(w.kind)},${jsq(w.name)},'copy')`, need: "admin" },
+                     { label: "Move to this cluster", run: `moveReview(${jsq(report.cluster)},${jsq(w.kind)},${jsq(w.name)})`, need: "admin" }])
           + ((w.warnings || []).length ? `<div class="dim xs" style="max-width:240px;margin-top:4px">${w.warnings.map(esc).join("; ")}</div>` : "")
         : `<span class="tag bad">cannot move</span><div class="dim xs" style="max-width:240px">${w.blockers.map(esc).join("; ")}</div>`}</td>
     </tr>`).join("")}</tbody></table></div>`
@@ -2032,14 +2033,19 @@ let MOVE_PLAN_SEQUENCE = 0;
 /* Each volume's choice in the move being reviewed: move (the default),
    blank or skip, and its storage class here. Kept across re-checks. */
 let MOVE_VOLUMES = {};
-window.moveReview = (cluster, kind, name) => {
+let MOVE_TRANSFER_MODE = "move";
+window.moveReview = (cluster, kind, name, transferMode = "move") => {
   ++MOVE_PLAN_SEQUENCE;
   MOVE_VOLUMES = {};
-  childModal(`Move ${name} from ${cluster}`, `
+  MOVE_TRANSFER_MODE = transferMode === "copy" && kind !== "volume" ? "copy" : "move";
+  const copy = MOVE_TRANSFER_MODE === "copy", verb = copy ? "Copy" : "Move";
+  childModal(`${verb} ${name} from ${cluster}`, `
   <p class="muted small">${kind === "volume"
     ? `Holds ${esc(name)} on ${esc(cluster)} while nothing uses it, backs it up to the shared backup storage,
       and restores it here. The original stays on ${esc(cluster)} until you remove it, so nothing is lost if
       you change your mind.`
+    : copy ? `Creates a stopped copy here. The source pauses for its volume backups, then resumes its previous running state.
+      Review the copy's network settings before starting it.`
     : `Stops ${esc(name)} on ${esc(cluster)}, backs up its volumes to the shared backup
       storage, restores them here, and starts it here. The original stays on ${esc(cluster)}, stopped,
       until you remove it, so it can be put back at any point before then.`}</p>
@@ -2056,8 +2062,8 @@ window.moveReview = (cluster, kind, name) => {
   <div class="row" style="margin-top:16px">
     <button class="btn" onclick="movePlan(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Check again</button>
     <button class="btn pri" id="mv_go" data-need="admin" disabled
-      onclick="moveStart(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Start move</button>
-    <button class="btn" onclick="modalBack()">Cancel</button></div>`);
+      onclick="moveStart(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Start ${copy ? "copy" : "move"}</button>
+    <button class="btn" onclick="modalBack()">Cancel</button></div>`, false, "operation-review");
   movePlan(cluster, kind, name);
   for (const id of ["#mv_ns", "#mv_ip"]) {
     const field = $(id);
@@ -2075,7 +2081,7 @@ window.moveAddressMode = value => {
 const moveBody = (cluster, kind, name) => ({
   cluster, kind, name, namespace: $("#mv_ns")?.value.trim() || "lab",
   address_mode: $("#mv_mode")?.value || "shared", address: $("#mv_ip")?.value.trim() || "",
-  storage_class: $("#mv_sc")?.value || "", volumes: MOVE_VOLUMES });
+  storage_class: $("#mv_sc")?.value || "", volumes: MOVE_VOLUMES, transfer_mode: MOVE_TRANSFER_MODE });
 
 /* One volume's choice changed: remembered, and the move checked again. */
 window.moveVolumeSet = (cluster, kind, name, claim, field, value) => {
@@ -2099,7 +2105,7 @@ function moveVolumesTable(plan, cluster, kind, name) {
     const pick = (MOVE_VOLUMES[c.claim] || {}).storage_class || c.storage_class || plan.storage_class || "";
     return `<tr><td><b class="mono">${esc(c.claim)}</b><div class="dim xs">${c.size_gb} GB${c.volume_mode === "Block" ? " · disk" : ""}${c.source_class ? ` · ${esc(c.source_class)} on ${esc(cluster)}` : ""}</div></td>
       <td><select id="mv_vol_${esc(c.claim)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'action',this.value)">
-        ${Object.entries(MOVE_VOLUME_ACTIONS).map(([value, label]) => `<option value="${value}" ${c.action === value ? "selected" : ""}>${label}</option>`).join("")}</select></td>
+        ${Object.entries(MOVE_VOLUME_ACTIONS).map(([value, label]) => `<option value="${value}" ${c.action === value ? "selected" : ""}>${value === "move" && MOVE_TRANSFER_MODE === "copy" ? "Copy its data" : label}</option>`).join("")}</select></td>
       <td>${c.action === "skip" ? '<span class="dim xs">the one here keeps its own</span>'
         : `<select id="mv_volsc_${esc(c.claim)}" onchange="moveVolumeSet(${arg(cluster)},${arg(kind)},${arg(name)},${arg(c.claim)},'storage_class',this.value)">
           ${classes.map(k => `<option value="${esc(k)}" ${k === pick ? "selected" : ""}>${esc(k)}</option>`).join("")}</select>`}</td>
@@ -2122,6 +2128,10 @@ window.movePlan = async (cluster, kind, name) => {
     const plan = await api("/api/move/plan", { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify(moveBody(cluster, kind, name)) });
     if (sequence !== MOVE_PLAN_SEQUENCE || $("#mv_plan") !== host) return;
+    if (MOVE_TRANSFER_MODE === "copy" && plan.transfer_mode !== "copy") {
+      host.innerHTML = '<div class="note bad">Update Homestead on this destination before copying. It only supports moves.</div>';
+      return;
+    }
     // A plan without each volume's action is from before there was a choice: every volume moves.
     const volumes = (plan.claims || []).map(c => ({ ...c, action: c.action || "move" }));
     plan.claims = volumes;
@@ -2137,11 +2147,11 @@ window.movePlan = async (cluster, kind, name) => {
     }
     const fix = (plan.fixes || [])[0];
     host.innerHTML = `
-      ${plan.blockers?.length ? `<div class="note bad"><b>This move would fail.</b><ul>${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>
+      ${plan.blockers?.length ? `<div class="note bad"><b>This ${MOVE_TRANSFER_MODE === "copy" ? "copy" : "move"} cannot start.</b><ul>${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>
         ${fix ? `<button class="btn sm pri" data-need="admin" onclick="clusterStorage(${jsq(cluster)},${fix.kind === "source-address"},() => movePlan(${jsq(cluster)},${jsq(kind)},${jsq(name)}))">${fix.kind === "source-address"
           ? `Give ${esc(cluster)}'s backup storage an address` : `Set up backup storage on ${esc(cluster)}`}</button>` : ""}</div>` : ""}
-      ${plan.warnings?.length ? `<div class="note warn"><b>Worth knowing first.</b><ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
-      ${plan.ok ? `<div class="note good"><b>Ready to move.</b>
+      ${plan.warnings?.length ? `<div class="note warn"><b>Before you start</b><ul>${plan.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>` : ""}
+      ${plan.ok ? `<div class="note good"><b>Ready to ${MOVE_TRANSFER_MODE === "copy" ? "copy" : "move"}.</b>
         ${kind === "volume" ? `${esc(name)} (${plan.total_gb} GB) goes through ${plan.joined ? "the backup storage both clusters already share" : `the backup storage on ${esc(cluster)}, which this cluster will be pointed at`}.`
           : volumes.some(c => c.action === "move") ? (() => { const moving = volumes.filter(c => c.action === "move");
             return `${moving.length === 1 ? "One volume" : `${moving.length} volumes`} (${plan.total_gb} GB) ${moving.length === 1 ? "goes" : "go"}
@@ -2149,7 +2159,7 @@ window.movePlan = async (cluster, kind, name) => {
           : volumes.length ? "No volume's data is moved, so only its definition travels."
           : "It has no volumes, so only its definition travels."}
         ${plan.addresses?.length ? `<br>Reachable here at ${plan.addresses.map(esc).join(", ")}.` : ""}
-        ${plan.will_run || kind === "volume" ? "" : `<br>It is stopped on ${esc(cluster)}, and will arrive stopped.`}</div>` : ""}
+        ${MOVE_TRANSFER_MODE === "copy" || plan.will_run || kind === "volume" ? "" : `<br>It is stopped on ${esc(cluster)}, and will arrive stopped.`}</div>` : ""}
       ${moveVolumesTable(plan, cluster, kind, name)}`;
     if (go) go.disabled = !plan.ok;
   } catch (e) {
@@ -2159,47 +2169,53 @@ window.movePlan = async (cluster, kind, name) => {
 };
 
 window.moveStart = async (cluster, kind, name) => {
-  const question = kind === "volume"
+  const body = JSON.parse(JSON.stringify(moveBody(cluster, kind, name)));
+  const copy = body.transfer_mode === "copy", sequence = MOVE_PLAN_SEQUENCE;
+  const question = copy ? `Copy ${name} from ${cluster}?` + String.fromCharCode(10, 10)
+      + "The source stops while its volumes are backed up, then returns to its original running state. The destination copy stays stopped."
+    : kind === "volume"
     ? `Bring the volume ${name} here from ${cluster}?` + String.fromCharCode(10, 10)
       + `Nothing on ${cluster} can use it until the move finishes or is put back.`
     : `Stop ${name} on ${cluster} and bring it here?` + String.fromCharCode(10, 10)
       + "It is unavailable from the moment it stops there until it starts here.";
   if (!(await ask(question))) return;
+  if (sequence !== MOVE_PLAN_SEQUENCE) return toast("The transfer settings changed; review them again", "bad");
   try {
     await api("/api/move/start", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(moveBody(cluster, kind, name)) });
-    toast(`moving ${name} from ${cluster}; follow it under Linked clusters or in Activity`, "ok");
+      body: JSON.stringify(body) });
+    toast(`${copy ? "Copying" : "Moving"} ${name} from ${cluster}; follow progress under Linked clusters or in Activity`, "ok");
     closeModal(); movesRepaint();
   } catch (e) { toast(e.message, "bad"); }
 };
 
 const MOVE_PHASE_WORDS = { joining: "Share storage", quiescing: "Stop there", "backing-up": "Back up",
-  syncing: "See backups", restoring: "Restore here", creating: "Create here", starting: "Start here" };
+  "releasing-source": "Resume source", syncing: "See backups", restoring: "Restore here", creating: "Create here", starting: "Start here" };
 
 function movesHtml(moves) {
   return (moves || []).map(m => {
+    const copy = m.transfer_mode === "copy";
     const tone = m.status === "succeeded" ? "ok" : m.status === "failed" ? "crit"
       : m.status === "cancelled" ? "low" : "warn";
     const steps = m.phases.filter(p => p !== "done").map((phase, index) => {
       const state = m.status === "succeeded" || index < m.phase_index ? "done"
         : index === m.phase_index ? (m.status === "failed" ? "failed" : m.status === "running" ? "active" : "")
         : "";
-      return `<div class="${state}"><i></i><span><b>${esc(MOVE_PHASE_WORDS[phase] || phase)}</b></span></div>`;
+      return `<div class="${state}"><i></i><span><b>${esc(copy && phase === "starting" ? "Keep copy stopped" : MOVE_PHASE_WORDS[phase] || phase)}</b></span></div>`;
     }).join("");
     const actions = [
-      m.status === "failed" ? `<button class="btn sm" data-need="admin" onclick="moveAct('retry',${jsq(m.id)})">${m.phase === "backing-up" ? "Retry failed backups" : "Retry"}</button>` : "",
-      m.status === "succeeded" && !m.source_removed
+      m.status === "failed" ? `<button class="btn sm" data-need="admin" onclick="moveAct('retry',${jsq(m.id)})">${m.cleanup_pending ? "Retry cleanup" : m.phase === "backing-up" ? "Retry failed backups" : "Retry"}</button>` : "",
+      m.status === "succeeded" && !m.source_removed && !copy
         ? `<button class="btn sm" data-need="admin" onclick="moveFinish(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.kind)})">Remove from ${esc(m.cluster)}</button>` : "",
       ["running", "failed", "succeeded"].includes(m.status) && !m.source_removed
-        ? `<button class="btn sm danger" data-need="admin" onclick="moveBack(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.status)},${m.source_stopped === false ? "false" : "true"})">${m.source_stopped === false ? "Cancel" : "Put back"}</button>` : "",
-      ["succeeded", "cancelled", "failed"].includes(m.status)
-        ? `<button class="btn sm" data-need="admin" data-tip="${m.status === "failed" ? `Clear it from this list, touching neither cluster` : m.status === "succeeded" && !m.source_removed ? `Clear it from this list. ${esc(m.cluster)} keeps its stopped copy until you remove it there.` : "Clear it from this list"}"
+        ? `<button class="btn sm danger" data-need="admin" onclick="moveBack(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.status)},${m.source_stopped === false ? "false" : "true"},${jsq(copy ? "copy" : "move")})">${copy ? m.status === "succeeded" ? "Remove copy" : "Cancel copy" : m.source_stopped === false ? "Cancel" : "Put back"}</button>` : "",
+      ["succeeded", "cancelled", "failed"].includes(m.status) && !(copy && m.source_stopped)
+        ? `<button class="btn sm" data-need="admin" data-tip="${m.status === "failed" ? `Clear it from this list, touching neither cluster` : m.status === "succeeded" && !m.source_removed && !copy ? `Clear it from this list. ${esc(m.cluster)} keeps its stopped copy until you remove it there.` : "Clear it from this list"}"
             onclick="moveDismiss(${jsq(m.id)})">Dismiss</button>` : "",
     ].join("");
     const started = Math.max(0, (Date.now() - Date.parse(m.created_at)) / 1000);
     return `<div class="card flat moveitem">
       <div class="between"><div><div class="ctitle">${esc(m.name)} <span class="dim">from ${esc(m.cluster)}</span>
-        ${m.kind === "vm" ? '<span class="tag">VM</span>' : ""}</div>
+        ${m.kind === "vm" ? '<span class="tag">VM</span>' : ""}${copy ? ' <span class="tag">Copy</span>' : ""}</div>
         <div class="csub">into ${esc(m.namespace)} · started ${esc(started < 90 ? "just now" : fmtAgo(started))}</div></div>
         <span class="pill ${tone}">${esc(m.status)}</span></div>
       <div class="rollout-meter"><span style="width:${Math.max(2, m.progress)}%"></span></div>
@@ -2231,7 +2247,12 @@ window.moveAct = async (action, id) => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
-window.moveBack = async (id, name, cluster, status, stopped = true) => {
+window.moveBack = async (id, name, cluster, status, stopped = true, transferMode = "move") => {
+  if (transferMode === "copy") {
+    if (!(await ask(`${status === "succeeded" ? "Remove the copy of" : "Cancel copying"} ${name}?` + String.fromCharCode(10, 10)
+      + `Removes the objects this copy created here, including their volume data. The original on ${cluster} is kept${stopped ? " and its previous running state is restored" : " as it is"}.`))) return;
+    return moveAct("abandon", id);
+  }
   // Nothing has stopped on the source yet: undoing it only cancels the move.
   if (!stopped) {
     if (!(await ask(`Cancel moving ${name}?` + String.fromCharCode(10, 10)

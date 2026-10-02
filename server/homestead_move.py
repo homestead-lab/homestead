@@ -249,7 +249,8 @@ def _volume_rows(users):
 
 def hello():
     """Which Homestead this is, as another one asks before moving anything."""
-    return {"version": VERSION, "protocol": PROTOCOL, "namespace": NS}
+    return {"version": VERSION, "protocol": PROTOCOL, "namespace": NS,
+            "capabilities": ["copy-source-lease"]}
 
 
 # --------------------------------------------------------------- the far side
@@ -584,7 +585,8 @@ def check_cluster(name):
         return {**base, "state": "refused", "message": str(error)}
 
     version, protocol = str(there.get("version") or ""), int(there.get("protocol") or 0)
-    result = {**base, "version": version, "protocol": protocol}
+    result = {**base, "version": version, "protocol": protocol,
+              "capabilities": there.get("capabilities") or []}
     shown = version or "an unknown release"
     if protocol < PROTOCOL:
         return {**result, "state": "behind", "compatible": False,

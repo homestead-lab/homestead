@@ -446,13 +446,14 @@ class EngineTests(unittest.TestCase):
             if route == "/api/move/source-status":
                 return source.status(query["kind"], query["name"])
             if route == "/api/move/source":
+                identity = {key: body[key] for key in ("transfer_id", "expected_uid") if key in body}
                 if body["action"] == "backup":
-                    return source.backup(body["kind"], body["name"], body.get("retry_failed", False), body.get("claims"))
+                    return source.backup(body["kind"], body["name"], body.get("retry_failed", False), body.get("claims"), **identity)
                 action = {"quiesce": source.quiesce, "backup": source.backup,
                           "release": source.release}.get(body["action"])
                 if body["action"] == "remove":
                     return source.remove(body["kind"], body["name"], body.get("volumes"), body.get("claims"))
-                return action(body["kind"], body["name"])
+                return action(body["kind"], body["name"], **identity)
             raise AssertionError(route)
 
         client.remote = remote

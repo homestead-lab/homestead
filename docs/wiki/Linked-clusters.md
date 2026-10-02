@@ -15,6 +15,10 @@ it relays everything, consoles included, to the others.
   do to a row - start, stop, edit, logs, a console - happens on its cluster.
 - **Move to cluster** in a container's or VM's `…` menu. It opens the other
   cluster at its review of the move; nothing stops until you start it there.
+- **Copy to cluster** keeps the source and creates a stopped copy on the
+  destination. The source pauses for its backups, then resumes its previous
+  running state while those backups are restored. Review the copied VM's
+  guest network settings before starting it.
 - **Moving workloads** under Settings → Linked clusters: moves under way, and
   each cluster a move can come from with **Browse workloads**. See
   [Moving between clusters](Moving-between-clusters).
