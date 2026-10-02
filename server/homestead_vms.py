@@ -225,6 +225,12 @@ def _why_not_filling(ns, dv):
         for event in events_for(ns, other, "")[:5]:
             if event.get("type") == "Warning" and event.get("message"):
                 reasons.append(event["message"])
+    # Combined events can put the real failure beyond the display's text limit.
+    # Diagnose the complete message before shortening generic event output.
+    if any(re.search(r"(?:cannot open|open).*?/dev/cdi-block-volume[^\n]*permission denied",
+                     str(reason), re.IGNORECASE) for reason in reasons):
+        reasons.insert(0, "CDI cannot access its block device. On k3s/RKE2, enable nonroot-devices on every node, "
+                          "restart the node service, then recreate the failed importer pod. Keep the disk PVC and DataVolume.")
     seen, out = set(), []
     for reason in reasons:
         text = " ".join(str(reason).split())[:240]

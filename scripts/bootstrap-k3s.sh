@@ -310,6 +310,9 @@ install_k3s() {
   say "Installing k3s${K3S_VERSION:+ $K3S_VERSION} ($1)"
   if [ -n "$K3S_VERSION" ]; then export INSTALL_K3S_VERSION="$K3S_VERSION"; fi
   if [ -n "$NODE_IP" ]; then set -- "$@" --node-ip "$NODE_IP"; fi
+  # CDI runs without root and must own the block devices assigned to its pods.
+  # Enable on workers too: an importer can be scheduled on any joined node.
+  set -- "$@" --nonroot-devices
   curl -sfL https://get.k3s.io | sh -s - "$@"
 }
 
@@ -320,6 +323,7 @@ install_rke2() { # server|agent [url token]
   say "Installing RKE2${RKE2_VERSION:+ $RKE2_VERSION} ($type)"
   mkdir -p /etc/rancher/rke2
   {
+    echo "nonroot-devices: true"
     [ -n "$NODE_IP" ] && echo "node-ip: $NODE_IP"
     [ -n "$url" ] && echo "server: $url"
     [ -n "$token" ] && echo "token: $token"
