@@ -1220,7 +1220,8 @@ def finish(move_id, volumes=False):
         raise ValueError("only a finished move's source can be removed")
     if move.get("source_removed"):
         return _public(move)
-    body = {"action": "remove", "kind": move["kind"], "name": move["name"], "volumes": bool(volumes)}
+    body = {"action": "remove", "kind": move["kind"], "name": move["name"], "volumes": bool(volumes),
+            "namespace": move.get("source_namespace", "")}
     moved = [c["claim"] for c in _moving(move)]
     if volumes and len(moved) != len(move["claims"]):
         # Skipped and blank volumes are the only copy of their data there. A
