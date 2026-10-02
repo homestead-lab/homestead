@@ -265,7 +265,7 @@ def _public(item):
         out["batch_name"] = item["ref"]["name"]
     if item.get("kind") == "snapshot-delete":
         out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
-    if item.get("kind") in ("self-data-prepare", "host-console"):
+    if item.get("kind") in ("self-data-prepare", "host-console", "cluster-shutdown"):
         out["cancellable"] = out["cleanable"] = False
     if item.get("kind") == "self-data-prepare":
         from homestead_self_data_prepare import can_archive
