@@ -1,0 +1,38 @@
+"use strict";
+const test=require("node:test"), assert=require("node:assert/strict"), fs=require("node:fs"), vm=require("node:vm");
+
+function setup() {
+  const sent=[], storage=new Map();
+  const ctx={console,URLSearchParams,Set,Map,Date,Promise,encodeURIComponent,
+    document:{addEventListener(){}},localStorage:{getItem:k=>storage.get(k),setItem:(k,v)=>storage.set(k,v)},
+    esc:String,jsq:JSON.stringify,toast(){},UI:{lead:t=>t,actions:t=>t,cancel:()=>""},
+    modal:(title,html)=>{ctx.title=title;ctx.html=html;},
+    api:async(path,opts)=>{sent.push({path,body:JSON.parse(opts.body)});return {};},
+    location:{href:"",pathname:"/settings",search:""},history:{replaceState(){}},
+    HomesteadRouter:require("../web/js/router.js")};
+  ctx.window=ctx;vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync("web/js/fleet.js","utf8"),ctx);
+  ctx.FLEET.view={linked:true,members:[{id:"a",handle:"source",self:true,name:"Source",reachable:true},
+    {id:"b",handle:"destination",name:"Destination",reachable:true}]};
+  return {ctx,sent};
+}
+
+test("VM copy destination selection preserves mode through the cluster switch",async()=>{
+  const t=setup();t.ctx.moveToCluster("vm","desktop","source","copy");
+  assert.match(t.ctx.title,/Copy to cluster/);
+  assert.match(t.ctx.html,/moveToClusterGo\("b","source","vm","desktop","copy"\)/);
+  await t.ctx.moveToClusterGo("b","source","vm","desktop","copy");
+  assert.equal(t.sent[0].body.id,"b");
+  const url=new URL(t.ctx.location.href,"https://example.invalid");
+  assert.equal(url.searchParams.get("transfer_mode"),"copy");
+  assert.equal(url.searchParams.get("move"),"source:vm:desktop");
+});
+
+test("arrival opens a copy review while old move links still open a move",()=>{
+  for(const mode of ["copy","move"]){
+    const t=setup(),calls=[];t.ctx.moveReview=(...args)=>calls.push(args);
+    t.ctx.location.search="?move=source%3Avm%3Adesktop"+(mode==="copy"?"&transfer_mode=copy":"");
+    t.ctx.fleetPendingMove();
+    assert.deepEqual(calls[0],["source","vm","desktop",mode]);
+  }
+});

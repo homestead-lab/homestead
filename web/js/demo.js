@@ -823,13 +823,19 @@
         { name: "harvester-node1", ok: true, current: false, pods_wl: 2, score: 88, cpu_after: 31, mem_after: 66,
           hardware: { igpu: true }, temp_c: 39, why: [] },
         { name: "harvester-node3", ok: false, current: false, pods_wl: 1, score: 0, cpu_after: 24, mem_after: 49,
-          hardware: {}, temp_c: 36, why: ["no Intel/AMD iGPU on this host"] }] } : {
-      ok: true, blockers: [], cluster: "branch", kind: "container", name: "frigate",
-      storage_class: JSON.parse(init.body || "{}").storage_class || "longhorn-r2", storage_classes: ["longhorn-r2", "longhorn-r3"],
-      namespace: "lab", joined: false, will_run: true, addresses: ["frigate on 192.0.2.242"],
-      warnings: ["this cluster's Longhorn backup target changes from (none) to s3://homestead-backups@us-east-1/; backups already written to the old one stay there"],
-      claims: [{ claim: "frigate-config", size_gb: 10, access_mode: "ReadWriteOnce",
-        volume_mode: "Filesystem", backing_image: "" }], total_gb: 10 },
+          hardware: {}, temp_c: 36, why: ["no Intel/AMD iGPU on this host"] }] } : (() => {
+      const body = JSON.parse(init.body || "{}"), isVm = body.kind === "vm", copy = body.transfer_mode === "copy";
+      return {
+      ok: true, blockers: [], cluster: body.cluster || "branch", kind: body.kind || "container", name: body.name || "frigate",
+      transfer_mode: copy ? "copy" : "move",
+      storage_class: body.storage_class || "longhorn-r2", storage_classes: ["longhorn-r2", "longhorn-r3"],
+      all_storage_classes: ["longhorn-r2", "longhorn-r3", "local-path"],
+      namespace: body.namespace || "lab", joined: false, will_run: !copy, addresses: isVm ? [] : ["frigate on 192.0.2.242"],
+      warnings: [...(copy && isVm ? ["The VM copy gets new MAC addresses and a firmware UUID. Review guest static IP and network settings before starting it"] : []),
+        "this cluster's Longhorn backup target changes from (none) to s3://homestead-backups@us-east-1/; backups already written to the old one stay there"],
+      claims: [{ claim: isVm ? "haos-disk-0" : "frigate-config", size_gb: isVm ? 32 : 10, access_mode: isVm ? "ReadWriteMany" : "ReadWriteOnce",
+        volume_mode: isVm ? "Block" : "Filesystem", backing_image: "" }], total_gb: isVm ? 32 : 10 };
+      })(),
     "/api/move/start": { id: "d1", status: "running" },
     "/api/host-console": { version: "2.8.293-dev.3", enabled: true, hosts: 2, installed: 2, current: 1, settled: false, harvester: false, nodes: [
       { name: "node-1", ready: true, enabled: true, version: "2.8.243", current: false, detail: "Installed 2.8.243; update available" },

@@ -460,6 +460,7 @@ function workloadActions(w, update, off, compact = false) {
     item("Console", `wlConsole(${ns},${name})`, "console", {need:"operator",tip:"Open an audited shell in a running container"}),
     item("Edit", `wlEdit(${ns},${name})`, "edit", {need:"operator"}),
     FLEET.view?.linked && !w.self && item("Move to cluster", `moveToCluster('container',${name},${jsq(w.site?.handle || "")})`, "move", {need:"admin"}),
+    FLEET.view?.linked && !w.self && item("Copy to cluster", `moveToCluster('container',${name},${jsq(w.site?.handle || "")},'copy')`, "copy", {need:"admin"}),
     (w.ports || []).length > 1 && item("Main port", `wlPrimaryPort(${ns},${name})`, "ext"),
     item("Placement", `wlPlacement(${ns},${name})`, "node"),
     item("Group", `wlGroup(${ns},${name})`, "list", {need:"operator"}),
