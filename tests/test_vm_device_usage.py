@@ -39,6 +39,68 @@ class DeviceAdmissionTests(unittest.TestCase):
             "uid": "vm-" + name, "version": "1", "phase": phase, "retain_resources": True,
             "device_requests": {RESOURCE: 1}, "device_nodes": ["node1"]}}
 
+    def running(self):
+        self.vm["spec"]["runStrategy"] = "Always"
+        instance, launcher = fixtures.VMCapacityTests.running(self)
+        launcher["spec"]["containers"][0]["resources"]["requests"][RESOURCE] = "1"
+        return instance, launcher
+
+    def test_running_edit_reuses_own_gpu_and_usb_without_releasing_cpu_or_ram(self):
+        usb = "example/usb"
+        self.vm["spec"]["template"]["spec"]["domain"]["devices"]["hostDevices"].append(
+            {"name": "keyboard", "deviceName": usb})
+        self.nodes[0]["allocatable"][usb] = "1"
+        self.config["spec"]["configuration"]["permittedHostDevices"]["usb"] = [{"resourceName": usb}]
+        _, launcher = self.running()
+        launcher["spec"]["containers"][0]["resources"]["requests"][usb] = "1"
+        before = copy.deepcopy(self.pods)
+        result = self.plan(action="edit", current=copy.deepcopy(self.vm))
+        self.assertFalse(result["blocked"], result)
+        self.assertEqual([], result["device_conflicts"])
+        self.assertEqual({RESOURCE: 1, usb: 1}, result["vm"]["context"]["reused_device_requests"])
+        self.assertEqual({RESOURCE: 1, usb: 1}, result["vm"]["context"]["device_requests"])
+        self.assertEqual(4.5, result["candidates"][0]["reserved_gb"])
+        self.assertEqual(before, self.pods, "observation and the resident's reservations remain intact")
+
+    def test_running_edit_requires_capacity_for_additional_devices(self):
+        self.running()
+        self.vm["spec"]["template"]["spec"]["domain"]["devices"]["hostDevices"].append(
+            {"name": "gpu2", "deviceName": RESOURCE})
+        self.assertTrue(self.plan(action="edit")["blocked"])
+        self.nodes[0]["allocatable"][RESOURCE] = "2"
+        self.assertFalse(self.plan(action="edit")["blocked"])
+        self.holder()
+        result = self.plan(action="edit")
+        self.assertTrue(result["blocked"])
+        self.assertIn("lab/other", str(result["device_conflicts"]))
+
+    def test_another_pending_start_does_not_block_edit_of_current_device_holder(self):
+        self.running()
+        result = self.plan(action="edit", power_intents=[self.intent()])
+        self.assertFalse(result["blocked"], result)
+        self.assertEqual([], result["device_conflicts"])
+        self.assertTrue(self.plan(power_intents=[self.intent()])["blocked"], "Start still cannot acquire the held device")
+
+    def test_running_edit_does_not_credit_staged_devices_or_unverified_launchers(self):
+        instance, launcher = self.running()
+        instance["spec"]["domain"]["devices"] = {}
+        self.assertTrue(self.plan(action="edit")["blocked"], "a saved device is not proof of live allocation")
+        instance["spec"] = copy.deepcopy(self.vm["spec"]["template"]["spec"])
+        for mutation in ("owner", "phase", "migration", "reservation"):
+            with self.subTest(mutation=mutation):
+                original = copy.deepcopy((instance, launcher))
+                if mutation == "owner":
+                    launcher["metadata"]["ownerReferences"][0]["uid"] = "other-vmi"
+                elif mutation == "phase":
+                    launcher["status"]["phase"] = "Pending"
+                elif mutation == "migration":
+                    instance["status"]["migrationState"] = {"migrationUid": "moving"}
+                else:
+                    del launcher["spec"]["containers"][0]["resources"]["requests"][RESOURCE]
+                self.assertTrue(self.plan(action="edit")["blocked"])
+                instance.clear(); instance.update(original[0])
+                launcher.clear(); launcher.update(original[1])
+
     def test_busy_device_names_its_holder_but_stopped_configuration_is_allowed(self):
         self.holder()
         start = self.plan()

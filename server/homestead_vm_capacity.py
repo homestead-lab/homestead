@@ -172,6 +172,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
     context["launchers"] = [VMRES.identity(pod) for pod in owned]
     manifest = model["manifest"]
     resident_node = None
+    edit_launcher = None
     dependency_pods = pods
     if action == "unpause":
         try:
@@ -210,6 +211,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
                 if selector.get("kubernetes.io/hostname") not in (None, node):
                     blockers.append("Stop the running VM before editing its pinned host; Save does not move its current instance")
                 selector["kubernetes.io/hostname"] = node
+                edit_launcher = launcher
             except ValueError as error:
                 blockers.append("Live edit requires a stable, verified resident launcher: " + str(error))
             warnings.append("Live edit conservatively retains current launcher reservations and checks the proposed VM on its current host too. Stop the VM and review again if this overlap cannot fit; Save does not guarantee a live resize or migration.")
@@ -251,7 +253,23 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
                           (not vmi or (vmi.get("status") or {}).get("phase") in ("Succeeded", "Failed")))
     usage = DEVICE_USAGE.observe(vm, device_spec, read, nodes, pods, power_intents,
         exclude_vmi_uid=(vmi or {}).get("metadata", {}).get("uid") if ownership_known and action in ("restart", "unpause") else None)
-    context["device_requests"] = usage["requests"]
+    context["device_requests"] = dict(usage["requests"])
+    if edit_launcher:
+        # Save retains the resident device allocation. Count only additional
+        # devices in the proposed template, while keeping the launcher's full
+        # reservations in the host budget (including CPU and RAM).
+        current_devices = DEVICE_USAGE.requests(vmi["spec"])
+        projected = manifest["spec"]["template"]["spec"]["containers"][0]["resources"]["requests"]
+        reused = {}
+        for resource, count in usage["requests"].items():
+            credit = min(count, current_devices.get(resource, 0),
+                         RESOURCES.pod_request(edit_launcher["spec"], resource))
+            if credit:
+                reused[resource] = credit
+                usage["requests"][resource] -= credit
+                projected[resource] = str(max(0, RESOURCES.quantity(projected.get(resource), resource) - credit))
+        usage["requests"] = {resource: count for resource, count in usage["requests"].items() if count}
+        context["reused_device_requests"] = reused
     if configuration_only:
         warnings.extend(usage["blockers"])
         if usage["holders"] or usage["pending"]:
