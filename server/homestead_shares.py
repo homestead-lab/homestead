@@ -12,6 +12,7 @@ import homestead_smb_recovery as RECOVERY
 import copy
 import hashlib
 import json
+import os
 import re
 import threading
 import time
@@ -541,6 +542,32 @@ def _volume_name(name):
     return "hs-" + hashlib.sha1(name.encode()).hexdigest()[:12]
 
 
+def filesystem_identity():
+    """The service identity, independent of SMB login accounts."""
+    identity = {}
+    for variable, setting, default in (("USERID", "SAMBA_UID", "99"),
+                                       ("GROUPID", "SAMBA_GID", "100")):
+        value = os.environ.get(setting, default)
+        if not re.fullmatch(r"[0-9]+", value) or not 0 < int(value) < 4294967295:
+            raise ValueError(f"{setting} must be a nonzero numeric filesystem ID")
+        identity[variable] = str(int(value))
+    return identity
+
+
+def shared_group_init(mounts, gid):
+    """Prepare writable share roots without changing owners or descendants."""
+    return {"name": "homestead-share-group", "image": "alpine:3.20",
+            "imagePullPolicy": "IfNotPresent", "resources": {},
+            "terminationMessagePath": "/dev/termination-log",
+            "terminationMessagePolicy": "File",
+            "command": ["sh", "-ec", '\n'.join(
+                f'chgrp {int(gid)} /shares/{i}; chmod g+rws /shares/{i}'
+                for i in range(len(mounts)))],
+            "securityContext": {"runAsUser": 0},
+            "volumeMounts": [{**mount, "mountPath": f"/shares/{i}"}
+                             for i, mount in enumerate(mounts)]}
+
+
 def configured_deployment(deployment, rows, credentials):
     """Build the whole dedicated SMB pod from the authoritative share list."""
     users = _validate_access(rows, credentials)
@@ -550,6 +577,11 @@ def configured_deployment(deployment, rows, credentials):
     deployment["spec"]["strategy"] = {"type": "Recreate"}
     container = next((row for row in spec["containers"] if row.get("name") in (SAMBA_NAME, LEGACY_NAME)),
                      spec["containers"][0])
+    # A shared group allows apps to retain their own UIDs and private appdata.
+    identity = filesystem_identity()
+    container["env"] = [row for row in container.get("env", [])
+                        if row.get("name") not in {*identity, "PERMISSIONS"}] + [
+                            {"name": name, "value": value} for name, value in identity.items()]
     # Include API-defaulted nonzero values so reconciliation is idempotent.
     container["startupProbe"] = {"tcpSocket": {"port": 445}, "periodSeconds": 5, "timeoutSeconds": 1,
                                  "successThreshold": 1, "failureThreshold": 60}
@@ -559,7 +591,9 @@ def configured_deployment(deployment, rows, credentials):
     # comes from the share inventory; a hand-edited mount must not survive or
     # collide with the one Homestead generates for the same path.
     mounts, volumes = [], []
-    args = ["-p"]
+    # The image's -p recursively chowns/chmods all shares, including appdata.
+    # Shared-group preparation only changes writable mount roots.
+    args = []
     attached, paths = {}, set()
     for row in sorted(rows, key=lambda item: item["name"]):
         if not row.get("pvc") or row["pvc"] in suspended:
@@ -588,7 +622,19 @@ def configured_deployment(deployment, rows, credentials):
                        f"{'yes' if row.get('public') else 'no'};{'all' if row.get('public') else _user(row.get('user'))}"]
     for user, password in sorted(users.items()):
         args += ["-u", f"{user};{password}"]
-    args += ["-g", "server min protocol = SMB2"]
+    args += ["-g", "server min protocol = SMB2",
+             "-g", "force group = smb",
+             "-g", "create mask = 0664", "-g", "force create mode = 0660",
+             "-g", "directory mask = 2775", "-g", "force directory mode = 2770"]
+    writable = [mount for mount in mounts if not mount.get("readOnly")]
+    init = [item for item in spec.get("initContainers", [])
+            if item.get("name") != "homestead-share-group"]
+    if writable:
+        init.append(shared_group_init(writable, identity["GROUPID"]))
+    if init:
+        spec["initContainers"] = init
+    else:
+        spec.pop("initContainers", None)
     container["args"], container["volumeMounts"], spec["volumes"] = args, mounts, volumes
     return deployment
 
@@ -639,11 +685,12 @@ def reconcile_samba(image="", retry_recovery=False):
     desired_container = desired_spec["containers"][0]
     if image:
         desired_container["image"] = image
-    fields = ("args", "volumeMounts", "image", "startupProbe", "readinessProbe")
+    fields = ("args", "env", "volumeMounts", "image", "startupProbe", "readinessProbe")
     # Compared without the zero values Kubernetes leaves out when it stores
     # a spec, or every check finds drift and restarts SMB (homestead_specs).
     changed = any(not SPECS.same(actual_container.get(field), desired_container.get(field)) for field in fields)
     changed |= not SPECS.same(actual_spec.get("volumes", []), desired_spec.get("volumes", []))
+    changed |= not SPECS.same(actual_spec.get("initContainers", []), desired_spec.get("initContainers", []))
     changed |= not SPECS.same(deployment["spec"].get("strategy"), desired["spec"].get("strategy"))
     if not changed:
         if RECOVERY.read(deployment) != recovery:

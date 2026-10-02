@@ -101,6 +101,13 @@ persistence:
 # cluster's default.
 storageClass: ""
 
+# Filesystem identity Samba uses on shared volumes. Apps may keep different
+# UIDs, but need this GID and UMASK=002 for group access. Existing descendants
+# need a separate migration when changing groups; their owners are preserved.
+samba:
+  uid: 99
+  gid: 100
+
 # Homestead published through a Cloudflare Tunnel behind Cloudflare Access:
 # requests that came through Cloudflare without Access's signature are refused.
 cloudflareAccess:
@@ -264,6 +271,10 @@ spec:
               value: {{ .Values.workloadNamespace.name | quote }}
             - name: SMB_NAMESPACE
               value: {{ .Values.workloadNamespace.name | quote }}
+            - name: SAMBA_UID
+              value: {{ .Values.samba.uid | quote }}
+            - name: SAMBA_GID
+              value: {{ .Values.samba.gid | quote }}
             - name: STORAGE_CLASS
               value: {{ .Values.storageClass | quote }}
             - name: LB_IP

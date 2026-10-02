@@ -1,8 +1,10 @@
 import base64
 import copy
 import json
+import os
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 
@@ -12,6 +14,85 @@ import homestead_shares as shares
 
 
 class ShareTests(unittest.TestCase):
+    def test_shared_group_prepares_only_writable_roots_and_keeps_other_init_containers(self):
+        dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]
+        spec = dep["spec"]["template"]["spec"]
+        spec["initContainers"] = [{"name": "other", "image": "busybox"}]
+        spec["containers"][0]["env"] = [{"name": "PERMISSIONS", "value": "true"}]
+        rows = [{"name": "rw", "pvc": "claim", "sub_path": "media", "public": True},
+                {"name": "ro", "pvc": "claim", "read_only": True, "public": True}]
+        desired = shares.configured_deployment(dep, rows, {})
+        spec = desired["spec"]["template"]["spec"]
+        self.assertEqual("other", spec["initContainers"][0]["name"])
+        init = spec["initContainers"][1]
+        self.assertEqual(1, len(init["volumeMounts"]))
+        self.assertEqual("media", init["volumeMounts"][0]["subPath"])
+        self.assertIn("chmod g+rws", init["command"][2])
+        self.assertNotIn("chown", init["command"][2])
+        self.assertNotIn("-R", init["command"][2])
+        container = spec["containers"][0]
+        self.assertNotIn("-p", container["args"])
+        self.assertNotIn("PERMISSIONS", [e["name"] for e in container["env"]])
+        self.assertIn("force create mode = 0660", container["args"])
+        self.assertIn("force directory mode = 2770", container["args"])
+        self.assertEqual(desired, shares.configured_deployment(desired, rows, {}))
+
+    def test_removing_last_writable_share_removes_group_init(self):
+        dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]
+        rows = [{"name": "rw", "pvc": "claim", "public": True}]
+        dep = shares.configured_deployment(dep, rows, {})
+        self.assertIn("initContainers", dep["spec"]["template"]["spec"])
+        rows[0]["read_only"] = True
+        dep = shares.configured_deployment(dep, rows, {})
+        self.assertNotIn("initContainers", dep["spec"]["template"]["spec"])
+
+    def test_smb_identity_preserves_other_environment_and_is_idempotent(self):
+        dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]
+        container = dep["spec"]["template"]["spec"]["containers"][0]
+        container["env"] = [{"name": "TZ", "value": "Europe/London"},
+                            {"name": "USERID", "value": "100"},
+                            {"name": "GROUPID", "value": "101"}]
+        rows, credentials, *_ = shares._state()
+        with patch.dict(os.environ, {"SAMBA_UID": "99", "SAMBA_GID": "100"}):
+            desired = shares.configured_deployment(dep, rows, credentials)
+            self.assertEqual(desired, shares.configured_deployment(desired, rows, credentials))
+        env = desired["spec"]["template"]["spec"]["containers"][0]["env"]
+        self.assertEqual({"TZ": "Europe/London", "USERID": "99", "GROUPID": "100"},
+                         {item["name"]: item["value"] for item in env})
+        self.assertEqual("100", container["env"][1]["value"])
+
+    def test_smb_identity_can_retain_the_former_image_defaults(self):
+        with patch.dict(os.environ, {"SAMBA_UID": "100", "SAMBA_GID": "101"}):
+            self.assertEqual({"USERID": "100", "GROUPID": "101"}, shares.filesystem_identity())
+
+    def test_reconciliation_repairs_identity_drift_once(self):
+        rows, credentials, config_obj, secret_obj, dep = shares._state()
+        with patch.dict(os.environ, {"SAMBA_UID": "99", "SAMBA_GID": "100"}):
+            dep = shares.configured_deployment(dep, rows, credentials)
+            actual = copy.deepcopy(dep)
+            actual["spec"]["template"]["spec"]["containers"][0]["env"] = [
+                {"name": "USERID", "value": "100"}, {"name": "GROUPID", "value": "101"}]
+            recovery = shares.RECOVERY.read(actual)
+            recovery.setdefault("suspended", {})
+            with patch.object(shares, "_state", return_value=(rows, credentials, config_obj, secret_obj, actual)), \
+                    patch.object(shares.RECOVERY, "observe", return_value=({}, "")), \
+                    patch.object(shares.RECOVERY, "plan", return_value=recovery), \
+                    patch.object(shares, "_samba_ready", return_value=False):
+                self.assertEqual("repaired", shares.reconcile_samba()["state"])
+            repaired = self.sent[-1][2]
+            with patch.object(shares, "_state", return_value=(rows, credentials, config_obj, secret_obj, repaired)), \
+                    patch.object(shares.RECOVERY, "observe", return_value=({}, "")), \
+                    patch.object(shares.RECOVERY, "plan", return_value=recovery), \
+                    patch.object(shares, "ksend") as send:
+                self.assertEqual("current", shares.reconcile_samba()["state"])
+                send.assert_not_called()
+
+    def test_invalid_smb_identity_is_rejected_before_changing_deployment(self):
+        for value in ("", "0", "-1", "abc", "4294967295"):
+            with self.subTest(value=value), patch.dict(os.environ, {"SAMBA_UID": value}):
+                with self.assertRaisesRegex(ValueError, "SAMBA_UID"):
+                    shares.filesystem_identity()
+
     def setUp(self):
         self.objects = {
             "/api/v1/namespaces/lab/configmaps/homestead-shares": {

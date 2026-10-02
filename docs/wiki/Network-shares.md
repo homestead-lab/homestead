@@ -45,6 +45,33 @@ Samba keeps one password per user. Select an existing SMB user in **New share**
 to reuse it, or add a new user. Use **SMB users** beside **New share** to change
 a password for all of that user's private shares.
 
+## Shared file access
+
+Homestead sets Samba's filesystem identity to UID `99`, GID `100`, matching
+the common app convention for shared downloads and media. This identity is
+separate from SMB login accounts. Set `samba.uid` and `samba.gid` in Helm values,
+or `SAMBA_UID` and `SAMBA_GID` on Homestead, to match your applications.
+Reconciliation maintains these IDs on the SMB container. Applications can keep
+different UIDs: they need the shared GID (as their primary or effective
+supplementary group), `UMASK=002`, and group-write access to existing files.
+An image that resets supplementary groups at startup may require setting PGID.
+
+SMB prepares only writable share roots with the shared group and group-write,
+traverse and setgid permissions. Setgid makes new files inherit the directory's
+group. SMB-created files allow group write, and new directories retain setgid.
+Read-only roots and all existing descendants are left untouched. Samba no
+longer runs its recursive `-p` ownership/permission rewrite on every startup.
+
+Existing files may need a one-time, scoped group/permission migration; changing
+the shared GID does not migrate descendants. Check every application using the
+volume first. Keep private `/config` ownership with its application UID.
+Use `samba.uid=100` and `samba.gid=101` to retain the former SMB identity.
+Storage must allow root-directory group/mode updates; root-squashed exports
+need preparation on the storage server. Apps that explicitly create restrictive
+permissions need their own configuration even with `UMASK=002`.
+
+This follows the [Servarr shared-group guidance](https://wiki.servarr.com/docker-guide).
+
 ## Connecting
 
 - **Windows**: `\\<address>\<share>` in File Explorer, or **Map network drive**.
