@@ -8,6 +8,14 @@
   --r:20px; --r2:14px;
   --e:cubic-bezier(.22,.61,.36,1);
 }
+#lhV2Setup{display:grid;gap:16px}
+#lhV2Setup .ui-progress.unknown .ui-bar i{animation-name:lh-v2-wait}
+@keyframes lh-v2-wait{from{transform:translateX(0)}to{transform:translateX(185%)}}
+html[data-theme="light"] .modalbox[data-context="longhorn-v2"]{background:var(--surf);color:var(--tx)}
+html[data-theme="light"] .modalbox[data-context="longhorn-v2"] .ui-callout.warn b{color:#824600}
+html[data-theme="light"] .modalbox[data-context="longhorn-v2"] .ui-bar{background:var(--line2)}
+html[data-theme="light"] .modalbox[data-context="longhorn-v2"] .ui-bar i{background:var(--tx)}
+html[data-theme="light"] .modalbox[data-context="longhorn-v2"] .ui-steps .current .ui-step-num{background:var(--tx);color:var(--surf);border-color:var(--tx)}
 /* ---- themes ---- */
 html[data-theme="light"]{
   --bg:#ececed; --surf:#ffffff; --surf2:#f6f6f7; --surf3:#ebebee;
