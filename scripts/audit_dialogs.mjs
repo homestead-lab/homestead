@@ -21,6 +21,14 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // "click:<fn>" (the first control whose onclick calls fn), or "text:<label>"
 // (the first button in the dialog with that label).
 const DIALOGS = [
+  ["disk-v2-review", "nodes", "window.__demoDiskV2State='ready';diskV2Open('node-1','disk-data')"],
+  ["disk-v2-blocked", "nodes", "window.__demoDiskV2State='blocked';diskV2Open('node-1','disk-data')"],
+  ["disk-v2-evacuating", "nodes", "window.__demoDiskV2State='evacuating';diskV2Watch('demo-disk-v2')"],
+  ["disk-v2-awaiting", "nodes", "window.__demoDiskV2State='awaiting-erase';diskV2Watch('demo-disk-v2')"],
+  ["disk-v2-erase", "nodes", "window.__demoDiskV2State='awaiting-erase';diskV2Watch('demo-disk-v2')", "diskV2EraseReview('demo-disk-v2')"],
+  ["disk-v2-preparing", "nodes", "window.__demoDiskV2State='preparing';diskV2Watch('demo-disk-v2')"],
+  ["disk-v2-failed", "nodes", "window.__demoDiskV2State='failed';diskV2Watch('demo-disk-v2')"],
+  ["disk-v2-complete", "nodes", "window.__demoDiskV2State='complete';diskV2Watch('demo-disk-v2')"],
   ["longhorn-v2-missing", "settings", "window.__demoV2State='missing';lhV2Setup()"],
   ["longhorn-v2-prepare", "settings", "window.__demoV2State='missing';lhV2Setup()", "lhV2ReviewHost('k3s-test')"],
   ["longhorn-v2-running", "settings", "window.__demoV2State='running';lhV2Setup()"],

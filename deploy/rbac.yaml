@@ -90,7 +90,7 @@ rules:
     # fromBackup parameter points at the selected Longhorn backup.
     verbs: [get, list, create]
   - apiGroups: ["longhorn.io"]
-    resources: [engines, settings, backupvolumes]
+    resources: [engines, settings, backupvolumes, instancemanagers, instancemanagerupgradecontrols]
     verbs: [get, list, watch]
   # Image cache: which nodes hold a copy of each VM image.
   - apiGroups: ["longhorn.io"]

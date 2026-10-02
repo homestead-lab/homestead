@@ -116,6 +116,7 @@ window.openOperation = (href, id = "", savedOperation = null) => {
   const operation = savedOperation?.id === id ? savedOperation : (STATE.data.operations || []).find(item => item.id === id);
   operationPanelOpen = false;
   renderOperations();
+  if(operation?.kind==='disk-v2-convert' && window.diskV2Watch) return diskV2Watch(id);
   // Recovery jobs need their retained-resource review, not just the page
   // where the resources live. Every review still checks the saved job afresh.
   if (operation?.status === "failed" && operation.mutation_recovery) return powerRecoveryReview(id, operation.kind === "import-create" ? "import" : true);
