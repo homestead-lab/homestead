@@ -279,8 +279,6 @@ function stepGo(id, to, relative) {
   root.dataset.step = next;
   panes.forEach((pane, i) => { pane.hidden = i !== next; });
   chips.forEach((chip, i) => { chip.classList.toggle("on", i === next); chip.classList.toggle("done", i < next); chip.setAttribute("aria-selected", String(i === next)); });
-  const head = root.querySelector(".stepper-head");
-  if (head && head.scrollWidth > head.clientWidth) chips[next]?.scrollIntoView({ block: "nearest", inline: "nearest" });
   const last = next === panes.length - 1, nextButton = root.querySelector("[data-next]");
   root.querySelector("[data-back]").hidden = !next;
   if (nextButton) { nextButton.hidden = last; if (!last) nextButton.textContent = `Next: ${chips[next + 1].textContent.replace(/^\d+/, "")}`; }
