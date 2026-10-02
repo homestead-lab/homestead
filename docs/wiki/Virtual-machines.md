@@ -76,6 +76,22 @@ network (Harvester's VM networks, or any Multus network), where it gets an
 address from your router. **Edit → Cloud-init** takes SSH keys, users and
 packages.
 
+### Isolated VM
+
+Select **Isolated VM** on the Network page when creating or editing a VM to
+remove all virtual network cards and disable KubeVirt's automatic pod-network
+card. Network, address and Service VIP controls are disabled while selected.
+The setting is saved with the VM and checked by the create/edit API; clear it
+before adding a network card again. Disks and PCI/USB passthrough are retained.
+A physical network device passed through PCI or USB can still connect the guest.
+
+Removing the last interface also disables automatic attachment, so an empty
+network list stays empty at the next boot. Older VMs with an empty saved list
+and automatic attachment enabled display **Network · automatic** and a warning.
+Saving an empty network list or selecting **Isolated VM** disables that default.
+For a running VM, save first and separately review a restart to apply removal;
+saving alone does not disconnect its current guest.
+
 ### An address of its own
 
 On the **pod network** a VM is reached through a Service, like a container.

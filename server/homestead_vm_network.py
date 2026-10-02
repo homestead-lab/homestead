@@ -10,9 +10,44 @@ from urllib.parse import quote
 
 import homestead_pod_resources as RESOURCES
 
+ISOLATED = "homestead.io/network-isolated"
+
 RESOURCE = "k8s.v1.cni.cncf.io/resourceName"
 DNS = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?")
 QUALIFIED = re.compile(r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?/[A-Za-z0-9](?:[A-Za-z0-9_.-]*[A-Za-z0-9])?")
+
+
+def isolated(vm):
+    return ((vm.get("metadata") or {}).get("annotations") or {}).get(ISOLATED) == "true"
+
+
+def isolation_requested(cfg, default=False):
+    if "isolated" in cfg and type(cfg["isolated"]) is not bool:
+        raise ValueError("Isolated VM must be a checkbox value")
+    return cfg.get("isolated", default)
+
+
+def apply_isolation(vm, cfg):
+    """Persist explicit isolation; a form/API cannot silently add NICs to it."""
+    enabled = isolation_requested(cfg, isolated(vm))
+    if enabled and (cfg.get("add_nics") or any(not row.get("remove") for row in cfg.get("nics") or [])):
+        raise ValueError("Clear Isolated VM before adding or configuring network cards")
+    spec = vm["spec"]["template"]["spec"]
+    devices = spec["domain"].get("devices") or {}
+    annotations = (vm.get("metadata") or {}).get("annotations") or {}
+    before = (annotations.get(ISOLATED), devices.get("autoattachPodInterface"),
+              devices.get("interfaces"), spec.get("networks"))
+    if enabled:
+        vm.setdefault("metadata", {}).setdefault("annotations", {})[ISOLATED] = "true"
+        annotations = vm["metadata"]["annotations"]
+        devices = spec["domain"].setdefault("devices", {})
+        devices["autoattachPodInterface"] = False
+        devices["interfaces"], spec["networks"] = [], []
+    elif "isolated" in cfg:
+        annotations.pop(ISOLATED, None)
+    after = (annotations.get(ISOLATED), devices.get("autoattachPodInterface"),
+             devices.get("interfaces"), spec.get("networks"))
+    return before != after
 
 
 def evidence(spec, namespace, configuration, read=None):

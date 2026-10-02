@@ -371,7 +371,7 @@ window.vmOpen = async (ns, name) => {
         <button class="btn sm" data-need="operator" onclick="vmEdit(${jsq(ns)},${jsq(name)})">${icon("edit")}Edit</button></div></div>
     ${v.problem ? `<div class="note bad" style="margin-top:10px">${esc(v.problem)}</div>` : ""}
     ${vmFilling(v)}
-    <div class="seg" style="margin:12px 0">${tab("overview", "Overview")}${tab("disks", `Disks · ${v.disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("events", "Events")}</div>
+    <div class="seg" style="margin:12px 0">${tab("overview", "Overview")}${tab("disks", `Disks · ${v.disks.length}`)}${tab("network", `Network · ${v.isolated ? "isolated" : v.implicit_network ? "automatic" : v.nics.length}`)}${tab("events", "Events")}</div>
     <div class="vm-pane" data-pane="overview">
       <div class="vm-facts wide">
         <div><span>CPU</span><b>${v.cores == null ? "Unavailable" : `${esc(v.cores)} cores`}</b></div><div><span>Memory</span><b>${esc(v.memory || "—")}</b></div>
@@ -481,7 +481,7 @@ window.vmEdit = async (ns, name) => {
   const tab = (id, label) => `<button class="${id === "general" ? "on" : ""}" onclick="vmEditTab(this,${jsq(id)})">${label}</button>`;
   const disks = v.disks.filter(d => d.kind === "disk" || d.kind === "cd-rom");
   const ci = v.cloud_init || {};
-  $("#mbody").innerHTML = `<div class="between vm-edit-tabs"><div class="seg">${tab("general", "General")}${v.hardware ? tab("hardware", "Hardware") : ""}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("devices", `Passthrough · ${(v.host_devices || []).length}`)}${tab("cloud", "Cloud-init")}</div>
+  $("#mbody").innerHTML = `<div class="between vm-edit-tabs"><div class="seg">${tab("general", "General")}${v.hardware ? tab("hardware", "Hardware") : ""}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.isolated ? "isolated" : v.implicit_network ? "automatic" : v.nics.length}`)}${tab("devices", `Passthrough · ${(v.host_devices || []).length}`)}${tab("cloud", "Cloud-init")}</div>
       <button class="btn sm" data-need="admin" onclick="vmYaml(${jsq(ns)},${jsq(name)})" title="Every field, as YAML">${icon("edit")}Edit YAML</button></div>
     <div class="ve-pane" data-pane="general" style="margin-top:12px">
       ${vmEditResourceFields(v)}
@@ -498,12 +498,16 @@ window.vmEdit = async (ns, name) => {
       <div class="row" style="margin-top:10px"><button class="btn sm" onclick="vmAddDisk('disk')">＋ Disk</button><button class="btn sm" onclick="vmAddDisk('cd-rom')">＋ CD-ROM</button></div>
       <div class="dim xs" style="margin-top:8px">Boot order: the lowest number boots first. Detached disks are kept as volumes.</div></div>
     <div class="ve-pane" data-pane="network" hidden style="margin-top:12px">
+      <label class="check"><input id="ve_isolated" type="checkbox" ${v.isolated ? "checked" : ""} onchange="vmIsolationChanged()"> Isolated VM</label>
+      <p class="dim small">Removes every virtual network card and disables automatic attachment. Clear this option before adding a card. Changes apply at the VM's next start; a running VM needs a separate restart. PCI or USB passthrough can still provide a physical network device.</p>
+      ${v.implicit_network ? '<div class="note warn">No network card is saved, but KubeVirt currently adds its default pod-network card at boot. Select Isolated VM to disable it, or add an explicit interface.</div>' : ""}
+      <div id="ve_network_controls">
       <div class="note small"><b>Service VIP (default or selected address)</b><p>Uses a masquerade pod-network interface and forwards the ports you select. It is not the guest's own IP or MAC. Configure this separately from NIC changes; save those first if you are adding a pod interface.</p>
         <button class="btn" data-need="operator" onclick="networkManage(${jsq(ns)},${jsq(name)},'VirtualMachine')">Configure default / selected VIP</button></div>
       <div class="tblwrap"><table class="tbl dense stack ve-table"><thead><tr><th>Interface</th><th>Model</th><th>Network</th><th>MAC</th><th></th></tr></thead>
         <tbody id="ve_nics">${v.nics.map(n => vmNicRow(n, o)).join("")}</tbody></table></div>
       <div class="row" style="margin-top:10px"><button class="btn sm" onclick="vmAddNic()">＋ Interface</button></div>
-      <div class="note small" style="margin-top:8px"><b>Direct LAN interface</b><p>A bridge/VLAN interface gets its IP from the LAN's DHCP server or the guest OS. The MAC field only identifies the NIC: it does not set an IP. For a stable guest IP, reserve the MAC in your DHCP server or configure networking inside the guest. Cloud-init network data is for initial provisioning and may not rerun on an existing VM.</p></div></div>
+      <div class="note small" style="margin-top:8px"><b>Direct LAN interface</b><p>A bridge/VLAN interface gets its IP from the LAN's DHCP server or the guest OS. The MAC field only identifies the NIC: it does not set an IP. For a stable guest IP, reserve the MAC in your DHCP server or configure networking inside the guest. Cloud-init network data is for initial provisioning and may not rerun on an existing VM.</p></div></div></div>
     <div class="ve-pane" data-pane="devices" hidden style="margin-top:12px">${window.vmDevicesPane ? window.vmDevicesPane(v, res) : ""}</div>
     <div class="ve-pane" data-pane="cloud" hidden style="margin-top:12px">
       ${v.sensitive_hidden ? `<div class="note">An administrator can view and edit cloud-init. It is preserved when you save other changes.</div>` : ci.source === "unreadable" ? `<div class="note bad">This VM's cloud-init is in a secret Homestead cannot read, so it is left as it is.</div>` : `
@@ -516,6 +520,14 @@ window.vmEdit = async (ns, name) => {
     <div class="row" style="margin-top:14px"><button class="btn pri" onclick="vmEditSave()">Review changes</button><button class="btn" onclick="closeModal()">Cancel</button></div>`;
   if (v.hardware) vmHardwareChanged();
   if (window.applyRole) applyRole();
+  vmIsolationChanged();
+};
+window.vmIsolationChanged = () => {
+  const isolated = !!$("#ve_isolated")?.checked;
+  $$("#ve_network_controls input, #ve_network_controls select, #ve_network_controls button").forEach(el => {
+    if (isolated && !el.disabled) { el.dataset.isolationDisabled = "true"; el.disabled = true; }
+    else if (!isolated && el.dataset.isolationDisabled) { el.disabled = false; delete el.dataset.isolationDisabled; }
+  });
 };
 window.vmEditTab = (button, pane) => {
   $$("#mbody .seg button").forEach(b => b.classList.toggle("on", b === button));
@@ -539,6 +551,7 @@ window.vmAddDisk = kind => {
         <input class="va_boot mono" type="number" min="1" max="64" placeholder="boot #" style="width:80px"></div></div></div></div>`);
 };
 window.vmAddNic = () => {
+  if ($("#ve_isolated")?.checked) return toast("Clear Isolated VM before adding a network card", "bad");
   const { o } = window.__vmEdit;
   $("#ve_nics").insertAdjacentHTML("beforeend", `<tr class="vn-add"><td><b>new</b></td>
     <td><select class="vn_model">${VM_MODELS.map(m => vmOpt(m, m, "virtio")).join("")}</select></td>
@@ -567,12 +580,14 @@ window.vmEditSave = async () => {
   const add_disks = $$("#mbody .vd-add").map(box => ({ kind: box.dataset.kind, size: box.querySelector(".va_size").value.trim(),
     storage_class: box.querySelector(".va_class")?.value || "", bus: box.querySelector(".va_bus").value,
     boot: box.querySelector(".va_boot").value || "", ...sourceOf(box.querySelector(".va_src"), box.querySelector(".va_url")) }));
-  const nics = $$("#mbody tr[data-nic]").map(row => ({ name: row.dataset.nic, model: row.querySelector(".vn_model").value,
+  const isolated = !!$("#ve_isolated")?.checked;
+  const nics = isolated ? [] : $$("#mbody tr[data-nic]").map(row => ({ name: row.dataset.nic, model: row.querySelector(".vn_model").value,
     network: row.querySelector(".vn_net").value, mac: row.querySelector(".vn_mac").value.trim(), remove: row.querySelector(".vn_rm").checked }));
-  const add_nics = $$("#mbody tr.vn-add").map(row => ({ model: row.querySelector(".vn_model").value, network: row.querySelector(".vn_net").value }));
+  const add_nics = isolated ? [] : $$("#mbody tr.vn-add").map(row => ({ model: row.querySelector(".vn_model").value, network: row.querySelector(".vn_net").value }));
   const body = { ns, name, run_strategy: $("#ve_strategy").value,
     description: $("#ve_desc").value, node: $("#ve_node").value, restart: false,
     disks, add_disks, nics, add_nics };
+  if ($("#ve_isolated")) body.isolated = isolated;
   // Profile-controlled fields have no inputs. Unchanged preference defaults
   // must not become explicit overrides just because the form was opened.
   if ($("#ve_cores") && +$("#ve_cores").value !== v.cores) body.cores = +$("#ve_cores").value;
@@ -606,6 +621,7 @@ window.vmEditReview = async (config, restartAfter = false) => {
     const plan = review.capacity, facts = plan.vm || {};
     $("#mbody").innerHTML = `<div class="update-review">
       <div class="reviewbox"><b>Save ${esc(frozen.name)}</b><p class="small">${esc(frozen.cores ?? "Unchanged")} CPU cores · ${esc(frozen.memory || "unchanged memory")}</p>
+        ${frozen.isolated ? '<p class="small"><b>Isolated VM</b> - removes all virtual network cards and disables automatic attachment at next start.</p>' : frozen.isolated === false ? '<p class="small">Virtual network cards are allowed. No automatic card is added when the last interface is removed.</p>' : ""}
         <p class="small">Restart policy: ${esc(facts.policy_before || "unknown")} → ${esc(facts.policy_after || "unknown")}</p>
         <p class="small muted">${facts.admission_needed ? "Resource and policy changes may take effect immediately through KubeVirt. Host RAM estimates include launcher overhead but are not a configured memory limit." : "No new launcher capacity is needed for this metadata or stop/manual-policy edit."}</p></div>
       ${plan.blockers?.length ? `<div class="note bad">${plan.blockers.map(esc).join(" · ")}</div>` : ""}
