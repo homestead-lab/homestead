@@ -76,3 +76,48 @@ test("create records its job and refreshes the tray on success or lost response"
     assert.equal(jobs.length,fail?0:1);assert.equal(refreshed,1);
   }
 });
+
+
+test("isolated create review needs no MAC and never opens VIP setup",async()=>{
+  const t=setup(),original=t.ctx.api;
+  t.ctx.api=async(path,options)=>{
+    const result=await original(path,options);
+    if(path.endsWith('/preview')) delete result.config.mac;
+    return result;
+  };
+  await t.ctx.vmCreateReview({name:'offline',namespace:'lab',isolated:true},{serviceMode:'manual',selectedVip:'192.0.2.10'});
+  assert.match(t.fields['#mbody'].innerHTML,/Isolated VM - no virtual network cards/);
+  assert.doesNotMatch(t.fields['#mbody'].innerHTML,/MAC undefined/);
+  t.fields['#vmCreateApprove'].checked=true;
+  await t.ctx.vmCreateReviewedApply();
+  assert.equal(t.sent.length,2);
+  assert.equal(t.sent[1].body.isolated,true);
+  assert.equal('mac' in t.sent[1].body,false);
+  assert.equal(t.exposed.length,0);
+});
+
+test("isolated new VM ignores stale network, static address and VIP fields",async()=>{
+  const t=setup(),reviews=[];
+  for(const [id,value] of Object.entries({v_boot:'',v_name:'offline',v_cores:'2',v_mem:'2Gi',v_disk:'20',v_pass:'long-test-password',v_net:'lab/lan',v_nic_model:'e1000e',v_addr_mode:'static',v_service:'manual'}))
+    t.fields[`#${id}`]={value};
+  t.fields['#v_isolated']={checked:true};
+  t.ctx.vmPresetSettings=()=>null;
+  t.ctx.vmCreateReview=async(body,network)=>reviews.push({body,network});
+  await t.ctx.doVmCreate();
+  assert.equal(reviews.length,1);
+  assert.equal(reviews[0].body.isolated,true);
+  for(const field of ['network','nic_model','static_ip','mac']) assert.equal(field in reviews[0].body,false);
+  assert.equal(reviews[0].network.serviceMode,'');
+});
+
+
+test("new VM isolation disables network controls and preserves existing restrictions",()=>{
+  const t=setup(),network={disabled:false,dataset:{}},restricted={disabled:true,dataset:{}};
+  t.ctx.$$=()=>[network,restricted];
+  t.ctx.vmLanNetworks=()=>[];
+  for(const key of ['#v_addr_wrap','#v_static']) t.fields[key]={};
+  t.fields['#v_isolated']={checked:true};
+  t.ctx.vmNetChanged();assert.equal(network.disabled,true);assert.equal(restricted.disabled,true);
+  t.fields['#v_isolated'].checked=false;
+  t.ctx.vmNetChanged();assert.equal(network.disabled,false);assert.equal(restricted.disabled,true);
+});

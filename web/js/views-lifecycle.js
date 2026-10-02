@@ -804,6 +804,11 @@ function vmReadAddress(p) {
     dns: $(`#${p}_dns`).value.split(",").map(x => x.trim()).filter(Boolean) };
 }
 window.vmNetChanged = () => {
+  const isolated = !!$("#v_isolated")?.checked;
+  $$("#v_network_controls input, #v_network_controls select, #v_network_controls button").forEach(el => {
+    if (isolated && !el.disabled) { el.dataset.isolationDisabled = "true"; el.disabled = true; }
+    else if (!isolated && el.dataset.isolationDisabled) { el.disabled = false; delete el.dataset.isolationDisabled; }
+  });
   const net = $("#v_net")?.value || "pod";
   const lan = vmLanNetworks(window.__vmCreateOptions || {}, true).some(n => n.name === net);
   $("#v_addr_wrap").hidden = !lan;
@@ -864,7 +869,9 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
     <div class="f" id="v_url_row" hidden><label>Image URL</label><input type="url" id="v_url" placeholder="https://cloud-images.ubuntu.com/…/img"></div>
 `;
   const vmNetwork = `
-
+    <label class="check"><input id="v_isolated" type="checkbox" onchange="vmNetChanged()"> Isolated VM</label>
+    <p class="dim small">No virtual network cards, including the automatic pod-network card. Clear this option before adding a card. PCI or USB passthrough can still provide a physical network device.</p>
+    <div id="v_network_controls">
     <div class="f"><label>Network ${tip("The pod network: reached through a Service, like a container. A LAN network (bridged): a machine there like any other, with an address from DHCP or one of its own.")}</label>
       <select id="v_net" onchange="vmNetChanged()"><option value="pod">Pod network - reached through a Service</option>
         ${(opts.network_details || []).filter(n => n.vms !== false).map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.lan ? ` · LAN${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}` : ""}</option>`).join("")}</select>
@@ -879,6 +886,7 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
       <div class="f"><label>Address</label><select id="v_addr_mode" onchange="vmNetChanged();vmSubnetPicked('v')">
         <option value="dhcp">From the network's DHCP</option><option value="static">One of its own</option></select></div>
       <div id="v_static" hidden>${vmAddressFields("v", opts)}</div></div>
+    </div>
 `;
   const vmStorage = `
     ${(opts.storage_classes || []).length ? `<div class="f" id="v_sc_row"><label>Storage class ${tip(opts.harvester
@@ -925,8 +933,9 @@ window.doVmCreate = async () => {
     install_iso: boot.startsWith("iso:") ? boot.slice(4) : "",
     drivers_iso: boot.startsWith("iso:") ? $("#v_drivers")?.value || "" : "",
     storage_class: $("#v_sc")?.value || "", network: $("#v_net")?.value || "pod",
-    nic_model: $("#v_nic_model")?.value || "virtio" };
-  if (body.network !== "pod" && $("#v_addr_mode")?.value === "static") {
+    nic_model: $("#v_nic_model")?.value || "virtio", isolated: !!$("#v_isolated")?.checked };
+  if (body.isolated) { delete body.network; delete body.nic_model; }
+  if (!body.isolated && body.network !== "pod" && $("#v_addr_mode")?.value === "static") {
     body.static_ip = Object.assign(vmReadAddress("v"), { address: $("#v_ip").value.trim() });
     if (!body.static_ip.address) return toast("give the VM its address", "bad");
   }
@@ -961,13 +970,13 @@ window.vmCreateReview = async (body, network = {}) => {
   try {
     const review = await api("/api/vm/create/preview", {method:"POST", headers:{"Content-Type":"application/json"},body:JSON.stringify(frozen)});
     if (sequence !== VM_CREATE_SEQUENCE) return;
-    if (!review.config?.mac || !review.capacity_token || typeof review.capacity?.blocked !== "boolean")
+    if (!(review.config?.isolated === true || review.config?.mac) || !review.capacity_token || typeof review.capacity?.blocked !== "boolean")
       throw new Error("VM creation review unavailable. Nothing was created; refresh before continuing.");
     VM_CREATE_REVIEW = {...review, network:{...network}};
     const cfg = review.config;
     childModal(`Review new VM · ${cfg.name}`, `<div class="update-review">
       <div class="reviewbox"><b>${esc(cfg.namespace)}/${esc(cfg.name)}</b><p class="small">${esc(cfg.cores || 2)} virtual CPUs · ${esc(cfg.memory || "2Gi")} guest memory · ${esc(cfg.start === false ? "Created stopped" : "Starts after disk preparation")}</p>
-        <p class="small muted">${esc(cfg.network || "pod")} · MAC ${esc(cfg.mac)}${cfg.static_ip?.address ? ` · ${esc(cfg.static_ip.address)}` : ""}. Guest login settings are included in this review but are not displayed.</p></div>
+        <p class="small muted">${cfg.isolated ? "Isolated VM - no virtual network cards" : `${esc(cfg.network || "pod")} · MAC ${esc(cfg.mac)}${cfg.static_ip?.address ? ` · ${esc(cfg.static_ip.address)}` : ""}`}. Guest login settings are included in this review but are not displayed.</p></div>
       <div class="reviewbox"><b>Disks to create</b>${review.volumes?.length ? review.volumes.map(v=>`<p class="small"><b>${esc(v.name)}</b> · ${esc(v.size)} · ${esc(v.access_mode)} · ${esc(v.volume_mode)}<br><span class="muted">${esc(v.storage_class)}</span></p>`).join("") : '<p class="small muted">Uses the selected existing imported disk; no new disk claim.</p>'}</div>
       ${cfg.host_devices?.add?.length ? `<div class="reviewbox"><b>Passthrough</b>${cfg.host_devices.add.map(d => `<p class="small">${esc(d.name)} · ${esc(d.resource)}${cfg.host_devices.roms?.[d.name] ? " · supplied vBIOS" : ""}</p>`).join("")}</div>` : ""}
       ${review.capacity.blockers?.length ? `<div class="note bad">${review.capacity.blockers.map(esc).join(" · ")}</div>` : ""}
@@ -997,7 +1006,7 @@ window.vmCreateReviewedApply = async () => {
     if (result.operation && window.noteOperation) noteOperation(result.operation);
     toast(result.warning || `${cfg.name} created${result.address ? ` at ${result.address}` : ""}`, result.warning ? "bad" : "ok");
     closeModal(); go("vms");
-    if (review.network.serviceMode) {
+    if (!cfg.isolated && review.network.serviceMode) {
       try { await networkExpose(cfg.namespace,cfg.name,"VirtualMachine",review.network.selectedVip); }
       catch(error) { toast(`VM created, but VIP setup could not open: ${error.message}. Use Edit → Network → Configure VIP / ports.`,"bad"); }
     }

@@ -4223,7 +4223,7 @@ def vm_create_configuration(body, *, preview=False):
     cfg = copy.deepcopy(body)
     cfg["namespace"] = _dns_name(cfg.get("namespace", DEFAULT_NS), "namespace")
     cfg["name"] = _dns_name(cfg.get("name"), "VM name")
-    if not cfg.get("mac"):
+    if cfg.get("isolated") is not True and not cfg.get("mac"):
         if not preview:
             raise ValueError("Review VM creation first so its generated MAC is fixed")
         cfg["mac"] = IMP._vm_mac()
