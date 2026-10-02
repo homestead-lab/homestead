@@ -59,7 +59,7 @@ const PAGES = [
   ["node-page", "nodes", "nodeDetail('harvester-node1')"],
   ["node-storage", "nodes", "nodeDetail('harvester-node1');setTimeout(() => nodeSectionGo('storage'), 1200)"],
   ["node-devices", "nodes", "nodeDetail('harvester-node1');setTimeout(() => { nodeSectionGo('hardware'); nodeDevicesLook('harvester-node1'); }, 1200)"],
-  ...["homestead", "updates", "monitoring", "hardware", "fleet", "connections", "access", "you"]
+  ...["homestead", "updates", "monitoring", "hardware", "fleet", "connections", "access", "troubleshooting", "you"]
     .map((tab) => [`settings-${tab}`, "settings", `settingsTab('${tab}')`]),
 ];
 

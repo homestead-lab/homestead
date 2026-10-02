@@ -129,6 +129,7 @@ function go(v, options = {}) {
     return;
   }
   if (!VIEWS[v]) return;
+  window.HomesteadRecorder?.note("navigation", { action: v });
   if (window.setupNavigation) setupNavigation(v);
   if (!$("#modal").classList.contains("hidden")) closeModal(false);
   // Anything still loading belongs to the page being left behind.

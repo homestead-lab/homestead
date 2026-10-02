@@ -16,7 +16,7 @@ function thresholdEditor(id, label, unit, help, pair) {
     </div></div>`;
 }
 
-/* Six sections, each gathering the cards of one topic. A card names its
+/* Nine sections, each gathering the cards of one topic. A card names its
    topic (data-tab); a section shows the cards of every topic it holds, and a
    link or button can still ask for a topic by its own name - settingsTab("fleet"). */
 const SETTINGS_SECTIONS = [
@@ -27,6 +27,7 @@ const SETTINGS_SECTIONS = [
   ["fleet", "Linked clusters", "Other Homesteads, moves", ["fleet"], "Cluster"],
   ["connections", "Connections", "UniFi, App Store", ["connections", "apps", "integrations"], "Cluster"],
   ["access", "Users and access", "Accounts and roles", ["access"], "Cluster"],
+  ["troubleshooting", "Troubleshooting", "Bug reports and logs", ["troubleshooting"], "Cluster"],
   ["you", "You", "Appearance, this device, account", ["you", "device", "general"], "Just you"],
 ];
 const settingsSection = topic => (SETTINGS_SECTIONS.find(([id, , , topics]) => id === topic || topics.includes(topic)) || SETTINGS_SECTIONS[0])[0];
@@ -223,6 +224,7 @@ async function viewSettings() {
       </section>
 
       <section class="card flat settings-wide" data-tab="updates" id="homesteadUpdateCard"></section>
+      ${window.troubleshootingCards ? troubleshootingCards() : ""}
       <section class="card flat settings-wide" data-tab="about" id="configCard">${window.configCardHtml ? configCardHtml() : ""}</section>
       <section class="card flat settings-wide" data-tab="about" id="selfHealthCard"><div class="empty small"><span class="spin2"></span> checking Homestead</div></section>
       <section class="card flat settings-wide" data-tab="about" id="replicaCard">${STATE.data.replicaHtml || ""}</section>
@@ -233,6 +235,7 @@ async function viewSettings() {
   STATE.settingsDirty = new Set();
   if (window.bindAppearance) bindAppearance();
   pwaPaint();
+  if (window.troubleshootingPaint) troubleshootingPaint();
   namespacesPaint();
   replicasPaint();
   mqttPaint();

@@ -144,9 +144,9 @@ after reloading the page. Returning rechecks the facts.
 
 ### Settings
 
-- **Eight sections, sorted by what you came to change.** Seven change the
+- **Nine sections, sorted by what you came to change.** Eight concern the
   cluster for everyone - Homestead, Updates, Monitoring, Hardware and
-  storage, Linked clusters, Connections, Users and access - and **You** is
+  storage, Linked clusters, Connections, Users and access, Troubleshooting - and **You** is
   yours and this browser's. A column beside them on a desktop; a list to tap
   into on a phone.
 - **A card names its topic** (`data-tab`); `SETTINGS_SECTIONS` in

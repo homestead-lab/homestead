@@ -1622,9 +1622,15 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .settings-grid[data-tab="connections"]>section[data-tab="apps"],
 .settings-grid[data-tab="connections"]>section[data-tab="integrations"],
 .settings-grid[data-tab="access"]>section[data-tab="access"],
+.settings-grid[data-tab="troubleshooting"]>section[data-tab="troubleshooting"],
 .settings-grid[data-tab="you"]>section[data-tab="you"],
 .settings-grid[data-tab="you"]>section[data-tab="device"],
 .settings-grid[data-tab="you"]>section[data-tab="general"]{display:block}
+.diagnostic-preview{white-space:pre-wrap;overflow-wrap:anywhere;max-height:360px;overflow:auto;background:var(--surf);padding:12px;border-radius:8px;font:12px/1.6 monospace}
+#diagnosticRecorder{background:var(--surf);color:var(--tx);border-color:var(--line)}
+#diagnosticRecorder>div{min-width:0;overflow-wrap:anywhere}
+#diagnosticRecorder span{display:block;font-size:12px}
+#diagnosticRecorder .btn{flex-shrink:0;background:var(--surf2);color:var(--tx);border-color:var(--line)}
 /* A threshold is one row: its name, then warning and critical side by side. */
 .threshold-card{padding:10px 12px;gap:12px}
 .threshold-values{gap:8px}
