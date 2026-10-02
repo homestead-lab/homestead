@@ -91,6 +91,7 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
 let EDIT_PLACEMENT = { others: [], nodes: 0 };
 let EDIT_CONTAINER_NEXT = 0, EDIT_REMOVED_CONTAINERS = [];
 let EDIT_REMOVED_PANELS = new Map();
+let EDIT_SAVE_UNCERTAIN = false;
 const nodes0 = list => (list || []).filter(n => n.schedulable !== false);
 const PLACEMENT_MODES = [["prefer", "prefer"], ["require", "require"]];
 function placementRow(kind, row = {}) {
@@ -213,6 +214,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       api(`/api/deploy/options?ns=${encodeURIComponent(ns)}`).catch(() => ({})),
       STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads").catch(() => []),
     ]);
+    EDIT_SAVE_UNCERTAIN = false;
     EDIT_PLACEMENT = { ns, name, others: (others || []).filter(x => !(x.ns === ns && x.name === name)),
       nodes: nodes0(liveNodes).length };
     if (liveNodes.length) STATE.data.nodes = liveNodes;
@@ -396,6 +398,7 @@ window.containerRemove = (mode, index) => {
 };
 let EDIT_REVIEW = null, EDIT_REVIEW_SEQUENCE = 0;
 window.editSave = async (ns, name) => {
+  if (EDIT_SAVE_UNCERTAIN) return toast("Reload the saved workload before reviewing another save", "bad");
   const workloadName = $("#e_workload_name").value.trim();
   if (workloadName !== name) return window.editReview({ns, name, workload_name: workloadName});
   const containers = $$("#e_containers .edit-container[data-original-name]").map(readEditedContainer);
@@ -438,6 +441,7 @@ function storageCopyReview(config, capacity) {
     UI.actions(UI.button("Back to edit","modalBack()") + UI.button("Start data move","confirmEdit()",{id:"editGo",kind:"pri",disabled:capacity.blocked}));
 }
 window.editReview = async body => {
+  if (EDIT_SAVE_UNCERTAIN) return toast("Reload the saved workload before reviewing another save", "bad");
   EDIT_REVIEW = null;
   const sequence = ++EDIT_REVIEW_SEQUENCE;
   const config = JSON.parse(JSON.stringify(body));
@@ -484,10 +488,16 @@ window.confirmEdit = async () => {
   } catch (e) {
     EDIT_REVIEW = null;
     window.startOperationChecks?.();
+    EDIT_SAVE_UNCERTAIN = true;
     toast(e.message, "bad");
-    button.disabled = false;
-    button.textContent = "Review again";
-    button.onclick = () => window.editReview(review.config);
+    button.disabled = true;
+    button.textContent = "Inspect before saving again";
+    button.onclick = null;
+    $("#mbody").insertAdjacentHTML("beforeend", `<div id="editSaveNotice" class="note warn" role="alert"><b>${esc(e.message)}</b><p>${renaming
+      ? "The rename may have partly completed. Inspect both workload names and Recent jobs before another action."
+      : "Some changes may already be saved, including new containers or volumes. Reload the saved workload to inspect what applied before making another change. Reload replaces this form's unsaved edits; the workload does not need a new name."}</p>
+      <button class="btn" onclick="${renaming ? "closeModal();go('workloads')" : `wlEdit(${jsq(ns)},${jsq(name)},true)`}">${renaming ? "Inspect workloads" : "Reload saved workload"}</button></div>`);
+    $("#editSaveNotice")?.scrollIntoView({ block: "nearest" });
   }
 };
 
