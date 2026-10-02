@@ -61,10 +61,13 @@ class Coordinator:
         return result["items"]
 
     def _fact(self, obj, fact, *, namespace=None):
-        if (obj.get("metadata", {}).get("name") != fact["name"] or identity(obj)["uid"] != fact["uid"]
-                or obj["metadata"].get("namespace") != namespace or obj["metadata"].get("deletionTimestamp")
-                or shape(obj) != fact["shape"]):
-            raise Held("A reviewed data handoff resource changed or was replaced")
+        meta = obj.get("metadata", {})
+        label = f"{obj.get('kind', 'Resource')} {namespace + '/' if namespace else ''}{fact['name']}"
+        reason = ("identity changed" if meta.get("name") != fact["name"] or identity(obj)["uid"] != fact["uid"] or meta.get("namespace") != namespace
+                  else "is being deleted" if meta.get("deletionTimestamp")
+                  else "specification or metadata changed" if shape(obj) != fact["shape"] else None)
+        if reason:
+            raise Held(f"Reviewed {label}: {reason}; recovery review required")
         return obj
 
     def _deployment(self):
@@ -224,6 +227,8 @@ class Coordinator:
         """One bounded phase; create a fresh instance from the anchor next poll."""
         dep = self._environment()
         require_app_readiness(dep["spec"]["template"]["spec"], self.state["deployment"]["name"])
+        if self.state.get("recovery", {}).get("action") == "return-original":
+            return self._return_original(dep)
         phase = self.state["phase"]
         if phase == "prepare":
             if not self._entry("stop"):
@@ -326,7 +331,40 @@ class Coordinator:
             return self._result("Homestead is ready on the new data volume; the original is retained")
         return self._result("Homestead's data move is complete; the original volume is retained")
 
-    def _ready(self, dep):
+    def _return_original(self, dep):
+        """Release mounts normally, then start only the unchanged source."""
+        if self.state["phase"] == "done":
+            return self._result("Homestead is ready on its original volume; both volumes are retained")
+        if any(e["step"] in ("switch", "start") for e in self.writer.entries):
+            raise Held("Original-volume recovery is prohibited after cutover")
+        if self._entry("recover-start"):
+            if self._ready(dep, original=True): self.anchor.recovered()
+            return self._result("Checking Homestead on its original volume; both volumes are retained")
+        known = self._entry("copy-job")
+        release = self._entry("release-copy") or self._entry("recover-release-copy")
+        if not self._quiet(dep, helper_uid=known["after"]["uid"] if known else None):
+            return self._result("Waiting for Homestead's original writers to stop")
+        if known and not release:
+            job = self.writer.observe(known)
+            self.writer.write("recover-release-copy", "DELETE", self.job_path,
+                              {"propagationPolicy": "Foreground"}, expected=identity(job))
+            return self._result("Releasing the copy mounts before original-volume recovery")
+        if release and (self.writer.observe(release) is not None or any(
+                owner(p, "Job", known["after"]["uid"]) for p in self._pods())):
+            return self._result("Waiting for the copy pod to release both retained volumes")
+        if not self._quiet(dep):
+            return self._result("Waiting for normal removal of all data-volume mounts")
+        proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = self.state["replicas"]
+        pin_app_image(proposed, self.plan["copy_image"])
+        volumes = [v for v in proposed["spec"]["template"]["spec"].get("volumes", []) if v["name"] == self.plan["data_volume"]]
+        if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != self.state["source"]["name"]:
+            raise Held("Recovery can start only the unchanged original data mount")
+        dep = self._admission("recover-start", proposed)
+        if not self._quiet(dep): raise Held("A writer returned during recovery admission")
+        self._update_dep("recover-start", dep, proposed)
+        return self._result("Starting Homestead on its original volume; both volumes are retained")
+
+    def _ready(self, dep, *, original=False):
         status = dep.get("status", {})
         generation = dep.get("metadata", {}).get("generation")
         if (type(generation) is not int or status.get("observedGeneration", 0) < generation
@@ -344,11 +382,13 @@ class Coordinator:
             app = next(c for c in pod["spec"]["containers"] if c["name"] == self.state["deployment"]["name"])
             if app.get("image") != self.plan["copy_image"]:
                 raise Held("A restarted Homestead pod does not use the reviewed source image digest")
+        destination = self.state["source"]["name"] if original else self.state["destination"]
+        forbidden = self.state["destination"] if original else self.state["source"]["name"]
         for pod in pods:
             mounted = claims(pod)
-            if self.state["source"]["name"] in mounted or self.state["destination"] in mounted and pod not in members:
+            if forbidden in mounted or destination in mounted and pod not in members:
                 raise Held("A pod outside the restarted Homestead still uses one of the retained data volumes")
-        return all(self.state["destination"] in claims(p) and not p["metadata"].get("deletionTimestamp")
+        return all(destination in claims(p) and not p["metadata"].get("deletionTimestamp")
                    and p.get("status", {}).get("phase") == "Running"
                    and any(c.get("type") == "Ready" and c.get("status") == "True" for c in p.get("status", {}).get("conditions", []))
                    for p in members)
