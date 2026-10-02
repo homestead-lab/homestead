@@ -189,6 +189,17 @@ class CleanupTests(unittest.TestCase):
                     self.observe()
                 self.assertEqual([], self.api.writes)
 
+    def test_reparented_scratch_or_worker_is_preserved(self):
+        for resource in ("scratch", "worker"):
+            with self.subTest(resource=resource):
+                self.setUp()
+                self.promote()
+                path = NS + "/pods/upload" if resource == "worker" else NS + "/persistentvolumeclaims/" + self.prime_name + "-scratch"
+                self.api.objects[path]["metadata"]["ownerReferences"] = [{"kind": "Pod", "uid": "foreign", "controller": True}]
+                with self.assertRaisesRegex(ValueError, "ownership changed"):
+                    self.clean()
+                self.assertEqual([], self.api.writes)
+
     def test_foreign_pod_holds_cleanup_even_while_terminating(self):
         self.promote()
         pod = obj("consumer", "other-pod", spec={"volumes": [{"persistentVolumeClaim": {"claimName": self.prime_name + "-scratch"}}]})

@@ -66,6 +66,14 @@ def _identity(obj):
     return meta
 
 
+def _claim_owned(disk, row, claim):
+    if row["role"] == "target":
+        return owner(claim, "DataVolume", disk.get("dv_uid"))
+    if row["role"] == "prime":
+        return owner(claim, "PersistentVolumeClaim", disk.get("target_uid"))
+    return any(owner(claim, "Pod", uid) for uid in disk["pods"])
+
+
 def observe(read, ns, work):
     """Capture live ownership and retired prime claims before any deletion."""
     claims = RESOURCES.items(read, f"/api/v1/namespaces/{ns}/persistentvolumeclaims")
@@ -118,6 +126,10 @@ def observe(read, ns, work):
                     continue
                 meta = _identity(claim)
                 disk["claims"][meta["uid"]] = {"name": meta["name"], "role": "scratch"}
+        for claim in claims:
+            known = disk["claims"].get(claim["metadata"].get("uid"))
+            if known and not _claim_owned(disk, known, claim):
+                raise ValueError("Import work claim ownership changed; it was preserved")
         for pv in pvs:
             spec = pv.get("spec") or {}
             claim = spec.get("claimRef") or {}
@@ -153,6 +165,11 @@ def cleanup(read, send, ns, work, keep_disks=True):
     pending = False
     claims = RESOURCES.items(read, f"/api/v1/namespaces/{ns}/persistentvolumeclaims")
     pods = RESOURCES.items(read, f"/api/v1/namespaces/{ns}/pods")
+    for disk in work["disks"].values():
+        for claim in claims:
+            known = disk["claims"].get(claim["metadata"].get("uid"))
+            if known and not _claim_owned(disk, known, claim):
+                raise ValueError("Import work claim ownership changed; cleanup stopped")
     disposable = {row["name"] for disk in work["disks"].values() for row in disk["claims"].values()
                   if row["role"] != "target" or not keep_disks}
     if not keep_disks:
@@ -197,6 +214,8 @@ def cleanup(read, send, ns, work, keep_disks=True):
             path = f"/api/v1/namespaces/{ns}/pods/{pod_name}"
             pod = RESOURCES.optional(read, path)
             if pod and pod["metadata"].get("uid") == uid:
+                if not any(owner(pod, "PersistentVolumeClaim", claim_uid) for claim_uid in disk["claims"]):
+                    raise ValueError("Import worker ownership changed; cleanup stopped")
                 pending |= not RESOURCES.delete(read, send, path, pod)
         # Re-read after requesting worker deletion. Even a terminating pod can
         # hold a mount; do not change the storage policy until it has disappeared.
