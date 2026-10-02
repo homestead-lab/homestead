@@ -5628,6 +5628,7 @@ UPDATES.PART = homestead_part
 UPDATES.VERSION = lambda: HOMESTEAD_VERSION
 SMART.bind(kget, DEFAULT_NS, AUTH.smart_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
+OPS.cdi_send = ksend
 RESTRUCTURE.bind(kget, ksend, raw_get)
 AFFINITY.bind(kget)
 FAILOVER.bind(kget, ksend)
@@ -9616,12 +9617,7 @@ class H(HTTP.LimitedHandler):
                 _cache.pop("vmimages", None)
                 return self._send(200, VMSTORE.refresh(force=True))
             if p == "/api/vm-disks/import":
-                result = IMP.import_vm_disk(b)
-                result["operation"] = OPS.start(
-                    "vm-disk-import", f"Import VM disk {result['name']}",
-                    {"kind": "DataVolume", "name": result["name"],
-                     "namespace": result["namespace"]},
-                    "/import", {"namespace": result["namespace"], "name": result["name"]})
+                result = IMP.import_vm_disk(b, ops=OPS)
                 return self._send(200, result)
             if p == "/api/images/prepull/stop":
                 return self._send(200, IMP.stop_prepull(b.get("name")))

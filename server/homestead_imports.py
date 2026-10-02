@@ -2029,7 +2029,7 @@ def _http_disk_source(cfg):
     return source
 
 
-def import_vm_disk(cfg):
+def import_vm_disk(cfg, ops=OPS):
     """Import a qemu-supported disk image into a new PVC through CDI."""
     namespace = _required_name(cfg.get("namespace") or NS, "namespace")
     name = _required_name(cfg.get("name"), "disk name")
@@ -2064,10 +2064,13 @@ def import_vm_disk(cfg):
             },
         },
     }
-    ksend("POST", f"/apis/cdi.kubevirt.io/v1beta1/namespaces/{namespace}/datavolumes", body)
+    import homestead_cdi_cleanup as CDI_CLEANUP
+    operation = CDI_CLEANUP.dispatch(kget, ksend, ops, "vm-disk-import", f"Import VM disk {name}",
+        {"kind": "DataVolume", "name": name, "namespace": namespace}, "/import",
+        {"namespace": namespace, "name": name}, [body], "import")
     _bust("vms", "vol")
     return {"ok": True, "namespace": namespace, "name": name, "pvc": name,
-            "size_gb": size_gb,
+            "size_gb": size_gb, "operation": operation,
             "message": f"CDI import into {namespace}/{name} started"}
 
 

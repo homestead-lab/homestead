@@ -1,4 +1,5 @@
 import sys
+import contextlib
 import unittest
 import urllib.error
 from pathlib import Path
@@ -16,6 +17,8 @@ class VmDiskImportTests(unittest.TestCase):
         def get(path):
             if path in self.objects:
                 return self.objects[path]
+            if path.endswith(("/persistentvolumeclaims", "/persistentvolumes", "/pods")):
+                return {"items": []}
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
 
         def send(method, path, body=None, **kwargs):
@@ -26,6 +29,19 @@ class VmDiskImportTests(unittest.TestCase):
         imports.ksend = send
         imports.NS = "lab"
         imports._cache = {}
+        class Ops:
+            @staticmethod
+            def dispatch_guard():
+                return contextlib.nullcontext()
+
+            @staticmethod
+            def start(kind, title, resource, href, ref, message):
+                return {"id": "op1"}
+
+            @staticmethod
+            def record_phase(*args, **kwargs):
+                return {"id": "op1"}
+        self.ops = Ops
 
     def test_import_builds_cdi_datavolume_without_returning_source_url(self):
         secret_url = "https://images.example.test/server.qcow2?token=sensitive"
@@ -33,7 +49,7 @@ class VmDiskImportTests(unittest.TestCase):
             "namespace": "lab", "name": "server-disk", "source_url": secret_url,
             "size_gb": 32, "storage_class": "longhorn-r2",
             "access_mode": "ReadWriteOnce", "checksum": "sha256:" + "a" * 64,
-        })
+        }, ops=self.ops)
         self.assertNotIn("sensitive", repr(result))
         method, path, body = self.sent[-1]
         self.assertEqual("POST", method)
