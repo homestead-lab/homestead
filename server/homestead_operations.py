@@ -11,6 +11,7 @@ import homestead_vm_power_receipts as POWER_RECEIPTS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
 from homestead_storage_journal import Held as StorageHeld
 import json
+import copy
 import os
 import secrets
 import threading
@@ -931,6 +932,13 @@ def cancel(operation_id, options=None, confirm="", allowed=None, by=""):
 # Where a kind of job has output of its own - a pod's log, a VM's console -
 # kind -> function(item) -> [{"title", "text", "note"}]. Read only when asked.
 LOGGERS = {}
+
+
+def diagnostic_summaries(operation_ids):
+    """Read saved job evidence without polling resolvers or opening consoles."""
+    with _lock:
+        return [{key: copy.deepcopy(row.get(key)) for key in ("id", "kind", "title", "status", "message", "history")}
+                for row in _read() if row.get("id") in operation_ids][:10]
 
 
 def log(operation_id):

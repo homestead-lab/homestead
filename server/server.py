@@ -33,6 +33,7 @@ import homestead_copy_job as COPY_JOB
 import homestead_import_job as IMPORT_JOB
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_operations as OPS
+import homestead_diagnostics as DIAGNOSTICS
 import homestead_storage_guard as STORAGE_GUARD
 import homestead_storage_resize as STORAGE_RESIZE
 import homestead_self_data_fence as SELF_DATA_FENCE
@@ -5698,6 +5699,18 @@ def _own_namespace():
 
 
 SELF.bind(kget, ksend, _own_namespace(), HOMESTEAD_VERSION, DATA_DIR)
+
+
+def _diagnostic_read(path, timeout=5):
+    req = urllib.request.Request(API + api_path(path), headers={"Authorization": f"Bearer {TOKEN}"})
+    with urllib.request.urlopen(req, context=CTX, timeout=timeout) as response:
+        raw = response.read(DIAGNOSTICS.MAX_SOURCE_BYTES + 1)
+    if "/log?" in path:
+        return raw.decode("utf-8", "replace")
+    return json.loads(raw)
+
+
+DIAGNOSTICS.bind(DATA_DIR, _diagnostic_read, OPS, HOMESTEAD_VERSION, _own_namespace(), os.environ.get("HOSTNAME", ""))
 SHARED.bind(DATA_DIR)
 LEADER.bind(kget, ksend, _own_namespace())
 IPAM.bind(kget, ksend, DEFAULT_NS, lambda: cached("network", 5, NETWORK.inventory))
@@ -7543,6 +7556,14 @@ class H(HTTP.LimitedHandler):
     _extra_headers = None
 
     def _send(self, code, body, ctype="application/json"):
+        report_id = self.headers.get("X-Homestead-Report", "")
+        if report_id and getattr(self, "_diagnostic_authorized", False) and getattr(self, "role", None) == "admin" and not self.path.startswith(("/api/diagnostics", "/api/auth/")):
+            try:
+                DIAGNOSTICS.server_event(report_id, self.user, {"kind": "server", "path": self.path,
+                    "method": self.command, "status": code, "request": self.headers.get("X-Homestead-Request", ""),
+                    "duration": round((time.monotonic() - self._diagnostic_started) * 1000)})
+            except Exception:
+                pass  # Recording must never change the result of a cluster action.
         if code >= 400:
             self.close_connection = True
         if isinstance(body, (dict, list)):
@@ -7799,6 +7820,7 @@ class H(HTTP.LimitedHandler):
             self._send(403, {"error": f"your role ({self.role}) cannot do this — {need} required",
                              "role": self.role, "needed": need})
             return True
+        self._diagnostic_authorized = True
         return None
 
     def _api_key_guard(self, path, token):
@@ -7850,6 +7872,8 @@ class H(HTTP.LimitedHandler):
         self._raw = None
         self._fleet_who = False
         self._fleet_from = None
+        self._diagnostic_authorized = False
+        self._diagnostic_started = time.monotonic()
         HOSTACCESS.set_role(None)
 
     def _raw_body(self):
@@ -7989,6 +8013,18 @@ class H(HTTP.LimitedHandler):
                 return
             if p.startswith("/api/v1/"):
                 return self._api_v1("GET", p, q, None)
+            if p == "/api/diagnostics":
+                return self._send(200, DIAGNOSTICS.listing(self.user))
+            if p == "/api/diagnostics/report":
+                return self._send(200, DIAGNOSTICS.snapshot((q.get("id") or [""])[0], self.user,
+                                                           (q.get("format") or ["anonymised"])[0]))
+            if p == "/api/diagnostics/issue":
+                return self._send(200, DIAGNOSTICS.issue((q.get("id") or [""])[0], self.user))
+            if p == "/api/diagnostics/download":
+                filename, ctype, body = DIAGNOSTICS.export((q.get("id") or [""])[0], self.user,
+                    (q.get("format") or ["anonymised"])[0], (q.get("package") or [""])[0] == "1")
+                self._extra_headers.append(("Content-Disposition", f'attachment; filename="{filename}"'))
+                return self._send(200, body, ctype)
             if p == "/api/console":
                 return CONSOLE_PROXY.handle(self, self.user, q)
             if p == "/api/node/shell":
@@ -8486,6 +8522,10 @@ class H(HTTP.LimitedHandler):
                     return self._send(409 if error.code in (400, 404) else error.code,
                                       {"error": logs_refusal(error, pod, container)})
             return self._send(404, {"error": "no route"})
+        except PermissionError as e:
+            return self._send(403, {"error": str(e)})
+        except ValueError as e:
+            return self._send(400, {"error": str(e)})
         except AUTH.StoreUnavailable as e:
             # Not an empty account store: the cluster did not answer.
             return self._send(503, {"error": str(e), "unavailable": True})
@@ -8510,6 +8550,19 @@ class H(HTTP.LimitedHandler):
             b = self._body()
             if not isinstance(b, dict):
                 return self._send(400, {"error": "a JSON object is required"})
+            if p == "/api/diagnostics/start":
+                return self._send(200, DIAGNOSTICS.create(self.user, b.get("package") is True))
+            if p == "/api/diagnostics/events":
+                return self._send(200, DIAGNOSTICS.append(b.get("id"), self.user, b.get("batch"), b.get("events")))
+            if p == "/api/diagnostics/stop":
+                return self._send(200, DIAGNOSTICS.stop(b.get("id"), self.user))
+            if p == "/api/diagnostics/draft":
+                return self._send(200, DIAGNOSTICS.draft(b.get("id"), self.user, b.get("title", ""), b.get("comment", "")))
+            if p == "/api/diagnostics/prepare":
+                return self._send(200, DIAGNOSTICS.prepare(b.get("id"), self.user, b.get("title", "Bug report"),
+                    b.get("comment", ""), b.get("sources", []), b.get("seconds", 900)))
+            if p == "/api/diagnostics/delete":
+                return self._send(200, DIAGNOSTICS.delete(b.get("id"), self.user))
             if p in ("/api/move", "/api/move/preview", "/api/image-updates/apply", "/api/image-updates/rollback", "/api/image-updates/preview"):
                 require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "")
             addr = self._client_ip()
@@ -9765,6 +9818,7 @@ def _samba_loop():
 def start_background_tasks():
     """Start only after normal boot or the independent move's verified completion."""
     require_self_data_write()
+    threading.Thread(target=DIAGNOSTICS.run, name="diagnostics-expiry", daemon=True).start()
     threading.Thread(target=_storage_runtime_loop, daemon=True).start()
     threading.Thread(target=_sampler, daemon=True).start()
     threading.Thread(target=_reconcile_permissions, daemon=True).start()
