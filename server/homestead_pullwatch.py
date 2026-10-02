@@ -95,14 +95,29 @@ def parse(log, layers):
     return done, total
 
 
+def disposable(pod, namespace=None):
+    """Only our bounded, read-only progress observer can waive the owner guard."""
+    containers = (pod.get("spec") or {}).get("containers") or []
+    command = (containers[0].get("command") or []) if len(containers) == 1 else []
+    if len(command) != 3 or not isinstance(command[2], str):
+        return False
+    match = re.search(r"^  for d in (sha256:[0-9a-f]{64}(?: sha256:[0-9a-f]{64})*); do$", command[2], re.M)
+    return bool(match) and RUNTIME.readonly_observer(pod, namespace or NS, TASK,
+        r"homestead-pull-watch-[0-9a-f]{14}", ["sh", "-c", script(match[1].split())], LIMIT + 60)
+
+
 def progress(node, image):
     """{"percent", "done_bytes", "total_bytes"} for a pull on node, starting
     the watcher on the first ask; {} when it cannot be known."""
     if not node or not image:
         return {}
     try:
-        arch = ((kget(f"/api/v1/nodes/{node}").get("metadata") or {}).get("labels") or {}).get(
-            "kubernetes.io/arch", "amd64")
+        host = kget(f"/api/v1/nodes/{node}")
+        # nodeName and the broad toleration bypass scheduling: do not recreate
+        # observers after maintenance cordons the host and evicts its pods.
+        if (host.get("spec") or {}).get("unschedulable"):
+            return {}
+        arch = ((host.get("metadata") or {}).get("labels") or {}).get("kubernetes.io/arch", "amd64")
         layers = _layers(image, arch)
     except Exception:
         return {}
@@ -117,6 +132,7 @@ def progress(node, image):
     if not pod:
         body = RUNTIME.pod(name, NS, node, script([layer["digest"] for layer in layers]), TASK,
                            {NAMES.key("image"): image[:250]}, memory="48Mi", deadline=LIMIT + 60)
+        body["spec"]["automountServiceAccountToken"] = False
         try:
             ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
         except Exception:
@@ -138,14 +154,17 @@ IDLE = 90
 
 def sweep(now=None):
     """Remove watchers that finished, and those no one has asked about lately."""
-    now = now or time.time()
+    now = time.time() if now is None else now
     for pod in NAMES.find(f"/api/v1/namespaces/{NS}/pods", "task", TASK):
+        if not disposable(pod):
+            continue
         meta = pod.get("metadata") or {}
         name, phase = meta.get("name", ""), (pod.get("status") or {}).get("phase")
-        if phase not in ("Succeeded", "Failed") and now - _ASKED.get(name, now) < IDLE:
+        if phase not in ("Succeeded", "Failed") and now - _ASKED.setdefault(name, now) < IDLE:
             continue
         try:
-            ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{name}?gracePeriodSeconds=0")
+            ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{name}?gracePeriodSeconds=0",
+                  {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": meta["uid"]}})
         except Exception:
-            pass
+            continue
         _ASKED.pop(name, None)
