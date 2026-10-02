@@ -290,7 +290,7 @@ function workloadGroupBar(all, pick) {
 
 function workloadGroupSelect(all, pick) {
   const names = workloadGroupNames(all), loose = all.filter(w => !w.group).length;
-  if (!names.length) return '<span class="wl-mobile-scope">All containers</span>';
+  if (!names.length) return '<span class="collection-mobile-scope">All containers</span>';
   const option = (value, label, count) => `<option value="${groupKeyIndex(value)}"${pick === value ? " selected" : ""}>${esc(label)} · ${count}</option>`;
   return `<select class="wl-group-select" aria-label="Container group" title="${esc(pick === NO_GROUP ? "Ungrouped" : pick || "All groups")}" onchange="pickWorkloadGroup(+this.value)">
     ${option("", "All groups", all.length)}${names.map(name => option(name, name, all.filter(w => w.group === name).length)).join("")}${loose ? option(NO_GROUP, "Ungrouped", loose) : ""}</select>`;
@@ -307,7 +307,7 @@ window.workloadListLayout = select => {
   const layout = select.value;
   closeActionMenu(select.closest("details"));
   // Keep the header and focus in place while only the list changes shape.
-  document.querySelector(".wl-mobile-toolbar .list-options>summary")?.focus({preventScroll:true});
+  document.querySelector(".collection-mobile-toolbar .list-options>summary")?.focus({preventScroll:true});
   setViewLayout("containers", "renderWorkloads", layout, {preservePaint:true});
 };
 
@@ -391,7 +391,7 @@ function renderWorkloads() {
   const updateButtons = `${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
     ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} check${updateErrors === 1 ? "" : "s"} failed</button>` : ""}`.trim();
   const deploy = '<button class="btn pri" data-need="operator" onclick="go(\'deploy\')">＋ Deploy</button>';
-  paint(`<div class="containers-page" data-collection="containers"><div class="phead">
+  paint(`<div class="containers-page collection-page" data-collection="containers"><div class="phead">
       <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · ${platform.length
         ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="Homestead and the helpers it runs - updated under Settings › Updates - and KubeVirt, CDI and the like, run by their own operators and upgraded under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
         : "system pods hidden"}${unchecked ? ` · <span data-tip="Marked ? in the list: stopped since Homestead started, so not yet compared with their registries">${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? " · images current" : ""}</p>
@@ -400,8 +400,8 @@ function renderWorkloads() {
       ${layoutSwitch("containers", "renderWorkloads")}
       ${moreMenu([items[0],items[1],{label:layout === "cards" ? "Show as rows" : "Show as cards",run:`setViewLayout('containers','renderWorkloads',${jsq(layout === "cards" ? "rows" : "cards")})`},items[2]])}
       ${deploy}</div></div>
-    <div class="wl-mobile-head"><div class="wl-mobile-toolbar">${workloadGroupSelect(all, group)}${workloadListOptions(platform, layout, items)}${deploy}</div>
-      <div class="wl-mobile-summary"><span>${rows.length} container${rows.length === 1 ? "" : "s"}</span>${updateButtons ? `<span aria-hidden="true">·</span>${updateButtons}` : ""}
+    <div class="collection-mobile-head"><div class="collection-mobile-toolbar">${workloadGroupSelect(all, group)}${workloadListOptions(platform, layout, items)}${deploy}</div>
+      <div class="collection-mobile-summary"><span>${rows.length} container${rows.length === 1 ? "" : "s"}</span>${updateButtons ? `<span aria-hidden="true">·</span>${updateButtons}` : ""}
         ${unchecked ? `<span class="dim" data-tip="Stopped or still starting; not yet compared with their registries">· ${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? '<span class="dim">· images current</span>' : ""}</div></div>
 
     ${rows.length ? workloadSections(rows, layout, group)
