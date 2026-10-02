@@ -47,8 +47,8 @@ a password for all of that user's private shares.
 
 ## Shared file access
 
-Homestead sets Samba's filesystem identity to UID `99`, GID `100`, matching
-the common app convention for shared downloads and media. This identity is
+Homestead keeps Samba's existing filesystem identity, UID `100`, GID `101`,
+by default so an upgrade preserves access to existing files. This identity is
 separate from SMB login accounts. Set `samba.uid` and `samba.gid` in Helm values,
 or `SAMBA_UID` and `SAMBA_GID` on Homestead, to match your applications.
 Reconciliation maintains these IDs on the SMB container. Applications can keep
@@ -65,9 +65,11 @@ longer runs its recursive `-p` ownership/permission rewrite on every startup.
 Existing files may need a one-time, scoped group/permission migration; changing
 the shared GID does not migrate descendants. Check every application using the
 volume first. Keep private `/config` ownership with its application UID.
-Use `samba.uid=100` and `samba.gid=101` to retain the former SMB identity.
-Storage must allow root-directory group/mode updates; root-squashed exports
-need preparation on the storage server. Apps that explicitly create restrictive
+For a setup using `99:100`, choose `samba.uid=99` and `samba.gid=100`
+explicitly and review existing file access before changing groups.
+Storage must allow required root-directory group/mode updates; root-squashed
+exports need preparation on the storage server. Already-prepared roots need
+no metadata writes. Apps that explicitly create restrictive
 permissions need their own configuration even with `UMASK=002`.
 
 This follows the [Servarr shared-group guidance](https://wiki.servarr.com/docker-guide).

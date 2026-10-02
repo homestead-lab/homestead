@@ -546,8 +546,8 @@ def _volume_name(name):
 def filesystem_identity():
     """The service identity, independent of SMB login accounts."""
     identity = {}
-    for variable, setting, default in (("USERID", "SAMBA_UID", "99"),
-                                       ("GROUPID", "SAMBA_GID", "100")):
+    for variable, setting, default in (("USERID", "SAMBA_UID", "100"),
+                                       ("GROUPID", "SAMBA_GID", "101")):
         value = os.environ.get(setting, default)
         if not re.fullmatch(r"[0-9]+", value) or not 0 < int(value) < 4294967295:
             raise ValueError(f"{setting} must be a nonzero numeric filesystem ID")
@@ -557,12 +557,18 @@ def filesystem_identity():
 
 def shared_group_init(mounts, gid):
     """Prepare writable share roots without changing owners or descendants."""
-    return {"name": "homestead-share-group", "image": "alpine:3.20",
-            "imagePullPolicy": "IfNotPresent", "resources": {},
+    return {"name": "homestead-share-group", "image": "alpine:3.24",
+            "imagePullPolicy": "IfNotPresent",
+            "resources": {"requests": {"cpu": "10m", "memory": "16Mi"}},
             "terminationMessagePath": "/dev/termination-log",
             "terminationMessagePolicy": "File",
             "command": ["sh", "-ec", '\n'.join(
-                f'chgrp {int(gid)} /shares/{i}; chmod g+rws /shares/{i}'
+                # Already-prepared exports need no privileged metadata writes.
+                f'if [ "$(stat -c %g /shares/{i})" != "{int(gid)}" ]; then '
+                f'chgrp {int(gid)} /shares/{i}; fi; '
+                f'mode=$(stat -c %a /shares/{i}); '
+                f'if [ "$((0$mode & 02070))" -ne "$((02070))" ]; then '
+                f'chmod g+rws /shares/{i}; fi'
                 for i in range(len(mounts)))],
             "securityContext": {"runAsUser": 0},
             "volumeMounts": [{**mount, "mountPath": f"/shares/{i}"}
@@ -582,7 +588,9 @@ def configured_deployment(deployment, rows, credentials):
     identity = filesystem_identity()
     container["env"] = [row for row in container.get("env", [])
                         if row.get("name") not in {*identity, "PERMISSIONS"}] + [
-                            {"name": name, "value": value} for name, value in identity.items()]
+                            {"name": name, "value": value} for name, value in identity.items()] + [
+                                {"name": "PERMISSIONS", "value": ""}]
+    # An explicit empty value also overrides image defaults and envFrom.
     # Include API-defaulted nonzero values so reconciliation is idempotent.
     container["startupProbe"] = {"tcpSocket": {"port": 445}, "periodSeconds": 5, "timeoutSeconds": 1,
                                  "successThreshold": 1, "failureThreshold": 60}

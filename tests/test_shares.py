@@ -32,7 +32,8 @@ class ShareTests(unittest.TestCase):
         self.assertNotIn("-R", init["command"][2])
         container = spec["containers"][0]
         self.assertNotIn("-p", container["args"])
-        self.assertNotIn("PERMISSIONS", [e["name"] for e in container["env"]])
+        self.assertEqual("", next(e["value"] for e in container["env"]
+                                  if e["name"] == "PERMISSIONS"))
         self.assertIn("force create mode = 0660", container["args"])
         self.assertIn("force directory mode = 2770", container["args"])
         self.assertEqual(desired, shares.configured_deployment(desired, rows, {}))
@@ -49,6 +50,7 @@ class ShareTests(unittest.TestCase):
     def test_smb_identity_preserves_other_environment_and_is_idempotent(self):
         dep = self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-smb"]
         container = dep["spec"]["template"]["spec"]["containers"][0]
+        container["envFrom"] = [{"configMapRef": {"name": "image-options"}}]
         container["env"] = [{"name": "TZ", "value": "Europe/London"},
                             {"name": "USERID", "value": "100"},
                             {"name": "GROUPID", "value": "101"}]
@@ -57,12 +59,13 @@ class ShareTests(unittest.TestCase):
             desired = shares.configured_deployment(dep, rows, credentials)
             self.assertEqual(desired, shares.configured_deployment(desired, rows, credentials))
         env = desired["spec"]["template"]["spec"]["containers"][0]["env"]
-        self.assertEqual({"TZ": "Europe/London", "USERID": "99", "GROUPID": "100"},
+        self.assertEqual(container["envFrom"], desired["spec"]["template"]["spec"]["containers"][0]["envFrom"])
+        self.assertEqual({"TZ": "Europe/London", "USERID": "99", "GROUPID": "100", "PERMISSIONS": ""},
                          {item["name"]: item["value"] for item in env})
         self.assertEqual("100", container["env"][1]["value"])
 
-    def test_smb_identity_can_retain_the_former_image_defaults(self):
-        with patch.dict(os.environ, {"SAMBA_UID": "100", "SAMBA_GID": "101"}):
+    def test_smb_identity_keeps_existing_access_when_no_override_is_configured(self):
+        with patch.dict(os.environ, {}, clear=True):
             self.assertEqual({"USERID": "100", "GROUPID": "101"}, shares.filesystem_identity())
 
     def test_reconciliation_repairs_identity_drift_once(self):

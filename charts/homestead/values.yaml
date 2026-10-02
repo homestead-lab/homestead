@@ -43,8 +43,8 @@ storageClass: ""
 # UIDs, but need this GID and UMASK=002 for group access. Existing descendants
 # need a separate migration when changing groups; their owners are preserved.
 samba:
-  uid: 99
-  gid: 100
+  uid: 100
+  gid: 101
 
 # Homestead published through a Cloudflare Tunnel behind Cloudflare Access:
 # requests that came through Cloudflare without Access's signature are refused.
