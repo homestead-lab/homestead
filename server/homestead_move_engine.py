@@ -59,6 +59,8 @@ COPY_PHASES = ("joining", "quiescing", "backing-up", "releasing-source", "syncin
 KINDS = ("container", "vm", "volume")
 # Shared with any other Homestead replica on the same data volume.
 _lock = SHARED.SharedLock("moves")
+_target_lock = SHARED.SharedLock("move-backup-target", strict=True, directory=lambda: DATA_DIR, timeout=60)
+TARGET_STORE = "move-backup-target.json"
 
 
 def _step_lock(move_id):
@@ -130,6 +132,7 @@ def _public(move):
         # "put back".
         "source_stopped": _source_held(move),
         "cleanup_pending": bool((move.get("flags") or {}).get("cancelling")) and move.get("status") == "failed",
+        "backup_target_cleanup_pending": bool((move.get("flags") or {}).get("target_cleanup_pending")),
         "claims": [{**{k: c.get(k) for k in ("claim", "size_gb", "backup", "created", "restored")},
                     "action": c.get("action", "move"), "storage_class": c.get("target_class") or move.get("storage_class") or ""}
                    for c in move.get("claims", [])],
@@ -402,7 +405,8 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
             fixes.append({"kind": "source-address", "cluster": cluster})
         if here.get("configured"):
             warnings.append(f"this cluster's Longhorn backup target changes from {here.get('url')} "
-                            f"to {there.get('url')}; backups already written to the old one stay there")
+                            f"to {there.get('url')} for this transfer, then returns to its previous setting; "
+                            "backups already written to the old one stay there")
 
     if not _get(f"/api/v1/namespaces/{namespace}"):
         warnings.append(f"namespace {namespace} does not exist here and will be created")
@@ -583,6 +587,121 @@ def _advance(move, phase, progress, message):
     _note(move, progress, message)
 
 
+def _target_journal(value=None):
+    path = os.path.join(DATA_DIR, TARGET_STORE)
+    if value is not None:
+        SHARED.write_json(path, value, durable=True, mode=0o600)
+        return value
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        return {}
+
+
+def _borrow_target(move, there=None):
+    try:
+        return _borrow_target_locked(move, there)
+    except urllib.error.HTTPError as error:
+        # Secret admission errors can include their submitted stringData.
+        raise CLIENT.Unreachable("Could not prepare transfer backup storage; check Kubernetes and retry") from error
+
+
+def _borrow_target_locked(move, there=None):
+    """Journal a single cluster-wide lease before any Kubernetes mutation."""
+    with _target_lock:
+        journal = _target_journal()
+        if journal and journal["owner"] != move["id"]:
+            _note(move, move.get("progress", 1), "Waiting for another transfer to release backup storage")
+            return False
+        here = LH.backup_target_state()
+        if not journal:
+            target = move.get("transfer_target")
+            if target is None:
+                there = there or CLIENT.remote(move["cluster"], "/api/move/target")
+                credentials = there.get("credentials") or {}
+                endpoint = there.get("endpoint") or credentials.get("AWS_ENDPOINTS", "")
+                if endpoint and hasattr(CLIENT, "answers") and not CLIENT.answers(endpoint):
+                    raise ValueError(f"this cluster cannot reach {move['cluster']}'s backup storage at {endpoint}. "
+                                     f"Give it an address this cluster can reach - {move['cluster']}'s Migration button "
+                                     "under Linked clusters - then retry")
+                shared = _same_target(LH.backup_target(), there)
+                secret = "" if shared else f"{JOIN_SECRET}-{move['id']}-{secrets.token_hex(4)}"
+                target = {"state": here if shared else LH.transfer_target_state(here, there["url"], secret, credentials),
+                          "secret": secret, "credentials": credentials if secret else {}}
+                move["transfer_target"] = target
+                move["previous_target"] = LH.backup_target().get("url", "")
+                _store(move)
+            journal = {"owner": move["id"], "previous": here, "applied": target["state"]}
+            _target_journal(journal)
+        if here == journal["applied"]:
+            return True
+        if here != journal["previous"]:
+            raise ValueError("Backup storage changed during this transfer; cancel it and review the storage settings")
+        target = move["transfer_target"]
+        if target["secret"]:
+            path = f"/api/v1/namespaces/{LHNS}/secrets"
+            secret = target["secret"]
+            existing = _get(f"{path}/{secret}")
+            if existing and not _ours(existing, move["id"]):
+                raise ValueError("The transfer's backup credentials already exist and belong to another workload")
+            if not existing:
+                ksend("POST", path, {
+                    "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                    "metadata": {"name": secret, "namespace": LHNS,
+                                 "annotations": {NAMES.key(MOVE_ID): move["id"]},
+                                 "labels": {NAMES.key("managed"): "true"}},
+                    "stringData": {str(k): str(v) for k, v in target["credentials"].items()}})
+        # Webhooks may echo submitted S3 keys. Keep their response private.
+        try:
+            applied = LH.replace_backup_target_state(here, journal["applied"])
+        except Exception as error:
+            raise CLIENT.Unreachable("Could not apply the transfer backup target; check backup storage and retry") from error
+        if not applied:
+            raise ValueError("Backup storage changed while the transfer was starting; cancel it and review the settings")
+        return True
+
+
+def _release_target(move):
+    with _target_lock:
+        journal = _target_journal()
+        if journal and journal["owner"] == move["id"]:
+            # A changed setting belongs to the admin; leave it alone.
+            try:
+                LH.replace_backup_target_state(journal["applied"], journal["previous"])
+            except Exception as error:
+                raise CLIENT.Unreachable("Could not restore previous backup storage; cleanup will retry") from error
+            _target_journal({})
+        move.setdefault("flags", {}).pop("target_cleanup_pending", None)
+        target = move.get("transfer_target") or {}
+        secret = target.get("secret")
+        if secret:
+            previous = (journal.get("previous") or {}).get("value") or {}
+            baseline_secret = previous.get("credentialSecret") if isinstance(previous, dict) else ""
+            current = LH.backup_target_state()
+            current_secret = "" if current["harvester"] else current["value"].get("credentialSecret", "")
+            if current_secret != secret and baseline_secret != secret:
+                path = f"/api/v1/namespaces/{LHNS}/secrets/{secret}"
+                existing = _get(path)
+                if existing and _ours(existing, move["id"]):
+                    meta = existing.get("metadata") or {}
+                    preconditions = {k: meta[k] for k in ("uid", "resourceVersion") if meta.get(k)}
+                    ksend("DELETE", path, {"preconditions": preconditions} if preconditions else None)
+        if move.get("status") in ("succeeded", "cancelled"):
+            move.pop("transfer_target", None)
+
+
+def _cleanup_target(move):
+    pending = "; Backup storage cleanup is pending; Homestead will retry automatically"
+    try:
+        _release_target(move)
+        move["message"] = move.get("message", "").replace(pending, "")
+    except Exception:
+        move.setdefault("flags", {})["target_cleanup_pending"] = True
+        if "Backup storage cleanup is pending" not in move.get("message", ""):
+            move["message"] = move.get("message", "") + pending
+
+
 def _joining(move):
     if _moving(move):
         support = LH.ensure_restore_support()
@@ -592,37 +711,8 @@ def _joining(move):
                 raise ValueError("CSI snapshot support did not become ready; repair the snapshot controller, then retry. The source has not been stopped")
             return _note(move, 1, support["message"])
     there = CLIENT.remote(move["cluster"], "/api/move/target")
-    here = LH.backup_target()
-    if _same_target(here, there):
-        return _advance(move, "quiescing", 4, "Both clusters share backup storage")
-    credentials = there.get("credentials") or {}
-    # Harvester tests a backup target when it is set, and Longhorn needs it to
-    # read the backups anyway: a store this cluster cannot reach is said
-    # plainly here, rather than as whatever the setting's webhook replies.
-    endpoint = there.get("endpoint") or credentials.get("AWS_ENDPOINTS", "")
-    if endpoint and hasattr(CLIENT, "answers") and not CLIENT.answers(endpoint):
-        raise ValueError(f"this cluster cannot reach {move['cluster']}'s backup storage at {endpoint}. "
-                         f"Give it an address this cluster can reach - {move['cluster']}'s Migration button "
-                         "under Linked clusters - then retry")
-    body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-            "metadata": {"name": JOIN_SECRET, "namespace": LHNS,
-                         "labels": {NAMES.key("managed"): "true"}},
-            "stringData": {str(k): str(v) for k, v in credentials.items()}}
-    if _get(f"/api/v1/namespaces/{LHNS}/secrets/{JOIN_SECRET}"):
-        ksend("PUT", f"/api/v1/namespaces/{LHNS}/secrets/{JOIN_SECRET}", body)
-    else:
-        ksend("POST", f"/api/v1/namespaces/{LHNS}/secrets", body)
-    move["previous_target"] = here.get("url", "") if here.get("configured") else ""
-    # On Harvester the target is Harvester's own setting, which carries the
-    # keys and endpoint itself and never reads the Secret above.
-    keys = None
-    if getattr(LH, "on_harvester", lambda: False)():
-        keys = {"access_key": credentials.get("AWS_ACCESS_KEY_ID", ""),
-                "secret_key": credentials.get("AWS_SECRET_ACCESS_KEY", ""),
-                "endpoint": credentials.get("AWS_ENDPOINTS", "")}
-    # Checked often while a move waits on it; Longhorn's default is minutes.
-    LH.set_backup_target(there["url"], JOIN_SECRET, poll="30s", **({"keys": keys} if keys else {}))
-    return _advance(move, "quiescing", 4, f"Reading backups from {move['cluster']}'s storage")
+    if _borrow_target(move, there):
+        return _advance(move, "quiescing", 4, f"Reading backups from {move['cluster']}'s storage")
 
 
 def _quiescing(move):
@@ -875,6 +965,7 @@ def _restoring(move):
         claim["restored"] = finished
         states.append(100 if finished else percent)
     if all(c["restored"] for c in move["claims"]):
+        _release_target(move)
         if move["kind"] == "volume":
             return _finish(move, "succeeded", f"{move['name']} is here; the original stays on "
                                               f"{move['cluster']} until you remove it there")
@@ -1062,6 +1153,7 @@ def _finish(move, status, message):
     if status == "succeeded":
         move.update(phase="done", progress=100)
         move.pop("definition", None)
+    _cleanup_target(move)
     if after_finish:
         try:
             after_finish()
@@ -1083,6 +1175,9 @@ def _tick(move):
     if not handler:
         return _finish(move, "failed", f"unknown phase {move.get('phase')}")
     try:
+        if move.get("phase") in ("quiescing", "backing-up", "releasing-source", "syncing", "restoring"):
+            if not _borrow_target(move):
+                return
         handler(move)
         move["failures"] = 0
     except CLIENT.Unreachable as error:
@@ -1117,17 +1212,27 @@ def tick_all():
 
 def _tick_all():
     with _lock:
-        running = [m["id"] for m in _read() if m.get("status") == "running"]
+        rows = _read()
+    journal = _target_journal()
+    running = [m["id"] for m in rows if m.get("status") == "running"
+               or (m.get("flags") or {}).get("target_cleanup_pending")
+               or (m.get("status") in ("succeeded", "cancelled") and m.get("transfer_target"))
+               or m["id"] == journal.get("owner")]
+    if journal and not any(m["id"] == journal["owner"] for m in rows):
+        _release_target({"id": journal["owner"], "status": "cancelled"})
     for move_id in running:
         with _serialized(move_id):
             move = _find(move_id)
-            if not move or move.get("status") != "running":
+            if not move:
                 continue
-            _tick(move)
+            if move.get("status") == "running":
+                _tick(move)
+            else:
+                _cleanup_target(move)
+                move["updated_at"] = _now()
             with _lock:
                 current = _find(move_id)
-                if current and current.get("status") == "running" and \
-                        current.get("updated_at") <= move.get("updated_at"):
+                if current and current.get("updated_at") <= move.get("updated_at"):
                     _store(move)
 
 
@@ -1158,6 +1263,8 @@ def _retry(move_id):
     if move.get("phase") == "backing-up":
         move.setdefault("flags", {})["retry_backups"] = True
     if move.get("phase") == "joining":
+        _release_target(move)
+        move.pop("transfer_target", None)
         move.setdefault("flags", {}).pop("snapshot_wait_started", None)
     move.update(status="running", failures=0, finished_at="",
                 message=f"Retrying from {move['phase']}", updated_at=_now())
@@ -1214,6 +1321,7 @@ def _abandon(move_id):
                 + (f"; removed {', '.join(removed)} here" if removed else ""),
                 finished_at=_now())
     move.pop("definition", None)
+    _cleanup_target(move)
     _store(move)
     return _public(move)
 
@@ -1266,6 +1374,9 @@ def dismiss(move_id=None):
             raise ValueError("a move still running cannot be cleared; cancel it, or wait for it to finish or fail")
         if any(m.get("transfer_mode") == "copy" and _source_held(m) for m in gone):
             raise ValueError("Cancel the failed copy to restore its source before dismissing it")
+        if any((m.get("flags") or {}).get("target_cleanup_pending")
+               or m["id"] == _target_journal().get("owner") for m in gone):
+            raise ValueError("Wait for backup storage cleanup before dismissing this transfer")
         _write([m for m in rows if m not in gone])
     failed = [m for m in gone if m.get("status") == "failed"]
     if failed:

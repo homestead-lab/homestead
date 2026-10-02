@@ -111,8 +111,35 @@ class FakeLonghorn:
         return self.harvester
 
     def set_backup_target(self, url, secret="", poll="5m", keys=None):
-        self.target = {"configured": True, "url": url, "secret": secret}
+        self.target = {"configured": bool(url), "url": url, "secret": secret, "interval": poll}
         self.keys = keys
+
+    def backup_target_state(self):
+        if self.harvester:
+            return {"harvester": True, "value": copy.deepcopy(getattr(self, "setting", {
+                "type": "nfs", "endpoint": self.target["url"], "refreshIntervalInSeconds": 300}))}
+        return {"harvester": False, "value": {
+            "backupTargetURL": self.target.get("url", ""), "credentialSecret": self.target.get("secret", ""),
+            "pollInterval": self.target.get("interval", "")}}
+
+    @staticmethod
+    def transfer_target_state(*args):
+        import homestead_longhorn
+        return homestead_longhorn.transfer_target_state(*args)
+
+    def replace_backup_target_state(self, expected, replacement):
+        if self.backup_target_state() != expected:
+            return False
+        value = replacement["value"]
+        if replacement["harvester"]:
+            self.setting = copy.deepcopy(value)
+            url = f"s3://{value['bucketName']}@{value['bucketRegion']}/" if value.get("type") == "s3" else value.get("endpoint", "")
+            keys = {"access_key": value.get("accessKeyId", ""), "secret_key": value.get("secretAccessKey", ""),
+                    "endpoint": value.get("endpoint", "")}
+            self.set_backup_target(url, poll=f"{value.get('refreshIntervalInSeconds', 300)}s", keys=keys)
+        else:
+            self.set_backup_target(value["backupTargetURL"], value["credentialSecret"], value["pollInterval"])
+        return True
 
     def create_backup(self, volume, name=None):
         name = f"homestead-{len(self.made) + 1}"
@@ -423,6 +450,10 @@ class EngineTests(unittest.TestCase):
     """The destination drives the source over HTTP; here, over a function call."""
 
     def setUp(self):
+        # Fake clusters must not invoke server.py's live API cleanup hook.
+        cleanup = mock.patch.object(engine, "after_finish", None)
+        cleanup.start()
+        self.addCleanup(cleanup.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.cluster = FakeCluster()
@@ -669,7 +700,7 @@ class EngineTests(unittest.TestCase):
                  "credentials": {"AWS_ACCESS_KEY_ID": "ak", "AWS_SECRET_ACCESS_KEY": "sk",
                                  "AWS_ENDPOINTS": "http://192.0.2.108:9000", "VIRTUAL_HOSTED_STYLE": "false"}}
         self.lh.target = {"configured": True, "url": "nfs://nas:/backups", "secret": ""}
-        move = {"cluster": "shed", "claims": [], "phase": "joining"}
+        move = {"id": "0123456789ab", "cluster": "shed", "claims": [], "phase": "joining"}
         with mock.patch.object(client, "remote", lambda name, path, body=None: there),                 mock.patch.object(client, "answers", lambda endpoint, timeout=3: self.reachable):
             engine._joining(move)
         return move
@@ -716,7 +747,7 @@ class EngineTests(unittest.TestCase):
 
     def test_on_longhorn_the_join_names_the_secret(self):
         self._join()
-        self.assertEqual(engine.JOIN_SECRET, self.lh.target["secret"])
+        self.assertTrue(self.lh.target["secret"].startswith(engine.JOIN_SECRET + "-0123456789ab-"))
         self.assertIsNone(self.lh.keys)
 
     def test_a_restart_part_way_through_picks_up_where_it_was(self):
