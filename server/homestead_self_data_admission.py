@@ -272,9 +272,13 @@ class Admitter:
                 if _review_key(fingerprint, self.policy["threshold"], self.nodes) != self.policy["reviews"][stage]["proposal"]:
                     raise Held("Copy or restart approval no longer matches; Homestead has not been stopped")
             return True
-        stage = "restart" if purpose in ("switch", "start") else purpose
+        stage = "restart" if purpose in ("switch", "start", "recover-start") else purpose
         report = review(self.read, self.namespace, stage, proposal, self.nodes, self.policy["threshold"], clock=self.clock)
         approved = self.policy["reviews"][stage]
+        if purpose == "recover-start":
+            approved = (self.handoff or {}).get("recovery", {}).get("restart")
+            if not approved:
+                raise Held("Original-volume restart needs its own reviewed capacity receipt")
         if (report["receipt"]["proposal"] != approved["proposal"]
                 or not set(report["receipt"]["warnings"]) <= set(approved["warnings"])):
             raise Held("Capacity or the workload changed; review the new warnings before continuing")
