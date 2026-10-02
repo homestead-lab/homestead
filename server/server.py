@@ -8410,6 +8410,8 @@ class H(HTTP.LimitedHandler):
                                                 if n["name"] == (q.get("name") or [""])[0]), {})))
             if p == "/api/os-updates":
                 return self._send(200, OS_ROLLOUT.report())
+            if p == "/api/passthrough/inventory":
+                return self._send(200, PASSTHROUGH.inventory((q.get("node") or [""])[0]))
             if p == "/api/passthrough/resources":
                 return self._send(200, PASSTHROUGH.resources())
             if p == "/api/self/address":
