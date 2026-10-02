@@ -52,7 +52,7 @@ function renderOperations() {
     <div class="jobmeter"><span class="${operation.status === "failed" ? "failed" : ""}" style="width:${Math.max(2, Math.min(100, operation.progress || 0))}%"></span></div>
     <div class="jobfoot"><span>${esc(operation.message || "")}</span><span>${operationAge(operation.finished_at || operation.started_at)}</span></div>
     <div class="jobactions">
-      <button class="btn sm" onclick="openOperation(${jsq(operation.href || "/")},${jsq(operation.id || "")})">Open</button>
+      <button class="btn sm" onclick="${operation.kind === 'cluster-shutdown' ? 'clusterShutdown()' : `openOperation(${jsq(operation.href || "/")},${jsq(operation.id || "")})`}">Open</button>
       <button class="btn sm" data-tip="Every step it has taken, and the output of what does its work" onclick="operationLog(${jsq(operation.id)})">${icon("log")}Log</button>
       ${operation.preparation_archivable ? `<button class="btn sm" data-need="admin" onclick="selfDataArchiveReview(${jsq(operation.id)})">Archive preparation</button>` : ""}
       ${operation.power_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview(${jsq(operation.id)})">Inspect outcome</button>` : ""}
