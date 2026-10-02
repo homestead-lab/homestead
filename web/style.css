@@ -2868,9 +2868,9 @@ html[data-motion="off"] .iconbtn.setupbtn.pulse svg{animation:none}
 .wl-inline-detail .workloadtree{margin:10px 0 0}
 .wl-detail-actions{display:none}
 .wl-detail-hardware{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
-.wl-mobile-head{display:none}
-html[data-theme="light"] .wl-mobile-summary .pillbtn.warn{color:#8a5200}
-html[data-theme="light"] .wl-mobile-summary .pillbtn.crit{color:#a1242a}
+.collection-mobile-head{display:none}
+html[data-theme="light"] .collection-mobile-summary .pillbtn.warn{color:#8a5200}
+html[data-theme="light"] .collection-mobile-summary .pillbtn.crit{color:#a1242a}
 /* Mobile collection controls use the existing portalled action menu. */
 .list-options>summary.btn{min-height:44px;height:auto;padding:8px 12px!important;font-size:13px;line-height:1.4;gap:6px}
 .list-options-pop{top:calc(100% + 6px);bottom:auto;min-width:min(310px,calc(100vw - 16px));max-width:calc(100vw - 16px);padding:8px 12px;background:var(--surf);color:var(--tx)}
@@ -2885,22 +2885,22 @@ html[data-theme="light"] .wl-mobile-summary .pillbtn.crit{color:#a1242a}
 .list-options-pop>button{min-height:44px;padding-inline:0;font-size:13px}
 @media(max-width:560px){
   /* Tabs, one toolbar, one status line. Rows keep their existing layout. */
-  .containers-page>.phead{display:block;margin-bottom:8px}
-  .containers-page>.phead>div:first-child{width:100%;min-width:0}
-  .containers-page>.phead>div:first-child>p,.containers-page>.phead .wgroup-bar,.containers-page>.phead>.row{display:none}
-  .containers-page .pagetabs{display:flex;width:100%;margin:0}
-  .containers-page .pagetabs>a{flex:1;min-width:0;min-height:40px;display:flex;align-items:center;justify-content:center;padding:6px 8px}
-  .wl-mobile-head{display:block;margin-bottom:12px}
-  .wl-mobile-toolbar{position:relative;display:flex;align-items:center;flex-wrap:nowrap;gap:7px}
-  .wl-group-select,.wl-mobile-scope{flex:1;min-width:0}
+  .collection-page>.phead{display:block;margin-bottom:8px}
+  .collection-page>.phead>div:first-child{width:100%;min-width:0}
+  .collection-page>.phead>div:first-child>p,.collection-page>.phead .wgroup-bar,.collection-page>.phead>.row{display:none}
+  .collection-page .pagetabs{display:flex;width:100%;margin:0}
+  .collection-page .pagetabs>a{flex:1;min-width:0;min-height:40px;display:flex;align-items:center;justify-content:center;padding:6px 8px}
+  .collection-mobile-head{display:block;margin-bottom:12px}
+  .collection-mobile-toolbar{position:relative;display:flex;align-items:center;flex-wrap:nowrap;gap:7px}
+  .wl-group-select,.collection-mobile-scope{flex:1;min-width:0}
   .wl-group-select{width:0;min-height:44px;padding:7px 10px;font-size:13px;font-weight:600;text-overflow:ellipsis}
-  .wl-mobile-scope{font-size:13px;color:var(--mut)}
-  .wl-mobile-toolbar>.btn{min-height:44px}
-  .wl-mobile-toolbar .list-options{position:static;margin:0;flex:0 0 auto}
-  .wl-mobile-summary{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:7px;min-height:26px;font-size:12.5px;color:var(--mut)}
-  .wl-mobile-summary .pillbtn{padding:3px 0;border:0;border-radius:0;background:transparent;box-shadow:none;font-size:12.5px}
-  .wl-mobile-summary .pillbtn.warn{color:var(--med)}
-  .wl-mobile-summary .pillbtn.crit{color:var(--crit)}
+  .collection-mobile-scope{font-size:13px;color:var(--mut)}
+  .collection-mobile-toolbar>.btn{min-height:44px}
+  .collection-mobile-toolbar .list-options{position:static;margin:0;flex:0 0 auto}
+  .collection-mobile-summary{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:7px;min-height:26px;font-size:12.5px;color:var(--mut)}
+  .collection-mobile-summary .pillbtn{padding:3px 0;border:0;border-radius:0;background:transparent;box-shadow:none;font-size:12.5px}
+  .collection-mobile-summary .pillbtn.warn{color:var(--med)}
+  .collection-mobile-summary .pillbtn.crit{color:var(--crit)}
   /* A matrix is the deliberate exception to stacked item rows: four compact
      host columns remain visible together; long fields move below it. */
   .tbl.stack.comparison-table{display:table;width:100%;min-width:calc(56px + var(--comparison-columns)*clamp(56px,(100vw - 82px)/4,86px))}
@@ -2962,8 +2962,8 @@ html[data-theme="light"] .wl-mobile-summary .pillbtn.crit{color:#a1242a}
   .wl-detail-actions .actionbar{justify-content:flex-end}
 }
 @media(max-width:350px){
-  .wl-mobile-toolbar .list-options-label{display:none}
-  .wl-mobile-toolbar .list-options>summary.btn{width:44px;justify-content:center;padding:8px!important}
+  .collection-mobile-toolbar .list-options-label{display:none}
+  .collection-mobile-toolbar .list-options>summary.btn{width:44px;justify-content:center;padding:8px!important}
 }
 
 /* Metrics settle into new observations; motion preferences apply to bars too. */
