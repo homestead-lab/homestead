@@ -1344,7 +1344,10 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
 .seg .btnicon{width:15px;height:15px}
 .btn.iconic{padding:5px 8px;gap:0;min-width:30px}
 /* Containers as rows: every workload on one line, its actions as icons. */
-.wltable-wrap{overflow:visible}
+.wltable-wrap{overflow:visible;container-type:inline-size;container-name:container-rows}
+/* Uptime is an extra column only when the list itself has room for it. */
+.wltable .wl-uptime{display:none}
+@container container-rows (min-width:1100px){.wltable .wl-uptime{display:table-cell}}
 .pill.slim{padding:2px 8px;font-size:11px;box-shadow:none}
 /* A page's shape while its data is on the way, and a page shown from last time. */
 .skel{display:block;position:relative;overflow:hidden;border-radius:9px;background:rgba(255,255,255,.045)}
@@ -2944,6 +2947,7 @@ html[data-theme="light"] .wl-mobile-summary .pillbtn.crit{color:#a1242a}
   .tbl.stack.compact.wltable .wl-row>.wl-ram{grid-area:ram;font-size:11.5px;line-height:1.4}
   .tbl.stack.compact.wltable .wl-row>.wl-cpu::before,.tbl.stack.compact.wltable .wl-row>.wl-ram::before{content:attr(data-label) " ";display:inline;font-size:11.5px;color:var(--mut);margin:0}
   .tbl.stack.compact.wltable .wl-row>.wl-image,.tbl.stack.compact.wltable .wl-row>.wl-access,.tbl.stack.compact.wltable .wl-row>.wl-actions,
+  .tbl.stack.compact.wltable .wl-row>.wl-uptime,
   .tbl.stack.compact.wltable tr.wl-off>.wl-cpu,.tbl.stack.compact.wltable tr.wl-off>.wl-ram,.wltable .wl-row-meta{display:none}
   .wltable .collection-disclosure .av{width:24px;height:24px;flex:0 0 24px}
   .wltable .collection-disclosure .wtitle{font-size:13px}
