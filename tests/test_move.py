@@ -208,7 +208,7 @@ class VersionTests(unittest.TestCase):
 
     def test_this_homestead_says_what_it_runs(self):
         self.assertEqual({"version": "2.8.59", "protocol": move.PROTOCOL, "namespace": "lab",
-                          "capabilities": ["copy-source-lease", "copy-destination"]},
+                          "capabilities": ["copy-source-lease", "copy-source-fence", "copy-destination"]},
                          move.hello())
 
     def test_the_same_release_is_plainly_fine(self):

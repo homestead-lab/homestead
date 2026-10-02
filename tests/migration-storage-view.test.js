@@ -7,10 +7,10 @@ function setup() {
   const calls=[], replies=[];
   const ctx = {console, URLSearchParams, Map, Set, Date, Promise, encodeURIComponent, clearTimeout,
     document:{addEventListener(){}}, STATE:{data:{}}, $:key=>fields[key], $$:()=>[],
-    esc:String, toast:()=>{}, ask:async()=>true, closeModal:()=>{}, movesRepaint:()=>{}, tip:t=>t,
+    esc:value=>String(value ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])), toast:()=>{}, ask:async()=>true, closeModal:()=>{}, movesRepaint:()=>{}, tip:t=>t,
     childModal:(title,html)=>{ctx.modalTitle=title;ctx.modalHtml=html;},
     api:(path,opts)=> { calls.push({path,body:JSON.parse(opts.body)}); return new Promise(resolve=>replies.push(resolve)); }};
-  ctx.window=ctx; vm.createContext(ctx); ctx.jsq=JSON.stringify;
+  ctx.window=ctx; vm.createContext(ctx); ctx.jsq=value=>ctx.esc(JSON.stringify(value));
   vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js","utf8"),ctx);
   return {ctx,fields,calls,replies};
 }
@@ -54,6 +54,25 @@ test("VM transfer renders hardware mapping and preserves choices in the reviewed
   await new Promise(resolve=>setImmediate(resolve));
   assert.deepEqual(t.calls[2].body.host_devices,{gpu:{resource:"example.test/new"}});
   t.replies.shift()({}); await start;
+});
+
+test("rendered hardware handlers execute after one HTML decode with real escaping", async()=>{
+  const t=setup(), plan={host_devices:[{name:"gpu",resource:"example.test/old",gpu:true,rom:true}],
+    device_resources:[{resource:"example.test/new",label:"GPU",kind:"pci",nodes:["node1"]}]};
+  const html=t.ctx.moveDevicesTable(plan,"source","vm","desktop");
+  const entities={amp:"&",quot:'"',lt:"<",gt:">","#39":"'"};
+  const handlers=[...html.matchAll(/onchange="([^"]+)"/g)].map(m=>m[1].replace(/&(amp|quot|lt|gt|#39);/g,(_,key)=>entities[key]));
+  assert.equal(handlers.length,3);
+  vm.runInContext(`(function(){${handlers[0]}}).call({value:"example.test/new"})`,t.ctx);
+  assert.deepEqual(t.calls[0].body.host_devices,{gpu:{resource:"example.test/new"}});
+  t.replies.shift()({ok:true,claims:[]}); await new Promise(resolve=>setImmediate(resolve));
+  vm.runInContext(`(function(){${handlers[1]}}).call({value:""})`,t.ctx);
+  assert.deepEqual(t.calls[1].body.host_devices,{gpu:{resource:"example.test/new",rom:""}});
+  t.replies.shift()({ok:true,claims:[]}); await new Promise(resolve=>setImmediate(resolve));
+  t.ctx.vmReadRom=async()=>"VaoA";
+  await vm.runInContext(`(async function(){return ${handlers[2]}}).call({files:[{name:"gpu.rom"}]})`,t.ctx);
+  assert.equal(t.calls[2].body.host_devices.gpu.rom,"VaoA");
+  t.replies.shift()({ok:true,claims:[]}); await new Promise(resolve=>setImmediate(resolve));
 });
 
 test("replacement vBIOS bytes are reviewed and do not enable Start until checked", async()=>{

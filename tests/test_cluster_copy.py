@@ -5,7 +5,7 @@ import json
 import unittest
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, Event
 from unittest import mock
 
 import test_move_flow as fixtures
@@ -14,11 +14,13 @@ import homestead_passthrough as passthrough
 
 
 class ClusterCopyTests(unittest.TestCase):
-    setUp = fixtures.EngineTests.setUp
+    def setUp(self):
+        fixtures.EngineTests.setUp(self)
+        self.cluster.objects["/apis/apps/v1/namespaces/lab/deployments/frigate"]["metadata"]["resourceVersion"] = "1"
 
     def seed_vm(self, strategy="Always", running=True):
         self.cluster.put("/apis/kubevirt.io/v1", {"groupVersion": "kubevirt.io/v1"})
-        vm = {"metadata": {"name": "desktop", "namespace": "lab", "uid": "source-vm-uid"},
+        vm = {"metadata": {"name": "desktop", "namespace": "lab", "uid": "source-vm-uid", "resourceVersion": "1"},
               "spec": {"runStrategy": strategy, "dataVolumeTemplates": [{"metadata": {"name": "os-disk"}}],
                        "template": {"spec": {"domain": {"cpu": {"cores": 4}, "memory": {"guest": "8Gi"},
                            "firmware": {"uuid": "00000000-0000-0000-0000-000000000001", "bootloader": {"efi": {}}},
@@ -249,6 +251,44 @@ class ClusterCopyTests(unittest.TestCase):
                 engine.start("shed", "container", "frigate", "copied", transfer_mode="copy")
         self.assertNotIn("/api/move/source", self.remote_calls)
 
+    def test_source_without_version_fencing_is_refused_before_quiesce(self):
+        with mock.patch.object(client, "check_cluster", return_value={"compatible": True, "capabilities": ["copy-source-lease"]}):
+            with self.assertRaisesRegex(ValueError, "Update Homestead on the source"):
+                engine.start("shed", "container", "frigate", "copied", transfer_mode="copy")
+        self.assertNotIn("/api/move/source", self.remote_calls)
+
+    def test_manual_recovery_keeps_lease_until_terminal_or_deleting_vmi_disappears(self):
+        for phase, deleting in (("Succeeded", False), ("Failed", False), ("Running", True)):
+            with self.subTest(phase=phase, deleting=deleting):
+                self.seed_vm("Manual", True)
+                source.quiesce("vm", "desktop", "012345abcdef", "source-vm-uid", "1")
+                vmi = {"metadata": {"name": "desktop"}, "status": {"phase": phase}}
+                if deleting:
+                    vmi["metadata"]["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+                self.cluster.put(self.vmi_path(), vmi)
+                before = len(self.cluster.calls)
+                with self.assertRaises(source.PendingRecovery):
+                    source.release("vm", "desktop", "012345abcdef", "source-vm-uid")
+                self.assertEqual("Halted", self.cluster.get(self.vm_path())["spec"]["runStrategy"])
+                self.assertEqual("012345abcdef", source.status("vm", "desktop")["transfer_owner"])
+                self.cluster.objects.pop(self.vmi_path())
+                source.release("vm", "desktop", "012345abcdef", "source-vm-uid")
+                self.assertEqual("Manual", self.cluster.get(self.vm_path())["spec"]["runStrategy"])
+                self.assertFalse(source.status("vm", "desktop")["transfer_owner"])
+                self.assertEqual(1, len([c for c in self.cluster.calls[before:] if c[1].endswith("/desktop/start")]))
+
+    def test_manual_recovery_wait_is_retried_by_engine(self):
+        self.seed_vm("Manual", True)
+        move = engine.start("shed", "vm", "desktop", "copied", transfer_mode="copy")
+        self.settle(move["id"], "releasing-source")
+        self.cluster.put(self.vmi_path(), {"status": {"phase": "Succeeded"}})
+        engine.tick_all()
+        waiting = engine._find(move["id"])
+        self.assertEqual(("running", "releasing-source"), (waiting["status"], waiting["phase"]))
+        self.assertTrue(engine._public(waiting)["source_stopped"])
+        self.cluster.objects.pop(self.vmi_path())
+        self.assertEqual("succeeded", self.settle(move["id"])["status"])
+
     def test_missing_cloud_init_secret_is_refused_before_source_stops(self):
         self.seed_vm()
         self.cluster.objects.pop("/api/v1/namespaces/lab/secrets/desktop-init")
@@ -275,7 +315,7 @@ class ClusterCopyTests(unittest.TestCase):
     def test_completed_rerun_source_keeps_its_completed_vmi(self):
         self.seed_vm("RerunOnFailure")
         self.cluster.objects[self.vmi_path()]["status"]["phase"] = "Succeeded"
-        source.quiesce("vm", "desktop", "012345abcdef", "source-vm-uid")
+        source.quiesce("vm", "desktop", "012345abcdef", "source-vm-uid", "1")
         self.assertEqual("RerunOnFailure", self.cluster.get(self.vm_path())["spec"]["runStrategy"])
         self.assertFalse(source.status("vm", "desktop")["running"])
         source.release("vm", "desktop", "012345abcdef", "source-vm-uid")
@@ -387,7 +427,7 @@ class ClusterCopyTests(unittest.TestCase):
 
     def test_lease_rejects_other_transfers_and_replaced_source(self):
         self.seed_vm()
-        source.quiesce("vm", "desktop", "012345abcdef", "source-vm-uid")
+        source.quiesce("vm", "desktop", "012345abcdef", "source-vm-uid", "1")
         for action in (source.quiesce, source.release):
             with self.assertRaisesRegex(ValueError, "another transfer"):
                 action("vm", "desktop", "abcdef012345", "source-vm-uid")
@@ -398,7 +438,7 @@ class ClusterCopyTests(unittest.TestCase):
 
     def test_terminating_vm_launcher_is_waited_for_before_backup(self):
         self.seed_vm()
-        source.quiesce("vm", "desktop", "012345abcdef", "source-vm-uid")
+        source.quiesce("vm", "desktop", "012345abcdef", "source-vm-uid", "1")
         self.cluster.objects.pop(self.vmi_path())
         self.cluster.put("/api/v1/namespaces/lab/pods/launcher", {
             "metadata": {"name": "launcher", "deletionTimestamp": "2026-01-01T00:00:00Z"},
@@ -421,6 +461,67 @@ class ClusterCopyTests(unittest.TestCase):
         self.assertTrue(engine.moves()[0]["source_stopped"])
         self.assertEqual("cancelled", engine.abandon(move["id"])["status"])
         self.assertEqual("Always", self.cluster.get(self.vm_path())["spec"]["runStrategy"])
+
+    def test_cancel_waits_for_in_flight_stop_then_restores_source(self):
+        self.seed_vm()
+        move = engine.start("shed", "vm", "desktop", "copied", transfer_mode="copy")
+        self.settle(move["id"], "quiescing")
+        entered, complete, cancelling = Event(), Event(), Event()
+        original = source.quiesce
+        def delayed(*args, **kwargs):
+            entered.set()
+            if not complete.wait(5):
+                raise AssertionError("test stop request timed out")
+            return original(*args, **kwargs)
+        def cancel():
+            cancelling.set()
+            return engine.abandon(move["id"])
+        with mock.patch.object(source, "quiesce", side_effect=delayed), ThreadPoolExecutor(max_workers=2) as pool:
+            tick = pool.submit(engine.tick_all)
+            try:
+                self.assertTrue(entered.wait(5))
+                cancellation = pool.submit(cancel)
+                self.assertTrue(cancelling.wait(5))
+                with self.assertRaises(TimeoutError):
+                    cancellation.result(timeout=0.1)
+            finally:
+                complete.set()
+            tick.result(timeout=5)
+            result = cancellation.result(timeout=5)
+        self.assertEqual("cancelled", result["status"])
+        self.assertFalse(result["source_stopped"])
+        self.assertEqual("Always", self.cluster.get(self.vm_path())["spec"]["runStrategy"])
+        self.assertFalse(source.status("vm", "desktop")["transfer_owner"])
+
+    def test_cancellation_fences_timed_out_stop_even_after_another_copy(self):
+        self.seed_vm()
+        move = engine.start("shed", "vm", "desktop", "copied", transfer_mode="copy")
+        self.settle(move["id"], "quiescing")
+        delayed = []
+        original = source.quiesce
+        def timed_out(*args, **kwargs):
+            delayed.append((args, kwargs))
+            raise client.Unreachable("stop request timed out before arriving")
+        with mock.patch.object(source, "quiesce", side_effect=timed_out):
+            engine.tick_all()
+        self.assertEqual("cancelled", engine.abandon(move["id"])["status"])
+        args, kwargs = delayed[0]
+        with self.assertRaisesRegex(ValueError, "already released"):
+            original(*args, **kwargs)
+        stale = self.cluster.get(self.vm_path())
+        stale["metadata"]["resourceVersion"] = kwargs["expected_version"]
+        stale["metadata"].get("annotations", {}).pop("homestead.io/copy-released", None)
+        with mock.patch.object(source, "_object", return_value=stale):
+            with self.assertRaises(urllib.error.HTTPError) as conflict:
+                original(*args, **kwargs)
+        self.assertEqual(409, conflict.exception.code)
+        version = source.definition("vm", "desktop")["source_version"]
+        source.quiesce("vm", "desktop", "012345abcdef", "source-vm-uid", version)
+        source.release("vm", "desktop", "012345abcdef", "source-vm-uid")
+        with self.assertRaisesRegex(ValueError, "source changed"):
+            original(*args, **kwargs)
+        self.assertEqual("Always", self.cluster.get(self.vm_path())["spec"]["runStrategy"])
+        self.assertFalse(source.status("vm", "desktop")["transfer_owner"])
 
     def test_cleanup_failure_retries_cleanup_without_restarting_source_again(self):
         move = engine.start("shed", "container", "frigate", "copied", transfer_mode="copy")

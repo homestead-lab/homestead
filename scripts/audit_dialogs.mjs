@@ -71,7 +71,7 @@ const DIALOGS = [
   ["cluster-storage", "settings", "settingsTab('fleet')", "clusterReady('staging')", "clusterStorage('staging')"],
   ["move-review", "settings", "settingsTab('fleet')", "moveReview('branch','container','frigate')"],
   ["vm-cluster-copy", "settings", "settingsTab('fleet')", "moveReview('branch','vm','home-assistant-os','copy','default')"],
-  ["vm-cluster-copy-devices", "settings", "settingsTab('fleet')", "moveReview('branch','vm','gpu-desktop','copy','default')", "moveDeviceSet('branch','vm','gpu-desktop','display','resource','homestead.io/pci-10de-1e87')"],
+  ["vm-cluster-copy-devices", "settings", "settingsTab('fleet')", "moveReview('branch','vm','gpu-desktop','copy','default')", "const select = document.querySelector('[aria-label=\"Destination device for display\"]'); select.value = 'homestead.io/pci-10de-1e87'; select.dispatchEvent(new Event('change', { bubbles: true }));"],
   ["container-cluster-copy", "settings", "settingsTab('fleet')", "moveReview('branch','container','frigate','copy','lab')"],
   ["vm-cluster-copy-picker", "vms", "[...document.querySelectorAll('[onclick]')].find(e => e.getAttribute('onclick').includes('moveToCluster(') && e.getAttribute('onclick').includes(\"'copy'\")).click()"],
   ["container-cluster-copy-picker", "workloads", "[...document.querySelectorAll('[onclick]')].find(e => e.getAttribute('onclick').includes('moveToCluster(') && e.getAttribute('onclick').includes(\"'copy'\")).click()"],
