@@ -89,6 +89,10 @@ spec:
               value: {{ .Values.workloadNamespace.name | quote }}
             - name: SMB_NAMESPACE
               value: {{ .Values.workloadNamespace.name | quote }}
+            - name: SAMBA_UID
+              value: {{ .Values.samba.uid | quote }}
+            - name: SAMBA_GID
+              value: {{ .Values.samba.gid | quote }}
             - name: STORAGE_CLASS
               value: {{ .Values.storageClass | quote }}
             - name: LB_IP
