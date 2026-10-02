@@ -4,6 +4,7 @@ CDI rebinds a prime PV to the final claim. That PV is data, not disposable
 work space. Receipts follow claim UIDs rather than relying on name prefixes.
 """
 import secrets
+import urllib.error
 
 import homestead_transfer_cleanup as RESOURCES
 
@@ -21,6 +22,8 @@ def dispatch(read, send, ops, kind, title, resource, href, ref, bodies, next_pha
     """Journal creation intent before POST; a lost reply is recovered by stamp."""
     with ops.dispatch_guard():
         work = receipt([body["metadata"]["name"] for body in bodies])
+        for disk in work["disks"].values():
+            disk["not_dispatched"] = True
         ref.update(cdi_cleanup=work, phase="creating")
         operation = ops.start(kind, title, resource, href, ref, "Making its disks")
         try:
@@ -30,7 +33,14 @@ def dispatch(read, send, ops, kind, title, resource, href, ref, bodies, next_pha
                 # Keep the ownership chain available even when CDI completes
                 # between polls. Homestead removes these workers in cleanup.
                 body["metadata"]["annotations"][RETAIN_WORKER] = "true"
-                made = send("POST", f"{API}/namespaces/{ref['namespace']}/datavolumes", body)
+                work["disks"][name]["not_dispatched"] = False
+                ops.record_phase(operation["id"], "creating", 1, "Making its disks", cdi_cleanup=work)
+                try:
+                    made = send("POST", f"{API}/namespaces/{ref['namespace']}/datavolumes", body)
+                except urllib.error.HTTPError as error:
+                    if error.code in (400, 403, 409, 422):
+                        work["disks"][name]["not_created"] = True
+                    raise
                 if (made or {}).get("metadata", {}).get("uid"):
                     work["disks"][name]["dv_uid"] = made["metadata"]["uid"]
                 # Capture the first target UID before another disk is dispatched;
@@ -62,6 +72,8 @@ def observe(read, ns, work):
     pods = RESOURCES.items(read, f"/api/v1/namespaces/{ns}/pods")
     pvs = RESOURCES.items(read, "/api/v1/persistentvolumes")
     for name, disk in work["disks"].items():
+        if disk.get("not_created") or disk.get("not_dispatched"):
+            continue
         dv = RESOURCES.optional(read, f"{API}/namespaces/{ns}/datavolumes/{name}")
         if dv:
             meta = _identity(dv)
@@ -167,6 +179,8 @@ def cleanup(read, send, ns, work, keep_disks=True):
                 raise ValueError("Import copy resource was replaced; cleanup stopped")
             pending |= not RESOURCES.delete(read, send, row["path"], obj)
     for name, disk in work["disks"].items():
+        if disk.get("not_created") or disk.get("not_dispatched"):
+            continue
         target = next((c for c in claims if c["metadata"].get("uid") == disk.get("target_uid")), None)
         if keep_disks and (not target or (target.get("status") or {}).get("phase") != "Bound"):
             raise ValueError("Completed disk claim is not bound; its storage was preserved")

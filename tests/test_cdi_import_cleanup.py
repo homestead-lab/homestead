@@ -403,6 +403,21 @@ class JournalTests(unittest.TestCase):
         self.assertNotIn(DV + "/guest-disk", self.api.objects)
         self.assertEqual(1, operations.dismiss_finished()["dismissed"])
 
+    def test_rejected_creation_leaves_a_racing_foreign_disk_and_cleans_only_our_disk(self):
+        bodies = [self.body(), self.body()]
+        bodies[1]["metadata"]["name"] = "second-disk"
+        foreign = obj("second-disk", "foreign-uid")
+        self.api.objects[DV + "/second-disk"] = foreign
+        def send(method, path, body=None, **kwargs):
+            if body["metadata"]["name"] == "second-disk":
+                raise urllib.error.HTTPError(path, 409, "exists", {}, None)
+            return self.api.send(method, path, body, **kwargs)
+        cleanup.dispatch(self.api.read, send, operations, "vm-disk-import", "Import disk", {}, "/import",
+                         {"namespace": "lab", "name": "guest-disk"}, bodies, "import")
+        self.assertEqual("failed", operations.list_operations()[0]["status"])
+        self.assertNotIn(DV + "/guest-disk", self.api.objects)
+        self.assertEqual(foreign, self.api.objects[DV + "/second-disk"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -418,10 +418,11 @@ def copy_script(src, vm, path, size):
 
 def _job(ref, disk, index, token, ca, item=None):
     src = _source(ref["source"])
-    job = f"homestead-vmimport-{ref['name']}"[:55].rstrip("-") + f"-{index + 1}"
+    work = ref.get("cdi_cleanup")
+    suffix = f"-{work['id'][:8]}-{index + 1}" if work else f"-{index + 1}"
+    job = f"homestead-vmimport-{ref['name']}"[:63 - len(suffix)].rstrip("-") + suffix
     secret = job + "-upload"
     ns = ref["namespace"]
-    work = ref.get("cdi_cleanup")
     stamp = {CDI_CLEANUP.STAMP: work["id"]} if work else {}
     disk["job"] = job
     aux = [{"path": f"/api/v1/namespaces/{ns}/secrets/{secret}"},
