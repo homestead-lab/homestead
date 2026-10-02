@@ -113,10 +113,6 @@ PLATFORM_NS = {"kubevirt": "KubeVirt", "cdi": "CDI", "system-upgrade": "system-u
 _cache = {}
 _lock = threading.Lock()
 
-# rolling time-series so the UI can draw real sparklines (not decoration)
-HIST_MAX = 120
-HIST = {"t": [], "cpu": [], "mem": [], "wl_pods": [], "sys_pods": [], "vol_bad": [],
-        "net_rx": [], "net_tx": []}
 _RATE = {}   # key -> (counter, timestamp) for per-node byte counters
 
 
@@ -150,29 +146,20 @@ def beat(name, every, error=None, leader_only=False):
 
 def _sampler():
     while True:
+        started = time.monotonic()
         try:
             o = get_overview()
-            with _lock:
-                HIST["t"].append(int(time.time()))
-                HIST["cpu"].append(o["cpu_pct"])
-                HIST["mem"].append(o["mem_pct"])
-                HIST["wl_pods"].append(o["workload_pods"])
-                HIST["sys_pods"].append(o["system_pods"])
-                HIST["vol_bad"].append(o["vol_degraded"] + o["vol_faulted"])
-                HIST["net_rx"].append(round(sum(n.get("rx_mbps", 0) for n in o["nodes"]), 2))
-                HIST["net_tx"].append(round(sum(n.get("tx_mbps", 0) for n in o["nodes"]), 2))
-                for k in HIST:
-                    if len(HIST[k]) > HIST_MAX:
-                        HIST[k] = HIST[k][-HIST_MAX:]
+            if LEADER.is_leader():
+                HISTORY.record_live(o)
             # Each VM's disk traffic is a count, and a rate needs two readings.
             try:
                 VMUSAGE.sample()
             except Exception:
                 pass
-            beat("sampler", 30)
+            beat("sampler", 30, leader_only=True)
         except Exception as error:
-            beat("sampler", 30, error)
-        time.sleep(30)
+            beat("sampler", 30, error, leader_only=True)
+        time.sleep(max(1, 30 - (time.monotonic() - started)))
 
 
 # A dot segment, plain or percent-encoded, anywhere in a path.
@@ -2169,7 +2156,7 @@ def new_claims(volumes):
     return list(claims.values())
 
 
-def build_deployment(cfg):
+def _build_single_deployment(cfg):
     name = _dns_name(cfg.get("workload_name") or cfg.get("name"), "workload name")
     container_name = _dns_name(cfg.get("container_name") or cfg.get("name"), "container name")
     ns = cfg.get("namespace", DEFAULT_NS)
@@ -2301,6 +2288,81 @@ def build_deployment(cfg):
     if lan_address:
         LAN.apply_to_template(dep, ns, name, lan_address)
     return dep, svc
+
+
+
+def additional_container_configs(cfg):
+    """Explicit extra definitions in a new pod; the original deploy stays compatible."""
+    rows = cfg.get("additional_containers") or []
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError("additional containers must be a list of definitions")
+    if rows and cfg.get("target_mode", "new") != "new":
+        raise ValueError("add containers to an existing workload from its editor")
+    if len(rows) > 31:
+        raise ValueError("a new workload supports up to 32 containers")
+    result = []
+    for row in rows:
+        allowed = {"name", "image", "env", "ports", "volumes", "hardware", "cpu", "memory", "memory_limit",
+                   "privileges", "privileged", "cap_add", "tun", "volume_owners", "new", "container_name"}
+        if set(row) - allowed - {"namespace", "workload_name", "network_mode", "target_mode", "app_profile", "env_bindings"}:
+            raise ValueError("additional containers use their own image, resources, ports, environment, hardware and storage; pod settings are shared")
+        item = {key: copy.deepcopy(value) for key, value in row.items() if key in allowed}
+        item.update(namespace=cfg.get("namespace") or DEFAULT_NS,
+                    workload_name=cfg.get("workload_name") or cfg.get("name"),
+                    container_name=row.get("name"), name=row.get("name"),
+                    network_mode=cfg.get("network_mode"), target_mode="new")
+        privileges = item.pop("privileges", {}) or {}
+        if not isinstance(privileges, dict) or set(privileges) - {"privileged", "cap_add", "tun"}:
+            raise ValueError("invalid additional container privileges")
+        item.update(privileges)
+        item = ensure_profile_compatible(analyze_deploy_intent(item))
+        result.append(item)
+    return result
+
+
+def deployment_volumes(cfg):
+    return [volume for item in [cfg, *additional_container_configs(cfg)]
+            for volume in item.get("volumes") or []]
+
+
+def prepare_deploy_network(cfg):
+    extras = additional_container_configs(cfg)
+    if not extras:
+        return NETWORK.prepare_deploy(cfg)
+    combined = dict(cfg, ports=[port for item in [cfg, *extras] for port in item.get("ports") or []])
+    planned = NETWORK.prepare_deploy(combined)
+    return dict(planned, ports=cfg.get("ports") or [])
+
+
+def build_deployment(cfg):
+    extras = additional_container_configs(cfg)
+    if not extras:
+        return _build_single_deployment(cfg)
+    HOSTACCESS.require_cfg([cfg, *extras])
+    dep, _ = _build_single_deployment(cfg)
+    changes = [dict(item, new=True, name=item["container_name"], privileges={
+        key: item[key] for key in ("privileged", "cap_add", "tun") if key in item}) for item in extras]
+    prepared = LC.prepare_edit({"ns": dep["metadata"]["namespace"], "name": dep["metadata"]["name"],
+                                "containers": changes}, current=dep)
+    dep = prepared["deployment"]
+    pspec = dep["spec"]["template"]["spec"]
+    used_names = {container["name"] for group in ("containers", "initContainers") for container in pspec.get(group) or []}
+    for item, container in zip(extras, pspec["containers"][1:]):
+        mounts = {mount["mountPath"]: mount for mount in container.get("volumeMounts") or []}
+        owners = [(mounts[path]["name"], mounts[path].get("subPath", ""), *owner)
+                  for path, owner in (item.get("volume_owners") or {}).items() if path in mounts]
+        if owners:
+            helper = VOLOWNER.init_container(owners)
+            helper["name"] = LC._unique_volume_name("hs-owner-" + container["name"], used_names)
+            pspec.setdefault("initContainers", []).append(helper)
+    all_ports = [port for item in [cfg, *extras] for port in item.get("ports") or []]
+    service_ports = [dict(port, name=port.get("name") or f"p{port.get('host') or port['container']}-{str(port.get('protocol') or 'TCP').lower()}") for port in all_ports]
+    _, service = _build_single_deployment(dict(cfg, ports=service_ports))
+    if service:
+        names = [port["name"] for port in service["spec"]["ports"]]
+        if len(names) != len(set(names)):
+            raise ValueError("exposed port names must be unique across all containers")
+    return dep, service
 
 
 def edit_lan(ns, name, wanted):
@@ -2820,7 +2882,7 @@ def capacity_manifest(config, existing=None):
         dep, _ = build_deployment(cfg)
     else:
         raise ValueError("deployment target must be new or existing")
-    claims = {row["name"]: row for row in new_claims(cfg.get("volumes") or [])}
+    claims = {row["name"]: row for row in new_claims(deployment_volumes(cfg))}
     for row in claims.values():
         if row["access_mode"] not in ("ReadWriteOnce", "ReadWriteMany", "ReadOnlyMany", "ReadWriteOncePod"):
             raise ValueError("invalid volume access mode")
@@ -2874,6 +2936,8 @@ def edit_capacity_plan(config):
         plan["rename"] = {"from": name, "to": new_name}
         plan["warnings"].append("Rename stops the old pods before starting the new workload. Volumes and service addresses are kept. Failed or uncertain steps retain resources for inspection, not automatic rollback.")
         return {"deployment": proposed, "name": new_name, "claims": [], "seeds": []}, context, plan
+    if config.get("remove_containers") and is_self(ns, name):
+        raise ValueError("Homestead cannot remove its own containers from this page")
     prepared = LC.prepare_edit(config, current=current)
     context = {"action": "edit", **rollout_review_context(current),
                "seeds": [(path, cm.get("metadata", {}).get("resourceVersion")) for path, cm in prepared["seeds"]]}
@@ -2912,6 +2976,18 @@ def edit_capacity_plan(config):
         if import_blocker:
             plan["blocked"] = True
             plan["warnings"].append(import_blocker)
+    additions = [row.get("name") for row in config.get("containers") or [] if row.get("new") is True]
+    removals = config.get("remove_containers") or []
+    if additions or removals:
+        exposed = [port for container in config.get("containers") or []
+                   for port in container.get("ports") or [] if port.get("expose")]
+        if exposed and config.get("manage_ports"):
+            NETWORK._ports({"ports": [{"name": port.get("name"), "port": port.get("host") or port.get("container"),
+                                      "target_port": port.get("container"), "protocol": port.get("protocol") or "TCP"}
+                                     for port in exposed]})
+        plan["container_changes"] = {"added": additions, "removed": removals}
+        plan["requires_confirmation"] = True
+        plan["warnings"].append("Changing the containers rolls every pod in this workload. Removed containers stop; persistent volumes and their data are retained.")
     if config.get("lan"):
         plan["warnings"].append("LAN network attachment availability is not guaranteed by the memory and placement review")
     return prepared, context, plan
@@ -2952,7 +3028,7 @@ def copy_admission(dep):
 def reviewed_deploy(b):
     """Deploy/App Store endpoint guard; Compose needs a whole-batch review."""
     b = ensure_profile_compatible(analyze_deploy_intent(copy.deepcopy(b)))
-    HOSTACCESS.require_cfg([b])
+    HOSTACCESS.require_cfg([b, *additional_container_configs(b)])
     if b.get("target_mode", "new") not in ("new", "existing"):
         raise ValueError("deployment target must be new or existing")
     current = None
@@ -2977,7 +3053,7 @@ def run_deploy(b, *, reviewed_current=None):
     guard_managed_smb(ns, target)
     b = ensure_profile_compatible(b)
     persist_icon_config(b)
-    b = NETWORK.prepare_deploy(b)
+    b = prepare_deploy_network(b)
     b = apply_deploy_bindings(b)
     b = apply_generated_secrets(b)
     b = prepare_lan(b)
@@ -2985,6 +3061,7 @@ def run_deploy(b, *, reviewed_current=None):
     target_mode = b.get("target_mode", "new")
     if target_mode == "new":
         b = VOLOWNER.prepare(b)
+        b["additional_containers"] = [VOLOWNER.prepare(item) for item in additional_container_configs(b)]
     if target_mode == "existing":
         target = _dns_name(b.get("target_workload"), "existing workload")
         current = copy.deepcopy(reviewed_current) if reviewed_current is not None else kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
@@ -2995,7 +3072,7 @@ def run_deploy(b, *, reviewed_current=None):
     else:
         raise ValueError("deployment target must be new or existing")
     reused = []
-    for claim in new_claims(b.get("volumes") or []):
+    for claim in new_claims(deployment_volumes(b)):
         if ensure_claim(ns, claim["name"], claim["size_gb"], claim["storage_class"], claim["access_mode"]):
             reused.append(claim["name"])
     b["_reused_claims"] = reused
@@ -4120,7 +4197,7 @@ def vm_power_capacity_plan(body):
         return value
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
     plan = VM_CAPACITY.plan(current, observed_read, PLACE.get_nodes(), action=action, current=current,
-                            warning_percent=threshold, expanded_spec=expanded_spec)
+                            warning_percent=threshold, expanded_spec=expanded_spec, power_intents=OPS._read())
     strategy = VMS._strategy(current)
     policy_after = "Always" if action == "start" and strategy == "Halted" else strategy
     plan["vm"]["policy_before"], plan["vm"]["policy_after"] = strategy, policy_after
@@ -4273,6 +4350,15 @@ def reviewed_vm_create(body):
 
 
 def reviewed_vm_power(body):
+    if body.get("action") in ("stop", "force-stop", "pause"):
+        return _reviewed_vm_power(body)
+    # Serialize local dispatches through the durable intent becoming visible.
+    # Kubernetes still owns the final allocation across external clients.
+    with SHARED.SharedLock("vm-device-power", strict=True, directory=lambda: OPS.DATA_DIR, timeout=60):
+        return _reviewed_vm_power(body)
+
+
+def _reviewed_vm_power(body):
     action = body.get("action", "")
     ns = _dns_name(body.get("ns", DEFAULT_NS), "namespace")
     name = _dns_name(body.get("name"), "VM name")
@@ -5792,6 +5878,9 @@ VMS.bind(kget, ksend, RESOURCES.events_for)
 VMUSAGE.bind(kget)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
 LHCAP.bind(kget, ksend, v2_engine_status)
+import homestead_lhv2_setup as LHV2_SETUP
+LHV2_SETUP.bind(kget, ksend, v2_engine_status, OPS, DEFAULT_NS)
+OPS.RESOLVERS["longhorn-v2-prepare"] = LHV2_SETUP.progress
 RECLASS.bind(kget, ksend, raw_get, storage_classes, LHCAP.status, _own_namespace())
 REVERT.bind(kget, ksend, RECLASS, is_self)
 NODESHELL.bind(kget, ksend, DEFAULT_NS)
@@ -7452,6 +7541,7 @@ def is_app_identity(path):
 # Enforced here, server-side. The UI hides what you cannot do as a courtesy,
 # but a viewer who hand-crafts the request still gets a 403.
 ADMIN_ROUTES = {
+    "/api/longhorn/v2/plan", "/api/longhorn/v2/prepare", "/api/longhorn/v2/enable",
     "/api/auth/users", "/api/auth/users/delete", "/api/auth/role",
     # API keys: made, listed and revoked by administrators only.
     "/api/auth/keys", "/api/auth/keys/revoke",
@@ -8369,8 +8459,10 @@ class H(HTTP.LimitedHandler):
                                                 if n["name"] == (q.get("name") or [""])[0]), {})))
             if p == "/api/os-updates":
                 return self._send(200, OS_ROLLOUT.report())
+            if p == "/api/passthrough/inventory":
+                return self._send(200, PASSTHROUGH.inventory((q.get("node") or [""])[0]))
             if p == "/api/passthrough/resources":
-                return self._send(200, PASSTHROUGH.resources())
+                return self._send(200, PASSTHROUGH.resources(with_usage=True))
             if p == "/api/self/address":
                 return self._send(200, SELF_ADDRESS.report())
             if p == "/api/welcome":
@@ -8409,8 +8501,8 @@ class H(HTTP.LimitedHandler):
             if p == "/api/history/long":
                 return self._send(200, HISTORY.series((q.get("range") or ["24h"])[0]))
             if p == "/api/history":
-                with _lock:
-                    return self._send(200, {k: list(v) for k, v in HIST.items()})
+                # Never hold the global cache mutex while writing to a client.
+                return self._send(200, HISTORY.live_series())
             if p == "/api/flow":
                 return self._send(200, cached("flow2", 8, get_flow2))
             if p == "/api/shares":
@@ -8541,6 +8633,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, RECLASS.old_copies())
             if p == "/api/storage/v2":
                 return self._send(200, v2_engine_status())
+            if p == "/api/longhorn/v2/plan":
+                return self._send(200, LHV2_SETUP.plan())
             if p == "/api/disks":
                 return self._send(200, cached("disks", 10, DISKS.inventory))
             if p == "/api/longhorn/capacity":
@@ -9238,7 +9332,8 @@ class H(HTTP.LimitedHandler):
                                                                  expected_version=str(b.get("expected_version") or "")),
                            "backup": lambda: MOVE_SOURCE.backup(kind, name, bool(b.get("retry_failed")),
                                                                  b.get("claims") if isinstance(b.get("claims"), list) else None,
-                                                                 **identity),
+                                                                 **identity, cleanup_id=str(b.get("cleanup_id") or "")),
+                           "cleanup": lambda: MOVE_SOURCE.cleanup(identity["transfer_id"], identity["expected_uid"]),
                            "release": lambda: MOVE_SOURCE.release(kind, name, **identity),
                            "remove": lambda: MOVE_SOURCE.remove(
                                kind, name, bool(b.get("volumes")),
@@ -9367,6 +9462,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, {"ok": True, "operation": op})
             if p == "/api/passthrough/inspect":
                 return self._send(200, PASSTHROUGH.inspect(str(b.get("node") or "")))
+            if p == "/api/passthrough/vbios/capture":
+                return self._send(200, PASSTHROUGH.capture_vbios(str(b.get("node") or ""), str(b.get("address") or "")))
             if p == "/api/passthrough/iommu":
                 return self._send(200, PASSTHROUGH.enable_iommu(str(b.get("node") or "")))
             if p == "/api/passthrough/pci":
@@ -9453,6 +9550,12 @@ class H(HTTP.LimitedHandler):
             if p == "/api/longhorn/settings":
                 _cache.pop("lhcap", None)
                 return self._send(200, LHCAP.save(b))
+            if p == "/api/longhorn/v2/prepare":
+                return self._send(200, LHV2_SETUP.prepare(b))
+            if p == "/api/longhorn/v2/enable":
+                result = LHV2_SETUP.enable(b)
+                _cache.pop("lhcap", None)
+                return self._send(200, result)
             if p == "/api/vm/k3s-cluster/plan":
                 return self._send(200, preview_vm_cluster(b))
             if p == "/api/vm/k3s-cluster":
@@ -9779,7 +9882,7 @@ class H(HTTP.LimitedHandler):
                     context = rollout_review_context(current)
                 capacity = deploy_capacity_plan(b, existing=current)
                 capacity_token = CAPACITY_REVIEW.issue(b, context)
-                b = NETWORK.prepare_deploy(b)
+                b = prepare_deploy_network(b)
                 b = apply_deploy_bindings(b)
                 b = apply_generated_secrets(b)
                 if b.get("target_mode") == "existing":

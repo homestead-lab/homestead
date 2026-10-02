@@ -571,13 +571,18 @@ than a header the client can write.
 
 ## Long-term stats
 
-The Dashboard's charts cover the last hour. Its **Over time** card covers up to
+The Dashboard's charts cover the last hour, sampled every thirty seconds and
+saved in a small `history-live.json` buffer on the data volume. They survive
+Homestead restarting and are shared by its replicas. Its **Over time** card covers up to
 ninety days: cluster CPU and RAM (average and peak), network in and out,
 workload pods, and each node's availability - the share of samples it was
 Ready - with its average CPU and RAM. Homestead records a sample every five
 minutes whether or not a browser is open (the leading replica does, in the
 background), keeps them for two days, and keeps hourly averages and peaks for
 ninety, in `history.json` on its data volume - a few hundred kilobytes at most.
+Longer ranges include the current hour's average and peak as samples arrive.
+The live charts keep refreshing while longer history loads; a failed history
+request keeps the existing charts and retries on the next refresh.
 It answers "was it busy last week?" and "has a node been dropping out?";
 Harvester's own monitoring (Prometheus and Grafana) is there for anything
 deeper.
@@ -1455,10 +1460,15 @@ A storage class can be made on Longhorn's V2 data engine (SPDK), which is
 faster and lighter on CPU than V1. The class table has an Engine column, a V2
 volume is tagged on Volumes, and the storage classes card says whether V2 is on
 and how many nodes can hold its volumes: each needs a disk given to Longhorn as
-a block device and 2 GiB of hugepages. Creating a V2 class says so when it
-could not schedule yet. On Harvester, V2 is switched on by Harvester's own
-`longhorn-v2-data-engine-enabled` setting and V2 disks are added per host, so
-Homestead reads Longhorn's settings rather than changing them.
+a block device and usually 2 GiB of hugepages. Creating a V2 class says so when
+it could not schedule yet. **Settings > Hardware and storage > Longhorn > Set up
+Longhorn V2** checks the installed memory requirement, prepares Linux k3s/rke2
+hosts through reviewed jobs, and verifies Kubernetes capacity before enabling.
+Any required reboot goes through the existing host maintenance review. Saved
+jobs, live logs and observed instance-manager readiness show progress. Disks
+and a V2 storage class remain separate reviewed steps. On Harvester, Homestead
+changes Harvester's `longhorn-v2-data-engine-enabled` setting; Harvester owns
+host preparation and restarts. See [the setup workflow](wiki/Storage.md#what-the-v2-engine-needs).
 
 ## Network shares
 

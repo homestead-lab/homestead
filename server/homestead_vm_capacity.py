@@ -14,6 +14,7 @@ import homestead_vm_state as STATE
 import homestead_numa_evidence as NUMA_EVIDENCE
 import homestead_allocation_evidence as ALLOCATION
 import homestead_vm_numa_fit as NUMA_FIT
+import homestead_vm_device_usage as DEVICE_USAGE
 
 
 def _items(read, path):
@@ -123,7 +124,7 @@ def dependencies(vm, read, planned_claims=None, *, pods=None):
 
 
 def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
-         planned_claims=None, expanded_spec=None, planned_configmaps=None):
+         planned_claims=None, expanded_spec=None, planned_configmaps=None, power_intents=()):
     if action not in ("start", "restart", "unpause", "create", "edit"):
         raise ValueError("unsupported VM admission action")
     namespace, name = vm["metadata"]["namespace"], vm["metadata"]["name"]
@@ -244,10 +245,32 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
     blockers.extend(evidence["blockers"])
     warnings.extend(evidence["warnings"])
     context["dependencies"] = {**model["dependencies"], **state["dependencies"], **evidence["context"]}
+    device_spec = dependency_vm["spec"]["template"]["spec"]
+    configuration_only = (action in ("create", "edit") and
+                          (vm.get("spec") or {}).get("runStrategy") in ("Halted", "Manual") and
+                          (not vmi or (vmi.get("status") or {}).get("phase") in ("Succeeded", "Failed")))
+    usage = DEVICE_USAGE.observe(vm, device_spec, read, nodes, pods, power_intents,
+        exclude_vmi_uid=(vmi or {}).get("metadata", {}).get("uid") if ownership_known and action in ("restart", "unpause") else None)
+    context["device_requests"] = usage["requests"]
+    if configuration_only:
+        warnings.extend(usage["blockers"])
+        if usage["holders"] or usage["pending"]:
+            warnings.append("Passthrough is also used by " + ", ".join(sorted({h["label"] for h in usage["holders"] + usage["pending"]}))
+                            + ". This stopped configuration can be saved; exclusive device availability is checked again at Start.")
+    else:
+        blockers.extend(usage["blockers"])
+        pods = usage["pods"]
     result = PLACE.manifest_plan(manifest, namespace, name, 1, warning_percent,
                                  planned_claims=planned_claims, pod_snapshot=pods, nodes_snapshot=nodes,
                                  read=read, memory_estimate_bytes=model["memory_estimate_bytes"],
-                                 workload_kind="vm", resident_node=resident_node)
+                                 workload_kind="vm", resident_node=resident_node,
+                                 configuration_resources=usage["requests"] if configuration_only else ())
+    device_conflicts = [] if configuration_only else DEVICE_USAGE.conflicts(usage, result["candidates"], nodes)
+    blockers.extend(device_conflicts)
+    result["device_conflicts"] = device_conflicts
+    if device_conflicts:
+        result["blocked"] = True
+        result["resource_slots"] = 0
     numa = ((dependency_vm["spec"]["template"]["spec"].get("domain") or {}).get("cpu") or {}).get("numa")
     if isinstance(numa, dict) and numa.get("guestMappingPassthrough") is not None and action != "unpause":
         # Only hosts otherwise eligible for this exact workload need probing.
@@ -280,6 +303,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
         if not result["resource_slots"]:
             result["blocked"] = True
             blockers.append("NUMA guest placement requires verified local CPU and hugepage allocations; physical topology alone cannot authorize a start")
+    context["device_nodes"] = [c["name"] for c in result["candidates"] if c["eligible"]]
     result["warnings"] = sorted(set(result["warnings"] + warnings))
     result["blockers"] = sorted(set(blockers))
     result["blocked"] |= bool(blockers)

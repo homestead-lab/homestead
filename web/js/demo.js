@@ -581,8 +581,8 @@
       usb: [{ vendor: "1a6e", product: "089a", name: "Google Coral TPU (unflashed)", port: "1-4", resource: "homestead.io/usb-1a6e-089a", permitted: true },
         { vendor: "1cf1", product: "0030", name: "dresden elektronik ConBee II", port: "1-2", resource: "homestead.io/usb-1cf1-0030", permitted: false }], listed: [] },
     "/api/passthrough/resources": { sidecar: true, resources: [
-      { resource: "homestead.io/pci-10de-1e87", kind: "pci", label: "10DE:1E87", nodes: ["harvester-node1"] },
-      { resource: "homestead.io/usb-1a6e-089a", kind: "usb", label: "1a6e:089a", nodes: ["harvester-node1", "harvester-node3"] }] },
+      { resource: "homestead.io/pci-10de-1e87", kind: "pci", label: "NVIDIA Corporation TU104 [GeForce RTX 2080]", selector: "10DE:1E87", devices: [{node: "harvester-node1", address: "0000:01:00.0", group: "12"}], nodes: ["harvester-node1"] },
+      { resource: "homestead.io/usb-1a6e-089a", kind: "usb", label: "Google Coral TPU (unflashed)", selector: "1a6e:089a", nodes: ["harvester-node1", "harvester-node3"] }] },
     // Every host's OS, one at a time (host-os.js): one host done, one restarting.
     "/api/os-updates": () => {
       const host = name => ({ os: "Ubuntu 24.04.3 LTS", updates: name === "harvester-node3" ? [{ name: "openssl", security: true }] : [],
@@ -1755,6 +1755,20 @@ ssh_pwauth: true
       v2: { enabled: false, harvester_setting: false, ready_nodes: 0, total_nodes: 3,
         nodes: ["harvester-node1", "harvester-node2", "harvester-node3"].map(name => ({ name, ready: false, block_disks: 0, hugepages_mb: 0,
           missing: ["a V2 (block) disk", "2 GiB of hugepages (has 0 MiB)"] })) } },
+    "/api/longhorn/v2/plan": () => {
+      const state=window.__demoV2State || 'missing', harvester=state==='harvester';
+      const configured=['reboot','ready','enabled','complete'].includes(state), capacity=['ready','enabled','complete'].includes(state)?2048:0;
+      const nodes=['k3s-test','k3s-server-2','k3s-server-3'].map((node,i)=>({node, required_mib:2048,target_pages:1024,
+        review_token:'host-review-'+i,capacity_mib:capacity,allocatable_mib:capacity,configured,
+        can_prepare:!harvester&&!configured&&state!=='running',needs_reboot:state==='reboot',engine_ready:state==='complete',
+        problems:configured&&capacity?[]:[capacity?'':'Kubernetes reports 0 MiB capacity; V2 needs 2048 MiB',configured?'':'Run host preparation to verify tools and persistent configuration'].filter(Boolean),
+        job:state==='missing'||harvester?null:{name:'homestead-v2-demo-'+i,state:state==='running'?'running':state==='failed'?'failed':'succeeded'}}));
+      return {namespace:'lab',enabled:['enabled','complete'].includes(state),harvester,harvester_requested:false,
+        distribution:harvester?'harvester':'k3s',required_mib:2048,nodes,review_token:'enable-review',
+        blockers:harvester?[]:nodes.flatMap(n=>n.problems.map(p=>n.node+': '+p)),can_enable:harvester||state==='ready',engine_ready:state==='complete'};
+    },
+    "/api/longhorn/v2/prepare": () => {window.__demoV2State='running';return {operation:{id:'demo-v2',kind:'longhorn-v2-prepare',title:'Prepare Longhorn V2',status:'running',progress:25,message:'Preparing host prerequisites'}};},
+    "/api/longhorn/v2/enable": () => {window.__demoV2State='enabled';return {ok:true};},
     "/api/longhorn/settings": { ok: true, detail: "Saved: over-provisioning 150%" },
     "/api/disks": { harvester: true, nodes: demoDisks, disk_tags: ["hdd", "nvme", "ssd"], all_node_tags: ["rack-a"],
       node_tags: { "harvester-node1": ["rack-a"], "harvester-node2": [], "harvester-node3": ["rack-a"] } },
@@ -2007,6 +2021,20 @@ ssh_pwauth: true
       { kind: "request", at: 9000, method: "POST", path: "/api/restart", status: 503, duration: 824 }],
     sources: { "homestead.log": "workload=frigate host=harvester-node1 address=192.0.2.207" },
     manifest: [{ source: "homestead.log", state: "included" }, { source: "homestead-previous.log", state: "unavailable" }] }];
+  const passthroughExample = responses["/api/passthrough/inspect"];
+  const inspectedDevices = {};
+  responses["/api/passthrough/inventory"] = url => ({facts: inspectedDevices[url.searchParams.get("node")] || null});
+  responses["/api/passthrough/inspect"] = (url, init) => {
+    const node = JSON.parse(init?.body || "{}").node || "harvester-node1";
+    return inspectedDevices[node] = {...passthroughExample, node, inspected_at: Math.floor(Date.now() / 1000)};
+  };
+  responses["/api/passthrough/vbios/capture"] = () => {
+    const rom = new Uint8Array(512);
+    rom.set([0x55, 0xaa]); rom[24] = 32;
+    rom.set([0x50, 0x43, 0x49, 0x52, 0xde, 0x10, 0x87, 0x1e], 32);
+    rom[48] = 1; rom[53] = 128;
+    return {ok: true, data: btoa(String.fromCharCode(...rom)), size: rom.length, filename: "demo-gpu-vbios.rom"};
+  };
   responses["/api/diagnostics"] = () => diagnosticReports.map(row => ({ ...row, events: row.events.length }));
   responses["/api/diagnostics/start"] = (url, init) => {
     const input = JSON.parse(init.body || "{}");

@@ -42,6 +42,34 @@ class EditCapacityTests(unittest.TestCase):
         icons.assert_not_called()
         return {**copy.deepcopy(self.config), "capacity_token": result[1]["capacity_token"], "confirm_capacity": True}
 
+    def test_added_and_removed_containers_are_reviewed_before_writes(self):
+        self.current["spec"]["template"]["spec"]["containers"].append({"name": "old-helper", "image": "example/old"})
+        self.config.update(remove_containers=["old-helper"])
+        self.config["containers"].append({"new": True, "name": "new-helper", "image": "example/new", "memory": "128Mi"})
+        config = self.reviewed()
+        result, send, create, icons = self.call("/api/edit", config)
+        self.assertEqual(200, result[0])
+        saved = send.call_args.args[2]["spec"]["template"]["spec"]["containers"]
+        self.assertEqual(["main", "new-helper"], [c["name"] for c in saved])
+        self.assertFalse(any(call.args[0] == "DELETE" for call in send.call_args_list))
+
+    def test_duplicate_listeners_in_added_container_fail_before_writes(self):
+        self.config.update(manage_ports=True)
+        self.config["containers"][0]["ports"] = [{"container": 8080, "host": 8080, "expose": True}]
+        self.config["containers"].append({"new": True, "name": "new-helper", "image": "example/new",
+                                         "ports": [{"container": 9090, "host": 8080, "expose": True}]})
+        result, send, create, icons = self.call("/api/edit/preview", self.config)
+        self.assertEqual(400, result[0])
+        send.assert_not_called(); create.assert_not_called(); icons.assert_not_called()
+
+    def test_changed_container_set_invalidates_the_review(self):
+        self.config["containers"].append({"new": True, "name": "new-helper", "image": "example/new"})
+        config = self.reviewed()
+        config["containers"][1]["image"] = "example/unreviewed"
+        result, send, create, icons = self.call("/api/edit", config)
+        self.assertEqual(409, result[0])
+        send.assert_not_called(); create.assert_not_called(); icons.assert_not_called()
+
     def test_preview_is_read_only_and_counts_all_containers(self):
         self.current["spec"]["template"]["spec"]["containers"].append({"name": "sidecar", "resources": {
             "requests": {"memory": "1Gi"}, "limits": {"memory": "1Gi"}}})

@@ -594,6 +594,7 @@ function v2Item(ok, label, how, detail = "") {
   return `<div class="v2item">${v2Mark(ok)}<div><b>${esc(label)}</b> ${tip(how)}${detail ? `<div class="dim xs">${esc(detail)}</div>` : ""}</div></div>`;
 }
 window.v2Details = async (fresh = false) => {
+  if (can("admin")) return lhV2Setup();
   let v2 = STATE.data.v2;
   if (fresh || !v2?.nodes?.[0]?.checks) v2 = STATE.data.v2 = await api("/api/storage/v2").catch(() => v2 || { nodes: [] });
   const h = v2.harvester_setting !== null && v2.harvester_setting !== undefined, d = v2.distribution;
@@ -1589,8 +1590,11 @@ async function lhSettingsPaint() {
     <div class="note" style="margin-top:12px">Past a node's limit, new volumes come up a copy short, replica rebuilds wait and expansions are refused;
       nothing already placed is moved. What fills a disk for real is data written — ${esc(sizeText((cap.nodes || []).reduce((s, n) => s + n.used_gb, 0)))} across all nodes now.</div>
     <div class="lh-v2">
-      <label class="switch"><input type="checkbox" id="lh_v2" ${v2.enabled ? "checked" : ""} ${admin ? "" : "disabled"}> <b>V2 data engine</b> (SPDK)</label>
-      <div class="dim xs">Faster volumes for a price: each host needs a disk given to Longhorn as a block device and 2 GiB of hugepages, and V2 volumes are a separate storage class.
+      <div class="between"><b>V2 data engine · ${v2.enabled ? 'enabled' : 'off'}</b>${admin ? actionBar([
+        {label:v2.enabled?'V2 setup and status':'Set up Longhorn V2',run:'lhV2Setup()'},
+        v2.enabled && {label:'Disable V2',run:'lhV2Disable()',danger:true}
+      ],{shown:1}) : ''}</div>
+      <div class="dim xs">Faster volumes for a price: each host needs a disk given to Longhorn as a block device and usually 2 GiB of hugepages (setup checks the installed requirement), and V2 volumes are a separate storage class.
         ${v2.harvester_setting !== null && v2.harvester_setting !== undefined ? "On Harvester this switches Harvester's own setting, which sets up hugepages and the kernel modules on each host." : ""}
         It cannot be switched off while V2 volumes exist. <a class="linkish" onclick="v2Details(true)">What each host needs</a></div>
       ${(v2.nodes || []).length ? `<div class="lh-v2-nodes">${v2.nodes.map(n => `<span class="tag ${n.ready ? "ok" : ""}" ${n.missing.length ? `data-tip="Needs ${esc(n.missing.join(" and "))}"` : ""}>${esc(lhShort(n.name))} · ${n.ready ? "ready" : "not ready"}</span>`).join("")}</div>` : ""}</div>`;
@@ -1613,12 +1617,8 @@ window.lhPreview = () => {
 };
 
 window.lhSettingsSave = async () => {
-  const cap = STATE.data.lhcap || {};
-  const body = { over_provisioning: +$("#lh_over").value, minimal_available: +$("#lh_min").value, v2: $("#lh_v2").checked,
+  const body = { over_provisioning: +$("#lh_over").value, minimal_available: +$("#lh_min").value,
     node_down: $("#lh_nodedown")?.value || "", ...($("#lh_rebuild") ? { rebuild_limit: +$("#lh_rebuild").value } : {}) };
-  if (body.v2 !== !!cap.v2?.enabled && !(await ask(body.v2
-    ? "Enable Longhorn's V2 data engine? Longhorn starts V2 instance managers on every node, which reserve CPU and hugepages even before any V2 volume exists."
-    : "Disable the V2 data engine? Longhorn refuses while V2 volumes exist."))) return;
   try {
     const r = await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(r.detail, "ok"); lhSettingsPaint();

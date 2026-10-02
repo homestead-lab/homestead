@@ -136,10 +136,12 @@ def _patch_setting(name, value):
         raise ValueError(f"Longhorn refused {name} = {value}: {message or f'HTTP {error.code}'}")
 
 
-def save(cfg):
+def save(cfg, *, allow_v2_enable=False):
     """Over-provisioning, minimal available space, and the V2 engine."""
     done = []
     current = settings()
+    if cfg.get("v2") and not current["v2"].get("enabled") and not allow_v2_enable:
+        raise ValueError("Use Set up Longhorn V2 to prepare hosts, verify hugepage capacity and review enabling the engine")
     if "over_provisioning" in cfg:
         over = _int(cfg["over_provisioning"], -1)
         if not 100 <= over <= 1000:
