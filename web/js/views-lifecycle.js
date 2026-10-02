@@ -39,7 +39,7 @@ const editVolumePicker = index => createVolumePicker($("#e_vols_" + index), {
   podHelp: "Mounts a volume already defined in this pod, sharing that storage with the other container.",
 });
 
-const editContainerPanel = (container, index, section) => {
+const editContainerPanel = (container, index, section, mode = "edit") => {
   const env = Object.entries(container.env || {});
   const refs = container.env_refs || [];
   const ports = container.ports || [];
@@ -78,9 +78,10 @@ const editContainerPanel = (container, index, section) => {
   const count = section === "environment" ? `${env.length + refs.length} vars`
     : section === "storage" ? `${mounts.length} mounts` : section === "hardware" ? `${ports.length} ports` : "";
   return `<details class="edit-container card flat" data-index="${index}" data-section="${section}"
-    ${section === "basics" ? `data-original-name="${esc(container.original_name || container.name)}"` : ""} ${index === 0 ? "open" : ""}>
+    ${section === "basics" || section === "all" ? `data-original-name="${esc(container.new ? "" : container.original_name || container.name)}" data-new="${container.new ? 1 : 0}"` : ""} ${index === 0 ? "open" : ""}>
     <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span>${count ? `<span class="pill">${count}</span>` : ""}</summary>
-    <div class="edit-container-body">${fields[section]()}</div>
+    <div class="edit-container-body">${section === "basics" || section === "all" ? `<div class="row"><button class="btn sm danger" type="button" data-container-remove onclick="containerRemove(${jsq(mode)},${index})">Remove container</button></div>` : ""}
+      ${section === "all" ? Object.entries(fields).map(([key, draw]) => `<div class="subsec">${({ basics: "Container", hardware: "Hardware and access", environment: "Environment", storage: "Storage" })[key]}</div>${draw()}`).join("") : fields[section]()}</div>
   </details>`;
 };
 
@@ -88,6 +89,8 @@ const editContainerPanel = (container, index, section) => {
    Keep this workload's instances on different nodes, or run it with or apart
    from other workloads. Each rule is a preference or a requirement. */
 let EDIT_PLACEMENT = { others: [], nodes: 0 };
+let EDIT_CONTAINER_NEXT = 0, EDIT_REMOVED_CONTAINERS = [];
+let EDIT_REMOVED_PANELS = new Map();
 const nodes0 = list => (list || []).filter(n => n.schedulable !== false);
 const PLACEMENT_MODES = [["prefer", "prefer"], ["require", "require"]];
 function placementRow(kind, row = {}) {
@@ -135,7 +138,7 @@ function placementSection(p, w, nodes, containers) {
   return `<section class="placement card flat" id="e_placement">
     <div class="sec" style="margin-top:0">Where it runs</div>
     <div class="place-level"><div class="place-title">Containers in this pod</div>
-      <div class="dim small">${names.length > 1 ? `${names.map(n => `<span class="tag">${esc(n)}</span>`).join(" ")} always run together on one node, sharing its network and any pod volumes.`
+      <div class="dim small" id="e_pod_containers">${names.length > 1 ? `${names.map(n => `<span class="tag">${esc(n)}</span>`).join(" ")} always run together on one node, sharing its network and any pod volumes.`
         : `<span class="tag">${esc(names[0] || w.name)}</span> is this pod's only container.`}
         Containers in one pod cannot be spread apart; to run one on its own node, make it a workload of its own and use the rules below.</div></div>
     <div class="place-level"><div class="place-title">Copies of this workload</div>
@@ -222,7 +225,10 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       shared_storage_classes: options.shared_storage_classes || [],
       storage_class_facts: options.storage_class_facts || {}, pod_volumes: w.pod_volumes || [],
       node: w.node || "" };
-    const panels = section => containers.map((container, index) => editContainerPanel(container, index, section)).join("");
+    EDIT_CONTAINER_NEXT = containers.length;
+    EDIT_REMOVED_CONTAINERS = [];
+    EDIT_REMOVED_PANELS = new Map();
+    const panels = section => `<div id="e_${section}_containers">${containers.map((container, index) => editContainerPanel(container, index, section)).join("")}</div>`;
     const basics = `
       <div class="f"><label>Workload name ${tip("The real Kubernetes Deployment name. Renaming creates a replacement Deployment, waits for it to become ready, then removes the old one. Generated pods use this name plus a Kubernetes suffix.")}</label><input type="text" id="e_workload_name" value="${esc(w.name)}"></div>
       <div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the workload name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
@@ -230,7 +236,11 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       <label class="switch" id="e_autostart_wrap"><input type="checkbox" id="e_autostart" onchange="editAutostartToggle()" ${w.autostart === false ? "" : "checked"}>
         Autostart ${tip("On keeps the workload running: Kubernetes restarts it after a crash, a node reboot or a cluster restart. Off scales it to zero and remembers the instance count for when you switch it back on.")}</label>
       <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>
-      ${panels("basics")}`;
+      <div class="between"><div class="sec">Containers in each pod</div>
+        <button class="btn" type="button" onclick="containerAdd('edit')">＋ Add container</button></div>
+      <div class="dim small">These containers run together in every pod, sharing its network and volumes. Pod copies are set under Where it runs.</div>
+      ${panels("basics")}
+      <div id="e_removed_containers" class="dim small"></div>`;
     const running = placementSection(w.placement || {}, w, nodes, containers);
     const access = `
       ${panels("hardware")}
@@ -264,6 +274,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     window.__editHadService = !!w.has_service;
     editPortsChanged();
     window.__editPortBaseline = editPortSignature();
+    containerRemoveButtons();
     placementChanged();
     if ($("#e_lan_on")?.checked) editLanToggle();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -285,10 +296,11 @@ window.editAddPort = (index, port = {}) => {
 window.editAddVol = (index, volume = {}) => addVolumeRow(editVolumePicker(index), volume);
 window.editContainerIdentity = index => {
   const name = $("#e_container_name_" + index).value, image = $("#e_image_" + index).value;
-  $$(`#e_containers .edit-container[data-index="${index}"]`).forEach(panel => {
+  $$(`.edit-container[data-index="${index}"]`).forEach(panel => {
     $(".edit-container-title b", panel).textContent = name || `Container ${+index + 1}`;
     $(".edit-container-title small", panel).textContent = image;
   });
+  editContainerListChanged();
 };
 function editPortSignature() {
   return JSON.stringify($$("#e_containers .edit-port-row").map(row => $$("input,select", row).map(e => e.type === "checkbox" ? e.checked : e.value)));
@@ -318,25 +330,77 @@ window.editAutostartToggle = () => {
     ? "Runs continuously and comes back after a reboot."
     : "Stays stopped until you switch autostart back on.";
 };
+function readEditedContainer(panel) {
+  const index = panel.dataset.index;
+  const env = {};
+  $$(".e-env-row", $("#e_env_" + index)).forEach(row => { const key = $(".ek", row).value.trim(); if (key) env[key] = $(".ev", row).value; });
+  const ports = $$(".edit-port-row", $("#e_ports_" + index)).map(row => ({ name: $(".ep-name", row).value.trim(),
+    container: +$(".ep-number", row).value, protocol: $(".ep-protocol", row).value,
+    host: +$(".ep-host", row).value || +$(".ep-number", row).value,
+    expose: $(".ep-expose", row).checked })).filter(port => port.container);
+  return { ...(panel.dataset.new === "1" ? { new: true } : { original_name: panel.dataset.originalName }), name: $("#e_container_name_" + index).value.trim(),
+    image: $("#e_image_" + index).value.trim(), cpu: $("#e_cpu_" + index).value.trim(),
+    memory: $("#e_mem_" + index).value.trim(), memory_limit: $("#e_mem_limit_" + index).value.trim(),
+    hardware: selectedHardware("e_hw_" + index), env, ports,
+    privileges: readPrivileges("e_pv_" + index) || undefined,
+    volumes: readVolumeRows($("#e_vols_" + index)) };
+}
+function editContainerListChanged() {
+  const host = $("#e_pod_containers");
+  if (!host) return;
+  const names = $$("#e_basics_containers .edit-container").map(panel => $("#e_container_name_" + panel.dataset.index).value);
+  host.innerHTML = `${names.map(name => `<span class="tag">${esc(name || "unnamed")}</span>`).join(" ")} run together in every pod, sharing its network and volumes.`;
+}
+function containerRemovedPaint() {
+  $("#e_removed_containers").innerHTML = [...EDIT_REMOVED_PANELS].map(([index, entry]) =>
+    `<div class="row"><span>Removed on save: ${esc(entry.name)}. Persistent volumes and data are kept.</span>
+      <button class="btn sm" type="button" onclick="containerRestore(${index})">Undo removal</button></div>`).join("");
+}
+window.containerRestore = index => {
+  const entry = EDIT_REMOVED_PANELS.get(index);
+  if (!entry) return;
+  for (const panel of entry.panels) {
+    const host = $("#e_" + panel.dataset.section + "_containers");
+    const later = [...host.children].find(other => +other.dataset.index > index);
+    host.insertBefore(panel, later || null);
+  }
+  EDIT_REMOVED_PANELS.delete(index);
+  EDIT_REMOVED_CONTAINERS = EDIT_REMOVED_CONTAINERS.filter(name => name !== entry.original);
+  containerRemovedPaint(); containerRemoveButtons(); editContainerListChanged(); editPortsChanged(); placementChanged();
+};
+function containerRemoveButtons() {
+  const cards = $$("#e_basics_containers .edit-container");
+  cards.forEach(card => { $("[data-container-remove]", card).disabled = cards.length <= 1; });
+}
+window.containerAdd = mode => {
+  if (mode === "deploy") return deployAddContainer();
+  const index = EDIT_CONTAINER_NEXT++;
+  const container = { name: `container-${index + 1}`, image: "", new: true, env: {}, ports: [], volumes: [] };
+  for (const section of ["basics", "hardware", "environment", "storage"])
+    $("#e_" + section + "_containers").insertAdjacentHTML("beforeend", editContainerPanel(container, index, section));
+  renderVolumeRows(editVolumePicker(index), []);
+  containerRemoveButtons();
+  $(`#e_basics_containers .edit-container[data-index="${index}"]`).open = true;
+  $("#e_container_name_" + index).focus();
+  editContainerListChanged();
+};
+window.containerRemove = (mode, index) => {
+  if (mode === "deploy") return deployRemoveContainer(index);
+  if ($$("#e_basics_containers .edit-container").length <= 1) return toast("Keep at least one container in this pod", "bad");
+  const panel = $(`#e_basics_containers .edit-container[data-index="${index}"]`);
+  if (panel.dataset.originalName) EDIT_REMOVED_CONTAINERS.push(panel.dataset.originalName);
+  const panels = $$(`#e_containers .edit-container[data-index="${index}"]`);
+  EDIT_REMOVED_PANELS.set(index, { panels, name: $("#e_container_name_" + index).value, original: panel.dataset.originalName });
+  panels.forEach(card => card.remove());
+  containerRemovedPaint(); containerRemoveButtons(); editContainerListChanged(); editPortsChanged(); placementChanged();
+};
 let EDIT_REVIEW = null, EDIT_REVIEW_SEQUENCE = 0;
 window.editSave = async (ns, name) => {
   const workloadName = $("#e_workload_name").value.trim();
   if (workloadName !== name) return window.editReview({ns, name, workload_name: workloadName});
-  const containers = $$("#e_containers .edit-container[data-original-name]").map(panel => {
-    const index = panel.dataset.index;
-    const env = {};
-    $$(".e-env-row", $("#e_env_" + index)).forEach(row => { const key = $(".ek", row).value.trim(); if (key) env[key] = $(".ev", row).value; });
-    const ports = $$(".edit-port-row", $("#e_ports_" + index)).map(row => ({ name: $(".ep-name", row).value.trim(),
-      container: +$(".ep-number", row).value, protocol: $(".ep-protocol", row).value,
-      host: +$(".ep-host", row).value || +$(".ep-number", row).value,
-      expose: $(".ep-expose", row).checked })).filter(port => port.container);
-    return { original_name: panel.dataset.originalName, name: $("#e_container_name_" + index).value.trim(),
-      image: $("#e_image_" + index).value.trim(), cpu: $("#e_cpu_" + index).value.trim(),
-      memory: $("#e_mem_" + index).value.trim(), memory_limit: $("#e_mem_limit_" + index).value.trim(),
-      hardware: selectedHardware("e_hw_" + index), env, ports,
-      privileges: readPrivileges("e_pv_" + index) || undefined,
-      volumes: readVolumeRows($("#e_vols_" + index)) };
-  });
+  const containers = $$("#e_containers .edit-container[data-original-name]").map(readEditedContainer);
+  if (containers.some(container => !container.name || !container.image)) return toast("Every container needs a name and image", "bad");
+  if (new Set(containers.map(container => container.name)).size !== containers.length) return toast("Container names must be unique in this pod", "bad");
   const storageIssue = containers.map(container => volumeListIssue(container.volumes)).find(Boolean);
   if (storageIssue) return toast(storageIssue, "bad");
   const seed_configs = $$("#mbody .e_seed").map(el => ({
@@ -345,7 +409,7 @@ window.editSave = async (ns, name) => {
   }));
   const body = { ns, name, workload_name: workloadName, pod_hostname: $("#e_pod_name").value.trim(),
     icon: $("#e_icon").value.trim(), replicas: Math.max(1, +$("#e_rep").value || 1),
-    autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs,
+    autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs, remove_containers: [...EDIT_REMOVED_CONTAINERS],
     placement: readPlacement(), failover: $("#e_failover")?.value || "" };
   if ($("#e_lan_on")) body.lan = $("#e_lan_on").checked && $("#el_ip") ? containerLanRead("el") : null;
   const nodeSelect = $("#e_node");
@@ -389,6 +453,7 @@ window.editReview = async body => {
       return;
     }
     childModal(rename ? "Rename workload" : "Review workload changes", `
+      ${!rename && review.capacity.container_changes ? `<p>Containers added: ${review.capacity.container_changes.added.map(esc).join(", ") || "none"}. Containers removed: ${review.capacity.container_changes.removed.map(esc).join(", ") || "none"}. Every pod rolls out; persistent volumes and data are kept.</p>` : ""}
       ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the workload name changes. Save other edits separately. Expect a short outage; volumes and service addresses are kept.</p>` : ""}
       ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both workload names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
         <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${(review.capacity.warnings || []).length} warning(s)</summary>${deployCapacityHtml(review.capacity)}</details>` : deployCapacityHtml(review.capacity)}

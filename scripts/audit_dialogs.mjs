@@ -58,6 +58,7 @@ const DIALOGS = [
   ["ip-unifi", "network", "ipamUnifi()"],
   ["ip-import", "network", "ipamImport()"],
   ["workload-edit", "workloads", "wlEdit('lab','frigate')"],
+  ["workload-edit-add-container", "workloads", "wlEdit('lab','frigate')", "containerAdd('edit')"],
   ["workload-edit-hardware", "workloads", "wlEdit('lab','frigate')", "stepGo('e_steps',1)"],
   ["workload-edit-environment", "workloads", "wlEdit('lab','home-assistant')", "stepGo('e_steps',2)"],
   ["workload-edit-storage", "workloads", "wlEdit('lab','frigate')", "stepGo('e_steps',3)"],
