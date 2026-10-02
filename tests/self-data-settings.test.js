@@ -210,3 +210,28 @@ test("closing or reopening move data invalidates a late archive preview", async 
     assert.doesNotMatch(t.fields["#selfDataFlow"]?.innerHTML || "", /selfDataArchiveConsent/);
   }
 });
+
+
+test("a retained k3s blocker opens its own recovery review without relying on the jobs cache", async () => {
+  const t = setup(), opened = [];
+  const job = {id:"old-batch",title:"k3s cluster k3s-demo",kind:"k3s-cluster",status:"failed",
+    message:"Guest verification timed out",href:"/vms?find=k3s-demo",recovery:true,mutation_recovery:true};
+  t.state.blocking_jobs = [job];
+  t.ctx.openOperation = (...args) => opened.push(args);
+  await t.ctx.replicasMoveData();
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /selfDataOpenJob/);
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /Review batch outcome/);
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /requires recovery/);
+  assert.match(t.fields["#selfDataFlow"].innerHTML, /id="selfDataCheck"[^>]*disabled/);
+  t.ctx.selfDataOpenJob("old-batch");
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0][0], job.href);
+  assert.equal(opened[0][1], job.id);
+  assert.equal(opened[0][2].mutation_recovery, true);
+  assert.equal(opened[0][2].kind, "k3s-cluster");
+  const count = t.sent.length;
+  await t.ctx.selfDataPrepareReview();
+  t.ctx.selfDataOpenJob("old-batch");
+  assert.equal(t.sent.length, count, "opening recovery invalidates the preparation dialog and approval");
+  assert.equal(opened.length, 1);
+});
