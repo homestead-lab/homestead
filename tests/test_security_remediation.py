@@ -405,6 +405,27 @@ class HttpTests(unittest.TestCase):
             time.sleep(0.01)
         self.assertEqual(2, self.listener._slots._value)
 
+    def test_retained_passthrough_inventory_is_read_only_but_host_actions_need_admin(self):
+        self.assertEqual("viewer", server.needed_role("/api/passthrough/inventory", "GET"))
+        facts = {"node": "node-1", "inspected_at": 1, "pci": [], "usb": []}
+        with mock.patch.object(server.H, "_who", return_value={"user": "fixture", "role": "viewer"}), \
+                mock.patch.object(server.PASSTHROUGH, "inventory", return_value={"facts": facts}) as inventory, \
+                mock.patch.object(server.PASSTHROUGH, "inspect") as inspect:
+            client = HTTPConnection(*self.listener.server_address, timeout=3)
+            try:
+                client.request("GET", "/api/passthrough/inventory?node=node-1")
+                response = client.getresponse()
+                self.assertEqual(200, response.status)
+                self.assertEqual({"facts": facts}, json.loads(response.read()))
+            finally:
+                client.close()
+            inventory.assert_called_once_with("node-1")
+            self.assertEqual(403, self.request('{"node":"node-1"}',
+                             {"X-Homestead-Auth": "1", "Content-Type": "application/json"}, "/api/passthrough/inspect"))
+            inspect.assert_not_called()
+        for path in ("/api/passthrough/inspect", "/api/passthrough/pci", "/api/passthrough/usb", "/api/passthrough/iommu"):
+            self.assertEqual("admin", server.needed_role(path, "POST"))
+
     def test_all_literal_http_routes_have_a_declared_policy(self):
         tree = ast.parse((ROOT / "server" / "server.py").read_text(encoding="utf-8"))
         handler = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "H")

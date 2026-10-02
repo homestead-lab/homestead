@@ -97,6 +97,7 @@ POLICY = {
     ('GET', '/api/operations/log'): 'viewer',
     ('GET', '/api/os-updates'): 'viewer',
     ('GET', '/api/overview'): 'viewer',
+    ('GET', '/api/passthrough/inventory'): 'viewer',
     ('GET', '/api/passthrough/resources'): 'viewer',
     ('GET', '/api/platform'): 'viewer',
     ('GET', '/api/platform/baseline'): 'viewer',

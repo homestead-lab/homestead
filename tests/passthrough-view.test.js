@@ -151,3 +151,11 @@ test("hosts with the same name in different clusters never share their cached de
   assert.match(t.body.innerHTML, /Named GPU/);
   assert.equal(t.requests.length, 2);
 });
+
+
+test("VM labels retain available hosts that have not yet been inspected", () => {
+  const t = setup();
+  const html = t.ctx.vmDevicesPane({}, {resources: [{resource: "example.test/gpu", kind: "pci", label: "Named GPU", nodes: ["node1", "node2"],
+    devices: [{node: "node1", address: "0000:01:00.0", group: "12"}]}]});
+  assert.match(html, /node1 0000:01:00.0 · group 12; node2/);
+});

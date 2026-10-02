@@ -150,7 +150,8 @@ window.ptIommu = async node => {
 /* ---------- a VM's devices ---------- */
 function vmHostDeviceLabel(r) {
   const details = (r.devices || []).map(d => `${d.node}${d.address ? ` ${d.address}` : ""}${d.group != null && d.group !== "" ? ` · group ${d.group}` : ""}`);
-  const where = details.length ? [...new Set(details)].join("; ") : (r.nodes || []).join(", ");
+  const described = new Set((r.devices || []).map(d => d.node));
+  const where = [...new Set([...details, ...(r.nodes || []).filter(node => !described.has(node))])].join("; ");
   return `${r.kind === "usb" ? "USB" : "PCI"} ${r.label || r.resource}${r.selector && r.selector !== r.label ? ` [${r.selector}]` : ""}${where ? ` · ${where}` : ""}${!r.nodes?.length ? " · unavailable" : ""}`;
 }
 function vmDevicesPane(v, res) {
