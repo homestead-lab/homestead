@@ -1,5 +1,8 @@
 import base64
 import json
+import os
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -324,6 +327,46 @@ class CaptureTests(unittest.TestCase):
             PASS.capture_vbios("node-1", self.gpu["address"])
         with self.assertRaises(ValueError):
             PASS.capture_script("0000:01:00.0; reboot")
+
+    def test_capture_wakes_card_and_restores_power_policy_after_success_or_read_failure(self):
+        if not shutil.which("sh"):
+            self.skipTest("no sh here")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            device = root / "gpu"
+            (device / "power").mkdir(parents=True)
+            (device / "rom").write_text("0\n")
+            fixture = root / "fixture.rom"
+            fixture.write_bytes(self.rom)
+            commands = root / "bin"
+            commands.mkdir()
+            dd = commands / "dd"
+            dd.write_text('''#!/bin/sh
+[ "$(cat "$GPU_TEST_DEVICE/power/control")" = on ] || exit 9
+[ "$GPU_TEST_FAIL" != 1 ] || exit 1
+for arg; do case "$arg" in of=*) output=${arg#of=} ;; esac; done
+cat "$GPU_TEST_ROM" > "$output"
+''', encoding="utf-8")
+            dd.chmod(0o755)
+            script = PASS.capture_script(self.gpu["address"]).replace(
+                "d=/sys/bus/pci/devices/" + self.gpu["address"], "d=" + shlex.quote(device.as_posix()))
+            # Set PATH inside sh so this also works with Git Bash on Windows.
+            script = "PATH=" + shlex.quote(commands.as_posix()) + ":$PATH\n" + script
+            for policy in ("auto", "on"):
+                for fail in ("0", "1"):
+                    with self.subTest(policy=policy, fail=fail):
+                        (device / "power/control").write_text(policy + "\n")
+                        result = subprocess.run(["sh"], input=script, text=True, capture_output=True,
+                            env={**os.environ, "GPU_TEST_DEVICE": device.as_posix(),
+                                 "GPU_TEST_ROM": fixture.as_posix(), "GPU_TEST_FAIL": fail})
+                        self.assertEqual(policy, (device / "power/control").read_text().strip())
+                        self.assertEqual("0", (device / "rom").read_text().strip())
+                        if fail == "1":
+                            self.assertNotEqual(0, result.returncode)
+                            self.assertIn("GPU ROM cannot be read", result.stdout)
+                        else:
+                            self.assertEqual(0, result.returncode, result.stderr)
+                            self.assertEqual(bytes(self.rom), base64.b64decode("".join(result.stdout.splitlines()[1:-1])))
 
     def test_capture_route_requires_admin(self):
         import homestead_route_policy as policy
