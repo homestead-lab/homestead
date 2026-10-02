@@ -17,6 +17,8 @@ class ObjectStoreTests(unittest.TestCase):
         self.objects = {}
         self.sent = []
         self.claims = []
+        for kind in ("backups", "snapshots", "backupbackingimages", "volumes", "backupvolumes"):
+            self.objects[f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/{kind}"] = {"items": []}
         store.bind(self._get, self._send, self._create_pvc, "lab")
         store.LH.bind(self._get, self._send, {}, "longhorn-r2")
         # Homestead's shared address, as Networking would plan it.
@@ -47,28 +49,122 @@ class ObjectStoreTests(unittest.TestCase):
             "status": {"loadBalancer": {"ingress": [{"ip": ip}] if ip else []}},
         }
 
-    def store_running(self, image, replicas=1):
+    def store_running(self, image, replicas=1, env=None):
         self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore"] = {
-            "spec": {"replicas": replicas, "template": {"spec": {"containers": [{"name": "s3", "image": image}]}}}}
+            "metadata": {"labels": {"homestead.io/managed": "true"}, "resourceVersion": "5"},
+            "spec": {"replicas": replicas, "template": {"spec": {"containers": [
+                {"name": "s3", "image": image, "env": env or []}]}}}}
+        return self.objects["/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore"]
 
-    def test_an_older_rustfs_moves_on_to_the_pinned_release_and_nothing_else_is_touched(self):
+    def test_an_older_rustfs_gets_the_pinned_release_and_quiet_scans(self):
         self.assertEqual("rustfs/rustfs:1.0.0", store.IMAGE)
-        self.store_running("rustfs/rustfs:1.0.0-rc.6")
+        current = self.store_running("rustfs/rustfs:1.0.0-rc.6", env=[
+            {"name": "RUSTFS_SECRET_KEY", "valueFrom": {"secretKeyRef": {"name": "keys", "key": "secret"}}}])
+        before = json.dumps(current, sort_keys=True)
         self.assertEqual(store.IMAGE, store.keep_in_step())
         method, path, body = self.sent[-1]
         self.assertEqual(("PATCH", "/apis/apps/v1/namespaces/lab/deployments/homestead-objectstore"), (method, path))
-        self.assertEqual({"spec": {"template": {"spec": {"containers": [{"name": "s3", "image": "rustfs/rustfs:1.0.0"}]}}}}, body,
-                         "only the image: keys, volume and address stay")
-        for image in ("rustfs/rustfs:1.0.0", "rustfs/rustfs:1.0.1", "minio/minio:RELEASE.2025-04-22T22-12-26Z",
+        patch = body["spec"]["template"]["spec"]["containers"][0]
+        self.assertEqual({"name", "image", "env"}, set(patch))
+        self.assertEqual(store.IMAGE, patch["image"])
+        self.assertEqual(store.SCANNER_DEFAULTS, {e["name"]: e["value"] for e in patch["env"]})
+        self.assertEqual({"resourceVersion": "5"}, body["metadata"])
+        self.assertEqual(before, json.dumps(current, sort_keys=True), "credentials and storage are never rewritten")
+        self.assertLess(store._rustfs_version("rustfs/rustfs:1.0.0-rc.6"), store._rustfs_version(store.IMAGE))
+
+    def test_the_current_release_gets_missing_settings_once_and_keeps_overrides(self):
+        overrides = [{"name": "RUSTFS_SCANNER_CYCLE", "value": "172800"},
+                     {"name": "RUSTFS_SCANNER_SPEED", "valueFrom": {"configMapKeyRef": {"name": "tuning", "key": "speed"}}}]
+        current = self.store_running(store.IMAGE, env=overrides[:])
+        self.assertEqual(store.IMAGE, store.keep_in_step())
+        patch = self.sent[-1][2]["spec"]["template"]["spec"]["containers"][0]
+        self.assertNotIn("image", patch)
+        self.assertEqual(set(store.SCANNER_DEFAULTS) - {e["name"] for e in overrides},
+                         {e["name"] for e in patch["env"]})
+        current["spec"]["template"]["spec"]["containers"][0]["env"].extend(patch["env"])
+        self.sent.clear()
+        self.assertEqual("", store.keep_in_step())
+        self.assertEqual([], self.sent)
+        self.assertEqual(overrides, current["spec"]["template"]["spec"]["containers"][0]["env"][:2])
+
+    def test_unmanaged_newer_unknown_minio_and_stopped_stores_are_left_alone(self):
+        for image in ("rustfs/rustfs:1.0.1", "minio/minio:RELEASE.2025-04-22T22-12-26Z",
                       "rustfs/rustfs:latest", "rustfs/rustfs@sha256:" + "a" * 64):
             with self.subTest(image=image):
-                self.sent.clear()
                 self.store_running(image)
                 self.assertEqual("", store.keep_in_step())
                 self.assertEqual([], self.sent)
         self.store_running("rustfs/rustfs:1.0.0-rc.6", replicas=0)
-        self.assertEqual("", store.keep_in_step(), "a store turned off stays off")
-        self.assertLess(store._rustfs_version("rustfs/rustfs:1.0.0-rc.6"), store._rustfs_version("rustfs/rustfs:1.0.0"))
+        self.assertEqual("", store.keep_in_step())
+        current = self.store_running(store.IMAGE)
+        current["metadata"]["labels"] = {}
+        self.assertEqual("", store.keep_in_step())
+        self.assertEqual([], self.sent)
+
+    def test_rollouts_wait_for_backups_remote_transfer_reads_and_restores(self):
+        cases = [
+            ("backups", {"metadata": {}, "status": {"state": "InProgress"}}),
+            ("backups", {"metadata": {}, "status": {}}),
+            ("backups", {"metadata": {"deletionTimestamp": "now"}, "status": {"state": "Completed"}}),
+            ("backups", {"metadata": {}, "spec": {"labels": {"homestead": "migration"}}, "status": {"state": "Completed"}}),
+            ("backups", {"metadata": {"annotations": {"homestead.io/move-id": "a" * 12}}, "status": {"state": "Completed"}}),
+            ("snapshots", {"metadata": {"annotations": {"homestead.io/move-id": "a" * 12}}}),
+            ("backupbackingimages", {"metadata": {}, "status": {"state": "InProgress"}}),
+            ("volumes", {"metadata": {}, "spec": {"restoreRequired": True}}),
+        ]
+        for kind, obj in cases:
+            with self.subTest(kind=kind, obj=obj):
+                path = f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/{kind}"
+                self.objects[path] = {"items": [obj]}
+                self.store_running(store.IMAGE)
+                self.assertEqual("", store.keep_in_step())
+                self.assertEqual([], self.sent)
+                self.objects[path] = {"items": []}
+        self.assertEqual(store.IMAGE, store.keep_in_step(), "cleanup releases the deferred rollout")
+
+    def test_a_deleted_backup_waits_for_longhorn_block_reclamation(self):
+        path = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/backupvolumes"
+        self.store_running(store.IMAGE)
+        for status in ({"lastBackupName": "deleted", "dataStored": "77701578752"},
+                       {"lastBackupName": "", "dataStored": "77701578752"},
+                       {"dataStored": "unknown"}):
+            with self.subTest(status=status):
+                self.objects[path] = {"items": [{"metadata": {}, "status": status}]}
+                self.assertEqual("", store.keep_in_step())
+                self.assertEqual([], self.sent)
+        self.objects[path] = {"items": [{"metadata": {}, "status": {"dataStored": "0"}}]}
+        self.assertEqual(store.IMAGE, store.keep_in_step())
+
+    def test_retained_ordinary_backups_do_not_prevent_quieter_scans(self):
+        self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/backups"] = {
+            "items": [{"metadata": {"name": "ordinary"}, "status": {"state": "Completed"}}]}
+        self.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/backupvolumes"] = {
+            "items": [{"metadata": {}, "status": {"dataStored": "1024", "lastBackupName": "ordinary"}}]}
+        self.store_running(store.IMAGE)
+        self.assertEqual(store.IMAGE, store.keep_in_step())
+
+    def test_failed_or_partial_inventory_defers_a_rollout(self):
+        path = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/backups"
+        self.store_running(store.IMAGE)
+        for inventory in (None, {"items": [], "metadata": {"continue": "more"}}, {},
+                          {"items": ["malformed"]}):
+            with self.subTest(inventory=inventory):
+                if inventory is None:
+                    self.objects.pop(path, None)
+                else:
+                    self.objects[path] = inventory
+                self.assertEqual("", store.keep_in_step())
+                self.assertEqual([], self.sent)
+        with mock.patch.object(store, "kget", side_effect=urllib.error.URLError("unavailable")):
+            self.assertEqual("", store.keep_in_step())
+
+    def test_reconfiguration_keeps_explicit_scan_overrides(self):
+        self.store_running(store.IMAGE, env=[{"name": "RUSTFS_SCANNER_CYCLE", "value": "172800"}])
+        store.deploy({"point_longhorn": False})
+        body = next(b for m, p, b in self.sent if m == "PUT" and p.endswith("/deployments/homestead-objectstore"))
+        env = {e["name"]: e for e in body["spec"]["template"]["spec"]["containers"][0]["env"]}
+        self.assertEqual("172800", env["RUSTFS_SCANNER_CYCLE"]["value"])
+        self.assertEqual("slowest", env["RUSTFS_SCANNER_SPEED"]["value"])
 
     def test_nothing_is_deployed_to_start_with(self):
         state = store.status()
@@ -260,7 +356,10 @@ class ObjectStoreTests(unittest.TestCase):
         spec = self._deployed()["spec"]["template"]["spec"]
         container = spec["containers"][0]
         self.assertTrue(container["image"].startswith("rustfs/rustfs:"))
-        self.assertEqual({"RUSTFS_ACCESS_KEY", "RUSTFS_SECRET_KEY", "RUSTFS_VOLUMES"}, {e["name"] for e in container["env"]})
+        self.assertEqual({"RUSTFS_ACCESS_KEY", "RUSTFS_SECRET_KEY", "RUSTFS_VOLUMES"} | set(store.SCANNER_DEFAULTS),
+                         {e["name"] for e in container["env"]})
+        self.assertEqual(store.SCANNER_DEFAULTS,
+                         {e["name"]: e["value"] for e in container["env"] if e["name"] in store.SCANNER_DEFAULTS})
         self.assertEqual(10001, spec["securityContext"]["fsGroup"])
 
     def test_a_minio_already_serving_backups_is_left_as_it_is(self):

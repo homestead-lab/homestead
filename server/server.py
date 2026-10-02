@@ -10075,7 +10075,7 @@ def _samba_loop():
                     moved = OBJECTS.keep_in_step()
                     OBJECTS.reconcile_target()
                 if moved:
-                    print(f"object store: moved to {moved}", flush=True)
+                    print(f"object store: reconciled {moved}", flush=True)
             except Exception as error:
                 print(f"object store: {str(error)[:180]}", flush=True)
         time.sleep(60)
