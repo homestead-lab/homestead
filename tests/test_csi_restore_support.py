@@ -58,6 +58,15 @@ class SnapshotSupportTests(unittest.TestCase):
                 install.assert_not_called()
             deployments[index]["status"]["availableReplicas"] = 1
 
+    def test_mirrored_and_digest_pinned_controllers_are_recognised_without_replacement(self):
+        self.ready()
+        deployments = self.objects["/apis/apps/v1/deployments"]["items"]
+        deployments[0]["spec"]["template"]["spec"]["containers"][0]["image"] = "example.com/mirrored-sig-storage-snapshot-controller@sha256:" + "a" * 64
+        deployments[1]["spec"]["template"]["spec"]["containers"][0]["image"] = "example.com/csi-snapshotter@sha256:" + "b" * 64
+        with patch.object(CSI.ADDONS, "_post_chart") as install:
+            self.assertTrue(CSI.ensure_support()["ready"])
+            install.assert_not_called()
+
     def test_missing_support_is_reported_read_only_and_installed_as_pinned_chart(self):
         self.assertTrue(CSI.support()["can_install"])
         self.assertEqual([], self.sent)

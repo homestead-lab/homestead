@@ -40,7 +40,12 @@ def _items(path):
 
 def _controller(deployment):
     containers = ((deployment.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers", [])
-    return any("snapshot-controller:" in str(c.get("image", "")) for c in containers)
+    return any(_component(c, "snapshot-controller") for c in containers)
+
+
+def _component(container, name):
+    image_name = str(container.get("image", "")).split("@", 1)[0].rsplit("/", 1)[-1].split(":", 1)[0]
+    return image_name == name or image_name.endswith("-sig-storage-" + name) or container.get("name") == name
 
 
 def support():
@@ -55,7 +60,7 @@ def support():
                 for d in deployments)
     snapshotters = [d for d in all_deployments
                     if (d.get("metadata") or {}).get("namespace") == "longhorn-system"
-                    and any("csi-snapshotter:" in str(c.get("image", ""))
+                    and any(_component(c, "csi-snapshotter")
                             for c in ((d.get("spec") or {}).get("template") or {}).get("spec", {}).get("containers", []))]
     driver_ready = any((d.get("status") or {}).get("availableReplicas", 0) > 0
                        and not (d.get("metadata") or {}).get("deletionTimestamp") for d in snapshotters)
