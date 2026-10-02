@@ -30,6 +30,7 @@ import homestead_icons as ICONS
 import homestead_names as NAMES
 import homestead_passthrough as PASSTHROUGH
 import homestead_vm_transfer_devices as VM_DEVICES
+import homestead_transfer_cleanup as CLEANUP
 
 kget = ksend = None
 LH = CLIENT = NETWORK = OPS = None
@@ -106,7 +107,12 @@ def _read():
 
 
 def _write(rows):
-    SHARED.write_json(_path(), rows[-MAX_MOVES:], durable=True, mode=0o600, separators=(",", ":"))
+    protected = [m for m in rows if m.get("status") in ("running", "failed")
+                 or (m.get("flags") or {}).get("resource_cleanup_pending")
+                 or (m.get("flags") or {}).get("target_cleanup_pending")]
+    historical = [m for m in rows if m not in protected][-MAX_MOVES:]
+    SHARED.write_json(_path(), sorted(protected + historical, key=lambda m: m.get("created_at", "")),
+                      durable=True, mode=0o600, separators=(",", ":"))
 
 
 def _find(move_id):
@@ -133,6 +139,12 @@ def _public(move):
         "source_stopped": _source_held(move),
         "cleanup_pending": bool((move.get("flags") or {}).get("cancelling")) and move.get("status") == "failed",
         "backup_target_cleanup_pending": bool((move.get("flags") or {}).get("target_cleanup_pending")),
+        "resource_cleanup_pending": bool((move.get("flags") or {}).get("resource_cleanup_pending")),
+        "cleanup_message": move.get("cleanup_message", ""),
+        "can_dismiss": not ((move.get("flags") or {}).get("resource_cleanup_pending")
+                            or (move.get("flags") or {}).get("target_cleanup_pending")
+                            or (move.get("status") == "failed" and move.get("cleanup_protocol") == 1
+                                and ((move.get("flags") or {}).get("quiesced") or (move.get("flags") or {}).get("quiesce_requested")))),
         "claims": [{**{k: c.get(k) for k in ("claim", "size_gb", "backup", "created", "restored")},
                     "action": c.get("action", "move"), "storage_class": c.get("target_class") or move.get("storage_class") or ""}
                    for c in move.get("claims", [])],
@@ -204,6 +216,8 @@ def _source_status(move):
 
 
 def _source_action(move, action, **extra):
+    if move.get("cleanup_protocol") == 1:
+        extra["expected_uid"] = move["source_uid"]
     if move.get("transfer_mode") == "copy":
         extra.update(transfer_id=move["id"], expected_uid=move["source_uid"])
         if action == "quiesce":
@@ -541,6 +555,7 @@ def start(cluster, kind, name, namespace=None, address_mode="shared", address=""
         "id": secrets.token_hex(6), "cluster": cluster, "kind": kind, "name": name,
         "source_namespace": definition.get("namespace", ""), "namespace": namespace,
         "transfer_mode": transfer_mode, "source_uid": definition.get("source_uid", ""),
+        "cleanup_protocol": 1 if definition.get("cleanup_protocol") == 1 and definition.get("source_uid") else 0,
         "host_devices": json.loads(json.dumps(host_devices or {})),
         "device_signature": VM_DEVICES.signature(definition) if kind == "vm" else "",
         "address_mode": address_mode, "address": address,
@@ -682,11 +697,10 @@ def _release_target(move):
             current_secret = "" if current["harvester"] else current["value"].get("credentialSecret", "")
             if current_secret != secret and baseline_secret != secret:
                 path = f"/api/v1/namespaces/{LHNS}/secrets/{secret}"
-                existing = _get(path)
+                existing = CLEANUP.optional(kget, path)
                 if existing and _ours(existing, move["id"]):
-                    meta = existing.get("metadata") or {}
-                    preconditions = {k: meta[k] for k in ("uid", "resourceVersion") if meta.get(k)}
-                    ksend("DELETE", path, {"preconditions": preconditions} if preconditions else None)
+                    if not CLEANUP.delete(kget, ksend, path, existing):
+                        raise CLIENT.Unreachable("Waiting for transfer backup credentials to be removed")
         if move.get("status") in ("succeeded", "cancelled"):
             move.pop("transfer_target", None)
 
@@ -725,8 +739,8 @@ def _quiescing(move):
             if move.get("device_signature") and VM_DEVICES.signature(definition) != move["device_signature"]:
                 raise ValueError("The source passthrough devices or vBIOS changed; cancel and review this transfer again")
             VM_DEVICES.prepare(definition, move["namespace"], move.get("host_devices"))
-        if move.get("transfer_mode") == "copy":
-            if not flags.get("quiesce_requested"):
+        if not flags.get("quiesce_requested"):
+            if move.get("transfer_mode") == "copy":
                 definition = definition or _definition(move)
                 flags["quiesce_version"] = definition.get("source_version", "")
             flags["quiesce_requested"] = True
@@ -761,6 +775,8 @@ def _backing_up(move):
                         50, "No volume data to back up")
     names = [c["claim"] for c in moving]
     extra = {} if len(moving) == len(move["claims"]) else {"claims": names}
+    if move.get("cleanup_protocol") == 1:
+        extra["cleanup_id"] = move["id"]
     made = _source_action(move, "backup", retry_failed=bool(flags.get("retry_backups")) or not flags.get("backed_up"),
                           **extra)
     by_claim = {row["claim"]: row["backup"] for row in made.get("backups", [])}
@@ -1153,12 +1169,56 @@ def _finish(move, status, message):
     if status == "succeeded":
         move.update(phase="done", progress=100)
         move.pop("definition", None)
+        move.setdefault("flags", {})["resource_cleanup_pending"] = True
+    # Persist completion before deleting backups. A lost cleanup response must
+    # not restart restoration against artifacts which have already been removed.
+    _store(move)
+    _cleanup_resources(move)
     _cleanup_target(move)
     if after_finish:
         try:
             after_finish()
         except Exception:
             pass
+
+
+def _cleanup_resources(move):
+    if move.get("status") not in ("succeeded", "cancelled"):
+        return
+    flags = move.setdefault("flags", {})
+    flags["resource_cleanup_pending"] = True
+    _store(move)
+    try:
+        cancelled = move["status"] == "cancelled"
+        if cancelled:
+            _remove_created(move)
+        destination = CLEANUP.destination(kget, ksend, move, cancelled)
+        pending = list(destination["pending"])
+        notes = list(destination["retained"])
+        if flags.get("destination_deletion_pending"):
+            pending.append("destination object deletion")
+        if any(c.get("cleanup_retain") for c in move.get("claims") or []):
+            notes.append("Retain storage policy keeps the removed destination disks; remove them separately if no longer needed")
+        if pending:
+            pass  # The source backup remains available until restore users are gone.
+        elif move.get("cleanup_protocol") == 1 and (flags.get("quiesce_requested") or flags.get("quiesced")):
+            result = CLIENT.remote(move["cluster"], "/api/move/source", {
+                "action": "cleanup", "kind": move["kind"], "name": move["name"],
+                "namespace": move.get("source_namespace", ""),
+                "transfer_id": move["id"], "expected_uid": move["source_uid"]})
+            if not isinstance(result.get("complete"), bool):
+                raise ValueError("Source cleanup was not confirmed")
+            if not result["complete"]:
+                pending.append("source transfer backups or snapshots")
+            notes += result.get("retained") or []
+        elif move.get("cleanup_protocol") != 1 and flags.get("backed_up"):
+            notes.append("Older source transfer backups retained; their ownership cannot be verified")
+        flags["resource_cleanup_pending"] = bool(pending)
+        move["cleanup_message"] = ("Temporary resource cleanup pending; Homestead retries automatically"
+                                   if pending else "; ".join(str(note) for note in notes))
+    except Exception:
+        flags["resource_cleanup_pending"] = True
+        move["cleanup_message"] = "Temporary resource cleanup pending; check both clusters. Homestead retries automatically"
 
 
 def _kubernetes_reason(error):
@@ -1216,6 +1276,8 @@ def _tick_all():
     journal = _target_journal()
     running = [m["id"] for m in rows if m.get("status") == "running"
                or (m.get("flags") or {}).get("target_cleanup_pending")
+               or (m.get("flags") or {}).get("resource_cleanup_pending")
+               or (m.get("status") in ("failed", "cancelled") and (m.get("flags") or {}).get("cancelling"))
                or (m.get("status") in ("succeeded", "cancelled") and m.get("transfer_target"))
                or m["id"] == journal.get("owner")]
     if journal and not any(m["id"] == journal["owner"] for m in rows):
@@ -1227,7 +1289,14 @@ def _tick_all():
                 continue
             if move.get("status") == "running":
                 _tick(move)
+            elif move.get("status") in ("failed", "cancelled") and (move.get("flags") or {}).get("cancelling"):
+                try:
+                    _abandon(move_id)
+                except Exception:
+                    pass
+                move = _find(move_id)
             else:
+                _cleanup_resources(move)
                 _cleanup_target(move)
                 move["updated_at"] = _now()
             with _lock:
@@ -1256,10 +1325,14 @@ def _retry(move_id):
     move = _find(move_id)
     if not move:
         raise ValueError("no such move")
+    if move.get("status") in ("failed", "cancelled") and move.get("flags", {}).get("cancelling"):
+        return _abandon(move_id)
+    if move.get("status") in ("succeeded", "cancelled") and move.get("flags", {}).get("resource_cleanup_pending"):
+        _cleanup_resources(move)
+        _store(move)
+        return _public(move)
     if move["status"] != "failed":
         raise ValueError("only a failed move can be retried")
-    if move.get("transfer_mode") == "copy" and move.get("flags", {}).get("cancelling"):
-        return abandon(move_id)
     if move.get("phase") == "backing-up":
         move.setdefault("flags", {})["retry_backups"] = True
     if move.get("phase") == "joining":
@@ -1292,8 +1365,8 @@ def _abandon(move_id):
                          "there is nothing to put back")
     stopped = _source_held(move)
     move.update(status="cancelled", message="Putting it back" if stopped else "Cancelling", updated_at=_now())
-    if move.get("transfer_mode") == "copy":
-        move.setdefault("flags", {})["cancelling"] = True
+    move.setdefault("flags", {})["cancelling"] = True
+    move["flags"]["resource_cleanup_pending"] = True
     _store(move)
     # Nothing stopped there yet means nothing to start again there - and no
     # need for the source to answer before this move can be cancelled.
@@ -1321,6 +1394,9 @@ def _abandon(move_id):
                 + (f"; removed {', '.join(removed)} here" if removed else ""),
                 finished_at=_now())
     move.pop("definition", None)
+    move.setdefault("flags", {})["resource_cleanup_pending"] = True
+    _cleanup_resources(move)
+    move["flags"].pop("cancelling", None)
     _cleanup_target(move)
     _store(move)
     return _public(move)
@@ -1328,28 +1404,31 @@ def _abandon(move_id):
 
 def _remove_created(move):
     namespace, removed, move_id = move["namespace"], [], move["id"]
+    pending = False
     # A volume is its own claim, removed with the claims below.
-    obj = None if move["kind"] == "volume" else _get(_object_path(move["kind"], namespace, move["name"]))
+    obj = None if move["kind"] == "volume" else CLEANUP.optional(kget, _object_path(move["kind"], namespace, move["name"]))
     if obj and _ours(obj, move_id):
-        ksend("DELETE", _object_path(move["kind"], namespace, move["name"])
-              + "?propagationPolicy=Background")
+        pending |= not CLEANUP.delete(kget, ksend, _object_path(move["kind"], namespace, move["name"]), obj)
         removed.append(move["name"])
     for kind in ("services", "secrets", "configmaps"):
-        try:
-            items = kget(f"/api/v1/namespaces/{namespace}/{kind}").get("items", [])
-        except urllib.error.HTTPError as error:
-            if error.code != 404:
-                raise
-            items = []
+        items = CLEANUP.items(kget, f"/api/v1/namespaces/{namespace}/{kind}")
         for item in items:
             if _ours(item, move_id):
-                ksend("DELETE", f"/api/v1/namespaces/{namespace}/{kind}/{item['metadata']['name']}")
+                pending |= not CLEANUP.delete(kget, ksend, f"/api/v1/namespaces/{namespace}/{kind}/{item['metadata']['name']}", item)
                 removed.append(item["metadata"]["name"])
     for claim in move["claims"]:
-        pvc = _get(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}")
+        pvc = CLEANUP.optional(kget, f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}")
         if pvc and _ours(pvc, move_id):
-            ksend("DELETE", f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}")
+            volume = (pvc.get("spec") or {}).get("volumeName")
+            if volume:
+                pv = CLEANUP.optional(kget, f"/api/v1/persistentvolumes/{volume}")
+                if pv and (pv.get("spec") or {}).get("persistentVolumeReclaimPolicy") == "Retain":
+                    claim["cleanup_retain"] = True
+                claim["cleanup_volume"] = ((pv or {}).get("spec", {}).get("csi") or {}).get("volumeHandle") or volume
+                _store(move)  # Preserve reclamation evidence before deleting the PVC.
+            pending |= not CLEANUP.delete(kget, ksend, f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}", pvc)
             removed.append(claim["claim"])
+    move.setdefault("flags", {})["destination_deletion_pending"] = pending
     return removed
 
 
@@ -1377,6 +1456,11 @@ def dismiss(move_id=None):
         if any((m.get("flags") or {}).get("target_cleanup_pending")
                or m["id"] == _target_journal().get("owner") for m in gone):
             raise ValueError("Wait for backup storage cleanup before dismissing this transfer")
+        if any((m.get("flags") or {}).get("resource_cleanup_pending") for m in gone):
+            raise ValueError("Wait for temporary resource cleanup before dismissing this transfer")
+        if any(m.get("status") == "failed" and m.get("cleanup_protocol") == 1
+               and ((m.get("flags") or {}).get("quiesced") or (m.get("flags") or {}).get("quiesce_requested")) for m in gone):
+            raise ValueError("Cancel or put back the failed transfer before dismissing it, so its resources can be cleaned up")
         _write([m for m in rows if m not in gone])
     failed = [m for m in gone if m.get("status") == "failed"]
     if failed:

@@ -54,6 +54,8 @@ class FakeCluster:
         if method == "POST":
             name = body["metadata"].get("name") or f"gen-{len(self.calls)}"
             body["metadata"]["name"] = name
+            body["metadata"].setdefault("uid", "created-" + str(len(self.calls)))
+            body["metadata"].setdefault("resourceVersion", "1")
             self.objects[f"{path}/{name}"] = copy.deepcopy(body)
             return copy.deepcopy(body)
         if method == "PUT":
@@ -146,7 +148,7 @@ class FakeLonghorn:
         self.made.append({"name": name, "volume": volume})
         return {"backup": name, "volume": volume}
 
-    def ensure_move_backup(self, volume, snapshot, backup):
+    def ensure_move_backup(self, volume, snapshot, backup, **kwargs):
         if not any(b["name"] == backup for b in self.made):
             self.made.append({"name": backup, "volume": volume})
         return {"backup": backup}
@@ -160,7 +162,8 @@ class FakeLonghorn:
         self.restored.append(cfg)
         ns, name = cfg["namespace"], cfg["name"]
         self.cluster.put(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}", {
-            "metadata": {"name": name, "annotations": dict(cfg.get("annotations") or {})},
+            "metadata": {"name": name, "namespace": ns, "uid": "restored-" + name, "resourceVersion": "1",
+                         "annotations": dict(cfg.get("annotations") or {})},
             "spec": {"volumeName": f"pvc-{name}-{ns}"}, "status": {"phase": "Bound"}})
         self.cluster.put(f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/"
                          f"pvc-{name}-{ns}", {"status": {"restoreInitiated": True, "restoreRequired": False,
@@ -487,7 +490,9 @@ class EngineTests(unittest.TestCase):
                 if body["action"] == "quiesce":
                     identity["expected_version"] = body.get("expected_version", "")
                 if body["action"] == "backup":
-                    return source.in_namespace(body.get("namespace"), source.backup, body["kind"], body["name"], body.get("retry_failed", False), body.get("claims"), **identity)
+                    return source.in_namespace(body.get("namespace"), source.backup, body["kind"], body["name"], body.get("retry_failed", False), body.get("claims"), **identity, cleanup_id=body.get("cleanup_id", ""))
+                if body["action"] == "cleanup":
+                    return source.cleanup(body["transfer_id"], body["expected_uid"])
                 action = {"quiesce": source.quiesce, "backup": source.backup,
                           "release": source.release}.get(body["action"])
                 if body["action"] == "remove":
@@ -556,8 +561,8 @@ class EngineTests(unittest.TestCase):
         move = engine.start("shed", "container", "frigate", "moved", "automatic")
         self.cluster.objects.pop("/api/v1/namespaces/lab/pods/frigate-1", None)
         create = self.lh.ensure_move_backup
-        def pending(*args):
-            result = create(*args)
+        def pending(*args, **kwargs):
+            result = create(*args, **kwargs)
             self.lh.made[-1]["state"] = "InProgress"
             return result
         with mock.patch.object(self.lh, "ensure_move_backup", side_effect=pending):
