@@ -128,6 +128,31 @@ test("copy activity has cleanup actions and never offers source removal", () => 
   assert.match(html,/Remove copy/); assert.doesNotMatch(html,/moveFinish\(|Put back|keeps its stopped copy/);
 });
 
+test("terminal transfer cleanup remains visible, escaped and cannot be dismissed", () => {
+  const t=setup();
+  const html=t.ctx.movesHtml([{id:"cleanup-job",name:"example",cluster:"source",kind:"vm",namespace:"lab",
+    status:"succeeded",progress:100,phase:"done",phases:["done"],created_at:new Date().toISOString(),
+    resource_cleanup_pending:true,can_dismiss:false,cleanup_message:"Waiting for <snapshot> cleanup"}]);
+  assert.match(html,/Retry cleanup/);
+  assert.match(html,/Waiting for &lt;snapshot&gt; cleanup/);
+  assert.doesNotMatch(html,/moveDismiss\(/);
+});
+
+test("terminal cleanup continues polling until the worker confirms completion", async () => {
+  const t=setup(), scheduled=[];
+  t.fields["#movesList"]={}; t.fields["#pageContent"]={contains:()=>true};
+  t.ctx.setTimeout=(fn,ms)=>{scheduled.push({fn,ms});return 1;};
+  t.ctx.api=async()=>[{status:"cancelled",id:"example",kind:"vm",progress:100,
+    phase:"done",phases:["done"],created_at:new Date().toISOString(),resource_cleanup_pending:true}];
+  await t.ctx.watchMoves();
+  assert.equal(scheduled.length,1);
+  assert.equal(scheduled[0].ms,4000);
+  t.ctx.api=async()=>[{status:"cancelled",id:"example",kind:"vm",progress:100,
+    phase:"done",phases:["done"],created_at:new Date().toISOString(),resource_cleanup_pending:false}];
+  await t.ctx.watchMoves();
+  assert.equal(scheduled.length,1);
+});
+
 test("late plan response cannot replace the newer choice or enable a blocked move",async()=>{
   const t=setup(), first=t.ctx.movePlan("source","container","camera-app");
   t.fields["#mv_sc"].value="longhorn-r2";

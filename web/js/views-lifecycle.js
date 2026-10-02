@@ -2342,12 +2342,12 @@ function movesHtml(moves) {
       return `<div class="${state}"><i></i><span><b>${esc(copy && phase === "starting" ? "Keep copy stopped" : MOVE_PHASE_WORDS[phase] || phase)}</b></span></div>`;
     }).join("");
     const actions = [
-      m.status === "failed" ? `<button class="btn sm" data-need="admin" onclick="moveAct('retry',${jsq(m.id)})">${m.cleanup_pending ? "Retry cleanup" : m.phase === "backing-up" ? "Retry failed backups" : "Retry"}</button>` : "",
+      m.status === "failed" || m.resource_cleanup_pending ? `<button class="btn sm" data-need="admin" onclick="moveAct('retry',${jsq(m.id)})">${m.cleanup_pending || m.resource_cleanup_pending ? "Retry cleanup" : m.phase === "backing-up" ? "Retry failed backups" : "Retry"}</button>` : "",
       m.status === "succeeded" && !m.source_removed && !copy
         ? `<button class="btn sm" data-need="admin" onclick="moveFinish(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.kind)})">Remove from ${esc(m.cluster)}</button>` : "",
       ["running", "failed", "succeeded"].includes(m.status) && !m.source_removed
         ? `<button class="btn sm danger" data-need="admin" onclick="moveBack(${jsq(m.id)},${jsq(m.name)},${jsq(m.cluster)},${jsq(m.status)},${m.source_stopped === false ? "false" : "true"},${jsq(copy ? "copy" : "move")})">${copy ? m.status === "succeeded" ? "Remove copy" : "Cancel copy" : m.source_stopped === false ? "Cancel" : "Put back"}</button>` : "",
-      ["succeeded", "cancelled", "failed"].includes(m.status) && !(copy && m.source_stopped)
+      ["succeeded", "cancelled", "failed"].includes(m.status) && !(copy && m.source_stopped) && m.can_dismiss !== false
         ? `<button class="btn sm" data-need="admin" data-tip="${m.status === "failed" ? `Clear it from this list, touching neither cluster` : m.status === "succeeded" && !m.source_removed && !copy ? `Clear it from this list. ${esc(m.cluster)} keeps its stopped copy until you remove it there.` : "Clear it from this list"}"
             onclick="moveDismiss(${jsq(m.id)})">Dismiss</button>` : "",
     ].join("");
@@ -2360,6 +2360,7 @@ function movesHtml(moves) {
       <div class="rollout-meter"><span style="width:${Math.max(2, m.progress)}%"></span></div>
       <div class="rollout-steps movesteps">${steps}</div>
       <div class="between"><span class="dim xs">${esc(m.message || "")}</span><div class="row">${actions}</div></div>
+      ${m.cleanup_message ? `<div class="dim xs" style="margin-top:6px">${m.resource_cleanup_pending ? '<span class="spin2"></span> ' : ""}${esc(m.cleanup_message)}</div>` : ""}
     </div>`;
   }).join("");
 }
@@ -2373,7 +2374,7 @@ async function watchMoves() {
   const host = $("#movesList");
   if (moves && host) host.innerHTML = movesHtml(moves);
   if (window.applyRole) window.applyRole();
-  if ((moves || []).some(m => m.status === "running")) window.__moveTimer = setTimeout(watchMoves, 4000);
+  if ((moves || []).some(m => m.status === "running" || m.resource_cleanup_pending || m.backup_target_cleanup_pending)) window.__moveTimer = setTimeout(watchMoves, 4000);
 }
 window.watchMoves = watchMoves;
 
@@ -2381,7 +2382,7 @@ window.moveAct = async (action, id) => {
   try {
     await api(`/api/move/moves/${action}`, { method: "POST",
       headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
-    toast(action === "retry" ? "retrying from where it stopped" : "done", "ok");
+    toast(action === "retry" ? "Retry requested" : "done", "ok");
     watchMoves();
   } catch (e) { toast(e.message, "bad"); }
 };
