@@ -226,6 +226,16 @@ class VmTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "vBIOS ConfigMap is missing or incomplete"):
             PASS.current_roms(vm, "lab")
 
+    def test_gpu_mapping_and_roms_cannot_target_usb_resources(self):
+        vm = self.vm()
+        vm["spec"]["template"]["spec"]["domain"]["devices"]["gpus"] = [{"name": "gpu", "deviceName": "old/gpu"}]
+        with mock.patch.object(PASS, "resources", return_value={"resources": [{"resource": "example.test/usb", "kind": "usb"}]}):
+            with self.assertRaisesRegex(ValueError, "needs a PCI device"):
+                PASS.edit_vm(vm, "lab", {"map": {"gpu": "example.test/usb"}}, [])
+            with self.assertRaisesRegex(ValueError, "USB devices cannot use"):
+                PASS.edit_vm(self.vm(), "lab", {"add": [{"name": "usb", "resource": "example.test/usb"}],
+                    "roms": {"usb": base64.b64encode(ROM).decode()}}, [])
+
     def test_combined_rom_limit_is_checked_before_a_configmap_is_written(self):
         rom = base64.b64encode(b"\x55\xaa" + b"\x00" * (400 * 1024)).decode()
         resource = "homestead.io/pci-10de-1e87"
