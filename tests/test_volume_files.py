@@ -1,6 +1,9 @@
+import copy
+from contextlib import nullcontext
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -98,6 +101,87 @@ class SessionPodTests(unittest.TestCase):
     def test_system_namespaces_are_refused(self):
         with self.assertRaises(PermissionError):
             files.open_session("kube-system", "anything")
+
+
+class CleanupTests(unittest.TestCase):
+    def setUp(self):
+        self.sent = []
+        self.pod = {
+            "metadata": {"name": "homestead-files-data", "namespace": "lab", "uid": "old-pod",
+                         "resourceVersion": "17", "creationTimestamp": "2026-10-02T00:00:00Z",
+                         "labels": {"homestead.io/task": "files"}},
+            "spec": {"activeDeadlineSeconds": 1800,
+                     "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "data"}}]},
+            "status": {"phase": "Running"}}
+        self.pods = [self.pod]
+        files.bind(lambda path: {"items": self.pods},
+                   lambda method, path, body: self.sent.append((method, path, body)),
+                   None, "", None, {"kube-system"})
+        self.created = 1790899200  # 2026-10-02 00:00 UTC
+
+    def test_running_helpers_are_kept_until_their_deadline(self):
+        self.assertEqual([], files.cleanup(self.created + 1799))
+        self.assertEqual([], self.sent)
+        self.assertEqual(["homestead-files-data"], files.cleanup(self.created + 1800))
+        method, path, body = self.sent[0]
+        self.assertEqual("DELETE", method)
+        self.assertEqual("/api/v1/namespaces/lab/pods/homestead-files-data", path)
+        self.assertEqual({"uid": "old-pod", "resourceVersion": "17"}, body["preconditions"])
+        self.assertEqual(0, body["gracePeriodSeconds"])
+
+    def test_finished_and_failed_helpers_are_removed_before_the_deadline(self):
+        for phase in ("Succeeded", "Failed"):
+            self.pod["status"]["phase"] = phase
+            self.assertEqual(["homestead-files-data"], files.cleanup(self.created + 10))
+
+    def test_an_unscheduled_helper_also_expires(self):
+        self.pod["status"] = {"phase": "Pending"}
+        self.assertEqual(["homestead-files-data"], files.cleanup(self.created + 1801))
+
+    def test_only_identifiable_managed_helpers_are_deleted(self):
+        mutations = [
+            ("metadata", "labels", {}), ("metadata", "uid", ""),
+            ("metadata", "name", "homestead-snapshot-files-data"),
+            ("metadata", "namespace", "kube-system"),
+            ("metadata", "creationTimestamp", "bad timestamp"),
+            ("metadata", "deletionTimestamp", "already closing"),
+            ("spec", "volumes", [{"name": "data", "persistentVolumeClaim": {"claimName": "other"}}])]
+        for section, key, value in mutations:
+            with self.subTest(key=key):
+                pod = copy.deepcopy(self.pod)
+                pod[section][key] = value
+                self.pods = [pod]
+                self.assertEqual([], files.cleanup(self.created + 1900))
+        self.assertEqual([], self.sent)
+
+    def test_api_or_delete_failures_are_reported_for_a_later_retry(self):
+        with patch.object(files, "kget", side_effect=ConnectionError("unavailable")):
+            with self.assertRaises(ConnectionError):
+                files.cleanup(self.created + 1900)
+        with patch.object(files, "ksend", side_effect=ValueError("replacement UID conflict")):
+            with self.assertRaisesRegex(ValueError, "UID conflict"):
+                files.cleanup(self.created + 1900)
+
+
+class CleanupLoopTests(unittest.TestCase):
+    def test_sweep_runs_only_on_the_writable_leader(self):
+        import server
+
+        class StopLoop(BaseException):
+            pass
+
+        for leader, writable in ((False, True), (True, True), (True, False)):
+            with self.subTest(leader=leader, writable=writable), \
+                    patch.object(server.LEADER, "is_leader", return_value=leader), \
+                    patch.object(server, "self_data_activity", side_effect=lambda: nullcontext()), \
+                    patch.object(server, "require_self_data_write", side_effect=None if writable else RuntimeError("held")), \
+                    patch.object(server.FILES, "cleanup") as cleanup, \
+                    patch.object(server, "beat") as beat, \
+                    patch.object(server.time, "sleep", side_effect=StopLoop):
+                with self.assertRaises(StopLoop):
+                    server._files_loop()
+                self.assertEqual(int(leader and writable), cleanup.call_count)
+                self.assertEqual(int(leader), beat.call_count)
 
 
 if __name__ == "__main__":
