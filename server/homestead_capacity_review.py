@@ -56,7 +56,8 @@ class Rejected(ValueError):
 
 def enforce(config, plan, context=None):
     if plan.get("blocked"):
-        raise Rejected("Deployment cannot fit the checked placement constraints. Review capacity before deploying.", plan)
+        raise Rejected("; ".join(plan["device_conflicts"]) if plan.get("device_conflicts") else
+                       "Deployment cannot fit the checked placement constraints. Review capacity before deploying.", plan)
     if plan.get("requires_confirmation") and (config.get("confirm_capacity") is not True or not valid(config, context)):
         raise Rejected("Placement or memory needs a fresh review and explicit acknowledgement before deploying.", plan)
     state = (plan.get("vm") or {}).get("state_initialization")

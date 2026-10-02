@@ -91,6 +91,8 @@ def _pod_status(namespace, pod):
 def open_session(namespace, pvc):
     """Start (or reuse) the helper pod that mounts this claim."""
     namespace, pvc = _name(namespace, "namespace"), _name(pvc, "volume name")
+    if pvc.startswith("homestead-snapshot-files-"):
+        raise PermissionError("Snapshot copies are read-only; use their snapshot browser")
     if namespace in SYSTEM_NAMESPACES:
         raise PermissionError("Homestead does not browse volumes in system namespaces")
     pod = pod_name(pvc)
@@ -145,6 +147,8 @@ def _wait_ready(namespace, pod, timeout=60):
 
 def close_session(namespace, pvc):
     namespace, pvc = _name(namespace, "namespace"), _name(pvc, "volume name")
+    if pvc.startswith("homestead-snapshot-files-"):
+        raise PermissionError("Close snapshot copies through their snapshot browser")
     try:
         ksend("DELETE", f"/api/v1/namespaces/{namespace}/pods/{pod_name(pvc)}"
                         "?gracePeriodSeconds=0")

@@ -69,6 +69,9 @@ class PassthroughTests(unittest.TestCase):
     def setUp(self):
         self.data = tempfile.mkdtemp()
         self.cluster, self.host = Cluster(), Host()
+        storage = mock.patch.object(PASS, "longhorn_block_paths", return_value=[])
+        storage.start()
+        self.addCleanup(storage.stop)
         self.bind()
 
     def bind(self, harvester=False):
@@ -88,6 +91,22 @@ class PassthroughTests(unittest.TestCase):
         self.assertFalse(rows["0000:00:00.0"]["offered"], "the chipset is not offered")
         self.assertEqual({"0bda:8153", "1a6e:089a"}, {f"{u['vendor']}:{u['product']}" for u in facts["usb"]},
                          "root hubs are left out")
+
+    def test_resource_usage_distinguishes_saved_configurations_and_active_instances(self):
+        self.cluster.kv["spec"]["configuration"]["permittedHostDevices"] = {"pciHostDevices": [
+            {"resourceName": "example/gpu", "pciVendorSelector": "10DE:1E87"}]}
+        spec = {"domain": {"devices": {"hostDevices": [{"deviceName": "example/gpu"}]}}}
+        self.cluster.objects["/apis/kubevirt.io/v1/virtualmachines"] = {"items": [
+            {"metadata": {"namespace": "lab", "name": name}, "spec": {"template": {"spec": spec}}}
+            for name in ("running", "stopped")]}
+        self.cluster.objects["/apis/kubevirt.io/v1/virtualmachineinstances"] = {"items": [
+            {"metadata": {"namespace": "lab", "name": name}, "spec": spec, "status": {"phase": phase}}
+            for name, phase in (("running", "Running"), ("pending", "Pending"), ("stopped", "Failed"))]}
+        row = PASS.resources(with_usage=True)["resources"][0]
+        self.assertEqual(["lab/running", "lab/stopped"], row["configured_vms"])
+        self.assertEqual(["lab/pending", "lab/running"], row["active_vms"])
+        self.cluster.objects["/apis/kubevirt.io/v1/virtualmachineinstances"]["metadata"] = {"continue": "more"}
+        self.assertIn("usage_error", PASS.resources(with_usage=True))
 
     def test_a_gpu_goes_to_vfio_with_its_group_but_not_the_bridge_and_kubevirt_is_told(self):
         result = PASS.give("node-1", "0000:01:00.0")
@@ -144,9 +163,90 @@ class PassthroughTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "vendor and product"):
             PASS.allow_usb("zz", "1")
 
+    def test_inventory_survives_rebinding_and_keeps_device_names_without_host_work(self):
+        facts = PASS.inspect("node-1")
+        self.assertGreater(facts["inspected_at"], 0)
+        self.bind()
+        scripts = len(self.host.scripts)
+        self.assertEqual(facts, PASS.inventory("node-1")["facts"])
+        self.assertIsNone(PASS.inventory("missing")["facts"])
+        self.cluster.kv["spec"]["configuration"]["permittedHostDevices"] = {
+            "pciHostDevices": [{"pciVendorSelector": "10DE:1E87", "resourceName": "other.test/gpu"}],
+            "usb": [{"resourceName": "homestead.io/usb-1a6e-089a", "selectors": [{"vendor": "1a6e", "product": "089a"}]}]}
+        gpu, usb = PASS.resources()["resources"]
+        self.assertEqual("NVIDIA Corporation TU104 [GeForce RTX 2080]", gpu["label"])
+        self.assertEqual("10DE:1E87", gpu["selector"])
+        self.assertTrue(gpu["gpu"])
+        self.assertFalse(usb["gpu"])
+        self.assertEqual("0000:01:00.0", gpu["devices"][0]["address"])
+        self.assertEqual("12", gpu["devices"][0]["group"])
+        self.assertEqual([], gpu["nodes"], "a custom resource is not allocated merely because its hardware matches")
+        self.assertEqual("Coral", usb["label"])
+        self.assertEqual([], usb["nodes"], "cached names do not claim current availability")
+        self.assertEqual(scripts, len(self.host.scripts), "reading names does not start helpers")
+        self.assertEqual([], self.cluster.sent)
+
+    def test_incomplete_inspection_cannot_replace_last_good_inventory(self):
+        facts = PASS.inspect("node-1")
+        self.host.out = "PCI partial\n"
+        with self.assertRaisesRegex(ValueError, "could not look"):
+            PASS.inspect("node-1")
+        self.assertEqual(facts, PASS.inventory("node-1")["facts"])
+
+    def test_retained_inventory_is_not_used_to_authorize_a_handoff(self):
+        PASS.inspect("node-1")
+        self.host.out = HOST.replace("GROUPS 18", "GROUPS 0")
+        with self.assertRaisesRegex(ValueError, "IOMMU is off"):
+            PASS.give("node-1", "0000:01:00.0")
+        self.assertFalse(any("driver_override" in s for s in self.host.scripts))
+
+    def test_display_cache_write_failure_does_not_block_inspection(self):
+        with mock.patch.object(PASS.SHARED, "write_json", side_effect=OSError("read-only data")):
+            facts = PASS.inspect("node-1")
+        self.assertTrue(facts["complete"])
+        self.assertEqual("read-only data", facts["inventory_error"])
+
+    def test_refresh_replaces_removed_devices_and_dead_nodes_do_not_label_resources(self):
+        PASS.inspect("node-1")
+        self.cluster.kv["spec"]["configuration"]["permittedHostDevices"] = {
+            "pciHostDevices": [{"pciVendorSelector": "10DE:1E87", "resourceName": "homestead.io/pci-10de-1e87"}]}
+        self.host.out = "\n".join(line for line in HOST.splitlines() if "0000:01:00.0" not in line) + "\n"
+        PASS.inspect("node-1")
+        self.assertEqual("10DE:1E87", PASS.resources()["resources"][0]["label"])
+        self.host.out = HOST
+        PASS.inspect("removed-node")
+        self.assertEqual([], PASS.resources()["resources"][0]["devices"])
+
+    def test_harvester_names_and_group_zero_come_from_current_inventory_crs(self):
+        self.bind(harvester=True)
+        self.cluster.kv["spec"]["configuration"]["permittedHostDevices"] = {
+            "pciHostDevices": [{"resourceName": "homestead.io/pci-10de-1e87"}]}
+        path = f"{PASS.HV}/pcidevices"
+        self.cluster.objects[path] = {"items": [
+            {"metadata": {"name": "gpu"}, "status": {"nodeName": "node-1", "address": "0000:01:00.0", "classId": "0300",
+                "iommuGroup": 0, "description": "Named GPU", "resourceName": "homestead.io/pci-10de-1e87"}},
+            {"metadata": {"name": "audio"}, "status": {"nodeName": "node-1", "address": "0000:01:00.1", "classId": "0403",
+                "iommuGroup": 0, "description": "Named audio"}}]}
+        facts = PASS.inspect("node-1")
+        self.assertEqual(["0000:01:00.1"], facts["pci"][0]["group_members"])
+        gpu = PASS.resources()["resources"][0]
+        self.assertEqual("Named GPU", gpu["label"])
+        self.assertTrue(gpu["gpu"])
+        self.assertEqual(0, gpu["devices"][0]["group"])
+        self.cluster.objects[path]["items"] = []
+        self.assertEqual([], PASS.resources()["resources"][0]["devices"], "old Harvester snapshots do not override live CRs")
+        self.assertEqual([], self.host.scripts)
+
+    def test_invalid_display_inventory_is_ignored(self):
+        path = Path(self.data, "passthrough-inventory.json")
+        for value in ("broken", '[]', '{"node-1": []}', '{"node-1": {"complete": true}}'):
+            path.write_text(value, encoding="utf-8")
+            self.assertIsNone(PASS.inventory("node-1")["facts"])
+            self.assertEqual([], PASS.resources()["resources"])
+
     def test_the_scripts_are_valid_shell(self):
         for script in (PASS.INSPECT, PASS.vfio_script(["0000:01:00.0"], True), PASS.vfio_script(["0000:01:00.0"], False),
-                       PASS.iommu_script("intel"), PASS.BOOT_SCRIPT):
+                       PASS.iommu_script("intel"), PASS.BOOT_SCRIPT, PASS.capture_script("0000:01:00.0")):
             try:
                 result = subprocess.run(["sh", "-n"], input=script, text=True, capture_output=True)
             except FileNotFoundError:
@@ -155,6 +255,79 @@ class PassthroughTests(unittest.TestCase):
 
 
 ROM = b"\x55\xaa" + b"\x00" * 4094
+
+
+class CaptureTests(unittest.TestCase):
+    def setUp(self):
+        self.gpu = {"address": "0000:01:00.0", "class": "0300", "driver": "vfio-pci",
+                    "vendor": "10de", "device": "1c30", "resource": "example/gpu", "group_members": []}
+        self.rom = bytearray(1024)
+        self.rom[:2] = b"\x55\xaa"
+        self.rom[24:26] = (32).to_bytes(2, "little")
+        self.rom[32:36] = b"PCIR"
+        self.rom[36:38] = (0x10de).to_bytes(2, "little")
+        self.rom[38:40] = (0x1c30).to_bytes(2, "little")
+        self.rom[48:50] = (2).to_bytes(2, "little")
+        self.rom[53] = 128
+        self.host = mock.Mock()
+        self.read = mock.patch.object(PASS, "inspect", return_value={"pci": [self.gpu]})
+        self.read.start()
+        self.addCleanup(self.read.stop)
+        self.get = mock.patch.object(PASS, "kget", return_value={"items": []})
+        self.get.start()
+        self.addCleanup(self.get.stop)
+        self.runner = mock.patch.object(PASS, "hostrun", self.host)
+        self.runner.start()
+        self.addCleanup(self.runner.stop)
+
+    def capture(self, raw=None):
+        self.host.run.return_value = ("ROM\n" + base64.b64encode(self.rom if raw is None else raw).decode() + "\nEND\n", "")
+        return PASS.capture_vbios("node-1", self.gpu["address"])
+
+    def test_download_matches_card_and_read_is_bounded_without_unbinding(self):
+        result = self.capture()
+        self.assertEqual(bytes(self.rom), base64.b64decode(result["data"]))
+        self.assertTrue(result["filename"].endswith("-10de-1c30.rom"))
+        script = self.host.run.call_args.args[1]
+        self.assertIn("count=161", script)
+        self.assertIn('echo 0 > "$d/rom"', script)
+        self.assertNotIn("unbind", script)
+        self.assertNotIn("reset", script)
+
+    def test_active_host_driver_and_non_gpu_are_refused_without_read(self):
+        for driver, klass in (("i915", "0300"), ("vfio-pci", "0200")):
+            self.gpu.update(driver=driver, **{"class": klass})
+            with self.assertRaises(ValueError):
+                self.capture()
+        self.host.run.assert_not_called()
+
+    def test_vm_use_and_failed_inventory_are_refused_without_read(self):
+        PASS.kget.return_value = {"items": [{"metadata": {"name": "busy"}, "status": {"nodeName": "node-1", "phase": "Running"},
+            "spec": {"domain": {"devices": {"hostDevices": [{"deviceName": "example/gpu"}]}}}}]}
+        with self.assertRaisesRegex(ValueError, "Stop VM busy"):
+            self.capture()
+        PASS.kget.side_effect = OSError("unavailable")
+        with self.assertRaisesRegex(ValueError, "could not be checked"):
+            self.capture()
+        self.host.run.assert_not_called()
+
+    def test_bad_truncated_wrong_card_and_oversized_roms_are_not_downloaded(self):
+        wrong = bytearray(self.rom)
+        wrong[38:40] = (0xffff).to_bytes(2, "little")
+        for raw in (b"MZ", self.rom[:600], wrong, b"\x55\xaa" + b"\0" * PASS.ROM_LIMIT):
+            with self.subTest(size=len(raw)), self.assertRaises(ValueError):
+                self.capture(raw)
+
+    def test_read_failure_is_actionable_and_shell_input_is_checked(self):
+        self.host.run.return_value = ("ERR This GPU ROM cannot be read\n", "")
+        with self.assertRaisesRegex(ValueError, "cannot be read"):
+            PASS.capture_vbios("node-1", self.gpu["address"])
+        with self.assertRaises(ValueError):
+            PASS.capture_script("0000:01:00.0; reboot")
+
+    def test_capture_route_requires_admin(self):
+        import homestead_route_policy as policy
+        self.assertEqual("admin", policy.role("/api/passthrough/vbios/capture", "POST"))
 
 
 class VmTests(unittest.TestCase):
@@ -192,16 +365,23 @@ class VmTests(unittest.TestCase):
         self.assertEqual({"hostdev-0": ROM}, PASS.current_roms(vm, "lab"))
 
     def test_the_hook_names_the_rom_on_the_right_device_and_never_breaks_the_vm(self):
-        script = PASS.hook_script({"hostdev-0": ROM})
+        script = PASS.hook_script({"hostdev-0": ROM}, sidecar_index=2)
         domain = ("<domain><devices><hostdev type='pci'><alias name='ua-hostdevice-hostdev-0'/></hostdev>"
                   "<hostdev type='pci'><alias name='ua-hostdevice-hostdev-1'/></hostdev></devices></domain>")
         with tempfile.TemporaryDirectory() as hooks:
-            code = script.replace('HOOKS = "/var/run/kubevirt-hooks"', f"HOOKS = {json.dumps(hooks)}")
+            # Model the sidecar's subPath mount and compute's parent mount.
+            sidecar = Path(hooks, "hook-sidecar-2")
+            sidecar.mkdir()
+            code = script.replace('HOOKS = "/var/run/kubevirt-hooks"', f"HOOKS = {json.dumps(str(sidecar))}")
+            code = code.replace('QEMU_HOOKS = "/var/run/kubevirt-hooks/hook-sidecar-2"', f"QEMU_HOOKS = {json.dumps(str(sidecar))}")
             out = subprocess.run([sys.executable, "-c", code, "--vmi", "{}", "--domain", domain],
                                  capture_output=True, text=True)
             self.assertIn(f"<rom bar=\"on\" file=\"{hooks}", out.stdout.replace("\\\\", "\\"))
             self.assertEqual(1, out.stdout.count("<rom"), "only the device the ROM is for")
-            self.assertEqual(ROM, Path(hooks, "vbios-hostdev-0.rom").read_bytes())
+            import xml.etree.ElementTree as ET
+            path = ET.fromstring(out.stdout).find(".//rom").get("file")
+            self.assertEqual(ROM, Path(path).read_bytes(), "QEMU can open the generated ROM path")
+            self.assertEqual(str(sidecar / "vbios-hostdev-0.rom"), path)
         broken = subprocess.run([sys.executable, "-c", script, "--vmi", "{}", "--domain", "<not xml"],
                                 capture_output=True, text=True)
         self.assertEqual("<not xml", broken.stdout, "the domain goes on unchanged")
