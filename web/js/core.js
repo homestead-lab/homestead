@@ -302,6 +302,7 @@ function childModal(t, h, wide, contextClass = "") {
 }
 
 function modalBack() {
+  if (window.snapshotFilesDismiss) window.snapshotFilesDismiss();
   const back = MODAL_STACK.pop();
   if (!back) return closeModal();
   modal(back.title, "", back.wide, back.context);
@@ -414,6 +415,7 @@ async function dismissModal() {
   closeModal();
 }
 function closeModal(updateRoute = true) {
+  if (window.snapshotFilesDismiss) window.snapshotFilesDismiss();
   if (window.selfDataClose) window.selfDataClose();
   window.__modalGuard = null;
   MODAL_STACK.length = 0;

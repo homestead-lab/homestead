@@ -597,8 +597,11 @@ function snapshotTimeline(snaps, vol, label) {
       ${(s.children || []).includes("volume-head") ? `<span class="tag" data-tip="This snapshot is the parent of live data. After marking it removed, Longhorn may need a fresh snapshot boundary before it can reclaim blocks.">parent of Volume Head</span>` : ""}</div>
       ${source === "system" ? '<p class="dim xs">Longhorn-created checkpoint (for example expansion or rebuild), not a user recovery point.</p>' : ""}
       ${s.error ? `<p class="warntext small">${esc(s.error)}</p>` : ""}
-      <div class="row snapshot-actions">${source !== "system" && source !== "unknown" && s.ready && !s.deleting && !s.removed ? `<button class="btn sm" data-need="admin" onclick="lhRevert(${jsq(vol)},${jsq(s.name)},${jsq(label)})">${icon("rollback")}Roll back</button>` : ""}
-      <button class="btn sm danger" data-need="admin" ${source === "unknown" ? "disabled" : ""} onclick="lhSnapDel(${jsq(s.name)},${jsq(vol)},${jsq(label)})">${icon("trash")}${s.deleting ? "Track cleanup" : source === "system" ? "Clean up" : "Delete"}</button></div>
+      <div class="snapshot-actions">${actionBar([
+        s.ready && !s.deleting && !s.removed && {label:'Browse files', need:'admin', run:`snapshotFiles(${jsq(vol)},${jsq(s.name)})`},
+        source !== 'system' && source !== 'unknown' && s.ready && !s.deleting && !s.removed && {label:'Roll back', icon:'rollback', need:'admin', run:`lhRevert(${jsq(vol)},${jsq(s.name)},${jsq(label)})`},
+        {label:s.deleting ? 'Track cleanup' : source === 'system' ? 'Clean up' : 'Delete', icon:'trash', need:'admin', danger:true, disabled:source === 'unknown', run:`lhSnapDel(${jsq(s.name)},${jsq(vol)},${jsq(label)})`}
+      ], {shown:1, label:'More snapshot actions'})}</div>
       </div></article>`;
   }).join("") || '<div class="empty small">No snapshots yet</div>'}
     <article class="snapshot-point head"><div class="snapshot-marker">${icon("play")}</div><div class="snapshot-content"><b>Volume Head</b><span class="dim small">Live data · now · never deleted as a snapshot</span></div></article></div>`;
@@ -636,7 +639,7 @@ async function refreshSnapshotDialog(token, vol, label) {
 }
 window.lhSnaps = async (vol, label) => {
   const token = ++SNAPSHOT_REFRESH;
-  modal("Snapshots · " + label, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
+  modal("Snapshots · " + label, `<div class="empty"><span class="spin2"></span>loading</div>`, true, 'snapshot-files');
   $(".modalbox").scrollTop = 0;
   try {
     const [snaps, bks] = await Promise.all([

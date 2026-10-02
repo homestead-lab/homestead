@@ -693,3 +693,7 @@ POLICY.update({
     ('POST', '/api/self/data/prepare/archive'): 'admin',
     ('POST', '/api/self/data/prepare/archive/preview'): 'admin',
 })
+
+POLICY.update({(method, '/api/snapshot-files/' + action): 'admin'
+               for method, actions in (("GET", ("plan", "status", "list", "download")),
+                                       ("POST", ("start", "close"))) for action in actions})
