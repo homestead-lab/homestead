@@ -1358,6 +1358,11 @@ receipts; it never copies or deletes data. Preparations for an earlier source
 volume are labelled as historical, and a preparation for the current data
 volume says that Homestead now uses it. Running and recovery jobs remain
 visible, and Move data names the jobs that block another preparation.
+**Review batch outcome** on a failed k3s blocker opens its retained-resource
+review directly. Inspect the listed VMs, type the batch name and acknowledge
+the unknown outcome to **Stop tracking batch**. This releases its preparation
+block without deleting or stopping VMs, disks or Secrets, retrying the batch,
+or claiming that guest verification passed. Reopen Move data for a fresh check.
 
 Finish upgrading every Homestead replica before starting a move. Homestead verifies
 capability records against the live pod UID and container runtime ID of processes

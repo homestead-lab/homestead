@@ -243,11 +243,20 @@ def can_archive(item):
 
 
 def blocking_jobs(ops, own_id=None):
-    return [{"id": i["id"], "title": i.get("title") or i.get("kind", "Job"),
-             "status": i.get("status", "unknown"), "message": i.get("message", ""),
-             "href": i.get("href", "/"), "recovery": bool(i.get("ref", {}).get("retain_resources"))}
-            for i in ops._read() if i["id"] != own_id and
-            (i.get("status") not in ops.TERMINAL or i.get("ref", {}).get("retain_resources"))]
+    jobs = []
+    for item in ops._read():
+        if item["id"] == own_id or (item.get("status") in ops.TERMINAL and not item.get("ref", {}).get("retain_resources")):
+            continue
+        public = ops._public(item)
+        # A blocker can be older than the visible Jobs tray. Include its public
+        # review flags so opening it does not depend on that browser cache.
+        jobs.append({"id": item["id"], "title": item.get("title") or item.get("kind", "Job"),
+                     "kind": item.get("kind", ""), "status": item.get("status", "unknown"),
+                     "message": item.get("message", ""), "href": item.get("href", "/"),
+                     "recovery": bool(item.get("ref", {}).get("retain_resources")),
+                     **{key: bool(public.get(key)) for key in ("mutation_recovery", "power_recovery", "storage_recovery",
+                                                              "tracking_only", "cleanable")}})
+    return jobs
 
 
 def blocked_message(prefix, jobs):

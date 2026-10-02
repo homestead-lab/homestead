@@ -1807,7 +1807,19 @@ ssh_pwauth: true
         window.__demoDataPrepared = true;
         return { operation: { id: "demo-data-prepare", title: "Prepare Homestead data volume", kind: "self-data-prepare", status: "succeeded", progress: 100, href: "/settings" }, destination: "homestead-data-prepared" };
       }
+      let blocker;
+      if (window.__demoDataBatchRecovery) {
+        window.__demoOps ||= [];
+        blocker = window.__demoOps.find(op => op.id === "data-batch-recovery");
+        if (!blocker) {
+          blocker = {id:"data-batch-recovery",title:"k3s cluster k3s-demo",kind:"k3s-cluster",batch_name:"k3s-demo",
+            status:"failed",progress:10,mutation_recovery:true,recovery:true,dismissible:false,href:"/vms?find=k3s-demo",
+            resource:{namespace:"lab",name:"k3s-demo-server-1"},message:"Guest verification timed out (0/1 ready). Resources are retained; inspect the batch outcome."};
+          window.__demoOps.push(blocker);
+        }
+      }
       return { source: "homestead-data", classes: [{ name: "longhorn", shareable: true }], execution_ready: false,
+        blocking_jobs: blocker?.mutation_recovery ? [blocker] : [],
         nodes: [{ name: "harvester-node1", ready: true }, { name: "harvester-node2", ready: true }],
         preparations: window.__demoDataPrepared ? [{ id: "demo-data-prepare", operation: "a".repeat(24), destination: "homestead-data-prepared", node: "harvester-node1", status: "succeeded", progress: 100, prepared: true, archivable: true,
           message: "Destination prepared. Review the move when you are ready for downtime." }] : [] };

@@ -110,11 +110,18 @@ window.toggleOperations = () => {
   operationPanelOpen = !operationPanelOpen;
   renderOperations();
 };
-window.openOperation = (href, id = "") => {
+window.openOperation = (href, id = "", savedOperation = null) => {
   const url = new URL(href || "/", window.location.origin);
   const route = HomesteadRouter.resolve(url.pathname);
-  const operation = (STATE.data.operations || []).find(item => item.id === id);
+  const operation = savedOperation?.id === id ? savedOperation : (STATE.data.operations || []).find(item => item.id === id);
   operationPanelOpen = false;
+  renderOperations();
+  // Recovery jobs need their retained-resource review, not just the page
+  // where the resources live. Every review still checks the saved job afresh.
+  if (operation?.status === "failed" && operation.mutation_recovery) return powerRecoveryReview(id, operation.kind === "import-create" ? "import" : true);
+  if (operation?.power_recovery) return powerRecoveryReview(id);
+  if (operation?.status === "failed" && operation.storage_recovery) return storageRecoveryReview(id);
+  if (operation?.tracking_only && operation?.cleanable) return cancelOperation(id);
   // The link names what the job is about. It used to become the site-wide
   // search, which then narrowed every page until cleared by hand; now the
   // page opens whole and the item is brought into view and marked.
@@ -123,7 +130,6 @@ window.openOperation = (href, id = "") => {
   url.searchParams.delete("find");
   url.searchParams.delete("q");
   go(route.view, { params: Object.fromEntries(url.searchParams) });
-  renderOperations();
   const opensItsOwn = ["reclass", "image-update", "image-rollback"].includes(operation?.kind);
   if (q && !opensItsOwn) highlightInPage(q);
   // An image update or rollback opens its rollout, as it looked when it ran.
@@ -263,6 +269,23 @@ window.powerRecoveryReview = async (id, mutation = false) => {
         (!p.blocked ? UI.ack("powerRecoveryAck", "I inspected the retained resources and accept that the old request may still finish.", {onchange:"powerRecoveryReady()"}) : "") +
         UI.actions(UI.cancel("Keep tracking") + UI.button("Resolve as unknown", "powerRecoveryResolve()", {kind:"pri",id:"powerRecoveryApply",disabled:true}));
       if ($(".modalbox")) $(".modalbox").scrollTop=0;
+      return;
+    }
+    if (p.action === "k3s-cluster") {
+      if ($("#mtitle")) $("#mtitle").textContent = "Review k3s batch";
+      const writeName = value => ({accepted:"Saved",intent:"Sent; no receipt",uncertain:"Response lost",unverified:"Unverified",refused:"Rejected","not dispatched":"Not sent"})[value] || value;
+      $("#mbody").innerHTML = UI.lead(`Review the planned VMs and retained resources for <b>${esc(p.confirm || "this batch")}</b>. Stopping tracking keeps them in the cluster and releases this job's block on moving Homestead data.`) +
+        UI.callout(p.blocked ? "bad" : "warn", p.blocked ? "Not ready to resolve" : "Guest health is unverified",
+          p.blocked ? (p.blockers || []).map(esc).join("<br>") : "Guest setup may still continue. This does not retry the batch, stop its VMs, delete data or verify that k3s is ready.") +
+        UI.section("Retained resources", UI.table(["Resource", "Last request", "Now"], (p.resources || []).map(row => [
+          `${row.resource.kind === "VirtualMachine" ? "VM" : esc(row.resource.kind)} · ${row.resource.kind === "VirtualMachine" ? `<a onclick="vmOpen(${jsq(row.resource.namespace)},${jsq(row.resource.name)})">${esc(row.resource.name)}</a>` : esc(row.resource.name)}`,
+          esc(writeName(row.last_write)), esc(row.relationship)]))) +
+        UI.more("Identity checks and recovery limits", (p.warnings || []).map(w => `<p>${esc(w)}</p>`).join("") +
+          (p.resources || []).map(row => `<p style="overflow-wrap:anywhere">${esc(row.resource.name)}<br>Recorded UID: ${esc(row.expected?.uid || "unverified")}<br>Current UID: ${esc(row.current?.uid || "not found")}</p>`).join("")) +
+        (!p.blocked ? UI.field(`Type ${esc(p.confirm)} to stop tracking`, '<input id="powerRecoveryName" autocomplete="off" oninput="powerRecoveryReady()">') +
+          UI.ack("powerRecoveryAck", "I inspected the planned VMs and retained resources. I accept the unknown outcome and that guest setup or an earlier request may still finish.", {onchange:"powerRecoveryReady()"}) : "") +
+        UI.actions(UI.cancel("Keep tracking") + UI.button("Stop tracking batch", "powerRecoveryResolve()", {kind:"pri", id:"powerRecoveryApply", disabled:true}));
+      if ($(".modalbox")) $(".modalbox").scrollTop = 0;
       return;
     }
     $("#mbody").innerHTML = `<div class="update-review">
