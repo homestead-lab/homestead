@@ -175,7 +175,7 @@ class ClusterCopyTests(unittest.TestCase):
         self.assertEqual("Halted", self.cluster.get(self.vm_path())["spec"]["runStrategy"])
         self.assertEqual("Always", self.cluster.get(self.vm_path("moved"))["spec"]["runStrategy"])
 
-    def test_copy_selects_source_namespace_without_touching_same_named_vm(self):
+    def test_transfers_select_source_namespace_without_touching_same_named_vm(self):
         self.seed_vm()
         paths = [self.vm_path(), self.vmi_path(), "/api/v1/namespaces/lab/secrets/desktop-init"]
         paths += [f"/api/v1/namespaces/lab/persistentvolumeclaims/{name}" for name in ("os-disk", "data-disk")]
@@ -199,6 +199,15 @@ class ClusterCopyTests(unittest.TestCase):
         self.assertEqual(6, self.cluster.get(self.vm_path("copied"))["spec"]["template"]["spec"]["domain"]["cpu"]["cores"])
         self.assertEqual("Always", self.cluster.get(self.vm_path("guests"))["spec"]["runStrategy"])
         self.assertEqual({"guest-pv-os-disk", "guest-pv-data-disk"}, {backup["volume"] for backup in self.lh.made})
+        moved = engine.start("shed", "vm", "desktop", "moved", source_namespace="guests")
+        self.settle(moved["id"], "starting")
+        self.cluster.put("/apis/kubevirt.io/v1/namespaces/moved/virtualmachineinstances/desktop", {"status": {"phase": "Running"}})
+        self.assertEqual("succeeded", self.settle(moved["id"])["status"])
+        engine.finish(moved["id"], True)
+        self.assertNotIn(self.vm_path("guests"), self.cluster.objects)
+        self.assertIn(self.vm_path(), self.cluster.objects)
+        self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/os-disk", self.cluster.objects)
+        self.assertNotIn("/api/v1/namespaces/guests/persistentvolumeclaims/os-disk", self.cluster.objects)
 
     def test_namespace_scope_is_isolated_and_resets_after_failure(self):
         barrier = Barrier(2)
