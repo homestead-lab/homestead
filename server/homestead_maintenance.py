@@ -2,6 +2,9 @@
 import hashlib
 import json
 from homestead_topology import selected
+import homestead_pullwatch as PULLWATCH
+import homestead_runtime as RUNTIME
+import homestead_names as NAMES
 
 
 def pod_snapshot(pods):
@@ -42,7 +45,50 @@ def longhorn_instance_manager(pod):
                 for o in meta.get("ownerReferences") or []))
 
 
-def inventory(get, pods):
+def observer(pod, namespace=None):
+    namespace = namespace or PULLWATCH.NS
+    if PULLWATCH.disposable(pod, namespace):
+        return "image-pull progress watcher"
+    if RUNTIME.readonly_observer(pod, namespace, "image-scan", r"homestead-image-scan-[0-9a-f]{10}-[0-9a-f]{1,6}",
+                                 ["sh", "-c", f"{RUNTIME.CRICTL} images -o json"], 120):
+        return "image-cache scan"
+    return ""
+
+
+def helper_blocker(pod):
+    """Known mutating/session helpers need an explicit end before maintenance.
+
+    Labels only add protection and guidance; they never authorize removal.
+    This also protects controller-owned copy Jobs from an automatic restart.
+    """
+    labels = (pod.get("metadata") or {}).get("labels") or {}
+    task = NAMES.label_of(pod.get("metadata"), "task")
+    guidance = {
+        "host-run": "host command may still be changing this host; wait for it to finish or inspect its interrupted operation",
+        "node-shell": "host shell may still be running commands; close its sessions and inspect the helper first",
+        "files": "file-browser session may be changing files; close the volume browser first",
+        "probe": "source probe is active; wait for the source inspection to finish",
+        "image-cleanup": "image removal is active; wait for cleanup to finish",
+        "import": "import/copy is active; finish or cancel it through its operation before maintenance",
+        "chown": "volume ownership changes are active; wait for them to finish",
+        "reclass": "volume migration is active; finish or recover it before maintenance",
+        "restructure": "workload data restructuring is active; finish or recover it before maintenance",
+        "iso-copy": "ISO copy is active; wait for it to finish before maintenance",
+        "vm-import": "VM import is active; finish or cancel it through its operation before maintenance",
+        "node-power": "an earlier power helper is active; inspect it before retrying",
+        "cluster-shutdown": "cluster shutdown is active; inspect its saved progress before another power action",
+    }
+    for key in ("self-data-copy", "data-preparation", "handoff-worker", "self-data-handoff"):
+        if labels.get(NAMES.key(key)):
+            return "Homestead data handoff is active; finish or recover the data move before maintenance"
+    if labels.get(NAMES.key("longhorn-v2-setup")):
+        return "Longhorn host preparation is active; wait for it to finish before maintenance"
+    if labels.get(NAMES.key("snapshot-files")):
+        return "snapshot browser or clone is active; close it and release its temporary mounts first"
+    return guidance.get(task, "")
+
+
+def inventory(get, pods, namespace=None):
     budgets = items(get, "/apis/policy/v1/poddisruptionbudgets")
     rows, blockers, storage, waiting = [], [], [], []
     for pod in pods:
@@ -52,7 +98,13 @@ def inventory(get, pods):
         ns, name = meta.get("namespace", "default"), meta.get("name", "?")
         identity = ns + "/" + name
         owner = next((o for o in meta.get("ownerReferences") or [] if o.get("controller") is True), {})
-        if not owner:
+        temporary = observer(pod, namespace)
+        busy = "" if temporary else helper_blocker(pod)
+        if temporary:
+            waiting.append(identity + ": temporary " + temporary + " will be evicted; only its report is lost")
+        if busy:
+            blockers.append(identity + ": " + busy)
+        elif not owner and not temporary:
             blockers.append(identity + ": unmanaged pod has no controller to recreate it; handle it explicitly first")
         matching = [b for b in budgets if (b.get("metadata") or {}).get("namespace") == ns and
                     selected((b.get("spec") or {}).get("selector"), meta.get("labels") or {})]
@@ -80,6 +132,10 @@ def inventory(get, pods):
                 if not wait_for_drain:
                     blockers.append(identity + ": disruption budget " + bm.get("name", "?") +
                                     (" status is stale/unknown" if not fresh else " permits no verified eviction"))
+        # Only verified observers have read-only runtime-tool/socket mounts.
+        # They remain in the reviewed snapshot, PDB checks and eviction targets.
+        if temporary:
+            continue
         for volume in spec.get("volumes") or []:
             kind, source = "", ""
             if "emptyDir" in volume:

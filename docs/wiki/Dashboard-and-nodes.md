@@ -151,7 +151,19 @@ disruption budgets and local/external storage used by pods being drained.
 Unmanaged pods, unavailable inventories and blocking or stale disruption budgets
 stop the action. The eviction API is authoritative; a positive budget is not a
 promise that every eviction will succeed. Homestead never force-deletes pods to
-bypass it. See Kubernetes' [disruption-budget reference](https://kubernetes.io/docs/reference/kubernetes-api/policy/pod-disruption-budget-v1/).
+bypass it. The same helper policy applies to host reboot/shutdown and cluster
+shutdown. Verified image-pull progress watchers and image-cache scans are evicted
+without a replacement controller: only their reports are lost. Their read-only
+runtime mounts do not count as application data. They are not started on cordoned
+hosts. Progress checks also clean up abandoned pull watchers; after a Homestead
+restart, the idle timer starts on the first check instead of resetting forever.
+
+Active host commands, source probes, image removal, imports/copies, ownership
+changes, volume moves, host preparation and earlier power/shutdown helpers block
+with guidance to finish or recover their operation first, including helpers with
+Job controllers. Close host shells, file browsers and snapshot browsers before
+maintenance: they can have commands, file changes or clone mounts in use. Other
+unmanaged pods still block. See Kubernetes' [disruption-budget reference](https://kubernetes.io/docs/reference/kubernetes-api/policy/pod-disruption-budget-v1/).
 
 Drain deletes `emptyDir` data. Host-local PVCs and paths do not follow a pod to
 another host. External NFS/CSI availability is not proven by the replica check.
