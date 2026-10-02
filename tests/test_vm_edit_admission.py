@@ -81,6 +81,52 @@ class VMEditAdmissionTests(unittest.TestCase):
             self.assertEqual(409, result[0], result)
             writes.assert_not_called()
 
+    def running_passthrough(self):
+        gpu, usb = "example.test/gpu", "example.test/usb"
+        self.vm["spec"]["runStrategy"] = "Always"
+        self.vm["spec"]["template"]["spec"]["domain"]["devices"] = {"hostDevices": [
+            {"name": "gpu", "deviceName": gpu}, {"name": "keyboard", "deviceName": usb}]}
+        self.nodes[0]["allocatable"].update({gpu: "1", usb: "1"})
+        self.config["spec"]["configuration"]["permittedHostDevices"] = {
+            "pciHostDevices": [{"resourceName": gpu}], "usb": [{"resourceName": usb}]}
+        instance, launcher = self.running()
+        launcher["spec"]["containers"][0]["resources"]["requests"].update({gpu: "1", usb: "1"})
+        return instance, launcher
+
+    def test_reviewed_running_edit_keeps_its_exclusive_gpu_and_usb(self):
+        instance, _ = self.running_passthrough()
+        before = copy.deepcopy(instance)
+        result, writes = self.call("/api/vm/edit", self.reviewed())
+        self.assertEqual(200, result[0], result)
+        self.assertEqual(1, writes.call_count)
+        self.assertIn("/virtualmachines/guest", writes.call_args.args[1])
+        saved = writes.call_args.args[2]
+        self.assertEqual("6Gi", saved["spec"]["template"]["spec"]["domain"]["memory"]["guest"])
+        self.assertEqual(self.vm["spec"]["template"]["spec"]["domain"]["devices"],
+                         saved["spec"]["template"]["spec"]["domain"]["devices"])
+        self.assertEqual(before, instance, "Save does not write or restart the running instance")
+
+    def test_changed_resident_allocation_invalidates_running_edit_review(self):
+        _, launcher = self.running_passthrough()
+        body = self.reviewed()
+        launcher["metadata"]["resourceVersion"] = "3"
+        del launcher["spec"]["containers"][0]["resources"]["requests"]["example.test/gpu"]
+        result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
+    def test_resident_device_credit_is_rechecked_immediately_before_save(self):
+        _, launcher = self.running_passthrough()
+        body = self.reviewed()
+        original = server.VMS.commit_edit
+        def commit(prepared, before_save=None, send=None):
+            del launcher["spec"]["containers"][0]["resources"]["requests"]["example.test/gpu"]
+            return original(prepared, before_save=before_save, send=send)
+        with mock.patch.object(server.VMS, "commit_edit", side_effect=commit):
+            result, writes = self.call("/api/vm/edit", body)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
+
     def passthrough_setup(self):
         resource = "example.test/gpu"
         self.nodes[0]["allocatable"][resource] = "1"

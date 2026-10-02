@@ -59,7 +59,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.295")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.296")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -4872,6 +4872,7 @@ def edit_volume(cfg):
             options = volume_edit_options(ns, name, pvc)
             if not options["can_expand"]:
                 raise ValueError(options["reason"])
+            STORAGE_RESIZE.check_upgrade(pvc, kget)
             ksend("PATCH", pvc_path,
                   {"spec": {"resources": {"requests": {"storage": f"{wanted}Gi"}}}},
                   ctype="application/merge-patch+json")
@@ -5796,6 +5797,7 @@ import homestead_self_address as SELF_ADDRESS
 import homestead_host_bridge as HOST_BRIDGE
 import homestead_manifests as MANIFESTS
 import homestead_disk_setup as DISK_SETUP
+import homestead_disk_v2 as DISK_V2
 import homestead_hvimage as HVIMAGE
 import homestead_revert as REVERT
 OPS.RESOLVERS["reclass"] = storage_move_progress
@@ -5845,6 +5847,10 @@ ADDONS.bind(kget, ksend, PLATFORM.detect, node_temps)
 MACVTAP.bind(kget, ksend, ADDONS, PLATFORM.detect)
 BASELINE.bind(kget, ADDONS, PLATFORM.detect, DEFAULT_NS, DATA_DIR, MACVTAP, PROBE, HOMESTEAD_VERSION)
 COMPONENTS.bind(kget, ksend, PLATFORM.detect, lambda cfg: HELM.upgrade(cfg), ADDONS)
+import homestead_lhv2_upgrade as LHV2_UPGRADE
+LHV2_UPGRADE.bind(kget, ksend, PLATFORM.detect, COMPONENTS.longhorn_version, COMPONENTS.parse)
+STORAGE_RESIZE.upgrade_guard = LHV2_UPGRADE.ensure_resize_idle
+LC.vm_migration_guard = LHV2_UPGRADE.ensure_vm_idle
 OPS.RESOLVERS["platform-upgrade"] = COMPONENTS.status
 OPS.CANCELLERS["platform-upgrade"] = (COMPONENTS.cancel_plan, COMPONENTS.cancel_run)
 
@@ -5975,6 +5981,11 @@ OPS.RESOLVERS["share-remove"] = SHARES.removal_progress
 OPS.CANCELLERS["snapshot-revert"] = (REVERT.cancel_plan,
     lambda item, options: storage_volume_action(item["ref"]["volume"], lambda: REVERT.cancel_run(item, options)))
 DISKS.bind(kget, ksend, node_temps)
+DISK_V2.bind(kget, ksend, PLATFORM.detect, OPS, DEFAULT_NS, _diagnostic_read)
+DISK_V2.protect_mutations(DISKS)
+OPS.RESOLVERS[DISK_V2.KIND] = DISK_V2.progress
+OPS.CANCELLERS[DISK_V2.KIND] = (DISK_V2.cancel_plan, DISK_V2.cancel_run)
+OPS.LOGGERS[DISK_V2.KIND] = DISK_V2.logs
 OPS.RESOLVERS["disk-retire"] = DISKS.retire_step
 OPS.RESUMABLE["disk-retire"] = DISKS.retire_resumable
 OPS.RESOLVERS["helm"] = HELM.job_status
@@ -7541,6 +7552,8 @@ def is_app_identity(path):
 # Enforced here, server-side. The UI hides what you cannot do as a courtesy,
 # but a viewer who hand-crafts the request still gets a 403.
 ADMIN_ROUTES = {
+    "/api/disks/v2/plan", "/api/disks/v2/start", "/api/disks/v2/status",
+    "/api/disks/v2/prepare-review", "/api/disks/v2/prepare",
     "/api/longhorn/v2/plan", "/api/longhorn/v2/prepare", "/api/longhorn/v2/enable",
     "/api/auth/users", "/api/auth/users/delete", "/api/auth/role",
     # API keys: made, listed and revoked by administrators only.
@@ -7611,6 +7624,7 @@ ADMIN_ROUTES = {
     "/api/vm/isos/folders", "/api/vm/isos/delete", "/api/vm/isos/browse", "/api/vm/isos/keep",
     # Upgrading the platform: the cluster, Longhorn, KubeVirt, CDI.
     "/api/cluster/components/upgrade", "/api/cluster/upgrades/start",
+    "/api/longhorn/v2/upgrade/review", "/api/longhorn/v2/upgrade/settings",
     # The VM image store downloads gigabytes into the cluster.
     "/api/vm/store/keep", "/api/vm/store/auto", "/api/vm/store/forget", "/api/vm/store/refresh",
     # Homestead's own permissions, and the namespaces apps live in.
@@ -8635,6 +8649,10 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, v2_engine_status())
             if p == "/api/longhorn/v2/plan":
                 return self._send(200, LHV2_SETUP.plan())
+            if p == "/api/longhorn/v2/upgrade":
+                return self._send(200, LHV2_UPGRADE.plan(q.get("to", [""])[0]))
+            if p == "/api/disks/v2/status":
+                return self._send(200, DISK_V2.status(q.get("id", [""])[0]))
             if p == "/api/disks":
                 return self._send(200, cached("disks", 10, DISKS.inventory))
             if p == "/api/longhorn/capacity":
@@ -8948,7 +8966,7 @@ class H(HTTP.LimitedHandler):
                 except SELF_DATA_FENCE.Held as error:
                     return self._send(409, {"error": str(error), "review_required": True})
             if p == "/api/cluster/components/upgrade":
-                result = COMPONENTS.upgrade(str(b.get("component") or ""), str(b.get("to") or ""))
+                result = COMPONENTS.upgrade(str(b.get("component") or ""), str(b.get("to") or ""), b)
                 for key in ("components", "helm", "platform"):
                     _cache.pop(key, None)
                 result["operation"] = OPS.start(
@@ -8957,7 +8975,8 @@ class H(HTTP.LimitedHandler):
                      "namespace": ""}, "/system/cluster",
                     {"component": result["component"], "name": result["name"], "from": result["from"],
                      "to": result["to"], "started": time.time(),
-                     "phase": "controller" if result["component"] == "cluster" else ""},
+                     "phase": "controller" if result["component"] == "cluster" else "",
+                     **({"v2_mode": result["v2_mode"]} if result.get("v2_mode") else {})},
                     result["detail"])
                 return self._send(200, result)
             if p == "/api/cluster/upgrades/start":
@@ -9453,6 +9472,14 @@ class H(HTTP.LimitedHandler):
             if p == "/api/vm/delete":
                 _cache.pop("vms", None)
                 return self._send(200, VMS.delete(b.get("ns", DEFAULT_NS), b.get("name", ""), bool(b.get("disks"))))
+            if p == "/api/disks/v2/plan":
+                return self._send(200, DISK_V2.review(b))
+            if p == "/api/disks/v2/start":
+                return self._send(200, DISK_V2.start(b))
+            if p == "/api/disks/v2/prepare-review":
+                return self._send(200, DISK_V2.prepare_review(b.get("id", "")))
+            if p == "/api/disks/v2/prepare":
+                return self._send(200, DISK_V2.prepare(b))
             if p == "/api/disks/retire/plan":
                 return self._send(200, DISKS.retire_plan(b.get("node", ""), b.get("disk", "")))
             if p == "/api/disks/retire":
@@ -9549,9 +9576,16 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, result)
             if p == "/api/longhorn/settings":
                 _cache.pop("lhcap", None)
-                return self._send(200, LHCAP.save(b))
+                with OPS._lock:
+                    if "v2" in b and not b["v2"] and DISK_V2.tasks():
+                        raise ValueError("Finish or stop the saved V2 disk preparation task before disabling V2")
+                    return self._send(200, LHCAP.save(b))
             if p == "/api/longhorn/v2/prepare":
                 return self._send(200, LHV2_SETUP.prepare(b))
+            if p == "/api/longhorn/v2/upgrade/review":
+                return self._send(200, LHV2_UPGRADE.settings_review(b.get("enabled"), b.get("timeout"))[0])
+            if p == "/api/longhorn/v2/upgrade/settings":
+                return self._send(200, LHV2_UPGRADE.configure(b, OPS))
             if p == "/api/longhorn/v2/enable":
                 result = LHV2_SETUP.enable(b)
                 _cache.pop("lhcap", None)

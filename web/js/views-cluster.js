@@ -149,7 +149,11 @@ function componentRow(c) {
         ${c.phase && c.phase !== "Deployed" ? `<span class="pill slim med">${esc(c.phase)}</span>` : ""}</div>
       <div class="dim xs">${esc(c.note || COMPONENT_HOW[c.how] || "")}${c.steps_left ? ` · ${esc(c.next)} first, then on to ${esc(c.newest)}: one minor version at a time` : ""}${c.error ? ` · could not check for releases: ${esc(c.error)}` : ""}</div>
       ${nodes}</div>
-    <div class="row">${c.notes_url ? `<a class="btn sm" href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Notes</a>` : ""}${action}</div></div>`;
+    <div class="row">${c.id === "longhorn" ? actionBar([
+      !running && c.next && {label:`Upgrade to ${c.next}`,run:`componentUpgrade(${jsq(c.id)})`,need:'admin'},
+      {label:'V2 upgrade status',run:'lhV2Upgrade()'},
+      c.notes_url && {label:'Release notes',run:`window.open(${jsq(safeHref(c.notes_url))},'_blank','noopener,noreferrer')`}
+    ]) : `${c.notes_url ? `<a class="btn sm" href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Notes</a>` : ""}${action}`}</div></div>`;
 }
 
 function componentsCard(r, settings = false) {
@@ -171,8 +175,7 @@ const COMPONENT_EFFECT = {
   cluster: (c, to) => `Each node is cordoned and restarted on ${to} in turn - the servers one at a time, then the agents.
     Apps on a node wait or move while it restarts. On a one-node cluster everything, Homestead too, is away for a minute or two;
     this page comes back by itself. The first time, Rancher's system-upgrade-controller is installed to do it.`,
-  longhorn: (c, to) => `Longhorn's manager, UI and engines restart on ${to}. Volumes stay attached and apps keep running, though
-    each volume's engine is upgraded as it next detaches or live, depending on Longhorn's settings. A backup of anything precious first is wise.`,
+  longhorn: (c, to) => `Upgrade Longhorn to ${to} after checking its V2 volumes and host requirements.`,
   kubevirt: (c, to) => `KubeVirt's operator rolls ${to} out. Running VMs carry on, and move to the new version as they restart or live-migrate.`,
   cdi: (c, to) => `CDI's operator rolls ${to} out. Disk imports under way may restart.`,
   "kube-vip": (c, to) => `The kube-vip chart is upgraded to ${to} with its current values. The agent restarts on each node in turn;
@@ -184,6 +187,7 @@ const COMPONENT_EFFECT = {
 window.componentUpgrade = async id => {
   const c = (STATE.data.components?.components || []).find(row => row.id === id);
   if (!c?.next) return;
+  if (id === 'longhorn') return lhV2Upgrade(c.next);
   modal(`Upgrade ${c.name} to ${c.next}`, `
     <p>${esc(c.name)} ${esc(c.installed)} → <b class="mono">${esc(c.next)}</b>${c.steps_left ? ` <span class="dim">(then ${esc(c.newest)}, as a further step)</span>` : ""}</p>
     <div class="note">${esc(COMPONENT_EFFECT[id](c, c.next).replace(/\s+/g, " "))}</div>

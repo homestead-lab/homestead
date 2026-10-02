@@ -169,7 +169,7 @@ class Shutdown:
         live_vms = ["/".join(identity(v)[:2]) for v in vmis if v.get("status", {}).get("phase") not in ("Succeeded", "Failed")]
         if live_vms:
             problems.append("Gracefully stop these VMs first: " + ", ".join(live_vms[:12]))
-        maintenance = M.inventory(self.get, targets)
+        maintenance = M.inventory(self.get, targets, namespace=self.ns)
         problems.extend(maintenance["blockers"])
         problems.extend(str(v) for v in self.busy())
         volumes = inventory(self.get, LH, True)
@@ -196,6 +196,7 @@ class Shutdown:
         return {"ready": not problems, "blockers": problems, "review_token": hashlib.sha256(encode(snapshot).encode()).hexdigest(),
                 "confirm": CONFIRM, "nodes": nodes, "homestead_node": own_node, "pods": len(targets) - 1,
                 "vms": live_vms, "volumes": len(volumes), "local_storage": maintenance["local_storage"],
+                "warnings": maintenance.get("waiting", []),
                 "snapshot": snapshot}
 
     def pod_body(self, state, uid, mode, node, index=None):

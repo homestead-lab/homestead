@@ -1,5 +1,10 @@
 """Explicit HTTP authorization declarations. New routes must declare a policy."""
 POLICY = {
+    ('GET', '/api/disks/v2/status'): 'admin',
+    ('POST', '/api/disks/v2/plan'): 'admin',
+    ('POST', '/api/disks/v2/start'): 'admin',
+    ('POST', '/api/disks/v2/prepare-review'): 'admin',
+    ('POST', '/api/disks/v2/prepare'): 'admin',
     ('GET', '/api/cluster/shutdown'): 'admin',
     ('GET', '/api/cluster/shutdown/plan'): 'admin',
     ('POST', '/api/cluster/shutdown'): 'admin',
@@ -394,6 +399,9 @@ POLICY = {
 
 POLICY.update({
     ('GET', '/api/longhorn/v2/plan'): 'admin',
+    ('GET', '/api/longhorn/v2/upgrade'): 'viewer',
+    ('POST', '/api/longhorn/v2/upgrade/review'): 'admin',
+    ('POST', '/api/longhorn/v2/upgrade/settings'): 'admin',
     ('POST', '/api/longhorn/v2/prepare'): 'admin',
     ('POST', '/api/longhorn/v2/enable'): 'admin',
     ("POST", "/api/fleet/switch"): "viewer",
