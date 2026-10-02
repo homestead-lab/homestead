@@ -1366,6 +1366,8 @@ copies take room until then. A VM on a DataVolume is switched to
 the plain volume, as a moved VM is; a DaemonSet, a bare pod, or a volume a
 StatefulSet's template made cannot be stopped or recreated safely, and is
 said so up front. Homestead's own data moves from Settings › Redundancy.
+Held moves before cutover have administrator-reviewed resume and
+return-to-original actions; see [Homestead data move recovery](data-move-recovery.md).
 
 Completed destination preparations can be archived from Move data or Jobs.
 Archiving hides the record while retaining both volumes and their creation

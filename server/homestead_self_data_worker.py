@@ -49,6 +49,14 @@ def progress(anchor, now):
     requested this view. Missing/stale heartbeats are not 'still running'.
     """
     state = anchor.state
+    recovering = state.get("recovery", {}).get("action") == "return-original"
+    if recovering and state["phase"] == "done" and state.get("runtime", {}).get("state") != "held":
+        writes = state["journal"]["ref"]["storage_writes"]
+        if (all(e["state"] == "accepted" for e in writes) and any(e["step"] == "recover-start" for e in writes)
+                and not any(e["step"] in ("switch", "start") for e in writes)):
+            return {"operation": state["operation"], "phase": "done", "status": "cancelled", "stale": False,
+                    "message": "Homestead is ready on its original volume. Both data volumes are retained.",
+                    "stages": [], "copy_percent": None, "retention_policy": "keep_both_volumes", "requires_review": False, "can_cancel": False}
     if state.get("setup_aborted"):
         return {"operation": state["operation"], "phase": "prepare", "status": "cancelled", "stale": False,
                 "message": "Preparation abandoned. Homestead keeps its original data volume. Both volumes are retained.",
@@ -73,7 +81,7 @@ def progress(anchor, now):
                "Waiting for the durable move record. Homestead has not been stopped." if preparing else
                "The worker has not reported recently. The last verified stage is shown; do not assume the move is running." if status == "unknown" else
                "Waiting for confirmation of the current request. It will not be sent again." if pending else
-               DESCRIPTIONS[phase])
+               "Returning Homestead to its original volume; waiting for mount release and verified startup." if recovering else DESCRIPTIONS[phase])
     current = A.PHASES.index(phase)
     stages = [{"id": key, "label": label,
                "state": "complete" if i < current or status == "done" else "current" if i == current else "pending"}
@@ -97,6 +105,7 @@ class Runner:
         self.clock = clock
         self.lock = threading.Lock()
         self.hold = None
+        self.held_recovery = None
         self._maintenance_active = False
 
     def maintenance_ready(self):
@@ -126,6 +135,7 @@ class Runner:
     def _save_hold(self):
         try:
             anchor = self._load()
+            self.held_recovery = anchor.state.get("recovery", {}).get("review")
             if (anchor.state.get("plan", {}).get("worker", {}).get("uid") == self.worker_uid
                     and "pointer_receipt" in anchor.state and anchor.state.get("runtime", {}).get("state") != "held"):
                 anchor.report(self.worker_uid, int(self.clock()), "held", self.hold)
@@ -139,12 +149,23 @@ class Runner:
             return self.snapshot()
         try:
             if self.hold:
-                self._save_hold()
-                return self.snapshot()
+                try:
+                    refreshed = self._load()
+                except Exception:
+                    return self.snapshot()
+                recovery = refreshed.state.get("recovery", {})
+                if (refreshed.state.get("runtime", {}).get("state") == "running"
+                        and recovery.get("previous_hold") == self.hold
+                        and recovery.get("review") and recovery["review"] != self.held_recovery):
+                    self.hold = None  # Only an explicit, durable recovery CAS clears this latch.
+                else:
+                    self._save_hold()
+                    return self.snapshot()
             try:
                 anchor = self._load()
                 if anchor.state.get("runtime", {}).get("state") == "held":
                     self.hold = anchor.state["runtime"]["message"]
+                    self.held_recovery = anchor.state.get("recovery", {}).get("review")
                     return self.snapshot()
                 if anchor.state["phase"] == "done":
                     return self.snapshot()
