@@ -920,7 +920,8 @@ async function mountEditor(host, content, filename) {
 }
 
 window.volumeFiles = async (namespace, pvc, attached) => {
-  Object.assign(FILEVIEW, { namespace, pvc, path: "", file: "", dirty: false });
+  if (window.snapshotFilesDismiss) window.snapshotFilesDismiss();
+  Object.assign(FILEVIEW, { namespace, pvc, path: "", file: "", dirty: false, snapshotSession: null });
   modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>starting a file browser on ${esc(pvc)}</div>`, true);
   if (attached && !(await ask(`${pvc} is attached to a running workload.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the workload is stopped. Continue anyway?`))) {
     return closeModal();
@@ -933,11 +934,16 @@ window.fileBrowse = async (path) => {
   if (FILEVIEW.dirty && !(await ask("Discard unsaved changes?"))) return;
   disposeEditor();
   try {
-    const listing = await api(`/api/files/list?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path || "")}`);
+    const snapshot = FILEVIEW.snapshotSession;
+    const listing = await api(snapshot
+      ? `/api/snapshot-files/list?namespace=${encodeURIComponent(namespace)}&session=${encodeURIComponent(snapshot.session)}&path=${encodeURIComponent(path || "")}`
+      : `/api/files/list?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path || "")}`);
+    if (FILEVIEW.pvc !== pvc || FILEVIEW.namespace !== namespace) return;
     Object.assign(FILEVIEW, { path: listing.path || "", file: "", dirty: false });
     $("#mbody").innerHTML = fileBrowserMarkup(listing);
     if (window.applyRole) window.applyRole();
   } catch (e) {
+    if (FILEVIEW.pvc !== pvc || FILEVIEW.namespace !== namespace) return;
     $("#mbody").innerHTML = `<div class="note dependency-danger"><b>The file browser could not start.</b> ${esc(e.message)}</div>
       <div class="row" style="margin-top:14px"><button class="btn" onclick="fileBrowse('')">Try again</button>
       <button class="btn" onclick="closeFiles()">Close</button></div>`;
@@ -946,7 +952,7 @@ window.fileBrowse = async (path) => {
 
 function fileCrumbs(path) {
   const parts = String(path || "").split("/").filter(Boolean);
-  const crumbs = [`<button class="linkish" onclick="fileBrowse('')">${esc(FILEVIEW.pvc)}</button>`];
+  const crumbs = [`<button class="linkish" onclick="fileBrowse('')">${esc(FILEVIEW.snapshotSession?.source.claim || FILEVIEW.pvc)}</button>`];
   parts.forEach((part, index) => {
     const upto = parts.slice(0, index + 1).join("/");
     crumbs.push(`<span class="dim">/</span><button class="linkish" onclick="fileBrowse(${jsq(upto)})">${esc(part)}</button>`);
@@ -956,23 +962,25 @@ function fileCrumbs(path) {
 
 function fileBrowserMarkup(listing) {
   const parent = String(listing.path || "").split("/").slice(0, -1).join("/");
-  return `<div class="filecrumbs">${fileCrumbs(listing.path)}</div>
+  return `${FILEVIEW.snapshotSession ? UI.lead(`Read-only snapshot · ${esc(FILEVIEW.snapshotSession.source.snapshot)}. The live volume stays online.`) : ''}<div class="filecrumbs">${fileCrumbs(listing.path)}</div>
     <div class="filelist">
       ${listing.path ? `<button class="filerow" onclick="fileBrowse(${jsq(parent)})"><span class="fileicon">↩</span><span>..</span><span class="dim xs">up one level</span></button>` : ""}
       ${listing.entries.map(entry => {
         const full = (listing.path ? listing.path + "/" : "") + entry.name;
         return entry.kind === "dir"
           ? `<button class="filerow" onclick="fileBrowse(${jsq(full)})"><span class="fileicon">▸</span><span>${esc(entry.name)}</span><span class="dim xs">folder</span></button>`
+          : FILEVIEW.snapshotSession
+          ? `<a class="filerow" href="${esc(snapshotFileUrl(full))}" download><span class="fileicon">↓</span><span>${esc(entry.name)}</span><span class="dim xs">${fileSize(entry.size)} · Download</span></a>`
           : `<button class="filerow" ${entry.editable ? `onclick="fileOpen(${jsq(full)})"` : "disabled"}><span class="fileicon">·</span><span>${esc(entry.name)}</span><span class="dim xs">${fileSize(entry.size)}${entry.editable ? "" : " · too large to edit"}</span></button>`;
       }).join("") || '<div class="empty small">this folder is empty</div>'}
     </div>
     ${listing.truncated ? '<div class="dim xs">Only the first 500 entries are listed.</div>' : ""}
     <div class="row" style="margin-top:16px"><button class="btn" onclick="closeFiles()">Close browser</button></div>
-    <div class="note" style="margin-top:12px">The browser runs as a short-lived pod that mounts this volume.
-      It stops on its own after 30 minutes, or when you close it.</div>`;
+    ${FILEVIEW.snapshotSession ? UI.more('Temporary copy', '<p class="ui-help">Files are downloaded from the selected snapshot. Closing this browser starts cleanup of its temporary copy. Abandoned sessions expire after 30 minutes; cleanup resumes when Homestead and the cluster API are available. Symbolic links and special files are excluded.</p>') : '<div class="note" style="margin-top:12px">The browser runs as a short-lived pod that mounts this volume. It stops on its own after 30 minutes, or when you close it.</div>'}`;
 }
 
 window.fileOpen = async (path) => {
+  if (FILEVIEW.snapshotSession) return;
   const { namespace, pvc } = FILEVIEW;
   try {
     const file = await api(`/api/files/read?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path)}`);
@@ -1023,6 +1031,7 @@ Close the editor and lose them?` : "";
 };
 
 window.fileSave = async (ignoreSyntax = false) => {
+  if (FILEVIEW.snapshotSession) return toast('Snapshots are read-only', 'bad');
   const { namespace, pvc, file } = FILEVIEW;
   const button = $("#file_save");
   const content = FILEVIEW.editor ? FILEVIEW.editor.getValue() : ($("#file_body")?.value ?? "");
@@ -1047,6 +1056,7 @@ window.fileSave = async (ignoreSyntax = false) => {
 };
 
 window.closeFiles = async () => {
+  if (FILEVIEW.snapshotSession) return snapshotFilesClose();
   const { namespace, pvc, dirty } = FILEVIEW;
   if (dirty && !(await ask("Discard unsaved changes?"))) return;
   disposeEditor();

@@ -1115,6 +1115,16 @@ ssh_pwauth: true
             volumes: [{ name: "plexmedia", created: false },
                       { name: "plex-config", created: true }] };
     },
+    "/api/snapshot-files/plan": url => ({volume:url.searchParams.get('volume'), snapshot:url.searchParams.get('snapshot'), namespace:'lab', claim:'frigate-config', storage_class:'longhorn', size:'10737418240', method:window.__demoSnapshotV2 ? 'linked-clone' : 'full-copy', engine:window.__demoSnapshotV2 ? 'v2' : 'v1', review_token:'demo'}),
+    "/api/snapshot-files/start": (url, opts) => {
+      const body = JSON.parse(opts.body || '{}');
+      return window.__demoSnapshotFiles = {namespace:'lab', session:'homestead-snapshot-files-' + body.request_id, state:'preparing', stage:'clone', percent:42,
+        source:{claim:'frigate-config', snapshot:body.snapshot, method:window.__demoSnapshotV2 ? 'linked-clone' : 'full-copy'}, message:'Preparing the selected snapshot; the live volume stays online'};
+    },
+    "/api/snapshot-files/status": () => ({...window.__demoSnapshotFiles, state:window.__demoSnapshotWaiting ? 'preparing' : 'ready'}),
+    "/api/snapshot-files/list": url => ({path:url.searchParams.get('path') || '', read_only:true, entries:[
+      {name:'config',kind:'dir',size:0,editable:false}, {name:'frigate.db',kind:'file',size:5242880,editable:false}, {name:'config.yml',kind:'file',size:4210,editable:false}]}),
+    "/api/snapshot-files/close": {state:'closing'},
     "/api/files/list": url => {
       const path = url.searchParams.get("path") || "";
       if (path === "config") {
