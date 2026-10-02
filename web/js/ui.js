@@ -284,8 +284,14 @@ function stepGo(id, to, relative) {
   if (nextButton) { nextButton.hidden = last; if (!last) nextButton.textContent = `Next: ${chips[next + 1].textContent.replace(/^\d+/, "")}`; }
   const finish = root.querySelector("[data-finish]");
   if (finish) finish.hidden = !last;
+  const chip = chips[next], head = chip?.parentElement;
+  if (head && head.scrollWidth > head.clientWidth) {
+    const item = chip.getBoundingClientRect(), strip = head.getBoundingClientRect();
+    if (item.left < strip.left) head.scrollLeft -= strip.left - item.left;
+    else if (item.right > strip.right) head.scrollLeft += item.right - strip.right;
+  }
   const body = root.closest("#mbody") || root.closest(".modalbox");
-  if (body) body.scrollTop = 0;
+  if (body) { body.scrollTop = 0; const dialog = body.closest(".modalbox"); if (dialog) dialog.scrollTop = 0; }
 }
 if (typeof window !== "undefined") { window.stepper = stepper; window.stepGo = stepGo; }
 

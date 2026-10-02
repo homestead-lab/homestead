@@ -314,6 +314,12 @@ and New share. Numbered chips across the top, one pane at a time, Back and
 Next at the foot. Every pane is drawn at once and only hidden, so the form's
 save reads every field; an edit keeps its Save on every step.
 
+Edit container uses Basics (workload and container names, images and autostart),
+Hardware and access (resources, devices, privileges and ports), Environment values
+(variables, managed references and startup configuration), Storage, Where it runs,
+and Address. Each step groups its fields by container. Changing a name or image
+updates that container's heading throughout the form; each field is rendered once.
+
 **One explanation box at most**, and only for a risk. A field's explanation
 is a `tip()` beside its label; what the whole dialog needs you to know is one
 `UI.more("How this works", …)` at the foot. `foldDialogNotes()` enforces it

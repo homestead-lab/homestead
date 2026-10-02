@@ -39,20 +39,20 @@ const editVolumePicker = index => createVolumePicker($("#e_vols_" + index), {
   podHelp: "Mounts a volume already defined in this pod, sharing that storage with the other container.",
 });
 
-const editContainerPanel = (container, index) => {
+const editContainerPanel = (container, index, section) => {
   const env = Object.entries(container.env || {});
   const refs = container.env_refs || [];
   const ports = container.ports || [];
   const volumes = container.volumes || [];
   const managed = volumes.filter(volume => volume.managed);
   const mounts = volumes.filter(volume => !volume.managed);
-  return `<details class="edit-container card flat" data-index="${index}" data-original-name="${esc(container.original_name || container.name)}" ${index === 0 ? "open" : ""}>
-    <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span><span class="pill">${env.length + refs.length} vars</span><span class="pill">${ports.length} ports</span><span class="pill">${mounts.length} mounts</span></summary>
-    <div class="edit-container-body">
+  const fields = {
+    basics: () => `
       <div class="f2">
-        <div class="f"><label>Container name ${tip("The Kubernetes name of this container inside the pod. Each container name must be unique.")}</label><input id="e_container_name_${index}" type="text" value="${esc(container.name)}"></div>
-        <div class="f"><label>Image</label><input id="e_image_${index}" type="text" value="${esc(container.image)}"></div>
-      </div>
+        <div class="f"><label>Container name ${tip("The Kubernetes name of this container inside the pod. Each container name must be unique.")}</label><input id="e_container_name_${index}" type="text" value="${esc(container.name)}" oninput="editContainerIdentity(${index})"></div>
+        <div class="f"><label>Image</label><input id="e_image_${index}" type="text" value="${esc(container.image)}" oninput="editContainerIdentity(${index})"></div>
+      </div>`,
+    hardware: () => `
       <div class="f2">
         <div class="f"><label>CPU reserved ${tip("Guaranteed scheduling capacity. 1000m = one core; it is not a hard usage limit.")}</label><input id="e_cpu_${index}" type="text" value="${esc(container.cpu || "")}" placeholder="50m"></div>
         <div class="f"><label>Memory reserved ${tip("Guaranteed scheduling capacity in Mi or Gi; it is not a hard usage limit.")}</label><input id="e_mem_${index}" type="text" value="${esc(container.memory || "")}" placeholder="128Mi"></div>
@@ -62,19 +62,25 @@ const editContainerPanel = (container, index) => {
       <div class="hwchoices">${hardwareChoices(`e_hw_${index}`, container.hardware || [])}</div>
       <div class="subsec">Privileges</div>
       ${privilegeFields(`e_pv_${index}`, container.privileges || {})}
+      <div class="subsec">Ports ${tip("Container port is where the process listens inside the container. LAN port is the number clients use on the Service address; unexposed ports stay inside the cluster.")}</div>
+      <div class="e-ports" id="e_ports_${index}">${ports.map(port => editPortRow(index, port)).join("")}</div>
+      <button class="btn sm" type="button" onclick="editAddPort(${index})">＋ add port</button>`,
+    environment: () => `
       <div class="subsec">Environment</div>
       ${refs.length ? `<div class="managed-env-list">${refs.map(ref => `<div><span class="mono">${esc(ref.name)}</span><span>${esc(ref.source)}</span><span class="pill info">managed reference</span></div>`).join("")}</div><div class="dim xs managed-env-note">References remain connected to Kubernetes and are not exposed or replaced when you save.</div>` : ""}
       <div class="e-env" id="e_env_${index}">${(env.length ? env : [["", ""]]).map(([key, value]) => editEnvRow(index, key, value)).join("")}</div>
-      <button class="btn sm" type="button" onclick="editAddEnv(${index})">＋ add variable</button>
-      <div class="subsec">Ports ${tip("Container port is where the process listens inside the container. LAN port is the number clients use on the Service address; unexposed ports stay inside the cluster.")}</div>
-      <div class="e-ports" id="e_ports_${index}">${ports.map(port => editPortRow(index, port)).join("")}</div>
-      <button class="btn sm" type="button" onclick="editAddPort(${index})">＋ add port</button>
-      <div class="subsec">Storage</div>
-      <div class="note storage-guide"><b>Choose deliberately:</b> RWO is best for one workload; RWX permits multi-node sharing; an existing PVC keeps its current data; a volume already in this pod shares the exact backing storage with another container. Host paths reduce failover portability. Saving creates any new claim, then rolls the pod.</div>
+      <button class="btn sm" type="button" onclick="editAddEnv(${index})">＋ add variable</button>`,
+    storage: () => `
       ${managed.length ? `<div class="edit-mount-list">${managed.map(volume => `<span class="tag info">${esc(volume.source || "?")} → ${esc(volume.path)}${volume.read_only ? " · read-only" : ""}</span>`).join("")}</div><div class="dim xs edit-mount-note">ConfigMap, Secret and hardware device mounts are managed by Homestead and stay as they are.</div>` : ""}
       <div class="e-vols" id="e_vols_${index}"></div>
-      <button class="btn sm" type="button" onclick="editAddVol(${index})">＋ add storage mapping</button>
-    </div>
+      <button class="btn sm" type="button" onclick="editAddVol(${index})">＋ add storage mapping</button>`,
+  };
+  const count = section === "environment" ? `${env.length + refs.length} vars`
+    : section === "storage" ? `${mounts.length} mounts` : section === "hardware" ? `${ports.length} ports` : "";
+  return `<details class="edit-container card flat" data-index="${index}" data-section="${section}"
+    ${section === "basics" ? `data-original-name="${esc(container.original_name || container.name)}"` : ""} ${index === 0 ? "open" : ""}>
+    <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span>${count ? `<span class="pill">${count}</span>` : ""}</summary>
+    <div class="edit-container-body">${fields[section]()}</div>
   </details>`;
 };
 
@@ -216,21 +222,21 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       shared_storage_classes: options.shared_storage_classes || [],
       storage_class_facts: options.storage_class_facts || {}, pod_volumes: w.pod_volumes || [],
       node: w.node || "" };
+    const panels = section => containers.map((container, index) => editContainerPanel(container, index, section)).join("");
     const basics = `
       <div class="f"><label>Workload name ${tip("The real Kubernetes Deployment name. Renaming creates a replacement Deployment, waits for it to become ready, then removes the old one. Generated pods use this name plus a Kubernetes suffix.")}</label><input type="text" id="e_workload_name" value="${esc(w.name)}"></div>
       <div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the workload name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
       <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates it and keeps a persistent local copy while retaining this source for later edits.")}</label><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/icon.png"></div>
       <label class="switch" id="e_autostart_wrap"><input type="checkbox" id="e_autostart" onchange="editAutostartToggle()" ${w.autostart === false ? "" : "checked"}>
         Autostart ${tip("On keeps the workload running: Kubernetes restarts it after a crash, a node reboot or a cluster restart. Off scales it to zero and remembers the instance count for when you switch it back on.")}</label>
-      <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>`;
+      <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>
+      ${panels("basics")}`;
     const running = placementSection(w.placement || {}, w, nodes, containers);
-    const inside = `
-      <div id="e_containers">${containers.map(editContainerPanel).join("")}</div>
+    const access = `
+      ${panels("hardware")}
       <div class="note" id="e_ports_note" hidden></div>`;
-    const address = `
-      <div id="e_vip_picture"></div>
-      <div class="row"><button class="btn" data-need="operator" onclick="networkManage(${jsq(ns)},${jsq(name)})">Choose its address</button>
-        ${tip("The address its ports answer on: the default workload VIP or one you pick. Applied on its own, without restarting the pod - save other changes first.")}</div>
+    const environment = `
+      ${panels("environment")}
       ${seeds.length ? `<div class="sec">Startup seed config ${tip("This ConfigMap is copied into the container's persistent storage by an init container before every start. It is authoritative: editing only the mounted file will be overwritten on restart.")}</div>
         <div class="note seed-note"><b>Authoritative startup configuration.</b> Saving here updates the ConfigMap and restarts the workload so the init container copies the new value into appdata.</div>
         ${seeds.map((s, i) => `<div class="seed-editor card flat">
@@ -239,12 +245,19 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
           <textarea id="e_seed_${i}" class="e_seed mono" rows="14"
             data-init="${esc(s.init_container)}" data-config-map="${esc(s.config_map)}" data-key="${esc(s.key)}">${esc(s.value)}</textarea>
           ${s.command ? `<div class="dim xs mono seed-command">${esc(s.command)}</div>` : ""}
-        </div>`).join("")}` : ""}
+        </div>`).join("")}` : ""}`;
+    const storage = `${UI.more("Choosing storage", "<p>RWO is best for one workload; RWX permits multi-node sharing. An existing PVC keeps its current data; a volume already in this pod shares its backing storage with another container. Host paths reduce failover portability. Saving creates any new claim, then rolls the pod.</p>")}
+      ${panels("storage")}`;
+    const address = `
+      <div id="e_vip_picture"></div>
+      <div class="row"><button class="btn" data-need="operator" onclick="networkManage(${jsq(ns)},${jsq(name)})">Choose its address</button>
+        ${tip("The address its ports answer on: the default workload VIP or one you pick. Applied on its own, without restarting the pod - save other changes first.")}</div>
       ${UI.more("What saving does", "<p>Saving rolls the pod. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either workload.</p>")}`;
-    $("#mbody").innerHTML = stepper("e_steps", [
-      { title: "Basics", html: basics }, { title: containers.length > 1 ? `Containers · ${containers.length}` : "Container", html: inside },
+    $("#mbody").innerHTML = `<div id="e_containers">${stepper("e_steps", [
+      { title: "Basics", html: basics }, { title: "Hardware and access", html: access },
+      { title: "Environment values", html: environment }, { title: "Storage", html: storage },
       { title: "Where it runs", html: running }, { title: "Address", html: address }],
-      `<button class="btn pri" id="e_save" onclick="editSave(${jsq(ns)},${jsq(name)})">Save &amp; restart</button>`, { always: true });
+      `<button class="btn pri" id="e_save" onclick="editSave(${jsq(ns)},${jsq(name)})">Save &amp; restart</button>`, { always: true })}</div>`;
     editVipPicture(w);
     containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
@@ -270,6 +283,13 @@ window.editAddPort = (index, port = {}) => {
   editPortsChanged();
 };
 window.editAddVol = (index, volume = {}) => addVolumeRow(editVolumePicker(index), volume);
+window.editContainerIdentity = index => {
+  const name = $("#e_container_name_" + index).value, image = $("#e_image_" + index).value;
+  $$(`#e_containers .edit-container[data-index="${index}"]`).forEach(panel => {
+    $(".edit-container-title b", panel).textContent = name || `Container ${+index + 1}`;
+    $(".edit-container-title small", panel).textContent = image;
+  });
+};
 function editPortSignature() {
   return JSON.stringify($$("#e_containers .edit-port-row").map(row => $$("input,select", row).map(e => e.type === "checkbox" ? e.checked : e.value)));
 }
@@ -302,11 +322,11 @@ let EDIT_REVIEW = null, EDIT_REVIEW_SEQUENCE = 0;
 window.editSave = async (ns, name) => {
   const workloadName = $("#e_workload_name").value.trim();
   if (workloadName !== name) return window.editReview({ns, name, workload_name: workloadName});
-  const containers = $$("#e_containers .edit-container").map(panel => {
+  const containers = $$("#e_containers .edit-container[data-original-name]").map(panel => {
     const index = panel.dataset.index;
     const env = {};
-    $$(".e-env-row", panel).forEach(row => { const key = $(".ek", row).value.trim(); if (key) env[key] = $(".ev", row).value; });
-    const ports = $$(".edit-port-row", panel).map(row => ({ name: $(".ep-name", row).value.trim(),
+    $$(".e-env-row", $("#e_env_" + index)).forEach(row => { const key = $(".ek", row).value.trim(); if (key) env[key] = $(".ev", row).value; });
+    const ports = $$(".edit-port-row", $("#e_ports_" + index)).map(row => ({ name: $(".ep-name", row).value.trim(),
       container: +$(".ep-number", row).value, protocol: $(".ep-protocol", row).value,
       host: +$(".ep-host", row).value || +$(".ep-number", row).value,
       expose: $(".ep-expose", row).checked })).filter(port => port.container);
