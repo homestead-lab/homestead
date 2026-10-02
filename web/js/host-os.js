@@ -166,31 +166,70 @@ window.nodePartitionsPaint = async node => {
    review, drain and wait as Host actions when an update asks for one. */
 const OSU_DAYS = [["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"], ["sun", "Sun"]];
 
+function osUpdatesHostsHtml(r) {
+  const rows = Object.entries(r.hosts || {}).sort(([a], [b]) => a.localeCompare(b)).map(([name, f]) => [
+    `<b>${esc(name)}</b><div class="dim xs">${esc(f.os || "")}${f.at ? ` · read ${esc(hostOsAge(f.at))}` : ""}</div>`,
+    (f.updates || []).length ? `${f.updates.length}${f.security ? ` ${UI.chip(`${f.security} security`, "warn")}` : ""}` : "up to date",
+    f.reboot ? UI.chip("needed", "warn") : "—",
+    hostOsAuto(f.auto),
+  ]);
+  return rows.length ? UI.table([{ label: "Host" }, { label: "Updates" }, { label: "Restart" }, { label: "Automatic updates" }], rows)
+    : UI.lead("No host has been read yet; the leader reads each within ten minutes of starting.");
+}
+function osUpdatesUnavailableHtml() {
+  return STATE.platform?.harvester
+    ? UI.callout("info", "Harvester updates its own hosts.", `Its hosts' operating system comes with Harvester. ${UI.actions(UI.button("Open Cluster", "go('cluster')"))}`)
+    : UI.callout("info", "Host updates are managed here on k3s and RKE2.", "Use your platform's host tools to update this cluster's operating systems.");
+}
+window.osUpdatesCardPaint = async () => {
+  const card = $("#settingsHostUpdates");
+  if (!card) return;
+  const header = actions => `<div class="settings-card-head"><div><div class="ctitle">Host updates</div>
+    <div class="csub">Operating system packages, security updates and restarts</div></div><div class="row">${actions}</div></div>`;
+  try {
+    const r = await api("/api/os-updates");
+    if ($("#settingsHostUpdates") !== card) return;
+    if (!r.applies) { card.innerHTML = header("") + osUpdatesUnavailableHtml(); return; }
+    const s = r.settings || {}, schedule = s.schedule || {};
+    const run = r.rollout?.status === "running" ? r.rollout : null;
+    const last = run ? null : r.rollout || r.last;
+    const days = OSU_DAYS.filter(([id]) => (schedule.days || []).includes(id)).map(([, label]) => label).join(", ");
+    const windowText = schedule.enabled ? `${days} at ${String(schedule.hour ?? 0).padStart(2, "0")}:00 ${schedule.tz || ""}` : "Weekly window off";
+    card.innerHTML = header(`${UI.button("Refresh status", "osUpdatesCardPaint()")}${can("admin")
+      ? UI.button("Manage host updates", "osUpdates()", { attrs: 'data-need="admin"' }) : UI.chip("admin managed")}`) +
+      `<div class="ui-stack">
+        ${run ? UI.progress(Math.round((run.index || 0) * 100 / Math.max(1, (run.nodes || []).length)),
+          {label: "Updating hosts one at a time", detail: run.message || ""}) : ""}
+        ${last ? UI.callout(last.status === "failed" ? "bad" : "info", `Last run ${last.status || "finished"}`, esc(last.message || "")) : ""}
+        ${osUpdatesHostsHtml(r)}
+        <p class="dim small">${s.manage === "homestead" ? "Managed by Homestead, one host at a time" : "Managed by each host's automatic updates"}
+          · ${esc(windowText)} · ${s.reboot === "never" ? "Rollout restarts: manual" : "Rollout restarts: when needed, drained first"}.
+          Manage host updates to change the schedule or start a reviewed update.</p>
+      </div>`;
+    if (window.applyRole) applyRole();
+  } catch (e) {
+    if ($("#settingsHostUpdates") !== card) return;
+    card.innerHTML = header(UI.button("Try again", "osUpdatesCardPaint()")) + UI.callout("bad", "Host update status could not be read.", esc(e.message));
+  }
+};
+
 window.osUpdates = async (child = false) => {
   (child ? childModal : modal)("OS updates", '<div class="empty"><span class="spin2"></span> reading every host</div>', true);
   let r;
   try { r = await api("/api/os-updates"); }
   catch (e) { $("#mbody").innerHTML = UI.callout("bad", "OS updates could not be read.", esc(e.message)); return; }
   if (!r.applies) {
-    $("#mbody").innerHTML = UI.callout("info", "Harvester updates its own hosts.", "Upgrade Harvester from System → Cluster; its hosts' OS comes with it.");
+    $("#mbody").innerHTML = osUpdatesUnavailableHtml();
     return;
   }
   const s = r.settings, run = r.rollout && r.rollout.status === "running" ? r.rollout : null, last = r.rollout && !run ? r.rollout : null;
-  const hosts = Object.entries(r.hosts || {}).sort(([a], [b]) => a.localeCompare(b));
-  const rows = hosts.map(([name, f]) => [
-    `<b>${esc(name)}</b><div class="dim xs">${esc(f.os || "")}</div>`,
-    (f.updates || []).length ? `${f.updates.length}${f.security ? ` ${UI.chip(`${f.security} security`, "warn")}` : ""}` : "up to date",
-    f.reboot ? UI.chip("needed", "warn") : "—",
-    hostOsAuto(f.auto),
-  ]);
   const results = rollout => (rollout.results || []).map(x => `<li><b>${esc(x.node)}</b> · ${esc(x.note)}</li>`).join("");
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "this browser's time";
   $("#mbody").innerHTML = `<div class="ui-stack">
     ${run ? `${UI.progress(Math.round((run.index || 0) * 100 / Math.max(1, run.nodes.length)), { label: `Updating ${run.nodes.length} hosts, one at a time`, detail: run.message || "" })}
       ${results(run) ? `<ul class="osu-results small">${results(run)}</ul>` : ""}` : ""}
     ${last ? `<div class="note ${last.status === "failed" ? "bad" : ""} small"><b>Last run ${esc(last.status)}</b>${last.finished ? ` · ${esc(hostOsAge(last.finished))}` : ""}<br>${esc(last.message || "")}</div>` : ""}
-    ${rows.length ? UI.table([{ label: "Host" }, { label: "Updates" }, { label: "Restart" }, { label: "Automatic updates" }], rows)
-      : UI.lead("No host has been read yet; the leader reads each within ten minutes of starting.")}
+    ${osUpdatesHostsHtml(r)}
     ${UI.section("Settings", `
       <div class="f"><label>Who installs updates ${tip("Ubuntu's unattended-upgrades installs security updates on each host by itself, and with Automatic-Reboot restarts it without a drain; Homestead then holds it off only while it updates every host. Chosen, Homestead switches it off on every host and installs updates itself, one host at a time, restarting through its review and drain.")}</label>
         <select id="osu_manage">
@@ -227,6 +266,7 @@ window.osUpdatesSave = async () => {
   try {
     await api("/api/os-updates/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast("OS update settings saved", "ok");
+    osUpdatesCardPaint();
   } catch (e) { toast(e.message, "bad"); }
 };
 window.osUpdatesStart = async () => {
@@ -237,6 +277,7 @@ window.osUpdatesStart = async () => {
     if (r.operation && window.noteOperation) noteOperation(r.operation);
     toast(r.detail, "ok");
     osUpdates();
+    osUpdatesCardPaint();
   } catch (e) { toast(e.message, "bad"); }
 };
 window.osUpdatesStop = async () => {
@@ -244,5 +285,6 @@ window.osUpdatesStop = async () => {
     const r = await api("/api/os-updates/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     toast(r.detail, "ok");
     osUpdates();
+    osUpdatesCardPaint();
   } catch (e) { toast(e.message, "bad"); }
 };
