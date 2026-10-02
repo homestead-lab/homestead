@@ -422,19 +422,49 @@ window.volumeCreateNow = async () => {
   try { await api("/api/volumes/create", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(`${body.name} created`, "ok"); closeModal(); resetPaint(); viewStorage(); } catch (e) { toast(e.message, "bad"); }
 };
-window.volumeEdit = (x, fromRoute = false) => {
+window.volumeEdit = async (x, fromRoute = false) => {
   if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "edit", ns: x.namespace || "lab", volume: x.pvc_name || x.name }, x.pvc_name || x.name);
-  modal("Edit · " + (x.pvc_name || x.name), `
-  <div class="f2"><div class="f"><label>Size (GB) ${tip("Volumes can be grown but not shrunk.")}</label><input id="ve_size" type="number" min="${Math.ceil(x.size_gb)}" value="${Math.ceil(x.size_gb)}"></div>
+  const namespace = x.namespace || "lab", name = x.pvc_name || x.name;
+  modal("Edit · " + name, '<div id="ve_loading" class="empty"><span class="spin2"></span> Checking volume expansion…</div>');
+  const loading = $("#ve_loading");
+  let options;
+  try {
+    options = await api(`/api/volumes/edit-options?ns=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}`);
+  } catch (e) {
+    if ($("#ve_loading") === loading && !$("#modal").classList.contains("hidden"))
+      modal("Edit · " + name, `<div class="note">Could not check this volume. ${esc(e.message)}</div><button class="btn" onclick="closeModal()">Close</button>`);
+    return;
+  }
+  if ($("#ve_loading") !== loading || $("#modal").classList.contains("hidden")) return;
+  const size = options.requested_gb || Math.ceil(x.size_gb);
+  modal("Edit · " + name, `
+  <div class="f2"><div class="f"><label>Size (GB) ${tip("Volumes can be grown but not shrunk.")}</label><input id="ve_size" type="number" min="${size}" value="${size}" ${options.can_expand ? "" : "disabled"}></div>
   <div class="f"><label>Replica count</label><input id="ve_reps" type="number" min="1" max="5" value="${x.replicas}"></div></div>
-  <div class="note"><b>${esc((x.access_modes || []).join(", ") || "Access mode unknown")}</b> · ${esc(x.storage_class || "storage class unknown")}<br>
+  ${options.can_expand ? "" : `<div class="note"><b>Size cannot be changed.</b> ${esc(options.reason)}<br>Replica count can still be changed.
+    ${options.repair_class ? `<div class="row" style="margin-top:10px"><button class="btn sm" data-need="admin" onclick="volumeClassRepairReview(${jsq(namespace)},${jsq(name)},${jsq(options.storage_class)})">Repair resize support…</button></div>` : ""}</div>`}
+  <div class="note"><b>${esc((x.access_modes || []).join(", ") || "Access mode unknown")}</b> · ${esc(options.storage_class || "No StorageClass")}<br>
   Kubernetes locks access mode and storage class after a claim is bound. To change RWO ↔ RWX, create a new volume and migrate the data.</div>
   <div class="row" style="margin-top:16px"><button class="btn pri" onclick="volumeEditNow(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)})">Save</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
 };
 window.volumeEditNow = async (namespace, name) => {
-  const body = { namespace, name, size_gb: +$("#ve_size").value, replicas: +$("#ve_reps").value };
+  const body = { namespace, name, replicas: +$("#ve_reps").value };
+  if (!$("#ve_size").disabled) body.size_gb = +$("#ve_size").value;
   try { const r = await api("/api/volumes/edit", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(r.detail || `${name} updated`, "ok"); closeModal(); resetPaint(); viewStorage(); } catch (e) { toast(e.message, "bad"); }
+};
+
+window.volumeClassRepairReview = (namespace, name, storageClass) => {
+  modal("Repair resize support", `<div class="note">Recreate <b>${esc(storageClass)}</b> from the bound Longhorn volume's storage settings and enable volume expansion.
+    This recreates Kubernetes configuration for every volume using that class. No backup is restored, and volume sizes and data stay unchanged.</div>
+    <div class="row" style="margin-top:16px"><button class="btn pri" data-need="admin" onclick="volumeClassRepairNow(${jsq(namespace)},${jsq(name)},${jsq(storageClass)},this)">Repair resize support</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+};
+window.volumeClassRepairNow = async (namespace, name, storageClass, button) => {
+  button.disabled = true;
+  try {
+    const r = await api("/api/volumes/repair-class", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ namespace, name, confirm: storageClass }) });
+    toast(r.detail, "ok"); closeModal(); resetPaint(); viewStorage();
+  } catch (e) { toast(e.message, "bad"); button.disabled = false; }
 };
 
 function volumeDeleteConfirmationValid(name, value) {
@@ -614,7 +644,7 @@ function storageClassCard(classes, v2 = null) {
   const every = classes || [];
   if (!every.length) return "";
   // Classes made for one image or one restore are not for choosing: folded
-  // away, with the restore ones - spent once their claim is bound - clearable.
+  // away. Repair resize supportes are kept while any claim still needs them.
   const special = every.filter(row => row.made_for);
   const restores = special.filter(row => row.made_for === "restore");
   const rows = STATE.showSpecialClasses ? every : every.filter(row => !row.made_for);
@@ -622,7 +652,7 @@ function storageClassCard(classes, v2 = null) {
       ${[special.length - restores.length ? `${special.length - restores.length} Harvester image${special.length - restores.length === 1 ? "" : "s"}` : "", restores.length ? `${restores.length} restore${restores.length === 1 ? "" : "s"}` : ""].filter(Boolean).join(" and ")}
       ${STATE.showSpecialClasses ? "shown" : "hidden"}, and never offered when choosing a class.
       <a class="linkish" onclick="STATE.showSpecialClasses=!STATE.showSpecialClasses;storageClassesPaint()">${STATE.showSpecialClasses ? "Hide" : "Show"} them</a>
-      ${restores.length ? ` · <a class="linkish" data-need="admin" onclick="storageClassCleanup()">Remove the restore ones</a>` : ""}</div>` : "";
+      ${restores.length ? ` · <a class="linkish" data-need="admin" onclick="storageClassCleanup()">Remove unused restore classes</a>` : ""}</div>` : "";
   // What a volume on it can do, as tags: one column, not three.
   const features = row => [
     row.migratable ? '<span class="tag" data-tip="Live-migratable volumes for VM disks. Longhorn cannot mount those into a pod, so it cannot back shared storage.">VM disks only</span>'
@@ -631,7 +661,7 @@ function storageClassCard(classes, v2 = null) {
     row.expandable ? '<span class="tag">can grow</span>' : '<span class="tag" data-tip="Volumes keep the size they were made with">fixed size</span>',
   ].filter(Boolean).join(" ");
   const kind = row => row.made_for === "image" ? '<span class="tag" data-tip="Harvester made it for one image: disks from that image are made on it">image</span>'
-    : row.made_for === "restore" ? '<span class="tag warn" data-tip="Made to read one backup into a new volume; not needed once that volume exists">restore</span>'
+    : row.made_for === "restore" ? '<span class="tag" data-tip="Made to restore a backup; kept while claims reference it so they can be resized">restore</span>'
     : row.made_for === "iso" ? '<span class="tag" data-tip="ISO copies Homestead made for VM CD-ROM drives: one replica, since the originals are on your shares">ISO copies</span>' : "";
   return `<div class="settings-card-head"><div><div class="ctitle">Storage classes</div>
       <div class="csub">What a new volume is made from. Kubernetes fixes a class once it is made, so a change means a new class.</div>

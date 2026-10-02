@@ -947,6 +947,16 @@ def restore_backup(cfg):
                     "mountOptions": base.get("mountOptions", []),
                     "allowedTopologies": base.get("allowedTopologies", [])}, sort_keys=True)
     class_name = _restore_class_name(url, replicas, extra)
+    existing_class = _get_or_none(f"/apis/storage.k8s.io/v1/storageclasses/{class_name}")
+    existing_meta = (existing_class or {}).get("metadata") or {}
+    if ((existing_meta.get("annotations") or {}).get("homestead.io/resize-support-repaired") == "true"
+            and (existing_meta.get("labels") or {}).get("app.kubernetes.io/managed-by") == "homestead"
+            and (existing_class or {}).get("provisioner") == "driver.longhorn.io"):
+        # Reconstructed classes support existing volumes. CSI attributes cannot
+        # recover every original provisioning option, so future restores use a
+        # fresh template and leave the repaired class and its bound claims alone.
+        class_name = _restore_class_name(url, replicas, extra + "|fresh-restore-template")
+        existing_class = _get_or_none(f"/apis/storage.k8s.io/v1/storageclasses/{class_name}")
     storage_class = {
         "apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
         "metadata": {"name": class_name,
@@ -962,7 +972,6 @@ def restore_backup(cfg):
         storage_class["mountOptions"] = list(base["mountOptions"])
     if base.get("allowedTopologies"):
         storage_class["allowedTopologies"] = list(base["allowedTopologies"])
-    existing_class = _get_or_none(f"/apis/storage.k8s.io/v1/storageclasses/{class_name}")
     if existing_class:
         if (existing_class.get("provisioner") != "driver.longhorn.io" or
                 (existing_class.get("parameters", {}) or {}) != parameters or

@@ -20,13 +20,15 @@ class ClassChoiceTests(unittest.TestCase):
                         klass("lh-8b6ca866-806d-430a-8fd4-d584f0f06128", backingImage="default-image-151065"),
                         klass("longhorn-image-ubuntu", backingImage="default-image-ubuntu"),
                         klass("homestead-restore-155ade32ea106399", fromBackup="s3://b/backups?volume=x")]
-        self.pvcs, self.sent = [], []
+        self.pvcs, self.pvs, self.sent = [], [], []
 
         def kget(path):
             if path == "/apis/storage.k8s.io/v1/storageclasses":
                 return {"items": self.classes}
             if path == "/api/v1/persistentvolumeclaims":
                 return {"items": self.pvcs}
+            if path == "/api/v1/persistentvolumes":
+                return {"items": self.pvs}
             return {"items": []}
         server.kget = kget
         server.ksend = lambda method, path, body=None, **kw: self.sent.append((method, path))
@@ -53,10 +55,33 @@ class ClassChoiceTests(unittest.TestCase):
         self.classes.append(klass("homestead-restore-deee238ba869b8e0", fromBackup="s3://b/backups?volume=y"))
         self.pvcs = [{"spec": {"storageClassName": "homestead-restore-deee238ba869b8e0"}, "status": {"phase": "Pending"}},
                      {"spec": {"storageClassName": "homestead-restore-155ade32ea106399"}, "status": {"phase": "Bound"}}]
+        self.classes.append(klass("homestead-restore-unused", fromBackup="s3://b/backups?volume=z"))
         removed = server.cleanup_restore_classes()
-        self.assertEqual(["homestead-restore-155ade32ea106399"], removed)
-        self.assertEqual([("DELETE", "/apis/storage.k8s.io/v1/storageclasses/homestead-restore-155ade32ea106399")],
-                         self.sent)
+        self.assertEqual(["homestead-restore-unused"], removed)
+        self.assertEqual([("DELETE", "/apis/storage.k8s.io/v1/storageclasses/homestead-restore-unused")], self.sent)
+
+    def test_legacy_claim_and_terminating_claim_keep_their_class(self):
+        self.pvcs = [{"metadata": {"deletionTimestamp": "2026-01-01T00:00:00Z",
+                                   "annotations": {"volume.beta.kubernetes.io/storage-class": "homestead-restore-155ade32ea106399"}},
+                      "status": {"phase": "Bound"}}]
+        self.assertEqual([], server.cleanup_restore_classes())
+        self.assertEqual([], self.sent)
+
+    def test_failed_claim_inventory_never_deletes_classes(self):
+        server.kget = lambda path: (_ for _ in ()).throw(RuntimeError("API unavailable"))
+        self.assertEqual([], server.cleanup_restore_classes())
+        self.assertEqual([], self.sent)
+
+    def test_incomplete_claim_inventory_never_deletes_classes(self):
+        server.kget = lambda path: {"items": [], "metadata": {"continue": "next-page"}}
+        self.assertEqual([], server.cleanup_restore_classes())
+        self.assertEqual([], self.sent)
+
+    def test_retained_backing_volume_keeps_its_restore_class_without_a_claim(self):
+        self.pvs = [{"spec": {"storageClassName": "homestead-restore-155ade32ea106399",
+                              "persistentVolumeReclaimPolicy": "Retain"}, "status": {"phase": "Released"}}]
+        self.assertEqual([], server.cleanup_restore_classes())
+        self.assertEqual([], self.sent)
 
 
 if __name__ == "__main__":

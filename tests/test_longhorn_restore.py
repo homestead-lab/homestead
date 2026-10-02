@@ -125,6 +125,21 @@ class LonghornRestoreTests(unittest.TestCase):
             longhorn.restore_backup({"backup": "backup-123", "namespace": "lab",
                                      "name": "restored-data", "size_gb": 5})
 
+    def test_new_restore_uses_full_template_instead_of_repaired_resize_class(self):
+        url = "nfs://backup/vol?backup=backup-123"
+        class_name = longhorn._restore_class_name(url, 2)
+        repaired = {"metadata": {"name": class_name, "labels": {"app.kubernetes.io/managed-by": "homestead"},
+                                  "annotations": {"homestead.io/resize-support-repaired": "true"}},
+                    "provisioner": "driver.longhorn.io", "allowVolumeExpansion": True,
+                    "parameters": {"fromBackup": url, "fsType": "ext4"}}
+        self.objects[f"/apis/storage.k8s.io/v1/storageclasses/{class_name}"] = repaired
+        first = longhorn.restore_backup({"backup": "backup-123", "namespace": "lab", "name": "copy-a"})
+        self.assertNotEqual(class_name, first["storage_class"])
+        second = longhorn.restore_backup({"backup": "backup-123", "namespace": "lab", "name": "copy-b"})
+        self.assertEqual(first["storage_class"], second["storage_class"])
+        self.assertIs(repaired, self.objects[f"/apis/storage.k8s.io/v1/storageclasses/{class_name}"])
+        self.assertEqual(1, sum(path == "/apis/storage.k8s.io/v1/storageclasses" for _, path, _, _ in self.sent))
+
 
 if __name__ == "__main__":
     unittest.main()

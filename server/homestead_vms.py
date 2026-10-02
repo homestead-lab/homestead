@@ -29,6 +29,7 @@ import homestead_vm_hardware as HARDWARE
 import homestead_hvimage as HVIMAGE
 import homestead_vmusage as VMUSAGE
 import homestead_vm_profiles as PROFILES
+import homestead_storage_resize as RESIZE
 
 kget = ksend = None
 events_for = lambda ns, name, uid="": []
@@ -642,11 +643,12 @@ def _edit_disks(vm, ns, edits, adds, claims, to_create, resize, dropped, effects
             size = _size(e["size"])
             pvc = claims.get(claim)
             if pvc:
-                current = (((pvc.get("status") or {}).get("capacity") or {}).get("storage")
-                           or (((pvc.get("spec") or {}).get("resources") or {}).get("requests") or {}).get("storage", ""))
+                current = max((((pvc.get("status") or {}).get("capacity") or {}).get("storage", ""),
+                              (((pvc.get("spec") or {}).get("resources") or {}).get("requests") or {}).get("storage", "")), key=_bytes)
                 if _bytes(size) < _bytes(current):
                     raise ValueError(f"{claim} is {current}; a disk can grow but not shrink")
                 if _bytes(size) > _bytes(current):
+                    RESIZE.require(pvc, kget)
                     resize.append((claim, size))
             else:
                 for t in _dv_templates(vm):
@@ -1028,6 +1030,7 @@ def _recheck_edit(prepared):
         current = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}")
         if _identity(current) != _identity(prepared["claims"][claim]):
             raise ValueError("A disk changed; review its resize again")
+        RESIZE.require(current, kget)
     old_names = {_volume_claim(v) for v in prepared["current"]["spec"]["template"]["spec"].get("volumes") or []}
     new_names = {_volume_claim(v) for v in prepared["vm"]["spec"]["template"]["spec"].get("volumes") or []} - old_names - {""}
     for claim in new_names:

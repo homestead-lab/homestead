@@ -619,6 +619,10 @@
       if (!disk?.smart) return { error: "Demo disk not found" };
       return { ...disk.smart, health_assessment: disk.health };
     },
+    "/api/volumes/edit-options": url => {
+      const volume = volumes.find(v => v.namespace === (url.searchParams.get("ns") || "lab") && v.pvc_name === url.searchParams.get("name"));
+      return { can_expand: true, requested_gb: Math.ceil(volume?.size_gb || 5), storage_class: volume?.storage_class || "longhorn", reason: "" };
+    },
     "/api/volumes/delete-plan": volumeDeletePlan, "/api/hardware/features": hardware,
     "/api/namespaces": ["default", "lab", "monitoring"],
     "/api/namespaces/manage": { default: "lab", system_hidden: 31, namespaces: [

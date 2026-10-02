@@ -24,7 +24,7 @@ class ShareTests(unittest.TestCase):
             },
             "/api/v1/namespaces/lab/persistentvolumeclaims/share-secure": {
                 "metadata": {"name": "share-secure", "resourceVersion": "9"},
-                "spec": {"resources": {"requests": {"storage": "10Gi"}}},
+                "spec": {"storageClassName": "example-storage", "resources": {"requests": {"storage": "10Gi"}}},
                 "status": {"phase": "Bound", "capacity": {"storage": "10Gi"}},
             },
             "/apis/apps/v1/namespaces/lab/deployments/homestead-smb": {
@@ -39,6 +39,7 @@ class ShareTests(unittest.TestCase):
                 }}},
             },
         }
+        self.objects["/apis/storage.k8s.io/v1/storageclasses/example-storage"] = {"allowVolumeExpansion": True}
         self.sent = []
         self.created = []
 
@@ -244,6 +245,21 @@ class ShareTests(unittest.TestCase):
         self.assertIn("media;new-password", container["args"])
         self.assertTrue(container["volumeMounts"][0]["readOnly"])
         self.assertNotIn("password", result["shares"][0])
+
+    def test_unsupported_growth_never_changes_share_access_or_credentials(self):
+        self.objects["/apis/storage.k8s.io/v1/storageclasses/example-storage"]["allowVolumeExpansion"] = False
+        before = copy.deepcopy(self.objects)
+        with self.assertRaisesRegex(ValueError, "does not allow volume expansion"):
+            shares.edit_share("secure", 20, "media", "new-password", False, True)
+        self.assertEqual([], self.sent)
+        self.assertEqual(before, self.objects)
+
+    def test_pending_growth_is_never_shrunk_to_reported_capacity(self):
+        pvc = self.objects["/api/v1/namespaces/lab/persistentvolumeclaims/share-secure"]
+        pvc["spec"]["resources"]["requests"]["storage"] = "20Gi"
+        with self.assertRaisesRegex(ValueError, "cannot shrink"):
+            shares.edit_share("secure", 15, "lab", "", False)
+        self.assertEqual([], self.sent)
 
     def test_blank_password_preserves_existing_private_password(self):
         shares.edit_share("secure", 10, "lab", "", False, False)
