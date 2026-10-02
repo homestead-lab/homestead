@@ -173,6 +173,7 @@ jobs:
             node scripts/check_launch_import_logs.mjs
             node scripts/check_mobile_pwa.mjs
             node scripts/check_collection_layouts.mjs
+            VOLUME_SCREENSHOTS=release-assets/pages/planned-volumes node tests/integration/planned-container-volumes.mjs
             node scripts/check_dashboard_storage.mjs
             node scripts/check_dashboard_stream.mjs
             node scripts/check_update_channels.mjs

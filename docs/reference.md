@@ -1161,8 +1161,13 @@ maps into appdata share one `<app>-appdata` volume, each in a folder named
 after its path, sized for all of them. Media stays for you to point at a
 library, and cache stays scratch space. Any storage row in the deploy wizard or
 the container editor has a **Folder in volume** field, so the same layout can
-be built by hand: give two rows the same new volume name and the second
-becomes another folder in it.
+be built by hand: define a new volume on the first mapping, then choose
+**Reuse new volume in this form** on another mapping and select its name.
+The volume does not need to exist yet. Each mapping keeps its own mount path,
+folder and read-only setting; the original mapping supplies the size, storage
+class and access mode, and deployment creates the claim once. For example,
+mount `config` at `/config` and `data` at `/data` from the same new appdata volume.
+Typing the same new volume name into two rows also shares that claim.
 
 The container editor can also restructure storage after the fact — combine two
 volumes into folders of one, split a folder out to a volume of its own, or
