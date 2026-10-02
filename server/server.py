@@ -5538,18 +5538,57 @@ for _kind in ("vm-create", "vm-edit"):
     OPS.CANCELLERS[_kind] = (VM_MUTATION_JOB.cancel_plan, VM_MUTATION_JOB.cancel_run)
 OPS.CANCELLERS["node-power"] = (lambda item: {"can": False, "why_not":
     "A host power command cannot be cancelled after it has been sent"}, lambda item, options: "")
-MOVE_ENGINE.after_finish = cleanup_restore_classes
+def cleanup_restores():
+    for cleanup in (cleanup_restore_classes, LH.cleanup_restore_snapshots):
+        try:
+            cleanup()
+        except Exception as error:
+            # Cleanup may be retried; it must not change a completed restore
+            # into a failed data operation. The cleanup itself fails closed.
+            print(f"Restore metadata cleanup deferred: {error}", flush=True)
+
+
+MOVE_ENGINE.after_finish = cleanup_restores
 
 
 def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
-    """Clean up unused restore classes after a restore finishes."""
+    """Resume snapshot setup after a restart and retain the selected class."""
+    ref = item["ref"]
+    cfg = ref.get("restore_config")
+    if cfg and not ref.get("restore_started"):
+        if item.get("status") == "queued":
+            cfg["snapshot_wait_started"] = time.time()
+        since = cfg.setdefault("snapshot_wait_started", time.time())
+        if time.time() - float(since) > 15 * 60:
+            raise ValueError("CSI snapshot setup did not become ready; repair snapshot support, then resume this restore")
+        existing = LH._get_or_none(f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}")
+        if existing:
+            annotation = (existing.get("metadata", {}).get("annotations") or {}).get("homestead.io/restore-id")
+            if annotation != cfg["restore_id"]:
+                raise ValueError("The destination PVC was created by another operation")
+            ref["restore_started"] = True
+        else:
+            created = LH.restore_backup(cfg)
+            if not created["created"]:
+                return "running", 2, created["message"]
+            ref["restore_started"] = True
+    pvc = LH._get_or_none(f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}")
+    if pvc:
+        if cfg and (pvc.get("metadata", {}).get("annotations") or {}).get("homestead.io/restore-id") != cfg["restore_id"]:
+            raise ValueError("The destination PVC was replaced by another operation")
+        problem = LH.restore_problem(pvc)
+        if problem:
+            return "failed", 8, f"CSI restore snapshot failed: {problem}"
     result = _resolve(item)
+    if result and result[0] == "succeeded" and cfg and pvc:
+        result = LH.finish_restore_resize(pvc, cfg) or result
     if result and result[0] in ("succeeded", "failed"):
-        cleanup_restore_classes()
+        cleanup_restores()
     return result
 
 
 OPS.RESOLVERS["volume-restore"] = _restore_then_tidy
+OPS.RESUMABLE["volume-restore"] = lambda item: not bool(item.get("ref", {}).get("restore_config"))
 UPGRADES.bind(kget)
 PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, get_workloads),
             lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
@@ -9456,15 +9495,18 @@ class H(HTTP.LimitedHandler):
                         b.get("backup"), b.get("namespace", DEFAULT_NS), b.get("name"))
                     if plan.get("conflict"):
                         return self._send(409, {"error": plan["conflict"]["message"], "plan": plan})
+                    b["restore_id"] = secrets.token_hex(12)
+                    b["annotations"] = {"homestead.io/restore-id": b["restore_id"]}
                     result = LH.restore_backup(b)
+                    b["source_size_bytes"] = result["source_size_bytes"]
                     result["operation"] = OPS.start(
                         "volume-restore", f"Restore {result['name']}",
                         {"kind": "PersistentVolumeClaim", "name": result["name"],
                          "namespace": result["namespace"]},
                         "/volumes?" + urllib.parse.urlencode({"find": result["name"]}),
                         {"namespace": result["namespace"], "name": result["name"],
-                         "backup": result["backup"]},
-                        "Waiting for Longhorn to provision the restored volume")
+                         "backup": result["backup"], "restore_config": b,
+                         "restore_started": result["created"]}, result["message"])
                 return self._send(200, result)
             if p == "/api/lh/target":
                 return self._send(200, LH.set_backup_target(

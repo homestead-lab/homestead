@@ -17,8 +17,8 @@ label patch, not a controller.
 import base64
 import json
 import homestead_names as NAMES
+import homestead_csi_restore as CSI_RESTORE
 import homestead_snapshot_delete as SNAPSHOT_DELETE
-import hashlib
 import math
 import re
 import secrets
@@ -51,6 +51,7 @@ def bind(_kget, _ksend, _cache_ref, storage_class="longhorn-r2"):
     global kget, ksend, _cache, STORAGE_CLASS
     kget, ksend, _cache = _kget, _ksend, _cache_ref
     STORAGE_CLASS = storage_class
+    CSI_RESTORE.bind(_kget, _ksend)
 
 
 def _bust(*keys):
@@ -857,14 +858,6 @@ def _restore_source(item):
     return status, url, size
 
 
-def _restore_class_name(url, replicas, extra=""):
-    # Extra settings only join the digest when present, so the classes earlier
-    # restores created keep the names they already have.
-    seed = f"{STORAGE_CLASS}\0{replicas}\0{url}" + (f"\0{extra}" if extra else "")
-    digest = hashlib.sha256(seed.encode()).hexdigest()[:16]
-    return f"homestead-restore-{digest}"
-
-
 def restore_plan(backup, namespace, pvc_name):
     item = _backup(backup)
     status, url, size = _restore_source(item)
@@ -894,6 +887,10 @@ def restore_plan(backup, namespace, pvc_name):
         "suggested_name": suggested, "namespace": namespace, "pvc_name": pvc_name,
         "conflict": conflict, "ready": conflict is None,
         "target": status.get("backupTargetName", "default") or "default",
+        "storage_class": STORAGE_CLASS,
+        "storage_classes": [c["metadata"]["name"] for c in kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])
+                            if c.get("provisioner") == "driver.longhorn.io"
+                            and not any((c.get("parameters") or {}).get(k) for k in ("fromBackup", "backingImage"))],
     }
 
 
@@ -901,6 +898,8 @@ def restore_backup(cfg):
     backup = str(cfg.get("backup") or "").strip()
     namespace = str(cfg.get("namespace") or "").strip()
     pvc_name = str(cfg.get("name") or "").strip()
+    if not namespace or not pvc_name:
+        raise ValueError("Choose a namespace and a new PVC name")
     plan = restore_plan(backup, namespace, pvc_name)
     if plan["conflict"]:
         raise ValueError(plan["conflict"]["message"])
@@ -916,72 +915,31 @@ def restore_backup(cfg):
     parameters = dict(base.get("parameters", {}) or {})
     if cfg.get("storage_class") and any(parameters.get(k) for k in ("fromBackup", "backingImage")):
         raise ValueError("choose a regular Longhorn storage class")
-    replicas = int(cfg.get("replicas") or (parameters.get("numberOfReplicas", 2) if cfg.get("storage_class") else 2))
-    if replicas < 1 or replicas > 5:
-        raise ValueError("replicas must be between 1 and 5")
     size_gb = int(cfg.get("size_gb") or plan["minimum_size_gb"])
     if size_gb < plan["minimum_size_gb"]:
         raise ValueError(f"restored PVC cannot be smaller than {plan['minimum_size_gb']} GiB")
-
-    item = _backup(backup)
-    status, url, _ = _restore_source(item)
+    if cfg.get("size_gb") and size_gb * 1073741824 > plan["volume_size_bytes"] and base.get("allowVolumeExpansion") is not True:
+        raise ValueError("A larger restore needs a storage class that allows volume expansion")
     volume_mode = str(cfg.get("volume_mode") or "Filesystem")
     if volume_mode not in ("Filesystem", "Block"):
         raise ValueError("volume mode must be Filesystem or Block")
-    # A container's claim is a filesystem and never live-migrates; Harvester's
-    # VM-oriented class may say migratable=true, which is valid only for block
-    # volumes. A VM disk is one, and one built on a Harvester image needs that
-    # image named, since its backup holds only what changed on top of it.
-    migratable = (str(parameters.get("migratable", "false")).lower() == "true"
-                  if cfg.get("storage_class") else bool(cfg.get("migratable"))) and volume_mode == "Block"
-    backing_image = str(cfg.get("backing_image") or "")
-    parameters.update(fromBackup=url, numberOfReplicas=str(replicas),
-                      migratable="true" if migratable else "false",
-                      backupTargetName=status.get("backupTargetName", "default") or "default")
-    if backing_image:
-        parameters["backingImage"] = backing_image
-    plain = (volume_mode, migratable, backing_image) == ("Filesystem", False, "")
-    extra = "" if plain else f"{volume_mode}|{migratable}|{backing_image}"
-    if cfg.get("storage_class"):
-        extra += "|" + base_name + "|" + json.dumps({"parameters": parameters,
-                    "mountOptions": base.get("mountOptions", []),
-                    "allowedTopologies": base.get("allowedTopologies", [])}, sort_keys=True)
-    class_name = _restore_class_name(url, replicas, extra)
-    existing_class = _get_or_none(f"/apis/storage.k8s.io/v1/storageclasses/{class_name}")
-    existing_meta = (existing_class or {}).get("metadata") or {}
-    if ((existing_meta.get("annotations") or {}).get("homestead.io/resize-support-repaired") == "true"
-            and (existing_meta.get("labels") or {}).get("app.kubernetes.io/managed-by") == "homestead"
-            and (existing_class or {}).get("provisioner") == "driver.longhorn.io"):
-        # Reconstructed classes support existing volumes. CSI attributes cannot
-        # recover every original provisioning option, so future restores use a
-        # fresh template and leave the repaired class and its bound claims alone.
-        class_name = _restore_class_name(url, replicas, extra + "|fresh-restore-template")
-        existing_class = _get_or_none(f"/apis/storage.k8s.io/v1/storageclasses/{class_name}")
-    storage_class = {
-        "apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
-        "metadata": {"name": class_name,
-                     "labels": {"app.kubernetes.io/managed-by": "homestead",
-                                "homestead.io/restore-class": "true"},
-                     "annotations": {"homestead.io/source-backup": backup,
-                                     "homestead.io/base-storage-class": base_name}},
-        "provisioner": "driver.longhorn.io", "allowVolumeExpansion": True,
-        "reclaimPolicy": "Delete", "volumeBindingMode": "Immediate",
-        "parameters": parameters,
-    }
-    if base.get("mountOptions"):
-        storage_class["mountOptions"] = list(base["mountOptions"])
-    if base.get("allowedTopologies"):
-        storage_class["allowedTopologies"] = list(base["allowedTopologies"])
-    if existing_class:
-        if (existing_class.get("provisioner") != "driver.longhorn.io" or
-                (existing_class.get("parameters", {}) or {}) != parameters or
-                (existing_class.get("mountOptions") or []) != (storage_class.get("mountOptions") or []) or
-                (existing_class.get("allowedTopologies") or []) != (storage_class.get("allowedTopologies") or []) or
-                (existing_class.get("metadata", {}).get("labels", {}) or {}).get(
-                    "app.kubernetes.io/managed-by") != "homestead"):
-            raise ValueError(f"restore storage class {class_name} exists with different settings")
-    else:
-        ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", storage_class)
+    validate_restore_class(base, volume_mode)
+    status, url, _ = _restore_source(_backup(backup))
+    # Replica count, tags and migratability come from the configured class.
+    # Longhorn's restore webhook recovers backingImage/backupTargetName from
+    # the backup; migration prepares that image before creating this PVC.
+    backing_image = str(status.get("volumeBackingImageName") or cfg.get("backing_image") or "")
+    if backing_image and _get_or_none(f"{API}/namespaces/{LHNS}/backingimages/{backing_image}") is None:
+        raise ValueError(f"Restore the {backing_image} backing image before restoring this disk")
+    supported = CSI_RESTORE.ensure_support()
+    result = {"ok": True, "backup": backup, "namespace": namespace, "name": pvc_name,
+              "storage_class": base_name, "size_gb": size_gb, "access_mode": access_mode,
+              "source_size_bytes": plan["volume_size_bytes"]}
+    if not supported["ready"]:
+        return {**result, "created": False, "message": supported["message"]}
+    snapshot_name = CSI_RESTORE.import_backup(namespace, pvc_name, backup,
+        status.get("volumeName", ""), url, volume_mode,
+        str(cfg.get("restore_id") or (cfg.get("annotations") or {}).get(NAMES.key("move-id")) or ""))
 
     annotations = {"homestead.io/restored-from-backup": backup,
                    "homestead.io/source-volume": plan["source_volume"]}
@@ -992,21 +950,46 @@ def restore_backup(cfg):
                      "labels": {"app.kubernetes.io/managed-by": "homestead",
                                 "homestead.io/restored-volume": "true"},
                      "annotations": annotations},
-        "spec": {"storageClassName": class_name, "accessModes": [access_mode],
+        "spec": {"storageClassName": base_name, "accessModes": [access_mode],
+                 "dataSource": {"apiGroup": "snapshot.storage.k8s.io", "kind": "VolumeSnapshot", "name": snapshot_name},
                  "volumeMode": volume_mode,
-                 "resources": {"requests": {"storage": f"{size_gb}Gi"}}},
+                 "resources": {"requests": {"storage": str(plan["volume_size_bytes"])}}},
     }
-    try:
-        out = ksend("POST", f"/api/v1/namespaces/{namespace}/persistentvolumeclaims", pvc)
-    except Exception:
-        # A class is safe to retain and reuse, but never hide a failed PVC create.
-        raise
+    out = ksend("POST", f"/api/v1/namespaces/{namespace}/persistentvolumeclaims", pvc)
     _bust("lhvols", "vol")
-    return {"ok": True, "backup": backup, "namespace": namespace, "name": pvc_name,
-            "storage_class": class_name, "size_gb": size_gb,
-            "access_mode": access_mode,
+    return {**result, "created": True, "snapshot": snapshot_name,
             "uid": (out.get("metadata", {}) or {}).get("uid", ""),
             "message": f"Restore of {backup} into {namespace}/{pvc_name} started"}
+
+
+def validate_restore_class(base, volume_mode="Filesystem", migration=False):
+    parameters = base.get("parameters") or {}
+    if base.get("provisioner") != "driver.longhorn.io" or any(parameters.get(k) for k in ("fromBackup", "backingImage")):
+        raise ValueError("Choose a regular Longhorn storage class")
+    if volume_mode == "Filesystem" and str(parameters.get("migratable", "false")).lower() == "true":
+        raise ValueError("Filesystem volumes need a storage class with migratable disabled")
+    if migration and base.get("volumeBindingMode") == "WaitForFirstConsumer":
+        raise ValueError("Migrated volumes need an Immediate storage class so they can restore before the workload starts")
+
+
+def restore_support():
+    return CSI_RESTORE.support()
+
+
+def ensure_restore_support():
+    return CSI_RESTORE.ensure_support()
+
+
+def restore_problem(pvc):
+    return CSI_RESTORE.problem(pvc)
+
+
+def cleanup_restore_snapshots():
+    return CSI_RESTORE.cleanup()
+
+
+def finish_restore_resize(pvc, cfg):
+    return CSI_RESTORE.finish_resize(pvc, cfg)
 
 
 # Tasks that keep a copy of a volume; trims and cleanups tidy, and protect nothing.

@@ -446,7 +446,8 @@
       created: lhBackups[0].created, backup_size_mb: lhBackups[0].size_mb,
       volume_size_bytes: 21474836480, minimum_size_gb: 20,
       suggested_name: "pvc-demo-frigate-restore", namespace: ns, pvc_name: name,
-      conflict, ready: !conflict, target: "default" };
+      conflict, ready: !conflict, target: "default", storage_class: "longhorn-r2",
+      storage_classes: ["longhorn-r2", "longhorn-fast"] };
   };
   const volumeDeletePlan = url => {
     const name = url.searchParams.get("name") || "scratch-test";

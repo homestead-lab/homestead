@@ -747,8 +747,9 @@ window.lhRestore = async backup => {
           <select id="lr_mode"><option value="ReadWriteOnce">ReadWriteOnce (RWO)</option>
             <option value="ReadWriteMany">ReadWriteMany (RWX)</option></select></div>
       </div>
-      <div class="f"><label>Replicas ${tip("Copies Longhorn maintains on separate eligible disks after the restore completes.")}</label>
-        <input id="lr_replicas" type="number" min="1" max="5" value="2"></div>
+      <div class="f"><label>Storage class ${tip("The restored PVC uses this configured class. Replica count, disk tags and other storage settings come from it.")}</label>
+        <select id="lr_sc" onchange="lhRestoreCheck()">${(plan.storage_classes || []).map(name => `<option value="${esc(name)}" ${name === plan.storage_class ? "selected" : ""}>${esc(name)}</option>`).join("")}</select>
+        <div class="dim small">The restored volume keeps this class and its storage settings.</div></div>
       <div id="lr_check" class="note"><span class="spin2"></span> checking destination name</div>
       <div class="row" style="margin-top:18px">
         <button class="btn pri" id="lr_submit" data-need="admin" data-backup="${esc(backup)}"
@@ -767,6 +768,7 @@ window.lhRestoreCheck = () => {
     const ns = $("#lr_ns").value, name = $("#lr_name").value.trim();
     button.disabled = true;
     if (!name) { box.className = "note bad"; box.textContent = "Enter a PVC name."; return; }
+    if (!$("#lr_sc").value) { box.className = "note bad"; box.textContent = "Create a regular Longhorn storage class before restoring."; return; }
     box.className = "note"; box.innerHTML = '<span class="spin2"></span> checking destination name';
     try {
       const plan = await api(`/api/lh/restore/plan?backup=${encodeURIComponent(backup)}&ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`);
@@ -778,7 +780,7 @@ window.lhRestoreCheck = () => {
 window.lhRestoreStart = async backup => {
   const body = { backup, namespace: $("#lr_ns").value, name: $("#lr_name").value.trim(),
     size_gb: +$("#lr_size").value, access_mode: $("#lr_mode").value,
-    replicas: +$("#lr_replicas").value };
+    storage_class: $("#lr_sc").value };
   const button = $("#lr_submit");
   button.disabled = true; button.innerHTML = '<span class="spin2"></span> starting';
   try {
