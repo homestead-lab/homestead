@@ -301,6 +301,7 @@ POLICY = {
     ('POST', '/api/os-updates/start'): 'admin',
     ('POST', '/api/os-updates/stop'): 'admin',
     ('POST', '/api/passthrough/inspect'): 'admin',
+    ('POST', '/api/passthrough/vbios/capture'): 'admin',
     ('POST', '/api/passthrough/iommu'): 'admin',
     ('POST', '/api/passthrough/pci'): 'admin',
     ('POST', '/api/passthrough/usb'): 'admin',

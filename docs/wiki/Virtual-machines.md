@@ -297,6 +297,15 @@ Host preparation opens in a separate tab so the VM configuration stays in place.
 
 ### A GPU's ROM (vBIOS)
 
+To capture a card's ROM, open its node's **Hardware → Devices for VMs**,
+inspect the devices, and choose **Capture vBIOS** beside the GPU. Give the
+GPU to VMs and stop any VM using its IOMMU group first. Homestead reads the
+card's sysfs ROM, checks its PCI image headers and vendor/device IDs, and
+downloads a `.rom` file. It does not detach a host driver or reset the card.
+The ROM read switch is disabled again when the helper finishes. A card that
+does not expose a readable ROM needs a dump from that exact card, such as
+one captured with GPU-Z; capture does not flash or modify the GPU firmware.
+
 Some GPUs need their ROM given to the VM - a card the host booted from, which
 hides its ROM afterwards, or one that needs a patched ROM. On the device's row,
 choose the ROM file when adding the device or editing it: up to 640 KiB, starting with the PCI ROM signature `55 AA`
@@ -312,6 +321,23 @@ Clearing a ROM removes its contents and the VM's hook reference; the empty
 managed ConfigMap is retained for inspection and reuse. Several ROM files
 must fit together within the ConfigMap's 1 MiB limit. If a saved ROM is missing,
 replace or clear it explicitly in the edit form; unrelated edits keep it intact.
+
+### Primary boot output
+
+In **VM → Edit → Hardware → Devices**, **Primary boot output** chooses
+**Web console (virtual display)**, **Passed-through GPU (physical monitor)**,
+or **Serial console only**. The change applies at the VM's next start.
+
+GPU output requires an attached passthrough GPU. It turns off virtual VGA and
+uses UEFI; when changing from BIOS, Secure Boot starts off. Connect the monitor
+to the GPU's physical port and provide a UEFI-capable vBIOS if the card needs
+one. The guest needs its GPU drivers for OS output. A guest installed for BIOS
+may need its bootloader repaired before it can boot using UEFI. The VNC screen
+is unavailable with GPU or serial output; keep the serial console enabled for
+troubleshooting. Switching back to the web console leaves UEFI in place.
+With several passed-through GPUs, the guest firmware chooses which card to
+initialize; this setting chooses physical GPU output rather than a specific
+card or connector.
 
 ### Hardware during a cluster transfer
 

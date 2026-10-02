@@ -45,6 +45,12 @@ try {
     assert.match(text, /GeForce RTX 2080/); assert.match(text, /TU104 HD Audio/);
     assert.match(text, /2 devices move together/); assert.match(text, /carries this host's network/);
     assert.equal(await page.evaluate(() => deviceReads), 1);
+    const downloadEvent = page.waitForEvent('download');
+    await page.locator('#nodeDevices').getByRole('button', {name: 'Capture vBIOS', exact: true}).first().click();
+    const download = await downloadEvent;
+    assert.equal(download.suggestedFilename(), 'demo-gpu-vbios.rom');
+    const captured = await fs.readFile(await download.path());
+    assert.deepEqual([...captured.subarray(0, 2)], [0x55, 0xaa]);
     const saved = await page.evaluate(() => PT.facts[ptKey('harvester-node1')]);
     await page.screenshot({path: `${output}/groups-${width}-${theme}.png`, fullPage: true});
     await page.evaluate(async () => { await go('dash'); await go('nodes', {params: {node: 'harvester-node1'}}); nodeSectionGo('hardware'); });
@@ -76,6 +82,15 @@ try {
     let overflow = await page.evaluate(() => document.querySelector('#mbody').scrollWidth > document.querySelector('#mbody').clientWidth + 1);
     assert.equal(overflow, false, 'VM device card fits the dialog');
     await page.evaluate(async () => { closeModal(); await vmEdit('default', 'home-assistant-os'); });
+    await page.locator('#mbody').getByRole('button', {name: 'Hardware', exact: true}).click();
+    await page.locator('#vh details[data-sec="devices"] summary').click();
+    await page.locator('#vh_boot_output').selectOption('gpu');
+    assert.equal(await page.locator('#vh_firmware').inputValue(), 'uefi');
+    const hardware = await page.evaluate(() => vmHardwareChanges(window.__vhBase));
+    assert.equal(hardware.boot_output, 'gpu'); assert.equal(hardware.graphics, false);
+    await page.screenshot({path: `${output}/boot-output-${width}-${theme}.png`});
+    assert.equal(await page.evaluate(() => document.querySelector('#mbody').scrollWidth > document.querySelector('#mbody').clientWidth + 1), false,
+      'boot output selector fits the dialog');
     await page.getByRole('button', {name: /^Passthrough/}).click();
     await page.locator('#pd_pick').waitFor({state: 'visible'});
     assert.match(await page.locator('#pd_pick option').first().innerText(), /GeForce RTX 2080/);

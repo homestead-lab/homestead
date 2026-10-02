@@ -261,6 +261,77 @@ def inspect(node):
 
 # ---- IOMMU --------------------------------------------------------------------
 
+def capture_script(address):
+    if not ADDRESS.fullmatch(address):
+        raise ValueError("Choose a valid PCI address")
+    return f'''set -e
+d=/sys/bus/pci/devices/{address}
+[ -f "$d/rom" ] || {{ echo "ERR This GPU does not expose a ROM through sysfs"; exit 1; }}
+drv=""; [ ! -e "$d/driver" ] || drv=$(basename "$(readlink "$d/driver")")
+[ -z "$drv" ] || [ "$drv" = vfio-pci ] || {{ echo "ERR Give this GPU to VMs first; its host driver is still active"; exit 1; }}
+t=$(mktemp)
+trap 'echo 0 > "$d/rom" 2>/dev/null || :; rm -f "$t"' EXIT HUP INT TERM
+echo 1 > "$d/rom" || {{ echo "ERR The GPU ROM could not be enabled"; exit 1; }}
+dd if="$d/rom" of="$t" bs=4096 count={ROM_LIMIT // 4096 + 1} 2>/dev/null || {{ echo "ERR This GPU ROM cannot be read; upload a ROM dumped from this card instead"; exit 1; }}
+echo ROM
+base64 "$t"
+echo END
+'''
+
+
+def capture_vbios(node, address):
+    """Read a stopped GPU's ROM without unbinding drivers or resetting it."""
+    if not ADDRESS.fullmatch(address):
+        raise ValueError("Choose a valid PCI address")
+    facts = inspect(node)
+    gpu = next((r for r in facts["pci"] if r["address"] == address), None)
+    if not gpu or not str(gpu.get("class") or "").startswith("03"):
+        raise ValueError("vBIOS capture is only available for a GPU on this host")
+    if gpu.get("driver") not in (None, "", "vfio-pci"):
+        raise ValueError("Give this GPU to VMs first; capture does not detach an active host display")
+    try:
+        instances = kget("/apis/kubevirt.io/v1/virtualmachineinstances")["items"]
+    except Exception:
+        raise ValueError("VM device use could not be checked; no ROM was read") from None
+    resources_in_group = {r.get("resource") for r in facts["pci"]
+                          if r["address"] in [address, *gpu.get("group_members", [])]}
+    for instance in instances:
+        status = instance.get("status") or {}
+        if status.get("phase") in ("Succeeded", "Failed"):
+            continue
+        # Unscheduled instances can acquire this device while capture starts.
+        if status.get("nodeName") and status["nodeName"] != node:
+            continue
+        devices = ((instance.get("spec") or {}).get("domain") or {}).get("devices") or {}
+        if any(d.get("deviceName") in resources_in_group for d in
+               (devices.get("hostDevices") or []) + (devices.get("gpus") or [])):
+            raise ValueError(f"Stop VM {instance['metadata']['name']} before capturing this GPU's vBIOS")
+    out, err = hostrun.run(node, capture_script(address), timeout=60)
+    if not out.startswith("ROM\n") or not out.rstrip().endswith("\nEND"):
+        problem = next((l[4:] for l in out.splitlines() if l.startswith("ERR ")), "")
+        raise ValueError(problem or "The GPU ROM could not be read; upload a dump from this card instead")
+    raw = check_rom("".join(out.splitlines()[1:-1]))
+    # Check every PCI image, including the EFI image, before offering a dump.
+    offset = 0
+    while True:
+        if offset + 26 > len(raw) or raw[offset:offset + 2] != b"\x55\xaa":
+            raise ValueError("The captured ROM is truncated or invalid; upload a dump from this card instead")
+        pcir = offset + int.from_bytes(raw[offset + 24:offset + 26], "little")
+        if pcir + 22 > len(raw) or raw[pcir:pcir + 4] != b"PCIR":
+            raise ValueError("The captured ROM has no valid PCI image header")
+        vendor = int.from_bytes(raw[pcir + 4:pcir + 6], "little")
+        device = int.from_bytes(raw[pcir + 6:pcir + 8], "little")
+        if (vendor, device) != (int(gpu["vendor"], 16), int(gpu["device"], 16)):
+            raise ValueError("The captured ROM does not match this GPU's vendor and device")
+        size = int.from_bytes(raw[pcir + 16:pcir + 18], "little") * 512
+        if not size or pcir + 22 > offset + size or offset + size > len(raw):
+            raise ValueError("The captured ROM is truncated or invalid")
+        if raw[pcir + 21] & 128:
+            break
+        offset += size
+    return {"ok": True, "data": base64.b64encode(raw).decode(), "size": len(raw),
+            "filename": f"vbios-{address.replace(':', '-')}-{gpu['vendor']}-{gpu['device']}.rom"}
+
 def iommu_script(cpu):
     words = "intel_iommu=on iommu=pt" if cpu == "intel" else "iommu=pt"
     return f"""set -e
@@ -628,7 +699,7 @@ def check_rom(data):
     return raw
 
 
-def hook_script(roms):
+def hook_script(roms, sidecar_index=0):
     """The onDefineDomain hook: each ROM written where QEMU can read it, and
     named as its device's ROM. On any failure the domain goes on unchanged."""
     table = ",\n".join(f"    {json.dumps(name)}: {json.dumps(base64.b64encode(raw).decode())}" for name, raw in roms.items())
@@ -641,6 +712,7 @@ ROMS = {{
 {table}
 }}
 HOOKS = "/var/run/kubevirt-hooks"
+QEMU_HOOKS = "/var/run/kubevirt-hooks/hook-sidecar-{sidecar_index}"
 
 
 def main():
@@ -666,7 +738,9 @@ def main():
             os.chmod(path, 0o644)
             for old in target.findall("rom"):
                 target.remove(old)
-            ET.SubElement(target, "rom", {{"bar": "on", "file": path}})
+            # Compute mounts the parent of the sidecar's own subdirectory.
+            qemu_path = os.path.join(QEMU_HOOKS, os.path.basename(path))
+            ET.SubElement(target, "rom", {{"bar": "on", "file": qemu_path}})
         sys.stdout.write(ET.tostring(root, encoding="unicode"))
     except Exception as error:
         sys.stderr.write("homestead vbios hook: " + str(error) + "\\n")
@@ -755,7 +829,7 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
             body = {"apiVersion": "v1", "kind": "ConfigMap",
                     "metadata": {"name": cm, "namespace": ns, "labels": {"homestead.io/managed": "true",
                                                                            "app": vm["metadata"]["name"]}},
-                    "data": {HOOK_KEY: hook_script(roms)}}
+                    "data": {HOOK_KEY: hook_script(roms, len(sidecars))}}
             if vm["metadata"].get("uid"):
                 body["metadata"]["ownerReferences"] = [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
                     "name": vm["metadata"]["name"], "uid": vm["metadata"]["uid"]}]

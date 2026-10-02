@@ -2576,13 +2576,13 @@ def prepare_vm(cfg, platform=None, default_class=""):
             },
         },
     }
-    if cfg.get("hardware"):
-        # Firmware, TPM and the rest, as the Hardware tab sets them later.
-        import homestead_vm_hardware as HARDWARE
-        HARDWARE.apply(vm, cfg["hardware"])
     effects = []
     if cfg.get("host_devices"):
         PASSTHROUGH.edit_vm(vm, ns, cfg["host_devices"], effects)
+    if cfg.get("hardware"):
+        # GPU output validates devices selected in the same creation wizard.
+        import homestead_vm_hardware as HARDWARE
+        HARDWARE.apply(vm, cfg["hardware"])
     return {"namespace": ns, "name": name, "vm": vm, "claims": claims, "secrets": secrets, "effects": effects,
             "downloads": downloads, "secret_name": secret_name,
             "result": {"ok": True, "vm": name, "datavolume": dv, "address": address,
