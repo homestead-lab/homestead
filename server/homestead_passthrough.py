@@ -270,7 +270,20 @@ d=/sys/bus/pci/devices/{address}
 drv=""; [ ! -e "$d/driver" ] || drv=$(basename "$(readlink "$d/driver")")
 [ -z "$drv" ] || [ "$drv" = vfio-pci ] || {{ echo "ERR Give this GPU to VMs first; its host driver is still active"; exit 1; }}
 t=$(mktemp)
-trap 'echo 0 > "$d/rom" 2>/dev/null || :; rm -f "$t"' EXIT HUP INT TERM
+pm=""
+cleanup() {{
+  echo 0 > "$d/rom" 2>/dev/null || :
+  [ -z "$pm" ] || echo "$pm" > "$d/power/control" || :
+  rm -f "$t"
+}}
+trap cleanup EXIT HUP INT TERM
+# VFIO runtime-suspends unused cards. A ROM read in D3hot fails even though
+# sysfs exposes the ROM; wake the card and restore its original policy.
+if [ -f "$d/power/control" ]; then
+  pm=$(cat "$d/power/control")
+  case "$pm" in auto|on) ;; *) echo "ERR The GPU power policy could not be read"; exit 1 ;; esac
+  echo on > "$d/power/control" || {{ echo "ERR The GPU could not be woken for ROM capture"; exit 1; }}
+fi
 echo 1 > "$d/rom" || {{ echo "ERR The GPU ROM could not be enabled"; exit 1; }}
 dd if="$d/rom" of="$t" bs=4096 count={ROM_LIMIT // 4096 + 1} 2>/dev/null || {{ echo "ERR This GPU ROM cannot be read; upload a ROM dumped from this card instead"; exit 1; }}
 echo ROM
