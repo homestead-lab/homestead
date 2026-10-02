@@ -103,3 +103,36 @@ test("edit records its job and refreshes the tray on success or lost response",a
     assert.equal(jobs.length,fail?0:1);assert.equal(refreshed,1);
   }
 });
+
+
+test("isolation disables NIC controls without unlocking role-disabled controls",()=>{
+  const t=setup(),card={disabled:false,dataset:{}},role={disabled:true,dataset:{}};
+  t.fields['#ve_isolated']={checked:true};
+  t.ctx.$$=()=>[card,role];
+  t.ctx.vmIsolationChanged();
+  assert.equal(card.disabled,true);assert.equal(role.disabled,true);
+  t.fields['#ve_isolated'].checked=false;t.ctx.vmIsolationChanged();
+  assert.equal(card.disabled,false);assert.equal(role.disabled,true);
+});
+
+test("isolation guards Add interface and save discards stale NIC rows",async()=>{
+  const t=setup(),reviews=[];let additions=0;
+  t.ctx.__vmEdit={ns:'lab',name:'guest',v:{cores:2,memory:'2Gi'},o:{}};
+  t.fields['#ve_isolated']={checked:true};
+  t.fields['#ve_nics']={insertAdjacentHTML(){additions++;}};
+  for(const [id,value] of Object.entries({ve_strategy:'Manual',ve_desc:'',ve_node:''})) t.fields[`#${id}`]={value};
+  t.ctx.$$=selector=>selector.includes('nic')||selector.includes('vn-add') ? [{querySelector(){throw new Error('stale NIC accessed');}}] : [];
+  t.ctx.vmEditReview=async body=>reviews.push(body);
+  t.ctx.vmAddNic();assert.equal(additions,0);
+  await t.ctx.vmEditSave();
+  assert.equal(reviews[0].isolated,true);
+  assert.equal(reviews[0].nics.length,0);assert.equal(reviews[0].add_nics.length,0);
+  assert.equal(reviews[0].restart,false);
+});
+
+test("isolation change is explicit in the edit review",async()=>{
+  const t=setup();await t.ctx.vmEditReview({name:'guest',ns:'lab',isolated:true});
+  assert.match(t.fields['#mbody'].innerHTML,/Isolated VM/);
+  assert.match(t.fields['#mbody'].innerHTML,/removes all virtual network cards/);
+  assert.match(t.fields['#mbody'].innerHTML,/at next start/);
+});

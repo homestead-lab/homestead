@@ -168,6 +168,7 @@ jobs:
             EDIT_SCREENSHOTS=release-assets/dialogs/container-edit node tests/integration/container-edit-steps.mjs
             CONTAINER_SET_SCREENSHOTS=release-assets/dialogs/container-set node tests/integration/container-set.mjs
             PASSTHROUGH_SCREENSHOTS=release-assets/dialogs/passthrough node tests/integration/passthrough-devices.mjs
+            VM_ISOLATION_SCREENSHOTS=release-assets/dialogs/vm-isolation node tests/integration/vm-network-isolation.mjs
           fi
           if [ "${{ matrix.audit }}" = pages ]; then
             node scripts/check_setup_guide.mjs
@@ -179,6 +180,7 @@ jobs:
             VOLUME_SCREENSHOTS=release-assets/pages/planned-volumes node tests/integration/planned-container-volumes.mjs
             node scripts/check_dashboard_storage.mjs
             node scripts/check_dashboard_stream.mjs
+            node tests/integration/volume-files-cleanup.mjs
             node scripts/check_update_channels.mjs
             node scripts/check_troubleshooting.mjs
           fi

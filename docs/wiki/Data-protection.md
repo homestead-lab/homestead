@@ -63,6 +63,21 @@ Have both.
    Longhorn volume, and points Longhorn at it. That is meant for
    [moving workloads](Moving-between-clusters) - it lives and dies with the
    cluster it protects, so it is not a backup of anything by itself.
+
+   The built-in RustFS store also checks the backup objects it already holds,
+   even when no transfer is running. Homestead uses a slow daily object scan and
+   hourly capacity accounting to reduce idle HDD reads from retained backups.
+   Integrity checks remain enabled; usage figures can take longer to catch up. Existing stores receive missing settings when Longhorn has no
+   active backup, restore or transfer artifacts; explicit environment overrides
+   are preserved. A first scan of a store with no usage cache can start sooner.
+   See [RustFS scanner controls](https://github.com/rustfs/rustfs/blob/1.0.0/docs/operations/scanner-runtime-controls.md).
+
+   Temporary transfer backups are removed after a successful transfer or
+   cancellation. Transfers completed before ownership tracking was added can
+   leave old artifacts: verify the destination restored every disk before
+   removing them through Longhorn. Homestead does not infer ownership from a
+   backup's name and delete it automatically.
+
 2. **Pick a plan.** **Plans** set up a policy in one go:
    - *Snapshots*: hourly, kept for a day; daily, kept for a week;
    - *Snapshots and backups*: those, plus daily and weekly backups;
