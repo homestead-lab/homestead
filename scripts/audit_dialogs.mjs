@@ -21,6 +21,14 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // "click:<fn>" (the first control whose onclick calls fn), or "text:<label>"
 // (the first button in the dialog with that label).
 const DIALOGS = [
+  ["bug-record", "settings", "bugStart()"],
+  ["bug-comment", "settings", "bugDescribe('0123456789abcdef0123456789abcdef')"],
+  ["bug-review", "settings", "bugReview('0123456789abcdef0123456789abcdef')"],
+  ["bug-review-full", "settings", "bugReview('0123456789abcdef0123456789abcdef','full')"],
+  ["bug-issue", "settings", "bugReview('0123456789abcdef0123456789abcdef')", "bugIssue()"],
+  ["bug-package", "settings", "bugPackage()"],
+  ["bug-package-full", "settings", "bugPackage()", "document.querySelector('#bugPackageFormat').value='full';bugPackageWarning('full')"],
+  ["bug-delete", "settings", "bugDelete('0123456789abcdef0123456789abcdef')"],
   ["self-data-prepare", "settings", "window.__demoDataPrepared=false;replicasMoveData()", "selfDataPrepareReview()"],
   ["self-data-blocked-k3s", "settings", "window.__demoOps=(window.__demoOps||[]).filter(x=>x.id!=='data-batch-recovery');window.__demoDataBatchRecovery=true;replicasMoveData()"],
   ["self-data-batch-recovery", "settings", "window.__demoOps=(window.__demoOps||[]).filter(x=>x.id!=='data-batch-recovery');window.__demoDataBatchRecovery=true;replicasMoveData()", "selfDataOpenJob('data-batch-recovery')"],
