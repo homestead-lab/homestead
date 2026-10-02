@@ -531,7 +531,7 @@ def backup_target():
     if not items:
         return {"configured": False, "url": "", "available": False, "reason": "none defined",
                 "harvester": _harvester_setting() is not None}
-    t = items[0]
+    t = next((item for item in items if item.get("metadata", {}).get("name") == "default"), items[0])
     sp, st = t.get("spec", {}), t.get("status", {}) or {}
     conds = {c["type"]: c for c in st.get("conditions", []) or []}
     avail = conds.get("Unavailable", {})
@@ -671,6 +671,74 @@ def on_harvester():
     """Whether the backup target is Harvester's setting, which holds the keys
     itself, rather than Longhorn's own, which names a Secret."""
     return _harvester_setting() is not None
+
+
+def _backup_target_object():
+    # Unlike the status card, a safety snapshot must fail on an unreadable API.
+    for path, harvester in ((HARVESTER_TARGET, True),
+                            (f"{API}/namespaces/{LHNS}/backuptargets/default", False)):
+        try:
+            return path, harvester, kget(path)
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+    return path, False, None
+
+
+def _backup_target_state(harvester, obj):
+    if harvester:
+        raw = (obj or {}).get("value") or ""
+        try:
+            value = json.loads(raw) if raw else {}
+            if not isinstance(value, dict):
+                value = raw
+        except ValueError:
+            value = raw
+        return {"harvester": True, "value": value}
+    spec = (obj or {}).get("spec") or {}
+    return {"harvester": False, "value": {
+        key: spec.get(key, "5m" if key == "pollInterval" else "")
+        for key in ("backupTargetURL", "credentialSecret", "pollInterval")}}
+
+
+def backup_target_state():
+    """Private, complete setting for temporary borrowing; may contain S3 keys."""
+    _, harvester, obj = _backup_target_object()
+    return _backup_target_state(harvester, obj)
+
+
+def transfer_target_state(previous, url, secret, credentials):
+    if previous["harvester"]:
+        keys = {"access_key": credentials.get("AWS_ACCESS_KEY_ID", ""),
+                "secret_key": credentials.get("AWS_SECRET_ACCESS_KEY", ""),
+                "endpoint": credentials.get("AWS_ENDPOINTS", "")}
+        current = {"virtualHostedStyle": str(credentials.get("VIRTUAL_HOSTED_STYLE", "false")).lower() == "true"}
+        return {"harvester": True, "value": harvester_target_value(url, keys, "30s", current)}
+    return {"harvester": False, "value": {
+        "backupTargetURL": url, "credentialSecret": secret, "pollInterval": "30s"}}
+
+
+def replace_backup_target_state(expected, replacement):
+    """Replace only our own setting, fenced against concurrent admin changes."""
+    path, harvester, obj = _backup_target_object()
+    if _backup_target_state(harvester, obj) != expected or harvester != replacement["harvester"]:
+        return False
+    if expected == replacement:
+        return True
+    value = replacement["value"]
+    patch = {"metadata": {"resourceVersion": (obj or {}).get("metadata", {}).get("resourceVersion", "")}}
+    if harvester:
+        patch["value"] = (json.dumps(value) if value else "") if isinstance(value, dict) else value
+    else:
+        patch["spec"] = value
+    if obj is None:
+        patch.update(apiVersion="longhorn.io/v1beta2", kind="BackupTarget")
+        patch["metadata"] = {"name": "default", "namespace": LHNS}
+        ksend("POST", path.rsplit("/", 1)[0], patch)
+    else:
+        ksend("PATCH", path, patch, ctype="application/merge-patch+json")
+    _bust("lhtarget")
+    return True
 
 
 def set_backup_target(url, secret="", poll="5m", keys=None):

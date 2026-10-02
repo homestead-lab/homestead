@@ -43,6 +43,11 @@ workloads** lists what is still needed, with a button beside each:
 - **Migration from it is off** - the source's store is stopped; its
   **Migration** button enables it again.
 
+The destination restores its previous backup setting once the volumes are
+restored, or the transfer fails or is cancelled. This includes the old
+credentials and polling interval. It keeps any storage change an admin made
+during the transfer. Transfers take turns using this cluster-wide setting.
+
 That S3 server needs an address on your LAN that the destination can reach. By
 default it shares the source's **shared address** - the one its apps share -
 and answers on port 9000 there, so no address of its own is needed. On k3s it
@@ -78,6 +83,17 @@ anything stops. Then, in the job tray:
 
 A move survives either Homestead restarting, and has no time limit that would
 abandon a large volume. A failed step can be retried once its cause is fixed.
+Retry temporarily reconnects to the saved backup store for that transfer.
+If backup-setting cleanup cannot reach Kubernetes, the job says so and
+Homestead retries cleanup automatically, including after a restart.
+
+Unlinking a cluster removes its fleet access; it does not remove backup storage
+or change a deliberately configured Longhorn target. Finish or cancel transfers
+before unlinking so Homestead can recover any stopped source workloads.
+Transfers from older versions may have left the destination pointing at the
+source's store. Check **Backups** and select the
+intended target if that store is no longer available; a cluster's UI address
+and its backup storage address can differ.
 
 A move that fails says why - the reason Kubernetes gave, or that this cluster
 cannot reach the source's backup storage. **Retry** carries on from the step
