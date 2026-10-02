@@ -77,7 +77,7 @@ test("confirmation on this device can be undone without manufacturing cluster he
 
 test("configured integrations and saved HTTPS addresses do not claim a passed health check", () => {
   const { ctx } = fixture();
-  for (const id of ["backups", "osupdates", "unifi", "unraid", "homeassistant", "linked", "starter", "console"]) {
+  for (const id of ["lan", "smb", "backups", "osupdates", "unifi", "unraid", "homeassistant", "linked", "starter", "console"]) {
     assert.equal(ctx.setupStatusLabel(id, "done"), "Configuration found");
   }
   assert.equal(ctx.setupStatusLabel("https", "done", { here: false }), "Previously checked");
@@ -93,4 +93,30 @@ test("Cloudflare guide stores only its position, keeps demo separate and rejects
   assert.equal(ctx.setupCloudflareStage(), null);
   ctx.setupCloudflareStage(null);
   assert.equal(saved.size, 0);
+});
+
+test("SMB and LAN network steps remain admin-only and expose the configuration actions", () => {
+  const {ctx} = fixture();
+  const state = {admin:true,steps:{lan:{applies:true,done:false},smb:{applies:true,done:false}}};
+  const ids = () => ctx.setupVisible(state).flatMap(([,list]) => [...list]);
+  assert.ok(ids().includes("lan")); assert.ok(ids().includes("smb"));
+  assert.equal(vm.runInContext("SETUP_STEPS.lan.title",ctx), "LAN networks");
+  assert.equal(vm.runInContext("SETUP_STEPS.smb.title",ctx), "SMB");
+  const opened=[];ctx.go=page=>opened.push(page);ctx.networkTab=tab=>opened.push(tab);ctx.settingsTab=tab=>opened.push(tab);
+  vm.runInContext("eval(SETUP_STEPS.lan.actions({})[0].run)",ctx);
+  vm.runInContext("eval(SETUP_STEPS.smb.actions({}).find(a=>a.pri).run)",ctx);
+  assert.deepEqual(opened,["services","network","hardware","settings"]);
+  assert.match(vm.runInContext("SETUP_CHECKS.lan",ctx),/not connectivity/);
+  assert.match(vm.runInContext("SETUP_CHECKS.smb",ctx),/not that clients can access/);
+  state.admin=false;assert.equal(ids().includes("lan"),false);assert.equal(ids().includes("smb"),false);
+});
+test("next and browser facts cannot mark SMB or LAN configuration complete", () => {
+  const {ctx} = fixture();
+  const steps=ctx.setupFacts({admin:true,steps:{lan:{done:false,applies:true},smb:{done:false,applies:true}}});
+  for(const id of ["lan","smb"]){
+    assert.equal(steps[id].done,false);
+    assert.equal(ctx.setupStatus(id,steps,[]),"todo");
+    assert.equal(ctx.setupStatus(id,steps,[id]),"skipped");
+    assert.equal(ctx.setupStatus(id,{[id]:{done:false,error:"unavailable"}},[]),"attention");
+  }
 });
