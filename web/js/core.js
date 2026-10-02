@@ -755,18 +755,20 @@ function morph(a, b) {
   }
 }
 function syncAttrs(x, y) {
+  if (x.nodeName.toLowerCase() === "svg" && x.classList.contains("spark")) {
+    x.sparkReset = x.getAttribute("data-spark-key") !== y.getAttribute("data-spark-key");
+    x.sparkWindow = { before: JSON.parse(x.getAttribute("data-spark-times") || "[]"),
+      after: JSON.parse(y.getAttribute("data-spark-times") || "[]") };
+  }
   // Whether a <details> is open belongs to the reader, the same way the text in
   // an input does: a background refresh must not fold up a pod tree mid-read.
   const readerOwnsOpen = x.nodeName === "DETAILS";
   for (const at of [...y.attributes]) if (!(readerOwnsOpen && at.name === "open") &&
       x.getAttribute(at.name) !== at.value) {
-    const animateSpark = at.name === "d" && x.closest(".spark") &&
-      (x.classList.contains("ln") || x.classList.contains("fl"));
-    x.setAttribute(at.name, at.value);
-    if (animateSpark && SET.motion !== "off" && x.animate) {
-      x.animate([{ transform: "translateX(7px)", opacity: .72 }, { transform: "translateX(0)", opacity: 1 }],
-        { duration: 420, easing: "cubic-bezier(.2,.8,.2,1)" });
-    }
+    if (at.name === "d" && x.closest(".spark") &&
+        (x.classList.contains("ln") || x.classList.contains("fl"))) {
+      updateSparkPath(x, at.value);
+    } else x.setAttribute(at.name, at.value);
   }
   for (const at of [...x.attributes]) {
     if (readerOwnsOpen && at.name === "open") continue;
@@ -776,36 +778,96 @@ function syncAttrs(x, y) {
 function resetPaint() { const h = V(); delete h.dataset.painted; h.classList.remove("refreshing"); h.innerHTML = ""; }
 
 /* ---------------- chart primitives ---------------- */
-function sparkline(vals, { w = 300, h = 74 } = {}) {
+const sparkAnimations = new WeakMap();
+const sparkMotion = () => SET.motion !== "off" && !document.hidden &&
+  !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+function sparkPath(points) {
+  points = points.map(point => point.map(value => Math.round(value * 1000) / 1000));
+  let d = `M ${points[0][0]},${points[0][1]}`;
+  for (let i = 1; i < points.length; i++) {
+    const [x0, y0] = points[i - 1], [x1, y1] = points[i], cx = (x0 + x1) / 2;
+    d += ` C ${cx},${y0} ${cx},${y1} ${x1},${y1}`;
+  }
+  return d;
+}
+function sparkPoints(d) {
+  return (d.match(/[MC]\s*[^MCLZ]+/g) || []).map(command =>
+    command.match(/[-+]?(?:\d*\.?\d+)(?:e[-+]?\d+)?/gi).slice(-2).map(Number));
+}
+/* Match observed samples: old points move left while the new point enters
+   at the right. No samples are invented between polls. */
+function sparkFrames(before, after, times, width) {
+  const old = times.before, next = times.after;
+  if (old.length === before.length && next.length === after.length && old.length > 1 && next.length > 1 &&
+      next.at(-1) > old.at(-1)) {
+    const start = old.indexOf(next[0]), last = next.indexOf(old.at(-1));
+    if (start >= 0 && last >= 0 && next.length - last <= 5 &&
+        old.slice(start).every((t, i) => t === next[i])) {
+      const ids = [...old, ...next.slice(last + 1)];
+      return { from: ids.map(t => {
+        const i = old.indexOf(t);
+        return i >= 0 ? before[i] : [width + (next.indexOf(t) - last) * width / (old.length - 1), before.at(-1)[1]];
+      }), to: ids.map(t => {
+        const i = next.indexOf(t);
+        return i >= 0 ? after[i] : [(old.indexOf(t) - start) * width / (next.length - 1), before[old.indexOf(t)][1]];
+      }) };
+    }
+    return null; // a gap or a reset is a fresh observation, not a scrolling continuation
+  }
+  return before.length === after.length ? { from: before, to: after } : null;
+}
+function updateSparkPath(path, target) {
+  const active = sparkAnimations.get(path);
+  if (active?.target === target && sparkMotion()) return;
+  if (active) cancelAnimationFrame(active.frame);
+  sparkAnimations.delete(path);
+  const svg = path.closest(".spark"), [, , width, height] = svg.getAttribute("viewBox").split(/\s+/).map(Number);
+  const before = sparkPoints(path.getAttribute("d") || ""), after = sparkPoints(target);
+  // Dense month-long plots move by less than a pixel per observation; keep their refresh cheap.
+  const frames = !svg.sparkReset && before.length > 1 && after.length > 1 &&
+      before.length <= 400 && after.length <= 400 && sparkMotion()
+    ? sparkFrames(before, after, svg.sparkWindow || { before: [], after: [] }, width) : null;
+  if (!frames) { path.setAttribute("d", target); return; }
+  const close = path.classList.contains("fl") ? ` L ${width},${height} L 0,${height} Z` : "";
+  const state = { target, frame: 0, start: null };
+  sparkAnimations.set(path, state);
+  const tick = now => {
+    if (!path.isConnected) { sparkAnimations.delete(path); return; }
+    state.start ??= now;
+    const progress = sparkMotion() ? Math.min(1, (now - state.start) / 650) : 1;
+    if (progress === 1) { path.setAttribute("d", target); sparkAnimations.delete(path); return; }
+    const eased = 1 - (1 - progress) ** 3;
+    path.setAttribute("d", sparkPath(frames.from.map(([x, y], i) =>
+      [x + (frames.to[i][0] - x) * eased, y + (frames.to[i][1] - y) * eased])) + close);
+    state.frame = requestAnimationFrame(tick);
+  };
+  // Extra samples start beyond the clip; the visible first frame keeps the old shape.
+  path.setAttribute("d", sparkPath(frames.from) + close);
+  state.frame = requestAnimationFrame(tick);
+}
+function sparkMeta(times, key) {
+  return ` data-spark-times="${esc(JSON.stringify(times || []))}" data-spark-key="${esc(key || "")}"`;
+}
+function sparkline(vals, { w = 300, h = 74, times, key } = {}) {
   if (!vals || vals.length < 2) vals = [0, 0];
   const n = vals.length, mn = Math.min(...vals), mx = Math.max(...vals);
   const pad = (mx - mn) * .25 || 1, lo = mn - pad, hi = mx + pad;
-  const pts = vals.map((v, i) => [(i / (n - 1)) * w, h - ((v - lo) / (hi - lo)) * h]);
-  let d = `M ${pts[0][0]},${pts[0][1]}`;
-  for (let i = 1; i < pts.length; i++) {
-    const [x0, y0] = pts[i - 1], [x1, y1] = pts[i], cx = (x0 + x1) / 2;
-    d += ` C ${cx},${y0} ${cx},${y1} ${x1},${y1}`;
-  }
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+  const d = sparkPath(vals.map((v, i) => [(i / (n - 1)) * w, h - ((v - lo) / (hi - lo)) * h]));
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"${sparkMeta(times, key)}>
     <path class="fl" d="${d} L ${w},${h} L 0,${h} Z"/><path class="ln" d="${d}"/></svg>`;
 }
-function dualSpark(a, b, { w = 300, h = 74 } = {}) {
+function dualSpark(a, b, { w = 300, h = 74, times, key } = {}) {
   const all = [...(a || []), ...(b || [])];
-  if (all.length < 2) return sparkline([0, 0], { w, h });
+  if (all.length < 2) return sparkline([0, 0], { w, h, times, key });
   const mn = Math.min(...all), mx = Math.max(...all);
   const pad = (mx - mn) * .2 || 1, lo = mn - pad, hi = mx + pad;
   const line = (vals, cl) => {
     if (!vals || vals.length < 2) return "";
     const n = vals.length;
-    const pts = vals.map((v, i) => [(i / (n - 1)) * w, h - ((v - lo) / (hi - lo)) * h]);
-    let d = `M ${pts[0][0]},${pts[0][1]}`;
-    for (let i = 1; i < pts.length; i++) {
-      const [x0, y0] = pts[i - 1], [x1, y1] = pts[i], cx = (x0 + x1) / 2;
-      d += ` C ${cx},${y0} ${cx},${y1} ${x1},${y1}`;
-    }
+    const d = sparkPath(vals.map((v, i) => [(i / (n - 1)) * w, h - ((v - lo) / (hi - lo)) * h]));
     return `<path class="ln ${cl}" d="${d}"/>`;
   };
-  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"${sparkMeta(times, key)}>
     ${line(a, "s1")}${line(b, "s2")}</svg>`;
 }
 const POL = (cx, cy, r, a) =>
