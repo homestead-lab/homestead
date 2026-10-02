@@ -1,5 +1,15 @@
 """Explicit HTTP authorization declarations. New routes must declare a policy."""
 POLICY = {
+    ('GET', '/api/diagnostics'): 'admin',
+    ('GET', '/api/diagnostics/report'): 'admin',
+    ('GET', '/api/diagnostics/download'): 'admin',
+    ('GET', '/api/diagnostics/issue'): 'admin',
+    ('POST', '/api/diagnostics/start'): 'admin',
+    ('POST', '/api/diagnostics/events'): 'admin',
+    ('POST', '/api/diagnostics/stop'): 'admin',
+    ('POST', '/api/diagnostics/draft'): 'admin',
+    ('POST', '/api/diagnostics/prepare'): 'admin',
+    ('POST', '/api/diagnostics/delete'): 'admin',
     ('GET', '/api/addons'): 'viewer',
     ('GET', '/api/alerts'): 'viewer',
     ('GET', '/api/appstore'): 'viewer',

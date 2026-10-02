@@ -179,11 +179,18 @@ async function api(path, opts) {
   const startedAt = window.NAV_TOKEN;
   // Linked clusters: which one this goes to (fleet.js).
   if (window.fleetRoute) ({ path, opts } = window.fleetRoute(path, opts || {}));
-  const r = await fetch(path, opts);
+  const diagnostic = window.HomesteadRecorder?.request(path, opts);
+  if (diagnostic) opts = { ...opts, headers: { ...opts?.headers, ...diagnostic.headers } };
+  let r;
+  try { r = await fetch(path, opts); }
+  catch (error) { diagnostic?.done(0); throw error; }
   const missing = r.headers.get("x-homestead-fleet-missing");
   if (missing && window.fleetNoteMissing) window.fleetNoteMissing(missing);
   const ct = r.headers.get("content-type") || "";
-  const b = ct.includes("json") ? await r.json() : await r.text();
+  let b;
+  try { b = ct.includes("json") ? await r.json() : await r.text(); }
+  catch (error) { diagnostic?.done(r.status); throw error; }
+  diagnostic?.done(r.status, b?.operation?.id);
   if (readOnly && startedAt !== window.NAV_TOKEN) return ABANDONED;
   if (!r.ok) throw new Error((b && b.error) || r.statusText);
   if (b && b.operation && window.noteOperation) window.noteOperation(b.operation);

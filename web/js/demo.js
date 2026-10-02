@@ -1965,6 +1965,37 @@ ssh_pwauth: true
     },
   };
 
+  const diagnosticDemoId = "0123456789abcdef0123456789abcdef";
+  const diagnosticReports = [{ id: diagnosticDemoId, title: "Container restart fails", comment: "Restart did not return the container to Ready.",
+    version: "2.8.293-dev.3", created: Date.now() / 1000, updated: Date.now() / 1000, expires: Date.now() / 1000 + 86400,
+    status: "ready", truncated: false, events: [{ kind: "click", at: 8000, action: "restart", target: "button:2" },
+      { kind: "request", at: 9000, method: "POST", path: "/api/restart", status: 503, duration: 824 }],
+    sources: { "homestead.log": "workload=frigate host=harvester-node1 address=192.0.2.207" },
+    manifest: [{ source: "homestead.log", state: "included" }, { source: "homestead-previous.log", state: "unavailable" }] }];
+  responses["/api/diagnostics"] = () => diagnosticReports.map(row => ({ ...row, events: row.events.length }));
+  responses["/api/diagnostics/start"] = (url, init) => {
+    const input = JSON.parse(init.body || "{}");
+    const row = { ...structuredClone(diagnosticReports[0]), id: crypto.randomUUID().replaceAll("-", ""), title: input.package ? "Logs package" : "Bug report",
+      comment: "", status: input.package ? "draft" : "recording", created: Date.now() / 1000, events: [] };
+    diagnosticReports.push(row); return { ...row, events: 0 };
+  };
+  responses["/api/diagnostics/report"] = url => {
+    const row = structuredClone(diagnosticReports.find(row => row.id === url.searchParams.get("id")) || diagnosticReports[0]);
+    row.format = url.searchParams.get("format") || "anonymised";
+    if (row.format === "anonymised") row.sources = { "homestead.log": "workload=<identifier-1> host=<identifier-2> address=<identifier-3>" };
+    return row;
+  };
+  for (const path of ["events", "stop", "draft", "prepare", "delete"]) responses[`/api/diagnostics/${path}`] = (url, init) => {
+    const input = JSON.parse(init.body || "{}"), row = diagnosticReports.find(row => row.id === input.id);
+    if (!row) return { error: "Report not found" };
+    if (path === "events") { if (input.batch > (row.lastBatch || 0)) row.events.push(...input.events); row.lastBatch = input.batch; return { batch: input.batch, status: row.status }; }
+    if (path === "delete") { diagnosticReports.splice(diagnosticReports.indexOf(row), 1); return { ok: true }; }
+    if (path === "stop") row.status = "draft";
+    if (path === "draft" || path === "prepare") { row.title = input.title || "Bug report"; row.comment = input.comment || ""; }
+    if (path === "prepare") row.status = "ready";
+    return { ...row, events: row.events.length };
+  };
+  responses["/api/diagnostics/issue"] = () => ({ title: "Container restart fails", body: "### What happened\nRestart did not return the container to Ready.\n\n### Diagnostics\nHomestead demo. Identifiers anonymised. No logs attached.", url: "https://github.com/wjcloudy/homestead/issues/new?title=Container%20restart%20fails", comment_shortened: false });
   const original = window.fetch.bind(window);
   /* Linked clusters: this one, a branch office that answers, and a DR site that is off. */
   const demoSites = [
@@ -2179,6 +2210,7 @@ ssh_pwauth: true
     const url = new URL(typeof input === "string" ? input : input.url, location.origin);
     if (!url.pathname.startsWith("/api/")) return original(input, init);
     const key = url.pathname === "/api/image-updates" ? "/api/image-updates" : url.pathname;
+    if (key === "/api/diagnostics/download") return new Response("Homestead demo diagnostics; no cluster logs were collected.\n", { headers: { "Content-Type": "text/plain" } });
     // Asked of a linked cluster: the branch office runs an older Homestead, which does
     // not yet tag its own parts, with a release waiting.
     const cluster = init?.headers?.["X-Homestead-Cluster"];
