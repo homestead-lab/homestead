@@ -2119,7 +2119,7 @@ function moveDevicesTable(plan, cluster, kind, name) {
   const args = [cluster, kind, name].map(jsq).join(",");
   const rows = plan.host_devices.map(d => {
     const choice = MOVE_DEVICES[d.name] || {}, resources = (plan.device_resources || []).filter(r => !d.gpu || r.kind === "pci");
-    const handler = esc(`${args},${jsq(d.name)}`);
+    const handler = `${args},${jsq(d.name)}`;
     const uploaded = choice.rom && !["source", ""].includes(choice.rom);
     return `<tr><td data-label="Source device"><b>${esc(d.name)}</b><div class="dim xs mono">${esc(d.resource)}</div></td>
       <td data-label="Destination device" data-wide><select aria-label="Destination device for ${esc(d.name)}" onchange="moveDeviceSet(${handler},'resource',this.value)">

@@ -7652,6 +7652,8 @@ class H(HTTP.LimitedHandler):
         """
         try:
             return self._send(200, call())
+        except MOVE_SOURCE.PendingRecovery as error:
+            return self._send(503, {"error": str(error)})
         except (ValueError, PermissionError) as error:
             return self._send(409, {"error": str(error)})
         except MOVE.Unreachable as error:
@@ -9076,7 +9078,8 @@ class H(HTTP.LimitedHandler):
                 action, kind, name = b.get("action"), b.get("kind"), b.get("name")
                 identity = {"transfer_id": str(b.get("transfer_id") or ""),
                             "expected_uid": str(b.get("expected_uid") or "")}
-                actions = {"quiesce": lambda: MOVE_SOURCE.quiesce(kind, name, **identity),
+                actions = {"quiesce": lambda: MOVE_SOURCE.quiesce(kind, name, **identity,
+                                                                 expected_version=str(b.get("expected_version") or "")),
                            "backup": lambda: MOVE_SOURCE.backup(kind, name, bool(b.get("retry_failed")),
                                                                  b.get("claims") if isinstance(b.get("claims"), list) else None,
                                                                  **identity),

@@ -33,6 +33,13 @@ LH_API = "/apis/longhorn.io/v1beta2"
 ORIGIN = "move-origin"
 BACKUPS = "move-backups"
 OWNER = "move-owner"
+RELEASED = "copy-released"
+
+
+class PendingRecovery(ValueError):
+    """Source recovery is waiting on KubeVirt; the destination should retry."""
+
+
 _SOURCE_NAMESPACE = ContextVar("move_source_namespace", default="")
 # Annotations that describe this cluster's copy of an object rather than the
 # thing itself, and would be wrong or meaningless on the far side.
@@ -135,7 +142,7 @@ def _clean_metadata(meta, namespace=None):
     annotations = {
         key: value for key, value in (meta.get("annotations") or {}).items()
         if key not in DROP_ANNOTATIONS
-        and key not in (NAMES.key(ORIGIN), NAMES.key(BACKUPS), NAMES.key(OWNER))}
+        and key not in (NAMES.key(ORIGIN), NAMES.key(BACKUPS), NAMES.key(OWNER), NAMES.key(RELEASED))}
     if annotations:
         meta["annotations"] = annotations
     else:
@@ -304,6 +311,7 @@ def definition(kind, name):
     return {
         "kind": kind, "name": name, "namespace": _namespace(),
         "source_uid": obj.get("metadata", {}).get("uid", ""),
+        "source_version": obj.get("metadata", {}).get("resourceVersion", ""),
         "transfer_owner": NAMES.read(_annotations(obj), OWNER),
         "held": bool(_origin(obj)),
         "object": body, "origin": origin,
@@ -342,7 +350,7 @@ def _remaining(kind, obj):
     return len(pods)
 
 
-def quiesce(kind, name, transfer_id="", expected_uid=""):
+def quiesce(kind, name, transfer_id="", expected_uid="", expected_version=""):
     """Stop the workload so its data is at rest, remembering how it was running.
 
     Asked twice, it does not overwrite what it remembered the first time -
@@ -352,6 +360,13 @@ def quiesce(kind, name, transfer_id="", expected_uid=""):
     kind = _kind(kind)
     obj = _object(kind, name)
     _owner(obj, transfer_id, expected_uid)
+    if transfer_id:
+        if NAMES.read(_annotations(obj), RELEASED) == transfer_id:
+            raise ValueError("This copy's source was already released; review a new copy")
+        if not obj.get("metadata", {}).get("resourceVersion") or not expected_version:
+            raise ValueError("Could not verify the source version; review the copy again")
+        if NAMES.read(_annotations(obj), OWNER) != transfer_id and obj["metadata"]["resourceVersion"] != expected_version:
+            raise ValueError("The source changed before stopping; review the copy again")
     origin = _origin(obj)
     if not origin:
         origin = _run_state(kind, obj)
@@ -506,11 +521,20 @@ def release(kind, name, transfer_id="", expected_uid=""):
     _owner(obj, transfer_id, expected_uid)
     origin = _origin(obj)
     if not origin:
+        if transfer_id:
+            version = obj.get("metadata", {}).get("resourceVersion")
+            if not version:
+                raise ValueError("Could not verify the source version before releasing the copy")
+            # Changing resourceVersion fences even a stop request that has
+            # not read the workload yet. Its reviewed version stays stale.
+            _merge(kind, name, {"metadata": {"resourceVersion": version,
+                    "annotations": {NAMES.key(RELEASED): transfer_id}}})
         return {"ok": True, "detail": f"{name} was not stopped for a move"}
     patch = {"metadata": {"annotations": {NAMES.key(ORIGIN): None, NAMES.key(BACKUPS): None,
                                            NAMES.key(OWNER): None}}}
     if transfer_id and obj.get("metadata", {}).get("resourceVersion"):
         patch["metadata"]["resourceVersion"] = obj["metadata"]["resourceVersion"]
+        patch["metadata"]["annotations"][NAMES.key(RELEASED)] = transfer_id
     if kind == "volume":
         _merge(kind, name, patch)
         return {"ok": True, "detail": f"{name} is no longer held for a move"}
@@ -518,6 +542,14 @@ def release(kind, name, transfer_id="", expected_uid=""):
     if transfer_id and kind == "vm" and origin.get("_copy_running") and origin.get("runStrategy") == "Manual":
         # Manual does not boot merely by restoring its run strategy. Retain
         # the lease until the start request succeeds, including lost replies.
+        vmi_path = f"/apis/kubevirt.io/v1/namespaces/{_namespace()}/virtualmachineinstances/{name}"
+        def recovering_vmi():
+            vmi = _get(vmi_path)
+            if vmi and ((vmi.get("metadata") or {}).get("deletionTimestamp") or
+                        (vmi.get("status") or {}).get("phase") in ("Succeeded", "Failed")):
+                raise PendingRecovery("Waiting for the old VM instance to disappear before restoring its running state")
+            return vmi
+        recovering_vmi()
         restore = {"spec": patch["spec"]}
         if obj.get("metadata", {}).get("resourceVersion"):
             restore["metadata"] = {"resourceVersion": obj["metadata"]["resourceVersion"]}
@@ -526,7 +558,7 @@ def release(kind, name, transfer_id="", expected_uid=""):
         _owner(current, transfer_id, expected_uid)
         pending = any(req.get("action") == "Start" for req in
                       (current.get("status") or {}).get("stateChangeRequests") or [])
-        if not pending and not _get(f"/apis/kubevirt.io/v1/namespaces/{_namespace()}/virtualmachineinstances/{name}"):
+        if not pending and not recovering_vmi():
             ksend("PUT", f"/apis/subresources.kubevirt.io/v1/namespaces/{_namespace()}/virtualmachines/{name}/start", {})
         if current.get("metadata", {}).get("resourceVersion"):
             patch["metadata"]["resourceVersion"] = _object(kind, name)["metadata"]["resourceVersion"]

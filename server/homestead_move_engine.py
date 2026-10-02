@@ -18,11 +18,13 @@ import uuid
 import homestead_shared as SHARED
 import json
 import os
+import re
 import secrets
 import threading
 import time
 import urllib.error
 import urllib.parse
+import weakref
 
 import homestead_icons as ICONS
 import homestead_names as NAMES
@@ -57,6 +59,23 @@ COPY_PHASES = ("joining", "quiescing", "backing-up", "releasing-source", "syncin
 KINDS = ("container", "vm", "volume")
 # Shared with any other Homestead replica on the same data volume.
 _lock = SHARED.SharedLock("moves")
+
+
+def _step_lock(move_id):
+    """Keep transfer effects and cancellation exclusive across replicas."""
+    if not isinstance(move_id, str) or not re.fullmatch(r"[0-9a-f]{12}", move_id):
+        raise ValueError("Invalid transfer identity")
+    return SHARED.SharedLock("move-step-" + move_id, strict=True, directory=lambda: DATA_DIR, timeout=60)
+
+
+_step_locks = weakref.WeakValueDictionary()
+_step_locks_guard = threading.Lock()
+
+
+def _serialized(move_id):
+    # SharedLock's thread mutex must be shared by callers in this process too.
+    with _step_locks_guard:
+        return _step_locks.setdefault(move_id, _step_lock(move_id))
 
 
 def bind(_kget, _ksend, longhorn, client, network, operations, data_dir, namespace):
@@ -184,6 +203,8 @@ def _source_status(move):
 def _source_action(move, action, **extra):
     if move.get("transfer_mode") == "copy":
         extra.update(transfer_id=move["id"], expected_uid=move["source_uid"])
+        if action == "quiesce":
+            extra["expected_version"] = move.get("flags", {}).get("quiesce_version", "")
     return CLIENT.remote(move["cluster"], "/api/move/source",
                          dict({"action": action, "kind": move["kind"], "name": move["name"],
                                "namespace": move.get("source_namespace", "")},
@@ -310,7 +331,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
                 "versions": versions}
     if versions.get("state") == "differs":
         warnings.append(versions["message"])
-    if transfer_mode == "copy" and "copy-source-lease" not in versions.get("capabilities", []):
+    if transfer_mode == "copy" and not {"copy-source-lease", "copy-source-fence"}.issubset(versions.get("capabilities", [])):
         return {"ok": False, "transfer_mode": "copy", "blockers": [
             "Update Homestead on the source cluster before copying workloads; this version cannot protect and release a copy's source"],
             "warnings": [], "claims": [], "versions": versions}
@@ -330,7 +351,7 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
         blockers.append("Update Homestead on the source cluster; it did not return the selected source namespace")
     if transfer_mode == "copy" and (definition.get("held") or definition.get("transfer_owner")):
         blockers.append("The source is held by another transfer; finish or put back that transfer first")
-    if transfer_mode == "copy" and not definition.get("source_uid"):
+    if transfer_mode == "copy" and (not definition.get("source_uid") or not definition.get("source_version")):
         blockers.append("Could not verify the source workload identity; refresh before copying")
     if kind == "vm":
         device_rows = PASSTHROUGH.vm_devices(definition["object"])
@@ -607,6 +628,7 @@ def _joining(move):
 def _quiescing(move):
     flags = move.setdefault("flags", {})
     if not flags.get("quiesced"):
+        definition = None
         if move["kind"] == "vm":
             # Revalidate inventory immediately before interrupting the source.
             definition = _definition(move)
@@ -614,6 +636,9 @@ def _quiescing(move):
                 raise ValueError("The source passthrough devices or vBIOS changed; cancel and review this transfer again")
             VM_DEVICES.prepare(definition, move["namespace"], move.get("host_devices"))
         if move.get("transfer_mode") == "copy":
+            if not flags.get("quiesce_requested"):
+                definition = definition or _definition(move)
+                flags["quiesce_version"] = definition.get("source_version", "")
             flags["quiesce_requested"] = True
             _store(move)  # A lost reply must still offer source recovery.
         stopped = _source_action(move, "quiesce")
@@ -1094,16 +1119,16 @@ def _tick_all():
     with _lock:
         running = [m["id"] for m in _read() if m.get("status") == "running"]
     for move_id in running:
-        move = _find(move_id)
-        if not move or move.get("status") != "running":
-            continue
-        _tick(move)
-        with _lock:
-            current = _find(move_id)
-            # Someone put it back or retried it while this step ran: theirs wins.
-            if current and current.get("status") == "running" and \
-                    current.get("updated_at") <= move.get("updated_at"):
-                _store(move)
+        with _serialized(move_id):
+            move = _find(move_id)
+            if not move or move.get("status") != "running":
+                continue
+            _tick(move)
+            with _lock:
+                current = _find(move_id)
+                if current and current.get("status") == "running" and \
+                        current.get("updated_at") <= move.get("updated_at"):
+                    _store(move)
 
 
 def run():
@@ -1118,6 +1143,11 @@ def run():
 
 # ------------------------------------------------------------ what people do
 def retry(move_id):
+    with _serialized(move_id):
+        return _retry(move_id)
+
+
+def _retry(move_id):
     move = _find(move_id)
     if not move:
         raise ValueError("no such move")
@@ -1137,6 +1167,11 @@ def retry(move_id):
 
 
 def abandon(move_id):
+    with _serialized(move_id):
+        return _abandon(move_id)
+
+
+def _abandon(move_id):
     """Put the workload back where it came from, and remove what arrived here.
 
     Only what this move made is removed - each object carries the move's id -
@@ -1158,7 +1193,9 @@ def abandon(move_id):
     try:
         if stopped and move.get("transfer_mode") == "copy":
             status = _source_status(move)
-            stopped = status.get("transfer_owner") == move["id"] and status.get("source_uid") == move.get("source_uid")
+            # An unowned source still needs a version fence: an HTTP request
+            # may have timed out before its stop patch was applied.
+            stopped = status.get("source_uid") == move.get("source_uid") and status.get("transfer_owner") in ("", move["id"])
         released = _source_action(move, "release") if stopped else {"detail": f"Source on {move['cluster']} kept as it was"}
     except Exception:
         move.update(status="failed", message="Source recovery failed; retry cancellation to restore its running state")
