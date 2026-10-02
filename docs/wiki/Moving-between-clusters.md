@@ -122,7 +122,42 @@ The original stays on the source until you remove it there (**Remove from
 &lt;cluster&gt;** in the move's row). An app on the source that still names the
 volume is left as it is.
 
-## Afterwards
+## Copying a VM or container
+
+Choose **Copy to cluster** from a VM or container's `…` menu. You can also
+choose **Copy to this cluster** when browsing a linked cluster's workloads.
+Both clusters must run a release with copy support; the review identifies
+which side needs updating.
+
+The source namespace follows the VM or container you selected, including
+workloads outside the default namespace. Pick the destination namespace and
+storage class. Each disk or volume can
+use its own class, or be created blank. Existing VM, claim and cloud-init
+Secret names are checked before the source stops; choose another namespace
+if those names are already in use on the destination.
+
+The source pauses while its selected volumes are backed up. Homestead then
+restores the source's previous running state, while the destination restores
+those backups and creates a **stopped** copy. A source that was stopped stays
+stopped. Copies receive new VM MAC addresses and a firmware UUID. Review the
+guest's static IP and network settings before starting the copy; guest disk
+contents and cloud-init configuration are preserved.
+
+Copies keep the original. They have no **Remove from source** action.
+**Cancel copy** restores the source's running state, if it is still held, and
+removes only the objects that copy created on the destination. After a copy
+finishes, **Remove copy** removes its destination objects. A failed cleanup
+offers **Retry cleanup**. A failed copy still holding the source must be
+cancelled before it can be dismissed.
+
+VM data disks must be Longhorn PVCs. Container-image disks and cloud-init travel with the
+VM definition. External instance types and preferences must first be expanded
+into the VM's settings. Host disks, additional access-credential Secrets and persistent
+firmware/TPM state are not copied; the review blocks these rather than making
+an incomplete VM. Change a VM's `Once` run strategy before copying it, since
+that strategy cannot safely resume after being stopped for the backup.
+
+## After a move
 
 The original stays on the source, **stopped**, until you remove it there - so
 it can be started again at any point. Finished moves can be dismissed from the

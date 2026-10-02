@@ -15,6 +15,8 @@ RESOURCES = {
     ("v1", "services"): "Service",
     ("v1", "persistentvolumeclaims"): "PersistentVolumeClaim",
     ("v1", "secrets"): "Secret",
+    ("v1", "configmaps"): "ConfigMap",
+    ("kubevirt.io/v1", "kubevirts"): "KubeVirt",
     ("kubevirt.io/v1", "virtualmachines"): "VirtualMachine",
     ("harvesterhci.io/v1beta1", "virtualmachineimages"): "VirtualMachineImage",
     ("cdi.kubevirt.io/v1beta1", "datavolumes"): "DataVolume",

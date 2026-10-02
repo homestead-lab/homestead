@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -204,6 +205,43 @@ class VmTests(unittest.TestCase):
         broken = subprocess.run([sys.executable, "-c", script, "--vmi", "{}", "--domain", "<not xml"],
                                 capture_output=True, text=True)
         self.assertEqual("<not xml", broken.stdout, "the domain goes on unchanged")
+
+    def test_new_devices_have_stable_names_and_existing_devices_can_be_remapped(self):
+        vm = self.vm()
+        resource = "homestead.io/pci-10de-1e87"
+        PASS.edit_vm(vm, "lab", {"add": [{"name": "gpu-main", "resource": resource}],
+                                "roms": {"gpu-main": base64.b64encode(ROM).decode()}}, [])
+        self.assertEqual("gpu-main", PASS.vm_devices(vm)[0]["name"])
+        with mock.patch.object(PASS, "resources", return_value={"resources": [{"resource": "example.test/gpu-new"}]}):
+            PASS.edit_vm(vm, "lab", {"map": {"gpu-main": "example.test/gpu-new"}}, [], {"gpu-main": ROM})
+        self.assertEqual("example.test/gpu-new", PASS.vm_devices(vm)[0]["resource"])
+        self.assertTrue(PASS.vm_devices(vm)[0]["rom"])
+        with self.assertRaisesRegex(ValueError, "unique valid name"):
+            PASS.edit_vm(vm, "lab", {"add": [{"name": "gpu-main", "resource": resource}]}, [])
+
+    def test_missing_managed_rom_is_not_silently_lost(self):
+        vm = self.vm()
+        PASS.edit_vm(vm, "lab", {"add": [{"resource": "homestead.io/pci-10de-1e87"}],
+                                "roms": {"hostdev-0": base64.b64encode(ROM).decode()}}, [])
+        with self.assertRaisesRegex(ValueError, "vBIOS ConfigMap is missing or incomplete"):
+            PASS.current_roms(vm, "lab")
+
+    def test_gpu_mapping_and_roms_cannot_target_usb_resources(self):
+        vm = self.vm()
+        vm["spec"]["template"]["spec"]["domain"]["devices"]["gpus"] = [{"name": "gpu", "deviceName": "old/gpu"}]
+        with mock.patch.object(PASS, "resources", return_value={"resources": [{"resource": "example.test/usb", "kind": "usb"}]}):
+            with self.assertRaisesRegex(ValueError, "needs a PCI device"):
+                PASS.edit_vm(vm, "lab", {"map": {"gpu": "example.test/usb"}}, [])
+            with self.assertRaisesRegex(ValueError, "USB devices cannot use"):
+                PASS.edit_vm(self.vm(), "lab", {"add": [{"name": "usb", "resource": "example.test/usb"}],
+                    "roms": {"usb": base64.b64encode(ROM).decode()}}, [])
+
+    def test_combined_rom_limit_is_checked_before_a_configmap_is_written(self):
+        rom = base64.b64encode(b"\x55\xaa" + b"\x00" * (400 * 1024)).decode()
+        resource = "homestead.io/pci-10de-1e87"
+        with self.assertRaisesRegex(ValueError, "combined vBIOS"):
+            PASS.edit_vm(self.vm(), "lab", {"add": [{"resource": resource}, {"resource": resource}],
+                "roms": {"hostdev-0": rom, "hostdev-1": rom}}, [])
 
     def test_roms_are_checked(self):
         for raw, words in ((b"MZ" + b"\x00" * 10, "55 AA"), (b"\x55\xaa" + b"\x00" * (PASS.ROM_LIMIT + 1), "fits")):

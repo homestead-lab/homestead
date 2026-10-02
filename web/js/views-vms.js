@@ -212,7 +212,8 @@ function vmActions(v, compact = false) {
         <button data-need="operator" onclick="this.closest('details').open=false;vmEdit(${jsq(v.ns)},${jsq(v.name)})">${icon("edit")}Edit</button>
         ${v.actions.includes("pause") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'pause')">${icon("pause")}Pause</button>` : ""}
         ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove(${jsq(v.ns)},${jsq(v.name)})">${icon("move")}Move host</button>` : ""}
-        ${FLEET.view?.linked ? `<button data-need="admin" title="Move it to another linked cluster, disks and all" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")})">${icon("move")}Move to cluster</button>` : ""}
+        ${FLEET.view?.linked ? `<button data-need="admin" title="Move it to another linked cluster, disks and all" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")},'move',${jsq(v.ns)})">${icon("move")}Move to cluster</button>` : ""}
+        ${FLEET.view?.linked ? `<button data-need="admin" title="Keep the source VM and create a stopped copy on another linked cluster" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")},'copy',${jsq(v.ns)})">${icon("copy")}Copy to cluster</button>` : ""}
         ${v.actions.includes("force-stop") ? `<button class="danger" data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'force-stop')" title="${esc(VM_ACTIONS["force-stop"][2])}">${icon("plug")}Force off</button>` : ""}
         <button class="danger" data-need="admin" onclick="this.closest('details').open=false;vmDelete(${jsq(v.ns)},${jsq(v.name)})">${icon("trash")}Delete</button>
       </div></details>`;
@@ -467,18 +468,18 @@ function vmEditResourceFields(v) {
 }
 
 window.vmEdit = async (ns, name) => {
-  modal(`Edit · ${name}`, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
+  modal(`Edit · ${name}`, `<div class="empty"><span class="spin2"></span>loading</div>`, true, "vm-config");
   let v, o, res;
   try {
     [v, o, res] = await Promise.all([api(`/api/vm?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`),
       api("/api/vm/create-options").catch(() => ({ cdi: true, images: [], storage_classes: [], networks: ["pod"], nodes: [] })),
-      api("/api/passthrough/resources").catch(() => ({ resources: [] }))]);
+      api("/api/passthrough/resources").catch(error => ({ resources: [], error: error.message }))]);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   window.__vmEdit = { ns, name, v, o };
   const tab = (id, label) => `<button class="${id === "general" ? "on" : ""}" onclick="vmEditTab(this,${jsq(id)})">${label}</button>`;
   const disks = v.disks.filter(d => d.kind === "disk" || d.kind === "cd-rom");
   const ci = v.cloud_init || {};
-  $("#mbody").innerHTML = `<div class="between vm-edit-tabs"><div class="seg">${tab("general", "General")}${v.hardware ? tab("hardware", "Hardware") : ""}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("devices", `Devices · ${(v.host_devices || []).length}`)}${tab("cloud", "Cloud-init")}</div>
+  $("#mbody").innerHTML = `<div class="between vm-edit-tabs"><div class="seg">${tab("general", "General")}${v.hardware ? tab("hardware", "Hardware") : ""}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("devices", `Passthrough · ${(v.host_devices || []).length}`)}${tab("cloud", "Cloud-init")}</div>
       <button class="btn sm" data-need="admin" onclick="vmYaml(${jsq(ns)},${jsq(name)})" title="Every field, as YAML">${icon("edit")}Edit YAML</button></div>
     <div class="ve-pane" data-pane="general" style="margin-top:12px">
       ${vmEditResourceFields(v)}

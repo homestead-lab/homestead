@@ -811,6 +811,7 @@
           warnings: ["mosquitto uses it and stays here, stopped"] }] },
     // One path, two questions: where this can move within the cluster (GET),
     // and what bringing it from another cluster involves (POST).
+    "/api/move/hello": { protocol: 1, namespace: "lab", capabilities: ["copy-source-lease", "copy-destination"] },
     "/api/move/plan": (url, init) => (init?.method || "GET") !== "GET" && JSON.parse(init.body || "{}").cluster === "dr-site"
       ? { ok: false, blockers: ["dr-site: this cluster has no Longhorn backup target; set up backup storage under Data protection first"],
           warnings: [], claims: [], fixes: [{ kind: "source-storage", cluster: "dr-site" }] }
@@ -823,13 +824,24 @@
         { name: "harvester-node1", ok: true, current: false, pods_wl: 2, score: 88, cpu_after: 31, mem_after: 66,
           hardware: { igpu: true }, temp_c: 39, why: [] },
         { name: "harvester-node3", ok: false, current: false, pods_wl: 1, score: 0, cpu_after: 24, mem_after: 49,
-          hardware: {}, temp_c: 36, why: ["no Intel/AMD iGPU on this host"] }] } : {
-      ok: true, blockers: [], cluster: "branch", kind: "container", name: "frigate",
-      storage_class: JSON.parse(init.body || "{}").storage_class || "longhorn-r2", storage_classes: ["longhorn-r2", "longhorn-r3"],
-      namespace: "lab", joined: false, will_run: true, addresses: ["frigate on 192.0.2.242"],
-      warnings: ["this cluster's Longhorn backup target changes from (none) to s3://homestead-backups@us-east-1/; backups already written to the old one stay there"],
-      claims: [{ claim: "frigate-config", size_gb: 10, access_mode: "ReadWriteOnce",
-        volume_mode: "Filesystem", backing_image: "" }], total_gb: 10 },
+          hardware: {}, temp_c: 36, why: ["no Intel/AMD iGPU on this host"] }] } : (() => {
+      const body = JSON.parse(init.body || "{}"), isVm = body.kind === "vm", copy = body.transfer_mode === "copy";
+      const hardware = isVm && body.name === "gpu-desktop", mapping = body.host_devices?.display;
+      const deviceReady = !hardware || mapping && "resource" in mapping;
+      return {
+      ok: !!deviceReady, blockers: deviceReady ? [] : ["Choose a destination device or Leave out for display"], cluster: body.cluster || "branch", kind: body.kind || "container", name: body.name || "frigate",
+      host_devices: hardware ? [{name:"display",resource:"example.test/source-gpu",gpu:true,rom:true}] : [],
+      device_resources: hardware ? [{resource:"homestead.io/pci-10de-1e87",label:"10DE:1E87",kind:"pci",nodes:["harvester-node1"]}] : [],
+      device_hosts: hardware && mapping?.resource ? ["harvester-node1"] : [],
+      transfer_mode: copy ? "copy" : "move",
+      storage_class: body.storage_class || "longhorn-r2", storage_classes: ["longhorn-r2", "longhorn-r3"],
+      all_storage_classes: ["longhorn-r2", "longhorn-r3", "local-path"],
+      namespace: body.namespace || "lab", joined: false, will_run: !copy, addresses: isVm ? [] : ["frigate on 192.0.2.242"],
+      warnings: [...(copy && isVm ? ["The VM copy gets new MAC addresses and a firmware UUID. Review guest static IP and network settings before starting it"] : []),
+        "this cluster's Longhorn backup target changes from (none) to s3://homestead-backups@us-east-1/; backups already written to the old one stay there"],
+      claims: [{ claim: isVm ? "haos-disk-0" : "frigate-config", size_gb: isVm ? 32 : 10, access_mode: isVm ? "ReadWriteMany" : "ReadWriteOnce",
+        volume_mode: isVm ? "Block" : "Filesystem", backing_image: "" }], total_gb: isVm ? 32 : 10 };
+      })(),
     "/api/move/start": { id: "d1", status: "running" },
     "/api/host-console": { version: "2.8.293-dev.3", enabled: true, hosts: 2, installed: 2, current: 1, settled: false, harvester: false, nodes: [
       { name: "node-1", ready: true, enabled: true, version: "2.8.243", current: false, detail: "Installed 2.8.243; update available" },

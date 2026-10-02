@@ -123,7 +123,7 @@ def dependencies(vm, read, planned_claims=None, *, pods=None):
 
 
 def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
-         planned_claims=None, expanded_spec=None):
+         planned_claims=None, expanded_spec=None, planned_configmaps=None):
     if action not in ("start", "restart", "unpause", "create", "edit"):
         raise ValueError("unsupported VM admission action")
     namespace, name = vm["metadata"]["namespace"], vm["metadata"]["name"]
@@ -143,7 +143,8 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
             raise ValueError("KubeVirt configuration identity unavailable")
     except Exception:
         configuration = None
-    model = VMRES.project(vm, configuration, expanded_spec=expanded_spec, read=read, kubevirt_version=kubevirt_version)
+    model = VMRES.project(vm, configuration, expanded_spec=expanded_spec, read=read, kubevirt_version=kubevirt_version,
+                          planned_configmaps=planned_configmaps)
     try:
         pods = _items(read, "/api/v1/pods")
     except Exception:
