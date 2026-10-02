@@ -60,7 +60,11 @@ it. From the row:
   pending cannot be reduced to its old reported capacity.
 - **Files** - browse and edit the files on it, in the same editor VS Code uses.
   A helper pod mounts it for up to 30 minutes; a ReadWriteOnce volume in use
-  must be stopped first. Saves keep the old file as `<name>.homestead-bak`.
+  must be stopped first. Closing the browser with its button, X, Escape, or
+  navigation requests removal of the helper. Closing the tab also sends a
+  cleanup request when the browser permits it. Abandoned helpers stop after
+  30 minutes; Homestead removes expired pod objects when the cluster API is
+  available. Saves keep the old file as `<name>.homestead-bak`.
 - **Ownership** - hand the files to the user an app runs as (read from its
   PUID/PGID), for data imported as root by an older release.
 - **Snapshots** - **Take snapshot now** and **Back up now**, and the volume's

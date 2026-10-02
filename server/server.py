@@ -6213,6 +6213,19 @@ def _snapshot_files_loop():
         time.sleep(30)
 
 
+def _files_loop():
+    while True:
+        if LEADER.is_leader():
+            try:
+                with self_data_activity():
+                    require_self_data_write()
+                    FILES.cleanup()
+                beat("volume-files", 30, leader_only=True)
+            except Exception as error:
+                beat("volume-files", 30, error, leader_only=True)
+        time.sleep(30)
+
+
 def _host_console_loop():
     """On the leader, the host console add-on brought to its setting, a host
     or two at a time. Its own loop: each host can take minutes, and the
@@ -10091,6 +10104,7 @@ def start_background_tasks():
     threading.Thread(target=_host_console_loop, daemon=True).start()
     threading.Thread(target=_storage_pending_loop, daemon=True).start()
     threading.Thread(target=_snapshot_files_loop, daemon=True).start()
+    threading.Thread(target=_files_loop, daemon=True).start()
     threading.Thread(target=_os_updates_loop, daemon=True).start()
     threading.Thread(target=_baseline_loop, daemon=True).start()
     threading.Thread(target=_vip_loop, daemon=True).start()
