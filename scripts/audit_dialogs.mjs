@@ -170,6 +170,8 @@ const DIALOGS = [
   ["image-updates", "workloads", "imageUpdateCenter()"],
   ["homestead-updates", "workloads", "homesteadUpdateDialog()"],
   ["image-update-review", "workloads", "imageUpdateReview('lab','frigate')"],
+  ["image-update-cordoned", "workloads", "window.__demoImageReviewCordoned=true;imageUpdateReview('lab','homestead')"],
+  ["image-update-cordoned-details", "workloads", "window.__demoImageReviewCordoned=true;imageUpdateReview('lab','homestead')", "document.querySelector('#mbody > .update-review > details').open=true"],
   ["image-update-batch", "workloads", "imageUpdateCenter()", "text:Stage selected"],
   ["workload-group", "workloads", "wlGroup('lab','frigate')"],
   ["workload-groups", "workloads", "manageWorkloadGroups()"],

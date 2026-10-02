@@ -59,7 +59,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.296")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.297")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -4223,7 +4223,7 @@ def vm_create_configuration(body, *, preview=False):
     cfg = copy.deepcopy(body)
     cfg["namespace"] = _dns_name(cfg.get("namespace", DEFAULT_NS), "namespace")
     cfg["name"] = _dns_name(cfg.get("name"), "VM name")
-    if not cfg.get("mac"):
+    if cfg.get("isolated") is not True and not cfg.get("mac"):
         if not preview:
             raise ValueError("Review VM creation first so its generated MAC is fixed")
         cfg["mac"] = IMP._vm_mac()
@@ -5628,6 +5628,7 @@ UPDATES.PART = homestead_part
 UPDATES.VERSION = lambda: HOMESTEAD_VERSION
 SMART.bind(kget, DEFAULT_NS, AUTH.smart_signing_key)
 OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
+OPS.cdi_send = ksend
 RESTRUCTURE.bind(kget, ksend, raw_get)
 AFFINITY.bind(kget)
 FAILOVER.bind(kget, ksend)
@@ -6210,6 +6211,19 @@ def _snapshot_files_loop():
                 beat("snapshot-files", 30, leader_only=True)
             except Exception as error:
                 beat("snapshot-files", 30, error, leader_only=True)
+        time.sleep(30)
+
+
+def _files_loop():
+    while True:
+        if LEADER.is_leader():
+            try:
+                with self_data_activity():
+                    require_self_data_write()
+                    FILES.cleanup()
+                beat("volume-files", 30, leader_only=True)
+            except Exception as error:
+                beat("volume-files", 30, error, leader_only=True)
         time.sleep(30)
 
 
@@ -9616,12 +9630,7 @@ class H(HTTP.LimitedHandler):
                 _cache.pop("vmimages", None)
                 return self._send(200, VMSTORE.refresh(force=True))
             if p == "/api/vm-disks/import":
-                result = IMP.import_vm_disk(b)
-                result["operation"] = OPS.start(
-                    "vm-disk-import", f"Import VM disk {result['name']}",
-                    {"kind": "DataVolume", "name": result["name"],
-                     "namespace": result["namespace"]},
-                    "/import", {"namespace": result["namespace"], "name": result["name"]})
+                result = IMP.import_vm_disk(b, ops=OPS)
                 return self._send(200, result)
             if p == "/api/images/prepull/stop":
                 return self._send(200, IMP.stop_prepull(b.get("name")))
@@ -10066,7 +10075,7 @@ def _samba_loop():
                     moved = OBJECTS.keep_in_step()
                     OBJECTS.reconcile_target()
                 if moved:
-                    print(f"object store: moved to {moved}", flush=True)
+                    print(f"object store: reconciled {moved}", flush=True)
             except Exception as error:
                 print(f"object store: {str(error)[:180]}", flush=True)
         time.sleep(60)
@@ -10091,6 +10100,7 @@ def start_background_tasks():
     threading.Thread(target=_host_console_loop, daemon=True).start()
     threading.Thread(target=_storage_pending_loop, daemon=True).start()
     threading.Thread(target=_snapshot_files_loop, daemon=True).start()
+    threading.Thread(target=_files_loop, daemon=True).start()
     threading.Thread(target=_os_updates_loop, daemon=True).start()
     threading.Thread(target=_baseline_loop, daemon=True).start()
     threading.Thread(target=_vip_loop, daemon=True).start()

@@ -4,7 +4,8 @@ const fs = require("node:fs"), vm = require("node:vm");
 
 function setup(review) {
   let html = "", fail = false;
-  const sent = [], notices = [], fields = { "#editCapacityConfirm": { checked: false }, "#editGo": {} };
+  const sent = [], notices = [], fields = { "#editCapacityConfirm": { checked: false }, "#editGo": {},
+    "#mbody": { insertAdjacentHTML(_where,body) { html += body; } } };
   const c = { window: {}, console, URLSearchParams, Map, document: { addEventListener() {} },
     $: s => fields[s], esc: s => String(s).replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
     childModal: (_, body) => { html = body; }, modal: (_, body) => { html = body; }, toast: m => notices.push(m), closeModal() {}, refresh() {}, setTimeout() {},
@@ -51,15 +52,27 @@ test("Edit fails closed for missing preview and hard blockers", async () => {
   }
 });
 
-test("A refused edit requires another preview, not a replay", async () => {
+test("An uncertain edit requires fresh saved state instead of replaying additions", async () => {
   const t = setup(review);
+  let scrolled = false;
+  t.fields["#editSaveNotice"] = { scrollIntoView() { scrolled = true; } };
   await t.c.window.editReview({ ns: "lab", name: "demo" });
   t.fail();
   t.fields["#editCapacityConfirm"].checked = true;
   await t.c.window.confirmEdit();
   await t.c.window.confirmEdit();
   assert.equal(t.sent.length, 1);
-  assert.equal(t.fields["#editGo"].textContent, "Review again");
+  assert.equal(scrolled, true);
+  assert.equal(t.fields["#editGo"].textContent, "Inspect before saving again");
+  assert.equal(t.fields["#editGo"].disabled, true);
+  assert.equal(t.fields["#editGo"].onclick, null);
+  assert.match(t.html(), /Some changes may already be saved/);
+  assert.match(t.html(), /Reload saved workload/);
+  assert.match(t.html(), /does not need a new name/);
+  await t.c.window.editReview({ns:"lab",name:"demo",containers:[{new:true,name:"helper"}]});
+  await t.c.window.editSave("lab","demo");
+  assert.equal(t.sent.length,1);
+  assert.match(t.notices.at(-1),/Reload the saved workload/);
 });
 
 test("Rename review explains a name-only outage and requires a separate acknowledgement", async () => {
@@ -163,4 +176,16 @@ test("Storage move has one plain-language review with escaped paths and both pla
   t.fields["#editCapacityConfirm"].checked = true;
   await t.c.window.confirmEdit();
   assert.equal(t.sent.length, 1);
+});
+
+
+test("uncertain rename directs inspection of both names and never offers stale retry",async()=>{
+  const t=setup({...review,capacity:{...review.capacity,rename:{from:'old',to:'new'}}});
+  await t.c.window.editReview({ns:'lab',name:'old',workload_name:'new'});
+  t.fail();t.fields['#editCapacityConfirm'].checked=true;
+  await t.c.window.confirmEdit();
+  assert.match(t.html(),/Inspect both workload names/);
+  assert.match(t.html(),/Inspect workloads/);
+  assert.doesNotMatch(t.html(),/Reload saved workload/);
+  assert.equal(t.fields['#editGo'].disabled,true);
 });

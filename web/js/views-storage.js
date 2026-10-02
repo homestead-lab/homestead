@@ -920,30 +920,76 @@ async function mountEditor(host, content, filename) {
 }
 
 window.volumeFiles = async (namespace, pvc, attached) => {
+  const closing = filesDismiss();
   if (window.snapshotFilesDismiss) window.snapshotFilesDismiss();
   Object.assign(FILEVIEW, { namespace, pvc, path: "", file: "", dirty: false, snapshotSession: null });
-  modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>starting a file browser on ${esc(pvc)}</div>`, true);
+  const headers = { "Content-Type": "application/json" };
+  const cluster = window.FLEET?.target || window.FLEET?.view?.self;
+  if (cluster) headers["X-Homestead-Cluster"] = cluster;
+  const session = FILEVIEW.liveSession = { namespace, pvc, headers };
+  modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>starting a file browser on ${esc(pvc)}</div>`, true, "volume-files");
   if (attached && !(await ask(`${pvc} is attached to a running workload.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the workload is stopped. Continue anyway?`))) {
-    return closeModal();
+    if (FILEVIEW.liveSession === session) closeModal();
+    return;
   }
+  await closing;
+  if (FILEVIEW.liveSession !== session) return;
   fileBrowse("");
 };
 
+async function filesRelease(session, keepalive = false) {
+  if (!session) return;
+  try {
+    await api("/api/files/close", { method: "POST", headers: session.headers, keepalive,
+      body: JSON.stringify({ namespace: session.namespace, pvc: session.pvc }) });
+  } catch (_) { /* the pod deadline and leader cleanup remain the fallback */ }
+}
+
+window.filesDismiss = (keepalive = false) => {
+  const session = FILEVIEW.liveSession;
+  if (!session) return;
+  FILEVIEW.liveSession = null;
+  disposeEditor();
+  Object.assign(FILEVIEW, { namespace: "", pvc: "", path: "", file: "", dirty: false });
+  return filesRelease(session, keepalive);
+};
+window.addEventListener?.("pagehide", () => {
+  if (!FILEVIEW.liveSession) return;
+  filesDismiss(true);
+  // A page restored from the back/forward cache must not display a browser
+  // whose helper was released when the page left.
+  closeModal(false);
+});
+
+function filesCurrent(session, namespace, pvc) {
+  return FILEVIEW.liveSession === session && FILEVIEW.namespace === namespace && FILEVIEW.pvc === pvc;
+}
+
+function filesReleaseLate(session) {
+  const current = FILEVIEW.liveSession;
+  // Sessions share one helper per claim. A newer browser for that same claim
+  // already owns it, so an old response must not close the replacement.
+  if (session && (!current || current.namespace !== session.namespace || current.pvc !== session.pvc
+      || current.headers["X-Homestead-Cluster"] !== session.headers["X-Homestead-Cluster"])) filesRelease(session);
+}
+
 window.fileBrowse = async (path) => {
   const { namespace, pvc } = FILEVIEW;
+  const session = FILEVIEW.liveSession;
   if (FILEVIEW.dirty && !(await ask("Discard unsaved changes?"))) return;
   disposeEditor();
   try {
     const snapshot = FILEVIEW.snapshotSession;
     const listing = await api(snapshot
       ? `/api/snapshot-files/list?namespace=${encodeURIComponent(namespace)}&session=${encodeURIComponent(snapshot.session)}&path=${encodeURIComponent(path || "")}`
-      : `/api/files/list?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path || "")}`);
-    if (FILEVIEW.pvc !== pvc || FILEVIEW.namespace !== namespace) return;
+      : `/api/files/list?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path || "")}`,
+      { keep: true, headers: session?.headers });
+    if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
     Object.assign(FILEVIEW, { path: listing.path || "", file: "", dirty: false });
     $("#mbody").innerHTML = fileBrowserMarkup(listing);
     if (window.applyRole) window.applyRole();
   } catch (e) {
-    if (FILEVIEW.pvc !== pvc || FILEVIEW.namespace !== namespace) return;
+    if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
     $("#mbody").innerHTML = `<div class="note dependency-danger"><b>The file browser could not start.</b> ${esc(e.message)}</div>
       <div class="row" style="margin-top:14px"><button class="btn" onclick="fileBrowse('')">Try again</button>
       <button class="btn" onclick="closeFiles()">Close</button></div>`;
@@ -982,8 +1028,11 @@ function fileBrowserMarkup(listing) {
 window.fileOpen = async (path) => {
   if (FILEVIEW.snapshotSession) return;
   const { namespace, pvc } = FILEVIEW;
+  const session = FILEVIEW.liveSession;
   try {
-    const file = await api(`/api/files/read?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path)}`);
+    const file = await api(`/api/files/read?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path)}`,
+      { keep: true, headers: session?.headers });
+    if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
     FILEVIEW.file = file.path;
     FILEVIEW.revision = file.revision;
     FILEVIEW.dirty = false;
@@ -997,8 +1046,13 @@ window.fileOpen = async (path) => {
         <button class="btn" onclick="closeFiles()">Close browser</button></div>`;
     FILEVIEW.editor = null;
     try {
-      FILEVIEW.editor = await mountEditor($("#file_editor"), file.content, file.path);
+      const editor = await mountEditor($("#file_editor"), file.content, file.path);
+      if (!filesCurrent(session, namespace, pvc)) {
+        editor.getModel()?.dispose(); editor.dispose(); return;
+      }
+      FILEVIEW.editor = editor;
     } catch (e) {
+      if (!filesCurrent(session, namespace, pvc)) return;
       // Still perfectly editable, just without highlighting.
       const host = $("#file_editor");
       if (host) {
@@ -1017,7 +1071,10 @@ window.fileOpen = async (path) => {
       }
     }
     if (window.applyRole) window.applyRole();
-  } catch (e) { toast(e.message, "bad"); }
+  } catch (e) {
+    if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
+    toast(e.message, "bad");
+  }
 };
 
 window.fileTouched = () => {
@@ -1033,18 +1090,21 @@ Close the editor and lose them?` : "";
 window.fileSave = async (ignoreSyntax = false) => {
   if (FILEVIEW.snapshotSession) return toast('Snapshots are read-only', 'bad');
   const { namespace, pvc, file } = FILEVIEW;
+  const session = FILEVIEW.liveSession;
   const button = $("#file_save");
   const content = FILEVIEW.editor ? FILEVIEW.editor.getValue() : ($("#file_body")?.value ?? "");
   if (button) { button.disabled = true; button.textContent = "Saving…"; }
   try {
-    const result = await api("/api/files/write", { method: "POST", headers: { "Content-Type": "application/json" },
+    const result = await api("/api/files/write", { method: "POST", headers: session?.headers || { "Content-Type": "application/json" },
       body: JSON.stringify({ namespace, pvc, path: file, content, revision: FILEVIEW.revision, ignore_syntax: ignoreSyntax }) });
+    if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
     FILEVIEW.revision = result.revision;
     FILEVIEW.dirty = false;
     const state = $("#file_state");
     if (state) state.textContent = `saved ${new Date().toLocaleTimeString()}`;
     toast(result.message || "saved", "ok");
   } catch (e) {
+    if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
     // A syntax complaint is a warning, not a refusal: it is your file.
     if (/^(JSON is invalid|YAML cannot)/.test(e.message) && (await ask(`${e.message}\n\nSave it anyway?`))) {
       return fileSave(true);
@@ -1057,14 +1117,11 @@ window.fileSave = async (ignoreSyntax = false) => {
 
 window.closeFiles = async () => {
   if (FILEVIEW.snapshotSession) return snapshotFilesClose();
-  const { namespace, pvc, dirty } = FILEVIEW;
+  const { dirty } = FILEVIEW;
   if (dirty && !(await ask("Discard unsaved changes?"))) return;
-  disposeEditor();
+  const closing = filesDismiss();
   closeModal();
-  try {
-    await api("/api/files/close", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ namespace, pvc }) });
-  } catch (e) { /* the pod expires on its own */ }
+  await closing;
 };
 
 window.volumeChown = async (namespace, name) => {
