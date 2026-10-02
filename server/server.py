@@ -4197,7 +4197,7 @@ def vm_power_capacity_plan(body):
         return value
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
     plan = VM_CAPACITY.plan(current, observed_read, PLACE.get_nodes(), action=action, current=current,
-                            warning_percent=threshold, expanded_spec=expanded_spec)
+                            warning_percent=threshold, expanded_spec=expanded_spec, power_intents=OPS._read())
     strategy = VMS._strategy(current)
     policy_after = "Always" if action == "start" and strategy == "Halted" else strategy
     plan["vm"]["policy_before"], plan["vm"]["policy_after"] = strategy, policy_after
@@ -4350,6 +4350,15 @@ def reviewed_vm_create(body):
 
 
 def reviewed_vm_power(body):
+    if body.get("action") in ("stop", "force-stop", "pause"):
+        return _reviewed_vm_power(body)
+    # Serialize local dispatches through the durable intent becoming visible.
+    # Kubernetes still owns the final allocation across external clients.
+    with SHARED.SharedLock("vm-device-power", strict=True, directory=lambda: OPS.DATA_DIR, timeout=60):
+        return _reviewed_vm_power(body)
+
+
+def _reviewed_vm_power(body):
     action = body.get("action", "")
     ns = _dns_name(body.get("ns", DEFAULT_NS), "namespace")
     name = _dns_name(body.get("name"), "VM name")
@@ -8413,7 +8422,7 @@ class H(HTTP.LimitedHandler):
             if p == "/api/passthrough/inventory":
                 return self._send(200, PASSTHROUGH.inventory((q.get("node") or [""])[0]))
             if p == "/api/passthrough/resources":
-                return self._send(200, PASSTHROUGH.resources())
+                return self._send(200, PASSTHROUGH.resources(with_usage=True))
             if p == "/api/self/address":
                 return self._send(200, SELF_ADDRESS.report())
             if p == "/api/welcome":

@@ -71,6 +71,35 @@ def _bool(value):
     return value is True or str(value).lower() in ("true", "1", "yes", "on")
 
 
+def _has_gpu(devices):
+    if devices.get("gpus"):
+        return True
+    if not devices.get("hostDevices"):
+        return False
+    import homestead_passthrough as PASSTHROUGH
+    verified = {row["resource"] for row in PASSTHROUGH.resources()["resources"] if row.get("gpu")}
+    return any(device.get("deviceName") in verified for device in devices["hostDevices"])
+
+
+def validate_boot_output(vm):
+    """Validate the resulting explicit selection, including field-only edits."""
+    template = vm["spec"]["template"]
+    output = ((template.get("metadata") or {}).get("annotations") or {}).get(BOOT_OUTPUT)
+    if not output:
+        return  # Preserve older, independently configured display settings.
+    settings = read(vm)
+    devices = template["spec"]["domain"].get("devices") or {}
+    if settings["graphics"] != (output == "console"):
+        raise ValueError("Primary boot output conflicts with the virtual display setting")
+    if output == "gpu":
+        if not _has_gpu(devices):
+            raise ValueError("GPU boot output needs an attached GPU verified in the host device inventory; inspect its host or choose web console output")
+        if settings["firmware"] != "uefi":
+            raise ValueError("GPU boot output needs UEFI firmware; choose web console output before switching to BIOS")
+    if output == "serial" and not settings["serial"]:
+        raise ValueError("Serial boot output needs the serial console enabled; choose another boot output before disabling it")
+
+
 def apply(vm, cfg, locked_cpu=False):
     """Write the settings in cfg (the form's changed fields only) onto the
     VM. Returns True when anything changed; raises ValueError for a setting
@@ -89,8 +118,6 @@ def apply(vm, cfg, locked_cpu=False):
             raise ValueError("Primary boot output conflicts with the virtual display setting")
         cfg["graphics"] = output == "console"
         if output == "gpu":
-            if not (devices.get("gpus") or devices.get("hostDevices")):
-                raise ValueError("Attach a GPU on the Passthrough tab before choosing GPU boot output")
             if cfg.get("firmware", "uefi") != "uefi":
                 raise ValueError("GPU boot output needs UEFI firmware")
             cfg["firmware"] = "uefi"
@@ -252,6 +279,7 @@ def apply(vm, cfg, locked_cpu=False):
             tspec["evictionStrategy"] = cfg["eviction"]
         else:
             tspec.pop("evictionStrategy", None)
+    validate_boot_output(vm)
     return vm != before
 
 

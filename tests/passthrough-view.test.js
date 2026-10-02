@@ -89,6 +89,21 @@ test("reopening the host restores a retained inspection and groups every compani
   assert.ok(!t.questions[0].includes("PCI bridge"), "bridge is not handed over");
 });
 
+test("overlapping configurations stay selectable and escaped holder names explain use", () => {
+  const t = setup(), inventory = JSON.parse(JSON.stringify(resources));
+  inventory.resources[0].active_vms = ["lab/<holder>"];
+  inventory.resources[0].configured_vms = ["lab/<holder>", "lab/stopped"];
+  const html = t.ctx.vmDevicesPane({}, inventory);
+  assert.match(html, /in use by lab\/&lt;holder>/);
+  assert.match(html, /Shared configurations/);
+  assert.match(html, /Configurations may overlap; Start checks/);
+  assert.ok(!html.includes("<holder>"));
+  t.ctx.vmAddHostDevice();
+  assert.match(t.fields.added, /example.test\/gpu/);
+  inventory.usage_error = "<unavailable>";
+  assert.match(t.ctx.vmDevicesPane({}, inventory), /&lt;unavailable>/);
+});
+
 test("capture downloads exact ROM bytes and restores the button after success or failure", async () => {
   const t = setup(), downloads = [], blobs = [], notices = [], revoked = [];
   t.ctx.atob = atob;
