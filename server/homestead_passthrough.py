@@ -627,12 +627,16 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
         if devices.get("gpus") is not None:
             devices["gpus"] = gpus
     names = {d.get("name") for d in hostdevs} | {d.get("name") for d in devices.get("gpus") or []}
-    known = {r["resource"] for r in resources()["resources"]}
+    offered = resources()["resources"]
+    known = {r["resource"] for r in offered}
+    kinds = {r["resource"]: r.get("kind") for r in offered}
     for name, resource in (cfg.get("map") or {}).items():
         if name not in names:
             raise ValueError(f"{name} is not one of this VM's devices")
         if not isinstance(resource, str) or resource not in known:
             raise ValueError(f"{resource or 'that device'} is not a device VMs may use; hand it over from its host first")
+        if kinds.get(resource) == "usb" and any(d.get("name") == name for d in devices.get("gpus") or []):
+            raise ValueError(f"GPU {name} needs a PCI device")
         for device in hostdevs + list(devices.get("gpus") or []):
             if device.get("name") == name and device.get("deviceName") != resource:
                 device["deviceName"] = resource
@@ -663,6 +667,9 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
         if name not in names:
             raise ValueError(f"{name} is not one of this VM's devices")
         if data:
+            resource = next(d.get("deviceName") for d in hostdevs + list(devices.get("gpus") or []) if d.get("name") == name)
+            if kinds.get(resource) == "usb":
+                raise ValueError("USB devices cannot use a vBIOS file; clear the ROM or choose a PCI device")
             roms[name] = check_rom(data)
         else:
             roms.pop(name, None)
@@ -670,6 +677,8 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
     for name in list(roms):
         if name not in names:
             roms.pop(name)
+        elif kinds.get(next(d.get("deviceName") for d in hostdevs + list(devices.get("gpus") or []) if d.get("name") == name)) == "usb":
+            raise ValueError("USB devices cannot use a vBIOS file; clear the ROM or choose a PCI device")
     if set(roms) != have or cfg.get("roms"):
         cm = f"{vm['metadata']['name']}-vbios"
         path = f"/api/v1/namespaces/{ns}/configmaps/{cm}"
