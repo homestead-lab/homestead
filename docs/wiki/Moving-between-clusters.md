@@ -178,3 +178,31 @@ that strategy cannot safely resume after being stopped for the backup.
 The original stays on the source, **stopped**, until you remove it there - so
 it can be started again at any point. Finished moves can be dismissed from the
 destination's list without touching the source's copy.
+
+## Temporary resource cleanup
+
+After a successful move or copy, Homestead removes its temporary source
+backups and snapshots, including failed backup attempts replaced during a
+retry. It also removes the destination's CSI restore metadata once the disks
+have bound. The destination disks and images they still use remain.
+
+A failed transfer keeps its backups and partial destination disks for
+**Retry**. To discard it, use **Cancel**, **Put back** or **Cancel copy**.
+Homestead restores the source's previous running state and removes the
+destination objects, restore metadata and unused images created by that
+transfer. A failed transfer that has stopped its source must be cancelled
+before it can be dismissed.
+
+If cleanup is waiting for either cluster or for storage deletion, the job
+shows **Temporary resource cleanup pending** and offers **Retry cleanup**.
+Homestead also retries automatically after a restart. Dismiss becomes available
+when cleanup finishes. Kubernetes and Longhorn may take time to detach,
+merge snapshots and reclaim disk space; Homestead keeps their safety
+finalizers intact.
+
+Cleanup uses ownership recorded when each resource was created. Shared images,
+unrelated backups and artifacts from older Homestead versions without this
+ownership are preserved. Storage with a **Retain** policy keeps removed
+destination disks, and the job explains that they need separate removal if
+no longer wanted. Update both clusters to enable source backup cleanup for
+new transfers.

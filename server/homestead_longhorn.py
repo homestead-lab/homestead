@@ -508,7 +508,7 @@ def snapshots(volume=None):
     return sorted(out, key=lambda x: x["created"], reverse=True)
 
 
-def create_snapshot(volume, name=None):
+def create_snapshot(volume, name=None, annotations=None):
     # The second alone is not enough: a workload with two volumes has both
     # snapshotted in the same one, and the second name was refused.
     name = name or f"homestead-{int(time.time())}-{secrets.token_hex(3)}"
@@ -516,6 +516,8 @@ def create_snapshot(volume, name=None):
             "metadata": {"name": name, "namespace": LHNS,
                          "labels": {NAMES.key("managed"): "true"}},
             "spec": {"volume": volume, "createSnapshot": True}}
+    if annotations:
+        body["metadata"]["annotations"] = dict(annotations)
     ksend("POST", f"{API}/namespaces/{LHNS}/snapshots", body)
     _bust("lhsnaps")
     return {"ok": True, "snapshot": name, "volume": volume}
@@ -839,10 +841,14 @@ def move_snapshot_error(snapshot):
     return error
 
 
-def ensure_move_backup(volume, snapshot, backup):
+def ensure_move_backup(volume, snapshot, backup, cleanup_id="", source_uid=""):
     """Advance a persisted migration request without waiting in an HTTP call."""
     if not all(_valid_k8s_name(n) for n in (volume, snapshot, backup)):
         raise ValueError("migration backup identity is invalid")
+    annotations = {}
+    if cleanup_id:
+        from homestead_transfer_cleanup import ownership
+        annotations = ownership(cleanup_id, source_uid)
     path = f"{API}/namespaces/{LHNS}/backups/{backup}"
     existing = _get_or_none(path)
     if existing:
@@ -853,7 +859,7 @@ def ensure_move_backup(volume, snapshot, backup):
     snap = _get_or_none(f"{API}/namespaces/{LHNS}/snapshots/{snapshot}")
     if not snap:
         try:
-            create_snapshot(volume, snapshot)
+            create_snapshot(volume, snapshot, annotations=annotations)
         except urllib.error.HTTPError as error:
             if error.code != 409:
                 raise
@@ -872,6 +878,8 @@ def ensure_move_backup(volume, snapshot, backup):
             "metadata": {"name": backup, "namespace": LHNS,
                          "labels": {"backup-volume": volume, NAMES.key("managed"): "true"}},
             "spec": {"snapshotName": snapshot, "labels": {"homestead": "migration"}}}
+    if annotations:
+        body["metadata"]["annotations"] = annotations
     try:
         ksend("POST", f"{API}/namespaces/{LHNS}/backups", body)
     except urllib.error.HTTPError as error:

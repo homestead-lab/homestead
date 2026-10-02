@@ -9269,7 +9269,8 @@ class H(HTTP.LimitedHandler):
                                                                  expected_version=str(b.get("expected_version") or "")),
                            "backup": lambda: MOVE_SOURCE.backup(kind, name, bool(b.get("retry_failed")),
                                                                  b.get("claims") if isinstance(b.get("claims"), list) else None,
-                                                                 **identity),
+                                                                 **identity, cleanup_id=str(b.get("cleanup_id") or "")),
+                           "cleanup": lambda: MOVE_SOURCE.cleanup(identity["transfer_id"], identity["expected_uid"]),
                            "release": lambda: MOVE_SOURCE.release(kind, name, **identity),
                            "remove": lambda: MOVE_SOURCE.remove(
                                kind, name, bool(b.get("volumes")),
