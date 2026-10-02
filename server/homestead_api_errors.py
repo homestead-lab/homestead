@@ -18,7 +18,7 @@ def _longhorn_expansion(message):
     reason = ("would exceed its storage allocation limit" if allocation else
               "does not have enough capacity under Longhorn's storage limits")
     return (f"Longhorn cannot enlarge this volume: a replica disk {reason} with {extra}. "
-            "Free unused Longhorn volumes on that disk, move replicas to disks with capacity, or add storage, then retry. "
+            "Remove unused Longhorn volumes on that disk, move replicas to disks with capacity, or add storage, then retry. "
             "Cluster-wide free space does not guarantee room on each replica disk.")
 
 
