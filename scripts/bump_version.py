@@ -26,7 +26,9 @@ def main(new):
     if not re.fullmatch(r"\d+\.\d+\.\d+(?:-dev\.[1-9]\d*)?", new):
         sys.exit("give the new version as MAJOR.MINOR.PATCH or MAJOR.MINOR.PATCH-dev.N")
     old = current()
-    pattern = re.compile(re.escape(old) + r"(?![\d])")
+    # A stable version is also the prefix of its previews. Historical preview
+    # references must not acquire a second suffix when stable moves to Dev.
+    pattern = re.compile(re.escape(old) + r"(?![\d]|-dev\.)")
     for name in FILES:
         path = ROOT / name
         text = path.read_text(encoding="utf-8")
