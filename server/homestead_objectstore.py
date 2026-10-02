@@ -42,6 +42,16 @@ PORT = 9000
 CONSOLE_PORT = 9001
 IMAGE = "rustfs/rustfs:1.0.0"
 RUSTFS = "rustfs/rustfs:"
+# This store stages transfers and keeps backups, usually on an HDD. RustFS's
+# default adaptive scans can keep walking thousands of Longhorn block objects
+# between transfers. Pace the checks rather than disabling integrity checking.
+SCANNER_DEFAULTS = {
+    "RUSTFS_SCANNER_SPEED": "slowest",
+    "RUSTFS_SCANNER_CYCLE": "86400",
+    "RUSTFS_SCANNER_START_DELAY_SECS": "300",
+    "RUSTFS_SCANNER_IDLE_MODE": "true",
+    "RUSTFS_CAPACITY_SCHEDULED_INTERVAL": "3600",
+}
 # MinIO's images stopped being published; one already running with backups in
 # it is left as it is rather than swapped for a server that may not read its
 # files. Anything else - a fresh store, or a MinIO that cannot start - gets
@@ -214,24 +224,89 @@ def _rustfs_version(image):
     return (int(major), int(minor), int(patch), int(rc) if rc else 10 ** 6)
 
 
+def _scanner_env(container):
+    """Defaults for a new store, retaining explicit operator overrides."""
+    existing = {e["name"]: e for e in container.get("env") or [] if e.get("name")}
+    return [existing.get(name, {"name": name, "value": value})
+            for name, value in SCANNER_DEFAULTS.items()]
+
+
+def _store_busy():
+    """Defer a rollout while Longhorn may be writing or reading transfer data.
+
+    A completed migration backup can still be serving a remote restore. It is
+    safe to restart only after the transfer cleanup has removed that artifact.
+    Missing or partial inventories cannot establish that the store is idle.
+    """
+    from homestead_transfer_cleanup import items
+    base = f"/apis/longhorn.io/v1beta2/namespaces/{LHNS}"
+    try:
+        backups = items(kget, base + "/backups")
+        snapshots = items(kget, base + "/snapshots")
+        images = items(kget, base + "/backupbackingimages", missing=True)
+        volumes = items(kget, base + "/volumes")
+        backup_volumes = items(kget, base + "/backupvolumes")
+    except (OSError, ValueError):
+        return True
+    for obj in backups + images:
+        if (obj.get("metadata", {}).get("deletionTimestamp")
+                or NAMES.annotation_of(obj["metadata"], "move-id")
+                or (obj.get("spec", {}).get("labels") or {}).get("homestead") == "migration"
+                or str((obj.get("status") or {}).get("state", "")).lower()
+                    not in ("completed", "error", "failed")):
+            return True
+    # Longhorn removes backup metadata before finishing block GC. Its Backup
+    # CR can disappear while the deletion command is still reclaiming objects.
+    # Until the BackupVolume inventory catches up, do not interrupt that work.
+    names = {b["metadata"].get("name") for b in backups}
+    for volume in backup_volumes:
+        status = volume.get("status") or {}
+        try:
+            stored = int(status.get("dataStored") or 0)
+        except (TypeError, ValueError):
+            return True
+        if stored > 0 and status.get("lastBackupName") not in names:
+            return True
+    return (any(NAMES.annotation_of(s["metadata"], "move-id") for s in snapshots)
+            or any((v.get("spec") or {}).get("restoreRequired")
+                   or (v.get("spec") or {}).get("restoreInitiated") for v in volumes))
+
+
 def keep_in_step():
-    """The store runs the RustFS Homestead pins, as its SMB and NFS servers
-    do: an older RustFS moves on - only the image changes; its keys, volume
-    and address stay - and nothing else is touched: MinIO, a newer or
-    unrecognised tag, or a store that is off. Returns the image moved to, or ""."""
-    current = _get(f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}")
-    if not current or not int((current.get("spec") or {}).get("replicas", 1) or 0):
+    """Upgrade managed RustFS and fill missing scan settings when it is idle.
+
+    Keep explicit environment overrides, credentials, volume and address. MinIO,
+    newer/unrecognised RustFS images and stopped stores are left alone. Return
+    the resulting image when a rollout was requested, otherwise an empty string.
+    """
+    path = f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}"
+    current = _get(path)
+    if (not current or not int((current.get("spec") or {}).get("replicas", 1) or 0)
+            or NAMES.label_of(current.get("metadata") or {}, "managed") != "true"):
         return ""
     containers = (((current.get("spec") or {}).get("template") or {}).get("spec") or {}).get("containers") or []
     if len(containers) != 1:
         return ""
-    running, wanted = _rustfs_version(containers[0].get("image")), _rustfs_version(IMAGE)
-    if not running or running >= wanted:
+    container = containers[0]
+    running, wanted = _rustfs_version(container.get("image")), _rustfs_version(IMAGE)
+    if not running or not wanted or running > wanted:
         return ""
-    ksend("PATCH", f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}",
-          {"spec": {"template": {"spec": {"containers": [{"name": containers[0]["name"], "image": IMAGE}]}}}},
-          ctype="application/strategic-merge-patch+json")
-    return IMAGE
+    present = {e.get("name") for e in container.get("env") or []}
+    missing = [e for e in _scanner_env(container) if e["name"] not in present]
+    if running == wanted and not missing:
+        return ""
+    if _store_busy():
+        return ""
+    patch = {"name": container["name"]}
+    if running < wanted:
+        patch["image"] = IMAGE
+    if missing:
+        patch["env"] = missing
+    body = {"spec": {"template": {"spec": {"containers": [patch]}}}}
+    if current.get("metadata", {}).get("resourceVersion"):
+        body["metadata"] = {"resourceVersion": current["metadata"]["resourceVersion"]}
+    ksend("PATCH", path, body, ctype="application/strategic-merge-patch+json")
+    return IMAGE if running < wanted else container["image"]
 
 
 def _claim_size(claim):
@@ -403,7 +478,8 @@ def deploy(cfg=None):
 
     labels = {"app": NAME, NAMES.key("managed"): "true"}
     current = _get(f"/apis/apps/v1/namespaces/{NS}/deployments/{NAME}")
-    running_image = ((((current or {}).get("spec") or {}).get("template") or {}).get("spec", {}).get("containers") or [{}])[0].get("image", "")
+    running_container = ((((current or {}).get("spec") or {}).get("template") or {}).get("spec", {}).get("containers") or [{}])[0]
+    running_image = running_container.get("image", "")
     serving = int(((current or {}).get("status") or {}).get("readyReplicas", 0) or 0) > 0
     keep_minio = MINIO in running_image and serving
     _bucket["ok"] = False
@@ -430,7 +506,8 @@ def deploy(cfg=None):
                             "name": SECRET, "key": "accesskey"}}},
                         {"name": "MINIO_ROOT_PASSWORD" if keep_minio else "RUSTFS_SECRET_KEY", "valueFrom": {"secretKeyRef": {
                             "name": SECRET, "key": "secretkey"}}},
-                    ] + ([] if keep_minio else [{"name": "RUSTFS_VOLUMES", "value": "/data"}]),
+                    ] + ([] if keep_minio else [{"name": "RUSTFS_VOLUMES", "value": "/data"}]
+                         + _scanner_env(running_container if running_image.startswith(RUSTFS) else {})),
                     "ports": [{"containerPort": PORT, "name": "s3"},
                               {"containerPort": CONSOLE_PORT, "name": "console"}],
                     "readinessProbe": {"httpGet": {"path": "/minio/health/ready", "port": "s3"},

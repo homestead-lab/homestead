@@ -28,6 +28,7 @@ import urllib.parse
 import homestead_vm_hardware as HARDWARE
 import homestead_hvimage as HVIMAGE
 import homestead_vmusage as VMUSAGE
+import homestead_vm_network as VMNETWORK
 import homestead_vm_profiles as PROFILES
 import homestead_storage_resize as RESIZE
 
@@ -352,6 +353,8 @@ def _row(vm, vmi, claims=None, dvs=None, instance_known=True):
             "stop_retries": _crash_retries_without_guest(vm, vmi, instance_known),
             "node": istatus.get("nodeName", ""), "cores": _cores(dom), "memory": _memory(dom),
             "ip": next((ip for n in nics for ip in n["ips"] if ":" not in ip), ""), "nics": nics, "disks": disks,
+            "isolated": VMNETWORK.isolated(vm),
+            "implicit_network": not nics and not networks and (dom.get("devices") or {}).get("autoattachPodInterface") is not False,
             # Every IPv4 address, first first, and the network the VM is on.
             "ips": list(dict.fromkeys(ip for n in nics for ip in n["ips"] if ":" not in ip)),
             "network": next((n["network"] for n in nics if n["network"]), ""),
@@ -804,6 +807,9 @@ def _edit_nics(tspec, edits, adds):
     if sum(1 for n in nets if "pod" in n) > 1:
         raise ValueError("a VM can be on the pod network once")
     devices["interfaces"], tspec["networks"] = ifaces, nets
+    # Empty lists alone let KubeVirt recreate its default NIC on the next boot.
+    changed |= devices.get("autoattachPodInterface") is not False
+    devices["autoattachPodInterface"] = False
     return changed
 
 
@@ -1006,7 +1012,9 @@ def prepare_edit(ns, name, cfg, current=None):
     if cfg.get("disks") or cfg.get("add_disks"):
         changed_hardware |= _edit_disks(vm, ns, cfg.get("disks") or [], cfg.get("add_disks") or [],
                                         claims, to_create, resize, dropped, effects)
-    if cfg.get("nics") or cfg.get("add_nics"):
+    network_isolated = VMNETWORK.isolation_requested(cfg, VMNETWORK.isolated(vm))
+    changed_hardware |= VMNETWORK.apply_isolation(vm, cfg)
+    if not network_isolated and ("nics" in cfg or cfg.get("add_nics")):
         changed_hardware |= _edit_nics(tspec, cfg.get("nics") or [], cfg.get("add_nics") or [])
     if cfg.get("cloud_init") is not None:
         import homestead_host_access as HOSTACCESS

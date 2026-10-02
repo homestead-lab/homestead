@@ -78,6 +78,27 @@ class VMCreateAdmissionTests(unittest.TestCase):
         self.assertNotIn("prepared", result[1])
         writes.assert_not_called()
 
+    def test_isolated_preview_and_reviewed_create_need_no_generated_mac(self):
+        self.body["isolated"] = True
+        with mock.patch.object(server.IMP, "_vm_mac") as mac:
+            body = self.reviewed()
+            self.assertNotIn("mac", body)
+            result, writes, records = self.call("/api/vm/create", body)
+            self.assertEqual(200, result[0], result)
+            mac.assert_not_called()
+            records.assert_not_called()
+        vm = next(c.args[2] for c in writes.call_args_list if c.args[1].endswith("/virtualmachines"))
+        spec = vm["spec"]["template"]["spec"]
+        self.assertEqual([], spec["networks"])
+        self.assertEqual([], spec["domain"]["devices"]["interfaces"])
+        self.assertIs(False, spec["domain"]["devices"]["autoattachPodInterface"])
+        self.assertEqual("true", vm["metadata"]["annotations"]["homestead.io/network-isolated"])
+        for field in ("network", "isolated"):
+            changed = {**body, field: "pod" if field == "network" else False}
+            rejected, repeated, _ = self.call("/api/vm/create", changed)
+            self.assertIn(rejected[0], (400, 409), rejected)
+            repeated.assert_not_called()
+
     def test_unreviewed_create_never_creates_a_dependency(self):
         for body in (self.body, {**self.body, "mac": "52:54:00:11:22:33", "confirm_capacity": True}):
             result, writes, records = self.call("/api/vm/create", body)

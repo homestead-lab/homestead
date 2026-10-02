@@ -10,6 +10,7 @@ length is checked against what was sent, and only then does it replace the
 original - a half-delivered stream can never truncate a config file.
 """
 import base64
+import datetime
 import hashlib
 import json
 import os
@@ -155,6 +156,46 @@ def close_session(namespace, pvc):
     except Exception:
         pass
     return {"ok": True}
+
+
+def cleanup(now=None):
+    """Remove expired helpers, including pods left behind after their deadline.
+
+    The kubelet stops their containers; it does not delete bare Pod objects.
+    Read only our labelled helpers and fence deletion to the observed identity,
+    so a browser opening a replacement cannot lose its new pod to this sweep.
+    """
+    now = time.time() if now is None else now
+    selector = urllib.parse.quote(NAMES.key("task") + "=files")
+    pods = kget(f"/api/v1/pods?labelSelector={selector}").get("items", [])
+    removed = []
+    for pod in pods:
+        meta, spec = pod.get("metadata", {}), pod.get("spec", {})
+        namespace, name = meta.get("namespace"), meta.get("name", "")
+        if (namespace in SYSTEM_NAMESPACES or not namespace or not meta.get("uid")
+                or meta.get("deletionTimestamp") or not name.startswith(POD_PREFIX)
+                or NAMES.label_of(meta, "task") != "files"):
+            continue
+        claim = next((v.get("persistentVolumeClaim", {}).get("claimName")
+                      for v in spec.get("volumes", []) if v.get("name") == "data"), None)
+        if not claim or name != pod_name(claim):
+            continue
+        terminal = pod.get("status", {}).get("phase") in ("Succeeded", "Failed")
+        try:
+            created = datetime.datetime.fromisoformat(meta["creationTimestamp"].replace("Z", "+00:00")).timestamp()
+            deadline = int(spec.get("activeDeadlineSeconds") or SESSION_SECONDS)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not terminal and now - created < max(1, deadline):
+            continue
+        preconditions = {"uid": meta["uid"]}
+        if meta.get("resourceVersion"):
+            preconditions["resourceVersion"] = meta["resourceVersion"]
+        ksend("DELETE", f"/api/v1/namespaces/{namespace}/pods/{name}", {
+            "apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0,
+            "preconditions": preconditions})
+        removed.append(name)
+    return removed
 
 
 # --------------------------------------------------------------------- exec

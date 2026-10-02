@@ -47,6 +47,24 @@ class ContainerSetTests(unittest.TestCase):
         self.assertEqual(before["spec"]["template"]["spec"]["containers"][0]["env"][0], spec["containers"][0]["env"][0])
         self.assertEqual([], prepared["claims"])
 
+    def test_added_container_keeps_workload_name_and_stale_addition_needs_fresh_state(self):
+        changes = [{"original_name": "main", "name": "main"},
+                   {"new": True, "name": "database", "image": "example/database:1"}]
+        prepared = self.prepare(workload_name="media", containers=changes)
+        self.assertEqual("media", prepared["name"])
+        self.assertEqual("media", prepared["deployment"]["metadata"]["name"])
+        self.assertEqual(["main", "old-helper", "database"],
+                         [c["name"] for c in prepared["deployment"]["spec"]["template"]["spec"]["containers"]])
+        # A Deployment write can succeed before a Service write or its response fails.
+        # Replaying the original form incorrectly treats its saved sidecar as new.
+        self.current = prepared["deployment"]
+        with self.assertRaisesRegex(ValueError, "unique"):
+            self.prepare(workload_name="media", containers=changes)
+        fresh = self.prepare(workload_name="media", containers=[
+            {"original_name": "database", "name": "database", "memory": "128Mi"}])
+        self.assertEqual("media", fresh["name"])
+        self.assertEqual(3, len(fresh["deployment"]["spec"]["template"]["spec"]["containers"]))
+
     def test_old_clients_do_not_remove_omitted_containers(self):
         prepared = self.prepare(containers=[{"original_name": "main", "memory": "256Mi"}])
         self.assertEqual(2, len(prepared["deployment"]["spec"]["template"]["spec"]["containers"]))
