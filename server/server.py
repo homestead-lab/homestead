@@ -59,7 +59,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.293-dev.3")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.293")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -2583,7 +2583,8 @@ def install_samba(address=""):
     cfg = {"name": SMB_NAME, "container_name": SMB_NAME, "image": SAMBA_IMAGE, "namespace": SMB_NAMESPACE,
            "ports": [{"container": 445, "name": "smb", "protocol": "TCP", "expose": True}],
            "vip_mode": "manual" if address else "automatic", "lb_ip": address,
-           "args": ["-p", "-g", "server min protocol = SMB2"]}
+           "args": ["-g", "server min protocol = SMB2"],
+           "env": {**SHARES.filesystem_identity(), "PERMISSIONS": ""}}
     cfg = NETWORK.prepare_deploy(cfg)
     dep, svc = build_deployment(cfg)
     created = ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", dep)
@@ -6653,9 +6654,10 @@ def samba_state():
             expected_spec = expected["spec"]["template"]["spec"]
             live_spec = dep["spec"]["template"]["spec"]
             expected_container = expected_spec["containers"][0]
-            in_sync = (all(container.get(field) == expected_container.get(field)
-                           for field in ("args", "volumeMounts"))
+            in_sync = (all(SHARES.SPECS.same(container.get(field), expected_container.get(field))
+                           for field in ("args", "env", "volumeMounts"))
                        and live_spec.get("volumes", []) == expected_spec.get("volumes", [])
+                       and SHARES.SPECS.same(live_spec.get("initContainers", []), expected_spec.get("initContainers", []))
                        and container.get("image") == SAMBA_IMAGE)
         except Exception as error:
             config_error = str(error)[:160]
