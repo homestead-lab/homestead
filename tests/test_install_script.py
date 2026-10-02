@@ -3,6 +3,7 @@
 without a machine to install on. The doctor runs against stand-ins for
 systemctl, k3s and the rest."""
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -13,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "install.sh"
+DEFAULT_VERSION = re.search(r'os\.environ\.get\("HOMESTEAD_VERSION", "([^"]+)"\)', (ROOT / "server" / "server.py").read_text(encoding="utf-8")).group(1)
 SH = shutil.which("dash") or shutil.which("sh")
 
 
@@ -27,7 +29,7 @@ def run(args, env=None, path_extra=None):
             full["PATH"] = path_extra + os.pathsep + full["PATH"]
         result = subprocess.run([SH, str(script), *args], capture_output=True, text=True, env=full,
                                 stdin=subprocess.DEVNULL, timeout=120)
-        return result.returncode, result.stdout + result.stderr
+        return result.returncode, re.sub(r"(?:/[^\s]+)?/homestead\.[A-Za-z0-9]+", "/tmp/homestead-private", result.stdout + result.stderr)
 
 
 @unittest.skipUnless(SH, "no POSIX shell here")
@@ -62,24 +64,24 @@ class InstallerTests(unittest.TestCase):
     def test_a_new_cluster_runs_bootstrap_with_the_answers(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_NODE_IP": "10.0.0.5",
                                                           "HS_LONGHORN": "no", "HS_KUBEVIRT": "yes", "HS_YES": "1"})
-        self.assertIn("+ sh /tmp/homestead-bootstrap-k3s.sh server --node-ip 10.0.0.5 --no-longhorn --kubevirt", out)
+        self.assertIn(f"+ sh /tmp/homestead-private/bootstrap-k3s.sh server --node-ip 10.0.0.5 --no-longhorn --kubevirt --homestead-version {DEFAULT_VERSION}", out)
         self.assertIn("http://10.0.0.5:8088", out)
 
     def test_joining_as_a_worker(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "10.0.0.6",
                                                           "HS_SERVER": "10.0.0.5", "HS_TOKEN": "tok", "HS_YES": "1"})
-        self.assertIn("+ sh /tmp/homestead-bootstrap-k3s.sh agent https://10.0.0.5:6443 tok --node-ip 10.0.0.6", out)
+        self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh agent https://10.0.0.5:6443 tok --node-ip 10.0.0.6", out)
 
     def test_a_new_rke2_cluster_always_has_longhorn(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_DIST": "rke2", "HS_NODE_IP": "10.0.0.5",
                                                           "HS_LONGHORN": "no", "HS_KUBEVIRT": "no", "HS_YES": "1"})
-        self.assertIn("+ sh /tmp/homestead-bootstrap-k3s.sh server --node-ip 10.0.0.5 --rke2", out)
+        self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh server --node-ip 10.0.0.5 --rke2", out)
         self.assertNotIn("--no-longhorn", out, "RKE2 has no storage of its own")
 
     def test_joining_an_rke2_cluster_uses_its_supervisor_port(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "server", "HS_DIST": "rke2", "HS_NODE_IP": "10.0.0.6",
                                                           "HS_SERVER": "10.0.0.5", "HS_TOKEN": "tok", "HS_YES": "1"})
-        self.assertIn("+ sh /tmp/homestead-bootstrap-k3s.sh join https://10.0.0.5:9345 tok --node-ip 10.0.0.6 --rke2", out)
+        self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh join https://10.0.0.5:9345 tok --node-ip 10.0.0.6 --rke2", out)
 
     def test_an_unknown_kubernetes_is_refused(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_DIST": "k0s", "HS_NODE_IP": "10.0.0.5", "HS_YES": "1"})
@@ -99,18 +101,18 @@ class InstallerTests(unittest.TestCase):
                                                           "HS_TOKEN": "tok", "HS_K8S_VERSION": "v1.32.8+k3s1", "HS_YES": "1"})
         self.assertIn("agent https://10.0.0.5:6443 tok --node-ip 10.0.0.6 --k3s-version v1.32.8+k3s1", out)
 
-    def test_no_versions_given_means_no_pins_and_no_lookups(self):
+    def test_default_pins_homestead_to_the_installer_release_without_lookups(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_NODE_IP": "10.0.0.5", "HS_LONGHORN": "yes",
                                                           "HS_KUBEVIRT": "no", "HS_YES": "1"})
-        self.assertIn("+ sh /tmp/homestead-bootstrap-k3s.sh server --node-ip 10.0.0.5\n", out)
-        self.assertNotIn("-version", out)
+        self.assertIn(f"+ sh /tmp/homestead-private/bootstrap-k3s.sh server --node-ip 10.0.0.5 --homestead-version {DEFAULT_VERSION}\n", out)
+        self.assertNotIn("--k3s-version", out)
         self.assertNotIn("Retrieving release information", out)
 
     def test_kube_vip_and_multus_can_be_left_out_or_pinned(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_NODE_IP": "10.0.0.5", "HS_LONGHORN": "yes",
                                                           "HS_KUBEVIRT": "no", "HS_KUBEVIP": "no",
                                                           "HS_MULTUS_VERSION": "v4.3.101", "HS_YES": "1"})
-        self.assertIn("+ sh /tmp/homestead-bootstrap-k3s.sh server --node-ip 10.0.0.5 --no-kube-vip --multus-version v4.3.101", out)
+        self.assertIn(f"+ sh /tmp/homestead-private/bootstrap-k3s.sh server --node-ip 10.0.0.5 --homestead-version {DEFAULT_VERSION} --no-kube-vip --multus-version v4.3.101", out)
 
     def test_summary_declined_changes_nothing(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_NODE_IP": "10.0.0.5", "HS_LONGHORN": "yes",
@@ -124,7 +126,7 @@ class InstallerTests(unittest.TestCase):
                                                           "HS_CLASS": "harvester-longhorn", "HS_YES": "1"})
         self.assertIn("s/192\\.0\\.2\\.242/192.0.2.250/g", out)
         self.assertIn("s/longhorn-r2/harvester-longhorn/g", out)
-        self.assertIn("apply -f /tmp/homestead-deploy.yaml", out)
+        self.assertIn("apply -f /tmp/homestead-private/deploy.yaml", out)
 
     def test_a_question_with_no_terminal_and_no_answer_says_which_to_give(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "10.0.0.6", "HS_YES": "1"})

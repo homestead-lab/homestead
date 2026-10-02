@@ -11,7 +11,10 @@ class SMBUserAuthorizationTests(unittest.TestCase):
                 wanted.append(node)
             if isinstance(node, ast.FunctionDef) and node.name == 'needed_role':
                 wanted.append(node)
-        scope = {}
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
+        import homestead_route_policy
+        scope = {"ROUTE_POLICY": homestead_route_policy}
         exec(compile(ast.Module(body=wanted, type_ignores=[]), '<authorization>', 'exec'), scope)
         for path in ('/api/shares/users', '/api/shares/users/delete'):
             for method in ('GET', 'POST'):

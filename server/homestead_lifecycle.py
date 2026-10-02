@@ -715,7 +715,7 @@ def set_cordon(node, unschedulable):
     return {"ok": True, "node": node, "cordoned": bool(unschedulable)}
 
 
-def drain(node, grace=30, include_system=False, reviewed_pods=None):
+def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, progress=None):
     """Evict workload pods off a node. DaemonSets and mirror pods are skipped
     because the scheduler will simply recreate them on the same node."""
     pods = MAINTENANCE.items(kget, "/api/v1/pods")
@@ -723,7 +723,7 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None):
         here = [p for p in pods if (p.get("spec") or {}).get("nodeName") == node]
         if MAINTENANCE.pod_snapshot(here) != reviewed_pods or any(not row[2] for row in reviewed_pods):
             raise ValueError("Host pods changed after review; power was not sent. Review the host again")
-    evicted, skipped = [], []
+    evicted, skipped, targets = [], [], {}
     for p in pods:
         if p["spec"].get("nodeName") != node:
             continue
@@ -740,15 +740,55 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None):
         if ns in SYS_NS and not include_system:
             skipped.append(f"{ns}/{name} (system)")
             continue
-        try:
-            ksend("POST", f"/api/v1/namespaces/{ns}/pods/{name}/eviction",
-                  {"apiVersion": "policy/v1", "kind": "Eviction",
-                   "metadata": {"name": name, "namespace": ns},
-                   "deleteOptions": {"gracePeriodSeconds": int(grace),
-                                     **({"preconditions": {"uid": p["metadata"]["uid"]}} if p["metadata"].get("uid") else {})}})
-            evicted.append(f"{ns}/{name}")
-        except urllib.error.HTTPError as e:
-            skipped.append(f"{ns}/{name} (HTTP {e.code})")
+        targets[f"{ns}/{name}"] = p
+    # Evict consumers first so Longhorn can detach their engines and release
+    # its instance-manager budget. Never delete pods or edit that budget.
+    targets = dict(sorted(targets.items(), key=lambda row: (MAINTENANCE.longhorn_instance_manager(row[1]), row[0])))
+    frozen = MAINTENANCE.pod_snapshot([p for p in pods if (p.get("spec") or {}).get("nodeName") == node])
+    deadline = time.monotonic() + 120
+    while targets:
+        retrying = []
+        for identity, p in targets.items():
+            if identity in evicted or (p.get("metadata") or {}).get("deletionTimestamp"):
+                continue
+            ns, name = p["metadata"]["namespace"], p["metadata"]["name"]
+            try:
+                ksend("POST", f"/api/v1/namespaces/{ns}/pods/{name}/eviction",
+                      {"apiVersion": "policy/v1", "kind": "Eviction",
+                       "metadata": {"name": name, "namespace": ns},
+                       "deleteOptions": {"gracePeriodSeconds": int(grace),
+                                         **({"preconditions": {"uid": p["metadata"]["uid"]}} if p["metadata"].get("uid") else {})}})
+                evicted.append(identity)
+            except urllib.error.HTTPError as e:
+                if wait and e.code == 429 and MAINTENANCE.longhorn_instance_manager(p):
+                    retrying.append(identity)
+                elif wait and e.code == 404:
+                    # It may have left between LIST and POST. The next complete
+                    # inventory must confirm that before power can be sent.
+                    evicted.append(identity)
+                else:
+                    skipped.append(f"{identity} (HTTP {e.code})")
+        if not wait or any("(HTTP " in item for item in skipped):
+            break
+        live = [p for p in MAINTENANCE.items(kget, "/api/v1/pods")
+                if (p.get("spec") or {}).get("nodeName") == node]
+        if any(row not in frozen for row in MAINTENANCE.pod_snapshot(live)):
+            raise ValueError("Host remains cordoned; pods changed during drain. Power was not sent; review the host again")
+        remaining = {p["metadata"]["namespace"] + "/" + p["metadata"]["name"]: p for p in live
+                     if MAINTENANCE.drainable(p)}
+        targets = {name: remaining[name] for name in targets if name in remaining}
+        if not targets:
+            break
+        waiting = [name for name in retrying if name in targets]
+        reason = ("Longhorn still prevents eviction" if waiting else "Pods have not left the host")
+        names = ", ".join(sorted(waiting or targets)[:6])
+        if time.monotonic() >= deadline:
+            raise ValueError(f"Host remains cordoned; drain timed out after 2 minutes. {reason}: {names}. "
+                             "Power was not sent; inspect Longhorn volumes, disruption budgets and pod events")
+        if progress:
+            progress("draining", 10, ("Waiting for Longhorn to allow storage pod eviction: " if waiting else
+                                     "Waiting for drained pods to leave: ") + names + "; power has not been sent")
+        time.sleep(2)
     _bust("wl", "ov", "nodes", "flow", "impact:")
     return {"ok": True, "node": node, "evicted": evicted, "skipped": skipped}
 
@@ -790,24 +830,12 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
     steps.append("cordoned")
     if drain_first:
         report("draining", 10, "Evicting workload and system pods through disruption budgets; power has not been sent")
-        d = drain(node, include_system=True, reviewed_pods=reviewed_pods)
+        d = drain(node, include_system=True, reviewed_pods=reviewed_pods, wait=True, progress=report)
         steps.append(f"drained {len(d['evicted'])} pod(s)")
         refused = [item for item in d["skipped"] if "(HTTP " in item]
         if refused:
             raise ValueError("Host remains cordoned; drain was refused for " + ", ".join(refused[:6]) +
                              ". Resolve the pod or disruption budget before retrying power control")
-        pending = set(d["evicted"])
-        deadline = time.time() + 120
-        while pending and time.time() < deadline:
-            live = MAINTENANCE.items(kget, "/api/v1/pods")
-            pending &= {(p.get("metadata") or {}).get("namespace", "") + "/" +
-                        (p.get("metadata") or {}).get("name", "") for p in live
-                        if (p.get("spec") or {}).get("nodeName") == node}
-            if pending:
-                time.sleep(2)
-        if pending:
-            raise ValueError("Host remains cordoned; these pods have not left it: " +
-                             ", ".join(sorted(pending)[:6]) + ". Power was not sent")
 
     # A long drain can outlive the reviewed quorum, VM and replica state.
     report("verifying", 15, "Drain completed; rechecking quorum, VMs, pods and volume replicas before power")
@@ -831,7 +859,7 @@ def _send_power(node, action, steps, rep, report):
             "tolerations": [{"operator": "Exists"}],
             "containers": [{
                 "name": "power",
-                "image": "busybox",
+                "image": "alpine:3.24",
                 "command": ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--",
                             "sh", "-c", f"sleep 3; {cmd}"],
                 "securityContext": {"privileged": True},

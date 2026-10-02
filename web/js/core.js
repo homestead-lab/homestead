@@ -42,7 +42,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.291";
+const HOMESTEAD_VERSION = "2.8.292-dev.2";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -324,9 +324,9 @@ window.childModal = childModal;
 
 /* Some pages come as cards or as rows. Which is the reader's choice, kept per
    browser and per page; nothing about it is worth a round trip. */
-/* Containers and VMs are lists you scan, so they start as rows; Nodes, a
-   handful of machines, as cards. A choice made with the switch is kept. */
-const LAYOUT_DEFAULT = { containers: "rows", vms: "rows" };
+/* Lists start as rows; nodes compare their metrics in columns. A choice
+   made with the switch is kept. */
+const LAYOUT_DEFAULT = { containers: "rows", vms: "rows", nodes: "rows" };
 function viewLayout(page) {
   const fallback = LAYOUT_DEFAULT[page] || "cards";
   try {
@@ -339,11 +339,11 @@ function layoutSwitch(page, redraw) {
   const option = (value, label, iconName) => `<button class="${layout === value ? "on" : ""}" title="${label}"
     aria-label="Show as ${label.toLowerCase()}" aria-pressed="${layout === value}"
     onclick="setViewLayout(${jsq(page)},${jsq(redraw)},${jsq(value)})">${icon(iconName)}</button>`;
-  return `<div class="seg iconseg" role="group" aria-label="Layout">${option("cards", "Cards", "dash")}${option("rows", "Rows", "list")}</div>`;
+  return `<div class="seg iconseg" role="group" aria-label="Layout">${option("cards", "Cards", "dash")}${option("rows", page === "nodes" ? "Comparison" : "Rows", "list")}</div>`;
 }
-window.setViewLayout = (page, redraw, layout) => {
+window.setViewLayout = (page, redraw, layout, {preservePaint = false} = {}) => {
   try { localStorage.setItem(`homestead.layout.${page}`, layout); } catch (e) { /* this visit only */ }
-  resetPaint();
+  if (!preservePaint) resetPaint();
   if (typeof window[redraw] === "function") window[redraw]();
 };
 window.modalBack = modalBack;
@@ -563,8 +563,9 @@ function firstDataRow(table) {
 }
 function sortBody(body, heads, state) {
   const rows = [...body.rows];
-  const keyed = rows.filter(row => row.cells.length === heads.length);
-  const rest = rows.filter(row => row.cells.length !== heads.length);
+  const keyed = rows.filter(row => !row.dataset.detailFor && row.cells.length === heads.length);
+  const rest = rows.filter(row => row.cells.length !== heads.length && !row.dataset.detailFor);
+  const details = new Map(rows.filter(row => row.dataset.detailFor).map(row => [row.dataset.detailFor, row]));
   keyed.map((row, at) => ({ row, at, value: sortValue(row.cells[state.col]) }))
     .sort((a, b) => {
       // Empty cells go last whichever way the column is sorted.
@@ -574,13 +575,24 @@ function sortBody(body, heads, state) {
       return order * state.dir || a.at - b.at;
     })
     .concat(rest.map(row => ({ row })))
-    .forEach(({ row }) => body.appendChild(row));
+    .forEach(({ row }) => {
+      body.appendChild(row);
+      const detail = details.get(row.dataset.rowKey);
+      if (detail) body.appendChild(detail);
+    });
 }
 /* On a phone a stacked table has no headings to click, so it gets a menu. */
 function sortBar(table, heads, state) {
   if (!table.classList.contains("stack")) return;
   const wrap = table.closest(".card") || table.parentElement;
-  let bar = wrap.previousElementSibling;
+  const collection = table.closest("[data-collection]");
+  const target = table.dataset.sortControls;
+  const selector = target ? `[data-sort-controls="${CSS.escape(target)}"].sortbar` : "";
+  // A collection can put the standard sort controls inside its Options
+  // menu. An open menu is portalled out of the collection into the page.
+  let bar = target && (collection?.querySelector(selector) ||
+    (collection?.isConnected && document.querySelector(`.actionmenu-portal ${selector}`)));
+  bar ||= wrap.previousElementSibling;
   if (!bar || !bar.classList.contains("sortbar")) {
     bar = document.createElement("div");
     bar.className = "sortbar";

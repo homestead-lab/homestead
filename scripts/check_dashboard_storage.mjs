@@ -9,7 +9,7 @@ try {
   const page=await context.newPage(),errors=[];
   page.on("pageerror",e=>errors.push(e.message));
   await page.goto(`${base}/?demo=1`,{waitUntil:"networkidle"});
-  await page.locator(".nodecard").first().waitFor();
+  await page.locator(".node-comparison").first().waitFor();
   await page.evaluate(()=>{
     const original=window.fetch;
     window.fetch=async(input,init)=>{
@@ -30,15 +30,16 @@ try {
     await page.setViewportSize(size);
     await page.evaluate(()=>go("dash"));
     await page.locator(".consumer-row").first().waitFor();
-    const card=page.locator(".nodecard").first();
+    const card=size.width>560 ? page.locator(".comparison-disk").first() : page.locator(".node-comparison-detail").first();
     assert.match(await card.innerText(),/40%\s+40\/100 GB/);
     assert.match(await card.innerText(),/Filesystem use · 500 GB disk/);
     assert.match(await card.locator(".meter.split").getAttribute("data-tip"),/Longhorn allowance left 30 GB/);
     const widths=await card.locator(".meter.split>span").evaluateAll(spans=>spans.map(s=>Number.parseFloat(s.style.width)));
     assert.deepEqual(widths,[30,10,30]);
-    for(const group of await card.locator(".badgegroup").all()) {
-      const caption=await group.locator(".badgecap").boundingBox();
-      const values=await group.locator(".badge-values").boundingBox();
+    for(const group of await page.locator(".node-comparison-detail .about-grid>div").all()) {
+      if(size.width>560) continue;
+      const caption=await group.locator(":scope>span").boundingBox();
+      const values=await group.locator(":scope>b").boundingBox();
       assert.ok(values.y>=caption.y+caption.height,"node tags sit below their heading");
       assert.ok(Math.abs(values.x-caption.x)<1,"wrapped tags align with their heading");
       for(const tag of await group.locator(".tag").all()) {

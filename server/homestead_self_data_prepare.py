@@ -141,8 +141,9 @@ def start(body, reviewed, ops):
     if body.get("confirm_capacity") is not True or not SIGN.valid({**cfg, "capacity_token": body.get("capacity_token")}, context):
         raise J.Held("Review destination preparation and acknowledge its capacity warnings before creating anything")
     # The caller holds ops._lock while recomputing review and starting the job.
-    if any(i.get("status") not in ops.TERMINAL or i.get("ref", {}).get("retain_resources") for i in ops._read()):
-        raise J.Held("Finish running or recovery jobs before preparing Homestead's destination")
+    jobs = blocking_jobs(ops)
+    if jobs:
+        raise J.Held(blocked_message("Finish running or recovery jobs before preparing Homestead's destination", jobs))
     return ops.start(KIND, "Prepare Homestead data volume", {"kind": "PersistentVolumeClaim", "namespace": ref["namespace"], "name": ref["destination"]},
         "/settings", {**copy.deepcopy(ref), "storage_writes": [], "retain_resources": True}, "Preparation recorded; Homestead keeps running")
 
@@ -232,3 +233,66 @@ def cancel_plan(item):
 
 def cancel_run(item, options):
     raise J.Held("Preparation cleanup requires inspection, not forgetting or repeating uncertain writes")
+
+
+def can_archive(item):
+    ref = item.get("ref") or {}
+    return (item.get("kind") == KIND and item.get("status") == "succeeded" and
+            bool(ref.get("prepared")) and ref.get("retain_resources") is False and
+            ref.get("preparation_archived") is not True)
+
+
+def blocking_jobs(ops, own_id=None):
+    jobs = []
+    for item in ops._read():
+        if item["id"] == own_id or (item.get("status") in ops.TERMINAL and not item.get("ref", {}).get("retain_resources")):
+            continue
+        public = ops._public(item)
+        # A blocker can be older than the visible Jobs tray. Include its public
+        # review flags so opening it does not depend on that browser cache.
+        jobs.append({"id": item["id"], "title": item.get("title") or item.get("kind", "Job"),
+                     "kind": item.get("kind", ""), "status": item.get("status", "unknown"),
+                     "message": item.get("message", ""), "href": item.get("href", "/"),
+                     "recovery": bool(item.get("ref", {}).get("retain_resources")),
+                     **{key: bool(public.get(key)) for key in ("mutation_recovery", "power_recovery", "storage_recovery",
+                                                              "tracking_only", "cleanable")}})
+    return jobs
+
+
+def blocked_message(prefix, jobs):
+    return prefix + ": " + "; ".join(j["title"] + " (" + j["status"] + ", " + j["id"] + ")"
+                                      for j in jobs[:6]) + ("; more jobs are listed in Jobs" if len(jobs) > 6 else "")
+
+
+def archive(body, actor, namespace, deployment, ops, *, start=False):
+    """Hide a completed preparation; keep its receipts and both volumes.
+
+    No resolver or cluster write runs here. The shared journal lock fences the
+    reviewed status and preserves exact identities even after history pruning.
+    """
+    if (not isinstance(body, dict) or not {"id"} <= set(body) <= {"id", "capacity_token", "confirm_archive"}
+            or not isinstance(body["id"], str) or not body["id"] or len(body["id"]) > 120):
+        raise J.Held("Choose a completed preparation to archive")
+    with ops._lock:
+        items = ops._read()
+        item = next((i for i in items if i["id"] == body["id"] and i.get("kind") == KIND
+                     and i.get("ref", {}).get("namespace") == namespace
+                     and i.get("ref", {}).get("deployment", {}).get("name") == deployment), None)
+        if not item or not can_archive(item):
+            raise J.Held("Only a successfully completed preparation can be archived. Running or recovery jobs need inspection")
+        ref = item["ref"]
+        cfg = {"id": item["id"]}
+        context = {"action": "self-data-preparation-archive", "actor": actor, "namespace": namespace,
+                   "status": item["status"], "ref": J.digest(ref)}
+        if not start:
+            return {**cfg, "destination": ref["destination"], "source": ref["source"]["name"],
+                    "capacity_token": SIGN.issue(cfg, context),
+                    "detail": "Hides this completed preparation from Move data and Jobs. Both volumes are retained; no data is copied or deleted."}
+        if body.get("confirm_archive") is not True or not SIGN.valid({**cfg, "capacity_token": body.get("capacity_token")}, context):
+            raise J.Held("Review this preparation again and confirm archiving its record")
+        ops.require_write()
+        ref["preparation_archived"] = True
+        item["updated_at"] = ops._now()
+        ops._note(item, item["status"], item.get("progress", 100), "Preparation record archived; volumes and receipts retained")
+        ops._write(items)
+        return {"ok": True, "id": item["id"], "detail": "Preparation archived. Both volumes and their creation receipts are retained."}

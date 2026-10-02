@@ -3,7 +3,7 @@
 Some fixes can only be made on the machine itself - a file k3s reads at
 start, a disk to format and mount. Kubernetes reaches a node only through a
 pod, so this is the node shell's helper (homestead_nodeshell) in miniature:
-a privileged busybox pod pinned to the node, sharing the host's namespaces,
+a privileged Alpine pod pinned to the node, sharing the host's namespaces,
 that runs one script through nsenter into PID 1 - the host as SSH gives it -
 and is deleted when the script ends. Only code in Homestead calls it, with
 scripts written here, never text from a request.
@@ -16,7 +16,7 @@ import homestead_names as NAMES
 kget = ksend = None
 exec_in = None           # (namespace, pod, argv, timeout=, container=) -> (stdout bytes, stderr text)
 NS = "lab"
-IMAGE = "busybox"
+IMAGE = "alpine:3.24"
 # nsenter leaves the script in this pod's cgroup, so what it runs on the host -
 # apt-get refreshing its lists, mkfs, update-initramfs - shares this limit. At
 # 64Mi the kernel killed apt-get part-way through reading a host's OS.

@@ -194,13 +194,22 @@ if (typeof MutationObserver === "function" && typeof document.querySelector === 
    items are left out, and
    with none left there is no menu. A header shows one main button and this
    beside it, so it fits on one line at any width. */
+function menuItems(items) {
+  return (items || []).filter(Boolean).map(item => `<button type="button"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.danger ? ' class="danger"' : ""}
+      onclick="this.closest('details').open=false;${item.run}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`).join("");
+}
 function moreMenu(items, label = "More actions", summaryClass = "btn") {
   const rows = (items || []).filter(Boolean);
   if (!rows.length) return "";
   const dots = summaryClass === "btn";
   return `<details class="actionmenu headmenu"><summary class="${summaryClass}"${dots ? ` aria-label="${esc(label)}"` : ""}>${dots ? "⋯" : esc(label)}</summary>
-    <div class="actionmenu-pop">${rows.map(item => `<button type="button"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.danger ? ' class="danger"' : ""}
-      onclick="this.closest('details').open=false;${item.run}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`).join("")}</div></details>`;
+    <div class="actionmenu-pop">${menuItems(rows)}</div></details>`;
+}
+/* Collection preferences share the action menu's placement, dismissal and
+   role checks. Controls stay inside it rather than adding toolbar rows. */
+function listOptions(controls, items) {
+  return `<details class="actionmenu headmenu list-options"><summary class="btn" aria-label="List options"><span class="list-options-label">Options</span>${icon("sliders")}</summary>
+    <div class="actionmenu-pop list-options-pop">${controls}${menuItems(items)}</div></details>`;
 }
 /* The top of a page: one line saying how things stand, and the numbers
    behind it a tap away. Items are HTML; the detail stays open across the
@@ -224,10 +233,10 @@ if (typeof window !== "undefined") { window.summaryLine = summaryLine; window.su
 /* A card's or a row's buttons: the first `shown` as buttons, the rest in the
    same ⋯ menu the page headers use, so every card and row reads the same way
    and none runs onto a second line. Items as for moreMenu, plus pri. */
-function actionBar(items, { shown = 2, label = "More actions" } = {}) {
+function actionBar(items, { shown = 2, label = "More actions", iconOnly = false } = {}) {
   const rows = (items || []).filter(Boolean);
-  const button = item => `<button type="button" class="btn sm${item.pri ? " pri" : ""}${item.danger ? " danger" : ""}"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.disabled ? " disabled" : ""}
-    onclick="${item.run}">${item.icon ? icon(item.icon) : ""}${esc(item.label)}</button>`;
+  const button = item => `<button type="button" class="btn sm${iconOnly ? " iconic" : ""}${item.pri ? " pri" : ""}${item.danger ? " danger" : ""}"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.ariaLabel ? ` aria-label="${esc(item.ariaLabel)}"` : ""}${item.disabled ? " disabled" : ""}
+    onclick="${item.run}">${item.icon ? icon(item.icon) : ""}${iconOnly && item.icon ? `<span class="sr-only">${esc(item.label)}</span>` : esc(item.label)}</button>`;
   const rest = rows.slice(shown);
   return `<div class="actionbar">${rows.slice(0, shown).map(button).join("")}${rest.length ? `<details class="actionmenu"><summary class="btn sm" aria-label="${esc(label)}">⋯</summary>
     <div class="actionmenu-pop">${rest.map(item => `<button type="button"${item.need ? ` data-need="${esc(item.need)}"` : ""}${item.tip ? ` title="${esc(item.tip)}"` : ""}${item.danger ? ' class="danger"' : ""}${item.disabled ? " disabled" : ""}
@@ -328,6 +337,7 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
     shell.remove();
     if (details.open) details.open = false;
   };
+  window.closeActionMenu = details => lower(details.owner || details);
   // A page repaint can take a row away with its menu open.
   const sweep = () => document.querySelectorAll("details.actionmenu-portal").forEach(shell => {
     if (!shell.owner?.isConnected || !shell.owner.open) { if (shell.owner) shell.owner.shell = null; shell.remove(); }
@@ -345,8 +355,11 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
     if (!details.shell) lift(details);
   }, true);
   document.addEventListener("click", event => {
+    const path = event.composedPath();
     document.querySelectorAll("details.actionmenu[open]").forEach(d => {
-      if (!d.contains(event.target) && !d.shell?.contains(event.target)) d.open = false;
+      // A control can redraw itself while this click is still bubbling
+      // (sorting does). Its original event path still belongs to the menu.
+      if (!d.contains(event.target) && !d.shell?.contains(event.target) && !path.includes(d) && !path.includes(d.shell)) d.open = false;
     });
   });
   document.addEventListener("keydown", event => {
@@ -357,4 +370,23 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
     document.querySelectorAll("details.actionmenu[open]").forEach(d => { d.open = false; });
   }, { passive: true, capture: true });
   setInterval(sweep, 1000);
+}
+
+/* A small comparison keeps items as columns, so the same metric lines up.
+   Four columns fit on a phone; larger comparisons scroll within the matrix.
+   Like UI.table, headings are text and values are already escaped HTML. */
+function comparisonTable(columns, rows, caption) {
+  return `<div class="tblwrap comparison-scroll" role="region" aria-label="${esc(caption)}"${columns.length > 4 ? ' tabindex="0"' : ""}><table class="tbl stack comparison-table" style="--comparison-columns:${columns.length}">
+    <caption class="sr-only">${esc(caption)}</caption><thead><tr><th scope="col">Node</th>
+    ${columns.map(c => `<th scope="col"${c.selected ? ' class="selected"' : ''}${c.attrs || ""}>${c.html}</th>`).join("")}</tr></thead>
+    <tbody>${rows.map(r => `<tr${r.phone === false ? ' class="comparison-extra"' : ''}><th scope="row">${esc(r.label)}</th>
+      ${r.values.map((v, i) => `<td${columns[i].selected ? ' class="selected"' : ''}${columns[i].attrs || ""}>${v}</td>`).join("")}</tr>`).join("")}</tbody>
+    </table></div>`;
+}
+
+/* A disclosure changes how much of an item is shown; its actions remain in
+   actionBar. A native button makes the whole title keyboard accessible. */
+function collectionDisclosure({ label, bodyHtml, expanded, controls, run, id }) {
+  return `<button type="button" class="collection-disclosure" id="${esc(id)}" aria-label="${esc(label)}"
+    aria-expanded="${!!expanded}" aria-controls="${esc(controls)}" onclick="${run}">${bodyHtml}<span class="collection-chevron" aria-hidden="true">${icon("chevron-down")}</span></button>`;
 }

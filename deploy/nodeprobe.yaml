@@ -20,6 +20,7 @@ data:
     """Read host sensors, devices and disk counters and serve them as JSON."""
     import json, os, platform, re, socket, stat, threading, time
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from homestead_http import BoundedHTTPServer, LimitedHandler
 
     SYS = "/host/sys"
     DEV = "/host/dev"
@@ -493,7 +494,7 @@ data:
                 "default_interface": default_interface(),
                 "v2": v2_facts(), "nfs": nfs_facts(), "numa": numa_facts()}
 
-    class H(BaseHTTPRequestHandler):
+    class H(LimitedHandler):
         protocol_version = "HTTP/1.1"
         def log_message(self, *a): pass
         def do_GET(self):
@@ -509,17 +510,18 @@ data:
         # host shutting down would wait out its whole stop timeout for this.
         import signal
         signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
-        ThreadingHTTPServer(("0.0.0.0", 9099), H).serve_forever()
+        BoundedHTTPServer(("0.0.0.0", 9099), H, max_connections=8).serve_forever()
   smart.py: |
     #!/usr/bin/env python3
     """Narrow HTTP wrapper around smartctl for Homestead's optional helper."""
     import hashlib, hmac, json, os, re, subprocess, time
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from urllib.parse import parse_qs, urlparse
+    from homestead_http import BoundedHTTPServer, LimitedHandler, deadline, BODY_SECONDS
 
     SYS = "/host/sys"
     DEV = "/host/dev"
-    AUTH_STORE = "/auth/store.json"
+    AUTH_STORE = "/auth/key"
     NODE = os.environ.get("NODE_NAME", "")
 
     def read(path):
@@ -756,14 +758,14 @@ data:
         try:
             if abs(time.time() - int(stamp)) > 30:
                 return False
-            with open(AUTH_STORE) as handle:
-                key = json.load(handle).get("signing_key", "").encode()
+            with open(AUTH_STORE, "rb") as handle:
+                key = handle.read()
             expected = hmac.new(key, stamp.encode() + b"." + raw, hashlib.sha256).hexdigest()
             return bool(key and hmac.compare_digest(expected, supplied or ""))
         except Exception:
             return False
 
-    class H(BaseHTTPRequestHandler):
+    class H(LimitedHandler):
         protocol_version = "HTTP/1.1"
         def log_message(self, *args): pass
         def send_json(self, code, value):
@@ -786,7 +788,11 @@ data:
                 return self.send_json(400, {"error": str(error)[:500]})
         def do_POST(self):
             length = min(4096, int(self.headers.get("Content-Length") or 0))
-            raw = self.rfile.read(length)
+            with deadline(self.connection, BODY_SECONDS):
+                raw = self.rfile.read(length)
+            if len(raw) != length:
+                self.close_connection = True
+                return self.send_json(400, {"error": "incomplete body"})
             if not signature_ok(raw, self.headers.get("X-Homestead-Time", ""),
                                 self.headers.get("X-Homestead-Signature", "")):
                 return self.send_json(403, {"error": "request signature is invalid"})
@@ -831,7 +837,104 @@ data:
         # host shutting down would wait out its whole stop timeout for this.
         import signal
         signal.signal(signal.SIGTERM, lambda *_: os._exit(0))
-        ThreadingHTTPServer(("0.0.0.0", 9100), H).serve_forever()
+        BoundedHTTPServer(("0.0.0.0", 9100), H, max_connections=8).serve_forever()
+  homestead_http.py: |
+    """Bounded HTTP connections and deadlines, including slow trickle clients."""
+    import socket
+    import re
+    import threading
+    from contextlib import contextmanager
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    IDLE_SECONDS = 15
+    HEADER_SECONDS = 15
+    BODY_SECONDS = 30
+    MAX_CONNECTIONS = 64
+
+
+    @contextmanager
+    def deadline(connection, seconds):
+        def expire():
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        timer = threading.Timer(seconds, expire)
+        timer.daemon = True
+        timer.start()
+        try:
+            yield
+        finally:
+            timer.cancel()
+
+
+    class BoundedHTTPServer(ThreadingHTTPServer):
+        daemon_threads = True
+        block_on_close = False
+
+        def __init__(self, *args, max_connections=MAX_CONNECTIONS, **kwargs):
+            self._slots = threading.BoundedSemaphore(max_connections)
+            super().__init__(*args, **kwargs)
+
+        def get_request(self):
+            connection, address = super().get_request()
+            connection.settimeout(IDLE_SECONDS)
+            return connection, address
+
+        def process_request(self, request, client_address):
+            if not self._slots.acquire(blocking=False):
+                self.shutdown_request(request)
+                return
+            try:
+                super().process_request(request, client_address)
+            except BaseException:
+                self._slots.release()
+                raise
+
+        def process_request_thread(self, request, client_address):
+            try:
+                super().process_request_thread(request, client_address)
+            finally:
+                self._slots.release()
+
+
+    class LimitedHandler(BaseHTTPRequestHandler):
+        """For standalone helpers: header deadline plus strict small body framing."""
+        timeout = IDLE_SECONDS
+        max_body = 4096
+
+        def handle_one_request(self):
+            self._header_deadline = deadline(self.connection, HEADER_SECONDS)
+            self._header_deadline.__enter__()
+            try:
+                super().handle_one_request()
+            except OSError:
+                self.close_connection = True
+            finally:
+                if self._header_deadline:
+                    self._header_deadline.__exit__(None, None, None)
+
+        def parse_request(self):
+            valid = super().parse_request()
+            self._header_deadline.__exit__(None, None, None)
+            self._header_deadline = None
+            if not valid:
+                return False
+            lengths = self.headers.get_all("Content-Length", [])
+            if (self.headers.get("Transfer-Encoding") or len(lengths) > 1 or
+                    lengths and not re.fullmatch(r"[0-9]+", lengths[0])):
+                self.send_error(400, "invalid request framing")
+                self.close_connection = True
+                return False
+            if lengths and int(lengths[0]) > self.max_body:
+                self.send_error(413)
+                self.close_connection = True
+                return False
+            if self.command not in ("POST", "PUT", "PATCH") and lengths and int(lengths[0]):
+                self.send_error(400, "unexpected request body")
+                self.close_connection = True
+                return False
+            return True
 ---
 apiVersion: apps/v1
 kind: DaemonSet
@@ -892,7 +995,7 @@ spec:
               mountPath: "/host/proc"
               readOnly: true
         - name: smart
-          image: ghcr.io/wjcloudy/homestead:2.8.291
+          image: ghcr.io/wjcloudy/homestead:2.8.292-dev.2
           imagePullPolicy: IfNotPresent
           command:
             - python3
@@ -953,5 +1056,4 @@ spec:
             type: Directory
         - name: auth
           secret:
-            secretName: homestead-auth
-            optional: true
+            secretName: homestead-smart-key

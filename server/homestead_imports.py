@@ -366,7 +366,7 @@ def run_probe(tag, script, src, timeout=70, *, authenticated=True):
         "spec": {"restartPolicy": "Never", "terminationGracePeriodSeconds": 1,
                  "automountServiceAccountToken": False, "activeDeadlineSeconds": timeout,
                  "containers": [{
-                     "name": "probe", "image": "alpine:3.20",
+                     "name": "probe", "image": "alpine:3.24",
                      "resources": {"requests": {"cpu": "50m", "memory": "64Mi"}, "limits": {"memory": "256Mi"}},
                      "command": ["sh", "-c",
                                  "set -e\napk add --no-cache openssh-client sshpass >/dev/null 2>&1\n" + setup + script],
@@ -604,7 +604,7 @@ def chown_claim(namespace, pvc, uid, gid):
         "spec": {"backoffLimit": 1, "ttlSecondsAfterFinished": 600,
                  "template": {"metadata": {"labels": NAMES.labels("chown")},
                               "spec": {"restartPolicy": "Never",
-                                       "containers": [{"name": "chown", "image": "alpine:3.20",
+                                       "containers": [{"name": "chown", "image": "alpine:3.24",
                                                        "command": ["sh", "-c", script],
                                                        "volumeMounts": [{"name": "data", "mountPath": "/data"}]}],
                                        "volumes": [{"name": "data",
@@ -950,7 +950,7 @@ def prepare_import(cfg):
                  "template": {"metadata": {"labels": NAMES.labels("import")},
                               "spec": {"restartPolicy": "Never", "automountServiceAccountToken": False,
                                        "containers": [{
-                                           "name": "copy", "image": "alpine:3.20",
+                                           "name": "copy", "image": "alpine:3.24",
                                            "resources": {"requests": {"cpu": "100m", "memory": "128Mi"},
                                                          "limits": {"memory": "512Mi"}},
                                            "command": ["sh", "-c", script],
@@ -1935,7 +1935,7 @@ def save_job(cfg):
                  "successfulJobsHistoryLimit": 3, "failedJobsHistoryLimit": 3,
                  "jobTemplate": {"spec": {"backoffLimit": 1, "ttlSecondsAfterFinished": 86400,
                      "template": {"spec": {"restartPolicy": "Never", "containers": [{
-                         "name": "task", "image": cfg.get("image", "alpine:3.20"),
+                         "name": "task", "image": cfg.get("image", "alpine:3.24"),
                          "command": ["sh", "-c", cfg["command"]],
                      }]}}}}},
     }

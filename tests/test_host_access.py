@@ -53,11 +53,12 @@ class HostAccessTests(unittest.TestCase):
         with self.assertRaises(host.Refused):
             host.require_edit(current, deployment([{"name": "app", "securityContext": {"privileged": True}}]))
 
-    def test_what_a_workload_already_had_does_not_stop_an_operators_edit(self):
+    def test_an_operator_cannot_replace_code_in_a_host_privileged_workload(self):
         host.set_role("operator")
         had = deployment([{"name": "app", "securityContext": {"privileged": True}}], hostNetwork=True)
         edited = deployment([{"name": "app", "image": "new", "securityContext": {"privileged": True}}], hostNetwork=True)
-        host.require_edit(had, edited)
+        with self.assertRaises(PermissionError):
+            host.require_edit(had, edited)
 
 
 if __name__ == "__main__":

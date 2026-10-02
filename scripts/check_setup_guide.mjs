@@ -43,7 +43,7 @@ try {
     await page.getByRole("button", { name: "Configure LAN networks", exact: true }).click();
     await page.locator("#netVmNets .vip-own").waitFor();
     await page.getByRole("button", { name: "Return to setup", exact: true }).waitFor();
-    assert.match(await page.locator("#setupReturn").innerText(), /LAN for VMs and containers/);
+    assert.match(await page.locator("#setupReturn").innerText(), /LAN networks/);
     await page.locator("#lanNetworks").getByRole("button", { name: /LAN network/ }).click();
     await page.getByText("New LAN network", { exact: true }).waitFor();
     await page.evaluate(() => closeModal());

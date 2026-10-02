@@ -3,17 +3,47 @@
 Privileged mode, added capabilities, the host's network, processes or IPC,
 and folders of the host's own filesystem each hand a container the node it
 runs on - and from a node, the cluster. Only an admin may give a workload
-any of them. An operator deploys and edits workloads freely otherwise, and
-may use the hardware features an admin has defined (an iGPU, a Coral), even
-though device passthrough runs privileged: an admin chose to offer those.
+any of them. An operator deploys and edits ordinary workloads otherwise.
+Hardware features that require privileged execution also require an admin.
 
 Checked on the request thread, against the role of the person asking. Work
 Homestead does itself - its own pods, reconciling in the background - has no
 person behind it and is not checked here.
 """
 import threading
+import homestead_names as NAMES
 
 _request = threading.local()
+_system_namespaces = frozenset()
+
+
+def bind_targets(system_namespaces):
+    global _system_namespaces
+    _system_namespaces = frozenset(system_namespaces)
+
+
+def require_target(obj, namespace=None):
+    """Operators cannot run code inside a management or host-privileged identity."""
+    if _allowed():
+        return
+    meta = (obj or {}).get("metadata") or {}
+    ns = namespace or meta.get("namespace", "")
+    spec = _podspec(obj)
+    template_meta = (((obj or {}).get("spec") or {}).get("template") or {}).get("metadata") or {}
+    labels = {**(meta.get("labels") or {}), **(template_meta.get("labels") or {})}
+    name = meta.get("name", "")
+    reserved = lambda value: value == NAMES.BRAND or str(value).startswith(NAMES.BRAND + "-")
+    protected = (ns in _system_namespaces or reserved(name) or reserved(labels.get("app", "")) or
+                 labels.get(NAMES.key("task")) or
+                 spec.get("serviceAccountName", "default") not in ("", "default") or
+                 bool(grants(obj)))
+    for volume in spec.get("volumes") or []:
+        protected = protected or reserved((volume.get("secret") or {}).get("secretName", ""))
+        protected = protected or reserved((volume.get("persistentVolumeClaim") or {}).get("claimName", ""))
+        for source in (volume.get("projected") or {}).get("sources") or []:
+            protected = protected or bool(source.get("serviceAccountToken"))
+    if protected:
+        raise PermissionError("only an admin can operate management, system, service-account or host-privileged workloads")
 
 
 class Refused(ValueError):
@@ -95,10 +125,11 @@ def require_cfg(configs):
 
 
 def require_edit(current, proposed, device_paths=()):
-    """Refuse an edit that adds host access, unless an admin makes it. What a
-    workload already had is not the operator's doing, and stays."""
+    """Only admins edit a workload with host access, including existing grants."""
     if _allowed():
         return
     added = grants(proposed, device_paths) - grants(current, device_paths)
     if added:
         raise Refused(f"only an admin can give a workload {', '.join(sorted(added))}")
+    require_target(current)
+    require_target(proposed)

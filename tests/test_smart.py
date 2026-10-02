@@ -107,10 +107,10 @@ class SmartTests(unittest.TestCase):
         probe_section = manifest.split("- name: probe", 1)[1].split("- name: smart", 1)[0]
         self.assertNotIn("privileged: true", probe_section)
         self.assertIn("X-Homestead-Signature", manifest)
-        self.assertIn("secretName: homestead-auth", manifest)
+        self.assertIn("secretName: homestead-smart-key", manifest)
         self.assertIn('["-d", device_type(name), "-a", "-j", path]', manifest)
         self.assertIn('["-d", device_type(name), "-t", test, "-j", path]', manifest)
-        script = manifest.split("  smart.py: |\n", 1)[1].split("\n---", 1)[0]
+        script = manifest.split("  smart.py: |\n", 1)[1].split("\n  homestead_http.py:", 1)[0].split("\n---", 1)[0]
         source = "\n".join(line[4:] if line.startswith("    ") else line
                            for line in script.splitlines())
         compile(source, "smart.py", "exec")
