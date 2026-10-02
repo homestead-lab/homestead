@@ -86,7 +86,7 @@ class CapacityTests(unittest.TestCase):
 
     def test_saving_settings(self):
         c = Cluster()
-        result = LHCAP.save({"over_provisioning": 150, "minimal_available": 25, "v2": True})
+        result = LHCAP.save({"over_provisioning": 150, "minimal_available": 25, "v2": True}, allow_v2_enable=True)
         self.assertIn(("PATCH", f"{LHCAP.LH}/settings/{LHCAP.OVER}", {"value": "150"}), c.sent)
         self.assertIn(("PATCH", f"{LHCAP.LH}/settings/{LHCAP.V2}", {"value": "true"}), c.sent)
         self.assertFalse([p for m, p, b in c.sent if p.endswith(LHCAP.MINIMAL)])      # unchanged
@@ -94,6 +94,12 @@ class CapacityTests(unittest.TestCase):
         for bad in ({"over_provisioning": 50}, {"minimal_available": 101}):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
                 LHCAP.save(bad)
+
+    def test_direct_enable_is_refused_before_any_settings_are_written(self):
+        c = Cluster()
+        with self.assertRaisesRegex(ValueError, "Set up Longhorn V2"):
+            LHCAP.save({"v2": True, "over_provisioning": 150, "allow_v2_enable": True})
+        self.assertEqual([], c.sent)
 
     def test_replicas_rebuilt_at_once_per_node(self):
         c = Cluster()
@@ -107,7 +113,7 @@ class CapacityTests(unittest.TestCase):
 
     def test_on_harvester_v2_goes_through_harvesters_setting(self):
         c = Cluster(harvester=True)
-        LHCAP.save({"v2": True})
+        LHCAP.save({"v2": True}, allow_v2_enable=True)
         method, path, body = c.sent[-1]
         self.assertEqual(("PUT", LHCAP.HARVESTER_V2, "true"), (method, path, body["value"]))
 

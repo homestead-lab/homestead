@@ -220,10 +220,11 @@ const SETUP_STEPS = {
       : !s.default ? "Choose a default storage class, or specify a class whenever you create a volume."
       : s.provisioner !== "driver.longhorn.io" ? `The default class, ${esc(s.default)}, uses a different storage provider. Review that provider's redundancy, or choose a Longhorn class.`
       : `The default class, ${esc(s.default)}, requests ${s.copies} replica${s.copies === 1 ? "" : "s"} across ${s.nodes} ready node${s.nodes === 1 ? "" : "s"}. ${s.copies > s.nodes ? "There are not enough ready nodes for that replica count." : "Additional replicas could improve redundancy."} The suggested count is ${s.target}.`,
-    body: s => window.Diagram && s.default ? Diagram.copies(Array.from({ length: s.nodes }, (_, i) => `node ${i + 1}`), s.copies || 1) : "",
-    actions: s => s.done ? [] : s.candidates?.length ? [{ label: `Make ${s.candidates[0]} the default`, run: `storageClassDefault(${jsArg(s.candidates[0])}).then(() => viewSetup())`, pri: true }]
-      : [{ label: `Create a class with ${s.target} replicas`, run: "settingsTab('hardware');go('settings');setTimeout(() => window.storageClassCreate && storageClassCreate(), 900)", pri: true }],
-    more: "<p>Changing the default affects new volumes only. Use Volumes to move an existing volume to another class.</p>",
+    body: s => (window.Diagram && s.default ? Diagram.copies(Array.from({ length: s.nodes }, (_, i) => `node ${i + 1}`), s.copies || 1) : "")
+      + '<div id="setupStorageSuggestions" aria-live="polite"><p class="small dim">Loading storage suggestions…</p></div>',
+    actions: () => [{ label: "Custom storage class", run: "setupStorageCustom()" },
+      { label: "Manage storage classes", run: "settingsTab('hardware');go('settings')" }],
+    more: "<p>Suggestions use Longhorn V1, allow expansion and keep data when a claim is deleted. Replicas go on different hosts; one replica has no redundancy. Review any suggestion to change its settings before creating it. SSD and HDD suggestions select disks by their Longhorn tags, rather than detecting drive hardware.</p><p>Changing the default affects new volumes only. Existing classes and volumes keep their settings. Use Volumes to move an existing volume to another class.</p>",
   },
   smb: {
     title: "SMB", lead: s => s.error ? "Review the SMB server and share configuration in Settings and Network shares." : s.done ? "The SMB server is installed and enabled. Add or review shares, then check access from a client on your LAN."
@@ -308,6 +309,93 @@ const SETUP_STEPS = {
   },
 };
 
+/* Suggestions are recipes to review, never writes made by opening the guide. */
+const setupStorageInventory = new WeakMap();
+function setupStorageHosts(inv, tags) {
+  if (!inv) return null;
+  return Object.values(inv.nodes || {}).filter(disks => disks.some(d => (d.longhorn || []).some(x =>
+    x.scheduling && x.ready !== false && !x.missing && !x.failed && x.type !== "block"
+      && tags.every(t => (x.tags || []).includes(t))))).length;
+}
+function setupStorageRecipes(s, classes, inv) {
+  const target = Math.max(1, Math.min(3, s.target || 1));
+  const sameTags = (actual, wanted) => actual.length === wanted.length && wanted.every(t => actual.includes(t));
+  const specs = [1, 2, 3].map(replicas => ({ id: `r${replicas}`, title: `${replicas} replica${replicas === 1 ? "" : "s"}`, replicas, disk_tags: [] }));
+  for (const tag of ["ssd", "hdd"]) {
+    const hosts = setupStorageHosts(inv, [tag]);
+    specs.push({ id: tag, title: `${tag.toUpperCase()} disks`, replicas: hosts === null ? target : Math.max(1, Math.min(target, hosts)), disk_tags: [tag] });
+  }
+  return specs.map(spec => {
+    const matches = classes.filter(c => !c.internal && !c.made_for && c.provisioner === "driver.longhorn.io"
+      && +c.replicas === spec.replicas && (c.engine || "v1") === "v1" && !c.migratable && !c.encrypted
+      && c.reclaim === "Retain" && c.expandable && !(c.node_tags || []).length
+      && c.parameters?.replicaSoftAntiAffinity !== "enabled" && sameTags(c.disk_tags || [], spec.disk_tags));
+    const match = matches.find(c => c.default) || matches[0];
+    const base = `longhorn-${spec.disk_tags[0] || spec.id}`;
+    let name = base;
+    if (classes.some(c => c.name === name)) name = `${base}-containers`;
+    for (let i = 2; classes.some(c => c.name === name); i++) name = `${base}-containers-${i}`;
+    return { ...spec, name: match?.name || name, existing: match || null, hosts: setupStorageHosts(inv, spec.disk_tags),
+      recommended: s.target > 0 && !spec.disk_tags.length && spec.replicas === target,
+      copies: "hosts", reclaim_policy: "Retain", engine: "v1", expandable: true, migratable: false,
+      node_tags: [], default: s.target > 0 && !s.default && !classes.some(c => c.default) && !spec.disk_tags.length && spec.replicas === target };
+  });
+}
+function setupStorageSuggestionsHtml(recipes) {
+  return '<p class="small dim">Choose a recipe to review. You can change every setting before creating the class.</p>'
+    + '<div class="setup-storage-grid">' + recipes.map((r, i) => {
+      const status = r.hosts === null ? "Disk availability could not be checked. Review placement before creating."
+        : !r.hosts ? (r.disk_tags.length ? `No schedulable V1 disk has the ${r.disk_tags[0]} tag. Tag disks first, or change the tag in the editor.` : "No schedulable V1 disks are reported.")
+        : `${r.hosts} eligible host${r.hosts === 1 ? "" : "s"} reported.` + (r.hosts < r.replicas ? ` Fewer than ${r.replicas}; volumes may run short of replicas. Adjust placement or replicas.` : "");
+      const action = r.existing ? r.existing.default ? UI.chip("Current default", "ok")
+        : UI.button("Make default", `setupStorageDefault(${i}, this)`)
+        : UI.button("Review and create", `setupStorageReview(${i})`);
+      return `<section class="setup-storage-recipe" data-storage-recipe="${r.id}">
+        <div class="row"><b>${esc(r.title)}</b>${r.recommended ? UI.chip("Suggested", "ok") : ""}</div>
+        <span class="mono small setup-storage-name">${esc(r.name)}</span>
+        <p class="small">${r.replicas} replica${r.replicas === 1 ? " · no redundancy" : "s · different hosts"}${r.disk_tags.length ? ` · ${esc(r.disk_tags[0])} tag` : ""}</p>
+        <p class="xs ${r.hosts !== null && r.hosts < r.replicas ? "badtext" : "dim"}">${esc(status)}</p>
+        ${r.existing ? '<p class="xs dim">Matching class already exists.</p>' : ""}<div class="setup-storage-action">${action}</div>
+      </section>`;
+    }).join("") + '</div>' + UI.button("Refresh suggestions", "setupStorageLoad(true)");
+}
+window.setupStorageLoad = async (force = false) => {
+  const state = STATE.data.setup, host = $("#setupStorageSuggestions");
+  if (!state || !host || STATE.view !== "setup") return;
+  let entry = setupStorageInventory.get(state);
+  if (!entry || force) {
+    entry = { promise: Promise.allSettled([api("/api/storage/classes"), api("/api/disks")]) };
+    setupStorageInventory.set(state, entry);
+  }
+  const [classes, disks] = await entry.promise;
+  if (STATE.data.setup !== state || STATE.view !== "setup" || $("#setupStorageSuggestions") !== host || setupStorageInventory.get(state) !== entry) return;
+  if (classes.status === "rejected") {
+    host.innerHTML = `<p class="small badtext">Could not load storage classes: ${esc(classes.reason?.message || "unavailable")}</p>` + UI.button("Try again", "setupStorageLoad(true)");
+    return;
+  }
+  entry.recipes = setupStorageRecipes(state.steps.storage || {}, classes.value, disks.status === "fulfilled" ? disks.value : null);
+  host.innerHTML = setupStorageSuggestionsHtml(entry.recipes);
+  if (window.applyRole) applyRole();
+};
+async function setupStorageRefresh() {
+  if (STATE.view === "setup") await viewSetup();
+  else await storageClassesPaint();
+}
+window.setupStorageReview = i => {
+  const recipe = setupStorageInventory.get(STATE.data.setup)?.recipes?.[i];
+  if (recipe && !recipe.existing) return storageClassCreate(recipe, setupStorageRefresh);
+};
+window.setupStorageCustom = () => storageClassCreate({}, setupStorageRefresh);
+window.setupStorageDefault = async (i, button) => {
+  const recipe = setupStorageInventory.get(STATE.data.setup)?.recipes?.[i];
+  if (!recipe?.existing || recipe.existing.default) return;
+  if (button) button.disabled = true;
+  try {
+    const result = await storageClassDefault(recipe.name);
+    if (result) await setupStorageRefresh();
+  } finally { if (button) button.disabled = false; }
+};
+
 /* ---------------- the page ---------------- */
 async function viewSetup() {
   let state;
@@ -334,6 +422,7 @@ async function viewSetup() {
       <nav class="settings-nav setup-nav" aria-label="Setup steps">${nav}</nav>
       <div class="settings-main" id="setupStep">${setupStepHtml(open, state, status, ids)}</div>
     </div>`);
+  if (open === "storage") setupStorageLoad();
 }
 window.viewSetup = viewSetup;
 
@@ -377,6 +466,7 @@ window.setupOpen = id => {
   if (matchMedia("(max-width: 900px)").matches) $("#setupStep").scrollIntoView({ block: "start" });
   $("#setupStep .stepper-chip.on")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   if (window.applyRole) applyRole();
+  if (id === "storage") setupStorageLoad();
 };
 
 window.setupSkip = async (step, skip) => {

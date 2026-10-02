@@ -1391,6 +1391,41 @@ document.addEventListener("keydown", event => {
 });
 
 /* ---------------- deploy ---------------- */
+let DEPLOY_CONTAINER_NEXT = 10000;
+function deployContainerStorage() {
+  EDIT_STORAGE = { ...DOPT, pod_volumes: [], node: "" };
+}
+function renderDeployContainers() {
+  const host = $("#d_extra_containers");
+  if (!host) return;
+  host.innerHTML = "";
+  deployContainerStorage();
+  for (const container of DCFG.additional_containers || []) {
+    const index = DEPLOY_CONTAINER_NEXT++;
+    host.insertAdjacentHTML("beforeend", editContainerPanel({ ...container, new: true }, index, "all", "deploy"));
+    renderVolumeRows(editVolumePicker(index), container.volumes || []);
+  }
+}
+window.deployAddContainer = () => {
+  collect();
+  DCFG.additional_containers ||= [];
+  DCFG.additional_containers.push({ name: `container-${DCFG.additional_containers.length + 2}`, image: "", cpu: "50m", memory: "128Mi", env: {}, ports: [], volumes: [] });
+  renderDeployContainers(); syncSummary();
+  const cards = $$("#d_extra_containers .edit-container");
+  cards.at(-1).open = true;
+  $("input", cards.at(-1)).focus();
+};
+window.deployRemovePrimary = async () => {
+  const cfg = collect(), extras = [...(cfg.additional_containers || [])];
+  if (!extras.length) return toast("Keep at least one container in this pod", "bad");
+  const next = extras.shift();
+  const cleared = { command: [], args: [], env_meta: [], env_bindings: {}, template_devices: [], volume_owners: {}, app_profile: null, gpu: false, cap_add: [], privileged: false, tun: false };
+  await viewDeploy({ ...cfg, ...cleared, ...next, ...(next.privileges || {}),
+    name: cfg.workload_name, workload_name: cfg.workload_name, container_name: next.name, additional_containers: extras });
+};
+window.deployRemoveContainer = index => {
+  $(`#d_extra_containers .edit-container[data-index="${index}"]`).remove(); syncSummary();
+};
 const deployDefaults = () => ({ name: "", workload_name: "", container_name: "", image: "", icon: "", namespace: "lab", replicas: 1,
   cpu: "50m", memory: "128Mi", memory_limit: "", ports: [], env: {}, env_meta: [], volumes: [], hardware: [],
   template_devices: [], target_mode: "new", target_workload: "", network_mode: "loadbalancer",
@@ -1448,10 +1483,13 @@ async function viewDeploy(pre) {
       <div class="f" id="d_workload_name_wrap"><label>Workload / pod prefix ${tip("The stable name for this workload. Kubernetes adds a generated suffix to each running pod, such as my-app-7d9f8c6b5-x2abc.")}</label><input type="text" id="d_workload_name" value="${esc(DCFG.workload_name)}" placeholder="my-app"></div>
       <div class="f"><label>Container name ${tip("The name of the container inside the pod. It can differ from the workload name and must use lowercase letters, numbers, and dashes.")}</label><input type="text" id="d_container_name" value="${esc(DCFG.container_name)}" placeholder="my-app"></div>
       <div class="f"><label>Docker image ${tip("The registry image and tag Kubernetes will pull, for example ghcr.io/home-assistant/home-assistant:stable")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"><span class="dim xs" id="d_image_note">${imagePullNote(DCFG.image)}</span></div>
+      <div class="row" id="d_add_container"><button class="btn" type="button" onclick="containerAdd('deploy')">＋ Add container</button>
+        <button class="btn danger" type="button" id="d_remove_primary" onclick="deployRemovePrimary()" disabled>Remove this container</button>
+        <span class="dim small">Different containers share every pod. Pod copies are set below.</span></div>
       <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates and saves a private copy on its persistent volume, so the logo survives source outages and upgrades.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/icon.png"></div>
       <div class="f2">
         <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
-        <div class="f" id="d_rep_wrap"><label>Instances ${tip("How many copies of this workload run at once. Most homelab apps want one; Longhorn replicas are a separate, storage-level idea.")}</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
+        <div class="f" id="d_rep_wrap"><label>Pod copies ${tip("How many copies of this workload run at once. Most homelab apps want one; Longhorn replicas are a separate, storage-level idea.")}</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
       </div>
       <div class="f2">
         <div class="f"><label>CPU reserved ${tip("The scheduler guarantees this much CPU capacity. 1000m = one CPU core; 50m = 5% of one core. This is not a hard limit.")}</label><input type="text" id="d_cpu" value="${esc(DCFG.cpu)}" placeholder="50m"></div>
@@ -1487,6 +1525,9 @@ async function viewDeploy(pre) {
       <div class="note storage-guide"><b>Choose deliberately:</b> RWO is best for one workload; RWX permits multi-node sharing; an existing PVC keeps its current data; a pod volume shares the exact backing volume with a sidecar. Host paths reduce failover portability.</div>
       <div id="d_vols"></div><button class="btn sm" onclick="addVol()">＋ add storage mapping</button>
       <div class="sec">Environment ${tip("Environment variables are passed directly to the container. App Store defaults are imported and remain editable.")}</div><div id="d_env"></div><button class="btn sm" onclick="addEnv()">＋ add variable</button>
+      <div id="d_extra_wrap"><div class="sec">Additional containers in each pod</div>
+        <div id="d_extra_containers"></div>
+        <button class="btn" type="button" onclick="containerAdd('deploy')">＋ Add container</button></div>
       <div class="row" style="margin-top:24px">
         <button class="btn pri" onclick="doDeploy()" ${DCFG.app_profile?.blocked ? "disabled" : ""}>Deploy container</button>
         <button class="btn" onclick="previewYaml()">Preview manifest</button>
@@ -1497,12 +1538,14 @@ async function viewDeploy(pre) {
       <button class="btn pri wide" style="margin-top:18px" onclick="doDeploy()" ${DCFG.app_profile?.blocked ? "disabled" : ""}>Deploy</button></div>
   </div>`);
   DRENDERING = true;
-  renderDeployTargets(); renderPorts(); renderVols(); renderEnv(); applyDeployMode();
+  renderDeployTargets(); renderPorts(); renderVols(); renderEnv(); renderDeployContainers(); applyDeployMode();
   DRENDERING = false; syncSummary();
   ["d_workload_name", "d_container_name", "d_image", "d_icon", "d_rep", "d_cpu", "d_mem", "d_mem_limit", "d_net", "d_vip_mode", "d_lb_ip", "d_target_workload"].forEach(id => {
     const el = $("#" + id); if (!el) return;
     el.addEventListener("input", syncSummary); el.addEventListener("change", syncSummary);
   });
+  $("#d_extra_containers").addEventListener("input", syncSummary);
+  $("#d_extra_containers").addEventListener("change", syncSummary);
   $("#d_target_mode").addEventListener("change", () => { applyDeployMode(); syncSummary(); });
   $("#d_target_workload").addEventListener("change", () => { collect(); updateJoinNote(); renderVols(); syncSummary(); });
   $("#d_ns").addEventListener("change", refreshDeployOptions);
@@ -1530,13 +1573,15 @@ async function refreshDeployOptions() {
   const ns = $("#d_ns").value;
   try { DOPT = await api("/api/deploy/options?ns=" + encodeURIComponent(ns)); }
   catch (e) { toast("Could not load namespace storage: " + e.message, "bad"); DOPT = { deployments: [], pvcs: [], storage_classes: [] }; }
-  DCFG.target_workload = ""; renderDeployTargets(); renderVols(); applyDeployMode(); syncSummary();
+  DCFG.target_workload = ""; renderDeployTargets(); renderVols(); renderDeployContainers(); applyDeployMode(); syncSummary();
 }
 function applyDeployMode() {
   const joining = $("#d_target_mode")?.value === "existing";
   $("#d_join_wrap").style.display = joining ? "block" : "none";
   $("#d_workload_name_wrap").style.display = joining ? "none" : "block";
   $("#d_rep_wrap").style.display = joining ? "none" : "block";
+  $("#d_add_container").hidden = joining;
+  $("#d_extra_wrap").hidden = joining;
   const host = [...$("#d_net").options].find(o => o.value === "host");
   if (host) host.disabled = joining;
   if (joining && $("#d_net").value === "host") $("#d_net").value = "internal";
@@ -1559,8 +1604,11 @@ function collect() {
   DCFG.ports = $$("#d_ports .port-row").map(r => ({ container: +$(".pc", r).value,
     host: +$(".ph", r).value || +$(".pc", r).value, protocol: $(".pp", r).value, expose: $(".pe", r).checked }));
   DCFG.volumes = readVolumeRows($("#d_vols"));
+  if (DCFG.target_mode === "new") DCFG.additional_containers = $$("#d_extra_containers .edit-container[data-original-name]").map(readEditedContainer);
   DCFG.env = {}; $$("#d_env .env-row").forEach(r => { const k = $(".ek", r).value.trim(); if (k) DCFG.env[k] = $(".ev", r).value; });
-  return DCFG;
+  const removePrimary = $("#d_remove_primary");
+  if (removePrimary) removePrimary.disabled = DCFG.target_mode !== "new" || !DCFG.additional_containers?.length;
+  return DCFG.target_mode === "existing" ? { ...DCFG, additional_containers: [] } : DCFG;
 }
 function syncSummary() {
   const c = collect();
@@ -1569,9 +1617,10 @@ function syncSummary() {
   const row = (i, l, v) => `<div class="drow"><div class="di">${i}</div><div class="dl">${l}</div><div class="dv">${v}</div></div>`;
   $("#d_summary").innerHTML =
     (c.target_mode === "existing" ? "" : row("◈", "Workload / pod", c.workload_name ? `<b>${esc(c.workload_name)}</b>` : '<span class="dim">—</span>')) +
+    (c.additional_containers?.length ? row("▣", "Containers in each pod", [c.container_name, ...c.additional_containers.map(item => item.name)].map(esc).join(", ")) : "") +
     row("▣", "Container", c.container_name ? `<b>${esc(c.container_name)}</b>` : '<span class="dim">—</span>') +
     row("❏", "Image", c.image ? `<span class="small mono">${esc(c.image)}</span>` : '<span class="dim">—</span>') +
-    row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Joins workload" : "Instances", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
+    row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Joins workload" : "Pod copies", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
     row("◴", "Requests", `<span class="small mono">${esc(c.cpu)} · ${esc(c.memory)}</span>`) +
     row("▣", "Memory max", c.memory_limit ? `<span class="small mono">${esc(c.memory_limit)}</span>` : '<span class="dim">no limit</span>') +
     ((c.command || []).length || (c.args || []).length ? row("›", "Runs", `<span class="small mono">${esc([...(c.command || []), ...(c.args || [])].join(" "))}</span>`) : "") +
@@ -1722,7 +1771,10 @@ window.doDeploy = async () => {
   if (!c.container_name || !c.image) return toast("container name and image are required", "bad");
   if (c.target_mode === "new" && !c.workload_name) return toast("workload / pod name is required", "bad");
   if (c.target_mode === "existing" && !c.target_workload) return toast("choose an existing workload", "bad");
-  const storageIssue = volumeListIssue(c.volumes);
+  const extra = c.additional_containers || [];
+  if (extra.some(container => !container.name || !container.image)) return toast("Every container needs a name and image", "bad");
+  if (new Set([c.container_name, ...extra.map(container => container.name)]).size !== extra.length + 1) return toast("Container names must be unique in this pod", "bad");
+  const storageIssue = [volumeListIssue(c.volumes), ...extra.map(container => volumeListIssue(container.volumes))].find(Boolean);
   if (storageIssue) return toast(storageIssue, "bad");
   try {
     const plan = await api("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });

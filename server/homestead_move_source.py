@@ -24,6 +24,7 @@ import homestead_names as NAMES
 import homestead_vm_transfer_devices as VM_DEVICES
 from homestead_pod_resources import storage_gib
 from homestead_longhorn import move_snapshot_error
+import homestead_transfer_cleanup as CLEANUP
 
 kget = ksend = None
 LH = None
@@ -277,6 +278,7 @@ def definition(kind, name):
     if kind == "volume":
         # The claim is rebuilt from its backup; nothing else travels.
         return {"kind": kind, "name": name, "namespace": _namespace(), "object": {}, "origin": origin,
+                "source_uid": obj.get("metadata", {}).get("uid", ""), "cleanup_protocol": 1,
                 "services": [], "secrets": [], "claims": [_claim_row(name)],
                 "node_selector": {}, "pull_secrets": [], "networks": []}
     template = ((obj.get("spec", {}) or {}).get("template", {}) or {})
@@ -311,6 +313,7 @@ def definition(kind, name):
     return {
         "kind": kind, "name": name, "namespace": _namespace(),
         "source_uid": obj.get("metadata", {}).get("uid", ""),
+        "cleanup_protocol": 1,
         "source_version": obj.get("metadata", {}).get("resourceVersion", ""),
         "transfer_owner": NAMES.read(_annotations(obj), OWNER),
         "held": bool(_origin(obj)),
@@ -412,12 +415,14 @@ def _recorded_backups(obj):
     return rows if isinstance(rows, list) else []
 
 
-def _backup_backing_image(image):
+def _backup_backing_image(image, cleanup_id="", source_uid=""):
     """Ask Longhorn to store a Harvester image alongside the disks built on it."""
     body = {"apiVersion": "longhorn.io/v1beta2", "kind": "BackupBackingImage",
             "metadata": {"name": image, "namespace": LHNS,
                          "labels": {NAMES.key("managed"): "true"}},
             "spec": {"userCreated": True, "labels": {}}}
+    if cleanup_id:
+        body["metadata"]["annotations"] = CLEANUP.ownership(cleanup_id, source_uid)
     try:
         ksend("POST", f"{LH_API}/namespaces/{LHNS}/backupbackingimages", body)
     except urllib.error.HTTPError as error:
@@ -425,13 +430,19 @@ def _backup_backing_image(image):
             raise
 
 
-def backup(kind, name, retry_failed=False, claims=None, transfer_id="", expected_uid=""):
+def backup(kind, name, retry_failed=False, claims=None, transfer_id="", expected_uid="", cleanup_id=""):
     """Back up the claims the workload mounts - all of them, or those named
     (the ones a move brings; the rest are skipped or made blank there).
     Refuses while it still runs."""
     kind = _kind(kind)
     obj = _object(kind, name)
     _owner(obj, transfer_id, expected_uid)
+    if cleanup_id and transfer_id and cleanup_id != transfer_id:
+        raise ValueError("Backup cleanup identity must match the active transfer")
+    if cleanup_id and not expected_uid:
+        raise ValueError("Backup cleanup requires the reviewed source identity")
+    cleanup = CLEANUP.ownership(cleanup_id, obj.get("metadata", {}).get("uid", "")) if cleanup_id else {}
+    cleanup_args = {"cleanup_id": cleanup_id, "source_uid": obj["metadata"]["uid"]} if cleanup else {}
     if not _origin(obj):
         raise ValueError(f"{name} has not been stopped for a move")
     if _remaining(kind, obj):
@@ -455,17 +466,18 @@ def backup(kind, name, retry_failed=False, claims=None, transfer_id="", expected
         previous = next((r for r in recorded if r.get("claim") == claim), None)
         state = states.get(claim, {})
         failed = str(state.get("state", "")).lower() in ("error", "failed", "missing") or state.get("error")
-        if previous and not (retry_failed and failed):
+        if previous and not (retry_failed and failed) and (not cleanup_id or previous.get("cleanup_id") == cleanup_id):
             # Legacy requests already have a Backup CR; new requests may still
             # be waiting for their Snapshot to become usable.
             if previous.get("snapshot"):
-                LH.ensure_move_backup(previous["volume"], previous["snapshot"], previous["backup"])
+                LH.ensure_move_backup(previous["volume"], previous["snapshot"], previous["backup"], **cleanup_args)
             if previous.get("backing_image"):
-                _backup_backing_image(previous["backing_image"])
+                _backup_backing_image(previous["backing_image"], **cleanup_args)
             continue
         source = _claim_row(claim)
         token = secrets.token_hex(8)
         row = {"claim": claim, "volume": source["volume"], "backup": f"homestead-move-{token}",
+               "cleanup_id": cleanup_id,
                "snapshot": f"homestead-move-{token}-snapshot", "backing_image": source["backing_image"],
                "requested_at": time.time(), "previous_backups": (previous or {}).get("previous_backups", [])
                + ([previous["backup"]] if previous else [])}
@@ -476,10 +488,16 @@ def backup(kind, name, retry_failed=False, claims=None, transfer_id="", expected
         # Save stable names BEFORE either create. A lost reply or reboot then
         # resumes the same request; completed backups are never deleted.
         save()
-        LH.ensure_move_backup(row["volume"], row["snapshot"], row["backup"])
+        LH.ensure_move_backup(row["volume"], row["snapshot"], row["backup"], **cleanup_args)
         if row["backing_image"]:
-            _backup_backing_image(row["backing_image"])
+            _backup_backing_image(row["backing_image"], **cleanup_args)
     return {"ok": True, "backups": recorded}
+
+
+def cleanup(transfer_id, expected_uid):
+    # Artifacts carry the original UID, so cleanup also works after the source
+    # was released or removed. A replacement workload is never followed.
+    return CLEANUP.source(kget, ksend, transfer_id, expected_uid)
 
 
 def status(kind, name):

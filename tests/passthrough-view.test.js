@@ -4,13 +4,22 @@ const test = require("node:test"), assert = require("node:assert/strict"), fs = 
 function setup() {
   const fields = {"#pd_pick": {value: "example.test/gpu"}, "#pd_adds": {insertAdjacentHTML: (_, html) => fields.added = html}};
   const rows = {added: [], all: []};
+  const body = {innerHTML: ""};
+  fields["#nodeDevices"] = {dataset: {}, querySelector: () => body};
+  const requests = [];
+  const answers = {};
+  const questions = [];
+
   const ctx = {console, Set, Uint8Array, btoa, document: {},
+    jsArg: JSON.stringify,
+    api: async (url, opts) => { requests.push({url, opts}); const answer = answers[url]; return typeof answer === "function" ? answer() : answer || {}; },
+    ask: async text => { questions.push(text); return false; },
     $: key => fields[key], $$: selector => selector === "#mbody .pd-add" || selector === "#pd_adds .pd-add" ? rows.added : rows.all,
     esc: value => String(value).replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;"),
-    UI: {lead: String, actions: String, button: (label, handler) => `${label} ${handler}`, more: (label, html) => `${label}${html}`, callout: (_, label, detail) => `${label}${detail}`}};
+    UI: {lead: String, actions: String, chip: String, section: (label, html) => `${label}${html}`, table: (_, rows) => rows.flat().join(""), button: (label, handler) => `${label} ${handler}`, more: (label, html) => `${label}${html}`, callout: (_, label, detail) => `${label}${detail}`}};
   ctx.window = ctx; vm.createContext(ctx);
   vm.runInContext(fs.readFileSync("web/js/passthrough.js", "utf8"), ctx);
-  return {ctx, fields, rows};
+  return {ctx, fields, rows, body, requests, answers, questions};
 }
 const resources = {resources: [{resource: "example.test/gpu", kind: "pci", label: "GPU", nodes: ["node1"]}]};
 
@@ -52,4 +61,144 @@ test("empty device inventory explains host setup and read failure is distinct", 
   assert.match(empty, /Hardware → Devices for VMs/);
   assert.match(empty, /target="_blank"/);
   assert.match(t.ctx.vmDevicesPane({}, {resources: [], error: "<unavailable>"}), /Devices could not be loaded.*&lt;unavailable>/);
+});
+
+
+const hostFacts = {node: "node1", iommu: true, inspected_at: 1700000000, pci: [
+  {address: "0000:01:00.0", name: "Named GPU", class: "0300", offered: true, group: "12", group_members: ["0000:01:00.1", "0000:00:01.0"]},
+  {address: "0000:01:00.1", name: "GPU audio", class: "0403", offered: true, group: "12", group_members: ["0000:01:00.0", "0000:00:01.0"]},
+  {address: "0000:00:01.0", name: "PCI bridge", class: "0604", offered: false, group: "12", group_members: ["0000:01:00.0", "0000:01:00.1"]},
+  {address: "0000:00:02.0", name: "Integrated GPU", class: "0300", offered: true, group: 0, group_members: []}
+], usb: []};
+
+test("reopening the host restores a retained inspection and groups every companion by name", async () => {
+  const t = setup();
+  t.answers["/api/passthrough/inventory?node=node1"] = {facts: hostFacts};
+  await t.ctx.nodeDevicesPaint("node1");
+  assert.match(t.body.innerHTML, /IOMMU group 12 · 3 devices/);
+  assert.match(t.body.innerHTML, /2 devices move together.*1 PCI bridge stays/);
+  for (const name of ["Named GPU", "GPU audio", "PCI bridge", "IOMMU group 0"]) assert.ok(t.body.innerHTML.includes(name));
+  assert.match(t.body.innerHTML, /Refresh devices/);
+  assert.match(t.body.innerHTML, /Last inspected/);
+  assert.equal((t.body.innerHTML.match(/Capture vBIOS/g) || []).length, 2, "capture is offered for GPUs only");
+  await t.ctx.nodeDevicesPaint("node1");
+  assert.equal(t.requests.length, 1, "reopening does not rerun a host helper or hide inventory");
+  assert.ok(!t.requests.some(r => r.opts), "restoring the inventory performs only a GET");
+  await t.ctx.ptPci("node1", "0000:01:00.0", true);
+  assert.match(t.questions[0], /GPU audio \(0000:01:00.1\)/);
+  assert.ok(!t.questions[0].includes("PCI bridge"), "bridge is not handed over");
+});
+
+test("overlapping configurations stay selectable and escaped holder names explain use", () => {
+  const t = setup(), inventory = JSON.parse(JSON.stringify(resources));
+  inventory.resources[0].active_vms = ["lab/<holder>"];
+  inventory.resources[0].configured_vms = ["lab/<holder>", "lab/stopped"];
+  const html = t.ctx.vmDevicesPane({}, inventory);
+  assert.match(html, /in use by lab\/&lt;holder>/);
+  assert.match(html, /Shared configurations/);
+  assert.match(html, /Configurations may overlap; Start checks/);
+  assert.ok(!html.includes("<holder>"));
+  t.ctx.vmAddHostDevice();
+  assert.match(t.fields.added, /example.test\/gpu/);
+  inventory.usage_error = "<unavailable>";
+  assert.match(t.ctx.vmDevicesPane({}, inventory), /&lt;unavailable>/);
+});
+
+test("capture downloads exact ROM bytes and restores the button after success or failure", async () => {
+  const t = setup(), downloads = [], blobs = [], notices = [], revoked = [];
+  t.ctx.atob = atob;
+  t.ctx.Blob = Blob;
+  t.ctx.URL = {createObjectURL: blob => {blobs.push(blob); return "blob:rom"; }, revokeObjectURL: url => revoked.push(url)};
+  t.ctx.setTimeout = fn => fn();
+  t.ctx.toast = (text, tone) => notices.push({text, tone});
+  t.ctx.document = {body: {appendChild(){}}, createElement: () => {
+    const link = {click() {downloads.push(this.download);}, remove(){}};
+    return link;
+  }};
+  t.answers["/api/passthrough/vbios/capture"] = {data: "VaoA", filename: "gpu.rom"};
+  const button = {disabled: false, textContent: "Capture vBIOS"};
+  await t.ctx.ptCaptureVbios("node1", "0000:01:00.0", button);
+  assert.deepEqual(downloads, ["gpu.rom"]);
+  assert.deepEqual([...new Uint8Array(await blobs[0].arrayBuffer())], [0x55, 0xaa, 0]);
+  assert.deepEqual(JSON.parse(t.requests[0].opts.body), {node: "node1", address: "0000:01:00.0"});
+  assert.deepEqual(revoked, ["blob:rom"]);
+  assert.equal(button.disabled, false);
+  t.answers["/api/passthrough/vbios/capture"] = () => {throw new Error("Stop VM busy");};
+  await t.ctx.ptCaptureVbios("node1", "0000:01:00.0", button);
+  assert.equal(notices.at(-1).text, "Stop VM busy");
+  assert.equal(button.textContent, "Capture vBIOS");
+  assert.equal(button.disabled, false);
+  assert.equal(downloads.length, 1);
+});
+
+test("a blocked group companion explains why its GPU cannot be offered", async () => {
+  const t = setup();
+  const facts = JSON.parse(JSON.stringify(hostFacts));
+  facts.pci[1].problems = ["it carries this host's network"];
+  t.answers["/api/passthrough/inventory?node=node1"] = {facts};
+  await t.ctx.nodeDevicesPaint("node1");
+  assert.match(t.body.innerHTML, /GPU audio: it carries this host's network/);
+  assert.ok(!t.body.innerHTML.includes('ptPci("node1","0000:01:00.0",true)'), "group protection is visible before offering");
+});
+
+test("failed refresh retains the inventory and offers retry", async () => {
+  const t = setup();
+  t.answers["/api/passthrough/inventory?node=node1"] = {facts: hostFacts};
+  await t.ctx.nodeDevicesPaint("node1");
+  t.answers["/api/passthrough/inspect"] = () => { throw new Error("host unavailable"); };
+  await t.ctx.nodeDevicesLook("node1");
+  assert.match(t.body.innerHTML, /Refresh failed; showing the last inspection/);
+  assert.match(t.body.innerHTML, /Named GPU/);
+  assert.match(t.body.innerHTML, /Refresh devices/);
+});
+
+test("inspection completing after navigation cannot overwrite another host", async () => {
+  const t = setup();
+  t.answers["/api/passthrough/inventory?node=node1"] = {facts: hostFacts};
+  await t.ctx.nodeDevicesPaint("node1");
+  let finish;
+  t.answers["/api/passthrough/inspect"] = () => new Promise(resolve => { finish = resolve; });
+  const reading = t.ctx.nodeDevicesLook("node1");
+  await t.ctx.nodeDevicesPaint("node2");
+  const html = t.body.innerHTML;
+  finish(hostFacts); await reading;
+  assert.equal(t.body.innerHTML, html);
+});
+
+test("VM choices and added cards show model, address, group, selector and live availability", () => {
+  const t = setup();
+  const inventory = {resources: [{resource: "example.test/gpu", kind: "pci", label: "Named GPU", selector: "10DE:1E87", nodes: ["node1"],
+    devices: [{node: "node1", name: "Named GPU", address: "0000:01:00.0", group: 0}]}]};
+  const html = t.ctx.vmDevicesPane({}, inventory);
+  assert.match(html, /Named GPU \[10DE:1E87\].*node1 0000:01:00.0 · group 0/);
+  t.ctx.vmAddHostDevice();
+  assert.match(t.fields.added, /Named GPU/);
+  assert.match(t.fields.added, /0000:01:00.0 · group 0/);
+  inventory.resources[0].nodes = [];
+  assert.match(t.ctx.vmDevicesPane({}, inventory), /unavailable/);
+});
+
+
+test("hosts with the same name in different clusters never share their cached devices", async () => {
+  const t = setup();
+  t.ctx.FLEET = {target: "", view: {self: "home"}};
+  t.answers["/api/passthrough/inventory?node=node1"] = {facts: hostFacts};
+  await t.ctx.nodeDevicesPaint("node1");
+  t.ctx.FLEET.target = "branch";
+  t.answers["/api/passthrough/inventory?node=node1"] = {facts: null};
+  await t.ctx.nodeDevicesPaint("node1");
+  assert.ok(!t.body.innerHTML.includes("Named GPU"));
+  assert.match(t.body.innerHTML, /Look at its devices/);
+  t.ctx.FLEET.target = "home";
+  await t.ctx.nodeDevicesPaint("node1");
+  assert.match(t.body.innerHTML, /Named GPU/);
+  assert.equal(t.requests.length, 2);
+});
+
+
+test("VM labels retain available hosts that have not yet been inspected", () => {
+  const t = setup();
+  const html = t.ctx.vmDevicesPane({}, {resources: [{resource: "example.test/gpu", kind: "pci", label: "Named GPU", nodes: ["node1", "node2"],
+    devices: [{node: "node1", address: "0000:01:00.0", group: "12"}]}]});
+  assert.match(html, /node1 0000:01:00.0 · group 12; node2/);
 });

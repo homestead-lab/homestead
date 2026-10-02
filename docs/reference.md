@@ -571,13 +571,18 @@ than a header the client can write.
 
 ## Long-term stats
 
-The Dashboard's charts cover the last hour. Its **Over time** card covers up to
+The Dashboard's charts cover the last hour, sampled every thirty seconds and
+saved in a small `history-live.json` buffer on the data volume. They survive
+Homestead restarting and are shared by its replicas. Its **Over time** card covers up to
 ninety days: cluster CPU and RAM (average and peak), network in and out,
 workload pods, and each node's availability - the share of samples it was
 Ready - with its average CPU and RAM. Homestead records a sample every five
 minutes whether or not a browser is open (the leading replica does, in the
 background), keeps them for two days, and keeps hourly averages and peaks for
 ninety, in `history.json` on its data volume - a few hundred kilobytes at most.
+Longer ranges include the current hour's average and peak as samples arrive.
+The live charts keep refreshing while longer history loads; a failed history
+request keeps the existing charts and retries on the next refresh.
 It answers "was it busy last week?" and "has a node been dropping out?";
 Harvester's own monitoring (Prometheus and Grafana) is there for anything
 deeper.
@@ -990,7 +995,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.294/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.295/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -1001,7 +1006,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.294 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.295 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1404,6 +1409,14 @@ and delete rather than an edit button that would silently do nothing. Deleting
 a class is refused while any claim still references it, and volumes already
 built from it keep working and keep their data.
 
+Setup → Default storage suggests classes with one, two or three replicas,
+plus SSD and HDD tag selectors. Review a suggestion to adjust its name,
+replicas, placement, tags or default status before creating it. These recipes
+use Longhorn V1, allow expansion, keep data when a claim is deleted and leave
+VM live migration off. Tagged recipes use up to the suggested replica count,
+limited by eligible tagged hosts; missing tags and insufficient hosts are
+shown explicitly. A matching existing class can be reused as the default.
+
 A volume that is not healthy says why, taken from Longhorn's own conditions:
 most often that a replica cannot be scheduled because no node has room for it.
 A volume that is merely rebuilding says so too, along with the fact that it is
@@ -1447,10 +1460,15 @@ A storage class can be made on Longhorn's V2 data engine (SPDK), which is
 faster and lighter on CPU than V1. The class table has an Engine column, a V2
 volume is tagged on Volumes, and the storage classes card says whether V2 is on
 and how many nodes can hold its volumes: each needs a disk given to Longhorn as
-a block device and 2 GiB of hugepages. Creating a V2 class says so when it
-could not schedule yet. On Harvester, V2 is switched on by Harvester's own
-`longhorn-v2-data-engine-enabled` setting and V2 disks are added per host, so
-Homestead reads Longhorn's settings rather than changing them.
+a block device and usually 2 GiB of hugepages. Creating a V2 class says so when
+it could not schedule yet. **Settings > Hardware and storage > Longhorn > Set up
+Longhorn V2** checks the installed memory requirement, prepares Linux k3s/rke2
+hosts through reviewed jobs, and verifies Kubernetes capacity before enabling.
+Any required reboot goes through the existing host maintenance review. Saved
+jobs, live logs and observed instance-manager readiness show progress. Disks
+and a V2 storage class remain separate reviewed steps. On Harvester, Homestead
+changes Harvester's `longhorn-v2-data-engine-enabled` setting; Harvester owns
+host preparation and restarts. See [the setup workflow](wiki/Storage.md#what-the-v2-engine-needs).
 
 ## Network shares
 
@@ -1893,10 +1911,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.294`, the workflow publishes:
+For a release such as `v2.8.295`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.294
+ghcr.io/wjcloudy/homestead:2.8.295
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1907,8 +1925,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.294
-git push origin v2.8.294
+git tag v2.8.295
+git push origin v2.8.295
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

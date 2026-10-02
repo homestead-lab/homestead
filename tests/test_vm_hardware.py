@@ -20,11 +20,65 @@ def vm(domain=None, tspec=None):
 
 
 class HardwareTests(unittest.TestCase):
+    def test_gpu_boot_output_uses_uefi_without_virtual_vga_and_preserves_other_devices(self):
+        target = vm({"devices": {"hostDevices": [{"name": "gpu", "deviceName": "example/gpu"}], "rng": {}}})
+        with mock.patch("homestead_passthrough.resources", return_value={"resources": [{"resource": "example/gpu", "gpu": True}]}):
+            HW.apply(target, {"boot_output": "gpu"})
+        self.assertEqual("gpu", HW.read(target)["boot_output"])
+        self.assertEqual("uefi", HW.read(target)["firmware"])
+        self.assertFalse(HW.read(target)["graphics"])
+        self.assertFalse(HW.read(target)["secure_boot"])
+        self.assertIn("rng", target["spec"]["template"]["spec"]["domain"]["devices"])
+        HW.apply(target, {"boot_output": "console"})
+        self.assertTrue(HW.read(target)["graphics"])
+        self.assertEqual("console", HW.read(target)["boot_output"])
+        self.assertEqual("uefi", HW.read(target)["firmware"], "switching output does not revert firmware")
+
+    def test_serial_output_and_invalid_conflicting_choices(self):
+        target = vm({"devices": {"autoattachSerialConsole": False}})
+        HW.apply(target, {"boot_output": "serial"})
+        self.assertTrue(HW.read(target)["serial"])
+        self.assertFalse(HW.read(target)["graphics"])
+        for cfg in ({"boot_output": "gpu"}, {"boot_output": "bad"},
+                    {"boot_output": "serial", "serial": False}, {"boot_output": "gpu", "graphics": True}):
+            with self.subTest(cfg=cfg), self.assertRaises(ValueError):
+                HW.apply(vm(), cfg)
+        target = vm({"devices": {"gpus": [{"name": "gpu"}]}})
+        with self.assertRaisesRegex(ValueError, "UEFI"):
+            HW.apply(target, {"boot_output": "gpu", "firmware": "bios"})
+
     def test_defaults_read_as_kubevirt_applies_them(self):
         h = HW.read(vm())
         self.assertEqual(({"sockets": 1, "cores": 2, "threads": 1, "model": "", "dedicated": False, "isolate_emulator": False},
                           "bios", "off", True, True, True, False),
                          (h["cpu"], h["firmware"], h["tpm"], h["graphics"], h["serial"], h["balloon"], h["tablet"]))
+
+    def test_non_gpu_and_unverified_host_devices_cannot_disable_the_display(self):
+        for resource in ("example/nic", "example/usb", "example/unknown"):
+            with self.subTest(resource=resource), mock.patch("homestead_passthrough.resources", return_value={"resources": [
+                    {"resource": "example/nic", "gpu": False}, {"resource": "example/usb", "gpu": False}]}), self.assertRaisesRegex(ValueError, "verified"):
+                HW.apply(vm({"devices": {"hostDevices": [{"name": "device", "deviceName": resource}]}}), {"boot_output": "gpu"})
+
+    def test_field_only_edits_preserve_boot_output_requirements(self):
+        serial = vm()
+        HW.apply(serial, {"boot_output": "serial"})
+        with self.assertRaisesRegex(ValueError, "Serial boot output"):
+            HW.apply(serial, {"serial": False})
+        gpu = vm({"devices": {"gpus": [{"name": "gpu"}]}})
+        HW.apply(gpu, {"boot_output": "gpu"})
+        with self.assertRaisesRegex(ValueError, "UEFI"):
+            HW.apply(gpu, {"firmware": "bios"})
+        HW.apply(gpu, {"boot_output": "console", "firmware": "bios"})
+        self.assertEqual("bios", HW.read(gpu)["firmware"])
+
+    def test_detaching_last_gpu_requires_changing_boot_output_in_the_same_edit(self):
+        target = vm({"devices": {"gpus": [{"name": "gpu"}]}})
+        HW.apply(target, {"boot_output": "gpu"})
+        target["spec"]["template"]["spec"]["domain"]["devices"].pop("gpus")
+        with self.assertRaisesRegex(ValueError, "attached GPU"):
+            HW.validate_boot_output(target)
+        HW.apply(target, {"boot_output": "console"})
+        self.assertTrue(HW.read(target)["graphics"])
 
     def test_windows_11_settings_are_written_as_kubevirt_wants(self):
         target = vm()
@@ -179,6 +233,20 @@ class AttachTests(unittest.TestCase):
     def setUp(self):
         self.cluster = edit_fixtures.Cluster({"harvester": True, "cdi": True})
 
+    def test_device_only_edit_cannot_remove_last_gpu_without_changing_output(self):
+        import homestead_passthrough as passthrough
+        devices = self.cluster.vm["spec"]["template"]["spec"]["domain"]["devices"]
+        devices["gpus"] = [{"name": "gpu", "deviceName": "example/gpu"}]
+        HW.apply(self.cluster.vm, {"boot_output": "gpu"})
+        with mock.patch.object(passthrough, "resources", return_value={"resources": []}):
+            with self.assertRaisesRegex(ValueError, "attached GPU"):
+                vms.prepare_edit("lab", "web", {"host_devices": {"remove": ["gpu"]}})
+            result = vms.prepare_edit("lab", "web", {"host_devices": {"remove": ["gpu"]},
+                                                       "hardware": {"boot_output": "console"}})
+        self.assertEqual("console", HW.read(result["vm"])["boot_output"])
+        self.assertTrue(HW.read(result["vm"])["graphics"])
+        self.assertFalse(self.cluster.sent)
+
     def test_an_iso_goes_in_a_cd_rom(self):
         with mock.patch.object(vms, "iso_ready", lambda ns, name: {"metadata": {"name": name}}):
             prepared = vms.prepare_edit("lab", "web", {"add_disks": [{"kind": "cd-rom", "iso": "iso-debian-1", "boot": "1"}]})
@@ -228,6 +296,16 @@ class InstallTests(unittest.TestCase):
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
 
         imports.kget, imports.ksend, imports.NS, imports._cache = get, lambda *a, **k: None, "lab", {}
+
+    def test_new_vm_can_select_gpu_boot_output_and_attach_the_gpu_in_one_review(self):
+        import homestead_passthrough as passthrough
+        with mock.patch.object(imports, "iso_ready", return_value={}), \
+                mock.patch.object(passthrough, "resources", return_value={"resources": [{"resource": "example/gpu", "kind": "pci", "gpu": True}]}):
+            plan = imports.prepare_vm({"name": "gpu", "install_iso": "iso-ubuntu", "hardware": {"boot_output": "gpu"},
+                "host_devices": {"add": [{"resource": "example/gpu"}]}}, {"harvester": False, "cdi": True}, "longhorn")
+        self.assertEqual("gpu", HW.read(plan["vm"])["boot_output"])
+        self.assertEqual("uefi", HW.read(plan["vm"])["firmware"])
+        self.assertFalse(HW.read(plan["vm"])["graphics"])
 
     def test_windows_gets_its_virtio_drivers_in_a_second_drive(self):
         with mock.patch.object(imports, "iso_ready", lambda ns, name: {}):

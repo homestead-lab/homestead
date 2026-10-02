@@ -42,7 +42,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.294";
+const HOMESTEAD_VERSION = "2.8.295";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -302,6 +302,7 @@ function childModal(t, h, wide, contextClass = "") {
 }
 
 function modalBack() {
+  if (window.snapshotFilesDismiss) window.snapshotFilesDismiss();
   const back = MODAL_STACK.pop();
   if (!back) return closeModal();
   modal(back.title, "", back.wide, back.context);
@@ -414,6 +415,7 @@ async function dismissModal() {
   closeModal();
 }
 function closeModal(updateRoute = true) {
+  if (window.snapshotFilesDismiss) window.snapshotFilesDismiss();
   if (window.selfDataClose) window.selfDataClose();
   window.__modalGuard = null;
   MODAL_STACK.length = 0;
@@ -856,7 +858,8 @@ function sparkMeta(times, key) {
   return ` data-spark-times="${esc(JSON.stringify(times || []))}" data-spark-key="${esc(key || "")}"`;
 }
 function sparkline(vals, { w = 300, h = 74, times, key } = {}) {
-  if (!vals || vals.length < 2) vals = [0, 0];
+  if (!vals?.length) vals = [0, 0];
+  else if (vals.length === 1) vals = [vals[0], vals[0]];
   const n = vals.length, mn = Math.min(...vals), mx = Math.max(...vals);
   const pad = (mx - mn) * .25 || 1, lo = mn - pad, hi = mx + pad;
   const d = sparkPath(vals.map((v, i) => [(i / (n - 1)) * w, h - ((v - lo) / (hi - lo)) * h]));
@@ -864,6 +867,8 @@ function sparkline(vals, { w = 300, h = 74, times, key } = {}) {
     <path class="fl" d="${d} L ${w},${h} L 0,${h} Z"/><path class="ln" d="${d}"/></svg>`;
 }
 function dualSpark(a, b, { w = 300, h = 74, times, key } = {}) {
+  if (a?.length === 1) a = [a[0], a[0]];
+  if (b?.length === 1) b = [b[0], b[0]];
   const all = [...(a || []), ...(b || [])];
   if (all.length < 2) return sparkline([0, 0], { w, h, times, key });
   const mn = Math.min(...all), mx = Math.max(...all);

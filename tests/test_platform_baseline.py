@@ -1,4 +1,6 @@
 import json
+import base64
+import gzip
 import sys
 import tempfile
 import unittest
@@ -113,6 +115,149 @@ class NetworkRowTests(unittest.TestCase):
         result = C.upgrade("kube-vip", "0.12.0")
         self.assertEqual([{"namespace": "kube-system", "name": "kube-vip", "version": "0.12.0"}], cluster.helm_calls)
         self.assertIn("0.12.0 (v1.3.0)", result["detail"])
+
+
+class NetworkUpgradeStatusTests(unittest.TestCase):
+    def seed(self, component="multus", namespace="kube-system"):
+        self.component = component
+        self.target = "v4.3.103" if component == "multus" else "0.12.0"
+        self.previous = "v4.3.102" if component == "multus" else "0.11.1"
+        self.name = "Multus" if component == "multus" else "kube-vip"
+        self.namespace = namespace
+        self.item = {"ref": {"component": component, "name": self.name, "from": self.previous, "to": self.target}}
+        self.secret_path = (f"/api/v1/namespaces/{namespace}/secrets?labelSelector="
+                            + C.urllib.parse.quote(f"owner=helm,name={component}", safe=""))
+        self.agent_path = DS.replace("kube-system", namespace) + component
+        agent = daemonset("example.test/network-agent:4.3.1")
+        agent["metadata"] = {"name": component, "generation": 2}
+        agent["status"] = {"observedGeneration": 2, "desiredNumberScheduled": 3,
+                           "updatedNumberScheduled": 3, "numberAvailable": 3}
+        self.cluster = Cluster(K3S, {
+            CHART + component: {"metadata": {"name": component}, "spec": {
+                "chart": "rke2-multus" if component == "multus" else component,
+                "version": self.target, "targetNamespace": namespace}},
+            self.agent_path: agent,
+            "/apis/k8s.cni.cncf.io/v1/network-attachment-definitions": {"items": []}})
+        self.release(self.target)
+
+    def release(self, version, state="deployed", revision=2):
+        record = {"name": self.component, "namespace": self.namespace, "version": revision,
+                  "chart": {"metadata": {"name": "rke2-multus" if self.component == "multus" else self.component,
+                                         "version": version, "appVersion": "4.3.1" if self.component == "multus" else "v1.3.0"}},
+                  "info": {"status": state}}
+        encoded = base64.b64encode(base64.b64encode(gzip.compress(json.dumps(record).encode()))).decode()
+        secret = {"metadata": {"labels": {"version": str(revision)}}, "data": {"release": encoded}}
+        self.cluster.objects[self.secret_path] = {"items": [secret]}
+        return secret
+
+    def test_both_network_upgrades_complete_without_reading_cdi(self):
+        for component in ("multus", "kube-vip"):
+            with self.subTest(component=component):
+                self.seed(component)
+                with patch.object(C, "cdi_version", side_effect=AssertionError("CDI is unrelated")):
+                    state, progress, message = C.status(self.item)
+                self.assertEqual(("succeeded", 100), (state, progress))
+                self.assertIn(f"chart {self.target}", message)
+                self.assertIn("all 3 scheduled nodes", message)
+
+    def test_requested_version_and_unchanged_multus_image_do_not_prove_chart_revision(self):
+        self.seed()
+        self.release(self.previous)
+        state, progress, message = C.status(self.item)
+        self.assertEqual(("running", 20), (state, progress))
+        self.assertIn(f"chart {self.previous}", message)
+        self.assertIn(self.target, message)
+        self.assertNotIn("1.66.1", message)
+
+    def test_newest_pending_release_does_not_fall_back_to_older_deployed_revision(self):
+        self.seed()
+        older = self.release(self.target, revision=1)
+        newest = self.release(self.target, "pending-upgrade", revision=2)
+        self.cluster.objects[self.secret_path] = {"items": [older, newest]}
+        self.assertEqual("running", C.status(self.item)[0])
+
+    def test_v_prefix_difference_is_normalized_for_deployed_chart(self):
+        self.seed()
+        self.release(self.target.lstrip("v"))
+        self.assertEqual("succeeded", C.status(self.item)[0])
+
+    def test_missing_or_unreadable_release_does_not_complete(self):
+        self.seed()
+        for secrets in ([], [{"metadata": {"labels": {"version": "2"}}, "data": {"release": "invalid"}}]):
+            with self.subTest(secrets=secrets):
+                self.cluster.objects[self.secret_path] = {"items": secrets}
+                self.assertEqual("running", C.status(self.item)[0])
+
+    def test_release_api_denial_does_not_complete_or_leak_error_body(self):
+        self.seed()
+        original = self.cluster.get
+        def get(path):
+            if path == self.secret_path:
+                raise urllib.error.HTTPError(path, 403, "private error body", {}, None)
+            return original(path)
+        with patch.object(C, "kget", side_effect=get):
+            state, _, message = C.status(self.item)
+        self.assertEqual("running", state)
+        self.assertNotIn("private error body", message)
+
+    def test_an_unrelated_chart_or_release_identity_does_not_complete(self):
+        for field in ("name", "namespace", "chart"):
+            with self.subTest(field=field):
+                self.seed()
+                secret = self.cluster.objects[self.secret_path]["items"][0]
+                record = C.HELM.decode(secret)
+                if field == "chart":
+                    record["chart"]["metadata"]["name"] = "other-chart"
+                else:
+                    record[field] = "other"
+                secret["data"]["release"] = base64.b64encode(base64.b64encode(gzip.compress(json.dumps(record).encode()))).decode()
+                self.assertEqual("running", C.status(self.item)[0])
+
+    def test_deployed_chart_waits_for_observed_updated_available_agents(self):
+        for change in ({"observedGeneration": 1}, {"updatedNumberScheduled": 2}, {"numberAvailable": 2},
+                       {"desiredNumberScheduled": 0, "updatedNumberScheduled": 0, "numberAvailable": 0}):
+            with self.subTest(change=change):
+                self.seed()
+                self.cluster.objects[self.agent_path]["status"].update(change)
+                self.assertEqual("running", C.status(self.item)[0])
+
+    def test_missing_or_deleting_agents_and_missing_multus_api_do_not_complete(self):
+        for missing in ("agent", "api", "deleting"):
+            with self.subTest(missing=missing):
+                self.seed()
+                if missing == "deleting":
+                    self.cluster.objects[self.agent_path]["metadata"]["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+                else:
+                    self.cluster.objects.pop(self.agent_path if missing == "agent" else
+                                             "/apis/k8s.cni.cncf.io/v1/network-attachment-definitions")
+                self.assertEqual("running", C.status(self.item)[0])
+
+    def test_alternate_agent_name_and_target_namespace_are_supported(self):
+        self.seed(namespace="network-system")
+        self.cluster.objects[self.agent_path.replace("/daemonsets/multus", "/daemonsets/rke2-multus")] = self.cluster.objects.pop(self.agent_path)
+        self.assertEqual("succeeded", C.status(self.item)[0])
+
+    def test_failed_release_and_active_retry_are_distinguished(self):
+        self.seed()
+        self.release(self.target, "failed")
+        self.assertEqual("failed", C.status(self.item)[0])
+        self.cluster.objects["/apis/batch/v1/namespaces/kube-system/jobs/helm-install-multus"] = {"status": {"active": 1}}
+        self.assertEqual(("running", 50), C.status(self.item)[:2])
+
+    def test_controller_job_failure_uses_its_reported_job_name(self):
+        self.seed()
+        self.release(self.previous)
+        self.cluster.objects[CHART + self.component]["status"] = {"jobName": "helm-install-network"}
+        self.cluster.objects["/apis/batch/v1/namespaces/kube-system/jobs/helm-install-network"] = {"status": {"failed": 1}}
+        with patch.object(C, "_elapsed", return_value=121):
+            state, _, message = C.status(self.item)
+        self.assertEqual("failed", state)
+        self.assertIn("helm-install-network", message)
+
+    def test_unknown_component_never_falls_through_to_cdi(self):
+        self.seed()
+        with patch.object(C, "cdi_version", side_effect=AssertionError("CDI is unrelated")):
+            self.assertEqual("failed", C.status({"ref": {"component": "other", "to": "1.0.0"}})[0])
 
 
 class FakeAddons:

@@ -97,6 +97,7 @@ POLICY = {
     ('GET', '/api/operations/log'): 'viewer',
     ('GET', '/api/os-updates'): 'viewer',
     ('GET', '/api/overview'): 'viewer',
+    ('GET', '/api/passthrough/inventory'): 'viewer',
     ('GET', '/api/passthrough/resources'): 'viewer',
     ('GET', '/api/platform'): 'viewer',
     ('GET', '/api/platform/baseline'): 'viewer',
@@ -300,6 +301,7 @@ POLICY = {
     ('POST', '/api/os-updates/start'): 'admin',
     ('POST', '/api/os-updates/stop'): 'admin',
     ('POST', '/api/passthrough/inspect'): 'admin',
+    ('POST', '/api/passthrough/vbios/capture'): 'admin',
     ('POST', '/api/passthrough/iommu'): 'admin',
     ('POST', '/api/passthrough/pci'): 'admin',
     ('POST', '/api/passthrough/usb'): 'admin',
@@ -391,6 +393,9 @@ POLICY = {
 }
 
 POLICY.update({
+    ('GET', '/api/longhorn/v2/plan'): 'admin',
+    ('POST', '/api/longhorn/v2/prepare'): 'admin',
+    ('POST', '/api/longhorn/v2/enable'): 'admin',
     ("POST", "/api/fleet/switch"): "viewer",
     **{("POST", path): "admin" for path in (
         "/api/fleet/join", "/api/fleet/accept", "/api/fleet/sync", "/api/fleet/remove",
@@ -693,3 +698,7 @@ POLICY.update({
     ('POST', '/api/self/data/prepare/archive'): 'admin',
     ('POST', '/api/self/data/prepare/archive/preview'): 'admin',
 })
+
+POLICY.update({(method, '/api/snapshot-files/' + action): 'admin'
+               for method, actions in (("GET", ("plan", "status", "list", "download")),
+                                       ("POST", ("start", "close"))) for action in actions})

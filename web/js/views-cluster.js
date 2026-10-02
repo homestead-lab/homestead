@@ -115,9 +115,17 @@ async function clusterComponentsPaint(force = false) {
     STATE.data.componentsHtml = componentsCard(report);
     const host = $("#clusterComponents");
     if (host) host.innerHTML = STATE.data.componentsHtml;
+    const settingsHost = $("#settingsComponents");
+    if (settingsHost) settingsHost.outerHTML = componentsCard(report, true);
     if (window.applyRole) applyRole();
     if (force) toast("releases checked", "ok");
-  } catch (e) { if (force) toast(e.message, "bad"); }
+  } catch (e) {
+    const host = $("#settingsComponents");
+    if (host && host.querySelector(".spin2")) host.innerHTML = `<div class="settings-card-head"><div class="ctitle">Platform versions</div>
+      <button class="btn sm" onclick="clusterComponentsPaint(true)">${icon("refresh")}Check</button></div>
+      <div class="empty small">Could not load platform versions: ${esc(e.message)}</div>`;
+    if (force) toast(e.message, "bad");
+  }
 }
 window.clusterComponentsPaint = clusterComponentsPaint;
 
@@ -144,11 +152,11 @@ function componentRow(c) {
     <div class="row">${c.notes_url ? `<a class="btn sm" href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">${icon("ext")}Notes</a>` : ""}${action}</div></div>`;
 }
 
-function componentsCard(r) {
+function componentsCard(r, settings = false) {
   const rows = (r.components || []).filter(c => !(r.harvester && c.id === "cluster"));
   // Counted: what can be upgraded here. Harvester's own parts move with it.
   const behind = rows.filter(c => c.next).length;
-  return `<section class="card flat cluster-wide" style="margin-top:14px">
+  return `<section class="card flat ${settings ? "settings-wide" : "cluster-wide"}"${settings ? ' data-tab="updates" id="settingsComponents"' : ' style="margin-top:14px"'}>
     <div class="settings-card-head"><div><div class="ctitle">Platform versions</div>
       <div class="csub">What runs under your apps, and whether anything newer is out. ${r.harvester
         ? "Harvester upgrades its own Longhorn and KubeVirt."

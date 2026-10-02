@@ -166,9 +166,12 @@ jobs:
           node scripts/audit_${{ matrix.audit }}.mjs
           if [ "${{ matrix.audit }}" = dialogs ] && [ "${{ matrix.shard }}" = 0 ]; then
             EDIT_SCREENSHOTS=release-assets/dialogs/container-edit node tests/integration/container-edit-steps.mjs
+            CONTAINER_SET_SCREENSHOTS=release-assets/dialogs/container-set node tests/integration/container-set.mjs
+            PASSTHROUGH_SCREENSHOTS=release-assets/dialogs/passthrough node tests/integration/passthrough-devices.mjs
           fi
           if [ "${{ matrix.audit }}" = pages ]; then
             node scripts/check_setup_guide.mjs
+            STORAGE_SCREENSHOTS=release-assets/pages/setup-storage node tests/integration/setup-storage-classes.mjs
             node scripts/check_demo_scenarios.mjs
             node scripts/check_launch_import_logs.mjs
             node scripts/check_mobile_pwa.mjs

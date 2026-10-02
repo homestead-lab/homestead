@@ -30,6 +30,7 @@ import homestead_icons as ICONS
 import homestead_names as NAMES
 import homestead_passthrough as PASSTHROUGH
 import homestead_vm_transfer_devices as VM_DEVICES
+import homestead_transfer_cleanup as CLEANUP
 
 kget = ksend = None
 LH = CLIENT = NETWORK = OPS = None
@@ -59,6 +60,8 @@ COPY_PHASES = ("joining", "quiescing", "backing-up", "releasing-source", "syncin
 KINDS = ("container", "vm", "volume")
 # Shared with any other Homestead replica on the same data volume.
 _lock = SHARED.SharedLock("moves")
+_target_lock = SHARED.SharedLock("move-backup-target", strict=True, directory=lambda: DATA_DIR, timeout=60)
+TARGET_STORE = "move-backup-target.json"
 
 
 def _step_lock(move_id):
@@ -104,7 +107,12 @@ def _read():
 
 
 def _write(rows):
-    SHARED.write_json(_path(), rows[-MAX_MOVES:], durable=True, mode=0o600, separators=(",", ":"))
+    protected = [m for m in rows if m.get("status") in ("running", "failed")
+                 or (m.get("flags") or {}).get("resource_cleanup_pending")
+                 or (m.get("flags") or {}).get("target_cleanup_pending")]
+    historical = [m for m in rows if m not in protected][-MAX_MOVES:]
+    SHARED.write_json(_path(), sorted(protected + historical, key=lambda m: m.get("created_at", "")),
+                      durable=True, mode=0o600, separators=(",", ":"))
 
 
 def _find(move_id):
@@ -130,6 +138,13 @@ def _public(move):
         # "put back".
         "source_stopped": _source_held(move),
         "cleanup_pending": bool((move.get("flags") or {}).get("cancelling")) and move.get("status") == "failed",
+        "backup_target_cleanup_pending": bool((move.get("flags") or {}).get("target_cleanup_pending")),
+        "resource_cleanup_pending": bool((move.get("flags") or {}).get("resource_cleanup_pending")),
+        "cleanup_message": move.get("cleanup_message", ""),
+        "can_dismiss": not ((move.get("flags") or {}).get("resource_cleanup_pending")
+                            or (move.get("flags") or {}).get("target_cleanup_pending")
+                            or (move.get("status") == "failed" and move.get("cleanup_protocol") == 1
+                                and ((move.get("flags") or {}).get("quiesced") or (move.get("flags") or {}).get("quiesce_requested")))),
         "claims": [{**{k: c.get(k) for k in ("claim", "size_gb", "backup", "created", "restored")},
                     "action": c.get("action", "move"), "storage_class": c.get("target_class") or move.get("storage_class") or ""}
                    for c in move.get("claims", [])],
@@ -201,6 +216,8 @@ def _source_status(move):
 
 
 def _source_action(move, action, **extra):
+    if move.get("cleanup_protocol") == 1:
+        extra["expected_uid"] = move["source_uid"]
     if move.get("transfer_mode") == "copy":
         extra.update(transfer_id=move["id"], expected_uid=move["source_uid"])
         if action == "quiesce":
@@ -402,7 +419,8 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
             fixes.append({"kind": "source-address", "cluster": cluster})
         if here.get("configured"):
             warnings.append(f"this cluster's Longhorn backup target changes from {here.get('url')} "
-                            f"to {there.get('url')}; backups already written to the old one stay there")
+                            f"to {there.get('url')} for this transfer, then returns to its previous setting; "
+                            "backups already written to the old one stay there")
 
     if not _get(f"/api/v1/namespaces/{namespace}"):
         warnings.append(f"namespace {namespace} does not exist here and will be created")
@@ -537,6 +555,7 @@ def start(cluster, kind, name, namespace=None, address_mode="shared", address=""
         "id": secrets.token_hex(6), "cluster": cluster, "kind": kind, "name": name,
         "source_namespace": definition.get("namespace", ""), "namespace": namespace,
         "transfer_mode": transfer_mode, "source_uid": definition.get("source_uid", ""),
+        "cleanup_protocol": 1 if definition.get("cleanup_protocol") == 1 and definition.get("source_uid") else 0,
         "host_devices": json.loads(json.dumps(host_devices or {})),
         "device_signature": VM_DEVICES.signature(definition) if kind == "vm" else "",
         "address_mode": address_mode, "address": address,
@@ -583,6 +602,120 @@ def _advance(move, phase, progress, message):
     _note(move, progress, message)
 
 
+def _target_journal(value=None):
+    path = os.path.join(DATA_DIR, TARGET_STORE)
+    if value is not None:
+        SHARED.write_json(path, value, durable=True, mode=0o600)
+        return value
+    try:
+        with open(path, encoding="utf-8") as handle:
+            return json.load(handle)
+    except FileNotFoundError:
+        return {}
+
+
+def _borrow_target(move, there=None):
+    try:
+        return _borrow_target_locked(move, there)
+    except urllib.error.HTTPError as error:
+        # Secret admission errors can include their submitted stringData.
+        raise CLIENT.Unreachable("Could not prepare transfer backup storage; check Kubernetes and retry") from error
+
+
+def _borrow_target_locked(move, there=None):
+    """Journal a single cluster-wide lease before any Kubernetes mutation."""
+    with _target_lock:
+        journal = _target_journal()
+        if journal and journal["owner"] != move["id"]:
+            _note(move, move.get("progress", 1), "Waiting for another transfer to release backup storage")
+            return False
+        here = LH.backup_target_state()
+        if not journal:
+            target = move.get("transfer_target")
+            if target is None:
+                there = there or CLIENT.remote(move["cluster"], "/api/move/target")
+                credentials = there.get("credentials") or {}
+                endpoint = there.get("endpoint") or credentials.get("AWS_ENDPOINTS", "")
+                if endpoint and hasattr(CLIENT, "answers") and not CLIENT.answers(endpoint):
+                    raise ValueError(f"this cluster cannot reach {move['cluster']}'s backup storage at {endpoint}. "
+                                     f"Give it an address this cluster can reach - {move['cluster']}'s Migration button "
+                                     "under Linked clusters - then retry")
+                shared = _same_target(LH.backup_target(), there)
+                secret = "" if shared else f"{JOIN_SECRET}-{move['id']}-{secrets.token_hex(4)}"
+                target = {"state": here if shared else LH.transfer_target_state(here, there["url"], secret, credentials),
+                          "secret": secret, "credentials": credentials if secret else {}}
+                move["transfer_target"] = target
+                move["previous_target"] = LH.backup_target().get("url", "")
+                _store(move)
+            journal = {"owner": move["id"], "previous": here, "applied": target["state"]}
+            _target_journal(journal)
+        if here == journal["applied"]:
+            return True
+        if here != journal["previous"]:
+            raise ValueError("Backup storage changed during this transfer; cancel it and review the storage settings")
+        target = move["transfer_target"]
+        if target["secret"]:
+            path = f"/api/v1/namespaces/{LHNS}/secrets"
+            secret = target["secret"]
+            existing = _get(f"{path}/{secret}")
+            if existing and not _ours(existing, move["id"]):
+                raise ValueError("The transfer's backup credentials already exist and belong to another workload")
+            if not existing:
+                ksend("POST", path, {
+                    "apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                    "metadata": {"name": secret, "namespace": LHNS,
+                                 "annotations": {NAMES.key(MOVE_ID): move["id"]},
+                                 "labels": {NAMES.key("managed"): "true"}},
+                    "stringData": {str(k): str(v) for k, v in target["credentials"].items()}})
+        # Webhooks may echo submitted S3 keys. Keep their response private.
+        try:
+            applied = LH.replace_backup_target_state(here, journal["applied"])
+        except Exception as error:
+            raise CLIENT.Unreachable("Could not apply the transfer backup target; check backup storage and retry") from error
+        if not applied:
+            raise ValueError("Backup storage changed while the transfer was starting; cancel it and review the settings")
+        return True
+
+
+def _release_target(move):
+    with _target_lock:
+        journal = _target_journal()
+        if journal and journal["owner"] == move["id"]:
+            # A changed setting belongs to the admin; leave it alone.
+            try:
+                LH.replace_backup_target_state(journal["applied"], journal["previous"])
+            except Exception as error:
+                raise CLIENT.Unreachable("Could not restore previous backup storage; cleanup will retry") from error
+            _target_journal({})
+        move.setdefault("flags", {}).pop("target_cleanup_pending", None)
+        target = move.get("transfer_target") or {}
+        secret = target.get("secret")
+        if secret:
+            previous = (journal.get("previous") or {}).get("value") or {}
+            baseline_secret = previous.get("credentialSecret") if isinstance(previous, dict) else ""
+            current = LH.backup_target_state()
+            current_secret = "" if current["harvester"] else current["value"].get("credentialSecret", "")
+            if current_secret != secret and baseline_secret != secret:
+                path = f"/api/v1/namespaces/{LHNS}/secrets/{secret}"
+                existing = CLEANUP.optional(kget, path)
+                if existing and _ours(existing, move["id"]):
+                    if not CLEANUP.delete(kget, ksend, path, existing):
+                        raise CLIENT.Unreachable("Waiting for transfer backup credentials to be removed")
+        if move.get("status") in ("succeeded", "cancelled"):
+            move.pop("transfer_target", None)
+
+
+def _cleanup_target(move):
+    pending = "; Backup storage cleanup is pending; Homestead will retry automatically"
+    try:
+        _release_target(move)
+        move["message"] = move.get("message", "").replace(pending, "")
+    except Exception:
+        move.setdefault("flags", {})["target_cleanup_pending"] = True
+        if "Backup storage cleanup is pending" not in move.get("message", ""):
+            move["message"] = move.get("message", "") + pending
+
+
 def _joining(move):
     if _moving(move):
         support = LH.ensure_restore_support()
@@ -592,37 +725,8 @@ def _joining(move):
                 raise ValueError("CSI snapshot support did not become ready; repair the snapshot controller, then retry. The source has not been stopped")
             return _note(move, 1, support["message"])
     there = CLIENT.remote(move["cluster"], "/api/move/target")
-    here = LH.backup_target()
-    if _same_target(here, there):
-        return _advance(move, "quiescing", 4, "Both clusters share backup storage")
-    credentials = there.get("credentials") or {}
-    # Harvester tests a backup target when it is set, and Longhorn needs it to
-    # read the backups anyway: a store this cluster cannot reach is said
-    # plainly here, rather than as whatever the setting's webhook replies.
-    endpoint = there.get("endpoint") or credentials.get("AWS_ENDPOINTS", "")
-    if endpoint and hasattr(CLIENT, "answers") and not CLIENT.answers(endpoint):
-        raise ValueError(f"this cluster cannot reach {move['cluster']}'s backup storage at {endpoint}. "
-                         f"Give it an address this cluster can reach - {move['cluster']}'s Migration button "
-                         "under Linked clusters - then retry")
-    body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-            "metadata": {"name": JOIN_SECRET, "namespace": LHNS,
-                         "labels": {NAMES.key("managed"): "true"}},
-            "stringData": {str(k): str(v) for k, v in credentials.items()}}
-    if _get(f"/api/v1/namespaces/{LHNS}/secrets/{JOIN_SECRET}"):
-        ksend("PUT", f"/api/v1/namespaces/{LHNS}/secrets/{JOIN_SECRET}", body)
-    else:
-        ksend("POST", f"/api/v1/namespaces/{LHNS}/secrets", body)
-    move["previous_target"] = here.get("url", "") if here.get("configured") else ""
-    # On Harvester the target is Harvester's own setting, which carries the
-    # keys and endpoint itself and never reads the Secret above.
-    keys = None
-    if getattr(LH, "on_harvester", lambda: False)():
-        keys = {"access_key": credentials.get("AWS_ACCESS_KEY_ID", ""),
-                "secret_key": credentials.get("AWS_SECRET_ACCESS_KEY", ""),
-                "endpoint": credentials.get("AWS_ENDPOINTS", "")}
-    # Checked often while a move waits on it; Longhorn's default is minutes.
-    LH.set_backup_target(there["url"], JOIN_SECRET, poll="30s", **({"keys": keys} if keys else {}))
-    return _advance(move, "quiescing", 4, f"Reading backups from {move['cluster']}'s storage")
+    if _borrow_target(move, there):
+        return _advance(move, "quiescing", 4, f"Reading backups from {move['cluster']}'s storage")
 
 
 def _quiescing(move):
@@ -635,8 +739,8 @@ def _quiescing(move):
             if move.get("device_signature") and VM_DEVICES.signature(definition) != move["device_signature"]:
                 raise ValueError("The source passthrough devices or vBIOS changed; cancel and review this transfer again")
             VM_DEVICES.prepare(definition, move["namespace"], move.get("host_devices"))
-        if move.get("transfer_mode") == "copy":
-            if not flags.get("quiesce_requested"):
+        if not flags.get("quiesce_requested"):
+            if move.get("transfer_mode") == "copy":
                 definition = definition or _definition(move)
                 flags["quiesce_version"] = definition.get("source_version", "")
             flags["quiesce_requested"] = True
@@ -671,6 +775,8 @@ def _backing_up(move):
                         50, "No volume data to back up")
     names = [c["claim"] for c in moving]
     extra = {} if len(moving) == len(move["claims"]) else {"claims": names}
+    if move.get("cleanup_protocol") == 1:
+        extra["cleanup_id"] = move["id"]
     made = _source_action(move, "backup", retry_failed=bool(flags.get("retry_backups")) or not flags.get("backed_up"),
                           **extra)
     by_claim = {row["claim"]: row["backup"] for row in made.get("backups", [])}
@@ -875,6 +981,7 @@ def _restoring(move):
         claim["restored"] = finished
         states.append(100 if finished else percent)
     if all(c["restored"] for c in move["claims"]):
+        _release_target(move)
         if move["kind"] == "volume":
             return _finish(move, "succeeded", f"{move['name']} is here; the original stays on "
                                               f"{move['cluster']} until you remove it there")
@@ -1062,11 +1169,56 @@ def _finish(move, status, message):
     if status == "succeeded":
         move.update(phase="done", progress=100)
         move.pop("definition", None)
+        move.setdefault("flags", {})["resource_cleanup_pending"] = True
+    # Persist completion before deleting backups. A lost cleanup response must
+    # not restart restoration against artifacts which have already been removed.
+    _store(move)
+    _cleanup_resources(move)
+    _cleanup_target(move)
     if after_finish:
         try:
             after_finish()
         except Exception:
             pass
+
+
+def _cleanup_resources(move):
+    if move.get("status") not in ("succeeded", "cancelled"):
+        return
+    flags = move.setdefault("flags", {})
+    flags["resource_cleanup_pending"] = True
+    _store(move)
+    try:
+        cancelled = move["status"] == "cancelled"
+        if cancelled:
+            _remove_created(move)
+        destination = CLEANUP.destination(kget, ksend, move, cancelled)
+        pending = list(destination["pending"])
+        notes = list(destination["retained"])
+        if flags.get("destination_deletion_pending"):
+            pending.append("destination object deletion")
+        if any(c.get("cleanup_retain") for c in move.get("claims") or []):
+            notes.append("Retain storage policy keeps the removed destination disks; remove them separately if no longer needed")
+        if pending:
+            pass  # The source backup remains available until restore users are gone.
+        elif move.get("cleanup_protocol") == 1 and (flags.get("quiesce_requested") or flags.get("quiesced")):
+            result = CLIENT.remote(move["cluster"], "/api/move/source", {
+                "action": "cleanup", "kind": move["kind"], "name": move["name"],
+                "namespace": move.get("source_namespace", ""),
+                "transfer_id": move["id"], "expected_uid": move["source_uid"]})
+            if not isinstance(result.get("complete"), bool):
+                raise ValueError("Source cleanup was not confirmed")
+            if not result["complete"]:
+                pending.append("source transfer backups or snapshots")
+            notes += result.get("retained") or []
+        elif move.get("cleanup_protocol") != 1 and flags.get("backed_up"):
+            notes.append("Older source transfer backups retained; their ownership cannot be verified")
+        flags["resource_cleanup_pending"] = bool(pending)
+        move["cleanup_message"] = ("Temporary resource cleanup pending; Homestead retries automatically"
+                                   if pending else "; ".join(str(note) for note in notes))
+    except Exception:
+        flags["resource_cleanup_pending"] = True
+        move["cleanup_message"] = "Temporary resource cleanup pending; check both clusters. Homestead retries automatically"
 
 
 def _kubernetes_reason(error):
@@ -1083,6 +1235,9 @@ def _tick(move):
     if not handler:
         return _finish(move, "failed", f"unknown phase {move.get('phase')}")
     try:
+        if move.get("phase") in ("quiescing", "backing-up", "releasing-source", "syncing", "restoring"):
+            if not _borrow_target(move):
+                return
         handler(move)
         move["failures"] = 0
     except CLIENT.Unreachable as error:
@@ -1117,17 +1272,36 @@ def tick_all():
 
 def _tick_all():
     with _lock:
-        running = [m["id"] for m in _read() if m.get("status") == "running"]
+        rows = _read()
+    journal = _target_journal()
+    running = [m["id"] for m in rows if m.get("status") == "running"
+               or (m.get("flags") or {}).get("target_cleanup_pending")
+               or (m.get("flags") or {}).get("resource_cleanup_pending")
+               or (m.get("status") in ("failed", "cancelled") and (m.get("flags") or {}).get("cancelling"))
+               or (m.get("status") in ("succeeded", "cancelled") and m.get("transfer_target"))
+               or m["id"] == journal.get("owner")]
+    if journal and not any(m["id"] == journal["owner"] for m in rows):
+        _release_target({"id": journal["owner"], "status": "cancelled"})
     for move_id in running:
         with _serialized(move_id):
             move = _find(move_id)
-            if not move or move.get("status") != "running":
+            if not move:
                 continue
-            _tick(move)
+            if move.get("status") == "running":
+                _tick(move)
+            elif move.get("status") in ("failed", "cancelled") and (move.get("flags") or {}).get("cancelling"):
+                try:
+                    _abandon(move_id)
+                except Exception:
+                    pass
+                move = _find(move_id)
+            else:
+                _cleanup_resources(move)
+                _cleanup_target(move)
+                move["updated_at"] = _now()
             with _lock:
                 current = _find(move_id)
-                if current and current.get("status") == "running" and \
-                        current.get("updated_at") <= move.get("updated_at"):
+                if current and current.get("updated_at") <= move.get("updated_at"):
                     _store(move)
 
 
@@ -1151,13 +1325,19 @@ def _retry(move_id):
     move = _find(move_id)
     if not move:
         raise ValueError("no such move")
+    if move.get("status") in ("failed", "cancelled") and move.get("flags", {}).get("cancelling"):
+        return _abandon(move_id)
+    if move.get("status") in ("succeeded", "cancelled") and move.get("flags", {}).get("resource_cleanup_pending"):
+        _cleanup_resources(move)
+        _store(move)
+        return _public(move)
     if move["status"] != "failed":
         raise ValueError("only a failed move can be retried")
-    if move.get("transfer_mode") == "copy" and move.get("flags", {}).get("cancelling"):
-        return abandon(move_id)
     if move.get("phase") == "backing-up":
         move.setdefault("flags", {})["retry_backups"] = True
     if move.get("phase") == "joining":
+        _release_target(move)
+        move.pop("transfer_target", None)
         move.setdefault("flags", {}).pop("snapshot_wait_started", None)
     move.update(status="running", failures=0, finished_at="",
                 message=f"Retrying from {move['phase']}", updated_at=_now())
@@ -1185,8 +1365,8 @@ def _abandon(move_id):
                          "there is nothing to put back")
     stopped = _source_held(move)
     move.update(status="cancelled", message="Putting it back" if stopped else "Cancelling", updated_at=_now())
-    if move.get("transfer_mode") == "copy":
-        move.setdefault("flags", {})["cancelling"] = True
+    move.setdefault("flags", {})["cancelling"] = True
+    move["flags"]["resource_cleanup_pending"] = True
     _store(move)
     # Nothing stopped there yet means nothing to start again there - and no
     # need for the source to answer before this move can be cancelled.
@@ -1214,34 +1394,41 @@ def _abandon(move_id):
                 + (f"; removed {', '.join(removed)} here" if removed else ""),
                 finished_at=_now())
     move.pop("definition", None)
+    move.setdefault("flags", {})["resource_cleanup_pending"] = True
+    _cleanup_resources(move)
+    move["flags"].pop("cancelling", None)
+    _cleanup_target(move)
     _store(move)
     return _public(move)
 
 
 def _remove_created(move):
     namespace, removed, move_id = move["namespace"], [], move["id"]
+    pending = False
     # A volume is its own claim, removed with the claims below.
-    obj = None if move["kind"] == "volume" else _get(_object_path(move["kind"], namespace, move["name"]))
+    obj = None if move["kind"] == "volume" else CLEANUP.optional(kget, _object_path(move["kind"], namespace, move["name"]))
     if obj and _ours(obj, move_id):
-        ksend("DELETE", _object_path(move["kind"], namespace, move["name"])
-              + "?propagationPolicy=Background")
+        pending |= not CLEANUP.delete(kget, ksend, _object_path(move["kind"], namespace, move["name"]), obj)
         removed.append(move["name"])
     for kind in ("services", "secrets", "configmaps"):
-        try:
-            items = kget(f"/api/v1/namespaces/{namespace}/{kind}").get("items", [])
-        except urllib.error.HTTPError as error:
-            if error.code != 404:
-                raise
-            items = []
+        items = CLEANUP.items(kget, f"/api/v1/namespaces/{namespace}/{kind}")
         for item in items:
             if _ours(item, move_id):
-                ksend("DELETE", f"/api/v1/namespaces/{namespace}/{kind}/{item['metadata']['name']}")
+                pending |= not CLEANUP.delete(kget, ksend, f"/api/v1/namespaces/{namespace}/{kind}/{item['metadata']['name']}", item)
                 removed.append(item["metadata"]["name"])
     for claim in move["claims"]:
-        pvc = _get(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}")
+        pvc = CLEANUP.optional(kget, f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}")
         if pvc and _ours(pvc, move_id):
-            ksend("DELETE", f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}")
+            volume = (pvc.get("spec") or {}).get("volumeName")
+            if volume:
+                pv = CLEANUP.optional(kget, f"/api/v1/persistentvolumes/{volume}")
+                if pv and (pv.get("spec") or {}).get("persistentVolumeReclaimPolicy") == "Retain":
+                    claim["cleanup_retain"] = True
+                claim["cleanup_volume"] = ((pv or {}).get("spec", {}).get("csi") or {}).get("volumeHandle") or volume
+                _store(move)  # Preserve reclamation evidence before deleting the PVC.
+            pending |= not CLEANUP.delete(kget, ksend, f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim['claim']}", pvc)
             removed.append(claim["claim"])
+    move.setdefault("flags", {})["destination_deletion_pending"] = pending
     return removed
 
 
@@ -1266,6 +1453,14 @@ def dismiss(move_id=None):
             raise ValueError("a move still running cannot be cleared; cancel it, or wait for it to finish or fail")
         if any(m.get("transfer_mode") == "copy" and _source_held(m) for m in gone):
             raise ValueError("Cancel the failed copy to restore its source before dismissing it")
+        if any((m.get("flags") or {}).get("target_cleanup_pending")
+               or m["id"] == _target_journal().get("owner") for m in gone):
+            raise ValueError("Wait for backup storage cleanup before dismissing this transfer")
+        if any((m.get("flags") or {}).get("resource_cleanup_pending") for m in gone):
+            raise ValueError("Wait for temporary resource cleanup before dismissing this transfer")
+        if any(m.get("status") == "failed" and m.get("cleanup_protocol") == 1
+               and ((m.get("flags") or {}).get("quiesced") or (m.get("flags") or {}).get("quiesce_requested")) for m in gone):
+            raise ValueError("Cancel or put back the failed transfer before dismissing it, so its resources can be cleaned up")
         _write([m for m in rows if m not in gone])
     failed = [m for m in gone if m.get("status") == "failed"]
     if failed:

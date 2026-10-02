@@ -594,6 +594,7 @@ function v2Item(ok, label, how, detail = "") {
   return `<div class="v2item">${v2Mark(ok)}<div><b>${esc(label)}</b> ${tip(how)}${detail ? `<div class="dim xs">${esc(detail)}</div>` : ""}</div></div>`;
 }
 window.v2Details = async (fresh = false) => {
+  if (can("admin")) return lhV2Setup();
   let v2 = STATE.data.v2;
   if (fresh || !v2?.nodes?.[0]?.checks) v2 = STATE.data.v2 = await api("/api/storage/v2").catch(() => v2 || { nodes: [] });
   const h = v2.harvester_setting !== null && v2.harvester_setting !== undefined, d = v2.distribution;
@@ -690,7 +691,7 @@ window.storageClassCleanup = async () => {
     toast(r.detail, "ok"); storageClassesPaint();
   } catch (e) { toast(e.message, "bad"); }
 };
-window.storageClassCreate = () => {
+window.storageClassCreate = async (prefill = {}, onSaved = null) => {
   modal("New storage class", `
     <p class="muted small">A storage class is a recipe Longhorn follows when it creates a volume:
       how many replicas to keep, whether the volume can grow, and what happens to the data when its
@@ -718,34 +719,50 @@ window.storageClassCreate = () => {
     <label class="switch"><input type="checkbox" id="sc_default"> Make this the default class</label>
     <div class="row" style="margin-top:18px"><button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>`);
-  storageClassTags();
+  for (const [id, key] of [["sc_name", "name"], ["sc_reps", "replicas"], ["sc_copies", "copies"],
+    ["sc_reclaim", "reclaim_policy"], ["sc_engine", "engine"]]) {
+    if (prefill[key] !== undefined) $("#" + id).value = prefill[key];
+  }
+  for (const [id, key] of [["sc_expand", "expandable"], ["sc_migratable", "migratable"], ["sc_default", "default"]]) {
+    if (prefill[key] !== undefined) $("#" + id).checked = !!prefill[key];
+  }
+  storageClassHint();
+  const button = $("#sc_go");
+  button.__storageSaved = onSaved;
+  button.disabled = true;
+  await storageClassTags(prefill, button);
+  if ($("#sc_go") === button) button.disabled = false;
 };
 /* The tags disks and nodes have, to choose from, and which nodes a choice
    leaves - a class needs one node per replica. */
-async function storageClassTags() {
+async function storageClassTags(prefill = {}, button = $("#sc_go")) {
   const inv = await loadDisks().catch(() => null);
-  const box = (id, tags, empty) => {
+  if ($("#sc_go") !== button) return;
+  const box = (id, available, selected, empty) => {
     const host = $(id);
     if (!host) return;
-    host.innerHTML = tags.length ? tags.map(t => `<label class="daychip"><input type="checkbox" value="${esc(t)}" onchange="storageClassReach()"><span>${esc(t)}</span></label>`).join("")
+    const tags = [...new Set([...available, ...selected])];
+    host.innerHTML = tags.length ? tags.map(t => `<label class="daychip"><input type="checkbox" value="${esc(t)}"${selected.includes(t) ? " checked" : ""} onchange="storageClassReach()"><span>${esc(t)}${available.includes(t) ? "" : " · not reported"}</span></label>`).join("")
       : `<span class="dim xs">${empty}</span>`;
   };
-  if (!inv) { box("#sc_disktags", [], "Could not read the disks' tags."); return; }
   STATE.data.scInv = inv;
-  box("#sc_disktags", inv.disk_tags || [], "No disk has a tag yet: add them to disks under Nodes, or Volumes → Disks.");
-  box("#sc_nodetags", inv.all_node_tags || [], "No node has a tag yet.");
+  box("#sc_disktags", inv?.disk_tags || [], prefill.disk_tags || [], "No disk has a tag yet: add them to disks under Nodes, or Volumes → Disks.");
+  box("#sc_nodetags", inv?.all_node_tags || [], prefill.node_tags || [], "No node has a tag yet.");
   // One host: only "different disks" can place a second copy.
-  if (Object.keys(inv.nodes || {}).length === 1 && $("#sc_copies")) $("#sc_copies").value = "disks";
+  if (inv && prefill.copies === undefined && Object.keys(inv.nodes || {}).length === 1 && $("#sc_copies")) $("#sc_copies").value = "disks";
   storageClassReach();
 }
 window.storageClassReach = () => {
   const inv = STATE.data.scInv, out = $("#sc_reach");
-  if (!inv || !out) return;
+  if (!out) return;
+  if (!inv) { out.className = "xs badtext"; out.textContent = "Could not read disk availability. Review tags and placement before creating this class."; return; }
   const disk = $$("#sc_disktags input:checked").map(b => b.value), node = $$("#sc_nodetags input:checked").map(b => b.value);
   const reps = +($("#sc_reps").value || 1), byDisk = $("#sc_copies")?.value === "disks";
-  const fits = (name, x) => x.scheduling && node.every(t => ((inv.node_tags || {})[name] || []).includes(t)) && disk.every(t => (x.tags || []).includes(t));
+  const fits = (name, x) => x.scheduling && x.ready !== false && !x.missing && !x.failed
+    && ($("#sc_engine")?.value === "v2" ? x.type === "block" : x.type !== "block")
+    && node.every(t => ((inv.node_tags || {})[name] || []).includes(t)) && disk.every(t => (x.tags || []).includes(t));
   const places = Object.entries(inv.nodes || {}).flatMap(([name, disks]) =>
-    disks.flatMap(d => d.longhorn.filter(x => fits(name, x)).map(x => ({ name, disk: x.id }))));
+    disks.flatMap(d => (d.longhorn || []).filter(x => fits(name, x)).map(x => ({ name, disk: x.id }))));
   const hosts = [...new Set(places.map(p => p.name))];
   const count = byDisk ? places.length : hosts.length, unit = byDisk ? "disk" : "host";
   out.className = count >= reps ? "dim xs" : "xs badtext";
@@ -754,6 +771,7 @@ window.storageClassReach = () => {
       + (count < reps ? ` - fewer than ${reps}, so volumes would run a copy short${!byDisk && places.length >= reps ? '. Choose "Different disks" to place them on one host' : ""}.` : ".");
 };
 window.storageClassEngine = async () => {
+  storageClassReach();
   const note = $("#sc_engine_note");
   if ($("#sc_engine").value !== "v2") { note.hidden = true; return; }
   note.hidden = false;
@@ -785,14 +803,16 @@ window.storageClassSave = async button => {
         engine: $("#sc_engine").value, default: $("#sc_default").checked,
         disk_tags: $$("#sc_disktags input:checked").map(b => b.value),
         node_tags: $$("#sc_nodetags input:checked").map(b => b.value) }) });
-    toast(result.message || `storage class "${name}" created`, "ok"); closeModal(); storageClassesPaint();
+    const after = button?.__storageSaved;
+    toast(result.message || `storage class "${name}" created`, "ok"); closeModal();
+    if (after) await after(); else await storageClassesPaint();
   } catch (e) { if (button) { button.disabled = false; button.textContent = "Create class"; } toast(e.message, "bad"); }
 };
 window.storageClassDefault = async name => {
   try {
     const result = await api("/api/storage/classes/default", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }) });
-    toast(result.message || `${name} is now the default`, "ok"); storageClassesPaint();
+    toast(result.message || `${name} is now the default`, "ok"); storageClassesPaint(); return result;
   } catch (e) { toast(e.message, "bad"); }
 };
 window.storageClassDelete = async name => {
@@ -900,7 +920,8 @@ async function mountEditor(host, content, filename) {
 }
 
 window.volumeFiles = async (namespace, pvc, attached) => {
-  Object.assign(FILEVIEW, { namespace, pvc, path: "", file: "", dirty: false });
+  if (window.snapshotFilesDismiss) window.snapshotFilesDismiss();
+  Object.assign(FILEVIEW, { namespace, pvc, path: "", file: "", dirty: false, snapshotSession: null });
   modal(`Files · ${pvc}`, `<div class="empty"><span class="spin2"></span>starting a file browser on ${esc(pvc)}</div>`, true);
   if (attached && !(await ask(`${pvc} is attached to a running workload.\n\nA ReadWriteOnce volume can only mount in one place, so the browser will not start until the workload is stopped. Continue anyway?`))) {
     return closeModal();
@@ -913,11 +934,16 @@ window.fileBrowse = async (path) => {
   if (FILEVIEW.dirty && !(await ask("Discard unsaved changes?"))) return;
   disposeEditor();
   try {
-    const listing = await api(`/api/files/list?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path || "")}`);
+    const snapshot = FILEVIEW.snapshotSession;
+    const listing = await api(snapshot
+      ? `/api/snapshot-files/list?namespace=${encodeURIComponent(namespace)}&session=${encodeURIComponent(snapshot.session)}&path=${encodeURIComponent(path || "")}`
+      : `/api/files/list?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path || "")}`);
+    if (FILEVIEW.pvc !== pvc || FILEVIEW.namespace !== namespace) return;
     Object.assign(FILEVIEW, { path: listing.path || "", file: "", dirty: false });
     $("#mbody").innerHTML = fileBrowserMarkup(listing);
     if (window.applyRole) window.applyRole();
   } catch (e) {
+    if (FILEVIEW.pvc !== pvc || FILEVIEW.namespace !== namespace) return;
     $("#mbody").innerHTML = `<div class="note dependency-danger"><b>The file browser could not start.</b> ${esc(e.message)}</div>
       <div class="row" style="margin-top:14px"><button class="btn" onclick="fileBrowse('')">Try again</button>
       <button class="btn" onclick="closeFiles()">Close</button></div>`;
@@ -926,7 +952,7 @@ window.fileBrowse = async (path) => {
 
 function fileCrumbs(path) {
   const parts = String(path || "").split("/").filter(Boolean);
-  const crumbs = [`<button class="linkish" onclick="fileBrowse('')">${esc(FILEVIEW.pvc)}</button>`];
+  const crumbs = [`<button class="linkish" onclick="fileBrowse('')">${esc(FILEVIEW.snapshotSession?.source.claim || FILEVIEW.pvc)}</button>`];
   parts.forEach((part, index) => {
     const upto = parts.slice(0, index + 1).join("/");
     crumbs.push(`<span class="dim">/</span><button class="linkish" onclick="fileBrowse(${jsq(upto)})">${esc(part)}</button>`);
@@ -936,23 +962,25 @@ function fileCrumbs(path) {
 
 function fileBrowserMarkup(listing) {
   const parent = String(listing.path || "").split("/").slice(0, -1).join("/");
-  return `<div class="filecrumbs">${fileCrumbs(listing.path)}</div>
+  return `${FILEVIEW.snapshotSession ? UI.lead(`Read-only snapshot · ${esc(FILEVIEW.snapshotSession.source.snapshot)}. The live volume stays online.`) : ''}<div class="filecrumbs">${fileCrumbs(listing.path)}</div>
     <div class="filelist">
       ${listing.path ? `<button class="filerow" onclick="fileBrowse(${jsq(parent)})"><span class="fileicon">↩</span><span>..</span><span class="dim xs">up one level</span></button>` : ""}
       ${listing.entries.map(entry => {
         const full = (listing.path ? listing.path + "/" : "") + entry.name;
         return entry.kind === "dir"
           ? `<button class="filerow" onclick="fileBrowse(${jsq(full)})"><span class="fileicon">▸</span><span>${esc(entry.name)}</span><span class="dim xs">folder</span></button>`
+          : FILEVIEW.snapshotSession
+          ? `<a class="filerow" href="${esc(snapshotFileUrl(full))}" download><span class="fileicon">↓</span><span>${esc(entry.name)}</span><span class="dim xs">${fileSize(entry.size)} · Download</span></a>`
           : `<button class="filerow" ${entry.editable ? `onclick="fileOpen(${jsq(full)})"` : "disabled"}><span class="fileicon">·</span><span>${esc(entry.name)}</span><span class="dim xs">${fileSize(entry.size)}${entry.editable ? "" : " · too large to edit"}</span></button>`;
       }).join("") || '<div class="empty small">this folder is empty</div>'}
     </div>
     ${listing.truncated ? '<div class="dim xs">Only the first 500 entries are listed.</div>' : ""}
     <div class="row" style="margin-top:16px"><button class="btn" onclick="closeFiles()">Close browser</button></div>
-    <div class="note" style="margin-top:12px">The browser runs as a short-lived pod that mounts this volume.
-      It stops on its own after 30 minutes, or when you close it.</div>`;
+    ${FILEVIEW.snapshotSession ? UI.more('Temporary copy', '<p class="ui-help">Files are downloaded from the selected snapshot. Closing this browser starts cleanup of its temporary copy. Abandoned sessions expire after 30 minutes; cleanup resumes when Homestead and the cluster API are available. Symbolic links and special files are excluded.</p>') : '<div class="note" style="margin-top:12px">The browser runs as a short-lived pod that mounts this volume. It stops on its own after 30 minutes, or when you close it.</div>'}`;
 }
 
 window.fileOpen = async (path) => {
+  if (FILEVIEW.snapshotSession) return;
   const { namespace, pvc } = FILEVIEW;
   try {
     const file = await api(`/api/files/read?namespace=${encodeURIComponent(namespace)}&pvc=${encodeURIComponent(pvc)}&path=${encodeURIComponent(path)}`);
@@ -1003,6 +1031,7 @@ Close the editor and lose them?` : "";
 };
 
 window.fileSave = async (ignoreSyntax = false) => {
+  if (FILEVIEW.snapshotSession) return toast('Snapshots are read-only', 'bad');
   const { namespace, pvc, file } = FILEVIEW;
   const button = $("#file_save");
   const content = FILEVIEW.editor ? FILEVIEW.editor.getValue() : ($("#file_body")?.value ?? "");
@@ -1027,6 +1056,7 @@ window.fileSave = async (ignoreSyntax = false) => {
 };
 
 window.closeFiles = async () => {
+  if (FILEVIEW.snapshotSession) return snapshotFilesClose();
   const { namespace, pvc, dirty } = FILEVIEW;
   if (dirty && !(await ask("Discard unsaved changes?"))) return;
   disposeEditor();
@@ -1560,8 +1590,11 @@ async function lhSettingsPaint() {
     <div class="note" style="margin-top:12px">Past a node's limit, new volumes come up a copy short, replica rebuilds wait and expansions are refused;
       nothing already placed is moved. What fills a disk for real is data written — ${esc(sizeText((cap.nodes || []).reduce((s, n) => s + n.used_gb, 0)))} across all nodes now.</div>
     <div class="lh-v2">
-      <label class="switch"><input type="checkbox" id="lh_v2" ${v2.enabled ? "checked" : ""} ${admin ? "" : "disabled"}> <b>V2 data engine</b> (SPDK)</label>
-      <div class="dim xs">Faster volumes for a price: each host needs a disk given to Longhorn as a block device and 2 GiB of hugepages, and V2 volumes are a separate storage class.
+      <div class="between"><b>V2 data engine · ${v2.enabled ? 'enabled' : 'off'}</b>${admin ? actionBar([
+        {label:v2.enabled?'V2 setup and status':'Set up Longhorn V2',run:'lhV2Setup()'},
+        v2.enabled && {label:'Disable V2',run:'lhV2Disable()',danger:true}
+      ],{shown:1}) : ''}</div>
+      <div class="dim xs">Faster volumes for a price: each host needs a disk given to Longhorn as a block device and usually 2 GiB of hugepages (setup checks the installed requirement), and V2 volumes are a separate storage class.
         ${v2.harvester_setting !== null && v2.harvester_setting !== undefined ? "On Harvester this switches Harvester's own setting, which sets up hugepages and the kernel modules on each host." : ""}
         It cannot be switched off while V2 volumes exist. <a class="linkish" onclick="v2Details(true)">What each host needs</a></div>
       ${(v2.nodes || []).length ? `<div class="lh-v2-nodes">${v2.nodes.map(n => `<span class="tag ${n.ready ? "ok" : ""}" ${n.missing.length ? `data-tip="Needs ${esc(n.missing.join(" and "))}"` : ""}>${esc(lhShort(n.name))} · ${n.ready ? "ready" : "not ready"}</span>`).join("")}</div>` : ""}</div>`;
@@ -1584,12 +1617,8 @@ window.lhPreview = () => {
 };
 
 window.lhSettingsSave = async () => {
-  const cap = STATE.data.lhcap || {};
-  const body = { over_provisioning: +$("#lh_over").value, minimal_available: +$("#lh_min").value, v2: $("#lh_v2").checked,
+  const body = { over_provisioning: +$("#lh_over").value, minimal_available: +$("#lh_min").value,
     node_down: $("#lh_nodedown")?.value || "", ...($("#lh_rebuild") ? { rebuild_limit: +$("#lh_rebuild").value } : {}) };
-  if (body.v2 !== !!cap.v2?.enabled && !(await ask(body.v2
-    ? "Enable Longhorn's V2 data engine? Longhorn starts V2 instance managers on every node, which reserve CPU and hugepages even before any V2 volume exists."
-    : "Disable the V2 data engine? Longhorn refuses while V2 volumes exist."))) return;
   try {
     const r = await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(r.detail, "ok"); lhSettingsPaint();
