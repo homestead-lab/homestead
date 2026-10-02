@@ -509,11 +509,11 @@ function workloadTable(rows, sections = null, folded = new Set()) {
   // orders the rows within each group rather than mixing them.
   const bodies = sections ? sections.map(([name, members]) => {
     const shut = folded.has(name || NO_GROUP);
-    return `<tbody class="grouphead"><tr><td colspan="7">${workloadGroupHead(name, members, shut)}</td></tr></tbody>
+    return `<tbody class="grouphead"><tr><td colspan="8">${workloadGroupHead(name, members, shut)}</td></tr></tbody>
       <tbody${shut ? " hidden" : ""}>${workloadTableRows(members)}</tbody>`;
   }).join("") : `<tbody>${workloadTableRows(rows)}</tbody>`;
   return `<div class="card flat pad0 wltable-wrap"><table class="tbl dense stack compact wltable" data-sort="containers" data-sort-controls="containers"><thead><tr>
-    <th>Workload</th><th>Status</th><th class="wl-image">Image</th><th>CPU</th><th>RAM</th><th class="wl-access">Access</th><th data-nosort>Actions</th></tr></thead>
+    <th>Workload</th><th>Status</th><th class="wl-image">Image</th><th>CPU</th><th>RAM</th><th class="wl-access">Access</th><th class="wl-uptime">Uptime</th><th data-nosort>Actions</th></tr></thead>
     ${bodies}</table></div>`;
 }
 
@@ -533,6 +533,7 @@ function workloadTableRows(rows) {
   return rows.map(w => {
     const ok = w.ready === w.desired && w.desired > 0, off = w.desired === 0;
     const key = workloadRowKey(w), id = `wl-detail-${encodeURIComponent(key)}`, open = workloadExpanded.has(key);
+    const uptime = !off && Number.isFinite(w.uptime) && w.uptime > 0 ? w.uptime : null;
     const update = w.platform || w.managed_smb || w.managed_nfs || remoteRow(w) ? null : workloadUpdate(w.ns, w.name);
     const updateError = update?.images?.find(x => x.error), pull = workloadPull(w), blocked = workloadBlocked(w);
     const quiet = off && !update?.unchecked && !updateError && !update?.available && !pull && !blocked;
@@ -552,9 +553,10 @@ function workloadTableRows(rows) {
       <td class="mono small nowrap wl-cpu" data-sort="${off ? "" : w.cpu}" data-tip="Live usage. 100% equals one fully used CPU core.">${off ? "—" : workloadCpuPercent(w.cpu)}</td>
       <td class="mono small nowrap wl-ram" data-sort="${off ? "" : w.mem_mb}">${off ? "—" : workloadMemory(w.mem_mb)}</td>
       <td class="wl-access" data-sm-hide><div class="waccess">${accessPorts(w.ports)}</div></td>
+      <td class="mono small nowrap wl-uptime" data-sm-hide data-sort="${uptime ?? ""}">${uptime === null ? "—" : esc(fmtUp(uptime))}</td>
       <td class="wl-actions" data-actions><div class="wacts">${workloadActions(w, update, off, true)}</div></td>
     </tr>
-    <tr class="wl-detail-row" data-detail-for="${esc(key)}"${clusterAttr(w)}${open ? "" : " hidden"}><td colspan="7">
+    <tr class="wl-detail-row" data-detail-for="${esc(key)}"${clusterAttr(w)}${open ? "" : " hidden"}><td colspan="8">
       <div class="wl-inline-detail" id="${esc(id)}">
         ${blocked ? `<div class="wblocked">${esc(blocked)}</div>` : ""}${pull ? pullBar(pull) : ""}
         <div class="about-grid">
