@@ -20,7 +20,7 @@ const nodeHardwareIds = n => (STATE.data.hardwareFeatures || [])
 async function viewDash() {
   const [o, hist, st, cap, , , up] = await Promise.all([
     api("/api/overview"),
-    api("/api/history").catch(() => ({})),
+    api("/api/history").catch(() => null),
     api("/api/storage").catch(() => null),
     STATE.platform?.longhorn === false ? null : api("/api/longhorn/capacity").catch(() => null),
     loadHardwareFeatures(),
@@ -44,7 +44,10 @@ async function viewDash() {
   if (sn) sn.textContent = `${o.nodes_ready}/${o.nodes_total}`;
 
   const H = hist || {};
-  const rx = (H.net_rx || []).slice(-40), tx = (H.net_tx || []).slice(-40);
+  const rx = H.net_rx || [], tx = H.net_tx || [];
+  const sampledAt = H.last_sample || H.t?.at(-1) || 0;
+  const sampleAge = sampledAt ? Math.max(0, Date.now() / 1000 - sampledAt) : 0;
+  const chartWindow = H.step === 300 ? "Last hour · saved five-minute samples" : "Last hour · sampled every 30 seconds";
   const netNow = o.nodes.reduce((s, n) => s + (n.rx_mbps || 0), 0);
   const txNow = o.nodes.reduce((s, n) => s + (n.tx_mbps || 0), 0);
   const diskUsed = o.nodes.reduce((s, n) => s + (n.fs_used_gb || 0), 0);
@@ -71,11 +74,13 @@ async function viewDash() {
       o.health_issues.some(x => x.kind === "Volume") ? "storage" : o.health_issues.every(x => x.kind === "Backup") ? "protect" : "workloads")})">Review</button>
   </div>` : ""}
 
+  ${hist === null ? '<div class="note warn">Chart history could not be loaded. Current overview values are shown; history will retry on the next refresh.</div>'
+    : sampledAt && sampleAge > Math.max(120, (H.step || 30) * 2) ? `<div class="note warn">Charts last sampled ${esc(fmtAgo(sampleAge))}. Check Live charts in Settings → About.</div>` : ""}
   <div class="grid g3 stagger">
     <div class="card glow dashcard ${worstMetricClass([{ value: o.cpu_pct, metric: "cpu" }, { value: o.mem_pct, metric: "memory" }])}">
       <div class="between"><div><div class="ctitle">Compute</div>
-        <div class="csub">CPU and memory across the cluster</div></div>${trend(H.cpu)}</div>
-      ${dualSpark((H.cpu || []).slice(-40), (H.mem || []).slice(-40), { times: (H.t || []).slice(-40) })}
+        <div class="csub">CPU and memory · ${chartWindow}</div></div>${trend(H.cpu)}</div>
+      ${H.cpu?.length ? dualSpark(H.cpu, H.mem || [], { times: H.t }) : '<div class="empty small">Waiting for recorded metrics</div>'}
       <div class="row dashnums">
         <div><div class="bignum">${o.cpu_pct}<span class="unit">%</span></div>
           <div class="csub"><span class="kdot s1"></span>CPU · ${o.cpu_cap} cores capacity</div></div>
@@ -86,8 +91,8 @@ async function viewDash() {
 
     <div class="card glow g-info dashcard">
       <div class="between"><div><div class="ctitle">Throughput</div>
-        <div class="csub">Network and local disk</div></div>${trend(rx)}</div>
-      ${dualSpark(rx, tx, { times: (H.t || []).slice(-40) })}
+        <div class="csub">Network and local disk · ${chartWindow}</div></div>${trend(rx)}</div>
+      ${rx.length ? dualSpark(rx, tx, { times: H.t }) : '<div class="empty small">Waiting for recorded metrics</div>'}
       <div class="row dashnums">
         <div><div class="bignum">${rateParts(netNow)[0]}<span class="unit">${rateParts(netNow)[1]}</span></div>
           <div class="csub"><span class="kdot s1"></span>in · ${rateParts(txNow).join(" ")} out</div></div>
@@ -128,7 +133,8 @@ async function viewDash() {
       ${consumerTable(o.top_mem, "memory")}</div>
   </div>
   <section class="card flat history-card" id="historyCard">${STATE.data.historyHtml || ""}</section>`);
-  await historyPaint();
+  // Saved history must not hold the live refresh loop's busy flag.
+  historyPaint();
 }
 
 function consumerTable(workloads, metric) {

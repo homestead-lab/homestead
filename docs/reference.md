@@ -571,13 +571,18 @@ than a header the client can write.
 
 ## Long-term stats
 
-The Dashboard's charts cover the last hour. Its **Over time** card covers up to
+The Dashboard's charts cover the last hour, sampled every thirty seconds and
+saved in a small `history-live.json` buffer on the data volume. They survive
+Homestead restarting and are shared by its replicas. Its **Over time** card covers up to
 ninety days: cluster CPU and RAM (average and peak), network in and out,
 workload pods, and each node's availability - the share of samples it was
 Ready - with its average CPU and RAM. Homestead records a sample every five
 minutes whether or not a browser is open (the leading replica does, in the
 background), keeps them for two days, and keeps hourly averages and peaks for
 ninety, in `history.json` on its data volume - a few hundred kilobytes at most.
+Longer ranges include the current hour's average and peak as samples arrive.
+The live charts keep refreshing while longer history loads; a failed history
+request keeps the existing charts and retries on the next refresh.
 It answers "was it busy last week?" and "has a node been dropping out?";
 Harvester's own monitoring (Prometheus and Grafana) is there for anything
 deeper.
