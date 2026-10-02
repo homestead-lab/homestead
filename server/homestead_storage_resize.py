@@ -2,6 +2,8 @@
 import urllib.error
 import urllib.parse
 
+upgrade_guard = None
+
 
 def storage_class(pvc):
     return ((pvc.get("metadata") or {}).get("annotations") or {}).get(
@@ -35,3 +37,9 @@ def require(pvc, read):
     result = options(pvc, read)
     if not result["can_expand"]:
         raise ValueError(result["reason"])
+    check_upgrade(pvc, read)
+
+
+def check_upgrade(pvc, read):
+    if upgrade_guard:
+        upgrade_guard(pvc, read)

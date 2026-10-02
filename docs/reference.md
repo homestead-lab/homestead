@@ -1470,6 +1470,11 @@ and a V2 storage class remain separate reviewed steps. On Harvester, Homestead
 changes Harvester's `longhorn-v2-data-engine-enabled` setting; Harvester owns
 host preparation and restarts. See [the setup workflow](wiki/Storage.md#what-the-v2-engine-needs).
 
+**Settings → Updates → Platform versions** also reviews Longhorn V2 live and offline
+upgrades. Live upgrade requires a 1.12.2+ source, Kubernetes 1.34+, and healthy
+replicas on at least two eligible hosts. The status view shows each host and offers
+pause/resume and timeout controls. See [V2 upgrades](wiki/Storage.md#upgrading-longhorn-v2).
+
 ## Network shares
 
 Network Shares manages the `homestead-smb` Deployment and Longhorn-backed claims

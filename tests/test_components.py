@@ -28,6 +28,8 @@ class VersionTests(unittest.TestCase):
 class Cluster:
     def __init__(self, platform, objects):
         self.platform, self.objects, self.sent = platform, objects, []
+        self.objects.setdefault("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes", {"items": []})
+        self.objects.setdefault("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas", {"items": []})
         C._releases.clear()
         C.bind(self.get, self.send, lambda force=False: self.platform, self.helm, Addons(),
                lambda url: K3S_CHANNELS if "k3s.io" in url else LONGHORN)

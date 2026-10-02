@@ -21,6 +21,11 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // "click:<fn>" (the first control whose onclick calls fn), or "text:<label>"
 // (the first button in the dialog with that label).
 const DIALOGS = [
+  ["longhorn-v2-upgrade-ready", "settings", "window.__demoV2UpgradeState='ready';lhV2Upgrade('v1.13.0')"],
+  ["longhorn-v2-upgrade-blocked", "settings", "window.__demoV2UpgradeState='blocked';lhV2Upgrade('v1.13.0')"],
+  ["longhorn-v2-upgrade-running", "settings", "window.__demoV2UpgradeState='running';lhV2Upgrade()"],
+  ["longhorn-v2-upgrade-failed", "settings", "window.__demoV2UpgradeState='failed';lhV2Upgrade()"],
+  ["longhorn-v2-upgrade-settings", "settings", "window.__demoV2UpgradeState='running';lhV2Upgrade()", "lhV2UpgradeSettings(false)"],
   ["disk-v2-review", "nodes", "window.__demoDiskV2State='ready';diskV2Open('node-1','disk-data')"],
   ["disk-v2-blocked", "nodes", "window.__demoDiskV2State='blocked';diskV2Open('node-1','disk-data')"],
   ["disk-v2-evacuating", "nodes", "window.__demoDiskV2State='evacuating';diskV2Watch('demo-disk-v2')"],
