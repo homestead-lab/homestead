@@ -6,6 +6,7 @@ const vm = require("node:vm");
 const context = { window: {}, console, document: {addEventListener() {}}, esc: x => String(x).replaceAll("<", "&lt;"), icon: () => "<svg></svg>" };
 vm.createContext(context);
 context.jsArg = s => JSON.stringify(String(s ?? "")); context.jsq = s => (context.esc || String)(context.jsArg(s));
+vm.runInContext(fs.readFileSync("web/js/ui.js", "utf8"), context);
 vm.runInContext(fs.readFileSync("web/js/views-protect.js", "utf8"), context);
 
 test("cleanup shows live volume-wide percentage and never invents completion", () => {

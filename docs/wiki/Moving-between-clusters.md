@@ -43,6 +43,11 @@ workloads** lists what is still needed, with a button beside each:
 - **Migration from it is off** - the source's store is stopped; its
   **Migration** button enables it again.
 
+The destination restores its previous backup setting once the volumes are
+restored, or the transfer fails or is cancelled. This includes the old
+credentials and polling interval. It keeps any storage change an admin made
+during the transfer. Transfers take turns using this cluster-wide setting.
+
 That S3 server needs an address on your LAN that the destination can reach. By
 default it shares the source's **shared address** - the one its apps share -
 and answers on port 9000 there, so no address of its own is needed. On k3s it
@@ -78,6 +83,17 @@ anything stops. Then, in the job tray:
 
 A move survives either Homestead restarting, and has no time limit that would
 abandon a large volume. A failed step can be retried once its cause is fixed.
+Retry temporarily reconnects to the saved backup store for that transfer.
+If backup-setting cleanup cannot reach Kubernetes, the job says so and
+Homestead retries cleanup automatically, including after a restart.
+
+Unlinking a cluster removes its fleet access; it does not remove backup storage
+or change a deliberately configured Longhorn target. Finish or cancel transfers
+before unlinking so Homestead can recover any stopped source workloads.
+Transfers from older versions may have left the destination pointing at the
+source's store. Check **Backups** and select the
+intended target if that store is no longer available; a cluster's UI address
+and its backup storage address can differ.
 
 A move that fails says why - the reason Kubernetes gave, or that this cluster
 cannot reach the source's backup storage. **Retry** carries on from the step
@@ -162,3 +178,31 @@ that strategy cannot safely resume after being stopped for the backup.
 The original stays on the source, **stopped**, until you remove it there - so
 it can be started again at any point. Finished moves can be dismissed from the
 destination's list without touching the source's copy.
+
+## Temporary resource cleanup
+
+After a successful move or copy, Homestead removes its temporary source
+backups and snapshots, including failed backup attempts replaced during a
+retry. It also removes the destination's CSI restore metadata once the disks
+have bound. The destination disks and images they still use remain.
+
+A failed transfer keeps its backups and partial destination disks for
+**Retry**. To discard it, use **Cancel**, **Put back** or **Cancel copy**.
+Homestead restores the source's previous running state and removes the
+destination objects, restore metadata and unused images created by that
+transfer. A failed transfer that has stopped its source must be cancelled
+before it can be dismissed.
+
+If cleanup is waiting for either cluster or for storage deletion, the job
+shows **Temporary resource cleanup pending** and offers **Retry cleanup**.
+Homestead also retries automatically after a restart. Dismiss becomes available
+when cleanup finishes. Kubernetes and Longhorn may take time to detach,
+merge snapshots and reclaim disk space; Homestead keeps their safety
+finalizers intact.
+
+Cleanup uses ownership recorded when each resource was created. Shared images,
+unrelated backups and artifacts from older Homestead versions without this
+ownership are preserved. Storage with a **Retain** policy keeps removed
+destination disks, and the job explains that they need separate removal if
+no longer wanted. Update both clusters to enable source backup cleanup for
+new transfers.
