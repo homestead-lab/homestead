@@ -7,7 +7,7 @@ Settings has eight sections: seven that change the cluster for everyone, and
 | Section | What is there |
 |---|---|
 | **Homestead** | its version and site name, its own health, how many copies run and where its data lives, configuration backup |
-| **Updates** | Homestead's releases (and linked clusters' in the same update); the container image update policy and its update window |
+| **Updates** | Homestead's releases (and linked clusters' in the same update); platform versions; host OS updates and schedules; the container image update policy and its update window |
 | **Monitoring** | when bars and node cards turn amber or red; drive health; publishing stats to MQTT and Home Assistant |
 | **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space, replica rebuilds and the V2 engine; storage classes; namespaces |
 | **Linked clusters** | other Homesteads managed from this one, and moving workloads between them |
@@ -104,6 +104,19 @@ Networking, installs it. Their chart versions are listed and upgraded under
 
 A page or form that needs one offers the same install. Harvester has the
 storage, VM and network add-ons built in, so its card shows only the node probe.
+
+## Host updates
+
+**Settings → Updates → Host updates** lists each host's pending packages,
+security updates, restart needs and automatic-update status, with progress
+for a running update. **Manage host updates** opens the same controls as
+**Nodes → OS updates**: choose who installs updates, set the weekly window,
+configure restarts, or review an update of every host one at a time. Only
+administrators can change these settings or start an update. Opening Settings
+or refreshing its status installs nothing.
+
+On Harvester, the card links to Cluster because the hosts' operating system
+is upgraded with Harvester.
 
 ## Homestead updates
 

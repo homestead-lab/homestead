@@ -21,7 +21,7 @@ function thresholdEditor(id, label, unit, help, pair) {
    link or button can still ask for a topic by its own name - settingsTab("fleet"). */
 const SETTINGS_SECTIONS = [
   ["homestead", "Homestead", "Version, health, copies, backup", ["homestead", "about"], "Cluster"],
-  ["updates", "Updates", "Releases, platform, containers", ["updates"], "Cluster"],
+  ["updates", "Updates", "Releases, platform, hosts, containers", ["updates"], "Cluster"],
   ["monitoring", "Monitoring", "Thresholds, drives, MQTT", ["monitoring", "health", "mqtt"], "Cluster"],
   ["hardware", "Hardware and storage", "Devices, add-ons, Longhorn", ["hardware", "cluster", "namespaces"], "Cluster"],
   ["fleet", "Linked clusters", "Other Homesteads, moves", ["fleet"], "Cluster"],
@@ -228,6 +228,10 @@ async function viewSettings() {
         <div class="settings-card-head"><div><div class="ctitle">Platform versions</div></div></div>
         <div class="empty small"><span class="spin2"></span> checking platform versions</div>
       </section>
+      <section class="card flat settings-wide" data-tab="updates" id="settingsHostUpdates">
+        <div class="settings-card-head"><div><div class="ctitle">Host updates</div></div></div>
+        <div class="empty small"><span class="spin2"></span> reading host update status</div>
+      </section>
       ${window.troubleshootingCards ? troubleshootingCards() : ""}
       <section class="card flat settings-wide" data-tab="about" id="configCard">${window.configCardHtml ? configCardHtml() : ""}</section>
       <section class="card flat settings-wide" data-tab="about" id="selfHealthCard"><div class="empty small"><span class="spin2"></span> checking Homestead</div></section>
@@ -253,6 +257,7 @@ async function viewSettings() {
     if (!STATE.data.imageUpdates) loadImageUpdates(false, true);
   }
   clusterComponentsPaint();
+  if (window.osUpdatesCardPaint) osUpdatesCardPaint();
   selfHealthPaint();
   // The UniFi card needs the IPAM record, which Settings does not otherwise load.
   api("/api/ipam").then(data => { STATE.data.ipam = data; const host = $("#unifiCard"); if (host) host.outerHTML = ipamUnifiCard(); }).catch(() => {});
