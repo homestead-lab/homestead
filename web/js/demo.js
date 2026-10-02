@@ -581,8 +581,8 @@
       usb: [{ vendor: "1a6e", product: "089a", name: "Google Coral TPU (unflashed)", port: "1-4", resource: "homestead.io/usb-1a6e-089a", permitted: true },
         { vendor: "1cf1", product: "0030", name: "dresden elektronik ConBee II", port: "1-2", resource: "homestead.io/usb-1cf1-0030", permitted: false }], listed: [] },
     "/api/passthrough/resources": { sidecar: true, resources: [
-      { resource: "homestead.io/pci-10de-1e87", kind: "pci", label: "10DE:1E87", nodes: ["harvester-node1"] },
-      { resource: "homestead.io/usb-1a6e-089a", kind: "usb", label: "1a6e:089a", nodes: ["harvester-node1", "harvester-node3"] }] },
+      { resource: "homestead.io/pci-10de-1e87", kind: "pci", label: "NVIDIA Corporation TU104 [GeForce RTX 2080]", selector: "10DE:1E87", devices: [{node: "harvester-node1", address: "0000:01:00.0", group: "12"}], nodes: ["harvester-node1"] },
+      { resource: "homestead.io/usb-1a6e-089a", kind: "usb", label: "Google Coral TPU (unflashed)", selector: "1a6e:089a", nodes: ["harvester-node1", "harvester-node3"] }] },
     // Every host's OS, one at a time (host-os.js): one host done, one restarting.
     "/api/os-updates": () => {
       const host = name => ({ os: "Ubuntu 24.04.3 LTS", updates: name === "harvester-node3" ? [{ name: "openssl", security: true }] : [],
@@ -1997,6 +1997,13 @@ ssh_pwauth: true
       { kind: "request", at: 9000, method: "POST", path: "/api/restart", status: 503, duration: 824 }],
     sources: { "homestead.log": "workload=frigate host=harvester-node1 address=192.0.2.207" },
     manifest: [{ source: "homestead.log", state: "included" }, { source: "homestead-previous.log", state: "unavailable" }] }];
+  const passthroughExample = responses["/api/passthrough/inspect"];
+  const inspectedDevices = {};
+  responses["/api/passthrough/inventory"] = url => ({facts: inspectedDevices[url.searchParams.get("node")] || null});
+  responses["/api/passthrough/inspect"] = (url, init) => {
+    const node = JSON.parse(init?.body || "{}").node || "harvester-node1";
+    return inspectedDevices[node] = {...passthroughExample, node, inspected_at: Math.floor(Date.now() / 1000)};
+  };
   responses["/api/diagnostics"] = () => diagnosticReports.map(row => ({ ...row, events: row.events.length }));
   responses["/api/diagnostics/start"] = (url, init) => {
     const input = JSON.parse(init.body || "{}");

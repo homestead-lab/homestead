@@ -38,6 +38,7 @@ import base64
 import copy
 import json
 import re
+import time
 
 import homestead_shared as SHARED
 
@@ -203,10 +204,42 @@ def usb_resource(vendor, product):
     return f"{PREFIX}usb-{vendor}-{product}"
 
 
+INVENTORY_LOCK = SHARED.SharedLock("passthrough-inventory", strict=True, directory=lambda: DATA_DIR)
+
+
+def _inventory():
+    try:
+        with open(f"{DATA_DIR}/passthrough-inventory.json", encoding="utf-8") as handle:
+            value = json.load(handle)
+        return {node: facts for node, facts in value.items() if isinstance(facts, dict) and facts.get("complete")
+                and isinstance(facts.get("pci"), list) and isinstance(facts.get("usb"), list)} if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def inventory(node):
+    """Last complete inspection, for display only. No host helper is started."""
+    return {"facts": _inventory().get(node)}
+
+
+def _remember(facts):
+    facts["inspected_at"] = int(time.time())
+    # A display cache must not prevent a device inspection or handoff when
+    # the data volume is unavailable. Mutations always inspect the host anew.
+    try:
+        with INVENTORY_LOCK:
+            saved = _inventory()
+            saved[facts["node"]] = facts
+            SHARED.write_json(f"{DATA_DIR}/passthrough-inventory.json", saved)
+    except (OSError, ValueError, RuntimeError) as error:
+        facts["inventory_error"] = str(error)
+    return facts
+
+
 def inspect(node):
     """A host's devices, as it sees them now."""
     if _harvester():
-        return _harvester_inventory(node)
+        return _remember(_harvester_inventory(node))
     claimed = longhorn_block_paths(node)
     if claimed is None:
         raise ValueError(f"Longhorn's disks on {node} could not be read, so its devices are not offered")
@@ -223,7 +256,7 @@ def inspect(node):
     for row in facts["usb"]:
         row["permitted"] = row["resource"] in permitted
     facts.update(node=node, harvester=False, kubevirt=bool(_kubevirt()))
-    return facts
+    return _remember(facts)
 
 
 # ---- IOMMU --------------------------------------------------------------------
@@ -479,6 +512,9 @@ def _harvester_inventory(node):
                      "permitted": d["metadata"]["name"] in claimed, "resource": s.get("resourceName", ""),
                      "problems": [], "group_members": [], "boot_vga": False, "nets": [], "harvester_name": d["metadata"]["name"],
                      "offered": klass[:2] in ("01", "02", "03", "04", "12") or klass[:4] == "0c03"})
+    for row in rows:
+        group = row["group"]
+        row["group_members"] = [r["address"] for r in rows if r is not row and r["group"] == group] if group not in (None, "") else []
     usb_rows = [{"vendor": (d.get("status") or {}).get("vendorID", ""), "product": (d.get("status") or {}).get("productID", ""),
                  "name": (d.get("status") or {}).get("description") or d["metadata"]["name"],
                  "resource": (d.get("status") or {}).get("resourceName", ""), "port": (d.get("status") or {}).get("devicePath", ""),
@@ -519,7 +555,23 @@ def harvester_usb(node, name, claim):
 def resources():
     """Every device resource a VM may ask for, and the hosts offering it now."""
     offered = {}
-    for n in (kget("/api/v1/nodes") or {}).get("items", []):
+    nodes = (kget("/api/v1/nodes") or {}).get("items", [])
+    live_nodes = {n["metadata"]["name"] for n in nodes}
+    snapshots = _inventory()
+    if _harvester():
+        snapshots = {}
+        # Harvester exposes descriptions through its inventory CRs; no host
+        # helper (or prior Homestead inspection) is necessary for names.
+        for kind in ("pci", "usb"):
+            for device in (_get(f"{HV}/{kind}devices") or {}).get("items") or []:
+                status = device.get("status") or {}
+                node = status.get("nodeName", "")
+                snapshots.setdefault(node, {}).setdefault(kind, []).append({
+                    "resource": status.get("resourceName", ""),
+                    "name": status.get("description") or (device.get("metadata") or {}).get("name", ""),
+                    "address": status.get("address") if kind == "pci" else status.get("devicePath"),
+                    "group": status.get("iommuGroup") if kind == "pci" else None})
+    for n in nodes:
         for key, value in ((n.get("status") or {}).get("allocatable") or {}).items():
             if "/" in key and str(value) not in ("0", ""):
                 offered.setdefault(key, []).append(n["metadata"]["name"])
@@ -530,7 +582,22 @@ def resources():
         for row in hd.get(key) or []:
             name = row.get("resourceName", "")
             label = row.get("pciVendorSelector") or ", ".join(f"{s.get('vendor')}:{s.get('product')}" for s in row.get("selectors") or [])
-            out.append({"resource": name, "kind": kind, "label": label, "nodes": sorted(offered.get(name, []))})
+            devices = []
+            for node, facts in snapshots.items():
+                if node not in live_nodes:
+                    continue
+                for device in facts.get(kind) or []:
+                    selector = f"{device.get('vendor', '')}:{device.get('device' if kind == 'pci' else 'product', '')}".lower()
+                    matches = (selector == label.lower() if kind == "pci" else
+                               any(selector == f"{s.get('vendor')}:{s.get('product')}".lower() for s in row.get("selectors") or []))
+                    if device.get("resource") == name or matches:
+                        detail = {"node": node, "name": device.get("name", ""),
+                                  "address": device.get("address") or device.get("port", ""), "group": device.get("group")}
+                        if detail not in devices:
+                            devices.append(detail)
+            names = sorted({d["name"] for d in devices if d["name"]})
+            out.append({"resource": name, "kind": kind, "label": " / ".join(names) or label, "selector": label,
+                        "devices": devices, "nodes": sorted(offered.get(name, []))})
     return {"resources": out, "sidecar": "Sidecar" in (((((kv or {}).get("spec") or {}).get("configuration") or {})
                                                        .get("developerConfiguration") or {}).get("featureGates") or [])}
 
