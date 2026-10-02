@@ -459,7 +459,7 @@ b.uptime-ok{color:var(--ok)}b.uptime-warn{color:var(--med)}b.uptime-bad{color:va
 .drow .dv{font-size:12.5px;font-weight:620;flex:1;min-width:auto;text-align:right;overflow-wrap:anywhere}
 
 /* sparkline */
-.spark{width:100%;height:78px;display:block;overflow:visible}
+.spark{width:100%;height:78px;display:block;overflow:hidden}
 .spark .ln{fill:none;stroke:#fff;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;
   filter:drop-shadow(0 0 8px rgba(255,255,255,.4))}
 .spark .fl{fill:url(#sg);opacity:.55}
@@ -2965,3 +2965,7 @@ html[data-theme="light"] .wl-mobile-summary .pillbtn.crit{color:#a1242a}
   .wl-mobile-toolbar .list-options-label{display:none}
   .wl-mobile-toolbar .list-options>summary.btn{width:44px;justify-content:center;padding:8px!important}
 }
+
+/* Metrics settle into new observations; motion preferences apply to bars too. */
+html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition:none}
+@media(prefers-reduced-motion:reduce){.meter>span,.meter.split>span,.ui-bar i{transition:none}}
