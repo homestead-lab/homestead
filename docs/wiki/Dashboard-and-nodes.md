@@ -68,7 +68,7 @@ filesystem over 90% are also [notifications](Settings#notifications), and the no
 
 #### Every host at once
 
-**Nodes → OS updates** updates every host, one at a time - now, or in a weekly
+**Nodes → OS updates**, also available through **Settings → Updates → Host updates → Manage host updates**, updates every host, one at a time - now, or in a weekly
 window (days and an hour, in your browser's time zone). Each Ready host in
 turn, the one Homestead's leader runs on last, refreshes its package lists and
 installs what is waiting. When an update needs a restart, the host gets the
