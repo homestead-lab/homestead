@@ -20,6 +20,32 @@ def vm(domain=None, tspec=None):
 
 
 class HardwareTests(unittest.TestCase):
+    def test_gpu_boot_output_uses_uefi_without_virtual_vga_and_preserves_other_devices(self):
+        target = vm({"devices": {"hostDevices": [{"name": "gpu", "deviceName": "example/gpu"}], "rng": {}}})
+        HW.apply(target, {"boot_output": "gpu"})
+        self.assertEqual("gpu", HW.read(target)["boot_output"])
+        self.assertEqual("uefi", HW.read(target)["firmware"])
+        self.assertFalse(HW.read(target)["graphics"])
+        self.assertFalse(HW.read(target)["secure_boot"])
+        self.assertIn("rng", target["spec"]["template"]["spec"]["domain"]["devices"])
+        HW.apply(target, {"boot_output": "console"})
+        self.assertTrue(HW.read(target)["graphics"])
+        self.assertEqual("console", HW.read(target)["boot_output"])
+        self.assertEqual("uefi", HW.read(target)["firmware"], "switching output does not revert firmware")
+
+    def test_serial_output_and_invalid_conflicting_choices(self):
+        target = vm({"devices": {"autoattachSerialConsole": False}})
+        HW.apply(target, {"boot_output": "serial"})
+        self.assertTrue(HW.read(target)["serial"])
+        self.assertFalse(HW.read(target)["graphics"])
+        for cfg in ({"boot_output": "gpu"}, {"boot_output": "bad"},
+                    {"boot_output": "serial", "serial": False}, {"boot_output": "gpu", "graphics": True}):
+            with self.subTest(cfg=cfg), self.assertRaises(ValueError):
+                HW.apply(vm(), cfg)
+        target = vm({"devices": {"gpus": [{"name": "gpu"}]}})
+        with self.assertRaisesRegex(ValueError, "UEFI"):
+            HW.apply(target, {"boot_output": "gpu", "firmware": "bios"})
+
     def test_defaults_read_as_kubevirt_applies_them(self):
         h = HW.read(vm())
         self.assertEqual(({"sockets": 1, "cores": 2, "threads": 1, "model": "", "dedicated": False, "isolate_emulator": False},
@@ -228,6 +254,16 @@ class InstallTests(unittest.TestCase):
             raise urllib.error.HTTPError(path, 404, "missing", {}, None)
 
         imports.kget, imports.ksend, imports.NS, imports._cache = get, lambda *a, **k: None, "lab", {}
+
+    def test_new_vm_can_select_gpu_boot_output_and_attach_the_gpu_in_one_review(self):
+        import homestead_passthrough as passthrough
+        with mock.patch.object(imports, "iso_ready", return_value={}), \
+                mock.patch.object(passthrough, "resources", return_value={"resources": [{"resource": "example/gpu", "kind": "pci"}]}):
+            plan = imports.prepare_vm({"name": "gpu", "install_iso": "iso-ubuntu", "hardware": {"boot_output": "gpu"},
+                "host_devices": {"add": [{"resource": "example/gpu"}]}}, {"harvester": False, "cdi": True}, "longhorn")
+        self.assertEqual("gpu", HW.read(plan["vm"])["boot_output"])
+        self.assertEqual("uefi", HW.read(plan["vm"])["firmware"])
+        self.assertFalse(HW.read(plan["vm"])["graphics"])
 
     def test_windows_gets_its_virtio_drivers_in_a_second_drive(self):
         with mock.patch.object(imports, "iso_ready", lambda ns, name: {}):

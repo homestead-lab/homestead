@@ -2018,6 +2018,13 @@ ssh_pwauth: true
     const node = JSON.parse(init?.body || "{}").node || "harvester-node1";
     return inspectedDevices[node] = {...passthroughExample, node, inspected_at: Math.floor(Date.now() / 1000)};
   };
+  responses["/api/passthrough/vbios/capture"] = () => {
+    const rom = new Uint8Array(512);
+    rom.set([0x55, 0xaa]); rom[24] = 32;
+    rom.set([0x50, 0x43, 0x49, 0x52, 0xde, 0x10, 0x87, 0x1e], 32);
+    rom[48] = 1; rom[53] = 128;
+    return {ok: true, data: btoa(String.fromCharCode(...rom)), size: rom.length, filename: "demo-gpu-vbios.rom"};
+  };
   responses["/api/diagnostics"] = () => diagnosticReports.map(row => ({ ...row, events: row.events.length }));
   responses["/api/diagnostics/start"] = (url, init) => {
     const input = JSON.parse(init.body || "{}");

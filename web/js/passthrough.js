@@ -72,7 +72,7 @@ function nodeDevicesRender(node, f, error = "", key = ptKey(node)) {
     groups.get(key).push(row);
   }
   const state = r => r.vfio ? UI.chip("for VMs", "ok") : r.listed ? UI.chip("for VMs after a restart", "info") : `<span class="dim xs">${esc(r.driver || "no driver")}</span>`;
-  const action = r => {
+  const handoff = r => {
     if (!r.offered) return `<span class="dim xs">${(r.class || "").startsWith("0604") ? "stays with the host" : "not offered separately"}</span>`;
     if (r.vfio || r.listed) return UI.button("Give back", `ptPci(${jsArg(node)},${jsArg(r.address)},false)`, { attrs: 'data-need="admin"' });
     const blocked = ptGroup(f, r).filter(x => !(x.class || "").startsWith("0604") && x.problems?.length);
@@ -80,6 +80,8 @@ function nodeDevicesRender(node, f, error = "", key = ptKey(node)) {
     return why ? `<span class="dim xs">${esc(why)}</span>`
       : UI.button("Give to VMs", `ptPci(${jsArg(node)},${jsArg(r.address)},true)`, { attrs: 'data-need="admin"' });
   };
+  const action = r => UI.actions(handoff(r) + ((r.class || "").startsWith("03")
+    ? UI.button("Capture vBIOS", `ptCaptureVbios(${jsArg(node)},${jsArg(r.address)},this)`, { attrs: 'data-need="admin"' }) : ""));
   const row = r => [`<b>${esc(r.name)}</b><div class="dim xs mono">${esc(r.address)}${r.class_name ? ` · ${esc(r.class_name)}` : ""}${r.boot_vga ? " · boot display" : ""}</div>`, state(r), action(r)];
   const group = rows => {
     const id = rows[0].group;
@@ -116,6 +118,20 @@ function nodeDevicesRender(node, f, error = "", key = ptKey(node)) {
   if (window.applyRole) applyRole();
 }
 
+window.ptCaptureVbios = async (node, address, button) => {
+  if (button) { button.disabled = true; button.textContent = "Capturing…"; }
+  try {
+    const result = await api("/api/passthrough/vbios/capture", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node, address }) });
+    const bytes = Uint8Array.from(atob(result.data), c => c.charCodeAt(0));
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
+    const link = document.createElement("a");
+    link.href = url; link.download = result.filename; document.body.appendChild(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    toast("vBIOS downloaded. Add it beside the GPU in VM → Edit → Passthrough.", "ok");
+  } catch (error) { toast(error.message, "bad"); }
+  finally { if (button) { button.disabled = false; button.textContent = "Capture vBIOS"; } }
+};
 window.ptPci = async (node, address, give) => {
   const r = (PT.facts[ptKey(node)]?.pci || []).find(x => x.address === address) || {};
   const others = ptGroup(PT.facts[ptKey(node)] || {}, r).filter(x => x.address !== address && !(x.class || "").startsWith("0604") && (give || x.listed));

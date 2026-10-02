@@ -20,6 +20,7 @@ EVICTION = ("", "LiveMigrate", "LiveMigrateIfPossible", "None")
 MACHINES = ("q35", "pc-q35", "virt")
 TIMEZONE = re.compile(r"[A-Za-z0-9_+\-]+(/[A-Za-z0-9_+\-]+){0,2}")
 CPU_MODEL = re.compile(r"[A-Za-z0-9._\-]{1,64}")
+BOOT_OUTPUT = "homestead.io/boot-output"
 # Hyper-V enlightenments a Windows guest runs better with, as Proxmox and
 # KubeVirt's own Windows examples set them.
 HYPERV = {"relaxed": {}, "vapic": {}, "spinlocks": {"spinlocks": 8191}, "vpindex": {}, "synic": {},
@@ -39,6 +40,8 @@ def read(vm):
     features = dom.get("features") or {}
     clock = dom.get("clock") or {}
     tpm = devices.get("tpm")
+    graphics = devices.get("autoattachGraphicsDevice") is not False
+    saved_output = ((((vm.get("spec") or {}).get("template") or {}).get("metadata") or {}).get("annotations") or {}).get(BOOT_OUTPUT)
     return {
         "cpu": {"sockets": int(cpu.get("sockets") or 1), "cores": int(cpu.get("cores") or 1),
                 "threads": int(cpu.get("threads") or 1), "model": str(cpu.get("model") or ""),
@@ -52,7 +55,8 @@ def read(vm):
         "hyperv": bool(features.get("hyperv")),
         "kvm_hidden": bool((features.get("kvm") or {}).get("hidden")),
         "timezone": str(clock.get("timezone") or ""),
-        "graphics": devices.get("autoattachGraphicsDevice") is not False,
+        "graphics": graphics,
+        "boot_output": "console" if graphics else "gpu" if saved_output == "gpu" or devices.get("gpus") else "serial",
         "serial": devices.get("autoattachSerialConsole") is not False,
         "tablet": any(i.get("type") == "tablet" for i in devices.get("inputs") or []),
         "rng": devices.get("rng") is not None,
@@ -76,6 +80,32 @@ def apply(vm, cfg, locked_cpu=False):
     dom = tspec.setdefault("domain", {})
     devices = dom.setdefault("devices", {})
     now = read(vm)
+    cfg = dict(cfg)
+    if "boot_output" in cfg:
+        output = cfg["boot_output"]
+        if output not in ("console", "gpu", "serial"):
+            raise ValueError("Primary boot output is web console, passed-through GPU, or serial console")
+        if "graphics" in cfg and _bool(cfg["graphics"]) != (output == "console"):
+            raise ValueError("Primary boot output conflicts with the virtual display setting")
+        cfg["graphics"] = output == "console"
+        if output == "gpu":
+            if not (devices.get("gpus") or devices.get("hostDevices")):
+                raise ValueError("Attach a GPU on the Passthrough tab before choosing GPU boot output")
+            if cfg.get("firmware", "uefi") != "uefi":
+                raise ValueError("GPU boot output needs UEFI firmware")
+            cfg["firmware"] = "uefi"
+            if now["firmware"] != "uefi":
+                cfg.setdefault("secure_boot", False)
+        if output == "serial":
+            if "serial" in cfg and not _bool(cfg["serial"]):
+                raise ValueError("Serial boot output needs the serial console enabled")
+            cfg["serial"] = True
+        annotations = vm["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})
+        annotations[BOOT_OUTPUT] = output
+    elif "graphics" in cfg:
+        # Legacy callers and presets must not retain a stale GPU selection.
+        annotations = (vm["spec"]["template"].get("metadata") or {}).get("annotations") or {}
+        annotations.pop(BOOT_OUTPUT, None)
 
     if "cpu" in cfg:
         want = cfg["cpu"] or {}
@@ -230,6 +260,9 @@ def requirements(settings, kubevirt=None, nodes=0):
     gates = set((((kubevirt or {}).get("spec") or {}).get("configuration") or {})
                 .get("developerConfiguration", {}).get("featureGates") or [])
     notes = []
+    if settings.get("boot_output") == "gpu":
+        notes.append("GPU boot output uses UEFI and turns off the VNC display. Connect the monitor to the passed-through GPU; "
+                     "it needs a UEFI-capable ROM and guest drivers. Changing firmware can require repairing the guest bootloader.")
     cpu = settings.get("cpu") or {}
     if cpu.get("dedicated"):
         notes.append("Dedicated CPUs need nodes whose kubelet runs the static CPU manager policy; "
