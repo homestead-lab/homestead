@@ -2047,6 +2047,9 @@ ssh_pwauth: true
       ready: ["harvester-node1", "harvester-node2", "harvester-node3"], can_lose: 1, nodes: [] },
     clocks: { done: true, applies: false },
     address: { done: true, applies: true, url: "http://192.0.2.245:8088", service_url: "http://homestead.lab.svc:8088", vips: 3, load_balancer: "kube-vip", harvester: true },
+    lan: { done: demoPlatform === "harvester", applies: true, networks: demoPlatform === "harvester"
+      ? [{ name: "default/vlan1", type: "bridge", vms: true, containers: true }] : [] },
+    smb: { done: true, applies: true, installed: true, enabled: true, address: "192.0.2.245", shares: 3 },
     https: { done: false, applies: true, url: "", tunnels: [] }, hostname: { done: false, applies: true },
     disks: { done: false, applies: true, unused: [{ node: "harvester-node2", device: "sdb", size_gb: 4000, kind: "HDD" }] },
     storage: { done: true, applies: true, default: "harvester-longhorn", copies: 3, provisioner: "driver.longhorn.io", nodes: 3, target: 3, candidates: [] },
