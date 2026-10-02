@@ -19,6 +19,7 @@ test("stored volumes map onto the picker's storage kinds", () => {
   assert.equal(volumeKind({ type: "pvc", create: false }), "existing");
   assert.equal(volumeKind({ type: "pvc", access_mode: "ReadWriteMany" }), "new-rwx");
   assert.equal(volumeKind({}), "new-rwo");
+  assert.equal(volumeKind({ kind: "new-rwx", reuse_new: true }), "planned");
 });
 
 test("a storage mapping needs an absolute mount path and a source", () => {
@@ -49,4 +50,12 @@ test("a folder in a volume stays inside it", () => {
   assert.equal(volumeRowIssue({ path: "/config", kind: "existing", source: "app", sub_path: "config" }), "");
   assert.match(volumeRowIssue({ path: "/config", kind: "existing", source: "app", sub_path: "../x" }), /inside its volume/);
   assert.match(volumeRowIssue({ path: "/config", kind: "existing", source: "app", sub_path: "/etc" }), /inside its volume/);
+});
+
+test("a reused new volume must resolve before saving, with the same mount validation", () => {
+  assert.match(volumeRowIssue({ path: "/data", kind: "planned", source: "missing", reuse_new: true }), /another mapping/);
+  const resolved = { path: "/data", kind: "new-rwo", source: "appdata", reuse_new: true, sub_path: "data" };
+  assert.equal(volumeListIssue([{ path: "/config", kind: "new-rwo", source: "appdata" }, resolved]), "");
+  assert.match(volumeRowIssue({ ...resolved, sub_path: "../outside" }), /inside its volume/);
+  assert.match(volumeRowIssue({ ...resolved, source: "Invalid Name" }), /lowercase/);
 });

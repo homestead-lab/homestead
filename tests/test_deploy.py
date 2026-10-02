@@ -163,6 +163,28 @@ class AppStoreTemplateTests(unittest.TestCase):
         ])
         self.assertEqual([("demo-appdata", 60)], [(c["name"], c["size_gb"]) for c in claims])
 
+    def test_two_paths_share_one_planned_claim_and_keep_their_folders(self):
+        volumes = [
+            {"type": "pvc", "kind": "new-rwx", "create": True, "source": "demo-appdata",
+             "path": "/config", "sub_path": "config", "size_gb": 55,
+             "storage_class": "longhorn-r3", "access_mode": "ReadWriteMany"},
+            {"type": "pvc", "kind": "new-rwx", "create": True, "reuse_new": True,
+             "source": "demo-appdata", "path": "/data", "sub_path": "data", "size_gb": 55,
+             "storage_class": "longhorn-r3", "access_mode": "ReadWriteMany", "read_only": True},
+        ]
+        self.assertEqual([{"name": "demo-appdata", "size_gb": 55,
+                           "storage_class": "longhorn-r3", "access_mode": "ReadWriteMany"}],
+                         server.new_claims(volumes))
+        with mock.patch.object(server.HW, "features", return_value=[]):
+            deployment, _ = server.build_deployment({"name": "demo", "image": "demo:1",
+                                                    "namespace": "lab", "volumes": volumes})
+        pod = deployment["spec"]["template"]["spec"]
+        self.assertEqual([{"name": "vol0", "persistentVolumeClaim": {"claimName": "demo-appdata"}}],
+                         pod["volumes"])
+        self.assertEqual([{"name": "vol0", "mountPath": "/config", "subPath": "config"},
+                          {"name": "vol0", "mountPath": "/data", "subPath": "data", "readOnly": True}],
+                         pod["containers"][0]["volumeMounts"])
+
     def test_system_localtime_is_imported_as_read_only_host_path(self):
         cfg = server.template_to_cfg({"name": "Demo", "repo": "demo", "config": [{
             "@attributes": {"Target": "/etc/localtime", "Type": "Path", "Mode": "ro"},
