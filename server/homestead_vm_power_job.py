@@ -24,6 +24,8 @@ def dispatch(body, context, ops, send, before_send):
     ref = {"namespace": vm["namespace"], "name": vm["name"], "uid": vm["uid"],
            "state_initialization_acknowledged": body.get("ack_state_initialization") is True and body.get("confirm_state_name") == vm["name"],
            "version": vm["resourceVersion"], "previous_vmi_uid": vmi.get("uid", ""), "action": action,
+           "device_requests": dict(observations.get("device_requests") or {}),
+           "device_nodes": list(observations.get("device_nodes") or []),
            "review_digest": hashlib.sha256(body["capacity_token"].encode()).hexdigest(),
            "review_expires": int(body["capacity_token"].split(".", 1)[0]),
            "phase": "prepared", "phase_at": time.time(), "retain_resources": True, "dispatch_protocol": 1}

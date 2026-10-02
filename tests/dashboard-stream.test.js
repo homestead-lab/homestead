@@ -65,14 +65,26 @@ test("dense history refreshes retain their exact geometry without scheduling hea
   assert.equal(path.d,target);assert.equal(frames.size,0);
 });
 
-test("an older history request cannot repaint over a newer observation of the same range",async()=>{
-  const requests=[],painted=[],ctx={AbortController,setTimeout,clearTimeout,STATE:{data:{}},host:{},historyRange:()=>"24h",esc:String,jsq:JSON.stringify,
+test("an older history request cannot repaint over a newer range",async()=>{
+  const requests=[],painted=[],ctx={AbortController,setTimeout,clearTimeout,STATE:{data:{}},host:{},range:"24h",esc:String,jsq:JSON.stringify,
     document:{createElement:()=>({})},morph:(_,next)=>painted.push(next.innerHTML),api:()=>new Promise(resolve=>requests.push(resolve))};
-  ctx.$=()=>ctx.host;vm.createContext(ctx);
+  ctx.$=()=>ctx.host;ctx.historyRange=()=>ctx.range;vm.createContext(ctx);
   const code=fs.readFileSync("web/js/views-stats.js","utf8");vm.runInContext(code.slice(code.indexOf("let historyRequest"),code.indexOf("window.historyPaint")),ctx);
-  const older=ctx.historyPaint(),newer=ctx.historyPaint();requests[1]({samples:0});await newer;
+  const older=ctx.historyPaint();ctx.range="7d";const newer=ctx.historyPaint();requests[1]({samples:0});await newer;
   const latest=ctx.STATE.data.historyHtml;requests[0]({samples:2});await older;
   assert.equal(ctx.STATE.data.historyHtml,latest);assert.equal(painted.length,1);
+});
+
+test("refreshing faster than history responds reuses its request and eventually paints",async()=>{
+  const requests=[],painted=[],ctx={AbortController,setTimeout,clearTimeout,STATE:{data:{}},host:{},historyRange:()=>"24h",esc:String,jsq:JSON.stringify,
+    document:{createElement:()=>({})},morph:(_,next)=>painted.push(next.innerHTML),api:(_path,opts)=>new Promise(resolve=>requests.push({resolve,signal:opts.signal}))};
+  ctx.$=()=>ctx.host;vm.createContext(ctx);
+  const code=fs.readFileSync("web/js/views-stats.js","utf8");vm.runInContext(code.slice(code.indexOf("let historyRequest"),code.indexOf("window.historyPaint")),ctx);
+  const refreshes=Array.from({length:6},()=>ctx.historyPaint());
+  assert.equal(requests.length,1);assert.equal(requests[0].signal.aborted,false);
+  requests[0].resolve({samples:0});await Promise.all(refreshes);
+  assert.equal(painted.length,1);assert.ok(ctx.STATE.data.historyHtml);
+  const later=ctx.historyPaint();assert.equal(requests.length,2);requests[1].resolve({samples:0});await later;
 });
 
 test("single observed CPU and RAM samples both render without inventing zero-valued data",()=>{

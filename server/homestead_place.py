@@ -339,7 +339,7 @@ def _reservation_snapshot(pods=_FETCH_PODS):
         return {}, False, ["existing pod reservations are unavailable; free scheduler capacity is unknown"], None
 
 
-def _resource_fit(spec, node, booked, known, additional):
+def _resource_fit(spec, node, booked, known, additional, configuration_resources=()):
     reasons, warnings, limits = [], [], [additional]
     resources = RESOURCES.resource_names(spec) | {"pods"}
     for resource in sorted(resources):
@@ -355,7 +355,7 @@ def _resource_fit(spec, node, booked, known, additional):
                 warnings.append(f"node allocatable {resource} is unavailable")
             continue
         available = RESOURCES.quantity(allocatable[resource], resource)
-        free = max(0, available - booked.get(resource, 0))
+        free = max(0, available - (0 if resource in configuration_resources else booked.get(resource, 0)))
         limits.append(free // request)
         if request > free:
             reasons.append(f"{resource} request exceeds {'remaining scheduler capacity' if known else 'node allocatable'}")
@@ -377,7 +377,8 @@ def start_plan(ns, name, replicas=1, warning_percent=88):
 
 def manifest_plan(dep, ns, name, replicas=1, warning_percent=88, *, current=0, planned_claims=None,
                   pod_snapshot=_FETCH_PODS, nodes_snapshot=None, read=None,
-                  memory_estimate_bytes=None, workload_kind="container", resident_node=None, features=None):
+                  memory_estimate_bytes=None, workload_kind="container", resident_node=None, features=None,
+                  configuration_resources=()):
     """Read-only capacity check for a proposed Deployment, including new claims.
 
     Existing start/scale callers provide current replicas. New deployments use
@@ -410,7 +411,7 @@ def manifest_plan(dep, ns, name, replicas=1, warning_percent=88, *, current=0, p
         ok, reasons = satisfies(node, reqs, features=features)
         scheduler_reasons, scheduler_cautions = _start_scheduler_check(pod_spec, node)
         booked = reservations.get(node["name"], {})
-        slots, fit_reasons, fit_warnings = _resource_fit(pod_spec, node, booked, reservations_known, additional)
+        slots, fit_reasons, fit_warnings = _resource_fit(pod_spec, node, booked, reservations_known, additional, configuration_resources)
         if dependencies:
             dependency_reasons, dependency_warnings, dependency_slots = dependencies.check(node, _required_affinity_matches)
             fit_reasons.extend(dependency_reasons)

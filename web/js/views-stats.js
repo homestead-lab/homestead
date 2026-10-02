@@ -78,13 +78,21 @@ function historyStat(label, values, unit, peak, times, key) {
 
 let historyRequest = 0;
 let historyAbort = null;
-async function historyPaint() {
+let historyPending = null, historyHost = null, historyPendingRange = null;
+function historyPaint() {
   const host = $("#historyCard");
-  if (!host) return;
-  const range = historyRange(), request = ++historyRequest;
+  if (!host) { historyAbort?.abort(); return Promise.resolve(); }
+  const range = historyRange();
+  if (historyPending && historyHost === host && historyPendingRange === range) return historyPending;
+  const request = ++historyRequest;
   historyAbort?.abort();
   const abort = new AbortController();
   historyAbort = abort;
+  historyHost = host; historyPendingRange = range;
+  historyPending = historyLoad(host, range, request, abort);
+  return historyPending;
+}
+async function historyLoad(host, range, request, abort) {
   const timeout = setTimeout(() => abort.abort(), 10000);
   let h;
   try { h = await api(`/api/history/long?range=${range}`, { signal: abort.signal }); }
@@ -96,7 +104,7 @@ async function historyPaint() {
     return;
   } finally {
     clearTimeout(timeout);
-    if (historyAbort === abort) historyAbort = null;
+    if (historyAbort === abort) { historyAbort = null; historyPending = null; }
   }
   if (request !== historyRequest || host !== $("#historyCard") || range !== historyRange()) return;
   const since = h.since ? new Date(h.since * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "";
