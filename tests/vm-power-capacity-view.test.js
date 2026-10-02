@@ -104,6 +104,19 @@ test("stop force stop and pause stay available without capacity review", async()
     assert.equal(t.sent[0].path,"/api/vm/power");
   }
 });
+test("failed boot without a guest offers Stop retries in detail and compact views",()=>{
+  const t=setup();
+  t.ctx.icon=()=>"";
+  for(const compact of [false,true]){
+    const html=t.ctx.vmActionButton({ns:"lab",name:"guest",stop_retries:true},"stop",false,compact);
+    assert.match(html,/aria-label="Stop retries"/);
+    assert.match(html,/keep the VM off until you start it/);
+    assert.doesNotMatch(html,/Ask the guest/);
+  }
+  const running=t.ctx.vmActionButton({ns:"lab",name:"guest",stop_retries:false},"stop");
+  assert.match(running,/aria-label="Shut down"/);
+  assert.match(running,/Ask the guest to power off/);
+});
 test("a stale preview cannot replace a newer VM review", async()=>{
   const t=setup();
   const original=t.ctx.api;

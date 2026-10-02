@@ -6,6 +6,7 @@ import urllib.error
 import homestead_addons as ADDONS
 import homestead_pod_resources as RESOURCES
 import homestead_storage_resize as RESIZE
+import homestead_names as NAMES
 
 API = "/apis/snapshot.storage.k8s.io/v1"
 LABEL = "homestead.io/restore-snapshot"
@@ -147,6 +148,8 @@ def import_backup(namespace, name, backup, source_volume, url, volume_mode, atte
     snapshot_name = f"homestead-restore-{digest}"
     labels = {OWNER: "homestead", LABEL: "true"}
     annotations = {"homestead.io/restore-pvc": name, "homestead.io/restore-namespace": namespace}
+    if re.fullmatch(r"[0-9a-f]{12}", str(attempt)):
+        annotations[NAMES.key("move-id")] = attempt
     content = _ensure(f"{API}/volumesnapshotcontents", {
         "apiVersion": "snapshot.storage.k8s.io/v1", "kind": "VolumeSnapshotContent",
         "metadata": {"name": snapshot_name, "labels": labels, "annotations": annotations},
@@ -246,3 +249,67 @@ def _delete(path, obj):
         raise ValueError("Snapshot cleanup could not verify the object's identity")
     ksend("DELETE", path, {"apiVersion": "v1", "kind": "DeleteOptions",
           "preconditions": {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}})
+
+
+def cleanup_transfer(read, send, transfer_id, cancelled=False):
+    """Reclaim this transfer's retained metadata, including cancelled imports."""
+    # Local import avoids a global binding switch between source/destination.
+    import homestead_transfer_cleanup as CLEANUP
+    if not re.fullmatch(r"[0-9a-f]{12}", str(transfer_id or "")):
+        raise ValueError("Invalid transfer cleanup identity")
+    pending = []
+    contents = CLEANUP.items(read, f"{API}/volumesnapshotcontents", missing=True)
+    claims = CLEANUP.items(read, "/api/v1/persistentvolumeclaims")
+    def users_of(namespace, snapshot_name):
+        return [p for p in claims
+                if any(s.get("name") == snapshot_name and s.get("kind") == "VolumeSnapshot"
+                        and s.get("apiGroup") == "snapshot.storage.k8s.io"
+                        and s.get("namespace", p["metadata"].get("namespace")) == namespace
+                        for s in ((p.get("spec") or {}).get("dataSource") or {},
+                                  (p.get("spec") or {}).get("dataSourceRef") or {}))]
+    for content in contents:
+        spec, meta = content.get("spec") or {}, content["metadata"]
+        if not _owned(content) or not CLEANUP.owned(content, transfer_id):
+            continue
+        if spec.get("driver") != "driver.longhorn.io" or spec.get("deletionPolicy") != "Retain":
+            raise ValueError("Transfer snapshot cleanup requires a retained Longhorn snapshot")
+        annotations = meta.get("annotations") or {}
+        namespace, name = annotations.get("homestead.io/restore-namespace"), annotations.get("homestead.io/restore-pvc")
+        ref = spec.get("volumeSnapshotRef") or {}
+        if not namespace or not name or ref.get("namespace") != namespace or not ref.get("name"):
+            raise ValueError("Transfer snapshot identity does not match its restore")
+        users = users_of(namespace, ref["name"])
+        if users and (cancelled or any((p.get("status") or {}).get("phase") != "Bound" for p in users)):
+            pending.append("restore snapshot " + meta["name"])
+            continue
+        if not cancelled and not users:
+            pending.append("restore snapshot " + meta["name"])
+            continue
+        path = f"{API}/namespaces/{namespace}/volumesnapshots/{ref['name']}"
+        snapshot = CLEANUP.optional(read, path)
+        if snapshot:
+            if (not _owned(snapshot) or not CLEANUP.owned(snapshot, transfer_id)
+                    or (snapshot.get("spec", {}).get("source") or {}).get("volumeSnapshotContentName") != meta["name"]
+                    or (ref.get("uid") and ref["uid"] != snapshot["metadata"].get("uid"))):
+                raise ValueError("Transfer restore snapshot ownership changed")
+            if not CLEANUP.delete(read, send, path, snapshot):
+                pending.append("restore snapshot " + meta["name"])
+        if not CLEANUP.delete(read, send, f"{API}/volumesnapshotcontents/{meta['name']}", content):
+            pending.append("restore content " + meta["name"])
+    # A previous deletion can remove the content before its snapshot has
+    # finished disappearing. Reconcile either half after a lost response.
+    for snapshot in CLEANUP.items(read, f"{API}/volumesnapshots", missing=True):
+        if not _owned(snapshot) or not CLEANUP.owned(snapshot, transfer_id):
+            continue
+        meta = snapshot["metadata"]
+        content_name = ((snapshot.get("spec") or {}).get("source") or {}).get("volumeSnapshotContentName")
+        if not content_name or CLEANUP.optional(read, f"{API}/volumesnapshotcontents/{content_name}"):
+            continue
+        users = users_of(meta.get("namespace"), meta["name"])
+        if ((cancelled and users) or (not cancelled and
+                (not users or any((p.get("status") or {}).get("phase") != "Bound" for p in users)))):
+            pending.append("restore snapshot " + meta["name"])
+        elif not CLEANUP.delete(read, send,
+                f"{API}/namespaces/{meta['namespace']}/volumesnapshots/{meta['name']}", snapshot):
+            pending.append("restore snapshot " + meta["name"])
+    return pending

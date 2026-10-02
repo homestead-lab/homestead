@@ -24,6 +24,11 @@ The form asks, in order:
 
 - **Name and namespace.** Apps go in `lab` unless you make others under
   **Settings → Hardware and storage → Namespaces**.
+- **Containers in each pod.** **Add container** adds another program to the
+  same workload. Give each its own name, image, resources, ports, variables
+  and storage. **Remove container** removes a draft definition; at least one
+  stays. **Pod copies** controls how many copies of the whole pod run, so two
+  containers with two pod copies means two pods, each running both containers.
 - **Memory reserved and Memory max.** Reserved memory is the scheduler's
   request; optional Memory max is the container's enforced limit and must be
   at least the request. Leave max blank for no container memory limit. A limit
@@ -375,6 +380,20 @@ A container given a hardware feature - an iGPU for transcoding, a Coral for
 Frigate, a Zigbee stick for Zigbee2MQTT - gets the device, and is kept on a host
 that has it. Features are named under **Settings → Hardware and storage**; see
 [Dashboard and nodes](Dashboard-and-nodes#hardware).
+
+## Containers sharing one pod
+
+In **Edit > Basics**, **Add container** adds a container alongside the existing
+ones. Its card appears in Hardware and access, Environment values and Storage
+too; these are the same container's fields, not separate instances. Names and
+images stay linked across steps. Containers share the pod's network, so use
+different listening ports for different programs.
+
+**Remove container** stages removal from every step. **Undo removal** restores
+its unsaved fields. The last container cannot be removed. Nothing changes on
+the cluster until **Save & restart**, the review, and confirmation. The review
+names additions and removals; every pod rolls out, and persistent volumes and
+their data are retained. Init containers and managed references stay as they are.
 
 ## Placement
 

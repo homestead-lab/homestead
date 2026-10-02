@@ -298,27 +298,40 @@ preview of each node's new limit, and turns the V2 engine on or off.
 
 ### What the V2 engine needs
 
-**What each host needs** (beside the V2 switch, or **details** on the storage
-classes card) is a checklist. Each line is ticked, crossed or marked unknown,
-and hovering its **?** shows how to do it on Harvester, k3s or RKE2:
+Open **Settings > Hardware and storage > Longhorn > Set up Longhorn V2**.
+The dialog checks the installed Longhorn requirement and each host before
+allowing enablement. Administrators can also open it from **What each host needs**.
 
-- **The cluster:** Longhorn 1.8 or newer, and the V2 engine switched on.
-- **Each host:**
-  - a CPU with SSE4.2 (any x86 from about 2008, or arm64);
-  - the kernel modules `vfio_pci`, `uio_pci_generic` and `nvme_tcp`;
-  - 2 GiB of hugepages;
-  - a whole empty disk given to Longhorn as a V2 (block) disk.
-- **Yours to check:** `nvme-cli` on each host, which Homestead cannot see.
-- **Worth knowing:** V2 keeps one CPU core busy on every node that runs it.
+1. **Prepare hosts.** Review and confirm one host at a time. On Linux k3s/rke2,
+   a saved Kubernetes Job installs `nvme-cli` if needed, loads and persists
+   `vfio_pci`, `uio_pci_generic` and `nvme_tcp`, and reserves 2 MiB hugepages.
+   The usual requirement is 2048 MiB per host; newer Longhorn memory settings
+   and the ordinary-memory option are respected. Existing larger reservations
+   and other pods' hugepage requests are preserved. Package repositories must
+   be reachable; unsupported operating systems require manual preparation.
+2. **Verify capacity.** Live status and **Task log** show progress. Configuration
+   saved is not the same as Kubernetes seeing the new capacity. If it remains
+   zero, **Review reboot** opens the existing drain, quorum and storage review.
+   Reboot one host at a time. A single-node reboot interrupts Homestead and
+   its workloads; reopen setup when it returns. After reboot, verify the host
+   and allow scheduling from its node page when appropriate.
+3. **Enable V2.** Confirm its ongoing CPU and memory costs after all host checks
+   pass. The dialog follows observed V2 instance-manager readiness. Longhorn's
+   admission checks still apply if the cluster changes during the request.
+4. **Choose disks and a storage class.** Add suitable block disks through the
+   existing disk review, then create a V2 storage class. Preparing hosts does
+   not format disks or change existing volumes' data engines.
 
-On Harvester, switching V2 on reserves the hugepages and loads the modules
-itself; on k3s and RKE2 those are two commands on each host, given in the
-tooltips. A V2 volume schedules only on hosts where everything is ticked.
+Host tasks continue when the dialog closes or Homestead restarts. Failed tasks
+retain their logs and partial configuration; review before retrying. Cancelling
+tracking cannot undo installed packages or reserved memory, so these tasks have
+no cancel action. Preparation jobs and their logs expire after seven days;
+recheck setup if preparation is older than this.
 
-![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.jpg)
-
-To make room: add a disk, delete old copies and volumes you no longer need, or
-move volumes with too many copies onto a class with fewer.
+On Harvester, the enable review uses Harvester's own setting. Harvester owns
+host preparation and required restarts; Homestead observes its progress rather
+than running generic host jobs. V2 needs Longhorn 1.8 or newer. It cannot be
+disabled while V2 volumes or block disks remain.
 
 ## Changing a volume's storage class
 

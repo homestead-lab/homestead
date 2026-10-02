@@ -118,8 +118,8 @@ class HistoryTests(unittest.TestCase):
         n2 = next(n for n in day["nodes"] if n["name"] == "n2")
         self.assertEqual(88.0, n2["availability"])
         week = HISTORY.series("7d", now=start + 3 * 3600)
-        self.assertEqual(2, week["samples"])
-        self.assertEqual(87.5, next(n for n in week["nodes"] if n["name"] == "n2")["availability"])
+        self.assertEqual(3, week["samples"], "include the unfinished current hour")
+        self.assertEqual(88.0, next(n for n in week["nodes"] if n["name"] == "n2")["availability"])
         # two days later the fine samples are gone, the hours stay
         HISTORY.record(overview(5), now=start + 3 * 86400)
         data = json.loads(Path(self.dir.name, "history.json").read_text())
@@ -128,6 +128,55 @@ class HistoryTests(unittest.TestCase):
 
     def test_an_empty_history_is_empty(self):
         self.assertEqual(0, HISTORY.series("30d")["samples"])
+
+    def test_live_history_survives_restart_and_is_shared_by_replicas(self):
+        start = 1_800_000_000
+        HISTORY.record_live(overview(10), now=start)
+        HISTORY.record_live(overview(20), now=start + 30)
+        HISTORY.bind(self.dir.name)  # a newly started process uses the saved file
+        values = HISTORY.live_series(now=start + 35)
+        self.assertEqual([start, start + 30], values["t"])
+        self.assertEqual([10, 20], values["cpu"])
+        self.assertEqual([2, 2], values["net_rx"])
+        self.assertEqual(start + 30, values["last_sample"])
+
+    def test_live_history_is_bounded_deduplicated_and_does_not_rewrite_long_history(self):
+        start = 1_800_000_000
+        HISTORY.record(overview(10), now=start)
+        saved = Path(self.dir.name, HISTORY.FILE).read_bytes()
+        for i in range(130):
+            HISTORY.record_live(overview(i), now=start + i * 30)
+        HISTORY.record_live(overview(999), now=start + 129 * 30 + 1)
+        values = HISTORY.live_series(now=start + 129 * 30 + 1)
+        self.assertEqual(120, len(values["t"]))
+        self.assertEqual(120, len(set(values["t"])))
+        self.assertEqual(999, values["cpu"][-1])
+        self.assertEqual(saved, Path(self.dir.name, HISTORY.FILE).read_bytes())
+        self.assertLess(Path(self.dir.name, HISTORY.LIVE_FILE).stat().st_size, 40000)
+
+    def test_upgrade_can_read_recent_existing_fine_samples(self):
+        start = 1_800_000_000
+        HISTORY.record(overview(10), now=start)
+        values = HISTORY.live_series(now=start + 10)
+        self.assertEqual([10], values["cpu"])
+        self.assertEqual(300, values["step"])
+        self.assertEqual([], HISTORY.live_series(now=start + 3601)["t"])
+
+    def test_long_ranges_refresh_the_current_hour_without_double_counting(self):
+        start = 1_800_000_000 - 1_800_000_000 % 3600
+        HISTORY.record(overview(10), now=start)
+        HISTORY.record(overview(20), now=start + 3600)
+        first = HISTORY.series("7d", now=start + 3610)
+        self.assertEqual([start, start + 3600], first["t"])
+        self.assertEqual([10, 20], first["cpu"])
+        HISTORY.record(overview(60), now=start + 3900)
+        next_values = HISTORY.series("7d", now=start + 3910)
+        self.assertEqual([10, 40], next_values["cpu"])
+        self.assertEqual(60, next_values["cpu_max"])
+        HISTORY.record(overview(30), now=start + 7200)
+        final = HISTORY.series("7d", now=start + 7210)
+        self.assertEqual([10, 40, 30], final["cpu"])
+        self.assertEqual(3, final["samples"])
 
 
 if __name__ == "__main__":

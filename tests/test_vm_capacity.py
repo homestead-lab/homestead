@@ -27,6 +27,8 @@ class VMCapacityTests(unittest.TestCase):
             return {"items": [self.config]}
         if path == "/api/v1/pods":
             return {"items": self.pods}
+        if path == "/apis/kubevirt.io/v1/virtualmachineinstances" and path not in self.objects:
+            return {"items": [obj for key, obj in self.objects.items() if "/virtualmachineinstances/" in key and isinstance(obj, dict)]}
         if path in self.objects:
             value = self.objects[path]
             if isinstance(value, Exception):

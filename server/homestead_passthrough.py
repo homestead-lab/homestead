@@ -38,6 +38,7 @@ import base64
 import copy
 import json
 import re
+import time
 
 import homestead_shared as SHARED
 
@@ -203,10 +204,42 @@ def usb_resource(vendor, product):
     return f"{PREFIX}usb-{vendor}-{product}"
 
 
+INVENTORY_LOCK = SHARED.SharedLock("passthrough-inventory", strict=True, directory=lambda: DATA_DIR)
+
+
+def _inventory():
+    try:
+        with open(f"{DATA_DIR}/passthrough-inventory.json", encoding="utf-8") as handle:
+            value = json.load(handle)
+        return {node: facts for node, facts in value.items() if isinstance(facts, dict) and facts.get("complete")
+                and isinstance(facts.get("pci"), list) and isinstance(facts.get("usb"), list)} if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def inventory(node):
+    """Last complete inspection, for display only. No host helper is started."""
+    return {"facts": _inventory().get(node)}
+
+
+def _remember(facts):
+    facts["inspected_at"] = int(time.time())
+    # A display cache must not prevent a device inspection or handoff when
+    # the data volume is unavailable. Mutations always inspect the host anew.
+    try:
+        with INVENTORY_LOCK:
+            saved = _inventory()
+            saved[facts["node"]] = facts
+            SHARED.write_json(f"{DATA_DIR}/passthrough-inventory.json", saved)
+    except (OSError, ValueError, RuntimeError) as error:
+        facts["inventory_error"] = str(error)
+    return facts
+
+
 def inspect(node):
     """A host's devices, as it sees them now."""
     if _harvester():
-        return _harvester_inventory(node)
+        return _remember(_harvester_inventory(node))
     claimed = longhorn_block_paths(node)
     if claimed is None:
         raise ValueError(f"Longhorn's disks on {node} could not be read, so its devices are not offered")
@@ -223,10 +256,94 @@ def inspect(node):
     for row in facts["usb"]:
         row["permitted"] = row["resource"] in permitted
     facts.update(node=node, harvester=False, kubevirt=bool(_kubevirt()))
-    return facts
+    return _remember(facts)
 
 
 # ---- IOMMU --------------------------------------------------------------------
+
+def capture_script(address):
+    if not ADDRESS.fullmatch(address):
+        raise ValueError("Choose a valid PCI address")
+    return f'''set -e
+d=/sys/bus/pci/devices/{address}
+[ -f "$d/rom" ] || {{ echo "ERR This GPU does not expose a ROM through sysfs"; exit 1; }}
+drv=""; [ ! -e "$d/driver" ] || drv=$(basename "$(readlink "$d/driver")")
+[ -z "$drv" ] || [ "$drv" = vfio-pci ] || {{ echo "ERR Give this GPU to VMs first; its host driver is still active"; exit 1; }}
+t=$(mktemp)
+pm=""
+cleanup() {{
+  echo 0 > "$d/rom" 2>/dev/null || :
+  [ -z "$pm" ] || echo "$pm" > "$d/power/control" || :
+  rm -f "$t"
+}}
+trap cleanup EXIT HUP INT TERM
+# VFIO runtime-suspends unused cards. A ROM read in D3hot fails even though
+# sysfs exposes the ROM; wake the card and restore its original policy.
+if [ -f "$d/power/control" ]; then
+  pm=$(cat "$d/power/control")
+  case "$pm" in auto|on) ;; *) echo "ERR The GPU power policy could not be read"; exit 1 ;; esac
+  echo on > "$d/power/control" || {{ echo "ERR The GPU could not be woken for ROM capture"; exit 1; }}
+fi
+echo 1 > "$d/rom" || {{ echo "ERR The GPU ROM could not be enabled"; exit 1; }}
+dd if="$d/rom" of="$t" bs=4096 count={ROM_LIMIT // 4096 + 1} 2>/dev/null || {{ echo "ERR This GPU ROM cannot be read; upload a ROM dumped from this card instead"; exit 1; }}
+echo ROM
+base64 "$t"
+echo END
+'''
+
+
+def capture_vbios(node, address):
+    """Read a stopped GPU's ROM without unbinding drivers or resetting it."""
+    if not ADDRESS.fullmatch(address):
+        raise ValueError("Choose a valid PCI address")
+    facts = inspect(node)
+    gpu = next((r for r in facts["pci"] if r["address"] == address), None)
+    if not gpu or not str(gpu.get("class") or "").startswith("03"):
+        raise ValueError("vBIOS capture is only available for a GPU on this host")
+    if gpu.get("driver") not in (None, "", "vfio-pci"):
+        raise ValueError("Give this GPU to VMs first; capture does not detach an active host display")
+    try:
+        instances = kget("/apis/kubevirt.io/v1/virtualmachineinstances")["items"]
+    except Exception:
+        raise ValueError("VM device use could not be checked; no ROM was read") from None
+    resources_in_group = {r.get("resource") for r in facts["pci"]
+                          if r["address"] in [address, *gpu.get("group_members", [])]}
+    for instance in instances:
+        status = instance.get("status") or {}
+        if status.get("phase") in ("Succeeded", "Failed"):
+            continue
+        # Unscheduled instances can acquire this device while capture starts.
+        if status.get("nodeName") and status["nodeName"] != node:
+            continue
+        devices = ((instance.get("spec") or {}).get("domain") or {}).get("devices") or {}
+        if any(d.get("deviceName") in resources_in_group for d in
+               (devices.get("hostDevices") or []) + (devices.get("gpus") or [])):
+            raise ValueError(f"Stop VM {instance['metadata']['name']} before capturing this GPU's vBIOS")
+    out, err = hostrun.run(node, capture_script(address), timeout=60)
+    if not out.startswith("ROM\n") or not out.rstrip().endswith("\nEND"):
+        problem = next((l[4:] for l in out.splitlines() if l.startswith("ERR ")), "")
+        raise ValueError(problem or "The GPU ROM could not be read; upload a dump from this card instead")
+    raw = check_rom("".join(out.splitlines()[1:-1]))
+    # Check every PCI image, including the EFI image, before offering a dump.
+    offset = 0
+    while True:
+        if offset + 26 > len(raw) or raw[offset:offset + 2] != b"\x55\xaa":
+            raise ValueError("The captured ROM is truncated or invalid; upload a dump from this card instead")
+        pcir = offset + int.from_bytes(raw[offset + 24:offset + 26], "little")
+        if pcir + 22 > len(raw) or raw[pcir:pcir + 4] != b"PCIR":
+            raise ValueError("The captured ROM has no valid PCI image header")
+        vendor = int.from_bytes(raw[pcir + 4:pcir + 6], "little")
+        device = int.from_bytes(raw[pcir + 6:pcir + 8], "little")
+        if (vendor, device) != (int(gpu["vendor"], 16), int(gpu["device"], 16)):
+            raise ValueError("The captured ROM does not match this GPU's vendor and device")
+        size = int.from_bytes(raw[pcir + 16:pcir + 18], "little") * 512
+        if not size or pcir + 22 > offset + size or offset + size > len(raw):
+            raise ValueError("The captured ROM is truncated or invalid")
+        if raw[pcir + 21] & 128:
+            break
+        offset += size
+    return {"ok": True, "data": base64.b64encode(raw).decode(), "size": len(raw),
+            "filename": f"vbios-{address.replace(':', '-')}-{gpu['vendor']}-{gpu['device']}.rom"}
 
 def iommu_script(cpu):
     words = "intel_iommu=on iommu=pt" if cpu == "intel" else "iommu=pt"
@@ -479,6 +596,9 @@ def _harvester_inventory(node):
                      "permitted": d["metadata"]["name"] in claimed, "resource": s.get("resourceName", ""),
                      "problems": [], "group_members": [], "boot_vga": False, "nets": [], "harvester_name": d["metadata"]["name"],
                      "offered": klass[:2] in ("01", "02", "03", "04", "12") or klass[:4] == "0c03"})
+    for row in rows:
+        group = row["group"]
+        row["group_members"] = [r["address"] for r in rows if r is not row and r["group"] == group] if group not in (None, "") else []
     usb_rows = [{"vendor": (d.get("status") or {}).get("vendorID", ""), "product": (d.get("status") or {}).get("productID", ""),
                  "name": (d.get("status") or {}).get("description") or d["metadata"]["name"],
                  "resource": (d.get("status") or {}).get("resourceName", ""), "port": (d.get("status") or {}).get("devicePath", ""),
@@ -516,10 +636,27 @@ def harvester_usb(node, name, claim):
 
 # ---- what VMs can use, and what a VM has --------------------------------------
 
-def resources():
+def resources(with_usage=False):
     """Every device resource a VM may ask for, and the hosts offering it now."""
     offered = {}
-    for n in (kget("/api/v1/nodes") or {}).get("items", []):
+    nodes = (kget("/api/v1/nodes") or {}).get("items", [])
+    live_nodes = {n["metadata"]["name"] for n in nodes}
+    snapshots = _inventory()
+    if _harvester():
+        snapshots = {}
+        # Harvester exposes descriptions through its inventory CRs; no host
+        # helper (or prior Homestead inspection) is necessary for names.
+        for kind in ("pci", "usb"):
+            for device in (_get(f"{HV}/{kind}devices") or {}).get("items") or []:
+                status = device.get("status") or {}
+                node = status.get("nodeName", "")
+                snapshots.setdefault(node, {}).setdefault(kind, []).append({
+                    "resource": status.get("resourceName", ""),
+                    "name": status.get("description") or (device.get("metadata") or {}).get("name", ""),
+                    "address": status.get("address") if kind == "pci" else status.get("devicePath"),
+                    "class": str(status.get("classId") or "").lower().removeprefix("0x"),
+                    "group": status.get("iommuGroup") if kind == "pci" else None})
+    for n in nodes:
         for key, value in ((n.get("status") or {}).get("allocatable") or {}).items():
             if "/" in key and str(value) not in ("0", ""):
                 offered.setdefault(key, []).append(n["metadata"]["name"])
@@ -530,9 +667,40 @@ def resources():
         for row in hd.get(key) or []:
             name = row.get("resourceName", "")
             label = row.get("pciVendorSelector") or ", ".join(f"{s.get('vendor')}:{s.get('product')}" for s in row.get("selectors") or [])
-            out.append({"resource": name, "kind": kind, "label": label, "nodes": sorted(offered.get(name, []))})
-    return {"resources": out, "sidecar": "Sidecar" in (((((kv or {}).get("spec") or {}).get("configuration") or {})
+            devices = []
+            for node, facts in snapshots.items():
+                if node not in live_nodes:
+                    continue
+                for device in facts.get(kind) or []:
+                    selector = f"{device.get('vendor', '')}:{device.get('device' if kind == 'pci' else 'product', '')}".lower()
+                    matches = (selector == label.lower() if kind == "pci" else
+                               any(selector == f"{s.get('vendor')}:{s.get('product')}".lower() for s in row.get("selectors") or []))
+                    if device.get("resource") == name or matches:
+                        detail = {"node": node, "name": device.get("name", ""),
+                                  "class": device.get("class", ""),
+                                  "address": device.get("address") or device.get("port", ""), "group": device.get("group")}
+                        if detail not in devices:
+                            devices.append(detail)
+            names = sorted({d["name"] for d in devices if d["name"]})
+            out.append({"resource": name, "kind": kind, "label": " / ".join(names) or label, "selector": label,
+                        "gpu": kind == "pci" and bool(devices) and all(str(d["class"]).startswith("03") for d in devices),
+                        "devices": devices, "nodes": sorted(offered.get(name, []))})
+    result = {"resources": out, "sidecar": "Sidecar" in (((((kv or {}).get("spec") or {}).get("configuration") or {})
                                                        .get("developerConfiguration") or {}).get("featureGates") or [])}
+    if with_usage:
+        import homestead_vm_device_usage as USAGE
+        try:
+            inventories = [kget(f"/apis/kubevirt.io/v1/{kind}") for kind in ("virtualmachines", "virtualmachineinstances")]
+            if any(not isinstance(v.get("items"), list) or (v.get("metadata") or {}).get("continue") for v in inventories):
+                raise ValueError("Incomplete VM inventory")
+            for row in out:
+                row["configured_vms"] = sorted({f"{vm['metadata']['namespace']}/{vm['metadata']['name']}" for vm in inventories[0]["items"]
+                    if row["resource"] in USAGE.requests(((vm.get("spec") or {}).get("template") or {}).get("spec") or {})})
+                row["active_vms"] = sorted({f"{vmi['metadata']['namespace']}/{vmi['metadata']['name']}" for vmi in inventories[1]["items"]
+                    if vmi.get("status", {}).get("phase") not in USAGE.TERMINAL and row["resource"] in USAGE.requests(vmi.get("spec") or {})})
+        except Exception:
+            result["usage_error"] = "VM device use could not be loaded. Availability will be checked again before Start."
+    return result
 
 
 def vm_devices(vm):
@@ -561,7 +729,7 @@ def check_rom(data):
     return raw
 
 
-def hook_script(roms):
+def hook_script(roms, sidecar_index=0):
     """The onDefineDomain hook: each ROM written where QEMU can read it, and
     named as its device's ROM. On any failure the domain goes on unchanged."""
     table = ",\n".join(f"    {json.dumps(name)}: {json.dumps(base64.b64encode(raw).decode())}" for name, raw in roms.items())
@@ -574,6 +742,7 @@ ROMS = {{
 {table}
 }}
 HOOKS = "/var/run/kubevirt-hooks"
+QEMU_HOOKS = "/var/run/kubevirt-hooks/hook-sidecar-{sidecar_index}"
 
 
 def main():
@@ -599,7 +768,9 @@ def main():
             os.chmod(path, 0o644)
             for old in target.findall("rom"):
                 target.remove(old)
-            ET.SubElement(target, "rom", {{"bar": "on", "file": path}})
+            # Compute mounts the parent of the sidecar's own subdirectory.
+            qemu_path = os.path.join(QEMU_HOOKS, os.path.basename(path))
+            ET.SubElement(target, "rom", {{"bar": "on", "file": qemu_path}})
         sys.stdout.write(ET.tostring(root, encoding="unicode"))
     except Exception as error:
         sys.stderr.write("homestead vbios hook: " + str(error) + "\\n")
@@ -688,7 +859,7 @@ def edit_vm(vm, ns, cfg, effects, current_roms=None):
             body = {"apiVersion": "v1", "kind": "ConfigMap",
                     "metadata": {"name": cm, "namespace": ns, "labels": {"homestead.io/managed": "true",
                                                                            "app": vm["metadata"]["name"]}},
-                    "data": {HOOK_KEY: hook_script(roms)}}
+                    "data": {HOOK_KEY: hook_script(roms, len(sidecars))}}
             if vm["metadata"].get("uid"):
                 body["metadata"]["ownerReferences"] = [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
                     "name": vm["metadata"]["name"], "uid": vm["metadata"]["uid"]}]

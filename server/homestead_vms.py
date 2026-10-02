@@ -86,6 +86,14 @@ def _stopped_after_crash(vm, vmi, instance_known=True):
                 and (not vmi or (vmi.get("status") or {}).get("phase") in ("Succeeded", "Failed")))
 
 
+def _crash_retries_without_guest(vm, vmi, instance_known=True):
+    status = vm.get("status") or {}
+    return bool(instance_known and not (vm.get("metadata") or {}).get("deletionTimestamp")
+                and status.get("printableStatus") == "CrashLoopBackOff"
+                and _strategy(vm) == "RerunOnFailure" and not status.get("stateChangeRequests")
+                and (not vmi or (vmi.get("status") or {}).get("phase") in ("Succeeded", "Failed")))
+
+
 def _status(vm, vmi, instance_known=True):
     if (vm.get("metadata") or {}).get("deletionTimestamp"):
         # Deleted in the foreground: it stays until its instance and the
@@ -341,6 +349,7 @@ def _row(vm, vmi, claims=None, dvs=None, instance_known=True):
         filling += _image_filling(vm)
     return {"ns": meta.get("namespace", ""), "name": meta.get("name", ""), "status": status,
             "run_strategy": _strategy(vm), "running": istatus.get("phase") == "Running",
+            "stop_retries": _crash_retries_without_guest(vm, vmi, instance_known),
             "node": istatus.get("nodeName", ""), "cores": _cores(dom), "memory": _memory(dom),
             "ip": next((ip for n in nics for ip in n["ips"] if ":" not in ip), ""), "nics": nics, "disks": disks,
             # Every IPv4 address, first first, and the network the VM is on.
@@ -898,10 +907,54 @@ def _refusal(error):
         return f"HTTP {error.code}"
 
 
+def _halt_crash_retries(ns, name):
+    """Stop an automatic boot retry when there is no guest to shut down."""
+    vm = _get(ns, name)
+    if (vm.get("status") or {}).get("printableStatus") != "CrashLoopBackOff" or _strategy(vm) != "RerunOnFailure":
+        return None
+    meta, status = vm.get("metadata") or {}, vm.get("status") or {}
+    identity = _identity(vm)
+    if (meta.get("namespace"), meta.get("name")) != (ns, name) or meta.get("deletionTimestamp"):
+        raise ValueError("The VM identity changed or is deleting; refresh before stopping it")
+    if status.get("stateChangeRequests"):
+        raise ValueError("A VM power request is already queued; wait for it before stopping retries")
+    try:
+        vmi = kget(f"{API}/namespaces/{ns}/virtualmachineinstances/{name}")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+        vmi = None
+    if vmi is not None:
+        imeta = vmi.get("metadata") or {}
+        if (imeta.get("namespace"), imeta.get("name")) != (ns, name) or not imeta.get("uid"):
+            raise ValueError("The VM instance could not be verified; refresh before stopping retries")
+        if (vmi.get("status") or {}).get("phase") not in ("Succeeded", "Failed"):
+            return None  # A live or unfinished instance uses KubeVirt's stop API.
+        if not any(owner.get("controller") is True and owner.get("kind") == "VirtualMachine"
+                   and owner.get("apiVersion", "").split("/")[0] == "kubevirt.io"
+                   and (owner.get("uid"), owner.get("name")) == (identity["uid"], name)
+                   for owner in imeta.get("ownerReferences") or []):
+            raise ValueError("The completed VM instance has a different owner; refresh before stopping retries")
+    # KubeVirt refuses /stop for RerunOnFailure without an unfinished VMI.
+    # This is a deliberate stop of retries, never a fallback after a refusal.
+    # Fence the identity/version; a conflict is returned without retrying.
+    ksend("PATCH", f"{API}/namespaces/{ns}/virtualmachines/{name}", [
+        {"op": "test", "path": "/metadata/uid", "value": identity["uid"]},
+        {"op": "test", "path": "/metadata/resourceVersion", "value": identity["resourceVersion"]},
+        {"op": "test", "path": "/spec/runStrategy", "value": "RerunOnFailure"},
+        {"op": "replace", "path": "/spec/runStrategy", "value": "Halted"}
+    ], ctype="application/json-patch+json")
+    return {"ok": True, "detail": f"Boot retries stopped for {name}; the VM is kept off until you start it"}
+
+
 def power(ns, name, action, *, raw_errors=False):
     """start, stop, force-stop, restart, pause, unpause."""
     _name(ns, "namespace"), _name(name, "VM name")
     try:
+        if action in ("stop", "force-stop"):
+            stopped = _halt_crash_retries(ns, name)
+            if stopped:
+                return stopped
         if action in ("pause", "unpause"):
             ksend("PUT", f"{SUB}/namespaces/{ns}/virtualmachineinstances/{name}/{action}", {})
         elif action == "force-stop":
@@ -969,6 +1022,8 @@ def prepare_edit(ns, name, cfg, current=None):
         if "cores" in cfg and any(k in (cfg["hardware"].get("cpu") or {}) for k in ("sockets", "cores", "threads")):
             raise ValueError("set the CPU count or its topology, not both")
         changed_hardware |= HARDWARE.apply(vm, cfg["hardware"], locked_cpu=bool(spec.get("instancetype")))
+    elif cfg.get("host_devices"):
+        HARDWARE.validate_boot_output(vm)
     if "cores" in cfg:
         cores = int(cfg["cores"])
         if not 1 <= cores <= 128:

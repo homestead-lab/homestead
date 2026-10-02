@@ -265,7 +265,7 @@ def _public(item):
         out["batch_name"] = item["ref"]["name"]
     if item.get("kind") == "snapshot-delete":
         out["cancellable"] = False  # Longhorn merging cannot be undone or safely interrupted.
-    if item.get("kind") in ("self-data-prepare", "host-console", "cluster-shutdown"):
+    if item.get("kind") in ("self-data-prepare", "host-console", "cluster-shutdown", "longhorn-v2-prepare"):
         out["cancellable"] = out["cleanable"] = False
     if item.get("kind") == "self-data-prepare":
         from homestead_self_data_prepare import can_archive
@@ -822,6 +822,9 @@ def _plan_for(item):
         return plan
     if item.get("kind") == "reclass" and "storage_protocol" in item.get("ref", {}):
         plan.update(can=False, why_not="Use the storage move review to pause safely; cancelling must not roll back or delete retained data")
+        return plan
+    if item.get("kind") == "longhorn-v2-prepare":
+        plan.update(can=False, why_not="Host package and memory changes cannot be undone by cancelling tracking; inspect the preparation log")
         return plan
     if item.get("kind") == "snapshot-delete":
         plan.update(can=False, why_not="Longhorn snapshot removal cannot be undone or safely cancelled")

@@ -1,0 +1,114 @@
+import copy
+import unittest
+from unittest import mock
+
+import test_vm_capacity as fixtures
+import test_vm_resources as objects
+import homestead_vm_device_usage as usage
+
+RESOURCE = "example/gpu"
+
+
+class DeviceAdmissionTests(unittest.TestCase):
+    read = fixtures.VMCapacityTests.read
+    plan = fixtures.VMCapacityTests.plan
+
+    def setUp(self):
+        fixtures.VMCapacityTests.setUp(self)
+        self.vm["spec"]["runStrategy"] = "Halted"
+        self.vm["spec"]["template"]["spec"]["domain"]["devices"] = {
+            "hostDevices": [{"name": "gpu", "deviceName": RESOURCE}]}
+        self.config["spec"]["configuration"]["permittedHostDevices"] = {"pciHostDevices": [{"resourceName": RESOURCE}]}
+        self.nodes[0]["allocatable"][RESOURCE] = "1"
+
+    def holder(self, name="other", node="node1", phase="Running", pod=True):
+        owner = objects.vm()
+        owner["metadata"].update(name=name, uid="vm-" + name)
+        instance = objects.child(owner, "VirtualMachine", name, "vmi-" + name)
+        instance["spec"] = copy.deepcopy(self.vm["spec"]["template"]["spec"])
+        instance["status"].update(nodeName=node, phase=phase)
+        self.objects[f"/apis/kubevirt.io/v1/namespaces/lab/virtualmachineinstances/{name}"] = instance
+        if pod:
+            launcher = objects.child(instance, "VirtualMachineInstance", "launcher-" + name, "pod-" + name)
+            launcher["spec"] = {"nodeName": node, "containers": [{"resources": {"requests": {RESOURCE: "1"}}}]}
+            self.pods.append(launcher)
+        return instance
+
+    def intent(self, name="other", phase="accepted"):
+        return {"kind": "vm-power", "status": "running", "ref": {"namespace": "lab", "name": name,
+            "uid": "vm-" + name, "version": "1", "phase": phase, "retain_resources": True,
+            "device_requests": {RESOURCE: 1}, "device_nodes": ["node1"]}}
+
+    def test_busy_device_names_its_holder_but_stopped_configuration_is_allowed(self):
+        self.holder()
+        start = self.plan()
+        self.assertTrue(start["blocked"])
+        self.assertIn("VM lab/other", " ".join(start["device_conflicts"]))
+        for action in ("edit", "create"):
+            with self.subTest(action=action):
+                configuration = self.plan(action=action)
+                self.assertFalse(configuration["blocked"], configuration)
+                self.assertIn("stopped configuration can be saved", " ".join(configuration["warnings"]))
+        self.vm["spec"]["runStrategy"] = "Always"
+        self.assertTrue(self.plan(action="edit")["blocked"])
+
+    def test_identical_devices_share_a_pool_without_false_conflict_or_double_counting(self):
+        self.holder()
+        self.nodes[0]["allocatable"][RESOURCE] = "2"
+        self.assertFalse(self.plan()["blocked"])
+        self.holder("third")
+        blocked = self.plan()
+        self.assertTrue(blocked["blocked"])
+        self.assertIn("lab/third", str(blocked["device_conflicts"]))
+
+    def test_another_host_with_a_free_identical_device_allows_start(self):
+        self.holder()
+        node = copy.deepcopy(self.nodes[0]); node["name"] = "node2"
+        self.nodes.append(node)
+        self.assertFalse(self.plan()["blocked"])
+
+    def test_pending_instance_reserves_the_device_before_a_launcher_appears(self):
+        for node in ("node1", None):
+            self.objects.clear()
+            self.holder(node=node, phase="Pending", pod=False)
+            with self.subTest(node=node):
+                plan = self.plan()
+                self.assertTrue(plan["blocked"])
+                self.assertIn("lab/other", str(plan["device_conflicts"]))
+
+    def test_terminating_launcher_keeps_the_device_after_instance_completion(self):
+        instance = self.holder(phase="Failed")
+        self.pods[0]["metadata"]["deletionTimestamp"] = "now"
+        self.assertTrue(self.plan()["blocked"])
+        self.pods[0]["status"]["phase"] = "Succeeded"
+        self.assertFalse(self.plan()["blocked"])
+
+    def test_pending_instance_on_another_selected_host_does_not_block_this_host(self):
+        instance = self.holder(node=None, phase="Pending", pod=False)
+        instance["spec"]["nodeSelector"] = {"kubernetes.io/hostname": "node2"}
+        self.assertFalse(self.plan()["blocked"])
+        instance["spec"]["nodeSelector"] = {"kubernetes.io/hostname": "node1"}
+        self.assertTrue(self.plan()["blocked"])
+
+    def test_unknown_instance_use_blocks_start_but_not_configuration(self):
+        self.objects["/apis/kubevirt.io/v1/virtualmachineinstances"] = {"items": [], "metadata": {"continue": "more"}}
+        self.assertTrue(self.plan()["blocked"])
+        self.assertFalse(self.plan(action="edit")["blocked"])
+
+    def test_durable_pending_start_is_counted_until_instance_or_explicit_stop_is_observed(self):
+        intent = self.intent()
+        self.assertTrue(self.plan(power_intents=[intent])["blocked"])
+        self.holder()
+        self.nodes[0]["allocatable"][RESOURCE] = "2"
+        self.assertFalse(self.plan(power_intents=[intent])["blocked"], "intent and its instance must not count twice")
+        self.objects.clear(); self.pods.clear(); self.nodes[0]["allocatable"][RESOURCE] = "1"
+        stopped = objects.vm(); stopped["metadata"].update(name="other", uid="vm-other", resourceVersion="2")
+        stopped["spec"]["runStrategy"] = "Halted"
+        self.objects["/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/other"] = stopped
+        self.assertFalse(self.plan(power_intents=[intent])["blocked"])
+        intent["ref"]["phase"] = "uncertain"
+        self.assertTrue(self.plan(power_intents=[intent])["blocked"], "an uncertain dispatch still requires inspection")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -73,22 +73,45 @@ function historyStat(label, values, unit, peak, times, key) {
   const max = peak ?? (nums.length ? Math.max(...nums) : 0);
   return `<div class="hist-chart"><div class="between"><span class="dim xs">${esc(label)}</span>
       <span class="mono xs">avg ${avg.toFixed(1)}${unit} · peak ${(+max).toFixed(1)}${unit}</span></div>
-    ${sparkline(nums.length > 1 ? nums : [0, 0], { w: 300, h: 56, times, key })}</div>`;
+    ${sparkline(nums, { w: 300, h: 56, times, key })}</div>`;
 }
 
 let historyRequest = 0;
-async function historyPaint() {
+let historyAbort = null;
+let historyPending = null, historyHost = null, historyPendingRange = null;
+function historyPaint() {
   const host = $("#historyCard");
-  if (!host) return;
-  const range = historyRange(), request = ++historyRequest;
+  if (!host) { historyAbort?.abort(); return Promise.resolve(); }
+  const range = historyRange();
+  if (historyPending && historyHost === host && historyPendingRange === range) return historyPending;
+  const request = ++historyRequest;
+  historyAbort?.abort();
+  const abort = new AbortController();
+  historyAbort = abort;
+  historyHost = host; historyPendingRange = range;
+  historyPending = historyLoad(host, range, request, abort);
+  return historyPending;
+}
+async function historyLoad(host, range, request, abort) {
+  const timeout = setTimeout(() => abort.abort(), 10000);
   let h;
-  try { h = await api(`/api/history/long?range=${range}`); } catch (e) { return; }
+  try { h = await api(`/api/history/long?range=${range}`, { signal: abort.signal }); }
+  catch (e) {
+    if (request !== historyRequest || host !== $("#historyCard") || range !== historyRange()) return;
+    let note = host.querySelector(".history-error");
+    if (!note) { note = document.createElement("div"); note.className = "note warn history-error"; host.appendChild(note); }
+    note.textContent = "Saved history could not refresh; existing charts are kept. Retrying on the next dashboard refresh.";
+    return;
+  } finally {
+    clearTimeout(timeout);
+    if (historyAbort === abort) { historyAbort = null; historyPending = null; }
+  }
   if (request !== historyRequest || host !== $("#historyCard") || range !== historyRange()) return;
   const since = h.since ? new Date(h.since * 1000).toLocaleDateString(undefined, { day: "numeric", month: "short" }) : "";
   STATE.data.historyHtml = `<div class="between"><div><div class="ctitle">Over time</div>
       <div class="csub">${h.samples ? `Recorded every ${h.step === 300 ? "5 minutes" : "hour"} by Homestead, open or not${since ? ` · since ${esc(since)}` : ""}` : "Homestead records a sample every 5 minutes; the first appears shortly."}</div></div>
       <div class="seg">${["24h", "7d", "30d", "90d"].map(r => `<button class="${r === range ? "on" : ""}" onclick="historyRange(${jsq(r)})">${r}</button>`).join("")}</div></div>
-    ${h.samples > 1 ? `<div class="hist-grid">
+    ${h.samples > 0 ? `<div class="hist-grid">
       ${historyStat("Cluster CPU", h.cpu, "%", h.cpu_max, h.t, range)}
       ${historyStat("Cluster RAM", h.mem, "%", h.mem_max, h.t, range)}
       <div class="hist-chart"><div class="between"><span class="dim xs">Network in / out</span><span class="mono xs">Mbit/s</span></div>${dualSpark(h.rx, h.tx, { w: 300, h: 56, times: h.t, key: range })}</div>

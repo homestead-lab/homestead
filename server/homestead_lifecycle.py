@@ -534,30 +534,49 @@ def prepare_edit(cfg, current=None):
     if not containers:
         raise ValueError(f"{name} has no editable containers")
 
+    removed = cfg.get("remove_containers") or []
+    if not isinstance(removed, list) or any(not isinstance(item, str) for item in removed):
+        raise ValueError("removed containers must be a list of names")
+    existing = {container.get("name"): container for container in containers}
+    if len(removed) != len(set(removed)) or set(removed) - set(existing):
+        raise ValueError("a removed container no longer exists or was submitted twice; reopen Edit")
+    containers[:] = [container for container in containers if container.get("name") not in removed]
     container_requests = []
     if "containers" in cfg:
-        existing = {container.get("name"): container for container in containers}
+        changes = cfg.get("containers")
+        if not isinstance(changes, list) or any(not isinstance(change, dict) for change in changes):
+            raise ValueError("containers must be a list of definitions")
         seen = set()
-        for change in cfg.get("containers") or []:
-            original = str(change.get("original_name") or change.get("name") or "")
-            if original not in existing:
-                raise ValueError(f"container {original or '(unnamed)'} no longer exists in {name}")
-            if original in seen:
-                raise ValueError(f"container {original} was submitted more than once")
-            seen.add(original)
-            container_requests.append((existing[original], change))
-        final_names = []
-        requested_by_original = {str(change.get("original_name") or change.get("name")): change
-                                 for _, change in container_requests}
-        for container in containers:
-            change = requested_by_original.get(container.get("name"), {})
-            final_names.append(dns_label(change.get("name") or container.get("name"), "container name"))
-        if len(final_names) != len(set(final_names)):
-            raise ValueError(f"container names must be unique in {name}")
+        for change in changes:
+            if change.get("new") is True:
+                if change.get("original_name"):
+                    raise ValueError("a new container cannot replace an existing container")
+                container = {"name": dns_label(change.get("name"), "container name"),
+                             "imagePullPolicy": "IfNotPresent"}
+                if not str(change.get("image") or "").strip():
+                    raise ValueError(f"{container['name']}: image is required")
+                containers.append(container)
+            else:
+                original = str(change.get("original_name") or change.get("name") or "")
+                if original not in existing or original in removed:
+                    raise ValueError(f"container {original or '(unnamed)'} no longer exists in {name}")
+                if original in seen:
+                    raise ValueError(f"container {original} was submitted more than once")
+                seen.add(original)
+                container = existing[original]
+            container_requests.append((container, change))
+        requested = {id(container): change for container, change in container_requests}
+        final_names = [dns_label(requested.get(id(container), {}).get("name") or container.get("name"),
+                                 "container name") for container in containers]
+        init_names = {container.get("name") for container in spec.get("initContainers") or []}
+        if len(final_names) != len(set(final_names)) or set(final_names) & init_names:
+            raise ValueError(f"container names must be unique in {name}, including init containers")
         for container, change in container_requests:
             _apply_container_edit(container, change, name)
     else:
         # Backward-compatible single-container request used by older clients.
+        if not containers:
+            raise ValueError("a workload must keep at least one container")
         legacy = {key: cfg[key] for key in ("image", "env", "cpu", "memory", "memory_limit", "ports") if key in cfg}
         if "container_name" in cfg:
             legacy["name"] = cfg["container_name"]
@@ -566,6 +585,8 @@ def prepare_edit(cfg, current=None):
             if any(other is not containers[0] and other.get("name") == final_name for other in containers):
                 raise ValueError(f"container {final_name} already exists in {name}")
             _apply_container_edit(containers[0], legacy, name)
+    if not containers:
+        raise ValueError("a workload must keep at least one container")
     pending_claims = _apply_container_volumes(ns, spec, container_requests)
     import homestead_privileges as PRIV
     for container, change in container_requests:
@@ -604,7 +625,7 @@ def prepare_edit(cfg, current=None):
             annotations[AUTOSTART_REPLICAS] = str(max(1, requested))
     hardware_requests = [(container, change.get("hardware") or [])
                          for container, change in container_requests if "hardware" in change]
-    if hardware_requests:
+    if hardware_requests or removed:
         _apply_container_hardware(spec, dep, hardware_requests)
     elif "hardware" in cfg or "gpu" in cfg:
         wanted = set(cfg.get("hardware") or [])
