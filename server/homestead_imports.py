@@ -1663,13 +1663,14 @@ def start_image_scan():
     attempt = format(int(time.time()), "x")[-6:]
     for node in kget("/api/v1/nodes").get("items", []):
         conditions = {c.get("type"): c.get("status") for c in (node.get("status") or {}).get("conditions") or []}
-        if conditions.get("Ready") != "True":
+        if conditions.get("Ready") != "True" or (node.get("spec") or {}).get("unschedulable"):
             continue
         name = node["metadata"]["name"]
         suffix = hashlib.sha256(name.encode()).hexdigest()[:10]
         body = RUNTIME.pod(f"homestead-image-scan-{suffix}-{attempt}", NS, name,
                            f"{RUNTIME.CRICTL} images -o json", SCAN_TASK,
                            {NAMES.key("cache-node"): name}, memory="64Mi", deadline=120)
+        body["spec"]["automountServiceAccountToken"] = False
         ksend("POST", f"/api/v1/namespaces/{NS}/pods", body)
         started.append(name)
     _SCAN_STARTED[0] = time.time()
