@@ -262,7 +262,8 @@ pressure, core services, and platform warnings from the last day.
 
 ### Platform versions
 
-**Platform versions** lists what runs under your apps: the cluster itself
+**Platform versions**, on the Cluster page and under **Settings > Updates**,
+lists what runs under your apps: the cluster itself
 (k3s or RKE2), Longhorn, KubeVirt, CDI, and the network components kube-vip
 and Multus. For each it shows the version
 running and the newest release, with a link to the release notes. Homestead
