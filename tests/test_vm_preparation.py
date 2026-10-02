@@ -14,6 +14,54 @@ class EditPreparationTests(unittest.TestCase):
     def setUp(self):
         self.cluster = edit_fixtures.Cluster({"harvester": True, "cdi": True})
 
+    def bound_disk(self):
+        self.pvc = {"metadata": {"name": "web-disk", "namespace": "lab", "uid": "disk-uid", "resourceVersion": "50"},
+                    "spec": {"storageClassName": "example-storage", "resources": {"requests": {"storage": "20Gi"}}},
+                    "status": {"phase": "Bound", "capacity": {"storage": "20Gi"}}}
+        self.storage_class = {"allowVolumeExpansion": True}
+        original = self.cluster.get
+        def read(path):
+            if path.endswith("/persistentvolumeclaims"): return {"items": [copy.deepcopy(self.pvc)]}
+            if path.endswith("/persistentvolumeclaims/web-disk"): return copy.deepcopy(self.pvc)
+            if path == "/apis/storage.k8s.io/v1/storageclasses/example-storage":
+                if self.storage_class is None: raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+                return copy.deepcopy(self.storage_class)
+            return original(path)
+        patch = mock.patch.object(vms, "kget", side_effect=read)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_unsupported_disk_growth_is_refused_before_vm_and_secret_changes(self):
+        self.bound_disk()
+        for sc in ({"allowVolumeExpansion": False}, None):
+            self.storage_class = sc
+            with self.assertRaisesRegex(ValueError, "StorageClass"):
+                vms.edit("lab", "web", {"disks": [{"name": "root", "size": "30Gi"}], "cloud_init": {"user_data": "new"}})
+            self.assertEqual([], self.cluster.sent)
+
+    def test_class_is_rechecked_at_commit_before_any_writes(self):
+        self.bound_disk()
+        prepared = vms.prepare_edit("lab", "web", {"disks": [{"name": "root", "size": "30Gi"}], "cloud_init": {"user_data": "new"}})
+        self.storage_class["allowVolumeExpansion"] = False
+        with self.assertRaisesRegex(ValueError, "does not allow"):
+            vms.commit_edit(prepared)
+        self.assertEqual([], self.cluster.sent)
+
+    def test_pending_disk_growth_cannot_be_shrunk_to_current_capacity(self):
+        self.bound_disk()
+        self.pvc["status"]["capacity"]["storage"] = "10Gi"
+        with self.assertRaisesRegex(ValueError, "grow but not shrink"):
+            vms.prepare_edit("lab", "web", {"disks": [{"name": "root", "size": "15Gi"}]})
+        self.assertEqual([], self.cluster.sent)
+
+    def test_unchanged_size_during_growth_does_not_submit_another_resize(self):
+        self.bound_disk()
+        self.pvc["status"]["capacity"]["storage"] = "10Gi"
+        self.storage_class = None
+        prepared = vms.prepare_edit("lab", "web", {"disks": [{"name": "root", "size": "20Gi"}]})
+        self.assertEqual([], prepared["resize"])
+        self.assertEqual([], self.cluster.sent)
+
     def test_cloud_init_with_invalid_memory_never_patches_secret(self):
         for memory in ("invalid", "0Gi", "-1Gi"):
             with self.assertRaises(ValueError):

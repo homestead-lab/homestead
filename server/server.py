@@ -34,6 +34,7 @@ import homestead_import_job as IMPORT_JOB
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_operations as OPS
 import homestead_storage_guard as STORAGE_GUARD
+import homestead_storage_resize as STORAGE_RESIZE
 import homestead_self_data_fence as SELF_DATA_FENCE
 import homestead_self_data_worker as SELF_DATA_WORKER
 import homestead_self_data_review as SELF_DATA_REVIEW
@@ -3398,22 +3399,29 @@ def _note_default_class(rows):
 
 
 def cleanup_restore_classes():
-    """Delete the classes restores left behind once nothing waits on them.
+    """Remove unused restore classes, retaining those needed for PVC expansion.
 
-    A restore makes a class that reads one backup; the claim made from it
-    keeps its volume when the class goes, so the class is only needed until
-    the claim is bound. Left behind, they filled every class picker."""
+    Bound claims still need their class for resizing. Restore classes are
+    excluded from regular pickers separately, so retaining them adds no clutter.
+    """
     try:
-        pending = {(p.get("spec") or {}).get("storageClassName")
-                   for p in kget("/api/v1/persistentvolumeclaims").get("items", [])
-                   if (p.get("status") or {}).get("phase") != "Bound"}
-        items = kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])
+        claims = kget("/api/v1/persistentvolumeclaims")
+        if "items" not in claims or (claims.get("metadata") or {}).get("continue"):
+            return []
+        volumes = kget("/api/v1/persistentvolumes")
+        classes = kget("/apis/storage.k8s.io/v1/storageclasses")
+        if any("items" not in collection or (collection.get("metadata") or {}).get("continue")
+               for collection in (volumes, classes)):
+            return []
+        in_use = {STORAGE_RESIZE.storage_class(p) for p in claims["items"]}
+        in_use.update((p.get("spec") or {}).get("storageClassName") for p in volumes["items"])
+        items = classes["items"]
     except Exception:
         return []
     removed = []
     for item in items:
         name = item["metadata"]["name"]
-        if name.startswith("homestead-restore-") and name not in pending:
+        if name.startswith("homestead-restore-") and name not in in_use:
             try:
                 ksend("DELETE", f"/apis/storage.k8s.io/v1/storageclasses/{name}")
                 removed.append(name)
@@ -3432,8 +3440,11 @@ LONGHORN_PROVISIONER = "driver.longhorn.io"
 def storage_class_usage():
     """How many claims each class is backing, so deletion can be guarded."""
     counts = {}
-    for item in kget("/api/v1/persistentvolumeclaims").get("items", []):
-        name = (item.get("spec", {}) or {}).get("storageClassName") or ""
+    claims = kget("/api/v1/persistentvolumeclaims")
+    if "items" not in claims or (claims.get("metadata") or {}).get("continue"):
+        raise ValueError("Could not check every claim using the storage classes; try again")
+    for item in claims["items"]:
+        name = STORAGE_RESIZE.storage_class(item)
         if name:
             counts[name] = counts.get(name, 0) + 1
     return counts
@@ -3679,6 +3690,11 @@ def delete_storage_class(name):
         raise ValueError(f"{name} still backs {row['in_use']} claim"
                          f"{'s' if row['in_use'] != 1 else ''}; existing volumes keep working, "
                          "but the class cannot be removed while claims reference it")
+    volumes = kget("/api/v1/persistentvolumes")
+    if "items" not in volumes or (volumes.get("metadata") or {}).get("continue"):
+        raise ValueError("Could not check every backing volume; the StorageClass was not deleted")
+    if any((pv.get("spec") or {}).get("storageClassName") == name for pv in volumes["items"]):
+        raise ValueError("This StorageClass still backs a persistent volume; keep it so retained data can be recovered and resized")
     ksend("DELETE", f"/apis/storage.k8s.io/v1/storageclasses/{name}")
     return {"ok": True, "classes": storage_class_inventory(),
             "message": f"Storage class {name} deleted; existing volumes are untouched"}
@@ -4615,6 +4631,97 @@ def create_volume(cfg):
     return {"ok": True, "name": name, "namespace": ns, "pvc": out}
 
 
+def _restore_class_repair(pvc):
+    """Reconstruct a missing Homestead restore class from its bound CSI volumes."""
+    spec, meta = pvc.get("spec") or {}, pvc.get("metadata") or {}
+    name = spec.get("storageClassName") or ""
+    labels = meta.get("labels") or {}
+    if (not re.fullmatch(r"homestead-restore-[0-9a-f]{16}", name)
+            or labels.get("app.kubernetes.io/managed-by") != "homestead"
+            or labels.get("homestead.io/restored-volume") != "true"
+            or not (meta.get("annotations") or {}).get("homestead.io/restored-from-backup")):
+        raise ValueError("Only missing classes from Homestead restores can be repaired here")
+    claims = kget("/api/v1/persistentvolumeclaims")
+    if "items" not in claims or (claims.get("metadata") or {}).get("continue"):
+        raise ValueError("Could not check every claim using this StorageClass")
+    users = [c for c in claims["items"] if ((c.get("metadata") or {}).get("annotations") or {}).get(
+                 "volume.beta.kubernetes.io/storage-class", (c.get("spec") or {}).get("storageClassName")) == name]
+    if not meta.get("uid") or not any((c.get("metadata") or {}).get("uid") == meta["uid"] for c in users):
+        raise ValueError("The claim changed; reopen the volume editor")
+    parameters = None
+    reclaim = None
+    for claim in users:
+        cs, cm = claim.get("spec") or {}, claim.get("metadata") or {}
+        if (claim.get("status") or {}).get("phase") != "Bound" or cm.get("deletionTimestamp") or not cs.get("volumeName"):
+            raise ValueError("Every claim using this class must be bound and not being deleted")
+        pv = kget("/api/v1/persistentvolumes/" + urllib.parse.quote(cs["volumeName"], safe=""))
+        ps = pv.get("spec") or {}
+        ref, csi = ps.get("claimRef") or {}, ps.get("csi") or {}
+        if (ps.get("storageClassName") != name or (pv.get("status") or {}).get("phase") != "Bound"
+                or not cm.get("uid") or ref.get("uid") != cm["uid"]
+                or ref.get("name") != cm.get("name") or ref.get("namespace") != cm.get("namespace")
+                or csi.get("driver") != "driver.longhorn.io"):
+            raise ValueError("The backing volume does not match the restored claim")
+        attrs = {k: v for k, v in (csi.get("volumeAttributes") or {}).items()
+                 if k not in ("storage.kubernetes.io/csiProvisionerIdentity", "share")}
+        if not attrs.get("fromBackup") or not all(isinstance(v, str) for v in attrs.values()):
+            raise ValueError("The backing volume has no usable restore parameters")
+        if csi.get("fsType"):
+            attrs["fsType"] = csi["fsType"]
+        policy = ps.get("persistentVolumeReclaimPolicy")
+        if policy not in ("Delete", "Retain") or (parameters is not None and (parameters != attrs or reclaim != policy)):
+            raise ValueError("The volumes using this class have different storage settings")
+        parameters, reclaim = attrs, policy
+    return {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
+            "metadata": {"name": name, "labels": {"app.kubernetes.io/managed-by": "homestead", "homestead.io/restore-class": "true"},
+                         "annotations": {"homestead.io/resize-support-repaired": "true"}},
+            "provisioner": "driver.longhorn.io", "allowVolumeExpansion": True,
+            "reclaimPolicy": reclaim, "volumeBindingMode": "Immediate", "parameters": parameters}
+
+
+def repair_volume_class(cfg):
+    ns, name = cfg.get("namespace") or DEFAULT_NS, cfg.get("name") or ""
+    pvc = kget(f"/api/v1/namespaces/{urllib.parse.quote(ns, safe='')}/persistentvolumeclaims/{urllib.parse.quote(name, safe='')}")
+    class_name = (pvc.get("spec") or {}).get("storageClassName") or ""
+    if cfg.get("confirm") != class_name or not class_name:
+        raise ValueError("Review the missing StorageClass before restoring it")
+    try:
+        kget("/apis/storage.k8s.io/v1/storageclasses/" + urllib.parse.quote(class_name, safe=""))
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+    else:
+        raise ValueError("The StorageClass already exists; reopen the volume editor")
+    body = _restore_class_repair(pvc)
+    ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", body)
+    for key in list(_cache):
+        if key.startswith(("stor", "sc", "vol")):
+            _cache.pop(key, None)
+    return {"ok": True, "detail": "Resize support repaired. You can now enlarge the volume."}
+
+
+def volume_edit_options(namespace, name, pvc=None):
+    """Read current Kubernetes expansion prerequisites without changing storage."""
+    if not name:
+        raise ValueError("Choose a volume")
+    ns = urllib.parse.quote(namespace or DEFAULT_NS, safe="")
+    claim = urllib.parse.quote(name, safe="")
+    if pvc is None:
+        pvc = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}")
+    spec = pvc.get("spec") or {}
+    requested_mb = _quantity_mb((spec.get("resources") or {}).get("requests", {}).get("storage", "0"))
+    result = STORAGE_RESIZE.options(pvc, kget)
+    result.update(requested_gb=-(-requested_mb // 1024) if requested_mb else 0, repair_class=False)
+    if result.pop("missing_class"):
+        result["reason"] = "This volume's StorageClass was removed. An administrator must repair its resize support before increasing the size."
+        try:
+            _restore_class_repair(pvc)
+            result["repair_class"] = True
+        except (ValueError, urllib.error.HTTPError):
+            pass
+    return result
+
+
 def edit_volume(cfg):
     """Grow a PVC and optionally change Longhorn replica count.
 
@@ -4624,7 +4731,13 @@ def edit_volume(cfg):
     save of the form reported a failure that had half happened.
     """
     ns, name = cfg.get("namespace") or DEFAULT_NS, cfg["name"]
-    pvc = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
+    pvc_path = f"/api/v1/namespaces/{urllib.parse.quote(ns, safe='')}/persistentvolumeclaims/{urllib.parse.quote(name, safe='')}"
+    pvc = kget(pvc_path)
+    reps = cfg.get("replicas")
+    if reps is not None:
+        reps = int(reps)
+        if not 1 <= reps <= 5:
+            raise ValueError("replica count must be between 1 and 5")
     done = []
     if cfg.get("size_gb"):
         wanted = int(cfg["size_gb"])
@@ -4634,16 +4747,15 @@ def edit_volume(cfg):
         if now_gb and wanted < now_gb:
             raise ValueError(f"{name} is {now_gb} GB; volumes can grow but not shrink")
         if wanted != now_gb:
-            ksend("PATCH", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}",
+            options = volume_edit_options(ns, name, pvc)
+            if not options["can_expand"]:
+                raise ValueError(options["reason"])
+            ksend("PATCH", pvc_path,
                   {"spec": {"resources": {"requests": {"storage": f"{wanted}Gi"}}}},
                   ctype="application/merge-patch+json")
             done.append(f"growing to {wanted} GB")
-    reps = cfg.get("replicas")
     vol_name = pvc.get("spec", {}).get("volumeName")
     if reps is not None and vol_name:
-        reps = int(reps)
-        if not 1 <= reps <= 5:
-            raise ValueError("replica count must be between 1 and 5")
         path = f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/{vol_name}"
         try:
             current = int(((kget(path).get("spec") or {}).get("numberOfReplicas")) or 0)
@@ -5426,19 +5538,57 @@ for _kind in ("vm-create", "vm-edit"):
     OPS.CANCELLERS[_kind] = (VM_MUTATION_JOB.cancel_plan, VM_MUTATION_JOB.cancel_run)
 OPS.CANCELLERS["node-power"] = (lambda item: {"can": False, "why_not":
     "A host power command cannot be cancelled after it has been sent"}, lambda item, options: "")
-MOVE_ENGINE.after_finish = cleanup_restore_classes
+def cleanup_restores():
+    for cleanup in (cleanup_restore_classes, LH.cleanup_restore_snapshots):
+        try:
+            cleanup()
+        except Exception as error:
+            # Cleanup may be retried; it must not change a completed restore
+            # into a failed data operation. The cleanup itself fails closed.
+            print(f"Restore metadata cleanup deferred: {error}", flush=True)
+
+
+MOVE_ENGINE.after_finish = cleanup_restores
 
 
 def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
-    """A restore, and - once it has finished - the class it read the backup
-    through removed, as nothing needs it after the claim is bound."""
+    """Resume snapshot setup after a restart and retain the selected class."""
+    ref = item["ref"]
+    cfg = ref.get("restore_config")
+    if cfg and not ref.get("restore_started"):
+        if item.get("status") == "queued":
+            cfg["snapshot_wait_started"] = time.time()
+        since = cfg.setdefault("snapshot_wait_started", time.time())
+        if time.time() - float(since) > 15 * 60:
+            raise ValueError("CSI snapshot setup did not become ready; repair snapshot support, then resume this restore")
+        existing = LH._get_or_none(f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}")
+        if existing:
+            annotation = (existing.get("metadata", {}).get("annotations") or {}).get("homestead.io/restore-id")
+            if annotation != cfg["restore_id"]:
+                raise ValueError("The destination PVC was created by another operation")
+            ref["restore_started"] = True
+        else:
+            created = LH.restore_backup(cfg)
+            if not created["created"]:
+                return "running", 2, created["message"]
+            ref["restore_started"] = True
+    pvc = LH._get_or_none(f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}")
+    if pvc:
+        if cfg and (pvc.get("metadata", {}).get("annotations") or {}).get("homestead.io/restore-id") != cfg["restore_id"]:
+            raise ValueError("The destination PVC was replaced by another operation")
+        problem = LH.restore_problem(pvc)
+        if problem:
+            return "failed", 8, f"CSI restore snapshot failed: {problem}"
     result = _resolve(item)
+    if result and result[0] == "succeeded" and cfg and pvc:
+        result = LH.finish_restore_resize(pvc, cfg) or result
     if result and result[0] in ("succeeded", "failed"):
-        cleanup_restore_classes()
+        cleanup_restores()
     return result
 
 
 OPS.RESOLVERS["volume-restore"] = _restore_then_tidy
+OPS.RESUMABLE["volume-restore"] = lambda item: not bool(item.get("ref", {}).get("restore_config"))
 UPGRADES.bind(kget)
 PORTAL.bind(kget, ksend, DEFAULT_NS, lambda: cached("wl", 5, get_workloads),
             lambda source: ICONS.persist(source, DATA_DIR), lambda reference: ICONS.data_url(reference, DATA_DIR))
@@ -8075,6 +8225,9 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("volother", 10, other_volumes))
             if p == "/api/volumes":
                 return self._send(200, cached("vol", 8, get_volumes))
+            if p == "/api/volumes/edit-options":
+                return self._send(200, volume_edit_options((q.get("ns") or [DEFAULT_NS])[0],
+                                                          (q.get("name") or [""])[0]))
             if p == "/api/volumes/delete-plan":
                 plan = VOLUMES.deletion_plan((q.get("ns") or [DEFAULT_NS])[0],
                     (q.get("name") or [""])[0], (q.get("volume") or [""])[0])
@@ -9187,6 +9340,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, create_volume(b))
             if p == "/api/volumes/edit":
                 return self._send(200, edit_volume(b))
+            if p == "/api/volumes/repair-class":
+                return self._send(200, repair_volume_class(b))
             if p == "/api/self/samba":
                 return self._send(200, set_samba(bool(b.get("enabled")), str(b.get("address") or "").strip()))
             if p == "/api/self/nfs":
@@ -9340,15 +9495,18 @@ class H(HTTP.LimitedHandler):
                         b.get("backup"), b.get("namespace", DEFAULT_NS), b.get("name"))
                     if plan.get("conflict"):
                         return self._send(409, {"error": plan["conflict"]["message"], "plan": plan})
+                    b["restore_id"] = secrets.token_hex(12)
+                    b["annotations"] = {"homestead.io/restore-id": b["restore_id"]}
                     result = LH.restore_backup(b)
+                    b["source_size_bytes"] = result["source_size_bytes"]
                     result["operation"] = OPS.start(
                         "volume-restore", f"Restore {result['name']}",
                         {"kind": "PersistentVolumeClaim", "name": result["name"],
                          "namespace": result["namespace"]},
                         "/volumes?" + urllib.parse.urlencode({"find": result["name"]}),
                         {"namespace": result["namespace"], "name": result["name"],
-                         "backup": result["backup"]},
-                        "Waiting for Longhorn to provision the restored volume")
+                         "backup": result["backup"], "restore_config": b,
+                         "restore_started": result["created"]}, result["message"])
                 return self._send(200, result)
             if p == "/api/lh/target":
                 return self._send(200, LH.set_backup_target(

@@ -329,7 +329,11 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
             blockers.append(f"{where}choose a regular storage class, not an existing restore or image class")
 
     moving = [c for c in definition.get("claims", []) if choices[c["claim"]]["action"] == "move"]
-    if moving or not definition.get("claims"):
+    if moving:
+        support = LH.restore_support()
+        if not support["ready"]:
+            (warnings if support.get("can_install") or support.get("waiting") else blockers).append(support["message"])
+    if any(not choices[c["claim"]]["storage_class"] for c in moving) or not definition.get("claims"):
         check_class(chosen_class, "", True)
     for claim in definition.get("claims", []):
         pick = choices[claim["claim"]]
@@ -343,6 +347,14 @@ def plan(cluster, kind, name, namespace=None, address_mode="shared", address="",
             blockers.append(f"volume {claim['claim']} already exists in {namespace} here")
         if pick["storage_class"] and pick["storage_class"] != chosen_class:
             check_class(pick["storage_class"], claim["claim"], pick["action"] == "move")
+        if pick["action"] == "move":
+            klass = pick["storage_class"] or chosen_class
+            base = _get(f"/apis/storage.k8s.io/v1/storageclasses/{urllib.parse.quote(klass, safe='')}")
+            if base:
+                try:
+                    LH.validate_restore_class(base, claim.get("volume_mode") or "Filesystem", migration=True)
+                except ValueError as error:
+                    blockers.append(f"volume {claim['claim']}: {error}")
         if pick["action"] == "move" and claim.get("backing_image") and not _get(
                 f"{LH_API}/namespaces/{LHNS}/backingimages/{claim['backing_image']}"):
             warnings.append(f"disk {claim['claim']} is built on the {claim['backing_image']} image, "
@@ -422,7 +434,7 @@ def start(cluster, kind, name, namespace=None, address_mode="shared", address=""
         "id": secrets.token_hex(6), "cluster": cluster, "kind": kind, "name": name,
         "source_namespace": definition.get("namespace", ""), "namespace": namespace,
         "address_mode": address_mode, "address": address,
-        "storage_class": storage_class,
+        "storage_class": checked["storage_class"],
         "status": "running", "phase": "joining", "progress": 1,
         "message": "Queued", "claims": [dict(c, backup="", created=False, restored=False,
                                              action=choices[c["claim"]]["action"],
@@ -465,6 +477,13 @@ def _advance(move, phase, progress, message):
 
 
 def _joining(move):
+    if _moving(move):
+        support = LH.ensure_restore_support()
+        if not support["ready"]:
+            since = move.setdefault("flags", {}).setdefault("snapshot_wait_started", time.time())
+            if time.time() - since > START_GRACE:
+                raise ValueError("CSI snapshot support did not become ready; repair the snapshot controller, then retry. The source has not been stopped")
+            return _note(move, 1, support["message"])
     there = CLIENT.remote(move["cluster"], "/api/move/target")
     here = LH.backup_target()
     if _same_target(here, there):
@@ -619,7 +638,7 @@ def _image_class():
     raise ValueError("this cluster has no Longhorn storage class to restore the image with")
 
 
-def _ensure_image(move, name):
+def _ensure_image(move, name, storage_class=""):
     """Restore a Harvester image from its backup before the disks built on it."""
     if _get(f"{LH_API}/namespaces/{LHNS}/backingimages/{name}"):
         return
@@ -634,7 +653,7 @@ def _ensure_image(move, name):
         "apiVersion": "longhorn.io/v1beta2", "kind": "BackingImage",
         "metadata": {"name": name, "namespace": LHNS,
                      "annotations": {NAMES.key(MOVE_ID): move["id"],
-                                     HARVESTER_IMAGE_CLASS: move.get("storage_class") or _image_class()}},
+                                     HARVESTER_IMAGE_CLASS: storage_class or move.get("storage_class") or _image_class()}},
         "spec": {"sourceType": "restore",
                  "sourceParameters": {"backup-url": url, "concurrent-limit": "2"}}})
 
@@ -642,6 +661,10 @@ def _ensure_image(move, name):
 def _restore_progress(namespace, claim):
     """(finished, percent) for one claim being restored from a backup."""
     pvc = _get(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{claim}")
+    if pvc:
+        problem = LH.restore_problem({**pvc, "metadata": {**pvc.get("metadata", {}), "namespace": namespace}})
+        if problem:
+            raise ValueError(f"Restoring {claim} failed: {problem}")
     if not pvc or (pvc.get("status", {}) or {}).get("phase") != "Bound":
         return False, 0
     volume_name = (pvc.get("spec", {}) or {}).get("volumeName", "")
@@ -649,7 +672,7 @@ def _restore_progress(namespace, claim):
     if not volume:
         return False, 0
     status = volume.get("status", {}) or {}
-    if not status.get("restoreRequired") and status.get("state") in ("detached", "attached"):
+    if status.get("restoreInitiated") and not status.get("restoreRequired") and status.get("state") in ("detached", "attached"):
         return True, 100
     percents = []
     try:
@@ -690,17 +713,18 @@ def _restoring(move):
             claim["created"] = True
             continue
         if claim.get("backing_image") and not _image_ready(claim["backing_image"]):
-            _ensure_image(move, claim["backing_image"])
+            _ensure_image(move, claim["backing_image"], claim.get("target_class") or move.get("storage_class") or "")
             return _note(move, 56, f"Restoring the {claim['backing_image']} image first")
-        LH.restore_backup({
+        result = LH.restore_backup({
             "backup": claim["backup"], "namespace": namespace, "name": claim["claim"],
             "size_gb": claim.get("size_gb"), "access_mode": claim.get("access_mode"),
             "storage_class": claim.get("target_class") or move.get("storage_class") or "",
-            "replicas": None if (claim.get("target_class") or move.get("storage_class")) else claim.get("replicas") or 2,
             "volume_mode": claim.get("volume_mode"),
             "migratable": claim.get("migratable"), "backing_image": claim.get("backing_image"),
             "annotations": {NAMES.key(MOVE_ID): move["id"],
                             NAMES.key(MOVED_FROM): f"{move['cluster']}/{move['name']}"}})
+        if result and result.get("created") is False:
+            return _note(move, 56, result["message"])
         claim["created"] = True
     states = []
     for claim in move["claims"]:
@@ -871,7 +895,7 @@ HANDLERS = {"joining": _joining, "quiescing": _quiescing, "backing-up": _backing
             "starting": _starting}
 
 
-# Called once a move has finished: the restore classes it made are spent.
+# Called after a move finishes to tidy safe restore metadata.
 after_finish = None
 
 
@@ -967,6 +991,8 @@ def retry(move_id):
         raise ValueError("only a failed move can be retried")
     if move.get("phase") == "backing-up":
         move.setdefault("flags", {})["retry_backups"] = True
+    if move.get("phase") == "joining":
+        move.setdefault("flags", {}).pop("snapshot_wait_started", None)
     move.update(status="running", failures=0, finished_at="",
                 message=f"Retrying from {move['phase']}", updated_at=_now())
     move["op"] = _operation(move)
