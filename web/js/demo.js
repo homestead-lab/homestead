@@ -826,8 +826,13 @@
         { name: "harvester-node3", ok: false, current: false, pods_wl: 1, score: 0, cpu_after: 24, mem_after: 49,
           hardware: {}, temp_c: 36, why: ["no Intel/AMD iGPU on this host"] }] } : (() => {
       const body = JSON.parse(init.body || "{}"), isVm = body.kind === "vm", copy = body.transfer_mode === "copy";
+      const hardware = isVm && body.name === "gpu-desktop", mapping = body.host_devices?.display;
+      const deviceReady = !hardware || mapping && "resource" in mapping;
       return {
-      ok: true, blockers: [], cluster: body.cluster || "branch", kind: body.kind || "container", name: body.name || "frigate",
+      ok: !!deviceReady, blockers: deviceReady ? [] : ["Choose a destination device or Leave out for display"], cluster: body.cluster || "branch", kind: body.kind || "container", name: body.name || "frigate",
+      host_devices: hardware ? [{name:"display",resource:"example.test/source-gpu",gpu:true,rom:true}] : [],
+      device_resources: hardware ? [{resource:"homestead.io/pci-10de-1e87",label:"10DE:1E87",kind:"pci",nodes:["harvester-node1"]}] : [],
+      device_hosts: hardware && mapping?.resource ? ["harvester-node1"] : [],
       transfer_mode: copy ? "copy" : "move",
       storage_class: body.storage_class || "longhorn-r2", storage_classes: ["longhorn-r2", "longhorn-r3"],
       all_storage_classes: ["longhorn-r2", "longhorn-r3", "local-path"],

@@ -270,7 +270,7 @@ anything is saved.
 A VM can have a host's own PCI device - a GPU, a NIC, an HBA - or a USB device.
 Two steps: the host hands the device over, then the VM asks for it.
 
-**On the host** - its node page, **Devices for VMs → Look at its devices**:
+**On the host** - **Nodes → select a host → Hardware → Devices for VMs → Look at its devices**:
 
 - **IOMMU** has to be on. On k3s and RKE2, **Switch IOMMU on** adds
   `intel_iommu=on iommu=pt` (`iommu=pt` on AMD, whose IOMMU is on by default)
@@ -289,15 +289,17 @@ Two steps: the host hands the device over, then the VM asks for it.
   PCIDeviceClaims and USBDeviceClaims, as its Devices page does. Its
   pcidevices-controller add-on must be enabled.
 
-**On the VM** - **Edit → Devices**: **＋ Device** from what the hosts offer,
+**On the VM** - **New VM → Passthrough** or **Edit → Passthrough**: **Add device** from what the hosts offer,
 each shown with the hosts that have it. A VM with a host device runs only on
 such a host and cannot live-migrate; the change applies at its next start.
+The edit form also lets you select a different resource for an existing device.
+Host preparation opens in a separate tab so the VM configuration stays in place.
 
 ### A GPU's ROM (vBIOS)
 
 Some GPUs need their ROM given to the VM - a card the host booted from, which
 hides its ROM afterwards, or one that needs a patched ROM. On the device's row,
-choose the ROM file: up to 640 KB, starting with the PCI ROM signature `55 AA`
+choose the ROM file when adding the device or editing it: up to 640 KiB, starting with the PCI ROM signature `55 AA`
 (a dump from GPU-Z or `nvflash` may carry a header to trim first). KubeVirt has
 no field for this, so Homestead uses its hook sidecar: a small script in a
 ConfigMap of the VM's (`<vm>-vbios`), with the ROM inside, runs as KubeVirt
@@ -305,6 +307,25 @@ defines the VM, writes the ROM where the VM's QEMU can read it, and names it as
 that device's ROM - changing nothing if anything goes wrong. It switches on
 KubeVirt's `Sidecar` feature. **clear** removes it; removing the device removes
 its ROM.
+
+Clearing a ROM removes its contents and the VM's hook reference; the empty
+managed ConfigMap is retained for inspection and reuse. Several ROM files
+must fit together within the ConfigMap's 1 MiB limit. If a saved ROM is missing,
+replace or clear it explicitly in the edit form; unrelated edits keep it intact.
+
+### Hardware during a cluster transfer
+
+**Copy to cluster** and **Move to cluster** show a passthrough mapping for each
+source device. Choose a resource offered by the destination's hosts, or
+**Leave out**. Selected devices must be available on a common host. Prepare
+IOMMU and devices on that host before starting the transfer.
+
+For each retained device, keep the source vBIOS, use the destination device's
+default ROM, or upload a replacement. A different GPU may require a different
+ROM. Homestead copies managed ROM data and rebuilds its hook ConfigMap on the
+destination. It removes the source hostname selector; other placement rules
+remain. Custom hook sidecars require separate dependency setup and are refused
+by this transfer flow. The source's device settings are unchanged.
 
 ## ISO library
 

@@ -36,6 +36,41 @@ test("review and submission carry the chosen destination storage class",async()=
   t.replies.shift()({}); await starting;
 });
 
+test("VM transfer renders hardware mapping and preserves choices in the reviewed request", async()=>{
+  const t=setup();
+  const pending=t.ctx.movePlan("source","vm","desktop");
+  t.replies.shift()({ok:false,claims:[],host_devices:[{name:"gpu",resource:"example.test/old",gpu:true,rom:true}],
+    device_resources:[{resource:"example.test/new",label:"GPU",kind:"pci",nodes:["node1"]}],blockers:["Choose a destination device"]});
+  await pending;
+  assert.match(t.fields["#mv_plan"].innerHTML,/Passthrough on this cluster/);
+  assert.match(t.fields["#mv_plan"].innerHTML,/Leave out/);
+  assert.match(t.fields["#mv_plan"].innerHTML,/Keep source vBIOS/);
+  assert.equal(t.fields["#mv_go"].disabled,true);
+  t.ctx.moveDeviceSet("source","vm","desktop","gpu","resource","example.test/new");
+  assert.deepEqual(t.calls[1].body.host_devices,{gpu:{resource:"example.test/new"}});
+  t.replies.shift()({ok:true,claims:[],device_hosts:["node1"]});
+  await new Promise(resolve=>setImmediate(resolve));
+  const start=t.ctx.moveStart("source","vm","desktop");
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(t.calls[2].body.host_devices,{gpu:{resource:"example.test/new"}});
+  t.replies.shift()({}); await start;
+});
+
+test("replacement vBIOS bytes are reviewed and do not enable Start until checked", async()=>{
+  const t=setup();
+  t.ctx.vmReadRom=async()=>"VaoA";
+  t.ctx.moveDeviceSet("source","vm","desktop","gpu","resource","example.test/new");
+  t.replies.shift()({ok:true,claims:[]});
+  await new Promise(resolve=>setImmediate(resolve));
+  await t.ctx.moveDeviceRom("source","vm","desktop","gpu",{files:[{name:"gpu.rom"}]});
+  assert.equal(t.fields["#mv_go"].disabled,true);
+  assert.deepEqual(t.calls[1].body.host_devices,{gpu:{resource:"example.test/new",rom:"VaoA"}});
+  t.replies.shift()({ok:true,claims:[],host_devices:[{name:"gpu",rom:true}],device_resources:[]});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(t.fields["#mv_plan"].innerHTML,/gpu.rom/);
+  assert.equal(t.fields["#mv_go"].disabled,false);
+});
+
 test("VM copy review and start retain copy mode and storage selection", async () => {
   const t = setup();
   t.ctx.moveReview("source", "vm", "desktop", "copy", "guests");

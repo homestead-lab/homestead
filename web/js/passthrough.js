@@ -4,7 +4,7 @@
    device claims; on k3s and RKE2 by switching IOMMU on (from the next
    restart), handing a PCI device and its IOMMU group to vfio-pci, and
    listing it with KubeVirt. A VM then asks for the device by name on its
-   Devices tab, where a GPU can be given its ROM (vBIOS) too. */
+   Passthrough tab, where a GPU can be given its ROM (vBIOS) too. */
 
 const PT = { facts: {} };
 
@@ -89,44 +89,59 @@ window.ptIommu = async node => {
 /* ---------- a VM's devices ---------- */
 function vmDevicesPane(v, res) {
   const have = v.host_devices || [], list = (res && res.resources) || [];
-  const label = r => `${r.kind === "usb" ? "USB" : "PCI"} ${r.label || r.resource}${r.nodes.length ? ` · on ${r.nodes.join(", ")}` : " · no host offers it now"}`;
+  window.__vmDeviceResources = list;
+  window.__vmDeviceNames = have.map(d => d.name);
+  const nodesUrl = window.HomesteadRouter?.urlFor("nodes") || "/nodes";
+  const label = r => `${r.kind === "usb" ? "USB" : "PCI"} ${r.label || r.resource}${r.nodes?.length ? ` · ${r.nodes.join(", ")}` : " · unavailable"}`;
   return `${have.length ? `<div class="tblwrap"><table class="tbl dense stack ve-table"><thead><tr><th>Device</th><th>ROM (vBIOS)</th><th></th></tr></thead><tbody>
-      ${have.map(d => `<tr data-hostdev="${esc(d.name)}"><td data-label="Device"><b>${esc(d.name)}</b><div class="dim xs mono">${esc(d.resource)}</div></td>
+      ${have.map(d => `<tr data-hostdev="${esc(d.name)}" data-resource="${esc(d.resource)}"><td data-label="Device"><label for="pd_device_${esc(d.name)}">${esc(d.name)}</label><select id="pd_device_${esc(d.name)}" class="pd_resource" aria-label="Device for ${esc(d.name)}">
+        ${!list.some(r => r.resource === d.resource) ? `<option value="${esc(d.resource)}">${esc(d.resource)} · unavailable</option>` : ""}${list.map(r => `<option value="${esc(r.resource)}" ${r.resource === d.resource ? "selected" : ""}>${esc(label(r))}</option>`).join("")}</select></td>
         <td data-label="ROM (vBIOS)">${d.rom ? `${UI.chip("its own ROM", "info")} <label class="check xs"><input type="checkbox" class="pd_clear"> clear</label>` : ""}
-          <input type="file" class="pd_rom" accept=".rom,.bin,application/octet-stream"></td>
+          <input type="file" class="pd_rom" aria-label="vBIOS file for ${esc(d.name)}" accept=".rom,.bin,application/octet-stream"></td>
         <td><label class="check xs"><input type="checkbox" class="pd_rm"> remove</label></td></tr>`).join("")}</tbody></table></div>`
-      : UI.lead("No host devices yet.")}
+      : UI.lead("Select a PCI or USB device offered by the cluster's hosts.")}
     <div id="pd_adds"></div>
-    ${list.length ? `<div class="row" style="margin-top:10px"><select id="pd_pick">${list.map(r => `<option value="${esc(r.resource)}">${esc(label(r))}</option>`).join("")}</select>
-      <button class="btn sm" onclick="vmAddHostDevice()">＋ Device</button></div>`
-      : '<div class="dim xs" style="margin-top:8px">No device is offered to VMs yet: hand one over on its host\'s page, under Devices.</div>'}
-    <p class="dim xs" style="margin-top:8px">A VM with a host device runs only where the device is, and cannot live-migrate; changes apply at its next start.
-      A ROM is for a GPU that needs its own (a card the host booted from, or a patched ROM): up to 640 KB, starting 55 AA. It uses KubeVirt's hook
-      sidecar, which Homestead switches on.</p>`;
+    ${res?.error ? UI.callout("bad", "Devices could not be loaded.", esc(res.error)) : ""}
+    ${list.length ? `<div class="f" style="margin-top:10px"><label for="pd_pick">Add PCI or USB device</label><select id="pd_pick">${list.map(r => `<option value="${esc(r.resource)}">${esc(label(r))}</option>`).join("")}</select></div>
+      ${UI.actions(UI.button("Add device", "vmAddHostDevice()"))}`
+      : '<p class="dim small">No host devices are offered to VMs. Prepare a device on its host first.</p>'}
+    <p class="dim small">Passthrough restricts this VM to hosts that offer its devices and prevents live migration. Changes apply at its next start.</p>
+    ${UI.more("IOMMU and vBIOS setup", `<p>Open <a href="${esc(nodesUrl)}" target="_blank" rel="noopener">Nodes</a> in a new tab, select a host, then Hardware → Devices for VMs. Check IOMMU and offer its PCI or USB device there. Enabling IOMMU may require a host reboot.</p><p>A GPU can use its default ROM or a vBIOS file you supply. Files must start with 55 AA and be at most 640 KiB. Homestead enables the KubeVirt hook sidecar when a ROM is supplied.</p>`)}`;
 }
 window.vmDevicesPane = vmDevicesPane;
 window.vmAddHostDevice = () => {
   const pick = $("#pd_pick");
   if (!pick) return;
-  $("#pd_adds").insertAdjacentHTML("beforeend", `<div class="pd-add row" data-resource="${esc(pick.value)}" style="margin-top:6px">
-    <span class="tag">new</span><span class="mono xs">${esc(pick.value)}</span><button class="btn sm" onclick="this.closest('.pd-add').remove()">✕</button></div>`);
+  const names = new Set([...(window.__vmDeviceNames || []), ...$$("#pd_adds .pd-add").map(row => row.dataset.hostdev)]);
+  let index = 0; while (names.has(`hostdev-${index}`)) index++;
+  const name = `hostdev-${index}`;
+  const resource = (window.__vmDeviceResources || []).find(r => r.resource === pick.value);
+  $("#pd_adds").insertAdjacentHTML("beforeend", `<div class="pd-add reviewbox" data-hostdev="${name}" data-resource="${esc(pick.value)}">
+    <div class="between"><b>${esc(resource?.label || pick.value)}</b><button type="button" class="btn sm" onclick="this.closest('.pd-add').remove()" aria-label="Remove ${name}">Remove</button></div>
+    <p class="dim xs">${esc(name)} · ${esc((resource?.nodes || []).join(", ") || "No host currently offers this device")}</p>
+    ${resource?.kind !== "usb" ? `<div class="f"><label for="pd_rom_${name}">vBIOS file <span class="dim">optional</span></label><input id="pd_rom_${name}" type="file" class="pd_rom" accept=".rom,.bin,application/octet-stream"></div>` : ""}</div>`);
 };
 async function readRom(file) {
   const buffer = await file.arrayBuffer();
   let text = "";
   const bytes = new Uint8Array(buffer);
+  if (!bytes.length || bytes.length > 640 * 1024) throw new Error("vBIOS files must be at most 640 KiB");
+  if (bytes[0] !== 0x55 || bytes[1] !== 0xaa) throw new Error("The vBIOS file must start with 55 AA; remove any dump header first");
   for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
   return btoa(text);
 }
-/* What the Devices tab changes, or null. */
+window.vmReadRom = readRom;
+/* What the Passthrough tab changes, or null. */
 window.vmDevicesChanges = async () => {
-  const out = { add: $$("#mbody .pd-add").map(x => ({ resource: x.dataset.resource })), remove: [], roms: {} };
-  for (const row of $$("#mbody tr[data-hostdev]")) {
+  const out = { add: $$("#mbody .pd-add").map(x => ({ name: x.dataset.hostdev, resource: x.dataset.resource })), map: {}, remove: [], roms: {} };
+  for (const row of $$("#mbody tr[data-hostdev], #mbody .pd-add")) {
     const name = row.dataset.hostdev;
     if (row.querySelector(".pd_rm")?.checked) { out.remove.push(name); continue; }
+    const selected = row.querySelector(".pd_resource")?.value;
+    if (selected && selected !== row.dataset.resource) out.map[name] = selected;
     const file = row.querySelector(".pd_rom")?.files?.[0];
     if (file) out.roms[name] = await readRom(file);
     else if (row.querySelector(".pd_clear")?.checked) out.roms[name] = "";
   }
-  return out.add.length || out.remove.length || Object.keys(out.roms).length ? out : null;
+  return out.add.length || out.remove.length || Object.keys(out.map).length || Object.keys(out.roms).length ? out : null;
 };

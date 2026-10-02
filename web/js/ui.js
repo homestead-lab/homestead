@@ -263,7 +263,7 @@ if (typeof window !== "undefined") { window.settingRow = settingRow; window.serv
    where changing one thing should not mean walking through all of them). */
 function stepper(id, steps, finish, { always = false } = {}) {
   return `<div class="stepper" id="${esc(id)}" data-step="0">
-    <div class="stepper-head" role="tablist">${steps.map((step, i) =>
+    <div class="stepper-head" role="tablist" data-scroll-x>${steps.map((step, i) =>
       `<button type="button" role="tab" class="stepper-chip${i ? "" : " on"}" data-i="${i}" aria-selected="${!i}" onclick="stepGo(${jsq(id)},${i})"><span>${i + 1}</span>${esc(step.title)}</button>`).join("")}</div>
     ${steps.map((step, i) => `<div class="stepper-pane" data-i="${i}"${i ? " hidden" : ""}>${step.html}</div>`).join("")}
     <div class="ui-actions stepper-foot"><div class="ui-actions-start"><button type="button" class="btn" data-back hidden onclick="stepGo(${jsq(id)},-1,true)">Back</button></div>
@@ -279,6 +279,8 @@ function stepGo(id, to, relative) {
   root.dataset.step = next;
   panes.forEach((pane, i) => { pane.hidden = i !== next; });
   chips.forEach((chip, i) => { chip.classList.toggle("on", i === next); chip.classList.toggle("done", i < next); chip.setAttribute("aria-selected", String(i === next)); });
+  const head = root.querySelector(".stepper-head");
+  if (head && head.scrollWidth > head.clientWidth) chips[next]?.scrollIntoView({ block: "nearest", inline: "nearest" });
   const last = next === panes.length - 1, nextButton = root.querySelector("[data-next]");
   root.querySelector("[data-back]").hidden = !next;
   if (nextButton) { nextButton.hidden = last; if (!last) nextButton.textContent = `Next: ${chips[next + 1].textContent.replace(/^\d+/, "")}`; }

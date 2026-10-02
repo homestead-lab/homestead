@@ -468,18 +468,18 @@ function vmEditResourceFields(v) {
 }
 
 window.vmEdit = async (ns, name) => {
-  modal(`Edit · ${name}`, `<div class="empty"><span class="spin2"></span>loading</div>`, true);
+  modal(`Edit · ${name}`, `<div class="empty"><span class="spin2"></span>loading</div>`, true, "vm-config");
   let v, o, res;
   try {
     [v, o, res] = await Promise.all([api(`/api/vm?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`),
       api("/api/vm/create-options").catch(() => ({ cdi: true, images: [], storage_classes: [], networks: ["pod"], nodes: [] })),
-      api("/api/passthrough/resources").catch(() => ({ resources: [] }))]);
+      api("/api/passthrough/resources").catch(error => ({ resources: [], error: error.message }))]);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   window.__vmEdit = { ns, name, v, o };
   const tab = (id, label) => `<button class="${id === "general" ? "on" : ""}" onclick="vmEditTab(this,${jsq(id)})">${label}</button>`;
   const disks = v.disks.filter(d => d.kind === "disk" || d.kind === "cd-rom");
   const ci = v.cloud_init || {};
-  $("#mbody").innerHTML = `<div class="between vm-edit-tabs"><div class="seg">${tab("general", "General")}${v.hardware ? tab("hardware", "Hardware") : ""}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("devices", `Devices · ${(v.host_devices || []).length}`)}${tab("cloud", "Cloud-init")}</div>
+  $("#mbody").innerHTML = `<div class="between vm-edit-tabs"><div class="seg">${tab("general", "General")}${v.hardware ? tab("hardware", "Hardware") : ""}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.nics.length}`)}${tab("devices", `Passthrough · ${(v.host_devices || []).length}`)}${tab("cloud", "Cloud-init")}</div>
       <button class="btn sm" data-need="admin" onclick="vmYaml(${jsq(ns)},${jsq(name)})" title="Every field, as YAML">${icon("edit")}Edit YAML</button></div>
     <div class="ve-pane" data-pane="general" style="margin-top:12px">
       ${vmEditResourceFields(v)}

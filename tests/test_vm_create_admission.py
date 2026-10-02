@@ -1,4 +1,5 @@
 import copy
+import base64
 import tempfile
 import unittest
 import urllib.error
@@ -7,6 +8,7 @@ from unittest import mock
 import test_vm_capacity as fixtures
 import server
 import homestead_capacity_review as review
+import homestead_passthrough as passthrough
 
 
 class VMCreateAdmissionTests(unittest.TestCase):
@@ -45,10 +47,12 @@ class VMCreateAdmissionTests(unittest.TestCase):
         handler._send = mock.Mock()
         def send(method, path, body=None, **kwargs):
             value = copy.deepcopy(body or {})
-            value.setdefault("metadata", {}).update(uid="created-uid", resourceVersion="1")
-            value["metadata"].setdefault("namespace", "lab")
+            value.setdefault("metadata", {}).update(resourceVersion="1")
+            value["metadata"].setdefault("uid", "created-uid")
+            value["metadata"].setdefault("namespace", path.split("/namespaces/")[-1].split("/")[0] if "/namespaces/" in path else "lab")
             if method == "PATCH":
-                value.update(apiVersion="v1", kind="Secret")
+                value.update(apiVersion="kubevirt.io/v1" if "/kubevirts/" in path else "v1",
+                             kind="KubeVirt" if "/kubevirts/" in path else "ConfigMap" if "/configmaps/" in path else "Secret")
                 value["metadata"].setdefault("name", path.rsplit("/", 1)[-1])
             return value
         with mock.patch.object(server.IMP, "ksend", side_effect=send) as writes, \
@@ -183,6 +187,50 @@ class VMCreateAdmissionTests(unittest.TestCase):
         image.assert_called_once()
         writes.assert_not_called()
         records.assert_not_called()
+
+    def passthrough_setup(self):
+        resource = "example.test/gpu"
+        self.nodes[0]["allocatable"][resource] = "1"
+        self.config["spec"]["configuration"]["permittedHostDevices"] = {
+            "pciHostDevices": [{"resourceName": resource, "pciVendorSelector": "1234:5678"}]}
+        self.body["host_devices"] = {"add": [{"name": "gpu", "resource": resource}],
+            "roms": {"gpu": base64.b64encode(b"\x55\xaa" + b"\x00" * 1022).decode()}}
+        for patch in (mock.patch.object(passthrough, "resources", return_value={"resources": [{"resource": resource}]}),
+                      mock.patch.object(passthrough, "_kubevirt", side_effect=lambda: copy.deepcopy(self.config))):
+            patch.start(); self.addCleanup(patch.stop)
+
+    def test_create_review_is_read_only_then_applies_device_and_rom_before_vm(self):
+        self.passthrough_setup()
+        body = self.reviewed()
+        result, writes, _ = self.call("/api/vm/create", body)
+        self.assertEqual(200, result[0], result)
+        calls = writes.call_args_list
+        vm = next(c.args[2] for c in calls if c.args[1].endswith("/virtualmachines"))
+        self.assertEqual("example.test/gpu", passthrough.vm_devices(vm)[0]["resource"])
+        cm = next(c.args[2] for c in calls if c.args[1].endswith("/configmaps"))
+        self.assertEqual("fresh-vbios", cm["metadata"]["name"])
+        self.assertEqual({"gpu"}, set(passthrough.roms_from_configmap(vm, cm)))
+        paths = [c.args[1] for c in calls]
+        self.assertLess(paths.index("/api/v1/namespaces/lab/configmaps"), paths.index("/apis/kubevirt.io/v1/namespaces/lab/virtualmachines"))
+        gate = next(c.args[2] for c in calls if "/kubevirts/" in c.args[1])
+        self.assertEqual({"uid": "kv-uid", "resourceVersion": "1"}, gate["metadata"])
+        self.assertIn("Sidecar", gate["spec"]["configuration"]["developerConfiguration"]["featureGates"])
+
+    def test_new_vbios_cannot_overwrite_a_configmap_created_after_review(self):
+        self.passthrough_setup()
+        body = self.reviewed()
+        self.objects["/api/v1/namespaces/lab/configmaps/fresh-vbios"] = {"metadata": {"name": "fresh-vbios"}}
+        result, writes, _ = self.call("/api/vm/create", body)
+        self.assertEqual(400, result[0], result)
+        writes.assert_not_called()
+
+    def test_device_settings_cannot_be_added_after_create_approval(self):
+        body = self.reviewed()
+        self.passthrough_setup()
+        body["host_devices"] = self.body["host_devices"]
+        result, writes, _ = self.call("/api/vm/create", body)
+        self.assertEqual(409, result[0], result)
+        writes.assert_not_called()
 
     def test_resolved_image_class_can_pass_fresh_admission(self):
         self.image_setup()

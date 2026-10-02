@@ -4162,7 +4162,8 @@ def vm_creation_capacity(prepared):
                 borrowed_users.append(owner["metadata"]["name"])
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
     plan = VM_CAPACITY.plan(prepared["vm"], read, PLACE.get_nodes(), action="create", warning_percent=threshold,
-                           planned_claims=claims)
+                           planned_claims=claims, planned_configmaps={e["path"]: e["body"] for e in prepared.get("effects", [])
+                                                                      if e["kind"] == "configmap" and e["body"]})
     plan["requires_confirmation"] = True
     if borrowed_users:
         plan["blockers"].append("Selected disk is referenced by existing VM(s), including stopped VMs: " + ", ".join(sorted(borrowed_users)))
@@ -4346,7 +4347,8 @@ def vm_edit_capacity(prepared):
         expanded_spec = VM_PROFILES.expand(vm, kget, ksend)
         threshold = get_app_settings()["thresholds"]["memory"]["critical"]
         plan = VM_CAPACITY.plan(vm, read, PLACE.get_nodes(), action="edit", current=current,
-                               warning_percent=threshold, planned_claims=claims, expanded_spec=expanded_spec)
+                               warning_percent=threshold, planned_claims=claims, expanded_spec=expanded_spec,
+                               planned_configmaps={e["path"]: e["body"] for e in prepared["effects"] if e["kind"] == "configmap" and e["body"]})
         plan["warnings"].append("Template and restart-policy changes may take effect immediately through KubeVirt. Saving is not a promise that the guest remains stopped or unchanged.")
         if after == "Halted":
             plan["warnings"].append("The requested policy is Halted. Resource placement shown is conservative; a separate reviewed Start is required to run it again.")
@@ -9094,7 +9096,7 @@ class H(HTTP.LimitedHandler):
                     b.get("namespace") or DEFAULT_NS, b.get("address_mode") or "shared",
                     b.get("address") or "", b.get("storage_class") or "",
                     b.get("volumes") if isinstance(b.get("volumes"), dict) else None,
-                    b.get("transfer_mode") or "move", b.get("source_namespace") or ""))
+                    b.get("transfer_mode") or "move", b.get("source_namespace") or "", b.get("host_devices")))
             if p == "/api/move/moves/retry":
                 return self._move(lambda: MOVE_ENGINE.retry(b.get("id")))
             if p == "/api/move/moves/abandon":

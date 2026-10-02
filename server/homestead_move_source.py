@@ -21,6 +21,7 @@ import time
 import urllib.error
 
 import homestead_names as NAMES
+import homestead_vm_transfer_devices as VM_DEVICES
 from homestead_pod_resources import storage_gib
 from homestead_longhorn import move_snapshot_error
 
@@ -286,7 +287,7 @@ def definition(kind, name):
             if "dataVolume" in volume:
                 volume["persistentVolumeClaim"] = {"claimName": volume.pop("dataVolume")["name"]}
             for source in ("cloudInitNoCloud", "cloudInitConfigDrive"):
-                for ref in ("userDataSecretRef", "networkDataSecretRef"):
+                for ref in ("secretRef", "userDataSecretRef", "networkDataSecretRef"):
                     secret_name = ((volume.get(source) or {}).get(ref) or {}).get("name")
                     if secret_name:
                         secret = _get(f"/api/v1/namespaces/{_namespace()}/secrets/{secret_name}")
@@ -308,6 +309,7 @@ def definition(kind, name):
         "object": body, "origin": origin,
         "services": [_clean_service(s) for s in _services_for(pod_labels)] if kind == "container" else [],
         "secrets": secrets,
+        **({"vbios": VM_DEVICES.export(dict(obj, metadata={**obj["metadata"], "namespace": _namespace()}), _get)} if kind == "vm" else {}),
         "claims": [_claim_row(claim) for claim in _claims_of(kind, obj)],
         "node_selector": (template.get("spec", {}) or {}).get("nodeSelector", {}) or {},
         "pull_secrets": [ref.get("name") for ref in

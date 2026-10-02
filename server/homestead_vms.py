@@ -957,7 +957,8 @@ def prepare_edit(ns, name, cfg, current=None):
     if cfg.get("host_devices"):
         # PCI and USB devices of a host, and a GPU's ROM (homestead_passthrough).
         import homestead_passthrough as PASSTHROUGH
-        changed_hardware |= PASSTHROUGH.edit_vm(vm, ns, cfg["host_devices"], effects, PASSTHROUGH.current_roms(vm, ns))
+        replaced = set(cfg["host_devices"].get("roms") or {}) | set(cfg["host_devices"].get("remove") or [])
+        changed_hardware |= PASSTHROUGH.edit_vm(vm, ns, cfg["host_devices"], effects, PASSTHROUGH.current_roms(vm, ns, replaced))
     if cfg.get("hardware"):
         if "cores" in cfg and any(k in (cfg["hardware"].get("cpu") or {}) for k in ("sockets", "cores", "threads")):
             raise ValueError("set the CPU count or its topology, not both")
@@ -1002,6 +1003,13 @@ def prepare_edit(ns, name, cfg, current=None):
             annotations.pop(DESCRIPTION, None)
     vm["metadata"].pop("managedFields", None)
     for effect in effects:
+        if effect["kind"] == "configmap":
+            current_map = _optional(effect["path"])
+            if current_map:
+                labels = (current_map.get("metadata") or {}).get("labels") or {}
+                if labels.get("homestead.io/managed") != "true" or labels.get("app") != name:
+                    raise ValueError("The vBIOS ConfigMap belongs to another resource; inspect it before editing this VM")
+            effect["identity"] = _identity(current_map) if current_map else None
         if effect["kind"] == "replace-datavolume" and effect["current"] is not None:
             effect["identity"] = _identity(effect.pop("current"))
     for claim, _ in resize:
@@ -1017,7 +1025,7 @@ def _recheck_edit(prepared):
     if _identity(_get(ns, name)) != prepared["identity"]:
         raise ValueError("The VM changed; review its edit again")
     for effect in prepared["effects"]:
-        if effect["kind"] in ("image-download", "configmap", "kubevirt-gates"):
+        if effect["kind"] in ("image-download", "kubevirt-gates"):
             continue
         current = _optional(effect["path"])
         if (None if current is None else _identity(current)) != effect.get("identity"):

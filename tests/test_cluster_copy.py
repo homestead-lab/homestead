@@ -1,5 +1,7 @@
 """A stopped destination copy, a retained source, and restartable disk transfer."""
 import copy
+import base64
+import json
 import unittest
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
@@ -8,6 +10,7 @@ from unittest import mock
 
 import test_move_flow as fixtures
 from test_move_flow import FakeNetwork, engine, source, client
+import homestead_passthrough as passthrough
 
 
 class ClusterCopyTests(unittest.TestCase):
@@ -80,6 +83,119 @@ class ClusterCopyTests(unittest.TestCase):
         self.assertNotIn("secrets", done)
         with self.assertRaisesRegex(ValueError, "keeps its source"):
             engine.finish(move["id"], True)
+
+    def hardware_vm(self):
+        vm = self.seed_vm()
+        spec = vm["spec"]["template"]["spec"]
+        spec["domain"]["devices"]["gpus"] = [{"name": "display", "deviceName": "example.test/source-gpu"}]
+        spec["nodeSelector"] = {"kubernetes.io/hostname": "source-node"}
+        rom = b"\x55\xaa" + b"\x00" * 1022
+        vm["spec"]["template"]["metadata"] = {"annotations": {
+            "homestead.io/vbios": '["display"]',
+            passthrough.HOOK_ANNOTATION: json.dumps([{"configMap": {"name": "desktop-vbios"}}])}}
+        self.cluster.put(self.vm_path(), vm)
+        self.cluster.put("/api/v1/namespaces/lab/configmaps/desktop-vbios", {
+            "metadata": {"name": "desktop-vbios"}, "data": {passthrough.HOOK_KEY: passthrough.hook_script({"display": rom})}})
+        # The simple fixture infers plurals from an 's' suffix. A ROM name also
+        # ends in s, so make absent object GETs behave like Kubernetes here.
+        original_get = engine.kget
+        def get(path):
+            if "/configmaps/" in path and path not in self.cluster.objects:
+                raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+            return original_get(path)
+        patch = mock.patch.object(engine, "kget", side_effect=get)
+        patch.start(); self.addCleanup(patch.stop)
+        resources = {"resources": [{"resource": "example.test/destination-gpu", "kind": "pci",
+                                    "label": "GPU", "nodes": ["destination-node"]}]}
+        for patch in (mock.patch.object(passthrough, "resources", return_value=resources),
+                      mock.patch.object(passthrough, "ensure_gates")):
+            patch.start(); self.addCleanup(patch.stop)
+        return vm, rom
+
+    def test_copy_maps_destination_gpu_and_carries_rom_without_changing_source(self):
+        original, rom = self.hardware_vm()
+        move = engine.start("shed", "vm", "desktop", "copied", transfer_mode="copy",
+                            host_devices={"display": {"resource": "example.test/destination-gpu"}})
+        self.assertEqual("succeeded", self.settle(move["id"])["status"])
+        copied = self.cluster.get(self.vm_path("copied"))
+        self.assertEqual("example.test/destination-gpu", passthrough.vm_devices(copied)[0]["resource"])
+        self.assertNotIn("kubernetes.io/hostname", copied["spec"]["template"]["spec"]["nodeSelector"])
+        cm = self.cluster.get("/api/v1/namespaces/copied/configmaps/desktop-vbios")
+        self.assertEqual({"display": rom}, passthrough.roms_from_configmap(copied, cm))
+        self.assertTrue(engine._ours(cm, move["id"]))
+        self.assertEqual(original["spec"]["template"], self.cluster.get(self.vm_path())["spec"]["template"])
+        engine.abandon(move["id"])
+        self.assertNotIn("/api/v1/namespaces/copied/configmaps/desktop-vbios", self.cluster.objects)
+        self.assertIn("/api/v1/namespaces/lab/configmaps/desktop-vbios", self.cluster.objects)
+
+    def test_leave_out_device_removes_its_rom_and_hook_on_copy(self):
+        self.hardware_vm()
+        move = engine.start("shed", "vm", "desktop", "copied", transfer_mode="copy",
+                            host_devices={"display": {"resource": ""}})
+        self.assertEqual("succeeded", self.settle(move["id"])["status"])
+        copied = self.cluster.get(self.vm_path("copied"))
+        self.assertEqual([], passthrough.vm_devices(copied))
+        self.assertNotIn(passthrough.HOOK_ANNOTATION, copied["spec"]["template"]["metadata"].get("annotations", {}))
+        self.assertNotIn("/api/v1/namespaces/copied/configmaps/desktop-vbios", self.cluster.objects)
+
+    def test_copy_can_replace_or_clear_source_vbios(self):
+        self.hardware_vm()
+        replacement = b"\x55\xaa" + b"\x11" * 1022
+        for namespace, rom in (("replacement", base64.b64encode(replacement).decode()), ("default-rom", "")):
+            move = engine.start("shed", "vm", "desktop", namespace, transfer_mode="copy",
+                                host_devices={"display": {"resource": "example.test/destination-gpu", "rom": rom}})
+            self.assertEqual("succeeded", self.settle(move["id"])["status"])
+            copied = self.cluster.get(self.vm_path(namespace))
+            self.assertEqual(bool(rom), passthrough.vm_devices(copied)[0]["rom"])
+            if rom:
+                cm = self.cluster.get(f"/api/v1/namespaces/{namespace}/configmaps/desktop-vbios")
+                self.assertEqual({"display": replacement}, passthrough.roms_from_configmap(copied, cm))
+
+    def test_devices_on_different_hosts_and_custom_hooks_block_before_quiesce(self):
+        vm, _ = self.hardware_vm()
+        vm["spec"]["template"]["spec"]["domain"]["devices"]["hostDevices"] = [{"name": "storage", "deviceName": "example.test/source-hba"}]
+        self.cluster.put(self.vm_path(), vm)
+        resources = {"resources": [{"resource": "example.test/destination-gpu", "kind": "pci", "nodes": ["node1"]},
+                                    {"resource": "example.test/destination-hba", "kind": "pci", "nodes": ["node2"]}]}
+        choices = {"display": {"resource": "example.test/destination-gpu"}, "storage": {"resource": "example.test/destination-hba"}}
+        with mock.patch.object(passthrough, "resources", return_value=resources), self.assertRaisesRegex(ValueError, "No destination host"):
+            engine.start("shed", "vm", "desktop", "copied", transfer_mode="copy", host_devices=choices)
+        vm["spec"]["template"]["metadata"]["annotations"][passthrough.HOOK_ANNOTATION] = '[{"image":"example.test/custom-hook"}]'
+        self.cluster.put(self.vm_path(), vm)
+        with self.assertRaisesRegex(ValueError, "custom hook sidecar"):
+            engine.start("shed", "vm", "desktop", "copied", transfer_mode="copy", host_devices=choices)
+        self.assertNotIn("/api/move/source", self.remote_calls)
+
+    def test_device_and_rom_problems_are_refused_before_stopping_source(self):
+        self.hardware_vm()
+        for choices, message in ((None, "Choose a destination device"),
+                                 ({"display": {"resource": "example.test/missing"}}, "not offered"),
+                                 ({"display": {"resource": "example.test/destination-gpu", "rom": "invalid"}}, "ROM file could not")):
+            with self.subTest(message=message), self.assertRaisesRegex(ValueError, message):
+                engine.start("shed", "vm", "desktop", "copied", transfer_mode="copy", host_devices=choices)
+        self.cluster.objects.pop("/api/v1/namespaces/lab/configmaps/desktop-vbios")
+        with self.assertRaisesRegex(ValueError, "vBIOS ConfigMap is missing"):
+            engine.start("shed", "vm", "desktop", "copied", transfer_mode="copy",
+                         host_devices={"display": {"resource": ""}})
+        self.assertNotIn("/api/move/source", self.remote_calls)
+
+    def test_device_mapping_changes_during_copy_queue_do_not_stop_source(self):
+        self.hardware_vm()
+        move = engine.start("shed", "vm", "desktop", "copied", transfer_mode="copy",
+                            host_devices={"display": {"resource": "example.test/destination-gpu"}})
+        self.cluster.objects[self.vm_path()]["spec"]["template"]["spec"]["domain"]["devices"]["gpus"][0]["deviceName"] = "example.test/changed"
+        result = self.settle(move["id"])
+        self.assertEqual("failed", result["status"])
+        self.assertIn("source passthrough devices or vBIOS changed", result["message"])
+        self.assertNotIn("/api/move/source", self.remote_calls)
+
+    def test_homestead_cloud_init_secret_ref_is_copied(self):
+        vm = self.seed_vm()
+        vm["spec"]["template"]["spec"]["volumes"][-1]["cloudInitNoCloud"] = {"secretRef": {"name": "desktop-init"}}
+        self.cluster.put(self.vm_path(), vm)
+        move = engine.start("shed", "vm", "desktop", "copied", transfer_mode="copy")
+        self.assertEqual("succeeded", self.settle(move["id"])["status"])
+        self.assertEqual({"userdata": "dGVzdA=="}, self.cluster.get("/api/v1/namespaces/copied/secrets/desktop-init")["data"])
 
     def test_source_is_released_after_backups_before_restore_and_snapshot_survives_restart(self):
         self.seed_vm()
