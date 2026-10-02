@@ -811,6 +811,7 @@
           warnings: ["mosquitto uses it and stays here, stopped"] }] },
     // One path, two questions: where this can move within the cluster (GET),
     // and what bringing it from another cluster involves (POST).
+    "/api/move/hello": { protocol: 1, namespace: "lab", capabilities: ["copy-source-lease", "copy-destination"] },
     "/api/move/plan": (url, init) => (init?.method || "GET") !== "GET" && JSON.parse(init.body || "{}").cluster === "dr-site"
       ? { ok: false, blockers: ["dr-site: this cluster has no Longhorn backup target; set up backup storage under Data protection first"],
           warnings: [], claims: [], fixes: [{ kind: "source-storage", cluster: "dr-site" }] }
