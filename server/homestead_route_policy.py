@@ -391,6 +391,9 @@ POLICY = {
 }
 
 POLICY.update({
+    ('GET', '/api/longhorn/v2/plan'): 'admin',
+    ('POST', '/api/longhorn/v2/prepare'): 'admin',
+    ('POST', '/api/longhorn/v2/enable'): 'admin',
     ("POST", "/api/fleet/switch"): "viewer",
     **{("POST", path): "admin" for path in (
         "/api/fleet/join", "/api/fleet/accept", "/api/fleet/sync", "/api/fleet/remove",

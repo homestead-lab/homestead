@@ -1455,10 +1455,15 @@ A storage class can be made on Longhorn's V2 data engine (SPDK), which is
 faster and lighter on CPU than V1. The class table has an Engine column, a V2
 volume is tagged on Volumes, and the storage classes card says whether V2 is on
 and how many nodes can hold its volumes: each needs a disk given to Longhorn as
-a block device and 2 GiB of hugepages. Creating a V2 class says so when it
-could not schedule yet. On Harvester, V2 is switched on by Harvester's own
-`longhorn-v2-data-engine-enabled` setting and V2 disks are added per host, so
-Homestead reads Longhorn's settings rather than changing them.
+a block device and usually 2 GiB of hugepages. Creating a V2 class says so when
+it could not schedule yet. **Settings > Hardware and storage > Longhorn > Set up
+Longhorn V2** checks the installed memory requirement, prepares Linux k3s/rke2
+hosts through reviewed jobs, and verifies Kubernetes capacity before enabling.
+Any required reboot goes through the existing host maintenance review. Saved
+jobs, live logs and observed instance-manager readiness show progress. Disks
+and a V2 storage class remain separate reviewed steps. On Harvester, Homestead
+changes Harvester's `longhorn-v2-data-engine-enabled` setting; Harvester owns
+host preparation and restarts. See [the setup workflow](wiki/Storage.md#what-the-v2-engine-needs).
 
 ## Network shares
 

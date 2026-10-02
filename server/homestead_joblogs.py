@@ -163,6 +163,7 @@ def register(ops):
             ("import", _ref_job(title="Copy")),
             ("protect-run", _ref_job(title="Run")),
             ("helm", _ref_job(title="Helm")),
+            ("longhorn-v2-prepare", _ref_job(title="V2 host preparation")),
             ("restructure", _ref_job(key="job", title="Copy")),
             ("workload-copy", copy_job),
             ("import-create", copy_job),
