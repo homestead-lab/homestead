@@ -57,6 +57,11 @@ try {
     await page.locator("#e_mem_0").fill("384Mi");
     await page.locator("#e_mem_limit_0").fill("2Gi");
     await page.locator("#e_pv_0_caps").fill("SYS_TIME");
+    // Ports are in the Address step now, as in Deploy, not under Hardware.
+    assert.equal(await page.locator('[data-section="hardware"] .e-ports').count(), 0);
+    await page.evaluate(() => stepGo("e_steps", 5));
+    assert.equal(await page.locator("#e_net").isVisible(), true, "access mode, as in Deploy");
+    assert.equal(await page.locator("#e_vip_mode").isVisible(), true, "VIP allocation, as in Deploy");
     await page.locator("#e_ports_0 .ep-host").fill("8099");
     assert.equal(await page.locator("#e_ports_note").isVisible(), true);
     await page.evaluate(() => stepGo("e_steps", 2));

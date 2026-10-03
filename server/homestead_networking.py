@@ -803,7 +803,7 @@ def _listener_owner(service, ports):
     return None
 
 
-def sync_workload_ports(namespace, workload, ports, network_mode=None, vip_mode="shared"):
+def sync_workload_ports(namespace, workload, ports, network_mode=None, vip_mode="shared", vip=""):
     """Point a workload's Service at the LAN ports its containers now expose.
 
     Editing a container only ever changed containerPort, which Kubernetes uses
@@ -830,6 +830,7 @@ def sync_workload_ports(namespace, workload, ports, network_mode=None, vip_mode=
         plan = create_service({"namespace": namespace, "name": workload, "workload": workload,
                                "type": "ClusterIP" if internal else "LoadBalancer",
                                "vip_mode": "cluster" if internal else vip_mode,
+                               **({"vip": vip} if vip and not internal else {}),
                                "ports": [{"name": port["name"], "port": port["port"],
                                           "target_port": port["targetPort"],
                                           "protocol": port["protocol"]} for port in desired]})
@@ -857,6 +858,67 @@ def sync_workload_ports(namespace, workload, ports, network_mode=None, vip_mode=
     ksend("PUT", f"/api/v1/namespaces/{namespace}/services/{name}", service)
     listeners = ", ".join(f"{port['port']}→{port['targetPort']}/{port['protocol']}" for port in desired)
     return f"Service {name} now listens on {listeners}"
+
+
+def _own_service(namespace, workload):
+    """The Service Homestead made for this workload alone, or None."""
+    services = workload_services(namespace, workload)
+    service = services[0] if services else None
+    if not service or service["metadata"]["name"] != workload:
+        return None
+    return service
+
+
+def set_workload_address(namespace, workload, network_mode, vip_mode="shared", vip=""):
+    """Put a workload's own Service where its Address step says: on the LAN
+    on the chosen VIP, or cluster-only. Edit used to leave this to a separate
+    dialog; Deploy always chose it with the ports. Only what differs from now
+    changes - a workload keeping its own address is not given a new one."""
+    namespace, workload = _name(namespace, "namespace"), _name(workload, "workload name")
+    if network_mode not in ("loadbalancer", "internal"):
+        return ""
+    service = _own_service(namespace, workload)
+    if not service:
+        return ""
+    mode = {"auto": "automatic"}.get(vip_mode or "shared", vip_mode or "shared")
+    meta, spec = service["metadata"], service.get("spec") or {}
+    row = next((r for r in inventory()["services"] if r["namespace"] == namespace and r["name"] == meta["name"]), {})
+    ports = [{"name": p.get("name", ""), "port": p.get("port"), "target_port": p.get("targetPort", p.get("port")),
+              "protocol": p.get("protocol") or "TCP"} for p in spec.get("ports") or []]
+    want = "ClusterIP" if network_mode == "internal" else "LoadBalancer"
+    cfg = {"namespace": namespace, "name": meta["name"], "workload": workload, "workload_kind": "Deployment",
+           "type": want, "vip_mode": "cluster" if want == "ClusterIP" else mode,
+           **({"vip": vip} if mode == "manual" and want == "LoadBalancer" else {}), "ports": ports}
+    if spec.get("type") != want:
+        # Reachability changes: the old Service goes and one of the new kind
+        # is made with the same ports, as Deploy would have made it.
+        path = f"/api/v1/namespaces/{namespace}/services/{meta['name']}"
+        ksend("DELETE", path)
+        # A LoadBalancer Service lingers while its address is released.
+        for _ in range(30):
+            try:
+                kget(path)
+            except urllib.error.HTTPError as error:
+                if error.code == 404:
+                    break
+                raise
+            time.sleep(1)
+        else:
+            raise ValueError(f"Service {namespace}/{meta['name']} is still being removed; save again in a moment")
+        return create_service(cfg)["message"]
+    if want == "ClusterIP":
+        return ""
+    current_ip = (row.get("requested_ips") or [""])[0]
+    current_mode = row.get("vip_mode") or ""
+    shared = (inventory()["shared_vip"] or {}).get("ip", "")
+    unchanged = (mode == "manual" and vip == current_ip
+                 or mode == "shared" and (current_mode == "shared" or (shared and current_ip == shared))
+                 or mode == "automatic" and current_ip and current_ip != shared and current_mode != "nodes"
+                 or mode == "nodes" and current_mode == "nodes")
+    if unchanged:
+        return ""
+    return create_service({**cfg, "update": True, "uid": meta.get("uid"),
+                           "resource_version": meta.get("resourceVersion")})["message"]
 
 
 def delete_service(namespace, name, force=False):

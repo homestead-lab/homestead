@@ -3031,10 +3031,22 @@ def apply_reviewed_edit(b, prepared, hold=False):
             if b.get("lan"):
                 b["network_mode"] = "lan"
     ports = [port for container in b.get("containers") or [] for port in container.get("ports") or []]
+    # The Address step, as in Deploy: how clients reach it, and on which VIP.
+    address = b.get("address") if isinstance(b.get("address"), dict) else {}
+    vip_mode = address.get("vip_mode") or "shared"
     if b.get("manage_ports") or any("expose" in port for port in ports):
-        message = NETWORK.sync_workload_ports(b["ns"], result.get("name") or b["name"], ports, network_mode=b.get("network_mode"))
+        message = NETWORK.sync_workload_ports(b["ns"], result.get("name") or b["name"], ports,
+                                              network_mode=address.get("network_mode") or b.get("network_mode"),
+                                              vip_mode={"auto": "automatic"}.get(vip_mode, vip_mode),
+                                              vip=address.get("lb_ip", "") if vip_mode == "manual" else "")
         if message:
             result["network"] = message
+            _cache.pop("network", None)
+    if address.get("network_mode") in ("loadbalancer", "internal"):
+        message = NETWORK.set_workload_address(b["ns"], result.get("name") or b["name"], address["network_mode"],
+                                               vip_mode, address.get("lb_ip", ""))
+        if message:
+            result["network"] = "; ".join(filter(None, [result.get("network"), message]))
             _cache.pop("network", None)
     return result
 

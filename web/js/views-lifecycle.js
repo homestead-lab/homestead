@@ -61,8 +61,8 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
       <div class="subsec">Hardware passed to this container</div>
       <div class="hwchoices">${hardwareChoices(`e_hw_${index}`, container.hardware || [])}</div>
       <div class="subsec">Privileges</div>
-      ${privilegeFields(`e_pv_${index}`, container.privileges || {})}
-      <div class="subsec">Ports ${tip("Container port is where the process listens inside the container. LAN port is the number clients use on the Service address; unexposed ports stay inside the cluster.")}</div>
+      ${privilegeFields(`e_pv_${index}`, container.privileges || {})}`,
+    address: () => `
       <div class="e-ports" id="e_ports_${index}">${ports.map(port => editPortRow(index, port)).join("")}</div>
       <button class="btn sm" type="button" onclick="editAddPort(${index})">＋ add port</button>`,
     environment: () => `
@@ -76,12 +76,12 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
       <button class="btn sm" type="button" onclick="editAddVol(${index})">＋ add storage mapping</button>`,
   };
   const count = section === "environment" ? `${env.length + refs.length} vars`
-    : section === "storage" ? `${mounts.length} mounts` : section === "hardware" ? `${ports.length} ports` : "";
+    : section === "storage" ? `${mounts.length} mounts` : section === "address" ? `${ports.length} ports` : "";
   return `<details class="edit-container card flat" data-index="${index}" data-section="${section}"
     ${section === "basics" || section === "all" ? `data-original-name="${esc(container.new ? "" : container.original_name || container.name)}" data-new="${container.new ? 1 : 0}"` : ""} ${index === 0 ? "open" : ""}>
     <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span>${count ? `<span class="pill">${count}</span>` : ""}</summary>
     <div class="edit-container-body">${section === "basics" || section === "all" ? `<div class="row"><button class="btn sm danger" type="button" data-container-remove onclick="containerRemove(${jsq(mode)},${index})">Remove container</button></div>` : ""}
-      ${section === "all" ? Object.entries(fields).map(([key, draw]) => `<div class="subsec">${({ basics: "Container", hardware: "Hardware and access", environment: "Environment", storage: "Storage" })[key]}</div>${draw()}`).join("") : fields[section]()}</div>
+      ${section === "all" ? Object.entries(fields).map(([key, draw]) => `<div class="subsec">${({ basics: "Container", hardware: "Hardware and access", environment: "Environment", storage: "Storage", address: "Ports" })[key]}</div>${draw()}`).join("") : fields[section]()}</div>
   </details>`;
 };
 
@@ -104,9 +104,36 @@ function placementRow(kind, row = {}) {
     <select class="aff-mode">${PLACEMENT_MODES.map(([value, label]) => `<option value="${value}" ${row.mode === value ? "selected" : ""}>${label}</option>`).join("")}</select>
     <button class="iconbtn row-remove" type="button" title="Remove this rule" onclick="this.closest('.aff-row').remove();placementChanged()">×</button></div>`;
 }
+/* How the workload is reached now, in the Address step's terms. */
+function editAddressNow(w, network, vips) {
+  const own = (network?.services || []).find(s => s.namespace === w.ns && s.name === w.name && !s.system);
+  const nodes = own && window.networkIsNodeAccess ? networkIsNodeAccess(own, network) : false;
+  const ip = own && !nodes ? (own.requested_ips?.[0] || own.external_ips?.[0] || "") : "";
+  const network_mode = w.network_mode === "host" ? "host" : w.lan && !w.has_service ? "lan" : own?.type === "ClusterIP" ? "internal" : "loadbalancer";
+  // An address of its own shows as that address, so keeping it changes nothing.
+  const vip_mode = !own ? (vips.shared ? "shared" : "auto") : nodes ? "nodes"
+    : own.vip_mode === "shared" || (ip && ip === vips.shared) ? "shared" : ip ? "manual" : "auto";
+  return { network_mode, vip_mode, lb_ip: vip_mode === "manual" ? ip : "" };
+}
+window.editAddressChanged = () => {
+  const access = $("#e_net")?.value, lan = access === "lan", lanBeside = $("#e_lan_beside");
+  const vip = $("#e_vip_mode")?.closest(".f");
+  if (vip) vip.hidden = access !== "loadbalancer";
+  if ($("#e_vip_wrap")) $("#e_vip_wrap").hidden = access !== "loadbalancer" || $("#e_vip_mode")?.value !== "manual";
+  // Its own LAN address is the mode itself, or an extra beside the VIP.
+  if (lanBeside) lanBeside.hidden = lan || access === "host";
+  // The LAN mode turns the extra address on; leaving it puts the choice back.
+  const on = $("#e_lan_on");
+  if (on && lan && on.dataset.before === undefined) { on.dataset.before = on.checked ? "1" : ""; on.checked = true; }
+  else if (on && !lan && on.dataset.before !== undefined) { on.checked = on.dataset.before === "1"; delete on.dataset.before; }
+  editLanToggle();
+  const note = $("#e_address_note");
+  if (note) note.hidden = !(lan || access === "host");
+};
 window.editLanToggle = async () => {
   const box = $("#e_lan_box");
-  box.hidden = !$("#e_lan_on").checked;
+  if (!box) return;
+  box.hidden = !($("#e_lan_on")?.checked || $("#e_net")?.value === "lan");
   if (!box.hidden && !box.dataset.filled) {
     let current = null;
     try { current = JSON.parse(box.dataset.current || "null"); } catch (e) { /* none */ }
@@ -161,9 +188,6 @@ function placementSection(p, w, nodes, containers) {
         <div class="f"><label>Keep off the node of ${tip("For pairs that should never share a host: two DNS servers, or two apps that would compete for one disk.")}</label>
           <div id="e_apart">${(p.apart || []).map(row => placementRow("apart", row)).join("")}</div>
           <button class="btn sm" type="button" onclick="placementAdd('apart')">＋ Add</button></div></div></div>
-    <div class="place-level"><div class="place-title">Its own LAN address</div>
-      <label class="switch"><input type="checkbox" id="e_lan_on" ${w.lan ? "checked" : ""} onchange="editLanToggle()"> An address of its own on the LAN, beside the pod network</label>
-      <div id="e_lan_box" ${w.lan ? "" : "hidden"} data-current="${esc(JSON.stringify(w.lan || null))}"></div></div>
     <div class="place-level"><div class="place-title">If its node fails</div>
       <div class="place-grid"><div class="f">${failoverSelect("e_failover", w.failover || "default")}</div>
         <div class="dim small">${esc(FAILOVER_HELP[w.failover || "default"])}</div></div></div>
@@ -214,6 +238,8 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       api(`/api/deploy/options?ns=${encodeURIComponent(ns)}`).catch(() => ({})),
       STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads").catch(() => []),
     ]);
+    const [vips, network] = await Promise.all([vipChoices(), api("/api/network").catch(() => null)]);
+    if (network) STATE.data.network = network;
     EDIT_SAVE_UNCERTAIN = false;
     EDIT_PLACEMENT = { ns, name, others: (others || []).filter(x => !(x.ns === ns && x.name === name)),
       nodes: nodes0(liveNodes).length };
@@ -245,8 +271,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       <div id="e_removed_containers" class="dim small"></div>`;
     const running = placementSection(w.placement || {}, w, nodes, containers);
     const access = `
-      ${panels("hardware")}
-      <div class="note" id="e_ports_note" hidden></div>`;
+      ${panels("hardware")}`;
     const environment = `
       ${panels("environment")}
       ${seeds.length ? `<div class="sec">Startup seed config ${tip("This ConfigMap is copied into the container's persistent storage by an init container before every start. It is authoritative: editing only the mounted file will be overwritten on restart.")}</div>
@@ -260,17 +285,18 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
         </div>`).join("")}` : ""}`;
     const storage = `${UI.more("Choosing storage", "<p>RWO is best for one workload; RWX permits multi-node sharing. An existing PVC keeps its current data; a volume already in this pod shares its backing storage with another container. Host paths reduce failover portability. Saving creates any new claim, then rolls the pod.</p>")}
       ${panels("storage")}`;
-    const address = `
-      <div id="e_vip_picture"></div>
-      <div class="row"><button class="btn" data-need="operator" onclick="networkManage(${jsq(ns)},${jsq(name)})">Choose its address</button>
-        ${tip("The address its ports answer on: the default workload VIP or one you pick. Applied on its own, without restarting the pod - save other changes first.")}</div>
+    const address = `${addressStepHtml("e", editAddressNow(w, network, vips), vips, vips.shared || "", {
+        onChange: "editAddressChanged()",
+        lanHtml: `<label class="switch" id="e_lan_beside"><input type="checkbox" id="e_lan_on" ${w.lan ? "checked" : ""} onchange="editAddressChanged()"> Also an address of its own on the LAN, beside its VIP</label>
+          <div id="e_lan_box" ${w.lan ? "" : "hidden"} data-current="${esc(JSON.stringify(w.lan || null))}"></div>`,
+        portsHtml: `<div class="note" id="e_address_note" hidden>With its own LAN address or the host's network, clients connect to it directly: its LAN ports and VIP are not used.</div>
+          ${panels("address")}<div class="note" id="e_ports_note" hidden></div>`})}
       ${UI.more("What saving does", "<p>Saving rolls the pod. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either workload.</p>")}`;
     $("#mbody").innerHTML = `<div id="e_containers">${stepper("e_steps", [
       { title: "Basics", html: basics }, { title: "Hardware and access", html: access },
       { title: "Environment values", html: environment }, { title: "Storage", html: storage },
       { title: "Where it runs", html: running }, { title: "Address", html: address }],
       `<button class="btn pri" id="e_save" onclick="editSave(${jsq(ns)},${jsq(name)})">Review changes</button>`, { always: true })}</div>`;
-    editVipPicture(w);
     containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
     window.__editHadService = !!w.has_service;
@@ -278,18 +304,9 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     window.__editPortBaseline = editPortSignature();
     containerRemoveButtons();
     placementChanged();
-    if ($("#e_lan_on")?.checked) editLanToggle();
+    editAddressChanged();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
-/* Its address, drawn: the VIP its ports answer on, and where each leads. */
-function editVipPicture(w) {
-  const host = $("#e_vip_picture");
-  if (!host || !window.Diagram) return;
-  const ports = (w.ports || []).filter(p => p.expose !== false);
-  const ip = (STATE.data.wl || []).find(x => x.ns === w.ns && x.name === w.name)?.ports?.[0]?.ip || "";
-  host.innerHTML = Diagram.vip(ip, ports.map(p => ({ port: p.host || p.port || p.container, app: w.name, node: w.node || "" })),
-    { empty: "no port is exposed on the LAN", caption: ip ? "" : "Not on the LAN yet: choose an address to expose its ports." });
-}
 window.editAddEnv = (index, key = "", value = "") => $("#e_env_" + index).insertAdjacentHTML("beforeend", editEnvRow(index, key, value));
 window.editAddPort = (index, port = {}) => {
   $("#e_ports_" + index).insertAdjacentHTML("beforeend", editPortRow(index, port));
@@ -378,7 +395,7 @@ window.containerAdd = mode => {
   if (mode === "deploy") return deployAddContainer();
   const index = EDIT_CONTAINER_NEXT++;
   const container = { name: `container-${index + 1}`, image: "", new: true, env: {}, ports: [], volumes: [] };
-  for (const section of ["basics", "hardware", "environment", "storage"])
+  for (const section of ["basics", "hardware", "environment", "storage", "address"])
     $("#e_" + section + "_containers").insertAdjacentHTML("beforeend", editContainerPanel(container, index, section));
   renderVolumeRows(editVolumePicker(index), []);
   containerRemoveButtons();
@@ -414,7 +431,13 @@ window.editSave = async (ns, name) => {
     icon: $("#e_icon").value.trim(), replicas: Math.max(1, +$("#e_rep").value || 1),
     autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs, remove_containers: [...EDIT_REMOVED_CONTAINERS],
     placement: readPlacement(), failover: $("#e_failover")?.value || "" };
-  if ($("#e_lan_on")) body.lan = $("#e_lan_on").checked && $("#el_ip") ? containerLanRead("el") : null;
+  const access = $("#e_net")?.value;
+  if (["loadbalancer", "internal", "lan"].includes(access)) {
+    body.address = { network_mode: access, vip_mode: $("#e_vip_mode")?.value || "shared", lb_ip: ($("#e_lb_ip")?.value || "").trim() };
+    if (access === "loadbalancer" && body.address.vip_mode === "manual" && !body.address.lb_ip) return toast("Choose the specific VIP, or another VIP allocation", "bad");
+  }
+  if (access === "lan" && !$("#el_ip")?.value.trim()) return toast("Give it its own LAN address, or choose another access mode", "bad");
+  if ($("#e_lan_on")) body.lan = (access === "lan" || $("#e_lan_on").checked) && $("#el_ip") ? containerLanRead("el") : null;
   const nodeSelect = $("#e_node");
   if (nodeSelect.value !== (nodeSelect.dataset.current || "")) body.node = nodeSelect.value || null;
   if ((STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name) && !body.autostart) {
