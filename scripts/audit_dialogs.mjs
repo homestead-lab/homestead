@@ -25,7 +25,7 @@ const DIALOGS = [
   ["jobs-recovery", "workloads", "STATE.data.operations=[{id:'held',kind:'self-data-handoff',title:'Move Homestead data',status:'failed',message:'Copy stopped. Both volumes are retained.',dismissible:false,storage_recovery:true}];jobsDialog()"],
   ["jobs-empty", "workloads", "STATE.data.operations=[];jobsDialog()"],
   ["jobs-disconnected", "workloads", "STATE.data.operations=[{id:'run',title:'Update Immich',status:'running',message:'Waiting for the new pod',progress:null}];STATE.operationsStale=true;jobsDialog()"],
-  ["container-update-progress", "workloads", "modal('Updating containers',batchUpdateMarkup([{ns:'lab',name:'immich'},{ns:'lab',name:'plex'}],{'lab/immich':{phase:'updating',ready:0,desired:1},'lab/plex':{phase:'ready',ready:1,desired:1}},[],false,true))"],
+  ["container-update-progress", "workloads", "modal('Updating containers',batchUpdateMarkup([{ns:'lab',name:'immich'},{ns:'lab',name:'plex'}],{[rolloutKey({ns:'lab',name:'immich'})]:{phase:'updating',ready:0,desired:1},[rolloutKey({ns:'lab',name:'plex'})]:{phase:'ready',ready:1,desired:1}},[],false,true))"],
 
   ["longhorn-v2-upgrade-ready", "settings", "window.__demoV2UpgradeState='ready';lhV2Upgrade('v1.13.0')"],
   ["longhorn-v2-upgrade-blocked", "settings", "window.__demoV2UpgradeState='blocked';lhV2Upgrade('v1.13.0')"],
@@ -74,6 +74,9 @@ const DIALOGS = [
   ["compose-import", "workloads", "composeImport()"],
   ["move-workload", "workloads", "moveWorkload('frigate','lab')"],
   ["add-harvester-host", "cluster", "clusterOnboarding()"],
+  ["add-harvester-host-2", "cluster", "clusterOnboarding()", "stepGo('host_join',1)"],
+  ["add-harvester-host-3", "cluster", "clusterOnboarding()", "stepGo('host_join',2)"],
+  ["add-harvester-host-4", "cluster", "clusterOnboarding()", "stepGo('host_join',3)"],
   ["remove-host", "cluster", "clusterRemovePick()"],
   ["add-host", "cluster", "platformJoinGuide()"],
   ["helm-release", "helm", "click:helmRelease"],

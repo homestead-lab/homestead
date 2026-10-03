@@ -2045,9 +2045,8 @@ window.clusterStorage = (name, addressOnly = false, after = null) => {
         <input id="cs_ip" class="mono" placeholder="192.0.2.243" hidden data-ipam>`,
         { help: `${shared ? `${esc(name)}'s shared address is the one its apps share; the store answers on its own port there.` : `${esc(name)} puts Services on its nodes' own addresses; the store answers on its own port there.`} Choose an address of its own only to keep its traffic apart.` }),
       addressOnly ? "" : UI.field("Port", '<input id="cs_port" type="number" min="1" max="65534" placeholder="9000" class="mono">',
-        { help: "Where the store answers: 9000, or the port it already has, when left blank. Pick another if an app there already uses it; the next port up is its console." }))}
-    ${UI.more("Whose address this is", `<p>The address belongs to ${esc(name)}, the cluster sending the workloads: its backup store answers on it.
-      This cluster never takes it - it only connects to it to read the backups during a move. It shares ${esc(name)}'s disks, so it is for moving, not your only copy of anything.</p>`)}
+        { help: "Blank keeps the existing port or uses 9000. The console uses the next port; both must be available." }))}
+    ${UI.more("Whose address this is", `<p>This address serves ${esc(name)}'s backup store. The destination reads backups from it without taking the address. The store shares the source cluster's disks; keep an independent backup.</p>`)}
     ${UI.actions(UI.button("Cancel", "modalBack()") + UI.button(addressOnly ? "Set the address" : "Set it up", `clusterStorageGo(${jsArg(name)})`, { kind: "pri", id: "cs_go" }))}
   </div>`);
 };
@@ -2520,13 +2519,24 @@ window.importReview = async body => {
     if (sequence !== IMPORT_REVIEW_SEQUENCE) return;
     if (!result.capacity || !result.capacity_token || !Array.isArray(result.phases)) throw new Error("Import review unavailable; refresh before continuing.");
     IMPORT_REVIEW = {config, ...result, submitting:false};
+    const phaseWarnings = new Map();
+    for (const phase of result.phases) {
+      const warnings = capacityNotes(phase.capacity).concerns;
+      if (phase.capacity.blocked && !warnings.length) warnings.push("Capacity checks block this phase.");
+      for (const warning of warnings) phaseWarnings.set(warning, [...(phaseWarnings.get(warning) || []), phase.title]);
+    }
+    const warningItems = [...new Set(result.capacity.warnings || [])].map(w => `<li>${esc(w)}</li>`);
+    for (const [warning, phases] of phaseWarnings) {
+      if (!(result.capacity.warnings || []).includes(warning)) warningItems.push(`<li><b>${phases.map(esc).join(", ")}:</b> ${esc(warning)}</li>`);
+    }
+
     childModal("Review import", `<div class="update-review">
       <div class="reviewbox"><b>${esc(config.name)}</b><p>${esc(config.image)}</p>
         ${config.source_consistency ? `<p>${config.source_consistency === "snapshot" ? "Copy from a consistent snapshot or backup. Source-container checks are skipped; verify the selected paths." : "All source writers must stay stopped." + (config.source_container_id ? " The original Docker container is checked before and after copying each folder." : " Homestead cannot verify other writers.")}</p>` : ""}
         ${(result.volumes || []).map(v => `<div class="dependency-row"><span>${v.create ? 'Create' : 'Reuse'} volume</span><b>${esc(v.name)} · ${esc(v.access_mode)} · ${esc(v.storage_class)}</b></div>`).join('')}
-      </div><div class="note warn">${result.capacity.warnings.map(esc).join('<br>')}</div>
+      </div>${warningItems.length ? UI.callout(result.capacity.blocked ? "bad" : "warn", result.capacity.blocked ? "Import blocked" : "Review before importing", `<ul class="ui-list">${warningItems.join("")}</ul>`) : ""}
       ${(config.mappings || []).some(m => m.copy !== false && m.medium !== 'memory') || config.remote_path ? UI.more('Copy safety checks', 'Free space is checked on the mounted destination against measured source sizes. Missing measurements are reported in the job log, not treated as zero. Estimates do not reserve space. Unsafe destination paths stop the copy; failed transfers keep both copies.') : ''}
-      ${result.phases.map(p => `<h3>${esc(p.title)}</h3>${deployCapacityHtml(p.capacity)}`).join('')}
+      ${result.phases.map(p => UI.more(`${p.title}: capacity`, deployCapacityHtml(p.capacity))).join('')}
       ${!result.capacity.blocked ? '<label class="switch"><input type="checkbox" id="importConfirm"> I approve this import, including file replacement and any capacity warnings.</label>' : ''}
       <div class="modalactions"><button class="btn" onclick="modalBack()">Back to import</button><button class="btn pri" id="importGo" ${result.capacity.blocked ? 'disabled' : ''} onclick="confirmImport()">Create reviewed import</button></div></div>`, true);
   } catch (e) { toast(e.message, "bad"); }

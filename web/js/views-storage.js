@@ -693,9 +693,7 @@ window.storageClassCleanup = async () => {
 };
 window.storageClassCreate = async (prefill = {}, onSaved = null) => {
   modal("New storage class", `
-    <p class="muted small">A storage class is a recipe Longhorn follows when it creates a volume:
-      how many replicas to keep, whether the volume can grow, and what happens to the data when its
-      claim is deleted. Kubernetes will not let those settings change afterwards, so choose them now.</p>
+    <p class="muted small">Set the defaults for new volumes: replicas, expansion and deletion policy. These storage-class settings cannot be edited after creation.</p>
     <div class="f" style="margin-top:14px"><label>Name</label>
       <input type="text" id="sc_name" placeholder="longhorn-r3" autocomplete="off"></div>
     <div class="f2"><div class="f"><label>Replicas ${tip("Copies of each volume Longhorn keeps. One has no redundancy.")}</label>
@@ -715,7 +713,7 @@ window.storageClassCreate = async (prefill = {}, onSaved = null) => {
       <div class="dim xs" id="sc_reach" style="margin-top:6px"></div></div>
     <label class="switch"><input type="checkbox" id="sc_expand" checked> Allow volumes to grow later</label>
     <label class="switch"><input type="checkbox" id="sc_migratable" onchange="storageClassHint()"> Live-migratable · for VM disks</label>
-    <div class="note" id="sc_hint">Leave migratable off for container storage: a migratable volume gets a second controller so a VM can move between hosts, and Longhorn refuses to mount that kind into a pod — which is what breaks ReadWriteMany.</div>
+    <div class="note" id="sc_hint">Keep Migratable off for containers. It is for VM migration; Longhorn cannot mount migratable volumes into container pods, including ReadWriteMany volumes.</div>
     <label class="switch"><input type="checkbox" id="sc_default"> Make this the default class</label>
     <div class="row" style="margin-top:18px"><button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>`);
@@ -790,7 +788,7 @@ window.storageClassHint = () => {
   hint.classList.toggle("bad", on);
   hint.innerHTML = on
     ? "<b>Volumes from this class cannot be mounted by containers.</b> Only pick this for VM disks that need live migration; ReadWriteMany claims built on it will never attach to a pod."
-    : "Leave migratable off for container storage: a migratable volume gets a second controller so a VM can move between hosts, and Longhorn refuses to mount that kind into a pod — which is what breaks ReadWriteMany.";
+    : "Keep Migratable off for containers. It is for VM migration; Longhorn cannot mount migratable volumes into container pods, including ReadWriteMany volumes.";
 };
 window.storageClassSave = async button => {
   const name = $("#sc_name").value.trim();
@@ -1131,10 +1129,7 @@ window.volumeChown = async (namespace, name) => {
   const hint = await api(`/api/volumes/ownership?namespace=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}`)
     .catch(() => ({ known: false, source: "" }));
   $("#mbody").innerHTML = `
-    <p class="muted small">An import keeps the ownership the files had on the source, and a volume created
-      from the App Store is written by the container itself, so both are already correct. This is for a
-      volume that is not: appdata imported before Homestead preserved ownership, or a container that runs
-      as a different user here than it did on the source. Its log fills with permission errors when so.</p>
+    <p class="muted small">Set file ownership to match the container's user and group. ${tip("Imports preserve source ownership. Change it only when the container requires different IDs or reports permission errors.")}</p>
     ${hint.known
       ? `<div class="note"><b>${esc(hint.workload)} runs as ${hint.uid ?? hint.gid}${hint.gid != null && hint.gid !== hint.uid ? `:${hint.gid}` : ""}.</b>
           Taken from ${esc(hint.source)}${hint.image ? ` · <span class="mono">${esc(hint.image)}</span>` : ""}.</div>`
@@ -1142,8 +1137,7 @@ window.volumeChown = async (namespace, name) => {
     <div class="f2" style="margin-top:14px">
       <div class="f"><label>User (UID)</label><input type="number" id="vc_uid" min="0" max="65535" value="${hint.uid ?? ""}" placeholder="1883"></div>
       <div class="f"><label>Group (GID)</label><input type="number" id="vc_gid" min="0" max="65535" value="${hint.gid ?? ""}" placeholder="same as UID"></div></div>
-    <div class="note">Homestead runs a short job that mounts the volume and changes ownership. The workload
-      should be stopped first: a ReadWriteOnce volume cannot attach to the job while its pod holds it.</div>
+    <div class="note">Stop the workload first so the ownership job can mount its volume. A ReadWriteOnce volume cannot attach while the workload holds it.</div>
     <div class="row" style="margin-top:16px">
       <button class="btn pri" data-need="admin" onclick="volumeChownNow(${jsq(namespace)},${jsq(name)},this)">Set ownership</button>
       <button class="btn" onclick="closeModal()">Cancel</button></div>`;

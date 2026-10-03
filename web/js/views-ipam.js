@@ -332,7 +332,7 @@ function ipamSubnetRow(s = {}) {
 }
 window.ipamSubnets = (add = "") => {
   const data = STATE.data.ipam || { subnets: [] };
-  modal("Subnets", `<p class="muted small">The networks Homestead keeps addresses for, each up to a /22. Give each its DHCP range so static addresses and VIPs inside it are flagged, and the next free address is found outside it.</p>
+  modal("Subnets", `<p class="muted small">Track subnets up to /22. Add DHCP ranges to flag address conflicts and suggest free addresses outside those ranges.</p>
     <div id="is_rows">${data.subnets.map(ipamSubnetRow).join("")}${add ? ipamSubnetRow({ cidr: add, name: "LAN", gateway: add.replace(/\.0\/24$/, ".1") }) : ""}</div>
     <div class="row" style="margin-top:10px"><button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow())">＋ Subnet</button>
       ${(data.suggested || []).map(c => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow({cidr:${jsq(c)}}))">＋ ${esc(c)} <span class="dim">(cluster nodes)</span></button>`).join("")}
@@ -352,7 +352,7 @@ window.ipamSubnetsSave = async () => {
 window.ipamUnifi = async () => {
   if (!STATE.data.ipam) { try { STATE.data.ipam = await api("/api/ipam"); } catch (e) { STATE.data.ipam = { subnets: [], unifi: {} }; } }
   const u = (STATE.data.ipam || {}).unifi || {};
-  modal("UniFi", `<p class="muted small">Brings in the clients and devices a UniFi Network controller knows - names, MACs, addresses - and its DHCP reservations. It never changes the controller. Create an API key on the console under <b>Settings → Control Plane → Integrations</b>.</p>
+  modal("UniFi", `<p class="muted small">Import UniFi devices, clients and DHCP reservations without changing the controller. Create an API key under <b>Settings → Control Plane → Integrations</b>.</p>
     <div class="f"><label>Console address</label><input id="uf_url" value="${esc(u.url || "")}" placeholder="https://192.0.2.1"></div>
     <div class="f2"><div class="f"><label>API key</label><input id="uf_key" type="password" autocomplete="off" placeholder="${u.has_key ? "saved · leave blank to keep" : "paste the key"}"></div>
       <div class="f"><label>Site</label><input id="uf_site" value="${esc(u.site || "default")}"></div></div>
@@ -430,8 +430,7 @@ function ipamDownload(name, text) {
 }
 window.ipamTemplate = () => ipamDownload("homestead-addresses-template.csv", IPAM_TEMPLATE);
 window.ipamImport = () => {
-  modal("Import addresses", `<p class="muted small">A CSV with a header row. <span class="mono">address</span> is required; any of
-      <span class="mono">name, mac, kind, category, owner, tags, note</span> may follow. A blank cell leaves what is recorded; other columns are skipped, so an export can be edited and imported back.</p>
+  modal("Import addresses", `<p class="muted small">Import a CSV with an <span class="mono">address</span> column. Blank cells preserve existing values; unknown columns are ignored. ${tip("Optional columns: name, mac, kind, category, owner, tags and note. Use the template below.")}</p>
     <p class="dim xs">kind: ${Object.keys(IPAM_KIND_LABELS).join(", ")} · category: ${Object.keys(IPAM_CATEGORIES).join(", ")} · tags separated by spaces</p>
     <div class="row" style="margin:12px 0"><button class="btn" onclick="ipamTemplate()">Download template</button>
       <label class="btn pri" style="cursor:pointer">Choose CSV…<input type="file" accept=".csv,text/csv" hidden onchange="ipamImportFile(this.files[0])"></label></div>

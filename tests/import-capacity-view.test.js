@@ -8,7 +8,8 @@ function setup({blocked=false, missing=false, fail=false}={}) {
   const calls=[], fields={"#importConfirm":{checked:false}, "#importGo":{}};
   const ctx={console, URLSearchParams, Map, Set, Date, Promise, encodeURIComponent,
     document:{addEventListener(){}}, STATE:{data:{}},
-    UI:{more:(title,body)=>`<details><summary>${title}</summary>${body}</details>`},
+    capacityNotes:plan=>({concerns:plan.warnings||[]}),
+    UI:{callout:(tone,title,body)=>`<div role="alert">${title}${body}</div>`,more:(title,body)=>`<details><summary>${title}</summary>${body}</details>`},
     $:key=>fields[key], $$:()=>[], esc:value=>String(value).replaceAll("<","&lt;"),
     toast:()=>{}, closeModal:()=>{}, resetPaint:()=>{}, viewImport:()=>{},
     deployCapacityHtml:plan=>`<div>${plan.name}</div>`,
@@ -17,7 +18,7 @@ function setup({blocked=false, missing=false, fail=false}={}) {
       calls.push({path,body:JSON.parse(opts.body)});
       if(path.endsWith("/preview")) return {capacity:missing?null:{blocked,warnings:["File replacement"]},
         capacity_token:"signed",volumes:[{name:"data",create:false,access_mode:"ReadWriteMany",storage_class:"storage"}],
-        phases:[{title:"Copy files",capacity:{name:"copy"}},{title:"Imported application",capacity:{name:"app"}}]};
+        phases:[{title:"Copy files",capacity:{name:"copy",warnings:["RAM warning"]}},{title:"Imported application",capacity:{name:"app",warnings:["RAM warning"]}}]};
       if(fail) throw Error("Lost connection");
       return {job:"homestead-import-app"};
     }};
@@ -73,4 +74,11 @@ test("copy review explains unknown space estimates and retained partial copies",
   assert.match(t.fields.html,/Copy safety checks/);
   assert.match(t.fields.html,/Missing measurements/);
   assert.match(t.fields.html,/failed transfers keep both copies/);
+});
+
+test("shared phase warnings appear once above collapsed capacity details",async()=>{
+  const t=setup(); await t.ctx.importReview({name:"app"});
+  assert.equal((t.fields.html.match(/RAM warning/g)||[]).length,1);
+  assert.match(t.fields.html,/Copy files, Imported application/);
+  assert.ok(t.fields.html.indexOf("RAM warning")<t.fields.html.indexOf("<details>"));
 });

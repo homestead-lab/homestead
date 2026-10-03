@@ -267,7 +267,7 @@ window.vmIsoLibrary = async () => {
     return ` · unused${left === null ? "" : left ? `, removed in ${left} day${left === 1 ? "" : "s"}` : ", removed soon"}`;
   };
   $("#mbody").innerHTML = `<div class="ui-stack iso-lib">
-    ${UI.lead("ISO images for VMs' CD-ROM drives, from folders on your Network Shares - drop them there from your PC. Each is copied once into a volume every VM can use; <b>Make ready</b> starts that. Copies keep one replica: the originals stay on your shares, and a lost copy is made ready again.")}
+    ${UI.lead("Use ISOs from Network Shares as VM installation media. <b>Make ready</b> creates a shared copy with one replica. Originals stay on the share; lost copies can be recreated.")}
     <div class="iso-folders"><div class="between"><b>Folders</b><button class="btn sm" data-need="admin" onclick="vmIsoAddFolder()">＋ Folder</button></div>
       ${lib.folders.length ? lib.folders.map((f, i) => `<div class="iso-folder"><span class="mono">${esc(f.share)}${f.path ? ` / ${esc(f.path)}` : ""}</span>
         <button class="btn sm" data-need="admin" onclick="vmIsoRemoveFolder(${i})">Remove</button></div>`).join("")

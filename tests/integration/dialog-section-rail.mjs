@@ -40,7 +40,8 @@ try {
       STATE.data.operations=[
         {id:"failed",title:"Move media",status:"failed",message:"Copy stopped. Source volume retained.",dismissible:true},
         {id:"active",title:"Update immich",status:"running",message:"Waiting for the new pod",progress:null},
-        {id:"complete",title:"Update Plex",status:"succeeded",progress:100,dismissible:true},
+        {id:"complete",kind:"self-data-handoff",title:"Move Homestead data",status:"succeeded",progress:100,dismissible:true},
+        {id:"recovered",kind:"self-data-handoff",title:"Recovered data move",status:"cancelled",dismissible:true},
         {id:"receipt",title:"Storage recovery",status:"succeeded",progress:100,dismissible:false}
       ]; renderOperations(); jobsDialog();
     },theme);
@@ -58,8 +59,9 @@ try {
     assert.equal(await page.locator('#mbody').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
     await page.screenshot({path:`${output}/jobs-${theme}-${width}.png`});
     await page.locator('#jobsClearCompleted').click();
-    assert.deepEqual(await page.evaluate(()=>dismissed),['complete']);
+    assert.deepEqual(await page.evaluate(()=>dismissed),['complete','recovered']);
     assert.deepEqual(await page.evaluate(()=>STATE.data.operations.map(x=>x.id)),['failed','active','receipt']);
+    assert.equal(await page.locator('#jobsClearCompleted').isVisible(),false);
     await page.evaluate(()=>{STATE.data.operations=[];renderOperations();});
     assert.equal(await page.getByText('No jobs.',{exact:true}).isVisible(),true);
     await page.evaluate(()=>modal("Updating containers", batchUpdateMarkup(
