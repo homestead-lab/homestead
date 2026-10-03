@@ -184,6 +184,8 @@ again: the image is already downloaded, so it is quick.
 
 ### GPU passthrough
 
+For initial setup and vBIOS capture, follow [GPU passthrough](GPU-passthrough).
+
 **The VM runs, but the physical monitor stays blank.** Work through these
 checks in order:
 

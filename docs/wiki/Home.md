@@ -61,6 +61,7 @@ probe - and your first sign-in.
 - [Network shares](Network-shares) - Samba shares from any volume
 - [Networking](Networking) - VIPs, which node answers for each address, services, IP address management
 - [Virtual machines](Virtual-machines) - create, edit, console, move
+- [GPU passthrough](GPU-passthrough) - host preparation, vBIOS capture, VM setup and physical displays
 - [Cluster shutdown](Cluster-shutdown) - confirmed shutdown of every host, live progress, and recovery
 - [Linked clusters](Linked-clusters) - several clusters from one sign-in, switched or shown together
 - [Moving between clusters](Moving-between-clusters) - bring workloads from one cluster to another

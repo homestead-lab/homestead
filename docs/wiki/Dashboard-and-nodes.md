@@ -302,6 +302,9 @@ step is offered once that one is done.
 
 ### Devices for VMs
 
+For a complete walkthrough from host preparation to the guest's first boot,
+see [GPU passthrough](GPU-passthrough).
+
 Under a host's **Hardware → Devices for VMs**, **Look at its devices** reads
 PCI and USB hardware once. The last complete inspection is retained when you
 leave the page or reload Homestead; its timestamp is shown. **Refresh devices**
