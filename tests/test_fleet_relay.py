@@ -93,6 +93,28 @@ class RelayOverHttpTests(unittest.TestCase):
         self.assertEqual("Loft", state["via"])
         self.assertEqual("close", headers.get("Connection"))
 
+    def test_dashboard_preferences_stay_with_the_home_account(self):
+        saved = {"revision":"one", "layout":{"version":1,"items":[]}}
+        with mock.patch.object(server.AUTH, "dashboard_preferences", return_value=saved) as read:
+            status, answer, _ = self.ask("/api/auth/preferences/dashboard", role="viewer")
+        self.assertEqual((200, saved), (status, answer))
+        read.assert_called_once_with("robin")
+        with mock.patch.object(server.AUTH, "save_dashboard_preferences", return_value=saved) as save:
+            body = {"revision":None, "layout":saved["layout"]}
+            status, answer, _ = self.ask("/api/auth/preferences/dashboard", role="viewer", body=body)
+        self.assertEqual((200, saved), (status, answer))
+        save.assert_called_once_with("robin", body)
+
+    def test_notification_delivery_is_confirmed_on_the_subscription_owner_cluster(self):
+        endpoint = "https://fcm.googleapis.com/home-device"
+        with mock.patch.object(server.PUSH, "mine", return_value={"user":"robin"}) as mine, \
+                mock.patch.object(server.ALERTS, "log", return_value={"latest":7}), \
+                mock.patch.object(server.PUSH, "advance") as advance:
+            status, _, _ = self.ask("/api/alerts/delivered", role="viewer", body={"endpoint":endpoint,"latest":7})
+        self.assertEqual(200, status)
+        mine.assert_called_once_with("robin", endpoint)
+        advance.assert_called_once_with("robin", endpoint, 7)
+
     def test_the_far_cluster_applies_its_own_rules_to_the_role(self):
         status, answer, _ = self.ask("/api/fleet/address", body={"url": "http://10.0.0.2:8088"})
         self.assertEqual(403, status)
