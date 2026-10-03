@@ -170,6 +170,7 @@ jobs:
             CONTAINER_SET_SCREENSHOTS=release-assets/dialogs/container-set node tests/integration/container-set.mjs
             PASSTHROUGH_SCREENSHOTS=release-assets/dialogs/passthrough node tests/integration/passthrough-devices.mjs
             VM_ISOLATION_SCREENSHOTS=release-assets/dialogs/vm-isolation node tests/integration/vm-network-isolation.mjs
+            FIREWALL_SCREENSHOTS=release-assets/dialogs/firewall node tests/integration/workload-firewall.mjs
           fi
           if [ "${{ matrix.audit }}" = pages ]; then
             if [ "${{ matrix.shard }}" = 0 ]; then

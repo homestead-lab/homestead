@@ -89,6 +89,7 @@ function networkAddressesHtml(data) {
 
 async function viewNetworking() {
   if (networkTab() === "ip") return viewIpam();
+  if (networkTab() === "firewall") return viewFirewall();
   const [data, baseline] = await Promise.all([api("/api/network"), api("/api/platform/baseline").catch(() => null)]);
   STATE.data.network = data;
   const q = STATE.q.toLowerCase();

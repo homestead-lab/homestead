@@ -2146,6 +2146,50 @@ ssh_pwauth: true
     "/api/fleet/all/vms": () => [...mine(demoVms), ...branch([{ ...demoVms[0], name: "pfsense", node: branchNodes[0], ip: "192.0.2.1", ips: ["192.0.2.1"] }])],
     "/api/fleet/all/volumes": () => [...mine(volumes), ...branch(volumes.slice(0, 2).map((v, i) => ({ ...v, name: `pvc-branch-${i}`, pvc_name: ["jellyfin-config", "unifi-data"][i] })))],
   });
+  const firewallTargets = workloads.map(row => ({namespace:row.ns, name:row.name, kind:"Deployment",
+    uid:`demo-${row.name}`, selector:{matchLabels:{app:row.name}}, labels:{app:row.name}, blocked:"", warnings:[]}));
+  const firewallSpec = cfg => {
+    const spec = {podSelector:{matchLabels:{app:cfg.target.name}}, policyTypes:[]};
+    for (const direction of ["ingress", "egress"]) {
+      if (cfg[direction] !== "restricted") continue;
+      spec.policyTypes.push(direction === "ingress" ? "Ingress" : "Egress");
+      spec[direction] = (cfg[direction + "_rules"] || []).map(row => {
+        const rule = {};
+        if (row.peer !== "any") rule[direction === "ingress" ? "from" : "to"] = [row.peer === "cidr"
+          ? {ipBlock:{cidr:row.value}} : {namespaceSelector:{matchLabels:{"kubernetes.io/metadata.name":row.value}}}];
+        if (row.protocol !== "Any") rule.ports = row.ports ? row.ports.split(",").map(p => ({protocol:row.protocol,port:Number(p.trim())})) : [{protocol:row.protocol}];
+        return rule;
+      });
+    }
+    if (cfg.allow_dns && spec.egress) spec.egress.push({to:[{namespaceSelector:{matchLabels:{"kubernetes.io/metadata.name":"kube-system"}},
+      podSelector:{matchLabels:{"k8s-app":"kube-dns"}}}],ports:[{protocol:"UDP",port:53},{protocol:"TCP",port:53}]});
+    return spec;
+  };
+  const firewallConfig = {namespace:firewallTargets[0].namespace, name:`homestead-fw-${firewallTargets[0].name}`,
+    target:Object.fromEntries(["namespace","name","kind","uid"].map(k => [k,firewallTargets[0][k]])),
+    ingress:"restricted", egress:"unchanged", ingress_rules:[{peer:"any",value:"",protocol:"TCP",ports:"80,443"}],egress_rules:[],allow_dns:false};
+  const firewall = {provider:{name:"K3s",detail:"Demo cluster: network-policy enforcement is not tested."},targets:firewallTargets,
+    namespaces:["lab","default","kube-system"],policies:[{namespace:firewallConfig.namespace,name:firewallConfig.name,
+      uid:"demo-firewall",resource_version:"1",managed:true,config:firewallConfig,spec:firewallSpec(firewallConfig)}]};
+  responses["/api/firewall"] = () => firewall;
+  responses["/api/firewall/preview"] = (url, init) => {
+    const cfg = JSON.parse(init?.body || "{}");
+    return {review:"demo-reviewed-policy",pods:[`${cfg.target.name}-demo`],overlapping:[],update:!!cfg.uid,
+      warnings:["Demo only: no cluster traffic changes.","Policies add allowed traffic together; other policies can permit additional connections.","Pod-network traffic only. Host and Multus/LAN traffic need a separate firewall."],
+      manifest:{apiVersion:"networking.k8s.io/v1",kind:"NetworkPolicy",metadata:{namespace:cfg.namespace,name:cfg.name},spec:firewallSpec(cfg)}};
+  };
+  responses["/api/firewall/save"] = (url, init) => {
+    const cfg = JSON.parse(init?.body || "{}");
+    firewall.policies = firewall.policies.filter(p => p.namespace !== cfg.namespace || p.name !== cfg.name);
+    firewall.policies.push({namespace:cfg.namespace,name:cfg.name,uid:cfg.uid || `demo-${Date.now()}`,resource_version:String(Date.now()),
+      managed:true,config:cfg,spec:firewallSpec(cfg)});
+    return {ok:true,message:"Demo firewall policy saved."};
+  };
+  responses["/api/firewall/delete"] = (url, init) => {
+    const cfg = JSON.parse(init?.body || "{}");
+    firewall.policies = firewall.policies.filter(p => p.namespace !== cfg.namespace || p.name !== cfg.name);
+    return {ok:true,message:"Demo policy removed."};
+  };
   responses["/api/ipam/free"] = [
     { cidr: "192.0.2.0/24", name: "Home LAN", free: ["192.0.2.231", "192.0.2.232", "192.0.2.233", "192.0.2.236",
       "192.0.2.237", "192.0.2.238", "192.0.2.241", "192.0.2.247", "192.0.2.248", "192.0.2.249", "192.0.2.251", "192.0.2.253"] },

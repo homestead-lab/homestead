@@ -440,6 +440,18 @@ class HttpTests(unittest.TestCase):
                             with self.subTest(method=method, path=literal.value):
                                 server.needed_role(literal.value, method)
 
+    def test_firewall_http_writes_require_admin_before_entering_the_editor(self):
+        headers = {"X-Homestead-Auth": "1", "Content-Type": "application/json"}
+        for role in ("viewer", "operator", "admin"):
+            with mock.patch.object(server.H, "_who", return_value={"user": "fixture", "role": role}):
+                for suffix, function in (("preview", "preview"), ("save", "save"), ("delete", "remove")):
+                    with self.subTest(role=role, route=suffix), mock.patch.object(server.FIREWALL, function, return_value={"ok": True}) as action:
+                        self.assertEqual(200 if role == "admin" else 403, self.request("{}", headers, "/api/firewall/" + suffix))
+                        if role == "admin":
+                            action.assert_called_once_with({})
+                        else:
+                            action.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

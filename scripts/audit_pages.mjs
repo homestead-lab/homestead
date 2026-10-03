@@ -53,6 +53,7 @@ const PAGES = [
   ["resources", "resources"],
   ["networking", "network", "networkTab('services')"],
   ["ip-addresses", "network", "networkTab('ip')"],
+  ["firewall", "network", "networkTab('firewall')"],
   ["import", "imports"],
   ["schedules", "schedules"],
   ["events", "events"],

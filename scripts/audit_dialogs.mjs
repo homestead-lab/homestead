@@ -21,6 +21,8 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // "click:<fn>" (the first control whose onclick calls fn), or "text:<label>"
 // (the first button in the dialog with that label).
 const DIALOGS = [
+  ["firewall-create", "network", "firewallEdit()"],
+  ["firewall-review", "network", "firewallEdit()", "firewallReview()"],
   ["active-alerts", "dash", "pwaAlertsDialog()"],
   ["notifications", "dash", "notificationsDialog()"],
   ["jobs-running", "workloads", "STATE.data.operations=[{id:'run',kind:'image-update',title:'Update Immich',status:'running',message:'Waiting for the new pod',progress:45}];jobsDialog()"],

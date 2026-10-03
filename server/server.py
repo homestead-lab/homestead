@@ -5531,6 +5531,7 @@ import homestead_smart as SMART
 import homestead_shares as SHARES
 import homestead_nfs as NFS
 import homestead_networking as NETWORK
+import homestead_firewall as FIREWALL
 import homestead_cluster as CLUSTER
 import homestead_probe as PROBE
 import homestead_objectstore as OBJECTS
@@ -7189,6 +7190,7 @@ VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 SHARES.install = install_samba
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP)
+FIREWALL.bind(kget, ksend, PLATFORM.detect, _own_namespace())
 VIPS.bind(kget, ksend)
 
 
@@ -7581,6 +7583,7 @@ def is_app_identity(path):
 # Enforced here, server-side. The UI hides what you cannot do as a courtesy,
 # but a viewer who hand-crafts the request still gets a 403.
 ADMIN_ROUTES = {
+    "/api/firewall/preview", "/api/firewall/save", "/api/firewall/delete",
     "/api/disks/v2/plan", "/api/disks/v2/start", "/api/disks/v2/status",
     "/api/disks/v2/prepare-review", "/api/disks/v2/prepare",
     "/api/longhorn/v2/plan", "/api/longhorn/v2/prepare", "/api/longhorn/v2/enable",
@@ -8381,6 +8384,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, PORTAL.candidates())
             if p == "/api/network":
                 return self._send(200, cached("network", 5, NETWORK.inventory))
+            if p == "/api/firewall":
+                return self._send(200, FIREWALL.inventory())
             if p == "/api/cluster":
                 return self._send(200, cached("cluster", 15, CLUSTER.inventory))
             if p == "/api/self/replicas":
@@ -9951,6 +9956,12 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, OPS.dismiss(b["id"]))
             if p == "/api/network/plan":
                 return self._send(200, NETWORK.service_plan(b))
+            if p == "/api/firewall/preview":
+                return self._send(200, FIREWALL.preview(b))
+            if p == "/api/firewall/save":
+                return self._send(200, FIREWALL.save(b))
+            if p == "/api/firewall/delete":
+                return self._send(200, FIREWALL.remove(b))
             if p == "/api/network/services":
                 guard_managed_smb(b.get("namespace") or DEFAULT_NS, b.get("name"))
                 result = NETWORK.create_service(b)
