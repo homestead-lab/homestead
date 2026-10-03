@@ -37,22 +37,25 @@ README summarises this evidence with icons. A tick describes an integrated or
 guided capability, not an independently measured ease-of-use score. The app-store
 row distinguishes self-hosted app catalogues from OS and VM image catalogues;
 Proxmox, Harvester, Talos and MicroCloud can use additional application tools.
+Headlamp's official App Catalog also provides guided app discovery through
+Artifact Hub and Helm, so it receives a tick despite using a different catalogue.
 The distributed-storage row means live storage shared and replicated across hosts,
 not Unraid local parity or ZFS send/receive backups.
 
-| Homelab need | **Homestead** | [Unraid](#unraid) | [Proxmox VE](#proxmox-ve) | [CasaOS](#casaos) | [Harvester](#harvester) | [Talos Linux](#talos-linux) | [MicroCloud](#microcloud) |
-|---|---|---|---|---|---|---|---|
-| Main focus | **Simple hyperconvergence for home** | NAS, apps and VMs | Virtualization and clusters | Personal cloud and apps | Hyperconverged infrastructure | Kubernetes operating system | Private cloud / HCI |
-| Everyday management | **Web UI for apps and infrastructure** | Web UI | Web UI | Web UI | Web UI; Rancher integration | API / CLI; optional Omni UI | UI / CLI |
-| App discovery | **Community Applications catalogue** | Community Applications plugin | OS / OCI templates | App Store | VM images; apps via guest clusters / Rancher | Kubernetes / Helm ecosystem | OS image catalogue |
-| Containers | **Kubernetes apps** | Docker | LXC; OCI images¹ | Docker | Kubernetes via Rancher / guests² | Kubernetes | LXD system containers; Docker in guests |
-| Virtual machines | **KubeVirt integration** | KVM | KVM | Separate tooling | KubeVirt | Add KubeVirt | LXD / QEMU |
-| Multi-node management | **Clusters and linked clusters** | Individual servers | Cluster management | Individual servers | Cluster management | Kubernetes clusters | LXD clusters |
-| Storage across nodes | **Longhorn replicas** | Local array / pools; ZFS replication | Ceph; ZFS replication | Host storage | Longhorn replicas | Add storage such as Longhorn | MicroCeph |
-| Workload failover³ | **Kubernetes + configured storage** | External solution | HA manager + suitable storage | External solution | VM HA + Longhorn | Kubernetes + added storage | LXD healing + shared storage |
-| File sharing | **Managed SMB / NFS shares** | Managed SMB / NFS shares | Configure in a guest / service | SMB sharing | Configure in a guest / service | Deploy a sharing service | Configure in a guest / service |
-| Snapshots and backups | **Volume / VM controls and schedules** | ZFS snapshots; backup apps / plugins | Guest backups; storage snapshots | Backup apps / external tools | VM snapshots and backups | Add workload / storage backup tools | LXD snapshots and exports |
-| Installation and updates | **Guided cluster setup; app, platform and host controls** | USB install; WebGUI updates | ISO install; web / package tools | Linux installer; CasaOS UI updates | ISO install; cluster upgrade workflow | Declarative install; API-driven upgrades | Interactive setup; snap update workflow |
+| Homelab need | **Homestead** | [Unraid](#unraid) | [Proxmox VE](#proxmox-ve) | [CasaOS](#casaos) | [Harvester](#harvester) | [Talos Linux](#talos-linux) | [MicroCloud](#microcloud) | [Headlamp](#headlamp) |
+|---|---|---|---|---|---|---|---| --- |
+| Main focus | **Simple hyperconvergence for home** | NAS, apps and VMs | Virtualization and clusters | Personal cloud and apps | Hyperconverged infrastructure | Kubernetes operating system | Private cloud / HCI | Extensible Kubernetes UI |
+| Everyday management | **Web UI for apps and infrastructure** | Web UI | Web UI | Web UI | Web UI; Rancher integration | API / CLI; optional Omni UI | UI / CLI | Web UI / desktop app; multiple clusters |
+| App discovery | **Community Applications catalogue** | Community Applications plugin | OS / OCI templates | App Store | VM images; apps via guest clusters / Rancher | Kubernetes / Helm ecosystem | OS image catalogue | Official App Catalog (Artifact Hub / Helm) |
+| Helm chart management | **Search, inspect and manage controller-owned charts** | Add Kubernetes + Helm UI | Guest Kubernetes + Helm UI | Add Kubernetes + Helm UI | Rancher / additional UI | External Helm client / UI | Guest Kubernetes + Helm UI | **Official App Catalog** |
+| Containers | **Kubernetes apps** | Docker | LXC; OCI images¹ | Docker | Kubernetes via Rancher / guests² | Kubernetes | LXD system containers; Docker in guests | Kubernetes resource management |
+| Virtual machines | **KubeVirt integration** | KVM | KVM | Separate tooling | KubeVirt | Add KubeVirt | LXD / QEMU | KubeVirt + community plugin / resources |
+| Multi-node management | **Clusters and linked clusters** | Individual servers | Cluster management | Individual servers | Cluster management | Kubernetes clusters | LXD clusters | Existing clusters; provision/scale through configured Cluster API |
+| Storage across nodes | **Longhorn replicas** | Local array / pools; ZFS replication | Ceph; ZFS replication | Host storage | Longhorn replicas | Add storage such as Longhorn | MicroCeph | Cluster storage such as Longhorn / Ceph |
+| Workload failover³ | **Kubernetes + configured storage** | External solution | HA manager + suitable storage | External solution | VM HA + Longhorn | Kubernetes + added storage | LXD healing + shared storage | Cluster controllers + suitable storage |
+| File sharing | **Managed SMB / NFS shares** | Managed SMB / NFS shares | Configure in a guest / service | SMB sharing | Configure in a guest / service | Deploy a sharing service | Configure in a guest / service | Deploy a sharing service |
+| Snapshots and backups | **Volume / VM controls and schedules** | ZFS snapshots; backup apps / plugins | Guest backups; storage snapshots | Backup apps / external tools | VM snapshots and backups | Add workload / storage backup tools | LXD snapshots and exports | Add CSI / backup tooling |
+| Installation and updates | **Guided cluster setup; app, platform and host controls** | USB install; WebGUI updates | ISO install; web / package tools | Linux installer; CasaOS UI updates | ISO install; cluster upgrade workflow | Declarative install; API-driven upgrades | Interactive setup; snap update workflow | Headlamp install/update; cluster lifecycle through additional tooling |
 
 ¹ Proxmox's OCI support is distinct from running the Docker engine or a Compose
 stack. ² Harvester's bare-metal container support depends on the Harvester and
@@ -73,6 +76,12 @@ branch. [Features and installation](../README.md#features),
 [cluster setup](wiki/Installing-on-k3s.md), [updates](wiki/Settings.md),
 [network shares](wiki/Network-shares.md), [storage](wiki/Storage.md), and
 [VM management](wiki/Virtual-machines.md) support the Homestead column.
+
+[Helm management](wiki/Helm-and-resources.md#helm) searches Artifact Hub or a
+specified chart repository, lists releases and displays values, notes and
+history. Install, upgrade and uninstall act on charts owned by the K3s/RKE2 Helm
+controller. Releases installed by another tool are shown without taking over
+their management; without that controller, Homestead lists releases only.
 
 The App Store consumes Community Applications templates and deploys workloads
 on Kubernetes; it is not the Docker engine. Longhorn, KubeVirt and networking
@@ -140,6 +149,15 @@ architectural choice, not evidence of better performance or reliability.
 
 ## Scope of the additional comparison rows
 
+- **Helm chart management (UI)** means discovering/installing charts and managing
+  releases, not merely installing the compared product with a Helm chart.
+  Homestead and Headlamp provide guided interfaces. Headlamp's official App
+  Catalog ships with desktop builds; in-cluster deployments need the appropriate
+  plugin/backend setup. Talos supports Kubernetes workloads but needs an external
+  Helm client/UI. Harvester uses Helm internally; arbitrary app management uses
+  additional tooling such as Rancher. Unraid, Proxmox, CasaOS and MicroCloud can
+  host an added Kubernetes environment and Helm UI, rather than directly manage
+  charts as their native container packages.
 - **Mobile app / PWA** counts a documented installable management app. Homestead
   supplies its PWA; Proxmox supplies an Android app; Unraid has separate community
   clients. A desktop web UI alone does not earn this tick. Crosses mean no such
@@ -286,3 +304,38 @@ Additional sources: [cluster size and hardware requirements](https://canonical.c
 [GPU](https://canonical.com/lxd/docs/default/reference/devices_gpu/),
 [managed network addresses](https://canonical.com/lxd/docs/default/reference/network_bridge/),
 and [events for external integrations](https://canonical.com/lxd/docs/default/events/).
+
+## Headlamp
+
+Headlamp is an extensible Kubernetes UI for existing clusters, available in a
+browser or as a desktop application. It provides multi-cluster access, workload
+and resource editing, logs and exec. Its official App Catalog provides Helm app
+discovery and release management; it is not limited to read-only dashboards.
+The comparison includes that official integration in the Helm and app-store ticks.
+
+Its other cells describe the connected cluster and extensions: KubeVirt plus a
+community plugin for VMs; configured storage, backup and networking components;
+and external monitoring/home-automation integrations. Viewing those resources
+does not itself supply replicated storage, failover or host-device preparation.
+Cluster API integration can manage lifecycle resources after CAPI and a provider
+are configured, which explains the grey setup/growth cells. Headlamp can manage
+ARM64 Kubernetes hosts; that tick does not mean it installs the host OS.
+Its [container release workflow](https://github.com/kubernetes-sigs/headlamp/blob/main/.github/workflows/container-publish.yml)
+also builds a Linux ARM64 image.
+
+Homestead's distinction is its integrated home-server workflow: guided K3s setup,
+hardware preparation, storage and file-share management, LAN inventory, MQTT
+discovery and a phone PWA. Headlamp is an alternative for Kubernetes and Helm
+administration and can also run alongside Homestead. Neither application's
+presence alone makes the underlying cluster highly available.
+
+Sources: [project features](https://github.com/kubernetes-sigs/headlamp),
+[official App Catalog](https://github.com/headlamp-k8s/plugins/tree/main/app-catalog),
+[plugin catalogue and community KubeVirt integrations](https://github.com/headlamp-k8s/plugins),
+[Cluster API plugin](https://github.com/headlamp-k8s/plugins/tree/main/cluster-api),
+and [in-cluster plugin setup](https://headlamp.dev/docs/latest/installation/in-cluster/).
+The [2025 project summary](https://headlamp.dev/blog/2025/11/13/headlamp-in-2025/)
+documents App Catalog's in-cluster service-proxy support; older plugin index
+text still says desktop-only, so verify the deployed plugin/backend version.
+
+For Harvester's use of Helm, see its [chart documentation](https://docs.harvesterhci.io/v1.8/troubleshooting/index/).

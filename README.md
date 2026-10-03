@@ -210,25 +210,30 @@ grow into a cluster, on supported **x86-64 or ARM64** hardware.
 
 **✅ Built-in or guided · ⚪ Supported with add-ons or custom configuration · ❌ Not supported by the product**
 
-| Feature | **Homestead** | Unraid | Proxmox VE | CasaOS | Harvester | Talos Linux | MicroCloud |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| Web management | ✅ | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ |
-| Mobile app / PWA | ✅ | ⚪ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Alerts and notifications | ✅ | ✅ | ✅ | ⚪ | ✅ | ⚪ | ⚪ |
-| Self-hosted app store | ✅ | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ |
-| Application containers | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ | ⚪ |
-| Virtual machines | ✅ | ✅ | ✅ | ❌ | ✅ | ⚪ | ✅ |
-| GPU / PCI passthrough to VMs | ✅ | ✅ | ✅ | ❌ | ✅ | ⚪ | ✅ |
-| USB devices in containers | ✅ | ✅ | ✅ | ⚪ | ⚪ | ⚪ | ✅ |
-| Single host → multi-node cluster | ✅ | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ |
-| ARM64 hosts | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Distributed, replicated storage | ✅ | ❌ | ✅ | ❌ | ✅ | ⚪ | ✅ |
-| Automatic workload failover | ✅ | ❌ | ✅ | ❌ | ✅ | ⚪ | ✅ |
-| IP address management (IPAM) | ✅ | ⚪ | ✅ | ⚪ | ✅ | ⚪ | ✅ |
-| Network file shares | ✅ | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ |
-| Workload snapshots and backups | ✅ | ⚪ | ✅ | ⚪ | ✅ | ⚪ | ✅ |
-| Home Assistant / MQTT monitoring | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ | ⚪ |
-| Guided setup and upgrades | ✅ | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ |
+| Feature | **Homestead** | Unraid | Proxmox VE | CasaOS | Harvester | Talos Linux | MicroCloud | Headlamp |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Web management | ✅ | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ | ✅ |
+| Mobile app / PWA | ✅ | ⚪ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Alerts and notifications | ✅ | ✅ | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ |
+| Self-hosted app store | ✅ | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ | ✅ |
+| Helm chart management (UI) | ✅ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ | ✅ |
+| Application containers | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ | ⚪ | ✅ |
+| Virtual machines | ✅ | ✅ | ✅ | ❌ | ✅ | ⚪ | ✅ | ⚪ |
+| GPU / PCI passthrough to VMs | ✅ | ✅ | ✅ | ❌ | ✅ | ⚪ | ✅ | ⚪ |
+| USB devices in containers | ✅ | ✅ | ✅ | ⚪ | ⚪ | ⚪ | ✅ | ⚪ |
+| Single host → multi-node cluster | ✅ | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ | ⚪ |
+| ARM64 hosts | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Distributed, replicated storage | ✅ | ❌ | ✅ | ❌ | ✅ | ⚪ | ✅ | ⚪ |
+| Automatic workload failover | ✅ | ❌ | ✅ | ❌ | ✅ | ⚪ | ✅ | ⚪ |
+| IP address management (IPAM) | ✅ | ⚪ | ✅ | ⚪ | ✅ | ⚪ | ✅ | ⚪ |
+| Network file shares | ✅ | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ | ⚪ |
+| Workload snapshots and backups | ✅ | ⚪ | ✅ | ⚪ | ✅ | ⚪ | ✅ | ⚪ |
+| Home Assistant / MQTT monitoring | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ |
+| Guided setup and upgrades | ✅ | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ | ⚪ |
+
+Helm means managing charts through a UI. Headlamp's ticks include its official
+App Catalog; infrastructure features depend on the connected Kubernetes cluster.
+Homestead's Helm changes require the K3s/RKE2 Helm controller.
 
 **Compared with Proxmox:** Homestead brings an app store, hardware-aware app
 placement, managed file shares, LAN address inventory and MQTT discovery together
