@@ -14,6 +14,26 @@ try{
   await page.evaluate(theme=>{clearInterval(window.__loopTimer);SET.theme=theme;applySettings();},theme);
   const order=()=>page.locator('.dashboard-widget').evaluateAll(els=>els.map(el=>el.dataset.widget));
   const initial=await order();assert.equal(initial.length,7);
+  if(width<=900){
+    assert.equal(await page.getByRole('button',{name:'Edit dashboard',exact:true}).isVisible(),false);
+    await page.evaluate(()=>Dashboard.start());
+    assert.equal(await page.evaluate(()=>Dashboard.editing()),false,'phone cannot enter the desktop editor');
+    assert.ok((await page.locator('.dashboard-widget').first().boundingBox()).y<160,'widgets start near the top');
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+    await page.screenshot({path:`${output}/saved-${theme}-${width}.png`,fullPage:true});
+    // A desktop draft survives resizing without exposing desktop layout controls.
+    await page.setViewportSize({width:1440,height:1000});
+    await page.getByRole('button',{name:'Edit dashboard',exact:true}).click();
+    await page.getByRole('button',{name:'Add Portal links',exact:true}).click();
+    await page.setViewportSize({width,height:1000});
+    assert.equal(await page.locator('.dashboard-edit-layout').isVisible(),false);
+    assert.equal(await page.getByRole('button',{name:'Phone preview',exact:true}).isVisible(),false);
+    assert.equal(await page.evaluate(()=>Dashboard.dirty()),true);
+    await page.setViewportSize({width:1440,height:1000});
+    assert.equal(await page.locator('[data-widget="portal"]').count(),1);
+    await page.getByRole('button',{name:'Cancel',exact:true}).click();await page.locator('.askdlg [data-a="yes"]').click();
+    assert.deepEqual(errors,[]);console.log(`Mobile dashboard passed: ${width}px ${theme}`);await context.close();continue;
+  }
   await page.getByRole('button',{name:'Edit dashboard',exact:true}).click();
   if(width<=1100)await page.locator('.dashboard-library-toggle').click();
   await page.getByRole('button',{name:'Add Portal links',exact:true}).click();
@@ -34,8 +54,34 @@ try{
     // Pointer drag moves a card to another grid position, including backwards.
     const grip=page.locator('[data-dash-drag="compute"]');await grip.scrollIntoViewIfNeeded();
     const from=await grip.boundingBox(),target=await page.locator('[data-dash-drag="throughput"]').boundingBox();
-    await page.mouse.move(from.x+15,from.y+15);await page.mouse.down();await page.mouse.move(target.x+20,target.y+15,{steps:10});await page.mouse.up();
+    const sourceBox=await page.locator('[data-widget="compute"]').boundingBox();
+    await page.mouse.move(from.x+15,from.y+15);await page.mouse.down();
+    assert.equal(await page.locator('.dashboard-drag-preview').count(),0,'a click does not create a preview');
+    await page.mouse.move(target.x+20,target.y+15,{steps:10});
+    const preview=page.locator('.dashboard-drag-preview'), previewCard=preview.locator('[data-widget="compute"]');
+    assert.equal(await preview.getAttribute('aria-hidden'),'true');
+    assert.equal(await preview.evaluate(el=>el.inert),true);
+    assert.ok(Number(await preview.evaluate(el=>getComputedStyle(el).opacity))<1);
+    const previewBox=await previewCard.boundingBox();
+    assert.ok(Math.abs(previewBox.width-sourceBox.width)<1,'preview preserves card width');
+    assert.ok(Math.abs(previewBox.x-(sourceBox.x+target.x+20-from.x-15))<1,'preview follows pointer with grab offset');
+    assert.equal(await page.locator('.dashboard-widget.drop-target').count(),1,'preview does not intercept the target');
+    assert.equal(await preview.locator('[id]').evaluateAll(els=>els.every(el=>document.querySelectorAll(`[id="${el.id}"]`).length===1)),true,'preview IDs are unique');
+    await page.screenshot({path:`${output}/drag-preview-${theme}.png`});
+    await page.mouse.up();
+    assert.equal(await preview.count(),0,'drop removes the preview');
     assert.ok((await order()).indexOf('compute')>(await order()).indexOf('throughput'));
+    const afterDrop=await order(),cancelGrip=page.locator('[data-dash-drag="compute"]');
+    await cancelGrip.scrollIntoViewIfNeeded();const cancelBox=await cancelGrip.boundingBox();
+    await page.mouse.move(cancelBox.x+15,cancelBox.y+15);await page.mouse.down();
+    await page.mouse.move(cancelBox.x+80,cancelBox.y+55,{steps:5});
+    assert.equal(await preview.count(),1);
+    await page.keyboard.press('Escape');await page.mouse.up();
+    assert.equal(await preview.count(),0,'Escape removes the preview');assert.deepEqual(await order(),afterDrop,'cancel preserves order');
+    await page.mouse.move(cancelBox.x+15,cancelBox.y+15);await page.mouse.down();
+    await page.mouse.move(cancelBox.x+80,cancelBox.y+55,{steps:5});
+    await page.evaluate(()=>window.dispatchEvent(new Event('blur')));await page.mouse.up();
+    assert.equal(await preview.count(),0,'losing window focus removes the preview');assert.deepEqual(await order(),afterDrop);
     await page.locator('[data-dash-resize="compute"]').focus();await page.keyboard.press('Enter');
     assert.equal(await page.evaluate(()=>document.activeElement.getAttribute('aria-label')),'Widget width');
     const handle=page.locator('[data-dash-resize="compute"]');await handle.scrollIntoViewIfNeeded();const box=await handle.boundingBox();

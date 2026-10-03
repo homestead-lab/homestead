@@ -3124,6 +3124,12 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 .dashboard-resize{position:absolute;bottom:1px;right:1px;z-index:3;border:0;border-radius:8px 0 10px 0;background:var(--surf);color:var(--tx);width:32px;height:32px;cursor:nwse-resize;touch-action:none}
 .dashboard-widget.dragging{opacity:.65;outline:2px dashed var(--tx)}
 .dashboard-widget.drop-target{outline:3px solid var(--tx);outline-offset:4px}
+.dashboard-widget.drag-source{opacity:.25}
+.dashboard-drag-preview{position:fixed;inset:0;z-index:60;pointer-events:none;overflow:hidden;opacity:.82}
+.dashboard-drag-preview>.dashboard-canvas[data-editing]{padding:0;border:0;border-radius:0;background:none;height:0}
+.dashboard-drag-preview .dashboard-widget{margin:0;will-change:transform;box-shadow:0 16px 44px #0005!important}
+.dashboard-drag-preview .dashboard-widget-tools{cursor:grabbing}
+
 .dashboard-canvas[data-editing] .dashboard-widget-content{pointer-events:none;user-select:none}
 .dashboard-canvas[data-editing] .dashboard-widget-content>.card{border:0;border-radius:0 0 12px 12px;box-shadow:none;padding-bottom:32px}
 .dashboard-library{position:sticky;top:78px;max-height:calc(100vh - 100px);overflow-y:auto;padding:16px}
@@ -3156,11 +3162,11 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
   .dashboard-widget .comparison-select{font-size:11.5px;padding:4px 0;min-height:40px}
   .dashboard-widget .node-comparison-detail{display:block;padding:10px}
   .dashboard-widget .node-comparison-head{display:flex;justify-content:space-between;gap:10px;margin-bottom:12px}
-  .dashboard-widget .about-grid{grid-template-columns:minmax(0,1fr)}
+  .dashboard-widget .about-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .dashboard-widget .about-grid>div{min-width:0;display:flex;flex-direction:column;align-items:flex-start;gap:4px}
   .dashboard-widget .about-grid .tag{white-space:normal;max-width:100%;overflow-wrap:anywhere}
   .dashboard-widget .hist-node{flex-wrap:wrap}
-  .dashboard-widget .storbody{flex-wrap:wrap}
+  .dashboard-widget .storbody{flex-wrap:nowrap}
 }
 @media(max-width:1100px){
   .dashboard-edit-layout{grid-template-columns:minmax(0,1fr)}
@@ -3195,3 +3201,42 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 .portal-compact .portal-tile{flex-direction:row;align-items:center;min-height:68px;padding:10px 12px;gap:10px}
 .portal-compact .portal-text{flex:1}
 .portal-compact .portal-icon{width:36px;height:36px}
+
+/* Shared mobile page contract: compact chrome, paired facts and controls,
+   full-width long inputs, and neutral navigation. See docs/design.md. */
+.workspace-location{display:none}
+@media(max-width:900px){
+  :root{--page-gap:10px;--module-gap:12px;--workspace-gap:12px}
+  .page{padding:12px 12px 80px}
+  .phead{gap:8px;margin-bottom:10px}
+  .page-summary-optional{display:none}
+  .pagetabs{margin-bottom:0;min-height:40px;align-items:center}
+  .pagetabs a{min-height:40px;display:flex;align-items:center}
+  .phead>.row:empty{display:none}
+  .workspace-location{display:flex;align-items:center;gap:12px;margin-bottom:10px;min-width:0;border-bottom:1px solid var(--line);padding-bottom:6px}
+  .workspace-location .settings-back{flex:0 0 auto;width:auto;min-height:44px;padding:8px 4px;margin:0!important;background:transparent;color:var(--tx);border-radius:8px}
+  .workspace-current{margin-left:auto;min-width:0;text-align:right;font-size:12px;font-weight:600;color:var(--mut);overflow-wrap:anywhere}
+  .settings-back:hover{background:var(--hover)}
+  .settings-back:focus-visible{outline:2px solid var(--tx);outline-offset:2px}
+  .settings-main .card{container-type:inline-size}
+  .srow{column-gap:10px;row-gap:6px}
+  .srow-l{flex:1 1 90px}
+  .srow:has(.rng) .srow-c,.srow:has(.appearance-seg) .srow-c{flex:0 1 auto;margin-left:auto;justify-content:flex-end}
+  .srow-c .rng{width:clamp(90px,25vw,140px)}
+  .srow-c .appearance-seg{max-width:100%}
+  .srow-c .appearance-seg button{min-height:40px;padding:7px 10px}
+  .dashboard-edit-layout,.dashboard-canvas-label{display:none}
+  .dashboard-mobile-notice{padding:12px;border:1px solid var(--line);border-radius:12px;margin-bottom:12px}
+  .dashboard-edit-toolbar [onclick="Dashboard.preview()"],.dashboard-edit-toolbar [onclick="Dashboard.reset()"],.dashboard-edit-toolbar [onclick^="Dashboard.history("]{display:none}
+}
+/* Chart and figures share a row down to a small phone. Never shrink numbers. */
+@container (max-width:400px){
+  .storbody{display:grid;grid-template-columns:minmax(74px,.7fr) minmax(0,1.3fr);gap:10px;align-items:center}
+  .stordonut svg{width:100%;max-width:110px;height:auto}
+  .storstats .drow{padding:6px 0;gap:6px}
+  .storstats .drow .dl{font-size:11px}
+}
+@media(max-width:360px){
+  .srow:has(.appearance-seg){align-items:flex-start}
+  .srow:has(.appearance-seg) .srow-c{flex:1 1 100%;justify-content:flex-start;margin:0}
+}

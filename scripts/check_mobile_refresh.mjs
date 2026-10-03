@@ -145,7 +145,7 @@ export async function checkMobileRefresh(page, context, installed) {
   await page.evaluate(() => STATE.view = "dash");
   await page.locator("#bottombar [data-more]").click();
   await Promise.all([page.waitForEvent("load"), page.locator("#reloadApp").click()]);
-  await page.locator("#views .phead").waitFor();
+  await page.locator("#views .phead").waitFor({state:"attached"});
   assert.equal(await page.evaluate(() => document.documentElement.dataset.display), "standalone", "Reload app loads the installed shell again");
   console.log(`${chromium ? "Chromium/Android" : "WebKit/iOS"} refresh button, gesture, guards, failure and reload checks passed`);
 }

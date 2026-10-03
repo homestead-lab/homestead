@@ -582,3 +582,44 @@ Do not fork charts, links or resource cards for the editor.
 - Add metadata and content to the registry to introduce a widget. Validate old
   layouts, unknown IDs, duplicate IDs and sizes before rendering. An empty saved
   layout is valid. Keep behavior coverage in `tests/integration/dashboard-editor.mjs`.
+
+
+### Mobile page layout contract
+
+Use the same shared components and content order at every size. At 900px and
+below, page chrome is compact (12px outer padding, 10px header gap, 12px module
+gap). Do not stack short controls or facts merely because the screen is narrow.
+
+- `UI.pageHeader` keeps actions and summaries by default. Use
+  `mobileSummary:"omit"` only for introductory copy already conveyed by the page
+  title/tabs; never omit counts, warnings or operation state. Group desktop-only
+  actions with `actionsClass:"hide-sm"` so an empty action row takes no space.
+- `UI.workspace` owns mobile section navigation. Supply `backLabel`, `back` and
+  `currentLabel`: a neutral return link on the left, current section on the right.
+  Settings uses **All settings**, hosts use **All sections**. Save and discard
+  remain in the shared save bar and retain the existing unsaved-change check.
+  Entering a section focuses its visible back link; returning focuses its list item.
+- `settingRow` keeps labels beside short controls, switches, sliders and segmented
+  choices when they fit. Long text fields and selects get the full next row.
+  At 360px and below, segmented choices may wrap as a unit. Keep touch targets at
+  least 40px (44px for back navigation); do not reduce text to fit.
+- Facts use two equal columns with wrapping values. Charts and short numeric
+  summaries may share a row using container queries. Long prose, large charts and
+  editors remain full width. Tables should use the existing summary/disclosure
+  collection pattern rather than hide essential values or stack every table cell.
+- Dashboard layout editing is available above 900px. Phones show the saved account
+  layout without Edit or desktop preview controls. If an editor is resized into
+  mobile width, retain its draft and show a concise notice plus Save/Cancel;
+  resume the editor at a wider size. Desktop's phone preview remains available.
+- Use `UI.more`/`UI.guide` for secondary explanations and `tip()` for brief field
+  help. Keep warnings, failed checks, required inputs and current progress visible.
+
+Validate 320px and 390px in light/dark themes and a desktop width, including
+keyboard focus, unsaved changes, empty dashboards and switching viewport mid-edit.
+
+Dashboard drag feedback: once the pointer moves past the drag threshold, a
+translucent copy follows it at the original grab offset. Keep the source in place
+and faded, and outline the destination. The preview must preserve card dimensions
+and container-query styling, remain inert and hidden from assistive technology,
+and disappear on drop, Escape, pointer cancellation, loss of focus or navigation.
+Keyboard reordering continues to use the normal card and live announcements.

@@ -63,14 +63,14 @@ await page.addInitScript(() => {
 const failures = [];
 try {
   await page.goto(origin + BASE, { waitUntil: "networkidle" });
-  await page.locator("#views .phead").waitFor({ timeout: 20000 });
+  await page.locator("#views .phead").waitFor({ state:"attached", timeout: 20000 });
   if (!await page.locator("#demoBanner").count()) failures.push("the demo banner is not shown");
   // Every page, sidebar or tab: HomesteadRouter knows them all.
   const views = await page.evaluate(() => Object.keys(HomesteadRouter.ROUTES));
   for (const view of views) {
     try {
       await page.evaluate(v => go(v), view);
-      await page.locator("#views .phead").waitFor({ timeout: 15000 });
+      await page.locator("#views .phead").waitFor({ state:"attached", timeout: 15000 });
       await page.waitForTimeout(600);
       if (!new URL(page.url()).pathname.startsWith(BASE)) failures.push(`${view}: left the site for ${page.url()}`);
     } catch (error) {
@@ -79,7 +79,7 @@ try {
   }
   // A deep link, as someone would follow it from the README.
   await page.goto(origin + BASE + "nodes", { waitUntil: "networkidle" });
-  await page.locator("#views .phead").waitFor({ timeout: 20000 });
+  await page.locator("#views .phead").waitFor({ state:"attached", timeout: 20000 });
   const active = await page.locator("#nav a.on").getAttribute("data-view");
   if (active !== "nodes") failures.push(`the deep link ${BASE}nodes opened ${active}, not nodes`);
 } catch (error) {

@@ -110,9 +110,9 @@ async function viewDash() {
 
   paint(`
   ${UI.pageHeader(`Cluster overview`, `Live health, capacity and placement across ${o.nodes_total} node${o.nodes_total > 1 ? "s" : ""}`, `
-      <button class="btn" onclick="Dashboard.start()">${icon("edit")}Edit dashboard</button>
+      <button class="btn hide-sm" onclick="Dashboard.start()">${icon("edit")}Edit dashboard</button>
       <button class="btn pri hide-sm" onclick="go('deploy')">＋ Deploy</button>
-    `)}
+    `, {mobileSummary:"omit",actionsClass:"hide-sm"})}
 
   ${(o.health_issues || []).length ? `<div class="clusteralert ${o.health === "critical" ? "critical" : ""}">
     <div><b>${o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded"}</b>
@@ -547,7 +547,7 @@ async function nodePage(name) {
       ${UI.workspace(UI.workspaceNav(sections.map(([key,label,descriptionHtml]) => ({key,label,descriptionHtml})),
         {label:`${n.name} sections`,selected:current,onSelect:key => `nodeSectionGo(${jsArg(key)})`}),
         sections.map(([id, , , body]) => `<div class="node-pane" data-pane="${id}"${id === current ? "" : " hidden"}>${body}</div>`).join(""),
-        {open:STATE.nodeSectionOpen,backLabel:n.name,back:"nodeSectionGo('')"})}
+        {open:STATE.nodeSectionOpen,backLabel:"All sections",currentLabel:sections.find(([id])=>id===current)?.[1],back:"nodeSectionGo('')"})}
     </div>`);
   window.__disksModal = false;
   nodeDisksPaint(n.name);
