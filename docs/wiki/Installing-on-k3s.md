@@ -183,9 +183,64 @@ machine's **own address**, not the VIP for Homestead and apps: that VIP carries
 apps, not the cluster, so the machine joins through a server's address on
 6443 (k3s) or 9345 (RKE2).
 
-**How many servers?** etcd needs more than half of its servers up. One server
-is fine for a homelab; three survive one failing; two are worse than one,
-since losing either stops the cluster.
+### Two machines and quorum
+
+**For a two-machine home setup, prefer two independent single-node k3s clusters,
+then [link them in Homestead](Linked-clusters#two-machines-at-home).** Each keeps
+its own control plane and workloads, so losing one does not remove the other's
+control plane. Linking provides one management experience; it does not replicate
+volumes or automatically restart one cluster's apps on the other.
+
+With embedded etcd, quorum is a majority of the **voting servers**, not the total
+number of machines. Two servers do have quorum while both are online, but cannot
+tolerate either failing or being rebooted. Existing pods may continue running
+after quorum is lost; the cluster cannot reliably schedule replacements or
+process control-plane changes.
+
+| Layout | What happens when a machine fails? |
+|---|---|
+| Two linked one-node clusters | The other cluster remains independent; the failed cluster's workloads stay down until recovered |
+| One server and one agent | Losing the server loses the control plane; the agent contributes no etcd vote |
+| Two voting servers | Both votes are required; losing either loses quorum |
+| Three voting servers | Two votes remain after one failure; workload recovery still needs suitable storage and spare capacity |
+
+One server plus an agent is a valid way to add compute when you accept a single
+control-plane failure point. It is not HA. These quorum rules describe embedded
+etcd, which Homestead's new-cluster installer uses; an external datastore has
+its own availability requirements. See [K3s embedded-etcd HA](https://docs.k3s.io/datastore/ha-embedded)
+and the [etcd quorum FAQ](https://etcd.io/docs/v3.6/faq/).
+
+### Using a small third server
+
+For one cluster, two main machines plus a suitable **ARM64 Raspberry Pi or small
+PC** can provide three etcd votes. Join it **as a server**, using the server join
+route above and matching the existing k3s version/configuration. Joining it as an
+agent adds compute, not a vote. It is a real etcd member storing cluster state,
+not a lightweight witness. Keep it on independent hardware; a VM on either main
+host would disappear with that host.
+
+Use a 64-bit Linux OS, reliable power, wired networking and an SSD for the k3s
+datastore. K3s lists 2 cores and 2 GB RAM as the server baseline; 4 GB or more is
+a more practical planning allowance for Homestead's supporting services. Do not
+rely on a slow microSD card for etcd. Check the Pi OS cgroup requirements in the
+[K3s hardware and Raspberry Pi guide](https://docs.k3s.io/installation/requirements).
+
+Keep ordinary apps, VMs and Longhorn replicas on the two larger hosts: configure
+placement/taints and Longhorn node/disk scheduling explicitly. K3s servers can
+run workloads by default; neither a server role nor a small machine's size
+automatically excludes it. System DaemonSets may still run there. Advanced users
+can configure a [dedicated etcd server](https://docs.k3s.io/installation/server-roles)
+using K3s's role controls; Homestead's standard join flow creates a regular server.
+
+The small server supplies **control-plane quorum**, not a third storage copy.
+With only two storage hosts, choose two replicas on different hosts rather than
+requesting an unplaceable third copy. After a storage-host failure only one copy
+remains, and the surviving main host must fit the workloads. An ARM node does
+not make x86-only apps or VM guests portable. If using V2, review
+[selective activation and Homestead's setup limitation](Storage#longhorn-v2-support-and-considerations)
+before adding the small node.
+
+### Volume copies as the cluster grows
 
 The script sets Longhorn up with one copy of each volume, which is all one
 machine can hold. As machines join, Homestead raises the default for new

@@ -4,6 +4,23 @@ Link your Homestead clusters - your main site, a branch office, a disaster-recov
 manage all of them from any one. Only one needs to be reachable from outside:
 it relays everything, consoles included, to the others.
 
+## Two machines at home
+
+For a home lab with only two machines, prefer one single-node k3s cluster on
+each, with Homestead installed in both, then link them below. Each cluster can
+operate independently when the other is down. Two embedded-etcd servers in one
+cluster require both votes and lose quorum when either machine fails.
+
+Linking is shared management, not an HA cluster: it adds no etcd votes, shared
+storage replicas or automatic workload failover. Back up each cluster to storage
+that survives its host. Keep both Homestead addresses available; if the one you
+usually open is down, open the surviving cluster directly. Planned workload
+moves and copies are separate workflows, not automatic disaster recovery.
+
+For a single cluster that tolerates one control-plane failure, add a third
+voting server. A suitable ARM64 Pi with SSD storage is an option on k3s; see
+[two-machine layouts and the small third server](Installing-on-k3s#two-machines-and-quorum).
+
 ## What you get
 
 - **A cluster switch** at the start of the top bar. Pick a cluster and the

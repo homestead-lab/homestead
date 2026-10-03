@@ -371,6 +371,88 @@ The dashboard names a node past 80%, and a notification goes out.
 **Settings → Hardware and storage** sets over-provisioning and the minimum free space, with a
 preview of each node's new limit, and turns the V2 engine on or off.
 
+## Longhorn V2 support and considerations
+
+Homestead supports Longhorn's **V2 data engine (SPDK)** alongside V1, including
+host preparation, V2 storage classes, block-disk setup and upgrade status.
+**V1 is the simpler starting point for a small home lab.** Consider V2 when your
+storage hosts have dedicated disks and CPU/memory headroom, and the workload
+benefits from it. V2 targets lower latency and higher throughput; it is not a
+promise of lower CPU use or better performance on every machine.
+
+### Version and hardware support
+
+Homestead's setup accepts Longhorn 1.8 or newer, but that is an integration
+minimum, not a statement that every release has the same V2 maturity. Upstream
+marks V2 generally available from **Longhorn 1.12.0**. Use the requirements and
+release notes for the version actually installed, including Harvester's bundled
+version when applicable.
+
+For **Longhorn 1.13.0**, the upstream installation guide specifies:
+
+| Item | Plan for |
+|---|---|
+| Kubernetes / kernel | Kubernetes 1.34+; Linux kernel 6.7+ for the documented NVMe/TCP path |
+| CPU architecture | AMD64 with SSE4.2, or ARM64; compatible device drivers are also required |
+| Memory | Normally 2 GiB of 2 MiB hugepages per V2 node, in addition to OS and workload memory |
+| CPU budget | Dedicated capacity for each V2 instance manager; polling mode can keep a core busy even at low application load |
+| Kernel modules | `vfio_pci`, `uio_pci_generic`, `nvme_tcp` |
+| Storage | Dedicated raw block devices; local NVMe is recommended for performance |
+
+See [installation requirements](https://longhorn.io/docs/1.13.0/deploy/install/)
+and [resource planning](https://longhorn.io/docs/1.13.0/best-practices/).
+These are version-specific requirements, not an instruction to upgrade every
+cluster to 1.13.0. Homestead reads the installed memory settings, including
+supported alternatives to hugepages; changing that setting does not remove
+the engine's actual memory needs.
+
+### Power use, ARM and small quorum nodes
+
+Polling is the default. Longhorn 1.13's full interrupt mode can reduce idle CPU
+use, with a latency trade-off under load; changing it requires V2 volumes to be
+detached. Check measured power draw and application latency before choosing it
+for an always-on home server.
+
+ARM64 support has a specific 1.13 caveat: upstream reports possible stuck I/O
+with NVMe-driver node disks and two or more SPDK CPU cores, and recommends
+AIO-backed disks as a workaround. UBLK remains experimental, with a kernel 6.17
+panic warning. See the [version's important notes](https://longhorn.io/docs/1.13.0/important-notes/)
+before choosing a driver or frontend. A Pi suitable for etcd is not automatically
+a suitable V2 storage host.
+
+Longhorn supports [selective V2 activation](https://longhorn.io/docs/1.13.0/advanced-resources/v2-data-engine/selective-v2-data-engine-activation/):
+the Kubernetes node label `node.longhorn.io/disable-v2-data-engine: "true"`
+excludes that node from V2. Workloads using V2 volumes must also stay on
+V2-enabled nodes. This does not by itself exclude ordinary apps or V1 replicas.
+
+**Current Homestead limitation:** the guided V2 setup checks every registered
+Longhorn node and does not exempt nodes with that exclusion label. A small
+quorum-only node can therefore block guided enablement. Selective activation
+needs upstream Longhorn configuration and verification; do not reserve large
+amounts of memory on a small node just to clear the wizard. Keep V1 if you need
+the simpler guided route. See [the small third-server design](Installing-on-k3s#using-a-small-third-server).
+
+### Disks, migration and recovery
+
+V1 and V2 can coexist, but enabling V2 does not convert existing volumes or
+filesystem disks. Homestead's guided V2 disk preparation uses dedicated whole
+disks. Check IOMMU grouping for the SPDK NVMe driver; a device that cannot be
+isolated may need the upstream AIO path instead. Never hand over an OS disk or
+a device still carrying wanted data.
+
+Back up first, create a V2 class, and try a disposable workload. Check attachment,
+snapshots, backup/restore, expansion and any VM migration you need against the
+installed release. Then use [Change storage class](#changing-a-volumes-storage-class)
+for the reviewed copy-and-swap workflow, with downtime and room for both copies.
+[Prepare an existing V1 disk for V2](#prepare-an-existing-v1-disk-for-v2) first
+evacuates its replicas, then separately reviews erasing it; it is not an in-place
+volume conversion.
+
+Control-plane quorum, storage replica count and V2 upgrade eligibility are
+separate. A third server with no storage does not add a third data copy or make
+a single storage host eligible for live V2 upgrades. Keep independent backups
+and follow [the live/offline upgrade rules](#upgrading-longhorn-v2).
+
 ### What the V2 engine needs
 
 Open **Settings > Hardware and storage > Longhorn > Set up Longhorn V2**.
