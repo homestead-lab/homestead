@@ -20,8 +20,8 @@ const HealthInsights = (() => {
     }
     if (data.cluster?.unavailable?.length) rows.push(item("cluster-partial","low","Some platform checks are unavailable","Open Cluster to review missing observations.","cluster"));
     for (const n of data.cluster?.nodes || []) {
-      if (n.ready === false) rows.push(item("node:"+n.name,"critical",n.name+" is not ready","Check this host before restarting or moving workloads.","nodes"));
-      else if (n.pressure?.length) rows.push(item("pressure:"+n.name,"medium",n.name+" reports resource pressure",n.pressure.join(", ")+". Free capacity or move workloads.","nodes"));
+      if (n.ready === false) rows.push(item("node:"+n.name,"critical",n.name+" is not ready","Check this host before restarting or moving workloads.","node:"+n.name));
+      else if (n.pressure?.length) rows.push(item("pressure:"+n.name,"medium",n.name+" reports resource pressure",n.pressure.join(", ")+". Free capacity or move workloads.","node:"+n.name));
     }
     const p=data.protection;
     if (p) {
@@ -36,18 +36,19 @@ const HealthInsights = (() => {
     }
     const temp=data.settings?.thresholds?.temperature, diskLimit=data.settings?.thresholds?.disk;
     for (const n of data.nodes || []) {
-      if (diskLimit && known(n.fs_pct) && n.fs_pct >= diskLimit.warning) rows.push(item("disk-space:"+n.name,n.fs_pct>=diskLimit.critical?"critical":"medium",`${n.name}: disk ${Math.round(n.fs_pct)}% full`,"Free space or expand capacity before storage fills.","nodes"));
-      if (temp && known(n.temps?.max_c) && n.temps.max_c >= temp.warning) rows.push(item("temperature:"+n.name,n.temps.max_c>=temp.critical?"critical":"medium",`${n.name}: maximum ${n.temps.max_c}°C`,"Inspect the sensor and cooling. Drive temperatures use their own thresholds.","nodes"));
+      if (diskLimit && known(n.fs_pct) && n.fs_pct >= diskLimit.warning) rows.push(item("disk-space:"+n.name,n.fs_pct>=diskLimit.critical?"critical":"medium",`${n.name}: disk ${Math.round(n.fs_pct)}% full`,"Free space or expand capacity before storage fills.","node:"+n.name));
+      if (temp && known(n.temps?.max_c) && n.temps.max_c >= temp.warning) rows.push(item("temperature:"+n.name,n.temps.max_c>=temp.critical?"critical":"medium",`${n.name}: maximum ${n.temps.max_c}°C`,"Inspect the sensor and cooling. Drive temperatures use their own thresholds.","node:"+n.name));
       for (const d of n.temps?.disks || []) {
-        if (["critical","attention","degraded"].includes(d.health?.state)) rows.push(item("disk:"+n.name+":"+d.name,d.health.state==="critical"?"critical":"medium",`${n.name} / ${d.name}: drive needs attention`,d.health.summary || "Check SMART results and verify backups before replacing the drive.","nodes"));
-        else if (!d.health || d.health.stale_probe || ["unknown","unsupported"].includes(d.health.state)) rows.push(item("disk:"+n.name+":"+d.name,"low",`${n.name} / ${d.name}: drive health unknown`,"Check the node probe and SMART support.","nodes"));
+        if (["critical","attention","degraded"].includes(d.health?.state)) rows.push(item("disk:"+n.name+":"+d.name,d.health.state==="critical"?"critical":"medium",`${n.name} / ${d.name}: drive needs attention`,d.health.summary || "Check SMART results and verify backups before replacing the drive.","disk:"+n.name+":"+d.name));
+        else if (!d.health || d.health.stale_probe || ["unknown","unsupported"].includes(d.health.state)) rows.push(item("disk:"+n.name+":"+d.name,"low",`${n.name} / ${d.name}: drive health unknown`,"Check the node probe and SMART support.","disk:"+n.name+":"+d.name));
       }
     }
     // Keep the exact reasons behind the dashboard banner visible here too.
     for(const issue of data.overview?.health_issues || []) {
       const id=issue.kind==="Disk"?"disk:"+issue.name.replace("/",":"):issue.kind==="Node"?"node:"+issue.name:"condition:"+issue.kind+":"+issue.name;
       const existing=rows.findIndex(row=>row.id===id), severity=issue.severity==="critical"?"critical":"medium";
-      const finding=item(id,severity,`${issue.kind} ${issue.name}`,issue.reason || "Review this condition.",({Node:"nodes",Disk:"nodes",Volume:"storage",Backup:"protect",Workload:"workloads"})[issue.kind] || "cluster");
+      const route=["Disk","Node"].includes(issue.kind)?id:({Volume:"storage",Backup:"protect",Workload:"workloads"})[issue.kind] || "cluster";
+      const finding=item(id,severity,`${issue.kind} ${issue.name}`,issue.reason || "Review this condition.",route);
       if(existing<0)rows.push(finding);
       else if(rank[severity]<rank[rows[existing].severity])rows[existing]=finding;
     }
@@ -103,7 +104,10 @@ const HealthInsights = (() => {
     return table+`<div class="dashboard-resource-footer">${rows.length} ${id==="vms"?"VMs":"containers"}<span>${running} running</span></div>`;
   }
   let data={}, request=null, generation=0, checkedAt=0;
-  const open = route => { if(route==="health")return go("cluster",{params:{section:"health"}}); if(route==="retry")return load(true);if(route==="about"){settingsTab("about");return go("settings");}if(route==="updates"){settingsTab("updates");return go("settings");}if(route==="jobs")return jobsDialog();return go(route); };
+  // A finding about one host or one drive opens that host's page, at the drive.
+  const open = route => { if(route==="health")return go("cluster",{params:{section:"health"}});
+    if(route.startsWith("node:"))return go("nodes",{params:{node:route.slice(5)}});
+    if(route.startsWith("disk:")){const [node,...disk]=route.slice(5).split(":");return go("nodes",{params:{node,disk:disk.join(":")}});} if(route==="retry")return load(true);if(route==="about"){settingsTab("about");return go("settings");}if(route==="updates"){settingsTab("updates");return go("settings");}if(route==="jobs")return jobsDialog();return go(route); };
   const list = (rows,limit=Infinity) => UI.insightList(rows.slice(0,limit).map(r=>({...r,tone:r.tone || tone(r.severity),label:r.label || r.severity,action:"Review",onclick:`HealthInsights.open(${jsArg(r.route)})`})));
   function healthBody(compact=false) {
     const rows=advice(data), max=Math.max(...(data.nodes || []).map(n=>n.temps?.max_c).filter(known));

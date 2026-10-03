@@ -12,6 +12,15 @@ test("snapshot-only volumes need external backups; a schedule does not mean a co
 test("missing sources are explicit unknown checks, not zero healthy results",()=>{
  const s=Object.fromEntries(Object.keys(base()).map(k=>[k,null]));assert.equal(H.advice(s).length,6);assert.ok(H.advice(s).every(r=>r.id.startsWith("unknown:")));
 });
+test("a finding about one host or drive reviews that host or drive",()=>{
+ const s=base();s.nodes=[{name:"host",fs_pct:95,temps:{disks:[{name:"sda",health:{state:"attention",summary:"2 reallocated sectors"}}]}}];
+ s.overview.health_issues=[{kind:"Disk",name:"other/nvme0n1",severity:"degraded",reason:"2 reallocated sectors"},{kind:"Node",name:"other",severity:"critical",reason:"NotReady"}];
+ const route=id=>H.advice(s).find(r=>r.id===id)?.route;
+ assert.equal(route("disk:host:sda"),"disk:host:sda","from the node's own drive report");
+ assert.equal(route("disk:other:nvme0n1"),"disk:other:nvme0n1","from the dashboard banner's issues");
+ assert.equal(route("disk-space:host"),"node:host");
+ assert.equal(route("node:other"),"node:other");
+});
 test("advice sorts critical first and respects configured temperature/disk thresholds",()=>{
  const s=base();s.nodes=[{name:"host",fs_pct:91,temps:{max_c:73,disks:[{name:"sda",health:{state:"critical",summary:"Pending sectors"}}]}}];
  const r=H.advice(s);assert.equal(r[0].severity,"critical");assert.equal(r.at(-1).severity,"medium");assert.match(r.find(r=>r.id.startsWith("temperature")).title,/73°C/);
