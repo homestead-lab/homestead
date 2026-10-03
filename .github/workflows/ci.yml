@@ -177,6 +177,7 @@ jobs:
               HOMESTEAD_URL=http://127.0.0.1:4173 DASHBOARD_EDITOR_SCREENSHOTS=release-assets/pages/dashboard-editor node tests/integration/dashboard-editor.mjs
               HOMESTEAD_URL=http://127.0.0.1:4173 node tests/integration/dashboard-account.mjs
               HOMESTEAD_URL=http://127.0.0.1:4173 INSIGHTS_OUTPUT=release-assets/pages/insights node tests/integration/health-insights.mjs
+              HOMESTEAD_URL=http://127.0.0.1:4173 ALERT_SCREENSHOTS=release-assets/pages/alerts node tests/integration/notification-alerts.mjs
             fi
             node scripts/check_setup_guide.mjs
             STORAGE_SCREENSHOTS=release-assets/pages/setup-storage node tests/integration/setup-storage-classes.mjs

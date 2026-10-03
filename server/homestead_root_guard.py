@@ -116,8 +116,8 @@ def alert_facts():
         node = key.split("/", 1)[0]
         facts.append({"key": f"rootguard:{key}", "category": "degraded", "severity": "degraded",
                       "title": f"{node}'s root filesystem is low: Longhorn stopped placing copies there",
-                      "resolved": f"{node}'s root filesystem has room again",
+                      "resolved": f"Root filesystem protection cleared on {node}",
                       "body": (f"{row.get('free_gb')} GB free of {row.get('total_gb')} GB. Copies already there stay; "
-                               "Move replicas off, or a Longhorn volume of its own (Use free space), frees it"),
+                               "Review disk usage and move replicas or expand storage to free space."),
                       "href": "/nodes"})
     return facts

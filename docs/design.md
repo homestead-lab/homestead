@@ -634,3 +634,14 @@ Keyboard reordering continues to use the normal card and live announcements.
 - Image selection ends with **Review selected** in `UI.actions`; checking registries is secondary. Review and acknowledgement still precede mutation. Keep policy and exact image/capacity detail in disclosures.
 - `rolloutProgress` uses `UI.progress` and `UI.checklist` for download, replacement pods and readiness. Show download percentages only with byte totals; old-pod readiness is not overall update progress. Finished queues count successfully updated apps. Preserve last-known progress under a disconnect notice.
 - SMART defaults stay **1 reallocated → warning; 1 pending / uncorrectable → critical**. Explain historical counts in tooltips and preserve user thresholds. The [smartmontools manual](https://github.com/smartmontools/smartmontools/blob/main/src/smartd.conf.5.in) reports nonzero pending and offline uncorrectable counts by default; severity mapping is Homestead's conservative policy, not a prediction of remaining drive life. [K3s embedded-etcd guidance](https://docs.k3s.io/datastore/ha-embedded) recommends an odd number of servers and at least three for high availability.
+
+
+### Alert acknowledgement
+
+Use the shared `UI.insightList` for active conditions, with severity text, a
+resource title, concise detail, and **Review** / **Acknowledge** actions. Put
+acknowledged conditions behind `UI.more`, with **Undo** available per condition.
+Keep **Close** in `UI.actions`. Account acknowledgement changes notification
+attention, never the underlying health verdict. Do not use a green healthy
+state for an acknowledged problem. See [notification rules](notifications.md)
+for trigger, delivery and wording contracts.

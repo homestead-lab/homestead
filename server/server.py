@@ -697,27 +697,27 @@ def smart_disk_issues(report, settings=None):
     cfg = settings or DEFAULT_APP_SETTINGS["smart"]
     issues = []
     if str(report.get("health") or "").lower() == "failed":
-        issues.append({"severity": "critical", "reason": "SMART overall-health check failed"})
+        issues.append({"severity": "critical", "reason": "SMART overall-health check failed", "metric": "smart_failed", "value": 1})
     temperature = report.get("temperature_c")
     if temperature is not None:
         severity = ("critical" if float(temperature) >= cfg["temperature"]["critical"] else
                     "degraded" if float(temperature) >= cfg["temperature"]["warning"] else "")
         if severity:
             issues.append({"severity": severity,
-                           "reason": f"drive temperature is {temperature}°C"})
+                           "reason": f"Drive temperature is {temperature}°C", "metric": "temperature", "value": int(float(temperature) // 5)})
     reallocated = int(report.get("reallocated") or 0)
     pending = int(report.get("pending") or 0)
     uncorrectable = int(report.get("uncorrectable") or 0)
     media = int(report.get("media_errors") or 0)
     if reallocated >= cfg["reallocated_warning"]:
-        issues.append({"severity": "degraded", "reason": f"{reallocated} reallocated sector(s)"})
+        issues.append({"severity": "degraded", "reason": f"{reallocated} reallocated sector{'s' if reallocated != 1 else ''}", "metric": "reallocated", "value": reallocated})
     if pending >= cfg["pending_critical"]:
-        issues.append({"severity": "critical", "reason": f"{pending} pending sector(s)"})
+        issues.append({"severity": "critical", "reason": f"{pending} pending sector{'s' if pending != 1 else ''}", "metric": "pending", "value": pending})
     if uncorrectable >= cfg["uncorrectable_critical"]:
         issues.append({"severity": "critical",
-                       "reason": f"{uncorrectable} uncorrectable sector(s)"})
+                       "reason": f"{uncorrectable} uncorrectable sector{'s' if uncorrectable != 1 else ''}", "metric": "uncorrectable", "value": uncorrectable})
     if media:
-        issues.append({"severity": "critical", "reason": f"{media} NVMe media error(s)"})
+        issues.append({"severity": "critical", "reason": f"{media} NVMe media error{'s' if media != 1 else ''}", "metric": "media", "value": media})
     return issues
 
 
@@ -749,14 +749,14 @@ def smart_disk_health(report, settings=None):
     # A drive that has spent its endurance is worn out whatever else it says.
     if life is not None and int(life) <= 10:
         issues.append({"severity": "critical",
-                       "reason": f"only {int(life)}% of rated life remains"})
+                       "reason": f"Only {int(life)}% of rated life remains", "metric": "wear", "value": 100 - int(life)})
     elif life is not None and int(life) <= 25:
         issues.append({"severity": "degraded",
-                       "reason": f"{int(life)}% of rated life remains"})
+                       "reason": f"{int(life)}% of rated life remains", "metric": "wear", "value": 100 - int(life)})
     if spare is not None and floor is not None and int(spare) <= int(floor):
         issues.append({"severity": "critical",
                        "reason": f"spare blocks are down to {int(spare)}%, "
-                                 f"at the drive's floor of {int(floor)}%"})
+                                 f"at the drive's floor of {int(floor)}%", "metric": "spare_used", "value": 100 - int(spare)})
     state = ("critical" if any(x["severity"] == "critical" for x in issues)
              else "attention" if issues else "healthy")
     if not issues:
@@ -879,7 +879,8 @@ def get_nodes():
         for disk in (temp_payload or {}).get("disks", []):
             disk["health"] = smart_disk_health(disk.get("smart"), smart_cfg)
             for issue in disk["health"]["issues"]:
-                disk_issues.append({**issue, "disk": disk.get("name", "unknown")})
+                disk_issues.append({**issue, "disk": disk.get("name", "unknown"),
+                                    "device_identity": (disk.get("smart") or {}).get("serial") or disk.get("serial") or ""})
         out.append({
             "name": name,
             "uid": n["metadata"].get("uid"),
@@ -1646,12 +1647,12 @@ def protection_issues(jobs, target):
     for job in guarding:
         if job.get("last_failed"):
             issues.append({"severity": "degraded", "kind": "Backup", "name": job["name"],
-                           "reason": f"its last {job['task'].split('-')[0]} run failed; its pod's log in longhorn-system says why"})
+                           "reason": f"The last {job['task'].split('-')[0]} run failed. Review its job log."})
     if any(j["task"].startswith("backup") for j in guarding):
         target = target or {}
         if not target.get("configured"):
             issues.append({"severity": "degraded", "kind": "Backup", "name": "backup target",
-                           "reason": "backup jobs are set up but there is no backup target, so every backup fails"})
+                           "reason": "Backup jobs have no backup target. Configure a destination."})
         elif not target.get("available"):
             issues.append({"severity": "degraded", "kind": "Backup", "name": "backup target",
                            "reason": f"{target.get('url', 'the backup target')} cannot be reached"
@@ -1666,11 +1667,13 @@ def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protec
         if node.get("status") != "Ready":
             issues.append({"severity": "critical", "kind": "Node",
                            "name": node.get("name", "unknown"),
-                           "reason": f"node is {node.get('status') or 'not ready'}"})
+                           "reason": f"Kubernetes reports {node.get('status') or 'not ready'}. Review this host."})
         for disk in (node.get("disk_issues") or []) if node.get("smart_notify", True) else []:
             issues.append({"severity": disk.get("severity", "degraded"), "kind": "Disk",
                            "name": f"{node.get('name', 'unknown')}/{disk.get('disk', 'unknown')}",
-                           "reason": disk.get("reason", "SMART warning")})
+                           "reason": disk.get("reason", "SMART warning"),
+                           "device_identity": disk.get("device_identity", ""),
+                           **({"metric": disk["metric"], "value": disk["value"]} if "metric" in disk else {})})
     for volume in volumes:
         robustness = str(volume.get("robustness", "") or "").lower()
         label = volume.get("pvc_name") or volume.get("name") or "unknown"
@@ -6077,25 +6080,32 @@ def push_alerts(fresh):
     """Wakes every device that wants one of these alerts, and belongs to a user still here."""
     if not fresh:
         return None
-    kinds = {entry["category"] for entry in fresh}
     users = {u["name"] for u in AUTH.list_users()}
-    urgent = any(e["severity"] == "critical" and e["phase"] == "raised" for e in fresh)
-    return PUSH.send(lambda row: row["user"] in users and kinds & set(row["categories"]),
+    urgent = any(e["severity"] == "critical" and e["phase"] in ("raised", "worsened") for e in fresh)
+    visible = {user: ALERTS.for_user(fresh, user) for user in users}
+    return PUSH.send(lambda row: row["user"] in users and any(
+                         e["category"] in row["categories"] for e in visible[row["user"]]),
                      urgency="high" if urgent else "normal")
 
 
-def alerts_pending(user, endpoint):
+def alerts_pending(user, endpoint, confirm_delivery=False):
     """What a device has not been shown yet, for its service worker after a push."""
     row = PUSH.mine(user, endpoint) if endpoint else None
     wanted = set(row["categories"]) if row else set()
-    active = len([a for a in ALERTS.active(wanted) if a.get("announced", 0) > 0])
+    active = len([a for a in ALERTS.active(user=user) if a.get("announced", 0) > 0 and not a["acknowledged"]])
     if not row:
         return {"alerts": [], "active": active, "known": False}
-    got = ALERTS.log(after=row.get("cursor", 0), categories=wanted | {"test"}, limit=12)
+    got = ALERTS.log(after=row.get("cursor", 0), categories=wanted | {"test"}, limit=300)
     mine = PUSH.tag(endpoint)
     alerts = [a for a in got["alerts"] if a["category"] != "test" or a.get("to") == mine]
-    PUSH.advance(user, endpoint, got["latest"])
-    return {"alerts": alerts, "active": active, "known": True}
+    # Replace old raises with their latest outcome before displaying a backlog.
+    latest = {a["key"]: a for a in alerts}
+    current = {a["key"]: a for a in ALERTS.active()}
+    alerts = ALERTS.for_user([a for a in latest.values() if a.get("event") or a["category"] == "test"
+                             or a["phase"] == "resolved" or a["id"] == current.get(a["key"], {}).get("announced")], user)
+    if not confirm_delivery:  # Compatibility with already installed workers.
+        PUSH.advance(user, endpoint, got["latest"])
+    return {"alerts": alerts, "active": active, "known": True, "latest": got["latest"]}
 
 
 def _alerts_loop():
@@ -7655,7 +7665,7 @@ SELF_ROUTES = {"/api/auth/preferences/dashboard", "/api/auth/logout", "/api/auth
                "/api/fleet/switch",
                # Notifications on your own devices, and what they are shown.
                "/api/push/subscribe", "/api/push/unsubscribe", "/api/push/test",
-               "/api/push/status", "/api/alerts/pending"}
+               "/api/push/status", "/api/alerts/pending", "/api/alerts/acknowledge", "/api/alerts/delivered"}
 
 
 def needed_role(path, method):
@@ -8284,7 +8294,7 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, {"key": PUSH.public_key(), "categories": PUSH.CATEGORIES,
                                         "defaults": PUSH.DEFAULT_CATEGORIES})
             if p == "/api/alerts":
-                return self._send(200, {"active": [a for a in ALERTS.active() if a.get("announced", 0) > 0],
+                return self._send(200, {"active": [a for a in ALERTS.active(user=self.user) if a.get("announced", 0) > 0],
                                         "log": [a for a in ALERTS.log(limit=30)["alerts"] if a["category"] != "test"],
                                         "devices": PUSH.devices(self.user)})
             if p == "/style.css":
@@ -8904,8 +8914,8 @@ class H(HTTP.LimitedHandler):
                 if not PUSH.mine(self.user, endpoint):
                     return self._send(404, {"error": "this device is not set up for notifications"})
                 ALERTS.note({"key": f"test:{int(time.time())}", "category": "test", "severity": "info",
-                             "title": "Homestead notifications work",
-                             "body": "This device will be told when something needs you.",
+                             "title": "Homestead test notification",
+                             "body": "Notifications are enabled for this device. Choose categories in Settings › This device.",
                              "href": "/settings", "to": PUSH.tag(endpoint)})
                 result = PUSH.send(lambda row: row["endpoint"] == endpoint, urgency="high")
                 status = (result["statuses"] or [0])[0]
@@ -8914,7 +8924,20 @@ class H(HTTP.LimitedHandler):
                                             if status else "the push service could not be reached"})
                 return self._send(200, {"ok": True})
             if p == "/api/alerts/pending":
-                return self._send(200, alerts_pending(self.user, str(b.get("endpoint") or "")))
+                return self._send(200, alerts_pending(self.user, str(b.get("endpoint") or ""), b.get("confirm_delivery") is True))
+            if p == "/api/alerts/acknowledge":
+                try:
+                    return self._send(200, ALERTS.acknowledge(self.user, b.get("key"), b.get("version"), b.get("undo") is True))
+                except ALERTS.AlertChanged as error:
+                    return self._send(409, {"error": str(error)})
+            if p == "/api/alerts/delivered":
+                endpoint, cursor = str(b.get("endpoint") or ""), b.get("latest")
+                if not PUSH.mine(self.user, endpoint):
+                    return self._send(404, {"error": "This notification device is not registered to your account."})
+                if type(cursor) is not int or cursor < 0 or cursor > ALERTS.log(limit=0)["latest"]:
+                    return self._send(400, {"error": "Invalid notification cursor."})
+                PUSH.advance(self.user, endpoint, cursor)
+                return self._send(200, {"ok": True})
             if p == "/api/auth/preferences/dashboard":
                 try:
                     return self._send(200, AUTH.save_dashboard_preferences(self.user, b))
@@ -8941,6 +8964,7 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, {"ok": True, "users": AUTH.list_users()})
             if p == "/api/auth/users/delete":
                 AUTH.delete_user(b.get("username"), self.user)
+                ALERTS.forget_user(str(b.get("username") or "").strip().lower())
                 self._signin("user-removed", b.get("username"), detail=f"by {self.user}")
                 return self._send(200, {"ok": True, "users": AUTH.list_users()})
             if p == "/api/auth/signout-everywhere":

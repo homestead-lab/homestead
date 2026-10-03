@@ -115,6 +115,7 @@ function ungate() {
 
 function stopAuthenticatedWork() {
   window.Dashboard?.invalidate();
+  window.stopAlertChecks?.();
   authGeneration++;
   ME = null; ROLE = null;
   clearInterval(window.__loopTimer);
@@ -348,6 +349,7 @@ async function afterAuth() {
   }
   startLoop();
   if (window.startOperationChecks) window.startOperationChecks();
+  if (window.startAlertChecks) window.startAlertChecks();
   if (window.startUpdateChecks) window.startUpdateChecks();
   // Load this user's guide reminder choice without opening or replacing a page.
   if (window.welcomeCheck) setTimeout(() => welcomeCheck(), 900);

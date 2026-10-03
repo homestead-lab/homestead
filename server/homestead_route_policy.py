@@ -166,6 +166,8 @@ POLICY = {
     ('POST', '/api/addons/nfs/remove'): 'admin',
     ('POST', '/api/addons/smb/remove'): 'admin',
     ('POST', '/api/alerts/pending'): 'viewer',
+    ('POST', '/api/alerts/acknowledge'): 'viewer',
+    ('POST', '/api/alerts/delivered'): 'viewer',
     ('POST', '/api/appstore/install'): 'operator',
     ('POST', '/api/auth/keys'): 'admin',
     ('POST', '/api/auth/keys/revoke'): 'admin',

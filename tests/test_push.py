@@ -146,7 +146,7 @@ class AlertTests(unittest.TestCase):
         self.assertEqual([], self.tick(node_down()))
         fresh = self.tick(node_down(), seconds=60)
 
-        self.assertEqual(["Node h1 is down"], [a["title"] for a in fresh])
+        self.assertEqual(["Host h1 is not ready"], [a["title"] for a in fresh])
         self.assertEqual("outage", fresh[0]["category"])
         self.assertEqual([], self.tick(node_down()), "announced once")
 
@@ -164,7 +164,7 @@ class AlertTests(unittest.TestCase):
         self.assertEqual([], self.tick({}), "not yet: it could come straight back")
         fresh = self.tick({}, seconds=90)
 
-        self.assertEqual([("resolved", "Node h1 is back")], [(a["phase"], a["title"]) for a in fresh])
+        self.assertEqual([("resolved", "Host readiness warning cleared: h1")], [(a["phase"], a["title"]) for a in fresh])
 
     def test_not_being_able_to_look_is_not_everything_recovering(self):
         self.tick({})
@@ -180,7 +180,7 @@ class AlertTests(unittest.TestCase):
         new = {"id": "b2", "status": "failed", "title": "Restore db", "message": "no backup", "href": "/volumes"}
         fresh = self.tick({}, jobs=[old, new])
 
-        self.assertEqual(["Failed: Restore db"], [a["title"] for a in fresh])
+        self.assertEqual(["Job failed: Restore db"], [a["title"] for a in fresh])
         self.assertEqual([], self.tick({}, jobs=[old, new]))
         self.assertEqual([], self.tick({}, jobs=[]), "a dismissed job is not news")
 
@@ -194,7 +194,7 @@ class AlertTests(unittest.TestCase):
         ready = alerts.observe({"joins": alerts.join_facts(old + [node("harvester-3", "u3", True)])}, self.now + 2)
 
         self.assertEqual(["harvester-3 is joining the cluster"], [a["title"] for a in registering])
-        self.assertEqual(["harvester-3 joined the cluster"], [a["title"] for a in ready])
+        self.assertEqual(["Host harvester-3 is ready"], [a["title"] for a in ready])
 
     def test_a_source_added_by_an_upgrade_starts_quiet(self):
         alerts.observe({"jobs": []}, self.now)
@@ -208,16 +208,16 @@ class AlertTests(unittest.TestCase):
         alerts.observe({"updates": alerts.update_facts(report("sha256:a"))}, self.now)
         self.assertEqual([], alerts.observe({"updates": alerts.update_facts(report("sha256:a"))}, self.now + 1))
         fresh = alerts.observe({"updates": alerts.update_facts(report("sha256:b"))}, self.now + 2)
-        self.assertEqual(["Update for web"], [a["title"] for a in fresh])
+        self.assertEqual(["Update available: web"], [a["title"] for a in fresh])
 
-    def test_homesteads_own_release_is_named_and_sent_to_about(self):
+    def test_homesteads_own_release_is_named_and_sent_to_updates(self):
         facts = alerts.update_facts({"workloads": [
             {"ns": "lab", "name": "homestead", "homestead": "self", "available": True,
              "images": [{"available": True, "remote_digest": "sha256:h", "candidate_tag": "2.9.0"}]},
             {"ns": "lab", "name": "homestead-nfs", "homestead": "nfs", "available": True,
              "images": [{"available": True, "remote_digest": "sha256:n", "candidate_tag": "3.21"}]}]})
-        self.assertEqual([("Homestead 2.9.0 is available", "/settings?tab=about"),
-                          ("Update for homestead-nfs", "/settings?tab=about")],
+        self.assertEqual([("Homestead 2.9.0 is available", "/settings?tab=updates"),
+                          ("Update available: homestead-nfs", "/settings?tab=updates")],
                          [(f["title"], f["href"]) for f in facts])
 
 
@@ -237,7 +237,7 @@ class DeliveryTests(unittest.TestCase):
         alerts.observe({"jobs": alerts.job_facts([{"id": "j", "status": "failed", "title": "Backup"}])}, 2)
 
         phone = server.alerts_pending("me", "https://fcm.googleapis.com/phone")
-        self.assertEqual(["Failed: Backup"], [a["title"] for a in phone["alerts"]])
+        self.assertEqual(["Job failed: Backup"], [a["title"] for a in phone["alerts"]])
         self.assertEqual([], server.alerts_pending("me", "https://fcm.googleapis.com/phone")["alerts"])
         self.assertEqual([], server.alerts_pending("me", "https://fcm.googleapis.com/tablet")["alerts"])
 
