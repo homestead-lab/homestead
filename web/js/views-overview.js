@@ -1,5 +1,9 @@
 const tempCls = c => c == null ? "" : sev(c, "temperature") === "b" ? "t-hot" : sev(c, "temperature") === "w" ? "t-warm" : "t-ok";
 const tempTag = c => c == null ? "" : sev(c, "temperature") === "b" ? "bad" : sev(c, "temperature") === "w" ? "warn" : "";
+/* The sensor a maximum came from, in brackets: "71° (NVMe nvme0)". */
+const tempSource = temps => temps?.max_source ? ` (${esc(temps.max_source)})` : "";
+/* The processor, as the node probe reads it, with its cores. */
+const cpuSummary = n => [n.temps?.cpu_model, n.cpu_cap != null ? `${n.cpu_cap} core${n.cpu_cap == 1 ? "" : "s"}` : ""].filter(Boolean).map(esc).join(" · ") || "—";
 const smartTone = health => health === "passed" ? "ok" : health === "failed" ? "bad" : "";
 /* The verdict Homestead reaches from the counters, not smartctl's own
    overall-health bit - that stays PASSED until a drive is nearly gone. */
@@ -148,7 +152,7 @@ function dashboardNodes(nodes, display="compact") {
       <div class="node-compact-heading">${UI.statusDot(tone,status)}<button class="linkish" onclick="nodeDetail(${jsq(n.name)})" title="${esc(n.name)}">${esc(n.name)}</button></div>
       <div class="node-compact-state ${tone==="bad"?"t-hot":tone==="warn"?"t-warm":"dim"}">${esc(status)}</div>
       ${percent("CPU",n.cpu_pct,"cpu")}${percent("Memory",n.mem_pct,"memory")}${percent("Disk",n.fs_pct,"disk")}
-      ${line("Network",network,"Receive / transmit")}${line("Max temp",known(temperature)?temperature+"°C":"—","Maximum observed host temperature; CPU temperature when no maximum is reported")}
+      ${line("Network",network,"Receive / transmit")}${line("Max temp",known(temperature)?temperature+"°C"+(known(maxTemp)?tempSource(n.temps):""):"—","Maximum observed host temperature, and the sensor it came from; CPU temperature when no maximum is reported")}
       ${line("Pods",n.pods ?? "—")}${line("Uptime",nodeUpFor(n).replace(/^up /,"") || "—")}
       ${issues.length?`<button class="node-compact-warning" onclick="HealthInsights.open('health')" title="${esc([...new Set(issues)].join("; "))}">${esc([...new Set(issues)].join("; "))}</button>`:""}
     </article>`;
@@ -286,7 +290,7 @@ function nodeCard(n) {
         <span class="small mono">${net[0]} <span class="dim">${net[1]}</span></span></div>
       ${n.temps && n.temps.cpu_c != null ? `<div class="between"><span class="dim xs">TEMP</span>
         <span class="small mono ${tempCls(n.temps.cpu_c)}"><b>${n.temps.cpu_c}°C</b>
-          ${n.temps.max_c > n.temps.cpu_c ? `<span class="dim">max ${n.temps.max_c}°</span>` : ""}</span></div>` : ""}
+          ${n.temps.max_c > n.temps.cpu_c ? `<span class="dim">max ${n.temps.max_c}°${tempSource(n.temps)}</span>` : ""}</span></div>` : ""}
     </div>
     <div class="nodepods"><span class="small mono" data-tip="${n.pods_wl} of your pods (bright) and ${n.pods_sys} system pods">
       <b>${n.pods}</b> <span class="dim">pods${n.vms ? ` · <b>${n.vms}</b> VM${n.vms === 1 ? "" : "s"}` : ""}</span></span>
@@ -358,7 +362,7 @@ function nodeComparisonMarkup(id) {
     metric("Status", n => `<span class="tag ${n.status === "Ready" ? "ok" : "bad"}">${esc(n.status)}</span>${n.schedulable === false ? '<span class="tag warn">cordoned</span>' : ""}
       ${n.host_os && ["warn", "bad"].includes(n.host_os.tone) ? `<span class="tag ${n.host_os.tone}" data-tip="${esc(n.host_os.text)}">host OS</span>` : ""}`),
     metric("CPU", n => percent(n.cpu_pct, "cpu")),
-    metric("Cores", n => `<span class="mono">${esc(n.cpu_cap ?? "—")}</span>`),
+    metric("Cores", n => `<span class="mono">${esc(n.cpu_cap ?? "—")}</span>${n.temps?.cpu_model ? `<span class="comparison-note">${esc(n.temps.cpu_model)}</span>` : ""}`),
     metric("Memory", n => `${percent(n.mem_pct, "memory")}<span class="comparison-note">${sizePair(n.mem_used_gb, n.mem_cap_gb)}</span>`),
     ...Array.from({length:Math.max(1,...nodes.map(n => (n.disks || []).length))}, (_, i) =>
       metric(`Storage ${i + 1}`, n => n.disks?.length ? comparisonDisk(n,n.disks[i]) : i ? '<span class="dim">—</span>' : comparisonDisk(n,{device:"filesystem",name:"Node filesystem",root_fs:true,system:true,size_gb:n.fs_cap_gb}), false)),
@@ -521,6 +525,7 @@ async function nodePage(name) {
       <div class="card flat"><div class="about-grid node-facts">
         ${fact("Roles", esc(n.roles.join(", ") || "worker"))}
         ${fact("Address", `<span class="mono">${esc((n.addresses || {}).InternalIP || "—")}</span>`)}
+        ${fact("CPU", cpuSummary(n))}
         ${fact("Serves", nodeDutyTags(n) || "—")}
         ${fact("Takes new work", n.schedulable ? "yes" : '<span class="tag warn">cordoned</span>')}
       </div>${odd.length ? `<div class="note warn" style="margin-top:10px">${odd.map(c => `<b>${esc(c.type)}</b>: ${esc(c.status)}`).join(" · ")}</div>` : ""}</div>`],
@@ -544,7 +549,7 @@ async function nodePage(name) {
       <div class="card flat"><div class="ctitle">Temperatures</div>
         <div style="margin-top:10px">${n.temps && n.temps.sensors ? ([...(n.temps.hwmon || []), ...(n.temps.thermal || [])].sort((a, b) => b.celsius - a.celsius).slice(0, 14)
           .map(t => `<span class="tag ${tempTag(t.celsius)}">${esc(t.chip ? t.chip + " " : "")}${esc(t.name)} ${t.celsius}°</span>`).join("")
-          || `<span class="small">CPU <b class="${tempCls(n.temps.cpu_c)}">${n.temps.cpu_c ?? "—"}°C</b> · hottest sensor <b class="${tempCls(n.temps.max_c)}">${n.temps.max_c ?? "—"}°C</b></span>`)
+          || `<span class="small">CPU <b class="${tempCls(n.temps.cpu_c)}">${n.temps.cpu_c ?? "—"}°C</b> · hottest sensor <b class="${tempCls(n.temps.max_c)}">${n.temps.max_c ?? "—"}°C</b>${tempSource(n.temps)}</span>`)
           : `<span class="dim small">No thermal data: it comes from the node probe. <a class="linkish" data-need="admin" onclick="probeInstallConfirm()">Install it</a></span>`}</div></div>`],
     ["network", "Network", `${(n.rx_mbps || 0).toFixed(1)} Mb/s in${vips.length ? ` · ${vips.length} VIP${vips.length === 1 ? "" : "s"}` : ""}`, `
       <div class="card flat"><div class="about-grid node-facts">

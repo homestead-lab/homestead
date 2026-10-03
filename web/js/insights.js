@@ -139,9 +139,11 @@ const HealthInsights = (() => {
   }
   function healthBody(compact=false) {
     const rows=advice(data), max=Math.max(...(data.nodes || []).map(n=>n.temps?.max_c).filter(known));
+    // Where the hottest reading is: which host, and which of its sensors.
+    const hottest=(data.nodes || []).find(n=>n.temps?.max_c===max), where=hottest?[hottest.name,hottest.temps?.max_source].filter(Boolean).join(" · "):"";
     const open=rows.filter(r=>!r.alert?.acknowledged), acked=rows.length-open.length;
     const counts=["critical","medium","low"].map(level=>`${open.filter(r=>r.severity===level).length} ${level}`).join(" · ")+(acked?` · ${acked} acknowledged`:"");
-    return `<div class="insight-summary">${esc(counts)}${Number.isFinite(max)?`<span>Max observed temperature ${esc(max)}°C</span>`:""}</div>`+
+    return `<div class="insight-summary">${esc(counts)}${Number.isFinite(max)?`<span>Max observed temperature ${esc(max)}°C${where?` (${esc(where)})`:""}</span>`:""}</div>`+
       (rows.length?list(rows,compact?3:Infinity):'<div class="empty small">No suggestions from the available checks.</div>')+
       (compact && rows.length>3?`<div class="ui-help">${rows.length-3} more in Cluster Health</div>`:"");
   }
