@@ -13,6 +13,7 @@ __pycache__/
 /.agents/
 /.codex/
 /*.local.md
+/docs/submissions/
 node_modules/
 _site/
 release-assets/
