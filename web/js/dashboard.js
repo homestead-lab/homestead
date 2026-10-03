@@ -21,10 +21,43 @@ const Dashboard = (() => {
       height:[0,360,520].includes(item.height)?item.height:0,
     }));
   };
-  const key = () => `homestead.dashboard.v1.${encodeURIComponent(ME || "guest")}`;
-  const stored = () => localStorage.getItem(key());
-  const read = () => { try { return normalize(JSON.parse(stored())); } catch { return defaults(); } };
-  let draft = null, initial = "", baseline = "", undo = [], redo = [], selected = "", phone = false, panelOpen = false, gesture = null, portalRequest = null, session = 0;
+  const endpoint = "/api/auth/preferences/dashboard";
+  const legacyKey = () => `homestead.dashboard.v1.${encodeURIComponent(ME || "guest")}`;
+  const legacy = () => { try { const value=JSON.parse(localStorage.getItem(legacyKey()));return value?.version===1 && Array.isArray(value.items)?{version:1,items:normalize(value)}:null; } catch { return null; } };
+  const clearLegacy = () => { try {localStorage.removeItem(legacyKey());}catch{} };
+  let layout = null, revision = null, loadedUser = null, loadError = "", layoutRequest = null, saving = false;
+  const read = () => clone(loadedUser===ME && layout!==null ? layout : legacy()?.items || defaults());
+  let draft = null, initial = "", baseline = null, undo = [], redo = [], selected = "", phone = false, panelOpen = false, gesture = null, portalRequest = null, session = 0;
+  async function load() {
+    if(draft!==null)return true;
+    if(layoutRequest)return layoutRequest;
+    const requestedSession=session, user=ME;
+    if(loadedUser!==user){layout=null;revision=null;loadError="";loadedUser=user;}
+    layoutRequest=(async()=>{
+      try{
+        let answer=await api(endpoint,{keep:true});
+        if(requestedSession!==session || user!==ME)return false;
+        if(!answer || !("revision" in answer) || !("layout" in answer))throw new Error("Dashboard preferences are unavailable.");
+        const old=legacy();
+        if(answer.layout===null && old){
+          try{answer=await api(endpoint,{method:"POST",body:JSON.stringify({revision:answer.revision,layout:old})});}
+          catch(error){
+            // A first-save race has a winner. Never replace that account layout
+            // with another browser's legacy data; leave the legacy copy on failure.
+            const latest=await api(endpoint,{keep:true});
+            if(latest.layout===null)throw error;
+            answer=latest;
+          }
+        }
+        if(requestedSession!==session || user!==ME)return false;
+        layout=normalize(answer.layout);revision=answer.revision;loadError="";
+        if(answer.layout!==null)clearLegacy();
+        return true;
+      }catch(error){if(requestedSession===session && user===ME)loadError=error.message || "Could not load your dashboard layout.";return false;}
+      finally{if(requestedSession===session)layoutRequest=null;}
+    })();
+    return layoutRequest;
+  }
   const clone = value => JSON.parse(JSON.stringify(value));
   const dirty = () => draft !== null && JSON.stringify(draft) !== initial;
   const announce = text => { const host=document.getElementById("dashboardStatus"); if(host) host.textContent=text; };
@@ -89,16 +122,16 @@ const Dashboard = (() => {
         <label>Height<select aria-label="Widget height" onchange="Dashboard.size('height',+this.value)">${[[0,"Fit content"],[360,"Medium"],[520,"Tall"]].map(([height,label])=>`<option value="${height}" ${height===item.height?"selected":""}>${label}</option>`).join("")}</select></label>
         <div class="dashboard-order"><button class="btn sm" ${index===0?"disabled":""} onclick="Dashboard.move(${jsq(item.id)},${index-1})">↑ Earlier</button><button class="btn sm" ${index===draft.length-1?"disabled":""} onclick="Dashboard.move(${jsq(item.id)},${index+1})">↓ Later</button></div>
         <button class="btn sm danger" onclick="Dashboard.remove(${jsq(item.id)})">Remove widget</button>`:""}</div>
-      ${UI.guide("How the grid works", "Drag a widget’s handle to change its position. Drag its bottom corner to resize, or use Widget settings. Cards snap to columns and grow to fit their content. On phones, cards stack in the same order with automatic height. Arrow keys on a move handle reorder cards. Metrics pause while editing. Changes are saved for your account in this browser.")}
+      ${UI.guide("How the grid works", "Drag a widget’s handle to change its position. Drag its bottom corner to resize, or use Widget settings. Cards snap to columns and grow to fit their content. On phones, cards stack in the same order with automatic height. Arrow keys on a move handle reorder cards. Metrics pause while editing. Your layout follows your account across browsers and devices.")}
     </div></aside>`;
   }
   function editor(message="") {
     if(draft===null)return;
     const focus=document.activeElement, focusId=focus?.dataset.dashDrag;
-    paint(`${UI.pageHeader("Edit dashboard", "Arrange your widgets. Changes stay private to this browser.")}
+    paint(`${UI.pageHeader("Edit dashboard", "Arrange your widgets. Your layout follows your account.")}
       <div class="dashboard-edit-toolbar"><div class="row"><span class="tag">Editing</span><span class="dim small">${draft.length} widgets</span><span class="dim small">${dirty()?"Unsaved changes":"Layout saved"}</span></div>
         <div class="row"><button class="btn sm" onclick="Dashboard.history(-1)" ${undo.length?"":"disabled"}>Undo</button><button class="btn sm" onclick="Dashboard.history(1)" ${redo.length?"":"disabled"}>Redo</button><button class="btn sm" onclick="Dashboard.reset()">Reset layout</button>
-        <button class="btn sm" aria-pressed="${phone}" onclick="Dashboard.preview()">${phone?"Desktop canvas":"Phone preview"}</button>${UI.button("Cancel", "Dashboard.cancel()")}${UI.button("Save layout", "Dashboard.save()", {kind:"pri"})}</div></div>
+        <button class="btn sm" aria-pressed="${phone}" onclick="Dashboard.preview()">${phone?"Desktop canvas":"Phone preview"}</button>${UI.button("Cancel", "Dashboard.cancel()", {disabled:saving})}${UI.button(saving?"Saving…":"Save layout", "Dashboard.save()", {kind:"pri",disabled:saving})}</div></div>
       ${(STATE.data.ov?.health_issues || []).length ? UI.callout("warn", "Cluster needs attention", esc(STATE.data.ov.health_summary || "Review cluster health after editing.")) : ""}
       <div class="dashboard-edit-layout"><div class="dashboard-workbench"><div class="dashboard-canvas-label"><span>${phone?"Phone · stacked layout":"Grid · drag to arrange"}</span><span>${phone?"Order is shared with desktop":"12 columns · automatic rows"}</span></div>${render(true)}</div>${inspector()}</div>
       <div id="dashboardStatus" class="sr-only" role="status" aria-live="polite">${esc(message)}</div>`);
@@ -108,7 +141,7 @@ const Dashboard = (() => {
     if(focusId)document.querySelector(`[data-dash-drag="${focusId}"]`)?.focus({preventScroll:true});
   }
   function change(fn,message) {
-    if(draft===null)return;
+    if(draft===null || saving)return;
     const before=clone(draft);fn();
     draft=normalize({version:1,items:draft});
     if(JSON.stringify(before)!==JSON.stringify(draft)){undo.push(before);if(undo.length>50)undo.shift();redo=[];}
@@ -124,31 +157,38 @@ const Dashboard = (() => {
     selected=id;change(()=>{const [item]=draft.splice(from,1);draft.splice(to,0,item);},`${widgets[id].title} moved to position ${to+1}.`);
   }
   async function leave() {
+    if(saving){toast("Wait for the layout to finish saving.","warn");return false;}
     if(dirty() && !(await ask("Discard dashboard changes?")))return false;
     draft=null;gesture=null;return true;
   }
   async function cancel(){if(await leave()){resetPaint();await viewDash();document.querySelector('[onclick="Dashboard.start()"]')?.focus();}}
-  function start() {
+  async function start() {
     if(draft!==null)return;
-    try{baseline=stored();}catch{baseline=null;}
+    if(!(await load())){toast(loadError,"bad");return;}
+    if(draft!==null)return;
+    baseline=revision;
     draft=read();initial=JSON.stringify(draft);undo=[];redo=[];phone=false;panelOpen=false;selected=draft[0]?.id || "";
     resetPaint();editor();loadPortal();document.querySelector('[onclick="Dashboard.save()"]')?.focus();
   }
   async function save() {
-    if(draft===null)return;
+    if(draft===null || saving)return;
+    const requestedSession=session,user=ME;
+    saving=true;editor();
     try {
-      if(stored()!==baseline)throw new Error("This layout changed in another tab. Cancel and reopen the editor to use the latest layout.");
-      localStorage.setItem(key(),JSON.stringify({version:1,items:draft}));
-    }catch(e){toast(e.message || "The layout could not be saved in this browser.","bad");return;}
-    draft=null;gesture=null;resetPaint();await viewDash();toast("Dashboard layout saved","ok");
+      const answer=await api(endpoint,{method:"POST",body:JSON.stringify({revision:baseline,layout:{version:1,items:draft}})});
+      if(requestedSession!==session || user!==ME)return;
+      layout=normalize(answer.layout);revision=answer.revision;loadedUser=user;clearLegacy();
+    }catch(e){if(requestedSession===session && user===ME){saving=false;editor();toast(e.message || "Your layout could not be saved. Try again.","bad");}return;}
+    if(requestedSession!==session || user!==ME)return;
+    saving=false;draft=null;gesture=null;resetPaint();await viewDash();toast("Dashboard layout saved to your account","ok");
     document.querySelector('[onclick="Dashboard.start()"]')?.focus();
   }
-  const apiObject={widgets, defaults, normalize, content:{}, render, loadPortal, editing:()=>draft!==null, dirty, start, save, cancel, leave, select, move,
-    invalidate(){session++;draft=null;gesture=null;undo=[];redo=[];portalRequest=null;apiObject.content={};},
+  const apiObject={widgets, defaults, normalize, content:{}, render, loadPortal, load, notice:()=>loadError?UI.callout("warn","Dashboard layout unavailable","Your saved layout could not be refreshed. Editing is unavailable until it reconnects."):"", editing:()=>draft!==null, dirty, start, save, cancel, leave, select, move,
+    invalidate(){session++;layout=null;revision=null;loadedUser=null;loadError="";layoutRequest=null;saving=false;draft=null;gesture=null;undo=[];redo=[];portalRequest=null;apiObject.content={};},
     add(id){if(!Object.hasOwn(widgets,id)||draft===null||draft.some(item=>item.id===id))return;selected=id;change(()=>draft.push({id,width:widgets[id].width,height:0}),`${widgets[id].title} added.`);if(id==="portal")loadPortal();},
     remove(id){if(!Object.hasOwn(widgets,id))return;change(()=>{draft=draft.filter(item=>item.id!==id);if(selected===id)selected=draft[0]?.id || "";},`${widgets[id].title} removed. Use Undo to restore it.`);},
     size(field,value){if(!["width","height"].includes(field))return;change(()=>{const item=draft.find(item=>item.id===selected);if(item)item[field]=value;},"Widget size updated.");},
-    history(direction){const from=direction<0?undo:redo,to=direction<0?redo:undo;if(!from.length || draft===null)return;to.push(clone(draft));draft=from.pop();if(!draft.some(item=>item.id===selected))selected=draft[0]?.id || "";editor(direction<0?"Change undone.":"Change restored.");},
+    history(direction){const from=direction<0?undo:redo,to=direction<0?redo:undo;if(!from.length || draft===null || saving)return;to.push(clone(draft));draft=from.pop();if(!draft.some(item=>item.id===selected))selected=draft[0]?.id || "";editor(direction<0?"Change undone.":"Change restored.");},
     reset(){change(()=>{draft=defaults();selected=draft[0].id;},"Default layout restored. Save to keep it, or Undo to go back.");},
     preview(){phone=!phone;editor();},
     togglePanel(){panelOpen=!panelOpen;editor();},
@@ -168,7 +208,7 @@ const Dashboard = (() => {
     });
     document.addEventListener("pointerdown",event=>{
       const handle=event.target.closest?.("[data-dash-drag],[data-dash-resize]");
-      if(!handle || draft===null || event.button!==0)return;
+      if(!handle || draft===null || saving || event.button!==0)return;
       const id=handle.dataset.dashDrag || handle.dataset.dashResize;
       handle.focus({preventScroll:true});
       const item=draft.find(item=>item.id===id),el=handle.closest(".dashboard-widget");

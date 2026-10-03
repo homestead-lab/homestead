@@ -62,9 +62,9 @@ try{
   await page.evaluate(()=>go('portal'));await page.locator('.askdlg [data-a="no"]').click();assert.equal(await page.evaluate(()=>STATE.view),'dash');
   await page.getByRole('button',{name:'Cancel',exact:true}).click();await page.locator('.askdlg [data-a="yes"]').click();
   await page.getByRole('button',{name:'Edit dashboard',exact:true}).waitFor();assert.deepEqual(await order(),expected);
-  // A conflicting tab save is not silently overwritten, and failure retains the draft.
+  // A conflicting session save is not silently overwritten, and server failure retains the draft.
   await page.getByRole('button',{name:'Edit dashboard',exact:true}).click();
-  await page.evaluate(()=>{localStorage.setItem(`homestead.dashboard.v1.${encodeURIComponent(ME)}`,JSON.stringify({version:1,items:[]}));});
+  await page.evaluate(()=>{localStorage.setItem(`homestead.demo.dashboard.${ME}`,JSON.stringify({revision:"another-session",layout:{version:1,items:[]}}));});
   await page.getByRole('button',{name:'Save layout',exact:true}).click();
   assert.equal(await page.evaluate(()=>Dashboard.editing()),true);
   await page.getByRole('button',{name:'Cancel',exact:true}).click();
@@ -75,9 +75,9 @@ try{
   if(width===1440 && theme==='dark'){
     await page.getByRole('button',{name:'Edit dashboard',exact:true}).click();
     await page.getByRole('button',{name:'Add Portal links',exact:true}).click();
-    await page.evaluate(()=>{window.originalSetItem=Storage.prototype.setItem;Storage.prototype.setItem=function(k,v){if(k.startsWith('homestead.dashboard.'))throw new Error('Browser storage is full');return originalSetItem.call(this,k,v);};});
+    await page.evaluate(()=>{window.originalDashboardApi=window.api;window.api=async function(path,opts){if(path==='/api/auth/preferences/dashboard' && opts?.method==='POST')throw new Error('Server unavailable');return originalDashboardApi(path,opts);};});
     await page.getByRole('button',{name:'Save layout',exact:true}).click();assert.equal(await page.evaluate(()=>Dashboard.dirty()),true);
-    await page.evaluate(()=>{Storage.prototype.setItem=originalSetItem;});
+    await page.evaluate(()=>{window.api=originalDashboardApi;});
     await page.getByRole('button',{name:'Save layout',exact:true}).click();await page.getByRole('button',{name:'Edit dashboard',exact:true}).waitFor();
     assert.equal((await order()).includes('portal'),true);
     await page.evaluate(async()=>{window.originalUser=ME;Dashboard.invalidate();ME='another-user';resetPaint();await viewDash();});
