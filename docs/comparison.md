@@ -15,7 +15,12 @@ the reviewed product. A cross does not mean arbitrary software could never be
 installed on the underlying machine. Absence of a built-in workflow is an assessment of the documented
 product scope, not proof that no community project exists.
 
-System containers, application containers and VMs are different. A VM image
+Application containers package an app or service and its dependencies, such as
+Jellyfin, Pi-hole or an MQTT broker. Homestead runs these through Kubernetes;
+other products use Docker or their own OCI image support. LXC/LXD system
+containers provide a fuller Linux environment where you can install packages
+and run multiple services, sharing the host's kernel. VMs run their own kernel.
+A VM image
 catalogue is useful, but is not the same experience as selecting a packaged
 self-hosted application. A local parity array or mirrored pool protects against
 some disk failures; clustered storage and workload failover address different
@@ -48,7 +53,7 @@ not Unraid local parity or ZFS send/receive backups.
 | Everyday management | **Web UI for apps and infrastructure** | Web UI | Web UI | Web UI | Web UI; Rancher integration | API / CLI; optional Omni UI | UI / CLI | Web UI / desktop app; multiple clusters |
 | App discovery | **Community Applications catalogue** | Community Applications plugin | OS / OCI templates | App Store | VM images; apps via guest clusters / Rancher | Kubernetes / Helm ecosystem | OS image catalogue | Official App Catalog (Artifact Hub / Helm) |
 | Helm chart management | **Search, inspect and manage controller-owned charts** | Add Kubernetes + Helm UI | Guest Kubernetes + Helm UI | Add Kubernetes + Helm UI | Rancher / additional UI | External Helm client / UI | Guest Kubernetes + Helm UI | **Official App Catalog** |
-| Containers | **Kubernetes apps** | Docker | LXC; OCI images¹ | Docker | Kubernetes via Rancher / guests² | Kubernetes | LXD system containers; Docker in guests | Kubernetes resource management |
+| Application containers (apps / services) | **Kubernetes apps** | Docker | OCI images via LXC¹ | Docker | Kubernetes via Rancher / guests² | Kubernetes | Docker in guests | Kubernetes resource management |
 | Linux system containers (LXC / LXD) | **Not supported** | Community LXC plugin | LXC management | Not supported | Not supported | Not supported | LXD management | Not supported |
 | Single sign-on (SSO) | **No identity-provider login** | WebGUI OIDC configuration | OpenID Connect / external authentication | No documented identity-provider login | Via Rancher integration | Via separate Omni management | LXD OIDC login | OIDC login |
 | Virtual machines | **KubeVirt integration** | KVM | KVM | Separate tooling | KubeVirt | Add KubeVirt | LXD / QEMU | KubeVirt + community plugin / resources |
