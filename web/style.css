@@ -798,7 +798,7 @@ svg use,#nav a svg,.iconbtn svg,.sicon svg{stroke:currentColor;fill:none;stroke-
 .pchip:hover{background:rgba(255,176,32,.22)}
 .mchip{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:7px;font-size:10.5px;
   font-weight:620;background:rgba(125,211,252,.1);border:1px solid rgba(125,211,252,.24);color:#9fdcfd}
-#archsvg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}
+.archsvg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}
 /* Architecture: four columns left to right, joined by lines. */
 :root{--arch-access:#ffb020;--arch-mount:#7dd3fc;--arch-copy:#a78bfa}
 .arch-legend{gap:14px;font-size:11.5px;color:var(--mut)}
@@ -851,22 +851,22 @@ html[data-theme="light"] .a2act{background:rgba(0,0,0,.07)}
 .arch2wrap{container-type:inline-size}
 @container (max-width: 880px){
   .arch2{grid-template-columns:1fr 1fr;row-gap:22px;column-gap:18px}
-  #archsvg{display:none}
+  .archsvg{display:none}
 }
 @media(max-width:1000px){
   .arch2{grid-template-columns:1fr 1fr;row-gap:22px;column-gap:18px}
-  .arch2wrap #archsvg{display:none}
+  .arch2wrap .archsvg{display:none}
 }
 @media(max-width:560px){.arch2{grid-template-columns:1fr}.arch2wrap{padding:12px}}
-#archsvg path{fill:none;stroke-width:1.3}
+.archsvg path{fill:none;stroke-width:1.3}
 .vipbox{text-align:center}
 .vipbox .vipip{font-size:16px;font-weight:720;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
 
 /* ---------- animated connectors ---------- */
-#archsvg path.flowline{stroke-dasharray:5 9;animation:dash 1.5s linear infinite}
+.archsvg path.flowline{stroke-dasharray:5 9;animation:dash 1.5s linear infinite}
 @keyframes dash{to{stroke-dashoffset:-14}}
-#archsvg circle.pulse{r:2.6;filter:drop-shadow(0 0 5px currentColor)}
-#archsvg .glowpath{filter:drop-shadow(0 0 4px rgba(255,255,255,.35))}
+.archsvg circle.pulse{r:2.6;filter:drop-shadow(0 0 5px currentColor)}
+.archsvg .glowpath{filter:drop-shadow(0 0 4px rgba(255,255,255,.35))}
 
 /* live cpu bar inside architecture workload cards */
 .livebar{height:3px;border-radius:99px;background:rgba(255,255,255,.1);overflow:hidden;margin-top:9px;position:relative}
@@ -1142,7 +1142,7 @@ html[data-theme="light"] .modalbox[data-context="snapshot-files"] .ui-steps .cur
   .split{grid-template-columns:1fr}
   .arch{grid-template-columns:1fr 1fr;min-width:0}
   .acol{padding:0 8px}
-  #archsvg{display:none}
+  .archsvg{display:none}
   .flowwrap{overflow-x:visible}
 }
 @media(max-width:900px){
@@ -3289,3 +3289,16 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 html[data-theme="light"] .dashboard-resource-state.ok{color:#167347}
 html[data-theme="light"] .dashboard-resource-state.warn,html[data-theme="light"] .node-compact-warning,html[data-theme="light"] .node-compact-state.t-warm{color:#8a5200}
 html[data-theme="light"] .dashboard-resource-state.bad{color:#a1242a}
+
+.architecture-cluster+.architecture-cluster{margin-top:24px}
+
+/* Mobile notifications reuse the standard dialog, with comfortable action rows. */
+.notification-center{display:grid;gap:6px;min-width:0}
+.notification-center>button{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surf2);color:var(--tx);font:inherit;font-size:13px;text-align:left;white-space:normal;cursor:pointer}
+.notification-center>button svg{width:18px;height:18px;flex:none}.notification-center>button.danger{color:var(--crit)}
+.notification-center .bell-head{padding:10px 0 2px;font-family:inherit;font-size:12px;letter-spacing:0;text-transform:none;color:var(--mut)}
+.notification-center .bell-job{display:flex;flex-direction:column;align-items:stretch}
+.notification-center .bell-job-msg{white-space:normal;color:var(--mut);line-height:1.4}
+.notification-center .bell-job-top b{white-space:normal}
+.notification-center .bell-all{margin:0;padding:10px 12px;color:var(--tx);font-size:13px;border:1px solid var(--line)}
+html[data-theme="light"] .notification-center>button.danger{color:#a1242a}

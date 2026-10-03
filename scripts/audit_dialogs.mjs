@@ -22,6 +22,7 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // (the first button in the dialog with that label).
 const DIALOGS = [
   ["active-alerts", "dash", "pwaAlertsDialog()"],
+  ["notifications", "dash", "notificationsDialog()"],
   ["jobs-running", "workloads", "STATE.data.operations=[{id:'run',kind:'image-update',title:'Update Immich',status:'running',message:'Waiting for the new pod',progress:45}];jobsDialog()"],
   ["jobs-recovery", "workloads", "STATE.data.operations=[{id:'held',kind:'self-data-handoff',title:'Move Homestead data',status:'failed',message:'Copy stopped. Both volumes are retained.',dismissible:false,storage_recovery:true}];jobsDialog()"],
   ["jobs-empty", "workloads", "STATE.data.operations=[];jobsDialog()"],

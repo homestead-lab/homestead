@@ -2140,6 +2140,7 @@ ssh_pwauth: true
     },
     "/api/fleet/legacy": [{ name: "staging", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40", linked_as: null }],
     "/api/fleet/link-legacy": { ok: true, member: { name: "Staging" }, missed: [] }, "/api/fleet/leave": { ok: true, missed: [] },
+    "/api/fleet/all/flow": () => ({clusters:[{...responses["/api/flow"],site:siteTag("a1f00d")},{...responses["/api/flow"],site:siteTag("b2c0de")}],missing:[{id:"c3beef",name:"DR site",error:"Not answering"}]}),
     "/api/fleet/all/workloads": () => [...mine(workloads), ...branch(branchWorkloads)],
     "/api/fleet/all/nodes": () => [...mine(nodes), ...branch(branchNodes.map((name, i) => ({ ...nodes[i], name })))],
     "/api/fleet/all/vms": () => [...mine(demoVms), ...branch([{ ...demoVms[0], name: "pfsense", node: branchNodes[0], ip: "192.0.2.1", ips: ["192.0.2.1"] }])],

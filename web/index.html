@@ -178,7 +178,7 @@
              update, container updates, and image checks that failed. -->
         <!-- The guide stays available after setup, including outside the demo. -->
         <button class="iconbtn setupbtn hidden" id="setupbtn" type="button" title="Setup guide" aria-label="Open the setup guide"><svg aria-hidden="true"><use href="#i-guide"/></svg></button>
-        <details class="actionmenu bellmenu" id="bell"><summary class="iconbtn" title="Nothing needs you" aria-label="Notifications">
+        <details class="actionmenu bellmenu" id="bell"><summary class="iconbtn" title="Nothing needs you" aria-label="Notifications" onclick="if(matchMedia('(max-width:900px)').matches){event.preventDefault();notificationsDialog()}">
           <svg><use href="#i-bell"/></svg><span id="bellCount" class="hidden">0</span><b id="bellErrors" class="hidden"></b></summary>
           <div class="actionmenu-pop bellpop" id="bellPop"><div class="bell-empty">Nothing needs you</div></div></details>
         <div class="iconbtn" id="opensettings" title="Your settings"><svg><use href="#i-gear"/></svg></div>
