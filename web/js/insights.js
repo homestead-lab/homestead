@@ -73,7 +73,7 @@ const HealthInsights = (() => {
   }
   let data={}, request=null, generation=0, checkedAt=0;
   const open = route => { if(route==="retry")return load(true);if(route==="about"){settingsTab("about");return go("settings");}if(route==="updates"){settingsTab("updates");return go("settings");}if(route==="jobs")return jobsDialog();return go(route); };
-  const list = (rows,limit=Infinity) => UI.insightList(rows.slice(0,limit).map(r=>({...r,tone:tone(r.severity),label:r.severity,action:"Review",onclick:`HealthInsights.open(${jsArg(r.route)})`})));
+  const list = (rows,limit=Infinity) => UI.insightList(rows.slice(0,limit).map(r=>({...r,tone:r.tone || tone(r.severity),label:r.label || r.severity,action:"Review",onclick:`HealthInsights.open(${jsArg(r.route)})`})));
   function healthBody(compact=false) {
     const rows=advice(data), max=Math.max(...(data.nodes || []).map(n=>n.temps?.max_c).filter(known));
     const counts=["critical","medium","low"].map(level=>`${rows.filter(r=>r.severity===level).length} ${level}`).join(" · ");
@@ -85,7 +85,7 @@ const HealthInsights = (() => {
     if (!needs[id].every(key=>key in data))return '<div class="empty small">Loading checks…</div>';
     if(id==="health")return healthBody(true);
     if(id!=="updates" && needs[id].some(key=>data[key]===null))return UI.callout("warn","Checks unavailable","Retry to refresh this widget.")+UI.button("Retry","HealthInsights.load(true)");
-    if(id==="backups")return `<div class="ui-help">Recorded external backups, oldest first. Check schedules in Protection.</div>`+list(backupRows(data.protection),4);
+    if(id==="backups")return `<div class="ui-help">Recorded external backups, oldest first. Check schedules in Protection.</div>`+(data.protection.volumes.length ? list(backupRows(data.protection).map(r=>({...r,label:r.severity==="medium"?"Missing":"Recorded"})),4) : '<div class="empty small">No Longhorn volumes reported.</div>');
     if(id==="workloads") {const s=workloadSummary(data.workloads,data.vms);return `<div class="insight-summary">${s.ready}/${s.active} apps ready<span>${s.stopped} stopped</span></div>`+(s.rows.length?list(s.rows,4):'<div class="empty small">No active workloads need attention.</div>');}
     if(id==="updates") {
       const r=data.updates, rows=(r?.workloads || []).filter(w=>w.available || w.images?.some(i=>i.error)).map(w=>item(w.ns+"/"+w.name,w.available?"low":"medium",w.name,w.available?"Image update available":"Registry check failed","updates"));
@@ -94,7 +94,7 @@ const HealthInsights = (() => {
       const incomplete=needs.updates.some(k=>data[k]===null) || r?.partial || (Array.isArray(r?.errors)?r.errors.length:r?.errors) || (data.hosts?.applies && !Object.keys(data.hosts.hosts || {}).length);
       return `<div class="insight-summary">${rows.length} item${rows.length===1?"":"s"} to review</div>`+list(rows,4)+(rows.length?"":'<div class="empty small">No updates reported by the available checks.</div>')+(incomplete?'<div class="ui-help">Some update checks are unavailable or incomplete. Review Updates.</div>':"");
     }
-    if(id==="jobs") {const jobs=data.jobs, active=jobs.filter(j=>!["succeeded","failed","cancelled"].includes(j.status)), failed=jobs.filter(j=>j.status==="failed");return `<div class="insight-summary">${active.length} running<span>${failed.length} failed</span></div>`+list([...failed,...active].map(j=>item(j.id,j.status==="failed"?"critical":"low",j.title,j.message || j.status,"jobs")),4);}
+    if(id==="jobs") {const jobs=data.jobs, active=jobs.filter(j=>!["succeeded","failed","cancelled"].includes(j.status)), failed=jobs.filter(j=>j.status==="failed");return `<div class="insight-summary">${active.length} running<span>${failed.length} failed</span></div>`+list([...failed,...active].map(j=>({...item(j.id,j.status==="failed"?"critical":"low",j.title,j.message || j.status,"jobs"),label:j.status,tone:j.status==="failed"?"bad":"warn"})),4);}
     return "";
   }
   function widget(id) {const route={health:"cluster",workloads:"workloads",backups:"protect",updates:"updates",jobs:"jobs"}[id];return `<div class="card flat insight-widget">${UI.moduleHeader(titles[id],"",UI.button("View all",`HealthInsights.open('${route}')`,{attrs:`aria-label="View all ${titles[id].toLowerCase()}"`}))}<div data-insight="${id}">${body(id)}</div></div>`;}
