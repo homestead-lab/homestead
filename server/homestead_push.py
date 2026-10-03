@@ -35,11 +35,11 @@ _key_cache = {}
 PUSH_HOSTS = ("fcm.googleapis.com", "push.services.mozilla.com", "push.apple.com",
               "notify.windows.com")
 CATEGORIES = {
-    "outage": "Outages: a node down, a volume faulted, a disk failing",
-    "degraded": "Degraded: a replica rebuilding, a workload not ready",
-    "jobs": "Failed jobs in Activity",
-    "joins": "Hosts joining the cluster",
-    "updates": "Image updates available",
+    "outage": "Critical conditions: hosts not ready, faulted volumes and critical drive warnings",
+    "degraded": "Warnings: reduced protection, storage limits and workloads not ready",
+    "jobs": "Failed jobs: background operations that need review",
+    "joins": "Hosts joining: registration and readiness",
+    "updates": "Updates: container images, host updates and platform upgrade results",
 }
 DEFAULT_CATEGORIES = ["outage", "degraded", "jobs", "joins"]
 

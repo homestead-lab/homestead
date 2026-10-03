@@ -71,7 +71,7 @@ try {
     assert.equal(await page.locator('#mbody .pill').filter({hasText:'queue stopped'}).isVisible(),true);
     assert.equal(await page.locator('#mbody details').getAttribute('open'),null);
     assert.equal(await page.getByRole('button',{name:'Close queue',exact:true}).isVisible(),true);
-    assert.equal(await page.getByText('Closing stops unstarted updates.',{exact:false}).isVisible(),true);
+    assert.equal(await page.getByText('Closing stops the remaining queue. Updates already started continue in Jobs.',{exact:false}).isVisible(),true);
     await page.screenshot({path:`${output}/updates-${theme}-${width}.png`});
     await page.evaluate(()=>modal('Field disclosure',stepper('test',[
       {title:'Basics',html:'<input id="first" value="unchanged">'},

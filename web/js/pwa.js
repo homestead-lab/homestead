@@ -87,21 +87,21 @@ window.pwaEnable = async () => {
   try {
     const permission = await Notification.requestPermission();
     if (permission !== "granted") {
-      toast(permission === "denied" ? "notifications are blocked for this site in the browser's settings"
-        : "notifications were not allowed", "bad");
+      toast(permission === "denied" ? "Notifications are blocked in this browser’s site settings."
+        : "Notification permission was not granted.", "bad");
       return pwaPaint();
     }
     const registration = PWA.registration || await pwaRegister();
-    if (!registration) throw new Error("the service worker could not start");
+    if (!registration) throw new Error("The notification service could not start.");
     await navigator.serviceWorker.ready;
     const key = await pwaKey();
     PWA.subscription = await registration.pushManager.getSubscription() ||
       await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: pwaKeyBytes(key.key) });
     await pwaPost("/api/push/subscribe", { subscription: PWA.subscription.toJSON(),
       categories: pwaChosen() || key.defaults, device: pwaDeviceName() });
-    toast("notifications are on for this device", "ok");
+    toast("Notifications are enabled for this device.", "ok");
   } catch (e) {
-    toast(e.message || "could not turn notifications on", "bad");
+    toast(e.message || "Notifications could not be enabled.", "bad");
   }
   pwaPaint();
 };
@@ -110,11 +110,11 @@ window.pwaDisable = async () => {
   const sub = PWA.subscription;
   try {
     if (sub) {
-      await pwaPost("/api/push/unsubscribe", { endpoint: sub.endpoint }).catch(() => null);
-      await sub.unsubscribe().catch(() => null);
+      await pwaPost("/api/push/unsubscribe", { endpoint: sub.endpoint });
+      await sub.unsubscribe();
     }
     PWA.subscription = null;
-    toast("notifications are off for this device", "ok");
+    toast("Notifications are disabled for this device.", "ok");
   } catch (e) { toast(e.message, "bad"); }
   pwaPaint();
 };
@@ -132,7 +132,7 @@ window.pwaTest = async () => {
   if (button) { button.disabled = true; button.textContent = "Sending…"; }
   try {
     await pwaPost("/api/push/test", { endpoint: PWA.subscription.endpoint });
-    toast("test sent — it should arrive in a few seconds", "ok");
+    toast("Test notification requested. Check this device’s notifications.", "ok");
   } catch (e) { toast(e.message, "bad"); }
   if (button) { button.disabled = false; button.textContent = "Send a test"; }
 };
@@ -163,6 +163,7 @@ function pwaWhy() {
 }
 
 async function pwaPaint() {
+  refreshPwaAlerts();
   const card = $("#pwaCard .pwa-body");
   if (!card) return;
   const installLine = pwaInstalled() ? '<span class="pill ok">installed</span>'
@@ -188,8 +189,8 @@ async function pwaPaint() {
     : on ? '<span class="pill ok">on</span>' : '<span class="pill neutral">off</span>';
   card.innerHTML = `
     <div class="pwa-state"><div><b>This device</b> ${state}<div class="dim xs">${esc(pwaDeviceName())}${
-      on && status.last_ok ? ` · last delivered ${esc(fmtAgo(Math.max(1, Date.now() / 1000 - status.last_ok)))}` : ""}${
-      on && status.failures ? ` · ${status.failures} not delivered` : ""}</div></div>
+      on && status.last_ok ? ` · last sent ${esc(fmtAgo(Math.max(1, Date.now() / 1000 - status.last_ok)))}` : ""}${
+      on && status.failures ? ` · ${status.failures} send failures` : ""}</div></div>
       <div class="row">${on
         ? '<button class="btn sm" id="pwaTest" onclick="pwaTest()">Send a test</button><button class="btn sm" onclick="pwaDisable()">Turn off</button>'
         : permission === "denied" ? ""
@@ -208,19 +209,68 @@ async function pwaPaint() {
 
 function pwaRecent(alerts) {
   const rows = (alerts.log || []).slice(-6).reverse();
-  if (!rows.length) return '<div class="dim xs">Nothing has needed telling yet.</div>';
+  if (!rows.length) return '<div class="dim xs">No notifications recorded.</div>';
   return `<div class="sec">Recent alerts</div><div class="settings-list">${rows.map(a => `
     <div class="settings-list-row"><div><b>${esc(a.title)}</b>${a.body ? `<div class="dim xs">${esc(a.body)}</div>` : ""}</div>
       <div class="settings-list-meta"><span class="pill ${a.phase === "resolved" ? "ok" : a.severity === "critical" ? "crit" : a.severity === "degraded" ? "warn" : "neutral"}">${
-        a.phase === "resolved" ? "resolved" : esc(a.category)}</span><span class="dim xs">${esc(fmtAgo(Math.max(1, Date.now() / 1000 - a.at)))}</span></div></div>`).join("")}</div>`;
+        a.phase === "resolved" ? "Cleared" : a.phase === "worsened" ? "Worsened" : esc({outage:"Critical",degraded:"Warning",jobs:"Job",joins:"Host",updates:"Update"}[a.category] || "Information")}</span><span class="dim xs">${esc(fmtAgo(Math.max(1, Date.now() / 1000 - a.at)))}</span></div></div>`).join("")}</div>`;
 }
 
 function pwaCard() {
   return `${UI.settingsCard(`
-    ${UI.moduleHeader(`Notifications on this device`, `Outages, failed jobs and hosts joining, pushed even when Homestead is closed`, `<span id="pwaInstallSlot"></span>`)}
+    ${UI.moduleHeader(`Notifications on this device`, `Choose what this device receives when Homestead is closed.`, `<span id="pwaInstallSlot"></span>`)}
     <div class="pwa-body"><div class="empty small"><span class="spin2"></span></div></div>
+    <div id="pwaAlerts"></div>
   `, {tab:`device`, id:`pwaCard`})}`;
 }
+const PWA_ALERTS={report:null,at:0,request:null,user:null,timer:null,epoch:0};
+function pwaAlertsHtml(report) {
+  const active=report?.active || [], pending=active.filter(a=>!a.acknowledged), acknowledged=active.filter(a=>a.acknowledged);
+  const rows=items=>UI.insightList(items.map(a=>({title:a.title,detail:a.body,
+    tone:a.acknowledged?"info":a.severity==="critical"?"bad":a.severity==="info"?"info":"warn",label:a.acknowledged?"Acknowledged":a.severity==="critical"?"Critical":a.severity==="info"?"Information":"Warning",
+    actionsHtml:UI.button("Review",`closeModal();openOperation(${jsArg(a.href || '/')})`)+UI.button(a.acknowledged?"Undo":"Acknowledge",`pwaAcknowledge(${jsArg(a.key)},${jsArg(a.version)},${!!a.acknowledged})`)
+  })));
+  return UI.lead("Acknowledgement quiets this condition across your devices until it worsens. Health checks remain visible.")+
+    (pending.length?rows(pending):'<div class="empty small">No unacknowledged conditions.</div>')+
+    (acknowledged.length?UI.more(`Acknowledged · ${acknowledged.length}`,rows(acknowledged)):"");
+}
+function paintPwaAlerts(report) {
+      pwaBadge((report.active || []).filter(a=>!a.acknowledged).length);
+      window.paintBell?.();
+      const settings=$("#pwaAlerts");if(settings)settings.innerHTML=UI.moduleHeader("Active alerts","",UI.button("Review alerts","pwaAlertsDialog()"))+`<div class="ui-help">${(report.active || []).filter(a=>!a.acknowledged).length} need attention · ${(report.active || []).filter(a=>a.acknowledged).length} acknowledged</div>`;
+      const dialog=$("#pwaAlertsDialog");if(dialog){const expanded=!!dialog.querySelector("details[open]");dialog.innerHTML=pwaAlertsHtml(report);if(expanded && dialog.querySelector("details"))dialog.querySelector("details").open=true;}
+}
+async function refreshPwaAlerts(force=false) {
+  if(typeof ME==="undefined" || !ME)return;
+  if(PWA_ALERTS.user!==ME){PWA_ALERTS.report=null;PWA_ALERTS.at=0;PWA_ALERTS.user=ME;}
+  if(PWA_ALERTS.request)return PWA_ALERTS.request;
+  if(!force && Date.now()-PWA_ALERTS.at<15000){paintPwaAlerts(PWA_ALERTS.report);return;}
+  const user=ME, epoch=PWA_ALERTS.epoch;
+  PWA_ALERTS.request=(async()=>{
+    try{
+      const report=await api("/api/alerts",{keep:true});if(user!==ME || epoch!==PWA_ALERTS.epoch)return;
+      PWA_ALERTS.report=report;PWA_ALERTS.at=Date.now();
+      paintPwaAlerts(report);
+    }catch(error){if(user===ME && epoch===PWA_ALERTS.epoch && $("#pwaAlertsDialog"))$("#pwaAlertsDialog").innerHTML=UI.callout("warn","Alerts could not be refreshed",esc(error.message))+UI.button("Retry","refreshPwaAlerts(true)");}
+    finally{if(epoch===PWA_ALERTS.epoch)PWA_ALERTS.request=null;}
+  })();return PWA_ALERTS.request;
+}
+window.pwaAlertsDialog=async()=>{
+  modal("Alerts",`<div id="pwaAlertsDialog"><div class="empty small">Loading alerts…</div></div>${UI.actions(UI.cancel("Close"))}`,true);
+  await refreshPwaAlerts(true);
+};
+window.pwaAcknowledge=async(key,version,undo=false)=>{
+  try{await pwaPost("/api/alerts/acknowledge",{key,version,undo});toast(undo?"Acknowledgement removed":"Acknowledged until this condition worsens","ok");}
+  catch(error){toast(error.message,"bad");}
+  await refreshPwaAlerts(true);
+};
+window.stopAlertChecks=()=>{clearInterval(PWA_ALERTS.timer);PWA_ALERTS.epoch++;PWA_ALERTS.report=null;PWA_ALERTS.request=null;PWA_ALERTS.at=0;PWA_ALERTS.user=null;};
+window.startAlertChecks=()=>{
+  clearInterval(PWA_ALERTS.timer);refreshPwaAlerts(true);
+  PWA_ALERTS.timer=setInterval(()=>{if(!document.hidden)refreshPwaAlerts();},20000);
+};
+window.refreshPwaAlerts=refreshPwaAlerts;
+window.PWA_ALERTS=PWA_ALERTS;
 window.pwaCard = pwaCard;
 window.pwaPaint = pwaPaint;
 
