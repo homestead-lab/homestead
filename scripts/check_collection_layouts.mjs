@@ -13,7 +13,7 @@ try {
     page.on('pageerror',e=>errors.push(e.message));
     await page.addInitScript(theme=>localStorage.setItem('homestead.settings',JSON.stringify({theme,motion:'off',refresh:60})),theme);
     await page.goto(`${base}/?demo=1`,{waitUntil:'networkidle'});
-    await page.locator('.node-comparison').waitFor();
+    await page.locator('.node-compact-grid').waitFor();
     await page.evaluate(async()=>{
       await document.fonts.ready;
       const original=window.api;
@@ -95,7 +95,7 @@ try {
     await nodeAction.getByRole('button',{name:'Open node',exact:true}).click();
     assert.equal(await page.evaluate(()=>window.__nodeRoute.target),'secondary-example');
     await page.evaluate(()=>{window.nodeDetail=window.__nodeDetailOriginal;FLEET.target='';localStorage.removeItem('homestead.fleet.mode');window.__nodesFixture=window.__fourNodes;return go('dash')});
-    await page.waitForFunction(()=>document.querySelectorAll('.comparison-select').length===4);
+    await page.waitForFunction(()=>document.querySelectorAll('.node-compact-host').length===4);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
 
     await page.evaluate(()=>go('workloads'));

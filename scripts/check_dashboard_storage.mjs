@@ -9,7 +9,12 @@ try {
   const page=await context.newPage(),errors=[];
   page.on("pageerror",e=>errors.push(e.message));
   await page.goto(`${base}/?demo=1`,{waitUntil:"networkidle"});
-  await page.locator(".node-comparison").first().waitFor();
+  await page.locator(".node-compact-grid").waitFor();
+  await page.evaluate(async()=>{
+    const prefs=await api('/api/auth/preferences/dashboard');
+    const items=Dashboard.defaults().map(item=>item.id==='nodes'?{...item,display:'detailed'}:item);
+    await api('/api/auth/preferences/dashboard',{method:'POST',body:JSON.stringify({revision:prefs.revision,layout:{version:1,items}})});
+  });
   await page.evaluate(()=>{
     const original=window.fetch;
     window.fetch=async(input,init)=>{

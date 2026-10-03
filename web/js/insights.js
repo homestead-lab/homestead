@@ -1,9 +1,9 @@
 /* Read-only, shared health advice for the dashboard and Cluster Health.
    Missing observations stay unknown; advice never changes cluster configuration. */
 const HealthInsights = (() => {
-  const titles = {health:"Health suggestions", workloads:"Workload health", backups:"Backup freshness", updates:"Updates awaiting review", jobs:"Running and failed jobs"};
-  const sources = {cluster:"/api/cluster", protection:"/api/lh/overview", nodes:"/api/nodes", self:"/api/self/health", settings:"/api/settings", workloads:"/api/workloads", vms:"/api/vms", updates:"/api/image-updates", jobs:"/api/operations", components:"/api/cluster/components", hosts:"/api/os-updates"};
-  const needs = {health:["cluster","protection","nodes","self","settings"], workloads:["workloads","vms"], backups:["protection"], updates:["updates","components","hosts"], jobs:["jobs"]};
+  const titles = {health:"Health suggestions", workloads:"Workload health", containers:"Containers", vms:"Virtual machines", backups:"Backup freshness", updates:"Updates awaiting review", jobs:"Running and failed jobs"};
+  const sources = {overview:"/api/overview",cluster:"/api/cluster", protection:"/api/lh/overview", nodes:"/api/nodes", self:"/api/self/health", settings:"/api/settings", workloads:"/api/workloads", vms:"/api/vms", updates:"/api/image-updates", jobs:"/api/operations", components:"/api/cluster/components", hosts:"/api/os-updates"};
+  const needs = {health:["cluster","protection","nodes","self","settings","overview"], workloads:["workloads","vms"], containers:["workloads"], vms:["vms"], backups:["protection"], updates:["updates","components","hosts"], jobs:["jobs"]};
   const rank = {critical:0,medium:1,low:2};
   const tone = severity => ({critical:"bad",medium:"warn",low:"info",healthy:"ok"}[severity] || "info");
   const item = (id,severity,title,detail,route) => ({id,severity,title,detail,route});
@@ -43,6 +43,14 @@ const HealthInsights = (() => {
         else if (!d.health || d.health.stale_probe || ["unknown","unsupported"].includes(d.health.state)) rows.push(item("disk:"+n.name+":"+d.name,"low",`${n.name} / ${d.name}: drive health unknown`,"Check the node probe and SMART support.","nodes"));
       }
     }
+    // Keep the exact reasons behind the dashboard banner visible here too.
+    for(const issue of data.overview?.health_issues || []) {
+      const id=issue.kind==="Disk"?"disk:"+issue.name.replace("/",":"):issue.kind==="Node"?"node:"+issue.name:"condition:"+issue.kind+":"+issue.name;
+      const existing=rows.findIndex(row=>row.id===id), severity=issue.severity==="critical"?"critical":"medium";
+      const finding=item(id,severity,`${issue.kind} ${issue.name}`,issue.reason || "Review this condition.",({Node:"nodes",Disk:"nodes",Volume:"storage",Backup:"protect",Workload:"workloads"})[issue.kind] || "cluster");
+      if(existing<0)rows.push(finding);
+      else if(rank[severity]<rank[rows[existing].severity])rows[existing]=finding;
+    }
     const h=data.self;
     if (h) {
       if (h.api?.ok === false) rows.push(item("self-api","critical","Homestead cannot reach Kubernetes",h.api.error || "Check cluster connectivity.","about"));
@@ -53,7 +61,7 @@ const HealthInsights = (() => {
       if (h.probe && (!h.probe.installed || h.probe.reporting < h.probe.desired)) rows.push(item("probe","low","Host monitoring is incomplete","Check node probes to restore temperature and drive observations.","about"));
       if (h.addresses?.problem || h.addresses?.clashes?.length) rows.push(item("addresses","critical","A service address conflicts with the cluster","Review service addresses before changing hosts.","network"));
     }
-    for (const key of needs.health) if (data[key] === null) rows.push(item("unknown:"+key,"low",`${({cluster:"Platform",protection:"Backup",nodes:"Host",self:"Homestead",settings:"Threshold"})[key]} checks unavailable`,"Retry or check access. Health cannot be confirmed from missing data.","retry"));
+    for (const key of needs.health) if (data[key] === null) rows.push(item("unknown:"+key,"low",`${({cluster:"Platform",protection:"Backup",nodes:"Host",self:"Homestead",settings:"Threshold",overview:"Cluster health"})[key]} checks unavailable`,"Retry or check access. Health cannot be confirmed from missing data.","retry"));
     return rows.sort((a,b)=>rank[a.severity]-rank[b.severity] || a.id.localeCompare(b.id));
   }
   function backupRows(p, now=Date.now()) {
@@ -71,8 +79,27 @@ const HealthInsights = (() => {
       rows:[...unhealthy.map(w=>item(w.ns+"/"+w.name,"medium",w.name,`${w.ready || 0}/${w.desired} pods ready · ${w.ns}`,"workloads")),
         ...vmIssues.map(v=>item(v.name,"medium",v.name,v.status || "VM not ready","vms"))]};
   }
+  // Both list widgets share row semantics and formatting with their collection pages.
+  function resourceRows(id, records=[]) {
+    return records.filter(r=>id!=="containers" || !r.platform).map(r=>{
+      const vm=id==="vms", stopped=vm?r.status==="Stopped":r.desired===0;
+      const ready=vm?r.status==="Running":r.desired>0 && r.ready>=r.desired;
+      const status=vm?r.status || "Unknown":stopped?"Stopped":ready?"Running":known(r.ready)&&known(r.desired)?`${r.ready}/${r.desired} ready`:"Unknown";
+      return {record:r,name:r.name,ns:r.ns,status,tone:stopped?"neutral":ready?"ok":vm && /Error|Fail|Crash|BackOff/i.test(status)?"bad":"warn",
+        cpu:stopped?null:vm?r.usage?.cpu_pct:known(r.cpu)?r.cpu*100:null,
+        memory:stopped?null:vm?r.usage?.mem:known(r.mem_mb)?r.mem_mb*1024**2:null};
+    }).sort((a,b)=>a.name.localeCompare(b.name) || String(a.ns).localeCompare(String(b.ns)));
+  }
+  function resourceList(id, records) {
+    const rows=resourceRows(id,records), running=rows.filter(r=>r.status==="Running").length;
+    const header=`<thead><tr><th>Name</th><th>State</th><th title="${id==="vms"?"Launcher CPU usage as a percentage of assigned cores":"100% equals one fully used CPU core"}">CPU</th><th>Memory</th></tr></thead>`;
+    const row=r=>`<tr${clusterAttr(r.record)}><td><div class="dashboard-resource-name">${UI.statusDot(r.tone)}<span title="${esc([r.ns,r.name].filter(Boolean).join("/"))}">${esc(r.name)}</span></div></td><td><span class="dashboard-resource-state ${r.tone}" title="${esc(r.record.problem || r.status)}">${esc(r.status)}</span></td><td class="mono">${known(r.cpu)?esc(Math.round(r.cpu*10)/10)+"%":"—"}</td><td class="mono">${known(r.memory)?esc(vmBytes(r.memory)):"—"}</td></tr>`;
+    const groups=Array.from({length:Math.ceil(rows.length/4)},(_,i)=>rows.slice(i*4,i*4+4));
+    const table=rows.length?`<div class="dashboard-resource-scroll" tabindex="0" role="region" aria-label="${titles[id]} list"><div class="dashboard-resource-columns">${groups.map(group=>`<table class="dashboard-resource-table">${header}<tbody>${group.map(row).join("")}</tbody></table>`).join("")}</div></div>`:'<div class="empty small">No '+(id==="vms"?"virtual machines":"app containers")+' reported.</div>';
+    return table+`<div class="dashboard-resource-footer">${rows.length} ${id==="vms"?"VMs":"containers"}<span>${running} running</span></div>`;
+  }
   let data={}, request=null, generation=0, checkedAt=0;
-  const open = route => { if(route==="retry")return load(true);if(route==="about"){settingsTab("about");return go("settings");}if(route==="updates"){settingsTab("updates");return go("settings");}if(route==="jobs")return jobsDialog();return go(route); };
+  const open = route => { if(route==="health")return go("cluster",{params:{section:"health"}}); if(route==="retry")return load(true);if(route==="about"){settingsTab("about");return go("settings");}if(route==="updates"){settingsTab("updates");return go("settings");}if(route==="jobs")return jobsDialog();return go(route); };
   const list = (rows,limit=Infinity) => UI.insightList(rows.slice(0,limit).map(r=>({...r,tone:r.tone || tone(r.severity),label:r.label || r.severity,action:"Review",onclick:`HealthInsights.open(${jsArg(r.route)})`})));
   function healthBody(compact=false) {
     const rows=advice(data), max=Math.max(...(data.nodes || []).map(n=>n.temps?.max_c).filter(known));
@@ -85,6 +112,7 @@ const HealthInsights = (() => {
     if (!needs[id].every(key=>key in data))return '<div class="empty small">Loading checks…</div>';
     if(id==="health")return healthBody(true);
     if(id!=="updates" && needs[id].some(key=>data[key]===null))return UI.callout("warn","Checks unavailable","Retry to refresh this widget.")+UI.button("Retry","HealthInsights.load(true)");
+    if(id==="containers" || id==="vms")return resourceList(id,data[id==="containers"?"workloads":"vms"]);
     if(id==="backups")return `<div class="ui-help">Recorded external backups, oldest first. Check schedules in Protection.</div>`+(data.protection.volumes.length ? list(backupRows(data.protection).map(r=>({...r,label:r.severity==="medium"?"Missing":"Recorded"})),4) : '<div class="empty small">No Longhorn volumes reported.</div>');
     if(id==="workloads") {const s=workloadSummary(data.workloads,data.vms);return `<div class="insight-summary">${s.ready}/${s.active} apps ready<span>${s.stopped} stopped</span></div>`+(s.rows.length?list(s.rows,4):'<div class="empty small">No active workloads need attention.</div>');}
     if(id==="updates") {
@@ -97,8 +125,8 @@ const HealthInsights = (() => {
     if(id==="jobs") {const jobs=data.jobs, active=jobs.filter(j=>!["succeeded","failed","cancelled"].includes(j.status)), failed=jobs.filter(j=>j.status==="failed");return `<div class="insight-summary">${active.length} running<span>${failed.length} failed</span></div>`+list([...failed,...active].map(j=>({...item(j.id,j.status==="failed"?"critical":"low",j.title,j.message || j.status,"jobs"),label:j.status,tone:j.status==="failed"?"bad":"warn"})),4);}
     return "";
   }
-  function widget(id) {const route={health:"cluster",workloads:"workloads",backups:"protect",updates:"updates",jobs:"jobs"}[id];return `<div class="card flat insight-widget">${UI.moduleHeader(titles[id],"",UI.button("View all",`HealthInsights.open('${route}')`,{attrs:`aria-label="View all ${titles[id].toLowerCase()}"`}))}<div data-insight="${id}">${body(id)}</div></div>`;}
-  function paint() {for(const el of document.querySelectorAll("[data-insight]"))el.innerHTML=el.dataset.insight==="full"?healthBody():body(el.dataset.insight);window.applyRole?.();}
+  function widget(id, settings={}) {const resource=["containers","vms"].includes(id);const route={containers:"workloads",vms:"vms",health:"health",workloads:"workloads",backups:"protect",updates:"updates",jobs:"jobs"}[id];return `<div class="card flat insight-widget${resource?" dashboard-resource-widget":""}"${resource?` style="--resource-list-height:${settings.height || 360}px"`:""}>${UI.moduleHeader(titles[id],"",UI.button("View all",`HealthInsights.open('${route}')`,{attrs:`aria-label="View all ${titles[id].toLowerCase()}"`}))}<div data-insight="${id}">${body(id)}</div></div>`;}
+  function paint() {for(const el of document.querySelectorAll("[data-insight]")){const next=el.cloneNode(false);next.innerHTML=el.dataset.insight==="full"?healthBody():body(el.dataset.insight);morph(el,next);}window.applyRole?.();}
   async function load(force=false) {
     if(request){await request;return load(force);}
     const ids=[...document.querySelectorAll("[data-insight]")].map(el=>el.dataset.insight==="full"?"health":el.dataset.insight);
@@ -111,7 +139,7 @@ const HealthInsights = (() => {
         if(key==="vms" && STATE.platform?.kubevirt===false)return [key,[]];
         try{
           const value=await api(sources[key],{keep:true});
-          const arrays=["nodes","workloads","vms","jobs"], fields={cluster:"control_plane",protection:"volumes",self:"api",settings:"thresholds",updates:"workloads",components:"components"};
+          const arrays=["nodes","workloads","vms","jobs"], fields={overview:"health_issues",cluster:"control_plane",protection:"volumes",self:"api",settings:"thresholds",updates:"workloads",components:"components"};
           const valid=arrays.includes(key)?Array.isArray(value):value && typeof value==="object" && !value.error && (!fields[key] || value[fields[key]]!==undefined);
           return [key,valid?value:null];
         }catch{return [key,null];}
@@ -121,7 +149,7 @@ const HealthInsights = (() => {
     })().finally(()=>{request=null;});return request;
   }
   function liveJobs(jobs,stale=false) {data.jobs=stale?null:jobs;for(const el of document.querySelectorAll('[data-insight="jobs"]'))el.innerHTML=body("jobs");}
-  return {titles,advice,backupRows,workloadSummary,widget,load,open,liveJobs,reset(){generation++;data={};checkedAt=0;},healthBody};
+  return {titles,advice,backupRows,workloadSummary,resourceRows,widget,load,open,liveJobs,reset(){generation++;data={};checkedAt=0;},healthBody};
 })();
 if(typeof window!=="undefined")window.HealthInsights=HealthInsights;
 if(typeof module!=="undefined")module.exports=HealthInsights;

@@ -74,6 +74,13 @@ async function applyDeepLink(v, params) {
   if (STATE.deepLinkToken === token) return;
   STATE.deepLinkToken = token;
 
+  if(v === "cluster" && params.section === "health") {
+    const section=document.getElementById("clusterHealth");
+    section?.setAttribute("tabindex","-1");
+    section?.focus({preventScroll:true});section?.scrollIntoView({block:"start"});
+    renderBreadcrumb(v,"Health");
+    return;
+  }
   let detail = "";
   let open = null;
   if (v === "nodes" && params.node) {

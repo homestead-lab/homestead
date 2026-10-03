@@ -5,13 +5,15 @@ const Dashboard = (() => {
     compute: {title:"Compute", description:"Live CPU and memory", width:4, widths:[4,6,8,12]},
     throughput: {title:"Throughput", description:"Network traffic and local disk", width:4, widths:[4,6,8,12]},
     storage: {title:"Storage", description:"Capacity and replica health", width:4, widths:[4,6,8,12]},
-    nodes: {title:"Node health", description:"Compare hosts and resources", width:12, widths:[12]},
+    nodes: {title:"Node health", description:"Host metrics and drive warnings", width:12, widths:[4,6,8,12]},
     cpu: {title:"Top CPU", description:"The busiest workloads", width:6, widths:[4,6,8,12]},
     memory: {title:"Top memory", description:"Workloads using the most RAM", width:6, widths:[4,6,8,12]},
     history: {title:"Over time", description:"Recorded cluster metrics", width:12, widths:[8,12]},
     ...Object.fromEntries([
       ["health","Health suggestions","Prioritized checks and next steps"],
       ["workloads","Workload health","Readiness and stopped workloads"],
+      ["containers","Containers","Compact app status and live usage"],
+      ["vms","Virtual machines","Compact VM status and live usage"],
       ["backups","Backup freshness","Oldest external backups and missing copies"],
       ["updates","Updates awaiting review","Container, platform and host updates"],
       ["jobs","Running and failed jobs","Active work and outcomes needing attention"],
@@ -25,7 +27,8 @@ const Dashboard = (() => {
     const seen = new Set();
     return value.items.filter(item=>item && Object.hasOwn(widgets,item.id) && !seen.has(item.id) && seen.add(item.id)).map(item=>({
       id:item.id, width:widgets[item.id].widths.includes(item.width)?item.width:widgets[item.id].width,
-      height:[0,360,520].includes(item.height)?item.height:0,
+      height:[0,240,360,520].includes(item.height)?item.height:0,
+      ...(item.id==="nodes" && item.display==="detailed"?{display:"detailed"}:{}),
     }));
   };
   const endpoint = "/api/auth/preferences/dashboard";
@@ -95,8 +98,9 @@ const Dashboard = (() => {
   const clone = value => JSON.parse(JSON.stringify(value));
   const dirty = () => draft !== null && JSON.stringify(draft) !== initial;
   const announce = text => { const host=document.getElementById("dashboardStatus"); if(host) host.textContent=text; };
-  function widgetContent(id) {
-    if (widgets[id]?.optional) return HealthInsights.widget(id);
+  function widgetContent(id, item={}) {
+    if (id === "nodes") return dashboardNodes(STATE.data.ov?.nodes || [], item.display || "compact");
+    if (widgets[id]?.optional) return HealthInsights.widget(id,item);
     if (id === "portal") return `<div class="card flat dashboard-portal">${UI.moduleHeader("Portal links", "", '<button class="btn sm" onclick="go(\'portal\')">Open Portal</button>')}
       <div id="dashboardPortal">${portalBody()}</div></div>`;
     if (id === "history") return `<section class="card flat history-card" id="historyCard">${STATE.data.historyHtml || '<div class="empty small">History is loading…</div>'}</section>`;
@@ -128,6 +132,7 @@ const Dashboard = (() => {
     const w=widgets[item.id];
     return `<div class="dashboard-widget-tools">
       <button type="button" class="dashboard-grip" data-dash-drag="${item.id}" aria-label="Move ${w.title}" title="Drag to move. Use arrow keys to reorder.">⠿ <span>${w.title}</span></button>
+      <button type="button" class="btn sm" aria-label="Settings for ${w.title}" onclick="Dashboard.select(${jsq(item.id)})">Settings</button>
       <button type="button" class="iconbtn" aria-label="Remove ${w.title}" onclick="Dashboard.remove(${jsq(item.id)})">×</button>
     </div>`;
   }
@@ -135,7 +140,7 @@ const Dashboard = (() => {
     const items=draft || read();
     return `<div class="dashboard-canvas${phone && edit?" dashboard-phone":""}"${edit?' data-editing="true"':''}>
       <div class="dashboard-grid consumer-grid" aria-label="Dashboard widgets">${items.map(item=>`<section class="dashboard-widget${edit && item.id===selected?" selected":""}" data-widget="${item.id}" style="--widget-span:${item.width};--widget-height:${item.height}px" aria-label="${widgets[item.id].title}">
-        ${edit?controls(item):""}<div class="dashboard-widget-content"${edit?' inert':''}>${widgetContent(item.id)}</div>
+        ${edit?controls(item):""}<div class="dashboard-widget-content"${edit?' inert':''}>${widgetContent(item.id,item)}</div>
         ${edit?`<button type="button" class="dashboard-select" aria-label="Configure ${widgets[item.id].title}" onclick="Dashboard.select(${jsq(item.id)})"></button>
           <button type="button" class="dashboard-resize" data-dash-resize="${item.id}" aria-label="Resize ${widgets[item.id].title}" title="Drag to resize, or use Widget settings">↘</button>`:""}
       </section>`).join("")}</div>
@@ -154,7 +159,8 @@ const Dashboard = (() => {
       }).join("")}</div>
       <div class="dashboard-inspector">${UI.moduleHeader("Widget settings",item?widgets[item.id].title:"Select a widget to adjust it.")}
       ${item?`<label>Width<select aria-label="Widget width" onchange="Dashboard.size('width',+this.value)">${widgets[item.id].widths.map(width=>`<option value="${width}" ${width===item.width?"selected":""}>${widths[width]}</option>`).join("")}</select></label>
-        <label>Height<select aria-label="Widget height" onchange="Dashboard.size('height',+this.value)">${[[0,"Fit content"],[360,"Medium"],[520,"Tall"]].map(([height,label])=>`<option value="${height}" ${height===item.height?"selected":""}>${label}</option>`).join("")}</select></label>
+        <label>Height<select aria-label="Widget height" onchange="Dashboard.size('height',+this.value)">${[[0,"Fit content"],[240,"Short"],[360,"Medium"],[520,"Tall"]].map(([height,label])=>`<option value="${height}" ${height===item.height?"selected":""}>${label}</option>`).join("")}</select></label>
+        ${item.id==="nodes"?`<label>Display<select aria-label="Node health display" onchange="Dashboard.nodeDisplay(this.value)"><option value="compact" ${item.display!=="detailed"?"selected":""}>Compact summaries</option><option value="detailed" ${item.display==="detailed"?"selected":""}>Detailed comparison</option></select></label>`:""}
         <div class="dashboard-order"><button class="btn sm" ${index===0?"disabled":""} onclick="Dashboard.move(${jsq(item.id)},${index-1})">↑ Earlier</button><button class="btn sm" ${index===draft.length-1?"disabled":""} onclick="Dashboard.move(${jsq(item.id)},${index+1})">↓ Later</button></div>
         <button class="btn sm danger" onclick="Dashboard.remove(${jsq(item.id)})">Remove widget</button>`:""}</div>
       ${UI.guide("How the grid works", "Drag a widget’s handle to change its position. Drag its bottom corner to resize, or use Widget settings. Cards snap to columns and grow to fit their content. On phones, cards stack in the same order with automatic height. Arrow keys on a move handle reorder cards. Metrics pause while editing. Your layout follows your account across browsers and devices.")}
@@ -225,6 +231,7 @@ const Dashboard = (() => {
     add(id){if(!Object.hasOwn(widgets,id)||draft===null||draft.some(item=>item.id===id))return;selected=id;change(()=>draft.push({id,width:widgets[id].width,height:0}),`${widgets[id].title} added.`);if(id==="portal")loadPortal();if(widgets[id]?.optional)HealthInsights.load();},
     remove(id){if(!Object.hasOwn(widgets,id))return;change(()=>{draft=draft.filter(item=>item.id!==id);if(selected===id)selected=draft[0]?.id || "";},`${widgets[id].title} removed. Use Undo to restore it.`);},
     size(field,value){if(!["width","height"].includes(field))return;change(()=>{const item=draft.find(item=>item.id===selected);if(item)item[field]=value;},"Widget size updated.");},
+    nodeDisplay(value){if(!["compact","detailed"].includes(value))return;change(()=>{const item=draft.find(row=>row.id==="nodes");if(item)item.display=value;},"Node display updated.");},
     history(direction){const from=direction<0?undo:redo,to=direction<0?redo:undo;if(!from.length || draft===null || saving)return;to.push(clone(draft));draft=from.pop();if(!draft.some(item=>item.id===selected))selected=draft[0]?.id || "";editor(direction<0?"Change undone.":"Change restored.");},
     reset(){change(()=>{draft=defaults();selected=draft[0].id;},"Default layout restored. Save to keep it, or Undo to go back.");},
     preview(){phone=!phone;editor();},
@@ -262,7 +269,7 @@ const Dashboard = (() => {
         const desired=g.item.width+dx/(grid.width/12);
         g.width=widgets[g.id].widths.reduce((best,n)=>Math.abs(n-desired)<Math.abs(best-desired)?n:best,g.item.width);
         const desiredHeight=(g.item.height || 280)+dy;
-        g.height=desiredHeight<320?0:desiredHeight<440?360:520;
+        g.height=desiredHeight<200?0:desiredHeight<300?240:desiredHeight<440?360:520;
         g.el.style.setProperty("--widget-span",g.width);g.el.style.setProperty("--widget-height",`${g.height}px`);
         announce(`${widths[g.width]}, ${g.height?g.height+" pixels":"fit content"}.`);
       }else{

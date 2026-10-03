@@ -20,8 +20,24 @@ import homestead_http as HTTP
 class DashboardPreferencesTests(unittest.TestCase):
     def test_health_widgets_are_valid_account_preferences(self):
         layout = {"version": 1, "items": [{"id": key, "width": 6, "height": 0}
-                  for key in ("health", "workloads", "backups", "updates", "jobs")]}
+                  for key in ("health", "workloads", "containers", "vms", "backups", "updates", "jobs")]}
         self.assertEqual(AUTH._dashboard_layout(layout), layout)
+
+    def test_node_width_and_display_settings_persist_with_the_account(self):
+        for width in (4,6,8,12):
+            layout={"version":1,"items":[{"id":"nodes","width":width,"height":360,"display":"detailed"}]}
+            saved=self.save(AUTH.dashboard_preferences("alice")["revision"],layout)
+            self.assertEqual(layout,AUTH.dashboard_preferences("alice")["layout"])
+        for display in ("other",{},None):
+            with self.assertRaises(ValueError):
+                AUTH._dashboard_layout({"version":1,"items":[{"id":"nodes","width":6,"height":0,"display":display}]})
+        with self.assertRaises(ValueError):
+            AUTH._dashboard_layout({"version":1,"items":[{"id":"compute","width":6,"height":0,"display":"compact"}]})
+
+    def test_short_resource_lists_persist(self):
+        layout={"version":1,"items":[{"id":"containers","width":12,"height":240},{"id":"vms","width":4,"height":240}]}
+        self.save(AUTH.dashboard_preferences("alice")["revision"],layout)
+        self.assertEqual(layout,AUTH.dashboard_preferences("alice")["layout"])
 
     def setUp(self):
         self.store = {"users": {"alice": {"role": "viewer", "ver": 1}, "bob": {"role": "admin", "ver": 2}}, "signing_key": "unchanged"}
