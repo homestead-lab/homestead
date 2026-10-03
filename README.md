@@ -217,7 +217,7 @@ grow into a cluster, on supported **x86-64 or ARM64** hardware.
 | Alerts and notifications | ✅ | ✅ | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ |
 | Self-hosted app store | ✅ | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ | ✅ |
 | Helm chart management (UI) | ✅ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ | ✅ |
-| Application containers (apps / services) | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ | ⚪ | ✅ |
+| Application containers (Docker / OCI images) | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ | ⚪ | ✅ |
 | Linux system containers (LXC / LXD) | ❌ | ⚪ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
 | Single sign-on (SSO) | ❌ | ✅ | ✅ | ❌ | ⚪ | ⚪ | ✅ | ✅ |
 | Virtual machines | ✅ | ✅ | ✅ | ❌ | ✅ | ⚪ | ✅ | ⚪ |
@@ -236,8 +236,8 @@ grow into a cluster, on supported **x86-64 or ARM64** hardware.
 Helm means managing charts through a UI. Headlamp's ticks include its official
 App Catalog; infrastructure features depend on the connected Kubernetes cluster.
 Homestead's Helm changes require the K3s/RKE2 Helm controller.
-Application containers package apps or services such as Jellyfin, Pi-hole or MQTT;
-Homestead runs these through Kubernetes. LXC/LXD system containers provide a fuller
+Application containers package apps or services such as Jellyfin, Pi-hole or MQTT.
+Homestead runs Docker / OCI images through Kubernetes. LXC/LXD system containers provide a fuller
 Linux environment, like a lightweight server sharing the host's kernel.
 SSO means identity-provider login to management; an external access gate alone does not count.
 
