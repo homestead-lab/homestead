@@ -88,6 +88,8 @@ async function applyDeepLink(v, params) {
     renderBreadcrumb(v, params.node);
     $("#title").textContent = params.node;
     pageTitle(params.node);
+    // A drive named too opens in the node's Storage section.
+    if (params.disk) window.smartDisk?.(params.node, params.disk);
     return;
   } else if (v === "workloads" && params.panel === "edit" && params.ns && params.workload) {
     detail = params.workload;

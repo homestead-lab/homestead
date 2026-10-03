@@ -12,6 +12,34 @@ test("snapshot-only volumes need external backups; a schedule does not mean a co
 test("missing sources are explicit unknown checks, not zero healthy results",()=>{
  const s=Object.fromEntries(Object.keys(base()).map(k=>[k,null]));assert.equal(H.advice(s).length,6);assert.ok(H.advice(s).every(r=>r.id.startsWith("unknown:")));
 });
+test("a finding the cluster tracks as an alert carries its acknowledgement and sorts after open ones",()=>{
+ const s=base();s.nodes=[{name:"host",temps:{disks:[{name:"sda",health:{state:"attention",summary:"2 reallocated sectors"}}]}}];
+ s.overview.health_issues=[{kind:"Disk",name:"host/sda",severity:"degraded",reason:"2 reallocated sectors"},{kind:"Workload",name:"lab/app",severity:"degraded",reason:"0/1 replicas ready"}];
+ s.alerts={active:[{key:"health:Disk:host/sda",version:"v1",acknowledged:true},{key:"health:Workload:lab/app",version:"v2",acknowledged:false}]};
+ const rows=H.advice(s), drive=rows.find(r=>r.id==="disk:host:sda"), app=rows.find(r=>r.id==="condition:Workload:lab/app");
+ assert.deepEqual(drive.alert,{key:"health:Disk:host/sda",version:"v1",acknowledged:true});
+ assert.deepEqual(app.alert,{key:"health:Workload:lab/app",version:"v2",acknowledged:false});
+ assert.ok(rows.indexOf(app)<rows.indexOf(drive),"acknowledged findings come after open ones");
+ assert.equal(H.alertKey("node:host"),"health:Node:host");
+ assert.equal(rows.find(r=>r.id==="backup-coverage")?.alert,undefined,"advice without an alert has no acknowledgement");
+});
+test("one etcd server is explained as a single-host cluster, not a margin warning",()=>{
+ const s=base();s.cluster.control_plane={etcd_total:1,etcd_ready:1,quorum_margin:0};
+ const quorum=H.advice(s).find(r=>r.id==="quorum");
+ assert.equal(quorum.severity,"low");assert.equal(quorum.title,"Single control-plane host");
+ assert.match(quorum.detail,/snapshot/);
+ s.cluster.control_plane={etcd_total:3,etcd_ready:2,quorum_margin:0};
+ assert.match(H.advice(s).find(r=>r.id==="quorum").detail,/2 of 3 etcd members are ready/);
+});
+test("a finding about one host or drive reviews that host or drive",()=>{
+ const s=base();s.nodes=[{name:"host",fs_pct:95,temps:{disks:[{name:"sda",health:{state:"attention",summary:"2 reallocated sectors"}}]}}];
+ s.overview.health_issues=[{kind:"Disk",name:"other/nvme0n1",severity:"degraded",reason:"2 reallocated sectors"},{kind:"Node",name:"other",severity:"critical",reason:"NotReady"}];
+ const route=id=>H.advice(s).find(r=>r.id===id)?.route;
+ assert.equal(route("disk:host:sda"),"disk:host:sda","from the node's own drive report");
+ assert.equal(route("disk:other:nvme0n1"),"disk:other:nvme0n1","from the dashboard banner's issues");
+ assert.equal(route("disk-space:host"),"node:host");
+ assert.equal(route("node:other"),"node:other");
+});
 test("advice sorts critical first and respects configured temperature/disk thresholds",()=>{
  const s=base();s.nodes=[{name:"host",fs_pct:91,temps:{max_c:73,disks:[{name:"sda",health:{state:"critical",summary:"Pending sectors"}}]}}];
  const r=H.advice(s);assert.equal(r[0].severity,"critical");assert.equal(r.at(-1).severity,"medium");assert.match(r.find(r=>r.id.startsWith("temperature")).title,/73°C/);
