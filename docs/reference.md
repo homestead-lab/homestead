@@ -446,6 +446,20 @@ Settings → Hardware and storage → Add-ons manages the SMB server afterwards.
 before anything of the share is made, so a share that cannot be served leaves
 nothing behind.
 
+### Workload firewall policies
+
+**Networking → Firewall** manages Kubernetes NetworkPolicies for individual
+workloads. Admins can use presets, choose allowed IP ranges or namespace peers,
+set inbound/outbound ports, and review affected pods and overlapping policies
+before applying. Viewer and operator roles can inspect policies. Editing and
+removal use resource identity and revision checks; externally managed or
+unsupported policies are inspect-only.
+
+Enforcement depends on the network provider and must be verified with real
+traffic. Host traffic and VM LAN/Multus interfaces require separate firewalls.
+See [the firewall guide](wiki/Networking.md#workload-firewall) for policy
+semantics, DNS exceptions, and backup scope.
+
 ### IP addresses
 
 Networking's **IP addresses** tab keeps, per subnet, what lives at each
