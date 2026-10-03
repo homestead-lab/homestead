@@ -1172,6 +1172,11 @@ def get_volumes():
         unclaimed = str(ks.get("pvStatus") or "") == "Released" or bool(
             ks.get("pvcName") and not pvc_obj and pvcs) or bool(
             pvc_obj and (pvc_obj.get("spec") or {}).get("volumeName") not in ("", None, v["metadata"]["name"]))
+        # Longhorn retains workload names after the final pod releases a
+        # volume. These describe past use, not a current attachment. In
+        # particular, retained CDI scratch PVs must still appear as unused.
+        if unclaimed or ks.get("lastPodRefAt"):
+            wls = []
         filesystem = filesystems.get((ks.get("namespace", ""), ks.get("pvcName", ""))) if not unclaimed and st.get("state") == "attached" else None
         out.append({
             "name": v["metadata"]["name"],
