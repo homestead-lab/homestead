@@ -41,11 +41,11 @@ class ChannelTests(unittest.TestCase):
             scan.assert_called_once_with(False)
 
     def check(self, part, channel, current="2.8.289", digest="sha256:" + "a" * 64, tags=None):
-        source = "ghcr.io/wjcloudy/homestead:" + current
+        source = "ghcr.io/homestead-lab/homestead:" + current
         dep = {"metadata": {"namespace": "lab", "name": "homestead", "annotations": {
             updates.TRACKED: '{"homestead": "' + source + '"}'}}, "spec": {"replicas": 0,
             "selector": {"matchLabels": {}}, "template": {"spec": {"containers": [
-                {"name": "homestead", "image": "ghcr.io/wjcloudy/homestead@" + digest if digest else source}]}}}}
+                {"name": "homestead", "image": "ghcr.io/homestead-lab/homestead@" + digest if digest else source}]}}}}
         with mock.patch.object(updates, "PART", return_value=part), \
              mock.patch.object(updates, "CHANNEL", return_value=channel), \
              mock.patch.object(updates, "_secret_credentials", return_value={}), \
