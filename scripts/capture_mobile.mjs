@@ -3,9 +3,9 @@
 // Each screen is taken at a phone's size (393 x 852 points, as an iPhone 15 or
 // 16), then drawn inside a phone frame - status bar, Dynamic Island, side
 // buttons - on a gradient in Homestead's colours. The main image puts the
-// desktop dashboard, in a browser window, behind two phones:
+// desktop dashboard, in a larger browser window, beside one phone:
 //
-//   release-assets/homestead-hero.jpg           desktop and phones, for the top of the README
+//   release-assets/homestead-hero.jpg           desktop and one phone, for the top of the README
 //   release-assets/homestead-mobile.jpg         a row of five phones with captions
 //   release-assets/homestead-mobile-<name>.jpg  one phone per screen
 //
@@ -198,13 +198,12 @@ const compose = async (width, height, body, file, scale = 1) => {
 
 const has = (name) => Boolean(images[name]);
 try {
-  // The main image: the desktop dashboard in a browser window, and in front
-  // of it two phones - networking behind, the dashboard nearest.
+  // The main image: a large desktop dashboard with one smaller phone at the
+  // right edge, leaving most of the desktop visible.
   if (has("dashboard") && images.desktop) {
     const W = 1600, H = 1000;
-    let body = windowHtml("left:60px;top:96px;width:1130px;z-index:1");
-    if (has("networking")) body += phoneHtml("networking", "left:938px;top:92px;transform:rotate(-5deg) scale(.74);z-index:2");
-    body += phoneHtml("dashboard", "left:1150px;top:150px;transform:scale(.8);z-index:3");
+    let body = windowHtml("left:40px;top:60px;width:1360px;z-index:1");
+    body += phoneHtml("dashboard", "left:1280px;top:360px;transform-origin:top left;transform:scale(.62);z-index:2");
     await compose(W, H, body, "homestead-hero.jpg", 1.25);
   }
 

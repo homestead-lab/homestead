@@ -1470,9 +1470,12 @@ ssh_pwauth: true
     "/api/workloads": workloads, "/api/network": network,
     // Rebooting a host: one app has nowhere else to go, one volume keeps a
     // single copy elsewhere while the host is down.
-    "/api/node/power/plan": url => ({ node: url.searchParams.get("node"), action: url.searchParams.get("action"), review_token: "demo-power",
+    "/api/node/power/plan": url => {
+      const plannedOutage = !!window.__demoSingleHostOutage && url.searchParams.get("force") !== "1";
+      const plan = { node: url.searchParams.get("node"), action: url.searchParams.get("action"), review_token: "demo-power",
       boot_id: "demo", pods: 14, vms: [], storage_unknown: false, ready: true, requires_data_ack: true, blockers: [],
       overridable: [], hard_blockers: [], force: url.searchParams.get("force") === "1",
+      planned_outage: plannedOutage,
       workloads: [{ ns: "lab", name: "frigate", stranded: true, eligible: [] },
         { ns: "lab", name: "home-assistant", stranded: false, eligible: ["harvester-node2", "harvester-node3"] },
         { ns: "lab", name: "paperless", stranded: false, eligible: ["harvester-node2"] }],
@@ -1481,7 +1484,16 @@ ssh_pwauth: true
         { name: "pvc-demo-ha", claim: "lab/homeassistant-config", healthy_elsewhere: 2, risk: "resync" }],
       maintenance: { budgets: [{ pod: "lab/paperless-5c9d", budget: "minAvailable 1", allowed: 1 }], local_storage: [] },
       warnings: ["DaemonSets and static pods remain on the host; their services stop during the outage.",
-        "1 workload(s) have no eligible failover host", "2 volume(s) lose a replica until this host returns or Longhorn rebuilds"] }),
+        "1 workload(s) have no eligible failover host", "2 volume(s) lose a replica until this host returns or Longhorn rebuilds"] };
+      if (plannedOutage) {
+        plan.workloads = [{ns:"lab",name:"homestead",stranded:true,eligible:[]}];
+        plan.stranded = [{ns:"lab",name:"homestead"}];
+        plan.volumes = [{name:"pvc-demo-homestead",claim:"lab/homestead-data",healthy_elsewhere:0,risk:"unavailable"}];
+        plan.maintenance.budgets[0].allowed = 0;
+        plan.warnings = ["All applications, storage and Homestead are unavailable while this host is down."];
+      }
+      return plan;
+    },
     // Starting a stopped app that only just fits: one host near its memory
     // warning, one ruled out by placement.
     "/api/workloads/start-plan": url => ({ namespace: url.searchParams.get("ns"), name: url.searchParams.get("name"),

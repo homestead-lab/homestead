@@ -496,16 +496,25 @@ function volumeDeleteConfirmationValid(name, value) {
 }
 window.volumeDeleteConfirmationValid = volumeDeleteConfirmationValid;
 
+let volumeDeleteTarget = null, volumeDeleteRequest = 0;
+window.volumeDeleteRefresh = () => volumeDeleteTarget && volumeDelete(volumeDeleteTarget);
 window.volumeDelete = async x => {
+  const request = ++volumeDeleteRequest;
+  volumeDeleteTarget = {name: x.name, pvc_name: x.pvc_name, namespace: x.namespace};
+  window.__volumeDeletePlan = null;
   const namespace = x.namespace || "lab", name = x.pvc_name || x.name;
   modal("Delete volume · " + name,
-    '<div class="empty"><span class="spin2"></span> checking mounts, snapshots, backups and reclaim policy…</div>', true);
+    '<div id="volumeDeleteReview" class="empty"><span class="spin2"></span> checking mounts, snapshots, backups and reclaim policy…</div>', true);
+  const waiting = $("#volumeDeleteReview");
   let p;
   try {
     p = await api(`/api/volumes/delete-plan?ns=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}&volume=${encodeURIComponent(x.name)}`);
   } catch (e) {
-    return void ($("#mbody").innerHTML = UI.callout("bad", "Impact check failed.", esc(e.message)) + UI.actions(UI.cancel("Close")));
+    if (request !== volumeDeleteRequest || $("#volumeDeleteReview") !== waiting) return;
+    return void ($("#mbody").innerHTML = UI.callout("bad", "Impact check failed.", esc(e.message)) +
+      UI.actions(UI.cancel("Close") + UI.button("Refresh review", "volumeDeleteRefresh()")));
   }
+  if (request !== volumeDeleteRequest || $("#volumeDeleteReview") !== waiting) return;
   window.__volumeDeletePlan = p;
   const stale = new Set((p.stale_consumers || []).map(c => `${c.kind}/${c.name}`));
   const lh = p.longhorn || {}, pv = p.pv || {};
@@ -513,6 +522,8 @@ window.volumeDelete = async x => {
   const permanentBlocked = !p.actions?.delete_data?.enabled;
   const detached = !!p.actions?.detach?.complete;
   const jobs = p.removable_jobs || [];
+  const verifyPending = !detached && p.inventory_complete === false && lh.state === "detached" &&
+    !lh.attached_node && !(p.consumers || []).length;
   const incomplete = (p.warnings || []).length
     ? `<p><b>Incomplete impact inventory</b></p><ul class="ui-list">${p.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
   const consumers = (p.consumers || []).map(c => [
@@ -532,12 +543,14 @@ window.volumeDelete = async x => {
       ["External backups", esc(p.backups?.count ?? "?")],
     ]),
     UI.section("1. Detach", UI.checklist([
-      { state: detached ? "ok" : "bad", title: detached ? "Already detached." : "Stop and unmount this claim first.",
-        detailHtml: `Detaching keeps the PVC and all data. Homestead will not silently rewrite or stop the workloads listed below.${(p.stale_consumers || []).length ? " Entries marked finished have stopped for good and do not hold it." : ""}` },
+      { state: detached ? "ok" : verifyPending ? "warn" : "bad",
+        title: detached ? "Already detached." : verifyPending ? "Longhorn reports detached; safety checks are incomplete." : "Stop and unmount this claim first.",
+        detailHtml: verifyPending ? "Refresh the review to verify the remaining checks before deleting." :
+          `Detaching keeps the PVC and all data. Homestead will not silently rewrite or stop the workloads listed below.${(p.stale_consumers || []).length ? " Entries marked finished have stopped for good and do not hold it." : ""}` },
       jobs.length && { state: "ok", title: `Finished ${jobs.length === 1 ? "job" : "jobs"} will be removed first`,
         detailHtml: `<span class="mono">${jobs.map(esc).join(", ")}</span> already completed - typically the copy job from an import. Kubernetes could otherwise hold the claim in Terminating.` },
     ]) + (consumers.length ? UI.table([{ label: "Used by" }, { label: "Mounts" }], consumers)
-      : `<div class="ui-empty">No pods, controllers, jobs or virtual machines reference this claim.</div>`)),
+      : `<div class="ui-empty">${p.inventory_complete === false ? "No workload references found in the available inventory." : "No pods, controllers, jobs or virtual machines reference this claim."}</div>`)),
     UI.section("2. Choose what happens to the data", `<div class="volume-delete-grid">
       <label class="volume-delete-option ${blocked || p.orphan ? "disabled" : ""}"><input type="radio" name="vd_action" value="delete_claim" onchange="volumeDeleteGate()" ${blocked || p.orphan ? "disabled" : ""}>
         <span><b>Delete claim, keep data</b><small>The PV policy becomes Retain, then the PVC is deleted. The released data needs Kubernetes or Longhorn administration to recover or remove later.</small></span></label>
@@ -551,7 +564,8 @@ window.volumeDelete = async x => {
     ])),
     UI.section("3. Confirm", UI.field(`Type ${name} to confirm`,
       `<input id="vd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="volumeDeleteGate()">`)),
-    UI.actions(UI.cancel() + UI.button("Delete selected", `volumeDeleteNow(${jsArg(namespace)},${jsArg(name)},${jsArg(p.uid)})`,
+    UI.actions(UI.cancel() + (blocked || p.inventory_complete === false ? UI.button("Refresh review", "volumeDeleteRefresh()") : "") +
+      UI.button("Delete selected", `volumeDeleteNow(${jsArg(namespace)},${jsArg(name)},${jsArg(p.uid)})`,
       { kind: "danger", id: "vd_go", disabled: true, attrs: 'data-need="admin"' })),
   ].join("");
 };

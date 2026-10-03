@@ -32,8 +32,9 @@ def _ready(node):
 def plan(node, action, force=False, volume_names=()):
     """What rebooting or shutting a host down would do, and what stops it.
 
-    Some stops are checks an admin may override - quorum on a one-node
-    cluster, VMs still running, a disruption budget, storage that cannot be
+    A verified single-host cluster uses an acknowledged planned outage.
+    Other stops are checks an admin may override - quorum, VMs still
+    running, a disruption budget, storage that cannot be
     read - and some are not: without the host's identity, with power control
     off, with an earlier helper still at work, or on a host that is not Ready,
     nothing can be sent safely. force turns the first kind into listed
@@ -48,6 +49,12 @@ def plan(node, action, force=False, volume_names=()):
     volumes = _items(f"{LH}/volumes", absent_ok=True) if replicas is not None else None
     pods = _items("/api/v1/pods")
     nodes = _items("/api/v1/nodes")
+    # A sole etcd member can still have worker nodes. Only a complete, matching
+    # one-host inventory permits the planned whole-cluster outage path.
+    planned_outage = (not force and bool(node_obj.get("metadata", {}).get("uid")) and len(nodes) == 1 and _ready(nodes[0]) and
+                      nodes[0].get("metadata", {}).get("name") == node and
+                      nodes[0].get("metadata", {}).get("uid") == node_obj.get("metadata", {}).get("uid") and
+                      control.get("members", []) in ([], [node]))
     ready_hosts = {n.get("metadata", {}).get("name") for n in nodes if _ready(n)}
     vmis = _items("/apis/kubevirt.io/v1/virtualmachineinstances", absent_ok=True) or []
     storage_unknown = replicas is None or volumes is None
@@ -87,17 +94,17 @@ def plan(node, action, force=False, volume_names=()):
         hard.append("An earlier power helper is still active on this host; inspect it before retrying")
     maintenance = {"budgets": [], "local_storage": [], "blockers": []}
     try:
-        maintenance = MAINTENANCE.inventory(kget, pods_here)
+        maintenance = MAINTENANCE.inventory(kget, pods_here, draining=not planned_outage)
         soft.extend(maintenance["blockers"])
     except Exception:
         soft.append("Drain/PDB or attached-storage inventory is unavailable or incomplete; review cannot be verified")
     if not power_enabled():
         hard.append("Host power control is disabled (ENABLE_NODE_POWER is off)")
     members = control.get("members", [])
-    if node in members and control.get("can_lose", 0) < 1:
+    if not planned_outage and node in members and control.get("can_lose", 0) < 1:
         soft.append("This host is the cluster's only etcd member: the cluster, Homestead with it, is away until it is back"
                     if len(members) == 1 else "Shutting down this etcd member would lose quorum")
-    if not _ready(node_obj):
+    if not _ready(node_obj) or (len(nodes) == 1 and nodes[0].get("metadata", {}).get("name") == node and not _ready(nodes[0])):
         hard.append("The host is not Ready; investigate it before issuing a new power command")
     if vm_rows:
         soft.append("Running VMs are on this host; migrate or stop them and review again")
@@ -105,8 +112,12 @@ def plan(node, action, force=False, volume_names=()):
         soft.append("Storage replica inventory is unavailable; volume impact cannot be verified")
     blockers = hard if force else hard + soft
     warnings = []
-    if not force:
+    if not force and not planned_outage:
         warnings.extend(maintenance.get("waiting", []))
+    if planned_outage:
+        warnings.append("Planned whole-cluster outage: all applications, storage and Homestead stop with this host. "
+                        "Homestead does not cordon or evict pods; the host's systemd receives the power request. "
+                        "Shutdown requires console or physical access to power the host on again.")
     if force and soft:
         warnings.append("Forced: no cordon or drain - pods and VMs on it stop with the host, and come back when it does "
                         "(or, on other hosts, once Kubernetes gives up on this one). Overridden: " + "; ".join(soft))
@@ -132,7 +143,7 @@ def plan(node, action, force=False, volume_names=()):
               "storage_unknown": storage_unknown, "vms": vm_rows,
               "maintenance": maintenance,
               "drain_pods": drain_pods,
-              "quorum": control.get("can_lose", 0), "force": bool(force)}
+              "quorum": control.get("can_lose", 0), "force": bool(force), "planned_outage": planned_outage}
     token = hashlib.sha256(json.dumps(review, sort_keys=True).encode()).hexdigest()[:20]
     return {"node": node, "node_uid": node_uid, "action": action, "review_token": token, "boot_id": boot_id,
             "quorum": control, "workloads": place.get("workloads", []),
@@ -142,7 +153,16 @@ def plan(node, action, force=False, volume_names=()):
             "drain_pods": drain_pods,
             "requires_data_ack": storage_unknown or bool(maintenance["local_storage"]) or any(v["risk"] in ("unavailable", "single-copy") for v in affected),
             "blockers": blockers, "warnings": warnings, "ready": not blockers,
-            "overridable": soft, "hard_blockers": hard, "force": bool(force)}
+            "overridable": soft, "hard_blockers": hard, "force": bool(force), "planned_outage": planned_outage}
+
+
+def recheck_planned_outage(original):
+    """Never turn a changed or multi-host cluster into an approved outage."""
+    fresh = plan(original["node"], original["action"])
+    if not fresh["ready"] or not fresh["planned_outage"]:
+        raise ValueError("Power was not sent: planned single-host outage is no longer safe to send; review again")
+    if fresh["review_token"] != original["review_token"]:
+        raise ValueError("Host or cluster impact changed since the review; power was not sent")
 
 
 def recheck_forced(original):
@@ -183,6 +203,7 @@ def recheck_after_drain(original):
 def status(item):
     """Observe a power command without treating a lost API connection as success."""
     ref = item["ref"]
+    scheduling = "Scheduling was left unchanged" if ref.get("planned_outage") else "It remains cordoned"
     now = time.time()
     phase = ref.get("phase")
     if phase in ("reviewed", "cordoning", "draining", "verifying"):
@@ -201,10 +222,10 @@ def status(item):
             # NotReady can mean a network partition, not a powered-off host.
             # Never turn that observation into a green shutdown success.
             if now - ref.get("started_epoch", now) > 600:
-                return "failed", 60, "Shutdown could not be verified. Host is NotReady; check its console or physical power before retrying. It remains cordoned"
+                return "failed", 60, "Shutdown could not be verified. Host is NotReady; check its console or physical power before retrying. " + scheduling
             return "running", 60, "Host is NotReady, not confirmed powered off. Check its console or physical power; no command will be retried"
         if now - ref.get("started_epoch", now) > 600:
-            return "failed", 60, "Host did not return Ready within 10 minutes; inspect the host. It remains cordoned"
+            return "failed", 60, "Host did not return Ready within 10 minutes; inspect the host. " + scheduling
         return "running", 60, "Host is NotReady; waiting to confirm shutdown or return"
     if ref["action"] == "poweroff" and ref.get("saw_down"):
         return "failed", 90, "Host returned Ready after shutdown was requested; check its power state"
@@ -212,7 +233,7 @@ def status(item):
         ref.setdefault("returned_at", now)
         volume_names = ref.get("volumes") or []
         if not volume_names:
-            return "succeeded", 100, "Host returned Ready with a new boot ID. It remains cordoned; check workloads before allowing scheduling"
+            return "succeeded", 100, "Host returned Ready with a new boot ID. " + scheduling + "; check workloads"
         volumes = _items(f"{LH}/volumes", absent_ok=True)
         if volumes is None:
             if now - ref["returned_at"] > 1800:
@@ -226,7 +247,7 @@ def status(item):
                 return "failed", 90, ("Host rebooted, but volumes did not become healthy within 30 minutes: " +
                                       ", ".join(pending[:4]))
             return "running", 90, f"Host is Ready; waiting for {len(pending)} volume(s) to become healthy: " + ", ".join(pending[:4])
-        return "succeeded", 100, "Host is Ready and affected Longhorn volumes are healthy. It remains cordoned; workload recovery is not yet verified"
+        return "succeeded", 100, "Host is Ready and affected Longhorn volumes are healthy. " + scheduling + "; workload recovery is not yet verified"
     if now - ref.get("started_epoch", now) > 600:
         return "failed", 30, "Power transition was not verified within 10 minutes. A helper may still run; inspect its events and logs before any new request. Host remains cordoned"
     if ref.get("saw_down"):

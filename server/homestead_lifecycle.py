@@ -814,7 +814,7 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
     return {"ok": True, "node": node, "evicted": evicted, "skipped": skipped}
 
 
-def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=None, progress=None, force=False):
+def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=None, progress=None, force=False, planned_outage=False):
     """Reboot or shut down a host.
 
     Kubernetes cannot do this. We schedule a one-shot privileged pod pinned to
@@ -828,10 +828,20 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
             "Deployment to turn it on. Cordon and drain work regardless.")
     if action not in ("reboot", "poweroff"):
         raise ValueError("action must be reboot or poweroff")
-    if before_send is None or (not force and (reviewed_pods is None or not drain_first)):
+    if before_send is None or (not force and not planned_outage and (reviewed_pods is None or not drain_first)):
         raise ValueError("A reviewed drain and fresh pre-power check are required; power was not sent")
     report = progress or (lambda *args, **kwargs: None)
     steps = []
+    if planned_outage:
+        if force:
+            raise ValueError("A planned outage cannot also be a forced action")
+        report("verifying", 15, "Rechecking the planned single-host cluster outage")
+        # The callback requires a fresh matching one-host inventory and review
+        # token. Eviction would remove Homestead before it could send power.
+        rep = quorum_report()
+        before_send()
+        steps.append("planned whole-cluster outage: no cordon or drain")
+        return _send_power(node, action, steps, rep, report)
     if force:
         # Overridden by an admin: no cordon or drain - which on a one-node
         # cluster would evict Homestead before it could send anything, and

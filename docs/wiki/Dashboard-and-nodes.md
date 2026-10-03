@@ -179,10 +179,19 @@ evicting a replacement under a reused name. Before power, Homestead rechecks
 quorum, VMs, replicas and remaining pods. A changed risk or incomplete drain
 leaves the host cordoned, with no power command sent.
 
-**Override.** Some stops can be overridden by an administrator: the host being
-the cluster's only etcd member (every single-node k3s or RKE2 cluster), running
-VMs, disruption budgets and inventories that cannot be read. Tick **Override**
-in the host's power section, or in the review, for a forced review that lists
+**Single-host clusters.** Normal **Reboot** and **Shut down** use a planned
+whole-cluster outage. Type the host name and acknowledge that all applications,
+storage and Homestead will go offline. To start a shut-down host again you need
+console or physical access. Homestead leaves scheduling unchanged and asks the
+host's systemd for power control without cordoning or evicting pods. Running VMs,
+active data operations and incomplete inventory still block the request. A sole
+etcd member with additional worker nodes still needs quorum protection. The full
+node inventory and reviewed impacts are checked again before power is sent;
+unattended OS updates cannot approve this outage.
+
+**Override.** Other stops can be overridden by an administrator: quorum on a
+multi-host cluster, running VMs, disruption budgets and inventories that cannot
+be read. Tick **Override** in the power review for a forced review that lists
 what the override means. A forced reboot or shutdown sends no cordon or drain:
 the host's own systemd stops everything in order, as its power button would,
 and pods start again when it is back, with nothing left cordoned. It is still
@@ -195,7 +204,8 @@ automatically resent. An existing active helper blocks another request. A new
 boot ID verifies a reboot even if polling missed NotReady. A reboot that stays
 down times out after ten minutes; volume recovery has a separate thirty-minute
 wait. NotReady alone cannot prove physical shutdown. No automatic uncordon is
-performed: inspect the node, workloads and storage before using **Uncordon**.
+performed after a multi-host drain: inspect the node, workloads and storage before
+using **Uncordon**. A planned single-host outage leaves scheduling unchanged.
 
 If this host runs Homestead itself, draining can interrupt the request. Inspect
 the persisted job after Homestead returns before retrying. Disposable-host
