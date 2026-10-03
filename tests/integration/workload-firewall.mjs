@@ -77,8 +77,37 @@ try {
     await page.evaluate(() => finishFirewallPreview());
     await page.waitForTimeout(100);
     assert.equal(await page.locator("#fw_apply").isDisabled(), true);
-    await page.evaluate(ns => { api = originalApi; closeModal(); firewallRemove(ns, "homestead-fw-browser-test"); }, ns);
-    await page.getByRole("button", {name:"Remove policy",exact:true}).click();
+    // A delayed save must not close a different editor opened in the meantime.
+    await page.evaluate(async () => {
+      api = originalApi;
+      await firewallReview();
+      window.api = async (url, options) => {
+        if (url.endsWith("/firewall/save")) await new Promise(resolve => { window.finishFirewallSave = resolve; });
+        return originalApi(url, options);
+      };
+      window.pendingFirewallSave = firewallSave();
+      closeModal();
+      await firewallEdit();
+    });
+    await page.locator("#fw_name").fill("homestead-fw-next-editor");
+    await page.evaluate(async () => { finishFirewallSave(); await pendingFirewallSave; api = originalApi; });
+    assert.equal(await page.locator("#fw_name").inputValue(), "homestead-fw-next-editor");
+    assert.equal(await page.locator("#fw_editor").isVisible(), true);
+    // A delayed delete must not repaint Firewall after leaving Networking.
+    await page.evaluate(ns => {
+      closeModal(); firewallRemove(ns, "homestead-fw-browser-test");
+      window.api = async (url, options) => {
+        if (url.endsWith("/firewall/delete")) await new Promise(resolve => { window.finishFirewallDelete = resolve; });
+        return originalApi(url, options);
+      };
+      window.pendingFirewallDelete = firewallDeleteConfirmed();
+      closeModal(); go("workloads");
+    }, ns);
+    await page.waitForFunction(() => STATE.view === "workloads");
+    await page.evaluate(async () => { finishFirewallDelete(); await pendingFirewallDelete; api = originalApi; });
+    assert.equal(await page.getByRole("button", {name:"＋ New policy",exact:true}).count(), 0);
+    assert.equal(await page.evaluate(() => STATE.view), "workloads");
+    await page.evaluate(async () => { go("network"); networkTab("firewall"); await viewFirewall(); });
     await page.waitForFunction(() => !STATE.data.firewall.policies.some(p => p.name === "homestead-fw-browser-test"));
     assert.deepEqual(errors, []);
     await context.close();

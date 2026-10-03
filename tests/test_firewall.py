@@ -94,6 +94,16 @@ class FirewallTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "review"): F.save(self.cfg)
         self.assertFalse(self.sent)
 
+    def test_non_text_rule_fields_cannot_widen_access(self):
+        for field in ("ports", "value"):
+            for value in (0, 80, False, None, [], {}):
+                self.cfg["ingress_rules"] = [{"peer": "any", "protocol": "TCP", field: value}]
+                with self.subTest(field=field, value=value), self.assertRaisesRegex(ValueError, "must be text"):
+                    F.preview(self.cfg)
+        self.assertFalse(self.sent)
+        self.cfg["ingress_rules"] = [{"peer": "any", "protocol": "TCP", "ports": ""}]
+        self.assertEqual([{"ports": [{"protocol": "TCP"}]}], F.preview(self.cfg)["manifest"]["spec"]["ingress"])
+
     def test_overlap_and_pod_changes_invalidate_review(self):
         self.cfg["review"] = F.preview(self.cfg)["review"]
         self.policies.append({"metadata": {"name": "external", "namespace": "apps", "uid": "x", "resourceVersion": "1"},
@@ -168,6 +178,26 @@ class FirewallTests(unittest.TestCase):
         self.workload["metadata"]["uid"] = "replacement"
         with self.assertRaisesRegex(ValueError, "replaced"): F.preview(self.cfg)
 
+    def test_malformed_stored_targets_are_inspect_only(self):
+        obj = self.existing()
+        config = json.loads(obj["metadata"]["annotations"][F.CONFIG])
+        valid = config["target"]
+        for target in (None, [], {}, {**valid, "kind": []}, {**valid, "kind": "Pod"},
+                       {**valid, "namespace": "other"}, {**valid, "uid": ""}, {**valid, "name": "../web"}):
+            config["target"] = target
+            obj["metadata"]["annotations"][F.CONFIG] = json.dumps(config)
+            with self.subTest(target=target):
+                row = F.inventory()["policies"][0]
+                self.assertFalse(row["managed"])
+                self.assertIsNone(row["config"])
+                self.assertEqual(obj["spec"], row["spec"])
+                with self.assertRaisesRegex(ValueError, "managed elsewhere"): F.preview(self.cfg)
+                with self.assertRaisesRegex(ValueError, "managed elsewhere"): F.remove(self.cfg)
+        del config["target"]
+        obj["metadata"]["annotations"][F.CONFIG] = json.dumps(config)
+        self.assertFalse(F.inventory()["policies"][0]["managed"])
+        self.assertFalse(self.sent)
+
     def test_delete_has_uid_and_resource_version_preconditions(self):
         self.existing()
         F.remove(self.cfg)
@@ -187,7 +217,7 @@ class FirewallTests(unittest.TestCase):
         self.workload["metadata"]["deletionTimestamp"] = "2026-10-03T12:00:00Z"
         with self.assertRaisesRegex(ValueError, "being deleted"): F.preview(self.cfg)
 
-    def test_vm_scope_uses_real_template_labels_and_excludes_lan_only(self):
+    def test_vm_scope_uses_stable_name_label_and_excludes_lan_only(self):
         vm = copy.deepcopy(self.workload)
         vm["spec"]["template"]["spec"] = {"networks": [{"name": "lan", "multus": {"networkName": "lan"}}]}
         self.assertIn("no pod-network", F._target(vm, "VirtualMachine")["blocked"])
@@ -195,9 +225,20 @@ class FirewallTests(unittest.TestCase):
         row = F._target(vm, "VirtualMachine")
         self.assertFalse(row["blocked"])
         self.assertTrue(row["warnings"])
-        self.assertEqual({"matchLabels": {"app": "web"}}, row["selector"])
+        self.assertEqual({"matchLabels": {"vm.kubevirt.io/name": "web"}}, row["selector"])
+        self.assertEqual("web", row["labels"]["vm.kubevirt.io/name"])
         vm["spec"]["template"]["metadata"]["labels"] = {}
-        self.assertTrue(F._target(vm, "VirtualMachine")["blocked"])
+        self.assertFalse(F._target(vm, "VirtualMachine")["blocked"])
+
+    def test_vm_selector_does_not_include_other_vms_with_shared_template_labels(self):
+        vm = copy.deepcopy(self.workload)
+        row = F._target(vm, "VirtualMachine")
+        self.assertTrue(F.matches(row["selector"], {"app": "web", "vm.kubevirt.io/name": "web"}))
+        self.assertFalse(F.matches(row["selector"], {"app": "web", "vm.kubevirt.io/name": "other"}))
+        vm["spec"]["template"]["metadata"]["labels"] = {"app": "changed"}
+        self.assertEqual(row["selector"], F._target(vm, "VirtualMachine")["selector"])
+        self.assertTrue(F.matches(F._target(vm, "VirtualMachine")["selector"],
+                                  {"app": "web", "vm.kubevirt.io/name": "web"}))
 
     def test_selectors_include_expressions(self):
         selector = {"matchExpressions": [{"key": "tier", "operator": "In", "values": ["web"]}]}
