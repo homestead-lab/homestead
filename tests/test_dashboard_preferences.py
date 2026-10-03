@@ -39,6 +39,35 @@ class DashboardPreferencesTests(unittest.TestCase):
         self.save(AUTH.dashboard_preferences("alice")["revision"],layout)
         self.assertEqual(layout,AUTH.dashboard_preferences("alice")["layout"])
 
+    def test_filters_and_gaps_follow_the_account(self):
+        layout = {"version": 1, "items": [
+            {"id": "containers", "width": 4, "height": 240, "column": 9, "newRow": True,
+             "groups": ["Media", ""], "status": "attention"},
+            {"id": "portal", "width": 6, "height": 360, "groups": [], "display": "tiles"}]}
+        self.save(None, layout)
+        self.assertEqual(layout, AUTH.dashboard_preferences("alice")["layout"])
+        self.assertIsNone(AUTH.dashboard_preferences("bob")["layout"])
+
+    def test_rejects_invalid_filter_and_grid_settings(self):
+        for changes in ({"column": 0}, {"column": 10}, {"column": True}, {"newRow": 1},
+                        {"groups": "Media"}, {"groups": [False]}, {"groups": ["x", "x"]},
+                        {"groups": ["x" * 41]}, {"status": "anything"}, {"display": "tiles"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                AUTH._dashboard_layout({"version": 1, "items": [dict(id="containers", width=4, height=0, **changes)]})
+
+    def test_custom_cards_are_bounded_and_private_to_the_account(self):
+        items = [{"id": key, "width": 6, "height": 240, "title": "Notes", "format": "html",
+                  "content": "<p>Private notes</p><script>ignored by renderer</script>"}
+                 for key in ("custom", "custom2", "custom3", "custom4")]
+        self.save(None, {"version": 1, "items": items})
+        self.assertEqual(items, AUTH.dashboard_preferences("alice")["layout"]["items"])
+        self.assertIsNone(AUTH.dashboard_preferences("bob")["layout"])
+        for changes in ({"title": "x" * 81}, {"content": "x" * 16385}, {"content": {}},
+                        {"title": None}, {"format": "script"}, {"format": []}, {"id": "custom5"},
+                        {"id": "compute"}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                AUTH._dashboard_layout({"version": 1, "items": [{**items[0], **changes}]})
+
     def setUp(self):
         self.store = {"users": {"alice": {"role": "viewer", "ver": 1}, "bob": {"role": "admin", "ver": 2}}, "signing_key": "unchanged"}
         self.rv = 1

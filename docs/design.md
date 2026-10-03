@@ -561,14 +561,23 @@ use the same renderers. Portal tiles come from `portalTiles`, shared with Portal
 Do not fork charts, links or resource cards for the editor.
 
 - Use a 12-column grid with third, half, two-thirds and full-width cards.
-  A widget may constrain its widths to keep its content usable. Node comparison
-  stays full width. Height is a minimum (fit content, medium or tall), never a crop.
+  A widget may constrain its widths to keep its content usable. Node health supports
+  all widths. Height is a minimum; compact resource and Portal lists scroll inside
+  short, medium or tall cards.
+- Desktop Start column and Start a new row preserve intentional gaps. Calculate
+  cells in array order without overlaps; narrow canvases discard desktop positions.
 - Array order is visual, keyboard and mobile reading order. Do not use dense grid
   backfilling or CSS order. Narrow canvases stack cards and reset minimum heights.
 - Keep editing explicit. Give cards a move handle, resize handle and accessible
   settings. Collapse the control panel on phones and retain the editing toolbar.
   Provide arrow-key movement, Earlier/Later controls, Undo/Redo,
   recoverable Reset, Cancel and Save. Phone preview uses the same container rules.
+- Put selected-widget settings before the bounded, scrollable library. Settings
+  buttons bring that inspector into view and move keyboard focus to it. Use themed
+  scrollbars for nested lists. Container groups, resource status, Portal sections
+  and Portal compact/tiles display are account options, preserved during refresh.
+  An omitted group filter means all groups (including future additions); an empty
+  selection means none. Keep Portal icons, safe links and status dots shared.
 - Keep the library and size settings outside the live content. Widget actions are
   inert during editing; refresh cannot replace the draft. Cluster alerts remain
   outside the customizable grid. Saving does not modify cluster resources.
@@ -583,6 +592,30 @@ Do not fork charts, links or resource cards for the editor.
   layouts, unknown IDs, duplicate IDs and sizes before rendering. An empty saved
   layout is valid. Keep behavior coverage in `tests/integration/dashboard-editor.mjs`.
 
+
+### Custom dashboard content
+
+Custom text / HTML cards reuse the dashboard shell, sizes, placement and account
+preferences. Up to four independent cards are available; each accepts an 80-character
+title and 16,384 characters of content. Plain text is the default and is escaped.
+Keep the editor in Widget settings, with an explicit Update preview action.
+
+Static HTML is rebuilt from a small formatting-tag allowlist by
+`DashboardCustom`. Only selected inline visual properties with non-resource values
+survive. Drop executable/resource elements, event handlers, links, forms, SVG,
+MathML, custom attributes and user stylesheets. Parsing uses an unconnected template;
+never insert the original markup into the live page or allow it into shared UI HTML.
+Limit sanitizer depth and node count as well as stored source length.
+
+Render the result in an iframe with an **empty sandbox**, no same-origin or script
+permissions, and no-referrer. Its own CSP denies every resource type except inline
+styles and prohibits base URLs and forms. Do not relax the app-wide CSP for custom
+content. No custom script, network access, navigation, popup, API, cookie or parent-DOM
+capability is exposed. This is for static cards; external integrations need their own
+reviewed feature. Account APIs store source as data, never serve it as an HTML page.
+Maintain hostile-content browser tests under the production parent CSP, including
+parent/storage isolation, blocked network requests, scripts, malformed markup and
+saved-content rendering in both themes at desktop and phone widths.
 
 ### Mobile page layout contract
 
