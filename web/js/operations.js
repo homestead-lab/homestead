@@ -18,9 +18,18 @@ function operationAge(value) {
 function renderOperations() {
   const tray = $("#jobTray"), items = STATE.data.operations || [];
   const active = items.filter(operationActive);
+  const finished = items.filter(item => !operationActive(item) && item.dismissible !== false);
+  for (const selector of ["#jobClear", "#jobsDialogClear"]) {
+    const clear = $(selector);
+    if (clear) {
+      clear.hidden = !finished.length;
+      if (finished.length) clear.textContent = `Clear ${finished.length} finished`;
+    }
+  }
   if (!items.length) {
     tray.classList.add("hidden");
     $("#jobList").innerHTML = "";
+    if ($("#jobsDialogList")) $("#jobsDialogList").innerHTML = '<div class="empty small">No jobs.</div>';
     if (window.paintBell) paintBell();
     if (window.uvmCopiesPaint) uvmCopiesPaint();
     return;
@@ -34,17 +43,6 @@ function renderOperations() {
     ${active.length ? `<span class="jobsummarypct">${Math.round(latest.progress || 0)}%</span>` : ""}
     <span class="jobchev" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></span>`;
   $("#jobSummary").setAttribute("aria-expanded", String(operationPanelOpen));
-  // Clearing one at a time is fine for a stray failure and tedious after a
-  // batch, so the header offers the lot - and says how many, because it will
-  // not touch anything still running.
-  const finished = items.filter(item => !operationActive(item) && item.dismissible !== false);
-  const clear = $("#jobClear");
-  if (clear) {
-    // Only relabel when there is something to clear, so it never reads
-    // "Clear 0 finished" in the moment between clearing and hiding.
-    clear.hidden = !finished.length;
-    if (finished.length) clear.textContent = `Clear ${finished.length} finished`;
-  }
   const list = items.slice(0, 12).map(operation => `<article class="jobitem">
     <div class="jobitemtop"><div><b>${esc(operation.title)}</b>
       <span>${esc(operation.resource?.namespace ? operation.resource.namespace + " · " : "")}${esc(operation.resource?.kind || operation.kind)}</span></div>
@@ -61,7 +59,7 @@ function renderOperations() {
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation(${jsq(operation.id)})">Carry on</button>` : ""}
       ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review retained resources and recovery choices; nothing is deleted" : "Says what it left behind and what cleanup removes"}" onclick="cancelOperation(${jsq(operation.id)})">${operation.tracking_only ? "Review retained resources" : "Clean up"}</button>` : ""}
       ${operation.cancellable ? `<button class="btn sm danger" data-need="${operation.copy_recovery ? "admin" : "operator"}" data-tip="Reviews what can be stopped or recovered before anything changes" onclick="cancelOperation(${jsq(operation.id)})">${operation.rename_recovery || operation.copy_recovery ? "Inspect outcome" : operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
-      ${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" onclick="dismissOperation(${jsq(operation.id)})">Dismiss</button>`}
+      ${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" data-tip="Clear this finished entry from Jobs. Volumes and required recovery records are retained." onclick="dismissOperation(${jsq(operation.id)})">Dismiss</button>`}
     </div>
   </article>`).join("");
   $("#jobList").innerHTML = list;
@@ -78,7 +76,7 @@ window.jobsDialog = () => {
   const finished = items.filter(item => !operationActive(item) && item.dismissible !== false).length;
   modal("Jobs", `${UI.lead("What Homestead is doing in the background, and what it did recently.")}
     <div id="jobsDialogList" class="joblist">${$("#jobList")?.innerHTML || '<div class="empty small">No jobs.</div>'}</div>
-    ${UI.actions(UI.cancel("Close") + (finished ? UI.button(`Clear ${finished} finished`, "dismissFinishedOperations()", { attrs: 'data-need="operator"' }) : ""))}`);
+    ${UI.actions(UI.cancel("Close") + UI.button(`Clear ${finished} finished`, "dismissFinishedOperations()", { id: "jobsDialogClear", attrs: `data-need="operator"${finished ? "" : " hidden"}` }))}`);
 };
 window.operationActive = operationActive;
 

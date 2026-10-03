@@ -61,3 +61,10 @@ new image into a pinned move, clear its hold, delete its marker, or scale the
 application up by itself. Those edits bypass the move's evidence and startup
 fence. The incident recovery must establish the same exact volume binding,
 known write outcomes and normal mount release before restoring the source.
+
+## Clearing finished moves from Jobs
+
+After a move succeeds or recovery has verified Homestead on its original volume,
+**Dismiss** and **Clear finished** hide its entry from Jobs. Both data volumes,
+the recovery audit, dispatch identities and saved log remain retained; clearing
+does not delete cluster resources. Jobs that still need recovery cannot be cleared.

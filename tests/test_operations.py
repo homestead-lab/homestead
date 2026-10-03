@@ -2,6 +2,7 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import urllib.error
 from pathlib import Path
 
@@ -127,6 +128,76 @@ class OperationTests(unittest.TestCase):
 
         self.assertEqual(0, result["dismissed"])
         self.assertEqual(0, result["remaining"])
+
+    def _data_move(self, status="succeeded", retained=False, *, legacy=False):
+        item = {"id": "move", "kind": "self-data-handoff", "status": status,
+                "title": "Move Homestead data", "history": [{"m": "Verified completion"}],
+                "ref": {"namespace": "lab", "operation": "original-dispatch",
+                        "source": "original", "destination": "copy", "anchor_uid": "anchor",
+                        "retain_resources": retained}}
+        if legacy:
+            operations.SHARED.write_json(Path(self.tmp.name) / operations.LEGACY_STORE, [item], durable=True)
+        else:
+            operations._write([item])
+        return item
+
+    def test_dismissing_settled_data_moves_keeps_audit_dispatch_and_volumes_after_restart_and_pruning(self):
+        for status in ("succeeded", "cancelled"):
+            for legacy in (False, True):
+                with self.subTest(status=status, legacy=legacy):
+                    # Reset both disjoint stores between cases.
+                    operations._write([])
+                    item = self._data_move(status, legacy=legacy)
+                    audit = Path(self.tmp.name) / "self-data-completed.json"
+                    audit.write_text('{"recovery":"original-volume"}', encoding="utf-8")
+                    self.assertTrue(operations._public(item)["dismissible"])
+                    with mock.patch.object(operations, "kget", side_effect=AssertionError("cluster access")):
+                        operations.dismiss(item["id"])
+                        operations.dismiss(item["id"])  # lost response can safely be retried
+                    with mock.patch.object(operations, "MAX_OPERATIONS", 0):
+                        operations._write(operations._read())
+                    operations.bind(operations.kget, self.tmp.name, operations.deployment_progress)
+                    saved = operations._read()[0]
+                    self.assertEqual(item["ref"], saved["ref"])
+                    self.assertEqual(item["history"], saved["history"])
+                    self.assertEqual(item["history"], operations.log(item["id"])["history"])
+                    self.assertTrue(saved["history_dismissed_at"])
+                    self.assertEqual(legacy, bool(saved.get("_legacy_store")))
+                    self.assertTrue(operations._receipt_needed(saved))
+                    self.assertEqual([], operations.snapshot())
+                    self.assertEqual([], operations.list_operations())
+                    self.assertEqual('{"recovery":"original-volume"}', audit.read_text(encoding="utf-8"))
+                    self.assertEqual(0, operations.dismiss_finished()["dismissed"])
+                    self.assertEqual(1, len(operations._read()))
+
+    def test_data_moves_with_unresolved_or_missing_holds_cannot_be_hidden(self):
+        for status, retained in (("running", False), ("failed", False), ("cancelled", True),
+                                 ("succeeded", True), ("cancelled", None), ("succeeded", None)):
+            with self.subTest(status=status, retained=retained):
+                item = self._data_move(status, retained)
+                if retained is None:
+                    item["ref"].pop("retain_resources")
+                item["history_dismissed_at"] = "old-hidden-flag"
+                operations._write([item])
+                self.assertFalse(operations._public(item)["dismissible"])
+                with self.assertRaises(ValueError): operations.dismiss(item["id"])
+                self.assertEqual(0, operations.dismiss_finished()["dismissed"])
+                self.assertEqual([item["id"]], [x["id"] for x in operations.snapshot()])
+
+    def test_bulk_clear_counts_hidden_data_moves_once_and_keeps_other_recovery_jobs(self):
+        move = self._data_move("cancelled")
+        ordinary = self._finished("download", "succeeded")
+        retained = {"id": "held", "kind": "backup", "status": "failed", "ref": {"retain_resources": True}}
+        active = {"id": "active", "kind": "backup", "status": "running", "ref": {}}
+        operations._write(operations._read() + [retained, active])
+        result = operations.dismiss_finished()
+        self.assertEqual(2, result["dismissed"])
+        self.assertEqual(2, result["remaining"])
+        self.assertEqual({move["id"], "held", "active"}, {x["id"] for x in operations._read()})
+        self.assertNotIn(ordinary["id"], {x["id"] for x in operations._read()})
+        again = operations.dismiss_finished()
+        self.assertEqual(0, again["dismissed"])
+        self.assertEqual(2, again["remaining"])
 
     def test_image_cleanup_tracks_each_node_pod(self):
         operations.start(
