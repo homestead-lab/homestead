@@ -24,7 +24,7 @@ try {
     const page=await context.newPage(), errors=[];
     page.on("pageerror",error=>errors.push(error.message));
     await page.goto(`${base}/?demo=1`,{waitUntil:"networkidle"});
-    await page.locator("#views .phead").waitFor();
+    await page.locator("#views .phead").waitFor({state:"attached"});
     assert.equal(await page.evaluate(()=>document.documentElement.dataset.display),installed?"standalone":"browser");
     assert.equal(await page.locator("#demoBanner").evaluate(el=>el.parentElement===document.body),true,"demo banner stays above the whole site");
     assert.equal(await page.evaluate(()=>document.querySelector("#demoBanner").getBoundingClientRect().bottom<=document.querySelector("#app").getBoundingClientRect().top),true,"demo banner sits above both navigation and content");
@@ -66,7 +66,7 @@ try {
       assert.equal(await page.evaluate(()=>document.body.classList.contains('navopen')),false);
       await page.locator('#views .settings-layout').waitFor();
       await page.evaluate(()=>go('dash'));
-      await page.locator('#views .phead').waitFor();
+      await page.locator('#views .phead').waitFor({state:"attached"});
     }
     await page.setViewportSize({width:412,height:839});
     await checkMobileRefresh(page,context,installed);
@@ -81,7 +81,7 @@ try {
       await page.setViewportSize(viewport);
       for(const view of ["dash","vms","workloads","portal","settings","setup","nodes","storage","network"]) {
         await page.evaluate(view=>go(view),view);
-        await page.locator("#views .phead").waitFor();
+        await page.locator("#views .phead").waitFor({state:"attached"});
         await page.waitForTimeout(350);
         const metrics=await page.evaluate(()=>{
           const main=document.querySelector(".main");
@@ -141,7 +141,7 @@ try {
     await page.evaluate(()=>{document.querySelector("#views").innerHTML='<div class="phead"><h2>Short page</h2></div>';scrollPageTop();});
     assert.equal(await page.locator(".main").evaluate(el=>el.scrollHeight===el.clientHeight),true);
     await page.evaluate(()=>go("dash"));
-    await page.locator("#views .phead").waitFor();
+    await page.locator("#views .phead").waitFor({state:"attached"});
     await page.locator(".main").evaluate(el=>el.scrollTop=300);
     await page.evaluate(()=>go("vms"));
     await page.locator("#views h2").filter({hasText:/Virtual machines/}).waitFor();

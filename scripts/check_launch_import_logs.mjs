@@ -10,7 +10,7 @@ try {
     const page = await browser.newPage({viewport:{width,height:900}}), errors=[];
     page.on('pageerror',error=>errors.push(error.message));
     await page.goto(`${base}/?demo=1`,{waitUntil:'networkidle'});
-    await page.locator('#views .phead').waitFor();
+    await page.locator('#views .phead').waitFor({state:"attached"});
     await page.evaluate(()=>{
       const original=window.api;
       window.__launchFixture={pinned:null,preferred:null,resident:null};

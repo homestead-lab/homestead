@@ -41,7 +41,7 @@ await page.addInitScript(() => {
   localStorage.setItem("homestead.network.tab", "services");
 });
 await page.goto(base, { waitUntil: "networkidle" });
-await page.locator("#views .phead").waitFor();
+await page.locator("#views .phead").waitFor({state:"attached"});
 await page.evaluate(() => document.fonts.ready);
 // Running jobs and scroll bars belong to a live session, not a picture.
 await page.addStyleTag({ content: "#jobTray{display:none!important} ::-webkit-scrollbar{display:none}" });
@@ -63,7 +63,7 @@ for (const shot of SHOTS) {
       go(view);
       window.scrollTo(0, 0);
     }, shot.view);
-    await page.locator("#views .phead").waitFor();
+    await page.locator("#views .phead").waitFor({state:"attached"});
     await page.waitForTimeout(1200);
     if (shot.hide) {
       await page.evaluate((text) => {
@@ -90,7 +90,7 @@ try {
     localStorage.setItem("homestead.settings", JSON.stringify({ theme: "dark", bg: "soft", blur: 26, motion: "off", refresh: 60 }));
   });
   await view.goto(base, { waitUntil: "networkidle" });
-  await view.locator("#views .phead").waitFor();
+  await view.locator("#views .phead").waitFor({state:"attached"});
   await view.evaluate(() => document.fonts.ready);
   await view.addStyleTag({ content: "#jobTray{display:none!important} ::-webkit-scrollbar{display:none}" });
   await view.waitForTimeout(1500);
