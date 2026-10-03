@@ -61,7 +61,8 @@ try {
       window.vmEditReview=async body=>isolationReviews.push({body});
       await vmEdit('default','home-assistant-os');
     });
-    await page.locator('#mbody .seg button').filter({hasText:'Network'}).click();
+    await page.locator('#ve_section').isVisible() ? await page.locator('#ve_section').selectOption('network') : await page.locator('#ve-tab-network').click();
+    assert.equal(await page.locator('#ve-tab-network').getAttribute('aria-selected'), 'true');
     assert.match(await page.locator('[data-pane="network"]').innerText(),/KubeVirt currently adds its default/);
     await page.locator('#ve_isolated').check();
     const add=page.getByRole('button',{name:'Interface',exact:false});
@@ -74,7 +75,8 @@ try {
     assert.equal(edited.isolated,true);assert.equal(edited.nics.length,0);assert.equal(edited.add_nics.length,0);
     await page.evaluate(async()=>{closeModal();isolatedSaved=true;await vmEdit('default','home-assistant-os');});
     assert.equal(await page.locator('#ve_isolated').isChecked(),true);
-    await page.locator('#mbody .seg button').filter({hasText:'Network'}).click();
+    await page.locator('#ve_section').isVisible() ? await page.locator('#ve_section').selectOption('network') : await page.locator('#ve-tab-network').click();
+    assert.equal(await page.locator('#ve-tab-network').getAttribute('aria-selected'), 'true');
     assert.equal(await page.getByRole('button',{name:'Interface',exact:false}).isDisabled(),true);
     await page.locator('#ve_isolated').uncheck();
     assert.equal(await page.getByRole('button',{name:'Interface',exact:false}).isDisabled(),false);

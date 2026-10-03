@@ -59,7 +59,7 @@ test("a linked cluster's rollout is reviewed, applied and followed there, and th
   assert.equal(applies[1].body.capacity_token, "signed-b2c0de-homestead", "the token that cluster issued");
   for (const s of applies) assert.equal(s.body.cluster, undefined, "the cluster is a header, not part of the body");
   assert.ok(t.sent.some(s => s.path.endsWith("/progress") && s.cluster === "b2c0de"));
-  assert.match(t.fields["#imageQueue"].innerHTML, /3\/3 rollouts complete/, "the two homestead rollouts are kept apart");
+  assert.match(t.fields["#imageQueue"].innerHTML, /3\/3 rollouts finished/, "the two homestead rollouts are kept apart");
 });
 
 test("a Homestead restarting mid-rollout is waited for, not counted as a failure", async () => {
@@ -67,7 +67,7 @@ test("a Homestead restarting mid-rollout is waited for, not counted as a failure
   await t.ctx.reviewImageActions([ITEMS[0]]);
   t.fields["#imageCapacityApprove"].checked = true;
   await t.ctx.imageReviewedApply();
-  assert.match(t.fields["#imageQueue"].innerHTML, /1\/1 rollouts complete/);
+  assert.match(t.fields["#imageQueue"].innerHTML, /1\/1 rollouts finished/);
   assert.doesNotMatch(t.fields["#imageQueue"].innerHTML, /needs attention/);
 });
 

@@ -297,56 +297,86 @@ Homestead is a working tool: show more at once, pad less.
 
 ## Dialogs
 
-### The shape of a dialog
+### Section rail standard
 
-Top to bottom, leaving out what a dialog does not need:
+Use the same opaque shell, concise header and bottom action bar for every
+dialog. Long forms use a section rail on the left; phones replace that rail
+with a labelled section selector above the content. Short confirmations and
+reviews need no rail. Do not add empty sections to make a small dialog larger.
 
-1. **Title** - what the dialog is about: `Delete volume · media`,
-   `Start frigate?`, `New share`. Sentence case, the object after a `·`.
-2. **Lead** (`UI.lead`) - one or two sentences: what happens if you go ahead.
-3. **One callout** (`UI.callout`) - the thing that needs attention, if there
-   is one. Never more than one warning or error callout: gather everything
-   into one, as a list.
-4. **Content** - sections (`UI.section`) of facts, tables, checklists, steps
-   or form fields.
-5. **Details** (`UI.more`) - how something is calculated, background, the
-   objects behind it.
-6. **Confirmation** (`UI.ack`, or a typed name) - only for actions that are
-   risky or cannot be undone.
-7. **Actions** (`UI.actions`) - always last.
+Top to bottom, leaving out what the dialog does not need:
 
-**Long forms go in steps** (`stepper()`): Edit container, Import, New VM
-and New share. Numbered chips across the top, one pane at a time, Back and
-Next at the foot. Every pane is drawn at once and only hidden, so the form's
-save reads every field; an edit keeps its Save on every step.
+1. **Title** — action and object, such as `Edit · frigate` or `Delete volume · media`.
+2. **Lead** (`UI.lead`) — one sentence describing the decision or next action.
+3. **Attention** (`UI.callout`) — blockers, consequences and required action stay
+   visible. Combine related warnings into one notice.
+4. **Content** — the current section's fields, a concise review, or current job status.
+5. **Optional detail** (`UI.more`) — named disclosures such as `Optional settings`,
+   `Capacity and exact images`, or `Log and history`.
+6. **Confirmation** (`UI.ack`, or a typed name) — an existing required risk check.
+7. **Actions** (`UI.actions`) — one footer, always after the content.
 
-Edit container uses Basics (workload and container names, images and autostart),
-Hardware and access (resources, devices, privileges and ports), Environment values
-(variables, managed references and startup configuration), Storage, Where it runs,
-and Address. Each step groups its fields by container. Changing a name or image
-updates that container's heading throughout the form; each field is rendered once.
-Basics places Add container above the list, with Remove container on each card.
-Removing a card stages its removal in every step and offers Undo removal. Saving
-reviews the complete container set and keeps persistent data. Pod copies remain
-separate from adding different containers inside each pod.
+### Navigation and buttons
 
-**One explanation box at most**, and only for a risk. A field's explanation
-is a `tip()` beside its label; what the whole dialog needs you to know is one
-`UI.more("How this works", …)` at the foot. `foldDialogNotes()` enforces it
-as a dialog draws: a second plain note and any after it fold into that
-expand; warnings, errors and notes with controls stay.
+`stepper(id, steps, finish, { always: true })` is a section editor: navigate
+directly, with **Cancel** on the left and **Review changes** on the right on every
+section. Do not add Next beside Review changes. A sequential creation form uses
+the same rail with Back, Next and a final Review action. Visiting a section does
+not mean its fields are valid and must never give it a completion tick.
 
-**Buttons.** The actions bar is the last thing in the dialog, pinned to its
-bottom edge while the content scrolls. Cancel (or Close) comes first and the
-main action last, on the right; on a phone they stack full width, main action
-on top. A button names what it does - `Delete volume`, `Start anyway` - not
-`OK`. A destructive main action is `kind: "danger"`.
+Render each field once and hide inactive panes. Switching sections must preserve
+values, added items and staged removals. Container edit groups Basics, Hardware
+and access, Environment values, Storage, Where it runs, and Address by container.
+Adding a container is distinct from increasing pod copies. Remove stages a
+removal with Undo; review keeps persistent data and explains the rollout.
 
-**Risky actions ask once, clearly**: one acknowledgement (`UI.ack`) or, when
-it cannot be undone, the object's name typed - never both for the same risk.
+Keep the footer reachable while content scrolls. Cancel or Close goes left; the
+main action goes right and names the result (`Review changes`, `Update`,
+`Delete volume`). The destructive action uses `kind: "danger"`. On phones keep
+the same order, with wrapping only when needed and at least 44px touch targets.
+Long tables become cards; form columns stack. The section selector uses a 16px
+font and an explicit label. Do not squeeze the desktop rail onto a phone.
 
-**Phones.** Dialogs open as a sheet from the bottom of the screen, full width;
-tables become cards and field grids one column on their own.
+### Show the decision; disclose the explanation
+
+Keep essential inputs, affected objects, interruption/data-loss consequences,
+blocking errors and required acknowledgements visible. Put uncommon settings,
+long identifiers, capacity calculations and logs behind descriptive summaries.
+Prefer a meaningful count or value (`Completed · 4`) over a generic `Details`.
+Avoid repeating the same consequence in the lead, a callout and an acknowledgement.
+
+Disclosures preserve their state while a dialog polls. Different job records
+have separate disclosure state. Invalid fields must reveal their section and
+any collapsed ancestors before receiving focus (`revealDialogField`). Keep
+required warnings outside disclosures so a previous collapsed state cannot hide
+a new blocker. Legacy `foldDialogNotes` works within each section; new content
+uses explicitly named `UI.more` disclosures instead of relying on automatic folding.
+
+Risky actions ask once for each distinct consequence. Preserve existing server
+review tokens, role checks, confirmations and recovery guards when restyling.
+Do not turn a visual simplification into weaker approval or automatic retry.
+
+### Progress, container updates and Jobs
+
+Show current phase and the next useful action first. A percentage must represent
+a reported measurement; unknown progress uses `UI.progress(null)` or a status
+without a bar. Navigation is not progress. Lost contact shows last known state
+and explicitly leaves completion unverified. Failed and blocked states remain
+visible; diagnostic output can collapse.
+
+Container update review shows the apps and image changes, restart impact and
+warnings. Exact digests and capacity calculations collapse. The update button
+stays disabled until the reviewed change is acknowledged. During a queue, keep
+failed or waiting workloads and their reason visible. **Close queue** explicitly
+stops unstarted updates; submitted rollouts continue in Jobs. Never imply that
+the browser-managed queue continues after closing it.
+
+Jobs uses a list on the left and selected job detail on the right. On phones the
+list sits above the detail. Keep selection through polling. Failed jobs belong
+under **Needs attention**, active jobs under **Running**, and successful/cancelled
+history under **Completed**. Log and history controls collapse; recovery actions
+remain visible. **Clear completed** removes only dismissible successful or
+cancelled records, preserving failed and protected recovery records.
 
 ## Components
 
@@ -368,7 +398,8 @@ tables become cards and field grids one column on their own.
 | `moreMenu(items)` | A header's secondary actions, behind `⋯` | The main action |
 | `menuButton(label, items)` | A main action that is a choice - ＋ Import and its kinds | A single action |
 | `actionBar(items, { shown })` | A card's or a row's buttons: `shown` (2) as buttons, the rest in `⋯` | A dialog's buttons |
-| `stepper(id, steps, finish, { always })` | A long form, one step at a time | A short form |
+| `stepper(id, steps, finish, { always })` | Section rail and phone selector; `always` for direct editing | A short form |
+| `revealDialogField(field)` | Reveal a field’s section and disclosures before focusing an error | Showing unrelated help |
 | `Diagram.node(n)`, `Diagram.vip(ip, rows)`, `Diagram.mapping(rows)` | What a node holds, where a VIP leads, where each folder goes - drawn live | Decoration |
 | `settingRow(label, help, control)` | One setting: label and help left, its control right | A form of many fields (use a dialog) |
 | `serviceRow(name, state, detail, actions)` | Something Homestead runs or connects to, with its state and buttons | A list of like items |
@@ -388,6 +419,12 @@ Older markup - `.note`, `.sec`, `.row` and `.modalactions` in dialogs,
 work uses the components.
 
 ## Checking
+
+Check the section rail at desktop and phone widths, in both themes. Verify
+that navigation retains field values, disclosures stay open during polling,
+errors reveal hidden fields, the footer is reachable, and completed-history
+clearing preserves failures and recovery records. Inspect screenshots as well
+as checking overflow; a dialog fitting its box is not enough.
 
 ### Rules the tests hold you to
 

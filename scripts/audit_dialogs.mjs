@@ -84,7 +84,7 @@ const DIALOGS = [
   ["workload-edit-hardware", "workloads", "wlEdit('lab','frigate')", "stepGo('e_steps',1)"],
   ["workload-edit-environment", "workloads", "wlEdit('lab','home-assistant')", "stepGo('e_steps',2)"],
   ["workload-edit-storage", "workloads", "wlEdit('lab','frigate')", "stepGo('e_steps',3)"],
-  ["workload-edit-review", "workloads", "wlEdit('lab','frigate')", "text:Save"],
+  ["workload-edit-review", "workloads", "wlEdit('lab','frigate')", "text:Review changes"],
   ["workload-storage-copy", "workloads", "wlEdit('lab','frigate')", "editReview({ns:'lab',name:'frigate',containers:[{name:'frigate',volumes:[{path:'/media/frigate',source:'camera-data',sub_path:'recordings',copy_from:{claim:'frigate-recordings'}}]}]})"],
   ["vm-migrate", "vms", "vmMove('default','home-assistant-os')"],
   ["vm-new", "vms", "vmNew()"],

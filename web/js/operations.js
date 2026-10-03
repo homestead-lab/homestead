@@ -21,6 +21,7 @@ function renderOperations() {
   if (!items.length) {
     tray.classList.add("hidden");
     $("#jobList").innerHTML = "";
+    paintJobsDialog();
     if (window.paintBell) paintBell();
     if (window.uvmCopiesPaint) uvmCopiesPaint();
     return;
@@ -45,11 +46,19 @@ function renderOperations() {
     clear.hidden = !finished.length;
     if (finished.length) clear.textContent = `Clear ${finished.length} finished`;
   }
-  const list = items.slice(0, 12).map(operation => `<article class="jobitem">
+  const list = items.slice(0, 12).map(operationCard).join("");
+  $("#jobList").innerHTML = list;
+  paintJobsDialog();
+  if (window.paintBell) paintBell();
+  if (window.uvmCopiesPaint) uvmCopiesPaint();
+  if (window.applyRole) window.applyRole();
+}
+
+function operationCard(operation) { return `<article class="jobitem" data-operation="${esc(operation.id)}">
     <div class="jobitemtop"><div><b>${esc(operation.title)}</b>
       <span>${esc(operation.resource?.namespace ? operation.resource.namespace + " · " : "")}${esc(operation.resource?.kind || operation.kind)}</span></div>
       <span class="pill ${operationTone(operation.status)}">${esc(operation.status)}</span></div>
-    <div class="jobmeter"><span class="${operation.status === "failed" ? "failed" : ""}" style="width:${Math.max(2, Math.min(100, operation.progress || 0))}%"></span></div>
+    ${operation.progress != null && Number.isFinite(Number(operation.progress)) ? `<div class="jobmeter" role="progressbar" aria-label="Reported progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.max(0, Math.min(100, Number(operation.progress)))}"><span class="${operation.status === "failed" ? "failed" : ""}" style="width:${Math.max(0, Math.min(100, Number(operation.progress)))}%"></span></div>` : ""}
     <div class="jobfoot"><span>${esc(operation.message || "")}</span><span>${operationAge(operation.finished_at || operation.started_at)}</span></div>
     <div class="jobactions">
       <button class="btn sm" onclick="${operation.kind === 'cluster-shutdown' ? 'clusterShutdown()' : `openOperation(${jsq(operation.href || "/")},${jsq(operation.id || "")})`}">Open</button>
@@ -63,22 +72,63 @@ function renderOperations() {
       ${operation.cancellable ? `<button class="btn sm danger" data-need="${operation.copy_recovery ? "admin" : "operator"}" data-tip="Reviews what can be stopped or recovered before anything changes" onclick="cancelOperation(${jsq(operation.id)})">${operation.rename_recovery || operation.copy_recovery ? "Inspect outcome" : operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
       ${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" onclick="dismissOperation(${jsq(operation.id)})">Dismiss</button>`}
     </div>
-  </article>`).join("");
-  $("#jobList").innerHTML = list;
-  const open = $("#jobsDialogList");
-  if (open) open.innerHTML = list || '<div class="empty small">No jobs.</div>';
-  if (window.paintBell) paintBell();
-  if (window.uvmCopiesPaint) uvmCopiesPaint();
-  if (window.applyRole) window.applyRole();
-}
+  </article>`; }
 
-/* Every job, running and recent, with its log and what can be done to it. */
-window.jobsDialog = () => {
+let selectedJobId = "";
+const completedJobs = items => items.filter(item => ["succeeded", "cancelled"].includes(item.status) && item.dismissible !== false);
+window.selectJob = id => { selectedJobId = id; paintJobsDialog(); window.applyRole?.(); };
+function paintJobsDialog() {
+  const host = $("#jobsDialogList");
+  if (!host) return;
   const items = STATE.data.operations || [];
-  const finished = items.filter(item => !operationActive(item) && item.dismissible !== false).length;
-  modal("Jobs", `${UI.lead("What Homestead is doing in the background, and what it did recently.")}
-    <div id="jobsDialogList" class="joblist">${$("#jobList")?.innerHTML || '<div class="empty small">No jobs.</div>'}</div>
-    ${UI.actions(UI.cancel("Close") + (finished ? UI.button(`Clear ${finished} finished`, "dismissFinishedOperations()", { attrs: 'data-need="operator"' }) : ""))}`);
+  const attention = items.filter(item => item.status === "failed");
+  const active = items.filter(operationActive);
+  const completed = items.filter(item => ["succeeded", "cancelled"].includes(item.status));
+  const selected = items.find(item => item.id === selectedJobId) || attention[0] || active[0] || completed[0];
+  selectedJobId = selected?.id || "";
+  // Capture disclosure state before replacing the DOM; polling must not close it.
+  const expanded = [...host.querySelectorAll("details[open][data-disclosure]")].map(el => [el.dataset.disclosure, el.closest("[data-operation]")?.dataset.operation || ""]);
+  const nav = rows => rows.map(item => `<button type="button" ${item.id === selectedJobId ? 'aria-current="true"' : ''} onclick="selectJob(${jsq(item.id)})"><span>${esc(item.title)}</span><small class="${item.status === 'failed' ? 'job-needs-attention' : ''}">${esc(item.status)}${item.resource?.namespace ? ` · ${esc(item.resource.namespace)}` : ''}</small></button>`).join("");
+  const stale = STATE.operationsStale ? UI.callout("warn", "Connection lost", "Showing the last known status. Checking again; completion is not assumed.") : "";
+  host.innerHTML = stale + (selected ? `<div class="dialog-rail jobs-rail">
+    <nav class="jobs-nav" aria-label="Jobs">
+      ${attention.length ? UI.section(`Needs attention · ${attention.length}`, nav(attention)) : ""}
+      ${active.length ? UI.section(`Running · ${active.length}`, nav(active)) : ""}
+      ${completed.length ? UI.more(`Completed · ${completed.length}`, nav(completed), completed.some(item => item.id === selectedJobId)).replace(/data-disclosure="[^"]*"/, 'data-disclosure="Completed"') : ""}
+    </nav>
+    <section class="jobs-detail" aria-label="Selected job">${operationCard(selected)}</section>
+  </div>` : '<div class="empty small">No jobs.</div>');
+  if (selected) {
+    const actions = host.querySelector(".jobs-detail .jobactions");
+    const secondary = [...actions.children].filter(button => /^(Log|Dismiss)$/.test(button.textContent.trim()));
+    if (secondary.length) {
+      const html = secondary.map(button => button.outerHTML).join("");
+      secondary.forEach(button => button.remove());
+      actions.insertAdjacentHTML("afterend", UI.more("Log and history", `<div class="jobactions">${html}</div>`));
+    }
+    if (selected.dismissible === false) host.querySelector(".jobs-detail .jobfoot").insertAdjacentHTML("afterend", '<p class="ui-help">This recovery record is retained until its outcome is resolved.</p>');
+  }
+  for (const detail of host.querySelectorAll("details[data-disclosure]")) {
+    if (expanded.some(([label, id]) => label === detail.dataset.disclosure && id === (detail.closest("[data-operation]")?.dataset.operation || ""))) detail.open = true;
+  }
+  const clear = $("#jobsClearCompleted"), count = completedJobs(items).length;
+  if (clear) { clear.hidden = !count; clear.textContent = `Clear completed (${count})`; }
+  window.applyRole?.();
+}
+window.jobsDialog = () => {
+  modal("Jobs", `<div id="jobsDialogList"></div>${UI.actions(UI.button("Clear completed", "dismissCompletedOperations()", {id:"jobsClearCompleted", attrs:'data-need="operator"'}), UI.cancel("Close"))}`);
+  paintJobsDialog();
+  window.applyRole?.();
+};
+window.dismissCompletedOperations = async () => {
+  const button = $("#jobsClearCompleted"); if (button) button.disabled = true;
+  try {
+    for (const item of completedJobs(STATE.data.operations || [])) {
+      await api("/api/operations/dismiss", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id:item.id})});
+      STATE.data.operations = (STATE.data.operations || []).filter(row => row.id !== item.id);
+    }
+  } catch (error) { toast(error.message, "bad"); }
+  finally { renderOperations(); if (button) button.disabled = false; }
 };
 window.operationActive = operationActive;
 
@@ -90,8 +140,9 @@ async function refreshOperations(immediate = false) {
     // never settles, which stopped this loop for good - the job an App Store
     // install started sat at "queued" while its container ran.
     STATE.data.operations = await api("/api/operations", { keep: true });
+    STATE.operationsStale = false;
     renderOperations();
-  } catch (_) { /* retain the last known state during API interruptions */ }
+  } catch (_) { STATE.operationsStale = true; paintJobsDialog(); }
   if (!ME) return;
   const active = (STATE.data.operations || []).some(operationActive);
   operationTimer = setTimeout(refreshOperations, immediate || active ? 3000 : 15000);
