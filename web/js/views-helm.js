@@ -21,9 +21,8 @@ function renderHelm() {
   const rows = all.filter(r => (STATE.helmSystem || !r.system) &&
     (!q || [r.name, r.namespace, r.chart, r.chart_version, r.app_version].join(" ").toLowerCase().includes(q)));
   const hidden = all.filter(r => r.system).length;
-  paint(`<div class="phead"><div><h2>Helm</h2><p>${rows.length} release${rows.length === 1 ? "" : "s"}${!STATE.helmSystem && hidden ? ` · ${hidden} of the platform's hidden` : ""} · charts from here install through RKE2's Helm controller</p></div>
-      <div class="row">${moreMenu([{ label: `${STATE.helmSystem ? "Hide" : "Show"} the platform's releases`, icon: "layers", run: "helmToggleSystem()" }])}
-      <button class="btn pri" data-need="admin" onclick="helmInstall()">＋ Install chart</button></div></div>
+  paint(`${UI.pageHeader(`Helm`, `${rows.length} release${rows.length === 1 ? "" : "s"}${!STATE.helmSystem && hidden ? ` · ${hidden} of the platform's hidden` : ""} · charts from here install through RKE2's Helm controller`, `${moreMenu([{ label: `${STATE.helmSystem ? "Hide" : "Show"} the platform's releases`, icon: "layers", run: "helmToggleSystem()" }])}
+      <button class="btn pri" data-need="admin" onclick="helmInstall()">＋ Install chart</button>`)}
     ${rows.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl dense stack" data-sort="helm"><thead><tr>
       <th>Release</th><th>Chart</th><th>App</th><th>Status</th><th>Revision</th><th data-nosort>Updated</th></tr></thead><tbody>
       ${rows.map(r => `<tr class="clickable" onclick="helmRelease(${jsq(r.namespace)},${jsq(r.name)})">
@@ -99,8 +98,8 @@ window.helmInstall = async () => {
       <div class="f"><label>Values ${tip("Only what you change from the chart's defaults. The defaults are shown on the right to copy from.")}</label>
         <div class="helm-values-pair"><textarea id="hi_values" class="mono helm-values" rows="14" spellcheck="false" placeholder="# e.g.\n# persistence:\n#   enabled: true"></textarea>
         <pre id="hi_defaults" class="mono helm-values dim" title="The chart's defaults"></pre></div></div>
-      <div class="row"><button class="btn pri" data-need="admin" onclick="helmInstallGo()">Install</button><button class="btn" onclick="closeModal()">Cancel</button>
-        <a class="btn" id="hi_readme" target="_blank" rel="noopener noreferrer" hidden>${icon("ext")}Chart page</a></div></div>
+      ${UI.actions(`<button class="btn pri" data-need="admin" onclick="helmInstallGo()">Install</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
+        <a class="btn" id="hi_readme" target="_blank" rel="noopener noreferrer" hidden>${icon("ext")}Chart page</a>`)}</div>
     <div class="dim xs" style="margin-top:8px"><a style="cursor:pointer;text-decoration:underline" onclick="helmManual()">Or enter a repository and chart by hand</a></div>`, true);
   setTimeout(() => $("#hi_q")?.focus(), 30);
 };

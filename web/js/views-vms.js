@@ -36,13 +36,10 @@ async function viewVMs() {
     { label: "ISO library", icon: "disk", run: "vmIsoLibrary()", tip: "ISO images from folders on your Network Shares, for VMs' CD-ROM drives" },
     { label: "New k3s cluster", icon: "plus", run: "k3sCluster()", need: "operator", tip: "A k3s cluster made of VMs here, each with an address of its own" }];
   const create = '<button class="btn pri" data-need="operator" onclick="vmNew()">＋ New VM</button>';
-  paint(`<div class="vms-page collection-page" data-collection="vms"><div class="phead"><div><h2>Virtual machines</h2>
-      <p>${vms.length} VM${vms.length === 1 ? "" : "s"} · ${running} running · ${STATE.platform?.harvester === false ? `KubeVirt on ${esc(platformName(STATE.platform))}${STATE.platform.cdi ? "" : " · no CDI"}` : "KubeVirt on Harvester"}</p></div>
-      <div class="row">${layoutSwitch("vms", "viewVMs")}
-      ${moreMenu(items)}${create}</div></div>
-    <div class="collection-mobile-head"><div class="collection-mobile-toolbar"><span class="collection-mobile-scope">All VMs</span>${vmListOptions(layout, items)}${create}</div>
-      <div class="collection-mobile-summary"><span>${rows.length} VM${rows.length === 1 ? "" : "s"} · ${rows.filter(v => v.status === "Running").length} running</span>
-        ${STATE.platform?.harvester === false && !STATE.platform.cdi ? '<span class="pill slim warn">No CDI</span>' : ""}</div></div>
+  paint(`<div class="vms-page collection-page" data-collection="vms">${UI.pageHeader(`Virtual machines`, `${vms.length} VM${vms.length === 1 ? "" : "s"} · ${running} running · ${STATE.platform?.harvester === false ? `KubeVirt on ${esc(platformName(STATE.platform))}${STATE.platform.cdi ? "" : " · no CDI"}` : "KubeVirt on Harvester"}`, `${layoutSwitch("vms", "viewVMs")}
+      ${moreMenu(items)}${create}`)}
+    ${UI.collectionHeader(`<span class="collection-mobile-scope">All VMs</span>${vmListOptions(layout, items)}${create}`, `<span>${rows.length} VM${rows.length === 1 ? "" : "s"} · ${rows.filter(v => v.status === "Running").length} running</span>
+        ${STATE.platform?.harvester === false && !STATE.platform.cdi ? '<span class="pill slim warn">No CDI</span>' : ""}`)}
     ${!rows.length ? `<div class="empty">${q ? "Nothing matches that search." : "No virtual machines yet — create one to get started."}</div>`
       : layout === "rows" ? vmTable(rows) : `<div class="vm-grid">${rows.map(vmCard).join("")}</div>`}</div>`);
 }
@@ -92,10 +89,8 @@ window.vmStore = async (check = false) => {
   const filter = (STATE.vmStoreFilter || "").toLowerCase();
   const shown = rows.filter(r => !filter || `${r.distro} ${r.name} ${r.variant} ${r.about}`.toLowerCase().includes(filter));
   $("#mbody").innerHTML = `
-    <p class="small" style="margin-top:0">Cloud images from their publishers, for this cluster's <b>${esc(s.arch)}</b> nodes. Each has cloud-init:
-      the VM's password is set for the user shown, and the image grows to fill its disk.</p>
-    ${s.harvester ? `<div class="note">Kept images are Harvester images - downloaded once, copied for each VM. One that keeps itself <b>current</b> is
-      checked twice a day; a new build downloads beside the old, and older builds no disk came from are deleted.</div>` : `<div class="note">${esc(s.note)}</div>`}
+    <p class="small" style="margin-top:0">Publisher images for <b>${esc(s.arch)}</b> hosts. ${tip("Cloud-init sets the password for the listed user and expands the image to fill the VM disk.")}</p>
+    ${s.harvester ? `${UI.more("Image caching and updates", "Kept images are downloaded once and copied for each VM. Automatic updates check twice daily. Older builds are removed only when no disks depend on them.")}` : `<div class="note">${esc(s.note)}</div>`}
     ${(s.own || []).length ? `<div class="sec">Your images on this cluster</div>
       <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Image</th><th>From</th><th>Size</th><th></th></tr></thead><tbody>
       ${s.own.map(o => `<tr><td><b>${esc(o.display)}</b><div class="dim xs mono">${esc(o.image)}</div></td>
@@ -119,7 +114,7 @@ window.vmStore = async (check = false) => {
             ${s.harvester ? `<td data-label="Here">${state(r)}</td>` : ""}<td>${actions(r)}</td></tr>`).join("")}</tbody>` : "";
       }).join("") || `<tbody><tr><td colspan="6" class="empty">Nothing matches that filter.</td></tr></tbody>`}</table></div></div>
     <div class="row between" style="margin-top:12px;flex-wrap:wrap;gap:8px">
-      <span class="dim xs">Your own disk image - qcow2, vmdk, raw, vdi, vhd or vhdx, from a web address - is imported under <a class="linkish" onclick="closeModal();go('import')">Import</a>.</span>
+      <span class="dim xs">Import your own disk image under <a class="linkish" onclick="closeModal();go('import')">Import</a>.</span>
       ${s.harvester ? `<button class="btn sm" data-need="admin" onclick="vmStoreRefresh()">${icon("refresh")}Check for newer builds</button>` : ""}</div>`;
   if (window.applyRole) applyRole();
   const box = $("#vmStoreFilter");
@@ -322,11 +317,11 @@ window.vmPowerReview = async config => {
       ${deployCapacityHtml(plan)}
       ${vmStateInitHtml(plan, "vmPower", "vmPowerReviewReady")}
       ${!plan.blocked ? '<label class="check"><input type="checkbox" id="vmPowerApprove" onchange="vmPowerReviewReady()"> Proceed with this power action and accept the displayed memory, placement, storage/state and restart-policy risks</label>' : ""}
-      <div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" id="vmPowerApply" disabled onclick="vmPowerReviewedApply()">${esc(VM_ACTIONS[frozen.action]?.[0] || "Apply")} reviewed VM</button></div></div>`;
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" id="vmPowerApply" disabled onclick="vmPowerReviewedApply()">${esc(VM_ACTIONS[frozen.action]?.[0] || "Apply")} reviewed VM</button>`)}</div>`;
   } catch (error) {
     if (sequence !== VM_POWER_SEQUENCE || !$("#vmPowerLoading")) return;
     VM_POWER_REVIEW = null;
-    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div><div class="modalactions"><button class="btn" onclick="modalBack()">Close</button></div>`;
+    $("#mbody").innerHTML = `<div class="note bad">${esc(error.message)}</div>${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Close</button>`)}`;
   }
 };
 window.vmPowerReviewReady = () => {
@@ -478,28 +473,27 @@ window.vmEdit = async (ns, name) => {
       api("/api/passthrough/resources").catch(error => ({ resources: [], error: error.message }))]);
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
   window.__vmEdit = { ns, name, v, o };
-  const tab = (id, label) => `<button class="${id === "general" ? "on" : ""}" onclick="vmEditTab(this,${jsq(id)})">${label}</button>`;
   const disks = v.disks.filter(d => d.kind === "disk" || d.kind === "cd-rom");
   const ci = v.cloud_init || {};
-  $("#mbody").innerHTML = `<div class="between vm-edit-tabs"><div class="seg">${tab("general", "General")}${v.hardware ? tab("hardware", "Hardware") : ""}${tab("disks", `Disks · ${disks.length}`)}${tab("network", `Network · ${v.isolated ? "isolated" : v.implicit_network ? "automatic" : v.nics.length}`)}${tab("devices", `Passthrough · ${(v.host_devices || []).length}`)}${tab("cloud", "Cloud-init")}</div>
-      <button class="btn sm" data-need="admin" onclick="vmYaml(${jsq(ns)},${jsq(name)})" title="Every field, as YAML">${icon("edit")}Edit YAML</button></div>
-    <div class="ve-pane" data-pane="general" style="margin-top:12px">
+  $("#mbody").innerHTML = UI.sectionForm("ve", [
+    {key:"general", title:"General", html:`
       ${vmEditResourceFields(v)}
       <div class="f2"><div class="f"><label>Run strategy ${tip("RerunOnFailure (Harvester's default): runs, and starts again if the guest crashes, but not after you stop it. Always: kept running whatever happens. Manual: runs only when started, never restarted. Halted: kept off.")}</label>
         <select id="ve_strategy">${["RerunOnFailure", "Always", "Manual", "Halted"].map(x => vmOpt(x, x, v.run_strategy)).join("")}</select></div>
         <div class="f"><label>Host ${tip("Keep the VM on one host, or let Kubernetes choose. A VM on a disk only one host can reach stays there anyway.")}</label>
         <select id="ve_node">${vmOpt("", "any host", v.node_selector || "")}${(o.nodes || []).map(n => vmOpt(n, n, v.node_selector || "")).join("")}</select></div></div>
-      <div class="f"><label>Description</label><input id="ve_desc" value="${esc(v.description || "")}" maxlength="300"></div></div>
-    ${v.hardware ? `<div class="ve-pane" data-pane="hardware" hidden style="margin-top:12px">${vmHardwareFields(v.hardware, o, !!v.resource_profile?.name)}</div>` : ""}
-    <div class="ve-pane" data-pane="disks" hidden style="margin-top:12px">
+      <div class="f"><label>Description</label><input id="ve_desc" value="${esc(v.description || "")}" maxlength="300"></div>
+      ${UI.more("Advanced editing", UI.button("Edit YAML", `vmYaml(${jsq(ns)},${jsq(name)})`, { attrs: 'data-need="admin"' }))}`},
+    v.hardware && {key:"hardware", title:"Hardware", html:vmHardwareFields(v.hardware, o, !!v.resource_profile?.name)},
+    {key:"disks", title:`Disks · ${disks.length}`, html:`
       <div class="tblwrap"><table class="tbl dense stack ve-table"><thead><tr><th>Disk</th><th>Boot</th><th>Bus</th><th>Size</th><th>Source</th><th></th></tr></thead>
         <tbody>${disks.map(d => vmDiskRow(d, o)).join("")}</tbody></table></div>
       <div id="ve_adds"></div>
       <div class="row" style="margin-top:10px"><button class="btn sm" onclick="vmAddDisk('disk')">＋ Disk</button><button class="btn sm" onclick="vmAddDisk('cd-rom')">＋ CD-ROM</button></div>
-      <div class="dim xs" style="margin-top:8px">Boot order: the lowest number boots first. Detached disks are kept as volumes.</div></div>
-    <div class="ve-pane" data-pane="network" hidden style="margin-top:12px">
+      <div class="dim xs" style="margin-top:8px">Boot order: the lowest number boots first. Detached disks are kept as volumes.</div>`},
+    {key:"network", title:`Network · ${v.isolated ? "isolated" : v.implicit_network ? "automatic" : v.nics.length}`, html:`
       <label class="check"><input id="ve_isolated" type="checkbox" ${v.isolated ? "checked" : ""} onchange="vmIsolationChanged()"> Isolated VM</label>
-      <p class="dim small">Removes every virtual network card and disables automatic attachment. Clear this option before adding a card. Changes apply at the VM's next start; a running VM needs a separate restart. PCI or USB passthrough can still provide a physical network device.</p>
+      <p class="dim small">Removes virtual network cards at the next start. Clear this option to add a card. Passthrough may still provide a physical network device.</p>
       ${v.implicit_network ? '<div class="note warn">No network card is saved, but KubeVirt currently adds its default pod-network card at boot. Select Isolated VM to disable it, or add an explicit interface.</div>' : ""}
       <div id="ve_network_controls">
       <div class="note small"><b>Service VIP (default or selected address)</b><p>Uses a masquerade pod-network interface and forwards the ports you select. It is not the guest's own IP or MAC. Configure this separately from NIC changes; save those first if you are adding a pod interface.</p>
@@ -507,17 +501,17 @@ window.vmEdit = async (ns, name) => {
       <div class="tblwrap"><table class="tbl dense stack ve-table"><thead><tr><th>Interface</th><th>Model</th><th>Network</th><th>MAC</th><th></th></tr></thead>
         <tbody id="ve_nics">${v.nics.map(n => vmNicRow(n, o)).join("")}</tbody></table></div>
       <div class="row" style="margin-top:10px"><button class="btn sm" onclick="vmAddNic()">＋ Interface</button></div>
-      <div class="note small" style="margin-top:8px"><b>Direct LAN interface</b><p>A bridge/VLAN interface gets its IP from the LAN's DHCP server or the guest OS. The MAC field only identifies the NIC: it does not set an IP. For a stable guest IP, reserve the MAC in your DHCP server or configure networking inside the guest. Cloud-init network data is for initial provisioning and may not rerun on an existing VM.</p></div></div></div>
-    <div class="ve-pane" data-pane="devices" hidden style="margin-top:12px">${window.vmDevicesPane ? window.vmDevicesPane(v, res) : ""}</div>
-    <div class="ve-pane" data-pane="cloud" hidden style="margin-top:12px">
+      ${UI.more("Direct LAN addressing", "<p>A bridge/VLAN interface gets its IP from LAN DHCP or the guest OS. Reserve its MAC in DHCP for a stable address. Changing the MAC does not set an IP. Cloud-init may not rerun on an existing VM.</p>")}</div>`},
+    {key:"devices", title:`Passthrough · ${(v.host_devices || []).length}`, html:window.vmDevicesPane ? window.vmDevicesPane(v, res) : ""},
+    {key:"cloud", title:"Cloud-init", html:`
       ${v.sensitive_hidden ? `<div class="note">An administrator can view and edit cloud-init. It is preserved when you save other changes.</div>` : ci.source === "unreadable" ? `<div class="note bad">This VM's cloud-init is in a secret Homestead cannot read, so it is left as it is.</div>` : `
       ${ci.source === "secret" ? '<div class="dim xs" style="margin-bottom:8px">Kept in the VM\'s own secret, as Harvester does.</div>' : ""}
       <div class="f"><label>User data</label><textarea id="ve_user" class="mono helm-values" spellcheck="false" placeholder="#cloud-config">${esc(ci.user_data || "")}</textarea></div>
       <div class="f"><label>Network data</label><textarea id="ve_netdata" class="mono helm-values" spellcheck="false" style="min-height:90px" placeholder="optional">${esc(ci.network_data || "")}</textarea></div>
-      <div class="dim xs">Cloud-init runs when the guest first boots; most images read it only once.</div>`}</div>
-    ${v.status === "Running" ? `<label class="switch" style="margin-top:12px"><input type="checkbox" id="ve_restart"> Review a restart after saving</label>
-      <div class="dim xs">Some changes can apply live through KubeVirt; a restart is a separate reviewed action.</div>` : ""}
-    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="vmEditSave()">Review changes</button><button class="btn" onclick="closeModal()">Cancel</button></div>`;
+      <div class="dim xs">Cloud-init runs when the guest first boots; most images read it only once.</div>`}`}
+  ], UI.button("Review changes", "vmEditSave()", {kind:"pri"}), {always:true,
+    noticeHtml:v.status === "Running" ? `<label class="switch"><input type="checkbox" id="ve_restart"> Review a restart after saving</label>
+      <div class="dim xs">Some changes can apply live through KubeVirt; a restart is a separate reviewed action.</div>` : ""});
   if (v.hardware) vmHardwareChanged();
   if (window.applyRole) applyRole();
   vmIsolationChanged();
@@ -529,10 +523,7 @@ window.vmIsolationChanged = () => {
     else if (!isolated && el.dataset.isolationDisabled) { el.disabled = false; delete el.dataset.isolationDisabled; }
   });
 };
-window.vmEditTab = (button, pane) => {
-  $$("#mbody .seg button").forEach(b => b.classList.toggle("on", b === button));
-  $$("#mbody .ve-pane").forEach(p => { p.hidden = p.dataset.pane !== pane; });
-};
+window.vmEditTab = (button, pane) => UI.selectSection("ve", pane);
 window.vmYaml = (ns, name) => {
   RES.pick = { group: "kubevirt.io", version: "v1", resource: "virtualmachines", kind: "VirtualMachine", namespaced: true };
   resOpen(ns, name);
@@ -630,7 +621,7 @@ window.vmEditReview = async (config, restartAfter = false) => {
       ${review.volumes?.length ? `<div class="reviewbox"><b>New disks</b>${review.volumes.map(v => `<p class="small"><span class="mono">${esc(v.name)}</span> · ${esc(v.size)} · ${esc(v.storage_class)} · ${esc(v.access_mode)}</p>`).join("")}</div>` : ""}
       <p class="small muted">${restartAfter ? "After saving, a separate restart review checks the saved VM and current host capacity. Saving does not automatically send Restart." : "Save sends no Restart request. If needed, restart the VM through its power controls afterward."}</p>
       ${!plan.blocked ? '<label class="check"><input type="checkbox" id="vmEditApprove" onchange="vmEditReviewReady()"> Save these exact changes and accept the displayed memory, policy and partial-save risks</label>' : ""}
-      <div class="modalactions"><button class="btn" onclick="vmEditReviewBack()">Back to edit</button><button class="btn pri" id="vmEditApply" disabled onclick="vmEditReviewedApply()">Save reviewed changes</button></div></div>`;
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="vmEditReviewBack()">Back to edit</button><button class="btn pri" id="vmEditApply" disabled onclick="vmEditReviewedApply()">Save reviewed changes</button>`)}</div>`;
   } catch (error) {
     if (sequence !== VM_EDIT_SEQUENCE || !$("#vmEditLoading")) return;
     VM_EDIT_REVIEW = null;
@@ -676,7 +667,7 @@ window.vmDelete = (ns, name) => {
     ${disks.length ? `<label class="switch"><input type="checkbox" id="vd_disks"> Delete its disks too: ${disks.map(d => `<span class="mono">${esc(d.claim)}</span>`).join(", ")}</label>
       <div class="dim xs">Left unticked, the disks are kept and can be attached to another VM or deleted from Volumes later.</div>` : ""}
     <div class="f" style="margin-top:12px"><label>Type the VM's name to delete it</label><input id="vd_confirm" autocomplete="off"></div>
-    <div class="row"><button class="btn danger" onclick="vmDeleteGo(${jsq(ns)},${jsq(name)})">Delete</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn danger" onclick="vmDeleteGo(${jsq(ns)},${jsq(name)})">Delete</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.vmDeleteGo = async (ns, name) => {
   if ($("#vd_confirm").value.trim() !== name) return toast("type the VM's name exactly", "bad");
@@ -703,8 +694,7 @@ window.k3sCluster = async () => {
   const lan = vmLanNetworks(opts, true);
   const images = (opts.images || []).filter(i => i.storage_class);
   $("#mbody").innerHTML = `
-    <p class="small" style="margin-top:0">VMs here become a k3s cluster: the first is its server, the rest join it. Each gets an address of
-      its own on the LAN, so the cluster is reached - and joins - as one built from real machines would be.</p>
+    <p class="small" style="margin-top:0">Create a k3s cluster from VMs, each with its own LAN address. The first VM is the server; the others join it.</p>
     ${lan.length ? "" : vmNetworkNote(opts, true)}
     <div class="f2"><div class="f"><label>Name ${tip("Starts each VM's name: k3s-demo-server-1, k3s-demo-agent-1 and so on.")}</label><input id="k_name" value="k3s-demo"></div>
       <div class="f"><label>Install ${tip("What each node sets up. k3s, Longhorn and Homestead is what a new install from our bootstrap script gets; local-path skips Longhorn and keeps each volume on one node; k3s alone installs nothing else.")}</label><select id="k_setup" onchange="k3sSetupChanged()">${Object.entries(K3S_SETUPS).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div></div>
@@ -726,9 +716,9 @@ window.k3sCluster = async () => {
     <div class="f"><label>LAN network ${tip("The network bridged to your LAN the nodes join, so each has an address of its own there.")}</label><select id="k_net">${lan.map(n => `<option value="${esc(n.name)}">${esc(n.name)}${n.vlan ? ` (VLAN ${esc(n.vlan)})` : ""}</option>`).join("") || '<option value="">none reaches the LAN</option>'}</select></div>
     ${vmAddressFields("k", opts, 3)}
     <div id="k_review"></div>
-    <div class="row" style="margin-top:14px"><button class="btn" onclick="k3sReview()" ${lan.length ? "" : "disabled"}>Review</button>
+    ${UI.actions(`<button class="btn" onclick="k3sReview()" ${lan.length ? "" : "disabled"}>Review</button>
       <button class="btn pri" id="k_go" data-need="operator" onclick="k3sCreate()" disabled>Create cluster</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
   k3sCountChanged();
   $$("#mbody input, #mbody select").forEach(field => {
     field.addEventListener("input", k3sInvalidateReview);
@@ -841,10 +831,8 @@ async function viewVmImport() {
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
   STATE.data.uvms = STATE.data.uvms || {};
   const servers = srcs.filter(s => s.kind !== "proxmox");
-  paint(`<div class="phead"><div><h2>Virtual machines</h2>
-      <p>Bring VMs across from an Unraid server, or a disk image from a web address</p></div>
-      <div class="row">${menuButton("＋ Import", [{ label: "Add an Unraid server", icon: "import", run: "srcAdd()", need: "admin" },
-        { label: "A disk image from a URL", icon: "disk", run: "vmDiskImport()", need: "admin" }])}</div></div>
+  paint(`${UI.pageHeader(`Virtual machines`, `Bring VMs across from an Unraid server, or a disk image from a web address`, `${menuButton("＋ Import", [{ label: "Add an Unraid server", icon: "import", run: "srcAdd()", need: "admin" },
+        { label: "A disk image from a URL", icon: "disk", run: "vmDiskImport()", need: "admin" }])}`)}
     ${servers.length ? servers.map(s => `<div class="sec">${esc(s.name)} ${tip(`${SOURCE_KINDS[s.kind] || s.kind} · ${s.user}@${s.host}`)}</div>
       <div class="card flat" id="${uvmId(s.name)}">${s.ssh_trust
         ? '<div class="empty"><span class="spin2"></span>asking it for its VMs</div>'

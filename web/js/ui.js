@@ -1,4 +1,4 @@
-/* Dialog components.
+/* Shared application components.
 
    Every dialog is built from these, so they all read the same way and all
    work on a phone. docs/design.md says when to use which; in short:
@@ -18,10 +18,16 @@
      UI.field       one labelled form control, with help beneath
      UI.chip        a short status label
      UI.button      a button
-     UI.actions     the dialog's buttons: last, right-aligned, primary last
+     UI.actions     one footer: dismissal left, primary action last on the right
+     UI.sectionForm section rail, phone selector, mounted panes and footer
+     UI.masterDetail grouped list and a selected detail, stacked on phones
 
    and for pages:
 
+     UI.pageHeader  page title, summary and actions
+     UI.moduleHeader shared card title, summary and actions
+     UI.settingsCard Settings topic, save scope and content
+     UI.workspace   section navigation and responsive page content
      UI.stats       a row of stat cards: a figure each, two to a row on a phone
      UI.guide       how a page works, collapsed - in place of notes at its top
 
@@ -77,7 +83,7 @@ const UI = (() => {
     const pct = known ? Math.max(0, Math.min(100, Number(value))) : 0;
     return `<div class="ui-progress ${tone(kind)}${known ? "" : " unknown"}">
       ${label || known ? `<div class="ui-progress-head"><span>${text(label)}</span>${known ? `<b>${Math.round(pct)}%</b>` : ""}</div>` : ""}
-      <div class="ui-bar" role="progressbar" ${known ? `aria-valuenow="${Math.round(pct)}"` : ""} aria-valuemin="0" aria-valuemax="100"><i style="width:${known ? pct : 35}%"></i></div>
+      <div class="ui-bar" role="progressbar" aria-label="${text(label || "Progress")}" ${known ? `aria-valuenow="${Math.round(pct)}"` : ""} aria-valuemin="0" aria-valuemax="100"><i style="width:${known ? pct : 35}%"></i></div>
       ${detail ? `<div class="ui-progress-detail">${text(detail)}</div>` : ""}</div>`;
   };
 
@@ -100,7 +106,7 @@ const UI = (() => {
       <tbody>${rows.map(row => `<tr>${row.map((cell, i) => `<td class="${columns[i]?.className || ""}" data-label="${text(columns[i]?.label || "")}">${cell}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
     : `<div class="ui-empty">${text(empty)}</div>`;
 
-  const more = (summary, bodyHtml, open = false) => `<details class="ui-more"${open ? " open" : ""}>
+  const more = (summary, bodyHtml, open = false, key = summary) => `<details class="ui-more" data-disclosure="${text(key)}"${open ? " open" : ""}>
     <summary>${text(summary)}</summary><div class="ui-more-body">${bodyHtml}</div></details>`;
 
   /* The one checkbox a risky action needs. Keep the sentence short: what the
@@ -120,9 +126,16 @@ const UI = (() => {
 
   /* The dialog's buttons. Pass the primary (or dangerous) button last; extra
      buttons that are not the main choice go in `start`, on the left. */
-  const actions = (buttonsHtml, startHtml = "") => `<div class="ui-actions">
-    ${startHtml ? `<div class="ui-actions-start">${startHtml}</div>` : ""}<div class="ui-actions-end">${buttonsHtml}</div></div>`;
-  const cancel = (label = "Cancel") => button(label, "closeModal()");
+  const actions = (buttonsHtml, startHtml = "", { className = "", attrs = "" } = {}) => {
+    // Existing callers may include Cancel among their actions. Move only explicitly
+    // marked dismissals, preserving their original handler and keyboard order.
+    const dismissals = [];
+    const endHtml = buttonsHtml.replace(/<button\b[^>]*\bdata-dialog-dismiss="true"[^>]*>[\s\S]*?<\/button>/g, html => { dismissals.push(html); return ""; });
+    const start = dismissals.join("") + startHtml;
+    return `<div class="ui-actions${className ? ` ${text(className)}` : ""}" ${attrs}>
+      ${start ? `<div class="ui-actions-start">${start}</div>` : ""}<div class="ui-actions-end">${endHtml}</div></div>`;
+  };
+  const cancel = (label = "Cancel") => button(label, "closeModal()", { attrs: 'data-dialog-dismiss="true"' });
 
   /* [{ title, value, unit, sub, tone, wide, tipHtml }]: tone ok | warn | bad | info
      tints the card; wide spans a whole row. */
@@ -136,8 +149,50 @@ const UI = (() => {
   /* How a page works, for whoever needs it: closed until opened. */
   const guide = (summary, bodyHtml) => `<details class="ui-guide"><summary>${text(summary)}</summary><div class="ui-guide-body">${bodyHtml}</div></details>`;
 
+  /* Page and module headings use explicit HTML slots, like section/facts.
+     Escape data at the call site; IDs and option labels are plain text. */
+  const pageHeader = (titleHtml, descriptionHtml = "", actionsHtml = "", { extraHtml = "", descriptionAttrs = "", actionsClass = "" } = {}) =>
+    `<div class="phead"><div><h2>${titleHtml}</h2>${descriptionHtml || descriptionAttrs ? `<p ${descriptionAttrs}>${descriptionHtml}</p>` : ""}${extraHtml}</div>${actionsHtml ? `<div class="row page-actions${actionsClass ? ` ${text(actionsClass)}` : ""}">${actionsHtml}</div>` : ""}</div>`;
+  const moduleHeader = (titleHtml, descriptionHtml = "", actionsHtml = "", { extraHtml = "", actionsClass = "" } = {}) =>
+    `<div class="settings-card-head"><div><div class="ctitle">${titleHtml}</div>${descriptionHtml ? `<div class="csub">${descriptionHtml}</div>` : ""}${extraHtml}</div>${actionsHtml ? `<div class="row module-actions${actionsClass ? ` ${text(actionsClass)}` : ""}">${actionsHtml}</div>` : ""}</div>`;
+  const settingsCard = (bodyHtml, { tab, id = "", save = "", wide = true, hidden = false } = {}) =>
+    `<section class="card flat${wide ? " settings-wide" : ""}" data-tab="${text(tab)}"${id ? ` id="${text(id)}"` : ""}${save ? ` data-save="${text(save)}"` : ""}${hidden ? " hidden" : ""}>${bodyHtml}</section>`;
+  const settingsGrid = (bodyHtml, tab) => `<div class="settings-grid" data-tab="${text(tab)}">${bodyHtml}</div>`;
+  const saveBar = ({ id, messageId, save, discard, hidden = true }) =>
+    `<div class="savebar" id="${text(id)}"${hidden ? " hidden" : ""}><span id="${text(messageId)}" role="status"></span>${button("Discard", discard)}${button("Save", save, {kind:"pri"})}</div>`;
+  const collectionHeader = (controlsHtml, summaryHtml) => `<div class="collection-mobile-head"><div class="collection-mobile-toolbar">${controlsHtml}</div><div class="collection-mobile-summary">${summaryHtml}</div></div>`;
+  const workspace = (navigationHtml, bodyHtml, { id = "", open = false, backLabel = "", back = "", guide = false, pickerHtml = "", contentId = "" } = {}) =>
+    `<div class="settings-layout${guide ? " setup-layout" : ""}"${id ? ` id="${text(id)}"` : ""}${guide ? "" : ` data-open="${open ? 1 : 0}"`}>${pickerHtml}${navigationHtml}<div class="settings-main"${contentId ? ` id="${text(contentId)}"` : ""}>${backLabel ? `<button type="button" class="settings-back" onclick="${text(back)}">‹ ${text(backLabel)}</button>` : ""}${bodyHtml}</div></div>`;
+  const workspaceNav = (items, { label, selected, onSelect, guide = false } = {}) =>
+    `<nav class="settings-nav${guide ? " setup-nav" : ""}"${guide ? "" : ' role="tablist" aria-orientation="vertical"'} aria-label="${text(label)}">${items.map((item, i) =>
+      `${item.group && item.group !== items[i - 1]?.group ? `<div class="${guide ? "setup-chapter" : "settings-nav-group"}">${text(item.group)}</div>` : ""}<button type="button"${guide ? "" : ` role="tab" aria-selected="${item.key === selected}" tabindex="${item.key === selected ? 0 : -1}"`} data-${guide ? "step" : "tab"}="${text(item.key)}" class="${guide ? "setup-step" : ""}${item.key === selected ? " on" : ""}"${item.ariaLabel ? ` aria-label="${text(item.ariaLabel)}"` : ""} onclick="${text(`UI.navigateWorkspace(this, () => ${onSelect(item.key)})`)}">${item.markerHtml || ""}<span>${guide ? text(item.label) : `<b>${text(item.label)}</b>${item.descriptionHtml ? `<small>${item.descriptionHtml}</small>` : ""}`}</span>${guide ? "" : '<i aria-hidden="true">›</i>'}</button>`).join("")}</nav>`;
+  const navigateWorkspace = async (button, run) => {
+    const nav = button.closest(".settings-nav"), label = nav?.getAttribute("aria-label");
+    const key = button.dataset.tab ?? button.dataset.step;
+    const restoreFocus = document.activeElement === button;
+    await run();
+    if (!restoreFocus) return;
+    const current = [...document.querySelectorAll(".settings-nav")].find(el => el.getAttribute("aria-label") === label);
+    const selected = [...(current?.querySelectorAll("button.on") || [])].find(el => (el.dataset.tab ?? el.dataset.step) === key);
+    selected?.focus({preventScroll:true});
+  };
+  const selectWorkspace = (root, key, { gridSelector = "", paneSelector = "" } = {}) => {
+    if (!root) return;
+    root.dataset.open = key ? "1" : "0";
+    if (!key) return;
+    if (gridSelector) { const grid = root.querySelector(gridSelector); if (grid) grid.dataset.tab = key; }
+    if (paneSelector) root.querySelectorAll(paneSelector).forEach(pane => { pane.hidden = pane.dataset.pane !== key; });
+    root.querySelectorAll('.settings-nav [data-tab]').forEach(item => {
+      const selected = item.dataset.tab === key;
+      item.classList.toggle("on", selected); item.setAttribute("aria-selected", String(selected)); item.tabIndex = selected ? 0 : -1;
+    });
+  };
+
   return { lead, callout, section, facts, checklist, steps, progress, meter, table, more, ack,
-    fields, field, chip, button, actions, cancel, stats, guide };
+    fields, field, chip, button, actions, cancel, stats, guide,
+    pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
+    sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,
+    selectSection: selectDialogSection, masterDetail: dialogMasterDetail };
 })();
 window.UI = UI;
 
@@ -146,7 +201,10 @@ window.UI = UI;
    buttons that ends the dialog (Cancel, Close or a primary action) is moved
    to the end and styled as its actions, so every dialog closes the same way. */
 function normaliseDialogActions(body) {
-  if (!body || body.querySelector(".ui-actions")) return;
+  if (!body) return;
+  const footer = [...body.children].find(el => el.classList.contains("ui-actions"));
+  if (footer && footer !== body.lastElementChild) body.appendChild(footer);
+  if (body.querySelector(".ui-actions")) return;
   const rows = [...body.children].filter(el => el.matches(".row, .modalactions") && el.children.length
     && [...el.children].every(child => child.matches("button, .btn, a.btn"))
     && [...el.children].some(child => child.matches(".pri, .danger") || /^(cancel|close|done)$/i.test(child.textContent.trim())));
@@ -165,6 +223,8 @@ window.normaliseDialogActions = normaliseDialogActions;
    alone - they need to be seen, or used. */
 function foldDialogNotes(body) {
   if (!body) return;
+  const panes = body.querySelectorAll(".stepper-pane");
+  if (panes.length) { panes.forEach(foldDialogNotes); return; }
   const plain = [...body.querySelectorAll(".note")].filter(note => !note.matches(".warn, .bad, .good, .crit, .dependency-danger")
     && !note.id && !note.hidden && !note.closest(".dialog-more, .ui-more, [hidden]")
     && !note.querySelector("button, input, select, textarea, a[onclick], .btn") && note.textContent.trim());
@@ -185,7 +245,7 @@ window.foldDialogNotes = foldDialogNotes;
 // moving on) get the same treatment.
 if (typeof MutationObserver === "function" && typeof document.querySelector === "function") {
   const body = document.querySelector("#mbody");
-  if (body) new MutationObserver(() => { normaliseDialogActions(body); foldDialogNotes(body); }).observe(body, { childList: true });
+  if (body) new MutationObserver(() => { normaliseDialogActions(body); foldDialogNotes(body); restoreDialogDisclosures(body); }).observe(body, { childList: true, subtree: true });
 }
 
 /* A page header's ⋯: the actions besides its main one. Each item is
@@ -256,20 +316,53 @@ function serviceRow(name, state, detail, actions) {
 }
 if (typeof window !== "undefined") { window.settingRow = settingRow; window.serviceRow = serviceRow; }
 
-/* A long form in steps: numbered chips across the top, one pane at a time,
-   Back and Next at the foot. Every pane is drawn at once and only hidden, so
-   a form's own save still reads every field. finish is the form's main
-   button: on the last step, or on every step when always is set (an edit,
-   where changing one thing should not mean walking through all of them). */
-function stepper(id, steps, finish, { always = false } = {}) {
-  return `<div class="stepper" id="${esc(id)}" data-step="0">
-    <div class="stepper-head" role="tablist" data-scroll-x>${steps.map((step, i) =>
-      `<button type="button" role="tab" class="stepper-chip${i ? "" : " on"}" data-i="${i}" aria-selected="${!i}" onclick="stepGo(${jsq(id)},${i})"><span>${i + 1}</span>${esc(step.title)}</button>`).join("")}</div>
-    ${steps.map((step, i) => `<div class="stepper-pane" data-i="${i}"${i ? " hidden" : ""}>${step.html}</div>`).join("")}
-    <div class="ui-actions stepper-foot"><div class="ui-actions-start"><button type="button" class="btn" data-back hidden onclick="stepGo(${jsq(id)},-1,true)">Back</button></div>
-      <div class="ui-actions-end">${always ? finish : `<span data-finish hidden>${finish}</span>`}
-        ${steps.length > 1 ? `<button type="button" class="btn ${always ? "" : "pri"}" data-next onclick="stepGo(${jsq(id)},1,true)">Next: ${esc(steps[1].title)}</button>` : ""}</div></div>
+/* Shared navigation for section forms and externally managed setup guides.
+   Handlers are JavaScript, escaped here once; keys and titles are plain text. */
+function dialogSectionNavigation(id, sections, { current = 0, always = false, onSelect = key => `UI.selectSection(${jsArg(id)},${jsArg(key)})`, onChange = `UI.selectSection(${jsArg(id)},this.value)`, guide = false } = {}) {
+  const label = always ? "Section" : "Step";
+  const keyOf = (section, i) => String(section.key ?? i);
+  return `<label class="dialog-section-picker">${label}<select id="${esc(id)}_section" aria-label="${label}" onchange="${esc(onChange)}">${sections.map((section, i) => `<option value="${esc(keyOf(section, i))}"${i === current ? " selected" : ""}>${esc(section.title)}${always ? "" : ` · ${i + 1} of ${sections.length}`}</option>`).join("")}</select></label>
+    <div class="stepper-head" ${guide ? 'aria-label="Setup steps"' : `role="tablist" aria-label="${always ? "Sections" : "Steps"}" aria-orientation="vertical"`}>${sections.map((section, i) => {
+      const key = keyOf(section, i), selected = i === current;
+      return `<button type="button" ${guide ? (selected ? 'aria-current="step"' : '') : `role="tab" id="${esc(id)}-tab-${esc(key)}" aria-controls="${esc(id)}-pane-${esc(key)}" aria-selected="${selected}" tabindex="${selected ? 0 : -1}"`} class="stepper-chip${selected ? " on" : ""}" data-i="${i}" data-key="${esc(key)}" onclick="${esc(onSelect(key))}">${esc(section.title)}</button>`;
+    }).join("")}</div>`;
+}
+
+/* All panes stay mounted, preserving unsaved fields when moving between sections.
+   Create forms advance with Next; editors expose their save/review on every section. */
+function dialogSectionForm(id, sections, finishHtml, { always = false, noticeHtml = "" } = {}) {
+  const list = sections.filter(Boolean);
+  if (!list.length) throw new Error("A section form needs at least one section");
+  return `<div class="stepper dialog-rail${always ? " section-editor" : ""}" id="${esc(id)}" data-step="0">
+    ${dialogSectionNavigation(id, list, { always })}
+    ${list.map((section, i) => {
+      const key = String(section.key ?? i);
+      return `<div class="stepper-pane" role="tabpanel" aria-labelledby="${esc(id)}-tab-${esc(key)}" id="${esc(id)}-pane-${esc(key)}" data-i="${i}" data-key="${esc(key)}"${i ? " hidden" : ""}>${section.lead ? UI.lead(esc(section.lead)) : ""}${section.html}</div>`;
+    }).join("")}
+    ${noticeHtml ? `<div class="dialog-rail-notice">${noticeHtml}</div>` : ""}
+    ${UI.actions((always ? finishHtml : `<span data-finish${list.length > 1 ? " hidden" : ""}>${finishHtml}</span>`) +
+      (!always && list.length > 1 ? UI.button("Next", `stepGo(${jsArg(id)},1,true)`, {kind:"pri",attrs:"data-next"}) : ""),
+      UI.cancel() + (always ? "" : UI.button("Back", `stepGo(${jsArg(id)},-1,true)`, {attrs:"data-back hidden"})), {className:"stepper-foot"})}
   </div>`;
+}
+function selectDialogSection(id, key) {
+  const root = document.getElementById(id);
+  const panes = [...(root?.querySelectorAll(":scope > .stepper-pane") || [])];
+  const index = panes.findIndex(pane => pane.dataset.key === String(key));
+  if (index >= 0) stepGo(id, index);
+}
+// Compatibility for existing create/edit callers; layout lives in sectionForm.
+function stepper(id, sections, finishHtml, options) {
+  return UI.sectionForm(id, sections, finishHtml, options);
+}
+
+/* A grouped list and one selected detail, stacked on phones. Domain actions and
+   polling stay with the caller; this owns navigation and disclosure structure. */
+function dialogMasterDetail(groups, selectedKey, detailHtml, { label = "Items", detailLabel = "Selected item", onSelect } = {}) {
+  const rows = items => items.map(item => `<button type="button"${String(item.key) === String(selectedKey) ? ' aria-current="true"' : ''} onclick="${esc(onSelect(item.key))}"><span>${esc(item.title)}</span>${item.detail ? `<small${item.attention ? ' class="needs-attention"' : ''}>${esc(item.detail)}</small>` : ""}</button>`).join("");
+  return `<div class="dialog-rail dialog-master-detail"><nav class="dialog-master-nav" aria-label="${esc(label)}">${groups.filter(group => group.items.length).map(group =>
+    group.collapsed ? UI.more(group.title, rows(group.items), group.items.some(item => String(item.key) === String(selectedKey)), group.key) : UI.section(group.title, rows(group.items))).join("")}</nav>
+    <section class="dialog-master-content" aria-label="${esc(detailLabel)}">${detailHtml}</section></div>`;
 }
 function stepGo(id, to, relative) {
   const root = document.getElementById(id);
@@ -278,10 +371,11 @@ function stepGo(id, to, relative) {
   const next = Math.max(0, Math.min(panes.length - 1, relative ? +root.dataset.step + to : to));
   root.dataset.step = next;
   panes.forEach((pane, i) => { pane.hidden = i !== next; });
-  chips.forEach((chip, i) => { chip.classList.toggle("on", i === next); chip.classList.toggle("done", i < next); chip.setAttribute("aria-selected", String(i === next)); });
+  chips.forEach((chip, i) => { chip.classList.toggle("on", i === next); chip.setAttribute("aria-selected", String(i === next)); chip.tabIndex = i === next ? 0 : -1; });
   const last = next === panes.length - 1, nextButton = root.querySelector("[data-next]");
-  root.querySelector("[data-back]").hidden = !next;
-  if (nextButton) { nextButton.hidden = last; if (!last) nextButton.textContent = `Next: ${chips[next + 1].textContent.replace(/^\d+/, "")}`; }
+  const back = root.querySelector("[data-back]"); if (back) back.hidden = !next;
+  const picker = root.querySelector(".dialog-section-picker select"); if (picker) picker.value = panes[next]?.dataset.key ?? String(next);
+  if (nextButton) { nextButton.hidden = last; if (!last) nextButton.textContent = "Next"; }
   const finish = root.querySelector("[data-finish]");
   if (finish) finish.hidden = !last;
   const chip = chips[next], head = chip?.parentElement;
@@ -348,6 +442,10 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
   const sweep = () => document.querySelectorAll("details.actionmenu-portal").forEach(shell => {
     if (!shell.owner?.isConnected || !shell.owner.open) { if (shell.owner) shell.owner.shell = null; shell.remove(); }
   });
+  document.addEventListener("click", event => {
+    const summary = event.target.closest?.("#mbody details[data-disclosure] > summary");
+    if (summary) dialogDisclosureState.set(dialogDisclosureKey(summary.parentElement), !summary.parentElement.open);
+  });
   document.addEventListener("toggle", event => {
     const details = event.target;
     if (details.matches?.("details.actionmenu-portal")) {
@@ -395,4 +493,53 @@ function comparisonTable(columns, rows, caption) {
 function collectionDisclosure({ label, bodyHtml, expanded, controls, run, id }) {
   return `<button type="button" class="collection-disclosure" id="${esc(id)}" aria-label="${esc(label)}"
     aria-expanded="${!!expanded}" aria-controls="${esc(controls)}" onclick="${run}">${bodyHtml}<span class="collection-chevron" aria-hidden="true">${icon("chevron-down")}</span></button>`;
+}
+
+/* Disclosures survive polling within a dialog. New dialogs reset this memory;
+   the dialog stack keeps the original DOM and its disclosure state. */
+let dialogDisclosureState = new Map();
+const restoredDialogDisclosures = new WeakSet();
+window.resetDialogDisclosures = () => { dialogDisclosureState = new Map(); };
+function dialogDisclosureKey(detail) {
+  return `${detail.closest("[data-operation], .stepper-pane")?.dataset.operation || detail.closest(".stepper-pane")?.id || ""}:${detail.dataset.disclosure}`;
+}
+function restoreDialogDisclosures(body) {
+  body?.querySelectorAll("details[data-disclosure]").forEach(detail => {
+    if (restoredDialogDisclosures.has(detail)) return;
+    restoredDialogDisclosures.add(detail);
+    const key = dialogDisclosureKey(detail);
+    if (dialogDisclosureState.has(key)) detail.open = dialogDisclosureState.get(key);
+  });
+}
+window.revealDialogField = field => {
+  if (typeof field === "string") field = document.querySelector(field);
+  if (!field) return;
+  const pane = field.closest(".stepper-pane");
+  if (pane) stepGo(pane.closest(".stepper").id, Number(pane.dataset.i));
+  for (let parent = field.parentElement; parent; parent = parent.parentElement) {
+    if (parent.matches("details")) parent.open = true;
+  }
+  field.scrollIntoView({ block: "nearest" }); field.focus();
+};
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("click", event => {
+    const summary = event.target.closest?.("#mbody details[data-disclosure] > summary");
+    if (summary) dialogDisclosureState.set(dialogDisclosureKey(summary.parentElement), !summary.parentElement.open);
+  });
+  document.addEventListener("toggle", event => {
+    const detail = event.target;
+    if (detail.matches?.("#mbody details[data-disclosure]"))
+      dialogDisclosureState.set(dialogDisclosureKey(detail), detail.open);
+  }, true);
+  document.addEventListener("keydown", event => {
+    const tab = event.target.closest?.('.dialog-rail [role="tab"], .settings-nav [role="tab"]');
+    if (!tab || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const tabs = [...tab.parentElement.querySelectorAll('[role="tab"]')], current = tabs.indexOf(tab);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowDown" ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[next].focus(); tabs[next].click();
+  });
+  document.addEventListener("invalid", event => {
+    if (event.target.closest?.("#mbody")) window.revealDialogField(event.target);
+  }, true);
 }

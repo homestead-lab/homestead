@@ -40,24 +40,27 @@ async function viewPortal() {
   api("/api/portal/status").then(status => { STATE.data.portalStatus = status; portalDots(); }).catch(() => {});
 }
 
+function portalTiles(rows, {compact = false} = {}) {
+  return portalSections(rows).map(([section, members]) => `<section class="portal-section">
+        ${section ? `<div class="sec">${esc(section)}</div>` : ""}
+        <div class="portal-grid${compact ? " portal-compact" : ""}">${members.map(link => `<a class="portal-tile card flat" href="${safeHref(link.url)}" target="_blank" rel="noopener noreferrer" data-link="${esc(link.id)}">
+          ${portalIcon(link)}<span class="portal-text"><b>${esc(link.title)}</b>
+            <span class="dim xs mono">${esc(portalHost(link.url))}</span>${link.note ? `<span class="dim xs">${esc(link.note)}</span>` : ""}</span>
+          <span class="portal-dot" data-tip="not checked yet"></span></a>`).join("")}</div></section>`).join("");
+}
+
 function renderPortal() {
   const links = (STATE.data.portal || {}).links || [];
   const q = STATE.q.toLowerCase();
   const rows = links.filter(link => !q || link.title.toLowerCase().includes(q) || link.url.toLowerCase().includes(q) ||
     (link.section || "").toLowerCase().includes(q) || (link.note || "").toLowerCase().includes(q));
-  paint(`<div class="phead"><div><h2>Portal</h2><p>${links.length} link${links.length === 1 ? "" : "s"}${q ? ` · ${rows.length} matching “${esc(q)}”` : ""} to apps and devices</p></div>
-      <div class="row">${moreMenu([{ label: "Check links", icon: "refresh", run: "portalRecheck()", tip: "See which links answer" }])}
-      <button class="btn pri" data-need="admin" onclick="portalEdit()">${icon("edit")}Edit links</button></div></div>
+  paint(`${UI.pageHeader(`Portal`, `${links.length} link${links.length === 1 ? "" : "s"}${q ? ` · ${rows.length} matching “${esc(q)}”` : ""} to apps and devices`, `${moreMenu([{ label: "Check links", icon: "refresh", run: "portalRecheck()", tip: "See which links answer" }])}
+      <button class="btn pri" data-need="admin" onclick="portalEdit()">${icon("edit")}Edit links</button>`)}
     ${!links.length ? `<div class="empty portal-empty"><b>No links yet.</b> Add the containers you open most, and the router, switches and NAS around them.
         <div class="row" style="justify-content:center;margin-top:12px"><button class="btn pri" data-need="admin" onclick="portalEdit(true)">Pick from containers</button>
         <button class="btn" data-need="admin" onclick="portalEdit()">Add a link</button></div></div>`
       : !rows.length ? `<div class="empty">Nothing matches that search.</div>`
-      : portalSections(rows).map(([section, members]) => `<section class="portal-section">
-        ${section ? `<div class="sec">${esc(section)}</div>` : ""}
-        <div class="portal-grid">${members.map(link => `<a class="portal-tile card flat" href="${safeHref(link.url)}" target="_blank" rel="noopener noreferrer" data-link="${esc(link.id)}">
-          ${portalIcon(link)}<span class="portal-text"><b>${esc(link.title)}</b>
-            <span class="dim xs mono">${esc(portalHost(link.url))}</span>${link.note ? `<span class="dim xs">${esc(link.note)}</span>` : ""}</span>
-          <span class="portal-dot" data-tip="not checked yet"></span></a>`).join("")}</div></section>`).join("")}`);
+      : portalTiles(rows)}`);
   portalDots();
 }
 
@@ -138,12 +141,12 @@ window.portalEdit = async (pick = false) => {
     const [data, wl] = await Promise.all([api("/api/portal"), STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads").catch(() => [])]);
     PORTAL_WORKLOADS = wl || [];
     PORTAL_EDIT = (data.links || []).map(link => ({ ...link }));
-    $("#mbody").innerHTML = `<p class="muted small">Tiles on the Portal page, in sections. Pick containers to add their addresses and logos, or add any address by hand - a router, a switch, a NAS. Addresses are visible to every signed-in user, so keep passwords out of them.</p>
+    $("#mbody").innerHTML = `<p class="muted small">Organize portal links or add links from containers. All signed-in users can see these addresses; do not include passwords.</p>
       <div class="row" style="gap:8px;margin:12px 0"><button class="btn" onclick="portalAdd()">＋ Link</button>
         <button class="btn" onclick="portalPick()">＋ From containers</button></div>
       <div id="pe_rows">${portalEditRows()}</div>
-      <div class="row" style="margin-top:16px"><button class="btn pri" id="pe_save" onclick="portalSave()">Save links</button>
-        <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+      ${UI.actions(`<button class="btn pri" id="pe_save" onclick="portalSave()">Save links</button>
+        <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
     if (pick) portalPick();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };

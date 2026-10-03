@@ -43,9 +43,7 @@ async function viewFlow() {
           <span class="a2dot" style="background:${ROB(v.robustness)}"></span><span class="a2name">${esc(v.name)}</span>
           <span class="a2meta mono">${v.size_gb}G · ${v.replicas}×</span></div>`;
 
-  paint(`<div class="phead">
-      <div><h2>Architecture</h2><p>How each app is reached, where its data lives, and which hosts hold the copies · hover anything to trace it</p></div>
-      <div class="row arch-head-actions">
+  paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · hover anything to trace it`, `
         ${disconnectedVolumes.length ? `<button class="btn sm ${STATE.archDisconnected ? "pri" : ""}" onclick="STATE.archDisconnected=!STATE.archDisconnected;viewFlow()"
           data-tip="Volumes no container or VM is defined to mount. They stay hidden so old and retained data does not obscure the live paths.">${STATE.archDisconnected ? "Hide" : "Show"} ${disconnectedVolumes.length} disconnected</button>` : ""}
         <div class="row hide-sm arch-legend">
@@ -53,7 +51,7 @@ async function viewFlow() {
           <span><i style="background:var(--arch-mount)"></i>mount</span>
           <span><i style="background:var(--arch-copy)"></i>replica</span>
         </div>
-      </div></div>
+      `, {actionsClass:`arch-head-actions`})}
     <div class="arch2wrap"><svg id="archsvg" aria-hidden="true"></svg><div class="arch2">
 
       <section class="a2col"><h4>Access</h4>
@@ -342,12 +340,10 @@ async function viewStorage() {
   const rows = v.filter(x => (!q || x.name.includes(q) || (x.node || "").includes(q) ||
     (x.pvc_name || "").includes(q) || (x.attached_to || "").toLowerCase().includes(q))
     && (!onlySpare || spare.includes(x)));
-  paint(`<div class="phead"><div><h2>Volumes</h2>
-      <p>${v.length} Longhorn volume${v.length === 1 ? "" : "s"} · replicated block storage${onlySpare ? ` · <a class="linkish" onclick="STATE.volSpare=false;viewStorage()">showing ${spare.length} unused · show all</a>` : ""}</p></div>
-      <div class="row">${moreMenu([spare.length ? { label: onlySpare ? "Show all volumes" : `Show the ${spare.length} unused`, icon: "list", run: "STATE.volSpare=!STATE.volSpare;viewStorage()",
+  paint(`${UI.pageHeader(`Volumes`, `${v.length} Longhorn volume${v.length === 1 ? "" : "s"} · replicated block storage${onlySpare ? ` · <a class="linkish" onclick="STATE.volSpare=false;viewStorage()">showing ${spare.length} unused · show all</a>` : ""}`, `${moreMenu([spare.length ? { label: onlySpare ? "Show all volumes" : `Show the ${spare.length} unused`, icon: "list", run: "STATE.volSpare=!STATE.volSpare;viewStorage()",
           tip: "Volumes nothing is defined to use - no container, VM or job - and ones kept after their claim went: the ones to look at when freeing space" } : null,
         { label: "Storage classes", icon: "disk", run: "settingsTab('hardware');go('settings')", tip: "What new volumes are made from: in Settings › Hardware and storage" }])}
-      <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button></div></div>
+      <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button>`)}
   ${st ? summaryLine("volumes", [
       `<b>${st.avail_gb} GB</b> free of ${st.cap_gb}`, `<b>${st.provisioned_gb} GB</b> provisioned`,
       `<span class="tag ok">${st.healthy} healthy</span>${st.degraded ? ` <span class="tag warn">${st.degraded} degraded</span>` : ""}${st.faulted ? ` <span class="tag bad">${st.faulted} faulted</span>` : ""}`,
@@ -412,7 +408,7 @@ window.volumeCreate = async () => {
     <div class="f"><label>Storage class</label><select id="vc_sc" onchange="volumeClassFacts()">${storageClassOptions(scs, "longhorn-r2", classes.facts)}</select>
       <div class="vclass-badges" id="vc_badges"></div></div>
     <div class="note" id="vc_mode_note" hidden></div>
-    <div class="row"><button class="btn pri" onclick="volumeCreateNow()">Create volume</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" onclick="volumeCreateNow()">Create volume</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   $("#vc_mode").addEventListener("change", volumeClassFacts);
   volumeClassFacts();
 };
@@ -444,7 +440,7 @@ window.volumeEdit = async (x, fromRoute = false) => {
     ${options.repair_class ? `<div class="row" style="margin-top:10px"><button class="btn sm" data-need="admin" onclick="volumeClassRepairReview(${jsq(namespace)},${jsq(name)},${jsq(options.storage_class)})">Repair resize support…</button></div>` : ""}</div>`}
   <div class="note"><b>${esc((x.access_modes || []).join(", ") || "Access mode unknown")}</b> · ${esc(options.storage_class || "No StorageClass")}<br>
   Kubernetes locks access mode and storage class after a claim is bound. To change RWO ↔ RWX, create a new volume and migrate the data.</div>
-  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="volumeEditNow(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)})">Save</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+  ${UI.actions(`<button class="btn pri" onclick="volumeEditNow(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)})">Save</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.volumeEditNow = async (namespace, name) => {
   const body = { namespace, name, replicas: +$("#ve_reps").value };
@@ -456,7 +452,7 @@ window.volumeEditNow = async (namespace, name) => {
 window.volumeClassRepairReview = (namespace, name, storageClass) => {
   modal("Repair resize support", `<div class="note">Recreate <b>${esc(storageClass)}</b> from the bound Longhorn volume's storage settings and enable volume expansion.
     This recreates Kubernetes configuration for every volume using that class. No backup is restored, and volume sizes and data stay unchanged.</div>
-    <div class="row" style="margin-top:16px"><button class="btn pri" data-need="admin" onclick="volumeClassRepairNow(${jsq(namespace)},${jsq(name)},${jsq(storageClass)},this)">Repair resize support</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" data-need="admin" onclick="volumeClassRepairNow(${jsq(namespace)},${jsq(name)},${jsq(storageClass)},this)">Repair resize support</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.volumeClassRepairNow = async (namespace, name, storageClass, button) => {
   button.disabled = true;
@@ -664,10 +660,7 @@ function storageClassCard(classes, v2 = null) {
   const kind = row => row.made_for === "image" ? '<span class="tag" data-tip="Harvester made it for one image: disks from that image are made on it">image</span>'
     : row.made_for === "restore" ? '<span class="tag" data-tip="Made to restore a backup; kept while claims reference it so they can be resized">restore</span>'
     : row.made_for === "iso" ? '<span class="tag" data-tip="ISO copies Homestead made for VM CD-ROM drives: one replica, since the originals are on your shares">ISO copies</span>' : "";
-  return `<div class="settings-card-head"><div><div class="ctitle">Storage classes</div>
-      <div class="csub">What a new volume is made from. Kubernetes fixes a class once it is made, so a change means a new class.</div>
-      ${v2Summary(v2, rows)}</div>
-    <button class="btn sm pri" data-need="admin" onclick="storageClassCreate()">＋ New storage class</button></div>
+  return `${UI.moduleHeader(`Storage classes`, `What a new volume is made from. Kubernetes fixes a class once it is made, so a change means a new class.`, `<button class="btn sm pri" data-need="admin" onclick="storageClassCreate()">＋ New storage class</button>`, {extraHtml:`${v2Summary(v2, rows)}`})}
     <div class="tblwrap"><table data-sort="storage-classes" class="tbl stack dense"><thead><tr>
       <th>Class</th><th>Engine</th><th>Copies</th><th data-nosort>Its volumes</th><th>In use</th><th data-nosort></th>
     </tr></thead><tbody>${rows.map(row => `<tr>
@@ -693,9 +686,7 @@ window.storageClassCleanup = async () => {
 };
 window.storageClassCreate = async (prefill = {}, onSaved = null) => {
   modal("New storage class", `
-    <p class="muted small">A storage class is a recipe Longhorn follows when it creates a volume:
-      how many replicas to keep, whether the volume can grow, and what happens to the data when its
-      claim is deleted. Kubernetes will not let those settings change afterwards, so choose them now.</p>
+    <p class="muted small">Set the defaults for new volumes: replicas, expansion and deletion policy. These storage-class settings cannot be edited after creation.</p>
     <div class="f" style="margin-top:14px"><label>Name</label>
       <input type="text" id="sc_name" placeholder="longhorn-r3" autocomplete="off"></div>
     <div class="f2"><div class="f"><label>Replicas ${tip("Copies of each volume Longhorn keeps. One has no redundancy.")}</label>
@@ -715,10 +706,10 @@ window.storageClassCreate = async (prefill = {}, onSaved = null) => {
       <div class="dim xs" id="sc_reach" style="margin-top:6px"></div></div>
     <label class="switch"><input type="checkbox" id="sc_expand" checked> Allow volumes to grow later</label>
     <label class="switch"><input type="checkbox" id="sc_migratable" onchange="storageClassHint()"> Live-migratable · for VM disks</label>
-    <div class="note" id="sc_hint">Leave migratable off for container storage: a migratable volume gets a second controller so a VM can move between hosts, and Longhorn refuses to mount that kind into a pod — which is what breaks ReadWriteMany.</div>
+    <div class="note" id="sc_hint">Keep Migratable off for containers. It is for VM migration; Longhorn cannot mount migratable volumes into container pods, including ReadWriteMany volumes.</div>
     <label class="switch"><input type="checkbox" id="sc_default"> Make this the default class</label>
-    <div class="row" style="margin-top:18px"><button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   for (const [id, key] of [["sc_name", "name"], ["sc_reps", "replicas"], ["sc_copies", "copies"],
     ["sc_reclaim", "reclaim_policy"], ["sc_engine", "engine"]]) {
     if (prefill[key] !== undefined) $("#" + id).value = prefill[key];
@@ -790,7 +781,7 @@ window.storageClassHint = () => {
   hint.classList.toggle("bad", on);
   hint.innerHTML = on
     ? "<b>Volumes from this class cannot be mounted by containers.</b> Only pick this for VM disks that need live migration; ReadWriteMany claims built on it will never attach to a pod."
-    : "Leave migratable off for container storage: a migratable volume gets a second controller so a VM can move between hosts, and Longhorn refuses to mount that kind into a pod — which is what breaks ReadWriteMany.";
+    : "Keep Migratable off for containers. It is for VM migration; Longhorn cannot mount migratable volumes into container pods, including ReadWriteMany volumes.";
 };
 window.storageClassSave = async button => {
   const name = $("#sc_name").value.trim();
@@ -991,8 +982,8 @@ window.fileBrowse = async (path) => {
   } catch (e) {
     if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
     $("#mbody").innerHTML = `<div class="note dependency-danger"><b>The file browser could not start.</b> ${esc(e.message)}</div>
-      <div class="row" style="margin-top:14px"><button class="btn" onclick="fileBrowse('')">Try again</button>
-      <button class="btn" onclick="closeFiles()">Close</button></div>`;
+      ${UI.actions(`<button class="btn" onclick="fileBrowse('')">Try again</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeFiles()">Close</button>`)}`;
   }
 };
 
@@ -1021,7 +1012,7 @@ function fileBrowserMarkup(listing) {
       }).join("") || '<div class="empty small">this folder is empty</div>'}
     </div>
     ${listing.truncated ? '<div class="dim xs">Only the first 500 entries are listed.</div>' : ""}
-    <div class="row" style="margin-top:16px"><button class="btn" onclick="closeFiles()">Close browser</button></div>
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeFiles()">Close browser</button>`)}
     ${FILEVIEW.snapshotSession ? UI.more('Temporary copy', '<p class="ui-help">Files are downloaded from the selected snapshot. Closing this browser starts cleanup of its temporary copy. Abandoned sessions expire after 30 minutes; cleanup resumes when Homestead and the cluster API are available. Symbolic links and special files are excluded.</p>') : '<div class="note" style="margin-top:12px">The browser runs as a short-lived pod that mounts this volume. It stops on its own after 30 minutes, or when you close it.</div>'}`;
 }
 
@@ -1040,10 +1031,9 @@ window.fileOpen = async (path) => {
       <div class="between fileeditbar"><span class="dim xs">${fileSize(file.size)} · saving keeps the previous contents as <span class="mono">${esc(file.path.split("/").pop())}.homestead-bak</span></span>
         <span class="dim xs" id="file_state"></span></div>
       <div id="file_editor" class="fileeditor"></div>
-      <div class="row" style="margin-top:14px">
-        <button class="btn pri" id="file_save" data-need="admin" onclick="fileSave()">Save</button>
-        <button class="btn" onclick="fileBrowse(${jsq(FILEVIEW.path)})">Back</button>
-        <button class="btn" onclick="closeFiles()">Close browser</button></div>`;
+      ${UI.actions(`<button class="btn pri" id="file_save" data-need="admin" onclick="fileSave()">Save</button>
+        <button data-dialog-dismiss="true" class="btn" onclick="fileBrowse(${jsq(FILEVIEW.path)})">Back</button>
+        <button data-dialog-dismiss="true" class="btn" onclick="closeFiles()">Close browser</button>`)}`;
     FILEVIEW.editor = null;
     try {
       const editor = await mountEditor($("#file_editor"), file.content, file.path);
@@ -1131,10 +1121,7 @@ window.volumeChown = async (namespace, name) => {
   const hint = await api(`/api/volumes/ownership?namespace=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}`)
     .catch(() => ({ known: false, source: "" }));
   $("#mbody").innerHTML = `
-    <p class="muted small">An import keeps the ownership the files had on the source, and a volume created
-      from the App Store is written by the container itself, so both are already correct. This is for a
-      volume that is not: appdata imported before Homestead preserved ownership, or a container that runs
-      as a different user here than it did on the source. Its log fills with permission errors when so.</p>
+    <p class="muted small">Set file ownership to match the container's user and group. ${tip("Imports preserve source ownership. Change it only when the container requires different IDs or reports permission errors.")}</p>
     ${hint.known
       ? `<div class="note"><b>${esc(hint.workload)} runs as ${hint.uid ?? hint.gid}${hint.gid != null && hint.gid !== hint.uid ? `:${hint.gid}` : ""}.</b>
           Taken from ${esc(hint.source)}${hint.image ? ` · <span class="mono">${esc(hint.image)}</span>` : ""}.</div>`
@@ -1142,11 +1129,9 @@ window.volumeChown = async (namespace, name) => {
     <div class="f2" style="margin-top:14px">
       <div class="f"><label>User (UID)</label><input type="number" id="vc_uid" min="0" max="65535" value="${hint.uid ?? ""}" placeholder="1883"></div>
       <div class="f"><label>Group (GID)</label><input type="number" id="vc_gid" min="0" max="65535" value="${hint.gid ?? ""}" placeholder="same as UID"></div></div>
-    <div class="note">Homestead runs a short job that mounts the volume and changes ownership. The workload
-      should be stopped first: a ReadWriteOnce volume cannot attach to the job while its pod holds it.</div>
-    <div class="row" style="margin-top:16px">
-      <button class="btn pri" data-need="admin" onclick="volumeChownNow(${jsq(namespace)},${jsq(name)},this)">Set ownership</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+    <div class="note">Stop the workload first so the ownership job can mount its volume. A ReadWriteOnce volume cannot attach while the workload holds it.</div>
+    ${UI.actions(`<button class="btn pri" data-need="admin" onclick="volumeChownNow(${jsq(namespace)},${jsq(name)},this)">Set ownership</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
   if (window.applyRole) window.applyRole();
 };
 window.volumeChownNow = async (namespace, name, button) => {
@@ -1171,7 +1156,7 @@ async function viewShares() {
   let sh;
   try { sh = await api("/api/shares"); }
   catch (e) {
-    paint(`<div class="phead"><div><h2>Network shares</h2></div></div>
+    paint(`${UI.pageHeader(`Network shares`, ``, ``)}
       <div class="note bad">Could not load shares: ${esc(e.message)} <button class="btn sm" onclick="viewShares()">Retry</button></div>`);
     return;
   }
@@ -1182,9 +1167,7 @@ async function viewShares() {
   STATE.data.nfs = nfs;
   STATE.data.sambaInstalled = !!smb.installed;
   const ip = smb.address || "address pending";
-  paint(`<div class="phead"><div><h2>Network shares</h2>
-    <p>SMB shares and optional NFSv4 exports backed by Longhorn volumes</p></div>
-    <div class="row">${moreMenu([{ label: "SMB users", icon: "list", run: "smbUsers()", need: "admin" }])}<button class="btn pri" data-need="admin" onclick="newShare()">＋ New share</button></div></div>
+  paint(`${UI.pageHeader(`Network shares`, `SMB shares and optional NFSv4 exports backed by Longhorn volumes`, `${moreMenu([{ label: "SMB users", icon: "list", run: "smbUsers()", need: "admin" }])}<button class="btn pri" data-need="admin" onclick="newShare()">＋ New share</button>`)}
   <div class="card" style="margin-bottom:14px"><div class="between"><div><div class="ctitle">SMB server · ${esc(smb.name || "homestead-smb")}</div>
     <div class="dim small">${smb.error ? `Status unavailable: ${esc(smb.error)}` : !smb.installed ? "Not installed · your first share can install it" :
       `${smb.enabled ? `${smb.ready || 0}/${smb.desired || 1} ready` : "Stopped"}${smb.address ? ` · \\\\${esc(smb.address)}` : " · waiting for an address"} · ${smb.served_shares?.length ?? 0}/${sh.length} share mappings${smb.in_sync ? "" : " · out of sync"}`}</div></div>
@@ -1226,7 +1209,7 @@ window.nfsExport = name => {
       <input id="nfs_clients" value="${esc(share.nfs_clients || "")}" placeholder="192.0.2.0/24" autocomplete="off"></div>
     <label class="switch"><input type="checkbox" id="nfs_ro" ${share.nfs_read_only !== false ? "checked" : ""}> Read only</label>
     <div class="dim xs" style="margin-top:8px">NFSv4 clients mount ${esc(STATE.data.nfs?.address || "<server-ip>")}:/${esc(name)} on TCP port 2049. The server and its VIP are enabled in Settings → Hardware and storage → Add-ons. Longhorn RWX re-export adds an extra NFS layer.</div>
-    <div class="modalactions"><button class="btn pri" onclick="nfsExportSave(${jsq(name)},this)">Save export</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" onclick="nfsExportSave(${jsq(name)},this)">Save export</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.nfsExportSave = async (name, button) => {
   const clients = $("#nfs_clients")?.value.trim() || "";
@@ -1421,8 +1404,8 @@ window.editShare = name => {
         <input type="password" id="she_pass" autocomplete="new-password" placeholder="${s.has_password ? "Leave blank to keep current password" : "Required for private access"}">
         ${shareAccountSiblings(s).length ? `<span class="dim xs">${esc(s.user)} is also used by ${esc(shareAccountSiblings(s).join(", "))}. Samba keeps one password per account, so a new one changes those too.</span>` : ""}</div></div>
     <label class="switch"><input type="checkbox" id="she_ro" ${s.read_only ? "checked" : ""}> Read only · clients can browse and download but cannot change files</label>
-    <div class="row" style="margin-top:18px"><button class="btn pri" data-need="admin" onclick="saveShareEdit(${jsq(s.name)},this)">${icon("edit")}Save changes</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" data-need="admin" onclick="saveShareEdit(${jsq(s.name)},this)">${icon("edit")}Save changes</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.saveShareEdit = async (name, button) => {
   const original = (STATE.data.shares || []).find(row => row.name === name);
@@ -1571,7 +1554,7 @@ async function viewEvents() {
   const rows = await api(tab === "signins" ? "/api/auth/history" : "/api/events");
   STATE.data.eventRows = rows;
   const heads = tab === "signins" ? ["Who", "What", "From", "When"] : ["Object", "Reason", "Message", "When"];
-  paint(`<div class="phead"><div><h2>Events</h2><p id="evCount"></p></div>${eventTabs(tab)}</div>
+  paint(`${UI.pageHeader(`Events`, ``, `${eventTabs(tab)}`, {descriptionAttrs:`id="evCount"`})}
   ${eventFilterBar(rows)}
   <div class="card flat pad0 eventtable"><div class="tblwrap"><table data-sort="${tab === "signins" ? "signins" : "events"}" class="tbl stack compact evtable"><thead><tr>
     ${heads.map((h, i) => `<th${i === 3 ? " data-nosort" : ""}>${h}</th>`).join("")}</tr></thead><tbody id="evRows"></tbody></table></div></div>`);
@@ -1627,10 +1610,8 @@ async function lhSettingsPaint() {
   catch (e) { host.innerHTML = `<div class="ctitle">Longhorn storage</div><div class="empty small">${esc(e.message)}</div>`; return; }
   STATE.data.lhcap = cap;
   const admin = can("admin"), v2 = cap.v2 || {};
-  host.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Longhorn storage</div>
-      <div class="csub">How much Longhorn may promise on each disk, and its V2 data engine</div></div>
-      <div class="row"><button class="btn sm" onclick="lhDisks()">Disks</button>
-      ${admin ? "" : '<span class="pill neutral">admin managed</span>'}</div></div>
+  host.innerHTML = `${UI.moduleHeader(`Longhorn storage`, `How much Longhorn may promise on each disk, and its V2 data engine`, `<button class="btn sm" onclick="lhDisks()">Disks</button>
+      ${admin ? "" : '<span class="pill neutral">admin managed</span>'}`)}
     <div class="f2">
       <div class="f"><label>Over-provisioning ${tip("Longhorn books a volume's full size on a disk when it places a replica, however little it holds. At 100% a disk can be promised its own size; at 200%, twice that, betting volumes never fill up. If they do, the disk runs out and its replicas fail.")}</label>
         <div class="row" style="flex-wrap:nowrap"><input id="lh_over" type="number" min="100" max="1000" step="10" value="${cap.over_provisioning}" ${admin ? "" : "disabled"} oninput="lhPreview()"><span class="dim">%</span></div></div>
@@ -1745,7 +1726,7 @@ function tagEditor(title, about, current, known, save) {
       <input type="text" id="tg_text" value="${esc(current.join(", "))}" placeholder="ssd, fast" autocomplete="off"></div>
     ${ideas.length ? `<div class="row" style="gap:6px;flex-wrap:wrap;margin:-4px 0 14px"><span class="dim xs">Add</span>${ideas.map(t =>
       `<button class="tag linkish" onclick="tagAdd(${jsq(t)})">＋ ${esc(t)}</button>`).join("")}</div>` : ""}
-    <div class="row"><button class="btn pri" id="tg_save">Save tags</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" id="tg_save">Save tags</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   $("#tg_save").onclick = () => save($("#tg_text").value.split(/[\s,]+/).filter(Boolean));
   $("#tg_text").focus();
 }
@@ -1844,8 +1825,8 @@ window.diskAdd = (node, blockdevice = "", path = "", needsWipe = false) => {
       ${v2 ? "" : '<div class="dim xs">The V2 engine is off; switch it on in Settings › Hardware and storage to add a V2 disk.</div>'}</div>
     ${blockdevice ? `<label class="switch"><input type="checkbox" id="da_wipe" ${needsWipe ? "" : "disabled"}> Erase it first
       ${needsWipe ? '<span class="badtext xs">— it already holds a filesystem or partitions, which are destroyed</span>' : '<span class="dim xs">— it is blank</span>'}</label>` : ""}
-    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="diskAddGo(${jsq(node)},${jsq(blockdevice)})">Add</button>
-      <button class="btn" onclick="modalBack()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" onclick="diskAddGo(${jsq(node)},${jsq(blockdevice)})">Add</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`);
 };
 /* Off Harvester: set a whole disk up for Longhorn from here. Homestead looks
    at it on its host first (homestead_disk_setup), then offers only what is
@@ -2042,8 +2023,8 @@ window.diskRetire = async (node, disk) => {
       unless you give ${p.only_copies === 1 ? "it" : "them"} up:
       <label class="switch" style="margin-top:8px"><input type="checkbox" id="dr_force" onchange="$('#dr_confirm_row').hidden=!this.checked"> Give ${p.only_copies === 1 ? "it" : "them"} up - the data is lost</label>
       <div id="dr_confirm_row" hidden class="f" style="margin-top:8px"><label>Type <span class="mono">${esc(disk)}</span> to confirm</label><input id="dr_confirm" class="mono"></div></div>` : ""}
-    <div class="row" style="margin-top:14px"><button class="btn pri" data-need="admin" onclick="diskRetireGo(${jsq(node)},${jsq(disk)})">Replace it</button>
-      <button class="btn" onclick="modalBack()">Cancel</button></div>`;
+    ${UI.actions(`<button class="btn pri" data-need="admin" onclick="diskRetireGo(${jsq(node)},${jsq(disk)})">Replace it</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`;
   if (window.applyRole) applyRole();
 };
 window.diskRetireGo = async (node, disk) => {
@@ -2159,7 +2140,7 @@ window.reclassWatch = async id => {
       ${op.status === "failed" && op.resumable ? `<div class="row" style="margin-top:12px"><button class="btn pri" data-need="admin" onclick="resumeOperation(${jsq(op.id)})">Carry on from this step</button></div>` : ""}
       ${op.status === "succeeded" && op.old_pv ? `<div class="row" style="margin-top:12px"><button class="btn danger" data-need="admin" onclick="reclassRemoveOld(${jsq(op.old_pv)})">Remove the old copy</button>
         <span class="dim xs">Keep it until the app is working on the new one.</span></div>` : ""}
-      <div class="row" style="margin-top:12px"><button class="btn" onclick="closeModal()">${op.status === "running" ? "Keep going in the background" : "Close"}</button></div>`;
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">${op.status === "running" ? "Keep going in the background" : "Close"}</button>`)}`;
     if (window.applyRole) applyRole();
   };
   modal("Changing storage class", '<div class="empty"><span class="spin2"></span></div>', true);

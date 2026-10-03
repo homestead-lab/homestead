@@ -33,12 +33,9 @@ window.composeImport = async () => {
     </div>
     <div class="compose-right" id="composeResult"><div class="empty">Paste a Compose file to check it.</div></div>
   </div>
-  <div class="modalactions compose-actions">
-    <span class="dim xs" id="composeState"></span>
-    <button class="btn" onclick="composeClear()">Clear</button>
+  ${UI.actions(`<button class="btn" onclick="composeClear()">Clear</button>
     <button class="btn" onclick="composeCheck(true)">Check again</button>
-    <button class="btn pri" id="composeCreate" data-need="operator" disabled onclick="composeCreate()">Create workloads</button>
-  </div>`, true, "compose");
+    <button class="btn pri" id="composeCreate" data-need="operator" disabled onclick="composeCreate()">Create workloads</button>`, '<span class="dim xs" id="composeState"></span>', {className:'compose-actions'})}`, true, "compose");
   if (window.applyRole) window.applyRole();
   $("#composeVars").addEventListener("input", () => composeChanged());
   $("#composeNs").addEventListener("change", () => composeChanged(0));
@@ -277,7 +274,7 @@ window.composeReview = async body => {
     childModal("Review Compose batch", `${composeCapacityHtml(response.capacity)}
       <div class="note">Each service is rechecked against the remaining batch before creation. A later failure stops the batch without deleting created workloads or volumes. Copy the Compose file somewhere safe if you need to recover it after a page refresh.</div>
       ${!response.capacity.blocked ? `<div class="note">Capacity warnings can be overridden, including conservative RAM estimates over 100%. Proceeding may cause memory pressure, OOM restarts or downtime; it does not change resource requests or limits.</div><label class="switch"><input type="checkbox" id="composeCapacityConfirm"> Proceed despite capacity warnings — I accept the batch, storage and partial-creation risks</label>` : ""}
-      <div id="composeApplyResult"></div><div class="modalactions"><button class="btn" onclick="modalBack()">Back</button><button class="btn pri" id="composeApply" ${response.capacity.blocked ? "disabled" : ""} onclick="composeConfirm()">Create reviewed workloads</button></div>`, true);
+      <div id="composeApplyResult"></div>${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back</button><button class="btn pri" id="composeApply" ${response.capacity.blocked ? "disabled" : ""} onclick="composeConfirm()">Create reviewed workloads</button>`)}`, true);
   } catch (e) { toast(e.message, "bad"); }
 };
 

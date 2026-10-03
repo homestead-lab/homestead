@@ -42,7 +42,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.297";
+const HOMESTEAD_VERSION = "2.8.298-dev.1";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -260,6 +260,7 @@ if (window.ResizeObserver && $("#jobTray")) {
 }
 function modal(t, h, wide, contextClass = "") {
   if (contextClass !== "volume-files" && window.filesDismiss) window.filesDismiss();
+  window.resetDialogDisclosures?.();
   window.__modalGuard = null;   // each modal decides for itself what is at stake
   $("#mtitle").textContent = t;
   $("#mbody").innerHTML = h;
@@ -374,8 +375,8 @@ function askDialog(message, { title = "", ok = "", danger = null, input = null }
     const risky = danger === null ? ASK_DANGER.test(String(message).trim()) : danger;
     layer.innerHTML = `<div class="askbox">${title ? `<h3>${esc(title)}</h3>` : ""}<p class="askmsg"></p>
       ${input ? `<input class="askin mono" autocomplete="off">` : ""}
-      <div class="row askbtns"><button class="btn" data-a="no">Cancel</button>
-        <button class="btn ${risky ? "danger" : "pri"}" data-a="yes">${esc(ok || (input ? "OK" : "Continue"))}</button></div></div>`;
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" data-a="no">Cancel</button>
+        <button class="btn ${risky ? "danger" : "pri"}" data-a="yes">${esc(ok || (input ? "OK" : "Continue"))}</button>`, "", {className:'askbtns'})}</div>`;
     layer.querySelector(".askmsg").textContent = String(message);
     const field = layer.querySelector(".askin");
     if (field) {
@@ -683,7 +684,7 @@ window.pagePlaceholder = pagePlaceholder;
 function pageSkeleton(view) {
   const bar = (width, height = 12) => `<span class="skel" style="width:${width};height:${height}px"></span>`;
   const repeat = (count, fn) => Array.from({ length: count }, (_, i) => fn(i)).join("");
-  const head = `<div class="phead"><div>${bar("min(280px,60vw)")}</div><div class="row skel-actions">${bar("84px", 32)}${bar("118px", 32)}</div></div>`;
+  const head = `${UI.pageHeader(``, ``, `${bar("84px", 32)}${bar("118px", 32)}`, {actionsClass:`skel-actions`, extraHtml:`${bar("min(280px,60vw)")}`})}`;
   const cards = (count, height) => `<div class="skel-grid">${repeat(count, () => `<div class="skel skel-card" style="height:${height}px"></div>`)}</div>`;
   const table = count => `<div class="card flat pad0 skel-table">${repeat(count, i => `<div class="skel-row">
       ${bar("30px", 30)}${bar(`${18 + (i * 7) % 12}%`)}${bar("9%")}${bar(`${20 + (i * 5) % 16}%`)}${bar("7%")}</div>`)}</div>`;

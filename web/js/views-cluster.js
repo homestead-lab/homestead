@@ -43,9 +43,8 @@ async function viewCluster() {
   const margin = cp.quorum_margin;
   const marginCopy = margin === null || margin === undefined ? "Unknown" : margin === 0 ? "No failure margin" : `${margin} member${margin === 1 ? "" : "s"}`;
   const serviceRows = (report.services || []).filter(service => service.pods || service.required);
-  paint(`<div class="phead"><div><h2>Cluster</h2><p>Harvester and Kubernetes platform health, separate from application health</p></div>
-    <div class="row">${moreMenu([{ label: "Shut down cluster…", icon: "power", run: "clusterShutdown()", need: "admin", danger: true }, { label: "Remove a host", icon: "trash", run: "clusterRemovePick()", need: "admin", danger: true }])}
-      <button class="btn pri" data-need="admin" onclick="clusterOnboarding()">${icon("plus")}Add a host</button></div></div>
+  paint(`${UI.pageHeader(`Cluster`, `Harvester and Kubernetes platform health, separate from application health`, `${moreMenu([{ label: "Shut down cluster…", icon: "power", run: "clusterShutdown()", need: "admin", danger: true }, { label: "Remove a host", icon: "trash", run: "clusterRemovePick()", need: "admin", danger: true }])}
+      <button class="btn pri" data-need="admin" onclick="clusterOnboarding()">${icon("plus")}Add a host</button>`)}
 
   ${summaryLine("cluster", [
       clusterPill(report.state, report.state === "healthy" ? "Platform healthy" : report.state === "critical" ? "Platform action required" : "Review items"),
@@ -66,25 +65,20 @@ async function viewCluster() {
 
 
   <div class="cluster-layout">
-    <section class="card flat cluster-wide"><div class="settings-card-head"><div><div class="ctitle">Nodes and capacity pressure</div>
-      <div class="csub">Roles, scheduling state, resource use, and Kubernetes pressure conditions</div></div>
-      ${clusterPill((report.capacity?.unready || []).length ? "critical" : (report.capacity?.pressure || []).length ? "attention" : "healthy",
-        `${(report.nodes || []).filter(node => node.ready).length}/${(report.nodes || []).length} ready`)}</div>
+    <section class="card flat cluster-wide">${UI.moduleHeader(`Nodes and capacity pressure`, `Roles, scheduling state, resource use, and Kubernetes pressure conditions`, `${clusterPill((report.capacity?.unready || []).length ? "critical" : (report.capacity?.pressure || []).length ? "attention" : "healthy",
+        `${(report.nodes || []).filter(node => node.ready).length}/${(report.nodes || []).length} ready`)}`)}
       <div class="cluster-node-grid">${(report.nodes || []).map(clusterNodeCard).join("") || '<div class="empty">No nodes reported.</div>'}</div></section>
 
-    <section class="card flat cluster-wide"><div class="settings-card-head"><div><div class="ctitle">Critical platform services</div>
-      <div class="csub">Observed system pods grouped by the job they perform</div></div></div>
+    <section class="card flat cluster-wide">${UI.moduleHeader(`Critical platform services`, `Observed system pods grouped by the job they perform`, ``)}
       <div class="cluster-service-grid">${serviceRows.map(clusterServiceCard).join("") || '<div class="empty">System service inventory unavailable.</div>'}</div>
       <div class="dim xs cluster-legend">“Not observed” is not treated as failed: some Harvester releases package or label components differently.</div></section>
 
-    <section class="card flat"><div class="settings-card-head"><div><div class="ctitle">Certificates and requests</div>
-      <div class="csub">Kubernetes certificate-signing requests; secret material is never displayed</div></div>${clusterPill(certs.state, certs.state)}</div>
+    <section class="card flat">${UI.moduleHeader(`Certificates and requests`, `Kubernetes certificate-signing requests; secret material is never displayed`, `${clusterPill(certs.state, certs.state)}`)}
       <div class="cluster-mini-stats"><span><b>${certs.pending || 0}</b> pending</span><span><b>${certs.failed || 0}</b> denied / failed</span><span><b>${certs.expiring || 0}</b> nearing requested lifetime</span></div>
       ${(certs.entries || []).length ? `<div class="cluster-csr-list">${certs.entries.slice(0, 5).map(row => `<div><span><b>${esc(row.name)}</b><small>${esc(row.signer || "unknown signer")}</small></span>${clusterPill(row.state === "approved" ? "healthy" : row.state === "pending" ? "attention" : "critical", row.state)}</div>`).join("")}</div>` : '<div class="empty small">No certificate-signing requests are currently retained.</div>'}
       <div class="dim xs">${esc(certs.note || "")}</div></section>
 
-    <section class="card flat"><div class="settings-card-head"><div><div class="ctitle">Recent platform warnings</div>
-      <div class="csub">Warning events from system namespaces and node objects in the last 24 hours</div></div>${clusterPill(warnings.length ? "attention" : "healthy", warnings.length ? `${warnings.length} warning${warnings.length === 1 ? "" : "s"}` : "clear")}</div>
+    <section class="card flat">${UI.moduleHeader(`Recent platform warnings`, `Warning events from system namespaces and node objects in the last 24 hours`, `${clusterPill(warnings.length ? "attention" : "healthy", warnings.length ? `${warnings.length} warning${warnings.length === 1 ? "" : "s"}` : "clear")}`)}
       <div class="cluster-warning-list">${warnings.slice(0, 8).map(row => `<div><span class="pill med">${esc(row.reason)}</span><span><b>${esc(row.object)}</b><small>${esc(row.namespace)} · ${esc(row.message)}</small></span><time>${esc(fmtAgo(row.age_seconds))}</time></div>`).join("") || '<div class="empty small">No recent platform warnings.</div>'}</div>
       ${warnings.length ? '<button class="btn sm" onclick="go(\'events\')">View all events</button>' : ""}</section>
 
@@ -121,8 +115,7 @@ async function clusterComponentsPaint(force = false) {
     if (force) toast("releases checked", "ok");
   } catch (e) {
     const host = $("#settingsComponents");
-    if (host && host.querySelector(".spin2")) host.innerHTML = `<div class="settings-card-head"><div class="ctitle">Platform versions</div>
-      <button class="btn sm" onclick="clusterComponentsPaint(true)">${icon("refresh")}Check</button></div>
+    if (host && host.querySelector(".spin2")) host.innerHTML = `${UI.moduleHeader(`Platform versions`, ``, `<button class="btn sm" onclick="clusterComponentsPaint(true)">${icon("refresh")}Check</button>`)}
       <div class="empty small">Could not load platform versions: ${esc(e.message)}</div>`;
     if (force) toast(e.message, "bad");
   }
@@ -160,15 +153,15 @@ function componentsCard(r, settings = false) {
   const rows = (r.components || []).filter(c => !(r.harvester && c.id === "cluster"));
   // Counted: what can be upgraded here. Harvester's own parts move with it.
   const behind = rows.filter(c => c.next).length;
-  return `<section class="card flat ${settings ? "settings-wide" : "cluster-wide"}"${settings ? ' data-tab="updates" id="settingsComponents"' : ' style="margin-top:14px"'}>
-    <div class="settings-card-head"><div><div class="ctitle">Platform versions</div>
-      <div class="csub">What runs under your apps, and whether anything newer is out. ${r.harvester
+  const body = `
+    ${UI.moduleHeader(`Platform versions`, `What runs under your apps, and whether anything newer is out. ${r.harvester
         ? "Harvester upgrades its own Longhorn and KubeVirt."
-        : "Upgrades go one minor version at a time, as each project supports."}</div></div>
-      <div class="row">${clusterPill(behind ? "attention" : "healthy", behind ? `${behind} update${behind === 1 ? "" : "s"}` : "up to date")}
-        <button class="btn sm" onclick="clusterComponentsPaint(true)">${icon("refresh")}Check</button></div></div>
+        : "Upgrades go one minor version at a time, as each project supports."}`, `${clusterPill(behind ? "attention" : "healthy", behind ? `${behind} update${behind === 1 ? "" : "s"}` : "up to date")}
+        <button class="btn sm" onclick="clusterComponentsPaint(true)">${icon("refresh")}Check</button>`)}
     <div class="release-list">${rows.map(componentRow).join("") || '<div class="dim small">Nothing to report.</div>'}</div>
-  </section>`;
+  `;
+  return settings ? UI.settingsCard(body, {tab:"updates",id:"settingsComponents"})
+    : `<section class="card flat cluster-wide" style="margin-top:14px">${body}</section>`;
 }
 
 const COMPONENT_EFFECT = {
@@ -192,8 +185,8 @@ window.componentUpgrade = async id => {
     <p>${esc(c.name)} ${esc(c.installed)} → <b class="mono">${esc(c.next)}</b>${c.steps_left ? ` <span class="dim">(then ${esc(c.newest)}, as a further step)</span>` : ""}</p>
     <div class="note">${esc(COMPONENT_EFFECT[id](c, c.next).replace(/\s+/g, " "))}</div>
     ${c.notes_url ? `<p class="small"><a href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">Read ${esc(c.next)}'s release notes ${icon("ext")}</a> first: they list anything to do before or after.</p>` : ""}
-    <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn pri" onclick="componentUpgradeGo(${jsq(id)}, ${jsq(c.next)})">Upgrade to ${esc(c.next)}</button></div>`);
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn pri" onclick="componentUpgradeGo(${jsq(id)}, ${jsq(c.next)})">Upgrade to ${esc(c.next)}</button>`)}`);
 };
 
 window.componentUpgradeGo = async (id, to) => {
@@ -214,8 +207,8 @@ window.harvesterUpgradeStart = version => {
     <div class="note">Before starting: every node Ready, no volume degraded, and a backup of anything precious. VMs that cannot live-migrate
       (a passed-through device, or one node) are shut down while their node restarts.</div>
     <div class="f"><label>Type <b class="mono">${esc(version)}</b> to start</label><input id="hv_up_confirm" class="mono" autocomplete="off"></div>
-    <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn pri" onclick="harvesterUpgradeGo(${jsq(version)})">Start the upgrade</button></div>`);
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn pri" onclick="harvesterUpgradeGo(${jsq(version)})">Start the upgrade</button>`)}`);
 };
 
 window.harvesterUpgradeGo = async version => {
@@ -290,10 +283,8 @@ function upgradesCard(r) {
   const status = !r.current ? "Harvester did not report its version"
     : behind ? `${r.stable.tag} is out; this cluster runs v${r.current}` : `v${r.current} is the newest stable release`;
   return `<section class="card flat cluster-wide upgrades-card" style="margin-top:14px">
-    <div class="settings-card-head"><div><div class="ctitle">Harvester releases</div>
-      <div class="csub">${esc(status)}. An upgrade Harvester offers can be started here or from its own dashboard; either way it is followed here.</div></div>
-      <div class="row">${clusterPill(r.active ? "attention" : behind ? "attention" : "healthy", r.active ? "upgrading" : behind ? "update available" : "up to date")}
-        <button class="btn sm" onclick="clusterUpgradesPaint(true)">${icon("refresh")}Check</button></div></div>
+    ${UI.moduleHeader(`Harvester releases`, `${esc(status)}. An upgrade Harvester offers can be started here or from its own dashboard; either way it is followed here.`, `${clusterPill(r.active ? "attention" : behind ? "attention" : "healthy", r.active ? "upgrading" : behind ? "update available" : "up to date")}
+        <button class="btn sm" onclick="clusterUpgradesPaint(true)">${icon("refresh")}Check</button>`)}
     ${r.last ? upgradeProgress(r.last) : ""}
     <div class="release-list">
       ${releaseRow("NEWEST STABLE", r.stable, "stable")}
