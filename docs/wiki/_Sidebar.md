@@ -13,6 +13,7 @@
 - [App Store](App-Store)
 - [Importing](Importing)
 - [Storage](Storage)
+- [Longhorn V2 considerations](Storage#longhorn-v2-support-and-considerations)
 - [Data protection](Data-protection)
 - [Network shares](Network-shares)
 - [Networking](Networking)

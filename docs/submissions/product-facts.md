@@ -71,6 +71,8 @@ Homestead brings hyperconvergence home: apps, VMs, replicated storage and networ
 
 - Kubernetes is required for real cluster management. A published container image and Compose import do not mean Homestead is a standalone Docker Compose deployment or a Docker-host manager.
 - Describe resilience as configurable: it depends on control-plane quorum, healthy replicas, workload placement, spare capacity and network configuration. The k3s guide explains that three servers tolerate one failing and that a two-server control plane does not. Avoid blanket zero-downtime or zero-data-loss promises.
+- For only two machines, recommend two linked single-node clusters for independent operation, or a third voting k3s server with suitable hardware. Linking is shared management, not automatic failover or cross-cluster storage replication. A small quorum server does not add a storage replica.
+- Longhorn V2 is optional and has version-specific CPU, memory, disk and ARM requirements. Do not describe it as universally faster or lighter than V1; see [V2 considerations](../wiki/Storage.md#longhorn-v2-support-and-considerations).
 - The k3s guide gives 2 CPU cores and 4 GB RAM as a starting point. This is not a validated minimum for every VM, storage or high-availability configuration.
 - The dashboard container's manifest requests 50m CPU and 96Mi RAM and sets a 256Mi memory limit. These are container settings, not whole-cluster hardware requirements. Its data claim requests 2Gi mounted at `/data`; the Service exposes TCP 8088 to container port 8080.
 - Mention iOS/Android access as a browser/PWA interface over HTTPS, not native App Store applications.
