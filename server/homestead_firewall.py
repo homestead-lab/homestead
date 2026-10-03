@@ -78,8 +78,10 @@ def _target(obj, kind):
     selector = copy.deepcopy(spec.get("selector") or {})
     warnings, blocked = [], ""
     if kind == "VirtualMachine":
-        # Template labels propagate to each launcher across VM restarts.
-        selector = {"matchLabels": copy.deepcopy(labels)} if labels else {}
+        # KubeVirt puts this stable, VM-specific label on every launcher pod.
+        # Template labels can be shared by unrelated VMs and change on edits.
+        labels = {**labels, "vm.kubevirt.io/name": name}
+        selector = {"matchLabels": {"vm.kubevirt.io/name": name}}
         networks = pod.get("networks") or []
         implicit = not networks and pod.get("domain", {}).get("devices", {}).get("autoattachPodInterface") is not False
         if not implicit and not any("pod" in network for network in networks):
@@ -108,11 +110,17 @@ def targets():
     return sorted(result, key=lambda row: (row["namespace"], row["name"], row["kind"]))
 
 
-def _resolve(target):
-    if not isinstance(target, dict) or target.get("kind") not in KINDS:
+def _target_identity(target):
+    if not isinstance(target, dict) or not isinstance(target.get("kind"), str) or target["kind"] not in KINDS:
         raise ValueError("Choose a workload")
-    kind = target["kind"]
     ns, name = _word(target.get("namespace"), "namespace"), _word(target.get("name"), "workload name")
+    if not isinstance(target.get("uid"), str) or not target["uid"].strip():
+        raise ValueError("Choose a workload with a current identity")
+    return target["kind"], ns, name
+
+
+def _resolve(target):
+    kind, ns, name = _target_identity(target)
     group = "kubevirt.io/v1" if kind == "VirtualMachine" else "apps/v1"
     row = _target(kget(f"/apis/{group}/namespaces/{ns}/{KINDS[kind]}/{name}"), kind)
     if not target.get("uid") or row["uid"] != target["uid"]:
@@ -142,7 +150,9 @@ def _rules(rows, direction):
     for row in rows:
         if not isinstance(row, dict) or set(row) - {"peer", "value", "protocol", "ports"}:
             raise ValueError("Invalid firewall rule")
-        peer, value = row.get("peer"), str(row.get("value") or "").strip()
+        if not isinstance(row.get("value", ""), str) or not isinstance(row.get("ports", ""), str):
+            raise ValueError("Peer addresses and ports must be text")
+        peer, value = row.get("peer"), row.get("value", "").strip()
         rule = {}
         if peer == "cidr":
             try:
@@ -156,7 +166,7 @@ def _rules(rows, direction):
         elif peer != "any" or value:
             raise ValueError("Choose anywhere, a namespace, or an IP range")
         protocol = row.get("protocol", "TCP")
-        ports = str(row.get("ports") or "").strip()
+        ports = row.get("ports", "").strip()
         if protocol not in ("TCP", "UDP", "SCTP", "Any"):
             raise ValueError("Choose TCP, UDP, SCTP, or any protocol")
         if protocol == "Any":
@@ -217,7 +227,8 @@ def _editable(obj):
         return None
     try:
         config = json.loads(meta.get("annotations", {}).get(CONFIG, ""))
-        if (config.get("name") != meta["name"] or config.get("namespace") != meta["namespace"] or
+        _, target_ns, _ = _target_identity(config.get("target"))
+        if (target_ns != meta["namespace"] or config.get("name") != meta["name"] or config.get("namespace") != meta["namespace"] or
                 _stored_spec(_spec(config, config["selector"])) != _stored_spec(obj.get("spec", {}))):
             return None
         return config

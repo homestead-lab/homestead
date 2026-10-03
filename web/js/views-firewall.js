@@ -173,27 +173,33 @@ window.firewallReview = async () => {
 };
 window.firewallSave = async () => {
   if (!FIREWALL_REVIEW) return toast("Review the current policy before applying", "bad");
-  const config = FIREWALL_REVIEW;
+  const config = FIREWALL_REVIEW, editor = document.getElementById("fw_editor"), navigation = window.NAV_TOKEN;
   firewallInvalidate();
   try {
     const result = await firewallPost("save", config);
-    closeModal(); toast(result.message, "ok"); await viewFirewall();
+    await firewallMutationFinished(result, editor, navigation);
   } catch (error) { toast(error.message, "bad"); }
 };
 window.firewallRemove = (ns, name) => {
   const row = STATE.data.firewall?.policies.find(p => p.namespace === ns && p.name === name);
   if (!row?.managed) return;
   FIREWALL_EDITOR = {removing:row};
-  modal("Remove firewall policy", UI.lead(`Remove <b>${esc(ns)}/${esc(name)}</b>?`) +
+  modal("Remove firewall policy", '<div id="fw_delete">' + UI.lead(`Remove <b>${esc(ns)}/${esc(name)}</b>?`) +
     UI.callout("warn", "Connectivity will change", "Remaining policies still apply. Removing the last policy for a direction allows all traffic in that direction; removing an allow policy can also block connections allowed only by it.") +
-    UI.actions(UI.cancel() + UI.button("Remove policy", "firewallDeleteConfirmed()", {kind:"danger", attrs:'data-need="admin"'})));
+    UI.actions(UI.cancel() + UI.button("Remove policy", "firewallDeleteConfirmed()", {kind:"danger", attrs:'data-need="admin"'})) + '</div>');
 };
 window.firewallDeleteConfirmed = async () => {
-  const row = FIREWALL_EDITOR?.removing;
+  const row = FIREWALL_EDITOR?.removing, editor = document.getElementById("fw_delete"), navigation = window.NAV_TOKEN;
   if (!row) return;
   FIREWALL_EDITOR = null;
   try {
     const result = await firewallPost("delete", {namespace:row.namespace, name:row.name, uid:row.uid, resource_version:row.resource_version});
-    closeModal(); toast(result.message, "ok"); await viewFirewall();
+    await firewallMutationFinished(result, editor, navigation);
   } catch (error) { toast(error.message, "bad"); }
 };
+
+async function firewallMutationFinished(result, editor, navigation) {
+  toast(result.message, "ok");
+  if (editor?.isConnected && navigation === window.NAV_TOKEN) closeModal();
+  if (navigation === window.NAV_TOKEN && STATE.view === "network" && networkTab() === "firewall") await viewFirewall();
+}
