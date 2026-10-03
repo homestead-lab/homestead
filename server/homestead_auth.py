@@ -199,7 +199,8 @@ def list_users():
 # resourceVersion makes the write atomic across Homestead replicas.
 _DASHBOARD_WIDTHS = {"compute": (4, 6, 8, 12), "throughput": (4, 6, 8, 12),
                      "storage": (4, 6, 8, 12), "nodes": (12,), "cpu": (4, 6, 8, 12),
-                     "memory": (4, 6, 8, 12), "history": (8, 12), "portal": (4, 6, 8, 12)}
+                     "memory": (4, 6, 8, 12), "history": (8, 12), "portal": (4, 6, 8, 12),
+                     **{key: (4, 6, 8, 12) for key in ("health", "workloads", "backups", "updates", "jobs")}}
 
 
 def _dashboard_layout(layout):

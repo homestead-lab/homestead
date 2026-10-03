@@ -8,7 +8,7 @@ function setup(items) {
     esc: value => String(value || ""), jsq: value => JSON.stringify(value), icon: () => "",
     api: async () => ({ok: true}), setTimeout() {}, clearTimeout() {}};
   ctx.window = ctx; vm.createContext(ctx);
-  vm.runInContext(fs.readFileSync("web/js/operations.js", "utf8"), ctx);
+  vm.runInContext(fs.readFileSync("web/js/ui.js","utf8"),ctx); vm.runInContext(fs.readFileSync("web/js/operations.js", "utf8"), ctx);
   return {ctx, fields};
 }
 function move(id, status, dismissible) {

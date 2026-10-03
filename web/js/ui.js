@@ -118,6 +118,9 @@ const UI = (() => {
   const field = (label, controlHtml, { help = "", tipHtml = "", wide = false } = {}) => `<div class="ui-field${wide ? " wide" : ""}">
     <label>${text(label)}${tipHtml}</label>${controlHtml}${help ? `<div class="ui-help">${text(help)}</div>` : ""}</div>`;
 
+  const statusDot = kind => `<i class="ui-status-dot ${["ok","bad","warn","info","neutral"].includes(kind)?kind:"neutral"}" aria-hidden="true"></i>`;
+  const insightList = rows => `<div class="ui-insight-list">${rows.map(r=>`<div class="ui-insight-row">${statusDot(r.tone)}<div><b>${text(r.title)}</b><small>${text(r.detail)}</small></div><div class="ui-insight-action">${chip(r.label,r.tone)}${r.onclick?button(r.action || "Review",r.onclick):""}</div></div>`).join("")}</div>`;
+
   const chip = (label, kind = "") => `<span class="ui-chip ${TONES.has(kind) ? kind : ""}">${text(label)}</span>`;
 
   /* kind: pri | danger | "" ; attrs are extra attributes, already escaped. */
@@ -198,7 +201,7 @@ const UI = (() => {
     fields, field, chip, button, actions, cancel, stats, guide,
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,
-    selectSection: selectDialogSection, masterDetail: dialogMasterDetail };
+    statusDot, insightList, selectSection: selectDialogSection, masterDetail: dialogMasterDetail };
 })();
 window.UI = UI;
 
@@ -365,7 +368,7 @@ function stepper(id, sections, finishHtml, options) {
 /* A grouped list and one selected detail, stacked on phones. Domain actions and
    polling stay with the caller; this owns navigation and disclosure structure. */
 function dialogMasterDetail(groups, selectedKey, detailHtml, { label = "Items", detailLabel = "Selected item", onSelect } = {}) {
-  const rows = items => items.map(item => `<button type="button"${String(item.key) === String(selectedKey) ? ' aria-current="true"' : ''} onclick="${esc(onSelect(item.key))}"><span>${esc(item.title)}</span>${item.detail ? `<small${item.attention ? ' class="needs-attention"' : ''}>${esc(item.detail)}</small>` : ""}</button>`).join("");
+  const rows = items => items.map(item => `<button type="button"${String(item.key) === String(selectedKey) ? ' aria-current="true"' : ''} onclick="${esc(onSelect(item.key))}"><span>${item.tone ? UI.statusDot(item.tone) : ""}${esc(item.title)}</span>${item.detail ? `<small${item.attention ? ' class="needs-attention"' : ''}>${esc(item.detail)}</small>` : ""}</button>`).join("");
   return `<div class="dialog-rail dialog-master-detail"><nav class="dialog-master-nav" aria-label="${esc(label)}">${groups.filter(group => group.items.length).map(group =>
     group.collapsed ? UI.more(group.title, rows(group.items), group.items.some(item => String(item.key) === String(selectedKey)), group.key) : UI.section(group.title, rows(group.items))).join("")}</nav>
     <section class="dialog-master-content" aria-label="${esc(detailLabel)}">${detailHtml}</section></div>`;
