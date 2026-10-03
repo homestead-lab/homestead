@@ -218,6 +218,8 @@ grow into a cluster, on supported **x86-64 or ARM64** hardware.
 | Self-hosted app store | ✅ | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ | ✅ |
 | Helm chart management (UI) | ✅ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ | ✅ |
 | Application containers | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ | ⚪ | ✅ |
+| Linux system containers (LXC / LXD) | ❌ | ⚪ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| Single sign-on (SSO) | ❌ | ✅ | ✅ | ❌ | ⚪ | ⚪ | ✅ | ✅ |
 | Virtual machines | ✅ | ✅ | ✅ | ❌ | ✅ | ⚪ | ✅ | ⚪ |
 | GPU / PCI passthrough to VMs | ✅ | ✅ | ✅ | ❌ | ✅ | ⚪ | ✅ | ⚪ |
 | USB devices in containers | ✅ | ✅ | ✅ | ⚪ | ⚪ | ⚪ | ✅ | ⚪ |
@@ -234,6 +236,8 @@ grow into a cluster, on supported **x86-64 or ARM64** hardware.
 Helm means managing charts through a UI. Headlamp's ticks include its official
 App Catalog; infrastructure features depend on the connected Kubernetes cluster.
 Homestead's Helm changes require the K3s/RKE2 Helm controller.
+System containers mean LXC/LXD management, distinct from application containers.
+SSO means identity-provider login to management; an external access gate alone does not count.
 
 **Compared with Proxmox:** Homestead brings an app store, hardware-aware app
 placement, managed file shares, LAN address inventory and MQTT discovery together
