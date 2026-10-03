@@ -274,7 +274,7 @@ def _public(item):
     if item.get("ref", {}).get("cdi_cleanup"):
         out["cancellable"] = False
     out["cleanable"] = _cleanable(item)
-    out["dismissible"] = item.get("status") in TERMINAL and not _receipt_needed(item) and not _recovery_needed(item)
+    out["dismissible"] = _dismissible(item)
     if item.get("kind") == "disk-v2-convert":
         out["disk_v2_preparation"] = True
         out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("evacuating", "awaiting-erase", "cancelled")
@@ -729,13 +729,37 @@ def _archived_preparation(item):
             ref.get("preparation_archived") is True and bool(ref.get("prepared")) and ref.get("retain_resources") is False)
 
 
+def _settled_data_move(item):
+    # The completion reconciler releases this hold only after verified startup
+    # or recovery. A terminal status alone is not permission to hide the job.
+    return (item.get("kind") == "self-data-handoff" and
+            item.get("status") in ("succeeded", "cancelled") and
+            item.get("ref", {}).get("retain_resources") is False)
+
+
+def _history_hidden(item):
+    return _archived_preparation(item) or (
+        _settled_data_move(item) and bool(item.get("history_dismissed_at")))
+
+
+def _dismissible(item):
+    return (_settled_data_move(item) or
+            (item.get("status") in TERMINAL and not _receipt_needed(item) and not _recovery_needed(item)))
+
+
+def _hide_data_move(item):
+    # Keep the full dispatch identity, log and audit in their original store.
+    # Receipt protection still prevents pruning; clearing never releases holds.
+    item.setdefault("history_dismissed_at", _now())
+
+
 def snapshot():
     """Inspect atomic saved files without creating locks or advancing jobs.
 
     This is a display snapshot, not a mutation authorization. The two journals
     are not a transaction; inconsistent/unavailable reads remain an error.
     """
-    return [_public(item) for item in _read() if not _archived_preparation(item)]
+    return [_public(item) for item in _read() if not _history_hidden(item)]
 
 
 def list_operations():
@@ -751,7 +775,7 @@ def list_operations():
         if changed:
             _write(items)
         items.sort(key=lambda item: item.get("started_at", ""), reverse=True)
-        return [_public(item) for item in items if not _archived_preparation(item)]
+        return [_public(item) for item in items if not _history_hidden(item)]
 
 
 def dismiss_finished():
@@ -762,11 +786,18 @@ def dismiss_finished():
     """
     with _lock:
         items = _read()
-        keep = [item for item in items if item.get("status") not in TERMINAL or _receipt_needed(item) or _recovery_needed(item)]
-        removed = len(items) - len(keep)
+        keep, removed = [], 0
+        for item in items:
+            if _history_hidden(item) or not _dismissible(item):
+                keep.append(item)
+                continue
+            removed += 1
+            if _settled_data_move(item):
+                _hide_data_move(item)
+                keep.append(item)
         if removed:
             _write(keep)
-        visible = [item for item in keep if not _archived_preparation(item)]
+        visible = [item for item in keep if not _history_hidden(item)]
         protected = sum(item.get("status") in TERMINAL for item in visible)
     return {"ok": True, "dismissed": removed, "remaining": len(visible),
             "detail": (f"cleared {removed} finished job" + ("" if removed == 1 else "s")
@@ -810,6 +841,10 @@ def dismiss(operation_id):
             raise ValueError("operation not found")
         if match.get("status") not in TERMINAL:
             raise ValueError("an active operation cannot be dismissed")
+        if _settled_data_move(match):
+            _hide_data_move(match)
+            _write(items)
+            return {"ok": True, "id": operation_id}
         if _receipt_needed(match):
             raise ValueError("This power receipt is still needed for recovery or replay protection; inspect its job and wait for the approval to expire")
         if _recovery_needed(match):
