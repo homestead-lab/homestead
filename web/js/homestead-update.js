@@ -10,11 +10,11 @@ let HOMESTEAD_CHANNEL_SAVING = false;
 
 function homesteadChannelPicker() {
   const channel = STATE.data.appSettings?.updates?.channel || STATE.data.imageUpdates?.channel || "prod";
-  return `<div class="srows"><div class="srow"><div class="srow-l"><b>Release channel</b>
-      <div class="dim xs">Prod has stable releases. Dev has preview releases. Changing channel checks for a release; installation still needs your review.</div></div>
-    <div class="srow-c"><select aria-label="Homestead release channel" data-need="admin" onchange="homesteadChannelSave(this.value)" ${HOMESTEAD_CHANNEL_SAVING || !can("admin") ? "disabled" : ""}>
+  return `<div class="srows">${settingRow("Release channel",
+    "Prod has stable releases. Dev has preview releases. Changing channel checks for a release; installation still needs your review.",
+    `<select aria-label="Homestead release channel" data-need="admin" onchange="homesteadChannelSave(this.value)" ${HOMESTEAD_CHANNEL_SAVING || !can("admin") ? "disabled" : ""}>
       <option value="prod" ${channel === "prod" ? "selected" : ""}>Prod · stable</option>
-      <option value="dev" ${channel === "dev" ? "selected" : ""}>Dev · preview</option></select></div></div></div>`;
+      <option value="dev" ${channel === "dev" ? "selected" : ""}>Dev · preview</option></select>`)}</div>`;
 }
 
 window.homesteadChannelSave = async channel => {
@@ -72,11 +72,11 @@ function paintBell() {
   // one stays under Needs you until it is dismissed.
   const operations = STATE.data.operations || [];
   const active = operations.filter(op => window.operationActive ? operationActive(op) : !["succeeded", "failed", "cancelled"].includes(op.status));
-  const failedJobs = operations.filter(op => op.status === "failed" && op.dismissible !== false);
+  const failedJobs = operations.filter(op => op.status === "failed");
   const jobRow = op => `<button class="bell-job" onclick="this.closest('details').open=false;openOperation(${jsq(op.href || "/")},${jsq(op.id || "")})">
       <span class="bell-job-top"><b>${esc(op.title)}</b><span>${op.progress != null ? `${Math.round(op.progress)}%` : esc(op.status)}</span></span>
       <span class="bell-job-msg">${esc(op.message || op.status || "")}</span>
-      <span class="jobmeter"><span style="width:${Math.max(2, Math.min(100, op.progress || 0))}%"></span></span></button>`;
+      ${op.progress != null && Number.isFinite(Number(op.progress)) ? `<span class="jobmeter"><span style="width:${Math.max(0, Math.min(100, Number(op.progress)))}%"></span></span>` : ""}</button>`;
   const rows = [
     waiting.length ? row("homesteadUpdateDialog()", "update", release ? `Homestead ${release} is available` : plural(waiting.length, "Homestead helper update")) : "",
     images ? row("imageUpdateCenter()", "box", plural(images, "container update")) : "",
@@ -254,10 +254,9 @@ window.homesteadUpdateCheck = async button => {
 function homesteadUpdateCardPaint() {
   const card = $("#homesteadUpdateCard");
   if (!card) return;
-  card.innerHTML = `<div class="ctitle">Homestead updates</div>
-    <div class="csub">Homestead's release and the helpers it runs are updated here, not with your apps
-      ${tip("The SMB and NFS servers and the object store moves use are part of Homestead: hidden with the platform on the Containers page, and updated from here. How updates are approved is under Settings › General.")}</div>
-    <div class="ui-stack">${homesteadUpdateBody(true)}</div>`;
+  card.innerHTML = UI.moduleHeader("Homestead updates", `Homestead and its built-in services
+    ${tip("Includes the SMB and NFS servers and the object store used for moves. Installation always requires review. Container update policy is also under Settings → Updates.")}`) +
+    `<div class="ui-stack">${homesteadUpdateBody(true)}</div>`;
   if (window.applyRole) applyRole();
   fleetUpdatesLoad();
 }

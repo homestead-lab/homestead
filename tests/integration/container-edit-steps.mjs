@@ -43,7 +43,7 @@ try {
       window.editReview = async body => { window.testSaved = body; };
       await wlEdit("lab", name, true);
     }, { name, theme });
-    assert.deepEqual(await page.locator("#e_steps .stepper-chip").allTextContents(), titles.map((title, index) => `${index + 1}${title}`));
+    assert.deepEqual(await page.locator("#e_steps .stepper-chip").allTextContents(), titles);
     const pane = async id => page.locator(`#${id}`).evaluate(el => +el.closest(".stepper-pane").dataset.i);
     for (const [id, expected] of [["e_image_0", 0], ["e_cpu_0", 1], ["e_env_0", 2], ["e_seed_0", 2], ["e_vols_0", 3]]) {
       assert.equal(await page.locator(`#${id}`).count(), 1);
@@ -52,14 +52,14 @@ try {
     await page.locator("#e_container_name_0").fill("primary-renamed");
     await page.locator("#e_image_0").fill("example/app:next");
     await page.evaluate(() => { window.testImageInput = document.querySelector("#e_image_0"); });
-    await page.locator("#e_steps [data-next]").click();
+    await page.evaluate(() => stepGo("e_steps", 1));
     await page.locator("#e_cpu_0").fill("75m");
     await page.locator("#e_mem_0").fill("384Mi");
     await page.locator("#e_mem_limit_0").fill("2Gi");
     await page.locator("#e_pv_0_caps").fill("SYS_TIME");
     await page.locator("#e_ports_0 .ep-host").fill("8099");
     assert.equal(await page.locator("#e_ports_note").isVisible(), true);
-    await page.locator("#e_steps [data-next]").click();
+    await page.evaluate(() => stepGo("e_steps", 2));
     await page.locator("#e_env_0 .ev").fill("changed-primary");
     await page.locator("#e_seed_0").fill("fixture: changed");
     if (multi) {
@@ -67,14 +67,15 @@ try {
       await page.locator("#e_env_1 .ev").fill("changed-sidecar");
     }
     assert.equal(await page.locator("#e_env_0").evaluate(el => el.previousElementSibling.textContent.includes("not exposed")), true);
-    await page.locator("#e_steps [data-next]").click();
+    await page.evaluate(() => stepGo("e_steps", 3));
     await page.locator("#e_vols_0 .vro").check();
     for (let index = 0; index < titles.length; index++) {
-      await page.evaluate(index => stepGo("e_steps", index), index);
+      if (width <= 640) await page.locator("#e_steps .dialog-section-picker select").selectOption(String(index));
+      else await page.locator(`#e_steps .stepper-chip[data-i="${index}"]`).click();
       assert.equal(await page.locator("#e_steps > .stepper-pane:not([hidden])").count(), 1);
       assert.equal(await page.locator("#e_save").isVisible(), true);
       assert.equal(await page.locator("#mbody").evaluate(el => el.scrollWidth <= el.clientWidth + 1), true);
-      assert.equal(await page.locator(`.stepper-chip[data-i="${index}"]`).evaluate(el => {
+      if (width > 640) assert.equal(await page.locator(`.stepper-chip[data-i="${index}"]`).evaluate(el => {
         const r = el.getBoundingClientRect(), parent = el.parentElement.getBoundingClientRect();
         const header = document.querySelector(".modalhead").getBoundingClientRect();
         return r.left >= parent.left - 1 && r.right <= parent.right + 1 && r.top >= header.bottom - 1;

@@ -10,7 +10,7 @@ function setup() {
     esc:value=>String(value ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])), toast:()=>{}, ask:async()=>true, closeModal:()=>{}, movesRepaint:()=>{}, tip:t=>t,
     childModal:(title,html)=>{ctx.modalTitle=title;ctx.modalHtml=html;},
     api:(path,opts)=> { calls.push({path,body:JSON.parse(opts.body)}); return new Promise(resolve=>replies.push(resolve)); }};
-  ctx.window=ctx; vm.createContext(ctx); ctx.jsq=value=>ctx.esc(JSON.stringify(value));
+  ctx.window=ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx); ctx.jsq=value=>ctx.esc(JSON.stringify(value));
   vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js","utf8"),ctx);
   return {ctx,fields,calls,replies};
 }

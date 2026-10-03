@@ -99,14 +99,13 @@ function ipamFiltered(rows) {
 
 function renderIpam() {
   const data = STATE.data.ipam || { subnets: [], suggested: [], unifi: {} };
-  const head = `<div class="phead"><div><h2>Networking</h2><p>Every address on your subnets: documented, used by the cluster${(data.unifi || {}).configured ? ", answering, or known to UniFi" : " or answering a scan"}</p></div>
-    <div class="row ipam-head-acts"><button class="btn" data-need="operator" onclick="ipamSubnets()">Subnets</button>
+  const head = `${UI.pageHeader(`Networking`, `Every address on your subnets: documented, used by the cluster${(data.unifi || {}).configured ? ", answering, or known to UniFi" : " or answering a scan"}`, `<button class="btn" data-need="operator" onclick="ipamSubnets()">Subnets</button>
       ${data.subnets.length ? `<button class="btn ipam-wide" data-need="operator" onclick="ipamImport()">Import CSV</button>
       <button class="btn ipam-wide" onclick="ipamExport()">Export CSV</button>
       <details class="actionmenu ipam-narrow"><summary class="btn" title="Import or export">⋯</summary><div class="actionmenu-pop">
         <button data-need="operator" onclick="this.closest('details').open=false;ipamImport()">${icon("import")}Import CSV</button>
         <button onclick="this.closest('details').open=false;ipamExport()">${icon("ext")}Export CSV</button></div></details>
-      <button class="btn pri" data-need="operator" onclick="ipamEdit()">＋ Address</button>` : ""}</div></div>
+      <button class="btn pri" data-need="operator" onclick="ipamEdit()">＋ Address</button>` : ""}`, {actionsClass:`ipam-head-acts`})}
     ${networkTabs("ip")}`;
   if (!data.subnets.length) {
     return paint(`${head}<div class="empty ipam-empty"><b>No subnets yet.</b> Add the LAN the cluster sits on, with its DHCP range, and Homestead fills in what the cluster uses.
@@ -293,8 +292,8 @@ window.ipamEdit = (ip = "") => {
     <div class="f"><label>Notes</label><textarea id="ia_note" rows="3" maxlength="300">${esc(row.note || "")}</textarea></div>
     ${(row.flags || []).map(f => `<div class="note ${f.level === "warn" ? "bad" : ""}">${esc(f.text)}</div>`).join("")}
     ${row.scan?.up ? `<div class="dim xs">Last scan: answering${row.scan.ports?.length ? ` on ${row.scan.ports.join(", ")}` : ""}${row.scan.rdns ? ` · ${esc(row.scan.rdns)}` : ""}</div>` : ""}
-    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="ipamSave()">Save</button><button class="btn" onclick="closeModal()">Cancel</button>
-      ${ip && ipamRows(subnet).some(r => r.ip === ip) ? `<button class="btn danger" style="margin-left:auto" data-need="operator" onclick="ipamRemove(${jsq(ip)})">Remove</button>` : ""}</div>`);
+    ${UI.actions(`<button class="btn pri" onclick="ipamSave()">Save</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
+      ${ip && ipamRows(subnet).some(r => r.ip === ip) ? `<button class="btn danger" style="margin-left:auto" data-need="operator" onclick="ipamRemove(${jsq(ip)})">Remove</button>` : ""}`)}`);
 };
 window.ipamRemove = async ip => {
   if (!(await ask(ipamRemoveQuestion(1)))) return;
@@ -332,12 +331,12 @@ function ipamSubnetRow(s = {}) {
 }
 window.ipamSubnets = (add = "") => {
   const data = STATE.data.ipam || { subnets: [] };
-  modal("Subnets", `<p class="muted small">The networks Homestead keeps addresses for, each up to a /22. Give each its DHCP range so static addresses and VIPs inside it are flagged, and the next free address is found outside it.</p>
+  modal("Subnets", `<p class="muted small">Track subnets up to /22. Add DHCP ranges to flag address conflicts and suggest free addresses outside those ranges.</p>
     <div id="is_rows">${data.subnets.map(ipamSubnetRow).join("")}${add ? ipamSubnetRow({ cidr: add, name: "LAN", gateway: add.replace(/\.0\/24$/, ".1") }) : ""}</div>
     <div class="row" style="margin-top:10px"><button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow())">＋ Subnet</button>
       ${(data.suggested || []).map(c => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow({cidr:${jsq(c)}}))">＋ ${esc(c)} <span class="dim">(cluster nodes)</span></button>`).join("")}
       ${(ipamUnifiOn() ? data.unifi_networks || [] : []).map((n, i) => `<button class="btn" onclick="$('#is_rows').insertAdjacentHTML('beforeend', ipamSubnetRow(STATE.data.ipam.unifi_networks[${i}]))">＋ ${esc(n.name || n.cidr)} <span class="dim">(UniFi${n.vlan ? ` · VLAN ${n.vlan}` : ""})</span></button>`).join("")}</div>
-    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="ipamSubnetsSave()">Save subnets</button><button class="btn" onclick="closeModal()">Cancel</button></div>`, true);
+    ${UI.actions(`<button class="btn pri" onclick="ipamSubnetsSave()">Save subnets</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`, true);
 };
 window.ipamSubnetRow = ipamSubnetRow;
 window.ipamSubnetsSave = async () => {
@@ -352,17 +351,17 @@ window.ipamSubnetsSave = async () => {
 window.ipamUnifi = async () => {
   if (!STATE.data.ipam) { try { STATE.data.ipam = await api("/api/ipam"); } catch (e) { STATE.data.ipam = { subnets: [], unifi: {} }; } }
   const u = (STATE.data.ipam || {}).unifi || {};
-  modal("UniFi", `<p class="muted small">Brings in the clients and devices a UniFi Network controller knows - names, MACs, addresses - and its DHCP reservations. It never changes the controller. Create an API key on the console under <b>Settings → Control Plane → Integrations</b>.</p>
+  modal("UniFi", `<p class="muted small">Import UniFi devices, clients and DHCP reservations without changing the controller. Create an API key under <b>Settings → Control Plane → Integrations</b>.</p>
     <div class="f"><label>Console address</label><input id="uf_url" value="${esc(u.url || "")}" placeholder="https://192.0.2.1"></div>
     <div class="f2"><div class="f"><label>API key</label><input id="uf_key" type="password" autocomplete="off" placeholder="${u.has_key ? "saved · leave blank to keep" : "paste the key"}"></div>
       <div class="f"><label>Site</label><input id="uf_site" value="${esc(u.site || "default")}"></div></div>
     <label class="switch"><input type="checkbox" id="uf_tls" ${u.verify_tls ? "checked" : ""}> Check the console's certificate ${tip("Consoles ship a self-signed certificate, so this is off unless yours has a real one.")}</label>
     ${u.last_sync ? `<div class="dim xs">Last synced ${esc(fmtAgo(Date.now() / 1000 - u.last_sync))}${u.site_name ? ` from ${esc(u.site_name)}` : ""}${u.note ? ` · ${esc(u.note)}` : ""}</div>` : ""}
     ${u.last_error ? `<div class="note bad">${esc(u.last_error)}</div>` : ""}
-    <div class="row" style="margin-top:14px"><button class="btn pri" data-need="admin" onclick="ipamUnifiSave(true)">Save and sync</button>
+    ${UI.actions(`<button class="btn pri" data-need="admin" onclick="ipamUnifiSave(true)">Save and sync</button>
       <button class="btn" data-need="admin" onclick="ipamUnifiSave(false)">Save</button>
       ${u.configured ? '<button class="btn danger" data-need="admin" onclick="ipamUnifiForget()">Disconnect</button>' : ""}
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.ipamUnifiSave = async sync => {
   try {
@@ -388,14 +387,13 @@ async function ipamAfterUnifi() {
 function ipamUnifiCard() {
   const u = ((STATE.data.ipam || {}).unifi) || {};
   const state = !u.configured ? '<span class="pill neutral">not connected</span>' : u.last_error ? '<span class="pill crit">error</span>' : '<span class="pill ok">connected</span>';
-  return `<section class="card flat settings-wide" data-tab="connections" id="unifiCard">
-    <div class="settings-card-head"><div><div class="ctitle">UniFi Network</div>
-      <div class="csub">Its clients, devices, reserved addresses and networks, and the names it knows, on the IP addresses page</div></div></div>
+  return `${UI.settingsCard(`
+    ${UI.moduleHeader(`UniFi Network`, `Its clients, devices, reserved addresses and networks, and the names it knows, on the IP addresses page`, ``)}
     ${serviceRow(u.configured ? "UniFi controller" : "No controller", state,
       u.configured ? `${esc(u.url)}${u.last_sync ? ` · synced ${esc(fmtAgo(Date.now() / 1000 - u.last_sync))}` : " · not synced yet"}` : "Optional: without it, IP addresses works from scans and what you write",
       actionBar([u.configured ? { label: "Sync now", run: "ipamSync()", need: "operator" } : null,
         { label: u.configured ? "Edit" : "Connect UniFi", run: "ipamUnifi()", need: "admin", pri: !u.configured }]))}
-    ${u.configured && u.last_error ? `<div class="note bad" style="margin-top:8px">${esc(u.last_error)}</div>` : ""}</section>`;
+    ${u.configured && u.last_error ? `<div class="note bad" style="margin-top:8px">${esc(u.last_error)}</div>` : ""}`, {tab:`connections`, id:`unifiCard`})}`;
 }
 window.ipamUnifiCard = ipamUnifiCard;
 
@@ -430,8 +428,7 @@ function ipamDownload(name, text) {
 }
 window.ipamTemplate = () => ipamDownload("homestead-addresses-template.csv", IPAM_TEMPLATE);
 window.ipamImport = () => {
-  modal("Import addresses", `<p class="muted small">A CSV with a header row. <span class="mono">address</span> is required; any of
-      <span class="mono">name, mac, kind, category, owner, tags, note</span> may follow. A blank cell leaves what is recorded; other columns are skipped, so an export can be edited and imported back.</p>
+  modal("Import addresses", `<p class="muted small">Import a CSV with an <span class="mono">address</span> column. Blank cells preserve existing values; unknown columns are ignored. ${tip("Optional columns: name, mac, kind, category, owner, tags and note. Use the template below.")}</p>
     <p class="dim xs">kind: ${Object.keys(IPAM_KIND_LABELS).join(", ")} · category: ${Object.keys(IPAM_CATEGORIES).join(", ")} · tags separated by spaces</p>
     <div class="row" style="margin:12px 0"><button class="btn" onclick="ipamTemplate()">Download template</button>
       <label class="btn pri" style="cursor:pointer">Choose CSV…<input type="file" accept=".csv,text/csv" hidden onchange="ipamImportFile(this.files[0])"></label></div>

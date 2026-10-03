@@ -53,22 +53,35 @@ test("every table is a stacked table, so it reads on a phone", () => {
   assert.deepStrictEqual(found, [], 'give these tables class="tbl stack"');
 });
 
-test("a Settings card opens with the standard head", () => {
-  // design.md, Settings: a card's title, subtitle and buttons are a
-  // settings-card-head, so every card in every section lines up.
-  const settings = FILES.find(f => f.name === "web/js/views-settings.js");
-  const found = [];
-  for (const match of settings.text.matchAll(/<section class="card[^"]*"[^>]*>([\s\S]*?)<\/section>/g)) {
-    if (/class="ctitle"/.test(match[1]) && !/settings-card-head/.test(match[1])) found.push(`web/js/views-settings.js:${lineOf(settings.text, match.index)}`);
-  }
-  assert.deepStrictEqual(found, [], 'wrap the title, subtitle and buttons in <div class="settings-card-head">');
+test("Settings uses shared module headings in ready and error states", () => {
+  const settings = FILES.find(file => file.name === "web/js/views-settings.js");
+  assert.doesNotMatch(settings.text, /class="(?:ctitle|csub)"/, "use UI.moduleHeader for Settings headings, including loading/error states");
 });
 
 test("the rules here are the ones design.md states", () => {
   // If a rule is changed here, design.md must say so too, and the other way round.
   const design = fs.readFileSync(path.join(__dirname, "..", "docs", "design.md"), "utf8");
   assert.match(design, /tests\/design-rules\.test\.js/, "design.md names this test");
-  for (const phrase of ["actionBar", "tbl stack", "settings-card-head", "data-form-row"]) {
+  for (const phrase of ["actionBar", "tbl stack", "settings-card-head", "data-form-row", "UI.sectionForm", "UI.masterDetail", "UI.actions", "UI.pageHeader", "UI.moduleHeader", "UI.settingsCard", "UI.workspace"]) {
     assert.ok(design.includes(phrase), `design.md mentions ${phrase}`);
   }
+});
+
+test("dialog navigation and layout are authored only by shared components", () => {
+  const found = offences(/<[a-z]+\b[^>]*\bclass="[^"]*\b(?:modalactions|ui-actions|dialog-rail|dialog-section-picker|stepper-head|stepper-pane|dialog-master-nav|dialog-master-content)\b[^"]*"/g);
+  assert.deepStrictEqual(found, [], "use UI.actions, UI.sectionForm/stepper, UI.sectionNavigation or UI.masterDetail");
+});
+
+test("dialog dismissal rows use UI.actions", () => {
+  const found = offences(/<div\b[^>]*class="row[^>]*>((?:(?!<div\b)[\s\S])*?)<\/div>/g,
+    match => /<button\b[^>]*>\s*(?:Cancel|Close(?: browser)?|Done|Back(?: to [^<]*)?|Keep tracking)\s*<\/button>|onclick="(?:closeModal|closeFiles)\(\)"/.test(match[1]));
+  assert.deepStrictEqual(found, [], "use UI.actions for footer buttons, with dismissal/back in its start slot");
+});
+
+test("page and Settings structure is authored only by the UI module", () => {
+  const found = offences(/<[a-z]+\b[^>]*\bclass="[^"]*\b(?:phead|settings-card-head|settings-layout|settings-nav|settings-main|settings-grid|settings-back|savebar|collection-mobile-head|srow)\b[^"]*"[^>]*>/g,
+    // paint's matcher inserts family tabs; it is a regex, not authored markup.
+    (match,file) => !file.text.slice(match.index + match[0].length).startsWith("\\s*"));
+  assert.deepStrictEqual(found, [], "use UI.pageHeader, UI.moduleHeader, UI.workspace, UI.settingsGrid, UI.saveBar, UI.collectionHeader or settingRow");
+  assert.deepStrictEqual(offences(/<section\b[^>]*\bdata-tab="/g), [], "use UI.settingsCard to retain topic/save/permission hooks consistently");
 });
