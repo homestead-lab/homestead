@@ -301,7 +301,7 @@ window.replicasMoveData = async (jobId = "") => {
         <div class="row"><button class="btn sm" onclick="selfDataWatch(${i})">${j.prepared ? "Review move" : j.status === "succeeded" ? "View record" : "View progress"}</button>
         ${j.archivable ? `<button class="btn sm" data-need="admin" onclick="selfDataArchiveReview(${jsq(j.id)})">Archive record</button>` : ""}</div></div>`).join("")}</div>` : ""}
       ${state.blocking_jobs?.length ? UI.section("Jobs that block preparation", UI.table([{label:"Job"},{label:"State"}], state.blocking_jobs.map(j => [
-        `<b>${esc(j.title)}</b><p class="small">${esc(j.message)}</p><button class="btn sm" onclick="selfDataOpenJob(${jsq(j.id)})">${j.status === "failed" && j.mutation_recovery && j.kind === "k3s-cluster" ? "Review batch outcome" : "Open job"}</button><button class="btn sm" onclick="operationLog(${jsq(j.id)})">Log</button>`,
+        `<b>${esc(j.title)}</b><p class="small">${esc(j.message)}</p>${j.closable ? `<button class="btn sm pri" data-need="admin" onclick="selfDataCloseReview(${jsq(j.id)})">Close recovery</button>` : ""}<button class="btn sm" onclick="selfDataOpenJob(${jsq(j.id)})">${j.status === "failed" && j.mutation_recovery && j.kind === "k3s-cluster" ? "Review batch outcome" : "Open job"}</button><button class="btn sm" onclick="operationLog(${jsq(j.id)})">Log</button>`,
         `${esc(j.status)}${j.recovery ? " · requires recovery" : ""}`])) + '<p class="ui-help">Finish or review these jobs before preparing another volume. Archiving a completed preparation does not clear a running or recovery job.</p>') : ""}
       ${UI.fields(UI.field("Destination storage", `<select aria-label="Destination storage" id="selfDataClass" onchange="selfDataClassChanged()">${(state.classes || []).map(c =>
         `<option value="${esc(c.name)}" data-shareable="${c.shareable ? 1 : 0}" ${c.name === picked ? "selected" : ""}>${esc(c.name)} · ${c.shareable ? "every host can use it" : "lives on one host's disk"}</option>`).join("")}</select>`),
@@ -314,8 +314,50 @@ window.replicasMoveData = async (jobId = "") => {
 window.selfDataOpenJob = id => {
   const job = selfDataDialog?.state?.blocking_jobs?.find(item => item.id === id);
   if (!job) return;
+  // A data move's own link is Settings - where this dialog already is - so
+  // following it came straight back here. Its record is the job's log.
+  if (job.kind === "self-data-handoff") return operationLog(job.id);
   selfDataClose();
   openOperation(job.href, job.id, job);
+};
+
+/* A cancelled move that kept both volumes: once Homestead runs on its
+   original volume again, its record can be closed so another preparation
+   can start. Both volumes and the audit stay. */
+let selfDataCloseDialog = null;
+window.selfDataCloseReview = async id => {
+  const request = {}; selfDataCloseDialog = request;
+  try {
+    const review = await selfDataPost("/api/self/data/handoff/close/preview", {id});
+    if (selfDataCloseDialog !== request) return;
+    if (review.id !== id || !review.capacity_token) throw Error("The review is incomplete. Check saved jobs again.");
+    request.review = review;
+    childModal("Close data move recovery", UI.lead(esc(review.detail)) +
+      UI.facts([["Homestead runs on", esc(review.source)], ["Kept, unused", esc(review.destination)]]) +
+      UI.ack("selfDataCloseConsent", "Close this move's record; keep both volumes and its audit", {onchange:"selfDataCloseReady()"}) +
+      UI.actions(UI.cancel("Back") + UI.button("Close recovery", "selfDataCloseStart()", {kind:"pri",id:"selfDataCloseGo",disabled:true})), true, "operation-review");
+  } catch (e) {
+    if (selfDataCloseDialog === request) childModal("Close data move recovery", `<p role="alert">${esc(e.message)}</p>` + UI.actions(UI.cancel("Back")), true, "operation-review");
+  }
+};
+window.selfDataCloseReady = () => {
+  const ready = !!(selfDataCloseDialog?.review && $("#selfDataCloseConsent")?.checked);
+  if ($("#selfDataCloseGo")) $("#selfDataCloseGo").disabled = !ready;
+  return ready;
+};
+window.selfDataCloseStart = async () => {
+  if (!selfDataCloseReady()) return;
+  const request = selfDataCloseDialog, saved = request.review;
+  request.review = null; selfDataCloseReady();
+  try {
+    const result = await selfDataPost("/api/self/data/handoff/close", {id:saved.id,capacity_token:saved.capacity_token,confirm_close:true});
+    toast(result.detail, "ok");
+    window.refreshOperations?.(true);
+    if (selfDataCloseDialog === request) { selfDataCloseDialog = null; await replicasMoveData(); }
+  } catch (e) {
+    if (selfDataCloseDialog === request) childModal("Close data move recovery", `<p role="alert">${esc(e.message)}</p><p>Nothing was changed. Both volumes are retained.</p>` +
+      UI.actions(UI.cancel("Back")), true, "operation-review");
+  }
 };
 /* The host only matters for storage that lives on one host's disk. */
 window.selfDataClassChanged = () => {

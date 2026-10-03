@@ -4014,6 +4014,21 @@ def power_plan_with_job(power_plan):
     return power_plan
 
 
+def homestead_running_on():
+    """The claim Homestead's own Deployment mounts for its data, and whether
+    it is ready on it now - read live, never from a cache."""
+    dep = kget(f"/apis/apps/v1/namespaces/{SELF.NS}/deployments/{NAMES.BRAND}")
+    spec, status = dep.get("spec") or {}, dep.get("status") or {}
+    volumes = (spec.get("template") or {}).get("spec", {}).get("volumes") or []
+    data = next((v for v in volumes if v.get("name") == "data"), None) or next(
+        (v for v in volumes if v.get("persistentVolumeClaim")), {})
+    claim = (data.get("persistentVolumeClaim") or {}).get("claimName", "")
+    meta = dep.get("metadata") or {}
+    ready = (int(status.get("readyReplicas") or 0) >= 1
+             and int(status.get("observedGeneration") or 0) >= int(meta.get("generation") or 0))
+    return claim, ready
+
+
 def send_reviewed_power(power_plan, force=False, background=False):
     """Cordon, drain and send a reviewed reboot or shutdown, as a job - what
     Host actions does once its review is accepted, and what an OS update of
@@ -9069,6 +9084,12 @@ class H(HTTP.LimitedHandler):
             if p == "/api/self/data/move/preview":
                 try:
                     return self._send(200, preview_self_data_move(b, self.user))
+                except SELF_DATA_FENCE.Held as error:
+                    return self._send(409, {"error": str(error), "review_required": True})
+            if p in ("/api/self/data/handoff/close", "/api/self/data/handoff/close/preview"):
+                try:
+                    return self._send(200, SELF_DATA_PREPARE.close_recovery(b, self.user, SELF.NS, NAMES.BRAND, OPS,
+                        homestead_running_on, start=p == "/api/self/data/handoff/close"))
                 except SELF_DATA_FENCE.Held as error:
                     return self._send(409, {"error": str(error), "review_required": True})
             if p in ("/api/self/data/prepare/archive", "/api/self/data/prepare/archive/preview"):

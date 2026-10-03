@@ -242,10 +242,67 @@ def can_archive(item):
             ref.get("preparation_archived") is not True)
 
 
+HANDOFF = "self-data-handoff"
+
+
+def can_close_recovery(item):
+    """A data move that was cancelled and kept both volumes: its retained
+    record blocked every later preparation, with nothing that could close it."""
+    ref = item.get("ref") or {}
+    return (item.get("kind") == HANDOFF and item.get("status") == "cancelled"
+            and ref.get("retain_resources") is True and not ref.get("recovery_closed"))
+
+
+def close_recovery(body, actor, namespace, deployment, ops, running_on, *, start=False):
+    """Close a cancelled move's recovery once Homestead runs on its original
+    volume again. Nothing is deleted: both volumes and the audit stay, and
+    only the record stops blocking another preparation.
+
+    running_on() says which claim Homestead's Deployment mounts now and
+    whether it is ready, read live; the review and the close both ask."""
+    if (not isinstance(body, dict) or not {"id"} <= set(body) <= {"id", "capacity_token", "confirm_close"}
+            or not isinstance(body["id"], str) or not body["id"] or len(body["id"]) > 120):
+        raise J.Held("Choose the cancelled data move to close")
+    with ops._lock:
+        items = ops._read()
+        item = next((i for i in items if i["id"] == body["id"] and i.get("kind") == HANDOFF
+                     and i.get("ref", {}).get("namespace") == namespace), None)
+        if not item or not can_close_recovery(item):
+            raise J.Held("Only a cancelled data move whose volumes were kept can be closed")
+        ref = item["ref"]
+        claim, ready = running_on()
+        if claim != ref.get("source"):
+            raise J.Held(f"Homestead is not running on the move's original volume {ref.get('source')} "
+                         f"(it mounts {claim or 'no data volume'}); inspect the move before closing it")
+        if not ready:
+            raise J.Held("Homestead is not ready on its original volume yet; close the move once it is")
+        cfg = {"id": item["id"]}
+        context = {"action": "self-data-handoff-close", "actor": actor, "namespace": namespace,
+                   "status": item["status"], "ref": J.digest(ref)}
+        detail = (f"Homestead runs on its original volume {ref.get('source')}. Closing this record lets you "
+                  f"prepare another volume. Both {ref.get('source')} and {ref.get('destination')} are kept, "
+                  "with the move's recovery audit; nothing is copied or deleted.")
+        if not start:
+            return {**cfg, "source": ref.get("source"), "destination": ref.get("destination"),
+                    "capacity_token": SIGN.issue(cfg, context), "detail": detail}
+        if body.get("confirm_close") is not True or not SIGN.valid({**cfg, "capacity_token": body.get("capacity_token")}, context):
+            raise J.Held("Review this data move again and confirm closing it")
+        ops.require_write()
+        ref["recovery_closed"] = {"at": int(time.time()), "actor": actor, "source": ref.get("source")}
+        item["updated_at"] = ops._now()
+        ops._note(item, item["status"], item.get("progress", 100),
+                  f"Recovery closed: Homestead runs on {ref.get('source')}; both volumes and the recovery audit retained")
+        ops._write(items)
+        return {"ok": True, "id": item["id"],
+                "detail": f"Closed. {ref.get('destination')} is kept and unused; remove it from Volumes when you no longer need it."}
+
+
 def blocking_jobs(ops, own_id=None):
     jobs = []
     for item in ops._read():
         if item["id"] == own_id or (item.get("status") in ops.TERMINAL and not item.get("ref", {}).get("retain_resources")):
+            continue
+        if item.get("ref", {}).get("recovery_closed"):
             continue
         public = ops._public(item)
         # A blocker can be older than the visible Jobs tray. Include its public
@@ -254,6 +311,7 @@ def blocking_jobs(ops, own_id=None):
                      "kind": item.get("kind", ""), "status": item.get("status", "unknown"),
                      "message": item.get("message", ""), "href": item.get("href", "/"),
                      "recovery": bool(item.get("ref", {}).get("retain_resources")),
+                     "closable": can_close_recovery(item),
                      **{key: bool(public.get(key)) for key in ("mutation_recovery", "power_recovery", "storage_recovery",
                                                               "tracking_only", "cleanable")}})
     return jobs
