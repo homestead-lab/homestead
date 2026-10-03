@@ -40,7 +40,7 @@ try {
       };
       await viewDash();
     },theme);
-    await page.waitForTimeout(750);
+    await page.waitForFunction(()=>![...document.querySelectorAll(".spark path")].some(el=>sparkAnimations.has(el)));
     await page.locator("#historyCard .seg button").first().focus();
     await page.evaluate(()=>{
       window.scrollTo(0,300);document.querySelector(".main").scrollTop=300;
@@ -50,17 +50,25 @@ try {
       streamRefs.before=streamRefs.path.getAttribute("d");streamRefs.barBefore=streamRefs.bar.getBoundingClientRect().width;
       window.streamSample=1;
     });
-    await page.evaluate(()=>viewDash());await page.waitForTimeout(150);
-    const mid=await page.evaluate(()=>({retained:streamRefs.charts.every((el,i)=>el===document.querySelectorAll(".spark")[i]),
+    await page.evaluate(()=>viewDash());
+    // Sample an observed animation frame, not a wall-clock delay that can expire
+    // before Chromium receives its second frame on a busy CI runner.
+    await page.waitForFunction(()=>{
+      const firstX=sparkPoints(streamRefs.path.getAttribute("d"))[0][0];
+      if(!sparkAnimations.has(streamRefs.path) || firstX>=0 || streamRefs.bar.getBoundingClientRect().width<=streamRefs.barBefore)return false;
+      window.streamMid={retained:streamRefs.charts.every((el,i)=>el===document.querySelectorAll(".spark")[i]),
       focus:document.activeElement===streamRefs.focus,scroll:[scrollY,document.querySelector(".main").scrollTop],
       scrolling:sparkAnimations.has(streamRefs.path),firstX:sparkPoints(streamRefs.path.getAttribute("d"))[0][0],
       changed:streamRefs.before!==streamRefs.path.getAttribute("d"),barWidth:streamRefs.bar.getBoundingClientRect().width,
-      barBefore:streamRefs.barBefore,overflow:document.documentElement.scrollWidth>innerWidth}));
+      barBefore:streamRefs.barBefore,overflow:document.documentElement.scrollWidth>innerWidth,path:streamRefs.path.getAttribute("d")};
+      return true;
+    },null,{timeout:5000});
+    const mid=await page.evaluate(()=>streamMid);
     assert.equal(mid.retained,true);assert.equal(mid.focus,true);assert.equal(mid.scrolling,true);assert.equal(mid.changed,true);
     assert.ok(mid.firstX<0,"an outgoing sample moves left");assert.ok(mid.barWidth>mid.barBefore,"resource bars transition upward");
     assert.deepEqual(mid.scroll,await page.evaluate(()=>streamRefs.scroll));assert.equal(mid.overflow,false);
-    const intermediate=await page.evaluate(()=>streamRefs.path.getAttribute("d"));
-    await page.waitForTimeout(650);
+    const intermediate=mid.path;
+    await page.waitForFunction(()=>!sparkAnimations.has(streamRefs.path));
     assert.equal(await page.evaluate(()=>sparkAnimations.has(streamRefs.path)),false);
     assert.notEqual(await page.evaluate(()=>streamRefs.path.getAttribute("d")),intermediate);
     const settled=await page.evaluate(()=>streamRefs.path.getAttribute("d"));
