@@ -31,3 +31,27 @@ test("node display settings survive normalization with a compact default",()=>{
 test("resource list widgets can save wide short layouts",()=>{
  assert.deepEqual(dashboard.normalize({version:1,items:[{id:'containers',width:12,height:240},{id:'vms',width:4,height:240}]}),[{id:'containers',width:12,height:240},{id:'vms',width:4,height:240}]);
 });
+
+
+test("desktop gaps preserve order without overlaps, including narrower cards",()=>{
+ const items=[{id:'compute',width:4},{id:'storage',width:4,column:9},{id:'containers',width:6,column:3,newRow:true},{id:'portal',width:4}];
+ assert.deepEqual(dashboard.positions(items),[{row:1,column:1},{row:1,column:9},{row:2,column:3},{row:2,column:9}]);
+ assert.deepEqual(dashboard.positions([{width:8},{width:4,column:2}]),[{row:1,column:1},{row:2,column:2}]);
+});
+test("widget filters distinguish all groups from none and preserve desktop placement",()=>{
+ const items=[{id:'containers',width:4,height:240,column:9,newRow:true,groups:[],status:'attention'},
+ {id:'portal',width:6,height:360,groups:['Media'],display:'tiles'}];
+ assert.deepEqual(dashboard.normalize({version:1,items}),items);
+ assert.deepEqual(dashboard.normalize({version:1,items:[{id:'containers',width:12,height:0,column:9,groups:['Media','Media',false],status:'bogus'}]}),[{id:'containers',width:12,height:0,groups:['Media']}]);
+});
+
+
+test("resource filters combine group selection and state without losing unknown metrics",()=>{
+ const insights=require('../web/js/insights.js');
+ const rows=[{name:'media',group:'Media',desired:1,ready:1},{name:'stopped',desired:0},{name:'broken',group:'Media',desired:1,ready:0}];
+ assert.deepEqual(insights.filteredRows('containers',rows,{groups:['Media'],status:'attention'}).map(r=>r.name),['broken']);
+ assert.deepEqual(insights.filteredRows('containers',rows,{groups:[]}),[]);
+ assert.deepEqual(insights.filteredRows('containers',rows,{groups:['']}).map(r=>r.name),['stopped']);
+ assert.equal(insights.filteredRows('containers',rows,{status:'running'})[0].cpu,null);
+ assert.deepEqual(insights.filteredRows('vms',[{name:'vm',status:'Starting'}],{status:'attention'}).map(r=>r.name),['vm']);
+});

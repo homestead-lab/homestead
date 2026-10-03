@@ -177,6 +177,7 @@ jobs:
               PAGE_STANDARD_SCREENSHOTS=release-assets/pages/components node tests/integration/page-components.mjs
               HOMESTEAD_URL=http://127.0.0.1:4173 DASHBOARD_EDITOR_SCREENSHOTS=release-assets/pages/dashboard-editor node tests/integration/dashboard-editor.mjs
               HOMESTEAD_URL=http://127.0.0.1:4173 node tests/integration/dashboard-account.mjs
+              HOMESTEAD_URL=http://127.0.0.1:4173 WIDGET_OPTIONS_SCREENSHOTS=release-assets/pages/widget-options node tests/integration/dashboard-widget-options.mjs
               HOMESTEAD_URL=http://127.0.0.1:4173 INSIGHTS_OUTPUT=release-assets/pages/insights node tests/integration/health-insights.mjs
               HOMESTEAD_URL=http://127.0.0.1:4173 NODE_HEALTH_SCREENSHOTS=release-assets/pages/node-health node tests/integration/dashboard-node-health.mjs
               HOMESTEAD_URL=http://127.0.0.1:4173 RESOURCE_WIDGET_SCREENSHOTS=release-assets/pages/resources node tests/integration/dashboard-resources.mjs

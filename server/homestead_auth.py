@@ -210,15 +210,27 @@ def _dashboard_layout(layout):
         raise ValueError("Invalid dashboard layout")
     seen = set()
     for item in layout["items"]:
-        if not isinstance(item, dict) or set(item) not in ({"id", "width", "height"}, {"id", "width", "height", "display"}):
+        if (not isinstance(item, dict) or not {"id", "width", "height"} <= set(item)
+                or set(item) - {"id", "width", "height", "display", "column", "newRow", "groups", "status"}):
             raise ValueError("Invalid dashboard widget")
         name = item["id"]
         if (not isinstance(name, str) or name not in _DASHBOARD_WIDTHS or name in seen
                 or type(item["width"]) is not int or item["width"] not in _DASHBOARD_WIDTHS[name]
                 or type(item["height"]) is not int or item["height"] not in (0, 240, 360, 520)):
             raise ValueError("Invalid dashboard widget or size")
-        if "display" in item and (name != "nodes" or item["display"] not in ("compact", "detailed")):
-            raise ValueError("Invalid node health display")
+        displays = {"nodes": ("compact", "detailed"), "portal": ("compact", "tiles")}
+        if "display" in item and item["display"] not in displays.get(name, ()):
+            raise ValueError("Invalid widget display")
+        if "column" in item and (type(item["column"]) is not int or not 1 <= item["column"] <= 13 - item["width"]):
+            raise ValueError("Invalid widget column")
+        if "newRow" in item and type(item["newRow"]) is not bool:
+            raise ValueError("Invalid widget row")
+        if "groups" in item and (name not in ("containers", "portal") or not isinstance(item["groups"], list)
+                or len(item["groups"]) > 100 or any(not isinstance(g, str) or len(g) > 40 for g in item["groups"])
+                or len(set(item["groups"])) != len(item["groups"])):
+            raise ValueError("Invalid widget groups")
+        if "status" in item and (name not in ("containers", "vms") or item["status"] not in ("running", "stopped", "attention")):
+            raise ValueError("Invalid widget status")
         seen.add(name)
     return copy.deepcopy(layout)
 
