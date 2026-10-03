@@ -74,7 +74,7 @@ case "$*" in
   "config view "*) echo "https://127.0.0.1:6443" ;;
   "get nodes -o jsonpath"*) printf "node1|192.0.2.50|True|v1.34.1+k3s1\nnode2|192.0.2.51|False|v1.34.1+k3s1\n" ;;
   "-n longhorn-system get daemonset "*) echo "longhorn-manager|longhornio/longhorn-manager:v1.9.2|1|2" ;;
-  "-n lab get deployment homestead --ignore-not-found"*) echo "homestead|ghcr.io/wjcloudy/homestead:2.8.199|1|1" ;;
+  "-n lab get deployment homestead --ignore-not-found"*) echo "homestead|ghcr.io/homestead-lab/homestead:2.8.199|1|1" ;;
   "get services "*) printf "lab/homestead|192.0.2.242 | \nlab/media|192.0.2.243 | \nlab/photos|192.0.2.244 | \nlab/backups|192.0.2.245 | \nlab/archive|192.0.2.246 | \n" ;;
   "get --raw /readyz"|"get --raw /readyz/etcd") echo ok ;;
   "get node node1 -o jsonpath"*) echo "True true" ;;

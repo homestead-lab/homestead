@@ -25,7 +25,7 @@ import urllib.request
 import homestead_ecdsa as EC
 
 DATA_DIR = "/data"
-CONTACT = "https://github.com/wjcloudy/homestead"
+CONTACT = "https://github.com/homestead-lab/homestead"
 # Shared with any other Homestead replica on the same data volume.
 _lock = SHARED.SharedLock("push")
 _key_cache = {}

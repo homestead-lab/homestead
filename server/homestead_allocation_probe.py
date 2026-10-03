@@ -131,7 +131,7 @@ def configure(body, version, *, preview=False):
     annotations.pop("homestead.io/allocation-key-uid", None)
     if enabled:
         annotations[ANNOTATION] = directory
-        spec["containers"].append({"name": CONTAINER, "image": "ghcr.io/wjcloudy/homestead:" + version,
+        spec["containers"].append({"name": CONTAINER, "image": NAMES.IMAGE + ":" + version,
             "imagePullPolicy": "IfNotPresent", "command": ["python3", "/srv/probe/allocation_http.py"],
             "env": [{"name": name, "valueFrom": {"fieldRef": {"fieldPath": field}}}
                     for name, field in (("NODE_NAME", "spec.nodeName"), ("POD_UID", "metadata.uid"))],
@@ -181,10 +181,10 @@ def reconcile(version):
     if not annotations.get(ANNOTATION) or len(indices) != 1:
         return {"state": "absent", "detail": "Optional VM placement checks are not enabled"}
     index = indices[0]
-    desired = "ghcr.io/wjcloudy/homestead:" + version
+    desired = NAMES.IMAGE + ":" + version
     if rows[index].get("image") == desired:
         return {"state": "current", "detail": "VM placement helper is current"}
-    if not rows[index].get("image", "").startswith("ghcr.io/wjcloudy/homestead:"):
+    if not rows[index].get("image", "").startswith(NAMES.IMAGE + ":"):
         return {"state": "unmanaged", "detail": "Custom VM placement helper image was preserved"}
     meta = obj["metadata"]
     if not meta.get("uid") or not meta.get("resourceVersion") or meta.get("deletionTimestamp"):

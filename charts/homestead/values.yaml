@@ -1,7 +1,7 @@
 # Homestead's Helm values. Everything else is fixed by the release.
 
 image:
-  repository: ghcr.io/wjcloudy/homestead
+  repository: ghcr.io/homestead-lab/homestead
   # Empty: the chart's appVersion, which is the release this chart came with.
   tag: ""
   pullPolicy: IfNotPresent

@@ -137,7 +137,7 @@ class PermissionTests(SelfTest):
         result = SELF.reconcile()
 
         self.assertEqual("manual", result["state"])
-        self.assertEqual("kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.73/deploy/rbac.yaml",
+        self.assertEqual("kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/v2.8.73/deploy/rbac.yaml",
                          result["command"])
 
     def test_an_account_the_binding_does_not_name_is_told_what_to_run(self):

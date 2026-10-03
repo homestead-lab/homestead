@@ -16,7 +16,7 @@ other consideration, a product or service whose value derives entirely or
 substantially from Homestead's functionality. This can include a rebranded copy,
 paid hosted Homestead, or related consulting/support services meeting that test.
 For permission outside these terms, contact the maintainer through the
-[repository](https://github.com/wjcloudy/homestead). Adding a small feature or
+[repository](https://github.com/homestead-lab/homestead). Adding a small feature or
 changing the name does not automatically avoid the restriction.
 
 The project is **source-available**, not OSI-approved open source. Community

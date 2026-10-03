@@ -4,7 +4,7 @@ set -euo pipefail
 
 NS="${NS:-lab}"
 HOST="${HOST:?set HOST to your Harvester host, e.g. HOST=rancher@192.0.2.210}"
-IMAGE="${IMAGE:-ghcr.io/wjcloudy/homestead}"
+IMAGE="${IMAGE:-ghcr.io/homestead-lab/homestead}"
 TAG="${TAG:-2.8.30}"
 INSTALL_NODE_PROBE="${INSTALL_NODE_PROBE:-true}"
 K='sudo -n /var/lib/rancher/rke2/bin/kubectl --kubeconfig /etc/rancher/rke2/rke2.yaml'

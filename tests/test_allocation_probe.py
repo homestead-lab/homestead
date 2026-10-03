@@ -158,7 +158,7 @@ class AllocationConfigurationTests(unittest.TestCase):
         self.assertEqual(before["containers"], spec["containers"][:-1])
         self.assertEqual(before["volumes"], spec["volumes"][:-4])
         sidecar = spec["containers"][-1]
-        self.assertEqual("ghcr.io/wjcloudy/homestead:9.9.9", sidecar["image"])
+        self.assertEqual("ghcr.io/homestead-lab/homestead:9.9.9", sidecar["image"])
         self.assertNotIn("privileged", sidecar["securityContext"])
         self.assertFalse(sidecar["securityContext"]["allowPrivilegeEscalation"])
         self.assertEqual(["ALL"], sidecar["securityContext"]["capabilities"]["drop"])
@@ -267,4 +267,4 @@ class AllocationConfigurationTests(unittest.TestCase):
         operations = write.call_args.args[2]
         self.assertEqual(["test", "test", "replace"], [op["op"] for op in operations])
         self.assertTrue(operations[-1]["path"].endswith("/image"))
-        self.assertEqual("ghcr.io/wjcloudy/homestead:9.9.9", operations[-1]["value"])
+        self.assertEqual("ghcr.io/homestead-lab/homestead:9.9.9", operations[-1]["value"])

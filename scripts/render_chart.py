@@ -39,10 +39,10 @@ type: application
 version: {version}
 appVersion: "{version}"
 kubeVersion: ">=1.25.0-0"
-home: https://github.com/wjcloudy/homestead
+home: https://github.com/homestead-lab/homestead
 sources:
-  - https://github.com/wjcloudy/homestead
-icon: https://raw.githubusercontent.com/wjcloudy/homestead/main/web/icons/icon-192.png
+  - https://github.com/homestead-lab/homestead
+icon: https://raw.githubusercontent.com/homestead-lab/homestead/main/web/icons/icon-192.png
 keywords: [homelab, harvester, longhorn, kubevirt, k3s, rke2, dashboard]
 maintainers:
   - name: wjcloudy
@@ -51,10 +51,10 @@ annotations:
   artifacthub.io/category: monitoring-logging
   artifacthub.io/links: |
     - name: Source
-      url: https://github.com/wjcloudy/homestead
+      url: https://github.com/homestead-lab/homestead
   artifacthub.io/images: |
     - name: homestead
-      image: ghcr.io/wjcloudy/homestead:{version}
+      image: ghcr.io/homestead-lab/homestead:{version}
     - name: probe
       image: python:3.12-alpine
 """
@@ -62,7 +62,7 @@ annotations:
 VALUES = """# Homestead's Helm values. Everything else is fixed by the release.
 
 image:
-  repository: ghcr.io/wjcloudy/homestead
+  repository: ghcr.io/homestead-lab/homestead
   # Empty: the chart's appVersion, which is the release this chart came with.
   tag: ""
   pullPolicy: IfNotPresent
@@ -389,7 +389,7 @@ def probe_daemonset(release):
     daemonset = [d for d in probe.manifest(release, namespace="__APPS__") if d["kind"] == "DaemonSet"][0]
     text = "\n".join(render_nodeprobe.emit(daemonset)) + "\n"
     text = text.replace("namespace: __APPS__", f"namespace: {APPS}")
-    text = text.replace(f"ghcr.io/wjcloudy/homestead:{release}", '{{ include "homestead.image" . }}')
+    text = text.replace(f"ghcr.io/homestead-lab/homestead:{release}", '{{ include "homestead.image" . }}')
     # The probe restarts when its scripts change, as Homestead does itself.
     marker = "    metadata:\n      labels:\n        app: homestead-nodeprobe\n"
     assert marker in text, "the probe's pod template changed shape"

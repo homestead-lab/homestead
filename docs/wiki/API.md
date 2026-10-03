@@ -9,7 +9,7 @@ The API describes itself: `GET /api/v1/openapi.json` on your Homestead returns
 an [OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.0) document of every
 endpoint, its scope, its parameters and the shape of its answer. The same
 document is in the repository as
-[`docs/api/openapi.json`](https://github.com/wjcloudy/homestead/blob/main/docs/api/openapi.json),
+[`docs/api/openapi.json`](https://github.com/homestead-lab/homestead/blob/main/docs/api/openapi.json),
 for tools that read a spec from GitHub - load it into Swagger UI, Postman, or
 an agent's tool list.
 

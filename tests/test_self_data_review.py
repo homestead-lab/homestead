@@ -185,7 +185,7 @@ class ReviewTests(unittest.TestCase):
         self.assertTrue(admit("stop", result["deployment"]))
 
     def test_mutable_source_tag_becomes_pinned_restart_approval(self):
-        self.dep["spec"]["template"]["spec"]["containers"][0]["image"] = "ghcr.io/wjcloudy/homestead:latest"
+        self.dep["spec"]["template"]["spec"]["containers"][0]["image"] = "ghcr.io/homestead-lab/homestead:latest"
         result = self.review.approve(self.approved())
         state = {"source": {"name": "source"}, "destination": "target", "replicas": 2, "operation": OP,
                  "plan": {"data_volume": "data", "copy_image": IMAGE, "copy_node": "node1"}}

@@ -29,7 +29,7 @@ import homestead_vm_write as VM_WRITE
 import homestead_k3s_health as HEALTH
 import urllib.parse
 
-BOOTSTRAP = "https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh"
+BOOTSTRAP = "https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh"
 K3S = "https://get.k3s.io"
 # Pin the released 26.04.1 minimal build; later point releases must be chosen explicitly.
 UBUNTU = "https://cloud-images.ubuntu.com/minimal/releases/resolute/release-20260827/ubuntu-26.04-minimal-cloudimg-amd64.img"

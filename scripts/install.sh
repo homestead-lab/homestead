@@ -1,7 +1,7 @@
 #!/bin/sh
 # Homestead installer and node doctor.
 #
-#   curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+#   curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo sh
 #
 # The installer detects what is already on the machine and offers the options
 # that apply:
@@ -55,7 +55,7 @@
 #          --skip-checks   continue the installation when system checks fail
 set -u
 
-RAW="https://raw.githubusercontent.com/wjcloudy/homestead"
+RAW="https://raw.githubusercontent.com/homestead-lab/homestead"
 REF="${HOMESTEAD_REF:-v2.8.302}"
 DRY=0
 DIST=k3s
@@ -64,7 +64,7 @@ ACTION=""
 SKIP_CHECKS=0
 UI=""
 TTY=/dev/tty
-WIKI="https://github.com/wjcloudy/homestead/wiki"
+WIKI="https://github.com/homestead-lab/homestead/wiki"
 FAILED=0
 BACK=Back
 MENU_DEFAULT=""
@@ -403,7 +403,7 @@ recommended() { # component -> its recommended release
     longhorn) cached longhorn releases longhorn/longhorn | head -n 1 ;;
     kubevirt) cached kubevirt-stable kubevirt_stable ;;
     cdi) cached cdi releases kubevirt/containerized-data-importer | head -n 1 ;;
-    homestead) cached homestead releases wjcloudy/homestead | head -n 1 | sed 's/^v//' ;;
+    homestead) cached homestead releases homestead-lab/homestead | head -n 1 | sed 's/^v//' ;;
   esac
 }
 component_name() {
@@ -466,7 +466,7 @@ version_choices() { # component -> "version|label" lines, newest first
     longhorn) list=$(cached longhorn releases longhorn/longhorn) ;;
     kubevirt) list=$(cached kubevirt releases kubevirt/kubevirt) ;;
     cdi) list=$(cached cdi releases kubevirt/containerized-data-importer) ;;
-    homestead) list=$(cached homestead releases wjcloudy/homestead); rec="v$rec" ;;
+    homestead) list=$(cached homestead releases homestead-lab/homestead); rec="v$rec" ;;
   esac
   printf '%s\n' "$list" | head -n 8 | while read -r v; do
     [ -n "$v" ] || continue

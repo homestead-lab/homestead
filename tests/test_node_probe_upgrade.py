@@ -45,7 +45,7 @@ class RenderedManifestTests(unittest.TestCase):
         containers = probe.manifest("9.9.9")[1]["spec"]["template"]["spec"]["containers"]
         smart = next(c for c in containers if c["name"] == "smart")
 
-        self.assertEqual("ghcr.io/wjcloudy/homestead:9.9.9", smart["image"])
+        self.assertEqual("ghcr.io/homestead-lab/homestead:9.9.9", smart["image"])
 
     def test_only_the_smart_sidecar_is_privileged(self):
         """The telemetry container reads sensors; it needs nothing special."""

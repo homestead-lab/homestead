@@ -28,7 +28,7 @@ POD = os.environ.get("HOSTNAME", "")
 BRAND = NAMES.BRAND
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANIFESTS = (os.path.join(HERE, "deploy.yaml"), os.path.join(HERE, "..", "deploy", "deploy.yaml"))
-RBAC_URL = "https://raw.githubusercontent.com/wjcloudy/homestead/{ref}/deploy/rbac.yaml"
+RBAC_URL = "https://raw.githubusercontent.com/homestead-lab/homestead/{ref}/deploy/rbac.yaml"
 LAST = {"state": "pending", "detail": "Homestead has not checked its permissions yet"}
 
 

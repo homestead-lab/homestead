@@ -29,7 +29,7 @@ chart into its own namespace, with your apps in `lab`.
 
 Both install the same objects - the chart is generated from the manifest.
 
-- **Helm** (`oci://ghcr.io/wjcloudy/charts/homestead`) takes values instead of
+- **Helm** (`oci://ghcr.io/homestead-lab/charts/homestead`) takes values instead of
   edits, and `helm uninstall` removes it (your apps, their namespace and
   Homestead's data volume are kept).
 - **The manifest** (`deploy/deploy.yaml`) needs only kubectl, and is what the k3s
@@ -44,7 +44,7 @@ servers and workers. It replaces the first local console's login screen with
 live CPU, RAM, uptime, IP addresses and local disk usage. Server nodes also show
 cluster members, readiness, Kubernetes versions and Homestead's service address.
 
-![The host console on a k3s server: CPU history and cores, memory, disks, and the cluster's nodes](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-host-status-logo.png)
+![The host console on a k3s server: CPU history and cores, memory, disks, and the cluster's nodes](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-host-status-logo.png)
 
 The dashboard uses green for healthy nodes, amber for warnings or cordoned
 nodes, and red for unavailable APIs, failed nodes or high resource usage.
@@ -52,7 +52,7 @@ CPU, per-core load, memory and disk usage have coloured bars, with a rolling
 CPU history graph. Usage turns amber at 75% and red at 90%. Narrow terminals
 stack the panels and keep the full view available by scrolling.
 
-![The host console with a node down and memory and Longhorn's disk nearly full](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-host-status-alert.png)
+![The host console with a node down and memory and Longhorn's disk nearly full](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-host-status-alert.png)
 
 The logo, history graph and usage bars use Unicode Braille dots, like btop.
 The house outline and two white infrastructure layers are rasterised from
@@ -68,7 +68,7 @@ Use the arrow keys or Page Up/Down to scroll. The screen returns after logout.
 SSH and other consoles work as usual. Host metrics refresh every two seconds;
 cluster status refreshes every fifteen seconds and shows API failures.
 
-![The installer's Host Console question](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-console.png)
+![The installer's Host Console question](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-console.png)
 
 Choose **No** at the Host Console question, or set `HS_CONSOLE=no` for unattended
 installation. To enable or disable it later, use **Configure host status console**
@@ -120,7 +120,7 @@ Sessions last 12 hours of inactivity, or 30 days with **Keep me signed in**, and
 never more than 90 days. Changing a password signs that account out
 everywhere.
 
-![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.jpg)
+![Settings - Cluster](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-settings-cluster.jpg)
 
 ## The setup guide
 
@@ -179,7 +179,7 @@ role up to date when it starts. An install older than that feature needs to be
 given that right once:
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/main/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/main/deploy/rbac.yaml
 ```
 
 Settings shows this line whenever Homestead finds it cannot update its role.
@@ -192,7 +192,7 @@ For a Helm-managed installation, update the existing release using its actual
 release name and namespace (shown by `helm list -A`). For example:
 
 ```bash
-helm upgrade homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --version 2.8.167 --reuse-values --set-string image.tag=2.8.167 --wait --timeout 5m
+helm upgrade homestead oci://ghcr.io/homestead-lab/charts/homestead -n homestead --version 2.8.167 --reuse-values --set-string image.tag=2.8.167 --wait --timeout 5m
 ```
 
 This preserves saved values while explicitly updating the image even if an older
@@ -210,7 +210,7 @@ setting restarts Homestead, not the host.
 The Service is plain HTTP, for your LAN. To reach Homestead from elsewhere - and
 to install it as an app with push notifications on your phone - put it behind
 HTTPS. The reference's
-[Cloudflare Tunnel section](https://github.com/wjcloudy/homestead/blob/main/docs/reference.md#publishing-through-a-cloudflare-tunnel)
+[Cloudflare Tunnel section](https://github.com/homestead-lab/homestead/blob/main/docs/reference.md#publishing-through-a-cloudflare-tunnel)
 covers doing that safely: Homestead can change anything in the cluster, so it
 belongs behind Cloudflare Access (or a VPN), never published bare.
 

@@ -33,7 +33,7 @@ Both the readable `.log` and diagnostic `.zip` offer two formats:
   may contain secrets and is intended for private troubleshooting.
 
 **GitHub issue…** builds an independently anonymised draft for
-`wjcloudy/homestead`, regardless of the selected download format. Review the
+`homestead-lab/homestead`, regardless of the selected download format. Review the
 exact title and body and acknowledge public sharing before continuing to
 GitHub. Submit the issue there using your own account. No attachment is
 uploaded automatically. A long comment is shortened for the draft link; its

@@ -5,10 +5,10 @@ type: application
 version: 2.8.302
 appVersion: "2.8.302"
 kubeVersion: ">=1.25.0-0"
-home: https://github.com/wjcloudy/homestead
+home: https://github.com/homestead-lab/homestead
 sources:
-  - https://github.com/wjcloudy/homestead
-icon: https://raw.githubusercontent.com/wjcloudy/homestead/main/web/icons/icon-192.png
+  - https://github.com/homestead-lab/homestead
+icon: https://raw.githubusercontent.com/homestead-lab/homestead/main/web/icons/icon-192.png
 keywords: [homelab, harvester, longhorn, kubevirt, k3s, rke2, dashboard]
 maintainers:
   - name: wjcloudy
@@ -17,9 +17,9 @@ annotations:
   artifacthub.io/category: monitoring-logging
   artifacthub.io/links: |
     - name: Source
-      url: https://github.com/wjcloudy/homestead
+      url: https://github.com/homestead-lab/homestead
   artifacthub.io/images: |
     - name: homestead
-      image: ghcr.io/wjcloudy/homestead:2.8.302
+      image: ghcr.io/homestead-lab/homestead:2.8.302
     - name: probe
       image: python:3.12-alpine

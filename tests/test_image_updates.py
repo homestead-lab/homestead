@@ -224,11 +224,11 @@ class ImageUpdateTests(unittest.TestCase):
         was installed with, however many times the app is updated."""
         spec = self.dep["spec"]["template"]["spec"]
         spec["containers"] = [{"name": "homestead",
-                               "image": "ghcr.io/wjcloudy/homestead:2.8.2",
+                               "image": "ghcr.io/homestead-lab/homestead:2.8.2",
                                "env": [{"name": "PORT", "value": "8080"},
                                        {"name": "HOMESTEAD_VERSION", "value": "2.8.2"}]}]
         spec["initContainers"] = [{"name": "data-permissions",
-                                   "image": "ghcr.io/wjcloudy/homestead:2.8.2"},
+                                   "image": "ghcr.io/homestead-lab/homestead:2.8.2"},
                                   {"name": "wait", "image": "busybox:1.36"}]
         new_digest = "sha256:" + "e" * 64
         old_digest = "sha256:" + "f" * 64
@@ -236,21 +236,21 @@ class ImageUpdateTests(unittest.TestCase):
                      "ownerReferences": [{"kind": "ReplicaSet", "uid": "rs-demo", "controller": True}]},
                      "spec": copy.deepcopy(spec), "status": {"phase": "Running",
                      "initContainerStatuses": [{"name": "data-permissions",
-                       "imageID": "ghcr.io/wjcloudy/homestead@" + old_digest}]}}]
+                       "imageID": "ghcr.io/homestead-lab/homestead@" + old_digest}]}}]
         original = updates._check_deployment
         try:
             updates._check_deployment = lambda *args, **kwargs: {
                 "images": [{"container": "homestead", "available": True,
-                            "source": "ghcr.io/wjcloudy/homestead:2.8.2",
+                            "source": "ghcr.io/homestead-lab/homestead:2.8.2",
                             "current_digest": old_digest,
-                            "candidate": "ghcr.io/wjcloudy/homestead:2.8.37",
+                            "candidate": "ghcr.io/homestead-lab/homestead:2.8.37",
                             "remote_digest": new_digest}]}
             updates.apply_update("lab", "demo")
         finally:
             updates._check_deployment = original
 
         spec = self.dep["spec"]["template"]["spec"]
-        wanted = "ghcr.io/wjcloudy/homestead@" + new_digest
+        wanted = "ghcr.io/homestead-lab/homestead@" + new_digest
         self.assertEqual(wanted, spec["containers"][0]["image"])
         self.assertEqual(wanted, spec["initContainers"][0]["image"],
                          "the init container is the same release as the app")
@@ -261,7 +261,7 @@ class ImageUpdateTests(unittest.TestCase):
 
         updates.rollback("lab", "demo")
         spec = self.dep["spec"]["template"]["spec"]
-        was = "ghcr.io/wjcloudy/homestead@" + old_digest
+        was = "ghcr.io/homestead-lab/homestead@" + old_digest
         self.assertEqual(was, spec["containers"][0]["image"])
         self.assertEqual(was, spec["initContainers"][0]["image"],
                          "rollback pins the init container to the exact previous digest")
