@@ -27,7 +27,7 @@
 </p>
 
 <p align="center">
-  <a href="https://wjcloudy.github.io/homestead/"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-hero.jpg" alt="Homestead on the desktop and on a phone: the dashboard, and virtual IPs"></a>
+  <a href="https://wjcloudy.github.io/homestead/"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-hero.jpg" alt="Homestead dashboard in a large desktop view alongside one phone"></a>
 </p>
 
 <p align="center">
