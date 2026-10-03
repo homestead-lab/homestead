@@ -37,3 +37,18 @@ test("desktop volume-name cell remains a table cell, flex belongs to its child",
   assert.match(css, /\.voltable \.volname-content\{display:flex/);
   assert.doesNotMatch(css, /\.voltable \.volname\{display:flex/);
 });
+
+test("retained detached storage is unused despite cached historical importer names", () => {
+  const v = {state: "detached", unclaimed: true, attached: ["prime-268211de"], attached_to: "prime-268211de", used_by: null};
+  assert.equal(context.volumeUse(v).kind, "unclaimed");
+  assert.match(context.volumeUseCell(v), /no claim/);
+  assert.doesNotMatch(context.volumeUseCell(v), /prime-268211de/);
+  assert.equal(context.volumeUse({...v, state: "attached"}).kind, "in-use", "physical attachment stays protected");
+});
+test("current workload references remain protected and stopped workloads keep their identity", () => {
+  assert.equal(context.volumeUse({state: "attached", attached: []}).kind, "in-use");
+  assert.equal(context.volumeUse({state: "detached", attached: ["importer-active"], unclaimed: false}).kind, "in-use");
+  assert.equal(context.volumeUse({state: "detached", attached: [], unclaimed: false, used_by: ["Deployment/nextcloud"]}).kind, "stopped");
+  assert.equal(context.volumeUse({state: "detached", attached: [], unclaimed: false, used_by: []}).kind, "orphaned");
+  assert.equal(context.volumeUse({state: "detached", attached: [], unclaimed: false, used_by: null}).kind, "detached");
+});
