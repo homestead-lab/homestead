@@ -146,6 +146,17 @@ rather than in an issue.
 
 ## Licence
 
-Homestead is MIT licensed. By contributing you agree that your contribution is
-released under the same [licence](LICENSE). Third-party code you add must be
-compatible with it and listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Homestead's original code is source-available under [Apache License 2.0 with
+Commons Clause 1.0](LICENSE). Contributions are welcome under those same terms;
+by intentionally submitting a contribution for inclusion, you agree to license
+it under them. You retain your copyright. Do not submit work you lack the
+right to license, including work subject to incompatible employer terms.
+
+Third-party code retains its own licence. Keep its notices and source-access
+requirements intact and list it in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Do not apply the Commons Clause to third-party files. In particular, changes
+to MPL-covered noVNC files remain MPL-covered, and GPL code must not be copied
+or linked into Homestead's restricted code. Independently executed tools and
+services require a separate compatibility and distribution review.
+
+See [docs/licensing.md](docs/licensing.md) for the scope and compatibility audit.

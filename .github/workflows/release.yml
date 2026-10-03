@@ -58,7 +58,8 @@ jobs:
             type=sha,prefix=${{ steps.version.outputs.channel }}-sha-
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-            org.opencontainers.image.description=Open-source homelab dashboard for Harvester, Rancher, Longhorn, Fleet, KubeVirt and Kubernetes
+            org.opencontainers.image.description=Hyperconvergence for home, made simple. Guided Kubernetes setup, apps, VMs, storage and networking.
+            org.opencontainers.image.licenses=LicenseRef-Apache-2.0-Commons-Clause
       - name: Build the image (not pushed yet)
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:

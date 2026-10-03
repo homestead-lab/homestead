@@ -48,7 +48,6 @@ maintainers:
   - name: wjcloudy
     url: https://github.com/wjcloudy
 annotations:
-  artifacthub.io/license: MIT
   artifacthub.io/category: monitoring-logging
   artifacthub.io/links: |
     - name: Source
@@ -402,6 +401,7 @@ def probe_daemonset(release):
 def files(release):
     """Every file of the chart: path -> text."""
     out = {
+        "LICENSE": (ROOT / "LICENSE").read_text(encoding="utf-8"),
         "Chart.yaml": CHART_YAML.format(version=release),
         "values.yaml": VALUES,
         ".helmignore": "*.tgz\n.git/\n",
