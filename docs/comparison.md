@@ -9,9 +9,10 @@ directory submissions; product capabilities and terminology change.
 
 The table compares the named products and explicitly identified integrations.
 It is not a count of checkmarks, a performance test, or a claim that Homestead
-replaces every function of the other products. “External solution” and “add”
-describe work outside the reviewed built-in workflow; they do not mean a feature
-is impossible. Absence of a built-in workflow is an assessment of the documented
+replaces every function of the other products. The symbols mean: ✅ a built-in or guided workflow; ⚪ support through
+add-ons, guest services or custom configuration; ❌ no supported workflow in
+the reviewed product. A cross does not mean arbitrary software could never be
+installed on the underlying machine. Absence of a built-in workflow is an assessment of the documented
 product scope, not proof that no community project exists.
 
 System containers, application containers and VMs are different. A VM image
@@ -25,6 +26,45 @@ Simplicity is Homestead's design aim, supported by its guided installer, app
 catalogue and shared management interface. We have not measured setup time or
 user success against the other products. Homestead is beta; the table does not
 claim equal maturity, support coverage, security assurance or hardware support.
+
+## Detailed coverage
+
+Homestead brings the everyday experience of a home server to a cluster:
+apps, volumes, shares and VMs, with compute, storage and networking managed
+together. It is currently **beta**. This comparison describes the documented
+management experience, including the integrations named in each cell. The
+README summarises this evidence with icons. A tick describes an integrated or
+guided capability, not an independently measured ease-of-use score. The app-store
+row distinguishes self-hosted app catalogues from OS and VM image catalogues;
+Proxmox, Harvester, Talos and MicroCloud can use additional application tools.
+The shared-storage row means live storage shared and replicated across hosts,
+not Unraid local parity or ZFS send/receive backups.
+
+| Homelab need | **Homestead** | [Unraid](#unraid) | [Proxmox VE](#proxmox-ve) | [CasaOS](#casaos) | [Harvester](#harvester) | [Talos Linux](#talos-linux) | [MicroCloud](#microcloud) |
+|---|---|---|---|---|---|---|---|
+| Main focus | **Simple hyperconvergence for home** | NAS, apps and VMs | Virtualization and clusters | Personal cloud and apps | Hyperconverged infrastructure | Kubernetes operating system | Private cloud / HCI |
+| Everyday management | **Web UI for apps and infrastructure** | Web UI | Web UI | Web UI | Web UI; Rancher integration | API / CLI; optional Omni UI | UI / CLI |
+| App discovery | **Community Applications catalogue** | Community Applications plugin | OS / OCI templates | App Store | VM images; apps via guest clusters / Rancher | Kubernetes / Helm ecosystem | OS image catalogue |
+| Containers | **Kubernetes apps** | Docker | LXC; OCI images¹ | Docker | Kubernetes via Rancher / guests² | Kubernetes | LXD system containers; Docker in guests |
+| Virtual machines | **KubeVirt integration** | KVM | KVM | Separate tooling | KubeVirt | Add KubeVirt | LXD / QEMU |
+| Multi-node management | **Clusters and linked clusters** | Individual servers | Cluster management | Individual servers | Cluster management | Kubernetes clusters | LXD clusters |
+| Storage across nodes | **Longhorn replicas** | Local array / pools; ZFS replication | Ceph; ZFS replication | Host storage | Longhorn replicas | Add storage such as Longhorn | MicroCeph |
+| Workload failover³ | **Kubernetes + configured storage** | External solution | HA manager + suitable storage | External solution | VM HA + Longhorn | Kubernetes + added storage | LXD healing + shared storage |
+| File sharing | **Managed SMB / NFS shares** | Managed SMB / NFS shares | Configure in a guest / service | SMB sharing | Configure in a guest / service | Deploy a sharing service | Configure in a guest / service |
+| Snapshots and backups | **Volume / VM controls and schedules** | ZFS snapshots; backup apps / plugins | Guest backups; storage snapshots | Backup apps / external tools | VM snapshots and backups | Add workload / storage backup tools | LXD snapshots and exports |
+| Installation and updates | **Guided cluster setup; app, platform and host controls** | USB install; WebGUI updates | ISO install; web / package tools | Linux installer; CasaOS UI updates | ISO install; cluster upgrade workflow | Declarative install; API-driven upgrades | Interactive setup; snap update workflow |
+
+¹ Proxmox's OCI support is distinct from running the Docker engine or a Compose
+stack. ² Harvester's bare-metal container support depends on the Harvester and
+Rancher versions and feature configuration. ³ Failover in every clustered
+option depends on quorum, healthy storage, spare capacity and networking;
+replication is not a backup. Local disk redundancy is different from keeping
+workloads available after a host fails.
+
+“Add”, “guest” and “external” indicate an additional component or workflow,
+not an inability to achieve the feature. Homestead's integrations also need
+their supporting components; on Harvester, host upgrades follow Harvester's
+own process. This is a documentation comparison, not a usability benchmark.
 
 ## Homestead
 

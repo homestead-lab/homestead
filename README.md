@@ -189,37 +189,26 @@ every job cancellable, with a rollback.
 
 ## How Homestead compares
 
-Homestead brings the everyday experience of a home server to a cluster:
-apps, volumes, shares and VMs, with compute, storage and networking managed
-together. It is currently **beta**. This comparison describes the documented
-management experience, including the integrations named in each cell.
+Hyperconvergence for home, with apps and infrastructure in one friendly interface.
 
-| Homelab need | **Homestead** | [Unraid](docs/comparison.md#unraid) | [Proxmox VE](docs/comparison.md#proxmox-ve) | [CasaOS](docs/comparison.md#casaos) | [Harvester](docs/comparison.md#harvester) | [Talos Linux](docs/comparison.md#talos-linux) | [MicroCloud](docs/comparison.md#microcloud) |
-|---|---|---|---|---|---|---|---|
-| Main focus | **Simple hyperconvergence for home** | NAS, apps and VMs | Virtualization and clusters | Personal cloud and apps | Hyperconverged infrastructure | Kubernetes operating system | Private cloud / HCI |
-| Everyday management | **Web UI for apps and infrastructure** | Web UI | Web UI | Web UI | Web UI; Rancher integration | API / CLI; optional Omni UI | UI / CLI |
-| App discovery | **Community Applications catalogue** | Community Applications plugin | OS / OCI templates | App Store | VM images; apps via guest clusters / Rancher | Kubernetes / Helm ecosystem | OS image catalogue |
-| Containers | **Kubernetes apps** | Docker | LXC; OCI images¹ | Docker | Kubernetes via Rancher / guests² | Kubernetes | LXD system containers; Docker in guests |
-| Virtual machines | **KubeVirt integration** | KVM | KVM | Separate tooling | KubeVirt | Add KubeVirt | LXD / QEMU |
-| Multi-node management | **Clusters and linked clusters** | Individual servers | Cluster management | Individual servers | Cluster management | Kubernetes clusters | LXD clusters |
-| Storage across nodes | **Longhorn replicas** | Local array / pools; ZFS replication | Ceph; ZFS replication | Host storage | Longhorn replicas | Add storage such as Longhorn | MicroCeph |
-| Workload failover³ | **Kubernetes + configured storage** | External solution | HA manager + suitable storage | External solution | VM HA + Longhorn | Kubernetes + added storage | LXD healing + shared storage |
-| File sharing | **Managed SMB / NFS shares** | Managed SMB / NFS shares | Configure in a guest / service | SMB sharing | Configure in a guest / service | Deploy a sharing service | Configure in a guest / service |
-| Snapshots and backups | **Volume / VM controls and schedules** | ZFS snapshots; backup apps / plugins | Guest backups; storage snapshots | Backup apps / external tools | VM snapshots and backups | Add workload / storage backup tools | LXD snapshots and exports |
-| Installation and updates | **Guided cluster setup; app, platform and host controls** | USB install; WebGUI updates | ISO install; web / package tools | Linux installer; CasaOS UI updates | ISO install; cluster upgrade workflow | Declarative install; API-driven upgrades | Interactive setup; snap update workflow |
+**✅ Built-in or guided · ⚪ Supported with add-ons or custom configuration · ❌ Not supported by the product**
 
-¹ Proxmox's OCI support is distinct from running the Docker engine or a Compose
-stack. ² Harvester's bare-metal container support depends on the Harvester and
-Rancher versions and feature configuration. ³ Failover in every clustered
-option depends on quorum, healthy storage, spare capacity and networking;
-replication is not a backup. Local disk redundancy is different from keeping
-workloads available after a host fails.
+| Feature | **Homestead** | Unraid | Proxmox VE | CasaOS | Harvester | Talos Linux | MicroCloud |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| Web management | ✅ | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ |
+| Self-hosted app store | ✅ | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ |
+| Application containers | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ | ⚪ |
+| Virtual machines | ✅ | ✅ | ✅ | ❌ | ✅ | ⚪ | ✅ |
+| Multi-node management | ✅ | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ |
+| Shared, replicated storage | ✅ | ❌ | ✅ | ❌ | ✅ | ⚪ | ✅ |
+| Automatic workload failover | ✅ | ❌ | ✅ | ❌ | ✅ | ⚪ | ✅ |
+| Network file shares | ✅ | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ |
+| Workload snapshots and backups | ✅ | ⚪ | ✅ | ⚪ | ✅ | ⚪ | ✅ |
+| Guided setup and upgrades | ✅ | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ |
 
-“Add”, “guest” and “external” indicate an additional component or workflow,
-not an inability to achieve the feature. Homestead's integrations also need
-their supporting components; on Harvester, host upgrades follow Harvester's
-own process. See [comparison scope and sources](docs/comparison.md), reviewed
-3 October 2026. This is a documentation comparison, not a usability benchmark.
+Homestead is **beta**. Cluster features require suitable hardware, quorum and
+storage configuration. Reviewed 3 October 2026;
+[details, qualifications and sources](docs/comparison.md).
 
 ## On your phone
 
