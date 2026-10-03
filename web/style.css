@@ -2054,6 +2054,7 @@ div.ipam-line.dim{display:block}
 .ui-checklist li,.ui-steps li{display:grid;grid-template-columns:28px minmax(0,1fr);gap:11px;align-items:start;padding:9px 2px}
 .ui-checklist li+li{border-top:1px solid var(--line)}
 .ui-check-mark,.ui-step-num{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;border:1.5px solid var(--line2);color:var(--mut);font:700 12px "Inter Tight",sans-serif}
+.ui-check-mark>.spin2{margin:0;border-color:var(--line2);border-top-color:currentColor}
 .ui-checklist .ok .ui-check-mark{border-color:transparent;background:rgba(61,220,145,.16);color:var(--ok)}
 .ui-checklist .warn .ui-check-mark{border-color:transparent;background:rgba(255,176,32,.16);color:var(--med)}
 .ui-checklist .bad .ui-check-mark{border-color:transparent;background:rgba(255,77,79,.16);color:var(--crit)}
