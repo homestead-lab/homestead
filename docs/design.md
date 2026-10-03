@@ -327,6 +327,17 @@ not mean its fields are valid and must never give it a completion tick.
 Render each field once and hide inactive panes. Switching sections must preserve
 values, added items and staged removals. Container edit groups Basics, Hardware
 and access, Environment values, Storage, Where it runs, and Address by container.
+The full-page container deploy form also uses `UI.sectionForm`: Basics, Hardware
+and access, Environment values, Storage, Address, Additional containers and Summary.
+Use Back/Next and one final Review deployment action; the review still checks capacity
+and any restart acknowledgement. Page forms use `page: true` for an in-flow footer and supply `cancelHtml` to return to their
+collection, while dialogs keep their dismiss action. Keep the live summary in its
+section, without a second deploy button. Storage/network explanations are collapsed;
+blocking template requirements and shared-lifecycle impact stay visible. Collapse
+optional appearance fields. Use `.f2.compact-fields` for short related controls
+(such as namespace/pod copies or CPU/memory) that fit side by side on phones. Adding a
+container reveals its section, and validation reveals and focuses invalid fields.
+
 Adding a container is distinct from increasing pod copies. Remove stages a
 removal with Undo; review keeps persistent data and explains the rollout.
 

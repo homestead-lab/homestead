@@ -3304,6 +3304,17 @@ html[data-theme="light"] .dashboard-resource-state.bad{color:#a1242a}
 .notification-center .bell-all{margin:0;padding:10px 12px;color:var(--tx);font-size:13px;border:1px solid var(--line)}
 html[data-theme="light"] .notification-center>button.danger{color:#a1242a}
 
+/* Full-page creation forms reuse the same rail and actions as dialogs. */
+.deploy-form{max-width:1200px;margin:0 auto}
+.deploy-form .stepper-pane{min-height:340px}
+.section-page>.stepper-foot{position:static;margin-left:0!important;margin-right:0!important;padding:14px 0 0;background:var(--surf)}
+.deploy-summary .dv{overflow-wrap:anywhere;min-width:0}
+@media(max-width:900px){.deploy-form .stepper-pane{min-height:0}}
+
+/* Short related form fields retain a useful pair at phone widths. */
+.f2.compact-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
+.f2.compact-fields>.f{min-width:0}
+
 /* Editor controls and widget lists share quiet, theme-aware scrollbars. */
 .dashboard-library,.dashboard-catalog,.dashboard-group-list,.dashboard-resource-scroll{scrollbar-width:thin;scrollbar-color:var(--mut) transparent}
 .dashboard-library::-webkit-scrollbar-thumb,.dashboard-catalog::-webkit-scrollbar-thumb,.dashboard-group-list::-webkit-scrollbar-thumb,.dashboard-resource-scroll::-webkit-scrollbar-thumb{background:var(--mut);border:2px solid var(--surf);border-radius:8px}

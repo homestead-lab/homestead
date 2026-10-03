@@ -73,6 +73,8 @@ try {
     assert.equal(await page.evaluate(() => STATE.data.setup.steps.https.done), false, "reading Cloudflare instructions must not mark HTTPS verified");
     await page.getByRole("button", { name: "Open connector deployment", exact: true }).click();
     await page.locator("#setupReturn").getByRole("button", { name: "Return to setup", exact: true }).waitFor();
+    if (width > 900) await page.getByRole('tab', {name: 'Environment values', exact: true}).click();
+    else await page.locator('#containerDeploy_section').selectOption('environment');
     await page.locator('#d_env .ek').waitFor();
     const connector = await page.evaluate(() => DCFG);
     assert.equal(connector.image, "cloudflare/cloudflared:latest");

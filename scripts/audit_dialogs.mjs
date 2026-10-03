@@ -200,7 +200,7 @@ const DIALOGS = [
   ["node-reboot", "nodes", "nodePowerReview('harvester-node1','reboot')"],
   ["node-shutdown", "nodes", "nodePowerReview('harvester-node1','poweroff')", "document.querySelector('#mbody .ui-more').open=true"],
   ["app-store-app", "store", "click:storeDetails"],
-  ["deploy-preview", "deploy", "click:previewYaml"],
+  ["deploy-preview", "deploy", "UI.selectSection('containerDeploy','summary')", "click:previewYaml"],
   ["fleet-link", "workloads", "fleetLink()"],
   ["fleet-migration-on", "settings", "settingsTab('fleet')", "fleetMigration('b2c0de')"],
   ["fleet-migration-here", "settings", "settingsTab('fleet')", "fleetMigration('a1f00d')"],
