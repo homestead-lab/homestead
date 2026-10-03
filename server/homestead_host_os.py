@@ -246,6 +246,11 @@ def read(node, refresh=False, now=None):
                          + (f": {err.strip()[-160:]}" if (err or "").strip() else
                             "; the host's kernel log (dmesg) says whether it ran out of memory"))
     facts["at"] = int(now or time.time())
+    # The boot this read saw: a later restart makes its "restart needed" old news.
+    try:
+        facts["boot_id"] = ((kget(f"/api/v1/nodes/{node}") or {}).get("status") or {}).get("nodeInfo", {}).get("bootID", "")
+    except Exception:
+        facts["boot_id"] = ""
     with _lock:
         state = _load()
         state[node] = facts
@@ -283,12 +288,33 @@ def summary(facts):
     return {"tone": tone, "text": ", ".join(words) or "up to date"}
 
 
+def _boots():
+    """Each node's current boot ID, as Kubernetes reports it."""
+    try:
+        return {item["metadata"]["name"]: ((item.get("status") or {}).get("nodeInfo") or {}).get("bootID", "")
+                for item in (kget("/api/v1/nodes") or {}).get("items", [])}
+    except Exception:
+        return {}
+
+
+def current(facts, boot_id):
+    """facts, minus a restart the host has had since they were read: a
+    manual restart otherwise left "restart needed" until the next read,
+    up to six hours later. The next round reads the host again."""
+    if facts and facts.get("reboot") and boot_id and facts.get("boot_id") and boot_id != facts["boot_id"]:
+        return {**facts, "reboot": False, "reboot_for": "", "restarted_since_read": True}
+    return facts
+
+
 def report(node=None):
     """What is known of each host, or of one, with how old it is."""
     p = platform(True) or {}
-    state = _load()
-    rows = {name: {**facts, "summary": summary(facts)} for name, facts in state.items()
-            if node is None or name == node}
+    state, boots = _load(), _boots()
+    rows = {}
+    for name, facts in state.items():
+        if node is None or name == node:
+            facts = current(facts, boots.get(name, ""))
+            rows[name] = {**facts, "summary": summary(facts)}
     return {"applies": applies(p), "hosts": rows, "every_s": EVERY}
 
 
@@ -304,7 +330,10 @@ def tick(now=None):
         name = item["metadata"]["name"]
         ready = any(c.get("type") == "Ready" and c.get("status") == "True"
                     for c in (item.get("status") or {}).get("conditions") or [])
-        if not ready or now - (state.get(name) or {}).get("at", 0) < EVERY:
+        known = state.get(name) or {}
+        boot = ((item.get("status") or {}).get("nodeInfo") or {}).get("bootID", "")
+        restarted = bool(boot and known.get("boot_id") and boot != known["boot_id"])
+        if not ready or (now - known.get("at", 0) < EVERY and not restarted):
             continue
         try:
             read(name, now=now)
@@ -397,7 +426,9 @@ def status(item, now=None):
 
 def alert_facts(state=None):
     """What needs someone, per host, as alert conditions."""
-    state = _load() if state is None else state
+    if state is None:
+        boots = _boots()
+        state = {node: current(facts, boots.get(node, "")) for node, facts in _load().items()}
     facts = []
     for node, host in state.items():
         if host.get("security"):
