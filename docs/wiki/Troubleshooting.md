@@ -182,6 +182,54 @@ of the storage class Harvester makes for a downloaded image, and newer
 Harvester names it differently. Delete the VM with its disk and create it
 again: the image is already downloaded, so it is quick.
 
+### GPU passthrough
+
+**The VM runs, but the physical monitor stays blank.** Work through these
+checks in order:
+
+1. Connect the monitor to the GPU assigned to the VM, select the correct input,
+   and check the cable. A motherboard video port belongs to different hardware.
+2. On the GPU's host, **Hardware → Devices for VMs → Refresh devices** should
+   show IOMMU on and the card handed to VMs. Confirm the VM's **Passthrough**
+   tab contains that GPU resource and that it started on a host offering it.
+3. In **VM → Edit → Hardware → Devices**, choose **Passed-through GPU (physical
+   monitor)** as **Primary boot output**. This selects UEFI and disables virtual
+   VGA. Save and restart the VM; adding the GPU alone does not choose its boot
+   display. A BIOS-installed guest may need a UEFI bootloader repair.
+4. If the card needs an explicit ROM, capture it on the host and select the
+   downloaded file beside the GPU in **Edit → Passthrough**. Use a ROM from the
+   actual card that supports UEFI, then restart the VM. Output that disappears
+   when the guest OS takes over also needs the guest's GPU driver checked.
+
+With physical GPU output selected, a blank or unavailable **Screen** (VNC)
+console is expected. Use **Serial** if the guest is configured for it, or an
+existing guest SSH/remote-desktop connection. Changing back to **Web console
+(virtual display)** restores the virtual display at the next start; UEFI stays
+enabled. With several GPUs, Homestead does not select a specific connector.
+
+**"GPU ROM reading failed" or the ROM cannot be read.** Stop VMs using the card's
+IOMMU group and give the card to VMs before capture. Homestead refuses to detach
+an active host display driver during capture. Current releases wake an idle,
+runtime-suspended VFIO GPU for the read and restore its power policy afterwards.
+Older releases could fail on these cards even when the ROM existed in sysfs.
+Update Homestead and try again. If the card still exposes no readable ROM,
+upload a dump from that card instead; see
+[ROM requirements](Virtual-machines#a-gpus-rom-vbios).
+
+**Only PCI IDs appear in the VM device picker.** Inspect or refresh the host
+under **Hardware → Devices for VMs**, then reopen VM Edit. Homestead retains
+the inspected model names; the PCI resource ID still identifies what the VM
+requests. See [passthrough setup](Virtual-machines#pci-and-usb-passthrough).
+
+**"Device ... is in use by VM ...".** Multiple stopped configurations may use
+the same device, but starting requires a free physical allocation. Stop the
+named holder and wait for its instance to release the device, or choose another
+available resource/host. A stable running VM can keep its own GPU and USB devices
+when editing. If an older release reports that VM as its own conflict, update
+Homestead and reopen the edit. A **stable, verified resident launcher** error
+can still occur during startup, shutdown or migration: wait, refresh, and
+review again. See [device sharing rules](Virtual-machines#several-vms-configured-for-the-same-device).
+
 ## Moves between clusters
 
 **The backup storage card says "no LAN address".** The S3 server on the source
