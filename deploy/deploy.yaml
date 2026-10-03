@@ -293,7 +293,7 @@ metadata:
   labels:
     app: homestead
   annotations:
-    homestead.io/update-sources: '{"homestead":"ghcr.io/homestead-lab/homestead:2.8.304"}'
+    homestead.io/update-sources: '{"homestead":"ghcr.io/homestead-lab/homestead:2.8.305-dev.1"}'
 spec:
   replicas: 1
   strategy:
@@ -328,7 +328,7 @@ spec:
           tolerationSeconds: 15
       initContainers:
         - name: data-permissions
-          image: ghcr.io/homestead-lab/homestead:2.8.304
+          image: ghcr.io/homestead-lab/homestead:2.8.305-dev.1
           imagePullPolicy: IfNotPresent
           command: ["sh", "-c", "chown 10001:10001 /data && chmod 0770 /data"]
           securityContext:
@@ -345,7 +345,7 @@ spec:
               mountPath: /data
       containers:
         - name: homestead
-          image: ghcr.io/homestead-lab/homestead:2.8.304
+          image: ghcr.io/homestead-lab/homestead:2.8.305-dev.1
           imagePullPolicy: IfNotPresent
           env:
             - name: PORT
