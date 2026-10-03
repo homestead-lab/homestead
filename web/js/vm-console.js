@@ -44,10 +44,9 @@ window.vmConsole = (ns, name, kind = "vnc") => {
     ${kind === "vnc" ? `<div class="vmc-paste" id="vmcPaste" hidden>
         <textarea id="vmcPasteText" rows="3" spellcheck="false" autocomplete="off"
           placeholder="Paste here (Ctrl+V), then Type it: the VM has no shared clipboard, so it is typed key by key"></textarea>
-        <div class="row" style="gap:10px;margin-top:8px">
-          <button class="btn sm pri" onclick="vmConsoleTypePasted()">Type into the VM</button>
+        ${UI.actions(`<button class="btn sm pri" onclick="vmConsoleTypePasted()">Type into the VM</button>
           <label class="switch" style="margin:0"><input type="checkbox" id="vmcPasteEnter"> <span>Press Enter after</span></label>
-          <button class="btn sm" onclick="vmConsolePasteClose()">Cancel</button></div></div>
+          <button data-dialog-dismiss="true" class="btn sm" onclick="vmConsolePasteClose()">Cancel</button>`)}</div>
       <div class="vmc-wrap" id="vmcWrap"><div class="vmc-screen" id="vmcScreen" tabindex="0"></div>
         <textarea class="vmc-keys" id="vmcKeys" aria-label="Type into the VM" autocapitalize="off" autocomplete="off"
           autocorrect="off" spellcheck="false" enterkeyhint="send"></textarea></div>`

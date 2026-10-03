@@ -22,7 +22,7 @@ function setup({blocked=false, missing=false, fail=false}={}) {
       if(fail) throw Error("Lost connection");
       return {job:"homestead-import-app"};
     }};
-  ctx.window=ctx; vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));
+  ctx.window=ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/views-lifecycle.js","utf8"),ctx);
   ctx.viewImport=()=>{};
   return {ctx,calls,fields};
@@ -80,5 +80,5 @@ test("shared phase warnings appear once above collapsed capacity details",async(
   const t=setup(); await t.ctx.importReview({name:"app"});
   assert.equal((t.fields.html.match(/RAM warning/g)||[]).length,1);
   assert.match(t.fields.html,/Copy files, Imported application/);
-  assert.ok(t.fields.html.indexOf("RAM warning")<t.fields.html.indexOf("<details>"));
+  assert.ok(t.fields.html.indexOf("RAM warning")<t.fields.html.indexOf("<details "));
 });

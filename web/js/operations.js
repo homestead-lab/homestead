@@ -88,25 +88,23 @@ function paintJobsDialog() {
   selectedJobId = selected?.id || "";
   // Capture disclosure state before replacing the DOM; polling must not close it.
   const expanded = [...host.querySelectorAll("details[open][data-disclosure]")].map(el => [el.dataset.disclosure, el.closest("[data-operation]")?.dataset.operation || ""]);
-  const nav = rows => rows.map(item => `<button type="button" ${item.id === selectedJobId ? 'aria-current="true"' : ''} onclick="selectJob(${jsq(item.id)})"><span>${esc(item.title)}</span><small class="${item.status === 'failed' ? 'job-needs-attention' : ''}">${esc(item.status)}${item.resource?.namespace ? ` · ${esc(item.resource.namespace)}` : ''}</small></button>`).join("");
+  const rows = items => items.map(item => ({key:item.id, title:item.title,
+    detail:`${item.status}${item.resource?.namespace ? ` · ${item.resource.namespace}` : ""}`, attention:item.status === "failed"}));
   const stale = STATE.operationsStale ? UI.callout("warn", "Connection lost", "Showing the last known status. Checking again; completion is not assumed.") : "";
-  host.innerHTML = stale + (selected ? `<div class="dialog-rail jobs-rail">
-    <nav class="jobs-nav" aria-label="Jobs">
-      ${attention.length ? UI.section(`Needs attention · ${attention.length}`, nav(attention)) : ""}
-      ${active.length ? UI.section(`Running · ${active.length}`, nav(active)) : ""}
-      ${completed.length ? UI.more(`Completed · ${completed.length}`, nav(completed), completed.some(item => item.id === selectedJobId)).replace(/data-disclosure="[^"]*"/, 'data-disclosure="Completed"') : ""}
-    </nav>
-    <section class="jobs-detail" aria-label="Selected job">${operationCard(selected)}</section>
-  </div>` : '<div class="empty small">No jobs.</div>');
+  host.innerHTML = stale + (selected ? UI.masterDetail([
+    {key:"attention", title:`Needs attention · ${attention.length}`, items:rows(attention)},
+    {key:"active", title:`Running · ${active.length}`, items:rows(active)},
+    {key:"Completed", title:`Completed · ${completed.length}`, items:rows(completed), collapsed:true}
+  ], selectedJobId, operationCard(selected), {label:"Jobs", detailLabel:"Selected job", onSelect:id => `selectJob(${jsArg(id)})`}) : '<div class="empty small">No jobs.</div>');
   if (selected) {
-    const actions = host.querySelector(".jobs-detail .jobactions");
+    const actions = host.querySelector(".dialog-master-content .jobactions");
     const secondary = [...actions.children].filter(button => /^(Log|Dismiss)$/.test(button.textContent.trim()));
     if (secondary.length) {
       const html = secondary.map(button => button.outerHTML).join("");
       secondary.forEach(button => button.remove());
       actions.insertAdjacentHTML("afterend", UI.more("Log and history", `<div class="jobactions">${html}</div>`));
     }
-    if (selected.dismissible === false) host.querySelector(".jobs-detail .jobfoot").insertAdjacentHTML("afterend", '<p class="ui-help">This recovery record is retained until its outcome is resolved.</p>');
+    if (selected.dismissible === false) host.querySelector(".dialog-master-content .jobfoot").insertAdjacentHTML("afterend", '<p class="ui-help">This recovery record is retained until its outcome is resolved.</p>');
   }
   for (const detail of host.querySelectorAll("details[data-disclosure]")) {
     if (expanded.some(([label, id]) => label === detail.dataset.disclosure && id === (detail.closest("[data-operation]")?.dataset.operation || ""))) detail.open = true;
@@ -353,7 +351,7 @@ window.powerRecoveryReview = async (id, mutation = false) => {
       ${(p.warnings || []).map(w=>`<div class="note warn small">${esc(w)}</div>`).join("")}
       ${!p.blocked ? `<div class="f"><label>Type ${esc(p.confirm)} to confirm inspection</label><input id="powerRecoveryName" autocomplete="off" oninput="powerRecoveryReady()"></div>
         <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> I inspected the ${p.action === "k3s-cluster" ? "planned VMs" : "VM"}${mutation ? " and retained resources" : ""}. I accept that the old request may still take effect late and that resolving this record allows a new, separately reviewed ${mutation ? "VM change" : "power action"}.</label>` : ""}
-      <div class="modalactions"><button class="btn" onclick="closeModal()">Keep tracking</button><button class="btn danger" id="powerRecoveryApply" disabled onclick="powerRecoveryResolve()">Record unknown outcome</button></div></div>`;
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Keep tracking</button><button class="btn danger" id="powerRecoveryApply" disabled onclick="powerRecoveryResolve()">Record unknown outcome</button>`)}</div>`;
     if ($(".modalbox")) $(".modalbox").scrollTop=0;
   } catch(error) {
     if (sequence !== POWER_RECOVERY_SEQ || !$("#powerRecoveryLoading")) return;
@@ -407,7 +405,7 @@ window.cancelOperation = async id => {
   const cleanup = plan.cleanup && plan.mode !== "forget";
   const body = !plan.can
     ? `<div class="note warn"><b>${plan.copy_recovery ? "The copy hold cannot be released yet." : "It cannot be cancelled at this step."}</b><div>${esc(plan.why_not || "")}</div></div>
-       <div class="row" style="margin-top:12px"><button class="btn" onclick="closeModal()">Close</button></div>`
+       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}`
     : `<p>${esc(plan.lead || (cleanup ? "This job failed part-way. Cleaning up removes what it left behind; the job stays in the list as failed."
         : plan.cleanup ? "This job failed. Stopping tracking keeps its failed outcome and all retained resources. Nothing is deleted or stopped in the cluster."
         : CANCEL_LEAD[plan.mode] || CANCEL_LEAD.stop))}</p>
@@ -419,10 +417,9 @@ window.cancelOperation = async id => {
       ${plan.confirm ? `<div class="f" style="margin-top:12px"><label>Type <b class="mono">${esc(plan.confirm)}</b> to confirm</label>
         <input id="oc_confirm" autocomplete="off" oninput="cancelOperationGate()"></div>` : ""}
       ${plan.needs === "admin" && !can("admin") ? `<div class="note warn" style="margin-top:12px">Cancelling this job needs an admin.</div>` : ""}
-      <div class="row" style="margin-top:12px">
-        <button class="btn ${high ? "danger" : "pri"}" id="oc_go" data-need="${esc(plan.needs || "operator")}" ${plan.confirm ? "disabled" : ""}
+      ${UI.actions(`<button class="btn ${high ? "danger" : "pri"}" id="oc_go" data-need="${esc(plan.needs || "operator")}" ${plan.confirm ? "disabled" : ""}
           onclick="cancelOperationGo(${jsq(plan.id)})">${esc(cleanup ? "Remove what it made" : plan.action)}</button>
-        <button class="btn" onclick="closeModal()">${plan.mode === "forget" ? "Keep tracking" : plan.cleanup ? "Leave it" : "Keep it running"}</button></div>`;
+        <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">${plan.mode === "forget" ? "Keep tracking" : plan.cleanup ? "Leave it" : "Keep it running"}</button>`)}`;
   modal(`${plan.copy_recovery ? "Inspect storage copy" : plan.mode === "forget" ? "Stop tracking" : cleanup ? "Clean up" : "Cancel"} · ${plan.title}`, body, false, "operation-review");
   window.__cancelPlan = plan;
   if (window.applyRole) window.applyRole();

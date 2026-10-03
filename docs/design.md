@@ -406,14 +406,14 @@ cancelled records, preserving failed and protected recovery records.
 | `UI.steps(list, current)` | A numbered guide (`current = -1`), or where a long job has got to | Unordered facts |
 | `UI.progress(value, options)` | Work under way; `null` while its size is unknown | How full something is |
 | `UI.meter({ now, after, warnAt })` | How full a host, disk or volume is, now and after a change | Progress over time |
-| `UI.more(summary, html)` | Detail in a dialog most people do not need | Anything needed to decide |
+| `UI.more(summary, html, open, key)` | Detail in a dialog most people do not need | Anything needed to decide |
 | `UI.guide(summary, html)` | How a page works, collapsed | Something that needs doing now |
 | `UI.stats(cards)` | A page's headline figures, behind a summary line | The first thing on a page |
 | `summaryLine(id, items, detail, label)` | A page's one-line status, its tiles a tap away (open stays open across refreshes) | A list |
 | `moreMenu(items)` | A header's secondary actions, behind `⋯` | The main action |
 | `menuButton(label, items)` | A main action that is a choice - ＋ Import and its kinds | A single action |
 | `actionBar(items, { shown })` | A card's or a row's buttons: `shown` (2) as buttons, the rest in `⋯` | A dialog's buttons |
-| `stepper(id, steps, finish, { always })` | Section rail and phone selector; `always` for direct editing | A short form |
+| `UI.sectionForm(id, sections, finish, { always, noticeHtml })` / `stepper(id, steps, finish, { always })` | Section rail and phone selector; `always` for direct editing | A short form |
 | `revealDialogField(field)` | Reveal a field’s section and disclosures before focusing an error | Showing unrelated help |
 | `Diagram.node(n)`, `Diagram.vip(ip, rows)`, `Diagram.mapping(rows)` | What a node holds, where a VIP leads, where each folder goes - drawn live | Decoration |
 | `settingRow(label, help, control)` | One setting: label and help left, its control right | A form of many fields (use a dialog) |
@@ -422,16 +422,35 @@ cancelled records, preserving failed and protected recovery records.
 | `UI.fields(...)` / `UI.field(label, control, { help })` | Forms: two columns on a desktop, one on a phone | - |
 | `UI.chip(label, tone)` | A short status next to a name | Sentences |
 | `UI.button(label, onclick, { kind })` / `UI.cancel()` | Buttons | - |
-| `UI.actions(buttons, start)` | A dialog's buttons | Buttons that act on one row |
+| `UI.masterDetail(groups, selectedKey, detailHtml, options)` | Grouped navigation and a selected detail, such as Jobs | Form steps |
+| `UI.sectionNavigation(id, sections, options)` | Externally managed setup guides; section forms include this automatically | Hand-written navigation |
+| `UI.actions(buttons, start, { className, attrs })` | A dialog's buttons | Buttons that act on one row |
 
 Menu and bar items are `{ label, run, icon, need, tip, danger, ariaLabel }`. `run` goes
 into the `onclick` attribute as it is, so values in it go through `jsq()`
 like any other handler's; `tests/handler-escaping.test.js` sends hostile
 values through them.
 
-Older markup - `.note`, `.sec`, `.row` and `.modalactions` in dialogs,
-`.grid.statgrid` on pages - still works, styled to match. New and rewritten
-work uses the components.
+Dialog structure is owned by `web/js/ui.js`. Feature code supplies section data,
+content and action handlers; it does not write rail, navigation or footer markup.
+Use stable section keys when sections are conditional. All panes stay mounted so
+navigation preserves unsaved values. The shared controller owns desktop tabs,
+keyboard focus, the phone selector and revealing fields with validation errors.
+
+Use `UI.actions` for every dialog footer. Pass Cancel/Back on the left and the
+primary action last on the right. `UI.cancel()` carries a dismissal marker; the
+component also moves marked dismissals out of an existing action string. Preserve
+permission gates, disabled states and handlers when migrating markup. Inline
+controls that edit a row remain an `actionBar` or a form row.
+
+Jobs uses `UI.masterDetail`; its caller owns selection, refresh and recovery
+actions. Stable disclosure keys preserve expansion when counts or text change.
+Long explanations use `UI.more`; decisions, blockers and consequences stay visible.
+`UI.button` and section/list selection callbacks escape their handler once; use
+`jsArg()` for values passed to those APIs.
+
+Older `.note`, `.sec` and page stat grids still work, styled to match. New and
+rewritten work uses the components.
 
 ## Checking
 
@@ -451,7 +470,9 @@ file and line, when it finds:
 - a list made by mapping items to `serviceRow()` - a list of like things is a
   `tbl stack` table;
 - a table that is not `tbl stack`;
-- a Settings card with a title but no `settings-card-head`.
+- a Settings card with a title but no `settings-card-head`;
+- rail, section navigation, pane or footer markup authored outside `ui.js`;
+- a hand-written dismissal row instead of `UI.actions`.
 
 It also checks this file still states those rules. Change a rule in both
 places at once; never quiet the test for one screen.

@@ -93,10 +93,8 @@ window.moveWorkload = async (name, ns) => {
       Clear preference — let the scheduler choose${!viable.length ? " (no failover host currently exists)" : ""}</label>
       <label class="switch"><input type="checkbox" id="mv_pin"> Hard pin ${tip("A hard pin guarantees this host but prevents automatic failover. The default is a preference so the scheduler may recover elsewhere if the node fails.")}</label></div>
 
-    <div class="row" style="margin-top:6px">
-      <button class="btn pri" id="mv_go" onclick="doMoveNow(${jsq(wl.ns)},${jsq(name)})" disabled>Review move</button>
-      <button class="btn" onclick="modalBack()">Cancel</button>
-    </div>
+    ${UI.actions(`<button class="btn pri" id="mv_go" onclick="doMoveNow(${jsq(wl.ns)},${jsq(name)})" disabled>Review move</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}
     <div class="note" style="margin-top:14px">Expect downtime: the old pod must stop before its ReadWriteOnce volume can attach elsewhere. Termination or reattachment may fail. ${tip("Eligible hosts meet the workload’s hardware, device, label, readiness and scheduling requirements.")}</div>`;
 
   const un = $("#mv_unpin");
@@ -138,7 +136,7 @@ window.hostMoveReview = async body => {
       ${deployCapacityHtml(review.capacity)}
       ${review.capacity.move.target ? `<details${review.capacity.move.target.blocked ? " open" : ""}><summary>Selected host: full desired replica count</summary><p class="small muted">The selected host must fit the desired replicas even for a preference. This check does not turn a preference into a hard pin.</p>${deployCapacityHtml(review.capacity.move.target)}</details>` : ""}
       ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="hostMoveConfirm"> Proceed despite capacity warnings — I accept the downtime, data, placement and memory risks</label>` : ""}
-      <div class="modalactions"><button class="btn" onclick="invalidateHostMove();modalBack()">Back</button><button class="btn pri" id="hostMoveGo" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmHostMove()">Apply reviewed placement</button></div>`, true);
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="invalidateHostMove();modalBack()">Back</button><button class="btn pri" id="hostMoveGo" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmHostMove()">Apply reviewed placement</button>`)}`, true);
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -184,9 +182,8 @@ window.evacuateNode = async node => {
       : '<div class="empty">Nothing of yours is running here.</div>'}
     ${impact.stranded.length ? `<div class="note dependency-danger" style="margin-top:14px"><b>${impact.stranded.length} workload${impact.stranded.length === 1 ? " has" : "s have"} no compatible destination.</b> Evicting them stops their current pods; Kubernetes will leave them Pending until a host with every required hardware feature returns.</div>
       <label class="switch dependency-confirm"><input type="checkbox" id="ev_allow" onchange="document.getElementById('ev_go').disabled=!this.checked"> I understand ${impact.stranded.map(w => esc(w.name)).join(", ")} will not come back up now</label>` : ""}
-    ${wls.length ? `<div class="row" style="margin-top:18px">
-      <button class="btn pri" id="ev_go" onclick="doEvacuate(${jsq(node)})" ${impact.stranded.length ? "disabled" : ""}>Evacuate ${wls.length} workload(s)</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>
+    ${wls.length ? `${UI.actions(`<button class="btn pri" id="ev_go" onclick="doEvacuate(${jsq(node)})" ${impact.stranded.length ? "disabled" : ""}>Evacuate ${wls.length} workload(s)</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
     <div class="note" style="margin-top:14px">Each workload restarts on another host. With
     ReadWriteOnce volumes they restart one at a time, so this is not instant.</div>` : ""}`);
 };

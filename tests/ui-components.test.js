@@ -79,3 +79,38 @@ test("a guide is closed until opened", () => {
   assert.match(html, /^<details class="ui-guide"><summary>How &lt;this&gt; works<\/summary>/);
   assert.doesNotMatch(html, / open/);
 });
+
+test("section forms share keyed desktop/mobile navigation and one footer", () => {
+  const html = UI.sectionForm("edit", [{key:"general",title:"General",html:'<input id="name">'}, false,
+    {key:"network",title:"Network",html:'<input id="address">'}], UI.button("Save", "save()"), {always:true});
+  assert.equal((html.match(/class="ui-actions /g) || []).length, 1);
+  assert.match(html, /aria-controls="edit-pane-network"/);
+  assert.match(html, /id="edit-pane-network" data-i="1" data-key="network" hidden/);
+  assert.match(html, /<option value="network">Network<\/option>/);
+  assert.match(html, /onchange="UI.selectSection\(&quot;edit&quot;,this.value\)"/);
+  assert.doesNotMatch(html, /data-next/);
+  assert.throws(() => UI.sectionForm("empty", [], ""), /at least one section/);
+});
+
+test("dismissal precedes the main action without losing a custom handler or gate", () => {
+  const html = UI.actions(UI.button("Delete", "remove()", {kind:"danger",disabled:true,attrs:'data-need="admin"'}) +
+    '<button data-dialog-dismiss="true" onclick="modalBack()">Back</button>');
+  assert.ok(html.indexOf('modalBack()') < html.indexOf('remove()'));
+  assert.match(html, /ui-actions-start[^]*Back<\/button><\/div>/);
+  assert.match(html, /disabled data-need="admin"/);
+});
+
+test("master detail keeps stable disclosure keys and escapes labels and selection handlers", () => {
+  const key = 'job"<&\\', title = '<img onerror=alert(1)>';
+  const html = UI.masterDetail([{key:"Completed", title:"Completed · 1", collapsed:true,
+    items:[{key,title,detail:"<done>"}]}], key, '<p>Selected content</p>', {onSelect:id => `pick(${JSON.stringify(id)})`});
+  assert.match(html, /data-disclosure="Completed" open/);
+  assert.match(html, /aria-current="true"/);
+  assert.match(html, /&lt;img onerror=alert\(1\)&gt;/);
+  assert.match(html, /&lt;done&gt;/);
+  const encoded = html.match(/onclick="([^"]*)"/)[1];
+  const decoded = encoded.replace(/&(amp|lt|gt|quot|#39);/g, (_,entity) => ({amp:"&",lt:"<",gt:">",quot:'"',"#39":"'"}[entity]));
+  let received;
+  new Function("pick", decoded)(value => {received=value;});
+  assert.equal(received,key);
+});

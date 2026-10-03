@@ -192,8 +192,8 @@ window.componentUpgrade = async id => {
     <p>${esc(c.name)} ${esc(c.installed)} → <b class="mono">${esc(c.next)}</b>${c.steps_left ? ` <span class="dim">(then ${esc(c.newest)}, as a further step)</span>` : ""}</p>
     <div class="note">${esc(COMPONENT_EFFECT[id](c, c.next).replace(/\s+/g, " "))}</div>
     ${c.notes_url ? `<p class="small"><a href="${safeHref(c.notes_url)}" target="_blank" rel="noopener noreferrer">Read ${esc(c.next)}'s release notes ${icon("ext")}</a> first: they list anything to do before or after.</p>` : ""}
-    <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn pri" onclick="componentUpgradeGo(${jsq(id)}, ${jsq(c.next)})">Upgrade to ${esc(c.next)}</button></div>`);
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn pri" onclick="componentUpgradeGo(${jsq(id)}, ${jsq(c.next)})">Upgrade to ${esc(c.next)}</button>`)}`);
 };
 
 window.componentUpgradeGo = async (id, to) => {
@@ -214,8 +214,8 @@ window.harvesterUpgradeStart = version => {
     <div class="note">Before starting: every node Ready, no volume degraded, and a backup of anything precious. VMs that cannot live-migrate
       (a passed-through device, or one node) are shut down while their node restarts.</div>
     <div class="f"><label>Type <b class="mono">${esc(version)}</b> to start</label><input id="hv_up_confirm" class="mono" autocomplete="off"></div>
-    <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn pri" onclick="harvesterUpgradeGo(${jsq(version)})">Start the upgrade</button></div>`);
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn pri" onclick="harvesterUpgradeGo(${jsq(version)})">Start the upgrade</button>`)}`);
 };
 
 window.harvesterUpgradeGo = async version => {

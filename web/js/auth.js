@@ -199,9 +199,8 @@ window.pwChange = () => modal("Change password", `
   <div class="f"><label>Current password</label><input type="password" id="pw_old" autocomplete="current-password"></div>
   <div class="f"><label>New password</label><input type="password" id="pw_new" autocomplete="new-password"></div>
   <div class="f"><label>Confirm new password</label><input type="password" id="pw_new2" autocomplete="new-password"></div>
-  <div class="row" style="margin-top:16px">
-    <button class="btn pri" onclick="doPwChange()">Change password</button>
-    <button class="btn" onclick="closeModal()">Cancel</button></div>
+  ${UI.actions(`<button class="btn pri" onclick="doPwChange()">Change password</button>
+    <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
   <div class="note" style="margin-top:14px">Changing your password signs out every other
   session, including on other devices.</div>`);
 

@@ -675,9 +675,8 @@ window.probeInstallConfirm = () => childModal("Install the node probe?", `
     <span class="mono">/proc</span> and <span class="mono">/dev</span> read-only, drops every
     capability, runs with a read-only root and cannot escalate privilege.</div>
   <div class="note warn"><b>SMART requires a privileged container</b> to read drive health. It uses a read-only root, isolated PID/IPC/network namespaces and signed requests. ${tip("Direct block-device access is required for the host’s varying drive types. Without the SMART container, drive-health data is unavailable.")}</div>
-  <div class="row" style="margin-top:16px">
-    <button class="btn pri" data-need="admin" onclick="probeInstall()">Install probe</button>
-    <button class="btn" onclick="closeModal()">Not now</button></div>`);
+  ${UI.actions(`<button class="btn pri" data-need="admin" onclick="probeInstall()">Install probe</button>
+    <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Not now</button>`)}`);
 
 window.probeInstall = async () => {
   try {
@@ -719,11 +718,9 @@ window.allocationProbeSettings = async () => {
       </details>
       <label class="vip-check"><input id="allocationProbeConsent" type="checkbox"><span>Allow read-only host allocation checks and restart monitoring.</span></label>
       ${current.enabled ? '<button class="btn sm" onclick="allocationProbeCheck(this)">Check hosts</button><div id="allocationProbeDiagnostics" role="status" aria-live="polite"></div>' : ""}
-      <div class="row" style="margin-top:16px">
-        <button class="btn pri" data-need="admin" ${capacity.blocked ? "disabled" : ""} onclick="allocationProbeSave(true,this)">${current.enabled ? "Save settings" : "Enable checks"}</button>
+      ${UI.actions(`<button class="btn pri" data-need="admin" ${capacity.blocked ? "disabled" : ""} onclick="allocationProbeSave(true,this)">${current.enabled ? "Save settings" : "Enable checks"}</button>
         ${current.enabled ? '<button class="btn" data-need="admin" onclick="allocationProbeSave(false,this)">Disable checks</button>' : ""}
-        <button class="btn" onclick="modalBack()">Cancel</button>
-      </div>`}`, false, "operation-review");
+        <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`}`, false, "operation-review");
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -765,7 +762,7 @@ window.allocationProbeSave = async (enabled, button) => {
 window.smartStartConfirm = (node, disk, type) => childModal(`Start ${type} SMART test?`, `
   <p>This asks <b>${esc(node)} / ${esc(disk)}</b> to run its built-in ${esc(type)} self-test.</p>
   <div class="note">The test does not erase data, but a long test can reduce storage performance and may take hours. Progress and the final drive result remain in Activity.</div>
-  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="smartStart(${jsq(node)},${jsq(disk)},${jsq(type)})">Start ${esc(type)} test</button><button class="btn" onclick="modalBack()">Cancel</button></div>`);
+  ${UI.actions(`<button class="btn pri" onclick="smartStart(${jsq(node)},${jsq(disk)},${jsq(type)})">Start ${esc(type)} test</button><button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`);
 
 window.smartStart = async (node, disk, type) => {
   try {
@@ -779,7 +776,7 @@ window.hardwareEdit = n => modal("Hardware · " + n.name, `
   <p class="muted small">Choose which configured features workloads may use on this node. Saving writes explicit Kubernetes labels; unchecked features are explicitly disabled even if detected.</p>
   <div class="hwchoices">${hardwareChoices("hw_node", nodeHardwareIds(n))}</div>
   <div class="note">${(n.hardware_inventory || []).map(x => `<div><b>${esc(x.name)}</b> · ${x.detected ? "detected" : "not detected"} · ${x.explicit == null ? "automatic" : x.explicit ? "enabled" : "disabled"}</div>`).join("") || "The node probe has not reported hardware inventory yet."}</div>
-  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="hardwareSave(${jsq(n.name)})">Save</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+  ${UI.actions(`<button class="btn pri" onclick="hardwareSave(${jsq(n.name)})">Save</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 window.hardwareSave = async node => {
   const body = { node, features: selectedHardware("hw_node") };
   try { await api("/api/node/hardware", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -829,7 +826,7 @@ window.hardwareFeatureEdit = async id => {
       <div id="hf_browse_results"></div>
     </div>
     <div class="note">Device passthrough makes the container privileged. Use the narrowest stable /dev path available. For a USB VID:PID, /dev/bus/usb is commonly required because bus addresses can change after reboot.</div>
-    <div class="row" style="margin-top:16px"><button class="btn pri" onclick="hardwareFeatureSave(${jsq(id || "")} )">Save feature</button><button class="btn" onclick="modalBack()">Cancel</button></div>`, true);
+    ${UI.actions(`<button class="btn pri" onclick="hardwareFeatureSave(${jsq(id || "")} )">Save feature</button><button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`, true);
   hardwareBrowseRender();
 };
 window.hardwareBrowseRender = () => {

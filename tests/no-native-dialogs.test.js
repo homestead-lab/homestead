@@ -28,7 +28,7 @@ test("ask resolves to the answer, and askText to the text or null", async () => 
   const document = { createElement: make, body, activeElement: null,
     addEventListener: (t, f) => { listeners[t] = f; }, removeEventListener: t => { delete listeners[t]; } };
   const ctx = { document, window: {}, esc: s => String(s) };
-  vm.createContext(ctx);
+  vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   const source = fs.readFileSync(path.join(__dirname, "..", "web", "js", "core.js"), "utf8");
   const start = source.indexOf("const ASK_DANGER"), end = source.indexOf("/* The X and Escape");
   vm.runInContext(source.slice(start, end), ctx);

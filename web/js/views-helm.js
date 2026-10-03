@@ -99,8 +99,8 @@ window.helmInstall = async () => {
       <div class="f"><label>Values ${tip("Only what you change from the chart's defaults. The defaults are shown on the right to copy from.")}</label>
         <div class="helm-values-pair"><textarea id="hi_values" class="mono helm-values" rows="14" spellcheck="false" placeholder="# e.g.\n# persistence:\n#   enabled: true"></textarea>
         <pre id="hi_defaults" class="mono helm-values dim" title="The chart's defaults"></pre></div></div>
-      <div class="row"><button class="btn pri" data-need="admin" onclick="helmInstallGo()">Install</button><button class="btn" onclick="closeModal()">Cancel</button>
-        <a class="btn" id="hi_readme" target="_blank" rel="noopener noreferrer" hidden>${icon("ext")}Chart page</a></div></div>
+      ${UI.actions(`<button class="btn pri" data-need="admin" onclick="helmInstallGo()">Install</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
+        <a class="btn" id="hi_readme" target="_blank" rel="noopener noreferrer" hidden>${icon("ext")}Chart page</a>`)}</div>
     <div class="dim xs" style="margin-top:8px"><a style="cursor:pointer;text-decoration:underline" onclick="helmManual()">Or enter a repository and chart by hand</a></div>`, true);
   setTimeout(() => $("#hi_q")?.focus(), 30);
 };

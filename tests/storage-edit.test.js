@@ -12,7 +12,7 @@ function editor(api) {
       context.html = html;
       elements["#ve_loading"] = html.includes('id="ve_loading"') ? {} : null;
     } };
-  vm.createContext(context);
+  vm.createContext(context); require("./helpers/load-ui")(context);
   vm.runInContext(fs.readFileSync("web/js/views-storage.js", "utf8"), context);
   context.viewStorage = () => {};
   return { context, elements };

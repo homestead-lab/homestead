@@ -836,7 +836,7 @@ window.sambaToggle = async box => {
     const own = (choices.own || []).find(v => v.free);
     return modal("Install Samba", `<p class="small">Samba serves the network shares. Choose the address Windows will find it at.</p>
       <div class="f">${vipPicker("smb", own ? own.ip : (choices.free[0] || ""), choices)}</div>
-      <div class="row" style="margin-top:14px"><button class="btn pri" onclick="sambaInstallGo()">Install</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+      ${UI.actions(`<button class="btn pri" onclick="sambaInstallGo()">Install</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   }
   if (!on && !(await ask("Stop Samba? Every share stops being served until it is switched on again; their volumes, settings and passwords are kept."))) {
     box.checked = true; return;
@@ -862,7 +862,7 @@ window.sambaRemove = () => {
   modal("Remove SMB server", `<p>The SMB address and server workload will be removed. Network shares stop being served.</p>
     <div class="note warn">Share definitions, passwords, all PVCs and their data remain. Re-enable SMB here to serve them again.</div>
     <div class="f"><label>Type <b class="mono">homestead-smb</b> to confirm</label><input id="smb_remove_confirm" autocomplete="off"></div>
-    <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn danger" onclick="sambaRemoveGo()">Remove server</button></div>`);
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn danger" onclick="sambaRemoveGo()">Remove server</button>`)}`);
 };
 window.sambaRemoveGo = async () => {
   const confirm = $("#smb_remove_confirm")?.value.trim();
@@ -880,9 +880,9 @@ window.nfsToggle = async box => {
   if (on && !nfs.installed) {
     box.checked = false;
     if (!(nfs.exports || []).length) return modal("Set up NFS exports", `<p>Choose an RWX share and its allowed client IP or CIDR in Network Shares before installing the NFS server.</p>
-      <div class="modalactions"><button class="btn pri" onclick="closeModal();go('shares')">Network Shares</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+      ${UI.actions(`<button class="btn pri" onclick="closeModal();go('shares')">Network Shares</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
     if (nodeAddressesOnly()) return modal("NFS needs a VIP", `<p>k3s ServiceLB cannot provide the dedicated address and preserved client IPs needed for this NFSv4 server. Install kube-vip under Cluster Add-ons, then try again.</p>
-      <div class="modalactions"><button class="btn pri" onclick="closeModal();addonsPaint()">OK</button></div>`);
+      ${UI.actions(`<button class="btn pri" onclick="closeModal();addonsPaint()">OK</button>`)}`);
     const choices = await vipChoices();
     choices.used = [];
     choices.own = (choices.own || []).filter(v => v.free);
@@ -892,7 +892,7 @@ window.nfsToggle = async box => {
       <div class="note warn">Only the client networks configured for each share can mount it. Removing this server later leaves every share definition and PVC in place.</div>
       <p class="small">SMB and NFS use different ports, but their separately placed servers need separate VIPs to keep client IP restrictions and routing correct after a host failure. Sharing one VIP would require a combined file-server pod.</p>
       <div class="f">${vipPicker("nfs", own ? own.ip : (choices.free[0] || ""), choices)}</div>
-      <div class="modalactions"><button class="btn pri" onclick="nfsInstallGo()">Install NFS server</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+      ${UI.actions(`<button class="btn pri" onclick="nfsInstallGo()">Install NFS server</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   }
   if (!on && !(await ask("Stop NFS? Exported shares become unavailable until it is switched on again. Their definitions and volumes are kept."))) {
     box.checked = true; return;
@@ -915,7 +915,7 @@ window.nfsInstallGo = async () => {
 window.nfsRemove = () => modal("Remove NFS server", `<p>The NFS container and its address will be removed. Clients will lose access to its exports.</p>
   <div class="note warn">Export settings, SMB shares, all PVCs and their data remain.</div>
   <div class="f"><label>Type <b class="mono">homestead-nfs</b> to confirm</label><input id="nfs_remove_confirm" autocomplete="off"></div>
-  <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn danger" onclick="nfsRemoveGo()">Remove server</button></div>`);
+  ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn danger" onclick="nfsRemoveGo()">Remove server</button>`)}`);
 window.nfsRemoveGo = async () => {
   const confirm = $("#nfs_remove_confirm")?.value.trim();
   if (confirm !== "homestead-nfs") return toast("type homestead-nfs to confirm", "bad");

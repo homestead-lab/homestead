@@ -375,8 +375,8 @@ function askDialog(message, { title = "", ok = "", danger = null, input = null }
     const risky = danger === null ? ASK_DANGER.test(String(message).trim()) : danger;
     layer.innerHTML = `<div class="askbox">${title ? `<h3>${esc(title)}</h3>` : ""}<p class="askmsg"></p>
       ${input ? `<input class="askin mono" autocomplete="off">` : ""}
-      <div class="row askbtns"><button class="btn" data-a="no">Cancel</button>
-        <button class="btn ${risky ? "danger" : "pri"}" data-a="yes">${esc(ok || (input ? "OK" : "Continue"))}</button></div></div>`;
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" data-a="no">Cancel</button>
+        <button class="btn ${risky ? "danger" : "pri"}" data-a="yes">${esc(ok || (input ? "OK" : "Continue"))}</button>`, "", {className:'askbtns'})}</div>`;
     layer.querySelector(".askmsg").textContent = String(message);
     const field = layer.querySelector(".askin");
     if (field) {

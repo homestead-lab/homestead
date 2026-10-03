@@ -463,7 +463,7 @@ window.editReview = async body => {
       ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both workload names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
         <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${(review.capacity.warnings || []).length} warning(s)</summary>${deployCapacityHtml(review.capacity)}</details>` : `${review.capacity.blocked || concerns.length ? UI.callout(review.capacity.blocked ? "bad" : "warn", review.capacity.blocked ? "Changes blocked" : "Check before saving", concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "Change the resources, storage or host selection before saving.") : ""}${UI.more("Capacity and placement", deployCapacityHtml(review.capacity))}` }
       ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "I accept the outage and capacity warnings" : concerns.length ? "I accept the restart and warnings above" : "I accept the restart"}</label>` : ""}
-      <div class="modalactions"><button class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename workload" : "Save reviewed changes"}</button></div>`, true, "operation-review");
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename workload" : "Save reviewed changes"}</button>`)}`, true, "operation-review");
   } catch (e) { toast(e.message, "bad"); }
 };
 window.confirmEdit = async () => {
@@ -512,9 +512,8 @@ window.wlMoveLegacy = async (ns, name) => {
       <option value="">any node (unpin)</option>
       ${nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)} · ${n.cpu_pct}% cpu, ${n.mem_pct}% ram${n.igpu ? " · iGPU" : ""}</option>`).join("")}
     </select></div>
-    <div class="row" style="margin-top:18px">
-      <button class="btn pri" onclick="doMove(${jsq(ns)},${jsq(name)})">Move</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>
+    ${UI.actions(`<button class="btn pri" onclick="doMove(${jsq(ns)},${jsq(name)})">Move</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
     <div class="note" style="margin-top:14px">This is a stop-then-start, not a live move —
     a ReadWriteOnce volume can only attach to one node at a time.</div>`);
 };
@@ -678,9 +677,8 @@ window.vmMove = (ns, name) => {
     <div class="f" style="margin-top:14px"><label>Target host</label><select id="vm_target">
       <option value="">let KubeVirt choose</option>
       ${nodes.map(n => `<option value="${esc(n.name)}">${esc(n.name)}</option>`).join("")}</select></div>
-    <div class="row" style="margin-top:16px">
-      <button class="btn pri" onclick="doVmMove(${jsq(ns)},${jsq(name)})">Migrate</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" onclick="doVmMove(${jsq(ns)},${jsq(name)})">Migrate</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.doVmMove = async (ns, name) => {
   try {
@@ -722,9 +720,9 @@ window.vmNetworkAdd = async (reopen = null) => {
     open("New LAN network", `<div class="note"><b>Multus is needed first.</b> A container or VM joins the LAN as a second network,
         which Kubernetes does through Multus - k3s and RKE2 leave it out unless asked.</div>
       <p class="small">${esc(o.multus_help || "Install Multus, then come back here.")}</p>
-      <div class="row" style="margin-top:14px">${STATE.platform?.helm_controller && ["k3s", "rke2"].includes(STATE.platform?.distribution)
+      ${UI.actions(`${STATE.platform?.helm_controller && ["k3s", "rke2"].includes(STATE.platform?.distribution)
         ? `<button class="btn pri" data-need="admin" onclick="closeModal(); addonInstall('multus')">Install Multus</button>` : ""}
-        <button class="btn" onclick="modalBack()">Close</button></div>`);
+        <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Close</button>`)}`);
     window.__vmNetworkReopen = back;
     return;
   }
@@ -750,8 +748,8 @@ window.vmNetworkAdd = async (reopen = null) => {
     ${usedBy}
     <div class="f"><label>VLAN ${tip("Empty: untagged - the same LAN the hosts are on. A number: that VLAN, which your switch must carry to the hosts.")}</label>
       <input id="vn_vlan" type="number" min="1" max="4094" placeholder="empty - untagged, the hosts' own LAN"></div>
-    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="vmNetworkAddGo()">Make it</button>
-      <button class="btn" onclick="modalBack()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" onclick="vmNetworkAddGo()">Make it</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`);
   window.__vmNetworkReopen = back;
   window.__vmNetworkOptions = o;
   vmNetworkForChanged();
@@ -993,7 +991,7 @@ window.vmCreateReview = async (body, network = {}) => {
       ${review.capacity.blockers?.length ? `<div class="note bad">${review.capacity.blockers.map(esc).join(" · ")}</div>` : ""}
       ${deployCapacityHtml(review.capacity)}
       ${!review.capacity.blocked && capacityNotes(review.capacity).concerns.length ? '<label class="check"><input id="vmCreateApprove" type="checkbox" onchange="vmCreateReviewReady()"> Create it anyway, accepting the warnings above</label>' : ""}
-      <div class="modalactions"><button class="btn" onclick="vmCreateReviewBack()">Back to configuration</button><button id="vmCreateApply" class="btn pri" disabled onclick="vmCreateReviewedApply()">Create VM</button></div></div>`,true);
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="vmCreateReviewBack()">Back to configuration</button><button id="vmCreateApply" class="btn pri" disabled onclick="vmCreateReviewedApply()">Create VM</button>`)}</div>`,true);
     vmCreateReviewReady();
   } catch (error) { if(sequence === VM_CREATE_SEQUENCE) toast(error.message,"bad"); }
 };
@@ -1133,7 +1131,7 @@ window.vmImageDelete = (namespace, name) => {
   modal(`Delete · ${i.display}`, `<p>The image is deleted, with its copies on ${i.nodes.length} node${i.nodes.length === 1 ? "" : "s"}
       (${esc(i.nodes.join(", ") || "none")}). No disk was made from it. A VM made from the same download address later downloads it again.</p>
     <div class="f" style="margin-top:12px"><label>Type <b class="mono">${esc(i.display)}</b> to confirm</label><input id="vmi_confirm" autocomplete="off"></div>
-    <div class="row"><button class="btn danger" onclick="vmImageDeleteGo(${jsq(namespace)},${jsq(name)})">Delete</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn danger" onclick="vmImageDeleteGo(${jsq(namespace)},${jsq(name)})">Delete</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.vmImageDeleteGo = async (namespace, name) => {
   try {
@@ -1204,9 +1202,8 @@ window.jobEdit = (j) => {
     <div class="f"><label>Image</label><input type="text" id="j_image" value="${esc(j.image || "alpine:3.20")}"></div>
     <div class="f"><label>Command</label><textarea id="j_cmd" rows="4" placeholder="echo hello">${esc(j.command || "")}</textarea></div>
     <label class="switch"><input type="checkbox" id="j_susp" ${j.suspend ? "checked" : ""}> Paused</label>
-    <div class="row" style="margin-top:16px">
-      <button class="btn pri" onclick="jobSave()">Save</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" onclick="jobSave()">Save</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.jobSave = async () => {
   const body = { name: $("#j_name").value.trim(), schedule: $("#j_sched").value.trim(),
@@ -1359,9 +1356,8 @@ window.importRemove = async (name, state) => {
         <span><b>The volume</b><small>No volume is recorded for this import.</small></span></label>`}
     </div>
     ${plan.known === false ? '<div class="note">This import predates the record of what it created, so only the job is removed.</div>' : ""}
-    <div class="row" style="margin-top:18px">
-      <button class="btn danger" id="imr_go" data-need="admin" onclick="importRemoveNow(${jsq(name)},this)">${running ? "Cancel import" : "Remove"}</button>
-      <button class="btn" onclick="closeModal()">Keep it</button></div>`);
+    ${UI.actions(`<button class="btn danger" id="imr_go" data-need="admin" onclick="importRemoveNow(${jsq(name)},this)">${running ? "Cancel import" : "Remove"}</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Keep it</button>`)}`);
   if (window.applyRole) window.applyRole();
 };
 window.importRemoveNow = async (name, button) => {
@@ -1402,7 +1398,7 @@ window.vmDiskImport = () => {
     <details><summary class="small">Authenticated or private CA source</summary><div class="f2" style="margin-top:12px">
       <div class="f"><label>Credential Secret ${tip("Optional Secret in the destination namespace containing CDI-compatible accessKeyId and secretKey fields.")}</label><input id="vd_secret" placeholder="image-download-credentials"></div>
       <div class="f"><label>CA ConfigMap ${tip("Optional ConfigMap in the destination namespace containing the endpoint's CA certificate.")}</label><input id="vd_ca" placeholder="private-ca"></div></div></details>
-    <div class="row" style="margin-top:18px"><button class="btn pri" onclick="doVmDiskImport()">Start import</button><button class="btn" onclick="closeModal()">Cancel</button></div>
+    ${UI.actions(`<button class="btn pri" onclick="doVmDiskImport()">Start import</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
     <div class="dim xs" style="margin-top:12px">Progress continues in the active-jobs tray after this dialog closes. Source URLs are not copied into Homestead's operation history.</div>`, true);
 };
 window.doVmDiskImport = async () => {
@@ -1537,8 +1533,8 @@ window.imageCleanupReview = digest => {
     <div class="f"><label>Remove from nodes</label><div class="cleanup-nodes">${image.nodes.map(node =>
       `<label class="switch"><input class="cleanup-node" type="checkbox" value="${esc(node)}" checked onchange="imageCleanupGate()"> ${esc(node)}</label>`).join("")}</div></div>
     <div class="f"><label>Type CLEAN to confirm</label><input id="cleanupConfirm" autocomplete="off" oninput="imageCleanupGate()" placeholder="CLEAN"></div>
-    <div class="row"><button id="cleanupGo" class="btn danger" data-need="admin" disabled onclick="imageCleanupApply(${jsq(digest)})">Remove cached image</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div></div>`, true);
+    ${UI.actions(`<button id="cleanupGo" class="btn danger" data-need="admin" disabled onclick="imageCleanupApply(${jsq(digest)})">Remove cached image</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}</div>`, true);
   if (window.applyRole) window.applyRole();
 };
 window.imageCleanupGate = () => {
@@ -2114,7 +2110,7 @@ window.clusterInventory = report => {
     </tr>`).join("")}</tbody></table></div>`
     : '<div class="empty">That cluster is running nothing Homestead can see.</div>'}
   ${clusterVolumesHtml(report)}
-  <div class="row" style="margin-top:16px"><button class="btn" onclick="closeModal()">Close</button></div>`);
+  ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}`);
 };
 
 /* Volumes that can move on their own. One a running app or VM uses is
@@ -2174,11 +2170,10 @@ window.moveReview = (cluster, kind, name, transferMode = "move", sourceNamespace
   <div class="f"><label>Destination storage class</label><select id="mv_sc" disabled><option value="">Loading destination classes…</option></select>
     <div class="dim xs">Restored volumes inherit this class's replica count, disk tags and other storage settings.</div></div>
   <div id="mv_plan"></div>
-  <div class="row" style="margin-top:16px">
-    <button class="btn" onclick="movePlan(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Check again</button>
+  ${UI.actions(`<button class="btn" onclick="movePlan(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Check again</button>
     <button class="btn pri" id="mv_go" data-need="admin" disabled
       onclick="moveStart(${jsq(cluster)},${jsq(kind)},${jsq(name)})">Start ${copy ? "copy" : "move"}</button>
-    <button class="btn" onclick="modalBack()">Cancel</button></div>`, false, "operation-review");
+    <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`, false, "operation-review");
   movePlan(cluster, kind, name);
   for (const id of ["#mv_ns", "#mv_ip"]) {
     const field = $(id);
@@ -2435,9 +2430,8 @@ window.moveFinish = (id, name, cluster, kind) => modal(`Remove ${name} from ${cl
   <div class="dim xs">Volumes it skipped or made blank here stay on ${esc(cluster)}: they are the only copy of that data.</div>
   <div class="note">Leaving the volumes costs space on ${esc(cluster)} but keeps a copy of the data as it
     was at the moment of the move. Their backups stay in the backup storage either way.</div>
-  <div class="row" style="margin-top:16px">
-    <button class="btn danger" data-need="admin" onclick="moveFinishNow(${jsq(id)})">Remove from ${esc(cluster)}</button>
-    <button class="btn" onclick="closeModal()">Not yet</button></div>`);
+  ${UI.actions(`<button class="btn danger" data-need="admin" onclick="moveFinishNow(${jsq(id)})">Remove from ${esc(cluster)}</button>
+    <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Not yet</button>`)}`);
 
 window.moveFinishNow = async id => {
   try {
@@ -2538,7 +2532,7 @@ window.importReview = async body => {
       ${(config.mappings || []).some(m => m.copy !== false && m.medium !== 'memory') || config.remote_path ? UI.more('Copy safety checks', 'Free space is checked on the mounted destination against measured source sizes. Missing measurements are reported in the job log, not treated as zero. Estimates do not reserve space. Unsafe destination paths stop the copy; failed transfers keep both copies.') : ''}
       ${result.phases.map(p => UI.more(`${p.title}: capacity`, deployCapacityHtml(p.capacity))).join('')}
       ${!result.capacity.blocked ? '<label class="switch"><input type="checkbox" id="importConfirm"> I approve this import, including file replacement and any capacity warnings.</label>' : ''}
-      <div class="modalactions"><button class="btn" onclick="modalBack()">Back to import</button><button class="btn pri" id="importGo" ${result.capacity.blocked ? 'disabled' : ''} onclick="confirmImport()">Create reviewed import</button></div></div>`, true);
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back to import</button><button class="btn pri" id="importGo" ${result.capacity.blocked ? 'disabled' : ''} onclick="confirmImport()">Create reviewed import</button>`)}</div>`, true);
   } catch (e) { toast(e.message, "bad"); }
 };
 window.confirmImport = async () => {
