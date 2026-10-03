@@ -653,7 +653,7 @@ window.nodePower = async (node, action) => {
       body: JSON.stringify({ node, action, confirm: c, review_token: plan.review_token, force: !!plan.force,
         allow_cluster_outage: !!$("#pw_outage")?.checked, allow_stranded: plan.planned_outage ? !!$("#pw_outage")?.checked : !!$("#pw_allow")?.checked, allow_data_risk: !!$("#pw_data")?.checked }) });
     if (r.operation) window.noteOperation?.(r.operation);
-    modal("Host maintenance", UI.lead(plan.force || plan.planned_outage ? `Sent. Follow it in Recent jobs${plan.action === "reboot" ? "; this page comes back when the host does" : ""}. It was not cordoned, so its pods start again as it comes back.`
+    modal("Host maintenance", UI.lead(plan.force || plan.planned_outage ? `Sent. Follow it in Recent jobs${plan.action === "reboot" ? "; this page comes back when the host does" : ""}. Scheduling was left unchanged; inspect workloads and storage when the host returns.`
       : "Follow progress in Recent jobs. The host stays cordoned; check it before allowing scheduling.") +
       UI.more("Steps so far", `<pre>${esc((r.steps || []).join("\n"))}</pre>`) + UI.actions(UI.cancel("Close")));
   } catch (e) {

@@ -104,7 +104,7 @@ def plan(node, action, force=False, volume_names=()):
     if not planned_outage and node in members and control.get("can_lose", 0) < 1:
         soft.append("This host is the cluster's only etcd member: the cluster, Homestead with it, is away until it is back"
                     if len(members) == 1 else "Shutting down this etcd member would lose quorum")
-    if not _ready(node_obj):
+    if not _ready(node_obj) or (len(nodes) == 1 and nodes[0].get("metadata", {}).get("name") == node and not _ready(nodes[0])):
         hard.append("The host is not Ready; investigate it before issuing a new power command")
     if vm_rows:
         soft.append("Running VMs are on this host; migrate or stop them and review again")

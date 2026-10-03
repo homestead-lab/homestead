@@ -58,6 +58,8 @@ class SingleNodePowerTests(unittest.TestCase):
         plan = power.plan("node1", "poweroff")
         self.assertFalse(plan["planned_outage"])
         self.assertFalse(plan["ready"])
+        power.quorum = lambda: {"members": [], "can_lose": 0}
+        self.assertFalse(power.plan("node1", "poweroff")["ready"])
 
     def test_disruption_budgets_do_not_block_an_outage_that_evicts_no_pods(self):
         self.objects["/apis/policy/v1/poddisruptionbudgets"]["items"] = [{

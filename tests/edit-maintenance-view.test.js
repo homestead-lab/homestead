@@ -211,7 +211,7 @@ test('single-host shutdown and reboot need outage acknowledgement without force'
     assert.equal(t.sent[0].body.force,false);
     assert.equal(t.sent[0].body.allow_cluster_outage,true);
     assert.equal(t.sent[0].body.allow_stranded,true);
-    assert.match(t.html(), /not cordoned/);
+    assert.match(t.html(), /Scheduling was left unchanged/);
     assert.doesNotMatch(t.html(), /host stays cordoned/);
   }
 });
