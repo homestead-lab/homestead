@@ -151,8 +151,8 @@ const UI = (() => {
 
   /* Page and module headings use explicit HTML slots, like section/facts.
      Escape data at the call site; IDs and option labels are plain text. */
-  const pageHeader = (titleHtml, descriptionHtml = "", actionsHtml = "", { extraHtml = "", descriptionAttrs = "", actionsClass = "" } = {}) =>
-    `<div class="phead"><div><h2>${titleHtml}</h2>${descriptionHtml || descriptionAttrs ? `<p ${descriptionAttrs}>${descriptionHtml}</p>` : ""}${extraHtml}</div>${actionsHtml ? `<div class="row page-actions${actionsClass ? ` ${text(actionsClass)}` : ""}">${actionsHtml}</div>` : ""}</div>`;
+  const pageHeader = (titleHtml, descriptionHtml = "", actionsHtml = "", { extraHtml = "", descriptionAttrs = "", actionsClass = "", mobileSummary = "show" } = {}) =>
+    `<div class="phead"><div><h2>${titleHtml}</h2>${descriptionHtml || descriptionAttrs ? `<p${mobileSummary === "omit" ? ' class="page-summary-optional"' : ""} ${descriptionAttrs}>${descriptionHtml}</p>` : ""}${extraHtml}</div>${actionsHtml ? `<div class="row page-actions${actionsClass ? ` ${text(actionsClass)}` : ""}">${actionsHtml}</div>` : ""}</div>`;
   const moduleHeader = (titleHtml, descriptionHtml = "", actionsHtml = "", { extraHtml = "", actionsClass = "" } = {}) =>
     `<div class="settings-card-head"><div><div class="ctitle">${titleHtml}</div>${descriptionHtml ? `<div class="csub">${descriptionHtml}</div>` : ""}${extraHtml}</div>${actionsHtml ? `<div class="row module-actions${actionsClass ? ` ${text(actionsClass)}` : ""}">${actionsHtml}</div>` : ""}</div>`;
   const settingsCard = (bodyHtml, { tab, id = "", save = "", wide = true, hidden = false } = {}) =>
@@ -161,8 +161,8 @@ const UI = (() => {
   const saveBar = ({ id, messageId, save, discard, hidden = true }) =>
     `<div class="savebar" id="${text(id)}"${hidden ? " hidden" : ""}><span id="${text(messageId)}" role="status"></span>${button("Discard", discard)}${button("Save", save, {kind:"pri"})}</div>`;
   const collectionHeader = (controlsHtml, summaryHtml) => `<div class="collection-mobile-head"><div class="collection-mobile-toolbar">${controlsHtml}</div><div class="collection-mobile-summary">${summaryHtml}</div></div>`;
-  const workspace = (navigationHtml, bodyHtml, { id = "", open = false, backLabel = "", back = "", guide = false, pickerHtml = "", contentId = "" } = {}) =>
-    `<div class="settings-layout${guide ? " setup-layout" : ""}"${id ? ` id="${text(id)}"` : ""}${guide ? "" : ` data-open="${open ? 1 : 0}"`}>${pickerHtml}${navigationHtml}<div class="settings-main"${contentId ? ` id="${text(contentId)}"` : ""}>${backLabel ? `<button type="button" class="settings-back" onclick="${text(back)}">‹ ${text(backLabel)}</button>` : ""}${bodyHtml}</div></div>`;
+  const workspace = (navigationHtml, bodyHtml, { id = "", open = false, backLabel = "", back = "", currentLabel = "", guide = false, pickerHtml = "", contentId = "" } = {}) =>
+    `<div class="settings-layout${guide ? " setup-layout" : ""}"${id ? ` id="${text(id)}"` : ""}${guide ? "" : ` data-open="${open ? 1 : 0}"`}>${pickerHtml}${navigationHtml}<div class="settings-main"${contentId ? ` id="${text(contentId)}"` : ""}>${backLabel ? `<nav class="workspace-location" aria-label="Section navigation"><button type="button" class="settings-back" onclick="${text(back)}">‹ ${text(backLabel)}</button><span class="workspace-current" aria-current="location">${text(currentLabel)}</span></nav>` : ""}${bodyHtml}</div></div>`;
   const workspaceNav = (items, { label, selected, onSelect, guide = false } = {}) =>
     `<nav class="settings-nav${guide ? " setup-nav" : ""}"${guide ? "" : ' role="tablist" aria-orientation="vertical"'} aria-label="${text(label)}">${items.map((item, i) =>
       `${item.group && item.group !== items[i - 1]?.group ? `<div class="${guide ? "setup-chapter" : "settings-nav-group"}">${text(item.group)}</div>` : ""}<button type="button"${guide ? "" : ` role="tab" aria-selected="${item.key === selected}" tabindex="${item.key === selected ? 0 : -1}"`} data-${guide ? "step" : "tab"}="${text(item.key)}" class="${guide ? "setup-step" : ""}${item.key === selected ? " on" : ""}"${item.ariaLabel ? ` aria-label="${text(item.ariaLabel)}"` : ""} onclick="${text(`UI.navigateWorkspace(this, () => ${onSelect(item.key)})`)}">${item.markerHtml || ""}<span>${guide ? text(item.label) : `<b>${text(item.label)}</b>${item.descriptionHtml ? `<small>${item.descriptionHtml}</small>` : ""}`}</span>${guide ? "" : '<i aria-hidden="true">›</i>'}</button>`).join("")}</nav>`;
@@ -174,12 +174,18 @@ const UI = (() => {
     if (!restoreFocus) return;
     const current = [...document.querySelectorAll(".settings-nav")].find(el => el.getAttribute("aria-label") === label);
     const selected = [...(current?.querySelectorAll("button.on") || [])].find(el => (el.dataset.tab ?? el.dataset.step) === key);
-    selected?.focus({preventScroll:true});
+    if (selected?.getClientRects().length) selected.focus({preventScroll:true});
+    else current?.closest(".settings-layout")?.querySelector(".settings-back")?.focus({preventScroll:true});
   };
   const selectWorkspace = (root, key, { gridSelector = "", paneSelector = "" } = {}) => {
     if (!root) return;
     root.dataset.open = key ? "1" : "0";
-    if (!key) return;
+    if (!key) {
+      root.querySelector('.settings-nav button.on')?.focus({preventScroll:true});
+      return;
+    }
+    const current = root.querySelector('.workspace-current');
+    if (current) current.textContent = [...root.querySelectorAll('.settings-nav [data-tab]')].find(item => item.dataset.tab === key)?.querySelector('b')?.textContent || '';
     if (gridSelector) { const grid = root.querySelector(gridSelector); if (grid) grid.dataset.tab = key; }
     if (paneSelector) root.querySelectorAll(paneSelector).forEach(pane => { pane.hidden = pane.dataset.pane !== key; });
     root.querySelectorAll('.settings-nav [data-tab]').forEach(item => {
