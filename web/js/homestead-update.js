@@ -67,13 +67,13 @@ function paintBell() {
   const { waiting, release } = homesteadUpdates();
   const images = window.BELL?.images || 0, errors = window.BELL?.errors || 0;
   const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-  const row = (run, iconName, text, cls = "") => `<button class="${cls}" onclick="this.closest('details').open=false;${run}">${icon(iconName)}${esc(text)}</button>`;
+  const row = (run, iconName, text, cls = "") => `<button class="${cls}" onclick="closeNotifications();${run}">${icon(iconName)}${esc(text)}</button>`;
   // Background jobs: running ones at the top, with their progress; a failed
   // one stays under Needs you until it is dismissed.
   const operations = STATE.data.operations || [];
   const active = operations.filter(op => window.operationActive ? operationActive(op) : !["succeeded", "failed", "cancelled"].includes(op.status));
   const failedJobs = operations.filter(op => op.status === "failed");
-  const jobRow = op => `<button class="bell-job" onclick="this.closest('details').open=false;openOperation(${jsq(op.href || "/")},${jsq(op.id || "")})">
+  const jobRow = op => `<button class="bell-job" onclick="closeNotifications();openOperation(${jsq(op.href || "/")},${jsq(op.id || "")})">
       <span class="bell-job-top"><b>${esc(op.title)}</b><span>${op.progress != null ? `${Math.round(op.progress)}%` : esc(op.status)}</span></span>
       <span class="bell-job-msg">${esc(op.message || op.status || "")}</span>
       ${op.progress != null && Number.isFinite(Number(op.progress)) ? `<span class="jobmeter"><span style="width:${Math.max(0, Math.min(100, Number(op.progress)))}%"></span></span>` : ""}</button>`;
@@ -94,11 +94,11 @@ function paintBell() {
   if (summary) { summary.title = words; summary.setAttribute("aria-label", `Notifications: ${words}`); }
   bell.classList.toggle("has-news", count > 0 || errors > 0);
   bell.classList.toggle("running", active.length > 0);
-  const pop = $("#bellPop");
-  if (pop) pop.innerHTML = (active.length ? `<div class="bell-head">Running now</div>${active.slice(0, 4).map(jobRow).join("")}` : "")
-    + (rows.length ? `<div class="bell-head">Needs you</div>${rows.join("")}` : active.length ? "" : '<div class="bell-empty">Nothing needs you</div>')
-    + `<button class="bell-all" onclick="this.closest('details').open=false;pwaAlertsDialog()">All alerts</button>`
-    + (operations.length ? `<button class="bell-all" onclick="this.closest('details').open=false;jobsDialog()">All jobs · ${operations.length}</button>` : "");
+  const html = (active.length ? `<div class="bell-head">Running now</div>${active.slice(0, 4).map(jobRow).join("")}` : "")
+    + (rows.length ? `<div class="bell-head">Needs attention</div>${rows.join("")}` : active.length ? "" : '<div class="bell-empty">Nothing needs you</div>')
+    + `<button class="bell-all" onclick="closeNotifications();pwaAlertsDialog()">All alerts</button>`
+    + (operations.length ? `<button class="bell-all" onclick="closeNotifications();jobsDialog()">All jobs · ${operations.length}</button>` : "");
+  for(const host of [$("#bellPop"),$("#notificationsDialogList")])if(host){const next=host.cloneNode(false);next.innerHTML=html;morph(host,next);}
 }
 window.paintBell = paintBell;
 window.paintHomesteadNotice = paintHomesteadNotice;
@@ -280,3 +280,14 @@ if (homesteadNoticeButton) {
     if (event.key === "Enter" || event.key === " ") { event.preventDefault(); homesteadUpdateDialog(); }
   };
 }
+
+// Phones use the standard dialog: a labelled surface with focus, scroll and Close.
+window.closeNotifications=()=>{
+  const bell=$("#bell");if(bell){bell.open=false;if(bell.shell)closeActionMenu(bell);}
+  if($("#notificationsDialogList"))closeModal();
+};
+window.notificationsDialog=()=>{
+  closeNotifications();
+  modal("Notifications",`<div id="notificationsDialogList" class="notification-center"></div>${UI.actions(UI.cancel("Close"))}`,true,"notifications");
+  paintBell();
+};
