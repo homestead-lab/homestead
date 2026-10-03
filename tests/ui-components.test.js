@@ -79,3 +79,70 @@ test("a guide is closed until opened", () => {
   assert.match(html, /^<details class="ui-guide"><summary>How &lt;this&gt; works<\/summary>/);
   assert.doesNotMatch(html, / open/);
 });
+
+test("section forms share keyed desktop/mobile navigation and one footer", () => {
+  const html = UI.sectionForm("edit", [{key:"general",title:"General",html:'<input id="name">'}, false,
+    {key:"network",title:"Network",html:'<input id="address">'}], UI.button("Save", "save()"), {always:true});
+  assert.equal((html.match(/class="ui-actions /g) || []).length, 1);
+  assert.match(html, /aria-controls="edit-pane-network"/);
+  assert.match(html, /id="edit-pane-network" data-i="1" data-key="network" hidden/);
+  assert.match(html, /<option value="network">Network<\/option>/);
+  assert.match(html, /onchange="UI.selectSection\(&quot;edit&quot;,this.value\)"/);
+  assert.doesNotMatch(html, /data-next/);
+  assert.throws(() => UI.sectionForm("empty", [], ""), /at least one section/);
+});
+
+test("dismissal precedes the main action without losing a custom handler or gate", () => {
+  const html = UI.actions(UI.button("Delete", "remove()", {kind:"danger",disabled:true,attrs:'data-need="admin"'}) +
+    '<button data-dialog-dismiss="true" onclick="modalBack()">Back</button>');
+  assert.ok(html.indexOf('modalBack()') < html.indexOf('remove()'));
+  assert.match(html, /ui-actions-start[^]*Back<\/button><\/div>/);
+  assert.match(html, /disabled data-need="admin"/);
+});
+
+test("master detail keeps stable disclosure keys and escapes labels and selection handlers", () => {
+  const key = 'job"<&\\', title = '<img onerror=alert(1)>';
+  const html = UI.masterDetail([{key:"Completed", title:"Completed · 1", collapsed:true,
+    items:[{key,title,detail:"<done>"}]}], key, '<p>Selected content</p>', {onSelect:id => `pick(${JSON.stringify(id)})`});
+  assert.match(html, /data-disclosure="Completed" open/);
+  assert.match(html, /aria-current="true"/);
+  assert.match(html, /&lt;img onerror=alert\(1\)&gt;/);
+  assert.match(html, /&lt;done&gt;/);
+  const encoded = html.match(/onclick="([^"]*)"/)[1];
+  const decoded = encoded.replace(/&(amp|lt|gt|quot|#39);/g, (_,entity) => ({amp:"&",lt:"<",gt:">",quot:'"',"#39":"'"}[entity]));
+  let received;
+  new Function("pick", decoded)(value => {received=value;});
+  assert.equal(received,key);
+});
+
+test("page and module headers share action placement and explicit HTML slots", () => {
+  const page = UI.pageHeader("Hosts", "<b>3</b> ready", '<button id="create">Add</button>', {extraHtml:'<span id="filter">Group</span>',descriptionAttrs:'id="count"'});
+  assert.match(page, /<h2>Hosts<\/h2><p id="count"><b>3<\/b> ready<\/p>/);
+  assert.match(page, /class="row page-actions"><button id="create">/);
+  assert.ok(page.indexOf('id="filter"') < page.indexOf('page-actions'));
+  const module = UI.moduleHeader("Updates", "Releases and hosts", '<button disabled data-need="admin">Check</button>');
+  assert.match(module, /settings-card-head/);
+  assert.match(module, /module-actions"><button disabled data-need="admin">/);
+});
+
+test("settings wrappers retain routing, save scope, loading identity and visibility", () => {
+  const card = UI.settingsCard('<div>Loading</div>', {tab:'updates',id:'host"updates',save:'app',hidden:true});
+  assert.match(card, /data-tab="updates" id="host&quot;updates" data-save="app" hidden/);
+  assert.match(UI.settingsGrid(card,'updates'), /class="settings-grid" data-tab="updates"/);
+  assert.match(UI.saveBar({id:'save',messageId:'message',save:'save(this)',discard:'discard()'}), /id="save" hidden/);
+  assert.match(UI.saveBar({id:'save',messageId:'message',save:'save(this)',discard:'discard()'}), /id="message" role="status"/);
+});
+
+test("workspace navigation escapes labels and handlers and groups items once", () => {
+  const key = 'quoted"<&';
+  const html = UI.workspaceNav([{key,label:'<Unsafe>',group:'Cluster'}, {key:'other',label:'Other',group:'Cluster'}],
+    {label:'Settings',selected:key,onSelect:id => `choose(${JSON.stringify(id)})`});
+  assert.equal((html.match(/settings-nav-group/g)||[]).length,1);
+  assert.match(html, /&lt;Unsafe&gt;/);
+  assert.match(html, /aria-selected="true" tabindex="0"/);
+  const encoded=html.match(/onclick="([^"]*)"/)[1];
+  const decoded=encoded.replace(/&(amp|lt|gt|quot|#39);/g,(_,e)=>({amp:'&',lt:'<',gt:'>',quot:'"','#39':"'"}[e]));
+  let result;new Function('choose','UI',decoded)(value=>{result=value;},{navigateWorkspace:(_button,run)=>run()});assert.equal(result,key);
+  assert.match(UI.workspace(html,'<input id="kept">',{open:false,backLabel:'Back',back:'goBack()'}), /data-open="0"/);
+  assert.match(UI.workspace(html,'<input id="kept">',{open:true}), /data-open="1"/);
+});

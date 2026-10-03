@@ -59,7 +59,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.297")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.298")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -7645,7 +7645,7 @@ ADMIN_ROUTES = {
     "/api/self/permissions", "/api/namespaces/create", "/api/namespaces/delete",
 }
 # things a signed-in user may always do to their own account
-SELF_ROUTES = {"/api/auth/logout", "/api/auth/password", "/api/auth/signout-everywhere",
+SELF_ROUTES = {"/api/auth/preferences/dashboard", "/api/auth/logout", "/api/auth/password", "/api/auth/signout-everywhere",
                # Which linked cluster this browser is looking at.
                "/api/fleet/switch",
                # Notifications on your own devices, and what they are shown.
@@ -8321,6 +8321,8 @@ class H(HTTP.LimitedHandler):
                     self._extra_headers.append(("X-Homestead-Fleet-Missing",
                                                 urllib.parse.quote(json.dumps(missing))))
                 return self._send(200, rows)
+            if p == "/api/auth/preferences/dashboard":
+                return self._send(200, AUTH.dashboard_preferences(self.user))
             if p == "/api/auth/users":
                 return self._send(200, AUTH.list_users())
             if p == "/api/setup":
@@ -8908,6 +8910,11 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, {"ok": True})
             if p == "/api/alerts/pending":
                 return self._send(200, alerts_pending(self.user, str(b.get("endpoint") or "")))
+            if p == "/api/auth/preferences/dashboard":
+                try:
+                    return self._send(200, AUTH.save_dashboard_preferences(self.user, b))
+                except AUTH.StoreConflict as error:
+                    return self._send(409, {"error": str(error)})
             if p == "/api/auth/password":
                 try:
                     AUTH.change_password(self.user, b.get("old"), b.get("new"))

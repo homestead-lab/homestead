@@ -18,6 +18,8 @@ const nodeHardwareIds = n => (STATE.data.hardwareFeatures || [])
 /* Dashboard, Nodes, node detail modal */
 
 async function viewDash() {
+  if (Dashboard.editing()) return;
+  const requestedNavigation = window.NAV_TOKEN;
   const [o, hist, st, cap, , , up] = await Promise.all([
     api("/api/overview"),
     api("/api/history").catch(() => null),
@@ -26,7 +28,9 @@ async function viewDash() {
     loadHardwareFeatures(),
     loadHealthSettings(),
     api("/api/nodes/uptime").catch(() => null),
+    Dashboard.load(),
   ]);
+  if (Dashboard.editing() || STATE.view !== "dash" || requestedNavigation !== window.NAV_TOKEN) return;
   STATE.data.uptime = up || STATE.data.uptime;
   STATE.data.ov = o; STATE.data.stor = st; STATE.data.lhcap = cap || STATE.data.lhcap;
   // A node near its allocation limit takes no new replicas: said before it bites.
@@ -59,25 +63,8 @@ async function viewDash() {
     { n: "Faulted", v: st.faulted, c: "#ff4d4f" },
   ].filter(p => p.v) : [];
 
-  paint(`
-  <div class="phead">
-    <div><h2>Cluster overview</h2><p>Live health, capacity and placement across ${o.nodes_total} node${o.nodes_total > 1 ? "s" : ""}</p></div>
-    <div class="row hide-sm">
-      <button class="btn pri" onclick="go('deploy')">＋ Deploy</button>
-    </div>
-  </div>
-
-  ${(o.health_issues || []).length ? `<div class="clusteralert ${o.health === "critical" ? "critical" : ""}">
-    <div><b>${o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded"}</b>
-      <span>${esc(o.health_summary)}</span></div>
-    <button class="btn sm" onclick="go(${jsq(o.health_issues.some(x => ["Node", "Disk"].includes(x.kind)) ? "nodes" :
-      o.health_issues.some(x => x.kind === "Volume") ? "storage" : o.health_issues.every(x => x.kind === "Backup") ? "protect" : "workloads")})">Review</button>
-  </div>` : ""}
-
-  ${hist === null ? '<div class="note warn">Chart history could not be loaded. Current overview values are shown; history will retry on the next refresh.</div>'
-    : sampledAt && sampleAge > Math.max(120, (H.step || 30) * 2) ? `<div class="note warn">Charts last sampled ${esc(fmtAgo(sampleAge))}. Check Live charts in Settings → About.</div>` : ""}
-  <div class="grid g3 stagger">
-    <div class="card glow dashcard ${worstMetricClass([{ value: o.cpu_pct, metric: "cpu" }, { value: o.mem_pct, metric: "memory" }])}">
+  Dashboard.content = {
+    compute: `    <div class="card glow dashcard ${worstMetricClass([{ value: o.cpu_pct, metric: "cpu" }, { value: o.mem_pct, metric: "memory" }])}">
       <div class="between"><div><div class="ctitle">Compute</div>
         <div class="csub">CPU and memory · ${chartWindow}</div></div>${trend(H.cpu)}</div>
       ${H.cpu?.length ? dualSpark(H.cpu, H.mem || [], { times: H.t }) : '<div class="empty small">Waiting for recorded metrics</div>'}
@@ -87,9 +74,8 @@ async function viewDash() {
         <div><div class="bignum">${o.mem_pct}<span class="unit">%</span></div>
           <div class="csub"><span class="kdot s2"></span>RAM · ${sizePair(o.mem_used_gb, o.mem_cap_gb)}</div></div>
       </div>
-    </div>
-
-    <div class="card glow g-info dashcard">
+    </div>`,
+    throughput: `    <div class="card glow g-info dashcard">
       <div class="between"><div><div class="ctitle">Throughput</div>
         <div class="csub">Network and local disk · ${chartWindow}</div></div>${trend(rx)}</div>
       ${rx.length ? dualSpark(rx, tx, { times: H.t }) : '<div class="empty small">Waiting for recorded metrics</div>'}
@@ -100,9 +86,8 @@ async function viewDash() {
           <div class="csub">node disk of ${sizeText(diskCap)}</div>
           ${meter(diskCap ? diskUsed / diskCap * 100 : 0, "", "disk")}</div>
       </div>
-    </div>
-
-    <div class="card flat storagecard">
+    </div>`,
+    storage: `    <div class="card flat storagecard">
       <div class="ctitle">Storage</div><div class="csub">Longhorn capacity and replica health</div>
       ${st ? `<div class="storbody">
       <div class="stordonut">${segDonut(storParts, st.volumes, "volumes", 128)}</div>
@@ -117,24 +102,32 @@ async function viewDash() {
           data-tip="${esc(tight.map(n => `${n.name}: ${n.allocated_gb} of ${n.limit_gb} GB allocated, room for a ${n.room_gb} GB replica`).join("; "))}">${esc(tight.map(n => n.name.replace("harvester-", "")).join(", "))} nearly full · a new ${cap.nodes.length > 1 ? "2-copy" : ""} volume fits ${esc(sizeText(cap.largest[Math.min(2, cap.nodes.length)]))}</a>` : ""}</div>
       </div></div>`
       : '<div class="empty">storage data unavailable</div>'}
-    </div>
-  </div>
+    </div>`,
+    nodes: `<div class="card flat dashboard-nodes">${UI.moduleHeader("Node health")}${nodeComparison(o.nodes, "dashboard")}</div>`,
+    cpu: `<div class="card flat pad0 consumer-card"><div class="cardhd"><div class="ctitle">Top CPU</div></div>${consumerTable(o.top_cpu, "cpu")}</div>`,
+    memory: `<div class="card flat pad0 consumer-card"><div class="cardhd"><div class="ctitle">Top memory</div></div>${consumerTable(o.top_mem, "memory")}</div>`,
+  };
 
-  <div class="sec">Node health</div>
-  ${nodeComparison(o.nodes, "dashboard")}
+  paint(`
+  ${UI.pageHeader(`Cluster overview`, `Live health, capacity and placement across ${o.nodes_total} node${o.nodes_total > 1 ? "s" : ""}`, `
+      <button class="btn" onclick="Dashboard.start()">${icon("edit")}Edit dashboard</button>
+      <button class="btn pri hide-sm" onclick="go('deploy')">＋ Deploy</button>
+    `)}
 
-  <div class="sec">Top consumers</div>
-  <div class="grid g2 consumer-grid">
-    <div class="card flat pad0 consumer-card">
-      <div class="cardhd"><div class="ctitle">Top CPU</div></div>
-      ${consumerTable(o.top_cpu, "cpu")}</div>
-    <div class="card flat pad0 consumer-card">
-      <div class="cardhd"><div class="ctitle">Top memory</div></div>
-      ${consumerTable(o.top_mem, "memory")}</div>
-  </div>
-  <section class="card flat history-card" id="historyCard">${STATE.data.historyHtml || ""}</section>`);
+  ${(o.health_issues || []).length ? `<div class="clusteralert ${o.health === "critical" ? "critical" : ""}">
+    <div><b>${o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded"}</b>
+      <span>${esc(o.health_summary)}</span></div>
+    <button class="btn sm" onclick="go(${jsq(o.health_issues.some(x => ["Node", "Disk"].includes(x.kind)) ? "nodes" :
+      o.health_issues.some(x => x.kind === "Volume") ? "storage" : o.health_issues.every(x => x.kind === "Backup") ? "protect" : "workloads")})">Review</button>
+  </div>` : ""}
+
+  ${hist === null ? '<div class="note warn">Chart history could not be loaded. Current overview values are shown; history will retry on the next refresh.</div>'
+    : sampledAt && sampleAge > Math.max(120, (H.step || 30) * 2) ? `<div class="note warn">Charts last sampled ${esc(fmtAgo(sampleAge))}. Check Live charts in Settings → About.</div>` : ""}
+  ${Dashboard.notice()}
+  ${Dashboard.render()}`);
   // Saved history must not hold the live refresh loop's busy flag.
   historyPaint();
+  Dashboard.loadPortal();
 }
 
 function consumerTable(workloads, metric) {
@@ -505,9 +498,7 @@ async function nodePage(name) {
         ${fact("Takes new work", n.schedulable ? "yes" : '<span class="tag warn">cordoned</span>')}
       </div>${odd.length ? `<div class="note warn" style="margin-top:10px">${odd.map(c => `<b>${esc(c.type)}</b>: ${esc(c.status)}`).join(" · ")}</div>` : ""}</div>`],
     ["workloads", "Workloads", `${n.workloads.length} app${n.workloads.length === 1 ? "" : "s"} · ${n.vms || 0} VM${n.vms === 1 ? "" : "s"}`, `
-      <div class="card flat"><div class="settings-card-head"><div><div class="ctitle">On this host</div>
-        <div class="csub">${n.pods_wl} of yours · ${n.pods_sys} system pods</div></div>
-        ${n.workloads.length ? `<button class="btn sm" data-need="admin" onclick="evacuateNode(${jsq(n.name)})">Move everything off</button>` : ""}</div>
+      <div class="card flat">${UI.moduleHeader(`On this host`, `${n.pods_wl} of yours · ${n.pods_sys} system pods`, `${n.workloads.length ? `<button class="btn sm" data-need="admin" onclick="evacuateNode(${jsq(n.name)})">Move everything off</button>` : ""}`)}
         <div>${n.workloads.length ? n.workloads.map(w => `<span class="tag movable" onclick="moveWorkload(${jsq(w)})">${esc(w)} <span class="mv">⇄</span></span>`).join("")
           : '<span class="dim xs">nothing of yours is scheduled here</span>'}</div>
         ${n.workloads.length ? `<div class="dim xs" style="margin-top:8px">Click one to move it to another host.</div>` : ""}</div>`],
@@ -519,9 +510,7 @@ async function nodePage(name) {
       <div class="card flat"><div class="ctitle">Disk activity ${tip("Live host block-device throughput and SMART health, from the node probe")}</div>
         <div class="diskactivity" style="margin-top:10px">${diskRows || '<div class="dim small">No per-disk counters: the node probe provides them.</div>'}</div></div></div>`],
     ["hardware", "Hardware", esc([hwNames.join(", "), n.temps?.cpu_c != null ? `CPU ${n.temps.cpu_c}°C` : ""].filter(Boolean).join(" · ") || "none defined"), `
-      <div class="card flat"><div class="settings-card-head"><div><div class="ctitle">Hardware for apps</div>
-        <div class="csub">What placement checks look for before a container moves or starts</div></div>
-        <button class="btn sm" data-need="admin" onclick="hardwareEdit(${esc(JSON.stringify(n))})">Define</button></div>
+      <div class="card flat">${UI.moduleHeader(`Hardware for apps`, `What placement checks look for before a container moves or starts`, `<button class="btn sm" data-need="admin" onclick="hardwareEdit(${esc(JSON.stringify(n))})">Define</button>`)}
         <div>${hardwareTags(hw) || '<span class="dim xs">No hardware is defined.</span>'}</div></div>
       <div class="card flat" id="nodeDevices"><div class="ctitle">Devices for VMs</div><div class="csub">PCI and USB devices this host can give to its virtual machines</div>
         <div class="pt-body" style="margin-top:10px"></div></div>
@@ -551,17 +540,14 @@ async function nodePage(name) {
       <div style="margin-top:10px">${(n.conditions || []).map(c => `<span class="tag ${c.type === "Ready" ? (c.status === "True" ? "ok" : "bad") : (c.status === "True" ? "warn" : "")}">${esc(c.type)}: ${esc(c.status)}</span>`).join("")}</div></div>`],
   ];
   const current = sections.some(([id]) => id === STATE.nodeSection) ? STATE.nodeSection : "overview";
-  paint(`<div class="phead"><div><h2>${esc(n.name)}</h2><p>${esc(n.roles.join(" · ") || "worker")} · <span class="mono">${esc((n.addresses || {}).InternalIP || "")}</span></p></div>
-      <div class="row"><button class="btn" data-need="admin" onclick="nodeShell(${jsq(n.name)})" title="A root shell on the host itself, as SSH would give">${icon("console")}Terminal</button>
-        <button class="btn pri" onclick="nodeActions(${jsq(n.name)})">Host actions</button></div></div>
+  paint(`${UI.pageHeader(`${esc(n.name)}`, `${esc(n.roles.join(" · ") || "worker")} · <span class="mono">${esc((n.addresses || {}).InternalIP || "")}</span>`, `<button class="btn" data-need="admin" onclick="nodeShell(${jsq(n.name)})" title="A root shell on the host itself, as SSH would give">${icon("console")}Terminal</button>
+        <button class="btn pri" onclick="nodeActions(${jsq(n.name)})">Host actions</button>`)}
     <div id="nodePage" data-node="${esc(n.name)}">
       <div class="sumline" id="nodeSummary">${summary}</div>
-      <div class="settings-layout" data-open="${STATE.nodeSectionOpen ? 1 : 0}">
-        <nav class="settings-nav" role="tablist" aria-label="${esc(n.name)} sections">${sections.map(([id, label, state]) =>
-          `<button type="button" role="tab" data-tab="${id}" class="${id === current ? "on" : ""}" aria-selected="${id === current}" onclick="nodeSectionGo(${jsq(id)})"><span><b>${label}</b><small>${state}</small></span><i aria-hidden="true">›</i></button>`).join("")}</nav>
-        <div class="settings-main"><button type="button" class="settings-back" onclick="nodeSectionGo('')">‹ ${esc(n.name)}</button>
-          ${sections.map(([id, , , body]) => `<div class="node-pane" data-pane="${id}"${id === current ? "" : " hidden"}>${body}</div>`).join("")}</div>
-      </div>
+      ${UI.workspace(UI.workspaceNav(sections.map(([key,label,descriptionHtml]) => ({key,label,descriptionHtml})),
+        {label:`${n.name} sections`,selected:current,onSelect:key => `nodeSectionGo(${jsArg(key)})`}),
+        sections.map(([id, , , body]) => `<div class="node-pane" data-pane="${id}"${id === current ? "" : " hidden"}>${body}</div>`).join(""),
+        {open:STATE.nodeSectionOpen,backLabel:n.name,back:"nodeSectionGo('')"})}
     </div>`);
   window.__disksModal = false;
   nodeDisksPaint(n.name);
@@ -588,11 +574,8 @@ window.nodeSectionGo = id => {
   STATE.nodeSectionOpen = !!id;
   const layout = $("#nodePage .settings-layout");
   if (!layout) return;
-  layout.dataset.open = id ? "1" : "0";
+  UI.selectWorkspace(layout, id, {paneSelector:".node-pane[data-pane]"});
   if (!id) return;
-  // Only the sections themselves: a section's own parts keep their state.
-  $$("#nodePage .node-pane[data-pane]").forEach(pane => { pane.hidden = pane.dataset.pane !== id; });
-  $$("#nodePage .settings-nav button").forEach(b => { b.classList.toggle("on", b.dataset.tab === id); b.setAttribute("aria-selected", String(b.dataset.tab === id)); });
   window.scrollPageTop();
 };
 
@@ -674,13 +657,9 @@ window.probeInstallConfirm = () => childModal("Install the node probe?", `
   <div class="note"><b>Telemetry container.</b> Mounts <span class="mono">/sys</span>,
     <span class="mono">/proc</span> and <span class="mono">/dev</span> read-only, drops every
     capability, runs with a read-only root and cannot escalate privilege.</div>
-  <div class="note warn"><b>SMART container is privileged.</b> Reading drive health means talking to
-    block devices directly, and no lesser capability covers an unknown, changing set of drives.
-    It has no host PID, IPC or network namespace, keeps a read-only root, and answers only
-    requests carrying a short-lived signature from Homestead. Without it there is no drive health.</div>
-  <div class="row" style="margin-top:16px">
-    <button class="btn pri" data-need="admin" onclick="probeInstall()">Install probe</button>
-    <button class="btn" onclick="closeModal()">Not now</button></div>`);
+  <div class="note warn"><b>SMART requires a privileged container</b> to read drive health. It uses a read-only root, isolated PID/IPC/network namespaces and signed requests. ${tip("Direct block-device access is required for the host’s varying drive types. Without the SMART container, drive-health data is unavailable.")}</div>
+  ${UI.actions(`<button class="btn pri" data-need="admin" onclick="probeInstall()">Install probe</button>
+    <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Not now</button>`)}`);
 
 window.probeInstall = async () => {
   try {
@@ -722,11 +701,9 @@ window.allocationProbeSettings = async () => {
       </details>
       <label class="vip-check"><input id="allocationProbeConsent" type="checkbox"><span>Allow read-only host allocation checks and restart monitoring.</span></label>
       ${current.enabled ? '<button class="btn sm" onclick="allocationProbeCheck(this)">Check hosts</button><div id="allocationProbeDiagnostics" role="status" aria-live="polite"></div>' : ""}
-      <div class="row" style="margin-top:16px">
-        <button class="btn pri" data-need="admin" ${capacity.blocked ? "disabled" : ""} onclick="allocationProbeSave(true,this)">${current.enabled ? "Save settings" : "Enable checks"}</button>
+      ${UI.actions(`<button class="btn pri" data-need="admin" ${capacity.blocked ? "disabled" : ""} onclick="allocationProbeSave(true,this)">${current.enabled ? "Save settings" : "Enable checks"}</button>
         ${current.enabled ? '<button class="btn" data-need="admin" onclick="allocationProbeSave(false,this)">Disable checks</button>' : ""}
-        <button class="btn" onclick="modalBack()">Cancel</button>
-      </div>`}`, false, "operation-review");
+        <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`}`, false, "operation-review");
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -768,7 +745,7 @@ window.allocationProbeSave = async (enabled, button) => {
 window.smartStartConfirm = (node, disk, type) => childModal(`Start ${type} SMART test?`, `
   <p>This asks <b>${esc(node)} / ${esc(disk)}</b> to run its built-in ${esc(type)} self-test.</p>
   <div class="note">The test does not erase data, but a long test can reduce storage performance and may take hours. Progress and the final drive result remain in Activity.</div>
-  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="smartStart(${jsq(node)},${jsq(disk)},${jsq(type)})">Start ${esc(type)} test</button><button class="btn" onclick="modalBack()">Cancel</button></div>`);
+  ${UI.actions(`<button class="btn pri" onclick="smartStart(${jsq(node)},${jsq(disk)},${jsq(type)})">Start ${esc(type)} test</button><button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`);
 
 window.smartStart = async (node, disk, type) => {
   try {
@@ -782,7 +759,7 @@ window.hardwareEdit = n => modal("Hardware · " + n.name, `
   <p class="muted small">Choose which configured features workloads may use on this node. Saving writes explicit Kubernetes labels; unchecked features are explicitly disabled even if detected.</p>
   <div class="hwchoices">${hardwareChoices("hw_node", nodeHardwareIds(n))}</div>
   <div class="note">${(n.hardware_inventory || []).map(x => `<div><b>${esc(x.name)}</b> · ${x.detected ? "detected" : "not detected"} · ${x.explicit == null ? "automatic" : x.explicit ? "enabled" : "disabled"}</div>`).join("") || "The node probe has not reported hardware inventory yet."}</div>
-  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="hardwareSave(${jsq(n.name)})">Save</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+  ${UI.actions(`<button class="btn pri" onclick="hardwareSave(${jsq(n.name)})">Save</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 window.hardwareSave = async node => {
   const body = { node, features: selectedHardware("hw_node") };
   try { await api("/api/node/hardware", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -832,7 +809,7 @@ window.hardwareFeatureEdit = async id => {
       <div id="hf_browse_results"></div>
     </div>
     <div class="note">Device passthrough makes the container privileged. Use the narrowest stable /dev path available. For a USB VID:PID, /dev/bus/usb is commonly required because bus addresses can change after reboot.</div>
-    <div class="row" style="margin-top:16px"><button class="btn pri" onclick="hardwareFeatureSave(${jsq(id || "")} )">Save feature</button><button class="btn" onclick="modalBack()">Cancel</button></div>`, true);
+    ${UI.actions(`<button class="btn pri" onclick="hardwareFeatureSave(${jsq(id || "")} )">Save feature</button><button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`, true);
   hardwareBrowseRender();
 };
 window.hardwareBrowseRender = () => {
@@ -896,14 +873,12 @@ async function viewNodes() {
   STATE.data.nodes = n;
   STATE.data.uptime = up || STATE.data.uptime;
   const layout = viewLayout("nodes");
-  paint(`<div class="phead"><div><h2>Nodes</h2>
-      <p>${n.length} node${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}</p></div>
-      <div class="row">${layoutSwitch("nodes", "viewNodes")}
+  paint(`${UI.pageHeader(`Nodes`, `${n.length} node${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}`, `${layoutSwitch("nodes", "viewNodes")}
       ${moreMenu([
         {label:layout === "cards" ? "Compare nodes" : "Show as cards",run:`setViewLayout('nodes','viewNodes',${jsq(layout === "cards" ? "rows" : "cards")})`},
         STATE.platform && !STATE.platform.harvester && {label:"OS updates",run:"osUpdates()"},
         {label:"Hardware features",run:"hardwareFeatureSettings()",need:"admin"}
-      ])}</div></div>
+      ])}`)}
    ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : nodeComparison(n, "nodes")}`);
 }
 

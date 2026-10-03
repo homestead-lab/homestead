@@ -11,7 +11,7 @@
 import { chromium } from "playwright";
 import { mkdir, writeFile } from "node:fs/promises";
 
-const output = "release-assets/dialogs";
+const output = process.env.DIALOG_OUTPUT || "release-assets/dialogs";
 await mkdir(output, { recursive: true });
 const base = (process.env.HOMESTEAD_URL || "http://127.0.0.1:4173") + "/?demo=1&demo-scenario=incidents";
 const only = process.argv[2] || "";
@@ -21,6 +21,12 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // "click:<fn>" (the first control whose onclick calls fn), or "text:<label>"
 // (the first button in the dialog with that label).
 const DIALOGS = [
+  ["jobs-running", "workloads", "STATE.data.operations=[{id:'run',kind:'image-update',title:'Update Immich',status:'running',message:'Waiting for the new pod',progress:45}];jobsDialog()"],
+  ["jobs-recovery", "workloads", "STATE.data.operations=[{id:'held',kind:'self-data-handoff',title:'Move Homestead data',status:'failed',message:'Copy stopped. Both volumes are retained.',dismissible:false,storage_recovery:true}];jobsDialog()"],
+  ["jobs-empty", "workloads", "STATE.data.operations=[];jobsDialog()"],
+  ["jobs-disconnected", "workloads", "STATE.data.operations=[{id:'run',title:'Update Immich',status:'running',message:'Waiting for the new pod',progress:null}];STATE.operationsStale=true;jobsDialog()"],
+  ["container-update-progress", "workloads", "modal('Updating containers',batchUpdateMarkup([{ns:'lab',name:'immich'},{ns:'lab',name:'plex'}],{[rolloutKey({ns:'lab',name:'immich'})]:{phase:'updating',ready:0,desired:1},[rolloutKey({ns:'lab',name:'plex'})]:{phase:'ready',ready:1,desired:1}},[],false,true))"],
+
   ["longhorn-v2-upgrade-ready", "settings", "window.__demoV2UpgradeState='ready';lhV2Upgrade('v1.13.0')"],
   ["longhorn-v2-upgrade-blocked", "settings", "window.__demoV2UpgradeState='blocked';lhV2Upgrade('v1.13.0')"],
   ["longhorn-v2-upgrade-running", "settings", "window.__demoV2UpgradeState='running';lhV2Upgrade()"],
@@ -68,6 +74,9 @@ const DIALOGS = [
   ["compose-import", "workloads", "composeImport()"],
   ["move-workload", "workloads", "moveWorkload('frigate','lab')"],
   ["add-harvester-host", "cluster", "clusterOnboarding()"],
+  ["add-harvester-host-2", "cluster", "clusterOnboarding()", "stepGo('host_join',1)"],
+  ["add-harvester-host-3", "cluster", "clusterOnboarding()", "stepGo('host_join',2)"],
+  ["add-harvester-host-4", "cluster", "clusterOnboarding()", "stepGo('host_join',3)"],
   ["remove-host", "cluster", "clusterRemovePick()"],
   ["add-host", "cluster", "platformJoinGuide()"],
   ["helm-release", "helm", "click:helmRelease"],
@@ -84,7 +93,7 @@ const DIALOGS = [
   ["workload-edit-hardware", "workloads", "wlEdit('lab','frigate')", "stepGo('e_steps',1)"],
   ["workload-edit-environment", "workloads", "wlEdit('lab','home-assistant')", "stepGo('e_steps',2)"],
   ["workload-edit-storage", "workloads", "wlEdit('lab','frigate')", "stepGo('e_steps',3)"],
-  ["workload-edit-review", "workloads", "wlEdit('lab','frigate')", "text:Save"],
+  ["workload-edit-review", "workloads", "wlEdit('lab','frigate')", "text:Review changes"],
   ["workload-storage-copy", "workloads", "wlEdit('lab','frigate')", "editReview({ns:'lab',name:'frigate',containers:[{name:'frigate',volumes:[{path:'/media/frigate',source:'camera-data',sub_path:'recordings',copy_from:{claim:'frigate-recordings'}}]}]})"],
   ["vm-migrate", "vms", "vmMove('default','home-assistant-os')"],
   ["vm-new", "vms", "vmNew()"],
@@ -194,6 +203,7 @@ const DIALOGS = [
   ["config-restore", "settings", "configRestore()"],
   ["config-restore-parts", "settings", "configRestore()", "configRestoreParts({homestead:'2.8.209',site:'Main site',created:'2026-09-26T21:40:00Z',parts:[{id:'settings',label:'Settings',detail:'Site name, health thresholds',state:'same',restorable:true,default:true},{id:'users',label:'Users and roles',detail:'Every account, its role and password',caution:'Replaces every account and password with those in the backup, and signs everyone out.',state:'differs',restorable:true,default:false},{id:'ipam',label:'IP addresses',detail:'Subnets and documented addresses',state:'differs',restorable:true,default:true},{id:'vmstore',label:'VM image store',detail:'The cloud images kept',state:'empty',restorable:false,default:true}]})"],
   ["move-to-cluster", "workloads", "moveToCluster('container','frigate')"],
+  ["jobs-completed-data-moves", "dash", "STATE.data.operations=window.__demoOps=[{id:'data-done',kind:'self-data-handoff',title:'Move Homestead data',resource:{namespace:'lab',kind:'PersistentVolumeClaim'},status:'succeeded',progress:100,message:'Homestead is ready on the new volume. The original volume is retained.',dismissible:true},{id:'data-recovered',kind:'self-data-handoff',title:'Move Homestead data',resource:{namespace:'lab',kind:'PersistentVolumeClaim'},status:'cancelled',progress:100,message:'Recovered Homestead on its original volume. Both data volumes and the recovery audit are retained.',dismissible:true}];renderOperations();jobsDialog()"],
 ];
 
 const report = [];
@@ -232,7 +242,7 @@ async function audit([label, width, height, mobile], items) {
   await page.addStyleTag({ content: "#jobTray{display:none!important}" });
 
   for (const [name, view, ...steps] of items) {
-    await page.evaluate(() => { window.__demoDataBatchRecovery = false; });
+    await page.evaluate(() => { window.__demoDataBatchRecovery = false; STATE.operationsStale = false; });
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } });
       await page.evaluate((v) => go(v), view);
@@ -275,6 +285,8 @@ async function audit([label, width, height, mobile], items) {
           .map((e) => `${e.tagName.toLowerCase()}.${[...e.classList].join(".")} ${getComputedStyle(e).fontSize}`);
         return {
           title: document.querySelector("#mtitle").textContent,
+          copy: body.innerText,
+          explanations: [...body.querySelectorAll("p, .ui-lead, .ui-help, .note, .ui-callout-body")].filter(e => e.offsetParent && !e.querySelector("p, .ui-lead, .ui-help, .note, .ui-callout-body")).map(e=>e.innerText.trim()).filter(Boolean),
           width: Math.round(boxRect.width), height: Math.round(box.scrollHeight),
           notes: body.querySelectorAll(".note").length,
           buttons: body.querySelectorAll("button, .btn").length,

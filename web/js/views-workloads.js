@@ -328,7 +328,7 @@ window.wlGroup = (ns, name) => {
 /* Several at once: tick the workloads, then name the group they go in. */
 window.manageWorkloadGroups = () => {
   const rows = STATE.data.wl || [], names = workloadGroupNames(rows);
-  modal("Groups", `<p class="muted small">Tick workloads, then move them to a group - an existing one or a new name - or out of every group. A group disappears when nothing is left in it.</p>
+  modal("Groups", `<p class="muted small">Select workloads to group or ungroup. Empty groups are removed automatically.</p>
     <div class="wg-list">${rows.map(w => `<label class="wg-item"><input type="checkbox" data-ns="${esc(w.ns)}" data-name="${esc(w.name)}">
       ${appAvatar(w.name, w.icon)}<span><b>${esc(w.name)}</b><span class="dim xs"> ${esc(w.ns)}</span></span>
       <span class="pill slim ${w.group ? "" : "neutral"}">${esc(w.group || "ungrouped")}</span></label>`).join("")}</div>
@@ -391,18 +391,14 @@ function renderWorkloads() {
   const updateButtons = `${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
     ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} check${updateErrors === 1 ? "" : "s"} failed</button>` : ""}`.trim();
   const deploy = '<button class="btn pri" data-need="operator" onclick="go(\'deploy\')">＋ Deploy</button>';
-  paint(`<div class="containers-page collection-page" data-collection="containers"><div class="phead">
-      <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · ${platform.length
+  paint(`<div class="containers-page collection-page" data-collection="containers">${UI.pageHeader(`Containers`, `${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · ${platform.length
         ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="Homestead and the helpers it runs - updated under Settings › Updates - and KubeVirt, CDI and the like, run by their own operators and upgraded under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
-        : "system pods hidden"}${unchecked ? ` · <span data-tip="Marked ? in the list: stopped since Homestead started, so not yet compared with their registries">${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? " · images current" : ""}</p>
-        ${all.length ? workloadGroupBar(all, group) : ""}</div>
-      <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>${updateButtons}
+        : "system pods hidden"}${unchecked ? ` · <span data-tip="Marked ? in the list: stopped since Homestead started, so not yet compared with their registries">${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? " · images current" : ""}`, `<span class="dim xs scanprogress" id="scanprogress"></span>${updateButtons}
       ${layoutSwitch("containers", "renderWorkloads")}
       ${moreMenu([items[0],items[1],{label:layout === "cards" ? "Show as rows" : "Show as cards",run:`setViewLayout('containers','renderWorkloads',${jsq(layout === "cards" ? "rows" : "cards")})`},items[2]])}
-      ${deploy}</div></div>
-    <div class="collection-mobile-head"><div class="collection-mobile-toolbar">${workloadGroupSelect(all, group)}${workloadListOptions(platform, layout, items)}${deploy}</div>
-      <div class="collection-mobile-summary"><span>${rows.length} container${rows.length === 1 ? "" : "s"}</span>${updateButtons ? `<span aria-hidden="true">·</span>${updateButtons}` : ""}
-        ${unchecked ? `<span class="dim" data-tip="Stopped or still starting; not yet compared with their registries">· ${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? '<span class="dim">· images current</span>' : ""}</div></div>
+      ${deploy}`, {extraHtml:`${all.length ? workloadGroupBar(all, group) : ""}`})}
+    ${UI.collectionHeader(`${workloadGroupSelect(all, group)}${workloadListOptions(platform, layout, items)}${deploy}`, `<span>${rows.length} container${rows.length === 1 ? "" : "s"}</span>${updateButtons ? `<span aria-hidden="true">·</span>${updateButtons}` : ""}
+        ${unchecked ? `<span class="dim" data-tip="Stopped or still starting; not yet compared with their registries">· ${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? '<span class="dim">· images current</span>' : ""}`)}
 
     ${rows.length ? workloadSections(rows, layout, group)
       : `<div class="empty">${q || group ? "Nothing matches that search." : "Nothing deployed yet."}</div>`}</div>`);
@@ -714,9 +710,9 @@ window.wlStopSelf = (ns, name) => {
       Your apps keep running; jobs in the tray, alerts and moves pause until it is back.</div>
     <p class="small">If it needs a fresh start, <b>Restart</b> brings it straight back.</p>
     <label class="switch"><input type="checkbox" id="ss_ok"> I understand - stop it</label>
-    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="closeModal();wlRestart(${jsq(ns)},${jsq(name)})">Restart instead</button>
+    ${UI.actions(`<button class="btn pri" onclick="closeModal();wlRestart(${jsq(ns)},${jsq(name)})">Restart instead</button>
       <button class="btn danger" onclick="wlStopSelfGo(${jsq(ns)},${jsq(name)})">Stop Homestead</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.wlStopSelfGo = async (ns, name) => {
   if (!$("#ss_ok").checked) return toast("Tick the box to confirm", "bad");
@@ -737,12 +733,10 @@ window.wlFailover = async () => {
   const policy = lh?.node_down || "";
   const moving = policy && policy !== "do-nothing";
   $("#mbody").innerHTML = `
-    <p class="small" style="margin-top:0">When a node stops answering, each container either moves to another node, waits for its node to
-      come back, or follows Kubernetes' default of five minutes. Changing a container restarts it.</p>
+    <p class="small" style="margin-top:0">Choose whether containers move, wait or use Kubernetes’ default five-minute delay after host failure. Saving a changed policy restarts that container.</p>
     ${lh ? `<div class="note ${moving ? "good" : "warn"}">${moving
       ? `Longhorn lets go of a failed node's volumes (<span class="mono">${esc(policy)}</span>), so a container moving to another node takes its volume with it.`
-      : `<b>A container with a single-node volume cannot really move yet.</b> Longhorn keeps its volume attached to the dead node, so on the
-         new node it waits until the old one is back. <button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()" style="margin-top:6px">Let Longhorn release them</button>`}</div>` : ""}
+      : `<b>Volume attachment blocks failover.</b> Single-node volumes remain attached to the failed host until Longhorn releases them. <button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()" style="margin-top:6px">Let Longhorn release them</button>`}</div>` : ""}
     <div class="row" style="margin:12px 0;gap:6px;flex-wrap:wrap"><span class="small dim">Set all to</span>
       ${Object.entries(FAILOVER_WORDS).map(([v, l]) => `<button class="btn sm" onclick="$$('#mbody select[data-fo]').forEach(s => s.value=${jsq(v)})">${esc(l)}</button>`).join("")}</div>
     <table class="tbl dense stack"><thead><tr><th>Container</th><th>If its node fails</th></tr></thead><tbody>
@@ -750,8 +744,8 @@ window.wlFailover = async () => {
           ${(w.hardware || []).length ? `<span class="tag hw" data-tip="Tied to hardware on its host">${esc(w.hardware.join(", "))}</span>` : ""}</td>
         <td data-label="If its node fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`)}</td></tr>`).join("")}
     </tbody></table>
-    <div class="row" style="margin-top:14px"><button class="btn pri" data-need="operator" onclick="wlFailoverSave()">Save changes</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+    ${UI.actions(`<button class="btn pri" data-need="operator" onclick="wlFailoverSave()">Save changes</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
   if (window.applyRole) applyRole();
 };
 window.wlFailoverSave = async () => {
@@ -845,9 +839,9 @@ window.wlDelete = async (ns, name) => {
     </div>
     <div class="f" style="margin-top:16px"><label>Type <b class="mono">${esc(name)}</b> to confirm</label>
       <input id="wd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="wlDeleteGate(${jsq(name)})"></div>
-    <div class="row"><button class="btn danger" id="wd_go" data-need="operator" disabled
+    ${UI.actions(`<button class="btn danger" id="wd_go" data-need="operator" disabled
       onclick="wlDeleteNow(${jsq(ns)},${jsq(name)},this)">Delete workload</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
   if (window.applyRole) window.applyRole();
 };
 window.wlDeleteGate = name => {
@@ -1084,15 +1078,15 @@ async function reviewImageActions(items, action = "update") {
       ${blocked ? UI.callout("bad", "Update blocked", list)
         : concerns.length ? UI.callout("warn", "", list) : ""}
       <ul class="upd-apps">${apps}</ul>
-      ${UI.more("Details: capacity, exact images, how it runs", `
+      ${UI.more("Capacity and exact images", `
         ${rows.map(({config, preview}) => `${many ? `<p><b>${esc(config.ns)}/${esc(config.name)}</b></p>` : ""}
           ${UI.facts(preview.images.flatMap(i => [[`${i.container} now`, `<code>${esc(i.before)}</code>`],
             [`${i.container} ${rollback ? "back to" : "new"}`, `<code>${esc(i.after)}</code>`], [`${i.container} recovery`, `<code>${esc(i.rollback)}</code>`]]))}
           ${deployCapacityHtml(preview.capacity, false, true)}`).join("")}
         <p>Exact image digests and full-pod capacity are checked again before each change. Failure, lost contact or an expired review stops the remaining queue.
         Closing this dialog stops unstarted updates; a rollout already submitted continues.</p>`)}
-      ${UI.actions(UI.cancel() + UI.button(rollback ? "Start rollback" : many ? `Update ${rows.length}` : "Update", "imageReviewedApply()", { kind: "pri", id: "imageCapacityApply", disabled: true }),
-        blocked ? "" : `<label class="upd-ok"><input type="checkbox" id="imageCapacityApprove" onchange="imageReviewReady()"> ${concerns.length ? "Accept the restart and the notes above" : "Accept the restart"}</label>`)}
+      ${blocked ? "" : `<label class="upd-ok"><input type="checkbox" id="imageCapacityApprove" onchange="imageReviewReady()"> ${concerns.length ? "I accept the restart and warnings above" : "I accept the service interruption"}</label>`}
+      ${UI.actions(UI.button(rollback ? "Start rollback" : many ? `Update ${rows.length}` : "Update", "imageReviewedApply()", { kind: "pri", id: "imageCapacityApply", disabled: true }), UI.cancel())}
     </div>`;
   } catch (error) {
     IMAGE_REVIEW = null;
@@ -1163,12 +1157,10 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
   const failureMap = Object.fromEntries(startFailures.map(item => [rolloutKey(item), item.error]));
   const complete = items.filter(item => failureMap[rolloutKey(item)] ||
     ["ready", "failed"].includes(states[rolloutKey(item)]?.phase)).length;
-  return `<div class="batch-rollout">
-    <div class="between"><div><b>${complete}/${items.length} rollouts complete</b>
-      <div class="dim xs">Each workload is tracked independently and keeps its own rollback image.</div></div>
-      ${queueMode && startFailures.length ? '<span class="pill warn">queue stopped</span>' : complete === items.length ? '<span class="pill ok">finished</span>' : reconnecting ? '<span class="pill warn">reconnecting</span>' : '<span class="pill ok">monitoring</span>'}</div>
-    <div class="rollout-meter"><span style="width:${items.length ? Math.round(complete / items.length * 100) : 100}%"></span></div>
-    <div class="batch-rollout-list">${items.map(item => {
+  const ready = items.filter(item => states[rolloutKey(item)]?.phase === "ready" && !failureMap[rolloutKey(item)]);
+  const pending = items.filter(item => !ready.includes(item));
+  const failed = items.some(item => failureMap[rolloutKey(item)] || states[rolloutKey(item)]?.phase === "failed");
+  const row = item => {
       const key = rolloutKey(item), state = states[key], startError = failureMap[key];
       const phase = startError ? "needs attention" : state?.phase || "starting";
       const tone = phase === "ready" ? "ok" : phase === "failed" || startError ? "crit" : "warn";
@@ -1177,9 +1169,16 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
       return `<div><span><b>${esc(item.name)}</b><small>${item.clusterName ? `${esc(item.clusterName)} · ` : ""}${esc(item.ns)}${state && state.desired != null ? ` · ${state.ready || 0}/${state.desired} ready` : ""}</small></span>
         <span class="pill ${tone}">${esc(phase)}</span>${startError ? `<div class="updateerror">${esc(startError)}</div>` : ""}
         ${waiting ? `<div class="dim xs">New pod waiting${waiting.node ? ` on ${esc(waiting.node)}` : ""}: ${esc(waiting.blocked)}</div>` : ""}</div>`;
-    }).join("")}</div>
+    };
+  return `<div class="batch-rollout">
+    <div class="between"><div><b>${complete}/${items.length} rollouts finished</b>
+      <div class="dim xs">Each workload is tracked independently and keeps its own rollback image.</div></div>
+      ${failed ? `<span class="pill warn">${queueMode ? "queue stopped" : "needs attention"}</span>` : complete === items.length ? '<span class="pill ok">finished</span>' : reconnecting ? '<span class="pill warn">reconnecting</span>' : '<span class="pill ok">monitoring</span>'}</div>
+    <div class="rollout-meter"><span style="width:${items.length ? Math.round(complete / items.length * 100) : 100}%"></span></div>
+    <div class="batch-rollout-list">${pending.map(row).join("")}</div>
+    ${ready.length ? UI.more(`Updated · ${ready.length}`, `<div class="batch-rollout-list">${ready.map(row).join("")}</div>`).replace(/data-disclosure="[^"]*"/, 'data-disclosure="Updated"') : ""}
     ${queueMode ? '<p class="small dim">Closing stops unstarted updates. Submitted rollouts continue and can be monitored in Jobs. A stopped queue always needs a new review.</p>' : ""}
-    <div class="row" style="margin-top:18px"><button class="btn" onclick="closeModal()">${queueMode ? complete === items.length ? "Done" : "Close / stop queue" : "Monitor in background"}</button></div>
+    ${UI.actions(UI.cancel(queueMode ? complete === items.length && !failed ? "Done" : "Close queue" : "Monitor in background"))}
   </div>`;
 }
 
@@ -1252,10 +1251,8 @@ function rolloutMarkup(s) {
     ${s.problems?.length ? `<div class="gateerr">${s.problems.map(esc).join("<br>")}</div>` : ""}
     <div class="podprogress">${(s.pods || []).map(p => `<div><span><b>${esc(p.name)}</b><small>${esc(p.node || "scheduling")}${p.pull?.state === "pulling" ? ` · pulling${p.pull.total_bytes ? ` ${p.pull.percent || 0}%` : ""} ${esc(pullElapsed(p.pull.seconds))}` : ""}</small>${p.blocked ? `<small class="pod-blocked">${esc(p.blocked)}</small>` : ""}</span>
       <span class="pill ${p.phase === "Running" ? "ok" : "warn"}">${esc(p.pull?.state === "pulling" ? "pulling image" : p.waiting?.[0]?.reason || p.phase)}</span></div>`).join("")}</div>
-    <div class="row" style="margin-top:18px">
-      ${s.can_rollback ? `<button class="btn ${s.phase === "failed" ? "danger" : ""}" data-need="operator" onclick="imageRollback(${jsq(s.ns)},${jsq(s.name)})">Rollback</button>` : ""}
-      ${s.phase === "ready" ? '<button class="btn pri" onclick="closeModal();go(\'workloads\')">Done</button>' : '<button class="btn" onclick="closeModal()">Monitor in background</button>'}
-    </div>`;
+    ${UI.actions(`${s.can_rollback ? `<button class="btn ${s.phase === "failed" ? "danger" : ""}" data-need="operator" onclick="imageRollback(${jsq(s.ns)},${jsq(s.name)})">Rollback</button>` : ""}
+      ${s.phase === "ready" ? '<button data-dialog-dismiss="true" class="btn pri" onclick="closeModal();go(\'workloads\')">Done</button>' : '<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Monitor in background</button>'}`)}`;
 }
 
 window.monitorImageRollout = (ns, name) => {
@@ -1482,14 +1479,11 @@ async function viewDeploy(pre) {
   const vips = await vipChoices();
   const sharedVip = vips.shared || "";
   resetPaint();
-  paint(`<div class="phead"><div><h2>Deploy a container</h2>
-      <p>Run an independent workload or add a sidecar container to an existing pod</p></div>
-      <button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button></div>
+  paint(`${UI.pageHeader(`Deploy a container`, `Run an independent workload or add a sidecar container to an existing pod`, `<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>`)}
   <div class="split">
     <div class="card flat">
       ${DCFG.app_profile ? `<div class="app-profile ${esc(DCFG.app_profile.level || "review")}">
-        <div class="settings-card-head"><div><b>${esc(DCFG.app_profile.label || "Template guidance")}</b>
-          <div class="dim small">Compatibility guidance derived from ports, paths, variables, and runtime access</div></div><span class="pill ${DCFG.app_profile.level === "dependency" ? "warn" : "info"}">${esc(DCFG.app_profile.intent || "template")}</span></div>
+        ${UI.moduleHeader(`${esc(DCFG.app_profile.label || "Template guidance")}`, `Compatibility guidance derived from ports, paths, variables, and runtime access`, `<span class="pill ${DCFG.app_profile.level === "dependency" ? "warn" : "info"}">${esc(DCFG.app_profile.intent || "template")}</span>`)}
         ${(DCFG.app_profile.notes || []).map(note => `<div class="profile-note">✓ ${esc(note)}</div>`).join("")}
         ${(DCFG.app_profile.dependencies || []).length ? `<div class="dependency-list">${DCFG.app_profile.dependencies.map(dep => `<div class="dependency-row stranded"><span>${esc(dep.name)}</span><b>${dep.managed ? "managed" : "deploy separately"}</b></div>`).join("")}</div>` : ""}
       </div>` : ""}
@@ -1813,7 +1807,7 @@ window.doDeploy = async () => {
       ${joining ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployConfirm" onchange="deployReviewReady()"> ${plan.capacity.rollout?.paused ? "I understand this saves a paused template; capacity must be reviewed again before resuming" : plan.capacity.rollout?.replicas === 0 ? "I understand this changes the stopped workload's pod template without starting it" : `I understand every container in ${esc(c.target_workload)} restarts as its pods roll out, with the downtime or overlap shown above`}</label>` : ""}
       ${plan.capacity?.requires_confirmation && !plan.capacity.blocked ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployCapacityConfirm" onchange="deployReviewReady()"> Proceed despite capacity warnings — I accept the placement, memory and provisioning risks</label>` : ""}
       <details><summary>Manifest preview</summary><pre>${esc(JSON.stringify({ deployment: plan.deployment, service: plan.service }, null, 2))}</pre></details>
-      <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy workload"}</button></div></div>`, true);
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy workload"}</button>`)}</div>`, true);
   } catch (e) { toast(e.message, "bad"); }
 };
 window.confirmDeploy = async () => {
@@ -1960,10 +1954,8 @@ function storeSection(mode, apps, total) {
 
 async function viewStore() {
   resetPaint();
-  paint(`<div class="phead">
-      <div><h2>Community catalogue</h2><p>Third-party Community Applications templates adapted into reviewed Kubernetes workloads</p></div>
-      <div class="row store-search"><input class="search" id="s_q" placeholder="plex, nextcloud, jellyfin…" value="${esc(STATE.q)}" style="width:260px;padding-left:16px">
-      <button class="btn pri" onclick="storeSearch()">Search</button></div></div>
+  paint(`${UI.pageHeader(`Community catalogue`, `Third-party Community Applications templates adapted into reviewed Kubernetes workloads`, `<input class="search" id="s_q" placeholder="plex, nextcloud, jellyfin…" value="${esc(STATE.q)}" style="width:260px;padding-left:16px">
+      <button class="btn pri" onclick="storeSearch()">Search</button>`, {actionsClass:`store-search`})}
     <div class="store-browse-head"><div class="seg store-modes" id="s_modes">
       ${Object.entries(STORE_MODES).map(([mode, [label]]) => `<button data-mode="${mode}" class="${STORE_MODE === mode ? "on" : ""}" onclick="storeBrowse(${jsq(mode)})">${label}</button>`).join("")}
     </div></div>
@@ -2070,8 +2062,8 @@ window.wlPrimaryPort = (ns, name) => {
     <div class="primary-ports">${w.ports.map(p => `<label class="switch"><input type="radio" name="pp" value="${p.port}" ${p.port === current ? "checked" : ""}>
       <b class="mono">${p.port}</b> <span class="dim xs">${esc(p.name || "")}${p.ip ? ` · ${esc(p.ip)}` : ""}</span></label>`).join("")}
       <label class="switch"><input type="radio" name="pp" value="0" ${current ? "" : "checked"}> <span class="dim">No preference - their own order</span></label></div>
-    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="wlPrimaryPortSave(${jsq(ns)},${jsq(name)})">Save</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" onclick="wlPrimaryPortSave(${jsq(ns)},${jsq(name)})">Save</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.wlPrimaryPortSave = async (ns, name) => {
   const port = +(document.querySelector('input[name="pp"]:checked')?.value || 0);

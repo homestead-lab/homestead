@@ -12,7 +12,7 @@ function setup(images = [], harvester = false) {
     $: key => fields[key], $$: () => [], esc: String, tip: () => "", modal() {},
     api: async () => ({images, harvester}), vmLanNetworks: () => [{name: "default/lan"}],
     vmAddressFields: () => "", vmReadAddress: () => ({prefix: 24})};
-  ctx.window = ctx; vm.createContext(ctx);
+  ctx.window = ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   vm.runInContext(fs.readFileSync("web/js/views-vms.js", "utf8"), ctx);
   ctx.k3sCountChanged = () => {};
   return {ctx, fields};

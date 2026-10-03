@@ -11,7 +11,8 @@
 import { chromium } from "playwright";
 import { mkdir, writeFile } from "node:fs/promises";
 
-const output = "release-assets/pages";
+const output = process.env.PAGE_OUTPUT || "release-assets/pages";
+const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 await mkdir(output, { recursive: true });
 const base = (process.env.HOMESTEAD_URL || "http://127.0.0.1:4173") + "/?demo=1";
 const only = process.argv[2] || "";
@@ -81,13 +82,13 @@ report.sort((a, b) => order(a) - order(b));
 
 async function audit([label, width, height, mobile], items) {
   const context = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: mobile ? 2 : 1,
-    isMobile: mobile, hasTouch: mobile, colorScheme: "dark" });
+    isMobile: mobile, hasTouch: mobile, colorScheme: theme });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.addInitScript(() => {
-    localStorage.setItem("homestead.settings", JSON.stringify({ theme: "dark", bg: "soft", blur: 26, motion: "off", refresh: 60 }));
-  });
+  await page.addInitScript(theme => {
+    localStorage.setItem("homestead.settings", JSON.stringify({ theme, bg: "soft", blur: 26, motion: "off", refresh: 60 }));
+  }, theme);
   await page.goto(base, { waitUntil: "networkidle" });
   await page.locator("#views .phead").waitFor();
   await page.evaluate(() => document.fonts.ready);

@@ -133,10 +133,10 @@
   const choices = (id, change = "") => UI.field("Download format", `<select id="${id}" aria-label="Download format" ${change ? `onchange="${change}"` : ""}><option value="anonymised">Anonymised · recommended for sharing</option><option value="full" ${format === "full" ? "selected" : ""}>Full · keep private</option></select>`);
   const wrap = html => `<div class="ui-stack" data-diagnostic-ignore>${html}</div>`;
   const fail = error => toast(error.message, "bad");
-  window.troubleshootingCards = () => `<section class="card flat settings-wide" data-tab="troubleshooting"><div class="settings-card-head"><div><div class="ctitle">Bug reports</div><div class="csub">Record UI actions and diagnostics while you reproduce a problem.</div></div><button class="btn sm pri" data-need="admin" onclick="bugStart()">Record a bug</button></div>
+  window.troubleshootingCards = () => `${UI.settingsCard(`${UI.moduleHeader(`Bug reports`, `Record UI actions and diagnostics while you reproduce a problem.`, `<button class="btn sm pri" data-need="admin" onclick="bugStart()">Record a bug</button>`)}
     ${UI.guide("What gets recorded", "Clicks, navigation, focus, scrolling, shortcuts, UI states, request results and browser errors in this tab. Form values, password input, terminal contents and screen video are excluded. Original service logs may contain sensitive data. Saved reports expire after 24 hours.")}
-    <div id="diagnosticReports">${can("admin") ? '<div class="empty small">Loading reports…</div>' : '<div class="empty small">An administrator can record bugs and download logs.</div>'}</div></section>
-    <section class="card flat settings-wide" data-tab="troubleshooting"><div class="settings-card-head"><div><div class="ctitle">Logs package</div><div class="csub">Download anonymised or full diagnostics without recording a bug.</div></div><button class="btn sm" data-need="admin" onclick="bugPackage()">Download logs</button></div></section>`;
+    <div id="diagnosticReports">${can("admin") ? '<div class="empty small">Loading reports…</div>' : '<div class="empty small">An administrator can record bugs and download logs.</div>'}</div>`, {tab:`troubleshooting`})}
+    ${UI.settingsCard(`${UI.moduleHeader(`Logs package`, `Download anonymised or full diagnostics without recording a bug.`, `<button class="btn sm" data-need="admin" onclick="bugPackage()">Download logs</button>`)}`, {tab:`troubleshooting`})}`;
   window.troubleshootingPaint = async () => {
     const host = $("#diagnosticReports"); if (!host || !can("admin")) return;
     try {

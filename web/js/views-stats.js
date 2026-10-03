@@ -10,8 +10,7 @@ async function mqttPaint() {
   STATE.data.mqtt = m;
   const s = m.status || {}, admin = can("admin");
   const state = { publishing: ["ok", "publishing"], standby: ["neutral", "standby"], error: ["crit", "error"], off: ["low", "off"] }[s.state] || ["low", s.state || "off"];
-  host.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Publish</div>
-      <div class="csub">Cluster and node stats to other systems</div></div></div>
+  host.innerHTML = `${UI.moduleHeader(`Publish`, `Cluster and node stats to other systems`, ``)}
     ${serviceRow("MQTT and Home Assistant", `<span class="pill ${state[0]}">${esc(state[1])}</span>`,
       s.state === "publishing" ? `${esc(s.detail)} · ${m.sensors.cluster + m.sensors.node} sensors · last ${Date.now() / 1000 - s.last_publish < 60 ? "under a minute ago" : esc(fmtAgo(Date.now() / 1000 - s.last_publish))}`
         : m.enabled ? esc(s.detail || "starting") : `Off · ${m.sensors.cluster} cluster sensors and ${m.sensors.node} for each node, with Home Assistant discovery`,

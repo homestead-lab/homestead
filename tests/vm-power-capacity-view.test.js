@@ -26,7 +26,7 @@ function setup({blocked=false, missing=false, fail=false, cpuEstimate=false, sta
       return {ok:true,detail:"starting"};
     }};
   ctx.window=ctx;
-  vm.createContext(ctx);
+  vm.createContext(ctx); require("./helpers/load-ui")(ctx);
   ctx.jsArg = s => JSON.stringify(String(s ?? "")); ctx.jsq = s => (ctx.esc || String)(ctx.jsArg(s));
   vm.runInContext(fs.readFileSync("web/js/views-vms.js","utf8"),ctx);
   return {ctx,fields,sent,notices};

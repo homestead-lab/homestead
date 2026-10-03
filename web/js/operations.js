@@ -18,9 +18,21 @@ function operationAge(value) {
 function renderOperations() {
   const tray = $("#jobTray"), items = STATE.data.operations || [];
   const active = items.filter(operationActive);
+  // Clearing one at a time is fine for a stray failure and tedious after a
+  // batch, so the header offers the lot - and says how many, because it will
+  // not touch anything still running.
+  const finished = items.filter(item => !operationActive(item) && item.dismissible !== false);
+  const clear = $("#jobClear");
+  if (clear) {
+    // Only relabel when there is something to clear, so it never reads
+    // "Clear 0 finished" in the moment between clearing and hiding.
+    clear.hidden = !finished.length;
+    if (finished.length) clear.textContent = `Clear ${finished.length} finished`;
+  }
   if (!items.length) {
     tray.classList.add("hidden");
     $("#jobList").innerHTML = "";
+    paintJobsDialog();
     if (window.paintBell) paintBell();
     if (window.uvmCopiesPaint) uvmCopiesPaint();
     return;
@@ -34,22 +46,19 @@ function renderOperations() {
     ${active.length ? `<span class="jobsummarypct">${Math.round(latest.progress || 0)}%</span>` : ""}
     <span class="jobchev" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></span>`;
   $("#jobSummary").setAttribute("aria-expanded", String(operationPanelOpen));
-  // Clearing one at a time is fine for a stray failure and tedious after a
-  // batch, so the header offers the lot - and says how many, because it will
-  // not touch anything still running.
-  const finished = items.filter(item => !operationActive(item) && item.dismissible !== false);
-  const clear = $("#jobClear");
-  if (clear) {
-    // Only relabel when there is something to clear, so it never reads
-    // "Clear 0 finished" in the moment between clearing and hiding.
-    clear.hidden = !finished.length;
-    if (finished.length) clear.textContent = `Clear ${finished.length} finished`;
-  }
-  const list = items.slice(0, 12).map(operation => `<article class="jobitem">
+  const list = items.slice(0, 12).map(operationCard).join("");
+  $("#jobList").innerHTML = list;
+  paintJobsDialog();
+  if (window.paintBell) paintBell();
+  if (window.uvmCopiesPaint) uvmCopiesPaint();
+  if (window.applyRole) window.applyRole();
+}
+
+function operationCard(operation) { return `<article class="jobitem" data-operation="${esc(operation.id)}">
     <div class="jobitemtop"><div><b>${esc(operation.title)}</b>
       <span>${esc(operation.resource?.namespace ? operation.resource.namespace + " · " : "")}${esc(operation.resource?.kind || operation.kind)}</span></div>
       <span class="pill ${operationTone(operation.status)}">${esc(operation.status)}</span></div>
-    <div class="jobmeter"><span class="${operation.status === "failed" ? "failed" : ""}" style="width:${Math.max(2, Math.min(100, operation.progress || 0))}%"></span></div>
+    ${operation.progress != null && Number.isFinite(Number(operation.progress)) ? `<div class="jobmeter" role="progressbar" aria-label="Reported progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.max(0, Math.min(100, Number(operation.progress)))}"><span class="${operation.status === "failed" ? "failed" : ""}" style="width:${Math.max(0, Math.min(100, Number(operation.progress)))}%"></span></div>` : ""}
     <div class="jobfoot"><span>${esc(operation.message || "")}</span><span>${operationAge(operation.finished_at || operation.started_at)}</span></div>
     <div class="jobactions">
       <button class="btn sm" onclick="${operation.kind === 'cluster-shutdown' ? 'clusterShutdown()' : `openOperation(${jsq(operation.href || "/")},${jsq(operation.id || "")})`}">Open</button>
@@ -61,24 +70,63 @@ function renderOperations() {
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation(${jsq(operation.id)})">Carry on</button>` : ""}
       ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review retained resources and recovery choices; nothing is deleted" : "Says what it left behind and what cleanup removes"}" onclick="cancelOperation(${jsq(operation.id)})">${operation.tracking_only ? "Review retained resources" : "Clean up"}</button>` : ""}
       ${operation.cancellable ? `<button class="btn sm danger" data-need="${operation.copy_recovery ? "admin" : "operator"}" data-tip="Reviews what can be stopped or recovered before anything changes" onclick="cancelOperation(${jsq(operation.id)})">${operation.rename_recovery || operation.copy_recovery ? "Inspect outcome" : operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
-      ${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" onclick="dismissOperation(${jsq(operation.id)})">Dismiss</button>`}
+      ${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" data-tip="Remove this finished entry from Jobs. Volumes and required recovery records are retained." onclick="dismissOperation(${jsq(operation.id)})">Dismiss</button>`}
     </div>
-  </article>`).join("");
-  $("#jobList").innerHTML = list;
-  const open = $("#jobsDialogList");
-  if (open) open.innerHTML = list || '<div class="empty small">No jobs.</div>';
-  if (window.paintBell) paintBell();
-  if (window.uvmCopiesPaint) uvmCopiesPaint();
-  if (window.applyRole) window.applyRole();
-}
+  </article>`; }
 
-/* Every job, running and recent, with its log and what can be done to it. */
-window.jobsDialog = () => {
+let selectedJobId = "";
+const completedJobs = items => items.filter(item => ["succeeded", "cancelled"].includes(item.status) && item.dismissible !== false);
+window.selectJob = id => { selectedJobId = id; paintJobsDialog(); window.applyRole?.(); };
+function paintJobsDialog() {
+  const host = $("#jobsDialogList");
+  if (!host) return;
   const items = STATE.data.operations || [];
-  const finished = items.filter(item => !operationActive(item) && item.dismissible !== false).length;
-  modal("Jobs", `${UI.lead("What Homestead is doing in the background, and what it did recently.")}
-    <div id="jobsDialogList" class="joblist">${$("#jobList")?.innerHTML || '<div class="empty small">No jobs.</div>'}</div>
-    ${UI.actions(UI.cancel("Close") + (finished ? UI.button(`Clear ${finished} finished`, "dismissFinishedOperations()", { attrs: 'data-need="operator"' }) : ""))}`);
+  const attention = items.filter(item => item.status === "failed");
+  const active = items.filter(operationActive);
+  const completed = items.filter(item => ["succeeded", "cancelled"].includes(item.status));
+  const selected = items.find(item => item.id === selectedJobId) || attention[0] || active[0] || completed[0];
+  selectedJobId = selected?.id || "";
+  // Capture disclosure state before replacing the DOM; polling must not close it.
+  const expanded = [...host.querySelectorAll("details[open][data-disclosure]")].map(el => [el.dataset.disclosure, el.closest("[data-operation]")?.dataset.operation || ""]);
+  const rows = items => items.map(item => ({key:item.id, title:item.title,
+    detail:`${item.status}${item.resource?.namespace ? ` · ${item.resource.namespace}` : ""}`, attention:item.status === "failed"}));
+  const stale = STATE.operationsStale ? UI.callout("warn", "Connection lost", "Showing the last known status. Checking again; completion is not assumed.") : "";
+  host.innerHTML = stale + (selected ? UI.masterDetail([
+    {key:"attention", title:`Needs attention · ${attention.length}`, items:rows(attention)},
+    {key:"active", title:`Running · ${active.length}`, items:rows(active)},
+    {key:"Completed", title:`Completed · ${completed.length}`, items:rows(completed), collapsed:true}
+  ], selectedJobId, operationCard(selected), {label:"Jobs", detailLabel:"Selected job", onSelect:id => `selectJob(${jsArg(id)})`}) : '<div class="empty small">No jobs.</div>');
+  if (selected) {
+    const actions = host.querySelector(".dialog-master-content .jobactions");
+    const secondary = [...actions.children].filter(button => /^(Log|Dismiss)$/.test(button.textContent.trim()));
+    if (secondary.length) {
+      const html = secondary.map(button => button.outerHTML).join("");
+      secondary.forEach(button => button.remove());
+      actions.insertAdjacentHTML("afterend", UI.more("Log and history", `<div class="jobactions">${html}</div>`));
+    }
+    if (selected.dismissible === false) host.querySelector(".dialog-master-content .jobfoot").insertAdjacentHTML("afterend", '<p class="ui-help">This recovery record is retained until its outcome is resolved.</p>');
+  }
+  for (const detail of host.querySelectorAll("details[data-disclosure]")) {
+    if (expanded.some(([label, id]) => label === detail.dataset.disclosure && id === (detail.closest("[data-operation]")?.dataset.operation || ""))) detail.open = true;
+  }
+  const clear = $("#jobsClearCompleted"), count = completedJobs(items).length;
+  if (clear) { clear.hidden = !count; clear.textContent = `Clear completed (${count})`; }
+  window.applyRole?.();
+}
+window.jobsDialog = () => {
+  modal("Jobs", `<div id="jobsDialogList"></div>${UI.actions(UI.button("Clear completed", "dismissCompletedOperations()", {id:"jobsClearCompleted", attrs:'data-need="operator"'}), UI.cancel("Close"))}`);
+  paintJobsDialog();
+  window.applyRole?.();
+};
+window.dismissCompletedOperations = async () => {
+  const button = $("#jobsClearCompleted"); if (button) button.disabled = true;
+  try {
+    for (const item of completedJobs(STATE.data.operations || [])) {
+      await api("/api/operations/dismiss", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({id:item.id})});
+      STATE.data.operations = (STATE.data.operations || []).filter(row => row.id !== item.id);
+    }
+  } catch (error) { toast(error.message, "bad"); }
+  finally { renderOperations(); if (button) button.disabled = false; }
 };
 window.operationActive = operationActive;
 
@@ -90,8 +138,9 @@ async function refreshOperations(immediate = false) {
     // never settles, which stopped this loop for good - the job an App Store
     // install started sat at "queued" while its container ran.
     STATE.data.operations = await api("/api/operations", { keep: true });
+    STATE.operationsStale = false;
     renderOperations();
-  } catch (_) { /* retain the last known state during API interruptions */ }
+  } catch (_) { STATE.operationsStale = true; paintJobsDialog(); }
   if (!ME) return;
   const active = (STATE.data.operations || []).some(operationActive);
   operationTimer = setTimeout(refreshOperations, immediate || active ? 3000 : 15000);
@@ -302,7 +351,7 @@ window.powerRecoveryReview = async (id, mutation = false) => {
       ${(p.warnings || []).map(w=>`<div class="note warn small">${esc(w)}</div>`).join("")}
       ${!p.blocked ? `<div class="f"><label>Type ${esc(p.confirm)} to confirm inspection</label><input id="powerRecoveryName" autocomplete="off" oninput="powerRecoveryReady()"></div>
         <label class="check"><input id="powerRecoveryAck" type="checkbox" onchange="powerRecoveryReady()"> I inspected the ${p.action === "k3s-cluster" ? "planned VMs" : "VM"}${mutation ? " and retained resources" : ""}. I accept that the old request may still take effect late and that resolving this record allows a new, separately reviewed ${mutation ? "VM change" : "power action"}.</label>` : ""}
-      <div class="modalactions"><button class="btn" onclick="closeModal()">Keep tracking</button><button class="btn danger" id="powerRecoveryApply" disabled onclick="powerRecoveryResolve()">Record unknown outcome</button></div></div>`;
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Keep tracking</button><button class="btn danger" id="powerRecoveryApply" disabled onclick="powerRecoveryResolve()">Record unknown outcome</button>`)}</div>`;
     if ($(".modalbox")) $(".modalbox").scrollTop=0;
   } catch(error) {
     if (sequence !== POWER_RECOVERY_SEQ || !$("#powerRecoveryLoading")) return;
@@ -356,7 +405,7 @@ window.cancelOperation = async id => {
   const cleanup = plan.cleanup && plan.mode !== "forget";
   const body = !plan.can
     ? `<div class="note warn"><b>${plan.copy_recovery ? "The copy hold cannot be released yet." : "It cannot be cancelled at this step."}</b><div>${esc(plan.why_not || "")}</div></div>
-       <div class="row" style="margin-top:12px"><button class="btn" onclick="closeModal()">Close</button></div>`
+       ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}`
     : `<p>${esc(plan.lead || (cleanup ? "This job failed part-way. Cleaning up removes what it left behind; the job stays in the list as failed."
         : plan.cleanup ? "This job failed. Stopping tracking keeps its failed outcome and all retained resources. Nothing is deleted or stopped in the cluster."
         : CANCEL_LEAD[plan.mode] || CANCEL_LEAD.stop))}</p>
@@ -368,10 +417,9 @@ window.cancelOperation = async id => {
       ${plan.confirm ? `<div class="f" style="margin-top:12px"><label>Type <b class="mono">${esc(plan.confirm)}</b> to confirm</label>
         <input id="oc_confirm" autocomplete="off" oninput="cancelOperationGate()"></div>` : ""}
       ${plan.needs === "admin" && !can("admin") ? `<div class="note warn" style="margin-top:12px">Cancelling this job needs an admin.</div>` : ""}
-      <div class="row" style="margin-top:12px">
-        <button class="btn ${high ? "danger" : "pri"}" id="oc_go" data-need="${esc(plan.needs || "operator")}" ${plan.confirm ? "disabled" : ""}
+      ${UI.actions(`<button class="btn ${high ? "danger" : "pri"}" id="oc_go" data-need="${esc(plan.needs || "operator")}" ${plan.confirm ? "disabled" : ""}
           onclick="cancelOperationGo(${jsq(plan.id)})">${esc(cleanup ? "Remove what it made" : plan.action)}</button>
-        <button class="btn" onclick="closeModal()">${plan.mode === "forget" ? "Keep tracking" : plan.cleanup ? "Leave it" : "Keep it running"}</button></div>`;
+        <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">${plan.mode === "forget" ? "Keep tracking" : plan.cleanup ? "Leave it" : "Keep it running"}</button>`)}`;
   modal(`${plan.copy_recovery ? "Inspect storage copy" : plan.mode === "forget" ? "Stop tracking" : cleanup ? "Clean up" : "Cancel"} · ${plan.title}`, body, false, "operation-review");
   window.__cancelPlan = plan;
   if (window.applyRole) window.applyRole();
