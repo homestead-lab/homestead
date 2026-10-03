@@ -43,6 +43,12 @@ old desktops, virtual machines - with spare capacity at each layer. Host
 failover needs control-plane quorum, healthy replicas and eligible spare hosts;
 three server nodes are the usual starting point for an HA control plane.
 
+**Only two machines?** Prefer [two linked single-node clusters](docs/wiki/Linked-clusters.md#two-machines-at-home)
+for independent operation. Two embedded-etcd servers need both online; losing
+either loses quorum. For one HA k3s cluster, add a suitable third voting server,
+such as an [ARM64 Raspberry Pi with SSD storage](docs/wiki/Installing-on-k3s.md#using-a-small-third-server).
+Linking clusters provides shared management, not automatic failover.
+
 <table>
 <tr>
 <td width="33%" valign="top">
@@ -118,7 +124,10 @@ rest for Longhorn:
   into a Longhorn disk of its own, keeping a tenth (at least 10 GB) for the
   system to grow into. Homestead does not resize the partitions of a running
   system, so plain partitions without LVM leave nothing it can use.
-- Longhorn's V2 engine needs a whole drive of its own.
+- Longhorn's V2 engine needs a whole drive of its own in Homestead's guided
+  disk workflow, plus CPU and memory headroom. Read the
+  [V2 support and considerations](docs/wiki/Storage.md#longhorn-v2-support-and-considerations)
+  before enabling it, particularly on ARM or mixed-size hosts.
 
 See [Installing on k3s](https://github.com/wjcloudy/homestead/wiki/Installing-on-k3s#disks).
 
