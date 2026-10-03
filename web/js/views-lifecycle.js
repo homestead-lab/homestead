@@ -233,14 +233,14 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     const panels = section => `<div id="e_${section}_containers">${containers.map((container, index) => editContainerPanel(container, index, section)).join("")}</div>`;
     const basics = `
       <div class="f"><label>Workload name ${tip("The real Kubernetes Deployment name. Renaming creates a replacement Deployment, waits for it to become ready, then removes the old one. Generated pods use this name plus a Kubernetes suffix.")}</label><input type="text" id="e_workload_name" value="${esc(w.name)}"></div>
-      <div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the workload name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
-      <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates it and keeps a persistent local copy while retaining this source for later edits.")}</label><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/icon.png"></div>
+      ${UI.more("Optional settings", `<div class="f"><label>Pod hostname ${tip("The hostname visible inside the pod. It does not rename the Kubernetes Pod; generated pods use the workload name plus a suffix.")}</label><input type="text" id="e_pod_name" value="${esc(w.pod_hostname || "")}" placeholder="optional"></div>
+      <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates it and keeps a persistent local copy while retaining this source for later edits.")}</label><input type="url" id="e_icon" value="${esc(w.icon || "")}" placeholder="https://…/icon.png"></div>`)}
       <label class="switch" id="e_autostart_wrap"><input type="checkbox" id="e_autostart" onchange="editAutostartToggle()" ${w.autostart === false ? "" : "checked"}>
         Autostart ${tip("On keeps the workload running: Kubernetes restarts it after a crash, a node reboot or a cluster restart. Off scales it to zero and remembers the instance count for when you switch it back on.")}</label>
       <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>
       <div class="between"><div class="sec">Containers in each pod</div>
         <button class="btn" type="button" onclick="containerAdd('edit')">＋ Add container</button></div>
-      <div class="dim small">These containers run together in every pod, sharing its network and volumes. Pod copies are set under Where it runs.</div>
+      ${UI.more("How containers share a pod", "<p>These containers share networking and volumes. Set pod copies under Where it runs.</p>")}
       ${panels("basics")}
       <div id="e_removed_containers" class="dim small"></div>`;
     const running = placementSection(w.placement || {}, w, nodes, containers);
@@ -269,7 +269,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       { title: "Basics", html: basics }, { title: "Hardware and access", html: access },
       { title: "Environment values", html: environment }, { title: "Storage", html: storage },
       { title: "Where it runs", html: running }, { title: "Address", html: address }],
-      `<button class="btn pri" id="e_save" onclick="editSave(${jsq(ns)},${jsq(name)})">Save &amp; restart</button>`, { always: true })}</div>`;
+      `<button class="btn pri" id="e_save" onclick="editSave(${jsq(ns)},${jsq(name)})">Review changes</button>`, { always: true })}</div>`;
     editVipPicture(w);
     containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
@@ -451,6 +451,7 @@ window.editReview = async body => {
     if (!review.capacity || !review.capacity_token) throw new Error("Capacity review unavailable; refresh before saving.");
     EDIT_REVIEW = { config, ...review, submitting: false };
     const rename = review.capacity.rename;
+    const concerns = capacityNotes(review.capacity).concerns;
     const copying = !!review.capacity.copy_helper;
     if (copying) {
       childModal("Move container data", storageCopyReview(config,review.capacity), true, "operation-review");
@@ -460,8 +461,8 @@ window.editReview = async body => {
       ${!rename && review.capacity.container_changes ? `<p>Containers added: ${review.capacity.container_changes.added.map(esc).join(", ") || "none"}. Containers removed: ${review.capacity.container_changes.removed.map(esc).join(", ") || "none"}. Every pod rolls out; persistent volumes and data are kept.</p>` : ""}
       ${rename ? `<p><b>${esc(rename.from)}</b> → <b>${esc(rename.to)}</b></p><p>Only the workload name changes. Save other edits separately. Expect a short outage; volumes and service addresses are kept.</p>` : ""}
       ${rename ? `<div class="note ${review.capacity.blocked ? "bad" : ""}">${review.capacity.blocked ? "Rename is blocked by the placement check. Review the details below." : "If a step fails, inspect both workload names in Recent jobs. Homestead will not automatically restart the old copy or remove the replacement."}</div>
-        <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${(review.capacity.warnings || []).length} warning(s)</summary>${deployCapacityHtml(review.capacity)}</details>` : deployCapacityHtml(review.capacity)}
-      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "I accept the outage and capacity warnings" : "Proceed despite capacity warnings — I accept the restart, placement, memory and storage risks"}</label>` : ""}
+        <details ${review.capacity.blocked ? "open" : ""}><summary>Capacity and placement · ${(review.capacity.warnings || []).length} warning(s)</summary>${deployCapacityHtml(review.capacity)}</details>` : `${review.capacity.blocked || concerns.length ? UI.callout(review.capacity.blocked ? "bad" : "warn", review.capacity.blocked ? "Changes blocked" : "Check before saving", concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "Change the resources, storage or host selection before saving.") : ""}${UI.more("Capacity and placement", deployCapacityHtml(review.capacity))}` }
+      ${!review.capacity.blocked ? `<label class="switch"><input type="checkbox" id="editCapacityConfirm"> ${rename ? "I accept the outage and capacity warnings" : concerns.length ? "I accept the restart and warnings above" : "I accept the restart"}</label>` : ""}
       <div class="modalactions"><button class="btn" onclick="modalBack()">Back to edit</button><button id="editGo" class="btn pri" ${review.capacity.blocked ? "disabled" : ""} onclick="confirmEdit()">${rename ? "Rename workload" : "Save reviewed changes"}</button></div>`, true, "operation-review");
   } catch (e) { toast(e.message, "bad"); }
 };

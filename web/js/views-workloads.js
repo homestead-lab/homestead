@@ -1084,15 +1084,15 @@ async function reviewImageActions(items, action = "update") {
       ${blocked ? UI.callout("bad", "Update blocked", list)
         : concerns.length ? UI.callout("warn", "", list) : ""}
       <ul class="upd-apps">${apps}</ul>
-      ${UI.more("Details: capacity, exact images, how it runs", `
+      ${UI.more("Capacity and exact images", `
         ${rows.map(({config, preview}) => `${many ? `<p><b>${esc(config.ns)}/${esc(config.name)}</b></p>` : ""}
           ${UI.facts(preview.images.flatMap(i => [[`${i.container} now`, `<code>${esc(i.before)}</code>`],
             [`${i.container} ${rollback ? "back to" : "new"}`, `<code>${esc(i.after)}</code>`], [`${i.container} recovery`, `<code>${esc(i.rollback)}</code>`]]))}
           ${deployCapacityHtml(preview.capacity, false, true)}`).join("")}
         <p>Exact image digests and full-pod capacity are checked again before each change. Failure, lost contact or an expired review stops the remaining queue.
         Closing this dialog stops unstarted updates; a rollout already submitted continues.</p>`)}
-      ${UI.actions(UI.cancel() + UI.button(rollback ? "Start rollback" : many ? `Update ${rows.length}` : "Update", "imageReviewedApply()", { kind: "pri", id: "imageCapacityApply", disabled: true }),
-        blocked ? "" : `<label class="upd-ok"><input type="checkbox" id="imageCapacityApprove" onchange="imageReviewReady()"> ${concerns.length ? "Accept the restart and the notes above" : "Accept the restart"}</label>`)}
+      ${blocked ? "" : `<label class="upd-ok"><input type="checkbox" id="imageCapacityApprove" onchange="imageReviewReady()"> ${concerns.length ? "I accept the restart and warnings above" : "I accept the service interruption"}</label>`}
+      ${UI.actions(UI.button(rollback ? "Start rollback" : many ? `Update ${rows.length}` : "Update", "imageReviewedApply()", { kind: "pri", id: "imageCapacityApply", disabled: true }), UI.cancel())}
     </div>`;
   } catch (error) {
     IMAGE_REVIEW = null;
@@ -1163,12 +1163,10 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
   const failureMap = Object.fromEntries(startFailures.map(item => [rolloutKey(item), item.error]));
   const complete = items.filter(item => failureMap[rolloutKey(item)] ||
     ["ready", "failed"].includes(states[rolloutKey(item)]?.phase)).length;
-  return `<div class="batch-rollout">
-    <div class="between"><div><b>${complete}/${items.length} rollouts complete</b>
-      <div class="dim xs">Each workload is tracked independently and keeps its own rollback image.</div></div>
-      ${queueMode && startFailures.length ? '<span class="pill warn">queue stopped</span>' : complete === items.length ? '<span class="pill ok">finished</span>' : reconnecting ? '<span class="pill warn">reconnecting</span>' : '<span class="pill ok">monitoring</span>'}</div>
-    <div class="rollout-meter"><span style="width:${items.length ? Math.round(complete / items.length * 100) : 100}%"></span></div>
-    <div class="batch-rollout-list">${items.map(item => {
+  const ready = items.filter(item => states[rolloutKey(item)]?.phase === "ready" && !failureMap[rolloutKey(item)]);
+  const pending = items.filter(item => !ready.includes(item));
+  const failed = items.some(item => failureMap[rolloutKey(item)] || states[rolloutKey(item)]?.phase === "failed");
+  const row = item => {
       const key = rolloutKey(item), state = states[key], startError = failureMap[key];
       const phase = startError ? "needs attention" : state?.phase || "starting";
       const tone = phase === "ready" ? "ok" : phase === "failed" || startError ? "crit" : "warn";
@@ -1177,9 +1175,16 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
       return `<div><span><b>${esc(item.name)}</b><small>${item.clusterName ? `${esc(item.clusterName)} · ` : ""}${esc(item.ns)}${state && state.desired != null ? ` · ${state.ready || 0}/${state.desired} ready` : ""}</small></span>
         <span class="pill ${tone}">${esc(phase)}</span>${startError ? `<div class="updateerror">${esc(startError)}</div>` : ""}
         ${waiting ? `<div class="dim xs">New pod waiting${waiting.node ? ` on ${esc(waiting.node)}` : ""}: ${esc(waiting.blocked)}</div>` : ""}</div>`;
-    }).join("")}</div>
+    };
+  return `<div class="batch-rollout">
+    <div class="between"><div><b>${complete}/${items.length} rollouts finished</b>
+      <div class="dim xs">Each workload is tracked independently and keeps its own rollback image.</div></div>
+      ${failed ? `<span class="pill warn">${queueMode ? "queue stopped" : "needs attention"}</span>` : complete === items.length ? '<span class="pill ok">finished</span>' : reconnecting ? '<span class="pill warn">reconnecting</span>' : '<span class="pill ok">monitoring</span>'}</div>
+    <div class="rollout-meter"><span style="width:${items.length ? Math.round(complete / items.length * 100) : 100}%"></span></div>
+    <div class="batch-rollout-list">${pending.map(row).join("")}</div>
+    ${ready.length ? UI.more(`Updated · ${ready.length}`, `<div class="batch-rollout-list">${ready.map(row).join("")}</div>`).replace(/data-disclosure="[^"]*"/, 'data-disclosure="Updated"') : ""}
     ${queueMode ? '<p class="small dim">Closing stops unstarted updates. Submitted rollouts continue and can be monitored in Jobs. A stopped queue always needs a new review.</p>' : ""}
-    <div class="row" style="margin-top:18px"><button class="btn" onclick="closeModal()">${queueMode ? complete === items.length ? "Done" : "Close / stop queue" : "Monitor in background"}</button></div>
+    ${UI.actions(UI.cancel(queueMode ? complete === items.length && !failed ? "Done" : "Close queue" : "Monitor in background"))}
   </div>`;
 }
 

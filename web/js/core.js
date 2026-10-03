@@ -260,6 +260,7 @@ if (window.ResizeObserver && $("#jobTray")) {
 }
 function modal(t, h, wide, contextClass = "") {
   if (contextClass !== "volume-files" && window.filesDismiss) window.filesDismiss();
+  window.resetDialogDisclosures?.();
   window.__modalGuard = null;   // each modal decides for itself what is at stake
   $("#mtitle").textContent = t;
   $("#mbody").innerHTML = h;

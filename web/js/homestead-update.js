@@ -72,11 +72,11 @@ function paintBell() {
   // one stays under Needs you until it is dismissed.
   const operations = STATE.data.operations || [];
   const active = operations.filter(op => window.operationActive ? operationActive(op) : !["succeeded", "failed", "cancelled"].includes(op.status));
-  const failedJobs = operations.filter(op => op.status === "failed" && op.dismissible !== false);
+  const failedJobs = operations.filter(op => op.status === "failed");
   const jobRow = op => `<button class="bell-job" onclick="this.closest('details').open=false;openOperation(${jsq(op.href || "/")},${jsq(op.id || "")})">
       <span class="bell-job-top"><b>${esc(op.title)}</b><span>${op.progress != null ? `${Math.round(op.progress)}%` : esc(op.status)}</span></span>
       <span class="bell-job-msg">${esc(op.message || op.status || "")}</span>
-      <span class="jobmeter"><span style="width:${Math.max(2, Math.min(100, op.progress || 0))}%"></span></span></button>`;
+      ${op.progress != null && Number.isFinite(Number(op.progress)) ? `<span class="jobmeter"><span style="width:${Math.max(0, Math.min(100, Number(op.progress)))}%"></span></span>` : ""}</button>`;
   const rows = [
     waiting.length ? row("homesteadUpdateDialog()", "update", release ? `Homestead ${release} is available` : plural(waiting.length, "Homestead helper update")) : "",
     images ? row("imageUpdateCenter()", "box", plural(images, "container update")) : "",

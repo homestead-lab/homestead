@@ -77,7 +77,7 @@ const UI = (() => {
     const pct = known ? Math.max(0, Math.min(100, Number(value))) : 0;
     return `<div class="ui-progress ${tone(kind)}${known ? "" : " unknown"}">
       ${label || known ? `<div class="ui-progress-head"><span>${text(label)}</span>${known ? `<b>${Math.round(pct)}%</b>` : ""}</div>` : ""}
-      <div class="ui-bar" role="progressbar" ${known ? `aria-valuenow="${Math.round(pct)}"` : ""} aria-valuemin="0" aria-valuemax="100"><i style="width:${known ? pct : 35}%"></i></div>
+      <div class="ui-bar" role="progressbar" aria-label="${text(label || "Progress")}" ${known ? `aria-valuenow="${Math.round(pct)}"` : ""} aria-valuemin="0" aria-valuemax="100"><i style="width:${known ? pct : 35}%"></i></div>
       ${detail ? `<div class="ui-progress-detail">${text(detail)}</div>` : ""}</div>`;
   };
 
@@ -100,7 +100,7 @@ const UI = (() => {
       <tbody>${rows.map(row => `<tr>${row.map((cell, i) => `<td class="${columns[i]?.className || ""}" data-label="${text(columns[i]?.label || "")}">${cell}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`
     : `<div class="ui-empty">${text(empty)}</div>`;
 
-  const more = (summary, bodyHtml, open = false) => `<details class="ui-more"${open ? " open" : ""}>
+  const more = (summary, bodyHtml, open = false) => `<details class="ui-more" data-disclosure="${text(summary)}"${open ? " open" : ""}>
     <summary>${text(summary)}</summary><div class="ui-more-body">${bodyHtml}</div></details>`;
 
   /* The one checkbox a risky action needs. Keep the sentence short: what the
@@ -122,7 +122,7 @@ const UI = (() => {
      buttons that are not the main choice go in `start`, on the left. */
   const actions = (buttonsHtml, startHtml = "") => `<div class="ui-actions">
     ${startHtml ? `<div class="ui-actions-start">${startHtml}</div>` : ""}<div class="ui-actions-end">${buttonsHtml}</div></div>`;
-  const cancel = (label = "Cancel") => button(label, "closeModal()");
+  const cancel = (label = "Cancel") => button(label, "closeModal()", { attrs: 'data-dialog-dismiss="true"' });
 
   /* [{ title, value, unit, sub, tone, wide, tipHtml }]: tone ok | warn | bad | info
      tints the card; wide spans a whole row. */
@@ -165,6 +165,8 @@ window.normaliseDialogActions = normaliseDialogActions;
    alone - they need to be seen, or used. */
 function foldDialogNotes(body) {
   if (!body) return;
+  const panes = body.querySelectorAll(".stepper-pane, .ve-pane");
+  if (panes.length) { panes.forEach(foldDialogNotes); return; }
   const plain = [...body.querySelectorAll(".note")].filter(note => !note.matches(".warn, .bad, .good, .crit, .dependency-danger")
     && !note.id && !note.hidden && !note.closest(".dialog-more, .ui-more, [hidden]")
     && !note.querySelector("button, input, select, textarea, a[onclick], .btn") && note.textContent.trim());
@@ -185,7 +187,7 @@ window.foldDialogNotes = foldDialogNotes;
 // moving on) get the same treatment.
 if (typeof MutationObserver === "function" && typeof document.querySelector === "function") {
   const body = document.querySelector("#mbody");
-  if (body) new MutationObserver(() => { normaliseDialogActions(body); foldDialogNotes(body); }).observe(body, { childList: true });
+  if (body) new MutationObserver(() => { normaliseDialogActions(body); foldDialogNotes(body); restoreDialogDisclosures(body); }).observe(body, { childList: true, subtree: true });
 }
 
 /* A page header's ⋯: the actions besides its main one. Each item is
@@ -262,13 +264,15 @@ if (typeof window !== "undefined") { window.settingRow = settingRow; window.serv
    button: on the last step, or on every step when always is set (an edit,
    where changing one thing should not mean walking through all of them). */
 function stepper(id, steps, finish, { always = false } = {}) {
-  return `<div class="stepper" id="${esc(id)}" data-step="0">
-    <div class="stepper-head" role="tablist" data-scroll-x>${steps.map((step, i) =>
-      `<button type="button" role="tab" class="stepper-chip${i ? "" : " on"}" data-i="${i}" aria-selected="${!i}" onclick="stepGo(${jsq(id)},${i})"><span>${i + 1}</span>${esc(step.title)}</button>`).join("")}</div>
-    ${steps.map((step, i) => `<div class="stepper-pane" data-i="${i}"${i ? " hidden" : ""}>${step.html}</div>`).join("")}
-    <div class="ui-actions stepper-foot"><div class="ui-actions-start"><button type="button" class="btn" data-back hidden onclick="stepGo(${jsq(id)},-1,true)">Back</button></div>
-      <div class="ui-actions-end">${always ? finish : `<span data-finish hidden>${finish}</span>`}
-        ${steps.length > 1 ? `<button type="button" class="btn ${always ? "" : "pri"}" data-next onclick="stepGo(${jsq(id)},1,true)">Next: ${esc(steps[1].title)}</button>` : ""}</div></div>
+  const navigate = i => `stepGo(${jsq(id)},${i})`;
+  return `<div class="stepper dialog-rail${always ? " section-editor" : ""}" id="${esc(id)}" data-step="0">
+    <label class="dialog-section-picker">${always ? "Section" : "Step"}<select aria-label="${always ? "Section" : "Step"}" onchange="stepGo(${jsq(id)},Number(this.value))">${steps.map((step,i) => `<option value="${i}">${esc(step.title)}${always ? "" : ` · ${i + 1} of ${steps.length}`}</option>`).join("")}</select></label>
+    <div class="stepper-head" role="tablist" aria-label="${always ? "Sections" : "Steps"}" aria-orientation="vertical">${steps.map((step, i) =>
+      `<button type="button" role="tab" id="${esc(id)}-tab-${i}" aria-controls="${esc(id)}-pane-${i}" class="stepper-chip${i ? "" : " on"}" data-i="${i}" aria-selected="${!i}" onclick="${navigate(i)}">${esc(step.title)}</button>`).join("")}</div>
+    ${steps.map((step, i) => `<div class="stepper-pane" role="tabpanel" aria-labelledby="${esc(id)}-tab-${i}" id="${esc(id)}-pane-${i}" data-i="${i}"${i ? " hidden" : ""}>${step.lead ? UI.lead(esc(step.lead)) : ""}${step.html}</div>`).join("")}
+    <div class="ui-actions stepper-foot"><div class="ui-actions-start">${UI.cancel()}${always ? "" : `<button type="button" class="btn" data-back hidden onclick="stepGo(${jsq(id)},-1,true)">Back</button>`}</div>
+      <div class="ui-actions-end">${always ? finish : `<span data-finish${steps.length > 1 ? " hidden" : ""}>${finish}</span>`}
+        ${!always && steps.length > 1 ? `<button type="button" class="btn pri" data-next onclick="stepGo(${jsq(id)},1,true)">Next</button>` : ""}</div></div>
   </div>`;
 }
 function stepGo(id, to, relative) {
@@ -278,10 +282,11 @@ function stepGo(id, to, relative) {
   const next = Math.max(0, Math.min(panes.length - 1, relative ? +root.dataset.step + to : to));
   root.dataset.step = next;
   panes.forEach((pane, i) => { pane.hidden = i !== next; });
-  chips.forEach((chip, i) => { chip.classList.toggle("on", i === next); chip.classList.toggle("done", i < next); chip.setAttribute("aria-selected", String(i === next)); });
+  chips.forEach((chip, i) => { chip.classList.toggle("on", i === next); chip.setAttribute("aria-selected", String(i === next)); });
   const last = next === panes.length - 1, nextButton = root.querySelector("[data-next]");
-  root.querySelector("[data-back]").hidden = !next;
-  if (nextButton) { nextButton.hidden = last; if (!last) nextButton.textContent = `Next: ${chips[next + 1].textContent.replace(/^\d+/, "")}`; }
+  const back = root.querySelector("[data-back]"); if (back) back.hidden = !next;
+  const picker = root.querySelector(".dialog-section-picker select"); if (picker) picker.value = String(next);
+  if (nextButton) { nextButton.hidden = last; if (!last) nextButton.textContent = "Next"; }
   const finish = root.querySelector("[data-finish]");
   if (finish) finish.hidden = !last;
   const chip = chips[next], head = chip?.parentElement;
@@ -348,6 +353,10 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
   const sweep = () => document.querySelectorAll("details.actionmenu-portal").forEach(shell => {
     if (!shell.owner?.isConnected || !shell.owner.open) { if (shell.owner) shell.owner.shell = null; shell.remove(); }
   });
+  document.addEventListener("click", event => {
+    const summary = event.target.closest?.("#mbody details[data-disclosure] > summary");
+    if (summary) dialogDisclosureState.set(dialogDisclosureKey(summary.parentElement), !summary.parentElement.open);
+  });
   document.addEventListener("toggle", event => {
     const details = event.target;
     if (details.matches?.("details.actionmenu-portal")) {
@@ -395,4 +404,55 @@ function comparisonTable(columns, rows, caption) {
 function collectionDisclosure({ label, bodyHtml, expanded, controls, run, id }) {
   return `<button type="button" class="collection-disclosure" id="${esc(id)}" aria-label="${esc(label)}"
     aria-expanded="${!!expanded}" aria-controls="${esc(controls)}" onclick="${run}">${bodyHtml}<span class="collection-chevron" aria-hidden="true">${icon("chevron-down")}</span></button>`;
+}
+
+/* Disclosures survive polling within a dialog. New dialogs reset this memory;
+   the dialog stack keeps the original DOM and its disclosure state. */
+let dialogDisclosureState = new Map();
+const restoredDialogDisclosures = new WeakSet();
+window.resetDialogDisclosures = () => { dialogDisclosureState = new Map(); };
+function dialogDisclosureKey(detail) {
+  return `${detail.closest("[data-operation], .stepper-pane, .ve-pane")?.dataset.operation || detail.closest(".stepper-pane, .ve-pane")?.id || ""}:${detail.dataset.disclosure}`;
+}
+function restoreDialogDisclosures(body) {
+  body?.querySelectorAll("details[data-disclosure]").forEach(detail => {
+    if (restoredDialogDisclosures.has(detail)) return;
+    restoredDialogDisclosures.add(detail);
+    const key = dialogDisclosureKey(detail);
+    if (dialogDisclosureState.has(key)) detail.open = dialogDisclosureState.get(key);
+  });
+}
+window.revealDialogField = field => {
+  if (typeof field === "string") field = document.querySelector(field);
+  if (!field) return;
+  const pane = field.closest(".stepper-pane");
+  if (pane) stepGo(pane.closest(".stepper").id, Number(pane.dataset.i));
+  const vmPane = field.closest(".ve-pane");
+  if (vmPane && window.vmEditTab) vmEditTab(null, vmPane.dataset.pane);
+  for (let parent = field.parentElement; parent; parent = parent.parentElement) {
+    if (parent.matches("details")) parent.open = true;
+  }
+  field.scrollIntoView({ block: "nearest" }); field.focus();
+};
+if (typeof document !== "undefined" && typeof document.addEventListener === "function") {
+  document.addEventListener("click", event => {
+    const summary = event.target.closest?.("#mbody details[data-disclosure] > summary");
+    if (summary) dialogDisclosureState.set(dialogDisclosureKey(summary.parentElement), !summary.parentElement.open);
+  });
+  document.addEventListener("toggle", event => {
+    const detail = event.target;
+    if (detail.matches?.("#mbody details[data-disclosure]"))
+      dialogDisclosureState.set(dialogDisclosureKey(detail), detail.open);
+  }, true);
+  document.addEventListener("keydown", event => {
+    const tab = event.target.closest?.('.dialog-rail [role="tab"]');
+    if (!tab || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const tabs = [...tab.parentElement.querySelectorAll('[role="tab"]')], current = tabs.indexOf(tab);
+    const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowDown" ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[next].click(); tabs[next].focus();
+  });
+  document.addEventListener("invalid", event => {
+    if (event.target.closest?.("#mbody")) window.revealDialogField(event.target);
+  }, true);
 }
