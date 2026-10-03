@@ -322,6 +322,9 @@ install_rke2() { # server|agent [url token]
   type="$1"; url="${2:-}"; token="${3:-}"
   say "Installing RKE2${RKE2_VERSION:+ $RKE2_VERSION} ($type)"
   mkdir -p /etc/rancher/rke2
+  # The file holds the cluster token, so only root may read it.
+  ( umask 077; : >> /etc/rancher/rke2/config.yaml )
+  chmod 600 /etc/rancher/rke2/config.yaml
   {
     echo "nonroot-devices: true"
     [ -n "$NODE_IP" ] && echo "node-ip: $NODE_IP"

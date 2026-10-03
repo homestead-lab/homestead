@@ -69,8 +69,14 @@ class InstallerTests(unittest.TestCase):
 
     def test_joining_as_a_worker(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "10.0.0.6",
-                                                          "HS_SERVER": "10.0.0.5", "HS_TOKEN": "tok", "HS_YES": "1"})
-        self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh agent https://10.0.0.5:6443 tok --node-ip 10.0.0.6", out)
+                                                          "HS_SERVER": "10.0.0.5", "HS_TOKEN": "K10example::server:secret", "HS_YES": "1"})
+        self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh agent https://10.0.0.5:6443 [token hidden] --node-ip 10.0.0.6", out)
+        self.assertNotIn("K10example", out, "the cluster token is never shown or logged")
+
+    def test_ref_needs_a_release(self):
+        code, out = run(["--dry-run", "--ref"])
+        self.assertEqual(2, code, out)
+        self.assertIn("Option --ref needs a release", out)
 
     def test_a_new_rke2_cluster_always_has_longhorn(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_DIST": "rke2", "HS_NODE_IP": "10.0.0.5",
@@ -81,7 +87,7 @@ class InstallerTests(unittest.TestCase):
     def test_joining_an_rke2_cluster_uses_its_supervisor_port(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "server", "HS_DIST": "rke2", "HS_NODE_IP": "10.0.0.6",
                                                           "HS_SERVER": "10.0.0.5", "HS_TOKEN": "tok", "HS_YES": "1"})
-        self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh join https://10.0.0.5:9345 tok --node-ip 10.0.0.6 --rke2", out)
+        self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh join https://10.0.0.5:9345 [token hidden] --node-ip 10.0.0.6 --rke2", out)
 
     def test_an_unknown_kubernetes_is_refused(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_DIST": "k0s", "HS_NODE_IP": "10.0.0.5", "HS_YES": "1"})
@@ -99,7 +105,7 @@ class InstallerTests(unittest.TestCase):
     def test_a_joining_node_takes_the_version_given(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "10.0.0.6", "HS_SERVER": "10.0.0.5",
                                                           "HS_TOKEN": "tok", "HS_K8S_VERSION": "v1.32.8+k3s1", "HS_YES": "1"})
-        self.assertIn("agent https://10.0.0.5:6443 tok --node-ip 10.0.0.6 --k3s-version v1.32.8+k3s1", out)
+        self.assertIn("agent https://10.0.0.5:6443 [token hidden] --node-ip 10.0.0.6 --k3s-version v1.32.8+k3s1", out)
 
     def test_default_pins_homestead_to_the_installer_release_without_lookups(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_NODE_IP": "10.0.0.5", "HS_LONGHORN": "yes",
@@ -547,6 +553,131 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("+ k3s kubectl uncordon node1", out)
         self.assertIn("+ k3s kubectl delete pods -A --field-selector=status.phase=Failed", out)
         self.assertNotIn("delete pod plex-1", out, "restarting failing pods is asked, never automatic")
+
+
+def functions(snippet, env=None, path_extra=None):
+    """The installer's functions without its main program, then snippet, as a dry run."""
+    text = SCRIPT.read_text(encoding="utf-8").replace("\r\n", "\n")
+    text = text.split("# ------------------------------------------------------------------ start", 1)[0]
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp, "functions.sh")
+        script.write_text(text + "\n" + snippet + "\n", encoding="utf-8", newline="\n")
+        full = dict(os.environ, HS_UI="text", TMPDIR=tmp, **(env or {}))
+        full.pop("KUBECONFIG", None)
+        if path_extra:
+            full["PATH"] = path_extra + os.pathsep + full["PATH"]
+        result = subprocess.run([SH, str(script), "--dry-run"], capture_output=True, text=True, env=full,
+                                stdin=subprocess.DEVNULL, timeout=60)
+        return result.returncode, result.stdout + result.stderr
+
+
+def stand_in(directory, name, body):
+    path = Path(directory, name)
+    path.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8", newline="\n")
+    path.chmod(path.stat().st_mode | stat.S_IEXEC)
+
+
+@unittest.skipUnless(SH and os.name == "posix", "needs a POSIX system")
+class InstallerFixTests(unittest.TestCase):
+    def test_a_token_is_hidden_wherever_a_command_line_is_shown(self):
+        code, out = functions('SECRET="a.b*c"; hide "join x a.b*c y a.b*c"; echo; hide "no secret here"')
+        self.assertEqual("join x [token hidden] y [token hidden]\nno secret here", out.strip())
+
+    def test_logs_are_readable_by_root_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = Path(tmp, "install.log")
+            log.write_text("old\n")
+            log.chmod(0o644)
+            fresh = Path(tmp, "doctor.log")
+            functions(f'private_log "{log}"; private_log "{fresh}"')
+            self.assertEqual(0o600, stat.S_IMODE(log.stat().st_mode))
+            self.assertEqual(0o600, stat.S_IMODE(fresh.stat().st_mode))
+
+    @unittest.skipUnless(shutil.which("pgrep"), "needs pgrep")
+    def test_an_interrupt_stops_the_install_step_and_everything_it_started(self):
+        code, out = functions('''
+            sh -c 'sleep 30 & sleep 30; wait' &
+            job=$!; sleep 1
+            children=$(pgrep -P "$job" | tr '\\n' ' ')
+            [ -n "$children" ] || echo "no children seen"
+            stop_tree "$job"; sleep 1
+            for pid in $job $children; do kill -0 "$pid" 2>/dev/null && echo "still running: $pid"; done
+            echo checked''')
+        self.assertIn("checked", out)
+        self.assertNotIn("no children seen", out)
+        self.assertNotIn("still running", out)
+
+    def test_a_cancelled_question_stops_the_installation(self):
+        with tempfile.TemporaryDirectory() as bin_dir:
+            # The address box is cancelled: whiptail exits 1.
+            stand_in(bin_dir, "whiptail", 'case "$*" in *"Homestead and Apps Address"*) exit 1 ;; esac; exit 0')
+            code, out = functions('''
+                UI=whiptail; BOX=whiptail; TTY=/dev/null; interactive() { true; }
+                pick_vip
+                echo "still installing with VIP=[$VIP]"''', path_extra=bin_dir)
+        self.assertNotEqual(0, code, out)
+        self.assertIn("Installation cancelled", out)
+        self.assertNotIn("still installing", out)
+
+    def test_a_typo_in_a_text_menu_asks_again(self):
+        import pty
+        master, slave = pty.openpty()
+        try:
+            os.write(master, b"7\nx\n2\n")
+            code, out = functions('''
+                TTY="$TEST_TTY"; interactive() { true; }
+                pick=$(choose HS_NOPE "Mode" "Pick one" a "First" b "Second") || exit
+                echo "picked [$pick]"''', env={"TEST_TTY": os.ttyname(slave)})
+        finally:
+            os.close(master)
+            os.close(slave)
+        self.assertIn("picked [b]", out)
+
+    def test_restore_warns_about_other_servers_when_the_cluster_cannot_be_asked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "server/db/snapshots").mkdir(parents=True)
+            Path(tmp, "server/db/snapshots/etcd-snapshot-1").write_text("x")
+            code, out = functions(f'''
+                KIND=k3s-server; DATA="{tmp}"
+                kc() {{ return 1; }}
+                menu() {{ echo etcd-snapshot-1; }}
+                typed() {{ printf '%s\\n' "$2"; return 1; }}
+                restore''')
+        self.assertIn("could not be asked how many server nodes", out)
+        self.assertNotIn("integer expression", out)
+
+    def test_the_clock_fix_enables_chrony_by_its_real_unit_name(self):
+        with tempfile.TemporaryDirectory() as bin_dir:
+            stand_in(bin_dir, "systemctl", '''case "$*" in
+  "list-unit-files chrony.service") echo "chrony.service enabled enabled" ;;
+  "list-unit-files chronyd.service") echo "chronyd.service alias -" ;;
+esac''')
+            code, out = functions("fix_clock", path_extra=bin_dir)
+        self.assertIn("+ systemctl enable --now chrony", out)
+        self.assertNotIn("chronyd", out)
+
+    def test_safe_fixes_run_each_fix_once(self):
+        code, out = functions('''
+            SERVICE=k3s; sleep() { :; }
+            found service bad "k3s service is not running" "" fix_restart yes
+            found certs warn "Certificates expire in 30 days" "" fix_restart yes
+            safe_fixes''')
+        self.assertEqual(1, out.count("+ systemctl restart k3s"), out)
+
+    def test_coredns_is_checked_on_rke2_under_its_own_name(self):
+        code, out = functions('''
+            KC=stub; KIND=rke2-server; NODE=node1; DATA=/nonexistent
+            kc() { case "$*" in
+              "get --raw /readyz"|"get --raw /readyz/etcd") return 0 ;;
+              "get node node1 "*) echo "True " ;;
+              "-n kube-system get deploy rke2-coredns-rke2-coredns") return 0 ;;
+              "-n kube-system get deploy rke2-coredns-rke2-coredns -o jsonpath="*) echo "" ;;
+              *) return 1 ;; esac; }
+            check_cluster
+            grep "^dns|" "$FOUND"
+            fix=$(grep "^dns|" "$FOUND" | cut -d"|" -f5); $fix''')
+        self.assertIn("dns|bad|CoreDNS is not ready", out)
+        self.assertIn("rollout restart deployment/rke2-coredns-rke2-coredns", out)
 
 
 if __name__ == "__main__":
