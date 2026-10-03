@@ -3989,12 +3989,14 @@ def send_reviewed_power(power_plan, force=False):
     Host actions does once its review is accepted, and what an OS update of
     every host does for each host that needs a restart."""
     node, action = power_plan["node"], power_plan["action"]
+    planned_outage = bool(power_plan.get("planned_outage")) and not force
     operation = OPS.start(
         "node-power", f"{action} {node}", {"kind": "Node", "name": node},
         "/nodes?node=" + urllib.parse.quote(node),
         {"node": node, "node_uid": power_plan["node_uid"], "action": action, "boot_id": power_plan["boot_id"],
          "volumes": [v["name"] for v in power_plan["volumes"]],
-         "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
+         "planned_outage": planned_outage, "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
+        "Planned whole-cluster outage; sending without cordon or drain" if planned_outage else
         "Forced by an admin; sending without cordon or drain" if force else "Host impact reviewed; preparing cordon and drain")
     phase_state = {"phase": "reviewed"}
 
@@ -4004,9 +4006,10 @@ def send_reviewed_power(power_plan, force=False):
         return updated
     try:
         result = LC.node_power(node, action, True,
-                               before_send=(lambda: POWER.recheck_forced(power_plan)) if force
+                               before_send=(lambda: POWER.recheck_planned_outage(power_plan)) if planned_outage else
+                               (lambda: POWER.recheck_forced(power_plan)) if force
                                else (lambda: POWER.recheck_after_drain(power_plan)),
-                               reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force)
+                               reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force, planned_outage=planned_outage)
         result["operation"] = operation
         return result
     except Exception as e:
@@ -4022,6 +4025,8 @@ def rollout_reboot(node, allow_single_copy=False):
     nobody to accept its warnings - so what a person would have to accept
     stops it, except a volume's only copy when the settings accept that."""
     power_plan = POWER.plan(node, "reboot")
+    if power_plan.get("planned_outage"):
+        raise ValueError("A single-host cluster outage needs a manual review and acknowledgement in Host actions")
     if not power_plan["ready"]:
         raise ValueError("; ".join(power_plan["blockers"]))
     if power_plan["stranded"]:
@@ -9498,6 +9503,9 @@ class H(HTTP.LimitedHandler):
                     return self._send(409, {"error": "; ".join(power_plan["blockers"]), "plan": power_plan})
                 if b.get("review_token") != power_plan["review_token"]:
                     return self._send(409, {"error": "host impact changed; review the plan again", "plan": power_plan})
+                if power_plan.get("planned_outage") and b.get("allow_cluster_outage") is not True:
+                    return self._send(409, {"error": "acknowledge the whole-cluster outage before host power control",
+                                            "plan": power_plan})
                 if power_plan["stranded"] and not b.get("allow_stranded"):
                     return self._send(409, {"error": "some workloads have no eligible failover host",
                                             "plan": power_plan})

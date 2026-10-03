@@ -195,6 +195,8 @@ const DIALOGS = [
   ["workload-logs", "workloads", "click:wlLogs"],
   ["workload-console", "workloads", "wlConsole('lab','frigate')"],
   ["workload-main-port", "workloads", "wlPrimaryPort('lab','frigate')"],
+  ["node-single-host-reboot", "nodes", "window.__demoSingleHostOutage=true;nodePowerReview('harvester-node1','reboot')"],
+  ["node-single-host-shutdown", "nodes", "window.__demoSingleHostOutage=true;nodePowerReview('harvester-node1','poweroff')"],
   ["node-reboot", "nodes", "nodePowerReview('harvester-node1','reboot')"],
   ["node-shutdown", "nodes", "nodePowerReview('harvester-node1','poweroff')", "document.querySelector('#mbody .ui-more').open=true"],
   ["app-store-app", "store", "click:storeDetails"],
@@ -246,7 +248,7 @@ async function audit([label, width, height, mobile], items) {
   await page.addStyleTag({ content: "#jobTray{display:none!important}" });
 
   for (const [name, view, ...steps] of items) {
-    await page.evaluate(() => { window.__demoDataBatchRecovery = false; STATE.operationsStale = false; });
+    await page.evaluate(() => { window.__demoDataBatchRecovery = false; window.__demoSingleHostOutage = false; STATE.operationsStale = false; });
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } });
       await page.evaluate((v) => go(v), view);
