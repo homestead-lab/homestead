@@ -13,8 +13,10 @@ from PIL import Image, ImageDraw, ImageFont
 
 parser = argparse.ArgumentParser()
 parser.add_argument('root', type=Path)
+parser.add_argument('--kind', choices=('dialogs','pages'), default='dialogs')
 args = parser.parse_args()
 root = args.root
+kind_label = 'page' if args.kind == 'pages' else 'dialog'
 font_root = Path('C:/Windows/Fonts')
 def font(size, bold=False):
     paths = [font_root/('segoeuib.ttf' if bold else 'segoeui.ttf'), Path('/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf' if bold else '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')]
@@ -49,7 +51,7 @@ for theme in reports:
             with Image.open(image_path) as im:sizes.append(min(2200,round(im.height*width/im.width)))
         height=max(sizes)+180
         card=Image.new('RGB',(2400,height),bg);draw=ImageDraw.Draw(card)
-        title=lookup[theme,name,'desktop']['title']
+        title=name.replace('-', ' ').title() if args.kind == 'pages' else lookup[theme,name,'desktop']['title']
         draw.text((40,24),title[:85],font=font(38,True),fill=fg)
         draw.text((40,76),name+'  |  '+theme.title(),font=font(24),fill=muted)
         draw.text((40,119),'DESKTOP · 1440 px viewport',font=font(22,True),fill=muted)
@@ -74,13 +76,14 @@ sheets=[]
 for theme in reports:
     for page,offset in enumerate(range(0,len(names),12),1):
         filename=f'contact-{theme}-{page:02}.png';sheets.append(filename)
-        sheet(theme,names[offset:offset+12],root/filename,'Homestead dialog contact sheets',f'{theme.title()} · page {page} of {math.ceil(len(names)/12)}')
+        sheet(theme,names[offset:offset+12],root/filename,f'Homestead {kind_label} contact sheets',f'{theme.title()} · page {page} of {math.ceil(len(names)/12)}')
 sample=[n for n in ('workload-edit','vm-edit','image-update-review','jobs-completed-data-moves','import-copy-review','add-harvester-host') if n in names]
-sheet('dark',sample,root/'sample-overview.png','Homestead · section rail and concise dialog copy','Selected samples')
+if args.kind == 'pages': sample=[n for n in ('containers','vms','node-page','settings-updates','settings-you','setup') if n in names]
+sheet('dark',sample,root/'sample-overview.png',f'Homestead · shared {kind_label} components','Selected samples')
 
 cards=[]
 for i,name in enumerate(names,1):
-    title=lookup['dark',name,'desktop']['title']; safe=html.escape(name);label=html.escape(title)
+    title=name.replace('-', ' ').title() if args.kind == 'pages' else lookup['dark',name,'desktop']['title']; safe=html.escape(name);label=html.escape(title)
     cards.append(f'''<article data-search="{safe} {label.lower()}"><header><span>{i:03}</span><h2>{label}</h2></header><p>{safe}</p>
     <a class="paired" href="cards/dark/{safe}.png" target="_blank"><img loading="lazy" src="cards/dark/{safe}.png" alt="{label}: desktop and phone" width="1200" height="900"></a>
     <footer><a class="desktop" href="dark/{safe}-desktop.png" target="_blank">Full desktop</a><a class="mobile" href="dark/{safe}-mobile.png" target="_blank">Full phone</a><a class="download" href="cards/dark/{safe}.png" download>Download pair</a></footer></article>''')
@@ -90,6 +93,7 @@ gallery='''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="view
 <p>Includes container updates, Jobs, settled data-move history from PR #206, forms, recovery and blocked states. Click a pair for the full card; use the links for original screenshots.</p>
 <nav><input id="search" aria-label="Find a dialog" placeholder="Find a dialog or state…"><label>Theme <select id="theme"><option value="dark">Dark</option><option value="light">Light</option></select></label><a href="contact-sheets.zip" download>Download all contact sheets</a><span id="count"></span></nav><div id="grid">CARDS</div></main>
 <script>const articles=[...document.querySelectorAll('article')];document.querySelector('#search').oninput=e=>{const q=e.target.value.toLowerCase();articles.forEach(a=>a.hidden=!a.dataset.search.toLowerCase().includes(q));document.querySelector('#count').textContent=articles.filter(a=>!a.hidden).length+' shown';};document.querySelector('#theme').onchange=e=>{const t=e.target.value;articles.forEach(a=>{const name=a.querySelector('p').textContent;a.querySelector('img').src=`cards/${t}/${name}.png`;a.querySelector('.paired').href=`cards/${t}/${name}.png`;a.querySelector('.download').href=`cards/${t}/${name}.png`;a.querySelector('.desktop').href=`${t}/${name}-desktop.png`;a.querySelector('.mobile').href=`${t}/${name}-mobile.png`;});};document.querySelector('#count').textContent=articles.length+' shown';</script></html>'''
+if args.kind == 'pages': gallery=gallery.replace('dialog','page')
 (root/'index.html').write_text(gallery.replace('COUNT',str(len(names))).replace('SHOTS',str(len(names)*4)).replace('CARDS','\n'.join(cards)),encoding='utf-8')
 with zipfile.ZipFile(root/'contact-sheets.zip','w',compression=zipfile.ZIP_DEFLATED,compresslevel=2) as z:
     for name in sheets:z.write(root/name,name)

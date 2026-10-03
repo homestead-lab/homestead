@@ -1049,9 +1049,7 @@ async function viewImages() {
   const all = d.images.filter(i => !q || i.name.toLowerCase().includes(q));
   const hidden = all.filter(i => core(i.name)).length;
   const imgs = all.filter(i => STATE.showCoreImages || !core(i.name));
-  paint(`<div class="phead"><div><h2>Image cache</h2>
-      <p>${imgs.length} app images across ${d.nodes.length} nodes · ${d.protected || 0} kept (running, stopped or for rollback) · ${hidden && !STATE.showCoreImages ? `${hidden} Harvester/system images hidden` : `${d.distinct} total`} ${tip("Each node's containerd is asked for every image it holds every 15 minutes or so; images pulled since are added from what Kubernetes reports.")}</p></div>
-      <label class="switch"><input type="checkbox" ${STATE.showCoreImages ? "checked" : ""} onchange="STATE.showCoreImages=this.checked;viewImages()"> Show Harvester/system images</label></div>
+  paint(`${UI.pageHeader(`Image cache`, `${imgs.length} app images across ${d.nodes.length} nodes · ${d.protected || 0} kept (running, stopped or for rollback) · ${hidden && !STATE.showCoreImages ? `${hidden} Harvester/system images hidden` : `${d.distinct} total`} ${tip("Each node's containerd is asked for every image it holds every 15 minutes or so; images pulled since are added from what Kubernetes reports.")}`, `<label class="switch"><input type="checkbox" ${STATE.showCoreImages ? "checked" : ""} onchange="STATE.showCoreImages=this.checked;viewImages()"> Show Harvester/system images</label>`)}
     <div class="grid g3 statgrid" style="margin-bottom:18px">
       ${d.nodes.map(n => `<div class="card flat"><div class="ctitle" title="${esc(n.node)}">${esc(n.node)}</div>
         <div class="bignum" style="margin-top:8px">${n.total_gb}<span class="unit">GB</span></div>
@@ -1176,9 +1174,7 @@ window.prepullStop = async name => {
 /* ---------------- schedules ---------------- */
 async function viewSchedules() {
   const js = await api("/api/schedules");
-  paint(`<div class="phead"><div><h2>Schedules</h2>
-      <p>${js.length} scheduled job${js.length === 1 ? "" : "s"} · standard cron syntax</p></div>
-      <button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button></div>
+  paint(`${UI.pageHeader(`Schedules`, `${js.length} scheduled job${js.length === 1 ? "" : "s"} · standard cron syntax`, `<button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button>`)}
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="schedules" class="tbl stack"><thead><tr>
       <th>Name</th><th>Schedule</th><th>Image</th><th data-nosort>Last run</th><th>State</th><th></th></tr></thead><tbody>
       ${js.map(j => `<tr>
@@ -1255,12 +1251,10 @@ async function viewImport() {
   ]);
   STATE.data.classFacts = (await api("/api/storageclasses?facts=1").catch(() => ({}))).facts || {};
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
-  paint(`<div class="phead"><div><h2>Import</h2>
-      <p>Bring apps in from an Unraid or Docker server, or a Docker Compose file. VMs are imported under Virtual machines.</p></div>
-      <div class="row">${menuButton("＋ Import", [{ label: "From an Unraid or Docker server", icon: "import", run: "srcAdd()", need: "admin" },
+  paint(`${UI.pageHeader(`Import`, `Bring apps in from an Unraid or Docker server, or a Docker Compose file. VMs are imported under Virtual machines.`, `${menuButton("＋ Import", [{ label: "From an Unraid or Docker server", icon: "import", run: "srcAdd()", need: "admin" },
         { label: "From a Docker Compose file", icon: "box", run: "composeImport()", need: "operator" },
         // VM imports moved to their own page; this points there for a release or so.
-        { label: "A VM, from Unraid or a disk image", icon: "vm", run: "go('vmimport')", tip: "Now under Virtual machines › Import" }])}</div></div>
+        { label: "A VM, from Unraid or a disk image", icon: "vm", run: "go('vmimport')", tip: "Now under Virtual machines › Import" }])}`)}
 
     <div class="sec">Unraid and Docker servers ${tip("Containers on another server - Unraid, or any Linux host running Docker - with their settings and appdata. Homestead reaches the server over SSH.")}</div>
     ${srcs.length ? `<div class="grid g3">${srcs.map(importSourceCard).join("")}</div>

@@ -10,11 +10,11 @@ let HOMESTEAD_CHANNEL_SAVING = false;
 
 function homesteadChannelPicker() {
   const channel = STATE.data.appSettings?.updates?.channel || STATE.data.imageUpdates?.channel || "prod";
-  return `<div class="srows"><div class="srow"><div class="srow-l"><b>Release channel</b>
-      <div class="dim xs">Prod has stable releases. Dev has preview releases. Changing channel checks for a release; installation still needs your review.</div></div>
-    <div class="srow-c"><select aria-label="Homestead release channel" data-need="admin" onchange="homesteadChannelSave(this.value)" ${HOMESTEAD_CHANNEL_SAVING || !can("admin") ? "disabled" : ""}>
+  return `<div class="srows">${settingRow("Release channel",
+    "Prod has stable releases. Dev has preview releases. Changing channel checks for a release; installation still needs your review.",
+    `<select aria-label="Homestead release channel" data-need="admin" onchange="homesteadChannelSave(this.value)" ${HOMESTEAD_CHANNEL_SAVING || !can("admin") ? "disabled" : ""}>
       <option value="prod" ${channel === "prod" ? "selected" : ""}>Prod · stable</option>
-      <option value="dev" ${channel === "dev" ? "selected" : ""}>Dev · preview</option></select></div></div></div>`;
+      <option value="dev" ${channel === "dev" ? "selected" : ""}>Dev · preview</option></select>`)}</div>`;
 }
 
 window.homesteadChannelSave = async channel => {
@@ -254,10 +254,9 @@ window.homesteadUpdateCheck = async button => {
 function homesteadUpdateCardPaint() {
   const card = $("#homesteadUpdateCard");
   if (!card) return;
-  card.innerHTML = `<div class="ctitle">Homestead updates</div>
-    <div class="csub">Homestead's release and the helpers it runs are updated here, not with your apps
-      ${tip("The SMB and NFS servers and the object store moves use are part of Homestead: hidden with the platform on the Containers page, and updated from here. How updates are approved is under Settings › General.")}</div>
-    <div class="ui-stack">${homesteadUpdateBody(true)}</div>`;
+  card.innerHTML = UI.moduleHeader("Homestead updates", `Homestead and its built-in services
+    ${tip("Includes the SMB and NFS servers and the object store used for moves. Installation always requires review. Container update policy is also under Settings → Updates.")}`) +
+    `<div class="ui-stack">${homesteadUpdateBody(true)}</div>`;
   if (window.applyRole) applyRole();
   fleetUpdatesLoad();
 }

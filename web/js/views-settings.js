@@ -38,11 +38,7 @@ function settingsTab(pick) {
     try { localStorage.setItem("homestead.settings.tab", section); } catch (e) { /* this visit only */ }
     // Asked for: open it, on a phone as well, where the list comes first.
     STATE.settingsOpen = true;
-    const layout = $(".settings-layout");
-    if (layout) layout.dataset.open = "1";
-    const grid = $(".settings-grid");
-    if (grid) grid.dataset.tab = section;
-    $$(".settings-nav button").forEach(b => { b.classList.toggle("on", b.dataset.tab === section); b.setAttribute("aria-selected", b.dataset.tab === section); });
+    UI.selectWorkspace($(".settings-layout"), section, {gridSelector:".settings-grid"});
     if (typeof window !== "undefined" && window.scrollPageTop) window.scrollPageTop();
     return section;
   }
@@ -61,8 +57,7 @@ window.settingsTab = settingsTab;
 /* A phone shows the list of sections first; back returns to it. */
 window.settingsBack = () => {
   STATE.settingsOpen = false;
-  const layout = $(".settings-layout");
-  if (layout) layout.dataset.open = "0";
+  UI.selectWorkspace($(".settings-layout"), "");
   window.scrollPageTop();
 };
 
@@ -90,32 +85,26 @@ async function viewSettings() {
     <td><span class="${roleClass(u.role)} rolechip">${esc(u.role)}</span></td><td class="dim xs mono">${esc(u.last_login || "never")}</td></tr>`).join("");
 
   const tab = settingsTab();
-  paint(`<div class="phead"><div><h2>Settings</h2><p>Cluster policy, hardware, access, and installation information</p></div></div>
-    <div class="settings-layout" data-open="${STATE.settingsOpen ? 1 : 0}">
-    <nav class="settings-nav" role="tablist" aria-label="Settings sections">${SETTINGS_SECTIONS.map(([id, label, sub, , group], i) =>
-      `${i === 0 || SETTINGS_SECTIONS[i - 1][4] !== group ? `<div class="settings-nav-group">${esc(group)}</div>` : ""}<button type="button" role="tab" data-tab="${id}" class="${id === tab ? "on" : ""}" aria-selected="${id === tab}" onclick="settingsGo(${jsq(id)})"><span><b>${esc(label)}</b><small>${esc(sub)}</small></span><i aria-hidden="true">›</i></button>`).join("")}</nav>
-    <div class="settings-main">
-    <button type="button" class="settings-back" onclick="settingsGo('')">‹ Back to Settings</button>
-    <div class="settings-grid" data-tab="${tab}">
-      <section class="card flat settings-wide" data-tab="you"><div class="settings-card-head"><div><div class="ctitle">Appearance</div>
-        <div class="csub">This browser only; it changes as you choose</div></div></div>
+  paint(`${UI.pageHeader(`Settings`, `Cluster policy, hardware, access, and installation information`, ``)}
+    ${UI.workspace(UI.workspaceNav(SETTINGS_SECTIONS.map(([key,label,description,,group]) => ({key,label,descriptionHtml:esc(description),group})),
+      {label:"Settings sections",selected:tab,onSelect:key => `settingsGo(${jsArg(key)})`}),
+      UI.settingsGrid(`
+      ${UI.settingsCard(`${UI.moduleHeader(`Appearance`, `This browser only; it changes as you choose`, ``)}
         <div class="srows">
           ${settingRow("Theme", "", `<div class="seg appearance-seg" id="optTheme"><button type="button" class="opt" data-v="dark">Dark</button><button type="button" class="opt" data-v="light">Light</button><button type="button" class="opt" data-v="auto">Auto</button></div>`)}
           ${settingRow("Background", "What the glass blurs behind it", `<div class="seg appearance-seg" id="optBg"><button type="button" class="opt" data-v="soft">Soft</button><button type="button" class="opt" data-v="gold">Gold</button><button type="button" class="opt" data-v="plain">Plain</button></div>`)}
           ${settingRow("Glass blur", "How frosted the panels are", `<input type="range" class="rng" id="optBlur" min="0" max="60" step="2"><span class="dim small mono"><span id="blurVal"></span>px</span>`)}
           ${settingRow("Motion", "Animated data flow along connectors", `<div class="seg appearance-seg" id="optMotion"><button type="button" class="opt" data-v="on">On</button><button type="button" class="opt" data-v="off">Reduced</button></div>`)}
           ${settingRow("Refresh every", "Pages patch themselves in place", `<input type="range" class="rng" id="optRefresh" min="5" max="60" step="5"><span class="dim small mono"><span id="refreshVal"></span>s</span>`)}
-        </div></section>
-      <section class="card flat settings-wide" data-tab="you"><div class="settings-card-head"><div><div class="ctitle">Your account</div>
-        <div class="csub">Signed in as ${esc(ME || "—")} · ${esc(ROLE || "viewer")}</div></div></div>
+        </div>`, {tab:`you`})}
+      ${UI.settingsCard(`${UI.moduleHeader(`Your account`, `Signed in as ${esc(ME || "—")} · ${esc(ROLE || "viewer")}`, ``)}
         <div class="srows">
           ${settingRow("Password", "", '<button class="btn sm" onclick="pwChange()">Change</button>')}
           ${settingRow("Sign out everywhere", "Every session of yours, on every device", '<button class="btn sm" onclick="signOutEverywhere()">Sign out everywhere</button>')}
           ${settingRow("Sign out", "This browser", '<button class="btn sm danger" onclick="doLogout()">Sign out</button>')}
-        </div><div class="dim xs" style="margin-top:8px">${sessionSummary(AUTH_STATE)}</div></section>
-      <section class="card flat settings-wide" data-tab="health" data-save="app">
-        <div class="settings-card-head"><div><div class="ctitle">Health thresholds</div><div class="csub">When bars and node cards turn amber and red, for everyone</div></div>
-          ${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}</div>
+        </div><div class="dim xs" style="margin-top:8px">${sessionSummary(AUTH_STATE)}</div>`, {tab:`you`})}
+      ${UI.settingsCard(`
+        ${UI.moduleHeader(`Health thresholds`, `When bars and node cards turn amber and red, for everyone`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
         <div class="threshold-grid">
           ${thresholdEditor("cpu", "CPU utilisation", "%", "Sustained node CPU pressure", thresholds.cpu)}
           ${thresholdEditor("memory", "Memory utilisation", "%", "Allocated node RAM pressure", thresholds.memory)}
@@ -123,12 +112,10 @@ async function viewSettings() {
           ${thresholdEditor("temperature", "CPU temperature", "°C", "Host thermal warning", thresholds.temperature)}
         </div>
         <div class="note"><b>Warning</b> changes the metric and node card to yellow. <b>Critical</b> changes them to red. A node uses the most severe result across CPU, memory, disk, and temperature.</div>
-      </section>
+      `, {tab:`health`, save:`app`})}
 
-      <section class="card flat settings-wide" data-tab="health" data-save="app">
-        <div class="settings-card-head"><div><div class="ctitle">Drive health</div>
-          <div class="csub">SMART warnings shown on node cards and in cluster health</div></div>
-          ${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}</div>
+      ${UI.settingsCard(`
+        ${UI.moduleHeader(`Drive health`, `SMART warnings shown on node cards and in cluster health`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
         <div class="threshold-grid">
           ${thresholdEditor("drive_temperature", "Drive temperature", "°C", "SATA, SAS, and NVMe temperature", smart.temperature)}
           <div class="threshold-card"><div><b>Media counters</b><div class="dim xs">Alert when raw drive counters reach these values</div></div>
@@ -140,12 +127,10 @@ async function viewSettings() {
         </div>
         <label class="switch" style="margin-top:14px"><input id="set_smart_notify" type="checkbox" ${smart.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}> Include SMART failures and threshold breaches in cluster health notifications</label>
         <div class="note"><b>Device differences are preserved.</b> NVMe reports media errors; ATA disks report reallocated, pending, and uncorrectable sectors. Missing counters are shown as unsupported, not zero.</div>
-      </section>
+      `, {tab:`health`, save:`app`})}
 
-      <section class="card flat settings-wide" data-tab="updates" data-save="app">
-        <div class="settings-card-head"><div><div class="ctitle">Container updates</div>
-          <div class="csub">When Homestead looks for newer images, and when a reviewed rollout may start</div></div>
-          ${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}</div>
+      ${UI.settingsCard(`
+        ${UI.moduleHeader(`Container updates`, `When Homestead looks for newer images, and when a reviewed rollout may start`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
         <div class="srows">
           ${settingRow(`Policy ${tip("Notify only blocks installs. Approval required permits a reviewed manual rollout. Maintenance window permits reviewed rollouts only during the window. Major releases are never picked on their own, and every install is reviewed.")}`, "",
             `<select id="set_update_policy" ${can("admin") ? "" : "disabled"}>
@@ -158,55 +143,50 @@ async function viewSettings() {
           ${settingRow("Update window", esc(updateWindowText(maintenance)) + (updates.policy === "maintenance_window" ? "" : " - used with the maintenance-window policy"),
             can("admin") ? '<button class="btn sm" onclick="updateWindowEdit()">Change</button>' : "")}
         </div>
-      </section>
+      `, {tab:`updates`, save:`app`})}
 
 
-      <section class="card flat" data-tab="hardware">
-        <div class="settings-card-head"><div><div class="ctitle">Hardware features</div><div class="csub">Reusable passthrough paths and automatic host detection</div></div>
-          <div class="row">${can("operator") ? '<button class="btn sm" onclick="hardwareRescan(this)" title="Look for devices plugged in since the last check">Rescan hosts</button>' : ""}
-          ${can("admin") ? '<button class="btn sm" onclick="hardwareFeatureSettings()">Manage</button>' : ""}</div></div>
+      ${UI.settingsCard(`
+        ${UI.moduleHeader(`Hardware features`, `Reusable passthrough paths and automatic host detection`, `${can("operator") ? '<button class="btn sm" onclick="hardwareRescan(this)" title="Look for devices plugged in since the last check">Rescan hosts</button>' : ""}
+          ${can("admin") ? '<button class="btn sm" onclick="hardwareFeatureSettings()">Manage</button>' : ""}`)}
         <div class="dim xs" style="margin:-4px 0 8px">Hosts are checked every 30 seconds, so a device plugged in later is found without a restart.</div>
         <div class="settings-list">${hardwareRows || '<div class="empty small">No hardware features configured.</div>'}</div>
-      </section>
+      `, {tab:`hardware`, wide:false})}
 
-      <section class="card flat" data-tab="access">
-        <div class="settings-card-head"><div><div class="ctitle">Users and roles</div><div class="csub">Who can sign in, and what each role may do</div></div>
-          ${can("admin") ? '<button class="btn sm pri" onclick="manageUsers()">Manage users</button>' : ""}</div>
+      ${UI.settingsCard(`
+        ${UI.moduleHeader(`Users and roles`, `Who can sign in, and what each role may do`, `${can("admin") ? '<button class="btn sm pri" onclick="manageUsers()">Manage users</button>' : ""}`)}
         <div class="role-legend">
           ${Object.entries(ROLE_COPY).map(([role, copy]) => `<div><span class="${roleClass(role)} rolechip">${role}</span><span class="dim xs">${esc(copy)}</span></div>`).join("")}
         </div>
         ${users.length ? `<div class="sec">Users</div><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>User</th><th>Role</th><th>Last sign-in</th></tr></thead><tbody>${userRows}</tbody></table></div>` : ""}
-      </section>
-      ${can("admin") ? '<section class="card flat" data-tab="access" id="apiKeysCard"><div class="empty small"><span class="spin2"></span>reading keys</div></section>' : ""}
+      `, {tab:`access`, wide:false})}
+      ${can("admin") ? UI.settingsCard('<div class="empty small"><span class="spin2"></span>reading keys</div>', {tab:"access",id:"apiKeysCard",wide:false}) : ""}
 
       ${pwaCard()}
 
       ${ipamUnifiCard()}
 
-      <section class="card flat settings-wide" data-tab="mqtt" id="mqttCard"></section>
-      <section class="card flat settings-wide" data-tab="fleet" id="fleetCard"><div class="empty small"><span class="spin2"></span> asking each cluster</div></section>
-      <section class="card flat settings-wide" data-tab="fleet" id="fleetMovesCard" hidden></section>
-      <section class="card flat settings-wide" data-tab="cluster" id="addonsCard" hidden></section>
-      <section class="card flat settings-wide" data-tab="cluster" id="lhSettingsCard" data-save="lh"><div class="empty small"><span class="spin2"></span>reading Longhorn</div></section>
-      <section class="card flat settings-wide" data-tab="cluster" id="storageClassesCard" hidden></section>
+      ${UI.settingsCard(``, {tab:`mqtt`, id:`mqttCard`})}
+      ${UI.settingsCard(`<div class="empty small"><span class="spin2"></span> asking each cluster</div>`, {tab:`fleet`, id:`fleetCard`})}
+      ${UI.settingsCard(``, {tab:`fleet`, id:`fleetMovesCard`, hidden:true})}
+      ${UI.settingsCard(``, {tab:`cluster`, id:`addonsCard`, hidden:true})}
+      ${UI.settingsCard(`<div class="empty small"><span class="spin2"></span>reading Longhorn</div>`, {tab:`cluster`, id:`lhSettingsCard`, save:`lh`})}
+      ${UI.settingsCard(``, {tab:`cluster`, id:`storageClassesCard`, hidden:true})}
 
-      <section class="card flat settings-wide" data-tab="connections">
-        <div class="settings-card-head"><div><div class="ctitle">App Store catalogue</div>
-          <div class="csub">Where the App Store's listings come from: any feed in the Community Applications format</div></div></div>
+      ${UI.settingsCard(`
+        ${UI.moduleHeader(`App Store catalogue`, `Where the App Store's listings come from: any feed in the Community Applications format`, ``)}
         ${serviceRow(STATE.data.appSettings?.catalog_url ? "Your own feed" : "Community Applications", '<span class="pill neutral">in use</span>',
           esc(STATE.data.appSettings?.catalog_url || "The public feed"), can("admin") ? actionBar([{ label: "Change", run: "catalogEdit()" }]) : "")}
-      </section>
+      `, {tab:`connections`})}
 
-      <section class="card flat settings-wide" id="nsCard" data-tab="namespaces">
-        <div class="settings-card-head"><div><div class="ctitle">Namespaces</div>
-          <div class="csub">Where apps live. Harvester, Rancher and Kubernetes keep their own, which are hidden here and in every picker.</div></div>
-          ${can("admin") ? `<div class="row ns-new"><input id="nsName" placeholder="new-namespace" maxlength="63" autocomplete="off"
-            onkeydown="if(event.key==='Enter')namespaceCreate()"><button class="btn sm pri" onclick="namespaceCreate()">Create</button></div>` : ""}</div>
+      ${UI.settingsCard(`
+        ${UI.moduleHeader(`Namespaces`, `Where apps live. Harvester, Rancher and Kubernetes keep their own, which are hidden here and in every picker.`, `${can("admin") ? `<div class="row ns-new"><input id="nsName" placeholder="new-namespace" maxlength="63" autocomplete="off"
+            onkeydown="if(event.key==='Enter')namespaceCreate()"><button class="btn sm pri" onclick="namespaceCreate()">Create</button></div>` : ""}`)}
         <div class="ns-body"><div class="empty small"><span class="spin2"></span></div></div>
-      </section>
+      `, {tab:`namespaces`, id:`nsCard`})}
 
-      <section class="card flat settings-wide" data-tab="about" data-save="app">
-        <div class="settings-card-head"><div><div class="ctitle">About this installation</div><div class="csub">What runs here, and what it is called</div></div></div>
+      ${UI.settingsCard(`
+        ${UI.moduleHeader(`About this installation`, `What runs here, and what it is called`, ``)}
         <div class="srows">${settingRow(`Site name ${tip("Shown under the Homestead wordmark and at the foot of the page; leave it blank to show nothing.")}`, "",
           `<input type="text" id="set_site_name" maxlength="40" placeholder="e.g. Main site" value="${esc(STATE.data.appSettings?.site_name || "")}" ${can("admin") ? "" : "disabled"}>`)}</div>
         <div class="about-grid">
@@ -221,25 +201,23 @@ async function viewSettings() {
           ${permissionsCell(info.permissions)}
         </div>
         <div class="row" style="margin-top:12px"><button class="btn sm" onclick="welcomeCheck(true)">Open setup guide</button></div>
-      </section>
+      `, {tab:`about`, save:`app`})}
 
-      <section class="card flat settings-wide" data-tab="updates" id="homesteadUpdateCard"></section>
-      <section class="card flat settings-wide" data-tab="updates" id="settingsComponents">
-        <div class="settings-card-head"><div><div class="ctitle">Platform versions</div></div></div>
+      ${UI.settingsCard(``, {tab:`updates`, id:`homesteadUpdateCard`})}
+      ${UI.settingsCard(`
+        ${UI.moduleHeader(`Platform versions`, ``, ``)}
         <div class="empty small"><span class="spin2"></span> checking platform versions</div>
-      </section>
-      <section class="card flat settings-wide" data-tab="updates" id="settingsHostUpdates">
-        <div class="settings-card-head"><div><div class="ctitle">Host updates</div></div></div>
+      `, {tab:`updates`, id:`settingsComponents`})}
+      ${UI.settingsCard(`
+        ${UI.moduleHeader(`Host updates`, ``, ``)}
         <div class="empty small"><span class="spin2"></span> reading host update status</div>
-      </section>
+      `, {tab:`updates`, id:`settingsHostUpdates`})}
       ${window.troubleshootingCards ? troubleshootingCards() : ""}
-      <section class="card flat settings-wide" data-tab="about" id="configCard">${window.configCardHtml ? configCardHtml() : ""}</section>
-      <section class="card flat settings-wide" data-tab="about" id="selfHealthCard"><div class="empty small"><span class="spin2"></span> checking Homestead</div></section>
-      <section class="card flat settings-wide" data-tab="about" id="replicaCard">${STATE.data.replicaHtml || ""}</section>
-    </div>
-    <div class="savebar" id="settingsSaveBar" hidden><span id="settingsSaveMsg"></span>
-      <button class="btn" type="button" onclick="settingsDiscard()">Discard</button><button class="btn pri" type="button" onclick="settingsSave(this)">Save</button></div>
-    </div></div>`);
+      ${UI.settingsCard(`${window.configCardHtml ? configCardHtml() : ""}`, {tab:`about`, id:`configCard`})}
+      ${UI.settingsCard(`<div class="empty small"><span class="spin2"></span> checking Homestead</div>`, {tab:`about`, id:`selfHealthCard`})}
+      ${UI.settingsCard(`${STATE.data.replicaHtml || ""}`, {tab:`about`, id:`replicaCard`})}
+    `, tab) + UI.saveBar({id:"settingsSaveBar",messageId:"settingsSaveMsg",save:"settingsSave(this)",discard:"settingsDiscard()"}),
+      {open:STATE.settingsOpen,backLabel:"Back to Settings",back:"settingsGo('')"})}`);
   STATE.settingsDirty = new Set();
   if (window.bindAppearance) bindAppearance();
   pwaPaint();
@@ -273,11 +251,9 @@ async function replicasPaint() {
   const note = r.desired > 1 && r.spread_nodes < Math.min(r.desired, ready)
     ? `<div class="note">${ready} copies are ready but only on ${r.spread_nodes} node${r.spread_nodes === 1 ? "" : "s"}: spreading is a preference, so the scheduler doubled up where it had to. They move apart as nodes free up.</div>`
     : r.desired === 1 ? `<div class="note">One copy: if its node fails, Homestead is away until Kubernetes starts it elsewhere - about a minute. Two copies on different nodes keep it answering.</div>` : "";
-  STATE.data.replicaHtml = `<div class="settings-card-head between"><div><div class="ctitle">Redundancy</div>
-      <div class="csub">How many copies of Homestead run. They share its data volume; one, the leader, raises alerts and advances moves, and another takes over within seconds if it stops.</div></div>
-      ${can("admin") ? `<div class="row"><select id="rep_count">${Array.from({ length: r.max }, (_, i) => i + 1).map(n =>
+  STATE.data.replicaHtml = `${UI.moduleHeader(`Redundancy`, `How many copies of Homestead run. They share its data volume; one, the leader, raises alerts and advances moves, and another takes over within seconds if it stops.`, `${can("admin") ? `<div class="row"><select id="rep_count">${Array.from({ length: r.max }, (_, i) => i + 1).map(n =>
         `<option value="${n}" ${n === r.desired ? "selected" : ""} ${n > 1 && !r.data?.shareable && n !== r.desired ? "disabled" : ""}>${n} cop${n === 1 ? "y" : "ies"}</option>`).join("")}</select>
-        <button class="btn sm pri" onclick="replicasSave()">Apply</button></div>` : ""}</div>
+        <button class="btn sm pri" onclick="replicasSave()">Apply</button></div>` : ""}`)}
     ${r.data && !r.data.shareable ? `<div class="note ${r.desired > 1 ? "bad" : ""}" style="margin-top:10px"><b>More than one copy needs a volume every node can mount.</b> ${esc(r.data.reason)}.
       ${r.data.candidates.length ? "" : "<div>This cluster has no storage class that shares a volume between nodes; create one under Volumes, without live migration.</div>"}</div>` : ""}
     ${r.data?.pvc ? `<div class="row" style="margin-top:10px;flex-wrap:wrap;gap:8px"><span class="small">Its data: <span class="mono">${esc(r.data.pvc)}</span> on <b>${esc(r.data.storage_class || "?")}</b></span>
@@ -695,9 +671,9 @@ window.settingsLeave = async () => {
 };
 window.settingsGo = async id => {
   if (!(await settingsLeave())) return;
-  if (!id) { settingsBack(); resetPaint(); viewSettings(); return; }
+  if (!id) { settingsBack(); resetPaint(); return viewSettings(); }
   settingsTab(id);
-  resetPaint(); viewSettings();
+  resetPaint(); return viewSettings();
 };
 
 /* ---------------- dialogs for settings with many fields ---------------- */
@@ -779,16 +755,14 @@ async function selfHealthPaint() {
   if (!host) return;
   let h;
   try { h = await api("/api/self/health"); }
-  catch (e) { host.innerHTML = `<div class="ctitle">Homestead's health</div><div class="note bad">${esc(e.message)}</div>`; return; }
+  catch (e) { host.innerHTML = UI.moduleHeader("Homestead's health") + UI.callout("bad", "Status unavailable", esc(e.message)); return; }
   const admin = can("admin"), probe = h.probe || {}, samba = h.samba || {}, pods = h.replicas?.pods || [];
   STATE.data.sambaInstalled = !!samba.installed;
   const row = (label, tone, word, detail = "", action = "") => `<div class="health-row"><span class="tag ${tone}">${esc(word)}</span>
     <div><b>${esc(label)}</b>${detail ? `<div class="dim xs">${detail}</div>` : ""}</div>${action ? `<div class="row">${action}</div>` : ""}</div>`;
   const problems = h.loops.filter(l => ["failing", "late"].includes(l.state)).length + (h.api.ok ? 0 : 1)
     + (probe.installed && probe.ready < probe.desired ? 1 : 0) + (samba.enabled && samba.ready < samba.desired ? 1 : 0);
-  host.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Homestead's health</div>
-      <div class="csub">What works in the background, checked every 15 seconds while this is open</div></div>
-      <span class="pill ${problems ? "warn" : "ok"}">${problems ? `${problems} to look at` : "all well"}</span></div>
+  host.innerHTML = `${UI.moduleHeader(`Homestead's health`, `What works in the background, checked every 15 seconds while this is open`, `<span class="pill ${problems ? "warn" : "ok"}">${problems ? `${problems} to look at` : "all well"}</span>`)}
     <div class="health-list">
       ${row("Kubernetes API", h.api.ok ? (h.api.ms > 2000 ? "warn" : "ok") : "bad", h.api.ok ? `${h.api.ms} ms` : "no answer",
         h.api.ok ? (h.api.ms > 2000 ? "Slow to answer: pages and actions wait on it." : "Answering promptly.") : esc(h.api.error || ""))}

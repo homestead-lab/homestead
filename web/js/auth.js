@@ -387,10 +387,8 @@ window.apiKeysPaint = async () => {
       <td data-label="Expires" class="small">${esc(keyUntil(k.expires))}</td>
       <td data-label="Last used" class="small">${k.last_used ? `${esc(agoText(k.last_used))}${k.last_ip ? `<div class="dim xs mono">${esc(k.last_ip)}</div>` : ""}` : '<span class="dim">never</span>'}</td>
       <td>${actionBar([{ label: "Revoke", run: `apiKeyRevoke(${jsq(k.id)},${jsq(k.name)})`, danger: true }], { shown: 1 })}</td></tr>`).join("");
-  card.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">API keys</div>
-      <div class="csub">For Home Assistant, scripts and AI agents. Each key expires, can do only what it is given, and works only on the API</div></div>
-      <div class="row"><a class="btn sm" href="${API_DOCS}" target="_blank" rel="noopener">API guide</a>
-        <button class="btn sm pri" onclick="apiKeyNew()">＋ New key</button></div></div>
+  card.innerHTML = `${UI.moduleHeader(`API keys`, `For Home Assistant, scripts and AI agents. Each key expires, can do only what it is given, and works only on the API`, `<a class="btn sm" href="${API_DOCS}" target="_blank" rel="noopener">API guide</a>
+        <button class="btn sm pri" onclick="apiKeyNew()">＋ New key</button>`)}
     ${rows ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Key</th><th>May</th><th>Expires</th><th>Last used</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>` : '<div class="dim small">No keys yet.</div>'}
     <div class="dim xs" style="margin-top:8px">A key cannot manage users or keys, reach a host's shell, or change settings, whatever its scopes.

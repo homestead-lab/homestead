@@ -98,10 +98,8 @@ async function viewNetworking() {
       .join(" ").toLowerCase().includes(q)));
   const controller = data.controller;
   const orphans = services.filter(row => row.orphaned).length;
-  paint(`<div class="phead"><div><h2>Networking</h2>
-      <p>Addresses, listeners and the live path from your LAN to each workload</p></div>
-      <div class="row">${moreMenu([{ label: `${showSystem ? "Hide" : "Show"} system services`, icon: "layers", run: "networkToggleSystem()" }])}
-      <button class="btn pri" data-need="operator" onclick="networkExpose()">＋ Expose workload</button></div></div>
+  paint(`${UI.pageHeader(`Networking`, `Addresses, listeners and the live path from your LAN to each workload`, `${moreMenu([{ label: `${showSystem ? "Hide" : "Show"} system services`, icon: "layers", run: "networkToggleSystem()" }])}
+      <button class="btn pri" data-need="operator" onclick="networkExpose()">＋ Expose workload</button>`)}
     ${networkTabs("services")}
     ${baselineHtml(baseline, "network")}
     ${UI.guide("How addresses work here", `

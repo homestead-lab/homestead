@@ -28,8 +28,7 @@ function renderResources() {
   const filter = RES.q.toLowerCase();
   const kinds = RES.kinds.filter(x => !filter || [x.kind, x.resource, x.group, ...x.short].join(" ").toLowerCase().includes(filter));
   const groups = [...new Set(kinds.map(x => x.category))];
-  paint(`<div class="phead"><div><h2>Resources</h2><p>Every kind this cluster serves, ${RES.kinds.length} of them · the columns are the API server's own</p></div>
-      <div class="row"><button class="btn pri" data-need="admin" onclick="resCreate()">＋ Create from YAML</button></div></div>
+  paint(`${UI.pageHeader(`Resources`, `Every kind this cluster serves, ${RES.kinds.length} of them · the columns are the API server's own`, `<button class="btn pri" data-need="admin" onclick="resCreate()">＋ Create from YAML</button>`)}
     <div class="res-layout">
       <aside class="res-kinds card flat">
         <input class="res-filter" placeholder="Find a kind" value="${esc(RES.q)}" oninput="resFilter(this.value)">

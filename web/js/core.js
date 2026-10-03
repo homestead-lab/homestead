@@ -684,7 +684,7 @@ window.pagePlaceholder = pagePlaceholder;
 function pageSkeleton(view) {
   const bar = (width, height = 12) => `<span class="skel" style="width:${width};height:${height}px"></span>`;
   const repeat = (count, fn) => Array.from({ length: count }, (_, i) => fn(i)).join("");
-  const head = `<div class="phead"><div>${bar("min(280px,60vw)")}</div><div class="row skel-actions">${bar("84px", 32)}${bar("118px", 32)}</div></div>`;
+  const head = `${UI.pageHeader(``, ``, `${bar("84px", 32)}${bar("118px", 32)}`, {actionsClass:`skel-actions`, extraHtml:`${bar("min(280px,60vw)")}`})}`;
   const cards = (count, height) => `<div class="skel-grid">${repeat(count, () => `<div class="skel skel-card" style="height:${height}px"></div>`)}</div>`;
   const table = count => `<div class="card flat pad0 skel-table">${repeat(count, i => `<div class="skel-row">
       ${bar("30px", 30)}${bar(`${18 + (i * 7) % 12}%`)}${bar("9%")}${bar(`${20 + (i * 5) % 16}%`)}${bar("7%")}</div>`)}</div>`;

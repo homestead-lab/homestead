@@ -184,8 +184,7 @@ function osUpdatesUnavailableHtml() {
 window.osUpdatesCardPaint = async () => {
   const card = $("#settingsHostUpdates");
   if (!card) return;
-  const header = actions => `<div class="settings-card-head"><div><div class="ctitle">Host updates</div>
-    <div class="csub">Operating system packages, security updates and restarts</div></div><div class="row">${actions}</div></div>`;
+  const header = actions => `${UI.moduleHeader(`Host updates`, `Operating system packages, security updates and restarts`, `${actions}`)}`;
   try {
     const r = await api("/api/os-updates");
     if ($("#settingsHostUpdates") !== card) return;

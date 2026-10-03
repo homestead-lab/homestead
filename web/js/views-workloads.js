@@ -391,18 +391,14 @@ function renderWorkloads() {
   const updateButtons = `${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
     ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} check${updateErrors === 1 ? "" : "s"} failed</button>` : ""}`.trim();
   const deploy = '<button class="btn pri" data-need="operator" onclick="go(\'deploy\')">＋ Deploy</button>';
-  paint(`<div class="containers-page collection-page" data-collection="containers"><div class="phead">
-      <div><h2>Containers</h2><p>${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · ${platform.length
+  paint(`<div class="containers-page collection-page" data-collection="containers">${UI.pageHeader(`Containers`, `${rows.length} workload${rows.length === 1 ? "" : "s"}${q ? ` matching “${esc(q)}”` : ""}${group ? ` in ${esc(group === NO_GROUP ? "no group" : group)}` : ""} · ${platform.length
         ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="Homestead and the helpers it runs - updated under Settings › Updates - and KubeVirt, CDI and the like, run by their own operators and upgraded under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
-        : "system pods hidden"}${unchecked ? ` · <span data-tip="Marked ? in the list: stopped since Homestead started, so not yet compared with their registries">${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? " · images current" : ""}</p>
-        ${all.length ? workloadGroupBar(all, group) : ""}</div>
-      <div class="row"><span class="dim xs scanprogress" id="scanprogress"></span>${updateButtons}
+        : "system pods hidden"}${unchecked ? ` · <span data-tip="Marked ? in the list: stopped since Homestead started, so not yet compared with their registries">${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? " · images current" : ""}`, `<span class="dim xs scanprogress" id="scanprogress"></span>${updateButtons}
       ${layoutSwitch("containers", "renderWorkloads")}
       ${moreMenu([items[0],items[1],{label:layout === "cards" ? "Show as rows" : "Show as cards",run:`setViewLayout('containers','renderWorkloads',${jsq(layout === "cards" ? "rows" : "cards")})`},items[2]])}
-      ${deploy}</div></div>
-    <div class="collection-mobile-head"><div class="collection-mobile-toolbar">${workloadGroupSelect(all, group)}${workloadListOptions(platform, layout, items)}${deploy}</div>
-      <div class="collection-mobile-summary"><span>${rows.length} container${rows.length === 1 ? "" : "s"}</span>${updateButtons ? `<span aria-hidden="true">·</span>${updateButtons}` : ""}
-        ${unchecked ? `<span class="dim" data-tip="Stopped or still starting; not yet compared with their registries">· ${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? '<span class="dim">· images current</span>' : ""}</div></div>
+      ${deploy}`, {extraHtml:`${all.length ? workloadGroupBar(all, group) : ""}`})}
+    ${UI.collectionHeader(`${workloadGroupSelect(all, group)}${workloadListOptions(platform, layout, items)}${deploy}`, `<span>${rows.length} container${rows.length === 1 ? "" : "s"}</span>${updateButtons ? `<span aria-hidden="true">·</span>${updateButtons}` : ""}
+        ${unchecked ? `<span class="dim" data-tip="Stopped or still starting; not yet compared with their registries">· ${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? '<span class="dim">· images current</span>' : ""}`)}
 
     ${rows.length ? workloadSections(rows, layout, group)
       : `<div class="empty">${q || group ? "Nothing matches that search." : "Nothing deployed yet."}</div>`}</div>`);
@@ -1483,14 +1479,11 @@ async function viewDeploy(pre) {
   const vips = await vipChoices();
   const sharedVip = vips.shared || "";
   resetPaint();
-  paint(`<div class="phead"><div><h2>Deploy a container</h2>
-      <p>Run an independent workload or add a sidecar container to an existing pod</p></div>
-      <button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button></div>
+  paint(`${UI.pageHeader(`Deploy a container`, `Run an independent workload or add a sidecar container to an existing pod`, `<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>`)}
   <div class="split">
     <div class="card flat">
       ${DCFG.app_profile ? `<div class="app-profile ${esc(DCFG.app_profile.level || "review")}">
-        <div class="settings-card-head"><div><b>${esc(DCFG.app_profile.label || "Template guidance")}</b>
-          <div class="dim small">Compatibility guidance derived from ports, paths, variables, and runtime access</div></div><span class="pill ${DCFG.app_profile.level === "dependency" ? "warn" : "info"}">${esc(DCFG.app_profile.intent || "template")}</span></div>
+        ${UI.moduleHeader(`${esc(DCFG.app_profile.label || "Template guidance")}`, `Compatibility guidance derived from ports, paths, variables, and runtime access`, `<span class="pill ${DCFG.app_profile.level === "dependency" ? "warn" : "info"}">${esc(DCFG.app_profile.intent || "template")}</span>`)}
         ${(DCFG.app_profile.notes || []).map(note => `<div class="profile-note">✓ ${esc(note)}</div>`).join("")}
         ${(DCFG.app_profile.dependencies || []).length ? `<div class="dependency-list">${DCFG.app_profile.dependencies.map(dep => `<div class="dependency-row stranded"><span>${esc(dep.name)}</span><b>${dep.managed ? "managed" : "deploy separately"}</b></div>`).join("")}</div>` : ""}
       </div>` : ""}
@@ -1961,10 +1954,8 @@ function storeSection(mode, apps, total) {
 
 async function viewStore() {
   resetPaint();
-  paint(`<div class="phead">
-      <div><h2>Community catalogue</h2><p>Third-party Community Applications templates adapted into reviewed Kubernetes workloads</p></div>
-      <div class="row store-search"><input class="search" id="s_q" placeholder="plex, nextcloud, jellyfin…" value="${esc(STATE.q)}" style="width:260px;padding-left:16px">
-      <button class="btn pri" onclick="storeSearch()">Search</button></div></div>
+  paint(`${UI.pageHeader(`Community catalogue`, `Third-party Community Applications templates adapted into reviewed Kubernetes workloads`, `<input class="search" id="s_q" placeholder="plex, nextcloud, jellyfin…" value="${esc(STATE.q)}" style="width:260px;padding-left:16px">
+      <button class="btn pri" onclick="storeSearch()">Search</button>`, {actionsClass:`store-search`})}
     <div class="store-browse-head"><div class="seg store-modes" id="s_modes">
       ${Object.entries(STORE_MODES).map(([mode, [label]]) => `<button data-mode="${mode}" class="${STORE_MODE === mode ? "on" : ""}" onclick="storeBrowse(${jsq(mode)})">${label}</button>`).join("")}
     </div></div>

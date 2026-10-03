@@ -1,4 +1,4 @@
-/* Dialog components.
+/* Shared application components.
 
    Every dialog is built from these, so they all read the same way and all
    work on a phone. docs/design.md says when to use which; in short:
@@ -24,6 +24,10 @@
 
    and for pages:
 
+     UI.pageHeader  page title, summary and actions
+     UI.moduleHeader shared card title, summary and actions
+     UI.settingsCard Settings topic, save scope and content
+     UI.workspace   section navigation and responsive page content
      UI.stats       a row of stat cards: a figure each, two to a row on a phone
      UI.guide       how a page works, collapsed - in place of notes at its top
 
@@ -145,8 +149,48 @@ const UI = (() => {
   /* How a page works, for whoever needs it: closed until opened. */
   const guide = (summary, bodyHtml) => `<details class="ui-guide"><summary>${text(summary)}</summary><div class="ui-guide-body">${bodyHtml}</div></details>`;
 
+  /* Page and module headings use explicit HTML slots, like section/facts.
+     Escape data at the call site; IDs and option labels are plain text. */
+  const pageHeader = (titleHtml, descriptionHtml = "", actionsHtml = "", { extraHtml = "", descriptionAttrs = "", actionsClass = "" } = {}) =>
+    `<div class="phead"><div><h2>${titleHtml}</h2>${descriptionHtml || descriptionAttrs ? `<p ${descriptionAttrs}>${descriptionHtml}</p>` : ""}${extraHtml}</div>${actionsHtml ? `<div class="row page-actions${actionsClass ? ` ${text(actionsClass)}` : ""}">${actionsHtml}</div>` : ""}</div>`;
+  const moduleHeader = (titleHtml, descriptionHtml = "", actionsHtml = "", { extraHtml = "", actionsClass = "" } = {}) =>
+    `<div class="settings-card-head"><div><div class="ctitle">${titleHtml}</div>${descriptionHtml ? `<div class="csub">${descriptionHtml}</div>` : ""}${extraHtml}</div>${actionsHtml ? `<div class="row module-actions${actionsClass ? ` ${text(actionsClass)}` : ""}">${actionsHtml}</div>` : ""}</div>`;
+  const settingsCard = (bodyHtml, { tab, id = "", save = "", wide = true, hidden = false } = {}) =>
+    `<section class="card flat${wide ? " settings-wide" : ""}" data-tab="${text(tab)}"${id ? ` id="${text(id)}"` : ""}${save ? ` data-save="${text(save)}"` : ""}${hidden ? " hidden" : ""}>${bodyHtml}</section>`;
+  const settingsGrid = (bodyHtml, tab) => `<div class="settings-grid" data-tab="${text(tab)}">${bodyHtml}</div>`;
+  const saveBar = ({ id, messageId, save, discard, hidden = true }) =>
+    `<div class="savebar" id="${text(id)}"${hidden ? " hidden" : ""}><span id="${text(messageId)}" role="status"></span>${button("Discard", discard)}${button("Save", save, {kind:"pri"})}</div>`;
+  const collectionHeader = (controlsHtml, summaryHtml) => `<div class="collection-mobile-head"><div class="collection-mobile-toolbar">${controlsHtml}</div><div class="collection-mobile-summary">${summaryHtml}</div></div>`;
+  const workspace = (navigationHtml, bodyHtml, { id = "", open = false, backLabel = "", back = "", guide = false, pickerHtml = "", contentId = "" } = {}) =>
+    `<div class="settings-layout${guide ? " setup-layout" : ""}"${id ? ` id="${text(id)}"` : ""}${guide ? "" : ` data-open="${open ? 1 : 0}"`}>${pickerHtml}${navigationHtml}<div class="settings-main"${contentId ? ` id="${text(contentId)}"` : ""}>${backLabel ? `<button type="button" class="settings-back" onclick="${text(back)}">‹ ${text(backLabel)}</button>` : ""}${bodyHtml}</div></div>`;
+  const workspaceNav = (items, { label, selected, onSelect, guide = false } = {}) =>
+    `<nav class="settings-nav${guide ? " setup-nav" : ""}"${guide ? "" : ' role="tablist" aria-orientation="vertical"'} aria-label="${text(label)}">${items.map((item, i) =>
+      `${item.group && item.group !== items[i - 1]?.group ? `<div class="${guide ? "setup-chapter" : "settings-nav-group"}">${text(item.group)}</div>` : ""}<button type="button"${guide ? "" : ` role="tab" aria-selected="${item.key === selected}" tabindex="${item.key === selected ? 0 : -1}"`} data-${guide ? "step" : "tab"}="${text(item.key)}" class="${guide ? "setup-step" : ""}${item.key === selected ? " on" : ""}"${item.ariaLabel ? ` aria-label="${text(item.ariaLabel)}"` : ""} onclick="${text(`UI.navigateWorkspace(this, () => ${onSelect(item.key)})`)}">${item.markerHtml || ""}<span>${guide ? text(item.label) : `<b>${text(item.label)}</b>${item.descriptionHtml ? `<small>${item.descriptionHtml}</small>` : ""}`}</span>${guide ? "" : '<i aria-hidden="true">›</i>'}</button>`).join("")}</nav>`;
+  const navigateWorkspace = async (button, run) => {
+    const nav = button.closest(".settings-nav"), label = nav?.getAttribute("aria-label");
+    const key = button.dataset.tab ?? button.dataset.step;
+    const restoreFocus = document.activeElement === button;
+    await run();
+    if (!restoreFocus) return;
+    const current = [...document.querySelectorAll(".settings-nav")].find(el => el.getAttribute("aria-label") === label);
+    const selected = [...(current?.querySelectorAll("button.on") || [])].find(el => (el.dataset.tab ?? el.dataset.step) === key);
+    selected?.focus({preventScroll:true});
+  };
+  const selectWorkspace = (root, key, { gridSelector = "", paneSelector = "" } = {}) => {
+    if (!root) return;
+    root.dataset.open = key ? "1" : "0";
+    if (!key) return;
+    if (gridSelector) { const grid = root.querySelector(gridSelector); if (grid) grid.dataset.tab = key; }
+    if (paneSelector) root.querySelectorAll(paneSelector).forEach(pane => { pane.hidden = pane.dataset.pane !== key; });
+    root.querySelectorAll('.settings-nav [data-tab]').forEach(item => {
+      const selected = item.dataset.tab === key;
+      item.classList.toggle("on", selected); item.setAttribute("aria-selected", String(selected)); item.tabIndex = selected ? 0 : -1;
+    });
+  };
+
   return { lead, callout, section, facts, checklist, steps, progress, meter, table, more, ack,
     fields, field, chip, button, actions, cancel, stats, guide,
+    pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,
     selectSection: selectDialogSection, masterDetail: dialogMasterDetail };
 })();
@@ -488,12 +532,12 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
       dialogDisclosureState.set(dialogDisclosureKey(detail), detail.open);
   }, true);
   document.addEventListener("keydown", event => {
-    const tab = event.target.closest?.('.dialog-rail [role="tab"]');
+    const tab = event.target.closest?.('.dialog-rail [role="tab"], .settings-nav [role="tab"]');
     if (!tab || !["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
     const tabs = [...tab.parentElement.querySelectorAll('[role="tab"]')], current = tabs.indexOf(tab);
     const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowDown" ? 1 : -1) + tabs.length) % tabs.length;
-    tabs[next].click(); tabs[next].focus();
+    tabs[next].focus(); tabs[next].click();
   });
   document.addEventListener("invalid", event => {
     if (event.target.closest?.("#mbody")) window.revealDialogField(event.target);

@@ -85,7 +85,7 @@ const SETUP_CHECKS = {
 function setupIntroHtml(ids, status) {
   const next = ids.find(id => ["attention", "todo"].includes(status[id])) || ids[0];
   return `<section class="card flat setup-card" data-step="intro">
-    <div class="settings-card-head"><div><div class="ctitle">Welcome to Homestead</div><div class="csub">A guide to your cluster and your own preferences</div></div></div>
+    ${UI.moduleHeader(`Welcome to Homestead`, `A guide to your cluster and your own preferences`, ``)}
     ${UI.lead("Work through the basics, or pick a step from the list. Optional steps can be skipped and revisited later.")}
     ${UI.steps([
       { title: "Review the checks", detailHtml: "Automatic checks use cluster reports. Each step explains what is checked; some choices need your confirmation." },
@@ -411,17 +411,13 @@ async function viewSetup() {
   const wanted = new URLSearchParams(location.search).get("step");
   const open = ids.includes(wanted) ? wanted : "intro";
   const mark = (s, id) => `<span class="setup-mark ${s}${id === "appearance" && s === "done" ? " confirmed" : ""}" aria-hidden="true">${s === "done" ? "✓" : s === "attention" ? "!" : ""}</span>`;
-  const nav = `<button class="setup-step${open === "intro" ? " on" : ""}" data-step="intro" onclick="setupOpen('intro')">${mark("todo")}<span>Start here</span></button>` + chapters.map(([title, list], c) => `<div class="setup-chapter">${c + 1} · ${esc(title)}</div>${list.map(id =>
-    `<button class="setup-step${id === open ? " on" : ""}" data-step="${id}" aria-label="${esc(SETUP_STEPS[id].title + ': ' + setupStatusLabel(id, status[id], state.steps[id]))}" onclick="setupOpen(${jsq(id)})">${mark(status[id], id)}<span>${esc(SETUP_STEPS[id].title)}</span></button>`).join("")}`).join("");
-  paint(`<div class="phead"><div><h2>Setup</h2>
-      <p>${done} of ${ids.length} steps complete${state.admin ? "" : " · your preferences"}${state.completed ? " · guide completed" : ""}</p></div>
-      <div class="row"><span class="setup-meter" aria-hidden="true"><span style="width:${ids.length ? Math.round(done / ids.length * 100) : 0}%"></span></span>
-        ${actionBar([{ label: state.hidden || state.completed ? "Show reminders again" : "Don’t show again", run: `setupReminders(${!(state.hidden || state.completed)})` }])}</div></div>
-    <div class="settings-layout setup-layout" id="setupPage">
-      <label class="setup-picker">Setup step<select id="setupSelect" onchange="setupOpen(this.value)"><option value="intro"${open === "intro" ? " selected" : ""}>Start here</option>${chapters.map(([title, list]) => `<optgroup label="${esc(title)}">${list.map(id => `<option value="${id}"${id === open ? " selected" : ""}>${esc(SETUP_STEPS[id].title)} · ${esc(setupStatusLabel(id, status[id], state.steps[id]))}</option>`).join("")}</optgroup>`).join("")}</select></label>
-      <nav class="settings-nav setup-nav" aria-label="Setup steps">${nav}</nav>
-      <div class="settings-main" id="setupStep">${setupStepHtml(open, state, status, ids)}</div>
-    </div>`);
+  const nav = UI.workspaceNav([{key:"intro",label:"Start here",markerHtml:mark("todo")}, ...chapters.flatMap(([title,list],c) => list.map(id => ({
+    key:id,label:SETUP_STEPS[id].title,group:`${c + 1} · ${title}`,markerHtml:mark(status[id],id),
+    ariaLabel:SETUP_STEPS[id].title + ': ' + setupStatusLabel(id,status[id],state.steps[id])
+  })))], {label:"Setup steps",selected:open,guide:true,onSelect:key => `setupOpen(${jsArg(key)})`});
+  paint(`${UI.pageHeader(`Setup`, `${done} of ${ids.length} steps complete${state.admin ? "" : " · your preferences"}${state.completed ? " · guide completed" : ""}`, `<span class="setup-meter" aria-hidden="true"><span style="width:${ids.length ? Math.round(done / ids.length * 100) : 0}%"></span></span>
+        ${actionBar([{ label: state.hidden || state.completed ? "Show reminders again" : "Don’t show again", run: `setupReminders(${!(state.hidden || state.completed)})` }])}`)}
+    ${UI.workspace(nav, setupStepHtml(open, state, status, ids), {id:"setupPage",guide:true,contentId:"setupStep",pickerHtml:`<label class="setup-picker">Setup step<select id="setupSelect" onchange="setupOpen(this.value)"><option value="intro"${open === "intro" ? " selected" : ""}>Start here</option>${chapters.map(([title, list]) => `<optgroup label="${esc(title)}">${list.map(id => `<option value="${id}"${id === open ? " selected" : ""}>${esc(SETUP_STEPS[id].title)} · ${esc(setupStatusLabel(id, status[id], state.steps[id]))}</option>`).join("")}</optgroup>`).join("")}</select></label>`})}`);
   if (open === "storage") setupStorageLoad();
 }
 window.viewSetup = viewSetup;
@@ -437,8 +433,7 @@ function setupStepHtml(id, state, status, ids) {
   const skip = st === "done" ? "" : st === "skipped"
     ? UI.button("Undo skip", `setupSkip(${jsArg(id)}, false)`) : UI.button("Skip this step", `setupSkip(${jsArg(id)}, true)`);
   return `<section class="card flat setup-card" data-step="${id}">
-      <div class="settings-card-head"><div><div class="ctitle">${esc(step.title)}</div>
-        <div class="csub">${UI.chip(setupStatusLabel(id, st, s), st === "done" && id !== "appearance" ? "ok" : st === "attention" ? "warn" : "")}</div></div></div>
+      ${UI.moduleHeader(`${esc(step.title)}`, `${UI.chip(setupStatusLabel(id, st, s), st === "done" && id !== "appearance" ? "ok" : st === "attention" ? "warn" : "")}`, ``)}
       <p class="small dim">${esc(SETUP_CHECKS[id])}${st === "skipped" ? " Skipping leaves it unchecked." : ""}</p>
       ${UI.lead(step.lead(s))}
       ${s.error ? UI.callout("warn", "Homestead could not check this just now", esc(s.error)) : ""}
@@ -549,7 +544,7 @@ function setupCloudflareHtml(state) {
   ];
   const current = steps[stage];
   return `<section class="card flat setup-card" data-step="https" data-cloudflare-stage="${stage}">
-    <div class="settings-card-head"><div><div class="ctitle">Set up Cloudflare Tunnel</div><div class="csub">Step ${stage + 1} of ${steps.length} · ${esc(current.title)}</div></div></div>
+    ${UI.moduleHeader(`Set up Cloudflare Tunnel`, `Step ${stage + 1} of ${steps.length} · ${esc(current.title)}`, ``)}
     ${UI.sectionNavigation("cloudflare-guide", steps, {current:stage, guide:true, onSelect:key => `setupCloudflareOpen(${Number(key)})`, onChange:"setupCloudflareOpen(Number(this.value))"})}
     ${UI.lead(current.lead)}<div class="setup-body small">${current.body}</div>
     <p class="small dim">These steps guide changes in Cloudflare. Homestead does not verify or mark them complete when you select Next.</p>

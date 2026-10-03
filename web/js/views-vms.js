@@ -36,13 +36,10 @@ async function viewVMs() {
     { label: "ISO library", icon: "disk", run: "vmIsoLibrary()", tip: "ISO images from folders on your Network Shares, for VMs' CD-ROM drives" },
     { label: "New k3s cluster", icon: "plus", run: "k3sCluster()", need: "operator", tip: "A k3s cluster made of VMs here, each with an address of its own" }];
   const create = '<button class="btn pri" data-need="operator" onclick="vmNew()">＋ New VM</button>';
-  paint(`<div class="vms-page collection-page" data-collection="vms"><div class="phead"><div><h2>Virtual machines</h2>
-      <p>${vms.length} VM${vms.length === 1 ? "" : "s"} · ${running} running · ${STATE.platform?.harvester === false ? `KubeVirt on ${esc(platformName(STATE.platform))}${STATE.platform.cdi ? "" : " · no CDI"}` : "KubeVirt on Harvester"}</p></div>
-      <div class="row">${layoutSwitch("vms", "viewVMs")}
-      ${moreMenu(items)}${create}</div></div>
-    <div class="collection-mobile-head"><div class="collection-mobile-toolbar"><span class="collection-mobile-scope">All VMs</span>${vmListOptions(layout, items)}${create}</div>
-      <div class="collection-mobile-summary"><span>${rows.length} VM${rows.length === 1 ? "" : "s"} · ${rows.filter(v => v.status === "Running").length} running</span>
-        ${STATE.platform?.harvester === false && !STATE.platform.cdi ? '<span class="pill slim warn">No CDI</span>' : ""}</div></div>
+  paint(`<div class="vms-page collection-page" data-collection="vms">${UI.pageHeader(`Virtual machines`, `${vms.length} VM${vms.length === 1 ? "" : "s"} · ${running} running · ${STATE.platform?.harvester === false ? `KubeVirt on ${esc(platformName(STATE.platform))}${STATE.platform.cdi ? "" : " · no CDI"}` : "KubeVirt on Harvester"}`, `${layoutSwitch("vms", "viewVMs")}
+      ${moreMenu(items)}${create}`)}
+    ${UI.collectionHeader(`<span class="collection-mobile-scope">All VMs</span>${vmListOptions(layout, items)}${create}`, `<span>${rows.length} VM${rows.length === 1 ? "" : "s"} · ${rows.filter(v => v.status === "Running").length} running</span>
+        ${STATE.platform?.harvester === false && !STATE.platform.cdi ? '<span class="pill slim warn">No CDI</span>' : ""}`)}
     ${!rows.length ? `<div class="empty">${q ? "Nothing matches that search." : "No virtual machines yet — create one to get started."}</div>`
       : layout === "rows" ? vmTable(rows) : `<div class="vm-grid">${rows.map(vmCard).join("")}</div>`}</div>`);
 }
@@ -834,10 +831,8 @@ async function viewVmImport() {
   STATE.data.srcs = srcs; STATE.data.importNamespaces = namespaces; STATE.data.importStorageClasses = storageClasses;
   STATE.data.uvms = STATE.data.uvms || {};
   const servers = srcs.filter(s => s.kind !== "proxmox");
-  paint(`<div class="phead"><div><h2>Virtual machines</h2>
-      <p>Bring VMs across from an Unraid server, or a disk image from a web address</p></div>
-      <div class="row">${menuButton("＋ Import", [{ label: "Add an Unraid server", icon: "import", run: "srcAdd()", need: "admin" },
-        { label: "A disk image from a URL", icon: "disk", run: "vmDiskImport()", need: "admin" }])}</div></div>
+  paint(`${UI.pageHeader(`Virtual machines`, `Bring VMs across from an Unraid server, or a disk image from a web address`, `${menuButton("＋ Import", [{ label: "Add an Unraid server", icon: "import", run: "srcAdd()", need: "admin" },
+        { label: "A disk image from a URL", icon: "disk", run: "vmDiskImport()", need: "admin" }])}`)}
     ${servers.length ? servers.map(s => `<div class="sec">${esc(s.name)} ${tip(`${SOURCE_KINDS[s.kind] || s.kind} · ${s.user}@${s.host}`)}</div>
       <div class="card flat" id="${uvmId(s.name)}">${s.ssh_trust
         ? '<div class="empty"><span class="spin2"></span>asking it for its VMs</div>'
