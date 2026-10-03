@@ -3124,6 +3124,12 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 .dashboard-resize{position:absolute;bottom:1px;right:1px;z-index:3;border:0;border-radius:8px 0 10px 0;background:var(--surf);color:var(--tx);width:32px;height:32px;cursor:nwse-resize;touch-action:none}
 .dashboard-widget.dragging{opacity:.65;outline:2px dashed var(--tx)}
 .dashboard-widget.drop-target{outline:3px solid var(--tx);outline-offset:4px}
+.dashboard-widget.drag-source{opacity:.25}
+.dashboard-drag-preview{position:fixed;inset:0;z-index:60;pointer-events:none;overflow:hidden;opacity:.82}
+.dashboard-drag-preview>.dashboard-canvas[data-editing]{padding:0;border:0;border-radius:0;background:none;height:0}
+.dashboard-drag-preview .dashboard-widget{margin:0;will-change:transform;box-shadow:0 16px 44px #0005!important}
+.dashboard-drag-preview .dashboard-widget-tools{cursor:grabbing}
+
 .dashboard-canvas[data-editing] .dashboard-widget-content{pointer-events:none;user-select:none}
 .dashboard-canvas[data-editing] .dashboard-widget-content>.card{border:0;border-radius:0 0 12px 12px;box-shadow:none;padding-bottom:32px}
 .dashboard-library{position:sticky;top:78px;max-height:calc(100vh - 100px);overflow-y:auto;padding:16px}

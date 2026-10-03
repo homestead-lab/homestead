@@ -28,6 +28,33 @@ const Dashboard = (() => {
   let layout = null, revision = null, loadedUser = null, loadError = "", layoutRequest = null, saving = false;
   const read = () => clone(loadedUser===ME && layout!==null ? layout : legacy()?.items || defaults());
   let draft = null, initial = "", baseline = null, undo = [], redo = [], selected = "", phone = false, panelOpen = false, gesture = null, portalRequest = null, session = 0;
+  function clearGesture() {
+    const g=gesture;gesture=null;
+    if(!g)return;
+    g.preview?.remove();
+    g.el.classList.remove("dragging","drag-source");
+    document.querySelectorAll(".dashboard-widget.drop-target").forEach(el=>el.classList.remove("drop-target"));
+    if(g.handle.hasPointerCapture(g.pointerId))g.handle.releasePointerCapture(g.pointerId);
+  }
+  function dragPreview(g) {
+    const preview=document.createElement("div");
+    preview.className="dashboard-drag-preview";preview.setAttribute("aria-hidden","true");preview.inert=true;
+    // Keep the original canvas width so its container queries render identically.
+    const canvas=document.createElement("div");canvas.className="dashboard-canvas";canvas.dataset.editing="true";
+    canvas.style.width=`${g.el.closest(".dashboard-canvas").getBoundingClientRect().width}px`;
+    const card=g.el.cloneNode(true);card.classList.remove("dragging","drag-source","selected","drop-target");
+    card.style.width=`${g.rect.width}px`;card.style.height=`${g.rect.height}px`;
+    // Copies of SVG gradients need their own IDs, as do the widget's other nodes.
+    const ids=new Map();
+    for(const el of [card,...card.querySelectorAll("[id]")])if(el.id){const id=el.id;el.id=`dashboard-drag-${id}`;ids.set(id,el.id);}
+    for(const el of [card,...card.querySelectorAll("*")])for(const attr of [...el.attributes]){
+      let value=attr.value;
+      for(const [id,replacement] of ids){value=value.replaceAll(`url(#${id})`,`url(#${replacement})`);if(value===`#${id}`)value=`#${replacement}`;}
+      if(value!==attr.value)el.setAttribute(attr.name,value);
+    }
+    canvas.append(card);preview.append(canvas);document.body.append(preview);
+    g.preview=preview;g.previewCard=card;g.el.classList.add("drag-source");
+  }
   async function load() {
     if(draft!==null)return true;
     if(layoutRequest)return layoutRequest;
@@ -160,7 +187,7 @@ const Dashboard = (() => {
   async function leave() {
     if(saving){toast("Wait for the layout to finish saving.","warn");return false;}
     if(dirty() && !(await ask("Discard dashboard changes?")))return false;
-    draft=null;gesture=null;return true;
+    clearGesture();draft=null;return true;
   }
   async function cancel(){if(await leave()){resetPaint();await viewDash();document.querySelector('[onclick="Dashboard.start()"]')?.focus();}}
   async function start() {
@@ -175,18 +202,18 @@ const Dashboard = (() => {
   async function save() {
     if(draft===null || saving)return;
     const requestedSession=session,user=ME;
-    saving=true;editor();
+    clearGesture();saving=true;editor();
     try {
       const answer=await api(endpoint,{method:"POST",body:JSON.stringify({revision:baseline,layout:{version:1,items:draft}})});
       if(requestedSession!==session || user!==ME)return;
       layout=normalize(answer.layout);revision=answer.revision;loadedUser=user;clearLegacy();
     }catch(e){if(requestedSession===session && user===ME){saving=false;editor();toast(e.message || "Your layout could not be saved. Try again.","bad");}return;}
     if(requestedSession!==session || user!==ME)return;
-    saving=false;draft=null;gesture=null;resetPaint();await viewDash();toast("Dashboard layout saved to your account","ok");
+    saving=false;clearGesture();draft=null;resetPaint();await viewDash();toast("Dashboard layout saved to your account","ok");
     document.querySelector('[onclick="Dashboard.start()"]')?.focus();
   }
   const apiObject={widgets, defaults, normalize, content:{}, render, loadPortal, load, notice:()=>loadError?UI.callout("warn","Dashboard layout unavailable","Your saved layout could not be refreshed. Editing is unavailable until it reconnects."):"", editing:()=>draft!==null, dirty, start, save, cancel, leave, select, move,
-    invalidate(){session++;layout=null;revision=null;loadedUser=null;loadError="";layoutRequest=null;saving=false;draft=null;gesture=null;undo=[];redo=[];portalRequest=null;apiObject.content={};},
+    invalidate(){session++;layout=null;revision=null;loadedUser=null;loadError="";layoutRequest=null;saving=false;clearGesture();draft=null;undo=[];redo=[];portalRequest=null;apiObject.content={};},
     add(id){if(!Object.hasOwn(widgets,id)||draft===null||draft.some(item=>item.id===id))return;selected=id;change(()=>draft.push({id,width:widgets[id].width,height:0}),`${widgets[id].title} added.`);if(id==="portal")loadPortal();},
     remove(id){if(!Object.hasOwn(widgets,id))return;change(()=>{draft=draft.filter(item=>item.id!==id);if(selected===id)selected=draft[0]?.id || "";},`${widgets[id].title} removed. Use Undo to restore it.`);},
     size(field,value){if(!["width","height"].includes(field))return;change(()=>{const item=draft.find(item=>item.id===selected);if(item)item[field]=value;},"Widget size updated.");},
@@ -210,11 +237,11 @@ const Dashboard = (() => {
     });
     document.addEventListener("pointerdown",event=>{
       const handle=event.target.closest?.("[data-dash-drag],[data-dash-resize]");
-      if(!handle || draft===null || saving || event.button!==0)return;
+      if(!handle || draft===null || saving || gesture || event.button!==0)return;
       const id=handle.dataset.dashDrag || handle.dataset.dashResize;
       handle.focus({preventScroll:true});
       const item=draft.find(item=>item.id===id),el=handle.closest(".dashboard-widget");
-      gesture={id,el,handle,item:clone(item),resize:!!handle.dataset.dashResize,x:event.clientX,y:event.clientY,to:draft.findIndex(row=>row.id===id),moved:false,pointerId:event.pointerId};
+      gesture={id,el,handle,rect:el.getBoundingClientRect(),item:clone(item),resize:!!handle.dataset.dashResize,x:event.clientX,y:event.clientY,to:draft.findIndex(row=>row.id===id),moved:false,pointerId:event.pointerId};
       handle.setPointerCapture(event.pointerId);event.preventDefault();selected=id;el.classList.add("selected");
     });
     document.addEventListener("pointermove",event=>{
@@ -231,6 +258,8 @@ const Dashboard = (() => {
         g.el.style.setProperty("--widget-span",g.width);g.el.style.setProperty("--widget-height",`${g.height}px`);
         announce(`${widths[g.width]}, ${g.height?g.height+" pixels":"fit content"}.`);
       }else{
+        if(!g.preview)dragPreview(g);
+        g.previewCard.style.transform=`translate3d(${g.rect.left+dx}px,${g.rect.top+dy}px,0)`;
         document.querySelectorAll(".dashboard-widget.drop-target").forEach(el=>el.classList.remove("drop-target"));
         const target=document.elementFromPoint(event.clientX,event.clientY)?.closest(".dashboard-widget");
         if(target && target!==g.el){g.to=draft.findIndex(row=>row.id===target.dataset.widget);target.classList.add("drop-target");announce(`Move to position ${g.to+1}.`);}
@@ -239,16 +268,18 @@ const Dashboard = (() => {
       }
     });
     function endGesture(){
-      if(!gesture)return;const g=gesture;gesture=null;
-      if(g.handle.hasPointerCapture(g.pointerId))g.handle.releasePointerCapture(g.pointerId);
-      g.el.classList.remove("dragging");document.querySelectorAll(".drop-target").forEach(el=>el.classList.remove("drop-target"));
+      if(!gesture)return;const g=gesture;clearGesture();
       if(g.cancel || !g.moved){editor();return;}
       if(g.resize)change(()=>{const item=draft.find(item=>item.id===g.id);item.width=g.width;item.height=g.height;},"Widget resized.");
       else move(g.id,g.to);
       document.querySelector(`[data-dash-drag="${g.id}"]`)?.focus({preventScroll:true});
     }
     document.addEventListener("pointerup",endGesture);
-    document.addEventListener("pointercancel",()=>{if(gesture)gesture.cancel=true;endGesture();});
+    const cancelGesture=()=>{if(gesture)gesture.cancel=true;endGesture();};
+    document.addEventListener("pointercancel",cancelGesture);
+    document.addEventListener("lostpointercapture",event=>{if(gesture?.pointerId===event.pointerId)cancelGesture();});
+    window.addEventListener("blur",cancelGesture);
+    window.addEventListener("resize",()=>{if(matchMedia("(max-width:900px)").matches)cancelGesture();});
     window.addEventListener("beforeunload",event=>{if(dirty()){event.preventDefault();event.returnValue="";}});
   }
   return apiObject;
