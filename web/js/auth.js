@@ -114,6 +114,7 @@ function ungate() {
 }
 
 function stopAuthenticatedWork() {
+  window.Dashboard?.invalidate();
   authGeneration++;
   ME = null; ROLE = null;
   clearInterval(window.__loopTimer);

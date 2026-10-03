@@ -551,3 +551,30 @@ paired PNG cards, paginated contact sheets, a ZIP of those sheets and a searchab
 The same contact-sheet builder supports page captures:
 `python scripts/build_dialog_contact_sheets.py release-assets/page-review --kind pages`.
 Capture both themes into that folder with `PAGE_OUTPUT` before building it.
+
+
+### Customizable dashboard
+
+`web/js/dashboard.js` owns the versioned widget registry, validated layout,
+canvas and editor. Feature renderers provide widget content; editing and viewing
+use the same renderers. Portal tiles come from `portalTiles`, shared with Portal.
+Do not fork charts, links or resource cards for the editor.
+
+- Use a 12-column grid with third, half, two-thirds and full-width cards.
+  A widget may constrain its widths to keep its content usable. Node comparison
+  stays full width. Height is a minimum (fit content, medium or tall), never a crop.
+- Array order is visual, keyboard and mobile reading order. Do not use dense grid
+  backfilling or CSS order. Narrow canvases stack cards and reset minimum heights.
+- Keep editing explicit. Give cards a move handle, resize handle and accessible
+  settings. Collapse the control panel on phones and retain the editing toolbar.
+  Provide arrow-key movement, Earlier/Later controls, Undo/Redo,
+  recoverable Reset, Cancel and Save. Phone preview uses the same container rules.
+- Keep the library and size settings outside the live content. Widget actions are
+  inert during editing; refresh cannot replace the draft. Cluster alerts remain
+  outside the customizable grid. Saving does not modify cluster resources.
+- Persist versioned layouts per signed-in username in browser storage. Say this
+  scope in the editor. Retain unsaved changes on storage errors or cross-tab
+  conflicts; warn before leaving a changed draft. Clear drafts on sign-out.
+- Add metadata and content to the registry to introduce a widget. Validate old
+  layouts, unknown IDs, duplicate IDs and sizes before rendering. An empty saved
+  layout is valid. Keep behavior coverage in `tests/integration/dashboard-editor.mjs`.

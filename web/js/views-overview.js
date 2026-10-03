@@ -18,6 +18,8 @@ const nodeHardwareIds = n => (STATE.data.hardwareFeatures || [])
 /* Dashboard, Nodes, node detail modal */
 
 async function viewDash() {
+  if (Dashboard.editing()) return;
+  const requestedNavigation = window.NAV_TOKEN;
   const [o, hist, st, cap, , , up] = await Promise.all([
     api("/api/overview"),
     api("/api/history").catch(() => null),
@@ -27,6 +29,7 @@ async function viewDash() {
     loadHealthSettings(),
     api("/api/nodes/uptime").catch(() => null),
   ]);
+  if (Dashboard.editing() || STATE.view !== "dash" || requestedNavigation !== window.NAV_TOKEN) return;
   STATE.data.uptime = up || STATE.data.uptime;
   STATE.data.ov = o; STATE.data.stor = st; STATE.data.lhcap = cap || STATE.data.lhcap;
   // A node near its allocation limit takes no new replicas: said before it bites.
@@ -59,22 +62,8 @@ async function viewDash() {
     { n: "Faulted", v: st.faulted, c: "#ff4d4f" },
   ].filter(p => p.v) : [];
 
-  paint(`
-  ${UI.pageHeader(`Cluster overview`, `Live health, capacity and placement across ${o.nodes_total} node${o.nodes_total > 1 ? "s" : ""}`, `
-      <button class="btn pri" onclick="go('deploy')">＋ Deploy</button>
-    `, {actionsClass:`hide-sm`})}
-
-  ${(o.health_issues || []).length ? `<div class="clusteralert ${o.health === "critical" ? "critical" : ""}">
-    <div><b>${o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded"}</b>
-      <span>${esc(o.health_summary)}</span></div>
-    <button class="btn sm" onclick="go(${jsq(o.health_issues.some(x => ["Node", "Disk"].includes(x.kind)) ? "nodes" :
-      o.health_issues.some(x => x.kind === "Volume") ? "storage" : o.health_issues.every(x => x.kind === "Backup") ? "protect" : "workloads")})">Review</button>
-  </div>` : ""}
-
-  ${hist === null ? '<div class="note warn">Chart history could not be loaded. Current overview values are shown; history will retry on the next refresh.</div>'
-    : sampledAt && sampleAge > Math.max(120, (H.step || 30) * 2) ? `<div class="note warn">Charts last sampled ${esc(fmtAgo(sampleAge))}. Check Live charts in Settings → About.</div>` : ""}
-  <div class="grid g3 stagger">
-    <div class="card glow dashcard ${worstMetricClass([{ value: o.cpu_pct, metric: "cpu" }, { value: o.mem_pct, metric: "memory" }])}">
+  Dashboard.content = {
+    compute: `    <div class="card glow dashcard ${worstMetricClass([{ value: o.cpu_pct, metric: "cpu" }, { value: o.mem_pct, metric: "memory" }])}">
       <div class="between"><div><div class="ctitle">Compute</div>
         <div class="csub">CPU and memory · ${chartWindow}</div></div>${trend(H.cpu)}</div>
       ${H.cpu?.length ? dualSpark(H.cpu, H.mem || [], { times: H.t }) : '<div class="empty small">Waiting for recorded metrics</div>'}
@@ -84,9 +73,8 @@ async function viewDash() {
         <div><div class="bignum">${o.mem_pct}<span class="unit">%</span></div>
           <div class="csub"><span class="kdot s2"></span>RAM · ${sizePair(o.mem_used_gb, o.mem_cap_gb)}</div></div>
       </div>
-    </div>
-
-    <div class="card glow g-info dashcard">
+    </div>`,
+    throughput: `    <div class="card glow g-info dashcard">
       <div class="between"><div><div class="ctitle">Throughput</div>
         <div class="csub">Network and local disk · ${chartWindow}</div></div>${trend(rx)}</div>
       ${rx.length ? dualSpark(rx, tx, { times: H.t }) : '<div class="empty small">Waiting for recorded metrics</div>'}
@@ -97,9 +85,8 @@ async function viewDash() {
           <div class="csub">node disk of ${sizeText(diskCap)}</div>
           ${meter(diskCap ? diskUsed / diskCap * 100 : 0, "", "disk")}</div>
       </div>
-    </div>
-
-    <div class="card flat storagecard">
+    </div>`,
+    storage: `    <div class="card flat storagecard">
       <div class="ctitle">Storage</div><div class="csub">Longhorn capacity and replica health</div>
       ${st ? `<div class="storbody">
       <div class="stordonut">${segDonut(storParts, st.volumes, "volumes", 128)}</div>
@@ -114,24 +101,31 @@ async function viewDash() {
           data-tip="${esc(tight.map(n => `${n.name}: ${n.allocated_gb} of ${n.limit_gb} GB allocated, room for a ${n.room_gb} GB replica`).join("; "))}">${esc(tight.map(n => n.name.replace("harvester-", "")).join(", "))} nearly full · a new ${cap.nodes.length > 1 ? "2-copy" : ""} volume fits ${esc(sizeText(cap.largest[Math.min(2, cap.nodes.length)]))}</a>` : ""}</div>
       </div></div>`
       : '<div class="empty">storage data unavailable</div>'}
-    </div>
-  </div>
+    </div>`,
+    nodes: `<div class="card flat dashboard-nodes">${UI.moduleHeader("Node health")}${nodeComparison(o.nodes, "dashboard")}</div>`,
+    cpu: `<div class="card flat pad0 consumer-card"><div class="cardhd"><div class="ctitle">Top CPU</div></div>${consumerTable(o.top_cpu, "cpu")}</div>`,
+    memory: `<div class="card flat pad0 consumer-card"><div class="cardhd"><div class="ctitle">Top memory</div></div>${consumerTable(o.top_mem, "memory")}</div>`,
+  };
 
-  <div class="sec">Node health</div>
-  ${nodeComparison(o.nodes, "dashboard")}
+  paint(`
+  ${UI.pageHeader(`Cluster overview`, `Live health, capacity and placement across ${o.nodes_total} node${o.nodes_total > 1 ? "s" : ""}`, `
+      <button class="btn" onclick="Dashboard.start()">${icon("edit")}Edit dashboard</button>
+      <button class="btn pri hide-sm" onclick="go('deploy')">＋ Deploy</button>
+    `)}
 
-  <div class="sec">Top consumers</div>
-  <div class="grid g2 consumer-grid">
-    <div class="card flat pad0 consumer-card">
-      <div class="cardhd"><div class="ctitle">Top CPU</div></div>
-      ${consumerTable(o.top_cpu, "cpu")}</div>
-    <div class="card flat pad0 consumer-card">
-      <div class="cardhd"><div class="ctitle">Top memory</div></div>
-      ${consumerTable(o.top_mem, "memory")}</div>
-  </div>
-  <section class="card flat history-card" id="historyCard">${STATE.data.historyHtml || ""}</section>`);
+  ${(o.health_issues || []).length ? `<div class="clusteralert ${o.health === "critical" ? "critical" : ""}">
+    <div><b>${o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded"}</b>
+      <span>${esc(o.health_summary)}</span></div>
+    <button class="btn sm" onclick="go(${jsq(o.health_issues.some(x => ["Node", "Disk"].includes(x.kind)) ? "nodes" :
+      o.health_issues.some(x => x.kind === "Volume") ? "storage" : o.health_issues.every(x => x.kind === "Backup") ? "protect" : "workloads")})">Review</button>
+  </div>` : ""}
+
+  ${hist === null ? '<div class="note warn">Chart history could not be loaded. Current overview values are shown; history will retry on the next refresh.</div>'
+    : sampledAt && sampleAge > Math.max(120, (H.step || 30) * 2) ? `<div class="note warn">Charts last sampled ${esc(fmtAgo(sampleAge))}. Check Live charts in Settings → About.</div>` : ""}
+  ${Dashboard.render()}`);
   // Saved history must not hold the live refresh loop's busy flag.
   historyPaint();
+  Dashboard.loadPortal();
 }
 
 function consumerTable(workloads, metric) {

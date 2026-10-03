@@ -123,6 +123,14 @@ async function applyDeepLink(v, params) {
 }
 
 function go(v, options = {}) {
+  if (STATE.view === "dash" && window.Dashboard?.editing() && !options.leave) {
+    if (v === "dash") return;
+    Dashboard.leave().then(ok => {
+      if (ok) go(v, { ...options, leave: true });
+      else if (options.fromLocation) window.history.replaceState({view:"dash"}, "", HomesteadRouter.urlFor("dash", routeParamsForView("dash")));
+    });
+    return;
+  }
   // Leaving Settings with changes not saved asks first.
   if (STATE.view === "settings" && v !== "settings" && STATE.settingsDirty?.size && !options.leave) {
     settingsLeave().then(ok => { if (ok) go(v, { ...options, leave: true }); });

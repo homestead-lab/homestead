@@ -174,6 +174,7 @@ jobs:
           if [ "${{ matrix.audit }}" = pages ]; then
             if [ "${{ matrix.shard }}" = 0 ]; then
               PAGE_STANDARD_SCREENSHOTS=release-assets/pages/components node tests/integration/page-components.mjs
+              HOMESTEAD_URL=http://127.0.0.1:4173 DASHBOARD_EDITOR_SCREENSHOTS=release-assets/pages/dashboard-editor node tests/integration/dashboard-editor.mjs
             fi
             node scripts/check_setup_guide.mjs
             STORAGE_SCREENSHOTS=release-assets/pages/setup-storage node tests/integration/setup-storage-classes.mjs
