@@ -63,7 +63,7 @@ try {
       await page.evaluate(()=>go("settings"));
       await page.locator(".settings-layout").waitFor();
       await page.evaluate(()=>settingsGo("you"));
-      const back=page.getByRole("button",{name:"‹ Back to Settings",exact:true});
+      const back=page.getByRole("button",{name:"‹ All settings",exact:true});
       await back.waitFor();
       await page.screenshot({path:`release-assets/pages/dashboard-storage/settings-${size.width}.png`});
       await back.click();
