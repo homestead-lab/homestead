@@ -5,6 +5,8 @@ the bound PV's reclaim policy.  This module makes that policy explicit and
 re-checks every safety condition immediately before deletion.
 """
 import re
+import math
+import time
 import urllib.error
 
 
@@ -34,18 +36,32 @@ def _identity(namespace, name):
 
 
 def _items(path, label, warnings, optional=False):
-    try:
-        listing = kget(path)
-        if not isinstance(listing.get("items"), list) or listing.get("metadata", {}).get("continue"):
-            raise ValueError("incomplete inventory")
-        return listing["items"]
-    except urllib.error.HTTPError as error:
-        if optional and error.code == 404:
-            return []
-        warnings.append(f"{label} inventory unavailable (HTTP {error.code})")
-    except Exception as error:
-        warnings.append(f"{label} inventory unavailable: {error}")
-    return []
+    # Retry a throttled inventory read once. Never retry deletion writes or
+    # turn a failed/partial inventory into permission to remove data.
+    for attempt in range(2):
+        try:
+            listing = kget(path)
+            if not isinstance(listing.get("items"), list) or listing.get("metadata", {}).get("continue"):
+                raise ValueError("incomplete inventory")
+            return listing["items"]
+        except urllib.error.HTTPError as error:
+            if error.code == 429 and attempt == 0:
+                try:
+                    delay = float((error.headers or {}).get("Retry-After", "0.5"))
+                    if not math.isfinite(delay) or delay < 0:
+                        delay = 0.5
+                except (TypeError, ValueError):
+                    delay = 0.5
+                error.close()
+                time.sleep(min(2.0, delay))
+                continue
+            if optional and error.code == 404:
+                return []
+            warnings.append(f"{label} inventory unavailable (HTTP {error.code})" +
+                            ("; temporarily rate limited, refresh the review shortly" if error.code == 429 else ""))
+        except Exception as error:
+            warnings.append(f"{label} inventory unavailable: {error}")
+        return []
 
 
 def _claim_volume_names(spec, claim):
