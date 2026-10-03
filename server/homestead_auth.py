@@ -198,9 +198,9 @@ def list_users():
 # Personal layouts live with the account, not a session or a browser. The Secret's
 # resourceVersion makes the write atomic across Homestead replicas.
 _DASHBOARD_WIDTHS = {"compute": (4, 6, 8, 12), "throughput": (4, 6, 8, 12),
-                     "storage": (4, 6, 8, 12), "nodes": (12,), "cpu": (4, 6, 8, 12),
+                     "storage": (4, 6, 8, 12), "nodes": (4, 6, 8, 12), "cpu": (4, 6, 8, 12),
                      "memory": (4, 6, 8, 12), "history": (8, 12), "portal": (4, 6, 8, 12),
-                     **{key: (4, 6, 8, 12) for key in ("health", "workloads", "backups", "updates", "jobs")}}
+                     **{key: (4, 6, 8, 12) for key in ("health", "workloads", "containers", "vms", "backups", "updates", "jobs")}}
 
 
 def _dashboard_layout(layout):
@@ -210,13 +210,15 @@ def _dashboard_layout(layout):
         raise ValueError("Invalid dashboard layout")
     seen = set()
     for item in layout["items"]:
-        if not isinstance(item, dict) or set(item) != {"id", "width", "height"}:
+        if not isinstance(item, dict) or set(item) not in ({"id", "width", "height"}, {"id", "width", "height", "display"}):
             raise ValueError("Invalid dashboard widget")
         name = item["id"]
         if (not isinstance(name, str) or name not in _DASHBOARD_WIDTHS or name in seen
                 or type(item["width"]) is not int or item["width"] not in _DASHBOARD_WIDTHS[name]
-                or type(item["height"]) is not int or item["height"] not in (0, 360, 520)):
+                or type(item["height"]) is not int or item["height"] not in (0, 240, 360, 520)):
             raise ValueError("Invalid dashboard widget or size")
+        if "display" in item and (name != "nodes" or item["display"] not in ("compact", "detailed")):
+            raise ValueError("Invalid node health display")
         seen.add(name)
     return copy.deepcopy(layout)
 

@@ -59,8 +59,9 @@ H_SIG = "X-Homestead-Fleet-Signature"
 # account and session, their devices' notifications, and the switch itself.
 LOCAL = {"/api/fleet/switch", "/api/fleet/home", "/api/auth/login", "/api/auth/logout",
          "/api/auth/setup", "/api/auth/password", "/api/auth/signout-everywhere",
+         "/api/auth/preferences/dashboard",
          "/api/push/subscribe", "/api/push/unsubscribe", "/api/push/test", "/api/push/status",
-         "/api/alerts/pending", "/healthz"}
+         "/api/alerts/pending", "/api/alerts/delivered", "/healthz"}
 ROLES = ("viewer", "operator", "admin")
 # Not passed on: they describe one connection, or who is asking, which the
 # signature says instead.

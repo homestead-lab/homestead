@@ -20,8 +20,24 @@ import homestead_http as HTTP
 class DashboardPreferencesTests(unittest.TestCase):
     def test_health_widgets_are_valid_account_preferences(self):
         layout = {"version": 1, "items": [{"id": key, "width": 6, "height": 0}
-                  for key in ("health", "workloads", "backups", "updates", "jobs")]}
+                  for key in ("health", "workloads", "containers", "vms", "backups", "updates", "jobs")]}
         self.assertEqual(AUTH._dashboard_layout(layout), layout)
+
+    def test_node_width_and_display_settings_persist_with_the_account(self):
+        for width in (4,6,8,12):
+            layout={"version":1,"items":[{"id":"nodes","width":width,"height":360,"display":"detailed"}]}
+            saved=self.save(AUTH.dashboard_preferences("alice")["revision"],layout)
+            self.assertEqual(layout,AUTH.dashboard_preferences("alice")["layout"])
+        for display in ("other",{},None):
+            with self.assertRaises(ValueError):
+                AUTH._dashboard_layout({"version":1,"items":[{"id":"nodes","width":6,"height":0,"display":display}]})
+        with self.assertRaises(ValueError):
+            AUTH._dashboard_layout({"version":1,"items":[{"id":"compute","width":6,"height":0,"display":"compact"}]})
+
+    def test_short_resource_lists_persist(self):
+        layout={"version":1,"items":[{"id":"containers","width":12,"height":240},{"id":"vms","width":4,"height":240}]}
+        self.save(AUTH.dashboard_preferences("alice")["revision"],layout)
+        self.assertEqual(layout,AUTH.dashboard_preferences("alice")["layout"])
 
     def setUp(self):
         self.store = {"users": {"alice": {"role": "viewer", "ver": 1}, "bob": {"role": "admin", "ver": 2}}, "signing_key": "unchanged"}
@@ -111,17 +127,20 @@ class DashboardPreferencesTests(unittest.TestCase):
             AUTH.save_dashboard_preferences("alice", {"revision": None, "layout": self.layout, "username": "bob"})
         self.assertEqual(1, self.rv)
 
-    def test_http_identity_csrf_and_conflict_status(self):
+    def test_switched_cluster_layout_uses_home_account_with_csrf_and_conflict_checks(self):
         listener = HTTP.BoundedHTTPServer(("127.0.0.1", 0), server.H, max_connections=2)
         thread = threading.Thread(target=listener.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(listener.server_close)
         self.addCleanup(listener.shutdown)
         identity = self.enterContext(patch.object(server.H, "_who", return_value={"user": "alice", "role": "viewer", "stale": False}))
+        self.enterContext(patch.object(server.FLEET, "self_id", return_value="home"))
+        self.enterContext(patch.object(server.FLEET, "member", return_value={"id":"remote"}))
+        forward = self.enterContext(patch.object(server.FLEET, "forward", side_effect=AssertionError("Account preferences must not be relayed")))
         def request(method, body=None, csrf=True):
             client = HTTPConnection(*listener.server_address, timeout=3)
             try:
-                headers = {"Content-Type": "application/json"}
+                headers = {"Content-Type": "application/json", "Cookie": "homestead_cluster=remote", "X-Homestead-Cluster": "remote"}
                 if csrf:
                     headers["X-Homestead-Auth"] = "1"
                 client.request(method, "/api/auth/preferences/dashboard?user=bob", json.dumps(body) if body is not None else None, headers)
@@ -139,6 +158,7 @@ class DashboardPreferencesTests(unittest.TestCase):
         identity.return_value = None
         self.assertEqual(401, request("GET")[0])
         self.assertEqual(401, request("POST", body)[0])
+        forward.assert_not_called()
 
     def test_routes_are_personal_and_available_to_viewers(self):
         for method in ("GET", "POST"):

@@ -45,7 +45,7 @@ try {
     await page.evaluate(()=>{
       window.scrollTo(0,300);document.querySelector(".main").scrollTop=300;
       window.streamRefs={charts:[...document.querySelectorAll(".spark")],path:document.querySelector(".dashcard .ln"),
-        bar:document.querySelector(".node-comparison .meter:not(.split) span"),focus:document.activeElement,
+        bar:document.querySelector(".dashboard-nodes .meter:not(.split) span"),focus:document.activeElement,
         scroll:[scrollY,document.querySelector(".main").scrollTop]};
       streamRefs.before=streamRefs.path.getAttribute("d");streamRefs.barBefore=streamRefs.bar.getBoundingClientRect().width;
       window.streamSample=1;
