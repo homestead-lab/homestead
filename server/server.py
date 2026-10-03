@@ -3984,10 +3984,29 @@ class PowerNotSent(Exception):
         self.operation = operation
 
 
-def send_reviewed_power(power_plan, force=False):
+def active_power_job(node):
+    """A reboot or shutdown job for this host that has not finished."""
+    return next((item for item in OPS.list_operations()
+                 if item.get("kind") == "node-power" and item.get("resource", {}).get("name") == node
+                 and item.get("status") not in ("succeeded", "failed", "cancelled")), None)
+
+
+def power_plan_with_job(power_plan):
+    """A host whose power job is still going cannot be reviewed again: a
+    second review during its drain is how the same drain started twice."""
+    running = active_power_job(power_plan.get("node"))
+    if running:
+        power_plan = {**power_plan, "ready": False, "operation": running,
+                      "blockers": ["A power job for this host is still running. Follow it in its progress view."]
+                                  + list(power_plan.get("blockers") or [])}
+    return power_plan
+
+
+def send_reviewed_power(power_plan, force=False, background=False):
     """Cordon, drain and send a reviewed reboot or shutdown, as a job - what
     Host actions does once its review is accepted, and what an OS update of
-    every host does for each host that needs a restart."""
+    every host does for each host that needs a restart. background returns
+    the job at once and leaves the work, and its outcome, to the job."""
     node, action = power_plan["node"], power_plan["action"]
     planned_outage = bool(power_plan.get("planned_outage")) and not force
     operation = OPS.start(
@@ -3995,7 +4014,8 @@ def send_reviewed_power(power_plan, force=False):
         "/nodes?node=" + urllib.parse.quote(node),
         {"node": node, "node_uid": power_plan["node_uid"], "action": action, "boot_id": power_plan["boot_id"],
          "volumes": [v["name"] for v in power_plan["volumes"]],
-         "planned_outage": planned_outage, "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
+         "planned_outage": planned_outage, "forced": bool(force),
+         "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
         "Planned whole-cluster outage; sending without cordon or drain" if planned_outage else
         "Forced by an admin; sending without cordon or drain" if force else "Host impact reviewed; preparing cordon and drain")
     phase_state = {"phase": "reviewed"}
@@ -4004,21 +4024,35 @@ def send_reviewed_power(power_plan, force=False):
         updated = OPS.record_phase(operation["id"], phase, percent, message, **details)
         phase_state["phase"] = phase
         return updated
-    try:
-        result = LC.node_power(node, action, True,
-                               before_send=(lambda: POWER.recheck_planned_outage(power_plan)) if planned_outage else
-                               (lambda: POWER.recheck_forced(power_plan)) if force
-                               else (lambda: POWER.recheck_after_drain(power_plan)),
-                               reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force, planned_outage=planned_outage)
-        result["operation"] = operation
-        return result
-    except Exception as e:
-        uncertain = phase_state["phase"] in ("sending", "observing")
-        message = ("Power submission outcome is uncertain; inspect the existing job/helper before retrying" if uncertain else
-                   "Power was not sent. Inspect the host's cordon state: " + str(e))
-        power_progress("observing" if uncertain else "failed", 20 if uncertain else 10, message)
-        raise PowerNotSent(message, operation) from e
 
+    def send():
+        try:
+            result = LC.node_power(node, action, True,
+                                   before_send=(lambda: POWER.recheck_planned_outage(power_plan)) if planned_outage else
+                                   (lambda: POWER.recheck_forced(power_plan)) if force
+                                   else (lambda: POWER.recheck_after_drain(power_plan)),
+                                   reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force, planned_outage=planned_outage)
+            result["operation"] = operation
+            return result
+        except Exception as e:
+            uncertain = phase_state["phase"] in ("sending", "observing")
+            message = ("Power submission outcome is uncertain; inspect the existing job/helper before retrying" if uncertain else
+                       "Power was not sent. Inspect the host's cordon state: " + str(e))
+            power_progress("observing" if uncertain else "failed", 20 if uncertain else 10, message)
+            raise PowerNotSent(message, operation) from e
+
+    if not background:
+        return send()
+
+    def run():
+        try:
+            send()
+        except PowerNotSent:
+            pass  # send() recorded the outcome on the job
+        except Exception as error:  # never leave the job looking busy
+            power_progress("failed", 10, f"Host power job stopped: {error}"[:400])
+    threading.Thread(target=run, name=f"node-power-{node}", daemon=True).start()
+    return {"operation": operation, "steps": [], "background": True}
 
 def rollout_reboot(node, allow_single_copy=False):
     """A restart for an OS update: the same review Host actions shows, with
@@ -8612,9 +8646,9 @@ class H(HTTP.LimitedHandler):
                     return self._send(400, {"error": "node is required"})
                 return self._send(200, cached("impact:" + node, 5, lambda: PLACE.impact(node)))
             if p == "/api/node/power/plan":
-                return self._send(200, POWER.plan((q.get("node") or [""])[0],
-                                                  (q.get("action") or [""])[0],
-                                                  force=(q.get("force") or [""])[0] == "1"))
+                return self._send(200, power_plan_with_job(POWER.plan((q.get("node") or [""])[0],
+                                                                      (q.get("action") or [""])[0],
+                                                                      force=(q.get("force") or [""])[0] == "1")))
             if p == "/api/cluster/shutdown/plan":
                 return self._send(200, cluster_shutdown(review=True).review())
             if p == "/api/cluster/shutdown":
@@ -9498,6 +9532,10 @@ class H(HTTP.LimitedHandler):
                 if b.get("confirm") != b.get("node"):
                     return self._send(400, {"error": "confirmation must repeat the node name"})
                 force = b.get("force") is True
+                running = active_power_job(b.get("node"))
+                if running:
+                    return self._send(409, {"error": "A power job for this host is still running; follow it instead of sending another",
+                                            "operation": running})
                 power_plan = POWER.plan(b["node"], b["action"], force=force)
                 if not power_plan["ready"]:
                     return self._send(409, {"error": "; ".join(power_plan["blockers"]), "plan": power_plan})
@@ -9512,10 +9550,9 @@ class H(HTTP.LimitedHandler):
                 if power_plan["requires_data_ack"] and not b.get("allow_data_risk"):
                     return self._send(409, {"error": "acknowledge the volume risk before host power control",
                                             "plan": power_plan})
-                try:
-                    return self._send(200, send_reviewed_power(power_plan, force))
-                except PowerNotSent as e:
-                    return self._send(409, {"error": str(e), "operation": e.operation})
+                # Cordon and drain can take many minutes: the request returns
+                # the job at once and the browser follows its phases.
+                return self._send(202, send_reviewed_power(power_plan, force, background=True))
             if p == "/api/cluster/shutdown":
                 return self._send(202, cluster_shutdown(review=True).start(b, OPS))
             if p == "/api/cluster/shutdown/cancel":

@@ -588,6 +588,7 @@ window.nodePowerReview = async (node, action, force = false) => {
   try { plan = await api(`/api/node/power/plan?${new URLSearchParams({ node, action, ...(force ? { force: "1" } : {}) })}`); }
   catch (e) { return toast(`Could not assess this host: ${e.message}`, "bad"); }
   if (sequence !== NODE_POWER_REVIEW_SEQUENCE) return;
+  if (plan.operation?.id) return window.nodePowerFollow(plan.operation.id);
   if (plan.node !== node || plan.action !== action || !plan.review_token || typeof plan.ready !== 'boolean')
     return toast("Host review is incomplete; refresh before continuing", "bad");
   window.__nodePowerPlan = plan;
@@ -647,22 +648,72 @@ window.nodePower = async (node, action) => {
   // Consume approval before sending, including double clicks and lost replies.
   window.__nodePowerPlan = null;
   const button = $("#pw_execute");
-  if (button) { button.disabled = true; button.textContent = plan.force || plan.planned_outage ? "Sending…" : "Draining host…"; }
+  if (button) { button.disabled = true; button.textContent = "Starting…"; }
   try {
     const r = await api("/api/node/power", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node, action, confirm: c, review_token: plan.review_token, force: !!plan.force,
         allow_cluster_outage: !!$("#pw_outage")?.checked, allow_stranded: plan.planned_outage ? !!$("#pw_outage")?.checked : !!$("#pw_allow")?.checked, allow_data_risk: !!$("#pw_data")?.checked }) });
     if (r.operation) window.noteOperation?.(r.operation);
+    if (r.operation?.id) return window.nodePowerFollow(r.operation.id, plan.force || plan.planned_outage
+      ? "Sent without cordon or drain. Scheduling was left unchanged; inspect workloads and storage when the host returns."
+      : "The host is cordoned and drained before the command is sent. It stays cordoned afterwards: check it before allowing scheduling again.");
     modal("Host maintenance", UI.lead(plan.force || plan.planned_outage ? `Sent. Follow it in Recent jobs${plan.action === "reboot" ? "; this page comes back when the host does" : ""}. Scheduling was left unchanged; inspect workloads and storage when the host returns.`
       : "Follow progress in Recent jobs. The host stays cordoned; check it before allowing scheduling.") +
       UI.more("Steps so far", `<pre>${esc((r.steps || []).join("\n"))}</pre>`) + UI.actions(UI.cancel("Close")));
   } catch (e) {
+    // A power job already going for this host: follow it rather than start another.
+    if (e.body?.operation?.id) return window.nodePowerFollow(e.body.operation.id);
     toast(e.message + " — inspect Recent jobs and the host before making another request.", "bad");
     if (button) {
       button.disabled = false; button.textContent = "Review host again";
       button.onclick = () => window.nodePowerReview(node, action);
     }
   } finally { window.refreshOperations?.(true); }
+};
+
+/* A reboot or shutdown as it goes: its steps, from the job's recorded phase.
+   Homestead itself may be unreachable while a host restarts - on a host it
+   runs on, or the only one - so the view keeps asking until the job ends. */
+let NODE_POWER_FOLLOW = 0;
+function nodePowerSteps(power) {
+  const reboot = power.action === "reboot";
+  return [
+    ...(power.direct ? [["verifying", "Recheck the host"]] : [
+      ["cordoning", "Stop new work on the host (cordon)"],
+      ["draining", "Move workloads off the host (drain)"],
+      ["verifying", "Recheck quorum, VMs and volume copies"]]),
+    ["sending", `Send the ${reboot ? "restart" : "shutdown"} command`],
+    ["observing", reboot ? "Wait for the host to restart and its volumes to recover" : "Wait for the host to power off"],
+  ];
+}
+function nodePowerProgressMarkup(op, offline = false) {
+  const power = op.power || {}, steps = nodePowerSteps(power);
+  const done = op.status === "succeeded", stopped = op.status === "failed" || op.status === "cancelled";
+  const at = Math.max(0, steps.findIndex(([phase]) => phase === power.phase));
+  const items = steps.map(([, title], i) => ({ title,
+    state: done || i < at ? "ok" : i === at ? (stopped ? "bad" : "run") : "todo",
+    detailHtml: i === at && !done && op.message ? esc(op.message) : "" }));
+  return UI.progress(done ? 100 : op.progress, { label: done ? "Finished" : stopped ? "Stopped" : "In progress", kind: done ? "ok" : stopped ? "bad" : "info" })
+    + UI.checklist(items)
+    + (offline ? UI.callout("warn", "Reconnecting", "Homestead cannot be reached right now. While a host it runs on restarts, that is expected; this view carries on by itself.") : "")
+    + (done ? UI.callout("ok", "Done", esc(op.message || "")) : "")
+    + (stopped ? UI.callout("bad", "Stopped", `${esc(op.message || "The job did not finish.")} Check the host before making another request.`) : "")
+    + UI.actions(UI.cancel("Close"));
+}
+window.nodePowerFollow = async (id, intro = "") => {
+  const sequence = ++NODE_POWER_FOLLOW;
+  modal("Host maintenance", (intro ? UI.lead(esc(intro)) : "") + '<div id="pwProgress"><div class="empty"><span class="spin2"></span>Starting…</div></div>', true);
+  let last = null;
+  while (sequence === NODE_POWER_FOLLOW && $("#pwProgress")) {
+    let offline = false;
+    try { last = (await api("/api/operations", { keep: true })).find(o => o.id === id) || last; }
+    catch { offline = true; }
+    if (!$("#pwProgress") || sequence !== NODE_POWER_FOLLOW) return;
+    if (last) $("#pwProgress").innerHTML = nodePowerProgressMarkup(last, offline);
+    else if (!offline) { $("#pwProgress").innerHTML = UI.callout("warn", "Job not found", "It may have been cleared. Check Recent jobs and the host.") + UI.actions(UI.cancel("Close")); return; }
+    if (last && ["succeeded", "failed", "cancelled"].includes(last.status)) { window.refreshOperations?.(true); return; }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
 };
 
 /* ---------------- VMs: the page is views-vms.js; moving and creating stay here ---------------- */

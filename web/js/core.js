@@ -192,7 +192,7 @@ async function api(path, opts) {
   catch (error) { diagnostic?.done(r.status); throw error; }
   diagnostic?.done(r.status, b?.operation?.id);
   if (readOnly && startedAt !== window.NAV_TOKEN) return ABANDONED;
-  if (!r.ok) throw new Error((b && b.error) || r.statusText);
+  if (!r.ok) throw Object.assign(new Error((b && b.error) || r.statusText), { status: r.status, body: b });
   if (b && b.operation && window.noteOperation) window.noteOperation(b.operation);
   return b;
 }

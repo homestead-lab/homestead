@@ -237,3 +237,18 @@ test('host actions exposes normal reviews even when quorum cannot lose a member'
   assert.match(t.html(), /planned whole-cluster outage/);
   assert.doesNotMatch(t.html(), /Override - reboot or shut down anyway|Review forced/);
 });
+
+test('a host power job shows its steps, the current one, and how it ended', () => {
+  const t = setup(review);
+  const markup = (phase, status = 'running', direct = false) =>
+    t.c.nodePowerProgressMarkup({ status, progress: 12, message: 'Evicting pods: 3 left', power: { phase, action: 'poweroff', direct } });
+  const states = html => [...html.matchAll(/<li class="(\w+)">/g)].map(m => m[1]);
+  assert.deepEqual(states(markup('draining')), ['ok', 'run', 'todo', 'todo', 'todo']);
+  assert.match(markup('draining'), /Evicting pods: 3 left/);
+  assert.deepEqual(states(markup('observing', 'succeeded')), ['ok', 'ok', 'ok', 'ok', 'ok']);
+  assert.deepEqual(states(markup('draining', 'failed')), ['ok', 'bad', 'todo', 'todo', 'todo']);
+  assert.match(markup('draining', 'failed'), /Check the host before making another request/);
+  // An outage or forced job skips cordon and drain.
+  assert.deepEqual(states(markup('sending', 'running', true)), ['ok', 'run', 'todo']);
+  assert.match(markup('draining', 'running', false, true), /Stop new work on the host/);
+});

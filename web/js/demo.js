@@ -1470,6 +1470,24 @@ ssh_pwauth: true
     "/api/workloads": workloads, "/api/network": network,
     // Rebooting a host: one app has nowhere else to go, one volume keeps a
     // single copy elsewhere while the host is down.
+    // A reviewed reboot or shutdown: a job that walks through the real phases.
+    "/api/node/power": (url, init) => {
+      const body = JSON.parse(init?.body || "{}"), reboot = body.action === "reboot";
+      const op = { id: "demo-power-" + Date.now(), kind: "node-power", title: `${body.action} ${body.node}`, status: "running",
+        progress: 5, message: "Cordoning host; power has not been sent", started_at: new Date().toISOString(), finished_at: "",
+        href: "/nodes?node=" + encodeURIComponent(body.node), resource: { kind: "Node", name: body.node, namespace: "" },
+        power: { phase: "cordoning", action: body.action, node: body.node, direct: !!(body.force || window.__demoSingleHostOutage) } };
+      const phases = op.power.direct
+        ? [["verifying", 15, "Rechecking the host"], ["sending", 20, "Submitting power helper"], ["observing", 60, reboot ? "Waiting for the host to return" : "Waiting for the host to leave Ready"]]
+        : [["draining", 10, "Evicting workload and system pods: 9 left"], ["draining", 12, "Evicting workload and system pods: 3 left"],
+           ["verifying", 15, "Drain completed; rechecking quorum, VMs, pods and volume replicas before power"],
+           ["sending", 20, "Submitting power helper"], ["observing", 60, reboot ? "Host is Ready; waiting for 2 volume(s) to become healthy" : "Host is NotReady; waiting to confirm shutdown"]];
+      (window.__demoOps ??= responses["/api/operations"]()).unshift(op);
+      phases.forEach(([phase, progress, message], i) => setTimeout(() => Object.assign(op, { progress, message, power: { ...op.power, phase } }), (i + 1) * 2500));
+      setTimeout(() => Object.assign(op, { status: "succeeded", progress: 100, finished_at: new Date().toISOString(),
+        message: reboot ? "Host rebooted and its volumes are healthy. The host stays cordoned." : "Host is powered off." }), (phases.length + 1) * 2500);
+      return { operation: op, steps: [], background: true };
+    },
     "/api/node/power/plan": url => {
       const plannedOutage = !!window.__demoSingleHostOutage && url.searchParams.get("force") !== "1";
       const plan = { node: url.searchParams.get("node"), action: url.searchParams.get("action"), review_token: "demo-power",
