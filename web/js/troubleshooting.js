@@ -256,7 +256,7 @@
   window.bugIssue = async () => {
     try {
       const draft = await api(`/api/diagnostics/issue?id=${encodeURIComponent(current.id)}`, { keep: true });
-      modal("Review public GitHub issue", wrap(UI.lead("Destination: wjcloudy/homestead") +
+      modal("Review public GitHub issue", wrap(UI.lead("Destination: homestead-lab/homestead") +
         UI.callout("warn", "This issue will be public", "Review the exact anonymised title and body below. Full logs are never included. Packages are not attached automatically.") +
         UI.field("Issue title", `<input aria-label="Issue title" value="${esc(draft.title)}" readonly>`) +
         `<pre class="diagnostic-preview">${esc(draft.body)}</pre>` +

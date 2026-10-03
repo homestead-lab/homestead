@@ -20,7 +20,7 @@ A section saves once: change what you like and a bar at its foot offers
 saved asks first. Settings with many fields - MQTT, UniFi, the update window,
 the App Store catalogue - open in a dialog of their own.
 
-![Settings - Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-cluster.jpg)
+![Settings - Cluster](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-settings-cluster.jpg)
 
 ## Refresh on a phone
 
@@ -157,7 +157,7 @@ opens this tab, as `?tab=` does for any of them.
 **About** shows whether the parts of Homestead that work in the background are
 working, refreshed every 15 seconds:
 
-![Settings - About](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-settings-health.jpg)
+![Settings - About](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-settings-health.jpg)
 
 - how fast the Kubernetes API answers;
 - each copy of Homestead, and which one leads;

@@ -231,8 +231,8 @@
     // Homestead itself: its Stop asks first, since it takes this page with it.
     { name: "homestead", ns: "lab", kind: "Deployment", group: "Homestead", self: true, platform: "Homestead", homestead: "self", desired: 1, ready: 1, uptime: 86400,
       cpu: 0.04, mem_mb: 88, nodes: ["harvester-node1"], hardware: [],
-      images: ["ghcr.io/wjcloudy/homestead:2.8.302"], ports: [{ port: 8088, ip: "192.0.2.242" }],
-      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/wjcloudy/homestead:2.8.302")] },
+      images: ["ghcr.io/homestead-lab/homestead:2.8.302"], ports: [{ port: 8088, ip: "192.0.2.242" }],
+      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/homestead-lab/homestead:2.8.302")] },
     { name: "homestead-smb", ns: "lab", kind: "Deployment", group: "Homestead", managed_smb: true, platform: "Homestead", homestead: "smb",
       desired: 1, ready: 1, uptime: 86400, cpu: 0.01, mem_mb: 40, nodes: ["harvester-node2"], hardware: [],
       images: ["dperson/samba:latest"], ports: [{ port: 445, ip: "192.0.2.245" }],
@@ -2043,7 +2043,7 @@ ssh_pwauth: true
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       // Homestead's own release, offered on the top bar and under Settings › Updates.
       { ns: "lab", name: "homestead", homestead: "self", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: `ghcr.io/wjcloudy/homestead:${typeof HOMESTEAD_VERSION === "string" ? HOMESTEAD_VERSION : "2.8.302"}`, candidate: "ghcr.io/wjcloudy/homestead:2.9.0", candidate_tag: "2.9.0", remote_digest: "sha256:ghi", available: true }] },
+        images: [{ container: "homestead", deployed: `ghcr.io/homestead-lab/homestead:${typeof HOMESTEAD_VERSION === "string" ? HOMESTEAD_VERSION : "2.8.302"}`, candidate: "ghcr.io/homestead-lab/homestead:2.9.0", candidate_tag: "2.9.0", remote_digest: "sha256:ghi", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
     // The demo is a Harvester cluster: kube-vip and Multus come with it.
@@ -2118,7 +2118,7 @@ ssh_pwauth: true
     if (path === "prepare") row.status = "ready";
     return { ...row, events: row.events.length };
   };
-  responses["/api/diagnostics/issue"] = () => ({ title: "Container restart fails", body: "### What happened\nRestart did not return the container to Ready.\n\n### Diagnostics\nHomestead demo. Identifiers anonymised. No logs attached.", url: "https://github.com/wjcloudy/homestead/issues/new?title=Container%20restart%20fails", comment_shortened: false });
+  responses["/api/diagnostics/issue"] = () => ({ title: "Container restart fails", body: "### What happened\nRestart did not return the container to Ready.\n\n### Diagnostics\nHomestead demo. Identifiers anonymised. No logs attached.", url: "https://github.com/homestead-lab/homestead/issues/new?title=Container%20restart%20fails", comment_shortened: false });
   const original = window.fetch.bind(window);
   /* Linked clusters: this one, a branch office that answers, and a DR site that is off. */
   const demoSites = [
@@ -2373,7 +2373,7 @@ ssh_pwauth: true
       bar.id = "demoBanner";
       bar.className = "demobanner";
       bar.innerHTML = `Live demo · ${scenario === "healthy" ? "healthy cluster" : scenario + " scenario"}: made-up data, and nothing you do here is saved. `
-        + '<a href="https://github.com/wjcloudy/homestead" target="_blank" rel="noopener">Homestead on GitHub</a>';
+        + '<a href="https://github.com/homestead-lab/homestead" target="_blank" rel="noopener">Homestead on GitHub</a>';
       document.body.prepend(bar);
     };
     if (document.body) banner(); else document.addEventListener("DOMContentLoaded", banner);
@@ -2400,7 +2400,7 @@ ssh_pwauth: true
     if (cluster && key === "/api/image-updates") {
       const branchReport = { checked_at: new Date().toISOString(), updates: 0, errors: 0, workloads: [
         { ns: "lab", name: "homestead", available: true, can_rollback: true, images: [{ container: "homestead",
-          deployed: "ghcr.io/wjcloudy/homestead:2.8.200", candidate: "ghcr.io/wjcloudy/homestead:2.9.0", candidate_tag: "2.9.0", available: true }] },
+          deployed: "ghcr.io/homestead-lab/homestead:2.8.200", candidate: "ghcr.io/homestead-lab/homestead:2.9.0", candidate_tag: "2.9.0", available: true }] },
         { ns: "lab", name: "jellyfin", available: false, can_rollback: false, images: [] }] };
       return new Response(JSON.stringify(branchReport), { status: 200, headers: { "Content-Type": "application/json" } });
     }
@@ -2412,7 +2412,7 @@ ssh_pwauth: true
       report.channel = channel;
       const image = report.workloads.find(w => w.homestead === "self").images[0];
       image.candidate_tag = channel === "dev" ? "2.9.0-dev.1" : "2.9.0";
-      image.candidate = "ghcr.io/wjcloudy/homestead:" + image.candidate_tag;
+      image.candidate = "ghcr.io/homestead-lab/homestead:" + image.candidate_tag;
       return new Response(JSON.stringify(responses["/api/settings"]), { status: 200, headers: { "Content-Type": "application/json" } });
     }
     const configured = responses[key];

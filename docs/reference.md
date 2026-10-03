@@ -2,7 +2,7 @@
 
 Every part of Homestead in detail: installing, each page and what it does,
 security, and how releases are made. The [README](../README.md) is the
-overview; the [wiki](https://github.com/wjcloudy/homestead/wiki) is the guided
+overview; the [wiki](https://github.com/homestead-lab/homestead/wiki) is the guided
 tour, from building a cluster to each page in turn.
 
 ## One line: install and node doctor
@@ -20,7 +20,7 @@ On a bare Linux machine (x86-64 or 64-bit ARM - old PCs, mini PCs, VMs), or on
 a Harvester host, or on any node of a cluster:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo sh
 ```
 
 It says what it found on the machine and offers what fits, as menus. A machine
@@ -28,7 +28,7 @@ without `whiptail` or `dialog` - minimal and cloud images often have neither -
 gets `whiptail` from its own package manager first; `--text` keeps to plain
 prompts instead:
 
-![The installer's menu](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-menu.png)
+![The installer's menu](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-menu.png)
 
 - **Install Homestead.** It checks the machine first: memory, disk, the
   internet, ports, the hostname, the clock, the firewall, hardware
@@ -51,7 +51,7 @@ prompts instead:
   `/var/log/homestead-install.log`) and ends with Homestead's address and the
   details for joining the next node.
 
-  ![The installation summary](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-ready.png)
+  ![The installation summary](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-ready.png)
 - **Check node health.** The node doctor looks at the host:
   - the Kubernetes service, disk and inodes, memory, the clock;
   - iSCSI and multipath, which Longhorn needs;
@@ -75,8 +75,8 @@ and `HS_VERSION`; `--help` lists them.
 Underneath, k3s and RKE2 installs come from
 [`scripts/bootstrap-k3s.sh`](../scripts/bootstrap-k3s.sh) (`--rke2` for RKE2),
 which can also be run directly. The
-[k3s guide](https://github.com/wjcloudy/homestead/wiki/Installing-on-k3s) and the
-[RKE2 guide](https://github.com/wjcloudy/homestead/wiki/Installing-on-RKE2) walk
+[k3s guide](https://github.com/homestead-lab/homestead/wiki/Installing-on-k3s) and the
+[RKE2 guide](https://github.com/homestead-lab/homestead/wiki/Installing-on-RKE2) walk
 through all of it.
 
 **Addresses on k3s.** k3s's built-in ServiceLB publishes each app on every
@@ -128,7 +128,7 @@ Each release publishes a chart to GitHub's registry, with the node probe
 included (switch it off with `nodeprobe.enabled=false`):
 
 ```bash
-helm install homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --create-namespace --set service.loadBalancerIP=192.0.2.242
+helm install homestead oci://ghcr.io/homestead-lab/charts/homestead -n homestead --create-namespace --set service.loadBalancerIP=192.0.2.242
 ```
 
 On k3s with its built-in ServiceLB there is no address to choose - Homestead
@@ -136,7 +136,7 @@ answers on every node's own address - and storage defaults to the cluster's
 class (`local-path`, or Longhorn once installed):
 
 ```bash
-helm install homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --create-namespace --set service.kubeVip=false
+helm install homestead oci://ghcr.io/homestead-lab/charts/homestead -n homestead --create-namespace --set service.kubeVip=false
 ```
 
 Homestead runs in its own namespace and deploys apps, shares and the probe to
@@ -145,7 +145,7 @@ chart is ever uninstalled - as it keeps its own data volume. Values worth
 knowing: `service.loadBalancerIP` (with `service.kubeVip`, on by default for
 Harvester), `persistence.storageClass` and `storageClass` (empty: the
 cluster's default), `cloudflareAccess.*`. `helm show values
-oci://ghcr.io/wjcloudy/charts/homestead` lists them all. The chart is made
+oci://ghcr.io/homestead-lab/charts/homestead` lists them all. The chart is made
 from the same manifests as `deploy/` by `scripts/render_chart.py`, so both
 install the same thing; there is one Homestead per cluster.
 
@@ -920,7 +920,7 @@ original pods to terminate and recheck placement before starting the replacement
 Service addresses, volumes and existing service-selector labels are preserved.
 Failures retain resources without automatic rollback or replay; inspect both
 names before starting either. Admin recovery only acknowledges the outcome and
-stops tracking. See [renaming a workload](https://github.com/wjcloudy/homestead/wiki/Containers#renaming-a-workload)
+stops tracking. See [renaming a workload](https://github.com/homestead-lab/homestead/wiki/Containers#renaming-a-workload)
 for the supported ownership, autoscaler and readiness boundaries.
 
 Jobs that can be cancelled offer **Cancel**. It first says what cancelling would
@@ -1041,7 +1041,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.302/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/v2.8.302/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -1308,7 +1308,7 @@ whose pods have not appeared yet. A later failure stops the batch and names what
 was already made, without deleting workloads or volumes. The example placement
 is not a scheduler reservation; unknown metrics and conservative RAM estimates
 require acknowledgement. An incomplete bounded search requires splitting the
-batch. See the [batch review and recovery guide](https://github.com/wjcloudy/homestead/wiki/Importing#batch-capacity-review).
+batch. See the [batch review and recovery guide](https://github.com/homestead-lab/homestead/wiki/Importing#batch-capacity-review).
 
 ## Editing files on a volume
 
@@ -1969,11 +1969,11 @@ Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 For a release such as `v2.8.302`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.302
-ghcr.io/wjcloudy/homestead:2.8
-ghcr.io/wjcloudy/homestead:2
-ghcr.io/wjcloudy/homestead:latest
-ghcr.io/wjcloudy/homestead:sha-<commit>
+ghcr.io/homestead-lab/homestead:2.8.302
+ghcr.io/homestead-lab/homestead:2.8
+ghcr.io/homestead-lab/homestead:2
+ghcr.io/homestead-lab/homestead:latest
+ghcr.io/homestead-lab/homestead:sha-<commit>
 ```
 
 The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry

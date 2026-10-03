@@ -367,7 +367,7 @@ window.setRole = async (name, role) => {
    Settings › Users and access: keys for Home Assistant, scripts and AI
    agents. Each expires, holds only the scopes it is given and works on
    /api/v1 alone; the token is shown once, when it is made. */
-const API_DOCS = "https://github.com/wjcloudy/homestead/wiki/API";
+const API_DOCS = "https://github.com/homestead-lab/homestead/wiki/API";
 const API_TTLS = [["1 day", 86400], ["7 days", 7 * 86400], ["30 days", 30 * 86400], ["90 days", 90 * 86400], ["1 year", 365 * 86400]];
 const keyUntil = t => {
   const left = t - Date.now() / 1000;

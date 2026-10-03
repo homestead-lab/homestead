@@ -60,10 +60,10 @@ TCP 9500-9504.
 On the first machine:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo sh
 ```
 
-![The installer's menu](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-menu.png)
+![The installer's menu](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-menu.png)
 
 Select **Install Homestead**, then **Create a new cluster**, then **k3s**
 (the other choice, RKE2, has [its own guide](Installing-on-RKE2)). The installer
@@ -71,7 +71,7 @@ checks the machine first (memory, disk, the internet, ports, the hostname, the
 clock, the firewall, `/dev/kvm`, an address from DHCP) and stops on anything
 that would make the install fail, saying what to put right.
 
-![The checks](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-checks.png)
+![The checks](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-checks.png)
 
 It asks which address the other machines reach this one on, when it has more
 than one, and whether to install Longhorn, the node probe and KubeVirt. Where
@@ -86,7 +86,7 @@ address. Leave it empty to keep the nodes' own addresses and add a VIP later
 does the same for `bootstrap-k3s.sh`.
 The installation summary then shows the settings and the version of each component:
 
-![The installation summary](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-ready.png)
+![The installation summary](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-ready.png)
 
 Each defaults to its current recommended release - k3s's stable channel,
 Longhorn's and CDI's newest release, KubeVirt's stable release, Homestead's
@@ -94,7 +94,7 @@ newest. To install another version, select the component: the list comes
 live from k3s's release channels and from GitHub, and **Enter a version
 manually** takes any other.
 
-![Choosing the k3s version](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-versions.png)
+![Choosing the k3s version](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-versions.png)
 
 Select **Install**, and it takes 5-10 minutes, with a progress bar.
 
@@ -118,13 +118,13 @@ The machine's own screen (not SSH) now shows a live status console in place of
 the login prompt - press Enter for the usual login. See
 [Local host console](Installing-Homestead#local-host-console).
 
-![The host console](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-host-status.png)
+![The host console](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-host-status.png)
 
-The installer runs [`bootstrap-k3s.sh`](https://github.com/wjcloudy/homestead/blob/main/scripts/bootstrap-k3s.sh)
+The installer runs [`bootstrap-k3s.sh`](https://github.com/homestead-lab/homestead/blob/main/scripts/bootstrap-k3s.sh)
 to do this. You can run it yourself instead, with no questions:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - server
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - server
 ```
 
 Options go after `server`:
@@ -148,7 +148,7 @@ The script is safe to run again: each step finds what the last run left.
 On each further machine, run the same line:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo sh
 ```
 
 Select **Install Homestead**, then **Join an existing cluster as a worker
@@ -168,13 +168,13 @@ sudo cat /var/lib/rancher/k3s/server/node-token
 As a **worker** (runs apps, not the control plane):
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - agent https://192.0.2.10:6443 <token>
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - agent https://192.0.2.10:6443 <token>
 ```
 
 As another **server** (control plane and etcd as well):
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - join https://192.0.2.10:6443 <token>
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - join https://192.0.2.10:6443 <token>
 ```
 
 Use `192.0.2.10` as the first machine's address, and your token. **Cluster →
@@ -369,7 +369,7 @@ Run the node doctor on the machine: the same line, then **Check node
 health**.
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo sh
 ```
 
 It checks the host and the cluster, lists what it found worst first, and
@@ -460,7 +460,7 @@ skip this prompt. Terminal-size queries are read-only, with a 24-row fallback.
 For an older installer, download it first so sudo starts with terminal input:
 
 ```bash
-curl -fL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh -o /tmp/homestead-install.sh
+curl -fL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh -o /tmp/homestead-install.sh
 sudo sh /tmp/homestead-install.sh
 ```
 
@@ -486,7 +486,7 @@ To trace startup without changing the cluster, save the script and run it
 with `--dry-run` (exit at the first menu):
 
 ```bash
-curl -fL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh -o /tmp/homestead-install.sh
+curl -fL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh -o /tmp/homestead-install.sh
 sudo sh -x /tmp/homestead-install.sh --dry-run
 ```
 

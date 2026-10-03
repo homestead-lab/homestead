@@ -15,11 +15,11 @@ def deployment(tracked=None):
 
 class ReleaseTagTests(unittest.TestCase):
     def test_the_tracked_release_names_a_digest_pinned_image(self):
-        dep = deployment({"homestead": "ghcr.io/wjcloudy/homestead:2.8.217"})
-        self.assertEqual("2.8.217", server.release_tag(dep, "homestead", "ghcr.io/wjcloudy/homestead@sha256:" + "a" * 64))
+        dep = deployment({"homestead": "ghcr.io/homestead-lab/homestead:2.8.217"})
+        self.assertEqual("2.8.217", server.release_tag(dep, "homestead", "ghcr.io/homestead-lab/homestead@sha256:" + "a" * 64))
 
     def test_without_one_the_image_says_its_own_tag(self):
-        self.assertEqual("2.8.215", server.release_tag(deployment(), "homestead", "ghcr.io/wjcloudy/homestead:2.8.215"))
+        self.assertEqual("2.8.215", server.release_tag(deployment(), "homestead", "ghcr.io/homestead-lab/homestead:2.8.215"))
         self.assertEqual("5000", server.release_tag(deployment(), "app", "registry.lan:5000/app"), "a registry port is not a tag") \
             if False else None
 

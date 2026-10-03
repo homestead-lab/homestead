@@ -1,4 +1,4 @@
-**[Home](Home)** · **[Live demo](https://wjcloudy.github.io/homestead/)**
+**[Home](Home)** · **[Live demo](https://homestead-lab.github.io/homestead/)**
 
 **Install**
 - [On k3s (recommended for home)](Installing-on-k3s)

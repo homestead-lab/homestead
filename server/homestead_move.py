@@ -698,7 +698,7 @@ def setup_storage(name, size_gb=100, lb_ip="", vip_mode="", port=0):
     if old:
         raise ValueError(f"{name} runs Homestead {old}, which sets up backup storage with MinIO - and MinIO's "
                          "images can no longer be downloaded. Update it to 2.8.111 or later first, then set it up: "
-                         "kubectl -n lab set image deployment/homestead homestead=ghcr.io/wjcloudy/homestead:2.8.111")
+                         "kubectl -n lab set image deployment/homestead homestead=ghcr.io/homestead-lab/homestead:2.8.111")
     size_gb = int(size_gb or 100)
     # No address asked for: the far cluster's shared address, where it has one.
     result = remote(name, "/api/objectstore/deploy",

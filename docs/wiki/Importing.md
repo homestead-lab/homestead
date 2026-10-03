@@ -7,7 +7,7 @@ from a web address.
 Workloads from another Homestead cluster move under **Settings → Linked
 clusters**.
 
-![Import](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-import.jpg)
+![Import](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-import.jpg)
 
 ## From Unraid or a Docker host
 

@@ -7,9 +7,9 @@ widely tested platform with Homestead.** One command turns a spare Linux machine
 into a cluster with Homestead on it. RKE2 and Harvester are supported alternatives;
 you can also install Homestead on an existing Kubernetes cluster.
 
-[![Homestead dashboard](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-dashboard.jpg)](https://wjcloudy.github.io/homestead/)
+[![Homestead dashboard](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-dashboard.jpg)](https://homestead-lab.github.io/homestead/)
 
-**[Try the live demo](https://wjcloudy.github.io/homestead/)**: the real interface on made-up data, in your
+**[Try the live demo](https://homestead-lab.github.io/homestead/)**: the real interface on made-up data, in your
 browser, with nothing to install. Every page works, and nothing you do there
 is saved.
 
@@ -22,7 +22,7 @@ Homestead's demo data, so they stay current on their own.*
 does it:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo sh
 ```
 
 Choose **k3s** in the installer for a new home setup, or follow the guide for
@@ -70,5 +70,5 @@ probe - and your first sign-in.
 - [Settings](Settings) - cluster add-ons, hardware, users, MQTT, Homestead updates and health
 - [Troubleshooting](Troubleshooting) - the problems people actually hit
 
-The [reference](https://github.com/wjcloudy/homestead/blob/main/docs/reference.md) covers every feature in depth; this wiki is the guided
+The [reference](https://github.com/homestead-lab/homestead/blob/main/docs/reference.md) covers every feature in depth; this wiki is the guided
 tour.

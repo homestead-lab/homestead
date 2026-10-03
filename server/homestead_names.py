@@ -11,6 +11,9 @@ BRAND = "homestead"
 DOMAIN = "homestead.io"
 NODEPROBE = f"{BRAND}-nodeprobe"
 
+# Where Homestead's own image is published.
+IMAGE = "ghcr.io/homestead-lab/homestead"
+
 kget = None
 
 

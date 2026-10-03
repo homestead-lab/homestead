@@ -395,7 +395,7 @@ def issue(report_id, owner):
             record["version"] + f"\n{len(record['events'])} UI/request events captured.\n" +
             "Anonymised diagnostics available separately. No logs attached.\n")
     title = record["title"][:90]
-    prefix = "https://github.com/wjcloudy/homestead/issues/new?"
+    prefix = "https://github.com/homestead-lab/homestead/issues/new?"
     original_body = body
     while len(prefix + urllib.parse.urlencode({"title": title, "body": body})) > 1800:
         body = body[:-20]

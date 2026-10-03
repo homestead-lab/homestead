@@ -41,8 +41,8 @@ test("an explicit registry, tag, or digest is not rewritten", () => {
 
 test("an update review names the release it moves between", () => {
   const digest = n => `sha256:${String(n).repeat(64).slice(0, 64)}`;
-  assert.deepEqual([...context.imageChangeWords(`ghcr.io/wjcloudy/homestead:2.8.200@${digest(1)}`,
-    `ghcr.io/wjcloudy/homestead:2.8.205@${digest(2)}`)], ["2.8.200", "2.8.205"]);
+  assert.deepEqual([...context.imageChangeWords(`ghcr.io/homestead-lab/homestead:2.8.200@${digest(1)}`,
+    `ghcr.io/homestead-lab/homestead:2.8.205@${digest(2)}`)], ["2.8.200", "2.8.205"]);
   assert.deepEqual([...context.imageChangeWords("ghcr.io/example/app:1.0.0", "ghcr.io/example/app:1.1.0")], ["1.0.0", "1.1.0"]);
 });
 
@@ -55,8 +55,8 @@ test("a new build under the same tag shows the start of each digest", () => {
 
 test("the release Homestead tracks names a digest-pinned image", () => {
   // An update pins the image to its digest, dropping the tag; the server sends the tracked release beside it.
-  assert.deepEqual([...context.imageChangeWords(`ghcr.io/wjcloudy/homestead@sha256:${"a".repeat(64)}`,
-    `ghcr.io/wjcloudy/homestead@sha256:${"b".repeat(64)}`, "2.8.215", "2.8.217")], ["2.8.215", "2.8.217"]);
+  assert.deepEqual([...context.imageChangeWords(`ghcr.io/homestead-lab/homestead@sha256:${"a".repeat(64)}`,
+    `ghcr.io/homestead-lab/homestead@sha256:${"b".repeat(64)}`, "2.8.215", "2.8.217")], ["2.8.215", "2.8.217"]);
   assert.deepEqual([...context.imageChangeWords(`nginx@sha256:${"a".repeat(64)}`, `nginx@sha256:${"b".repeat(64)}`, "latest", "latest")],
     ["latest · aaaaaaa", "latest · bbbbbbb"]);
 });

@@ -9,7 +9,7 @@ keeps every job's steps and errors across restarts.
 On any node of a k3s, RKE2, Harvester or plain Kubernetes cluster:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo sh
 ```
 
 Select **Check node health**. It looks at:
@@ -22,13 +22,13 @@ Select **Check node health**. It looks at:
   failed pods left behind, Longhorn volumes, CoreDNS, Homestead, and how old
   the newest etcd snapshot is.
 
-![The node doctor](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-doctor.png)
+![The node doctor](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-doctor.png)
 
 The results are listed by severity: `[FAIL]`, `[WARN]`, then `[ OK ]`.
 Selecting one shows what is wrong and why it matters, and offers its fix,
 asking first.
 
-![A finding and its fix](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-doctor-fix.png)
+![A finding and its fix](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-doctor-fix.png)
 
 The fixes restart a stopped service (which also renews
 certificates due within 90 days), turn on time sync or `iscsid`, uncordon the
@@ -80,7 +80,7 @@ this.
 there:
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/main/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/main/deploy/rbac.yaml
 ```
 
 ## Containers
@@ -249,6 +249,6 @@ itself.
 
 ## Asking for help
 
-[Open an issue](https://github.com/wjcloudy/homestead/issues) with the
+[Open an issue](https://github.com/homestead-lab/homestead/issues) with the
 Homestead version (Settings → Homestead), the cluster type, and the job's steps from
 the job tray.
