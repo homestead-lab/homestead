@@ -189,3 +189,51 @@ test("uncertain rename directs inspection of both names and never offers stale r
   assert.doesNotMatch(t.html(),/Reload saved workload/);
   assert.equal(t.fields['#editGo'].disabled,true);
 });
+
+
+test('single-host shutdown and reboot need outage acknowledgement without force', async () => {
+  for (const action of ['reboot', 'poweroff']) {
+    const t=setup({...hostReview,action,planned_outage:true,stranded:[{ns:'lab',name:'homestead'}],
+      maintenance:{budgets:[{pod:'longhorn-system/manager',budget:'manager',allowed:0,wait_for_drain:false}]}});
+    hostFields(t);
+    t.fields['#pw_outage']={checked:false};
+    await t.c.window.nodePowerReview('host1',action);
+    assert.match(t.html(), /planned whole-cluster outage/);
+    assert.match(t.html(), /does not evict pods/);
+    assert.match(t.html(), /id="pw_outage"/);
+    assert.doesNotMatch(t.html(), /Override these checks|id="pw_allow"|waits for Longhorn during drain|host stays cordoned/);
+    if(action==='poweroff') assert.match(t.html(), /console or physical access to power this host on again/);
+    await t.c.window.nodePower('host1',action);
+    assert.equal(t.sent.length,0);
+    t.fields['#pw_outage'].checked=true;
+    await t.c.window.nodePower('host1',action);
+    assert.equal(t.sent.length,1);
+    assert.equal(t.sent[0].body.force,false);
+    assert.equal(t.sent[0].body.allow_cluster_outage,true);
+    assert.equal(t.sent[0].body.allow_stranded,true);
+    assert.match(t.html(), /not cordoned/);
+    assert.doesNotMatch(t.html(), /host stays cordoned/);
+  }
+});
+
+test('single-host outage still requires separate storage-risk acknowledgement', async () => {
+  const t=setup({...hostReview,planned_outage:true,requires_data_ack:true});
+  hostFields(t); t.fields['#pw_outage']={checked:true};t.fields['#pw_data']={checked:false};
+  await t.c.window.nodePowerReview('host1','reboot');
+  await t.c.window.nodePower('host1','reboot');
+  assert.equal(t.sent.length,0);
+  t.fields['#pw_data'].checked=true;
+  await t.c.window.nodePower('host1','reboot');
+  assert.equal(t.sent.length,1);
+});
+
+test('host actions exposes normal reviews even when quorum cannot lose a member', async () => {
+  const t=setup(hostReview);
+  t.c.api=async path=>path==='/api/quorum'?{members:['host1'],can_lose:0,total:1,ready:['host1'],quorum_needs:1}:
+    {workloads:[],stranded:[]};
+  await t.c.window.nodeActions('host1');
+  assert.match(t.html(), /Review reboot/);
+  assert.match(t.html(), /Review shutdown/);
+  assert.match(t.html(), /planned whole-cluster outage/);
+  assert.doesNotMatch(t.html(), /Override - reboot or shut down anyway|Review forced/);
+});

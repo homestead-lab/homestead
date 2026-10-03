@@ -955,7 +955,17 @@ requires a fresh host review, not a repeat of the previous request. A helper in
 image-pull backoff may still start later: inspect it before sending anything else.
 Missing creation receipts and replacement helpers are not treated as the original.
 
-Longhorn instance-manager budgets may allow zero disruptions before maintenance
+A verified single-host cluster offers normal **Reboot** and **Shut down** as a
+planned whole-cluster outage, without a forced override. Type the host name and
+acknowledge that applications, storage and Homestead go offline; shutdown also
+requires console or physical access to power it on again. This path leaves
+scheduling unchanged and sends the host's systemd power request without evicting
+pods. Running VMs, active data helpers and incomplete inventories still block it.
+A sole etcd member with worker nodes does not qualify. Topology, identity and
+reviewed impacts are rechecked before submission. Unattended OS rollouts cannot
+approve this outage.
+
+On multi-host clusters, Longhorn instance-manager budgets may allow zero disruptions before maintenance
 starts. The review explains that Homestead will cordon the host, evict workload
 pods first, and wait up to two minutes for Longhorn to permit storage pod eviction.
 It uses the Kubernetes Eviction API throughout; it does not delete these pods or
@@ -975,8 +985,9 @@ cordon and drain and is still refused when power control is off, the host is not
 Ready, a helper is active, or the host's identity or boot ID changed.
 
 A reboot is observed through the same Node identity returning Ready with a changed
-boot ID, followed by affected Longhorn health checks. The host stays cordoned;
-this does not verify application recovery or automatically allow scheduling.
+boot ID, followed by affected Longhorn health checks. After a multi-host drain
+the host stays cordoned; a planned single-host outage leaves scheduling unchanged.
+Neither verifies application recovery.
 For shutdown, [NotReady is not proof of physical power-off](https://kubernetes.io/docs/reference/node/node-status/).
 After ten minutes without confirmation the job reports that shutdown could not
 be verified. Check the host console or physical power; no automatic retry is sent.
