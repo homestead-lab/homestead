@@ -49,6 +49,8 @@ not Unraid local parity or ZFS send/receive backups.
 | App discovery | **Community Applications catalogue** | Community Applications plugin | OS / OCI templates | App Store | VM images; apps via guest clusters / Rancher | Kubernetes / Helm ecosystem | OS image catalogue | Official App Catalog (Artifact Hub / Helm) |
 | Helm chart management | **Search, inspect and manage controller-owned charts** | Add Kubernetes + Helm UI | Guest Kubernetes + Helm UI | Add Kubernetes + Helm UI | Rancher / additional UI | External Helm client / UI | Guest Kubernetes + Helm UI | **Official App Catalog** |
 | Containers | **Kubernetes apps** | Docker | LXC; OCI images¹ | Docker | Kubernetes via Rancher / guests² | Kubernetes | LXD system containers; Docker in guests | Kubernetes resource management |
+| Linux system containers (LXC / LXD) | **Not supported** | Community LXC plugin | LXC management | Not supported | Not supported | Not supported | LXD management | Not supported |
+| Single sign-on (SSO) | **No identity-provider login** | WebGUI OIDC configuration | OpenID Connect / external authentication | No documented identity-provider login | Via Rancher integration | Via separate Omni management | LXD OIDC login | OIDC login |
 | Virtual machines | **KubeVirt integration** | KVM | KVM | Separate tooling | KubeVirt | Add KubeVirt | LXD / QEMU | KubeVirt + community plugin / resources |
 | Multi-node management | **Clusters and linked clusters** | Individual servers | Cluster management | Individual servers | Cluster management | Kubernetes clusters | LXD clusters | Existing clusters; provision/scale through configured Cluster API |
 | Storage across nodes | **Longhorn replicas** | Local array / pools; ZFS replication | Ceph; ZFS replication | Host storage | Longhorn replicas | Add storage such as Longhorn | MicroCeph | Cluster storage such as Longhorn / Ceph |
@@ -149,6 +151,28 @@ architectural choice, not evidence of better performance or reliability.
 
 ## Scope of the additional comparison rows
 
+- **Linux system containers (LXC / LXD)** means managing full Linux environments
+  that share the host kernel. Proxmox and MicroCloud provide this directly;
+  Unraid has a community LXC plugin. Homestead manages Kubernetes application
+  containers and KubeVirt VMs, not LXC/LXD instances. Installing a separate LXC
+  manager inside a VM does not count as support in the compared product.
+- **Single sign-on (SSO)** means signing into the management interface through
+  an identity provider, not SSO for applications hosted on the platform.
+  Homestead has local users and roles; its Cloudflare Access gate does not
+  replace that login or map external identities into Homestead accounts.
+  Unraid, Proxmox, MicroCloud's LXD UI and Headlamp support identity-provider
+  login. Harvester uses additional Rancher management; Talos can use the
+  separate Omni product, so both receive grey circles. CasaOS has no documented
+  identity-provider login in the reviewed core product.
+
+  Sources: [Unraid LXC plugin](https://github.com/ich777/unraid-lxc-plugin),
+  [Unraid OIDC setup](https://docs.unraid.net/API/oidc-provider-setup/),
+  [Proxmox features](https://www.proxmox.com/en/products/proxmox-virtual-environment/features),
+  [LXD authentication](https://canonical.com/lxd/docs/latest/authentication/),
+  [Headlamp OIDC](https://headlamp.dev/docs/latest/installation/in-cluster/oidc/),
+  [Harvester/Rancher authentication](https://docs.harvesterhci.io/v1.5/rancher/rancher-integration/),
+  [Omni authentication configuration](https://github.com/siderolabs/omni/blob/main/deploy/helm/omni/README.md),
+  and [Homestead's security model](security.md).
 - **Helm chart management (UI)** means discovering/installing charts and managing
   releases, not merely installing the compared product with a Helm chart.
   Homestead and Headlamp provide guided interfaces. Headlamp's official App
