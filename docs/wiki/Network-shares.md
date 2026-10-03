@@ -81,6 +81,26 @@ This follows the [Servarr shared-group guidance](https://wiki.servarr.com/docker
 - **Linux**: `smb://<address>/<share>` in the file manager, or mount with
   `mount -t cifs`.
 
+## Folder names and capitalization
+
+Use one spelling for each folder shared with Windows, including in container
+mount paths and application settings. Linux can store `Movie-Library` and
+`movie-library` as separate directories, while Windows SMB access can resolve
+both names to the same folder. Explorer may show both names with identical
+contents even though Linux lists different files in each.
+
+If this happens, compare both exact paths through Homestead's volume file
+browser or Linux. Check which path each application uses, then give one folder
+a distinct name and update any references to it. Renaming on Linux avoids
+Windows resolving the change against the wrong folder. Keep both sets of files
+until their contents and application paths have been checked.
+
+SMB name handling does not prevent containers or host processes writing
+directly to Linux storage from creating case-only duplicates. Homestead does
+not currently scan for these collisions or reject them in application folder
+paths. Manually editing the managed Samba container is not a durable prevention
+measure; its configuration is rebuilt from the saved share settings.
+
 ## Changes and safety
 
 Growing a share happens in place. Access changes restart Samba, followed in the
