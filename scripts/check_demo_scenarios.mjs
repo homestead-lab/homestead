@@ -11,7 +11,7 @@ try {
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
     await page.goto(`${base}/?demo=1${scenario === "healthy" ? "" : `&demo-scenario=${scenario}`}`, { waitUntil: "networkidle" });
-    await page.locator("#views .phead").waitFor();
+    await page.locator("#views .phead").waitFor({state:"attached"});
     await page.waitForFunction(() => document.querySelector("#healthPill")?.textContent?.trim());
     const expected = scenario === "incidents" ? "DEGRADED" : scenario.toUpperCase();
     assert.equal((await page.locator("#healthPill").innerText()).trim(), expected);

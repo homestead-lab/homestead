@@ -237,7 +237,7 @@ async function audit([label, width, height, mobile], items) {
     localStorage.setItem("homestead.settings", JSON.stringify({ theme, bg: "soft", blur: 26, motion: "off", refresh: 60 }));
   }, theme);
   await page.goto(base, { waitUntil: "networkidle" });
-  await page.locator("#views .phead").waitFor();
+  await page.locator("#views .phead").waitFor({state:"attached"});
   await page.evaluate(() => document.fonts.ready);
   await page.addStyleTag({ content: "#jobTray{display:none!important}" });
 
@@ -246,7 +246,7 @@ async function audit([label, width, height, mobile], items) {
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } });
       await page.evaluate((v) => go(v), view);
-      await page.locator("#views .phead").waitFor();
+      await page.locator("#views .phead").waitFor({state:"attached"});
       await page.waitForTimeout(700);
       for (const step of steps) {
         if (step.startsWith("click:")) {

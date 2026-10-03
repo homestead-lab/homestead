@@ -18,7 +18,7 @@ try {
     await button("Record a bug").click(); await button("Start recording").click();
     await page.locator("#diagnosticRecorder:not(.hidden)").waitFor();
     await page.evaluate(() => go("workloads"));
-    await page.locator("#views .phead").waitFor();
+    await page.locator("#views .phead").waitFor({state:"attached"});
     await page.evaluate(() => {
       window.diagnosticNoop = () => {};
       const fixture = document.createElement("div"); fixture.id = "diagnosticFixture";

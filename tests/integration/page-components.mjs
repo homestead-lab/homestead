@@ -25,7 +25,7 @@ let browser;
 try {
   await fs.mkdir(output,{recursive:true});
   browser=await chromium.launch({headless:true});
-  for(const width of [1440,390]) for(const theme of ['dark','light']) {
+  for(const width of [1440,390,320]) for(const theme of ['dark','light']) {
     const context=await browser.newContext({viewport:{width,height:1000}}), page=await context.newPage(), errors=[];
     page.on('pageerror',e=>errors.push(e.message));
     await page.route('**/*',route=>route.request().url().startsWith(base)?route.continue():route.abort());
@@ -63,9 +63,19 @@ try {
     await page.waitForFunction(()=>document.querySelector('#settingsSaveBar')?.hidden);
     assert.equal(await page.locator('#set_cpu_warn').inputValue(),String(original-1));
     if(width<900){
+      assert.equal(await page.locator('.workspace-current').textContent(),'Monitoring');
+      assert.equal(await page.locator('.settings-back').textContent(),'‹ All settings');
+      await page.evaluate(()=>{const url=new URL(location.href);url.searchParams.set('tab','monitoring');history.replaceState(history.state,'',url);});
+      await page.locator('#set_cpu_warn').fill(String(original-2));
+      await page.locator('.settings-back').click();
+      await page.locator('.askdlg [data-a="no"]').click();
+      assert.equal(await page.locator('#set_cpu_warn').inputValue(),String(original-2));
+      await page.locator('#settingsSaveBar').getByRole('button',{name:'Discard',exact:true}).click();
       await page.locator('.settings-back').click();
       await page.locator('.settings-nav [data-tab="updates"]').waitFor({state:'visible'});
       assert.equal(await page.locator('.settings-main').isVisible(),false);
+      assert.equal(await page.evaluate(()=>new URL(location.href).searchParams.has('tab')),false);
+      assert.equal(await page.evaluate(()=>document.activeElement.dataset.tab),'monitoring');
     }
     await page.locator('.settings-nav [data-tab="updates"]').click();
     await page.locator('#settingsHostUpdates .settings-card-head').waitFor({state:'visible'});

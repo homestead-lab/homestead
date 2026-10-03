@@ -15,7 +15,7 @@ await page.addInitScript(() => {
   localStorage.setItem("homestead.settings", JSON.stringify({ theme: "dark", bg: "soft", blur: 26, motion: "off", refresh: 60 }));
 });
 await page.goto((process.env.HOMESTEAD_URL || "http://127.0.0.1:4173") + "/?demo=1", { waitUntil: "networkidle" });
-await page.locator("#views .phead").waitFor();
+await page.locator("#views .phead").waitFor({state:"attached"});
 await page.evaluate(() => document.fonts.ready);
 // The demo keeps jobs running for its own pages; in a picture the tray only
 // covers what the picture is of.
@@ -30,7 +30,7 @@ const capture = async (view, name, before) => {
     if (view) {
       await page.evaluate(() => { if (!document.querySelector("#modal")?.classList.contains("hidden")) closeModal(); });
       await page.evaluate(v => go(v), view);
-      await page.locator("#views .phead").waitFor();
+      await page.locator("#views .phead").waitFor({state:"attached"});
     }
     if (before) await page.evaluate(before);
     await settle();
@@ -45,7 +45,7 @@ const dialog = async (view, name, open) => {
   try {
     await page.evaluate(() => { if (!document.querySelector("#modal")?.classList.contains("hidden")) closeModal(); });
     await page.evaluate(v => go(v), view);
-    await page.locator("#views .phead").waitFor();
+    await page.locator("#views .phead").waitFor({state:"attached"});
     await settle();
     await page.evaluate(open);
     await page.locator("#modal:not(.hidden) #mbody").waitFor();
