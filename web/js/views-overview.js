@@ -315,9 +315,11 @@ function nodeComparisonLabel(nodes, name) {
   const boundary = Math.max(prefix.lastIndexOf("-"), prefix.lastIndexOf("_"), prefix.lastIndexOf("."));
   return name.slice(boundary + 1) || name;
 }
-function nodeComparison(nodes, context) {
+// One node is a card in a dashboard widget; the Nodes page shows it as a
+// one-column table when rows were chosen there.
+function nodeComparison(nodes, context, { singleCard = true } = {}) {
   if (!nodes.length) return '<div class="empty">No nodes reported.</div>';
-  if (nodes.length === 1) return `<div class="single-node-summary">${nodeCard(nodes[0])}</div>`;
+  if (nodes.length === 1 && singleCard) return `<div class="single-node-summary">${nodeCard(nodes[0])}</div>`;
   const id = `${context}-0`;
   nodeComparisons.set(id, { nodes });
   return nodeComparisonMarkup(id);
@@ -904,7 +906,7 @@ async function viewNodes() {
         STATE.platform && !STATE.platform.harvester && {label:"OS updates",run:"osUpdates()"},
         {label:"Hardware features",run:"hardwareFeatureSettings()",need:"admin"}
       ])}`)}
-   ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : nodeComparison(n, "nodes")}`);
+   ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : nodeComparison(n, "nodes", { singleCard: false })}`);
 }
 
 /* ---------------- a node's own terminal ----------------
