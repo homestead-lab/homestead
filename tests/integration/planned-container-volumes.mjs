@@ -49,6 +49,7 @@ try {
         { path: "/data", source: "nas-data", kind: "existing", sub_path: "data" },
       ] });
     }, { theme, kind });
+    await page.evaluate(()=>UI.selectSection("containerDeploy","storage"));
     let rows = page.locator("#d_vols .deploy-volume"), owner = rows.nth(0), reused = rows.nth(1);
     await reused.locator(".vk").selectOption("planned");
     assert.match(await reused.locator(".vselect").textContent(), /qbittorrent-appdata.*created with this workload/);
