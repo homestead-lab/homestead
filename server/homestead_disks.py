@@ -746,10 +746,10 @@ def alert_facts(inv):
                 if disk.get("ready"):
                     continue
                 facts.append({"key": f"disks:{node}:{disk['id']}", "category": "outage", "severity": "critical",
-                              "title": f"A Longhorn disk on {node} has failed",
-                              "resolved": f"The Longhorn disk {disk['path']} on {node} is working again",
+                              "title": f"Longhorn disk is not ready on {node}",
+                              "resolved": f"Longhorn disk warning cleared: {node} / {disk['path']}",
                               "body": (disk.get("missing") or disk.get("problem") or "Longhorn reports it not ready")
-                                      + f" ({disk['path']}). Its volumes run on their other copies meanwhile.",
+                                      + f" ({disk['path']}). Check volume replicas; workload availability depends on healthy copies.",
                               "href": f"/nodes/{node}"})
     return facts
 

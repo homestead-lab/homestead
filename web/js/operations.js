@@ -17,6 +17,7 @@ function operationAge(value) {
 
 function renderOperations() {
   const tray = $("#jobTray"), items = STATE.data.operations || [];
+  window.HealthInsights?.liveJobs(items,STATE.operationsStale);
   const active = items.filter(operationActive);
   // Clearing one at a time is fine for a stray failure and tedious after a
   // batch, so the header offers the lot - and says how many, because it will
@@ -55,7 +56,7 @@ function renderOperations() {
 }
 
 function operationCard(operation) { return `<article class="jobitem" data-operation="${esc(operation.id)}">
-    <div class="jobitemtop"><div><b>${esc(operation.title)}</b>
+    <div class="jobitemtop"><div><b>${UI.statusDot(({succeeded:"ok",failed:"bad",cancelled:"neutral"})[operation.status] || "warn")}${esc(operation.title)}</b>
       <span>${esc(operation.resource?.namespace ? operation.resource.namespace + " · " : "")}${esc(operation.resource?.kind || operation.kind)}</span></div>
       <span class="pill ${operationTone(operation.status)}">${esc(operation.status)}</span></div>
     ${operation.progress != null && Number.isFinite(Number(operation.progress)) ? `<div class="jobmeter" role="progressbar" aria-label="Reported progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.max(0, Math.min(100, Number(operation.progress)))}"><span class="${operation.status === "failed" ? "failed" : ""}" style="width:${Math.max(0, Math.min(100, Number(operation.progress)))}%"></span></div>` : ""}
@@ -89,7 +90,7 @@ function paintJobsDialog() {
   // Capture disclosure state before replacing the DOM; polling must not close it.
   const expanded = [...host.querySelectorAll("details[open][data-disclosure]")].map(el => [el.dataset.disclosure, el.closest("[data-operation]")?.dataset.operation || ""]);
   const rows = items => items.map(item => ({key:item.id, title:item.title,
-    detail:`${item.status}${item.resource?.namespace ? ` · ${item.resource.namespace}` : ""}`, attention:item.status === "failed"}));
+    tone:({succeeded:"ok",failed:"bad",cancelled:"neutral"})[item.status] || "warn", detail:`${item.status}${item.resource?.namespace ? ` · ${item.resource.namespace}` : ""}`, attention:item.status === "failed"}));
   const stale = STATE.operationsStale ? UI.callout("warn", "Connection lost", "Showing the last known status. Checking again; completion is not assumed.") : "";
   host.innerHTML = stale + (selected ? UI.masterDetail([
     {key:"attention", title:`Needs attention · ${attention.length}`, items:rows(attention)},

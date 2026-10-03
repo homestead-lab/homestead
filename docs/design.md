@@ -623,3 +623,25 @@ and faded, and outline the destination. The preview must preserve card dimension
 and container-query styling, remain inert and hidden from assistive technology,
 and disappear on drop, Escape, pointer cancellation, loss of focus or navigation.
 Keyboard reordering continues to use the normal card and live announcements.
+
+
+### Health advice and update monitoring
+
+- `HealthInsights` owns read-only observation rules and the same advice in dashboard widgets and **Cluster → Health**. Keep Critical, Medium and Low text beside color; unknown observations are actionable gaps, never healthy zeroes. Only reported etcd roles inform quorum advice; worker count does not.
+- `UI.insightList` is the compact shared row for observations: status dot, title, one brief explanation, status text and a review action. `UI.statusDot` also marks Jobs list entries and cards. Keep color accompanied by words.
+- Dashboard additions are optional account widgets. Do not insert them into existing saved layouts. Fetch only sources required by mounted widgets, share requests and reuse the existing Jobs refresh loop. Platform/host checks complement image checks in the Updates widget.
+- Backup freshness shows recorded external-backup ages and missing copies. A schedule, replica or snapshot is not proof of a successful external backup. Do not assume a daily recovery target for a weekly schedule.
+- Image selection ends with **Review selected** in `UI.actions`; checking registries is secondary. Review and acknowledgement still precede mutation. Keep policy and exact image/capacity detail in disclosures.
+- `rolloutProgress` uses `UI.progress` and `UI.checklist` for download, replacement pods and readiness. Show download percentages only with byte totals; old-pod readiness is not overall update progress. Finished queues count successfully updated apps. Preserve last-known progress under a disconnect notice.
+- SMART defaults stay **1 reallocated → warning; 1 pending / uncorrectable → critical**. Explain historical counts in tooltips and preserve user thresholds. The [smartmontools manual](https://github.com/smartmontools/smartmontools/blob/main/src/smartd.conf.5.in) reports nonzero pending and offline uncorrectable counts by default; severity mapping is Homestead's conservative policy, not a prediction of remaining drive life. [K3s embedded-etcd guidance](https://docs.k3s.io/datastore/ha-embedded) recommends an odd number of servers and at least three for high availability.
+
+
+### Alert acknowledgement
+
+Use the shared `UI.insightList` for active conditions, with severity text, a
+resource title, concise detail, and **Review** / **Acknowledge** actions. Put
+acknowledged conditions behind `UI.more`, with **Undo** available per condition.
+Keep **Close** in `UI.actions`. Account acknowledgement changes notification
+attention, never the underlying health verdict. Do not use a green healthy
+state for an acknowledged problem. See [notification rules](notifications.md)
+for trigger, delivery and wording contracts.

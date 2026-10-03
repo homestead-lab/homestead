@@ -2073,7 +2073,7 @@ div.ipam-line.dim{display:block}
 .ui-bar i{display:block;height:100%;border-radius:inherit;background:#fff;transition:width .4s var(--e)}
 .ui-progress.ok .ui-bar i{background:var(--ok)}.ui-progress.warn .ui-bar i{background:var(--med)}.ui-progress.bad .ui-bar i{background:var(--crit)}
 .ui-progress.unknown .ui-bar i{animation:ui-indeterminate 1.3s ease-in-out infinite}
-@keyframes ui-indeterminate{from{transform:translateX(-100%)}to{transform:translateX(290%)}}
+@keyframes ui-indeterminate{from{transform:translateX(0)}to{transform:translateX(185%)}}
 .ui-progress-detail{font-size:12px;color:var(--mut)}
 
 .ui-meter{position:relative;height:8px;border-radius:5px;background:rgba(255,255,255,.08);overflow:hidden;min-width:80px}
@@ -3240,3 +3240,14 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
   .srow:has(.appearance-seg){align-items:flex-start}
   .srow:has(.appearance-seg) .srow-c{flex:1 1 100%;justify-content:flex-start;margin:0}
 }
+
+/* Shared compact status/advice rows: status always has a text equivalent. */
+.ui-status-dot{display:inline-block;flex:none;width:8px;height:8px;border-radius:50%;background:var(--mut);margin-right:8px}
+.ui-status-dot.ok{background:var(--ok,#24bc88)}.ui-status-dot.bad{background:var(--crit)}.ui-status-dot.warn{background:var(--med)}.ui-status-dot.info{background:var(--low)}
+.ui-insight-row{display:flex;align-items:flex-start;gap:8px;padding:12px 0;border-bottom:1px solid var(--line)}
+.ui-insight-row:last-child{border-bottom:0}.ui-insight-row>.ui-status-dot{margin:6px 0 0}.ui-insight-row>div:first-of-type{flex:1;min-width:0}
+.ui-insight-row b,.ui-insight-row small{display:block;overflow-wrap:anywhere}.ui-insight-row small{color:var(--mut);font-size:12px;margin-top:4px}
+.ui-insight-action{display:flex;align-items:flex-end;flex-direction:column;gap:6px}.ui-insight-action .btn{padding:5px 9px;font-size:12px}
+.insight-summary{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:13px;font-weight:600;margin:10px 0}.insight-summary span{color:var(--mut);font-weight:400}
+.insight-widget{height:100%;min-width:0}.insight-widget .settings-card-head .btn{font-size:12px;padding:5px 8px}
+#clusterHealth{margin-bottom:var(--page-gap,14px)}

@@ -9,10 +9,17 @@ const Dashboard = (() => {
     cpu: {title:"Top CPU", description:"The busiest workloads", width:6, widths:[4,6,8,12]},
     memory: {title:"Top memory", description:"Workloads using the most RAM", width:6, widths:[4,6,8,12]},
     history: {title:"Over time", description:"Recorded cluster metrics", width:12, widths:[8,12]},
+    ...Object.fromEntries([
+      ["health","Health suggestions","Prioritized checks and next steps"],
+      ["workloads","Workload health","Readiness and stopped workloads"],
+      ["backups","Backup freshness","Oldest external backups and missing copies"],
+      ["updates","Updates awaiting review","Container, platform and host updates"],
+      ["jobs","Running and failed jobs","Active work and outcomes needing attention"],
+    ].map(([id,title,description])=>[id,{title,description,width:6,widths:[4,6,8,12],optional:true}])),
     portal: {title:"Portal links", description:"Your apps and devices", width:6, widths:[4,6,8,12]},
   });
   const widths = {4:"One third",6:"Half",8:"Two thirds",12:"Full width"};
-  const defaults = () => Object.entries(widgets).filter(([id])=>id!=="portal").map(([id,w])=>({id,width:w.width,height:0}));
+  const defaults = () => Object.entries(widgets).filter(([id,w])=>id!=="portal" && !w.optional).map(([id,w])=>({id,width:w.width,height:0}));
   const normalize = value => {
     if (value?.version !== 1 || !Array.isArray(value.items)) return defaults();
     const seen = new Set();
@@ -89,6 +96,7 @@ const Dashboard = (() => {
   const dirty = () => draft !== null && JSON.stringify(draft) !== initial;
   const announce = text => { const host=document.getElementById("dashboardStatus"); if(host) host.textContent=text; };
   function widgetContent(id) {
+    if (widgets[id]?.optional) return HealthInsights.widget(id);
     if (id === "portal") return `<div class="card flat dashboard-portal">${UI.moduleHeader("Portal links", "", '<button class="btn sm" onclick="go(\'portal\')">Open Portal</button>')}
       <div id="dashboardPortal">${portalBody()}</div></div>`;
     if (id === "history") return `<section class="card flat history-card" id="historyCard">${STATE.data.historyHtml || '<div class="empty small">History is loading…</div>'}</section>`;
@@ -213,8 +221,8 @@ const Dashboard = (() => {
     document.querySelector('[onclick="Dashboard.start()"]')?.focus();
   }
   const apiObject={widgets, defaults, normalize, content:{}, render, loadPortal, load, notice:()=>loadError?UI.callout("warn","Dashboard layout unavailable","Your saved layout could not be refreshed. Editing is unavailable until it reconnects."):"", editing:()=>draft!==null, dirty, start, save, cancel, leave, select, move,
-    invalidate(){session++;layout=null;revision=null;loadedUser=null;loadError="";layoutRequest=null;saving=false;clearGesture();draft=null;undo=[];redo=[];portalRequest=null;apiObject.content={};},
-    add(id){if(!Object.hasOwn(widgets,id)||draft===null||draft.some(item=>item.id===id))return;selected=id;change(()=>draft.push({id,width:widgets[id].width,height:0}),`${widgets[id].title} added.`);if(id==="portal")loadPortal();},
+    invalidate(){window.HealthInsights?.reset();session++;layout=null;revision=null;loadedUser=null;loadError="";layoutRequest=null;saving=false;clearGesture();draft=null;undo=[];redo=[];portalRequest=null;apiObject.content={};},
+    add(id){if(!Object.hasOwn(widgets,id)||draft===null||draft.some(item=>item.id===id))return;selected=id;change(()=>draft.push({id,width:widgets[id].width,height:0}),`${widgets[id].title} added.`);if(id==="portal")loadPortal();if(widgets[id]?.optional)HealthInsights.load();},
     remove(id){if(!Object.hasOwn(widgets,id))return;change(()=>{draft=draft.filter(item=>item.id!==id);if(selected===id)selected=draft[0]?.id || "";},`${widgets[id].title} removed. Use Undo to restore it.`);},
     size(field,value){if(!["width","height"].includes(field))return;change(()=>{const item=draft.find(item=>item.id===selected);if(item)item[field]=value;},"Widget size updated.");},
     history(direction){const from=direction<0?undo:redo,to=direction<0?redo:undo;if(!from.length || draft===null || saving)return;to.push(clone(draft));draft=from.pop();if(!draft.some(item=>item.id===selected))selected=draft[0]?.id || "";editor(direction<0?"Change undone.":"Change restored.");},

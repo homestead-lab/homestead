@@ -169,3 +169,13 @@ test("cordon summaries distinguish all-host, mixed-host and healthy-host cases",
   plan.candidates=[{name:"node-1",eligible:true,reasons:[]}];
   assert.match(ctx.imagePlacementBlocker(plan),/^A replacement pod cannot fit/);
 });
+
+
+test("download percentages represent known bytes; old ready pods cannot claim completion",()=>{
+ const {ctx}=setup(), s={phase:"updating",generation:5,observed_generation:5,ready:1,desired:1,updated:0};
+ const waiting=ctx.rolloutProgress(s);assert.doesNotMatch(waiting,/aria-valuenow=/);
+ const downloading=ctx.rolloutProgress({...s,pull:{state:"pulling",percent:42,total_bytes:1024,seconds:2}});
+ assert.match(downloading,/aria-valuenow="42"/);assert.match(downloading,/Downloading image/);
+ const done=ctx.rolloutProgress({...s,phase:"ready",updated:1});assert.match(done,/aria-valuenow="100"/);
+ const failed=ctx.rolloutProgress({...s,phase:"failed"});assert.match(failed,/Update needs attention/);assert.doesNotMatch(failed,/role="progressbar"/);
+});

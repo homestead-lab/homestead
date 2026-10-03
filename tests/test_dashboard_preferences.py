@@ -18,6 +18,11 @@ import homestead_http as HTTP
 
 
 class DashboardPreferencesTests(unittest.TestCase):
+    def test_health_widgets_are_valid_account_preferences(self):
+        layout = {"version": 1, "items": [{"id": key, "width": 6, "height": 0}
+                  for key in ("health", "workloads", "backups", "updates", "jobs")]}
+        self.assertEqual(AUTH._dashboard_layout(layout), layout)
+
     def setUp(self):
         self.store = {"users": {"alice": {"role": "viewer", "ver": 1}, "bob": {"role": "admin", "ver": 2}}, "signing_key": "unchanged"}
         self.rv = 1
