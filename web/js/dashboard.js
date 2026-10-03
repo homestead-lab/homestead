@@ -104,7 +104,7 @@ const Dashboard = (() => {
         ${edit?`<button type="button" class="dashboard-select" aria-label="Configure ${widgets[item.id].title}" onclick="Dashboard.select(${jsq(item.id)})"></button>
           <button type="button" class="dashboard-resize" data-dash-resize="${item.id}" aria-label="Resize ${widgets[item.id].title}" title="Drag to resize, or use Widget settings">↘</button>`:""}
       </section>`).join("")}</div>
-      ${items.length?"":`<div class="dashboard-empty card flat"><b>Your dashboard, your way</b><p class="dim">${edit?"Choose a widget from the library to get started.":"Add the information you use most."}</p>${edit?"":'<button class="btn" onclick="Dashboard.start()">Add widgets</button>'}</div>`}
+      ${items.length?"":`<div class="dashboard-empty card flat"><b>Your dashboard, your way</b><p class="dim">${edit?"Choose a widget from the library to get started.":"Add the information you use most."}</p>${edit?"":'<button class="btn hide-sm" onclick="Dashboard.start()">Add widgets</button><span class="only-sm">Open this dashboard on a larger screen to add widgets.</span>'}</div>`}
     </div>`;
   }
   function inspector() {
@@ -129,6 +129,7 @@ const Dashboard = (() => {
     if(draft===null)return;
     const focus=document.activeElement, focusId=focus?.dataset.dashDrag;
     paint(`${UI.pageHeader("Edit dashboard", "Arrange your widgets. Your layout follows your account.")}
+      <div class="dashboard-mobile-notice only-sm" role="status">Use a larger screen to continue arranging widgets. Your unsaved changes are kept.</div>
       <div class="dashboard-edit-toolbar"><div class="row"><span class="tag">Editing</span><span class="dim small">${draft.length} widgets</span><span class="dim small">${dirty()?"Unsaved changes":"Layout saved"}</span></div>
         <div class="row"><button class="btn sm" onclick="Dashboard.history(-1)" ${undo.length?"":"disabled"}>Undo</button><button class="btn sm" onclick="Dashboard.history(1)" ${redo.length?"":"disabled"}>Redo</button><button class="btn sm" onclick="Dashboard.reset()">Reset layout</button>
         <button class="btn sm" aria-pressed="${phone}" onclick="Dashboard.preview()">${phone?"Desktop canvas":"Phone preview"}</button>${UI.button("Cancel", "Dashboard.cancel()", {disabled:saving})}${UI.button(saving?"Saving…":"Save layout", "Dashboard.save()", {kind:"pri",disabled:saving})}</div></div>
@@ -163,9 +164,10 @@ const Dashboard = (() => {
   }
   async function cancel(){if(await leave()){resetPaint();await viewDash();document.querySelector('[onclick="Dashboard.start()"]')?.focus();}}
   async function start() {
+    if(matchMedia("(max-width:900px)").matches){toast("Use a larger screen to edit the dashboard layout.","warn");return;}
     if(draft!==null)return;
     if(!(await load())){toast(loadError,"bad");return;}
-    if(draft!==null)return;
+    if(draft!==null || matchMedia("(max-width:900px)").matches)return;
     baseline=revision;
     draft=read();initial=JSON.stringify(draft);undo=[];redo=[];phone=false;panelOpen=false;selected=draft[0]?.id || "";
     resetPaint();editor();loadPortal();document.querySelector('[onclick="Dashboard.save()"]')?.focus();

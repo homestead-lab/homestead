@@ -14,6 +14,26 @@ try{
   await page.evaluate(theme=>{clearInterval(window.__loopTimer);SET.theme=theme;applySettings();},theme);
   const order=()=>page.locator('.dashboard-widget').evaluateAll(els=>els.map(el=>el.dataset.widget));
   const initial=await order();assert.equal(initial.length,7);
+  if(width<=900){
+    assert.equal(await page.getByRole('button',{name:'Edit dashboard',exact:true}).isVisible(),false);
+    await page.evaluate(()=>Dashboard.start());
+    assert.equal(await page.evaluate(()=>Dashboard.editing()),false,'phone cannot enter the desktop editor');
+    assert.ok((await page.locator('.dashboard-widget').first().boundingBox()).y<160,'widgets start near the top');
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+    await page.screenshot({path:`${output}/saved-${theme}-${width}.png`,fullPage:true});
+    // A desktop draft survives resizing without exposing desktop layout controls.
+    await page.setViewportSize({width:1440,height:1000});
+    await page.getByRole('button',{name:'Edit dashboard',exact:true}).click();
+    await page.getByRole('button',{name:'Add Portal links',exact:true}).click();
+    await page.setViewportSize({width,height:1000});
+    assert.equal(await page.locator('.dashboard-edit-layout').isVisible(),false);
+    assert.equal(await page.getByRole('button',{name:'Phone preview',exact:true}).isVisible(),false);
+    assert.equal(await page.evaluate(()=>Dashboard.dirty()),true);
+    await page.setViewportSize({width:1440,height:1000});
+    assert.equal(await page.locator('[data-widget="portal"]').count(),1);
+    await page.getByRole('button',{name:'Cancel',exact:true}).click();await page.locator('.askdlg [data-a="yes"]').click();
+    assert.deepEqual(errors,[]);console.log(`Mobile dashboard passed: ${width}px ${theme}`);await context.close();continue;
+  }
   await page.getByRole('button',{name:'Edit dashboard',exact:true}).click();
   if(width<=1100)await page.locator('.dashboard-library-toggle').click();
   await page.getByRole('button',{name:'Add Portal links',exact:true}).click();

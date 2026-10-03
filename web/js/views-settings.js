@@ -85,7 +85,7 @@ async function viewSettings() {
     <td><span class="${roleClass(u.role)} rolechip">${esc(u.role)}</span></td><td class="dim xs mono">${esc(u.last_login || "never")}</td></tr>`).join("");
 
   const tab = settingsTab();
-  paint(`${UI.pageHeader(`Settings`, `Cluster policy, hardware, access, and installation information`, ``)}
+  paint(`${UI.pageHeader(`Settings`, `Cluster policy, hardware, access, and installation information`, ``, {mobileSummary:"omit"})}
     ${UI.workspace(UI.workspaceNav(SETTINGS_SECTIONS.map(([key,label,description,,group]) => ({key,label,descriptionHtml:esc(description),group})),
       {label:"Settings sections",selected:tab,onSelect:key => `settingsGo(${jsArg(key)})`}),
       UI.settingsGrid(`
@@ -217,7 +217,7 @@ async function viewSettings() {
       ${UI.settingsCard(`<div class="empty small"><span class="spin2"></span> checking Homestead</div>`, {tab:`about`, id:`selfHealthCard`})}
       ${UI.settingsCard(`${STATE.data.replicaHtml || ""}`, {tab:`about`, id:`replicaCard`})}
     `, tab) + UI.saveBar({id:"settingsSaveBar",messageId:"settingsSaveMsg",save:"settingsSave(this)",discard:"settingsDiscard()"}),
-      {open:STATE.settingsOpen,backLabel:"Back to Settings",back:"settingsGo('')"})}`);
+      {open:STATE.settingsOpen,backLabel:"All settings",currentLabel:SETTINGS_SECTIONS.find(([id])=>id===tab)?.[1],back:"settingsGo('')"})}`);
   STATE.settingsDirty = new Set();
   if (window.bindAppearance) bindAppearance();
   pwaPaint();
@@ -671,7 +671,15 @@ window.settingsLeave = async () => {
 };
 window.settingsGo = async id => {
   if (!(await settingsLeave())) return;
-  if (!id) { settingsBack(); resetPaint(); return viewSettings(); }
+  if (!id) {
+    // A deep link must not reopen the section after returning to the list.
+    const url = new URL(location.href);url.searchParams.delete("tab");
+    history.replaceState(history.state,"",url);
+    settingsBack();resetPaint();await viewSettings();
+    $(".settings-nav button.on")?.focus({preventScroll:true});return;
+  }
+  const url = new URL(location.href);
+  if (url.searchParams.has("tab")) {url.searchParams.set("tab",settingsSection(id));history.replaceState(history.state,"",url);}
   settingsTab(id);
   resetPaint(); return viewSettings();
 };

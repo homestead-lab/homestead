@@ -71,7 +71,7 @@ const browser = await chromium.launch({ headless: true });
 // Each width's list is shared between a few tabs, all at once: one tab
 // working through every item in turn took most of CI's time.
 const WORKERS = Number(process.env.AUDIT_WORKERS || 4);
-const WIDTHS = [["desktop", 1440, 900, false], ["mobile", 390, 844, true]];
+const WIDTHS = [["desktop", 1440, 900, false], ["mobile", Number(process.env.HOMESTEAD_MOBILE_WIDTH || 390), 844, true]];
 const todo = PAGES.filter(([name]) => !only || name.includes(only));
 const shares = Array.from({ length: WORKERS }, (_, i) => todo.filter((_, j) => j % WORKERS === i)).filter((share) => share.length);
 await Promise.all(WIDTHS.flatMap((width) => shares.map((share) => audit(width, share))));
@@ -90,7 +90,8 @@ async function audit([label, width, height, mobile], items) {
     localStorage.setItem("homestead.settings", JSON.stringify({ theme, bg: "soft", blur: 26, motion: "off", refresh: 60 }));
   }, theme);
   await page.goto(base, { waitUntil: "networkidle" });
-  await page.locator("#views .phead").waitFor();
+  await page.locator("#views .phead").waitFor({state:"attached"});
+  await page.locator("#views").waitFor({state:"visible"});
   await page.evaluate(() => document.fonts.ready);
   // Running jobs and passing notices belong to a moment, not the page.
   await page.addStyleTag({ content: "#jobTray,#toast{display:none!important}" });
@@ -99,7 +100,8 @@ async function audit([label, width, height, mobile], items) {
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } localStorage.removeItem("homestead.fleet.mode"); });
       await page.evaluate((v) => go(v), view);
-      await page.locator("#views .phead").waitFor();
+      await page.locator("#views .phead").waitFor({state:"attached"});
+      await page.locator("#views").waitFor({state:"visible"});
       await page.waitForTimeout(1200);
       if (after) { await page.evaluate(after); await page.waitForTimeout(900); }
       await page.evaluate(() => window.scrollTo(0, 0));
