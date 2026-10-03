@@ -1648,7 +1648,9 @@ function collect() {
 }
 function syncSummary() {
   const c = collect();
-  const vipWrap = $("#d_vip_wrap"); if (vipWrap) vipWrap.style.display = c.network_mode === "loadbalancer" && c.vip_mode === "manual" ? "block" : "none";
+  // The hidden attribute, as deployLanChanged sets it: a display style
+  // cannot show what [hidden] hides with !important.
+  const vipWrap = $("#d_vip_wrap"); if (vipWrap) vipWrap.hidden = !(c.network_mode === "loadbalancer" && c.vip_mode === "manual");
   const imageNote = $("#d_image_note"); if (imageNote) imageNote.innerHTML = imagePullNote(c.image);
   const row = (i, l, v) => `<div class="drow"><div class="di">${i}</div><div class="dl">${l}</div><div class="dv">${v}</div></div>`;
   $("#d_summary").innerHTML =
