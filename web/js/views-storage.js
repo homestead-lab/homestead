@@ -192,8 +192,9 @@ const volumeReason = v => (v.health_reason && v.state === "attached"
    volume keeps its data for the next start; one nothing refers to is the
    kind to think about deleting. */
 function volumeUse(x) {
-  if (attachedWorkloads(x).length || x.state === "attached") return { kind: "in-use" };
+  if (x.state === "attached") return { kind: "in-use" };
   if (x.unclaimed) return { kind: "unclaimed" };
+  if (attachedWorkloads(x).length) return { kind: "in-use" };
   if (x.used_by == null) return { kind: "detached" };
   return x.used_by.length ? { kind: "stopped", by: x.used_by } : { kind: "orphaned" };
 }
