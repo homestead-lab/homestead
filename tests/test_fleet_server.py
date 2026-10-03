@@ -53,6 +53,18 @@ class TargetTests(unittest.TestCase):
         for path in ("/api/auth/login", "/api/auth/logout", "/api/fleet/switch", "/api/fleet/home", "/api/push/subscribe"):
             self.assertEqual("", h._fleet_target(path), path)
 
+    def test_account_layout_and_device_receipts_ignore_all_cluster_selectors(self):
+        for path in ("/api/auth/preferences/dashboard", "/api/alerts/delivered"):
+            for method in ("GET", "POST"):
+                with self.subTest(path=path, method=method):
+                    h = handler(path=path+"?hs_cluster=garage1", method=method,
+                                headers={"Cookie": "homestead_cluster=shed1", "X-Homestead-Cluster": "garage1"})
+                    self.assertEqual("", h._fleet_target(path))
+        # Cluster-specific alert review and acknowledgement still follow the switch.
+        for path in ("/api/alerts", "/api/alerts/acknowledge", "/api/auth/state"):
+            h = handler(path=path, headers={"Cookie": "homestead_cluster=shed1"})
+            self.assertEqual("shed1", h._fleet_target(path))
+
     def test_a_relayed_request_is_never_relayed_again(self):
         h = handler(headers={"Cookie": "homestead_cluster=shed1", server.FLEET.H_FROM: "loft1"})
         self.assertEqual("", h._fleet_target("/api/nodes"))

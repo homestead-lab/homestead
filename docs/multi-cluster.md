@@ -91,7 +91,8 @@ cannot talk to the rest until linked again.
 For each request, `_fleet_target` asks which cluster it is for:
 
 1. never another if it is already signed by a member (no relay loops), or is
-   answered here by nature - sign-in, sign-out, password, push, the switch
+   answered here by nature - sign-in, sign-out, password, dashboard preferences,
+   push (including delivery confirmations), and the switch
    (`FLEET.LOCAL`);
 2. the `X-Homestead-Cluster` header - a row's action in All clusters;
 3. the `hs_cluster` query parameter - a console from such a row, since a
@@ -156,3 +157,13 @@ with a dialog open go to it.
 - Nonces are remembered per Homestead process: with several Homestead replicas,
   a signed request copied off the wire could be replayed to another replica
   within five minutes. Use HTTPS between members where the LAN is not trusted.
+
+
+### Personal dashboard preferences
+
+Dashboard layouts belong to the account on the Homestead the browser signed
+into. Both reading and saving `/api/auth/preferences/dashboard` stay there,
+regardless of the selected cluster. Widget data continues to come from the
+selected cluster. The remote identity (`name@member`) is an audit identity,
+not an account whose preferences should be created on the remote cluster.
+Update the entry-point Homestead to receive this routing fix.

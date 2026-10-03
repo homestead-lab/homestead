@@ -111,17 +111,20 @@ class DashboardPreferencesTests(unittest.TestCase):
             AUTH.save_dashboard_preferences("alice", {"revision": None, "layout": self.layout, "username": "bob"})
         self.assertEqual(1, self.rv)
 
-    def test_http_identity_csrf_and_conflict_status(self):
+    def test_switched_cluster_layout_uses_home_account_with_csrf_and_conflict_checks(self):
         listener = HTTP.BoundedHTTPServer(("127.0.0.1", 0), server.H, max_connections=2)
         thread = threading.Thread(target=listener.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(listener.server_close)
         self.addCleanup(listener.shutdown)
         identity = self.enterContext(patch.object(server.H, "_who", return_value={"user": "alice", "role": "viewer", "stale": False}))
+        self.enterContext(patch.object(server.FLEET, "self_id", return_value="home"))
+        self.enterContext(patch.object(server.FLEET, "member", return_value={"id":"remote"}))
+        forward = self.enterContext(patch.object(server.FLEET, "forward", side_effect=AssertionError("Account preferences must not be relayed")))
         def request(method, body=None, csrf=True):
             client = HTTPConnection(*listener.server_address, timeout=3)
             try:
-                headers = {"Content-Type": "application/json"}
+                headers = {"Content-Type": "application/json", "Cookie": "homestead_cluster=remote", "X-Homestead-Cluster": "remote"}
                 if csrf:
                     headers["X-Homestead-Auth"] = "1"
                 client.request(method, "/api/auth/preferences/dashboard?user=bob", json.dumps(body) if body is not None else None, headers)
@@ -139,6 +142,7 @@ class DashboardPreferencesTests(unittest.TestCase):
         identity.return_value = None
         self.assertEqual(401, request("GET")[0])
         self.assertEqual(401, request("POST", body)[0])
+        forward.assert_not_called()
 
     def test_routes_are_personal_and_available_to_viewers(self):
         for method in ("GET", "POST"):
