@@ -22,14 +22,15 @@ function networkTab(pick) {
     resetPaint(); refresh(true);
     return pick;
   }
-  try { return localStorage.getItem("homestead.network.tab") === "ip" ? "ip" : "services"; } catch (e) { return "services"; }
+  try { const saved = localStorage.getItem("homestead.network.tab"); return ["ip", "firewall"].includes(saved) ? saved : "services"; } catch (e) { return "services"; }
 }
 window.networkTab = networkTab;
 
 function networkTabs(active) {
   return `<div class="seg network-tabs" role="tablist">
     <button class="${active === "services" ? "on" : ""}" onclick="networkTab('services')">Services &amp; VIPs</button>
-    <button class="${active === "ip" ? "on" : ""}" onclick="networkTab('ip')">IP addresses</button></div>`;
+    <button class="${active === "ip" ? "on" : ""}" onclick="networkTab('ip')">IP addresses</button>
+    <button class="${active === "firewall" ? "on" : ""}" onclick="networkTab('firewall')">Firewall</button></div>`;
 }
 window.networkTabs = networkTabs;
 

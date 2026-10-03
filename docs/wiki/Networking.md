@@ -288,6 +288,48 @@ start. Widen it, rename it or give it its DHCP range like any other.
 - **UniFi** (optional, **Settings → Connections → UniFi Network**) brings in what a UniFi
   controller knows: clients, devices, reservations and networks, read-only.
 
+## Workload firewall
+
+**Networking → Firewall** lists Kubernetes NetworkPolicies. An admin can create
+and edit Homestead policies with a workload picker and inbound/outbound allow
+rules. Other policies remain visible for inspection, including policies changed
+outside the editor into a form it cannot represent.
+
+1. Choose **New policy** and select a Deployment, StatefulSet, DaemonSet, or
+   supported pod-network VM.
+2. Start with **Block inbound**, **Web server**, **Allow this namespace**, or
+   **Isolate · keep cluster DNS**, then adjust the rules. A peer can be anywhere,
+   an IP/CIDR (IPv4 or IPv6), or pods in a named namespace. Specify TCP, UDP, or
+   SCTP destination ports; blank ports means every port for that protocol.
+3. Choose **Review policy** to see the matching running pods, other matching
+   policies, warnings, and the generated Kubernetes policy.
+4. **Apply policy**, then test both permitted and blocked connections. If the
+   workload, matching pods, or policies changed after review, review again.
+
+**Allow listed traffic only** isolates that direction; an empty rule list
+allows nothing through this policy. **Unrestricted by this policy** leaves that
+direction to the other policies. Kubernetes combines all matching policies:
+another policy can permit a connection this one omits. Rules are not ordered,
+and there is no higher-priority deny. Removing the last policy for a direction
+restores default allow; removing an allow policy while others remain can block
+connections.
+
+The page reports detected provider support separately from enforcement. K3s
+includes a network-policy controller by default, but it can be disabled. An API
+object alone does not prove traffic is filtered. Check your provider's settings
+and verify traffic before relying on a policy.
+
+Host networking and platform workloads are excluded from the editor. Policies
+cover pod-network traffic only: VM LAN/Multus interfaces and host traffic need
+guest, host, or upstream firewalls. Service address translation can affect which
+source IP a policy sees. The DNS checkbox permits CoreDNS/kube-dns pods in
+`kube-system`; NodeLocal DNS and custom resolvers need explicit rules.
+
+Policies are stored as Kubernetes resources, not in Homestead's configuration
+backup. Include NetworkPolicies in cluster backups. See the upstream
+[NetworkPolicy guide](https://kubernetes.io/docs/concepts/services-networking/network-policies/)
+and [K3s networking options](https://docs.k3s.io/networking/basic-network-options/).
+
 ## Portal
 
 **Portal** is a page of links to every web interface - your apps (picked from
