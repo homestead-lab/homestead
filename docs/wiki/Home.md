@@ -35,6 +35,11 @@ your chosen platform:
 | An integrated HCI operating system with VMs and storage on dedicated hardware | [Installing on Harvester](Installing-on-Harvester) |
 | Homestead on a cluster you already run (RKE2, kubeadm, a Headlamp user's cluster) | [Installing on an existing cluster](Installing-on-an-existing-cluster) |
 
+**Two machines?** Prefer [two linked single-node clusters](Linked-clusters#two-machines-at-home),
+or add a [small third voting k3s server](Installing-on-k3s#using-a-small-third-server).
+Two etcd servers cannot tolerate losing either vote. Linked clusters provide
+shared management, not automatic failover.
+
 **On k3s, everything works**: containers, the App Store, Compose, networking,
 IP addresses, Helm, volumes and data protection (the k3s script installs
 Longhorn), and virtual machines once KubeVirt is added. Only following a
@@ -51,6 +56,7 @@ probe - and your first sign-in.
 - [App Store](App-Store) - Unraid's Community Applications, deployed properly
 - [Importing](Importing) - containers and VMs from an Unraid server, a Docker Compose file, or a VM disk image
 - [Storage](Storage) - volumes, Longhorn allocation, adding disks, changing a storage class
+- [Longhorn V2 support and considerations](Storage#longhorn-v2-support-and-considerations) - hardware, ARM, resource costs and migration
 - [Data protection](Data-protection) - snapshots, backups, backup storage, restores
 - [Network shares](Network-shares) - Samba shares from any volume
 - [Networking](Networking) - VIPs, which node answers for each address, services, IP address management

@@ -11,6 +11,11 @@ tour, from building a cluster to each page in turn.
 with Homestead.** Choose it for a new home setup; RKE2 and Harvester are supported
 alternatives. The [k3s guide](wiki/Installing-on-k3s.md) walks through the recommended route.
 
+With only two machines, prefer [two linked single-node clusters](wiki/Linked-clusters.md#two-machines-at-home)
+for independent operation, or add a [third voting k3s server](wiki/Installing-on-k3s.md#using-a-small-third-server).
+Two embedded-etcd servers require both votes; a worker adds no vote. Linking
+clusters supplies shared management, not automatic failover.
+
 On a bare Linux machine (x86-64 or 64-bit ARM - old PCs, mini PCs, VMs), or on
 a Harvester host, or on any node of a cluster:
 
@@ -1472,8 +1477,12 @@ whatever was using it before.
 
 ### Longhorn V2
 
-A storage class can be made on Longhorn's V2 data engine (SPDK), which is
-faster and lighter on CPU than V1. The class table has an Engine column, a V2
+A storage class can be made on Longhorn's V2 data engine (SPDK), which targets
+lower latency and higher throughput, with dedicated CPU and memory costs.
+V1 is the simpler starting point for a small home lab. See
+[V2 support and considerations](wiki/Storage.md#longhorn-v2-support-and-considerations)
+for version requirements, ARM caveats and selective-activation limitations.
+The class table has an Engine column, a V2
 volume is tagged on Volumes, and the storage classes card says whether V2 is on
 and how many nodes can hold its volumes: each needs a disk given to Longhorn as
 a block device and usually 2 GiB of hugepages. Creating a V2 class says so when
