@@ -1665,16 +1665,24 @@ ssh_pwauth: true
         pods_system: 96, pods_workload: 12, pods_sys_bad: 0, pods_wl_bad: 0, vms_running: 1, health: "degraded", wl_summary: "lab:12", cpu_pct: 18.2, mem_pct: 41.7 } },
       { topic: "harvester/node/harvester_node1/state", payload: { cpu_pct: 21.3, mem_pct: 44.1, mem_gb: 27.6, rx_mbps: 12.4, tx_mbps: 3.1, pods: 41, vms: 1, wl: "home-assistant", status: "Ready" } }] },
     "/api/history/long": url => {
-      const range = new URL(url, location.origin).searchParams.get("range") || "24h";
-      const points = { "24h": 288, "7d": 168, "30d": 720, "90d": 1440 }[range] || 288;
-      const step = range === "24h" ? 300 : 3600, now = Math.floor(Date.now() / 1000);
-      const wave = (i, base, amp, period) => +(base + amp * Math.sin(i / period * 2 * Math.PI) + (i * 7919 % 13) / 4).toFixed(1);
-      const t = Array.from({ length: points }, (_, i) => now - (points - i) * step);
-      return { range, step, t, samples: points, since: t[0],
-        cpu: t.map((_, i) => wave(i, 18, 8, range === "24h" ? 288 : 24)), mem: t.map((_, i) => wave(i, 42, 3, 96)),
-        rx: t.map((_, i) => wave(i, 14, 9, 48)), tx: t.map((_, i) => wave(i, 4, 2, 48)), pods: t.map(() => 12),
+      const requested = new URL(url, location.origin).searchParams.get("range") || "24h";
+      const spans = { "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "90d": 90 * 86400 };
+      const range = Object.hasOwn(spans, requested) ? requested : "24h", span = spans[range];
+      const step = range === "24h" ? 300 : 3600, points = span / step;
+      const now = Math.floor(Date.now() / 1000 / step) * step;
+      // Gentle trends across the selected window, rather than per-sample
+      // sawtooth noise that overwhelms a phone-sized long-term chart. Anchor
+      // values to timestamps so refreshing keeps previously shown buckets.
+      const wave = (time, base, amp, cycles, offset = 0) => {
+        const phase = time / span * cycles * 2 * Math.PI + offset;
+        return +(base + amp * (Math.sin(phase) + 0.16 * Math.sin(phase * 0.37 + 0.8))).toFixed(2);
+      };
+      const t = Array.from({ length: points }, (_, i) => now - (points - 1 - i) * step);
+      const cpu = t.map(time => wave(time, 18, 8, 3)), mem = t.map(time => wave(time, 42, 3, 1.5));
+      return { range, step, t, samples: points, since: t[0], cpu, mem,
+        rx: t.map(time => wave(time, 14, 9, 4)), tx: t.map(time => wave(time, 4, 2, 4, 0.4)), pods: t.map(() => 12),
         vol_bad: t.map((_, i) => (scenario !== "healthy" && i > points * 0.6 && i < points * 0.62 ? 1 : 0)), nodes_ready: t.map(() => 3), nodes_total: t.map(() => 3),
-        cpu_max: 41.5, mem_max: 49.2,
+        cpu_max: Math.max(...cpu), mem_max: Math.max(...mem),
         nodes: [{ name: "harvester-node1", cpu: 21.4, mem: 44.1, availability: 100 }, { name: "harvester-node2", cpu: 17.9, mem: 39.8, availability: scenario === "healthy" ? 100 : 99.31 },
           { name: "harvester-node3", cpu: 12.2, mem: 35.0, availability: 100 }] };
     },
