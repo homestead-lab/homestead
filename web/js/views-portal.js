@@ -40,6 +40,15 @@ async function viewPortal() {
   api("/api/portal/status").then(status => { STATE.data.portalStatus = status; portalDots(); }).catch(() => {});
 }
 
+function portalTiles(rows, {compact = false} = {}) {
+  return portalSections(rows).map(([section, members]) => `<section class="portal-section">
+        ${section ? `<div class="sec">${esc(section)}</div>` : ""}
+        <div class="portal-grid${compact ? " portal-compact" : ""}">${members.map(link => `<a class="portal-tile card flat" href="${safeHref(link.url)}" target="_blank" rel="noopener noreferrer" data-link="${esc(link.id)}">
+          ${portalIcon(link)}<span class="portal-text"><b>${esc(link.title)}</b>
+            <span class="dim xs mono">${esc(portalHost(link.url))}</span>${link.note ? `<span class="dim xs">${esc(link.note)}</span>` : ""}</span>
+          <span class="portal-dot" data-tip="not checked yet"></span></a>`).join("")}</div></section>`).join("");
+}
+
 function renderPortal() {
   const links = (STATE.data.portal || {}).links || [];
   const q = STATE.q.toLowerCase();
@@ -51,12 +60,7 @@ function renderPortal() {
         <div class="row" style="justify-content:center;margin-top:12px"><button class="btn pri" data-need="admin" onclick="portalEdit(true)">Pick from containers</button>
         <button class="btn" data-need="admin" onclick="portalEdit()">Add a link</button></div></div>`
       : !rows.length ? `<div class="empty">Nothing matches that search.</div>`
-      : portalSections(rows).map(([section, members]) => `<section class="portal-section">
-        ${section ? `<div class="sec">${esc(section)}</div>` : ""}
-        <div class="portal-grid">${members.map(link => `<a class="portal-tile card flat" href="${safeHref(link.url)}" target="_blank" rel="noopener noreferrer" data-link="${esc(link.id)}">
-          ${portalIcon(link)}<span class="portal-text"><b>${esc(link.title)}</b>
-            <span class="dim xs mono">${esc(portalHost(link.url))}</span>${link.note ? `<span class="dim xs">${esc(link.note)}</span>` : ""}</span>
-          <span class="portal-dot" data-tip="not checked yet"></span></a>`).join("")}</div></section>`).join("")}`);
+      : portalTiles(rows)}`);
   portalDots();
 }
 
