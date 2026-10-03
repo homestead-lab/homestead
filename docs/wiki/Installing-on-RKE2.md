@@ -1,10 +1,12 @@
-# Installing on RKE2 (full Kubernetes)
+# Installing on RKE2
 
-[RKE2](https://docs.rke2.io) is Rancher's Kubernetes distribution: upstream
-Kubernetes with etcd, containerd and the Canal network, hardened to the CIS
-benchmark out of the box. It is what Harvester is built on, and the closest a
-homelab gets to the Kubernetes that businesses run. It asks more of the
-machines than [k3s](Installing-on-k3s) does.
+[RKE2](https://docs.rke2.io) is Rancher's Kubernetes distribution and the
+foundation used by Harvester. It is a supported alternative for users who
+specifically want RKE2 or already run it.
+
+**For home self-hosting, [k3s](Installing-on-k3s) is preferred and is the most
+widely tested platform with Homestead.** Both distributions run Kubernetes;
+RKE2 is not required for Homestead's VM, storage or cluster features.
 
 The same one-line installer builds either one. It installs RKE2, with
 [Longhorn](https://longhorn.io) storage and Homestead running on it.
@@ -13,15 +15,15 @@ The same one-line installer builds either one. It installs RKE2, with
 
 | | k3s | RKE2 |
 |---|---|---|
-| **What it is** | Kubernetes in one small program | Upstream Kubernetes, hardened (CIS), as Harvester runs it |
+| **What it is** | Lightweight Kubernetes distribution | Rancher's Kubernetes distribution, also used by Harvester |
 | **Memory for a server** | 2 GB to start, 4 GB comfortable | 4 GB at least, 8 GB comfortable |
-| **Suits** | old PCs, mini PCs, ARM boards, small VMs | machines with room to spare; learning Kubernetes as work runs it |
+| **Suits** | preferred home setup; most widely tested with Homestead | existing RKE2 users or a specific RKE2 requirement |
 | **Storage** | Longhorn, or k3s's own local-path | Longhorn (RKE2 has no storage of its own) |
 | **Addresses for apps** | ServiceLB: every node's own address | the same - the installer turns RKE2's ServiceLB on |
 | **In Homestead** | everything | everything |
 
-Homestead does not mind which: every page works the same on both. If you are
-unsure, k3s is lighter; RKE2 is the choice when you want full Kubernetes.
+Homestead supports the same core workflows on both, with the required add-ons.
+Choose k3s if you are unsure which foundation to use for a home setup.
 
 ## What works on RKE2
 

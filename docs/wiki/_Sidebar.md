@@ -1,9 +1,9 @@
 **[Home](Home)** · **[Live demo](https://wjcloudy.github.io/homestead/)**
 
 **Install**
+- [On k3s (recommended for home)](Installing-on-k3s)
+- [On RKE2](Installing-on-RKE2)
 - [On Harvester](Installing-on-Harvester)
-- [On k3s](Installing-on-k3s)
-- [On RKE2 (full Kubernetes)](Installing-on-RKE2)
 - [On an existing cluster](Installing-on-an-existing-cluster)
 - [Installing Homestead](Installing-Homestead)
 

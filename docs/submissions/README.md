@@ -66,7 +66,7 @@ Counts include spaces and punctuation. Only Awesome Sysadmin's limit below was v
 | AlternativeTo short description | 138 | At most 160, editorial target |
 | Proposed GitHub About description | 151 | Concise summary; no keyword list |
 
-The AlternativeTo full description is 195 words. All local Markdown links were checked for an existing target. Candidate YAML fields were compared with the upstream examples; upstream lint/build checks remain part of preparing an actual list PR.
+The AlternativeTo full description is 178 words. All local Markdown links were checked for an existing target. Candidate YAML fields were compared with the upstream examples; upstream lint/build checks remain part of preparing an actual list PR.
 
 ## Before sending
 

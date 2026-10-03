@@ -1,11 +1,11 @@
 # Homestead
 
-Homestead is a homelab control panel for Kubernetes: containers, virtual
-machines, storage, network shares, backups and addresses in one place, in
-words that make sense if you came from Unraid or Docker. It runs on
-**[k3s](https://k3s.io)** - one command turns a spare Linux machine into a
-cluster with Homestead on it - on [Harvester](https://harvesterhci.io), where
-it grew up, and on RKE2 or any cluster you look after with Headlamp today.
+Homestead brings hyperconvergence home: apps, virtual machines, storage,
+networking and cluster administration in one friendly interface.
+**[k3s](Installing-on-k3s) is preferred for home self-hosting and is the most
+widely tested platform with Homestead.** One command turns a spare Linux machine
+into a cluster with Homestead on it. RKE2 and Harvester are supported alternatives;
+you can also install Homestead on an existing Kubernetes cluster.
 
 [![Homestead dashboard](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-dashboard.jpg)](https://wjcloudy.github.io/homestead/)
 
@@ -25,14 +25,14 @@ does it:
 curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
 ```
 
-Or pick the cluster you want, and follow its guide through to Homestead
-running:
+Choose **k3s** in the installer for a new home setup, or follow the guide for
+your chosen platform:
 
 | You want | Guide |
 |---|---|
-| VMs and containers on dedicated hardware, all managed for you | [Installing on Harvester](Installing-on-Harvester) |
-| A light cluster on ordinary Linux machines - old PCs, mini PCs, VMs, 64-bit ARM boards | [Installing on k3s](Installing-on-k3s) |
-| Full upstream Kubernetes on your own machines - hardened, as Harvester runs it, closer to what work runs | [Installing on RKE2](Installing-on-RKE2) |
+| **Recommended for home self-hosting:** a light cluster on old PCs, mini PCs, VMs or supported ARM64 boards | [Installing on k3s](Installing-on-k3s) |
+| Rancher's RKE2 distribution on your own Linux machines | [Installing on RKE2](Installing-on-RKE2) |
+| An integrated HCI operating system with VMs and storage on dedicated hardware | [Installing on Harvester](Installing-on-Harvester) |
 | Homestead on a cluster you already run (RKE2, kubeadm, a Headlamp user's cluster) | [Installing on an existing cluster](Installing-on-an-existing-cluster) |
 
 **On k3s, everything works**: containers, the App Store, Compose, networking,

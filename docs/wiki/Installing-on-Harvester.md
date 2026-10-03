@@ -2,9 +2,13 @@
 
 [Harvester](https://harvesterhci.io) is an operating system for a small
 cluster of servers: it installs from a USB stick, and gives you Kubernetes,
-Longhorn storage and KubeVirt virtual machines already wired together. It is
-the most complete home for Homestead - every page works, VMs included - and
-the one Homestead was built on.
+Longhorn storage and KubeVirt virtual machines already wired together.
+Homestead supports it as an integrated HCI alternative.
+
+**For home self-hosting, [k3s](Installing-on-k3s) is preferred and is the most
+widely tested platform with Homestead.** Choose Harvester when you want its
+integrated operating system or already run it; k3s also supports VMs and
+replicated storage with KubeVirt and Longhorn.
 
 This guide goes from bare machines to Homestead running. Allow an hour for the
 first host.

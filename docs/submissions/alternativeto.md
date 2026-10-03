@@ -15,7 +15,7 @@ No authenticated form was opened. The lengths below are editorial targets, not v
 | Licence | Source-available; Apache 2.0 + Commons Clause 1.0 |
 | Platforms | Self-Hosted, Linux, Web, where offered |
 | Suggested tags | homelab, kubernetes, container-management, virtualization, server-management, storage, backup |
-| Suggested features | Cluster management, guided installation, platform upgrades, container management, virtual machines, snapshots, backups, replicated storage, network management, role-based access |
+| Suggested features | Cluster management, guided installation, platform upgrades, containers, virtual machines, GPU/PCI passthrough, container USB access, snapshots, backups, distributed storage, IPAM, PWA, push notifications, MQTT, Home Assistant monitoring |
 
 Select only matching tags/features that exist in the form. Browser access from Windows, macOS, iOS or Android does not make these native server or mobile application platforms.
 
@@ -28,13 +28,13 @@ Hyperconvergence for home, made simple: apps, VMs, storage and networking in one
 ## Full description — target: 150–220 words
 
 ```text
-Homestead brings hyperconvergence home, combining compute, storage and networking across ordinary machines. Its friendly browser interface is built around familiar apps, volumes and VMs, with guided installation and integrated update controls to simplify running a Kubernetes homelab.
+Homestead brings hyperconvergence home, combining apps, virtual machines, distributed storage and networking in one friendly interface. Start with one machine and grow into a cluster, with guided installation and integrated update controls.
 
-Manage app deployment and updates, container logs and consoles, virtual machines, volume snapshots, scheduled backups, network shares and virtual IPs. Longhorn provides replicated storage, while KubeVirt provides virtual machines. Link clusters to manage workloads across them. Homestead also supports imports from Docker Compose, Unraid and supported VM disk images, alongside access to Kubernetes resources and YAML.
+Manage app deployment and updates, GPU/PCI passthrough for VMs, USB devices for containers, snapshots, scheduled backups and SMB/NFS shares. IPAM tracks LAN addresses alongside workload virtual IPs. Longhorn supplies replicated storage and KubeVirt supplies VMs. An installable PWA brings management and push notifications to your phone; MQTT discovery brings cluster and node health into Home Assistant.
 
-Homestead runs on k3s, RKE2, Harvester or an existing Kubernetes cluster. A guided Linux installer can create or join a k3s or RKE2 cluster; Helm and Kubernetes manifest installation are also available. Host update controls are available, with Harvester hosts updated through Harvester itself. Features depend on the components installed in the cluster, and resilience depends on quorum, replication and available capacity.
+k3s is preferred for home self-hosting and is Homestead's most widely tested platform. RKE2 and Harvester are supported alternatives. Supported x86-64 and ARM64 systems can run Homestead, subject to component and hardware compatibility. Link clusters, import Docker Compose or Unraid workloads, and access Kubernetes resources when needed.
 
-The project is free under Apache 2.0 with Commons Clause 1.0 and currently beta. An interactive demo lets visitors explore the browser interface using sample data without installing a cluster. The interface also supports installation as a PWA over HTTPS.
+Homestead is free to self-host under Apache 2.0 with Commons Clause 1.0 and currently beta. Resilience requires suitable quorum, replicas and capacity; physical devices constrain migration and failover. Large deployments have not been benchmarked. Try the interactive demo using sample data before installing.
 ```
 
 ## Alternatives to suggest, with scope

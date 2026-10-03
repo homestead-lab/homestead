@@ -17,10 +17,16 @@ Verified against the local [README](../../README.md), [project licence](../../LI
 | Maturity | Beta, as stated by the README |
 | Implementation | Python backend; JavaScript browser interface |
 | Runtime | Kubernetes on Linux; k3s, RKE2, Harvester or an existing Kubernetes cluster |
+| Recommended platform | k3s: preferred for home self-hosting and the most widely tested platform with Homestead; RKE2 and Harvester are supported alternatives |
 | Installation routes | Guided Linux installer, Helm chart or Kubernetes manifest |
 | Image architectures | Release workflow builds linux/amd64 and linux/arm64; component and hardware support still varies |
 | Storage / VMs | Longhorn enables volume and data-protection features; KubeVirt enables VMs |
 | Networking | kube-vip provides virtual IP support; Multus provides additional network attachment support |
+| Hardware access | Guided GPU/PCI and USB passthrough for VMs; named hardware features and eligible-host placement for containers, including USB radios |
+| IPAM | LAN subnet/address inventory, scanning, live cluster addresses and VIP allocation; optional read-only UniFi import |
+| Mobile and alerts | Installable HTTPS PWA on supported iOS/Android browsers, with push notifications |
+| Home automation | MQTT cluster/node statistics with Home Assistant discovery; scoped API access for monitoring and control |
+| Growth | Start with one host and add hosts or link clusters; no verified maximum scale or large-cluster benchmark |
 | Demo behaviour | Interactive interface with sample data; no live cluster and no saved changes |
 
 The [GitHub repository API](https://api.github.com/repos/wjcloudy/homestead) reported creation on **19 September 2026**. The earliest release retained in the current API listing was v2.8.294, published **2 October 2026**. Neither observation proves the original first public release date. Do not calculate a definitive Awesome-list eligibility date from a commit timestamp or repository creation date; establish the first public release separately.
@@ -56,7 +62,7 @@ Hyperconverged homelab platform combining compute, storage and networking, with 
 ### Short paragraph — target: 50–80 words
 
 ```text
-Homestead brings hyperconvergence home: apps, virtual machines, replicated storage and networking across ordinary machines, managed through one friendly interface. A guided installer builds or joins a Kubernetes cluster, while browser controls simplify everyday administration, backups and updates. It runs on k3s, RKE2, Harvester or existing Kubernetes clusters, with Longhorn for storage and KubeVirt for VMs. source-available and currently beta, it offers an interactive demo using sample data.
+Homestead brings hyperconvergence home: apps, VMs, replicated storage and networking in one friendly interface. Start with k3s, the preferred and most widely tested platform for home self-hosting, or use RKE2 or Harvester. Guided installation, hardware assignment, snapshots, backups and upgrades simplify everyday management. An installable phone app provides push notifications, while MQTT discovery connects cluster health to Home Assistant. Homestead is source-available and currently beta.
 ```
 
 ## Claims to keep precise
@@ -68,6 +74,8 @@ Homestead brings hyperconvergence home: apps, virtual machines, replicated stora
 - The k3s guide gives 2 CPU cores and 4 GB RAM as a starting point. This is not a validated minimum for every VM, storage or high-availability configuration.
 - The dashboard container's manifest requests 50m CPU and 96Mi RAM and sets a 256Mi memory limit. These are container settings, not whole-cluster hardware requirements. Its data claim requests 2Gi mounted at `/data`; the Service exposes TCP 8088 to container port 8080.
 - Mention iOS/Android access as a browser/PWA interface over HTTPS, not native App Store applications.
+- Describe ARM64 support as conditional on the underlying distribution, images and hardware; do not promise every feature on every ARM board. Use "start small and grow" rather than an untested large-scale or maximum-node claim.
+- Passthrough devices remain physical and host-bound. Hardware-aware placement needs an eligible host; VM passthrough prevents live migration. Replicated storage does not remove these restrictions.
 - Do not describe Homestead as a hypervisor, NAS operating system, Kubernetes distribution, or full replacement for every feature of Unraid, Proxmox or Portainer.
 - Avoid unverified adoption numbers, security certifications, telemetry claims, performance benchmarks and production-readiness claims.
 
