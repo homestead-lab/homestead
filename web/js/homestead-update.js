@@ -5,7 +5,7 @@
    dialog it opens, and a card under Settings › Updates. The update itself is
    the same reviewed rollout an app gets (reviewImageActions), Homestead last. */
 const HOMESTEAD_PARTS = { self: "Homestead", smb: "SMB server", nfs: "NFS server", objectstore: "Object store" };
-const HOMESTEAD_RELEASES = "https://github.com/wjcloudy/homestead/releases";
+const HOMESTEAD_RELEASES = "https://github.com/homestead-lab/homestead/releases";
 let HOMESTEAD_CHANNEL_SAVING = false;
 
 function homesteadChannelPicker() {

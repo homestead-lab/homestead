@@ -8,7 +8,7 @@ It has two tabs: **Machines**, the VMs here, and **Import**, which brings VMs
 across [from an Unraid server](Importing#vms-from-unraid), settings and disks,
 and [disk images](Importing#a-vm-disk-image) from a web address.
 
-![VMs](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vms.jpg)
+![VMs](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-vms.jpg)
 
 ## Each VM
 
@@ -46,7 +46,7 @@ download has not started after three minutes says why.
 
 ## New VM
 
-![New VM](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vm-new.jpg)
+![New VM](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-vm-new.jpg)
 
 **＋ New VM** asks for a name, CPU cores, memory, a disk size, a root password
 and a boot disk:
@@ -230,7 +230,7 @@ on disposable resources before relying on them for production recovery.
 
 ## Edit
 
-![Edit VM](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vm-edit.jpg)
+![Edit VM](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-vm-edit.jpg)
 
 **Edit** covers what a VM is made of:
 

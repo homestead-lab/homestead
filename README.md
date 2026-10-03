@@ -10,28 +10,28 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/wjcloudy/homestead/releases/latest"><img src="https://img.shields.io/github/v/release/wjcloudy/homestead?label=release&color=f59e0b" alt="Latest release"></a>
-  <a href="https://github.com/wjcloudy/homestead/actions/workflows/ci.yml"><img src="https://github.com/wjcloudy/homestead/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="https://github.com/wjcloudy/homestead/pkgs/container/homestead"><img src="https://img.shields.io/badge/ghcr.io-homestead-2453ff?logo=docker&logoColor=white" alt="Container image"></a>
-  <a href="https://wjcloudy.github.io/homestead/"><img src="https://img.shields.io/badge/live_demo-try_it-2453ff" alt="Live demo"></a>
+  <a href="https://github.com/homestead-lab/homestead/releases/latest"><img src="https://img.shields.io/github/v/release/homestead-lab/homestead?label=release&color=f59e0b" alt="Latest release"></a>
+  <a href="https://github.com/homestead-lab/homestead/actions/workflows/ci.yml"><img src="https://github.com/homestead-lab/homestead/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/homestead-lab/homestead/pkgs/container/homestead"><img src="https://img.shields.io/badge/ghcr.io-homestead-2453ff?logo=docker&logoColor=white" alt="Container image"></a>
+  <a href="https://homestead-lab.github.io/homestead/"><img src="https://img.shields.io/badge/live_demo-try_it-2453ff" alt="Live demo"></a>
   <img src="https://img.shields.io/badge/status-beta-f59e0b" alt="Status: beta">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache_2.0_%2B_Commons_Clause-30ba78" alt="Apache 2.0 with Commons Clause licence"></a>
 </p>
 
 <p align="center">
-  <a href="https://wjcloudy.github.io/homestead/"><b>Live demo</b></a> &nbsp;·&nbsp;
+  <a href="https://homestead-lab.github.io/homestead/"><b>Live demo</b></a> &nbsp;·&nbsp;
   <a href="#quick-install"><b>Quick install</b></a> &nbsp;·&nbsp;
   <a href="#features"><b>Features</b></a> &nbsp;·&nbsp;
-  <a href="https://github.com/wjcloudy/homestead/wiki"><b>Wiki</b></a> &nbsp;·&nbsp;
+  <a href="https://github.com/homestead-lab/homestead/wiki"><b>Wiki</b></a> &nbsp;·&nbsp;
   <a href="docs/reference.md"><b>Reference</b></a>
 </p>
 
 <p align="center">
-  <a href="https://wjcloudy.github.io/homestead/"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-hero.jpg" alt="Homestead dashboard in a large desktop view alongside one phone"></a>
+  <a href="https://homestead-lab.github.io/homestead/"><img src="https://github.com/homestead-lab/homestead/releases/latest/download/homestead-hero.jpg" alt="Homestead dashboard in a large desktop view alongside one phone"></a>
 </p>
 
 <p align="center">
-  <b>Try it before you install it:</b> the <a href="https://wjcloudy.github.io/homestead/">live demo</a> is the real interface on made-up data,
+  <b>Try it before you install it:</b> the <a href="https://homestead-lab.github.io/homestead/">live demo</a> is the real interface on made-up data,
   in your browser. Click around every page; nothing you do there is saved.
 </p>
 
@@ -96,13 +96,13 @@ click away as YAML. It runs on [k3s](https://k3s.io), RKE2,
 
 **Choose k3s for home self-hosting.** It is Homestead's preferred platform and
 the most widely tested with Homestead. Start with the
-[k3s guide](https://github.com/wjcloudy/homestead/wiki/Installing-on-k3s);
+[k3s guide](https://github.com/homestead-lab/homestead/wiki/Installing-on-k3s);
 RKE2 and Harvester are supported alternatives.
 
 On a Linux machine - a bare one, a k3s or RKE2 server, or a Harvester node:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo sh
 ```
 
 - **New cluster or join one.** The installer checks the machine, then creates
@@ -129,14 +129,14 @@ rest for Longhorn:
   [V2 support and considerations](docs/wiki/Storage.md#longhorn-v2-support-and-considerations)
   before enabling it, particularly on ARM or mixed-size hosts.
 
-See [Installing on k3s](https://github.com/wjcloudy/homestead/wiki/Installing-on-k3s#disks).
+See [Installing on k3s](https://github.com/homestead-lab/homestead/wiki/Installing-on-k3s#disks).
 
 Then open `http://<your machine>:8088` and create the administrator account.
 Already running a cluster? Install with
 [Helm or the manifest](docs/reference.md#install-with-helm). The wiki walks
-through [k3s](https://github.com/wjcloudy/homestead/wiki/Installing-on-k3s),
-[RKE2](https://github.com/wjcloudy/homestead/wiki/Installing-on-RKE2) and
-[Harvester](https://github.com/wjcloudy/homestead/wiki/Installing-on-Harvester)
+through [k3s](https://github.com/homestead-lab/homestead/wiki/Installing-on-k3s),
+[RKE2](https://github.com/homestead-lab/homestead/wiki/Installing-on-RKE2) and
+[Harvester](https://github.com/homestead-lab/homestead/wiki/Installing-on-Harvester)
 step by step.
 
 ## Features
@@ -171,7 +171,7 @@ or a VM disk image (qcow2, VMDK).
 
 **API** - scoped, expiring API keys for Home Assistant, scripts and AI agents,
 on a versioned, self-describing API ([OpenAPI](docs/api/openapi.json),
-[guide](https://github.com/wjcloudy/homestead/wiki/API)).
+[guide](https://github.com/homestead-lab/homestead/wiki/API)).
 
 </td>
 <td width="50%" valign="top">
@@ -258,23 +258,23 @@ Homestead installs as an app on iOS and Android (over HTTPS), with push
 notifications for outages, degraded storage, failed jobs and image updates.
 
 <p align="center">
-  <img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-mobile.jpg" alt="Homestead on a phone: dashboard, containers, VIPs, replicated volumes, and snapshots and backups">
+  <img src="https://github.com/homestead-lab/homestead/releases/latest/download/homestead-mobile.jpg" alt="Homestead on a phone: dashboard, containers, VIPs, replicated volumes, and snapshots and backups">
 </p>
 
 ## On the desktop
 
 <p align="center">
-  <img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-dashboard.jpg" alt="The Homestead dashboard">
+  <img src="https://github.com/homestead-lab/homestead/releases/latest/download/homestead-dashboard.jpg" alt="The Homestead dashboard">
 </p>
 
 <table>
 <tr>
-<td width="50%"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-containers.jpg" alt="Containers"><p align="center"><b>Containers</b></p></td>
-<td width="50%"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-architecture.jpg" alt="Architecture: VIP to workload to volume to replica"><p align="center"><b>Architecture</b></p></td>
+<td width="50%"><img src="https://github.com/homestead-lab/homestead/releases/latest/download/homestead-containers.jpg" alt="Containers"><p align="center"><b>Containers</b></p></td>
+<td width="50%"><img src="https://github.com/homestead-lab/homestead/releases/latest/download/homestead-architecture.jpg" alt="Architecture: VIP to workload to volume to replica"><p align="center"><b>Architecture</b></p></td>
 </tr>
 <tr>
-<td width="50%"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-volumes.jpg" alt="Replicated volumes"><p align="center"><b>Volumes</b></p></td>
-<td width="50%"><img src="https://github.com/wjcloudy/homestead/releases/latest/download/homestead-vms.jpg" alt="Virtual machines"><p align="center"><b>Virtual machines</b></p></td>
+<td width="50%"><img src="https://github.com/homestead-lab/homestead/releases/latest/download/homestead-volumes.jpg" alt="Replicated volumes"><p align="center"><b>Volumes</b></p></td>
+<td width="50%"><img src="https://github.com/homestead-lab/homestead/releases/latest/download/homestead-vms.jpg" alt="Virtual machines"><p align="center"><b>Virtual machines</b></p></td>
 </tr>
 </table>
 
@@ -285,7 +285,7 @@ dialog audits use the incident scenario, and CI checks all three health states.
 
 Every screenshot is taken from Homestead's demo data by each release, so they
 always show the current version. The same demo runs live at
-**[wjcloudy.github.io/homestead](https://wjcloudy.github.io/homestead/)**, updated with each release.
+**[homestead-lab.github.io/homestead](https://homestead-lab.github.io/homestead/)**, updated with each release.
 
 ## Where it runs
 
@@ -306,11 +306,11 @@ checks what the cluster has, and each page works with that.
 
 ## Documentation
 
-- **[Wiki](https://github.com/wjcloudy/homestead/wiki)** - the guided tour:
+- **[Wiki](https://github.com/homestead-lab/homestead/wiki)** - the guided tour:
   building a cluster, installing Homestead, then each page in turn.
 - **[Reference](docs/reference.md)** - every feature in depth, security notes,
   and how releases are made.
-- **[Troubleshooting](https://github.com/wjcloudy/homestead/wiki/Troubleshooting)** -
+- **[Troubleshooting](https://github.com/homestead-lab/homestead/wiki/Troubleshooting)** -
   the problems people actually hit, and the node doctor.
 
 ## Contributing

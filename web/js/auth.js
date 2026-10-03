@@ -34,7 +34,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error) {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.302" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.303-dev.1" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     <p class="dim small">This page tries again every few seconds.</p>
@@ -126,7 +126,7 @@ function stopAuthenticatedWork() {
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.302" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.303-dev.1" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -367,7 +367,7 @@ window.setRole = async (name, role) => {
    Settings › Users and access: keys for Home Assistant, scripts and AI
    agents. Each expires, holds only the scopes it is given and works on
    /api/v1 alone; the token is shown once, when it is made. */
-const API_DOCS = "https://github.com/wjcloudy/homestead/wiki/API";
+const API_DOCS = "https://github.com/homestead-lab/homestead/wiki/API";
 const API_TTLS = [["1 day", 86400], ["7 days", 7 * 86400], ["30 days", 30 * 86400], ["90 days", 90 * 86400], ["1 year", 365 * 86400]];
 const keyUntil = t => {
   const left = t - Date.now() / 1000;

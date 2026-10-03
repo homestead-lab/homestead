@@ -84,7 +84,7 @@ def manifest(version="dev", namespace=None, scripts=None):
                          _mount("dev", "/host/dev"), _mount("proc", "/host/proc")],
     }
     smart = {
-        "name": "smart", "image": "ghcr.io/wjcloudy/homestead:" + version,
+        "name": "smart", "image": NAMES.IMAGE + ":" + version,
         "imagePullPolicy": "IfNotPresent",
         "command": ["python3", "/srv/smart.py"],
         "ports": [{"containerPort": SMART_PORT, "name": "smart"}],

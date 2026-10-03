@@ -141,7 +141,7 @@ prod retention, while retaining all Git tags and registry images.
 ## Security
 
 Please report a vulnerability privately through
-[GitHub security advisories](https://github.com/wjcloudy/homestead/security/advisories/new)
+[GitHub security advisories](https://github.com/homestead-lab/homestead/security/advisories/new)
 rather than in an issue.
 
 ## Licence

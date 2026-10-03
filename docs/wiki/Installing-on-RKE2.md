@@ -86,21 +86,21 @@ sudo systemctl reload NetworkManager
 On the first machine:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo sh
 ```
 
-![The installer's menu](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-menu.png)
+![The installer's menu](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-menu.png)
 
 Select **Install Homestead**, then **Create a new cluster**, then **RKE2**:
 
-![Which Kubernetes](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-kubernetes.png)
+![Which Kubernetes](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-kubernetes.png)
 
 The installer checks the machine first - memory, disk, the internet (it
 reaches `get.rke2.io` and `ghcr.io`), ports 6443, 9345 and 10250, the
 hostname, the clock, the firewall, `/dev/kvm`, an address from DHCP - and
 stops on anything that would make the install fail, saying what to put right.
 
-![The checks](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-checks.png)
+![The checks](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-checks.png)
 
 It asks which address the other machines reach this one on, when it has more
 than one, and whether to install KubeVirt. The installation summary then
@@ -109,7 +109,7 @@ channel, Longhorn, KubeVirt, CDI and Homestead from their current releases.
 Select a component to install another version: the list comes live from
 RKE2's release channels and from GitHub.
 
-![The installation summary](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-tui-ready.png)
+![The installation summary](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-tui-ready.png)
 
 Select **Install**. The first installation takes 10-15 minutes while RKE2
 downloads its images, with a progress bar. Afterwards, each machine's own
@@ -126,11 +126,11 @@ press Enter for the usual login; see
 
 Open that address and create the first administrator.
 
-The installer runs [`bootstrap-k3s.sh`](https://github.com/wjcloudy/homestead/blob/main/scripts/bootstrap-k3s.sh)
+The installer runs [`bootstrap-k3s.sh`](https://github.com/homestead-lab/homestead/blob/main/scripts/bootstrap-k3s.sh)
 with `--rke2` to do this. You can run it yourself instead, with no questions:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - server --rke2
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - server --rke2
 ```
 
 Options go after `server`:
@@ -148,7 +148,7 @@ Options go after `server`:
 Unattended, the installer takes its answers ahead:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo HS_ROLE=new HS_DIST=rke2 HS_NODE_IP=192.0.2.10 HS_YES=1 sh
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo HS_ROLE=new HS_DIST=rke2 HS_NODE_IP=192.0.2.10 HS_YES=1 sh
 ```
 
 ## 3. More machines
@@ -156,7 +156,7 @@ curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/inst
 On each further machine, run the same line:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo sh
 ```
 
 Select **Install Homestead**, then **Join an existing cluster as a worker
@@ -173,13 +173,13 @@ sudo cat /var/lib/rancher/rke2/server/node-token
 Or, with no questions, as a **worker**:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - agent https://192.0.2.10:9345 <token> --rke2
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - agent https://192.0.2.10:9345 <token> --rke2
 ```
 
 As another **server**:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - join https://192.0.2.10:9345 <token> --rke2
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - join https://192.0.2.10:9345 <token> --rke2
 ```
 
 Use `192.0.2.10` as the first machine's address, and your token. **Cluster →

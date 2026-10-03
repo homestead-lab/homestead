@@ -3,7 +3,7 @@
 # or join another machine to one.
 #
 #   New cluster, on the first machine:
-#     curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - server
+#     curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/bootstrap-k3s.sh | sudo sh -s - server
 #
 #   Another machine, as a worker (the token is in /var/lib/rancher/k3s/server/node-token on the first):
 #     curl -sfL .../bootstrap-k3s.sh | sudo sh -s - agent https://<first-machine>:6443 <token>
@@ -99,7 +99,7 @@ VIP=""
 LONGHORN_VOLUME=auto
 NODE_IP=""
 JOIN_TAINT=""
-RAW=https://raw.githubusercontent.com/wjcloudy/homestead
+RAW=https://raw.githubusercontent.com/homestead-lab/homestead
 
 say() { printf '\n==> %s\n' "$*"; }
 fail() { printf '\nerror: %s\n' "$*" >&2; exit 1; }

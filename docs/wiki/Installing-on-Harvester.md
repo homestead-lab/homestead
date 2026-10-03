@@ -97,7 +97,7 @@ goes there.
 The easiest way: on a management host (step 4, first way), as root, run
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo sh
 ```
 
 It sees that this is Harvester, checks the host reaches the cluster and
@@ -112,14 +112,14 @@ From a host (step 4, first way), one line fetches the manifest, gives it your
 address and Harvester's storage class, and applies it:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/deploy/deploy.yaml | sed -e 's/192\.0\.2\.242/192.0.2.242/g' -e 's/longhorn-r2/harvester-longhorn/g' -e 's/accessModes: \[ReadWriteMany\]/accessModes: [ReadWriteOnce]/' | kubectl apply -f -
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/deploy/deploy.yaml | sed -e 's/192\.0\.2\.242/192.0.2.242/g' -e 's/longhorn-r2/harvester-longhorn/g' -e 's/accessModes: \[ReadWriteMany\]/accessModes: [ReadWriteOnce]/' | kubectl apply -f -
 ```
 
 Change the second `192.0.2.242` to your address. Or, with Helm on your own
 computer:
 
 ```bash
-helm install homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --create-namespace --set service.loadBalancerIP=192.0.2.242
+helm install homestead oci://ghcr.io/homestead-lab/charts/homestead -n homestead --create-namespace --set service.loadBalancerIP=192.0.2.242
 ```
 
 Either way, watch it start (the manifest installs into `lab`, the Helm chart

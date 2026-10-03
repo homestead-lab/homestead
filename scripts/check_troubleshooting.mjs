@@ -66,7 +66,7 @@ try {
     assert(await button("Continue on GitHub").isDisabled());
     await page.locator("#bugShareAck").check();
     assert(!(await button("Continue on GitHub").isDisabled()));
-    assert((await button("Continue on GitHub").getAttribute("onclick")).includes("https://github.com/wjcloudy/homestead/issues/new?"));
+    assert((await button("Continue on GitHub").getAttribute("onclick")).includes("https://github.com/homestead-lab/homestead/issues/new?"));
     await page.screenshot({ path: `release-assets/troubleshooting/issue-${theme}-${width}.png`, fullPage: true });
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     await page.evaluate(() => closeModal()); await page.evaluate(() => bugPackage());

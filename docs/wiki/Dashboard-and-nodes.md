@@ -6,7 +6,7 @@ The Dashboard is the cluster at a glance: CPU, memory, network and disk for the
 whole cluster, what is unhealthy right now, and the containers and VMs using the
 most.
 
-![Dashboard](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-dashboard.jpg)
+![Dashboard](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-dashboard.jpg)
 
 - **Health** changes only on a real change - a node going not-Ready, a volume
   degrading, a workload failing to start - and a problem shows once it has
@@ -29,7 +29,7 @@ node's own IP and each VIP it currently answers for; those VIPs move to
 another node if it goes down. [Networking](Networking#nodes--addresses) shows
 the same addresses with the ports and apps on each.
 
-![Nodes](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-nodes.jpg)
+![Nodes](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-nodes.jpg)
 
 Clicking a node opens it: its hardware, the pods and VMs on it, per-disk read
 and write speed, and each drive's health.
@@ -98,7 +98,7 @@ The node's **Disks** card draws each disk's partition table to scale - each
 partition's size, filesystem and mount, what sits on it (LVM, RAID) and space
 left unallocated.
 
-![Node detail](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-node-detail.jpg)
+![Node detail](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-node-detail.jpg)
 
 ### Uptime
 
@@ -260,7 +260,7 @@ on a host that has it. See [Containers](Containers#hardware).
 control plane and etcd (and how many servers can fail before it stops), node
 pressure, core services, and platform warnings from the last day.
 
-![Cluster](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-cluster.jpg)
+![Cluster](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-cluster.jpg)
 
 - **Add a host** walks through adding a machine, for the cluster you have:
   Harvester's installer screens, or k3s/RKE2's join command, and shows the new

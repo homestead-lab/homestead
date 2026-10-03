@@ -59,7 +59,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.302")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.303-dev.1")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -5134,7 +5134,7 @@ def fetch_appstore():
 
     def go():
         req = urllib.request.Request(source, headers={
-            "User-Agent": f"Homestead/{HOMESTEAD_VERSION} (+https://github.com/wjcloudy/homestead)",
+            "User-Agent": f"Homestead/{HOMESTEAD_VERSION} (+https://github.com/homestead-lab/homestead)",
             "Accept": "application/json",
         })
         with urllib.request.urlopen(req, timeout=60) as r:
@@ -8548,7 +8548,7 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, report)
             if p == "/api/node/probe/allocation":
                 current = ALLOCATION_PROBE.status()
-                if current["enabled"] and current.get("image") != "ghcr.io/wjcloudy/homestead:" + HOMESTEAD_VERSION:
+                if current["enabled"] and current.get("image") != NAMES.IMAGE + ":" + HOMESTEAD_VERSION:
                     current["detail"] = "Helper update pending. Review capacity and save settings to use this release."
                 if current["installed"]:
                     try:

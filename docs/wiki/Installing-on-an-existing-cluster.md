@@ -12,7 +12,7 @@ On a **k3s or RKE2 server**, the one-line installer does it for you - it
 finds the cluster, adds Longhorn if it is missing, and installs Homestead:
 
 ```bash
-curl -sfL https://raw.githubusercontent.com/wjcloudy/homestead/main/scripts/install.sh | sudo sh
+curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/main/scripts/install.sh | sudo sh
 ```
 
 For anything else - or to choose every value yourself - use Helm or the
@@ -39,13 +39,13 @@ Kubernetes 1.25 or newer, x86-64 or ARM64.
 Pick an address your load balancer can give out (`192.0.2.242` below):
 
 ```bash
-helm install homestead oci://ghcr.io/wjcloudy/charts/homestead -n homestead --create-namespace --set service.loadBalancerIP=192.0.2.242 --set service.kubeVip=false
+helm install homestead oci://ghcr.io/homestead-lab/charts/homestead -n homestead --create-namespace --set service.loadBalancerIP=192.0.2.242 --set service.kubeVip=false
 ```
 
 `service.kubeVip=false` is for anything but Harvester and kube-vip: it stops the
 chart asking for the address in kube-vip's annotation.
 
-Useful values (`helm show values oci://ghcr.io/wjcloudy/charts/homestead` lists
+Useful values (`helm show values oci://ghcr.io/homestead-lab/charts/homestead` lists
 them all):
 
 | Value | Default | Meaning |
@@ -71,7 +71,7 @@ The manifest installs the same things into the `lab` namespace. Download it,
 then change three things:
 
 ```bash
-curl -sfLO https://raw.githubusercontent.com/wjcloudy/homestead/main/deploy/deploy.yaml
+curl -sfLO https://raw.githubusercontent.com/homestead-lab/homestead/main/deploy/deploy.yaml
 ```
 
 1. `storageClassName: longhorn-r2` and the `STORAGE_CLASS` value - to a class
@@ -92,7 +92,7 @@ Homestead runs as its own ServiceAccount with a ClusterRole that can read every
 kind and change most of them - it deploys apps, makes volumes, edits objects
 from the Resources page, and keeps its own role up to date as releases need
 more. That is close to cluster-admin, and is said plainly in
-[`deploy/rbac.yaml`](https://github.com/wjcloudy/homestead/blob/main/deploy/rbac.yaml).
+[`deploy/rbac.yaml`](https://github.com/homestead-lab/homestead/blob/main/deploy/rbac.yaml).
 Container consoles are limited to the namespace your apps go in. If that is more than
 you want in a shared cluster, Homestead is not the right fit there.
 

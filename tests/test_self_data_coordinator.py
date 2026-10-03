@@ -13,7 +13,7 @@ from homestead_storage_journal import Held, identity, shape
 
 
 OP = "a" * 24
-IMAGE = "ghcr.io/wjcloudy/homestead@sha256:" + "b" * 64
+IMAGE = "ghcr.io/homestead-lab/homestead@sha256:" + "b" * 64
 RECEIPT = {"manifest": "c" * 64, "files": 7, "bytes": 1234}
 
 

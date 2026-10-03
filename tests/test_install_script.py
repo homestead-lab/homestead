@@ -381,8 +381,8 @@ case "$*" in
     [ "$TEST_MODE" != denied ] || exit 1
     [ "$TEST_MODE" != absent ] || exit 0
     if [ "$TEST_MODE" = digest ]; then
-      echo 'homestead|ghcr.io/wjcloudy/homestead@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234|1|1'
-    else echo 'homestead|ghcr.io/wjcloudy/homestead:2.8.199|1|1'; fi ;;
+      echo 'homestead|ghcr.io/homestead-lab/homestead@sha256:1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234|1|1'
+    else echo 'homestead|ghcr.io/homestead-lab/homestead:2.8.199|1|1'; fi ;;
   'get services '*)
     [ "$TEST_MODE" != denied ] || exit 1
     [ "$TEST_MODE" != absent ] || exit 0

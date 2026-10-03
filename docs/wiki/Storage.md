@@ -4,7 +4,7 @@
 persistent volume claims - with its size, how full it is, who uses it, and
 what Longhorn thinks of it.
 
-![Volumes](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-volumes.jpg)
+![Volumes](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-volumes.jpg)
 
 ## Reading the table
 
@@ -152,7 +152,7 @@ Each node's card lists every disk on the host: the system disk, the disks
 Longhorn uses, and any nothing uses yet. **Disks** (on Volumes, on a node, or in
 Settings → Hardware and storage) opens them all.
 
-![Disks](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-disks.jpg)
+![Disks](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-disks.jpg)
 
 - **Add to Longhorn** (Harvester) - Harvester formats the disk (wiping it first
   if you say so) and gives it to Longhorn, as its own UI does.
@@ -496,7 +496,7 @@ Kubernetes cannot change a volume's class, so **Change storage class** makes a
 copy on the new class and swaps it in under the original's name - every
 container, VM, share and backup job that uses it by name carries on unchanged.
 
-![Change storage class](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-storage-class-change.jpg)
+![Change storage class](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-storage-class-change.jpg)
 
 The review lists affected workloads, the new volume's size, replica allocation
 and estimated destination room. Both copies use space until you remove the old
@@ -523,7 +523,7 @@ and its approval cannot be consumed twice. The durable workflow for new moves:
 4. the original is released and the copy takes its name;
 5. everything starts again as it was.
 
-![Storage class change in progress](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-storage-class-progress.jpg)
+![Storage class change in progress](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-storage-class-progress.jpg)
 
 New moves record each request's intent before sending it and verify its resource
 identity afterwards. A lost or unverified reply is not retried or adopted by name.

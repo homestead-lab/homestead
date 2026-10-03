@@ -11,7 +11,7 @@ was already removed; it does not delete the underlying volume.
 **Shares** serves volumes to Windows, macOS and Linux over SMB (Samba), the way
 an Unraid share does - `\\192.0.2.245\media`.
 
-![Shares](https://github.com/wjcloudy/homestead/releases/latest/download/homestead-shares.jpg)
+![Shares](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-shares.jpg)
 
 ## The first share
 

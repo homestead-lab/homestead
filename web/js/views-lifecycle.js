@@ -1967,7 +1967,7 @@ window.clusterReady = async name => {
            <div><button class="btn sm" data-need="admin" onclick="clusterStorage(${jsq(name)},true)">Give it another address</button></div>`)
       : r.update_first
       ? step(false, `${esc(name)} runs Homestead v${esc(r.version?.version || "?")}, which sets up backup storage with MinIO - whose images can no longer be downloaded`,
-          `<div class="dim xs">Update it to 2.8.111 or later, then set it up from here:</div><div class="mono xs">kubectl -n lab set image deployment/homestead homestead=ghcr.io/wjcloudy/homestead:2.8.111</div>`)
+          `<div class="dim xs">Update it to 2.8.111 or later, then set it up from here:</div><div class="mono xs">kubectl -n lab set image deployment/homestead homestead=ghcr.io/homestead-lab/homestead:2.8.111</div>`)
       : target.configured && target.reachable_off_cluster
       ? step(true, `Backup storage on ${esc(name)}`, `<div class="dim xs mono">${esc(target.url || "")} · ${esc(target.endpoint || "")}</div>`)
       : target.configured

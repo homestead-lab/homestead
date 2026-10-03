@@ -18,7 +18,7 @@ HEADER = """# Homestead's permissions on their own, from deploy/deploy.yaml.
 # Apply this once to an install from before 2.8.71 and
 # Homestead keeps its permissions up to date itself from then on:
 #
-#   kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/<release>/deploy/rbac.yaml
+#   kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/<release>/deploy/rbac.yaml
 #
 # It changes no Deployment, Service or volume. Installed Homestead somewhere
 # other than the lab namespace? Change the namespaces below to match.
