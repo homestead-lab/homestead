@@ -91,9 +91,8 @@ window.objectStoreSetup = () => {
     <div class="f"><label>Port ${tip("Where the store answers. Pick another if an app on that address already uses 9000; the next port up is its console.")}</label>
       <input id="os_port" type="number" min="1" max="65534" value="${store.port || 9000}" class="mono"></div></div>
   <div class="note"><b>Keep an independent backup.</b> This store shares the cluster’s disks. Use it for migration staging, not your only copy.</div>
-  <div class="row" style="margin-top:16px">
-    <button class="btn pri" data-need="admin" onclick="objectStoreDeploy()">${store.deployed ? "Save storage settings" : "Set up storage"}</button>
-    <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+  ${UI.actions(`<button class="btn pri" data-need="admin" onclick="objectStoreDeploy()">${store.deployed ? "Save storage settings" : "Set up storage"}</button>
+    <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 
 window.objectStoreDeploy = async () => {
@@ -303,9 +302,8 @@ window.lhJob = (j) => {
         ${esc(g)}${g === "default" ? ' <span class="tag info">all volumes</span>' : ""}</label>`).join("")}</div>
       <input type="text" id="lj_newgroup" placeholder="…or type a new group name">
     </div>
-    <div class="row" style="margin-top:18px">
-      <button class="btn pri" onclick="lhJobSave()">Save job</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>
+    ${UI.actions(`<button class="btn pri" onclick="lhJobSave()">Save job</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
     <div class="note" style="margin-top:14px">Snapshots are stored on the volume itself and are
     near-instant. Backups upload to the backup target and need one configured — without it a
     backup job fails on every run.</div>`, true);
@@ -383,7 +381,7 @@ window.lhPlans = (group = "default") => {
       <div class="dim xs" style="margin-top:6px">A plan for a group of its own needs the group first:
         <a class="linkish" onclick="lhGroup()">make one</a>.</div></div>
     <div class="plan-list" id="lp_list">${planList(group, "snapshots")}</div>
-    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="lhPlanApply()">Set up plan</button><button class="btn" onclick="closeModal()">Cancel</button></div>`, true);
+    ${UI.actions(`<button class="btn pri" onclick="lhPlanApply()">Set up plan</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`, true);
 };
 window.lhPlanGroup = () => {
   const chosen = $("input[name=lp_plan]:checked")?.value || "snapshots";
@@ -441,9 +439,8 @@ window.lhGroup = (name = "") => {
     <div class="f"><label>Also set up a plan for it</label><select id="lg_plan"><option value="">No plan</option>
       ${PROTECT_PLANS.map(plan => `<option value="${plan.id}">${esc(plan.title)}</option>`).join("")}</select>
       <div class="dim xs" style="margin-top:6px">Its jobs are named after the group, so they protect only these volumes.</div></div>
-    <div class="row" style="margin-top:16px">
-      <button class="btn pri" data-original="${esc(name)}" onclick="lhGroupSave(this.dataset.original)">Save group</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`, true);
+    ${UI.actions(`<button class="btn pri" data-original="${esc(name)}" onclick="lhGroupSave(this.dataset.original)">Save group</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`, true);
 };
 window.lhGroupFilter = () => {
   const q = ($("#lg_filter").value || "").trim().toLowerCase();
@@ -548,9 +545,8 @@ window.lhAssign = (vol, label) => {
       <input type="checkbox" class="pj" value="${esc(j.name)}" ${v.jobs.includes(j.name) ? "checked" : ""}>
       ${esc(j.name)} <span class="dim xs">${esc(j.task)}</span></label>`).join("")
       || '<div class="dim xs">no jobs defined yet</div>'}</div>
-    <div class="row" style="margin-top:18px">
-      <button class="btn pri" onclick="lhAssignSave(${jsq(vol)})">Save</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" onclick="lhAssignSave(${jsq(vol)})">Save</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.lhAssignSave = async vol => {
   const d = STATE.data.lh;
@@ -752,10 +748,9 @@ window.lhRestore = async backup => {
         <select id="lr_sc" onchange="lhRestoreCheck()">${(plan.storage_classes || []).map(name => `<option value="${esc(name)}" ${name === plan.storage_class ? "selected" : ""}>${esc(name)}</option>`).join("")}</select>
         <div class="dim small">The restored volume keeps this class and its storage settings.</div></div>
       <div id="lr_check" class="note"><span class="spin2"></span> checking destination name</div>
-      <div class="row" style="margin-top:18px">
-        <button class="btn pri" id="lr_submit" data-need="admin" data-backup="${esc(backup)}"
+      ${UI.actions(`<button class="btn pri" id="lr_submit" data-need="admin" data-backup="${esc(backup)}"
           onclick="lhRestoreStart(this.dataset.backup)" disabled>${icon("rollback")}Start restore</button>
-        <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+        <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
     if (window.applyRole) window.applyRole();
     lhRestoreCheck();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
@@ -806,8 +801,8 @@ window.lhRevert = async (vol, snap, label) => {
         ${users.map(u => `<span class="tag">${esc(u.kind === "VirtualMachine" ? "VM" : u.kind)} ${esc(u.name)}</span>`).join(" ")}</div>`
         : '<div class="dim small">Nothing uses it now, so nothing needs stopping.</div>'}
       ${(p.blockers || []).map(b => `<div class="note bad">${esc(b)}</div>`).join("")}
-      <div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button>
-        <button class="btn pri" ${p.ready ? "" : "disabled"} onclick="lhRevertGo(${jsq(vol)},${jsq(snap)})">${icon("rollback")}Roll back</button></div>`;
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>
+        <button class="btn pri" ${p.ready ? "" : "disabled"} onclick="lhRevertGo(${jsq(vol)},${jsq(snap)})">${icon("rollback")}Roll back</button>`)}`;
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
 window.lhRevertGo = async (vol, snap) => {
@@ -834,7 +829,7 @@ window.lhSnapDel = async (name, vol, label) => {
       ${(p.blockers || []).map(b => `<div class="note bad">${esc(b)}</div>`).join("")}
       <p class="dim small">A persistent job tracks request, merge/purge and verified removal. Closing this dialog does not stop it. Removal cannot be undone or cancelled.</p>
       <div class="f"><label>Type <b class="mono">${esc(p.name)}</b> to confirm</label><input id="sd_confirm" autocomplete="off" oninput="lhSnapDeleteGate()"></div>
-      <div class="modalactions"><button class="btn" onclick="modalBack()">Back</button><button id="sd_go" class="btn danger" data-need="admin" disabled onclick="lhSnapDeleteGo()">Start cleanup job</button></div>`;
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Back</button><button id="sd_go" class="btn danger" data-need="admin" disabled onclick="lhSnapDeleteGo()">Start cleanup job</button>`)}`;
   } catch (e) { $("#mbody").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }
 };
 window.lhSnapDeleteGate = () => {
@@ -883,9 +878,8 @@ window.lhTarget = () => {
       <div class="f"><label>Poll interval</label>
         <input type="text" id="bt_poll" value="${esc(t.interval || "5m")}"></div>
     </div>
-    <div class="row" style="margin-top:16px">
-      <button class="btn pri" onclick="lhTargetSave()">Save target</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>
+    ${UI.actions(`<button class="btn pri" onclick="lhTargetSave()">Save target</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
     <div class="note" style="margin-top:14px">For NFS the export must be reachable from every node
     and allow root writes, otherwise backups fail with a permission error that only shows up on the
     first scheduled run.</div>`);

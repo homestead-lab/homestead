@@ -63,8 +63,23 @@ try {
     });
     await page.locator('#ve_section').isVisible() ? await page.locator('#ve_section').selectOption('network') : await page.locator('#ve-tab-network').click();
     assert.equal(await page.locator('#ve-tab-network').getAttribute('aria-selected'), 'true');
-    assert.match(await page.locator('[data-pane="network"]').innerText(),/KubeVirt currently adds its default/);
+    assert.match(await page.locator('#ve-pane-network').innerText(),/KubeVirt currently adds its default/);
     await page.locator('#ve_isolated').check();
+    // The VM editor uses the same controller as other forms: moving between
+    // sections preserves the DOM and error focus reveals the correct section.
+    await page.evaluate(()=>{window.savedIsolationField=document.querySelector('#ve_isolated');UI.selectSection('ve','general');});
+    await page.locator('#ve_desc').fill('Retained across sections');
+    await page.evaluate(()=>revealDialogField(document.querySelector('#ve_isolated')));
+    assert.equal(await page.locator('#ve_section').inputValue(),'network');
+    assert.equal(await page.locator('#ve_isolated').isChecked(),true);
+    assert.equal(await page.evaluate(()=>savedIsolationField===document.querySelector('#ve_isolated')),true);
+    assert.equal(await page.locator('#ve_desc').inputValue(),'Retained across sections');
+    assert.equal(await page.locator('#ve > .ui-actions').count(),1);
+    if(width>640){
+      await page.locator('#ve-tab-network').focus();await page.keyboard.press('Home');
+      assert.equal(await page.locator('#ve-tab-general').getAttribute('tabindex'),'0');
+      await page.locator('#ve-tab-network').click();
+    }
     const add=page.getByRole('button',{name:'Interface',exact:false});
     assert.equal(await add.isDisabled(),true);
     await page.evaluate(()=>vmAddNic());assert.equal(await page.locator('#ve_nics tr.vn-add').count(),0);

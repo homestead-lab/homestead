@@ -194,7 +194,7 @@ window.clusterRemovePick = async () => {
       <div class="cleanup-card card flat">${up.map(n => `<div class="cleanup-row"><div><b>${esc(n.name)}</b>
         <span>${esc((n.roles || []).join(" · ") || "worker")} · Ready - stop it first to retire it</span></div>
         <button class="btn sm" onclick="nodeRemoval(${jsq(n.name)})">What it takes…</button></div>`).join("")}</div>` : ""}
-    <div class="modalactions"><button class="btn" onclick="closeModal()">Close</button></div>`;
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Close</button>`)}`;
 };
 
 /* Removing a node: what it costs, checked first, then Harvester's order. */
@@ -228,9 +228,9 @@ window.nodeRemoval = async name => {
       rejoins; a host that still has its old install will try to register again.</p>
     ${(plan.lost_volumes.length || (plan.pinned_volumes || []).length) && plan.ok ? `<label class="switch dependency-confirm"><input type="checkbox" id="rm_loss"
       onchange="nodeRemovalMode()"> <span id="rm_loss_text"></span></label>` : ""}
-    <div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button>
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>
       ${plan.ok ? `<button class="btn danger" id="rm_go" data-need="admin"
-        onclick="nodeRemove(${jsq(name)})">Remove ${esc(name)}</button>` : ""}</div>`;
+        onclick="nodeRemove(${jsq(name)})">Remove ${esc(name)}</button>` : ""}`)}`;
   window.__removalPlan = plan;
   nodeRemovalMode();
   if (window.applyRole) window.applyRole();
@@ -299,7 +299,7 @@ window.nodeRemove = async name => {
     $("#mbody").innerHTML = `<div class="note good"><b>${esc(name)} is out of the cluster.</b></div>
       <ol class="removal-steps done">${result.log.map(l => `<li>${esc(l)}</li>`).join("")}</ol>
       <div class="sec">Anything left over</div><div id="rm_left"><div class="dim small"><span class="spin2"></span> checking</div></div>
-      <div class="modalactions"><button class="btn pri" onclick="closeModal(); if (STATE.view === 'cluster') { resetPaint(); viewCluster(); }">Done</button></div>`;
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn pri" onclick="closeModal(); if (STATE.view === 'cluster') { resetPaint(); viewCluster(); }">Done</button>`)}`;
     removalLeftovers();
   } catch (e) {
     toast(e.message, "bad");

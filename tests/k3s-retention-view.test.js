@@ -19,7 +19,7 @@ function setup({cleanup=true,mode="forget",copy=false,blocked=false}={}) {
         undo:mode==="forget"?[]:["Deletes owned resources"],keeps:["All VMs, disks, Secrets and IP-address records remain"],options:[]};
       return {operation:{...job,cleanable:false,dismissible:true,tracking_stopped:true}};
     }};
-  ctx.window=ctx;vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/operations.js","utf8"),ctx);
+  ctx.window=ctx;vm.createContext(ctx); require("./helpers/load-ui")(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/operations.js","utf8"),ctx);
   return {ctx,elements,calls,modal};
 }
 test("retained failed k3s jobs have a review action and cannot be cleared silently",()=>{

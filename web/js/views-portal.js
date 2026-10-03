@@ -142,8 +142,8 @@ window.portalEdit = async (pick = false) => {
       <div class="row" style="gap:8px;margin:12px 0"><button class="btn" onclick="portalAdd()">＋ Link</button>
         <button class="btn" onclick="portalPick()">＋ From containers</button></div>
       <div id="pe_rows">${portalEditRows()}</div>
-      <div class="row" style="margin-top:16px"><button class="btn pri" id="pe_save" onclick="portalSave()">Save links</button>
-        <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+      ${UI.actions(`<button class="btn pri" id="pe_save" onclick="portalSave()">Save links</button>
+        <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
     if (pick) portalPick();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };

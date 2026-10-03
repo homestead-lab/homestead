@@ -68,7 +68,18 @@ test("the rules here are the ones design.md states", () => {
   // If a rule is changed here, design.md must say so too, and the other way round.
   const design = fs.readFileSync(path.join(__dirname, "..", "docs", "design.md"), "utf8");
   assert.match(design, /tests\/design-rules\.test\.js/, "design.md names this test");
-  for (const phrase of ["actionBar", "tbl stack", "settings-card-head", "data-form-row"]) {
+  for (const phrase of ["actionBar", "tbl stack", "settings-card-head", "data-form-row", "UI.sectionForm", "UI.masterDetail", "UI.actions"]) {
     assert.ok(design.includes(phrase), `design.md mentions ${phrase}`);
   }
+});
+
+test("dialog navigation and layout are authored only by shared components", () => {
+  const found = offences(/<[a-z]+\b[^>]*\bclass="[^"]*\b(?:modalactions|ui-actions|dialog-rail|dialog-section-picker|stepper-head|stepper-pane|dialog-master-nav|dialog-master-content)\b[^"]*"/g);
+  assert.deepStrictEqual(found, [], "use UI.actions, UI.sectionForm/stepper, UI.sectionNavigation or UI.masterDetail");
+});
+
+test("dialog dismissal rows use UI.actions", () => {
+  const found = offences(/<div\b[^>]*class="row[^>]*>((?:(?!<div\b)[\s\S])*?)<\/div>/g,
+    match => /<button\b[^>]*>\s*(?:Cancel|Close(?: browser)?|Done|Back(?: to [^<]*)?|Keep tracking)\s*<\/button>|onclick="(?:closeModal|closeFiles)\(\)"/.test(match[1]));
+  assert.deepStrictEqual(found, [], "use UI.actions for footer buttons, with dismissal/back in its start slot");
 });

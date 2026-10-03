@@ -3029,8 +3029,6 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 .dialog-section-picker{display:none}
 .dialog-rail>.stepper-foot,.dialog-rail>.ui-actions{grid-column:1 / -1;grid-row:31;margin-top:20px!important}
 .dialog-rail>.dialog-rail-notice{grid-column:1 / -1;grid-row:30;min-width:0}
-.dialog-rail-content>.ve-pane{margin-top:0!important}
-.dialog-rail-content>.ve-pane[hidden]{display:none}
 .dialog-rail .ui-more{margin-top:12px}
 .ui-more>summary{min-height:32px;display:flex;padding:7px 0;color:var(--mut)}
 .ui-more[open]>summary{color:var(--tx)}
@@ -3046,20 +3044,19 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 .ui-actions.legacy>.btn.pri,.ui-actions.legacy>.btn.danger{order:2;margin-left:auto}
 .stepper-foot [data-finish]{display:contents}
 .stepper-foot [data-finish][hidden]{display:none}
-.vm-edit-rail .ui-actions-start{gap:8px}
-.jobs-rail{grid-template-columns:200px minmax(0,1fr)}
-.jobs-nav{grid-column:1;grid-row:1;min-width:0;padding-right:12px;border-right:1px solid var(--line)}
-.jobs-nav button{display:block;width:100%;border:0;border-radius:8px;background:transparent;color:var(--tx);padding:11px 10px;text-align:left;font:500 12.5px "Inter Tight",sans-serif;overflow-wrap:anywhere;cursor:pointer}
-.jobs-nav button[aria-current]{background:var(--surf3)}
-.jobs-nav small{display:block;font-size:11.5px;color:var(--mut);margin-top:3px}
-.jobs-nav .job-needs-attention{color:var(--crit)}
-.jobs-detail{grid-column:2;grid-row:1;min-width:0}
-.jobs-detail .jobitem{padding:0;border:0;background:none}
-.jobs-detail .jobitemtop{margin-bottom:12px}
-.jobs-detail .jobfoot{margin:12px 0;gap:12px;overflow-wrap:anywhere}
-.jobs-detail .jobactions{gap:8px;flex-wrap:wrap}
-.jobs-detail .jobmeter.unknown{display:none}
-.jobs-detail .ui-more{margin-top:18px}
+.dialog-master-detail{grid-template-columns:200px minmax(0,1fr)}
+.dialog-master-nav{grid-column:1;grid-row:1;min-width:0;padding-right:12px;border-right:1px solid var(--line)}
+.dialog-master-nav button{display:block;width:100%;border:0;border-radius:8px;background:transparent;color:var(--tx);padding:11px 10px;text-align:left;font:500 12.5px "Inter Tight",sans-serif;overflow-wrap:anywhere;cursor:pointer}
+.dialog-master-nav button[aria-current]{background:var(--surf3)}
+.dialog-master-nav small{display:block;font-size:11.5px;color:var(--mut);margin-top:3px}
+.dialog-master-nav .needs-attention{color:var(--crit)}
+.dialog-master-content{grid-column:2;grid-row:1;min-width:0}
+.dialog-master-content .jobitem{padding:0;border:0;background:none}
+.dialog-master-content .jobitemtop{margin-bottom:12px}
+.dialog-master-content .jobfoot{margin:12px 0;gap:12px;overflow-wrap:anywhere}
+.dialog-master-content .jobactions{gap:8px;flex-wrap:wrap}
+.dialog-master-content .jobmeter.unknown{display:none}
+.dialog-master-content .ui-more{margin-top:18px}
 .jobs-dialog-actions{margin-top:18px}
 @media(max-width:640px){
  .dialog-rail{display:block}
@@ -3075,14 +3072,20 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
  .ui-actions-end{justify-content:flex-end}
  .ui-actions-start:has(input){flex-basis:100%}
  .ui-more>summary{min-height:44px}
- .jobs-nav{border-right:0;border-bottom:1px solid var(--line);padding:0 0 12px;margin:0 0 18px}
- .jobs-nav button{min-height:44px}
+ .dialog-master-nav{border-right:0;border-bottom:1px solid var(--line);padding:0 0 12px;margin:0 0 18px}
+ .dialog-master-nav button{min-height:44px}
 }
 
-@media(max-width:640px){.jobs-nav{max-height:230px;overflow:auto}}
+@media(max-width:640px){.dialog-master-nav{max-height:230px;overflow:auto}}
 
 .ui-more>summary::before{flex:0 0 6px}
-.jobs-detail .jobitemtop b{font-size:14px;white-space:normal;overflow-wrap:anywhere}
-.jobs-detail .jobfoot{font-size:13px;color:var(--mut);align-items:flex-start}
-.jobs-detail .jobfoot>span:first-child{white-space:normal;overflow:visible;text-overflow:clip}
-.jobs-nav .ui-section{margin:0 0 14px}
+.dialog-master-content .jobitemtop b{font-size:14px;white-space:normal;overflow-wrap:anywhere}
+.dialog-master-content .jobfoot{font-size:13px;color:var(--mut);align-items:flex-start}
+.dialog-master-content .jobfoot>span:first-child{white-space:normal;overflow:visible;text-overflow:clip}
+.dialog-master-nav .ui-section{margin:0 0 14px}
+
+/* Setup guides share the section picker; their steps are externally managed. */
+@media(max-width:640px){.setup-card>.stepper-head{display:none}}
+.ui-actions[hidden]{display:none}
+.ui-actions-end:empty{display:none}
+.vmc-paste .ui-actions{position:static}

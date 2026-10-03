@@ -45,13 +45,13 @@ try {
         {id:"receipt",title:"Storage recovery",status:"succeeded",progress:100,dismissible:false}
       ]; renderOperations(); jobsDialog();
     },theme);
-    assert.match(await page.locator('.jobs-detail').innerText(),/Move media/);
-    await page.locator('.jobs-nav button').filter({hasText:'Update immich'}).click();
-    assert.equal(await page.locator('.jobs-detail [role="progressbar"]').count(),0);
-    const detail=page.locator('.jobs-detail details');await detail.locator('summary').click();
+    assert.match(await page.locator('.dialog-master-content').innerText(),/Move media/);
+    await page.locator('.dialog-master-nav button').filter({hasText:'Update immich'}).click();
+    assert.equal(await page.locator('.dialog-master-content [role="progressbar"]').count(),0);
+    const detail=page.locator('.dialog-master-content details');await detail.locator('summary').click();
     await page.evaluate(()=>renderOperations());
     assert.equal(await detail.getAttribute('open'),'');
-    assert.match(await page.locator('.jobs-detail').innerText(),/Update immich/);
+    assert.match(await page.locator('.dialog-master-content').innerText(),/Update immich/);
     await detail.locator('summary').click();await page.evaluate(()=>renderOperations());
     assert.equal(await detail.getAttribute('open'),null);
     await page.evaluate(()=>{STATE.operationsStale=true;renderOperations();});
@@ -84,6 +84,23 @@ try {
     else await page.locator('#test .dialog-section-picker select').selectOption('0');
     assert.equal(await page.locator('#first').inputValue(),'unchanged');
     assert.equal(await page.locator('#first').isVisible(),true);
+    // A migrated footer must retain its visibility gate and original Cancel action.
+    await page.evaluate(async()=>{closeModal();await viewResources();await resOpen('lab','sample');});
+    assert.equal(await page.locator('#res_save_row').isVisible(),false);
+    await page.evaluate(()=>resEdit());
+    assert.equal(await page.locator('#res_save_row').isVisible(),true);
+    assert.equal(await page.locator('#res_yaml').getAttribute('readonly'),null);
+    assert.equal(await page.locator('#mbody').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
+    await page.locator('#res_save_row').getByRole('button',{name:'Cancel',exact:true}).click();
+    await page.waitForFunction(()=>document.querySelector('#res_save_row')?.hidden);
+    // Externally managed guides use the same desktop/phone navigation renderer.
+    await page.evaluate(()=>{
+      closeModal();setupCloudflareStage(0);modal('Cloudflare guide',setupCloudflareHtml({steps:{}}));
+      window.setupCloudflareOpen=value=>{window.guideSelection=value;};
+    });
+    if(width>640) await page.locator('#mbody .stepper-chip').nth(2).click();
+    else await page.locator('#cloudflare-guide_section').selectOption('2');
+    assert.equal(await page.evaluate(()=>guideSelection),2);
     assert.deepEqual(errors,[]);
     console.log(`Dialog standard passed: ${width}px ${theme}`);await context.close();
   }

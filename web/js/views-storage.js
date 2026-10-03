@@ -412,7 +412,7 @@ window.volumeCreate = async () => {
     <div class="f"><label>Storage class</label><select id="vc_sc" onchange="volumeClassFacts()">${storageClassOptions(scs, "longhorn-r2", classes.facts)}</select>
       <div class="vclass-badges" id="vc_badges"></div></div>
     <div class="note" id="vc_mode_note" hidden></div>
-    <div class="row"><button class="btn pri" onclick="volumeCreateNow()">Create volume</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" onclick="volumeCreateNow()">Create volume</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   $("#vc_mode").addEventListener("change", volumeClassFacts);
   volumeClassFacts();
 };
@@ -444,7 +444,7 @@ window.volumeEdit = async (x, fromRoute = false) => {
     ${options.repair_class ? `<div class="row" style="margin-top:10px"><button class="btn sm" data-need="admin" onclick="volumeClassRepairReview(${jsq(namespace)},${jsq(name)},${jsq(options.storage_class)})">Repair resize support…</button></div>` : ""}</div>`}
   <div class="note"><b>${esc((x.access_modes || []).join(", ") || "Access mode unknown")}</b> · ${esc(options.storage_class || "No StorageClass")}<br>
   Kubernetes locks access mode and storage class after a claim is bound. To change RWO ↔ RWX, create a new volume and migrate the data.</div>
-  <div class="row" style="margin-top:16px"><button class="btn pri" onclick="volumeEditNow(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)})">Save</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+  ${UI.actions(`<button class="btn pri" onclick="volumeEditNow(${jsq(x.namespace || "lab")},${jsq(x.pvc_name || x.name)})">Save</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.volumeEditNow = async (namespace, name) => {
   const body = { namespace, name, replicas: +$("#ve_reps").value };
@@ -456,7 +456,7 @@ window.volumeEditNow = async (namespace, name) => {
 window.volumeClassRepairReview = (namespace, name, storageClass) => {
   modal("Repair resize support", `<div class="note">Recreate <b>${esc(storageClass)}</b> from the bound Longhorn volume's storage settings and enable volume expansion.
     This recreates Kubernetes configuration for every volume using that class. No backup is restored, and volume sizes and data stay unchanged.</div>
-    <div class="row" style="margin-top:16px"><button class="btn pri" data-need="admin" onclick="volumeClassRepairNow(${jsq(namespace)},${jsq(name)},${jsq(storageClass)},this)">Repair resize support</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" data-need="admin" onclick="volumeClassRepairNow(${jsq(namespace)},${jsq(name)},${jsq(storageClass)},this)">Repair resize support</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.volumeClassRepairNow = async (namespace, name, storageClass, button) => {
   button.disabled = true;
@@ -715,8 +715,8 @@ window.storageClassCreate = async (prefill = {}, onSaved = null) => {
     <label class="switch"><input type="checkbox" id="sc_migratable" onchange="storageClassHint()"> Live-migratable · for VM disks</label>
     <div class="note" id="sc_hint">Keep Migratable off for containers. It is for VM migration; Longhorn cannot mount migratable volumes into container pods, including ReadWriteMany volumes.</div>
     <label class="switch"><input type="checkbox" id="sc_default"> Make this the default class</label>
-    <div class="row" style="margin-top:18px"><button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" id="sc_go" data-need="admin" onclick="storageClassSave(this)">Create class</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   for (const [id, key] of [["sc_name", "name"], ["sc_reps", "replicas"], ["sc_copies", "copies"],
     ["sc_reclaim", "reclaim_policy"], ["sc_engine", "engine"]]) {
     if (prefill[key] !== undefined) $("#" + id).value = prefill[key];
@@ -989,8 +989,8 @@ window.fileBrowse = async (path) => {
   } catch (e) {
     if (!filesCurrent(session, namespace, pvc)) { filesReleaseLate(session); return; }
     $("#mbody").innerHTML = `<div class="note dependency-danger"><b>The file browser could not start.</b> ${esc(e.message)}</div>
-      <div class="row" style="margin-top:14px"><button class="btn" onclick="fileBrowse('')">Try again</button>
-      <button class="btn" onclick="closeFiles()">Close</button></div>`;
+      ${UI.actions(`<button class="btn" onclick="fileBrowse('')">Try again</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeFiles()">Close</button>`)}`;
   }
 };
 
@@ -1019,7 +1019,7 @@ function fileBrowserMarkup(listing) {
       }).join("") || '<div class="empty small">this folder is empty</div>'}
     </div>
     ${listing.truncated ? '<div class="dim xs">Only the first 500 entries are listed.</div>' : ""}
-    <div class="row" style="margin-top:16px"><button class="btn" onclick="closeFiles()">Close browser</button></div>
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeFiles()">Close browser</button>`)}
     ${FILEVIEW.snapshotSession ? UI.more('Temporary copy', '<p class="ui-help">Files are downloaded from the selected snapshot. Closing this browser starts cleanup of its temporary copy. Abandoned sessions expire after 30 minutes; cleanup resumes when Homestead and the cluster API are available. Symbolic links and special files are excluded.</p>') : '<div class="note" style="margin-top:12px">The browser runs as a short-lived pod that mounts this volume. It stops on its own after 30 minutes, or when you close it.</div>'}`;
 }
 
@@ -1038,10 +1038,9 @@ window.fileOpen = async (path) => {
       <div class="between fileeditbar"><span class="dim xs">${fileSize(file.size)} · saving keeps the previous contents as <span class="mono">${esc(file.path.split("/").pop())}.homestead-bak</span></span>
         <span class="dim xs" id="file_state"></span></div>
       <div id="file_editor" class="fileeditor"></div>
-      <div class="row" style="margin-top:14px">
-        <button class="btn pri" id="file_save" data-need="admin" onclick="fileSave()">Save</button>
-        <button class="btn" onclick="fileBrowse(${jsq(FILEVIEW.path)})">Back</button>
-        <button class="btn" onclick="closeFiles()">Close browser</button></div>`;
+      ${UI.actions(`<button class="btn pri" id="file_save" data-need="admin" onclick="fileSave()">Save</button>
+        <button data-dialog-dismiss="true" class="btn" onclick="fileBrowse(${jsq(FILEVIEW.path)})">Back</button>
+        <button data-dialog-dismiss="true" class="btn" onclick="closeFiles()">Close browser</button>`)}`;
     FILEVIEW.editor = null;
     try {
       const editor = await mountEditor($("#file_editor"), file.content, file.path);
@@ -1138,9 +1137,8 @@ window.volumeChown = async (namespace, name) => {
       <div class="f"><label>User (UID)</label><input type="number" id="vc_uid" min="0" max="65535" value="${hint.uid ?? ""}" placeholder="1883"></div>
       <div class="f"><label>Group (GID)</label><input type="number" id="vc_gid" min="0" max="65535" value="${hint.gid ?? ""}" placeholder="same as UID"></div></div>
     <div class="note">Stop the workload first so the ownership job can mount its volume. A ReadWriteOnce volume cannot attach while the workload holds it.</div>
-    <div class="row" style="margin-top:16px">
-      <button class="btn pri" data-need="admin" onclick="volumeChownNow(${jsq(namespace)},${jsq(name)},this)">Set ownership</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+    ${UI.actions(`<button class="btn pri" data-need="admin" onclick="volumeChownNow(${jsq(namespace)},${jsq(name)},this)">Set ownership</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
   if (window.applyRole) window.applyRole();
 };
 window.volumeChownNow = async (namespace, name, button) => {
@@ -1220,7 +1218,7 @@ window.nfsExport = name => {
       <input id="nfs_clients" value="${esc(share.nfs_clients || "")}" placeholder="192.0.2.0/24" autocomplete="off"></div>
     <label class="switch"><input type="checkbox" id="nfs_ro" ${share.nfs_read_only !== false ? "checked" : ""}> Read only</label>
     <div class="dim xs" style="margin-top:8px">NFSv4 clients mount ${esc(STATE.data.nfs?.address || "<server-ip>")}:/${esc(name)} on TCP port 2049. The server and its VIP are enabled in Settings → Hardware and storage → Add-ons. Longhorn RWX re-export adds an extra NFS layer.</div>
-    <div class="modalactions"><button class="btn pri" onclick="nfsExportSave(${jsq(name)},this)">Save export</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" onclick="nfsExportSave(${jsq(name)},this)">Save export</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.nfsExportSave = async (name, button) => {
   const clients = $("#nfs_clients")?.value.trim() || "";
@@ -1415,8 +1413,8 @@ window.editShare = name => {
         <input type="password" id="she_pass" autocomplete="new-password" placeholder="${s.has_password ? "Leave blank to keep current password" : "Required for private access"}">
         ${shareAccountSiblings(s).length ? `<span class="dim xs">${esc(s.user)} is also used by ${esc(shareAccountSiblings(s).join(", "))}. Samba keeps one password per account, so a new one changes those too.</span>` : ""}</div></div>
     <label class="switch"><input type="checkbox" id="she_ro" ${s.read_only ? "checked" : ""}> Read only · clients can browse and download but cannot change files</label>
-    <div class="row" style="margin-top:18px"><button class="btn pri" data-need="admin" onclick="saveShareEdit(${jsq(s.name)},this)">${icon("edit")}Save changes</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" data-need="admin" onclick="saveShareEdit(${jsq(s.name)},this)">${icon("edit")}Save changes</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.saveShareEdit = async (name, button) => {
   const original = (STATE.data.shares || []).find(row => row.name === name);
@@ -1739,7 +1737,7 @@ function tagEditor(title, about, current, known, save) {
       <input type="text" id="tg_text" value="${esc(current.join(", "))}" placeholder="ssd, fast" autocomplete="off"></div>
     ${ideas.length ? `<div class="row" style="gap:6px;flex-wrap:wrap;margin:-4px 0 14px"><span class="dim xs">Add</span>${ideas.map(t =>
       `<button class="tag linkish" onclick="tagAdd(${jsq(t)})">＋ ${esc(t)}</button>`).join("")}</div>` : ""}
-    <div class="row"><button class="btn pri" id="tg_save">Save tags</button><button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" id="tg_save">Save tags</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
   $("#tg_save").onclick = () => save($("#tg_text").value.split(/[\s,]+/).filter(Boolean));
   $("#tg_text").focus();
 }
@@ -1838,8 +1836,8 @@ window.diskAdd = (node, blockdevice = "", path = "", needsWipe = false) => {
       ${v2 ? "" : '<div class="dim xs">The V2 engine is off; switch it on in Settings › Hardware and storage to add a V2 disk.</div>'}</div>
     ${blockdevice ? `<label class="switch"><input type="checkbox" id="da_wipe" ${needsWipe ? "" : "disabled"}> Erase it first
       ${needsWipe ? '<span class="badtext xs">— it already holds a filesystem or partitions, which are destroyed</span>' : '<span class="dim xs">— it is blank</span>'}</label>` : ""}
-    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="diskAddGo(${jsq(node)},${jsq(blockdevice)})">Add</button>
-      <button class="btn" onclick="modalBack()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" onclick="diskAddGo(${jsq(node)},${jsq(blockdevice)})">Add</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`);
 };
 /* Off Harvester: set a whole disk up for Longhorn from here. Homestead looks
    at it on its host first (homestead_disk_setup), then offers only what is
@@ -2036,8 +2034,8 @@ window.diskRetire = async (node, disk) => {
       unless you give ${p.only_copies === 1 ? "it" : "them"} up:
       <label class="switch" style="margin-top:8px"><input type="checkbox" id="dr_force" onchange="$('#dr_confirm_row').hidden=!this.checked"> Give ${p.only_copies === 1 ? "it" : "them"} up - the data is lost</label>
       <div id="dr_confirm_row" hidden class="f" style="margin-top:8px"><label>Type <span class="mono">${esc(disk)}</span> to confirm</label><input id="dr_confirm" class="mono"></div></div>` : ""}
-    <div class="row" style="margin-top:14px"><button class="btn pri" data-need="admin" onclick="diskRetireGo(${jsq(node)},${jsq(disk)})">Replace it</button>
-      <button class="btn" onclick="modalBack()">Cancel</button></div>`;
+    ${UI.actions(`<button class="btn pri" data-need="admin" onclick="diskRetireGo(${jsq(node)},${jsq(disk)})">Replace it</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>`)}`;
   if (window.applyRole) applyRole();
 };
 window.diskRetireGo = async (node, disk) => {
@@ -2153,7 +2151,7 @@ window.reclassWatch = async id => {
       ${op.status === "failed" && op.resumable ? `<div class="row" style="margin-top:12px"><button class="btn pri" data-need="admin" onclick="resumeOperation(${jsq(op.id)})">Carry on from this step</button></div>` : ""}
       ${op.status === "succeeded" && op.old_pv ? `<div class="row" style="margin-top:12px"><button class="btn danger" data-need="admin" onclick="reclassRemoveOld(${jsq(op.old_pv)})">Remove the old copy</button>
         <span class="dim xs">Keep it until the app is working on the new one.</span></div>` : ""}
-      <div class="row" style="margin-top:12px"><button class="btn" onclick="closeModal()">${op.status === "running" ? "Keep going in the background" : "Close"}</button></div>`;
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">${op.status === "running" ? "Keep going in the background" : "Close"}</button>`)}`;
     if (window.applyRole) applyRole();
   };
   modal("Changing storage class", '<div class="empty"><span class="spin2"></span></div>', true);

@@ -361,7 +361,7 @@ window.networkExpose = async (namespace = "", name = "", kind = "Deployment", se
       <div class="f"><label for="net_existing">Connection to edit</label><select id="net_existing" onchange="networkServicePicked()"></select></div>
       <div class="f2"><div class="f"><label for="net_name">Kubernetes Service name</label><input id="net_name" type="text" value="${esc(first.name)}"></div>
       <div class="f"><label for="net_type">Reachability</label><select id="net_type" onchange="networkModeChanged()"><option value="LoadBalancer">LAN access</option><option value="ClusterIP">Cluster only</option></select></div></div></details>
-    <div id="net_review"></div><div class="modalactions"><button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkReview()">Review changes</button></div></div></div>`, true);
+    <div id="net_review"></div>${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkReview()">Review changes</button>`)}</div></div>`, true);
   $("#net_workload").disabled = editing;
   if (!choose) {
     networkServiceOptions(editing);
@@ -425,8 +425,8 @@ let NETWORK_REVIEW = null;
 function networkInvalidateReview() {
   NETWORK_REVIEW = null;
   if ($("#net_review")) $("#net_review").innerHTML = "";
-  const actions = $("#net_editor .modalactions");
-  if (actions) actions.innerHTML = '<button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkReview()">Review changes</button>';
+  const actions = $("#net_editor .ui-actions");
+  if (actions) actions.outerHTML = UI.actions(UI.button("Review changes", "networkReview()", {kind:"pri"}), UI.button("Cancel", "modalBack()"));
 }
 
 /* The VIP the dialog was opened for, on a new connection. */
@@ -489,8 +489,8 @@ window.networkReview = async () => {
     NETWORK_REVIEW = { ...cfg, reviewed_vip: plan.vip || "" };
     $("#net_review").innerHTML = `<div class="reviewbox"><b>After applying</b><div class="netpath big"><span>${esc(plan.path.vip)}</span><i>→</i><span>${esc(cfg.workload)}</span></div>
       <div class="dim xs">${plan.ports.map(p => `${p.port}/${p.protocol} → ${p.targetPort}`).join(" · ")}</div>${plan.warnings.map(w => `<div class="tag warn" style="margin-top:8px">${esc(w)}</div>`).join("")}</div>`;
-    const actions = $("#mbody .modalactions");
-    actions.innerHTML = '<button class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" onclick="networkCreate()">Apply changes</button>';
+    const actions = $("#mbody .ui-actions");
+    actions.outerHTML = UI.actions(UI.button("Apply changes", "networkCreate()", {kind:"pri"}), UI.button("Cancel", "modalBack()"));
   } catch (error) { toast(error.message, "bad"); }
 };
 
@@ -545,7 +545,7 @@ window.vipAdd = () => {
       <p>${provider === "kube-vip" ? "kube-vip advertises the address when a workload Service requests it; saving it alone does not make it respond." : provider === "metallb" ? "MetalLB must also have these addresses in a configured address pool. Saving them here does not configure MetalLB's pools." : "You can save addresses now. Install kube-vip or MetalLB in Settings → Hardware and storage → Add-ons before using a movable workload VIP; ServiceLB uses node addresses."}</p>`)}
     <label class="vip-check"><input id="va_confirm" type="checkbox"><span>I have checked that these addresses are reserved outside DHCP and are not used by another device.</span></label>
     <div id="va_result" class="small" role="status" aria-live="polite"></div>
-    <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="va_save" onclick="vipAddGo()">Add VIP</button></div></div>`);
+    ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="va_save" onclick="vipAddGo()">Add VIP</button>`)}</div>`);
   vipAddPicture();
 };
 /* The new VIP, drawn: the LAN, the address as typed, and the apps it will carry. */

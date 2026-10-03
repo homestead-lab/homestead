@@ -714,9 +714,9 @@ window.wlStopSelf = (ns, name) => {
       Your apps keep running; jobs in the tray, alerts and moves pause until it is back.</div>
     <p class="small">If it needs a fresh start, <b>Restart</b> brings it straight back.</p>
     <label class="switch"><input type="checkbox" id="ss_ok"> I understand - stop it</label>
-    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="closeModal();wlRestart(${jsq(ns)},${jsq(name)})">Restart instead</button>
+    ${UI.actions(`<button class="btn pri" onclick="closeModal();wlRestart(${jsq(ns)},${jsq(name)})">Restart instead</button>
       <button class="btn danger" onclick="wlStopSelfGo(${jsq(ns)},${jsq(name)})">Stop Homestead</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.wlStopSelfGo = async (ns, name) => {
   if (!$("#ss_ok").checked) return toast("Tick the box to confirm", "bad");
@@ -748,8 +748,8 @@ window.wlFailover = async () => {
           ${(w.hardware || []).length ? `<span class="tag hw" data-tip="Tied to hardware on its host">${esc(w.hardware.join(", "))}</span>` : ""}</td>
         <td data-label="If its node fails">${failoverSelect(`fo_${w.ns}_${w.name}`, w.failover || "default", `data-fo data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" data-was="${esc(w.failover || "default")}"`)}</td></tr>`).join("")}
     </tbody></table>
-    <div class="row" style="margin-top:14px"><button class="btn pri" data-need="operator" onclick="wlFailoverSave()">Save changes</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+    ${UI.actions(`<button class="btn pri" data-need="operator" onclick="wlFailoverSave()">Save changes</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
   if (window.applyRole) applyRole();
 };
 window.wlFailoverSave = async () => {
@@ -843,9 +843,9 @@ window.wlDelete = async (ns, name) => {
     </div>
     <div class="f" style="margin-top:16px"><label>Type <b class="mono">${esc(name)}</b> to confirm</label>
       <input id="wd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="wlDeleteGate(${jsq(name)})"></div>
-    <div class="row"><button class="btn danger" id="wd_go" data-need="operator" disabled
+    ${UI.actions(`<button class="btn danger" id="wd_go" data-need="operator" disabled
       onclick="wlDeleteNow(${jsq(ns)},${jsq(name)},this)">Delete workload</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`;
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`;
   if (window.applyRole) window.applyRole();
 };
 window.wlDeleteGate = name => {
@@ -1255,10 +1255,8 @@ function rolloutMarkup(s) {
     ${s.problems?.length ? `<div class="gateerr">${s.problems.map(esc).join("<br>")}</div>` : ""}
     <div class="podprogress">${(s.pods || []).map(p => `<div><span><b>${esc(p.name)}</b><small>${esc(p.node || "scheduling")}${p.pull?.state === "pulling" ? ` · pulling${p.pull.total_bytes ? ` ${p.pull.percent || 0}%` : ""} ${esc(pullElapsed(p.pull.seconds))}` : ""}</small>${p.blocked ? `<small class="pod-blocked">${esc(p.blocked)}</small>` : ""}</span>
       <span class="pill ${p.phase === "Running" ? "ok" : "warn"}">${esc(p.pull?.state === "pulling" ? "pulling image" : p.waiting?.[0]?.reason || p.phase)}</span></div>`).join("")}</div>
-    <div class="row" style="margin-top:18px">
-      ${s.can_rollback ? `<button class="btn ${s.phase === "failed" ? "danger" : ""}" data-need="operator" onclick="imageRollback(${jsq(s.ns)},${jsq(s.name)})">Rollback</button>` : ""}
-      ${s.phase === "ready" ? '<button class="btn pri" onclick="closeModal();go(\'workloads\')">Done</button>' : '<button class="btn" onclick="closeModal()">Monitor in background</button>'}
-    </div>`;
+    ${UI.actions(`${s.can_rollback ? `<button class="btn ${s.phase === "failed" ? "danger" : ""}" data-need="operator" onclick="imageRollback(${jsq(s.ns)},${jsq(s.name)})">Rollback</button>` : ""}
+      ${s.phase === "ready" ? '<button data-dialog-dismiss="true" class="btn pri" onclick="closeModal();go(\'workloads\')">Done</button>' : '<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Monitor in background</button>'}`)}`;
 }
 
 window.monitorImageRollout = (ns, name) => {
@@ -1816,7 +1814,7 @@ window.doDeploy = async () => {
       ${joining ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployConfirm" onchange="deployReviewReady()"> ${plan.capacity.rollout?.paused ? "I understand this saves a paused template; capacity must be reviewed again before resuming" : plan.capacity.rollout?.replicas === 0 ? "I understand this changes the stopped workload's pod template without starting it" : `I understand every container in ${esc(c.target_workload)} restarts as its pods roll out, with the downtime or overlap shown above`}</label>` : ""}
       ${plan.capacity?.requires_confirmation && !plan.capacity.blocked ? `<label class="switch dependency-confirm"><input type="checkbox" id="deployCapacityConfirm" onchange="deployReviewReady()"> Proceed despite capacity warnings — I accept the placement, memory and provisioning risks</label>` : ""}
       <details><summary>Manifest preview</summary><pre>${esc(JSON.stringify({ deployment: plan.deployment, service: plan.service }, null, 2))}</pre></details>
-      <div class="modalactions"><button class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy workload"}</button></div></div>`, true);
+      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button><button class="btn pri" id="deployGo" ${joining || plan.capacity?.requires_confirmation || plan.capacity?.blocked ? "disabled" : ""} onclick="confirmDeploy()">${joining ? "Add container & restart pod" : "Deploy workload"}</button>`)}</div>`, true);
   } catch (e) { toast(e.message, "bad"); }
 };
 window.confirmDeploy = async () => {
@@ -2073,8 +2071,8 @@ window.wlPrimaryPort = (ns, name) => {
     <div class="primary-ports">${w.ports.map(p => `<label class="switch"><input type="radio" name="pp" value="${p.port}" ${p.port === current ? "checked" : ""}>
       <b class="mono">${p.port}</b> <span class="dim xs">${esc(p.name || "")}${p.ip ? ` · ${esc(p.ip)}` : ""}</span></label>`).join("")}
       <label class="switch"><input type="radio" name="pp" value="0" ${current ? "" : "checked"}> <span class="dim">No preference - their own order</span></label></div>
-    <div class="row" style="margin-top:14px"><button class="btn pri" onclick="wlPrimaryPortSave(${jsq(ns)},${jsq(name)})">Save</button>
-      <button class="btn" onclick="closeModal()">Cancel</button></div>`);
+    ${UI.actions(`<button class="btn pri" onclick="wlPrimaryPortSave(${jsq(ns)},${jsq(name)})">Save</button>
+      <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
 };
 window.wlPrimaryPortSave = async (ns, name) => {
   const port = +(document.querySelector('input[name="pp"]:checked')?.value || 0);
