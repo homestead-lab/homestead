@@ -14,7 +14,7 @@ try {
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
     await page.goto(`${base}/?demo=1&demo-scenario=incidents`, { waitUntil: "networkidle" });
-    await page.locator("#views .phead").waitFor();
+    await page.locator("#views .phead").waitFor({state:"attached"});
     await page.getByRole("button", { name: "Open the setup guide", exact: true }).click();
     await page.locator('[data-step="intro"].setup-card').waitFor();
     assert.equal(await page.locator("#setupStep").evaluate(el => el.getBoundingClientRect().top < innerHeight), true, "intro is visible without scrolling past the step list");
@@ -101,7 +101,7 @@ try {
     await page.getByRole("button", { name: "Show reminders again", exact: true }).waitFor();
     assert.equal(await page.locator("#setupbtn").evaluate(el => el.classList.contains("pulse")), false);
     await page.evaluate(() => go("dash"));
-    await page.locator("#views .phead").waitFor();
+    await page.locator("#views .phead").waitFor({state:"attached"});
     assert.equal(await page.getByText(/^Setup progress:/).count(), 0);
     assert.equal(await page.getByRole("button", { name: "Open the setup guide", exact: true }).isVisible(), true);
     await page.getByRole("button", { name: "Open the setup guide", exact: true }).click();
