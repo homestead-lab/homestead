@@ -1,8 +1,9 @@
 # Security
 
-How Homestead protects the cluster it runs, what the last audit (2.8.215)
-found and fixed, and what remains by design. Read this before changing
-sign-in, roles, anything that builds pods, or how pages put values into HTML.
+How Homestead protects the cluster it runs, how changes are checked before
+they ship, what the audits (2.8.215, and the installer in 2.8.304) found and
+fixed, and what remains by design. Read this before changing sign-in, roles,
+anything that builds pods, the installer, or how pages put values into HTML.
 
 ## The model
 
@@ -104,7 +105,14 @@ can leave a `.homestead-lock` directory; inspect the file and backup before an
 administrator clears that lock.
 
 The installer stages downloads in a private temporary directory and defaults
-to an immutable release ref; `--ref` remains an explicit override. Node probes
+to an immutable release ref; `--ref` remains an explicit override. A cluster
+join token is never written to a log or shown on screen: command lines are
+logged and printed with it replaced by `[token hidden]`, the installer and
+node doctor logs (`/var/log/homestead-install.log`,
+`/var/log/homestead-doctor.log`) are readable by root only, and so is RKE2's
+`/etc/rancher/rke2/config.yaml`, which holds the token. The token is still an
+argument to the bootstrap script while it runs, so it is visible to other
+users of the machine through the process list during installation. Node probes
 use a separate `homestead-smart-key` Secret, derived for that helper only, rather
 than mounting user password hashes or the session-signing key. Homestead migrates
 an existing probe on reconciliation and provisions the key for manual/chart
@@ -142,6 +150,28 @@ Pages are HTML strings. Three rules keep what they show from running:
    `href="${safeHref(url)}"` - only http(s) and same-site paths; a
    `javascript:` URL becomes `#`.
 
+## How changes are checked
+
+Every pull request and every push to `dev` and `main` runs CI
+(`.github/workflows/ci.yml`). A first job reads what the change touches, and
+the slow checks run only when their part of the code changed; a change to the
+docs alone runs none of them, and a release commit that only moves version
+numbers counts as no change.
+
+| Check | Runs when | What it holds |
+|---|---|---|
+| Backend and frontend tests | Any code changes | `python -m unittest` over `tests/`, `node --test`, a syntax check of every script, and the image built and run read-only with every capability dropped for the data-copy and file-permission tests |
+| Page and dialog checks | `web/` or the checks change | Every page and dialog opened against the demo data at desktop and phone widths, in light and dark, and held to `docs/design.md`: nothing wider than the screen, no text under 10px, nothing that stops opening. They run in eight groups of about two minutes in parallel (`scripts/ci_ui_checks.sh`) |
+| Installer screens | The installer or host console changes | The installer's and node doctor's menus driven in tmux as a person would |
+| Data moves on k3s | The self-data code changes | Two real data moves on a throwaway k3s cluster, with retained volumes and helper cleanup |
+| Source copy | Any code changes | SSH trust and interrupted copies rehearsed in an isolated container with no network |
+
+A release (`.github/workflows/release.yml`) waits for that CI run on its
+commit, or runs the tests itself when there was none, and publishes nothing
+until the candidate image and its base and helper images pass the security
+scan for amd64 and arm64 (`scripts/security_scan.sh`). Releases go to the dev
+channel first (`2.8.N-dev.1`) and reach `main` as the same code.
+
 ## The 2.8.215 audit
 
 Found and fixed:
@@ -171,3 +201,25 @@ Remaining, by design or for later:
 - **Linked-cluster nonces** are claimed in Kubernetes with resource-version
   conflict checks, so replicas share the replay boundary. A replay-store outage
   denies signed requests rather than weakening that protection.
+
+## The 2.8.304 installer review
+
+A full review of `scripts/install.sh`, the installer and node doctor. Each
+finding was reproduced before it was fixed, and each fix has a test in
+`tests/test_install_script.py`.
+
+| Finding | Risk | Fix |
+|---|---|---|
+| Joining with text prompts or `--dry-run` wrote the cluster token into `/var/log/homestead-doctor.log`, readable by every local user; RKE2's `config.yaml` with the token had default permissions | Anyone with a login on the node could read the token and add a machine of their own to the cluster | The token is replaced by `[token hidden]` in every logged or shown command line; the logs and RKE2's config are root-only |
+| Cancel or Back on a question ended only the subshell that asked it | The installation went on with an empty answer: Back on *Node IP Address* led to a summary with no node address | Every question stops the installation when cancelled; its button says Cancel |
+| Ctrl+C during a progress bar closed the installer but not the step it was running | An installation kept going unseen after it seemed to be cancelled | The interrupt stops the step and everything it started, and says so |
+| With the API down, a restore could not count the server nodes and dropped its warning | A restore on one server of several, without stopping the others first, splits the cluster | An unknown count gives the warning anyway |
+| The clock fix enabled `chronyd`, which on Ubuntu is an alias systemctl refuses | The fix failed on Ubuntu | It uses the unit's real name |
+
+Also fixed: a typo in a text menu, the VIP or the Longhorn size asks again
+rather than ending the installation; *Apply all safe fixes* runs each fix once
+(it could restart k3s several times); CoreDNS is checked on RKE2 under its own
+name.
+
+Remaining: the token is an argument to the bootstrap script while it runs, so
+another user on the node can see it in the process list during installation.
