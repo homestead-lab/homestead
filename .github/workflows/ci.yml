@@ -67,7 +67,7 @@ jobs:
             [ "$(block "$BASE" "$1")" != "$(block HEAD "$1")" ] && echo true || echo false
           }
           either() { [ "$1" = true ] || [ "$2" = true ] && echo true || echo false; }
-          ui=$(either "$(touches web scripts/audit_dialogs.mjs scripts/audit_pages.mjs)" "$(job_changed dialogs)")
+          ui=$(either "$(touches web scripts/audit_dialogs.mjs scripts/audit_pages.mjs scripts/ci_ui_checks.sh)" "$(job_changed dialogs)")
           installer=$(either "$(touches scripts/install.sh scripts/install-console.sh scripts/host-console.py scripts/capture_tui.sh scripts/render_tui.mjs)" "$(job_changed installer-screens)")
           echo "ui=$ui installer=$installer"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"; echo "installer=$installer" >> "$GITHUB_OUTPUT"
@@ -133,16 +133,13 @@ jobs:
     needs: changes
     if: needs.changes.outputs.ui == 'true'
     runs-on: ubuntu-latest
-    # The dialogs are split across three runners, each with its third of the
-    # list; the pages take one.
+    # The checks are split into groups of about two minutes, each on a runner
+    # of its own (scripts/ci_ui_checks.sh lists them): one long sequence made
+    # this job the slowest part of CI.
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { audit: dialogs, shard: 0, shards: 3 }
-          - { audit: dialogs, shard: 1, shards: 3 }
-          - { audit: dialogs, shard: 2, shards: 3 }
-          - { audit: pages, shard: 0, shards: 1 }
+        group: [dialogs-0, dialogs-1, dialogs-2, dialog-flows, pages, pages-dashboard, pages-setup, pages-live]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -156,55 +153,17 @@ jobs:
         run: |
           npm install --no-save --no-package-lock playwright@1.55.0 >/dev/null
           npx playwright install --with-deps chromium >/dev/null
-      - name: Check every ${{ matrix.audit == 'dialogs' && 'dialog' || 'page' }}
-        env:
-          AUDIT_SHARD: ${{ matrix.shard }}
-          AUDIT_SHARDS: ${{ matrix.shards }}
+      - name: Check ${{ matrix.group }}
         run: |
           PORT=4173 WEBROOT=web DATA_DIR=/tmp/homestead-demo-data python server/server.py >/tmp/homestead-demo.log 2>&1 &
           for i in $(seq 1 30); do curl -sf http://127.0.0.1:4173/ >/dev/null && break; sleep 1; done
-          node scripts/audit_${{ matrix.audit }}.mjs
-          if [ "${{ matrix.audit }}" = dialogs ] && [ "${{ matrix.shard }}" = 0 ]; then
-            DIALOG_STANDARD_SCREENSHOTS=release-assets/dialogs/section-rail node tests/integration/dialog-section-rail.mjs
-            EDIT_SCREENSHOTS=release-assets/dialogs/container-edit node tests/integration/container-edit-steps.mjs
-            CONTAINER_SET_SCREENSHOTS=release-assets/dialogs/container-set node tests/integration/container-set.mjs
-            PASSTHROUGH_SCREENSHOTS=release-assets/dialogs/passthrough node tests/integration/passthrough-devices.mjs
-            VM_ISOLATION_SCREENSHOTS=release-assets/dialogs/vm-isolation node tests/integration/vm-network-isolation.mjs
-            FIREWALL_SCREENSHOTS=release-assets/dialogs/firewall node tests/integration/workload-firewall.mjs
-          fi
-          if [ "${{ matrix.audit }}" = pages ]; then
-            if [ "${{ matrix.shard }}" = 0 ]; then
-              PAGE_STANDARD_SCREENSHOTS=release-assets/pages/components node tests/integration/page-components.mjs
-              HOMESTEAD_URL=http://127.0.0.1:4173 DASHBOARD_EDITOR_SCREENSHOTS=release-assets/pages/dashboard-editor node tests/integration/dashboard-editor.mjs
-              HOMESTEAD_URL=http://127.0.0.1:4173 node tests/integration/dashboard-account.mjs
-              HOMESTEAD_URL=http://127.0.0.1:4173 DEPLOY_FORM_SCREENSHOTS=release-assets/pages/container-deploy node tests/integration/container-deploy-form.mjs
-              HOMESTEAD_URL=http://127.0.0.1:4173 WIDGET_OPTIONS_SCREENSHOTS=release-assets/pages/widget-options node tests/integration/dashboard-widget-options.mjs
-              HOMESTEAD_URL=http://127.0.0.1:4173 CUSTOM_WIDGET_SCREENSHOTS=release-assets/pages/custom-widget node tests/integration/dashboard-custom.mjs
-              HOMESTEAD_URL=http://127.0.0.1:4173 INSIGHTS_OUTPUT=release-assets/pages/insights node tests/integration/health-insights.mjs
-              HOMESTEAD_URL=http://127.0.0.1:4173 NODE_HEALTH_SCREENSHOTS=release-assets/pages/node-health node tests/integration/dashboard-node-health.mjs
-              HOMESTEAD_URL=http://127.0.0.1:4173 RESOURCE_WIDGET_SCREENSHOTS=release-assets/pages/resources node tests/integration/dashboard-resources.mjs
-              HOMESTEAD_URL=http://127.0.0.1:4173 ARCHITECTURE_SCREENSHOTS=release-assets/pages/architecture node tests/integration/combined-architecture.mjs
-              HOMESTEAD_URL=http://127.0.0.1:4173 NOTIFICATION_SCREENSHOTS=release-assets/pages/notifications node tests/integration/mobile-notifications.mjs
-              HOMESTEAD_URL=http://127.0.0.1:4173 ALERT_SCREENSHOTS=release-assets/pages/alerts node tests/integration/notification-alerts.mjs
-            fi
-            node scripts/check_setup_guide.mjs
-            STORAGE_SCREENSHOTS=release-assets/pages/setup-storage node tests/integration/setup-storage-classes.mjs
-            node scripts/check_demo_scenarios.mjs
-            node scripts/check_launch_import_logs.mjs
-            node scripts/check_mobile_pwa.mjs
-            node scripts/check_collection_layouts.mjs
-            VOLUME_SCREENSHOTS=release-assets/pages/planned-volumes node tests/integration/planned-container-volumes.mjs
-            node scripts/check_dashboard_storage.mjs
-            node scripts/check_dashboard_stream.mjs
-            node tests/integration/volume-files-cleanup.mjs
-            node scripts/check_update_channels.mjs
-            node scripts/check_troubleshooting.mjs
-          fi
+          sh scripts/ci_ui_checks.sh ${{ matrix.group }}
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
-          name: ${{ matrix.audit }}-${{ matrix.shard }}
-          path: release-assets/${{ matrix.audit }}
+          name: ${{ matrix.group }}
+          path: release-assets
+          if-no-files-found: ignore
   test-and-build:
     needs: changes
     if: needs.changes.outputs.code == 'true'
