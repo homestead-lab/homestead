@@ -3329,3 +3329,11 @@ html[data-theme="light"] .notification-center>button.danger{color:#a1242a}
   .dashboard-inspector .dashboard-check{align-self:end;min-height:36px}
   .dashboard-inspector select{min-width:0;padding-left:8px;padding-right:8px}
 }
+
+.dashboard-custom{display:flex;flex-direction:column;min-width:0}
+.dashboard-custom-body{min-width:0;flex:1}
+.dashboard-custom-frame{display:block;width:100%;border:0;background:transparent;color-scheme:normal}
+.dashboard-custom-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.5;max-height:440px}
+.dashboard-custom-field{grid-column:1 / -1;width:100%}
+.dashboard-custom-field input,.dashboard-custom-field textarea{display:block;width:100%;margin-top:5px;min-width:0}
+.dashboard-custom-field textarea{resize:vertical;font-family:var(--mono);font-size:12px;max-height:320px}

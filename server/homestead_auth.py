@@ -200,7 +200,7 @@ def list_users():
 _DASHBOARD_WIDTHS = {"compute": (4, 6, 8, 12), "throughput": (4, 6, 8, 12),
                      "storage": (4, 6, 8, 12), "nodes": (4, 6, 8, 12), "cpu": (4, 6, 8, 12),
                      "memory": (4, 6, 8, 12), "history": (8, 12), "portal": (4, 6, 8, 12),
-                     **{key: (4, 6, 8, 12) for key in ("health", "workloads", "containers", "vms", "backups", "updates", "jobs")}}
+                     **{key: (4, 6, 8, 12) for key in ("health", "workloads", "containers", "vms", "backups", "updates", "jobs", "custom", "custom2", "custom3", "custom4")}}
 
 
 def _dashboard_layout(layout):
@@ -211,7 +211,7 @@ def _dashboard_layout(layout):
     seen = set()
     for item in layout["items"]:
         if (not isinstance(item, dict) or not {"id", "width", "height"} <= set(item)
-                or set(item) - {"id", "width", "height", "display", "column", "newRow", "groups", "status"}):
+                or set(item) - {"id", "width", "height", "display", "column", "newRow", "groups", "status", "title", "format", "content"}):
             raise ValueError("Invalid dashboard widget")
         name = item["id"]
         if (not isinstance(name, str) or name not in _DASHBOARD_WIDTHS or name in seen
@@ -231,6 +231,14 @@ def _dashboard_layout(layout):
             raise ValueError("Invalid widget groups")
         if "status" in item and (name not in ("containers", "vms") or item["status"] not in ("running", "stopped", "attention")):
             raise ValueError("Invalid widget status")
+        custom_fields = {"title", "format", "content"} & set(item)
+        if custom_fields and name not in ("custom", "custom2", "custom3", "custom4"):
+            raise ValueError("Custom content is only supported by custom widgets")
+        for key, limit in (("title", 80), ("content", 16384)):
+            if key in item and (not isinstance(item[key], str) or len(item[key]) > limit):
+                raise ValueError("Invalid custom widget " + key)
+        if "format" in item and item["format"] not in ("text", "html"):
+            raise ValueError("Invalid custom widget format")
         seen.add(name)
     return copy.deepcopy(layout)
 

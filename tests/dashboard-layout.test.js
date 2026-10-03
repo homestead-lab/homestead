@@ -55,3 +55,10 @@ test("resource filters combine group selection and state without losing unknown 
  assert.equal(insights.filteredRows('containers',rows,{status:'running'})[0].cpu,null);
  assert.deepEqual(insights.filteredRows('vms',[{name:'vm',status:'Starting'}],{status:'attention'}).map(r=>r.name),['vm']);
 });
+
+test("custom cards are optional, independent and bounded",()=>{
+ assert.equal(dashboard.defaults().some(item=>item.id.startsWith('custom')),false);
+ const rows=dashboard.normalize({version:1,items:[{id:'custom',width:6,height:240,title:'Notes',format:'html',content:'<b>Private</b>'},{id:'custom2',width:4,height:0,title:'x'.repeat(100),format:'script',content:'y'.repeat(20000)}]});
+ assert.equal(rows[0].format,'html');assert.equal(rows[0].content,'<b>Private</b>');
+ assert.equal(rows[1].format,'text');assert.equal(rows[1].title.length,80);assert.equal(rows[1].content.length,16384);
+});

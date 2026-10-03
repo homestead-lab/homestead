@@ -18,6 +18,7 @@ const Dashboard = (() => {
       ["updates","Updates awaiting review","Container, platform and host updates"],
       ["jobs","Running and failed jobs","Active work and outcomes needing attention"],
     ].map(([id,title,description])=>[id,{title,description,width:6,widths:[4,6,8,12],optional:true}])),
+    ...Object.fromEntries(["custom","custom2","custom3","custom4"].map(id=>[id,{title:"Custom text / HTML",description:"Notes and static HTML · up to 4 cards",width:6,widths:[4,6,8,12],custom:true,optional:true}])),
     portal: {title:"Portal links", description:"Your apps and devices", width:6, widths:[4,6,8,12]},
   });
   const widths = {4:"One third",6:"Half",8:"Two thirds",12:"Full width"};
@@ -28,6 +29,7 @@ const Dashboard = (() => {
     return value.items.filter(item=>item && Object.hasOwn(widgets,item.id) && !seen.has(item.id) && seen.add(item.id)).map(item=>({
       id:item.id, width:widgets[item.id].widths.includes(item.width)?item.width:widgets[item.id].width,
       height:[0,240,360,520].includes(item.height)?item.height:0,
+      ...(widgets[item.id].custom?{title:typeof item.title==="string"?item.title.slice(0,80):"",format:item.format==="html"?"html":"text",content:typeof item.content==="string"?item.content.slice(0,16384):""}:{}),
       ...(item.id==="nodes" && item.display==="detailed"?{display:"detailed"}:{}),
       ...(item.id==="portal" && item.display==="tiles"?{display:"tiles"}:{}),
       ...(Number.isInteger(item.column) && item.column>0 && item.column<=13-(widgets[item.id].widths.includes(item.width)?item.width:widgets[item.id].width)?{column:item.column}:{}),
@@ -116,6 +118,7 @@ const Dashboard = (() => {
   const dirty = () => draft !== null && JSON.stringify(draft) !== initial;
   const announce = text => { const host=document.getElementById("dashboardStatus"); if(host) host.textContent=text; };
   function widgetContent(id, item={}) {
+    if (widgets[id]?.custom) return DashboardCustom.render(item);
     if (id === "nodes") return dashboardNodes(STATE.data.ov?.nodes || [], item.display || "compact");
     if (widgets[id]?.optional) return HealthInsights.widget(id,item);
     if (id === "portal") return `<div class="card flat dashboard-portal dashboard-resource-widget" style="--resource-list-height:${item.height || 360}px">${UI.moduleHeader("Portal links", "", '<button class="btn sm" onclick="go(\'portal\')">Open Portal</button>')}
@@ -147,11 +150,11 @@ const Dashboard = (() => {
     return portalRequest;
   }
   function controls(item) {
-    const w=widgets[item.id];
+    const w={...widgets[item.id],title:widgets[item.id].custom && item.title?item.title:widgets[item.id].title};
     return `<div class="dashboard-widget-tools">
-      <button type="button" class="dashboard-grip" data-dash-drag="${item.id}" aria-label="Move ${w.title}" title="Drag to move. Use arrow keys to reorder.">⠿ <span>${w.title}</span></button>
-      <button type="button" class="btn sm" aria-label="Settings for ${w.title}" onclick="Dashboard.select(${jsq(item.id)})">Settings</button>
-      <button type="button" class="iconbtn" aria-label="Remove ${w.title}" onclick="Dashboard.remove(${jsq(item.id)})">×</button>
+      <button type="button" class="dashboard-grip" data-dash-drag="${item.id}" aria-label="Move ${esc(w.title)}" title="Drag to move. Use arrow keys to reorder.">⠿ <span>${esc(w.title)}</span></button>
+      <button type="button" class="btn sm" aria-label="Settings for ${esc(w.title)}" onclick="Dashboard.select(${jsq(item.id)})">Settings</button>
+      <button type="button" class="iconbtn" aria-label="Remove ${esc(w.title)}" onclick="Dashboard.remove(${jsq(item.id)})">×</button>
     </div>`;
   }
   function render(edit=false) {
@@ -192,13 +195,14 @@ const Dashboard = (() => {
         <label class="dashboard-check"><input type="checkbox" ${item.newRow?"checked":""} data-option="newRow" onchange="Dashboard.option('newRow',this.checked)"> Start a new row</label>
         ${["containers","vms"].includes(item.id)?`<label>Show<select aria-label="Workload status" onchange="Dashboard.option('status',this.value)">${[["all","All states"],["running","Running"],["stopped","Stopped"],["attention","Needs attention"]].map(([v,label])=>`<option value="${v}" ${(item.status || "all")===v?"selected":""}>${label}</option>`).join("")}</select></label>`:""}
         ${item.id==="portal"?`<label>Display<select aria-label="Portal display" onchange="Dashboard.option('display',this.value)"><option value="compact" ${item.display!=="tiles"?"selected":""}>Compact rows</option><option value="tiles" ${item.display==="tiles"?"selected":""}>Tiles</option></select></label>`:""}
+        ${widgets[item.id].custom?DashboardCustom.fields(item):""}
         <div id="dashboardGroupOptions">${groupOptions(item)}</div>
         <div class="dashboard-order"><button class="btn sm" ${index===0?"disabled":""} onclick="Dashboard.move(${jsq(item.id)},${index-1})">↑ Earlier</button><button class="btn sm" ${index===draft.length-1?"disabled":""} onclick="Dashboard.move(${jsq(item.id)},${index+1})">↓ Later</button></div>
         <button class="btn sm danger" onclick="Dashboard.remove(${jsq(item.id)})">Remove widget</button>`:""}</div>
       ${UI.moduleHeader("Widgets", "Add what you use. Remove what you don’t.")}
-      <div class="dashboard-catalog">${Object.entries(widgets).map(([id,w])=>{
+      <div class="dashboard-catalog">${Object.entries(widgets).filter(([id,w])=>!w.custom || id===(Object.keys(widgets).find(key=>widgets[key].custom && !draft.some(item=>item.id===key)) || "custom4")).map(([id,w])=>{
         const added=draft.some(item=>item.id===id);
-        return `<button type="button" class="dashboard-catalog-item${id===selected?" on":""}" onclick="Dashboard.${added?"select":"add"}(${jsq(id)})" aria-label="${added?"Configure":"Add"} ${w.title}"><span><b>${w.title}</b><small>${w.description}</small></span><span aria-hidden="true">${added?"✓":"＋"}</span></button>`;
+        return `<button type="button" class="dashboard-catalog-item${id===selected?" on":""}" onclick="Dashboard.${added?"select":"add"}(${jsq(id)})" aria-label="${added?"Configure":"Add"} ${esc(w.title)}"><span><b>${esc(w.title)}</b><small>${w.description}</small></span><span aria-hidden="true">${added?"✓":"＋"}</span></button>`;
       }).join("")}</div>
       ${UI.guide("How the grid works", "Drag a widget’s handle to change its position. Drag its bottom corner to resize, or use Widget settings. Use Start column to leave a gap, or Start a new row to leave the rest of a row empty. Cards grow to fit their content. On phones, cards stack in the same order with automatic height. Arrow keys on a move handle reorder cards. Metrics pause while editing. Your layout follows your account across browsers and devices.")}
     </div></aside>`;
@@ -221,6 +225,9 @@ const Dashboard = (() => {
         const field=document.querySelector(`[aria-label="${label}"]`);if(field)field.value=String(value);
       }
       const row=document.querySelector('[data-option="newRow"]');if(row)row.checked=!!current.newRow;
+      for(const [label,value] of [["Custom widget title",current.title || ""],["Custom widget format",current.format || "text"],["Custom widget content",current.content || ""]]){
+        const field=document.querySelector(`[aria-label="${label}"]`);if(field && field!==document.activeElement)field.value=value;
+      }
       syncGroups();
     }
     portalDots();
@@ -275,9 +282,10 @@ const Dashboard = (() => {
   }
   const apiObject={widgets, defaults, normalize, positions, settings, refreshOptions, content:{}, render, loadPortal, load, notice:()=>loadError?UI.callout("warn","Dashboard layout unavailable","Your saved layout could not be refreshed. Editing is unavailable until it reconnects."):"", editing:()=>draft!==null, dirty, start, save, cancel, leave, select, move,
     invalidate(){window.HealthInsights?.reset();session++;layout=null;revision=null;loadedUser=null;loadError="";layoutRequest=null;saving=false;clearGesture();draft=null;undo=[];redo=[];portalRequest=null;apiObject.content={};},
-    add(id){if(!Object.hasOwn(widgets,id)||draft===null||draft.some(item=>item.id===id))return;selected=id;change(()=>draft.push({id,width:widgets[id].width,height:0}),`${widgets[id].title} added.`);if(id==="portal")loadPortal();if(widgets[id]?.optional)HealthInsights.load();},
+    add(id){if(!Object.hasOwn(widgets,id)||draft===null||draft.some(item=>item.id===id))return;selected=id;change(()=>draft.push({id,width:widgets[id].width,height:0}),`${widgets[id].title} added.`);if(id==="portal")loadPortal();if(widgets[id]?.optional && !widgets[id].custom)HealthInsights.load();},
     remove(id){if(!Object.hasOwn(widgets,id))return;change(()=>{draft=draft.filter(item=>item.id!==id);if(selected===id)selected=draft[0]?.id || "";},`${widgets[id].title} removed. Use Undo to restore it.`);},
     size(field,value){if(!["width","height"].includes(field))return;change(()=>{const item=draft.find(item=>item.id===selected);if(item){item[field]=value;if(field==="width" && item.column>13-value)item.column=13-value;}},"Widget size updated.");},
+    custom(key,value){if(!["title","format","content"].includes(key))return;change(()=>{const item=settings(selected);if(widgets[item.id]?.custom)item[key]=value;},"Custom widget updated.");},
     option(key,value){if(!["column","newRow","status","display"].includes(key))return;change(()=>{const item=draft.find(row=>row.id===selected);if(item)item[key]=value;},"Widget settings updated.");},
     allGroups(all){change(()=>{const item=settings(selected);if(all)delete item.groups;else item.groups=[];},"Widget filter updated.");},
     group(value,checked){change(()=>{const item=settings(selected), available=item.id==="portal"?(STATE.data.portal?.links || []).map(l=>l.section || ""):HealthInsights.groups() || [];const groups=new Set(item.groups || available);if(checked)groups.add(value);else groups.delete(value);item.groups=[...groups];},"Widget filter updated.");},
