@@ -138,7 +138,7 @@ window.portalEdit = async (pick = false) => {
     const [data, wl] = await Promise.all([api("/api/portal"), STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads").catch(() => [])]);
     PORTAL_WORKLOADS = wl || [];
     PORTAL_EDIT = (data.links || []).map(link => ({ ...link }));
-    $("#mbody").innerHTML = `<p class="muted small">Tiles on the Portal page, in sections. Pick containers to add their addresses and logos, or add any address by hand - a router, a switch, a NAS. Addresses are visible to every signed-in user, so keep passwords out of them.</p>
+    $("#mbody").innerHTML = `<p class="muted small">Organize portal links or add links from containers. All signed-in users can see these addresses; do not include passwords.</p>
       <div class="row" style="gap:8px;margin:12px 0"><button class="btn" onclick="portalAdd()">＋ Link</button>
         <button class="btn" onclick="portalPick()">＋ From containers</button></div>
       <div id="pe_rows">${portalEditRows()}</div>

@@ -22,7 +22,7 @@ function guideScreens(g) {
   const rows = [
     ["Installation mode", "<b>Join an existing Harvester cluster</b>"],
     ["Node role", role],
-    ["Password", "A password for the <span class=\"mono\">rancher</span> user on this host - for SSH and the console. Your other hosts' is fine."],
+    ["Password", "Set the <span class=\"mono\">rancher</span> password for SSH and console access."],
     ["Installation disk", "The disk Harvester goes on. <b>Everything on it is erased.</b> An SSD of 250 GB or more."],
     ["Data disk", "A second disk for VM and volume data, if the machine has one. On a single-disk machine, leave it as the installation disk."],
     ["Persistent size", "Leave the default (150 GiB)."],
@@ -54,8 +54,7 @@ window.clusterOnboarding = async () => {
   }
   ONBOARD.known = new Set(g.nodes.map(n => n.name));
   $("#mbody").innerHTML = `
-    <p class="muted small">Harvester's own installer adds the host. You pick its disk and network card on the machine
-      itself; everything else is below, with this cluster's answers.</p>
+    <p class="muted small">Install Harvester on the new host, then join this cluster using the settings below.</p>
     <section class="guide-step"><h4><span>1</span>Boot the installer</h4>
       ${g.iso ? `<p>This cluster runs <b>Harvester v${esc(g.version)}</b>; the new host needs the same release.</p>
         <div class="row"><a class="btn sm pri" href="${safeHref(g.iso)}" target="_blank" rel="noopener">Harvester v${esc(g.version)} ISO (${esc(g.arch)})</a>
@@ -73,6 +72,9 @@ window.clusterOnboarding = async () => {
       <p class="dim xs">In the order Harvester asks; some releases put the password or role a screen earlier.</p>
       ${guideScreens(g)}</section>
     <section class="guide-step"><h4><span>4</span>Watch it join</h4><div id="guideWatch"></div></section>`;
+  const sections = [...document.querySelectorAll("#mbody .guide-step")];
+  const steps = sections.map(section => ({title:section.querySelector("h4").textContent.replace(/^\d+/, "").trim(), html:section.innerHTML.replace(/<h4>[\s\S]*?<\/h4>/, "")}));
+  $("#mbody").innerHTML = UI.lead("Use the Harvester installer on the new host to join this cluster.") + stepper("host_join", steps, UI.button("View hosts", "closeModal();go('nodes')", {kind:"pri"}));
   guideWatch();
 };
 
@@ -183,8 +185,7 @@ window.clusterRemovePick = async () => {
   const nodes = await api("/api/nodes").catch(() => []);
   const down = nodes.filter(n => n.status !== "Ready"), up = nodes.filter(n => n.status === "Ready");
   $("#mbody").innerHTML = `
-    <p class="small" style="margin-top:0">For a host that has failed and is not coming back - or one you are retiring. Homestead checks what
-      removing it costs first: etcd quorum, volumes whose only copy it held, apps and volumes tied to it. Nothing changes until you confirm.</p>
+    <p class="small" style="margin-top:0">Remove a retired or permanently failed host. Review quorum, volume replicas and pinned workloads before confirming.</p>
     ${down.length ? `<div class="sec">Not ready</div><div class="cleanup-card card flat">${down.map(n => `<div class="cleanup-row bad"><div>
         <b>${esc(n.name)}</b><span>${esc((n.roles || []).join(" · ") || "worker")} · ${esc(n.status || "not ready")}</span></div>
         <button class="btn sm danger" onclick="nodeRemoval(${jsq(n.name)})">Check and remove…</button></div>`).join("")}</div>`

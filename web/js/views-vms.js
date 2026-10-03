@@ -92,10 +92,8 @@ window.vmStore = async (check = false) => {
   const filter = (STATE.vmStoreFilter || "").toLowerCase();
   const shown = rows.filter(r => !filter || `${r.distro} ${r.name} ${r.variant} ${r.about}`.toLowerCase().includes(filter));
   $("#mbody").innerHTML = `
-    <p class="small" style="margin-top:0">Cloud images from their publishers, for this cluster's <b>${esc(s.arch)}</b> nodes. Each has cloud-init:
-      the VM's password is set for the user shown, and the image grows to fill its disk.</p>
-    ${s.harvester ? `<div class="note">Kept images are Harvester images - downloaded once, copied for each VM. One that keeps itself <b>current</b> is
-      checked twice a day; a new build downloads beside the old, and older builds no disk came from are deleted.</div>` : `<div class="note">${esc(s.note)}</div>`}
+    <p class="small" style="margin-top:0">Publisher images for <b>${esc(s.arch)}</b> hosts. ${tip("Cloud-init sets the password for the listed user and expands the image to fill the VM disk.")}</p>
+    ${s.harvester ? `${UI.more("Image caching and updates", "Kept images are downloaded once and copied for each VM. Automatic updates check twice daily. Older builds are removed only when no disks depend on them.")}` : `<div class="note">${esc(s.note)}</div>`}
     ${(s.own || []).length ? `<div class="sec">Your images on this cluster</div>
       <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Image</th><th>From</th><th>Size</th><th></th></tr></thead><tbody>
       ${s.own.map(o => `<tr><td><b>${esc(o.display)}</b><div class="dim xs mono">${esc(o.image)}</div></td>
@@ -119,7 +117,7 @@ window.vmStore = async (check = false) => {
             ${s.harvester ? `<td data-label="Here">${state(r)}</td>` : ""}<td>${actions(r)}</td></tr>`).join("")}</tbody>` : "";
       }).join("") || `<tbody><tr><td colspan="6" class="empty">Nothing matches that filter.</td></tr></tbody>`}</table></div></div>
     <div class="row between" style="margin-top:12px;flex-wrap:wrap;gap:8px">
-      <span class="dim xs">Your own disk image - qcow2, vmdk, raw, vdi, vhd or vhdx, from a web address - is imported under <a class="linkish" onclick="closeModal();go('import')">Import</a>.</span>
+      <span class="dim xs">Import your own disk image under <a class="linkish" onclick="closeModal();go('import')">Import</a>.</span>
       ${s.harvester ? `<button class="btn sm" data-need="admin" onclick="vmStoreRefresh()">${icon("refresh")}Check for newer builds</button>` : ""}</div>`;
   if (window.applyRole) applyRole();
   const box = $("#vmStoreFilter");
@@ -713,8 +711,7 @@ window.k3sCluster = async () => {
   const lan = vmLanNetworks(opts, true);
   const images = (opts.images || []).filter(i => i.storage_class);
   $("#mbody").innerHTML = `
-    <p class="small" style="margin-top:0">VMs here become a k3s cluster: the first is its server, the rest join it. Each gets an address of
-      its own on the LAN, so the cluster is reached - and joins - as one built from real machines would be.</p>
+    <p class="small" style="margin-top:0">Create a k3s cluster from VMs, each with its own LAN address. The first VM is the server; the others join it.</p>
     ${lan.length ? "" : vmNetworkNote(opts, true)}
     <div class="f2"><div class="f"><label>Name ${tip("Starts each VM's name: k3s-demo-server-1, k3s-demo-agent-1 and so on.")}</label><input id="k_name" value="k3s-demo"></div>
       <div class="f"><label>Install ${tip("What each node sets up. k3s, Longhorn and Homestead is what a new install from our bootstrap script gets; local-path skips Longhorn and keeps each volume on one node; k3s alone installs nothing else.")}</label><select id="k_setup" onchange="k3sSetupChanged()">${Object.entries(K3S_SETUPS).map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select></div></div>

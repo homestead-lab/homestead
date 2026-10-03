@@ -90,9 +90,7 @@ window.objectStoreSetup = () => {
       <input id="os_ip" type="text" class="mono" value="${esc(store.reachable_off_cluster && store.endpoint ? new URL(store.endpoint).hostname : "")}" placeholder="Homestead's shared address" data-ipam></div>
     <div class="f"><label>Port ${tip("Where the store answers. Pick another if an app on that address already uses 9000; the next port up is its console.")}</label>
       <input id="os_port" type="number" min="1" max="65534" value="${store.port || 9000}" class="mono"></div></div>
-  <div class="note"><b>It shares fate with what it protects.</b> Storage inside this cluster is the right
-    place to stage a migration and the wrong place for your only copy. Keep anything you cannot lose
-    somewhere else as well.</div>
+  <div class="note"><b>Keep an independent backup.</b> This store shares the cluster’s disks. Use it for migration staging, not your only copy.</div>
   <div class="row" style="margin-top:16px">
     <button class="btn pri" data-need="admin" onclick="objectStoreDeploy()">${store.deployed ? "Save storage settings" : "Set up storage"}</button>
     <button class="btn" onclick="closeModal()">Cancel</button></div>`);

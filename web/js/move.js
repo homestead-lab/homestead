@@ -97,9 +97,7 @@ window.moveWorkload = async (name, ns) => {
       <button class="btn pri" id="mv_go" onclick="doMoveNow(${jsq(wl.ns)},${jsq(name)})" disabled>Review move</button>
       <button class="btn" onclick="modalBack()">Cancel</button>
     </div>
-    <div class="note" style="margin-top:14px">Eligible hosts already account for every configured hardware feature, passthrough path, USB ID, node label, advertised device resource, readiness and cordon. This is a stop-then-start, not a live move. A
-    ReadWriteOnce volume can only attach to one node at a time, so the old pod must fully
-    terminate before the new one starts. Expect downtime; termination and storage reattachment can take longer or fail.</div>`;
+    <div class="note" style="margin-top:14px">Expect downtime: the old pod must stop before its ReadWriteOnce volume can attach elsewhere. Termination or reattachment may fail. ${tip("Eligible hosts meet the workload’s hardware, device, label, readiness and scheduling requirements.")}</div>`;
 
   const un = $("#mv_unpin");
   un.onchange = () => {

@@ -245,12 +245,7 @@ window.osUpdates = async (child = false) => {
         <option value="never" ${s.reboot === "never" ? "selected" : ""}>Never - I restart hosts myself</option></select></div>
       <label class="check"><input type="checkbox" id="osu_single" ${s.single_copy ? "checked" : ""}> Restart a host even when a volume has its only healthy copy there - that volume is unavailable until the host is back</label>
       ${UI.actions(UI.button("Save settings", "osUpdatesSave()", { id: "osu_save", attrs: 'data-need="admin"' }))}`)}
-    ${UI.more("What an update of every host does", `<p class="small">Each Ready host in turn - the one Homestead's leader runs on last - refreshes its
-      package lists and installs what is waiting. When an update asks for a restart, the host gets the same review as Host actions:
-      running VMs, the cluster's only etcd member or a volume's only copy stop the restart, and that host is listed as needing one.
-      Otherwise it is cordoned, drained through disruption budgets, restarted, and uncordoned once it is Ready and its Longhorn volumes
-      are healthy; only then is the next host touched. A failed install stops the run. Ubuntu's automatic updates are held off on every
-      host while it runs.</p>`)}
+    ${UI.more("What an update of every host does", `<p class="small">Updates run one host at a time, with Homestead's leader last. Restarts use Host actions checks: running VMs, a sole etcd member or a volume's only copy can block them. Hosts drain through disruption budgets and resume scheduling once Ready with healthy storage. Failed installs stop the queue. Ubuntu automatic updates pause during the run.</p>`)}
     ${UI.actions([
       run ? UI.button("Stop after this host", "osUpdatesStop()", { attrs: 'data-need="admin"' }) : "",
       !run ? UI.button("Update every host now", "osUpdatesStart()", { kind: "pri", attrs: 'data-need="admin"' }) : "",

@@ -328,7 +328,7 @@ window.wlGroup = (ns, name) => {
 /* Several at once: tick the workloads, then name the group they go in. */
 window.manageWorkloadGroups = () => {
   const rows = STATE.data.wl || [], names = workloadGroupNames(rows);
-  modal("Groups", `<p class="muted small">Tick workloads, then move them to a group - an existing one or a new name - or out of every group. A group disappears when nothing is left in it.</p>
+  modal("Groups", `<p class="muted small">Select workloads to group or ungroup. Empty groups are removed automatically.</p>
     <div class="wg-list">${rows.map(w => `<label class="wg-item"><input type="checkbox" data-ns="${esc(w.ns)}" data-name="${esc(w.name)}">
       ${appAvatar(w.name, w.icon)}<span><b>${esc(w.name)}</b><span class="dim xs"> ${esc(w.ns)}</span></span>
       <span class="pill slim ${w.group ? "" : "neutral"}">${esc(w.group || "ungrouped")}</span></label>`).join("")}</div>
@@ -737,12 +737,10 @@ window.wlFailover = async () => {
   const policy = lh?.node_down || "";
   const moving = policy && policy !== "do-nothing";
   $("#mbody").innerHTML = `
-    <p class="small" style="margin-top:0">When a node stops answering, each container either moves to another node, waits for its node to
-      come back, or follows Kubernetes' default of five minutes. Changing a container restarts it.</p>
+    <p class="small" style="margin-top:0">Choose whether containers move, wait or use Kubernetes’ default five-minute delay after host failure. Saving a changed policy restarts that container.</p>
     ${lh ? `<div class="note ${moving ? "good" : "warn"}">${moving
       ? `Longhorn lets go of a failed node's volumes (<span class="mono">${esc(policy)}</span>), so a container moving to another node takes its volume with it.`
-      : `<b>A container with a single-node volume cannot really move yet.</b> Longhorn keeps its volume attached to the dead node, so on the
-         new node it waits until the old one is back. <button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()" style="margin-top:6px">Let Longhorn release them</button>`}</div>` : ""}
+      : `<b>Volume attachment blocks failover.</b> Single-node volumes remain attached to the failed host until Longhorn releases them. <button class="btn sm pri" data-need="admin" onclick="wlFailoverPolicy()" style="margin-top:6px">Let Longhorn release them</button>`}</div>` : ""}
     <div class="row" style="margin:12px 0;gap:6px;flex-wrap:wrap"><span class="small dim">Set all to</span>
       ${Object.entries(FAILOVER_WORDS).map(([v, l]) => `<button class="btn sm" onclick="$$('#mbody select[data-fo]').forEach(s => s.value=${jsq(v)})">${esc(l)}</button>`).join("")}</div>
     <table class="tbl dense stack"><thead><tr><th>Container</th><th>If its node fails</th></tr></thead><tbody>

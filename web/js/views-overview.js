@@ -674,10 +674,7 @@ window.probeInstallConfirm = () => childModal("Install the node probe?", `
   <div class="note"><b>Telemetry container.</b> Mounts <span class="mono">/sys</span>,
     <span class="mono">/proc</span> and <span class="mono">/dev</span> read-only, drops every
     capability, runs with a read-only root and cannot escalate privilege.</div>
-  <div class="note warn"><b>SMART container is privileged.</b> Reading drive health means talking to
-    block devices directly, and no lesser capability covers an unknown, changing set of drives.
-    It has no host PID, IPC or network namespace, keeps a read-only root, and answers only
-    requests carrying a short-lived signature from Homestead. Without it there is no drive health.</div>
+  <div class="note warn"><b>SMART requires a privileged container</b> to read drive health. It uses a read-only root, isolated PID/IPC/network namespaces and signed requests. ${tip("Direct block-device access is required for the host’s varying drive types. Without the SMART container, drive-health data is unavailable.")}</div>
   <div class="row" style="margin-top:16px">
     <button class="btn pri" data-need="admin" onclick="probeInstall()">Install probe</button>
     <button class="btn" onclick="closeModal()">Not now</button></div>`);

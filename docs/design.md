@@ -337,6 +337,21 @@ the same order, with wrapping only when needed and at least 44px touch targets.
 Long tables become cards; form columns stack. The section selector uses a 16px
 font and an explicit label. Do not squeeze the desktop rail onto a phone.
 
+### Professional, succinct copy
+
+Use sentence case and direct verbs. Aim for one lead sentence and one short
+instruction per field. Remove conversational filler, repeated consequences,
+implementation narration and promises that checks cannot guarantee. A long
+dialog may contain many objects; judge explanatory copy separately from names,
+rows and field labels.
+
+Use `tip()` beside a field label for a short definition or uncommon setting.
+Tooltips must work by keyboard focus and touch as well as hover. Use a named
+`UI.more` disclosure for multi-paragraph guidance, commands or diagnostic output.
+Use rail sections when the user must complete several tasks. Never hide a
+blocker, destructive consequence, recovery instruction or required consent in
+a tooltip. Keep examples concise and use neutral, professional wording.
+
 ### Show the decision; disclose the explanation
 
 Keep essential inputs, affected objects, interruption/data-loss consequences,
@@ -462,3 +477,16 @@ can be measured, not clutter.
 A new page is added to `scripts/audit_pages.mjs` and a new dialog to
 `scripts/audit_dialogs.mjs`, with demo data in `web/js/demo.js` if it needs
 any, so CI checks it from then on.
+
+
+### Dialog contact sheets
+
+Render both themes with `scripts/audit_dialogs.mjs`, setting `DIALOG_OUTPUT`
+to `release-assets/dialog-review/dark` or `release-assets/dialog-review/light`
+and `HOMESTEAD_AUDIT_THEME` to the matching theme. Each audit includes desktop
+and phone screenshots, visible copy and layout measurements.
+
+Run `python scripts/build_dialog_contact_sheets.py release-assets/dialog-review`
+with Pillow installed. It validates matching theme inventories, then writes
+paired PNG cards, paginated contact sheets, a ZIP of those sheets and a searchable
+`index.html` gallery. Open the gallery locally; review images use demo data.

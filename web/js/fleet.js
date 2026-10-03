@@ -234,8 +234,7 @@ window.fleetMigration = async id => {
     if (ready) (window.__clusterReady ||= {})[m.handle] = ready;
   }
   if (!$("#mbody")) return;
-  const lead = UI.lead(`Lets workloads move from ${esc(m.name)} to another linked cluster. Each one's volumes are backed up to
-    ${esc(m.name)}'s backup storage - an S3 store (RustFS) on a Longhorn volume - and restored where it goes.`);
+  const lead = UI.lead(`Move workloads from ${esc(m.name)} to linked clusters by backing up their volumes to its S3 store and restoring them at the destination.`);
   const target = ready?.target || {};
   let body;
   if (state.allowed) {
