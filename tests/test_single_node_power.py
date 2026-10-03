@@ -125,17 +125,59 @@ class SingleNodePowerTests(unittest.TestCase):
         handler._guard = lambda _: False
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
-        for ack, code in [(None,409), (False,409), ("true",409), (True,200)]:
+        for ack, code in [(None,409), (False,409), ("true",409), (True,202)]:
             handler._body = lambda: {**body, "allow_cluster_outage": ack}
-            with mock.patch.object(server, "send_reviewed_power", return_value={"ok":True}) as send:
+            with mock.patch.object(server, "send_reviewed_power", return_value={"ok":True}) as send,                     mock.patch.object(server, "active_power_job", return_value=None):
                 handler.do_POST()
             self.assertEqual(code, handler._send.call_args.args[0])
-            self.assertEqual(code == 200, send.called)
+            self.assertEqual(code == 202, send.called)
         handler._body = lambda: {**body, "allow_cluster_outage": True, "review_token": "stale"}
-        with mock.patch.object(server, "send_reviewed_power") as send:
+        with mock.patch.object(server, "send_reviewed_power") as send,                 mock.patch.object(server, "active_power_job", return_value=None):
             handler.do_POST()
         self.assertEqual(409, handler._send.call_args.args[0])
         send.assert_not_called()
+
+    def test_a_running_power_job_blocks_another_review_and_send(self):
+        # A second review during the first job's drain started the same
+        # drain again; the browser now follows the running job instead.
+        running = {"id": "job-1", "kind": "node-power", "status": "running", "resource": {"name": "node1"}}
+        with mock.patch.object(server.OPS, "list_operations", return_value=[running]):
+            plan = server.power_plan_with_job(power.plan("node1", "poweroff"))
+            self.assertFalse(plan["ready"])
+            self.assertEqual("job-1", plan["operation"]["id"])
+            handler = object.__new__(server.H)
+            handler.path, handler.headers = "/api/node/power", {}
+            handler._guard = lambda _: False
+            handler._client_ip = lambda: "127.0.0.1"
+            handler._send = mock.Mock()
+            handler._body = lambda: {"node": "node1", "action": "poweroff", "confirm": "node1"}
+            with mock.patch.object(server, "send_reviewed_power") as send:
+                handler.do_POST()
+        self.assertEqual(409, handler._send.call_args.args[0])
+        self.assertEqual("job-1", handler._send.call_args.args[1]["operation"]["id"])
+        send.assert_not_called()
+        finished = {**running, "status": "succeeded"}
+        with mock.patch.object(server.OPS, "list_operations", return_value=[finished]):
+            self.assertIsNone(server.active_power_job("node1"))
+
+    def test_the_send_returns_its_job_at_once_and_runs_in_the_background(self):
+        plan = power.plan("node1", "poweroff")
+        started, release = server.threading.Event(), server.threading.Event()
+        def slow_power(*args, **kwargs):
+            started.set(); release.wait(5)
+            return {"ok": True}
+        with mock.patch.object(server.OPS, "start", return_value={"id": "job-2"}),                 mock.patch.object(server.OPS, "record_phase") as phase,                 mock.patch.object(lifecycle, "node_power", side_effect=slow_power):
+            result = server.send_reviewed_power(plan, background=True)
+            self.assertEqual({"id": "job-2"}, result["operation"])
+            self.assertTrue(result["background"])
+            self.assertTrue(started.wait(5), "the work runs after the reply")
+            release.set()
+        with mock.patch.object(server.OPS, "start", return_value={"id": "job-3"}),                 mock.patch.object(server.OPS, "record_phase") as phase,                 mock.patch.object(lifecycle, "node_power", side_effect=RuntimeError("drain stuck")):
+            server.send_reviewed_power(plan, background=True)
+            for _ in range(50):
+                if phase.called: break
+                server.time.sleep(0.05)
+        self.assertEqual("failed", phase.call_args.args[1], "a failure is recorded on the job, not lost")
 
     def test_outage_cannot_skip_the_fresh_check_or_also_be_forced(self):
         with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), mock.patch.object(lifecycle, "ksend") as send:

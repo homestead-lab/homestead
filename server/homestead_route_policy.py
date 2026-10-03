@@ -715,6 +715,8 @@ def role(path, method):
 
 POLICY.update({
     ('POST', '/api/self/data/prepare/archive'): 'admin',
+    ('POST', '/api/self/data/handoff/close'): 'admin',
+    ('POST', '/api/self/data/handoff/close/preview'): 'admin',
     ('POST', '/api/self/data/prepare/archive/preview'): 'admin',
 })
 

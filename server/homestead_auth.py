@@ -100,9 +100,23 @@ def _unavailable(error, allow_stale=True):
     if (allow_stale and _store_cache["data"] is not None and
             time.time() - _store_cache["at"] <= MAX_STALE_SECONDS):
         return _store_cache["data"]
-    raise StoreUnavailable("Homestead cannot read its accounts from the cluster right now "
-                           f"({str(error)[:120] or type(error).__name__}); the Kubernetes API may be slow "
-                           "or unreachable. Try again in a moment.")
+    unavailable = StoreUnavailable("Homestead cannot read its accounts from the cluster right now. "
+                                   "The Kubernetes API may be slow or unreachable.")
+    unavailable.cause = unavailable_cause(error)
+    raise unavailable
+
+
+def unavailable_cause(error):
+    """What stopped the read, said plainly; the raw error otherwise."""
+    reason = str(error) or type(error).__name__
+    lowered = reason.lower()
+    if "errno -3" in lowered or "name resolution" in lowered or "name or service not known" in lowered:
+        return "The cluster's DNS did not answer. The host running CoreDNS may be down."
+    if "timed out" in lowered or "timeout" in lowered:
+        return "The Kubernetes API did not answer in time."
+    if "connection refused" in lowered:
+        return "The Kubernetes API refused the connection."
+    return reason[:160]
 
 
 class StoreConflict(ValueError):

@@ -1539,24 +1539,9 @@ async function viewDeploy(pre) {
       ${UI.more("Choose a storage type", "RWO suits a single workload. RWX allows sharing across nodes. Existing claims keep their data. Pod volumes share storage between containers in a pod. Host paths tie data to one host.")}
       <div id="d_vols"></div><button class="btn sm" onclick="addVol()">＋ add storage mapping</button>
     `},
-    {key:"address", title:"Address", lead:"Choose how clients reach the workload.", html:`
-      <div class="sec">Network ${tip("Kubernetes replaces Docker bridge networking with Services. Use a dedicated VIP for DNS servers and other workloads that must own common ports.")}</div>
-      <div class="f2"><div class="f"><label>Access mode</label><select id="d_net">
-        <option value="loadbalancer" ${DCFG.network_mode === "loadbalancer" ? "selected" : ""}>LAN access (VIP)</option>
-        <option value="internal" ${DCFG.network_mode === "internal" ? "selected" : ""}>Cluster only</option>
-        <option value="host" ${DCFG.network_mode === "host" ? "selected" : ""}>Host network (advanced)</option>
-        <option value="lan" ${DCFG.network_mode === "lan" ? "selected" : ""}>Its own LAN address (bridged)</option></select></div>
-        <div class="f"><label>${nodeAddressesOnly() ? `LAN address ${tip(NODE_ADDRESS_TIP)}` : "VIP allocation"}</label><select id="d_vip_mode">
-          ${nodeAddressesOnly() ? nodeAddressOption() : `${nodeAddressChoice(DCFG.vip_mode === "nodes" || (DCFG.vip_mode === "shared" && !sharedVip))}
-          ${nodeAddressBeside() && !sharedVip ? "" : `<option value="shared" ${DCFG.vip_mode === "shared" ? "selected" : ""}>Default workload VIP${sharedVip ? ` · ${esc(sharedVip)}` : " · configure in Networking"}</option>`}
-          <option value="auto" ${DCFG.vip_mode === "auto" ? "selected" : ""}>New automatic VIP${vips.freeCount ? ` · ${vips.freeCount} free` : ""}</option>
-          <option value="manual" ${DCFG.vip_mode === "manual" ? "selected" : ""}>Specific VIP</option>`}</select></div></div>
-      <div class="f" id="d_vip_wrap"><label>Specific VIP</label>${vipPicker("d", DCFG.lb_ip || "", vips)}</div>
-      <div id="d_lan_box" hidden></div>
-      ${UI.more("How addresses work", nodeAddressesOnly()
-        ? "Node addresses expose each port on every node. Each port can belong to one Service. Add kube-vip in Settings for dedicated addresses. Host networking binds directly to one node."
-        : "The default VIP shares an address using separate ports. Automatic and specific VIPs give the workload another address. Bridged LAN networking adds its own interface; host networking binds directly to one node.")}
-      <div class="sec">Ports ${tip("Container port is where the process listens. LAN port is what clients use through the Kubernetes Service. TCP and UDP on the same number are separate listeners.")}</div><div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>
+    {key:"address", title:"Address", lead:"Choose how clients reach the workload.", html:`${addressStepHtml("d", DCFG, vips, sharedVip, {
+        lanHtml: '<div id="d_lan_box" hidden></div>',
+        portsHtml: '<div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>'})}
     `},
     {key:"containers", title:"Additional containers", lead:"Add other containers that share each pod.", html:`
       <div id="d_extra_wrap"><div class="sec">Additional containers in each pod</div>
@@ -1878,6 +1863,36 @@ async function vipChoices(networkData) {
     used: (net?.vips || []).filter(v => !closed[v.ip]), own, labels: net?.vip_labels || {}, blocked: closed };
 }
 window.vipChoices = vipChoices;
+
+/* The Address step - how clients reach a workload, and on which ports -
+   drawn the same in Deploy (prefix d) and Edit (prefix e). Edit cannot turn
+   host networking on or off; a workload deployed with it shows it as set. */
+function addressStepHtml(prefix, cfg, vips, sharedVip, { lanHtml = "", portsHtml = "", onChange = "" } = {}) {
+  const editing = prefix !== "d", host = cfg.network_mode === "host";
+  const change = onChange ? ` onchange="${onChange}"` : "";
+  const mode = value => cfg.network_mode === value ? "selected" : "";
+  const vip = value => cfg.vip_mode === value ? "selected" : "";
+  return `
+      <div class="sec">Network ${tip("Kubernetes replaces Docker bridge networking with Services. Use a dedicated VIP for DNS servers and other workloads that must own common ports.")}</div>
+      <div class="f2"><div class="f"><label>Access mode</label><select id="${prefix}_net"${change}${editing && host ? " disabled" : ""}>
+        <option value="loadbalancer" ${mode("loadbalancer")}>LAN access (VIP)</option>
+        <option value="internal" ${mode("internal")}>Cluster only</option>
+        ${!editing || host ? `<option value="host" ${mode("host")}>Host network (advanced)</option>` : ""}
+        <option value="lan" ${mode("lan")}>Its own LAN address (bridged)</option></select></div>
+        <div class="f"><label>${nodeAddressesOnly() ? `LAN address ${tip(NODE_ADDRESS_TIP)}` : "VIP allocation"}</label><select id="${prefix}_vip_mode"${change}>
+          ${nodeAddressesOnly() ? nodeAddressOption() : `${nodeAddressChoice(cfg.vip_mode === "nodes" || (cfg.vip_mode === "shared" && !sharedVip))}
+          ${nodeAddressBeside() && !sharedVip ? "" : `<option value="shared" ${vip("shared")}>Default workload VIP${sharedVip ? ` · ${esc(sharedVip)}` : " · configure in Networking"}</option>`}
+          <option value="auto" ${vip("auto")}>New automatic VIP${vips.freeCount ? ` · ${vips.freeCount} free` : ""}</option>
+          <option value="manual" ${vip("manual")}>Specific VIP</option>`}</select></div></div>
+      ${editing && host ? '<p class="ui-help">It uses its host\'s network, set when it was deployed. Deploy it again to change that.</p>' : ""}
+      <div class="f" id="${prefix}_vip_wrap"><label>Specific VIP</label>${vipPicker(prefix, cfg.lb_ip || "", vips)}</div>
+      ${lanHtml}
+      ${UI.more("How addresses work", nodeAddressesOnly()
+        ? "Node addresses expose each port on every node. Each port can belong to one Service. Add kube-vip in Settings for dedicated addresses. Host networking binds directly to one node."
+        : "The default VIP shares an address using separate ports. Automatic and specific VIPs give the workload another address. Bridged LAN networking adds its own interface; host networking binds directly to one node.")}
+      <div class="sec">Ports ${tip("Container port is where the process listens. LAN port is what clients use through the Kubernetes Service. TCP and UDP on the same number are separate listeners.")}</div>${portsHtml}`;
+}
+window.addressStepHtml = addressStepHtml;
 
 function vipPicker(prefix, current, choices) {
   if (choices.blocked?.[current]) current = "";

@@ -281,6 +281,10 @@ def _public(item):
         out["cleanable"] = False
     if item.get("kind") == "k3s-cluster":
         out["tracking_only"] = True
+    if item.get("kind") == "node-power":
+        ref = item.get("ref") or {}
+        out["power"] = {"phase": ref.get("phase", ""), "action": ref.get("action", ""), "node": ref.get("node", ""),
+                        "direct": bool(ref.get("planned_outage") or ref.get("forced"))}
     if item.get("kind") == "vm-power":
         out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("prepared", "accepted")
         out["power_recovery"] = item.get("status") not in TERMINAL and item.get("ref", {}).get("phase") in ("uncertain", "dispatching")

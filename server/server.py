@@ -46,8 +46,20 @@ import homestead_self_data_execute as SELF_DATA_EXECUTE
 import homestead_self_data_route as SELF_DATA_ROUTE
 import homestead_self_data_finish as SELF_DATA_FINISH
 
+def api_origin(environ=os.environ):
+    """Where the Kubernetes API answers: the address the kubelet gives every
+    pod, not kubernetes.default.svc. The name needs CoreDNS, and k3s runs one
+    CoreDNS replica: while its host was down, every lookup failed and
+    Homestead lost the API although the API itself was up. The API's
+    certificate names the Service address too."""
+    host, port = environ.get("KUBERNETES_SERVICE_HOST", ""), environ.get("KUBERNETES_SERVICE_PORT", "443")
+    if not host:
+        return "https://kubernetes.default.svc"
+    return f"https://[{host}]:{port}" if ":" in host else f"https://{host}:{port}"
+
+
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
-API = "https://kubernetes.default.svc"
+API = api_origin()
 TOKEN = open(f"{SA}/token").read().strip() if os.path.exists(f"{SA}/token") else ""
 CTX = ssl.create_default_context(cafile=f"{SA}/ca.crt") if os.path.exists(f"{SA}/ca.crt") else ssl._create_unverified_context()
 WEBROOT = os.environ.get("WEBROOT", "/web")
@@ -3019,10 +3031,22 @@ def apply_reviewed_edit(b, prepared, hold=False):
             if b.get("lan"):
                 b["network_mode"] = "lan"
     ports = [port for container in b.get("containers") or [] for port in container.get("ports") or []]
+    # The Address step, as in Deploy: how clients reach it, and on which VIP.
+    address = b.get("address") if isinstance(b.get("address"), dict) else {}
+    vip_mode = address.get("vip_mode") or "shared"
     if b.get("manage_ports") or any("expose" in port for port in ports):
-        message = NETWORK.sync_workload_ports(b["ns"], result.get("name") or b["name"], ports, network_mode=b.get("network_mode"))
+        message = NETWORK.sync_workload_ports(b["ns"], result.get("name") or b["name"], ports,
+                                              network_mode=address.get("network_mode") or b.get("network_mode"),
+                                              vip_mode={"auto": "automatic"}.get(vip_mode, vip_mode),
+                                              vip=address.get("lb_ip", "") if vip_mode == "manual" else "")
         if message:
             result["network"] = message
+            _cache.pop("network", None)
+    if address.get("network_mode") in ("loadbalancer", "internal"):
+        message = NETWORK.set_workload_address(b["ns"], result.get("name") or b["name"], address["network_mode"],
+                                               vip_mode, address.get("lb_ip", ""))
+        if message:
+            result["network"] = "; ".join(filter(None, [result.get("network"), message]))
             _cache.pop("network", None)
     return result
 
@@ -3984,10 +4008,44 @@ class PowerNotSent(Exception):
         self.operation = operation
 
 
-def send_reviewed_power(power_plan, force=False):
+def active_power_job(node):
+    """A reboot or shutdown job for this host that has not finished."""
+    return next((item for item in OPS.list_operations()
+                 if item.get("kind") == "node-power" and item.get("resource", {}).get("name") == node
+                 and item.get("status") not in ("succeeded", "failed", "cancelled")), None)
+
+
+def power_plan_with_job(power_plan):
+    """A host whose power job is still going cannot be reviewed again: a
+    second review during its drain is how the same drain started twice."""
+    running = active_power_job(power_plan.get("node"))
+    if running:
+        power_plan = {**power_plan, "ready": False, "operation": running,
+                      "blockers": ["A power job for this host is still running. Follow it in its progress view."]
+                                  + list(power_plan.get("blockers") or [])}
+    return power_plan
+
+
+def homestead_running_on():
+    """The claim Homestead's own Deployment mounts for its data, and whether
+    it is ready on it now - read live, never from a cache."""
+    dep = kget(f"/apis/apps/v1/namespaces/{SELF.NS}/deployments/{NAMES.BRAND}")
+    spec, status = dep.get("spec") or {}, dep.get("status") or {}
+    volumes = (spec.get("template") or {}).get("spec", {}).get("volumes") or []
+    data = next((v for v in volumes if v.get("name") == "data"), None) or next(
+        (v for v in volumes if v.get("persistentVolumeClaim")), {})
+    claim = (data.get("persistentVolumeClaim") or {}).get("claimName", "")
+    meta = dep.get("metadata") or {}
+    ready = (int(status.get("readyReplicas") or 0) >= 1
+             and int(status.get("observedGeneration") or 0) >= int(meta.get("generation") or 0))
+    return claim, ready
+
+
+def send_reviewed_power(power_plan, force=False, background=False):
     """Cordon, drain and send a reviewed reboot or shutdown, as a job - what
     Host actions does once its review is accepted, and what an OS update of
-    every host does for each host that needs a restart."""
+    every host does for each host that needs a restart. background returns
+    the job at once and leaves the work, and its outcome, to the job."""
     node, action = power_plan["node"], power_plan["action"]
     planned_outage = bool(power_plan.get("planned_outage")) and not force
     operation = OPS.start(
@@ -3995,7 +4053,8 @@ def send_reviewed_power(power_plan, force=False):
         "/nodes?node=" + urllib.parse.quote(node),
         {"node": node, "node_uid": power_plan["node_uid"], "action": action, "boot_id": power_plan["boot_id"],
          "volumes": [v["name"] for v in power_plan["volumes"]],
-         "planned_outage": planned_outage, "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
+         "planned_outage": planned_outage, "forced": bool(force),
+         "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
         "Planned whole-cluster outage; sending without cordon or drain" if planned_outage else
         "Forced by an admin; sending without cordon or drain" if force else "Host impact reviewed; preparing cordon and drain")
     phase_state = {"phase": "reviewed"}
@@ -4004,21 +4063,35 @@ def send_reviewed_power(power_plan, force=False):
         updated = OPS.record_phase(operation["id"], phase, percent, message, **details)
         phase_state["phase"] = phase
         return updated
-    try:
-        result = LC.node_power(node, action, True,
-                               before_send=(lambda: POWER.recheck_planned_outage(power_plan)) if planned_outage else
-                               (lambda: POWER.recheck_forced(power_plan)) if force
-                               else (lambda: POWER.recheck_after_drain(power_plan)),
-                               reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force, planned_outage=planned_outage)
-        result["operation"] = operation
-        return result
-    except Exception as e:
-        uncertain = phase_state["phase"] in ("sending", "observing")
-        message = ("Power submission outcome is uncertain; inspect the existing job/helper before retrying" if uncertain else
-                   "Power was not sent. Inspect the host's cordon state: " + str(e))
-        power_progress("observing" if uncertain else "failed", 20 if uncertain else 10, message)
-        raise PowerNotSent(message, operation) from e
 
+    def send():
+        try:
+            result = LC.node_power(node, action, True,
+                                   before_send=(lambda: POWER.recheck_planned_outage(power_plan)) if planned_outage else
+                                   (lambda: POWER.recheck_forced(power_plan)) if force
+                                   else (lambda: POWER.recheck_after_drain(power_plan)),
+                                   reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force, planned_outage=planned_outage)
+            result["operation"] = operation
+            return result
+        except Exception as e:
+            uncertain = phase_state["phase"] in ("sending", "observing")
+            message = ("Power submission outcome is uncertain; inspect the existing job/helper before retrying" if uncertain else
+                       "Power was not sent. Inspect the host's cordon state: " + str(e))
+            power_progress("observing" if uncertain else "failed", 20 if uncertain else 10, message)
+            raise PowerNotSent(message, operation) from e
+
+    if not background:
+        return send()
+
+    def run():
+        try:
+            send()
+        except PowerNotSent:
+            pass  # send() recorded the outcome on the job
+        except Exception as error:  # never leave the job looking busy
+            power_progress("failed", 10, f"Host power job stopped: {error}"[:400])
+    threading.Thread(target=run, name=f"node-power-{node}", daemon=True).start()
+    return {"operation": operation, "steps": [], "background": True}
 
 def rollout_reboot(node, allow_single_copy=False):
     """A restart for an OS update: the same review Host actions shows, with
@@ -8087,7 +8160,7 @@ class H(HTTP.LimitedHandler):
             self._send(429 if limited else 401, {"error": message})
             return True
         except AUTH.StoreUnavailable as error:
-            self._send(503, {"error": str(error)})
+            self._send(503, {"error": str(error), "cause": getattr(error, "cause", "")})
             return True
         self.api_key = {**key, "kind": "key"}
         # API control scopes carry operator authority, never an internal/admin
@@ -8612,9 +8685,9 @@ class H(HTTP.LimitedHandler):
                     return self._send(400, {"error": "node is required"})
                 return self._send(200, cached("impact:" + node, 5, lambda: PLACE.impact(node)))
             if p == "/api/node/power/plan":
-                return self._send(200, POWER.plan((q.get("node") or [""])[0],
-                                                  (q.get("action") or [""])[0],
-                                                  force=(q.get("force") or [""])[0] == "1"))
+                return self._send(200, power_plan_with_job(POWER.plan((q.get("node") or [""])[0],
+                                                                      (q.get("action") or [""])[0],
+                                                                      force=(q.get("force") or [""])[0] == "1")))
             if p == "/api/cluster/shutdown/plan":
                 return self._send(200, cluster_shutdown(review=True).review())
             if p == "/api/cluster/shutdown":
@@ -8797,7 +8870,7 @@ class H(HTTP.LimitedHandler):
             return self._send(400, {"error": str(e)})
         except AUTH.StoreUnavailable as e:
             # Not an empty account store: the cluster did not answer.
-            return self._send(503, {"error": str(e), "unavailable": True})
+            return self._send(503, {"error": str(e), "cause": getattr(e, "cause", ""), "unavailable": True})
         except urllib.error.HTTPError as e:
             return self._send(e.code, {"error": API_ERRORS.message(e, 500)})
         except Exception as e:
@@ -9023,6 +9096,12 @@ class H(HTTP.LimitedHandler):
             if p == "/api/self/data/move/preview":
                 try:
                     return self._send(200, preview_self_data_move(b, self.user))
+                except SELF_DATA_FENCE.Held as error:
+                    return self._send(409, {"error": str(error), "review_required": True})
+            if p in ("/api/self/data/handoff/close", "/api/self/data/handoff/close/preview"):
+                try:
+                    return self._send(200, SELF_DATA_PREPARE.close_recovery(b, self.user, SELF.NS, NAMES.BRAND, OPS,
+                        homestead_running_on, start=p == "/api/self/data/handoff/close"))
                 except SELF_DATA_FENCE.Held as error:
                     return self._send(409, {"error": str(error), "review_required": True})
             if p in ("/api/self/data/prepare/archive", "/api/self/data/prepare/archive/preview"):
@@ -9498,6 +9577,10 @@ class H(HTTP.LimitedHandler):
                 if b.get("confirm") != b.get("node"):
                     return self._send(400, {"error": "confirmation must repeat the node name"})
                 force = b.get("force") is True
+                running = active_power_job(b.get("node"))
+                if running:
+                    return self._send(409, {"error": "A power job for this host is still running; follow it instead of sending another",
+                                            "operation": running})
                 power_plan = POWER.plan(b["node"], b["action"], force=force)
                 if not power_plan["ready"]:
                     return self._send(409, {"error": "; ".join(power_plan["blockers"]), "plan": power_plan})
@@ -9512,10 +9595,9 @@ class H(HTTP.LimitedHandler):
                 if power_plan["requires_data_ack"] and not b.get("allow_data_risk"):
                     return self._send(409, {"error": "acknowledge the volume risk before host power control",
                                             "plan": power_plan})
-                try:
-                    return self._send(200, send_reviewed_power(power_plan, force))
-                except PowerNotSent as e:
-                    return self._send(409, {"error": str(e), "operation": e.operation})
+                # Cordon and drain can take many minutes: the request returns
+                # the job at once and the browser follows its phases.
+                return self._send(202, send_reviewed_power(power_plan, force, background=True))
             if p == "/api/cluster/shutdown":
                 return self._send(202, cluster_shutdown(review=True).start(b, OPS))
             if p == "/api/cluster/shutdown/cancel":
@@ -10019,7 +10101,7 @@ class H(HTTP.LimitedHandler):
             return self._send(400, {"error": str(e)})
         except AUTH.StoreUnavailable as e:
             # Not an empty account store: the cluster did not answer.
-            return self._send(503, {"error": str(e), "unavailable": True})
+            return self._send(503, {"error": str(e), "cause": getattr(e, "cause", ""), "unavailable": True})
         except urllib.error.HTTPError as e:
             return self._send(e.code, {"error": API_ERRORS.message(e)})
         except Exception as e:
@@ -10041,7 +10123,7 @@ class H(HTTP.LimitedHandler):
             return self._send(404, {"error": "no route"})
         except AUTH.StoreUnavailable as e:
             # Not an empty account store: the cluster did not answer.
-            return self._send(503, {"error": str(e), "unavailable": True})
+            return self._send(503, {"error": str(e), "cause": getattr(e, "cause", ""), "unavailable": True})
         except ValueError as e:
             return self._send(400, {"error": str(e)})
         except urllib.error.HTTPError as e:

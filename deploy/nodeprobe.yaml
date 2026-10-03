@@ -91,7 +91,11 @@ data:
                 if not (-50 < c < 200):
                     continue
                 label = _read(os.path.join(d, f.replace("_input", "_label"))) or f[:-6]
-                out.append({"chip": chip, "name": label, "celsius": c})
+                try:
+                    device = os.path.basename(os.path.realpath(os.path.join(d, "device"))) if os.path.exists(os.path.join(d, "device")) else ""
+                except OSError:
+                    device = ""
+                out.append({"chip": chip, "name": label, "celsius": c, "device": device})
         return out
 
     def devices():
@@ -468,9 +472,44 @@ data:
             pass
         return result
 
+    # What a sensor is, in words: chips and thermal zones name their driver.
+    SENSOR_KINDS = (("coretemp", "CPU"), ("k10temp", "CPU"), ("zenpower", "CPU"), ("cpu_thermal", "CPU"),
+                    ("cpu-thermal", "CPU"), ("x86_pkg_temp", "CPU"), ("soc_thermal", "CPU"), ("nvme", "NVMe"),
+                    ("drivetemp", "Drive"), ("amdgpu", "GPU"), ("radeon", "GPU"), ("nouveau", "GPU"), ("i915", "GPU"),
+                    ("acpitz", "Motherboard"), ("pch_", "Chipset"), ("iwlwifi", "Wi-Fi"), ("mt79", "Wi-Fi"),
+                    ("r8169", "Network"), ("igc", "Network"), ("ixgbe", "Network"), ("bnxt", "Network"))
+
+
+    def sensor_label(chip, name="", device=""):
+        """A sensor as people would say it: "CPU Package id 0", "NVMe nvme0"."""
+        chip = chip or ""
+        kind = next((word for prefix, word in SENSOR_KINDS if chip.lower().startswith(prefix)), chip)
+        if kind == "NVMe" and re.fullmatch(r"nvme\d+", device or ""):
+            return f"NVMe {device}"
+        name = name or ""
+        if not name or name.lower() in ("composite", chip.lower()) or re.fullmatch(r"temp\d+", name):
+            return kind
+        if kind == "CPU" and name.lower().startswith(("package", "tctl", "tdie")):
+            return "CPU package"
+        return f"{kind} {name}"
+
+
+    def cpu_model():
+        """The host's processor, as /proc/cpuinfo names it; this is not namespaced."""
+        text = _read("/proc/cpuinfo") or ""
+        for key in ("model name", "Model", "Hardware", "cpu model"):
+            match = re.search(rf"^{re.escape(key)}\s*:\s*(.+)$", text, re.M)
+            if match:
+                return re.sub(r"\s+", " ", match.group(1)).strip()[:120]
+        return ""
+
+
     def payload():
         t, hw = thermal(), hwmon()
         allt = [x["celsius"] for x in t] + [x["celsius"] for x in hw]
+        # Which sensor the hottest reading is: a number alone says nothing of where.
+        readings = [(x["celsius"], sensor_label(x["name"])) for x in t] +                [(x["celsius"], sensor_label(x["chip"], x["name"], x.get("device", ""))) for x in hw]
+        hottest = max(readings, key=lambda r: r[0])[1] if readings else ""
         # prefer a package/core sensor for the headline number
         pkg = next((x["celsius"] for x in hw
                     if "package" in (x["name"] or "").lower()
@@ -481,6 +520,8 @@ data:
         return {"node": os.environ.get("NODE_NAME", socket.gethostname()),
                 "cpu_c": pkg if pkg is not None else (max(allt) if allt else None),
                 "max_c": max(allt) if allt else None,
+                "max_source": hottest,
+                "cpu_model": cpu_model(),
                 "thermal": t, "hwmon": hw,
                 "sensors": len(t) + len(hw),
                 "devices": devices(),

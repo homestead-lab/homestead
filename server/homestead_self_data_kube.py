@@ -8,6 +8,7 @@ from a malicious coordinator. Setup/cleanup still belongs to the reviewed app.
 """
 import hashlib
 import json
+import os
 import re
 import ssl
 import urllib.error
@@ -17,7 +18,10 @@ import homestead_self_data_anchor as A
 from homestead_storage_journal import Held
 
 
-ORIGIN = "https://kubernetes.default.svc"
+# The address the kubelet gives every pod: kubernetes.default.svc needs
+# CoreDNS, which may be down with the host it ran on.
+_HOST, _PORT = os.environ.get("KUBERNETES_SERVICE_HOST", ""), os.environ.get("KUBERNETES_SERVICE_PORT", "443")
+ORIGIN = (f"https://[{_HOST}]:{_PORT}" if ":" in _HOST else f"https://{_HOST}:{_PORT}") if _HOST else "https://kubernetes.default.svc"
 TOKEN = "/var/run/homestead-handoff/token"
 CA = "/var/run/homestead-handoff/ca.crt"
 NAME = r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?"
