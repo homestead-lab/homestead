@@ -2,11 +2,11 @@
   <img src="web/assets/homestead-lockup.svg" width="340" alt="Homestead">
 </p>
 
-<h3 align="center">A fully redundant homelab - compute, storage and network - in one friendly dashboard.</h3>
+<h3 align="center">Hyperconvergence for home, made simple.</h3>
 
 <p align="center">
-  Run your apps and virtual machines across ordinary machines, and keep them running when one fails.<br>
-  Built on Kubernetes, without having to become a Kubernetes expert.
+  Apps, virtual machines, replicated storage and networking across ordinary machines - in one friendly interface.<br>
+  Guided Kubernetes setup and integrated updates, designed for your homelab.
 </p>
 
 <p align="center">
@@ -14,8 +14,8 @@
   <a href="https://github.com/wjcloudy/homestead/actions/workflows/ci.yml"><img src="https://github.com/wjcloudy/homestead/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/wjcloudy/homestead/pkgs/container/homestead"><img src="https://img.shields.io/badge/ghcr.io-homestead-2453ff?logo=docker&logoColor=white" alt="Container image"></a>
   <a href="https://wjcloudy.github.io/homestead/"><img src="https://img.shields.io/badge/live_demo-try_it-2453ff" alt="Live demo"></a>
-  <img src="https://img.shields.io/badge/status-alpha-f59e0b" alt="Status: alpha">
-  <img src="https://img.shields.io/badge/license-MIT-30ba78" alt="MIT licence">
+  <img src="https://img.shields.io/badge/status-beta-f59e0b" alt="Status: beta">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache_2.0_%2B_Commons_Clause-30ba78" alt="Apache 2.0 with Commons Clause licence"></a>
 </p>
 
 <p align="center">
@@ -187,6 +187,40 @@ every job cancellable, with a rollback.
 </tr>
 </table>
 
+## How Homestead compares
+
+Homestead brings the everyday experience of a home server to a cluster:
+apps, volumes, shares and VMs, with compute, storage and networking managed
+together. It is currently **beta**. This comparison describes the documented
+management experience, including the integrations named in each cell.
+
+| Homelab need | **Homestead** | [Unraid](docs/comparison.md#unraid) | [Proxmox VE](docs/comparison.md#proxmox-ve) | [CasaOS](docs/comparison.md#casaos) | [Harvester](docs/comparison.md#harvester) | [Talos Linux](docs/comparison.md#talos-linux) | [MicroCloud](docs/comparison.md#microcloud) |
+|---|---|---|---|---|---|---|---|
+| Main focus | **Simple hyperconvergence for home** | NAS, apps and VMs | Virtualization and clusters | Personal cloud and apps | Hyperconverged infrastructure | Kubernetes operating system | Private cloud / HCI |
+| Everyday management | **Web UI for apps and infrastructure** | Web UI | Web UI | Web UI | Web UI; Rancher integration | API / CLI; optional Omni UI | UI / CLI |
+| App discovery | **Community Applications catalogue** | Community Applications plugin | OS / OCI templates | App Store | VM images; apps via guest clusters / Rancher | Kubernetes / Helm ecosystem | OS image catalogue |
+| Containers | **Kubernetes apps** | Docker | LXC; OCI images¹ | Docker | Kubernetes via Rancher / guests² | Kubernetes | LXD system containers; Docker in guests |
+| Virtual machines | **KubeVirt integration** | KVM | KVM | Separate tooling | KubeVirt | Add KubeVirt | LXD / QEMU |
+| Multi-node management | **Clusters and linked clusters** | Individual servers | Cluster management | Individual servers | Cluster management | Kubernetes clusters | LXD clusters |
+| Storage across nodes | **Longhorn replicas** | Local array / pools; ZFS replication | Ceph; ZFS replication | Host storage | Longhorn replicas | Add storage such as Longhorn | MicroCeph |
+| Workload failover³ | **Kubernetes + configured storage** | External solution | HA manager + suitable storage | External solution | VM HA + Longhorn | Kubernetes + added storage | LXD healing + shared storage |
+| File sharing | **Managed SMB / NFS shares** | Managed SMB / NFS shares | Configure in a guest / service | SMB sharing | Configure in a guest / service | Deploy a sharing service | Configure in a guest / service |
+| Snapshots and backups | **Volume / VM controls and schedules** | ZFS snapshots; backup apps / plugins | Guest backups; storage snapshots | Backup apps / external tools | VM snapshots and backups | Add workload / storage backup tools | LXD snapshots and exports |
+| Installation and updates | **Guided cluster setup; app, platform and host controls** | USB install; WebGUI updates | ISO install; web / package tools | Linux installer; CasaOS UI updates | ISO install; cluster upgrade workflow | Declarative install; API-driven upgrades | Interactive setup; snap update workflow |
+
+¹ Proxmox's OCI support is distinct from running the Docker engine or a Compose
+stack. ² Harvester's bare-metal container support depends on the Harvester and
+Rancher versions and feature configuration. ³ Failover in every clustered
+option depends on quorum, healthy storage, spare capacity and networking;
+replication is not a backup. Local disk redundancy is different from keeping
+workloads available after a host fails.
+
+“Add”, “guest” and “external” indicate an additional component or workflow,
+not an inability to achieve the feature. Homestead's integrations also need
+their supporting components; on Harvester, host upgrades follow Harvester's
+own process. See [comparison scope and sources](docs/comparison.md), reviewed
+3 October 2026. This is a documentation comparison, not a usability benchmark.
+
 ## On your phone
 
 Homestead installs as an app on iOS and Android (over HTTPS), with push
@@ -253,10 +287,22 @@ running it locally against demo data, the tests, and how releases are made.
 
 ## Licence
 
-Homestead is released under the [MIT License](LICENSE). The Monaco editor it
-bundles, the images it starts and the catalogue it reads are listed with their
-own terms in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), along with the
-trademarks it mentions.
+Homestead is **source-available** under the [Apache License 2.0 with the
+Commons Clause 1.0](LICENSE). You can use it at home or internally at work,
+study the code, modify it, contribute, and redistribute it subject to those
+terms. Selling Homestead, or a product or service whose value derives entirely
+or substantially from its functionality, requires separate permission. This
+can include paid hosting and related consulting or support; the full licence
+defines the restriction.
+
+Community contributions are welcome. This is a source-available licence,
+rather than an OSI-approved open-source licence. Previously published MIT
+versions keep their MIT permissions. See the [licensing guide](docs/licensing.md)
+for examples and the transition details.
+
+Third-party libraries, images and catalogue content retain their own licences;
+Homestead's Commons Clause does not restrict their rights. Their terms and
+attributions are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Unraid® is a registered trademark of Lime Technology, Inc. Homestead is not
 affiliated with, endorsed, or sponsored by Lime Technology, Inc.

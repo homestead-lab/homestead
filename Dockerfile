@@ -8,11 +8,11 @@ RUN python -m pip install --no-cache-dir --only-binary=:all: --require-hashes -r
 ARG VERSION=dev
 ARG REVISION=unknown
 LABEL org.opencontainers.image.title="Homestead" \
-      org.opencontainers.image.description="A friendly homelab control plane for Harvester, Rancher, Longhorn, Fleet and Kubernetes" \
+      org.opencontainers.image.description="Hyperconvergence for home, made simple. Guided Kubernetes setup, apps, VMs, storage and networking." \
       org.opencontainers.image.source="https://github.com/wjcloudy/homestead" \
       org.opencontainers.image.version="$VERSION" \
       org.opencontainers.image.revision="$REVISION" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="LicenseRef-Apache-2.0-Commons-Clause"
 
 ENV PORT=8080 \
     WEBROOT=/web \

@@ -1,6 +1,11 @@
 # Third-party notices
 
-Homestead is released under the [MIT License](LICENSE). It is written against
+Homestead's original work is source-available under [Apache License 2.0 with
+Commons Clause 1.0](LICENSE). **Third-party components retain their own terms;
+the Commons Clause does not apply to them or restrict their independent use,
+modification, sale or redistribution under their respective licences.** This
+includes files with their own notices, even when shipped in the same repository,
+Helm chart or container image. It is written against
 Python's standard library and plain browser JavaScript, with an optional
 node-allocation collector using gRPC and Protocol Buffers. What ships, what it runs, and what it reads
 are listed here with their terms.
@@ -10,10 +15,11 @@ are listed here with their terms.
 | Component | Where | Licence |
 |---|---|---|
 | Kubernetes PodResources v1 schema (adapted from v1.32.0) and generated Python messages | `server/probe/podresources.proto`, `server/probe/podresources_pb2.py` | Apache-2.0; [full licence](licenses/KUBERNETES-PODRESOURCES.txt). Go-specific options and the unused Get RPC were removed; field numbers are unchanged. |
-| [Monaco Editor](https://github.com/microsoft/monaco-editor) 0.52.2 (a trimmed subset) | `web/vendor/monaco/` | MIT - © Microsoft Corporation; the full text is in [`web/vendor/monaco/LICENSE`](web/vendor/monaco/LICENSE) |
+| [Monaco Editor](https://github.com/microsoft/monaco-editor) 0.52.2 (a trimmed subset) | `web/vendor/monaco/` | MIT - © Microsoft Corporation; [`LICENSE`](web/vendor/monaco/LICENSE); embedded components and Codicon terms are in upstream [`ThirdPartyNotices.txt`](web/vendor/monaco/ThirdPartyNotices.txt) |
 | Codicon icon font, shipped with Monaco | `web/vendor/monaco/vs/base/browser/ui/codicons/codicon/codicon.ttf` | [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) - © Microsoft Corporation, from [vscode-codicons](https://github.com/microsoft/vscode-codicons) |
-| [noVNC](https://github.com/novnc/noVNC) 1.7.0 (`core` and `vendor` from the npm package) | `web/vendor/novnc/` | MPL-2.0 - © the noVNC authors (see [`AUTHORS`](web/vendor/novnc/AUTHORS)); the full text is in [`web/vendor/novnc/LICENSE.txt`](web/vendor/novnc/LICENSE.txt). The files are unmodified, so their source is the upstream release. |
-| [xterm.js](https://github.com/xtermjs/xterm.js) 6.0.0 and its fit add-on 0.11.0 (`lib` and `css` from the npm packages) | `web/vendor/xterm/` | MIT - © The xterm.js authors; the full text is in [`web/vendor/xterm/LICENSE`](web/vendor/xterm/LICENSE). Unmodified. |
+| [noVNC](https://github.com/novnc/noVNC) 1.7.0 (`core` and `vendor` from the npm package) | `web/vendor/novnc/` | MPL-2.0 - © the noVNC authors (see [`AUTHORS`](web/vendor/novnc/AUTHORS)); [overview](web/vendor/novnc/LICENSE.txt), [full MPL text](web/vendor/novnc/docs/LICENSE.MPL-2.0). Unmodified source is included in `core/`; the exact package is [@novnc/novnc 1.7.0](https://registry.npmjs.org/@novnc/novnc/-/novnc-1.7.0.tgz). MPL-covered files and modifications remain under MPL-2.0, independently of Homestead's licence. |
+| noVNC DES implementation | `web/vendor/novnc/core/crypto/des.js` | Its retained header includes Widget Workshop, AT&T and Jef Poskanzer attributions and permissive terms; see that source file and noVNC's BSD licence texts. |
+| [xterm.js](https://github.com/xtermjs/xterm.js) 6.0.0 and its fit add-on 0.11.0 (`lib` and `css` from the npm packages) | `web/vendor/xterm/` | MIT - © The xterm.js authors; [`LICENSE`](web/vendor/xterm/LICENSE) and the add-on's separate [`LICENSE-addon-fit`](web/vendor/xterm/LICENSE-addon-fit). Unmodified. |
 | pako, shipped with noVNC | `web/vendor/novnc/vendor/pako/` | MIT - © Vitaly Puzrin; see [`web/vendor/novnc/vendor/pako/LICENSE`](web/vendor/novnc/vendor/pako/LICENSE) |
 
 ## In the Homestead container image
@@ -22,7 +28,13 @@ The image is built on the official [`python:3.12-alpine`](https://hub.docker.com
 image: the Python interpreter and standard library (PSF License) on Alpine
 Linux, whose packages carry their own licences. The image adds these packages;
 Python wheel versions and hashes are pinned in `requirements-topology.txt`.
-Their distribution licence files remain installed with the packages.
+Python wheel licence files remain installed with the packages. Alpine packages
+and their source obligations are independent of Homestead's licence. The GPL
+utilities below are unmodified, separately executable programs invoked through
+command-line interfaces; they are not linked into Homestead. Redistributors must
+provide corresponding source as required by their licences for the exact binary
+versions they distribute; a link to a moving upstream branch alone is not a
+substitute for that obligation.
 
 | Package | Why | Licence |
 |---|---|---|

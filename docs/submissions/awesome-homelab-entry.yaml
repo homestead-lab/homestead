@@ -1,0 +1,4 @@
+# Conditional draft only: maintainers must accept the source-available licence first.
+- name: Homestead
+  url: https://github.com/wjcloudy/homestead
+  description: Hyperconverged homelab platform with a simple web interface for apps, VMs, storage and networking, plus guided cluster setup and upgrades.
