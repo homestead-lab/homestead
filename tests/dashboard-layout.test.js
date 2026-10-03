@@ -8,9 +8,9 @@ test("an empty dashboard is intentional; unsupported or malformed versions use s
   assert.deepEqual(dashboard.normalize({version:1,items:[]}),[]);
   for(const value of [null,{}, {version:2,items:[]},{version:1,items:null}])assert.deepEqual(dashboard.normalize(value),dashboard.defaults());
 });
-test("size constraints keep node comparisons full width and prevent content clipping",()=>{
+test("node widgets accept narrower widths while invalid history sizes use defaults",()=>{
   assert.deepEqual(dashboard.normalize({version:1,items:[{id:"nodes",width:4,height:520},{id:"history",width:4,height:400}]}),[
-    {id:"nodes",width:12,height:520},{id:"history",width:12,height:0}]);
+    {id:"nodes",width:4,height:520},{id:"history",width:12,height:0}]);
 });
 test("default layouts are fresh independent objects",()=>{
   const changed=dashboard.defaults();changed[0].width=12;changed.reverse();
@@ -18,7 +18,16 @@ test("default layouts are fresh independent objects",()=>{
 });
 
 test("new health widgets are optional and retain sizes in saved layouts",()=>{
- const ids=["health","workloads","backups","updates","jobs"];
+ const ids=["health","workloads","containers","vms","backups","updates","jobs"];
  assert.equal(dashboard.defaults().length,7);
  assert.deepEqual(dashboard.normalize({version:1,items:ids.map(id=>({id,width:4,height:360}))}).map(w=>w.id),ids);
+});
+
+test("node display settings survive normalization with a compact default",()=>{
+ for(const width of [4,6,8,12])assert.deepEqual(dashboard.normalize({version:1,items:[{id:"nodes",width,height:0,display:"detailed"}]}),[{id:"nodes",width,height:0,display:"detailed"}]);
+ assert.deepEqual(dashboard.normalize({version:1,items:[{id:"nodes",width:6,height:0,display:"unknown"}]}),[{id:"nodes",width:6,height:0}]);
+});
+
+test("resource list widgets can save wide short layouts",()=>{
+ assert.deepEqual(dashboard.normalize({version:1,items:[{id:'containers',width:12,height:240},{id:'vms',width:4,height:240}]}),[{id:'containers',width:12,height:240},{id:'vms',width:4,height:240}]);
 });

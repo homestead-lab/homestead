@@ -3251,3 +3251,41 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 .insight-summary{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:13px;font-weight:600;margin:10px 0}.insight-summary span{color:var(--mut);font-weight:400}
 .insight-widget{height:100%;min-width:0}.insight-widget .settings-card-head .btn{font-size:12px;padding:5px 8px}
 #clusterHealth{margin-bottom:var(--page-gap,14px)}
+
+/* Node summaries use the widget's available width, including editor previews. */
+.node-compact-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(148px,100%),1fr));gap:16px 14px}
+.node-compact-host{min-width:0;font-size:12px;line-height:1.35}
+.node-compact-heading{display:flex;align-items:center;gap:7px;min-width:0}
+.node-compact-heading button{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;min-width:0}
+.node-compact-state{font-size:11px;margin:3px 0 9px}
+.node-compact-metric{display:grid;grid-template-columns:45px minmax(32px,1fr) 28px;align-items:center;gap:5px;margin:3px 0}
+.node-compact-metric>span:first-child,.node-compact-line>span{color:var(--mut)}
+.node-compact-metric b{text-align:right;font-size:12px}.node-compact-metric .meter{margin:0;min-width:0;width:100%}
+.node-compact-line{display:flex;justify-content:space-between;gap:8px;margin:3px 0;min-width:0}
+.node-compact-line b{font-size:11.5px;font-weight:550;overflow-wrap:anywhere;text-align:right;min-width:0}
+.node-compact-warning{display:block;background:none;border:0;color:var(--med);padding:5px 0 0;text-align:left;font:inherit;font-size:11px;line-height:1.4;overflow-wrap:anywhere;cursor:pointer;text-decoration:underline;text-underline-offset:2px}
+#clusterHealth{scroll-margin-top:90px}
+.dashboard-nodes .single-node-summary{max-width:none;min-width:0}
+.dashboard-nodes .nodecard{min-width:0}
+.dashboard-nodes .nodehead{flex-wrap:wrap}
+
+/* Shared dense resource list for container and VM dashboard widgets. */
+.dashboard-resource-widget{container-type:inline-size;display:flex;flex-direction:column}
+.dashboard-resource-widget>[data-insight]{display:flex;flex-direction:column;min-height:0;max-height:calc(var(--resource-list-height) - 76px)}
+.dashboard-resource-scroll{overflow:auto;min-height:0;scrollbar-width:thin}
+.dashboard-resource-table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
+.dashboard-resource-table th{position:sticky;top:0;background:var(--surf);z-index:1;color:var(--mut);font-weight:500;text-align:left}
+.dashboard-resource-table th,.dashboard-resource-table td{padding:4px 4px;border-bottom:1px solid var(--line);vertical-align:middle}
+.dashboard-resource-table th:nth-child(2){width:78px}.dashboard-resource-table th:nth-child(3){width:54px}.dashboard-resource-table th:nth-child(4){width:72px}
+.dashboard-resource-table td:nth-child(n+3),.dashboard-resource-table th:nth-child(n+3){text-align:right;white-space:nowrap}
+.dashboard-resource-name{display:flex;align-items:center;gap:7px;min-width:0}.dashboard-resource-name>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dashboard-resource-state{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px}.dashboard-resource-state.ok{color:var(--ok)}.dashboard-resource-state.warn{color:var(--med)}.dashboard-resource-state.bad{color:var(--crit)}.dashboard-resource-state.neutral{color:var(--mut)}
+.dashboard-resource-footer{display:flex;justify-content:space-between;gap:12px;padding-top:9px;color:var(--mut);font-size:11px}
+@container(max-width:360px){.dashboard-resource-table{font-size:11px}.dashboard-resource-table th,.dashboard-resource-table td{padding:4px 2px}.dashboard-resource-table th:nth-child(2){width:62px}.dashboard-resource-table th:nth-child(3){width:40px}.dashboard-resource-table th:nth-child(4){width:60px}.dashboard-resource-name{gap:5px}.dashboard-resource-name .ui-status-dot{width:6px;height:6px}}
+
+.dashboard-resource-widget>.settings-card-head{flex-direction:row;align-items:center;flex-wrap:nowrap}
+.dashboard-resource-columns{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(310px,100%),1fr));column-gap:18px;align-items:start}
+@container(max-width:637px){.dashboard-resource-columns{row-gap:0}}
+html[data-theme="light"] .dashboard-resource-state.ok{color:#167347}
+html[data-theme="light"] .dashboard-resource-state.warn,html[data-theme="light"] .node-compact-warning,html[data-theme="light"] .node-compact-state.t-warm{color:#8a5200}
+html[data-theme="light"] .dashboard-resource-state.bad{color:#a1242a}

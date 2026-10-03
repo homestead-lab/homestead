@@ -103,7 +103,6 @@ async function viewDash() {
       </div></div>`
       : '<div class="empty">storage data unavailable</div>'}
     </div>`,
-    nodes: `<div class="card flat dashboard-nodes">${UI.moduleHeader("Node health")}${nodeComparison(o.nodes, "dashboard")}</div>`,
     cpu: `<div class="card flat pad0 consumer-card"><div class="cardhd"><div class="ctitle">Top CPU</div></div>${consumerTable(o.top_cpu, "cpu")}</div>`,
     memory: `<div class="card flat pad0 consumer-card"><div class="cardhd"><div class="ctitle">Top memory</div></div>${consumerTable(o.top_mem, "memory")}</div>`,
   };
@@ -117,8 +116,7 @@ async function viewDash() {
   ${(o.health_issues || []).length ? `<div class="clusteralert ${o.health === "critical" ? "critical" : ""}">
     <div><b>${o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded"}</b>
       <span>${esc(o.health_summary)}</span></div>
-    <button class="btn sm" onclick="go(${jsq(o.health_issues.some(x => ["Node", "Disk"].includes(x.kind)) ? "nodes" :
-      o.health_issues.some(x => x.kind === "Volume") ? "storage" : o.health_issues.every(x => x.kind === "Backup") ? "protect" : "workloads")})">Review</button>
+    <button class="btn sm" onclick="HealthInsights.open('health')">Review</button>
   </div>` : ""}
 
   ${hist === null ? '<div class="note warn">Chart history could not be loaded. Current overview values are shown; history will retry on the next refresh.</div>'
@@ -129,6 +127,32 @@ async function viewDash() {
   historyPaint();
   Dashboard.loadPortal();
   HealthInsights.load();
+}
+
+/* Dense host summaries respond to widget width, rather than viewport width. */
+function dashboardNodes(nodes, display="compact") {
+  const header=UI.moduleHeader("Node health", "", UI.button("Health", "HealthInsights.open('health')", {attrs:'aria-label="Review cluster health"'}));
+  if(display==="detailed")return `<div class="card flat dashboard-nodes">${header}${nodeComparison(nodes,"dashboard")}</div>`;
+  const known=value=>typeof value==="number" && Number.isFinite(value);
+  const percent=(label,value,kind)=>`<div class="node-compact-metric"><span>${label}</span><b class="mono">${known(value)?esc(Math.round(value*10)/10)+"%":"—"}</b>${known(value)?meter(value,"",kind):'<span class="node-compact-no-data" title="Not reported">—</span>'}</div>`;
+  const line=(label,value,tip="")=>`<div class="node-compact-line"><span>${label}</span><b class="mono" title="${esc(tip)}">${esc(value)}</b></div>`;
+  return `<div class="card flat dashboard-nodes">${header}<div class="node-compact-grid">${nodes.map(n=>{
+    const issues=[...(n.disk_issues || []).map(i=>`${i.disk}: ${i.reason}`),...(n.temps?.disks || []).filter(d=>["critical","attention","degraded"].includes(d.health?.state)).map(d=>`${d.name}: ${d.health.summary || "Drive needs attention"}`)];
+    const critical=n.status!=="Ready" || (n.disk_issues || []).some(i=>i.severity==="critical") || (n.temps?.disks || []).some(d=>d.health?.state==="critical");
+    const tone=critical?"bad":issues.length || n.schedulable===false || ["warn","bad"].includes(n.host_os?.tone)?"warn":"ok";
+    const status=n.status!=="Ready"?n.status || "Not ready":issues.length?"Drive warning":n.schedulable===false?"Cordoned":["warn","bad"].includes(n.host_os?.tone)?"Host OS warning":"Ready";
+    const cpuTemp=n.temps?.cpu_c, maxTemp=n.temps?.max_c;
+    const temperature=known(maxTemp)?maxTemp:cpuTemp;
+    const network=known(n.rx_mbps)&&known(n.tx_mbps)?ratePair(n.rx_mbps,n.tx_mbps).join(" "):"—";
+    return `<article class="node-compact-host"${clusterAttr(n)}>
+      <div class="node-compact-heading">${UI.statusDot(tone,status)}<button class="linkish" onclick="nodeDetail(${jsq(n.name)})" title="${esc(n.name)}">${esc(n.name)}</button></div>
+      <div class="node-compact-state ${tone==="bad"?"t-hot":tone==="warn"?"t-warm":"dim"}">${esc(status)}</div>
+      ${percent("CPU",n.cpu_pct,"cpu")}${percent("Memory",n.mem_pct,"memory")}${percent("Disk",n.fs_pct,"disk")}
+      ${line("Network",network,"Receive / transmit")}${line("Max temp",known(temperature)?temperature+"°C":"—","Maximum observed host temperature; CPU temperature when no maximum is reported")}
+      ${line("Pods",n.pods ?? "—")}${line("Uptime",nodeUpFor(n).replace(/^up /,"") || "—")}
+      ${issues.length?`<button class="node-compact-warning" onclick="HealthInsights.open('health')" title="${esc([...new Set(issues)].join("; "))}">${esc([...new Set(issues)].join("; "))}</button>`:""}
+    </article>`;
+  }).join("") || '<div class="empty small">No nodes reported.</div>'}</div></div>`;
 }
 
 function consumerTable(workloads, metric) {

@@ -645,3 +645,26 @@ Keep **Close** in `UI.actions`. Account acknowledgement changes notification
 attention, never the underlying health verdict. Do not use a green healthy
 state for an acknowledged problem. See [notification rules](notifications.md)
 for trigger, delivery and wording contracts.
+
+
+### Node health dashboard widget
+
+Node health supports third, half, two-thirds and full widths. Compact summaries
+are the default: repeat labelled metrics per host in a grid that responds to the
+widget width, with automatic stacking on phones. Reuse shared meters, status
+dots and typography. Show missing readings as unknown; show SMART warnings even
+when Kubernetes reports Ready. Keep a detailed comparison as a saved per-account
+widget option. Configuration must be available through a visible Settings action,
+as well as selecting the card or using its resize handle.
+
+Dashboard cluster warnings and health-widget links open Cluster → Health with
+the section focused. That section must include the reasons shown in the warning,
+not just platform readiness or general suggestions.
+
+Containers and Virtual machines are optional list widgets sharing one compact
+row component: name, state, observed CPU and memory. Keep stopped and missing
+readings distinct from zero usage. Container lists exclude platform helpers.
+Support third through full width, with a Short (240 px) height for shallow
+layouts. Wide lists flow into parallel groups of four rows; narrow lists stack
+the groups. Scroll rows within the card with column headings and a count.
+Keep these summaries read-only; View all opens the existing management page.
