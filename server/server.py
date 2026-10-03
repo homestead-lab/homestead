@@ -46,8 +46,20 @@ import homestead_self_data_execute as SELF_DATA_EXECUTE
 import homestead_self_data_route as SELF_DATA_ROUTE
 import homestead_self_data_finish as SELF_DATA_FINISH
 
+def api_origin(environ=os.environ):
+    """Where the Kubernetes API answers: the address the kubelet gives every
+    pod, not kubernetes.default.svc. The name needs CoreDNS, and k3s runs one
+    CoreDNS replica: while its host was down, every lookup failed and
+    Homestead lost the API although the API itself was up. The API's
+    certificate names the Service address too."""
+    host, port = environ.get("KUBERNETES_SERVICE_HOST", ""), environ.get("KUBERNETES_SERVICE_PORT", "443")
+    if not host:
+        return "https://kubernetes.default.svc"
+    return f"https://[{host}]:{port}" if ":" in host else f"https://{host}:{port}"
+
+
 SA = "/var/run/secrets/kubernetes.io/serviceaccount"
-API = "https://kubernetes.default.svc"
+API = api_origin()
 TOKEN = open(f"{SA}/token").read().strip() if os.path.exists(f"{SA}/token") else ""
 CTX = ssl.create_default_context(cafile=f"{SA}/ca.crt") if os.path.exists(f"{SA}/ca.crt") else ssl._create_unverified_context()
 WEBROOT = os.environ.get("WEBROOT", "/web")
@@ -8121,7 +8133,7 @@ class H(HTTP.LimitedHandler):
             self._send(429 if limited else 401, {"error": message})
             return True
         except AUTH.StoreUnavailable as error:
-            self._send(503, {"error": str(error)})
+            self._send(503, {"error": str(error), "cause": getattr(error, "cause", "")})
             return True
         self.api_key = {**key, "kind": "key"}
         # API control scopes carry operator authority, never an internal/admin
@@ -8831,7 +8843,7 @@ class H(HTTP.LimitedHandler):
             return self._send(400, {"error": str(e)})
         except AUTH.StoreUnavailable as e:
             # Not an empty account store: the cluster did not answer.
-            return self._send(503, {"error": str(e), "unavailable": True})
+            return self._send(503, {"error": str(e), "cause": getattr(e, "cause", ""), "unavailable": True})
         except urllib.error.HTTPError as e:
             return self._send(e.code, {"error": API_ERRORS.message(e, 500)})
         except Exception as e:
@@ -10056,7 +10068,7 @@ class H(HTTP.LimitedHandler):
             return self._send(400, {"error": str(e)})
         except AUTH.StoreUnavailable as e:
             # Not an empty account store: the cluster did not answer.
-            return self._send(503, {"error": str(e), "unavailable": True})
+            return self._send(503, {"error": str(e), "cause": getattr(e, "cause", ""), "unavailable": True})
         except urllib.error.HTTPError as e:
             return self._send(e.code, {"error": API_ERRORS.message(e)})
         except Exception as e:
@@ -10078,7 +10090,7 @@ class H(HTTP.LimitedHandler):
             return self._send(404, {"error": "no route"})
         except AUTH.StoreUnavailable as e:
             # Not an empty account store: the cluster did not answer.
-            return self._send(503, {"error": str(e), "unavailable": True})
+            return self._send(503, {"error": str(e), "cause": getattr(e, "cause", ""), "unavailable": True})
         except ValueError as e:
             return self._send(400, {"error": str(e)})
         except urllib.error.HTTPError as e:

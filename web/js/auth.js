@@ -26,17 +26,18 @@ async function authState() {
     const body = await r.json();
     // The cluster did not answer: that is not "no accounts yet", and must
     // never be offered as first-time setup.
-    if (!r.ok) return { unavailable: true, error: body.error || r.statusText };
+    if (!r.ok) return { unavailable: true, error: body.error || r.statusText, cause: body.cause || "" };
     window.AUTH_STATE = body;
     return window.AUTH_STATE;
   } catch (e) { return { unavailable: true, error: e.message }; }
 }
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
-function clusterUnavailable(error) {
+function clusterUnavailable(error, cause = "") {
   gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.306-dev.1" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
+    ${cause ? `<p class="dim xs gatecause"><b>Cause:</b> ${esc(cause)}</p>` : ""}
     <p class="dim small">This page tries again every few seconds.</p>
     <button class="btn wide" onclick="location.reload()">Try now</button>`);
   clearTimeout(window.__authRetry);
@@ -322,7 +323,7 @@ $("#whoami").onclick = () => go("settings");
 async function boot() {
   clearTimeout(window.__authRetry);
   const st = await authState();
-  if (st.unavailable) return clusterUnavailable(st.error);
+  if (st.unavailable) return clusterUnavailable(st.error, st.cause);
   if (st.data_handoff) return dataHandoffStarting(st);
   if (st.setup) return loginForm(null, true);
   if (!st.user) return loginForm();
