@@ -284,6 +284,9 @@ anything is saved.
 
 ## PCI and USB passthrough
 
+For a step-by-step GPU setup, including vBIOS capture and physical display output,
+see [GPU passthrough](GPU-passthrough).
+
 A VM can have a host's own PCI device - a GPU, a NIC, an HBA - or a USB device.
 Two steps: the host hands the device over, then the VM asks for it.
 
