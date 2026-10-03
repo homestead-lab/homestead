@@ -2,8 +2,8 @@
    Missing observations stay unknown; advice never changes cluster configuration. */
 const HealthInsights = (() => {
   const titles = {health:"Health suggestions", workloads:"Workload health", containers:"Containers", vms:"Virtual machines", backups:"Backup freshness", updates:"Updates awaiting review", jobs:"Running and failed jobs"};
-  const sources = {overview:"/api/overview",cluster:"/api/cluster", protection:"/api/lh/overview", nodes:"/api/nodes", self:"/api/self/health", settings:"/api/settings", workloads:"/api/workloads", vms:"/api/vms", updates:"/api/image-updates", jobs:"/api/operations", components:"/api/cluster/components", hosts:"/api/os-updates"};
-  const needs = {health:["cluster","protection","nodes","self","settings","overview"], workloads:["workloads","vms"], containers:["workloads"], vms:["vms"], backups:["protection"], updates:["updates","components","hosts"], jobs:["jobs"]};
+  const sources = {alerts:"/api/alerts",overview:"/api/overview",cluster:"/api/cluster", protection:"/api/lh/overview", nodes:"/api/nodes", self:"/api/self/health", settings:"/api/settings", workloads:"/api/workloads", vms:"/api/vms", updates:"/api/image-updates", jobs:"/api/operations", components:"/api/cluster/components", hosts:"/api/os-updates"};
+  const needs = {health:["cluster","protection","nodes","self","settings","overview","alerts"], workloads:["workloads","vms"], containers:["workloads"], vms:["vms"], backups:["protection"], updates:["updates","components","hosts"], jobs:["jobs"]};
   const rank = {critical:0,medium:1,low:2};
   const tone = severity => ({critical:"bad",medium:"warn",low:"info",healthy:"ok"}[severity] || "info");
   const item = (id,severity,title,detail,route) => ({id,severity,title,detail,route});
@@ -13,15 +13,17 @@ const HealthInsights = (() => {
     if (cp?.etcd_total > 0) {
       if (known(cp.etcd_ready) && cp.etcd_ready < Math.floor(cp.etcd_total/2)+1)
         rows.push(item("quorum","critical","etcd quorum is unavailable","Restore unavailable etcd hosts before making cluster changes.","cluster"));
+      else if (cp.etcd_total === 1)
+        rows.push(item("quorum","low","Single control-plane host","This cluster's state is kept on one host, so it has no failover: if that host fails, the cluster comes back only from an etcd snapshot. That is normal for a one-node cluster. Keep snapshots (k3s takes one every 12 hours; the node doctor can take one now) and copy them to another machine. Three server nodes would survive the loss of one.","cluster"));
       else if (cp.etcd_total === 2)
         rows.push(item("quorum","medium","Two etcd members have no failure margin","Add a third etcd server. Both current members are required for quorum.","cluster"));
       else if (cp.quorum_margin === 0)
-        rows.push(item("quorum","medium","No etcd failure margin","Review member readiness and plan three healthy etcd servers for resilience.","cluster"));
+        rows.push(item("quorum","medium","No etcd failure margin",`${cp.etcd_ready} of ${cp.etcd_total} etcd members are ready, the fewest that keep quorum: losing one more stops the control plane. Bring the others back before changing hosts.`,"cluster"));
     }
     if (data.cluster?.unavailable?.length) rows.push(item("cluster-partial","low","Some platform checks are unavailable","Open Cluster to review missing observations.","cluster"));
     for (const n of data.cluster?.nodes || []) {
-      if (n.ready === false) rows.push(item("node:"+n.name,"critical",n.name+" is not ready","Check this host before restarting or moving workloads.","nodes"));
-      else if (n.pressure?.length) rows.push(item("pressure:"+n.name,"medium",n.name+" reports resource pressure",n.pressure.join(", ")+". Free capacity or move workloads.","nodes"));
+      if (n.ready === false) rows.push(item("node:"+n.name,"critical",n.name+" is not ready","Check this host before restarting or moving workloads.","node:"+n.name));
+      else if (n.pressure?.length) rows.push(item("pressure:"+n.name,"medium",n.name+" reports resource pressure",n.pressure.join(", ")+". Free capacity or move workloads.","node:"+n.name));
     }
     const p=data.protection;
     if (p) {
@@ -36,18 +38,19 @@ const HealthInsights = (() => {
     }
     const temp=data.settings?.thresholds?.temperature, diskLimit=data.settings?.thresholds?.disk;
     for (const n of data.nodes || []) {
-      if (diskLimit && known(n.fs_pct) && n.fs_pct >= diskLimit.warning) rows.push(item("disk-space:"+n.name,n.fs_pct>=diskLimit.critical?"critical":"medium",`${n.name}: disk ${Math.round(n.fs_pct)}% full`,"Free space or expand capacity before storage fills.","nodes"));
-      if (temp && known(n.temps?.max_c) && n.temps.max_c >= temp.warning) rows.push(item("temperature:"+n.name,n.temps.max_c>=temp.critical?"critical":"medium",`${n.name}: maximum ${n.temps.max_c}°C`,"Inspect the sensor and cooling. Drive temperatures use their own thresholds.","nodes"));
+      if (diskLimit && known(n.fs_pct) && n.fs_pct >= diskLimit.warning) rows.push(item("disk-space:"+n.name,n.fs_pct>=diskLimit.critical?"critical":"medium",`${n.name}: disk ${Math.round(n.fs_pct)}% full`,"Free space or expand capacity before storage fills.","node:"+n.name));
+      if (temp && known(n.temps?.max_c) && n.temps.max_c >= temp.warning) rows.push(item("temperature:"+n.name,n.temps.max_c>=temp.critical?"critical":"medium",`${n.name}: maximum ${n.temps.max_c}°C`,"Inspect the sensor and cooling. Drive temperatures use their own thresholds.","node:"+n.name));
       for (const d of n.temps?.disks || []) {
-        if (["critical","attention","degraded"].includes(d.health?.state)) rows.push(item("disk:"+n.name+":"+d.name,d.health.state==="critical"?"critical":"medium",`${n.name} / ${d.name}: drive needs attention`,d.health.summary || "Check SMART results and verify backups before replacing the drive.","nodes"));
-        else if (!d.health || d.health.stale_probe || ["unknown","unsupported"].includes(d.health.state)) rows.push(item("disk:"+n.name+":"+d.name,"low",`${n.name} / ${d.name}: drive health unknown`,"Check the node probe and SMART support.","nodes"));
+        if (["critical","attention","degraded"].includes(d.health?.state)) rows.push(item("disk:"+n.name+":"+d.name,d.health.state==="critical"?"critical":"medium",`${n.name} / ${d.name}: drive needs attention`,d.health.summary || "Check SMART results and verify backups before replacing the drive.","disk:"+n.name+":"+d.name));
+        else if (!d.health || d.health.stale_probe || ["unknown","unsupported"].includes(d.health.state)) rows.push(item("disk:"+n.name+":"+d.name,"low",`${n.name} / ${d.name}: drive health unknown`,"Check the node probe and SMART support.","disk:"+n.name+":"+d.name));
       }
     }
     // Keep the exact reasons behind the dashboard banner visible here too.
     for(const issue of data.overview?.health_issues || []) {
       const id=issue.kind==="Disk"?"disk:"+issue.name.replace("/",":"):issue.kind==="Node"?"node:"+issue.name:"condition:"+issue.kind+":"+issue.name;
       const existing=rows.findIndex(row=>row.id===id), severity=issue.severity==="critical"?"critical":"medium";
-      const finding=item(id,severity,`${issue.kind} ${issue.name}`,issue.reason || "Review this condition.",({Node:"nodes",Disk:"nodes",Volume:"storage",Backup:"protect",Workload:"workloads"})[issue.kind] || "cluster");
+      const route=["Disk","Node"].includes(issue.kind)?id:({Volume:"storage",Backup:"protect",Workload:"workloads"})[issue.kind] || "cluster";
+      const finding=item(id,severity,`${issue.kind} ${issue.name}`,issue.reason || "Review this condition.",route);
       if(existing<0)rows.push(finding);
       else if(rank[severity]<rank[rows[existing].severity])rows[existing]=finding;
     }
@@ -61,8 +64,22 @@ const HealthInsights = (() => {
       if (h.probe && (!h.probe.installed || h.probe.reporting < h.probe.desired)) rows.push(item("probe","low","Host monitoring is incomplete","Check node probes to restore temperature and drive observations.","about"));
       if (h.addresses?.problem || h.addresses?.clashes?.length) rows.push(item("addresses","critical","A service address conflicts with the cluster","Review service addresses before changing hosts.","network"));
     }
-    for (const key of needs.health) if (data[key] === null) rows.push(item("unknown:"+key,"low",`${({cluster:"Platform",protection:"Backup",nodes:"Host",self:"Homestead",settings:"Threshold",overview:"Cluster health"})[key]} checks unavailable`,"Retry or check access. Health cannot be confirmed from missing data.","retry"));
-    return rows.sort((a,b)=>rank[a.severity]-rank[b.severity] || a.id.localeCompare(b.id));
+    for (const key of needs.health) if (key !== "alerts" && data[key] === null) rows.push(item("unknown:"+key,"low",`${({cluster:"Platform",protection:"Backup",nodes:"Host",self:"Homestead",settings:"Threshold",overview:"Cluster health"})[key]} checks unavailable`,"Retry or check access. Health cannot be confirmed from missing data.","retry"));
+    // A finding the cluster tracks as an alert can be acknowledged by this
+    // account; it returns by itself when the condition gets worse.
+    const alerts=new Map((data.alerts?.active || []).map(a=>[a.key,a]));
+    for (const row of rows) {
+      const alert=alerts.get(alertKey(row.id));
+      if (alert?.version) row.alert={key:alert.key,version:alert.version,acknowledged:!!alert.acknowledged};
+    }
+    return rows.sort((a,b)=>Number(!!a.alert?.acknowledged)-Number(!!b.alert?.acknowledged) || rank[a.severity]-rank[b.severity] || a.id.localeCompare(b.id));
+  }
+  // The alert behind a finding: health:<kind>:<name>, as the server names it.
+  function alertKey(id) {
+    if (id.startsWith("disk:")) { const [node,...disk]=id.slice(5).split(":"); return `health:Disk:${node}/${disk.join(":")}`; }
+    if (id.startsWith("node:")) return "health:Node:"+id.slice(5);
+    if (id.startsWith("condition:")) return "health:"+id.slice(10);
+    return "";
   }
   function backupRows(p, now=Date.now()) {
     return [...(p?.volumes || [])].sort((a,b)=>Number(!!a.last_backup_at)-Number(!!b.last_backup_at) || String(a.last_backup_at || "").localeCompare(String(b.last_backup_at || ""))).map(v=> {
@@ -103,11 +120,27 @@ const HealthInsights = (() => {
     return table+`<div class="dashboard-resource-footer">${rows.length} ${id==="vms"?"VMs":"containers"}<span>${running} running</span></div>`;
   }
   let data={}, request=null, generation=0, checkedAt=0;
-  const open = route => { if(route==="health")return go("cluster",{params:{section:"health"}}); if(route==="retry")return load(true);if(route==="about"){settingsTab("about");return go("settings");}if(route==="updates"){settingsTab("updates");return go("settings");}if(route==="jobs")return jobsDialog();return go(route); };
-  const list = (rows,limit=Infinity) => UI.insightList(rows.slice(0,limit).map(r=>({...r,tone:r.tone || tone(r.severity),label:r.label || r.severity,action:"Review",onclick:`HealthInsights.open(${jsArg(r.route)})`})));
+  // A finding about one host or one drive opens that host's page, at the drive.
+  const open = route => { if(route==="health")return go("cluster",{params:{section:"health"}});
+    if(route.startsWith("node:"))return go("nodes",{params:{node:route.slice(5)}});
+    if(route.startsWith("disk:")){const [node,...disk]=route.slice(5).split(":");return go("nodes",{params:{node,disk:disk.join(":")}});} if(route==="retry")return load(true);if(route==="about"){settingsTab("about");return go("settings");}if(route==="updates"){settingsTab("updates");return go("settings");}if(route==="jobs")return jobsDialog();return go(route); };
+  const list = (rows,limit=Infinity) => UI.insightList(rows.slice(0,limit).map(r=>{
+    const acked=r.alert?.acknowledged, review=`HealthInsights.open(${jsArg(r.route)})`;
+    const actionsHtml=r.alert ? UI.button("Review",review)+UI.button(acked?"Undo":"Acknowledge",`HealthInsights.acknowledge(${jsArg(r.alert.key)},${jsArg(r.alert.version)},${acked})`,
+      {attrs:`data-tip="${acked?"Show this finding as active again":"Mark as reviewed until it gets worse"}"`}) : "";
+    return {...r,tone:acked?"info":r.tone || tone(r.severity),label:acked?"Acknowledged":r.label || r.severity,action:"Review",onclick:review,actionsHtml};
+  }));
+  async function acknowledge(key,version,undo=false) {
+    try{await api("/api/alerts/acknowledge",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,version,undo})});
+      toast(undo?"Acknowledgement removed":"Acknowledged until this condition worsens","ok");}
+    catch(e){toast(e.message,"bad");}
+    await load(true);
+    window.refreshPwaAlerts?.(true);
+  }
   function healthBody(compact=false) {
     const rows=advice(data), max=Math.max(...(data.nodes || []).map(n=>n.temps?.max_c).filter(known));
-    const counts=["critical","medium","low"].map(level=>`${rows.filter(r=>r.severity===level).length} ${level}`).join(" · ");
+    const open=rows.filter(r=>!r.alert?.acknowledged), acked=rows.length-open.length;
+    const counts=["critical","medium","low"].map(level=>`${open.filter(r=>r.severity===level).length} ${level}`).join(" · ")+(acked?` · ${acked} acknowledged`:"");
     return `<div class="insight-summary">${esc(counts)}${Number.isFinite(max)?`<span>Max observed temperature ${esc(max)}°C</span>`:""}</div>`+
       (rows.length?list(rows,compact?3:Infinity):'<div class="empty small">No suggestions from the available checks.</div>')+
       (compact && rows.length>3?`<div class="ui-help">${rows.length-3} more in Cluster Health</div>`:"");
@@ -130,11 +163,22 @@ const HealthInsights = (() => {
     return "";
   }
   function widget(id, settings={}) {const resource=["containers","vms"].includes(id);const route={containers:"workloads",vms:"vms",health:"health",workloads:"workloads",backups:"protect",updates:"updates",jobs:"jobs"}[id];return `<div class="card flat insight-widget${resource?" dashboard-resource-widget":""}"${resource?` style="--resource-list-height:${settings.height || 360}px"`:""}>${UI.moduleHeader(titles[id],"",UI.button("View all",`HealthInsights.open('${route}')`,{attrs:`aria-label="View all ${titles[id].toLowerCase()}"`}))}<div data-insight="${id}">${body(id,settings)}</div></div>`;}
-  function paint() {for(const el of document.querySelectorAll("[data-insight]")){const next=el.cloneNode(false);next.innerHTML=el.dataset.insight==="full"?healthBody():body(el.dataset.insight,window.Dashboard?.settings(el.dataset.insight));morph(el,next);}window.Dashboard?.refreshOptions();window.applyRole?.();}
+  // The dashboard banner: once this account has acknowledged every issue in
+  // it, it says so quietly instead of warning.
+  function paintBanner() {
+    const banner=document.querySelector(".clusteralert"), issues=data.overview?.health_issues || [];
+    if(!banner || !data.alerts || !issues.length)return;
+    const alerts=new Map((data.alerts.active || []).map(a=>[a.key,a]));
+    const done=issues.every(i=>alerts.get(`health:${i.kind}:${i.name}`)?.acknowledged), title=banner.querySelector("b");
+    title.dataset.text ||= title.textContent;
+    banner.classList.toggle("acknowledged",done);
+    title.textContent=done?"Acknowledged until it gets worse":title.dataset.text;
+  }
+  function paint() {paintBanner();for(const el of document.querySelectorAll("[data-insight]")){const next=el.cloneNode(false);next.innerHTML=el.dataset.insight==="full"?healthBody():body(el.dataset.insight,window.Dashboard?.settings(el.dataset.insight));morph(el,next);}window.Dashboard?.refreshOptions();window.applyRole?.();}
   async function load(force=false) {
     if(request){await request;return load(force);}
     const ids=[...document.querySelectorAll("[data-insight]")].map(el=>el.dataset.insight==="full"?"health":el.dataset.insight);
-    const keys=[...new Set(ids.flatMap(id=>needs[id] || []))];if(!keys.length)return;
+    const keys=[...new Set([...ids.flatMap(id=>needs[id] || []),...(document.querySelector(".clusteralert")?["overview","alerts"]:[])])];if(!keys.length)return;
     if(!force && checkedAt>Date.now()-30000 && keys.every(key=>key in data)){paint();return;}
     const token=window.NAV_TOKEN, epoch=generation;
     request=(async()=>{
@@ -143,7 +187,7 @@ const HealthInsights = (() => {
         if(key==="vms" && STATE.platform?.kubevirt===false)return [key,[]];
         try{
           const value=await api(sources[key],{keep:true});
-          const arrays=["nodes","workloads","vms","jobs"], fields={overview:"health_issues",cluster:"control_plane",protection:"volumes",self:"api",settings:"thresholds",updates:"workloads",components:"components"};
+          const arrays=["nodes","workloads","vms","jobs"], fields={alerts:"active",overview:"health_issues",cluster:"control_plane",protection:"volumes",self:"api",settings:"thresholds",updates:"workloads",components:"components"};
           const valid=arrays.includes(key)?Array.isArray(value):value && typeof value==="object" && !value.error && (!fields[key] || value[fields[key]]!==undefined);
           return [key,valid?value:null];
         }catch{return [key,null];}
@@ -153,7 +197,7 @@ const HealthInsights = (() => {
     })().finally(()=>{request=null;});return request;
   }
   function liveJobs(jobs,stale=false) {data.jobs=stale?null:jobs;for(const el of document.querySelectorAll('[data-insight="jobs"]'))el.innerHTML=body("jobs");}
-  return {titles,advice,backupRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,reset(){generation++;data={};checkedAt=0;},healthBody};
+  return {titles,advice,acknowledge,alertKey,backupRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,reset(){generation++;data={};checkedAt=0;},healthBody};
 })();
 if(typeof window!=="undefined")window.HealthInsights=HealthInsights;
 if(typeof module!=="undefined")module.exports=HealthInsights;

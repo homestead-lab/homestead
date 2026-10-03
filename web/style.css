@@ -156,7 +156,8 @@ a{color:inherit;text-decoration:none}
 .navbadge.hidden{display:none}
 .sidefoot{padding:16px 18px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:9px}
 .clusteralert{display:flex;align-items:center;justify-content:space-between;gap:16px;margin:-5px 0 18px;padding:12px 14px;border:1px solid rgba(255,176,32,.3);border-radius:13px;background:rgba(255,176,32,.08)}
-.clusteralert.critical{border-color:rgba(255,77,79,.34);background:rgba(255,77,79,.08)}.clusteralert>div{display:flex;flex-direction:column;gap:2px}.clusteralert b{font-size:12px}.clusteralert span{color:var(--mut);font-size:11px}
+.clusteralert.critical{border-color:rgba(255,77,79,.34);background:rgba(255,77,79,.08)}
+.clusteralert.acknowledged{border-color:var(--line);background:transparent}.clusteralert>div{display:flex;flex-direction:column;gap:2px}.clusteralert b{font-size:12px}.clusteralert span{color:var(--mut);font-size:11px}
 
 /* ---------------- persistent jobs tray ---------------- */
 .jobtray{position:fixed;left:258px;right:20px;bottom:18px;z-index:42;display:flex;flex-direction:column;align-items:flex-end;pointer-events:none}
@@ -3326,7 +3327,8 @@ html[data-theme="light"] .notification-center>button.danger{color:#a1242a}
 .dashboard-group-list{max-height:130px;overflow:auto;overflow-wrap:anywhere}
 .dashboard-inspector #dashboardGroupOptions{width:100%}
 .dashboard-portal>#dashboardPortal{max-height:calc(var(--resource-list-height) - 76px)}
-.dashboard-widget .portal-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:0 16px}
+/* auto-fill keeps a short group's empty columns, so every group's links line up at one width. */
+.dashboard-widget .portal-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(220px,100%),1fr));gap:0 16px}
 .portal-list .portal-tile{min-height:36px;padding:5px 2px;gap:8px;border:0;border-bottom:1px solid var(--line);border-radius:0;box-shadow:none;background:transparent;margin:0}
 .portal-list .portal-icon{height:22px;width:22px;font-size:10px;flex:0 0 22px}
 .portal-list .portal-icon svg{height:16px;width:16px}

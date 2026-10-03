@@ -75,9 +75,13 @@ try {
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     await page.screenshot({path:`${output}/nodes-ten-${width}-${theme}.png`,fullPage:true});
     await page.evaluate(()=>{window.__nodesFixture=window.__fourNodes.slice(0,1);return viewNodes()});
-    await page.locator('.single-node-summary .nodecard').waitFor();
-    assert.equal(await page.locator('.single-node-summary .uptime-strip').count(),1);
-    assert.equal(await page.locator('.single-node-summary .podgrid').count(),1);
+    // One node with rows chosen is a one-column table, not a card: a card
+    // here read as the page ignoring the choice.
+    await page.locator('.comparison-table').first().waitFor();
+    assert.equal(await page.locator('.single-node-summary').count(),0,'one node in rows view is not a card');
+    assert.equal(await page.locator('.comparison-table thead th').count(),2,'one node in rows view is a one-column table');
+    assert.equal(await page.locator('.comparison-table .uptime-strip').count(),1);
+    assert.equal(await page.locator('.comparison-table .podgrid').count(),1);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
     await page.screenshot({path:`${output}/nodes-single-${width}-${theme}.png`,fullPage:true});
     // Identical node names on linked clusters retain independent selection
