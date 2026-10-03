@@ -1,5 +1,9 @@
 # Installing on an existing cluster
 
+**Building a new home setup? [k3s](Installing-on-k3s) is preferred for home
+self-hosting and is the most widely tested platform with Homestead.** This
+guide is for installing on a cluster you already have.
+
 Already run RKE2, k3s, kubeadm, Talos or a managed Kubernetes, and look after
 it with Headlamp, Lens or kubectl? Homestead installs beside whatever is there
 and changes nothing until you ask it to.

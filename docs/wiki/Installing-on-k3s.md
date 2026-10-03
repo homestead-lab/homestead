@@ -1,9 +1,12 @@
 # Installing on k3s
 
-[k3s](https://k3s.io) is Kubernetes in one small program. It runs on almost any
-Linux machine - an old desktop, a mini PC, a VM - and needs far less than
-Harvester: 2 cores and 4 GB of memory is enough to start. It is the DIY route:
-the kind of cluster people build and then look after with Headlamp.
+**k3s is Homestead's preferred platform for home self-hosting and the most widely
+tested with Homestead.** Start here when building a new home server or homelab.
+
+[k3s](https://k3s.io) packages Kubernetes for a small footprint. It runs on
+supported Linux machines - an old desktop, a mini PC, a VM or ARM64 hardware.
+2 cores and 4 GB of memory is a starting point; VMs and storage workloads need
+additional capacity. Begin with one machine and add hosts as your lab grows.
 
 One script turns a bare machine into a k3s cluster with
 [Longhorn](https://longhorn.io) storage and Homestead running on it.

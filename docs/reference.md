@@ -7,6 +7,10 @@ tour, from building a cluster to each page in turn.
 
 ## One line: install and node doctor
 
+**k3s is preferred for home self-hosting and is the most widely tested platform
+with Homestead.** Choose it for a new home setup; RKE2 and Harvester are supported
+alternatives. The [k3s guide](wiki/Installing-on-k3s.md) walks through the recommended route.
+
 On a bare Linux machine (x86-64 or 64-bit ARM - old PCs, mini PCs, VMs), or on
 a Harvester host, or on any node of a cluster:
 

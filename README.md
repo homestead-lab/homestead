@@ -38,9 +38,10 @@
 ## Why Homestead
 
 A homelab on a single machine is one failed disk, power supply or update away
-from going dark. Homestead spreads your homelab across two or more ordinary
-machines - mini PCs, old desktops, virtual machines - so that every layer has
-a spare:
+from going dark. Start there, then grow across ordinary machines - mini PCs,
+old desktops, virtual machines - with spare capacity at each layer. Host
+failover needs control-plane quorum, healthy replicas and eligible spare hosts;
+three server nodes are the usual starting point for an HA control plane.
 
 <table>
 <tr>
@@ -48,18 +49,18 @@ a spare:
 
 **Compute**
 
-Containers and VMs restart on a healthy node when one fails. Placement rules
-decide where each app may run, and VMs live-migrate between hosts for
-maintenance.
+Eligible containers and VMs can restart on a healthy node when one fails.
+Placement rules decide where each app may run, and compatible VMs can
+live-migrate between hosts for maintenance.
 
 </td>
 <td width="33%" valign="top">
 
 **Storage**
 
-Every volume is replicated across nodes by Longhorn, so a dead disk or host
-loses nothing. Snapshots, scheduled backups to S3 or NFS, and restores in a
-few clicks.
+Longhorn replicates configured volumes across nodes to protect against disk
+or host failure. Snapshots, scheduled backups to S3 or NFS, and restores are
+managed in the same interface.
 
 </td>
 <td width="33%" valign="top">
@@ -86,6 +87,11 @@ click away as YAML. It runs on [k3s](https://k3s.io), RKE2,
 [Harvester HCI](https://harvesterhci.io) or any Kubernetes you already run.
 
 ## Quick install
+
+**Choose k3s for home self-hosting.** It is Homestead's preferred platform and
+the most widely tested with Homestead. Start with the
+[k3s guide](https://github.com/wjcloudy/homestead/wiki/Installing-on-k3s);
+RKE2 and Harvester are supported alternatives.
 
 On a Linux machine - a bare one, a k3s or RKE2 server, or a Harvester node:
 
@@ -190,24 +196,40 @@ every job cancellable, with a rollback.
 ## How Homestead compares
 
 Hyperconvergence for home, with apps and infrastructure in one friendly interface.
+Choose **K3s (recommended), RKE2 or Harvester** underneath. Start with one small machine and
+grow into a cluster, on supported **x86-64 or ARM64** hardware.
 
 **✅ Built-in or guided · ⚪ Supported with add-ons or custom configuration · ❌ Not supported by the product**
 
 | Feature | **Homestead** | Unraid | Proxmox VE | CasaOS | Harvester | Talos Linux | MicroCloud |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | Web management | ✅ | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ |
+| Mobile app / PWA | ✅ | ⚪ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Alerts and notifications | ✅ | ✅ | ✅ | ⚪ | ✅ | ⚪ | ⚪ |
 | Self-hosted app store | ✅ | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ |
 | Application containers | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ | ⚪ |
 | Virtual machines | ✅ | ✅ | ✅ | ❌ | ✅ | ⚪ | ✅ |
-| Multi-node management | ✅ | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ |
-| Shared, replicated storage | ✅ | ❌ | ✅ | ❌ | ✅ | ⚪ | ✅ |
+| GPU / PCI passthrough to VMs | ✅ | ✅ | ✅ | ❌ | ✅ | ⚪ | ✅ |
+| USB devices in containers | ✅ | ✅ | ✅ | ⚪ | ⚪ | ⚪ | ✅ |
+| Single host → multi-node cluster | ✅ | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ |
+| ARM64 hosts | ✅ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Distributed, replicated storage | ✅ | ❌ | ✅ | ❌ | ✅ | ⚪ | ✅ |
 | Automatic workload failover | ✅ | ❌ | ✅ | ❌ | ✅ | ⚪ | ✅ |
+| IP address management (IPAM) | ✅ | ⚪ | ✅ | ⚪ | ✅ | ⚪ | ✅ |
 | Network file shares | ✅ | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ |
 | Workload snapshots and backups | ✅ | ⚪ | ✅ | ⚪ | ✅ | ⚪ | ✅ |
+| Home Assistant / MQTT monitoring | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ | ⚪ |
 | Guided setup and upgrades | ✅ | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ |
 
-Homestead is **beta**. Cluster features require suitable hardware, quorum and
-storage configuration. Reviewed 3 October 2026;
+**Compared with Proxmox:** Homestead brings an app store, hardware-aware app
+placement, managed file shares, LAN address inventory and MQTT discovery together
+with cluster administration. Its phone interface is an installable PWA with
+push notifications. Proxmox also provides passthrough, distributed storage,
+backups, IPAM, alerts and mobile access.
+
+Homestead is **beta**. Hardware, architecture and HA requirements vary by stack;
+device-bound workloads restrict migration and failover. Large-scale deployments
+have not been benchmarked. Reviewed 3 October 2026;
 [details, qualifications and sources](docs/comparison.md).
 
 ## On your phone
@@ -247,9 +269,11 @@ always show the current version. The same demo runs live at
 
 ## Where it runs
 
-Homestead checks what the cluster has, and each page works with that.
+**k3s is preferred for home self-hosting and is the most widely tested platform
+with Homestead.** RKE2 and Harvester remain supported alternatives. Homestead
+checks what the cluster has, and each page works with that.
 
-| | k3s | Harvester | RKE2 or other Kubernetes |
+| | k3s (recommended) | Harvester | RKE2 or other Kubernetes |
 |---|---|---|---|
 | **Install** | [one line](docs/reference.md#one-line-install-and-node-doctor) from bare Linux | [one line](docs/reference.md#one-line-install-and-node-doctor) on a node, or Helm or the manifest | RKE2: [one line](docs/reference.md#one-line-install-and-node-doctor) from bare Linux, or onto an RKE2 server; any other: [Helm or the manifest](docs/reference.md#installing-with-the-manifest) |
 | **Containers, App Store, Compose, Portal, Networking, IP addresses, Resources, dashboard** | yes | yes | yes |

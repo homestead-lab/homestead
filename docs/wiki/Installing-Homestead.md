@@ -1,6 +1,10 @@
 # Installing Homestead
 
-The cluster guides - [Harvester](Installing-on-Harvester), [k3s](Installing-on-k3s),
+**For a new home self-hosting setup, choose [k3s](Installing-on-k3s): it is
+Homestead's preferred and most widely tested platform.**
+
+The cluster guides - [k3s](Installing-on-k3s), [RKE2](Installing-on-RKE2),
+[Harvester](Installing-on-Harvester),
 [an existing cluster](Installing-on-an-existing-cluster) - each end with
 Homestead running. This page is what they share: what got installed, the first
 sign-in, and looking after Homestead afterwards.
