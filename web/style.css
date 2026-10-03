@@ -3326,7 +3326,8 @@ html[data-theme="light"] .notification-center>button.danger{color:#a1242a}
 .dashboard-group-list{max-height:130px;overflow:auto;overflow-wrap:anywhere}
 .dashboard-inspector #dashboardGroupOptions{width:100%}
 .dashboard-portal>#dashboardPortal{max-height:calc(var(--resource-list-height) - 76px)}
-.dashboard-widget .portal-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:0 16px}
+/* auto-fill keeps a short group's empty columns, so every group's links line up at one width. */
+.dashboard-widget .portal-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(220px,100%),1fr));gap:0 16px}
 .portal-list .portal-tile{min-height:36px;padding:5px 2px;gap:8px;border:0;border-bottom:1px solid var(--line);border-radius:0;box-shadow:none;background:transparent;margin:0}
 .portal-list .portal-icon{height:22px;width:22px;font-size:10px;flex:0 0 22px}
 .portal-list .portal-icon svg{height:16px;width:16px}

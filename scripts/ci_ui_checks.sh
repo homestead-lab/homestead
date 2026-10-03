@@ -28,6 +28,7 @@ case "${1:-}" in
     DEPLOY_FORM_SCREENSHOTS=release-assets/pages/container-deploy node tests/integration/container-deploy-form.mjs
     WIDGET_OPTIONS_SCREENSHOTS=release-assets/pages/widget-options node tests/integration/dashboard-widget-options.mjs
     CUSTOM_WIDGET_SCREENSHOTS=release-assets/pages/custom-widget node tests/integration/dashboard-custom.mjs
+    PORTAL_COLUMN_SCREENSHOTS=release-assets/pages/portal-columns node tests/integration/portal-widget-columns.mjs
     ;;
   pages-dashboard)
     INSIGHTS_OUTPUT=release-assets/pages/insights node tests/integration/health-insights.mjs
