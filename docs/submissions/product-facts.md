@@ -19,6 +19,7 @@ Verified against the local [README](../../README.md), [project licence](../../LI
 | Runtime | Kubernetes on Linux; k3s, RKE2, Harvester or an existing Kubernetes cluster |
 | Recommended platform | k3s: preferred for home self-hosting and the most widely tested platform with Homestead; RKE2 and Harvester are supported alternatives |
 | Installation routes | Guided Linux installer, Helm chart or Kubernetes manifest |
+| Helm management | Search Artifact Hub or use chart repositories, inspect releases and manage controller-owned charts; changes require the K3s/RKE2 Helm controller, with release listing only on other clusters |
 | Image architectures | Release workflow builds linux/amd64 and linux/arm64; component and hardware support still varies |
 | Storage / VMs | Longhorn enables volume and data-protection features; KubeVirt enables VMs |
 | Networking | kube-vip provides virtual IP support; Multus provides additional network attachment support |

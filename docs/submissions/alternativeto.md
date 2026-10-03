@@ -15,7 +15,7 @@ No authenticated form was opened. The lengths below are editorial targets, not v
 | Licence | Source-available; Apache 2.0 + Commons Clause 1.0 |
 | Platforms | Self-Hosted, Linux, Web, where offered |
 | Suggested tags | homelab, kubernetes, container-management, virtualization, server-management, storage, backup |
-| Suggested features | Cluster management, guided installation, platform upgrades, containers, virtual machines, GPU/PCI passthrough, container USB access, snapshots, backups, distributed storage, IPAM, PWA, push notifications, MQTT, Home Assistant monitoring |
+| Suggested features | Cluster management, guided installation, platform upgrades, containers, Helm chart management, virtual machines, GPU/PCI passthrough, container USB access, snapshots, backups, distributed storage, IPAM, PWA, push notifications, MQTT, Home Assistant monitoring |
 
 Select only matching tags/features that exist in the form. Browser access from Windows, macOS, iOS or Android does not make these native server or mobile application platforms.
 
@@ -44,8 +44,9 @@ These are proposed comparisons, not claims of feature parity. Review each relati
 | Candidate | Overlapping use case | Homestead limitation to preserve |
 |---|---|---|
 | Portainer | Browser-based container administration, especially on Kubernetes | Homestead requires Kubernetes; do not suggest it as a drop-in manager for a plain Docker host |
+| Headlamp | Kubernetes workload/resource management and Helm app discovery | Headlamp also has an official App Catalog and an extensible plugin ecosystem; Homestead's Helm changes require the K3s/RKE2 Helm controller |
 | Unraid | Homelab apps, VMs, shares and storage administration | Homestead manages Kubernetes infrastructure; it does not supply an Unraid-compatible NAS operating system |
 
-The [feature comparison and sources](../comparison.md) cover Unraid, Proxmox VE, CasaOS, Harvester, Talos Linux and MicroCloud. That comparison describes overlapping use cases, not automatic replacement relationships. Homestead integrates with Harvester, KubeVirt and Longhorn; do not describe it as replacing those dependencies.
+The [feature comparison and sources](../comparison.md) cover Unraid, Proxmox VE, CasaOS, Harvester, Talos Linux, MicroCloud and Headlamp. That comparison describes overlapping use cases, not automatic replacement relationships. Homestead integrates with Harvester, KubeVirt and Longhorn; do not describe it as replacing those dependencies.
 
 Use the dashboard, containers, volumes and VM images in [assets.md](assets.md), with captions identifying sample data. Review any image size requirements in the actual form before upload.
