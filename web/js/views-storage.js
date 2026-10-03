@@ -43,9 +43,7 @@ async function viewFlow() {
           <span class="a2dot" style="background:${ROB(v.robustness)}"></span><span class="a2name">${esc(v.name)}</span>
           <span class="a2meta mono">${v.size_gb}G · ${v.replicas}×</span></div>`;
 
-  paint(`<div class="phead">
-      <div><h2>Architecture</h2><p>How each app is reached, where its data lives, and which hosts hold the copies · hover anything to trace it</p></div>
-      <div class="row arch-head-actions">
+  paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · hover anything to trace it`, `
         ${disconnectedVolumes.length ? `<button class="btn sm ${STATE.archDisconnected ? "pri" : ""}" onclick="STATE.archDisconnected=!STATE.archDisconnected;viewFlow()"
           data-tip="Volumes no container or VM is defined to mount. They stay hidden so old and retained data does not obscure the live paths.">${STATE.archDisconnected ? "Hide" : "Show"} ${disconnectedVolumes.length} disconnected</button>` : ""}
         <div class="row hide-sm arch-legend">
@@ -53,7 +51,7 @@ async function viewFlow() {
           <span><i style="background:var(--arch-mount)"></i>mount</span>
           <span><i style="background:var(--arch-copy)"></i>replica</span>
         </div>
-      </div></div>
+      `, {actionsClass:`arch-head-actions`})}
     <div class="arch2wrap"><svg id="archsvg" aria-hidden="true"></svg><div class="arch2">
 
       <section class="a2col"><h4>Access</h4>
@@ -342,12 +340,10 @@ async function viewStorage() {
   const rows = v.filter(x => (!q || x.name.includes(q) || (x.node || "").includes(q) ||
     (x.pvc_name || "").includes(q) || (x.attached_to || "").toLowerCase().includes(q))
     && (!onlySpare || spare.includes(x)));
-  paint(`<div class="phead"><div><h2>Volumes</h2>
-      <p>${v.length} Longhorn volume${v.length === 1 ? "" : "s"} · replicated block storage${onlySpare ? ` · <a class="linkish" onclick="STATE.volSpare=false;viewStorage()">showing ${spare.length} unused · show all</a>` : ""}</p></div>
-      <div class="row">${moreMenu([spare.length ? { label: onlySpare ? "Show all volumes" : `Show the ${spare.length} unused`, icon: "list", run: "STATE.volSpare=!STATE.volSpare;viewStorage()",
+  paint(`${UI.pageHeader(`Volumes`, `${v.length} Longhorn volume${v.length === 1 ? "" : "s"} · replicated block storage${onlySpare ? ` · <a class="linkish" onclick="STATE.volSpare=false;viewStorage()">showing ${spare.length} unused · show all</a>` : ""}`, `${moreMenu([spare.length ? { label: onlySpare ? "Show all volumes" : `Show the ${spare.length} unused`, icon: "list", run: "STATE.volSpare=!STATE.volSpare;viewStorage()",
           tip: "Volumes nothing is defined to use - no container, VM or job - and ones kept after their claim went: the ones to look at when freeing space" } : null,
         { label: "Storage classes", icon: "disk", run: "settingsTab('hardware');go('settings')", tip: "What new volumes are made from: in Settings › Hardware and storage" }])}
-      <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button></div></div>
+      <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button>`)}
   ${st ? summaryLine("volumes", [
       `<b>${st.avail_gb} GB</b> free of ${st.cap_gb}`, `<b>${st.provisioned_gb} GB</b> provisioned`,
       `<span class="tag ok">${st.healthy} healthy</span>${st.degraded ? ` <span class="tag warn">${st.degraded} degraded</span>` : ""}${st.faulted ? ` <span class="tag bad">${st.faulted} faulted</span>` : ""}`,
@@ -664,10 +660,7 @@ function storageClassCard(classes, v2 = null) {
   const kind = row => row.made_for === "image" ? '<span class="tag" data-tip="Harvester made it for one image: disks from that image are made on it">image</span>'
     : row.made_for === "restore" ? '<span class="tag" data-tip="Made to restore a backup; kept while claims reference it so they can be resized">restore</span>'
     : row.made_for === "iso" ? '<span class="tag" data-tip="ISO copies Homestead made for VM CD-ROM drives: one replica, since the originals are on your shares">ISO copies</span>' : "";
-  return `<div class="settings-card-head"><div><div class="ctitle">Storage classes</div>
-      <div class="csub">What a new volume is made from. Kubernetes fixes a class once it is made, so a change means a new class.</div>
-      ${v2Summary(v2, rows)}</div>
-    <button class="btn sm pri" data-need="admin" onclick="storageClassCreate()">＋ New storage class</button></div>
+  return `${UI.moduleHeader(`Storage classes`, `What a new volume is made from. Kubernetes fixes a class once it is made, so a change means a new class.`, `<button class="btn sm pri" data-need="admin" onclick="storageClassCreate()">＋ New storage class</button>`, {extraHtml:`${v2Summary(v2, rows)}`})}
     <div class="tblwrap"><table data-sort="storage-classes" class="tbl stack dense"><thead><tr>
       <th>Class</th><th>Engine</th><th>Copies</th><th data-nosort>Its volumes</th><th>In use</th><th data-nosort></th>
     </tr></thead><tbody>${rows.map(row => `<tr>
@@ -1163,7 +1156,7 @@ async function viewShares() {
   let sh;
   try { sh = await api("/api/shares"); }
   catch (e) {
-    paint(`<div class="phead"><div><h2>Network shares</h2></div></div>
+    paint(`${UI.pageHeader(`Network shares`, ``, ``)}
       <div class="note bad">Could not load shares: ${esc(e.message)} <button class="btn sm" onclick="viewShares()">Retry</button></div>`);
     return;
   }
@@ -1174,9 +1167,7 @@ async function viewShares() {
   STATE.data.nfs = nfs;
   STATE.data.sambaInstalled = !!smb.installed;
   const ip = smb.address || "address pending";
-  paint(`<div class="phead"><div><h2>Network shares</h2>
-    <p>SMB shares and optional NFSv4 exports backed by Longhorn volumes</p></div>
-    <div class="row">${moreMenu([{ label: "SMB users", icon: "list", run: "smbUsers()", need: "admin" }])}<button class="btn pri" data-need="admin" onclick="newShare()">＋ New share</button></div></div>
+  paint(`${UI.pageHeader(`Network shares`, `SMB shares and optional NFSv4 exports backed by Longhorn volumes`, `${moreMenu([{ label: "SMB users", icon: "list", run: "smbUsers()", need: "admin" }])}<button class="btn pri" data-need="admin" onclick="newShare()">＋ New share</button>`)}
   <div class="card" style="margin-bottom:14px"><div class="between"><div><div class="ctitle">SMB server · ${esc(smb.name || "homestead-smb")}</div>
     <div class="dim small">${smb.error ? `Status unavailable: ${esc(smb.error)}` : !smb.installed ? "Not installed · your first share can install it" :
       `${smb.enabled ? `${smb.ready || 0}/${smb.desired || 1} ready` : "Stopped"}${smb.address ? ` · \\\\${esc(smb.address)}` : " · waiting for an address"} · ${smb.served_shares?.length ?? 0}/${sh.length} share mappings${smb.in_sync ? "" : " · out of sync"}`}</div></div>
@@ -1563,7 +1554,7 @@ async function viewEvents() {
   const rows = await api(tab === "signins" ? "/api/auth/history" : "/api/events");
   STATE.data.eventRows = rows;
   const heads = tab === "signins" ? ["Who", "What", "From", "When"] : ["Object", "Reason", "Message", "When"];
-  paint(`<div class="phead"><div><h2>Events</h2><p id="evCount"></p></div>${eventTabs(tab)}</div>
+  paint(`${UI.pageHeader(`Events`, ``, `${eventTabs(tab)}`, {descriptionAttrs:`id="evCount"`})}
   ${eventFilterBar(rows)}
   <div class="card flat pad0 eventtable"><div class="tblwrap"><table data-sort="${tab === "signins" ? "signins" : "events"}" class="tbl stack compact evtable"><thead><tr>
     ${heads.map((h, i) => `<th${i === 3 ? " data-nosort" : ""}>${h}</th>`).join("")}</tr></thead><tbody id="evRows"></tbody></table></div></div>`);
@@ -1619,10 +1610,8 @@ async function lhSettingsPaint() {
   catch (e) { host.innerHTML = `<div class="ctitle">Longhorn storage</div><div class="empty small">${esc(e.message)}</div>`; return; }
   STATE.data.lhcap = cap;
   const admin = can("admin"), v2 = cap.v2 || {};
-  host.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Longhorn storage</div>
-      <div class="csub">How much Longhorn may promise on each disk, and its V2 data engine</div></div>
-      <div class="row"><button class="btn sm" onclick="lhDisks()">Disks</button>
-      ${admin ? "" : '<span class="pill neutral">admin managed</span>'}</div></div>
+  host.innerHTML = `${UI.moduleHeader(`Longhorn storage`, `How much Longhorn may promise on each disk, and its V2 data engine`, `<button class="btn sm" onclick="lhDisks()">Disks</button>
+      ${admin ? "" : '<span class="pill neutral">admin managed</span>'}`)}
     <div class="f2">
       <div class="f"><label>Over-provisioning ${tip("Longhorn books a volume's full size on a disk when it places a replica, however little it holds. At 100% a disk can be promised its own size; at 200%, twice that, betting volumes never fill up. If they do, the disk runs out and its replicas fail.")}</label>
         <div class="row" style="flex-wrap:nowrap"><input id="lh_over" type="number" min="100" max="1000" step="10" value="${cap.over_provisioning}" ${admin ? "" : "disabled"} oninput="lhPreview()"><span class="dim">%</span></div></div>

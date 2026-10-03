@@ -99,14 +99,13 @@ function ipamFiltered(rows) {
 
 function renderIpam() {
   const data = STATE.data.ipam || { subnets: [], suggested: [], unifi: {} };
-  const head = `<div class="phead"><div><h2>Networking</h2><p>Every address on your subnets: documented, used by the cluster${(data.unifi || {}).configured ? ", answering, or known to UniFi" : " or answering a scan"}</p></div>
-    <div class="row ipam-head-acts"><button class="btn" data-need="operator" onclick="ipamSubnets()">Subnets</button>
+  const head = `${UI.pageHeader(`Networking`, `Every address on your subnets: documented, used by the cluster${(data.unifi || {}).configured ? ", answering, or known to UniFi" : " or answering a scan"}`, `<button class="btn" data-need="operator" onclick="ipamSubnets()">Subnets</button>
       ${data.subnets.length ? `<button class="btn ipam-wide" data-need="operator" onclick="ipamImport()">Import CSV</button>
       <button class="btn ipam-wide" onclick="ipamExport()">Export CSV</button>
       <details class="actionmenu ipam-narrow"><summary class="btn" title="Import or export">⋯</summary><div class="actionmenu-pop">
         <button data-need="operator" onclick="this.closest('details').open=false;ipamImport()">${icon("import")}Import CSV</button>
         <button onclick="this.closest('details').open=false;ipamExport()">${icon("ext")}Export CSV</button></div></details>
-      <button class="btn pri" data-need="operator" onclick="ipamEdit()">＋ Address</button>` : ""}</div></div>
+      <button class="btn pri" data-need="operator" onclick="ipamEdit()">＋ Address</button>` : ""}`, {actionsClass:`ipam-head-acts`})}
     ${networkTabs("ip")}`;
   if (!data.subnets.length) {
     return paint(`${head}<div class="empty ipam-empty"><b>No subnets yet.</b> Add the LAN the cluster sits on, with its DHCP range, and Homestead fills in what the cluster uses.
@@ -388,14 +387,13 @@ async function ipamAfterUnifi() {
 function ipamUnifiCard() {
   const u = ((STATE.data.ipam || {}).unifi) || {};
   const state = !u.configured ? '<span class="pill neutral">not connected</span>' : u.last_error ? '<span class="pill crit">error</span>' : '<span class="pill ok">connected</span>';
-  return `<section class="card flat settings-wide" data-tab="connections" id="unifiCard">
-    <div class="settings-card-head"><div><div class="ctitle">UniFi Network</div>
-      <div class="csub">Its clients, devices, reserved addresses and networks, and the names it knows, on the IP addresses page</div></div></div>
+  return `${UI.settingsCard(`
+    ${UI.moduleHeader(`UniFi Network`, `Its clients, devices, reserved addresses and networks, and the names it knows, on the IP addresses page`, ``)}
     ${serviceRow(u.configured ? "UniFi controller" : "No controller", state,
       u.configured ? `${esc(u.url)}${u.last_sync ? ` · synced ${esc(fmtAgo(Date.now() / 1000 - u.last_sync))}` : " · not synced yet"}` : "Optional: without it, IP addresses works from scans and what you write",
       actionBar([u.configured ? { label: "Sync now", run: "ipamSync()", need: "operator" } : null,
         { label: u.configured ? "Edit" : "Connect UniFi", run: "ipamUnifi()", need: "admin", pri: !u.configured }]))}
-    ${u.configured && u.last_error ? `<div class="note bad" style="margin-top:8px">${esc(u.last_error)}</div>` : ""}</section>`;
+    ${u.configured && u.last_error ? `<div class="note bad" style="margin-top:8px">${esc(u.last_error)}</div>` : ""}`, {tab:`connections`, id:`unifiCard`})}`;
 }
 window.ipamUnifiCard = ipamUnifiCard;
 

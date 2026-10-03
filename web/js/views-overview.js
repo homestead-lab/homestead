@@ -60,12 +60,9 @@ async function viewDash() {
   ].filter(p => p.v) : [];
 
   paint(`
-  <div class="phead">
-    <div><h2>Cluster overview</h2><p>Live health, capacity and placement across ${o.nodes_total} node${o.nodes_total > 1 ? "s" : ""}</p></div>
-    <div class="row hide-sm">
+  ${UI.pageHeader(`Cluster overview`, `Live health, capacity and placement across ${o.nodes_total} node${o.nodes_total > 1 ? "s" : ""}`, `
       <button class="btn pri" onclick="go('deploy')">＋ Deploy</button>
-    </div>
-  </div>
+    `, {actionsClass:`hide-sm`})}
 
   ${(o.health_issues || []).length ? `<div class="clusteralert ${o.health === "critical" ? "critical" : ""}">
     <div><b>${o.health === "critical" ? "Cluster needs attention" : "Cluster is degraded"}</b>
@@ -505,9 +502,7 @@ async function nodePage(name) {
         ${fact("Takes new work", n.schedulable ? "yes" : '<span class="tag warn">cordoned</span>')}
       </div>${odd.length ? `<div class="note warn" style="margin-top:10px">${odd.map(c => `<b>${esc(c.type)}</b>: ${esc(c.status)}`).join(" · ")}</div>` : ""}</div>`],
     ["workloads", "Workloads", `${n.workloads.length} app${n.workloads.length === 1 ? "" : "s"} · ${n.vms || 0} VM${n.vms === 1 ? "" : "s"}`, `
-      <div class="card flat"><div class="settings-card-head"><div><div class="ctitle">On this host</div>
-        <div class="csub">${n.pods_wl} of yours · ${n.pods_sys} system pods</div></div>
-        ${n.workloads.length ? `<button class="btn sm" data-need="admin" onclick="evacuateNode(${jsq(n.name)})">Move everything off</button>` : ""}</div>
+      <div class="card flat">${UI.moduleHeader(`On this host`, `${n.pods_wl} of yours · ${n.pods_sys} system pods`, `${n.workloads.length ? `<button class="btn sm" data-need="admin" onclick="evacuateNode(${jsq(n.name)})">Move everything off</button>` : ""}`)}
         <div>${n.workloads.length ? n.workloads.map(w => `<span class="tag movable" onclick="moveWorkload(${jsq(w)})">${esc(w)} <span class="mv">⇄</span></span>`).join("")
           : '<span class="dim xs">nothing of yours is scheduled here</span>'}</div>
         ${n.workloads.length ? `<div class="dim xs" style="margin-top:8px">Click one to move it to another host.</div>` : ""}</div>`],
@@ -519,9 +514,7 @@ async function nodePage(name) {
       <div class="card flat"><div class="ctitle">Disk activity ${tip("Live host block-device throughput and SMART health, from the node probe")}</div>
         <div class="diskactivity" style="margin-top:10px">${diskRows || '<div class="dim small">No per-disk counters: the node probe provides them.</div>'}</div></div></div>`],
     ["hardware", "Hardware", esc([hwNames.join(", "), n.temps?.cpu_c != null ? `CPU ${n.temps.cpu_c}°C` : ""].filter(Boolean).join(" · ") || "none defined"), `
-      <div class="card flat"><div class="settings-card-head"><div><div class="ctitle">Hardware for apps</div>
-        <div class="csub">What placement checks look for before a container moves or starts</div></div>
-        <button class="btn sm" data-need="admin" onclick="hardwareEdit(${esc(JSON.stringify(n))})">Define</button></div>
+      <div class="card flat">${UI.moduleHeader(`Hardware for apps`, `What placement checks look for before a container moves or starts`, `<button class="btn sm" data-need="admin" onclick="hardwareEdit(${esc(JSON.stringify(n))})">Define</button>`)}
         <div>${hardwareTags(hw) || '<span class="dim xs">No hardware is defined.</span>'}</div></div>
       <div class="card flat" id="nodeDevices"><div class="ctitle">Devices for VMs</div><div class="csub">PCI and USB devices this host can give to its virtual machines</div>
         <div class="pt-body" style="margin-top:10px"></div></div>
@@ -551,17 +544,14 @@ async function nodePage(name) {
       <div style="margin-top:10px">${(n.conditions || []).map(c => `<span class="tag ${c.type === "Ready" ? (c.status === "True" ? "ok" : "bad") : (c.status === "True" ? "warn" : "")}">${esc(c.type)}: ${esc(c.status)}</span>`).join("")}</div></div>`],
   ];
   const current = sections.some(([id]) => id === STATE.nodeSection) ? STATE.nodeSection : "overview";
-  paint(`<div class="phead"><div><h2>${esc(n.name)}</h2><p>${esc(n.roles.join(" · ") || "worker")} · <span class="mono">${esc((n.addresses || {}).InternalIP || "")}</span></p></div>
-      <div class="row"><button class="btn" data-need="admin" onclick="nodeShell(${jsq(n.name)})" title="A root shell on the host itself, as SSH would give">${icon("console")}Terminal</button>
-        <button class="btn pri" onclick="nodeActions(${jsq(n.name)})">Host actions</button></div></div>
+  paint(`${UI.pageHeader(`${esc(n.name)}`, `${esc(n.roles.join(" · ") || "worker")} · <span class="mono">${esc((n.addresses || {}).InternalIP || "")}</span>`, `<button class="btn" data-need="admin" onclick="nodeShell(${jsq(n.name)})" title="A root shell on the host itself, as SSH would give">${icon("console")}Terminal</button>
+        <button class="btn pri" onclick="nodeActions(${jsq(n.name)})">Host actions</button>`)}
     <div id="nodePage" data-node="${esc(n.name)}">
       <div class="sumline" id="nodeSummary">${summary}</div>
-      <div class="settings-layout" data-open="${STATE.nodeSectionOpen ? 1 : 0}">
-        <nav class="settings-nav" role="tablist" aria-label="${esc(n.name)} sections">${sections.map(([id, label, state]) =>
-          `<button type="button" role="tab" data-tab="${id}" class="${id === current ? "on" : ""}" aria-selected="${id === current}" onclick="nodeSectionGo(${jsq(id)})"><span><b>${label}</b><small>${state}</small></span><i aria-hidden="true">›</i></button>`).join("")}</nav>
-        <div class="settings-main"><button type="button" class="settings-back" onclick="nodeSectionGo('')">‹ ${esc(n.name)}</button>
-          ${sections.map(([id, , , body]) => `<div class="node-pane" data-pane="${id}"${id === current ? "" : " hidden"}>${body}</div>`).join("")}</div>
-      </div>
+      ${UI.workspace(UI.workspaceNav(sections.map(([key,label,descriptionHtml]) => ({key,label,descriptionHtml})),
+        {label:`${n.name} sections`,selected:current,onSelect:key => `nodeSectionGo(${jsArg(key)})`}),
+        sections.map(([id, , , body]) => `<div class="node-pane" data-pane="${id}"${id === current ? "" : " hidden"}>${body}</div>`).join(""),
+        {open:STATE.nodeSectionOpen,backLabel:n.name,back:"nodeSectionGo('')"})}
     </div>`);
   window.__disksModal = false;
   nodeDisksPaint(n.name);
@@ -588,11 +578,8 @@ window.nodeSectionGo = id => {
   STATE.nodeSectionOpen = !!id;
   const layout = $("#nodePage .settings-layout");
   if (!layout) return;
-  layout.dataset.open = id ? "1" : "0";
+  UI.selectWorkspace(layout, id, {paneSelector:".node-pane[data-pane]"});
   if (!id) return;
-  // Only the sections themselves: a section's own parts keep their state.
-  $$("#nodePage .node-pane[data-pane]").forEach(pane => { pane.hidden = pane.dataset.pane !== id; });
-  $$("#nodePage .settings-nav button").forEach(b => { b.classList.toggle("on", b.dataset.tab === id); b.setAttribute("aria-selected", String(b.dataset.tab === id)); });
   window.scrollPageTop();
 };
 
@@ -890,14 +877,12 @@ async function viewNodes() {
   STATE.data.nodes = n;
   STATE.data.uptime = up || STATE.data.uptime;
   const layout = viewLayout("nodes");
-  paint(`<div class="phead"><div><h2>Nodes</h2>
-      <p>${n.length} node${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}</p></div>
-      <div class="row">${layoutSwitch("nodes", "viewNodes")}
+  paint(`${UI.pageHeader(`Nodes`, `${n.length} node${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}`, `${layoutSwitch("nodes", "viewNodes")}
       ${moreMenu([
         {label:layout === "cards" ? "Compare nodes" : "Show as cards",run:`setViewLayout('nodes','viewNodes',${jsq(layout === "cards" ? "rows" : "cards")})`},
         STATE.platform && !STATE.platform.harvester && {label:"OS updates",run:"osUpdates()"},
         {label:"Hardware features",run:"hardwareFeatureSettings()",need:"admin"}
-      ])}</div></div>
+      ])}`)}
    ${layout === "cards" ? `<div class="nodegrid stagger">${n.map(nodeCard).join("")}</div>` : nodeComparison(n, "nodes")}`);
 }
 

@@ -61,7 +61,7 @@ column headings are the one small upper-case label.
 
 ### The shape of a page
 
-1. **Header** (`.phead`) - on the left, the page family's tabs when it has
+1. **Header** (`UI.pageHeader`) - on the left, the page family's tabs when it has
    them (added by `paint()`), then a one-line subtitle; on the right, on the
    same line as the tabs, the actions: the cards/rows switch if the page has
    one, `moreMenu()` for everything secondary, and one main button (`pri`) -
@@ -393,6 +393,39 @@ history under **Completed**. Log and history controls collapse; recovery actions
 remain visible. **Clear completed** removes only dismissible successful or
 cancelled records, preserving failed and protected recovery records.
 
+## Shared page and Settings structure
+
+`web/js/ui.js` owns page and module layout. Pages provide titles, content, state
+and handlers through shared components. Do not write custom header, Settings card,
+sidebar, mobile collection toolbar or save-bar markup in feature modules.
+
+- `UI.pageHeader(titleHtml, descriptionHtml, actionsHtml, options)` places the
+  subtitle and filters on the left and actions on the right. `paint()` adds the
+  page family's tabs. Keep the primary action last; use `moreMenu` for secondary
+  choices. Dynamic values in HTML slots must be escaped.
+- `UI.moduleHeader(titleHtml, descriptionHtml, actionsHtml)` gives Settings,
+  host details, Cluster and Setup the same heading and action placement. Its
+  action group wraps below the heading when space is limited.
+- `UI.settingsCard(bodyHtml, {tab, id, save, wide, hidden})` retains a module's
+  topic, loading identity, save scope and visibility. Reuse the same content
+  renderer wherever a module appears; do not copy its markup into another page.
+- `UI.settingsGrid(bodyHtml, tab)` groups cards for a selected Settings section.
+  `UI.saveBar` owns the sticky Discard/Save layout and live status message.
+  Callers retain dirty tracking, validation, permission checks and save behavior.
+- `UI.workspace` and `UI.workspaceNav` provide the shared sidebar/content layout
+  used by Settings, host details and Setup. `UI.selectWorkspace` updates section
+  selection without replacing the fields. On phones, Settings and host details
+  show their section list first with a consistent Back button; Setup keeps its
+  step picker. Keyboard navigation uses Up, Down, Home and End.
+- `UI.collectionHeader` places mobile container/VM controls above their summary.
+  Continue using `settingRow`, `serviceRow`, `actionBar`, `summaryLine`, `UI.stats`
+  and `UI.table` for their existing purposes.
+
+Spacing comes from `--page-gap`, `--module-gap`, `--workspace-gap` and
+`--workspace-rail` in `web/style.css`. Adjust the shared rule instead of adding
+page-specific spacing overrides. Keep loading, blocked, empty and ready states
+in the same module shell so controls do not change location as data arrives.
+
 ## Components
 
 | Component | Use it for | Not for |
@@ -470,9 +503,11 @@ file and line, when it finds:
 - a list made by mapping items to `serviceRow()` - a list of like things is a
   `tbl stack` table;
 - a table that is not `tbl stack`;
-- a Settings card with a title but no `settings-card-head`;
+- a hand-written Settings title/subtitle instead of `UI.moduleHeader`;
 - rail, section navigation, pane or footer markup authored outside `ui.js`;
-- a hand-written dismissal row instead of `UI.actions`.
+- a hand-written dismissal row instead of `UI.actions`;
+- page headers, module headers, Settings wrappers, navigation or save bars written
+  outside the shared UI module.
 
 It also checks this file still states those rules. Change a rule in both
 places at once; never quiet the test for one screen.
@@ -481,6 +516,7 @@ With the demo running (`PORT=4173 WEBROOT=web python server/server.py`):
 
 ```bash
 node scripts/audit_pages.mjs
+# PAGE_OUTPUT selects the capture folder; HOMESTEAD_AUDIT_THEME=light checks light mode.
 ```
 
 ```bash
@@ -511,3 +547,7 @@ Run `python scripts/build_dialog_contact_sheets.py release-assets/dialog-review`
 with Pillow installed. It validates matching theme inventories, then writes
 paired PNG cards, paginated contact sheets, a ZIP of those sheets and a searchable
 `index.html` gallery. Open the gallery locally; review images use demo data.
+
+The same contact-sheet builder supports page captures:
+`python scripts/build_dialog_contact_sheets.py release-assets/page-review --kind pages`.
+Capture both themes into that folder with `PAGE_OUTPUT` before building it.

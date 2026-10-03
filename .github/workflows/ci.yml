@@ -172,6 +172,9 @@ jobs:
             VM_ISOLATION_SCREENSHOTS=release-assets/dialogs/vm-isolation node tests/integration/vm-network-isolation.mjs
           fi
           if [ "${{ matrix.audit }}" = pages ]; then
+            if [ "${{ matrix.shard }}" = 0 ]; then
+              PAGE_STANDARD_SCREENSHOTS=release-assets/pages/components node tests/integration/page-components.mjs
+            fi
             node scripts/check_setup_guide.mjs
             STORAGE_SCREENSHOTS=release-assets/pages/setup-storage node tests/integration/setup-storage-classes.mjs
             node scripts/check_demo_scenarios.mjs

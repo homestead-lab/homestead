@@ -138,13 +138,10 @@ async function viewProtect() {
   const tgt = d.target || {};
   const cover = d.total ? Math.round(d.protected / d.total * 100) : 0;
 
-  paint(`<div class="phead">
-      <div><h2>Data protection</h2>
-        <p>Longhorn recurring jobs, snapshot groups and backups across ${d.total} volume${d.total === 1 ? "" : "s"}</p></div>
-      <div class="row">
+  paint(`${UI.pageHeader(`Data protection`, `Longhorn recurring jobs, snapshot groups and backups across ${d.total} volume${d.total === 1 ? "" : "s"}`, `
         ${moreMenu([{ label: "Backup target", icon: "shield", run: "lhTarget()", need: "admin" }, { label: "Plans", icon: "clock", run: "lhPlans()", need: "operator" }])}
         <button class="btn pri" data-need="operator" onclick="lhJob()">＋ New job</button>
-      </div></div>
+      `)}
 
   ${objects.deployed ? "" : objectStoreCard(objects, tgt)}
   ${summaryLine("protect", [

@@ -114,3 +114,35 @@ test("master detail keeps stable disclosure keys and escapes labels and selectio
   new Function("pick", decoded)(value => {received=value;});
   assert.equal(received,key);
 });
+
+test("page and module headers share action placement and explicit HTML slots", () => {
+  const page = UI.pageHeader("Hosts", "<b>3</b> ready", '<button id="create">Add</button>', {extraHtml:'<span id="filter">Group</span>',descriptionAttrs:'id="count"'});
+  assert.match(page, /<h2>Hosts<\/h2><p id="count"><b>3<\/b> ready<\/p>/);
+  assert.match(page, /class="row page-actions"><button id="create">/);
+  assert.ok(page.indexOf('id="filter"') < page.indexOf('page-actions'));
+  const module = UI.moduleHeader("Updates", "Releases and hosts", '<button disabled data-need="admin">Check</button>');
+  assert.match(module, /settings-card-head/);
+  assert.match(module, /module-actions"><button disabled data-need="admin">/);
+});
+
+test("settings wrappers retain routing, save scope, loading identity and visibility", () => {
+  const card = UI.settingsCard('<div>Loading</div>', {tab:'updates',id:'host"updates',save:'app',hidden:true});
+  assert.match(card, /data-tab="updates" id="host&quot;updates" data-save="app" hidden/);
+  assert.match(UI.settingsGrid(card,'updates'), /class="settings-grid" data-tab="updates"/);
+  assert.match(UI.saveBar({id:'save',messageId:'message',save:'save(this)',discard:'discard()'}), /id="save" hidden/);
+  assert.match(UI.saveBar({id:'save',messageId:'message',save:'save(this)',discard:'discard()'}), /id="message" role="status"/);
+});
+
+test("workspace navigation escapes labels and handlers and groups items once", () => {
+  const key = 'quoted"<&';
+  const html = UI.workspaceNav([{key,label:'<Unsafe>',group:'Cluster'}, {key:'other',label:'Other',group:'Cluster'}],
+    {label:'Settings',selected:key,onSelect:id => `choose(${JSON.stringify(id)})`});
+  assert.equal((html.match(/settings-nav-group/g)||[]).length,1);
+  assert.match(html, /&lt;Unsafe&gt;/);
+  assert.match(html, /aria-selected="true" tabindex="0"/);
+  const encoded=html.match(/onclick="([^"]*)"/)[1];
+  const decoded=encoded.replace(/&(amp|lt|gt|quot|#39);/g,(_,e)=>({amp:'&',lt:'<',gt:'>',quot:'"','#39':"'"}[e]));
+  let result;new Function('choose','UI',decoded)(value=>{result=value;},{navigateWorkspace:(_button,run)=>run()});assert.equal(result,key);
+  assert.match(UI.workspace(html,'<input id="kept">',{open:false,backLabel:'Back',back:'goBack()'}), /data-open="0"/);
+  assert.match(UI.workspace(html,'<input id="kept">',{open:true}), /data-open="1"/);
+});
