@@ -261,8 +261,9 @@ The **Hardware** tab keeps each group folded, with its settings on one line:
 - **Guest tuning** - Hyper-V enlightenments for Windows, hiding KVM from GPU
   drivers that refuse to run in a VM, and the clock's time zone (UTC, or local
   time for Windows).
-- **Devices** - the display the web console shows, the serial console, a
-  tablet pointer, a random-number device, the memory balloon, a sound card.
+- **Devices** - primary boot output (web console, physical GPU or serial), the
+  serial console, a tablet pointer, a random-number device, the memory balloon,
+  a sound card.
 - **Memory and placement** - hugepages, and what happens when its node is
   drained: live-migrate, try to, or stop.
 
@@ -298,6 +299,8 @@ Two steps: the host hands the device over, then the VM asks for it.
   bridges stay), and lists it with KubeVirt as `homestead.io/pci-<vendor>-<device>`.
   A device carrying the host's network, or with a disk the host has mounted, is
   refused. **Give back** returns it to its own driver.
+  Giving away the host's boot GPU makes its local display go dark; keep remote
+  access to Homestead and the host available.
 - **Offer to VMs** on a USB device lists it with KubeVirt by vendor and product
   (`homestead.io/usb-<vendor>-<product>`), on any host that has one; nothing on
   the host changes.
@@ -311,6 +314,35 @@ such a host and cannot live-migrate; the change applies at its next start.
 The edit form also lets you select a different resource for an existing device.
 Host preparation opens in a separate tab so the VM configuration stays in place.
 
+The **Passthrough** picker shows inspected device models, vendor/product IDs,
+hosts, PCI addresses and IOMMU groups, plus VMs currently using the resource.
+On k3s/RKE2, devices offered before Homestead retained inventories may initially
+show only their IDs: inspect or refresh that host under **Hardware → Devices
+for VMs** once to populate their names. Harvester device names come directly
+from its inventory. Names and addresses describe the hardware; the selection
+still requests a KubeVirt resource, which can represent matching devices on
+several hosts. Current host availability comes from the cluster, independently
+of the retained names.
+
+A GPU's audio function moves to vfio-pci with its IOMMU group on k3s/RKE2.
+Add that function separately in **Passthrough** if the guest needs it too.
+
+### Several VMs configured for the same device
+
+Stopped VMs can be configured with the same PCI or USB resource. Saving those
+configurations does not reserve the hardware. **Start** checks active VMs and
+pending starts against the number of devices available on eligible hosts. If
+the only matching device is busy, the review names its holder: stop that VM
+and wait for its device allocation to be released before starting the other.
+Several matching physical devices can serve several VMs when capacity allows.
+
+Editing a running VM reuses its verified existing GPU and USB allocations;
+keeping its own device does not count as requesting a second copy. Additional
+devices still need free capacity. If the review says **Live edit requires a
+stable, verified resident launcher**, wait for startup, shutdown or migration
+to finish, refresh, and review again. Stop the VM before changing its pinned
+host. Saving does not guarantee that a hardware change can be applied live.
+
 ### A GPU's ROM (vBIOS)
 
 To capture a card's ROM, open its node's **Hardware → Devices for VMs**,
@@ -318,6 +350,8 @@ inspect the devices, and choose **Capture vBIOS** beside the GPU. Give the
 GPU to VMs and stop any VM using its IOMMU group first. Homestead reads the
 card's sysfs ROM, checks its PCI image headers and vendor/device IDs, and
 downloads a `.rom` file. It does not detach a host driver or reset the card.
+For an idle VFIO GPU that has runtime-suspended, capture temporarily wakes the
+card and restores its previous power policy afterwards, including on failure.
 The ROM read switch is disabled again when the helper finishes. A card that
 does not expose a readable ROM needs a dump from that exact card, such as
 one captured with GPU-Z; capture does not flash or modify the GPU firmware.
@@ -340,7 +374,8 @@ replace or clear it explicitly in the edit form; unrelated edits keep it intact.
 
 ### Primary boot output
 
-In **VM → Edit → Hardware → Devices**, **Primary boot output** chooses
+In **New VM → Hardware → Devices**, or **VM → Edit → Hardware → Devices**,
+**Primary boot output** chooses
 **Web console (virtual display)**, **Passed-through GPU (physical monitor)**,
 or **Serial console only**. The change applies at the VM's next start.
 
@@ -355,6 +390,30 @@ With several passed-through GPUs, the guest firmware chooses which card to
 initialize; this setting chooses physical GPU output rather than a specific
 card or connector.
 
+If removing the last GPU, change **Primary boot output** to web console or
+serial in the same edit. Clearing a vBIOS file alone does not restore the
+virtual display. A serial console also needs the guest to send output to its
+serial port; enabling the virtual port alone does not configure the guest OS.
+
+### First boot on a physical GPU
+
+1. On the host, check IOMMU and **Give to VMs** for the GPU. If IOMMU was just
+   enabled, restart the host and inspect it again before continuing.
+2. Stop VMs using the card or its IOMMU group. If the card needs a ROM, choose
+   **Capture vBIOS** on its host and keep the downloaded file.
+3. In the VM's **Passthrough** tab, add the GPU and select that ROM beside the
+   device. A card that works with its default ROM needs no uploaded file.
+4. In **Hardware → Devices**, select **Passed-through GPU (physical monitor)**
+   and keep the serial console enabled. Review the change and save it. Check
+   that a guest previously installed for BIOS can boot with UEFI.
+5. Connect the monitor to the passed-through GPU and select the matching input.
+   Start the stopped VM, or restart it if it was already running when you changed
+   the settings. Install the guest's GPU driver for OS display output.
+
+The physical display is separate from Homestead's VNC screen. See
+[GPU troubleshooting](Troubleshooting#gpu-passthrough) if the VM runs but the
+monitor stays blank.
+
 ### Hardware during a cluster transfer
 
 **Copy to cluster** and **Move to cluster** show a passthrough mapping for each
@@ -368,15 +427,6 @@ ROM. Homestead copies managed ROM data and rebuilds its hook ConfigMap on the
 destination. It removes the source hostname selector; other placement rules
 remain. Custom hook sidecars require separate dependency setup and are refused
 by this transfer flow. The source's device settings are unchanged.
-
-The **Passthrough** picker shows inspected device models, vendor/product IDs,
-hosts, PCI addresses and IOMMU groups. On k3s/RKE2, devices offered before
-Homestead retained inventories may initially show only their IDs: inspect or
-refresh that host under **Hardware → Devices for VMs** once to populate their
-names. Harvester device names come directly from its inventory. Names and
-addresses describe the hardware; the selection still requests a KubeVirt
-resource, which can represent matching devices on several hosts. Current host
-availability comes from the cluster, independently of the retained names.
 
 ## ISO library
 

@@ -33,6 +33,8 @@ Everything Homestead does, with nothing Harvester-specific needed:
 
 ## 1. What you need
 
+Homestead is tested with **Ubuntu 26.04.1 LTS (minimal installation)**.
+
 - **One or more Linux machines** with a 64-bit OS (Ubuntu Server 24.04 LTS,
   Debian 12, Rocky/Alma 9 or openSUSE Leap are all fine), `curl`, and root
   access. x86-64 or 64-bit ARM.
