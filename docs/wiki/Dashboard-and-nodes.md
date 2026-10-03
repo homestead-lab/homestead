@@ -314,3 +314,16 @@ together. On k3s/RKE2, the other functions move to vfio-pci with the selected
 device; PCI bridges stay with the host. A group containing the host's network
 or a disk in use cannot be handed over. On Harvester, its controller manages
 the individual device claims.
+
+The host's boot GPU is marked **boot display**. Giving it to VMs removes the
+host's local screen output. Hardware preparation and vBIOS capture require an
+administrator; VM attachment is configured separately in the VM's
+**Passthrough** tab.
+
+For a GPU, **Capture vBIOS** downloads a ROM after checking that its host driver
+is detached and no active VM uses its IOMMU group. An idle VFIO card is woken
+temporarily if needed, then its original power policy is restored. The capture
+does not upload the ROM into a VM: choose the downloaded file beside the GPU
+in **VM → Edit → Passthrough**. See
+[GPU ROMs](Virtual-machines#a-gpus-rom-vbios) and
+[first boot on a physical GPU](Virtual-machines#first-boot-on-a-physical-gpu).

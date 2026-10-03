@@ -237,11 +237,18 @@ filesystem overhead. This avoids inheriting a
 block-device mode that the host runtime may not let CDI access.
 When every disk has arrived the VM is made,
 **stopped**, for you to start. The VM on Unraid is never changed or deleted; if
-a copy fails, cleanup of its destination disks is requested. A storage class
-with **Retain** keeps the backing volumes, including CDI scratch volumes,
-after their claims are removed. Review those disconnected volumes in
-**Volumes** before choosing **Permanently delete data**. The failed import can
-be retried without changing the source VM.
+a copy fails, cleanup of its destination disks is requested. New imports also
+reclaim their own CDI staging and scratch storage, including temporary space
+on a **Retain** storage class. Completed disks keep their chosen storage policy.
+If copying finishes but VM creation fails, the completed disks are kept so you
+can create the VM from them under Import. The failed import can be retried
+without changing the source VM once its cleanup finishes.
+
+The job stays active while temporary import storage is being removed, and
+cleanup continues after a Homestead restart. Do not retry with the same disk
+names while cleanup is pending. Storage used by another workload, with changed
+ownership, or left by an older import without tracked ownership is preserved;
+inspect it under **Volumes** before removing anything separately.
 
 This needs CDI, which Harvester includes.
 
@@ -252,6 +259,10 @@ disk image - qcow2, vmdk, raw, vdi, vhd(x) - into a new volume, converting it as
 it goes, and can check its SHA-256. When it finishes, **Create VM** boots from
 it. This needs CDI, which Harvester includes. See
 [Virtual machines](Virtual-machines).
+
+URL disk imports use the same tracked CDI staging and scratch cleanup described
+above. Completion includes removal of the import's temporary storage; the
+finished VM disk remains available for **Create VM**.
 
 ## From another Homestead
 
