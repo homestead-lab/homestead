@@ -61,7 +61,7 @@ column headings are the one small upper-case label.
 
 ### The shape of a page
 
-1. **Header** (`.phead`) - on the left, the page family's tabs when it has
+1. **Header** (`UI.pageHeader`) - on the left, the page family's tabs when it has
    them (added by `paint()`), then a one-line subtitle; on the right, on the
    same line as the tabs, the actions: the cards/rows switch if the page has
    one, `moreMenu()` for everything secondary, and one main button (`pri`) -
@@ -297,56 +297,134 @@ Homestead is a working tool: show more at once, pad less.
 
 ## Dialogs
 
-### The shape of a dialog
+### Section rail standard
 
-Top to bottom, leaving out what a dialog does not need:
+Use the same opaque shell, concise header and bottom action bar for every
+dialog. Long forms use a section rail on the left; phones replace that rail
+with a labelled section selector above the content. Short confirmations and
+reviews need no rail. Do not add empty sections to make a small dialog larger.
 
-1. **Title** - what the dialog is about: `Delete volume · media`,
-   `Start frigate?`, `New share`. Sentence case, the object after a `·`.
-2. **Lead** (`UI.lead`) - one or two sentences: what happens if you go ahead.
-3. **One callout** (`UI.callout`) - the thing that needs attention, if there
-   is one. Never more than one warning or error callout: gather everything
-   into one, as a list.
-4. **Content** - sections (`UI.section`) of facts, tables, checklists, steps
-   or form fields.
-5. **Details** (`UI.more`) - how something is calculated, background, the
-   objects behind it.
-6. **Confirmation** (`UI.ack`, or a typed name) - only for actions that are
-   risky or cannot be undone.
-7. **Actions** (`UI.actions`) - always last.
+Top to bottom, leaving out what the dialog does not need:
 
-**Long forms go in steps** (`stepper()`): Edit container, Import, New VM
-and New share. Numbered chips across the top, one pane at a time, Back and
-Next at the foot. Every pane is drawn at once and only hidden, so the form's
-save reads every field; an edit keeps its Save on every step.
+1. **Title** — action and object, such as `Edit · frigate` or `Delete volume · media`.
+2. **Lead** (`UI.lead`) — one sentence describing the decision or next action.
+3. **Attention** (`UI.callout`) — blockers, consequences and required action stay
+   visible. Combine related warnings into one notice.
+4. **Content** — the current section's fields, a concise review, or current job status.
+5. **Optional detail** (`UI.more`) — named disclosures such as `Optional settings`,
+   `Capacity and exact images`, or `Log and history`.
+6. **Confirmation** (`UI.ack`, or a typed name) — an existing required risk check.
+7. **Actions** (`UI.actions`) — one footer, always after the content.
 
-Edit container uses Basics (workload and container names, images and autostart),
-Hardware and access (resources, devices, privileges and ports), Environment values
-(variables, managed references and startup configuration), Storage, Where it runs,
-and Address. Each step groups its fields by container. Changing a name or image
-updates that container's heading throughout the form; each field is rendered once.
-Basics places Add container above the list, with Remove container on each card.
-Removing a card stages its removal in every step and offers Undo removal. Saving
-reviews the complete container set and keeps persistent data. Pod copies remain
-separate from adding different containers inside each pod.
+### Navigation and buttons
 
-**One explanation box at most**, and only for a risk. A field's explanation
-is a `tip()` beside its label; what the whole dialog needs you to know is one
-`UI.more("How this works", …)` at the foot. `foldDialogNotes()` enforces it
-as a dialog draws: a second plain note and any after it fold into that
-expand; warnings, errors and notes with controls stay.
+`stepper(id, steps, finish, { always: true })` is a section editor: navigate
+directly, with **Cancel** on the left and **Review changes** on the right on every
+section. Do not add Next beside Review changes. A sequential creation form uses
+the same rail with Back, Next and a final Review action. Visiting a section does
+not mean its fields are valid and must never give it a completion tick.
 
-**Buttons.** The actions bar is the last thing in the dialog, pinned to its
-bottom edge while the content scrolls. Cancel (or Close) comes first and the
-main action last, on the right; on a phone they stack full width, main action
-on top. A button names what it does - `Delete volume`, `Start anyway` - not
-`OK`. A destructive main action is `kind: "danger"`.
+Render each field once and hide inactive panes. Switching sections must preserve
+values, added items and staged removals. Container edit groups Basics, Hardware
+and access, Environment values, Storage, Where it runs, and Address by container.
+Adding a container is distinct from increasing pod copies. Remove stages a
+removal with Undo; review keeps persistent data and explains the rollout.
 
-**Risky actions ask once, clearly**: one acknowledgement (`UI.ack`) or, when
-it cannot be undone, the object's name typed - never both for the same risk.
+Keep the footer reachable while content scrolls. Cancel or Close goes left; the
+main action goes right and names the result (`Review changes`, `Update`,
+`Delete volume`). The destructive action uses `kind: "danger"`. On phones keep
+the same order, with wrapping only when needed and at least 44px touch targets.
+Long tables become cards; form columns stack. The section selector uses a 16px
+font and an explicit label. Do not squeeze the desktop rail onto a phone.
 
-**Phones.** Dialogs open as a sheet from the bottom of the screen, full width;
-tables become cards and field grids one column on their own.
+### Professional, succinct copy
+
+Use sentence case and direct verbs. Aim for one lead sentence and one short
+instruction per field. Remove conversational filler, repeated consequences,
+implementation narration and promises that checks cannot guarantee. A long
+dialog may contain many objects; judge explanatory copy separately from names,
+rows and field labels.
+
+Use `tip()` beside a field label for a short definition or uncommon setting.
+Tooltips must work by keyboard focus and touch as well as hover. Use a named
+`UI.more` disclosure for multi-paragraph guidance, commands or diagnostic output.
+Use rail sections when the user must complete several tasks. Never hide a
+blocker, destructive consequence, recovery instruction or required consent in
+a tooltip. Keep examples concise and use neutral, professional wording.
+
+### Show the decision; disclose the explanation
+
+Keep essential inputs, affected objects, interruption/data-loss consequences,
+blocking errors and required acknowledgements visible. Put uncommon settings,
+long identifiers, capacity calculations and logs behind descriptive summaries.
+Prefer a meaningful count or value (`Completed · 4`) over a generic `Details`.
+Avoid repeating the same consequence in the lead, a callout and an acknowledgement.
+
+Disclosures preserve their state while a dialog polls. Different job records
+have separate disclosure state. Invalid fields must reveal their section and
+any collapsed ancestors before receiving focus (`revealDialogField`). Keep
+required warnings outside disclosures so a previous collapsed state cannot hide
+a new blocker. Legacy `foldDialogNotes` works within each section; new content
+uses explicitly named `UI.more` disclosures instead of relying on automatic folding.
+
+Risky actions ask once for each distinct consequence. Preserve existing server
+review tokens, role checks, confirmations and recovery guards when restyling.
+Do not turn a visual simplification into weaker approval or automatic retry.
+
+### Progress, container updates and Jobs
+
+Show current phase and the next useful action first. A percentage must represent
+a reported measurement; unknown progress uses `UI.progress(null)` or a status
+without a bar. Navigation is not progress. Lost contact shows last known state
+and explicitly leaves completion unverified. Failed and blocked states remain
+visible; diagnostic output can collapse.
+
+Container update review shows the apps and image changes, restart impact and
+warnings. Exact digests and capacity calculations collapse. The update button
+stays disabled until the reviewed change is acknowledged. During a queue, keep
+failed or waiting workloads and their reason visible. **Close queue** explicitly
+stops unstarted updates; submitted rollouts continue in Jobs. Never imply that
+the browser-managed queue continues after closing it.
+
+Jobs uses a list on the left and selected job detail on the right. On phones the
+list sits above the detail. Keep selection through polling. Failed jobs belong
+under **Needs attention**, active jobs under **Running**, and successful/cancelled
+history under **Completed**. Log and history controls collapse; recovery actions
+remain visible. **Clear completed** removes only dismissible successful or
+cancelled records, preserving failed and protected recovery records.
+
+## Shared page and Settings structure
+
+`web/js/ui.js` owns page and module layout. Pages provide titles, content, state
+and handlers through shared components. Do not write custom header, Settings card,
+sidebar, mobile collection toolbar or save-bar markup in feature modules.
+
+- `UI.pageHeader(titleHtml, descriptionHtml, actionsHtml, options)` places the
+  subtitle and filters on the left and actions on the right. `paint()` adds the
+  page family's tabs. Keep the primary action last; use `moreMenu` for secondary
+  choices. Dynamic values in HTML slots must be escaped.
+- `UI.moduleHeader(titleHtml, descriptionHtml, actionsHtml)` gives Settings,
+  host details, Cluster and Setup the same heading and action placement. Its
+  action group wraps below the heading when space is limited.
+- `UI.settingsCard(bodyHtml, {tab, id, save, wide, hidden})` retains a module's
+  topic, loading identity, save scope and visibility. Reuse the same content
+  renderer wherever a module appears; do not copy its markup into another page.
+- `UI.settingsGrid(bodyHtml, tab)` groups cards for a selected Settings section.
+  `UI.saveBar` owns the sticky Discard/Save layout and live status message.
+  Callers retain dirty tracking, validation, permission checks and save behavior.
+- `UI.workspace` and `UI.workspaceNav` provide the shared sidebar/content layout
+  used by Settings, host details and Setup. `UI.selectWorkspace` updates section
+  selection without replacing the fields. On phones, Settings and host details
+  show their section list first with a consistent Back button; Setup keeps its
+  step picker. Keyboard navigation uses Up, Down, Home and End.
+- `UI.collectionHeader` places mobile container/VM controls above their summary.
+  Continue using `settingRow`, `serviceRow`, `actionBar`, `summaryLine`, `UI.stats`
+  and `UI.table` for their existing purposes.
+
+Spacing comes from `--page-gap`, `--module-gap`, `--workspace-gap` and
+`--workspace-rail` in `web/style.css`. Adjust the shared rule instead of adding
+page-specific spacing overrides. Keep loading, blocked, empty and ready states
+in the same module shell so controls do not change location as data arrives.
 
 ## Components
 
@@ -361,14 +439,15 @@ tables become cards and field grids one column on their own.
 | `UI.steps(list, current)` | A numbered guide (`current = -1`), or where a long job has got to | Unordered facts |
 | `UI.progress(value, options)` | Work under way; `null` while its size is unknown | How full something is |
 | `UI.meter({ now, after, warnAt })` | How full a host, disk or volume is, now and after a change | Progress over time |
-| `UI.more(summary, html)` | Detail in a dialog most people do not need | Anything needed to decide |
+| `UI.more(summary, html, open, key)` | Detail in a dialog most people do not need | Anything needed to decide |
 | `UI.guide(summary, html)` | How a page works, collapsed | Something that needs doing now |
 | `UI.stats(cards)` | A page's headline figures, behind a summary line | The first thing on a page |
 | `summaryLine(id, items, detail, label)` | A page's one-line status, its tiles a tap away (open stays open across refreshes) | A list |
 | `moreMenu(items)` | A header's secondary actions, behind `⋯` | The main action |
 | `menuButton(label, items)` | A main action that is a choice - ＋ Import and its kinds | A single action |
 | `actionBar(items, { shown })` | A card's or a row's buttons: `shown` (2) as buttons, the rest in `⋯` | A dialog's buttons |
-| `stepper(id, steps, finish, { always })` | A long form, one step at a time | A short form |
+| `UI.sectionForm(id, sections, finish, { always, noticeHtml })` / `stepper(id, steps, finish, { always })` | Section rail and phone selector; `always` for direct editing | A short form |
+| `revealDialogField(field)` | Reveal a field’s section and disclosures before focusing an error | Showing unrelated help |
 | `Diagram.node(n)`, `Diagram.vip(ip, rows)`, `Diagram.mapping(rows)` | What a node holds, where a VIP leads, where each folder goes - drawn live | Decoration |
 | `settingRow(label, help, control)` | One setting: label and help left, its control right | A form of many fields (use a dialog) |
 | `serviceRow(name, state, detail, actions)` | Something Homestead runs or connects to, with its state and buttons | A list of like items |
@@ -376,18 +455,43 @@ tables become cards and field grids one column on their own.
 | `UI.fields(...)` / `UI.field(label, control, { help })` | Forms: two columns on a desktop, one on a phone | - |
 | `UI.chip(label, tone)` | A short status next to a name | Sentences |
 | `UI.button(label, onclick, { kind })` / `UI.cancel()` | Buttons | - |
-| `UI.actions(buttons, start)` | A dialog's buttons | Buttons that act on one row |
+| `UI.masterDetail(groups, selectedKey, detailHtml, options)` | Grouped navigation and a selected detail, such as Jobs | Form steps |
+| `UI.sectionNavigation(id, sections, options)` | Externally managed setup guides; section forms include this automatically | Hand-written navigation |
+| `UI.actions(buttons, start, { className, attrs })` | A dialog's buttons | Buttons that act on one row |
 
 Menu and bar items are `{ label, run, icon, need, tip, danger, ariaLabel }`. `run` goes
 into the `onclick` attribute as it is, so values in it go through `jsq()`
 like any other handler's; `tests/handler-escaping.test.js` sends hostile
 values through them.
 
-Older markup - `.note`, `.sec`, `.row` and `.modalactions` in dialogs,
-`.grid.statgrid` on pages - still works, styled to match. New and rewritten
-work uses the components.
+Dialog structure is owned by `web/js/ui.js`. Feature code supplies section data,
+content and action handlers; it does not write rail, navigation or footer markup.
+Use stable section keys when sections are conditional. All panes stay mounted so
+navigation preserves unsaved values. The shared controller owns desktop tabs,
+keyboard focus, the phone selector and revealing fields with validation errors.
+
+Use `UI.actions` for every dialog footer. Pass Cancel/Back on the left and the
+primary action last on the right. `UI.cancel()` carries a dismissal marker; the
+component also moves marked dismissals out of an existing action string. Preserve
+permission gates, disabled states and handlers when migrating markup. Inline
+controls that edit a row remain an `actionBar` or a form row.
+
+Jobs uses `UI.masterDetail`; its caller owns selection, refresh and recovery
+actions. Stable disclosure keys preserve expansion when counts or text change.
+Long explanations use `UI.more`; decisions, blockers and consequences stay visible.
+`UI.button` and section/list selection callbacks escape their handler once; use
+`jsArg()` for values passed to those APIs.
+
+Older `.note`, `.sec` and page stat grids still work, styled to match. New and
+rewritten work uses the components.
 
 ## Checking
+
+Check the section rail at desktop and phone widths, in both themes. Verify
+that navigation retains field values, disclosures stay open during polling,
+errors reveal hidden fields, the footer is reachable, and completed-history
+clearing preserves failures and recovery records. Inspect screenshots as well
+as checking overflow; a dialog fitting its box is not enough.
 
 ### Rules the tests hold you to
 
@@ -399,7 +503,11 @@ file and line, when it finds:
 - a list made by mapping items to `serviceRow()` - a list of like things is a
   `tbl stack` table;
 - a table that is not `tbl stack`;
-- a Settings card with a title but no `settings-card-head`.
+- a hand-written Settings title/subtitle instead of `UI.moduleHeader`;
+- rail, section navigation, pane or footer markup authored outside `ui.js`;
+- a hand-written dismissal row instead of `UI.actions`;
+- page headers, module headers, Settings wrappers, navigation or save bars written
+  outside the shared UI module.
 
 It also checks this file still states those rules. Change a rule in both
 places at once; never quiet the test for one screen.
@@ -408,6 +516,7 @@ With the demo running (`PORT=4173 WEBROOT=web python server/server.py`):
 
 ```bash
 node scripts/audit_pages.mjs
+# PAGE_OUTPUT selects the capture folder; HOMESTEAD_AUDIT_THEME=light checks light mode.
 ```
 
 ```bash
@@ -425,3 +534,51 @@ can be measured, not clutter.
 A new page is added to `scripts/audit_pages.mjs` and a new dialog to
 `scripts/audit_dialogs.mjs`, with demo data in `web/js/demo.js` if it needs
 any, so CI checks it from then on.
+
+
+### Dialog contact sheets
+
+Render both themes with `scripts/audit_dialogs.mjs`, setting `DIALOG_OUTPUT`
+to `release-assets/dialog-review/dark` or `release-assets/dialog-review/light`
+and `HOMESTEAD_AUDIT_THEME` to the matching theme. Each audit includes desktop
+and phone screenshots, visible copy and layout measurements.
+
+Run `python scripts/build_dialog_contact_sheets.py release-assets/dialog-review`
+with Pillow installed. It validates matching theme inventories, then writes
+paired PNG cards, paginated contact sheets, a ZIP of those sheets and a searchable
+`index.html` gallery. Open the gallery locally; review images use demo data.
+
+The same contact-sheet builder supports page captures:
+`python scripts/build_dialog_contact_sheets.py release-assets/page-review --kind pages`.
+Capture both themes into that folder with `PAGE_OUTPUT` before building it.
+
+
+### Customizable dashboard
+
+`web/js/dashboard.js` owns the versioned widget registry, validated layout,
+canvas and editor. Feature renderers provide widget content; editing and viewing
+use the same renderers. Portal tiles come from `portalTiles`, shared with Portal.
+Do not fork charts, links or resource cards for the editor.
+
+- Use a 12-column grid with third, half, two-thirds and full-width cards.
+  A widget may constrain its widths to keep its content usable. Node comparison
+  stays full width. Height is a minimum (fit content, medium or tall), never a crop.
+- Array order is visual, keyboard and mobile reading order. Do not use dense grid
+  backfilling or CSS order. Narrow canvases stack cards and reset minimum heights.
+- Keep editing explicit. Give cards a move handle, resize handle and accessible
+  settings. Collapse the control panel on phones and retain the editing toolbar.
+  Provide arrow-key movement, Earlier/Later controls, Undo/Redo,
+  recoverable Reset, Cancel and Save. Phone preview uses the same container rules.
+- Keep the library and size settings outside the live content. Widget actions are
+  inert during editing; refresh cannot replace the draft. Cluster alerts remain
+  outside the customizable grid. Saving does not modify cluster resources.
+- Persist versioned layouts in the account store through
+  `/api/auth/preferences/dashboard`, using the authenticated account identity.
+  Layouts follow the user across sessions, browsers and devices. Read the latest
+  layout before editing; save with its revision and Kubernetes resourceVersion
+  checks. Keep drafts on server errors or concurrent-session conflicts. Import a
+  legacy browser layout only if the account has no layout; never overwrite a
+  server layout during migration. Warn before leaving a draft; clear it on sign-out.
+- Add metadata and content to the registry to introduce a widget. Validate old
+  layouts, unknown IDs, duplicate IDs and sizes before rendering. An empty saved
+  layout is valid. Keep behavior coverage in `tests/integration/dashboard-editor.mjs`.

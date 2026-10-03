@@ -234,8 +234,7 @@ window.fleetMigration = async id => {
     if (ready) (window.__clusterReady ||= {})[m.handle] = ready;
   }
   if (!$("#mbody")) return;
-  const lead = UI.lead(`Lets workloads move from ${esc(m.name)} to another linked cluster. Each one's volumes are backed up to
-    ${esc(m.name)}'s backup storage - an S3 store (RustFS) on a Longhorn volume - and restored where it goes.`);
+  const lead = UI.lead(`Move workloads from ${esc(m.name)} to linked clusters by backing up their volumes to its S3 store and restoring them at the destination.`);
   const target = ready?.target || {};
   let body;
   if (state.allowed) {
@@ -373,9 +372,7 @@ window.fleetSettingsPaint = async () => {
   const all = fleetMode() === "all";
   const mode = (value, label) => `<button type="button" class="${(value === "all") === all ? "on" : ""}" aria-pressed="${(value === "all") === all}"
     onclick="fleetSetMode(${jsq(value)})">${label}</button>`;
-  host.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Linked clusters</div>
-      <div class="csub">Other Homesteads managed from this one - even when only this one is reachable from outside.</div></div>
-      ${UI.button("Link a cluster", "fleetLink()", { kind: "pri", attrs: 'data-need="admin"' })}</div>
+  host.innerHTML = `${UI.moduleHeader(`Linked clusters`, `Other Homesteads managed from this one - even when only this one is reachable from outside.`, `${UI.button("Link a cluster", "fleetLink()", { kind: "pri", attrs: 'data-need="admin"' })}`)}
     ${view ? `<ul class="fleet-list">${fleetMembersHtml(view)}</ul>` : UI.callout("bad", "Could not read the linked clusters.")}
     ${view?.linked ? UI.section("How they show", `<div class="seg fleet-mode" role="group" aria-label="How linked clusters show">
         ${mode("one", "One cluster at a time")}${mode("all", "All clusters together")}</div>
@@ -405,9 +402,7 @@ window.fleetMovesPaint = async () => {
   const [moves, clusters] = await Promise.all([api("/api/move/moves").catch(() => []), api("/api/move/clusters").catch(() => [])]);
   if (!$("#fleetMovesCard")) return;
   host.hidden = !moves.length && !clusters.length;
-  host.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Moving workloads</div>
-      <div class="csub">Bring containers and VMs here from another cluster. A cluster's <b>Migration</b> button above lets workloads move from it.</div></div>
-      ${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? UI.button("Clear finished", "moveDismiss()", { attrs: 'data-need="admin"' }) : ""}</div>
+  host.innerHTML = `${UI.moduleHeader(`Moving workloads`, `Bring containers and VMs here from another cluster. A cluster's <b>Migration</b> button above lets workloads move from it.`, `${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? UI.button("Clear finished", "moveDismiss()", { attrs: 'data-need="admin"' }) : ""}`)}
     <div id="movesList">${moves.length ? movesHtml(moves) : ""}</div>
     ${clusters.length ? `<ul class="fleet-list move-sources">${clusters.map(moveSourceRow).join("")}</ul>` : ""}`;
   if (window.applyRole) applyRole();

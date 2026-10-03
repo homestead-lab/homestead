@@ -82,7 +82,8 @@ try {
     let overflow = await page.evaluate(() => document.querySelector('#mbody').scrollWidth > document.querySelector('#mbody').clientWidth + 1);
     assert.equal(overflow, false, 'VM device card fits the dialog');
     await page.evaluate(async () => { closeModal(); await vmEdit('default', 'home-assistant-os'); });
-    await page.locator('#mbody').getByRole('button', {name: 'Hardware', exact: true}).click();
+    if(await page.locator('#ve_section').isVisible()) await page.locator('#ve_section').selectOption('hardware');
+    else await page.locator('#ve-tab-hardware').click();
     await page.locator('#vh details[data-sec="devices"] summary').click();
     await page.locator('#vh_boot_output').selectOption('gpu');
     assert.equal(await page.locator('#vh_firmware').inputValue(), 'uefi');
@@ -91,7 +92,8 @@ try {
     await page.screenshot({path: `${output}/boot-output-${width}-${theme}.png`});
     assert.equal(await page.evaluate(() => document.querySelector('#mbody').scrollWidth > document.querySelector('#mbody').clientWidth + 1), false,
       'boot output selector fits the dialog');
-    await page.getByRole('button', {name: /^Passthrough/}).click();
+    if(await page.locator('#ve_section').isVisible()) await page.locator('#ve_section').selectOption('devices');
+    else await page.locator('#ve-tab-devices').click();
     await page.locator('#pd_pick').waitFor({state: 'visible'});
     assert.match(await page.locator('#pd_pick option').first().innerText(), /GeForce RTX 2080/);
     await page.getByRole('button', {name: 'Add device', exact: true}).click();

@@ -7,7 +7,7 @@ function setup(fail=false) {
     childModal:(_title,body,_wide,style)=>{html=body;context=style;}, modalBack(){}, toast:m=>notices.push(m), ask:async()=>true,
     api:async(path,options)=>{calls.push({path,options});if(!options) return {installed:true,enabled:true,uid:"uid",resource_version:"12",detail:"<private>",directory:"/custom/pod-resources",capacity:{blocked:false,blockers:[],warnings:[],fingerprint:"review"}};
       if(fail) throw new Error("lost response");return {detail:"saved"};}};
-  ctx.window=ctx;vm.createContext(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-overview.js","utf8"),ctx);
+  ctx.window=ctx;vm.createContext(ctx); require("./helpers/load-ui")(ctx);ctx.jsArg=s=>JSON.stringify(String(s??""));ctx.jsq=s=>(ctx.esc||String)(ctx.jsArg(s));vm.runInContext(fs.readFileSync("web/js/views-overview.js","utf8"),ctx);
   return {ctx,calls,notices,fields,html:()=>html,context:()=>context};
 }
 test("allocation collector requires host access consent and preserves reviewed identity",async()=>{

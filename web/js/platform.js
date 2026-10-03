@@ -39,7 +39,7 @@ function platformLacks(need, title) {
   const p = STATE.platform;
   if (!p || p[need] !== false) return false;
   const info = PLATFORM_NEEDS[need];
-  paint(`<div class="phead"><div><h2>${esc(title)}</h2><p>${esc(platformName(p))} · ${esc(info.name)} is not installed</p></div></div>
+  paint(`${UI.pageHeader(`${esc(title)}`, `${esc(platformName(p))} · ${esc(info.name)} is not installed`, ``)}
     <div class="empty platform-missing"><b>This page needs ${esc(info.name)}</b>, because ${esc(info.why)}.
       <p class="dim small" style="max-width:560px;margin:10px auto 0">${esc(info.fix)}</p>
       ${can("admin") && p.helm_controller ? `<div class="row" style="justify-content:center;margin-top:12px">
@@ -204,9 +204,8 @@ window.addonsPaint = async () => {
       ${can("admin") && !nfs.error ? `<label class="switch"><input type="checkbox" ${nfs.enabled ? "checked" : ""} onchange="nfsToggle(this)"> ${nfs.enabled ? "On" : "Off"}</label>
         ${nfs.installed ? '<button class="btn sm danger" onclick="nfsRemove()">Remove server</button>' : ""}` : ""}</div></div>`;
   const clusterRows = s.harvester ? "" : `${hostConsoleRow(consoles)}${row("longhorn", s.longhorn)}${row("kubevirt", s.kubevirt)}${s.multus ? row("multus", s.multus) : ""}${s.kube_vip ? row("kube-vip", s.kube_vip) : ""}`;
-  card.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">Add-ons</div>
-      <div class="csub">${s.harvester ? "Optional Homestead services; Harvester already provides storage, VM and network add-ons"
-        : `What this ${esc(platformName(STATE.platform || { distribution: s.distribution }))} cluster can add`}</div></div></div>
+  card.innerHTML = `${UI.moduleHeader(`Add-ons`, `${s.harvester ? "Optional Homestead services; Harvester already provides storage, VM and network add-ons"
+        : `What this ${esc(platformName(STATE.platform || { distribution: s.distribution }))} cluster can add`}`, ``)}
     ${baselineHtml(baseline)}${probeRow}${smbRow}${nfsRow}${clusterRows}`;
   if (window.applyRole) applyRole();
 };

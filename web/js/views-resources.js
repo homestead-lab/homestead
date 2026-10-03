@@ -28,8 +28,7 @@ function renderResources() {
   const filter = RES.q.toLowerCase();
   const kinds = RES.kinds.filter(x => !filter || [x.kind, x.resource, x.group, ...x.short].join(" ").toLowerCase().includes(filter));
   const groups = [...new Set(kinds.map(x => x.category))];
-  paint(`<div class="phead"><div><h2>Resources</h2><p>Every kind this cluster serves, ${RES.kinds.length} of them · the columns are the API server's own</p></div>
-      <div class="row"><button class="btn pri" data-need="admin" onclick="resCreate()">＋ Create from YAML</button></div></div>
+  paint(`${UI.pageHeader(`Resources`, `Every kind this cluster serves, ${RES.kinds.length} of them · the columns are the API server's own`, `<button class="btn pri" data-need="admin" onclick="resCreate()">＋ Create from YAML</button>`)}
     <div class="res-layout">
       <aside class="res-kinds card flat">
         <input class="res-filter" placeholder="Find a kind" value="${esc(RES.q)}" oninput="resFilter(this.value)">
@@ -76,9 +75,9 @@ window.resOpen = async (ns, name, reveal = false) => {
         <button class="btn sm danger" data-need="admin" onclick="resDelete(${jsq(ns)},${jsq(name)})">${icon("trash")}Delete</button></div></div>
     <div class="seg" style="margin:10px 0">${["YAML", "Events"].map((t, i) => `<button class="${i ? "" : "on"}" onclick="resTab(this,${jsq(t)})">${t}</button>`).join("")}</div>
     <div class="res-pane" data-pane="YAML"><textarea id="res_yaml" class="mono helm-values res-yaml" spellcheck="false" readonly>${esc(o.yaml)}</textarea>
-      <div class="row" id="res_save_row" hidden style="margin-top:8px"><button class="btn pri" onclick="resSave(${jsq(ns)},${jsq(name)})">Save</button>
-        <button class="btn" onclick="resOpen(${jsq(ns)},${jsq(name)},${reveal})">Cancel</button>
-        <span class="dim xs">Saved as a replace; if someone changed it meanwhile, the save is refused rather than overwrite them.</span></div></div>
+      ${UI.actions(`<button class="btn pri" onclick="resSave(${jsq(ns)},${jsq(name)})">Save</button>
+        <button data-dialog-dismiss="true" class="btn" onclick="resOpen(${jsq(ns)},${jsq(name)},${reveal})">Cancel</button>
+        <span class="dim xs">Saved as a replace; if someone changed it meanwhile, the save is refused rather than overwrite them.</span>`, "", {attrs:`id="res_save_row" hidden`})}</div>
     <div class="res-pane" data-pane="Events" hidden><div id="res_events" class="dim small">loading</div></div>`;
   if (window.applyRole) applyRole();
   const uid = (o.object.metadata || {}).uid || "";
@@ -115,7 +114,7 @@ window.resCreate = () => {
   modal("Create from YAML", `<p class="muted small">One object or several, separated by <span class="mono">---</span>, created in order. Objects without a namespace go to the one chosen here.</p>
     <div class="f"><label>Namespace</label><select id="rc_ns">${(STATE.data.namespacesAll || ["default"]).map(n => `<option ${n === (RES.ns || "lab") ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
     <textarea id="rc_yaml" class="mono helm-values res-yaml" spellcheck="false" placeholder="apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: example\ndata:\n  hello: world"></textarea>
-    <div class="row" style="margin-top:10px"><button class="btn pri" onclick="resCreateGo()">Create</button><button class="btn" onclick="closeModal()">Cancel</button></div>`, true);
+    ${UI.actions(`<button class="btn pri" onclick="resCreateGo()">Create</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`, true);
 };
 window.resCreateGo = async () => {
   try { const r = await resPost("/api/resources/create", { yaml: $("#rc_yaml").value, ns: $("#rc_ns").value }); toast(r.detail, "ok"); closeModal(); viewResources(); }

@@ -34,7 +34,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error) {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.297" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.298-dev.1" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     <p class="dim small">This page tries again every few seconds.</p>
@@ -114,6 +114,7 @@ function ungate() {
 }
 
 function stopAuthenticatedWork() {
+  window.Dashboard?.invalidate();
   authGeneration++;
   ME = null; ROLE = null;
   clearInterval(window.__loopTimer);
@@ -124,7 +125,7 @@ function stopAuthenticatedWork() {
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.297" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.298-dev.1" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -199,9 +200,8 @@ window.pwChange = () => modal("Change password", `
   <div class="f"><label>Current password</label><input type="password" id="pw_old" autocomplete="current-password"></div>
   <div class="f"><label>New password</label><input type="password" id="pw_new" autocomplete="new-password"></div>
   <div class="f"><label>Confirm new password</label><input type="password" id="pw_new2" autocomplete="new-password"></div>
-  <div class="row" style="margin-top:16px">
-    <button class="btn pri" onclick="doPwChange()">Change password</button>
-    <button class="btn" onclick="closeModal()">Cancel</button></div>
+  ${UI.actions(`<button class="btn pri" onclick="doPwChange()">Change password</button>
+    <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}
   <div class="note" style="margin-top:14px">Changing your password signs out every other
   session, including on other devices.</div>`);
 
@@ -388,10 +388,8 @@ window.apiKeysPaint = async () => {
       <td data-label="Expires" class="small">${esc(keyUntil(k.expires))}</td>
       <td data-label="Last used" class="small">${k.last_used ? `${esc(agoText(k.last_used))}${k.last_ip ? `<div class="dim xs mono">${esc(k.last_ip)}</div>` : ""}` : '<span class="dim">never</span>'}</td>
       <td>${actionBar([{ label: "Revoke", run: `apiKeyRevoke(${jsq(k.id)},${jsq(k.name)})`, danger: true }], { shown: 1 })}</td></tr>`).join("");
-  card.innerHTML = `<div class="settings-card-head"><div><div class="ctitle">API keys</div>
-      <div class="csub">For Home Assistant, scripts and AI agents. Each key expires, can do only what it is given, and works only on the API</div></div>
-      <div class="row"><a class="btn sm" href="${API_DOCS}" target="_blank" rel="noopener">API guide</a>
-        <button class="btn sm pri" onclick="apiKeyNew()">＋ New key</button></div></div>
+  card.innerHTML = `${UI.moduleHeader(`API keys`, `For Home Assistant, scripts and AI agents. Each key expires, can do only what it is given, and works only on the API`, `<a class="btn sm" href="${API_DOCS}" target="_blank" rel="noopener">API guide</a>
+        <button class="btn sm pri" onclick="apiKeyNew()">＋ New key</button>`)}
     ${rows ? `<div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Key</th><th>May</th><th>Expires</th><th>Last used</th><th></th></tr></thead>
       <tbody>${rows}</tbody></table></div>` : '<div class="dim small">No keys yet.</div>'}
     <div class="dim xs" style="margin-top:8px">A key cannot manage users or keys, reach a host's shell, or change settings, whatever its scopes.
