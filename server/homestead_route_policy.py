@@ -705,7 +705,10 @@ def role(path, method):
         return "operator"
     if method == "GET" and __import__("re").fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path):
         return "viewer"
-    if method == "GET" and path in ("/api/fleet/all/workloads", "/api/fleet/all/vms", "/api/fleet/all/nodes", "/api/fleet/all/volumes"):
+    # The combined lists and Architecture across linked clusters
+    # (FLEET_LISTS in server.py); each member applies its own roles.
+    if method == "GET" and path in ("/api/fleet/all/workloads", "/api/fleet/all/vms", "/api/fleet/all/nodes",
+                                    "/api/fleet/all/volumes", "/api/fleet/all/flow"):
         return "viewer"
     return POLICY.get((method, path))
 
