@@ -18,6 +18,17 @@ function operationAge(value) {
 function renderOperations() {
   const tray = $("#jobTray"), items = STATE.data.operations || [];
   const active = items.filter(operationActive);
+  // Clearing one at a time is fine for a stray failure and tedious after a
+  // batch, so the header offers the lot - and says how many, because it will
+  // not touch anything still running.
+  const finished = items.filter(item => !operationActive(item) && item.dismissible !== false);
+  const clear = $("#jobClear");
+  if (clear) {
+    // Only relabel when there is something to clear, so it never reads
+    // "Clear 0 finished" in the moment between clearing and hiding.
+    clear.hidden = !finished.length;
+    if (finished.length) clear.textContent = `Clear ${finished.length} finished`;
+  }
   if (!items.length) {
     tray.classList.add("hidden");
     $("#jobList").innerHTML = "";
@@ -35,17 +46,6 @@ function renderOperations() {
     ${active.length ? `<span class="jobsummarypct">${Math.round(latest.progress || 0)}%</span>` : ""}
     <span class="jobchev" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 15l6-6 6 6"/></svg></span>`;
   $("#jobSummary").setAttribute("aria-expanded", String(operationPanelOpen));
-  // Clearing one at a time is fine for a stray failure and tedious after a
-  // batch, so the header offers the lot - and says how many, because it will
-  // not touch anything still running.
-  const finished = items.filter(item => !operationActive(item) && item.dismissible !== false);
-  const clear = $("#jobClear");
-  if (clear) {
-    // Only relabel when there is something to clear, so it never reads
-    // "Clear 0 finished" in the moment between clearing and hiding.
-    clear.hidden = !finished.length;
-    if (finished.length) clear.textContent = `Clear ${finished.length} finished`;
-  }
   const list = items.slice(0, 12).map(operationCard).join("");
   $("#jobList").innerHTML = list;
   paintJobsDialog();
@@ -70,7 +70,7 @@ function operationCard(operation) { return `<article class="jobitem" data-operat
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation(${jsq(operation.id)})">Carry on</button>` : ""}
       ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review retained resources and recovery choices; nothing is deleted" : "Says what it left behind and what cleanup removes"}" onclick="cancelOperation(${jsq(operation.id)})">${operation.tracking_only ? "Review retained resources" : "Clean up"}</button>` : ""}
       ${operation.cancellable ? `<button class="btn sm danger" data-need="${operation.copy_recovery ? "admin" : "operator"}" data-tip="Reviews what can be stopped or recovered before anything changes" onclick="cancelOperation(${jsq(operation.id)})">${operation.rename_recovery || operation.copy_recovery ? "Inspect outcome" : operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
-      ${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" onclick="dismissOperation(${jsq(operation.id)})">Dismiss</button>`}
+      ${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" data-tip="Remove this finished entry from Jobs. Volumes and required recovery records are retained." onclick="dismissOperation(${jsq(operation.id)})">Dismiss</button>`}
     </div>
   </article>`; }
 
