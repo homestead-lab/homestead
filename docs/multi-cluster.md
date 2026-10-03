@@ -16,7 +16,7 @@ relay in `server/server.py` (`_fleet_target`, `_fleet_forward`,
   API, consoles - to the one picked. That cluster serves its own pages, so two
   clusters on different releases each show their own app.
 - **All clusters** keeps this Homestead's app and shows Containers, Virtual
-  Machines, Nodes and Volumes from every linked cluster together, each row
+  Machines, Nodes, Volumes and Architecture from every linked cluster together, each row
   tagged with its cluster (Containers groups by cluster). An action on a row -
   or a dialog or console opened from it - goes to that row's cluster.
 - **Move to cluster**, in a container's or VM's `…` menu, opens the
@@ -167,3 +167,14 @@ regardless of the selected cluster. Widget data continues to come from the
 selected cluster. The remote identity (`name@member`) is an audit identity,
 not an account whose preferences should be created on the remote cluster.
 Update the entry-point Homestead to receive this routing fix.
+
+## Combined Architecture
+
+`/api/fleet/all/flow` gathers each member's existing `/api/flow` response using
+its signed user/role relay. It returns tagged cluster graphs and a `missing`
+list. Partial results remain visible with a persistent warning naming the
+clusters that could not be loaded. Resource identities are prefixed with the
+cluster ID in the browser; display and action names remain unchanged. VIPs,
+ports, claims and replica links therefore cannot cross cluster boundaries when
+names or addresses match. Move actions carry the resource's cluster context. Each cluster has its own
+labelled diagram, stacked vertically; highlighting stays within that diagram.

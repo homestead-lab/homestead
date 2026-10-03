@@ -668,3 +668,11 @@ Support third through full width, with a Short (240 px) height for shallow
 layouts. Wide lists flow into parallel groups of four rows; narrow lists stack
 the groups. Scroll rows within the card with column headings and a count.
 Keep these summaries read-only; View all opens the existing management page.
+
+### Mobile notification entry
+
+The top-bar bell opens the shared Notifications dialog on phones. Give it a
+visible title, comfortably sized action rows, scrollable content and the shared
+Close footer. Running jobs and attention items lead to their existing review
+screens. Desktop keeps the anchored menu. Do not use a small detached bottom
+popover for an attention surface containing several kinds of action.
