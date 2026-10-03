@@ -2313,6 +2313,17 @@ ssh_pwauth: true
     const url = new URL(typeof input === "string" ? input : input.url, location.origin);
     if (!url.pathname.startsWith("/api/")) return original(input, init);
     const key = url.pathname === "/api/image-updates" ? "/api/image-updates" : url.pathname;
+    if (key === "/api/auth/preferences/dashboard") {
+      const storageKey = `homestead.demo.dashboard.${typeof ME === "string" ? ME : "demo"}`;
+      let saved;try {saved=JSON.parse(localStorage.getItem(storageKey));}catch{}
+      saved ||= {revision:null,layout:null};
+      if(init?.method === "POST") {
+        const body=JSON.parse(init.body);
+        if(body.revision!==saved.revision)return new Response(JSON.stringify({error:"Your dashboard changed in another session. Cancel and reopen the editor to load the latest layout."}),{status:409,headers:{"Content-Type":"application/json"}});
+        saved={revision:crypto.randomUUID(),layout:body.layout};localStorage.setItem(storageKey,JSON.stringify(saved));
+      }
+      return new Response(JSON.stringify(saved),{status:200,headers:{"Content-Type":"application/json"}});
+    }
     if (key === "/api/diagnostics/download") return new Response("Homestead demo diagnostics; no cluster logs were collected.\n", { headers: { "Content-Type": "text/plain" } });
     // Asked of a linked cluster: the branch office runs an older Homestead, which does
     // not yet tag its own parts, with a release waiting.

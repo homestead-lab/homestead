@@ -1,5 +1,7 @@
 """Explicit HTTP authorization declarations. New routes must declare a policy."""
 POLICY = {
+    ('GET', '/api/auth/preferences/dashboard'): 'viewer',
+    ('POST', '/api/auth/preferences/dashboard'): 'viewer',
     ('GET', '/api/disks/v2/status'): 'admin',
     ('POST', '/api/disks/v2/plan'): 'admin',
     ('POST', '/api/disks/v2/start'): 'admin',

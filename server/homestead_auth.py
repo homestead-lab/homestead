@@ -195,6 +195,66 @@ def list_users():
             for u, v in sorted(_load().get("users", {}).items())]
 
 
+# Personal layouts live with the account, not a session or a browser. The Secret's
+# resourceVersion makes the write atomic across Homestead replicas.
+_DASHBOARD_WIDTHS = {"compute": (4, 6, 8, 12), "throughput": (4, 6, 8, 12),
+                     "storage": (4, 6, 8, 12), "nodes": (12,), "cpu": (4, 6, 8, 12),
+                     "memory": (4, 6, 8, 12), "history": (8, 12), "portal": (4, 6, 8, 12)}
+
+
+def _dashboard_layout(layout):
+    if (not isinstance(layout, dict) or set(layout) != {"version", "items"}
+            or type(layout["version"]) is not int or layout["version"] != 1
+            or not isinstance(layout["items"], list) or len(layout["items"]) > len(_DASHBOARD_WIDTHS)):
+        raise ValueError("Invalid dashboard layout")
+    seen = set()
+    for item in layout["items"]:
+        if not isinstance(item, dict) or set(item) != {"id", "width", "height"}:
+            raise ValueError("Invalid dashboard widget")
+        name = item["id"]
+        if (not isinstance(name, str) or name not in _DASHBOARD_WIDTHS or name in seen
+                or type(item["width"]) is not int or item["width"] not in _DASHBOARD_WIDTHS[name]
+                or type(item["height"]) is not int or item["height"] not in (0, 360, 520)):
+            raise ValueError("Invalid dashboard widget or size")
+        seen.add(name)
+    return copy.deepcopy(layout)
+
+
+def dashboard_preferences(username):
+    data = _load(force=True, allow_stale=False)
+    user = data["users"].get(username)
+    if user is None:
+        raise PermissionError("Account no longer exists; sign in again")
+    return copy.deepcopy(user.get("dashboard", {"revision": None, "layout": None}))
+
+
+def save_dashboard_preferences(username, body):
+    if not isinstance(body, dict) or set(body) != {"revision", "layout"}:
+        raise ValueError("Supply a dashboard layout and its revision")
+    layout = _dashboard_layout(body["layout"])
+    revision = body["revision"]
+    if revision is not None and (not isinstance(revision, str) or len(revision) > 64):
+        raise ValueError("Invalid dashboard revision")
+    for attempt in range(3):
+        data = copy.deepcopy(_load(force=True, allow_stale=False))
+        user = data["users"].get(username)
+        if user is None:
+            raise PermissionError("Account no longer exists; sign in again")
+        current = user.get("dashboard", {"revision": None, "layout": None})
+        if current["revision"] != revision:
+            raise StoreConflict("Your dashboard changed in another session. Cancel and reopen the editor to load the latest layout.")
+        saved = {"revision": secrets.token_hex(16), "layout": layout}
+        user["dashboard"] = saved
+        try:
+            _save(data)
+            return copy.deepcopy(saved)
+        except StoreConflict:
+            # An unrelated account/password update can safely be merged after
+            # rereading. A changed dashboard revision is rejected above.
+            if attempt == 2:
+                raise
+
+
 def role_of(username):
     return _load().get("users", {}).get(username, {}).get("role", "viewer")
 

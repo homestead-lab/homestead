@@ -28,6 +28,7 @@ async function viewDash() {
     loadHardwareFeatures(),
     loadHealthSettings(),
     api("/api/nodes/uptime").catch(() => null),
+    Dashboard.load(),
   ]);
   if (Dashboard.editing() || STATE.view !== "dash" || requestedNavigation !== window.NAV_TOKEN) return;
   STATE.data.uptime = up || STATE.data.uptime;
@@ -122,6 +123,7 @@ async function viewDash() {
 
   ${hist === null ? '<div class="note warn">Chart history could not be loaded. Current overview values are shown; history will retry on the next refresh.</div>'
     : sampledAt && sampleAge > Math.max(120, (H.step || 30) * 2) ? `<div class="note warn">Charts last sampled ${esc(fmtAgo(sampleAge))}. Check Live charts in Settings → About.</div>` : ""}
+  ${Dashboard.notice()}
   ${Dashboard.render()}`);
   // Saved history must not hold the live refresh loop's busy flag.
   historyPaint();

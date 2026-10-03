@@ -572,9 +572,13 @@ Do not fork charts, links or resource cards for the editor.
 - Keep the library and size settings outside the live content. Widget actions are
   inert during editing; refresh cannot replace the draft. Cluster alerts remain
   outside the customizable grid. Saving does not modify cluster resources.
-- Persist versioned layouts per signed-in username in browser storage. Say this
-  scope in the editor. Retain unsaved changes on storage errors or cross-tab
-  conflicts; warn before leaving a changed draft. Clear drafts on sign-out.
+- Persist versioned layouts in the account store through
+  `/api/auth/preferences/dashboard`, using the authenticated account identity.
+  Layouts follow the user across sessions, browsers and devices. Read the latest
+  layout before editing; save with its revision and Kubernetes resourceVersion
+  checks. Keep drafts on server errors or concurrent-session conflicts. Import a
+  legacy browser layout only if the account has no layout; never overwrite a
+  server layout during migration. Warn before leaving a draft; clear it on sign-out.
 - Add metadata and content to the registry to introduce a widget. Validate old
   layouts, unknown IDs, duplicate IDs and sizes before rendering. An empty saved
   layout is valid. Keep behavior coverage in `tests/integration/dashboard-editor.mjs`.
