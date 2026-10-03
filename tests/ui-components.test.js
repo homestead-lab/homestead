@@ -146,3 +146,11 @@ test("workspace navigation escapes labels and handlers and groups items once", (
   assert.match(UI.workspace(html,'<input id="kept">',{open:false,backLabel:'Back',back:'goBack()'}), /data-open="0"/);
   assert.match(UI.workspace(html,'<input id="kept">',{open:true}), /data-open="1"/);
 });
+
+
+test("page section forms have an in-flow footer and return action without changing dialog dismissal",()=>{
+ const sections=[{title:'Basics',html:'<input id="field">'}];
+ const page=UI.sectionForm('create',sections,'<button>Review</button>',{page:true,cancelHtml:UI.button('Cancel',"go('workloads')")});
+ assert.match(page,/section-page/);assert.match(page,/go\(/);assert.doesNotMatch(page,/closeModal\(/);
+ assert.match(UI.sectionForm('dialog',sections,'<button>Save</button>'),/closeModal\(/);
+});

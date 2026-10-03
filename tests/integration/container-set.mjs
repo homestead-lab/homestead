@@ -140,6 +140,7 @@ try {
     assert.equal(created.additional_containers[0].memory, '192Mi');
     assert.equal(created.additional_containers[0].env.MODE, 'shared-pod');
     await page.screenshot({ path: `${output}/new-added-${width}-${theme}.png`, fullPage: true });
+    await page.evaluate(()=>UI.selectSection('containerDeploy','basics'));
     await page.locator('#d_remove_primary').click();
     await page.waitForFunction(() => document.querySelector('#d_container_name').value === 'helper');
     assert.equal((await page.evaluate(() => collect())).additional_containers.length, 0);

@@ -798,7 +798,7 @@ svg use,#nav a svg,.iconbtn svg,.sicon svg{stroke:currentColor;fill:none;stroke-
 .pchip:hover{background:rgba(255,176,32,.22)}
 .mchip{display:inline-flex;align-items:center;gap:5px;padding:4px 9px;border-radius:7px;font-size:10.5px;
   font-weight:620;background:rgba(125,211,252,.1);border:1px solid rgba(125,211,252,.24);color:#9fdcfd}
-#archsvg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}
+.archsvg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:1}
 /* Architecture: four columns left to right, joined by lines. */
 :root{--arch-access:#ffb020;--arch-mount:#7dd3fc;--arch-copy:#a78bfa}
 .arch-legend{gap:14px;font-size:11.5px;color:var(--mut)}
@@ -851,22 +851,22 @@ html[data-theme="light"] .a2act{background:rgba(0,0,0,.07)}
 .arch2wrap{container-type:inline-size}
 @container (max-width: 880px){
   .arch2{grid-template-columns:1fr 1fr;row-gap:22px;column-gap:18px}
-  #archsvg{display:none}
+  .archsvg{display:none}
 }
 @media(max-width:1000px){
   .arch2{grid-template-columns:1fr 1fr;row-gap:22px;column-gap:18px}
-  .arch2wrap #archsvg{display:none}
+  .arch2wrap .archsvg{display:none}
 }
 @media(max-width:560px){.arch2{grid-template-columns:1fr}.arch2wrap{padding:12px}}
-#archsvg path{fill:none;stroke-width:1.3}
+.archsvg path{fill:none;stroke-width:1.3}
 .vipbox{text-align:center}
 .vipbox .vipip{font-size:16px;font-weight:720;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
 
 /* ---------- animated connectors ---------- */
-#archsvg path.flowline{stroke-dasharray:5 9;animation:dash 1.5s linear infinite}
+.archsvg path.flowline{stroke-dasharray:5 9;animation:dash 1.5s linear infinite}
 @keyframes dash{to{stroke-dashoffset:-14}}
-#archsvg circle.pulse{r:2.6;filter:drop-shadow(0 0 5px currentColor)}
-#archsvg .glowpath{filter:drop-shadow(0 0 4px rgba(255,255,255,.35))}
+.archsvg circle.pulse{r:2.6;filter:drop-shadow(0 0 5px currentColor)}
+.archsvg .glowpath{filter:drop-shadow(0 0 4px rgba(255,255,255,.35))}
 
 /* live cpu bar inside architecture workload cards */
 .livebar{height:3px;border-radius:99px;background:rgba(255,255,255,.1);overflow:hidden;margin-top:9px;position:relative}
@@ -1142,7 +1142,7 @@ html[data-theme="light"] .modalbox[data-context="snapshot-files"] .ui-steps .cur
   .split{grid-template-columns:1fr}
   .arch{grid-template-columns:1fr 1fr;min-width:0}
   .acol{padding:0 8px}
-  #archsvg{display:none}
+  .archsvg{display:none}
   .flowwrap{overflow-x:visible}
 }
 @media(max-width:900px){
@@ -2054,6 +2054,7 @@ div.ipam-line.dim{display:block}
 .ui-checklist li,.ui-steps li{display:grid;grid-template-columns:28px minmax(0,1fr);gap:11px;align-items:start;padding:9px 2px}
 .ui-checklist li+li{border-top:1px solid var(--line)}
 .ui-check-mark,.ui-step-num{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;border:1.5px solid var(--line2);color:var(--mut);font:700 12px "Inter Tight",sans-serif}
+.ui-check-mark>.spin2{margin:0;border-color:var(--line2);border-top-color:currentColor}
 .ui-checklist .ok .ui-check-mark{border-color:transparent;background:rgba(61,220,145,.16);color:var(--ok)}
 .ui-checklist .warn .ui-check-mark{border-color:transparent;background:rgba(255,176,32,.16);color:var(--med)}
 .ui-checklist .bad .ui-check-mark{border-color:transparent;background:rgba(255,77,79,.16);color:var(--crit)}
@@ -3100,7 +3101,7 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 /* Dashboard composition: a reading-order grid shared by view and editor. */
 .dashboard-canvas{container-type:inline-size;min-width:0;width:100%}
 .dashboard-grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:var(--module-gap);align-items:stretch}
-.dashboard-widget{grid-column:span var(--widget-span);position:relative;min-width:0;display:flex;flex-direction:column}
+.dashboard-widget{grid-column:var(--widget-column,auto) / span var(--widget-span);grid-row:var(--widget-row,auto);position:relative;min-width:0;display:flex;flex-direction:column}
 .dashboard-widget-content{min-width:0;flex:1;display:flex;flex-direction:column;min-height:var(--widget-height)}
 .dashboard-widget-content>.card{height:100%;flex:1;margin:0;min-width:0}
 .dashboard-widget .hist-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
@@ -3133,12 +3134,12 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 .dashboard-canvas[data-editing] .dashboard-widget-content{pointer-events:none;user-select:none}
 .dashboard-canvas[data-editing] .dashboard-widget-content>.card{border:0;border-radius:0 0 12px 12px;box-shadow:none;padding-bottom:32px}
 .dashboard-library{position:sticky;top:78px;max-height:calc(100vh - 100px);overflow-y:auto;padding:16px}
-.dashboard-catalog{display:grid;gap:4px}
+.dashboard-catalog{display:grid;gap:4px;max-height:260px;overflow-y:auto;overscroll-behavior:contain}
 .dashboard-catalog-item{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px;border:1px solid transparent;border-radius:9px;background:transparent;color:var(--tx);text-align:left;cursor:pointer;font:inherit;width:100%}
 .dashboard-catalog-item:hover,.dashboard-catalog-item.on{border-color:var(--line);background:var(--hover)}
 .dashboard-catalog-item b{font-size:12.5px;display:block}
 .dashboard-catalog-item small{display:block;color:var(--mut);font-size:11.5px;line-height:1.5;margin-top:2px}
-.dashboard-inspector{border-top:1px solid var(--line);margin-top:16px;padding-top:16px}
+.dashboard-inspector{border-bottom:1px solid var(--line);margin-bottom:16px;padding-bottom:16px;outline:none}
 .dashboard-inspector>label{display:block;margin-bottom:12px;font-size:12px;color:var(--mut)}
 .dashboard-inspector select{display:block;width:100%;margin-top:5px}
 .dashboard-order{display:flex;gap:8px;margin-bottom:12px}
@@ -3146,7 +3147,7 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 .dashboard-phone{max-width:390px;margin:0 auto;border:5px solid var(--line)!important;border-radius:24px!important;padding:12px!important}
 .dashboard-grip:focus-visible,.dashboard-select:focus-visible,.dashboard-resize:focus-visible,.dashboard-catalog-item:focus-visible{outline:2px solid var(--tx);outline-offset:2px}
 @container (max-width:760px){
-  .dashboard-widget{grid-column:span 12}
+  .dashboard-widget{grid-column:span 12;grid-row:auto}
   .dashboard-widget-content{min-height:0}
   .dashboard-resize{display:none}
 }
@@ -3289,3 +3290,62 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 html[data-theme="light"] .dashboard-resource-state.ok{color:#167347}
 html[data-theme="light"] .dashboard-resource-state.warn,html[data-theme="light"] .node-compact-warning,html[data-theme="light"] .node-compact-state.t-warm{color:#8a5200}
 html[data-theme="light"] .dashboard-resource-state.bad{color:#a1242a}
+
+.architecture-cluster+.architecture-cluster{margin-top:24px}
+
+/* Mobile notifications reuse the standard dialog, with comfortable action rows. */
+.notification-center{display:grid;gap:6px;min-width:0}
+.notification-center>button{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surf2);color:var(--tx);font:inherit;font-size:13px;text-align:left;white-space:normal;cursor:pointer}
+.notification-center>button svg{width:18px;height:18px;flex:none}.notification-center>button.danger{color:var(--crit)}
+.notification-center .bell-head{padding:10px 0 2px;font-family:inherit;font-size:12px;letter-spacing:0;text-transform:none;color:var(--mut)}
+.notification-center .bell-job{display:flex;flex-direction:column;align-items:stretch}
+.notification-center .bell-job-msg{white-space:normal;color:var(--mut);line-height:1.4}
+.notification-center .bell-job-top b{white-space:normal}
+.notification-center .bell-all{margin:0;padding:10px 12px;color:var(--tx);font-size:13px;border:1px solid var(--line)}
+html[data-theme="light"] .notification-center>button.danger{color:#a1242a}
+
+/* Full-page creation forms reuse the same rail and actions as dialogs. */
+.deploy-form{max-width:1200px;margin:0 auto}
+.deploy-form .stepper-pane{min-height:340px}
+.section-page>.stepper-foot{position:static;margin-left:0!important;margin-right:0!important;padding:14px 0 0;background:var(--surf)}
+.deploy-summary .dv{overflow-wrap:anywhere;min-width:0}
+@media(max-width:900px){.deploy-form .stepper-pane{min-height:0}}
+
+/* Short related form fields retain a useful pair at phone widths. */
+.f2.compact-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
+.f2.compact-fields>.f{min-width:0}
+
+/* Editor controls and widget lists share quiet, theme-aware scrollbars. */
+.dashboard-library,.dashboard-catalog,.dashboard-group-list,.dashboard-resource-scroll{scrollbar-width:thin;scrollbar-color:var(--mut) transparent}
+.dashboard-library::-webkit-scrollbar-thumb,.dashboard-catalog::-webkit-scrollbar-thumb,.dashboard-group-list::-webkit-scrollbar-thumb,.dashboard-resource-scroll::-webkit-scrollbar-thumb{background:var(--mut);border:2px solid var(--surf);border-radius:8px}
+.dashboard-library::-webkit-scrollbar-track,.dashboard-catalog::-webkit-scrollbar-track,.dashboard-group-list::-webkit-scrollbar-track,.dashboard-resource-scroll::-webkit-scrollbar-track{background:var(--surf)}
+.dashboard-inspector .dashboard-check{display:flex;align-items:center;gap:8px;color:var(--tx);min-height:30px;font-size:12px;margin:0}
+.dashboard-check input{width:auto;flex:0 0 auto;margin:0}
+.dashboard-group-options{border:1px solid var(--line);border-radius:8px;padding:8px;margin:0 0 12px;min-width:0}
+.dashboard-group-options legend{color:var(--mut);font-size:12px;padding:0 4px}
+.dashboard-group-list{max-height:130px;overflow:auto;overflow-wrap:anywhere}
+.dashboard-inspector #dashboardGroupOptions{width:100%}
+.dashboard-portal>#dashboardPortal{max-height:calc(var(--resource-list-height) - 76px)}
+.dashboard-widget .portal-list{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:0 16px}
+.portal-list .portal-tile{min-height:36px;padding:5px 2px;gap:8px;border:0;border-bottom:1px solid var(--line);border-radius:0;box-shadow:none;background:transparent;margin:0}
+.portal-list .portal-icon{height:22px;width:22px;font-size:10px;flex:0 0 22px}
+.portal-list .portal-icon svg{height:16px;width:16px}
+.portal-list .portal-text{min-width:0}.portal-list .portal-text b{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.portal-list .portal-dot{position:static;flex:0 0 7px;margin-left:auto}
+@media(max-width:900px){.portal-list .portal-tile{min-height:44px}}
+
+@media(min-width:1101px){
+  .dashboard-inspector{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .dashboard-inspector>.settings-card-head,.dashboard-inspector>#dashboardGroupOptions,.dashboard-inspector>.dashboard-order,.dashboard-inspector>.btn{grid-column:1 / -1}
+  .dashboard-inspector>label{min-width:0;margin:0}
+  .dashboard-inspector .dashboard-check{align-self:end;min-height:36px}
+  .dashboard-inspector select{min-width:0;padding-left:8px;padding-right:8px}
+}
+
+.dashboard-custom{display:flex;flex-direction:column;min-width:0}
+.dashboard-custom-body{min-width:0;flex:1}
+.dashboard-custom-frame{display:block;width:100%;border:0;background:transparent;color-scheme:normal}
+.dashboard-custom-text{white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px;line-height:1.5;max-height:440px}
+.dashboard-custom-field{grid-column:1 / -1;width:100%}
+.dashboard-custom-field input,.dashboard-custom-field textarea{display:block;width:100%;margin-top:5px;min-width:0}
+.dashboard-custom-field textarea{resize:vertical;font-family:var(--mono);font-size:12px;max-height:320px}

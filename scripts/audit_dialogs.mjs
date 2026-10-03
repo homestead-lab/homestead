@@ -21,7 +21,10 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // "click:<fn>" (the first control whose onclick calls fn), or "text:<label>"
 // (the first button in the dialog with that label).
 const DIALOGS = [
+  ["firewall-create", "network", "firewallEdit()"],
+  ["firewall-review", "network", "firewallEdit()", "firewallReview()"],
   ["active-alerts", "dash", "pwaAlertsDialog()"],
+  ["notifications", "dash", "notificationsDialog()"],
   ["jobs-running", "workloads", "STATE.data.operations=[{id:'run',kind:'image-update',title:'Update Immich',status:'running',message:'Waiting for the new pod',progress:45}];jobsDialog()"],
   ["jobs-recovery", "workloads", "STATE.data.operations=[{id:'held',kind:'self-data-handoff',title:'Move Homestead data',status:'failed',message:'Copy stopped. Both volumes are retained.',dismissible:false,storage_recovery:true}];jobsDialog()"],
   ["jobs-empty", "workloads", "STATE.data.operations=[];jobsDialog()"],
@@ -192,10 +195,12 @@ const DIALOGS = [
   ["workload-logs", "workloads", "click:wlLogs"],
   ["workload-console", "workloads", "wlConsole('lab','frigate')"],
   ["workload-main-port", "workloads", "wlPrimaryPort('lab','frigate')"],
+  ["node-single-host-reboot", "nodes", "window.__demoSingleHostOutage=true;nodePowerReview('harvester-node1','reboot')"],
+  ["node-single-host-shutdown", "nodes", "window.__demoSingleHostOutage=true;nodePowerReview('harvester-node1','poweroff')"],
   ["node-reboot", "nodes", "nodePowerReview('harvester-node1','reboot')"],
   ["node-shutdown", "nodes", "nodePowerReview('harvester-node1','poweroff')", "document.querySelector('#mbody .ui-more').open=true"],
   ["app-store-app", "store", "click:storeDetails"],
-  ["deploy-preview", "deploy", "click:previewYaml"],
+  ["deploy-preview", "deploy", "UI.selectSection('containerDeploy','summary')", "click:previewYaml"],
   ["fleet-link", "workloads", "fleetLink()"],
   ["fleet-migration-on", "settings", "settingsTab('fleet')", "fleetMigration('b2c0de')"],
   ["fleet-migration-here", "settings", "settingsTab('fleet')", "fleetMigration('a1f00d')"],
@@ -243,7 +248,7 @@ async function audit([label, width, height, mobile], items) {
   await page.addStyleTag({ content: "#jobTray{display:none!important}" });
 
   for (const [name, view, ...steps] of items) {
-    await page.evaluate(() => { window.__demoDataBatchRecovery = false; STATE.operationsStale = false; });
+    await page.evaluate(() => { window.__demoDataBatchRecovery = false; window.__demoSingleHostOutage = false; STATE.operationsStale = false; });
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } });
       await page.evaluate((v) => go(v), view);

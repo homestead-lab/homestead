@@ -88,7 +88,7 @@ def helper_blocker(pod):
     return guidance.get(task, "")
 
 
-def inventory(get, pods, namespace=None):
+def inventory(get, pods, namespace=None, draining=True):
     budgets = items(get, "/apis/policy/v1/poddisruptionbudgets")
     rows, blockers, storage, waiting = [], [], [], []
     for pod in pods:
@@ -100,7 +100,7 @@ def inventory(get, pods, namespace=None):
         owner = next((o for o in meta.get("ownerReferences") or [] if o.get("controller") is True), {})
         temporary = observer(pod, namespace)
         busy = "" if temporary else helper_blocker(pod)
-        if temporary:
+        if temporary and draining:
             waiting.append(identity + ": temporary " + temporary + " will be evicted; only its report is lost")
         if busy:
             blockers.append(identity + ": " + busy)
@@ -108,7 +108,7 @@ def inventory(get, pods, namespace=None):
             blockers.append(identity + ": unmanaged pod has no controller to recreate it; handle it explicitly first")
         matching = [b for b in budgets if (b.get("metadata") or {}).get("namespace") == ns and
                     selected((b.get("spec") or {}).get("selector"), meta.get("labels") or {})]
-        if len(matching) > 1:
+        if draining and len(matching) > 1:
             blockers.append(identity + ": multiple disruption budgets match; eviction cannot be verified")
         for budget in matching:
             bm, bs, policy = budget.get("metadata") or {}, budget.get("status") or {}, budget.get("spec") or {}
@@ -119,7 +119,7 @@ def inventory(get, pods, namespace=None):
             # Longhorn protects the manager until cordon and workload eviction
             # release its engines. Only its own fresh, single budget can wait;
             # the Eviction API still has to authorize removal during the drain.
-            wait_for_drain = (longhorn_instance_manager(pod) and len(matching) == 1 and
+            wait_for_drain = (draining and longhorn_instance_manager(pod) and len(matching) == 1 and
                               bm.get("name") == name and fresh and type(allowed) is int and allowed == 0)
             rows.append({"pod": identity, "budget": ns + "/" + bm.get("name", "?"),
                          "allowed": allowed if fresh else None, "unhealthy_allowed": unhealthy_allowed,
@@ -128,7 +128,7 @@ def inventory(get, pods, namespace=None):
                 waiting.append(identity + ": Longhorn currently protects this storage pod. Homestead will cordon, "
                                "drain workloads and wait up to 2 minutes for eviction to be allowed. "
                                "If Longhorn keeps it protected, power will not be sent and the host stays cordoned")
-            if not unhealthy_allowed and (not fresh or not isinstance(allowed, int) or allowed < 1):
+            if draining and not unhealthy_allowed and (not fresh or not isinstance(allowed, int) or allowed < 1):
                 if not wait_for_drain:
                     blockers.append(identity + ": disruption budget " + bm.get("name", "?") +
                                     (" status is stale/unknown" if not fresh else " permits no verified eviction"))
@@ -139,7 +139,7 @@ def inventory(get, pods, namespace=None):
         for volume in spec.get("volumes") or []:
             kind, source = "", ""
             if "emptyDir" in volume:
-                kind, source = "emptyDir (deleted by drain)", volume.get("name", "?")
+                kind, source = ("emptyDir (deleted by drain)" if draining else "emptyDir (temporary pod storage)"), volume.get("name", "?")
             elif "hostPath" in volume:
                 kind, source = "host-local path (not moved)", (volume["hostPath"] or {}).get("path", "?")
             elif "persistentVolumeClaim" in volume:

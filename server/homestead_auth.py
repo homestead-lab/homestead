@@ -200,7 +200,7 @@ def list_users():
 _DASHBOARD_WIDTHS = {"compute": (4, 6, 8, 12), "throughput": (4, 6, 8, 12),
                      "storage": (4, 6, 8, 12), "nodes": (4, 6, 8, 12), "cpu": (4, 6, 8, 12),
                      "memory": (4, 6, 8, 12), "history": (8, 12), "portal": (4, 6, 8, 12),
-                     **{key: (4, 6, 8, 12) for key in ("health", "workloads", "containers", "vms", "backups", "updates", "jobs")}}
+                     **{key: (4, 6, 8, 12) for key in ("health", "workloads", "containers", "vms", "backups", "updates", "jobs", "custom", "custom2", "custom3", "custom4")}}
 
 
 def _dashboard_layout(layout):
@@ -210,15 +210,35 @@ def _dashboard_layout(layout):
         raise ValueError("Invalid dashboard layout")
     seen = set()
     for item in layout["items"]:
-        if not isinstance(item, dict) or set(item) not in ({"id", "width", "height"}, {"id", "width", "height", "display"}):
+        if (not isinstance(item, dict) or not {"id", "width", "height"} <= set(item)
+                or set(item) - {"id", "width", "height", "display", "column", "newRow", "groups", "status", "title", "format", "content"}):
             raise ValueError("Invalid dashboard widget")
         name = item["id"]
         if (not isinstance(name, str) or name not in _DASHBOARD_WIDTHS or name in seen
                 or type(item["width"]) is not int or item["width"] not in _DASHBOARD_WIDTHS[name]
                 or type(item["height"]) is not int or item["height"] not in (0, 240, 360, 520)):
             raise ValueError("Invalid dashboard widget or size")
-        if "display" in item and (name != "nodes" or item["display"] not in ("compact", "detailed")):
-            raise ValueError("Invalid node health display")
+        displays = {"nodes": ("compact", "detailed"), "portal": ("compact", "tiles")}
+        if "display" in item and item["display"] not in displays.get(name, ()):
+            raise ValueError("Invalid widget display")
+        if "column" in item and (type(item["column"]) is not int or not 1 <= item["column"] <= 13 - item["width"]):
+            raise ValueError("Invalid widget column")
+        if "newRow" in item and type(item["newRow"]) is not bool:
+            raise ValueError("Invalid widget row")
+        if "groups" in item and (name not in ("containers", "portal") or not isinstance(item["groups"], list)
+                or len(item["groups"]) > 100 or any(not isinstance(g, str) or len(g) > 40 for g in item["groups"])
+                or len(set(item["groups"])) != len(item["groups"])):
+            raise ValueError("Invalid widget groups")
+        if "status" in item and (name not in ("containers", "vms") or item["status"] not in ("running", "stopped", "attention")):
+            raise ValueError("Invalid widget status")
+        custom_fields = {"title", "format", "content"} & set(item)
+        if custom_fields and name not in ("custom", "custom2", "custom3", "custom4"):
+            raise ValueError("Custom content is only supported by custom widgets")
+        for key, limit in (("title", 80), ("content", 16384)):
+            if key in item and (not isinstance(item[key], str) or len(item[key]) > limit):
+                raise ValueError("Invalid custom widget " + key)
+        if "format" in item and item["format"] not in ("text", "html"):
+            raise ValueError("Invalid custom widget format")
         seen.add(name)
     return copy.deepcopy(layout)
 

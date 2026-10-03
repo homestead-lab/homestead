@@ -7,9 +7,9 @@
    its containers, VMs, nodes and volumes; each row carries its cluster, and
    an action on a row goes to that cluster. */
 
-// Each list, and the page that shows it from every cluster. Elsewhere - a
+// Each collection/graph, and its combined-cluster page. Elsewhere - a
 // deploy placing pods, say - a list means this cluster's own.
-const FLEET_LISTS = { "/api/workloads": "workloads", "/api/vms": "vms", "/api/nodes": "nodes", "/api/volumes": "storage" };
+const FLEET_LISTS = { "/api/workloads": "workloads", "/api/vms": "vms", "/api/nodes": "nodes", "/api/volumes": "storage", "/api/flow": "flow" };
 window.FLEET = { view: null, target: "", missingSaid: new Set() };
 
 function fleetMode() {
@@ -23,7 +23,7 @@ function setFleetMode(mode) {
 const fleetAll = () => fleetMode() === "all" && !!FLEET.view?.linked;
 window.fleetAll = fleetAll;
 
-/* Where api() sends a request. The four lists come from every cluster in
+/* Where api() sends a request. Collections and Architecture come from every cluster in
    the view of all of them; an action taken on another cluster's row - or a
    dialog opened from one - goes to that cluster. */
 window.fleetRoute = (path, opts = {}) => {

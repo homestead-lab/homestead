@@ -1438,6 +1438,7 @@ window.deployAddContainer = () => {
   DCFG.additional_containers ||= [];
   DCFG.additional_containers.push({ name: `container-${DCFG.additional_containers.length + 2}`, image: "", cpu: "50m", memory: "128Mi", env: {}, ports: [], volumes: [] });
   renderDeployContainers(); syncSummary();
+  UI.selectSection("containerDeploy", "containers");
   const cards = $$("#d_extra_containers .edit-container");
   cards.at(-1).open = true;
   $("input", cards.at(-1)).focus();
@@ -1489,12 +1490,11 @@ async function viewDeploy(pre) {
   const vips = await vipChoices();
   const sharedVip = vips.shared || "";
   resetPaint();
-  paint(`${UI.pageHeader(`Deploy a container`, `Run an independent workload or add a sidecar container to an existing pod`, `<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>`)}
-  <div class="split">
-    <div class="card flat">
+  const sections = [
+    {key:"basics", title:"Basics", lead:"Name the workload and its first container.", html:`
       ${DCFG.app_profile ? `<div class="app-profile ${esc(DCFG.app_profile.level || "review")}">
-        ${UI.moduleHeader(`${esc(DCFG.app_profile.label || "Template guidance")}`, `Compatibility guidance derived from ports, paths, variables, and runtime access`, `<span class="pill ${DCFG.app_profile.level === "dependency" ? "warn" : "info"}">${esc(DCFG.app_profile.intent || "template")}</span>`)}
-        ${(DCFG.app_profile.notes || []).map(note => `<div class="profile-note">✓ ${esc(note)}</div>`).join("")}
+        ${UI.moduleHeader(`${esc(DCFG.app_profile.label || "Template guidance")}`, `Review this template’s requirements.`, `<span class="pill ${DCFG.app_profile.level === "dependency" ? "warn" : "info"}">${esc(DCFG.app_profile.intent || "template")}</span>`)}
+        ${DCFG.app_profile.notes?.length ? UI.more("Template notes", DCFG.app_profile.notes.map(note => `<p>${esc(note)}</p>`).join(""), !!DCFG.app_profile.blocked) : ""}
         ${(DCFG.app_profile.dependencies || []).length ? `<div class="dependency-list">${DCFG.app_profile.dependencies.map(dep => `<div class="dependency-row stranded"><span>${esc(dep.name)}</span><b>${dep.managed ? "managed" : "deploy separately"}</b></div>`).join("")}</div>` : ""}
       </div>` : ""}
       <div class="f"><label>Deployment model ${tip("A new workload gets its own pod and lifecycle. Adding to an existing workload creates a sidecar container; Kubernetes restarts that workload's pods to apply it.")}</label>
@@ -1504,30 +1504,42 @@ async function viewDeploy(pre) {
         <div class="f"><label>Existing workload</label><select id="d_target_workload"></select></div>
         <div id="d_join_note" class="note"></div>
       </div>
-      <div class="f" id="d_workload_name_wrap"><label>Workload / pod prefix ${tip("The stable name for this workload. Kubernetes adds a generated suffix to each running pod, such as my-app-7d9f8c6b5-x2abc.")}</label><input type="text" id="d_workload_name" value="${esc(DCFG.workload_name)}" placeholder="my-app"></div>
+      <div class="f" id="d_workload_name_wrap"><label>Workload name ${tip("The stable name for this workload. Kubernetes adds a generated suffix to each running pod, such as my-app-7d9f8c6b5-x2abc.")}</label><input type="text" id="d_workload_name" value="${esc(DCFG.workload_name)}" placeholder="my-app"></div>
       <div class="f"><label>Container name ${tip("The name of the container inside the pod. It can differ from the workload name and must use lowercase letters, numbers, and dashes.")}</label><input type="text" id="d_container_name" value="${esc(DCFG.container_name)}" placeholder="my-app"></div>
-      <div class="f"><label>Docker image ${tip("The registry image and tag Kubernetes will pull, for example ghcr.io/home-assistant/home-assistant:stable")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"><span class="dim xs" id="d_image_note">${imagePullNote(DCFG.image)}</span></div>
+      <div class="f"><label>Image ${tip("The registry image and tag Kubernetes will pull, for example ghcr.io/home-assistant/home-assistant:stable")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"><span class="dim xs" id="d_image_note">${imagePullNote(DCFG.image)}</span></div>
       <div class="row" id="d_add_container"><button class="btn" type="button" onclick="containerAdd('deploy')">＋ Add container</button>
         <button class="btn danger" type="button" id="d_remove_primary" onclick="deployRemovePrimary()" disabled>Remove this container</button>
-        <span class="dim small">Different containers share every pod. Pod copies are set below.</span></div>
-      <div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates and saves a private copy on its persistent volume, so the logo survives source outages and upgrades.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/icon.png"></div>
-      <div class="f2">
+        <span class="dim small">Containers share each pod’s network and lifecycle.</span></div>
+      ${UI.more("Container appearance", `<div class="f"><label>Container logo ${tip("Optional public HTTPS image URL. Homestead validates and saves a private copy on its persistent volume, so the logo survives source outages and upgrades.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/icon.png"></div>`)}
+      <div class="f2 compact-fields">
         <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
         <div class="f" id="d_rep_wrap"><label>Pod copies ${tip("How many copies of this workload run at once. Most homelab apps want one; Longhorn replicas are a separate, storage-level idea.")}</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
       </div>
-      <div class="f2">
+    `},
+    {key:"hardware", title:"Hardware and access", lead:"Set resources and host access for the first container.", html:`
+      <div class="f2 compact-fields">
         <div class="f"><label>CPU reserved ${tip("The scheduler guarantees this much CPU capacity. 1000m = one CPU core; 50m = 5% of one core. This is not a hard limit.")}</label><input type="text" id="d_cpu" value="${esc(DCFG.cpu)}" placeholder="50m"></div>
         <div class="f"><label>Memory reserved ${tip("The scheduler keeps this much RAM available for the container. Mi means mebibytes and Gi means gibibytes. This is not a hard limit.")}</label><input type="text" id="d_mem" value="${esc(DCFG.memory)}" placeholder="128Mi"></div>
       </div>
-      <div class="f"><label>Memory max (optional) ${tip("The most memory this container may use. Exceeding it can cause an OOM kill and restart. Leave blank for no container memory limit; set it at least as high as Memory reserved. Use Mi or Gi, for example 1Gi.")}</label><input type="text" id="d_mem_limit" value="${esc(DCFG.memory_limit || "")}" placeholder="No limit · e.g. 1Gi"><span class="dim xs">A limit protects the host, but setting it too low can repeatedly restart the app.</span></div>
+      <div class="f"><label>Memory max (optional) ${tip("The most memory this container may use. Exceeding it can cause an OOM kill and restart. Leave blank for no container memory limit; set it at least as high as Memory reserved. Use Mi or Gi, for example 1Gi.")}</label><input type="text" id="d_mem_limit" value="${esc(DCFG.memory_limit || "")}" placeholder="No limit · e.g. 1Gi"></div>
       <div class="sec">Hardware ${tip("Homestead adds the device path and schedules only onto nodes marked as having that hardware.")}</div>
       <div class="hwchoices">
         ${hardwareChoices("d_hw", (DCFG.hardware || []).concat(DCFG.gpu && !(DCFG.hardware || []).includes("igpu") ? ["igpu"] : []))}
       </div>
       <div class="sec">Privileges ${tip("What the container may do to its host beyond the defaults. VPN containers need the tunnel.")}</div>
-      ${DCFG.tun || DCFG.privileged || (DCFG.cap_add || []).length ? '<div class="note">Set from the template: Unraid gives this app these privileges.</div>' : ""}
+      ${DCFG.tun || DCFG.privileged || (DCFG.cap_add || []).length ? '<div class="note">Imported privileges: review host access before deploying.</div>' : ""}
       ${privilegeFields("d_pv", DCFG)}
       ${(DCFG.template_devices || []).length ? `<div class="note import-device-note"><b>Imported device mappings:</b> ${(DCFG.template_devices || []).map(d => `<span class="mono">${esc(d.host_path || "?")} → ${esc(d.container_path || "?")}</span>`).join(", ")}. Matching hardware features were selected; review them before deploying.</div>` : ""}
+    `},
+    {key:"environment", title:"Environment values", lead:"Set the values the first container needs.", html:`
+      <div class="sec">Environment ${tip("Environment variables are passed directly to the container. App Store defaults are imported and remain editable.")}</div><div id="d_env"></div><button class="btn sm" onclick="addEnv()">＋ add variable</button>
+    `},
+    {key:"storage", title:"Storage", lead:"Choose where the first container stores its data.", html:`
+      <div class="sec">Storage ${tip("The mount path is inside the container. Choose whether its backing storage is a new Longhorn claim, an existing claim, an existing volume in a shared pod, or a path on one host.")}</div>
+      ${UI.more("Choose a storage type", "RWO suits a single workload. RWX allows sharing across nodes. Existing claims keep their data. Pod volumes share storage between containers in a pod. Host paths tie data to one host.")}
+      <div id="d_vols"></div><button class="btn sm" onclick="addVol()">＋ add storage mapping</button>
+    `},
+    {key:"address", title:"Address", lead:"Choose how clients reach the workload.", html:`
       <div class="sec">Network ${tip("Kubernetes replaces Docker bridge networking with Services. Use a dedicated VIP for DNS servers and other workloads that must own common ports.")}</div>
       <div class="f2"><div class="f"><label>Access mode</label><select id="d_net">
         <option value="loadbalancer" ${DCFG.network_mode === "loadbalancer" ? "selected" : ""}>LAN access (VIP)</option>
@@ -1541,26 +1553,25 @@ async function viewDeploy(pre) {
           <option value="manual" ${DCFG.vip_mode === "manual" ? "selected" : ""}>Specific VIP</option>`}</select></div></div>
       <div class="f" id="d_vip_wrap"><label>Specific VIP</label>${vipPicker("d", DCFG.lb_ip || "", vips)}</div>
       <div id="d_lan_box" hidden></div>
-      ${nodeAddressesOnly() ? `<div class="note"><b>Docker bridge → Kubernetes Service.</b> On k3s it answers on every node's own address at its LAN port.
-        Each port can be used by one Service only; a DNS server wanting port 53 needs it free there. Host network binds directly on one node and reduces failover safety.
-        For an address of its own, add <b>kube-vip</b> under Settings → Hardware and storage → Add-ons.</div>` : `<div class="note"><b>Docker bridge → Kubernetes Service.</b> Default workload VIP shares the address configured in Networking on unique LAN ports. New automatic VIP selects another reserved address; Specific VIP lets you choose. Neither uses the control-plane address. Multus is only needed for a separate bridged LAN interface. Host network binds directly on one node and reduces failover safety.</div>`}
+      ${UI.more("How addresses work", nodeAddressesOnly()
+        ? "Node addresses expose each port on every node. Each port can belong to one Service. Add kube-vip in Settings for dedicated addresses. Host networking binds directly to one node."
+        : "The default VIP shares an address using separate ports. Automatic and specific VIPs give the workload another address. Bridged LAN networking adds its own interface; host networking binds directly to one node.")}
       <div class="sec">Ports ${tip("Container port is where the process listens. LAN port is what clients use through the Kubernetes Service. TCP and UDP on the same number are separate listeners.")}</div><div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>
-      <div class="sec">Storage ${tip("The mount path is inside the container. Choose whether its backing storage is a new Longhorn claim, an existing claim, an existing volume in a shared pod, or a path on one host.")}</div>
-      <div class="note storage-guide"><b>Choose deliberately:</b> RWO is best for one workload; RWX permits multi-node sharing; an existing PVC keeps its current data; a pod volume shares the exact backing volume with a sidecar. Host paths reduce failover portability.</div>
-      <div id="d_vols"></div><button class="btn sm" onclick="addVol()">＋ add storage mapping</button>
-      <div class="sec">Environment ${tip("Environment variables are passed directly to the container. App Store defaults are imported and remain editable.")}</div><div id="d_env"></div><button class="btn sm" onclick="addEnv()">＋ add variable</button>
+    `},
+    {key:"containers", title:"Additional containers", lead:"Add other containers that share each pod.", html:`
       <div id="d_extra_wrap"><div class="sec">Additional containers in each pod</div>
         <div id="d_extra_containers"></div>
         <button class="btn" type="button" onclick="containerAdd('deploy')">＋ Add container</button></div>
-      <div class="row" style="margin-top:24px">
-        <button class="btn pri" onclick="doDeploy()" ${DCFG.app_profile?.blocked ? "disabled" : ""}>Deploy container</button>
-        <button class="btn" onclick="previewYaml()">Preview manifest</button>
-      </div>
-    </div>
-    <div class="card flat"><div class="ctitle">Configuration</div><div class="csub">Live summary</div>
-      <div id="d_summary" style="margin-top:14px"></div>
-      <button class="btn pri wide" style="margin-top:18px" onclick="doDeploy()" ${DCFG.app_profile?.blocked ? "disabled" : ""}>Deploy</button></div>
-  </div>`);
+      <div id="d_extra_join" class="empty small" hidden>Add one container to the existing workload at a time.</div>
+    `},
+    {key:"summary", title:"Summary", lead:"Check the configuration, then review capacity and rollout impact.", html:`
+      <div id="d_summary" class="deploy-summary"></div>
+    `}
+  ];
+  paint(`${UI.pageHeader("Deploy a container", "Configure the workload, then review before deploying.", '<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>')}
+    <div class="card flat deploy-form">${UI.sectionForm("containerDeploy", sections,
+      UI.button("Preview manifest", "previewYaml()") + UI.button("Review deployment", "doDeploy()", {kind:"pri",disabled:!!DCFG.app_profile?.blocked}),
+      {page:true,cancelHtml:UI.button("Cancel", "go('workloads')")})}</div>`);
   DRENDERING = true;
   renderDeployTargets(); renderPorts(); renderVols(); renderEnv(); renderDeployContainers(); applyDeployMode();
   DRENDERING = false; syncSummary();
@@ -1589,7 +1600,7 @@ function renderDeployTargets() {
 function updateJoinNote() {
   const target = selectedTarget(), note = $("#d_join_note"); if (!note) return;
   note.innerHTML = target
-    ? `<b>Shared lifecycle:</b> saving restarts <span class="mono">${esc(target.name)}</span> and all of its containers (${target.containers.map(esc).join(", ")}). The new container shares the pod network, scheduler placement, and selected pod volumes.`
+    ? `<b>Shared lifecycle:</b> Adding this container updates <span class="mono">${esc(target.name)}</span> and may restart all ${target.containers.length} existing containers. Network and placement are shared; review shows the rollout impact.`
     : `<b>No existing workload is available.</b> Select another namespace or create a new workload.`;
 }
 async function refreshDeployOptions() {
@@ -1606,6 +1617,7 @@ function applyDeployMode() {
   $("#d_rep_wrap").style.display = joining ? "none" : "block";
   $("#d_add_container").hidden = joining;
   $("#d_extra_wrap").hidden = joining;
+  $("#d_extra_join").hidden = !joining;
   const host = [...$("#d_net").options].find(o => o.value === "host");
   if (host) host.disabled = joining;
   if (joining && $("#d_net").value === "host") $("#d_net").value = "internal";
@@ -1785,20 +1797,26 @@ window.deployReviewReady = () => {
   if ($("#deployGo")) $("#deployGo").disabled = !ready;
   return !!ready;
 };
+function deployInvalid(message, selector) {
+  const field=document.querySelector(selector), pane=field?.closest('.stepper-pane');
+  if(pane)UI.selectSection("containerDeploy",pane.dataset.key);
+  for(let parent=field?.parentElement;parent && parent!==pane;parent=parent.parentElement)if(parent.tagName==="DETAILS")parent.open=true;
+  field?.focus();toast(message,"bad");
+}
 window.doDeploy = async () => {
   if (DEPLOY_SUBMITTING) return;
   const sequence = ++DEPLOY_REVIEW_SEQUENCE;
   DEPLOY_REVIEW = null;
   const c = collect();
   if (c.app_profile?.blocked) return toast(c.app_profile.label || "this template is not directly compatible", "bad");
-  if (!c.container_name || !c.image) return toast("container name and image are required", "bad");
-  if (c.target_mode === "new" && !c.workload_name) return toast("workload / pod name is required", "bad");
-  if (c.target_mode === "existing" && !c.target_workload) return toast("choose an existing workload", "bad");
+  if (!c.container_name || !c.image) return deployInvalid("Container name and image are required.", !c.container_name?"#d_container_name":"#d_image");
+  if (c.target_mode === "new" && !c.workload_name) return deployInvalid("Workload name is required.", "#d_workload_name");
+  if (c.target_mode === "existing" && !c.target_workload) return deployInvalid("Choose an existing workload.", "#d_target_workload");
   const extra = c.additional_containers || [];
-  if (extra.some(container => !container.name || !container.image)) return toast("Every container needs a name and image", "bad");
-  if (new Set([c.container_name, ...extra.map(container => container.name)]).size !== extra.length + 1) return toast("Container names must be unique in this pod", "bad");
+  if (extra.some(container => !container.name || !container.image)) return deployInvalid("Every container needs a name and image.", "#d_extra_containers input");
+  if (new Set([c.container_name, ...extra.map(container => container.name)]).size !== extra.length + 1) return deployInvalid("Container names must be unique in this pod.", "#d_container_name");
   const storageIssue = [volumeListIssue(c.volumes), ...extra.map(container => volumeListIssue(container.volumes))].find(Boolean);
-  if (storageIssue) return toast(storageIssue, "bad");
+  if (storageIssue) return deployInvalid(storageIssue, volumeListIssue(c.volumes)?"#d_vols input":"#d_extra_containers input");
   try {
     const plan = await api("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(c) });
     if (sequence !== DEPLOY_REVIEW_SEQUENCE) return;

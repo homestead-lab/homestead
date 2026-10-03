@@ -59,7 +59,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.301")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.302-dev.1")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -3989,12 +3989,14 @@ def send_reviewed_power(power_plan, force=False):
     Host actions does once its review is accepted, and what an OS update of
     every host does for each host that needs a restart."""
     node, action = power_plan["node"], power_plan["action"]
+    planned_outage = bool(power_plan.get("planned_outage")) and not force
     operation = OPS.start(
         "node-power", f"{action} {node}", {"kind": "Node", "name": node},
         "/nodes?node=" + urllib.parse.quote(node),
         {"node": node, "node_uid": power_plan["node_uid"], "action": action, "boot_id": power_plan["boot_id"],
          "volumes": [v["name"] for v in power_plan["volumes"]],
-         "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
+         "planned_outage": planned_outage, "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
+        "Planned whole-cluster outage; sending without cordon or drain" if planned_outage else
         "Forced by an admin; sending without cordon or drain" if force else "Host impact reviewed; preparing cordon and drain")
     phase_state = {"phase": "reviewed"}
 
@@ -4004,9 +4006,10 @@ def send_reviewed_power(power_plan, force=False):
         return updated
     try:
         result = LC.node_power(node, action, True,
-                               before_send=(lambda: POWER.recheck_forced(power_plan)) if force
+                               before_send=(lambda: POWER.recheck_planned_outage(power_plan)) if planned_outage else
+                               (lambda: POWER.recheck_forced(power_plan)) if force
                                else (lambda: POWER.recheck_after_drain(power_plan)),
-                               reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force)
+                               reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force, planned_outage=planned_outage)
         result["operation"] = operation
         return result
     except Exception as e:
@@ -4022,6 +4025,8 @@ def rollout_reboot(node, allow_single_copy=False):
     nobody to accept its warnings - so what a person would have to accept
     stops it, except a volume's only copy when the settings accept that."""
     power_plan = POWER.plan(node, "reboot")
+    if power_plan.get("planned_outage"):
+        raise ValueError("A single-host cluster outage needs a manual review and acknowledgement in Host actions")
     if not power_plan["ready"]:
         raise ValueError("; ".join(power_plan["blockers"]))
     if power_plan["stranded"]:
@@ -5531,6 +5536,7 @@ import homestead_smart as SMART
 import homestead_shares as SHARES
 import homestead_nfs as NFS
 import homestead_networking as NETWORK
+import homestead_firewall as FIREWALL
 import homestead_cluster as CLUSTER
 import homestead_probe as PROBE
 import homestead_objectstore as OBJECTS
@@ -7189,6 +7195,7 @@ VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 SHARES.install = install_samba
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP)
+FIREWALL.bind(kget, ksend, PLATFORM.detect, _own_namespace())
 VIPS.bind(kget, ksend)
 
 
@@ -7581,6 +7588,7 @@ def is_app_identity(path):
 # Enforced here, server-side. The UI hides what you cannot do as a courtesy,
 # but a viewer who hand-crafts the request still gets a 403.
 ADMIN_ROUTES = {
+    "/api/firewall/preview", "/api/firewall/save", "/api/firewall/delete",
     "/api/disks/v2/plan", "/api/disks/v2/start", "/api/disks/v2/status",
     "/api/disks/v2/prepare-review", "/api/disks/v2/prepare",
     "/api/longhorn/v2/plan", "/api/longhorn/v2/prepare", "/api/longhorn/v2/enable",
@@ -7690,18 +7698,18 @@ def persist_icon_config(cfg):
 
 
 # ---------------------------------------------------------------- linked clusters
-# The lists the view of every linked cluster at once gathers, and how this
-# cluster answers each one itself.
+# The resources the combined view gathers, and how this cluster answers locally.
 FLEET_LISTS = {
     "workloads": lambda: cached("wl", 5, get_workloads),
     "vms": lambda: cached("vms", 5, VMS.list_vms),
     "nodes": lambda: cached("nodes", 5, get_nodes),
     "volumes": lambda: cached("vol", 8, get_volumes),
+    "flow": lambda: cached("flow2", 8, get_flow2),
 }
 
 
 def fleet_all(what, user, role):
-    """One list from every linked cluster, each row saying whose it is.
+    """Gather tagged resource lists or Architecture graphs from linked clusters.
 
     Each cluster is asked as the person asking, so it shows them what their
     role lets them see there. A cluster that does not answer is left out and
@@ -7715,8 +7723,12 @@ def fleet_all(what, user, role):
 
     def ask(m):
         try:
-            results[m["id"]] = FLEET.call(m, "GET", f"/api/{what}", timeout=12,
-                                          user=str(user or "").split("@", 1)[0], role=role)
+            result = FLEET.call(m, "GET", f"/api/{what}", timeout=12,
+                                user=str(user or "").split("@", 1)[0], role=role)
+            if what == "flow" and (not isinstance(result, dict) or
+                    any(not isinstance(result.get(key), list) for key in ("workloads", "volumes", "nodes", "vips"))):
+                raise ValueError("Architecture data is unavailable")
+            results[m["id"]] = result
         except Exception as error:
             missing.append({"id": m["id"], "name": m["name"], "error": str(error)[:200]})
     threads = [threading.Thread(target=ask, args=(m,), daemon=True)
@@ -7725,15 +7737,22 @@ def fleet_all(what, user, role):
                 for m in view["members"] if not m["self"] and not m["reachable"]]
     for thread in threads:
         thread.start()
-    results[view["self"]] = local()
+    try:
+        results[view["self"]] = local()
+    except Exception as error:
+        if what != "flow":
+            raise
+        missing.append({"id": view["self"], "name": tags[view["self"]]["name"], "error": str(error)[:200]})
     for thread in threads:
         thread.join(15)
     rows = []
     for m in view["members"]:
-        for row in results.get(m["id"]) or []:
+        result = results.get(m["id"])
+        entries = [result] if what == "flow" and result is not None else result or []
+        for row in entries:
             if isinstance(row, dict):
                 rows.append({**row, "site": tags[m["id"]]})
-    return rows, missing
+    return ({"clusters": rows, "missing": missing} if what == "flow" else rows), missing
 
 
 # ---------------------------------------------------------------- HTTP
@@ -8370,6 +8389,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, PORTAL.candidates())
             if p == "/api/network":
                 return self._send(200, cached("network", 5, NETWORK.inventory))
+            if p == "/api/firewall":
+                return self._send(200, FIREWALL.inventory())
             if p == "/api/cluster":
                 return self._send(200, cached("cluster", 15, CLUSTER.inventory))
             if p == "/api/self/replicas":
@@ -9482,6 +9503,9 @@ class H(HTTP.LimitedHandler):
                     return self._send(409, {"error": "; ".join(power_plan["blockers"]), "plan": power_plan})
                 if b.get("review_token") != power_plan["review_token"]:
                     return self._send(409, {"error": "host impact changed; review the plan again", "plan": power_plan})
+                if power_plan.get("planned_outage") and b.get("allow_cluster_outage") is not True:
+                    return self._send(409, {"error": "acknowledge the whole-cluster outage before host power control",
+                                            "plan": power_plan})
                 if power_plan["stranded"] and not b.get("allow_stranded"):
                     return self._send(409, {"error": "some workloads have no eligible failover host",
                                             "plan": power_plan})
@@ -9940,6 +9964,12 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, OPS.dismiss(b["id"]))
             if p == "/api/network/plan":
                 return self._send(200, NETWORK.service_plan(b))
+            if p == "/api/firewall/preview":
+                return self._send(200, FIREWALL.preview(b))
+            if p == "/api/firewall/save":
+                return self._send(200, FIREWALL.save(b))
+            if p == "/api/firewall/delete":
+                return self._send(200, FIREWALL.remove(b))
             if p == "/api/network/services":
                 guard_managed_smb(b.get("namespace") or DEFAULT_NS, b.get("name"))
                 result = NETWORK.create_service(b)

@@ -531,7 +531,6 @@ window.nodeActions = async name => {
   }
   window.__nodeImpact = impact;
   const isEtcd = (qr.members || []).includes(name);
-  const risky = isEtcd && qr.can_lose < 1;
   const off = qr.power_enabled === false;
   childModal("Host actions · " + name, `
     <div class="grid g2" style="gap:12px">
@@ -565,17 +564,7 @@ window.nodeActions = async name => {
         helper pod that enters the host namespaces. This installation has disabled it. Set
         <span class="mono">ENABLE_NODE_POWER=true</span> on the Homestead Deployment to enable it.
         Cordon and drain above work regardless.</div>`
-      : risky ? `<div class="note" style="border-color:rgba(255,77,79,.35);background:rgba(255,77,79,.08);color:#ffb4b8">
-        <b>Blocked.</b> ${(qr.ready || []).length} of ${qr.total} etcd members are ready and quorum needs
-        ${qr.quorum_needs}. ${qr.total === 1 ? "This is the cluster's only member: while it is down, so is the cluster - Homestead with it - until it is back."
-          : "Taking this host down would lose the cluster. Bring the other members back first."}</div>
-        <label class="switch" data-need="admin" style="margin-top:10px"><input type="checkbox" onchange="$('#pw_forced_row').hidden = !this.checked">
-          Override - reboot or shut down anyway</label>
-        <div class="row" id="pw_forced_row" hidden style="margin-top:8px">
-          <button class="btn danger" data-need="admin" onclick="nodePowerReview(${jsq(name)},'reboot',true)">Review forced reboot…</button>
-          <button class="btn danger" data-need="admin" onclick="nodePowerReview(${jsq(name)},'poweroff',true)">Review forced shutdown…</button>
-        </div>`
-      : `<p class="muted small">Review fresh workload, VM, quorum and Longhorn replica impacts before either action. Homestead will cordon and wait for drained pods to leave before sending host power.</p>
+      : `<p class="muted small">Review fresh workload, VM, quorum and Longhorn replica impacts before either action. On a multi-host cluster Homestead cordons and drains the host. A single-host cluster uses a planned whole-cluster outage with its own acknowledgement.</p>
       <div class="row">
         <button class="btn danger" onclick="nodePowerReview(${jsq(name)},'reboot')">Review reboot…</button>
         <button class="btn danger" onclick="nodePowerReview(${jsq(name)},'poweroff')">Review shutdown…</button>
@@ -611,8 +600,11 @@ window.nodePowerReview = async (node, action, force = false) => {
   const concerns = [...(plan.vms?.length ? [`VMs to check: ${plan.vms.join(", ")}. Their migration or shutdown must be verified separately.`] : []), ...(plan.warnings || [])];
   const overridable = !plan.force && (plan.overridable || []).length && !(plan.hard_blockers || []).length;
   const forced = window.__nodePowerForced = !!plan.force;
+  const outage = !!plan.planned_outage;
   childModal(`${forced ? "Forced " : ""}${verb.toLowerCase()} · ${node}`, [
-    UI.lead(forced
+    UI.lead(outage
+      ? `${plan.pods} pod${plan.pods === 1 ? "" : "s"} and ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"} currently run on <b>${esc(node)}</b>, the cluster's only host. This is a planned whole-cluster outage. Homestead asks the host's systemd to ${action === "reboot" ? "reboot" : "power off"}; it leaves scheduling unchanged and does not evict pods. Applications, storage and this page go offline.`
+      : forced
       ? `${plan.pods} pod${plan.pods === 1 ? "" : "s"} and ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"} run on <b>${esc(node)}</b>. Forced: Homestead does not cordon or drain it - it asks the host's own systemd to ${action === "reboot" ? "reboot" : "power off"}, which stops everything in order, as its power button would.`
       : `${plan.pods} pod${plan.pods === 1 ? "" : "s"} and ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"} currently run on <b>${esc(node)}</b>. Homestead cordons it and waits for drained pods to leave; live migration and restart elsewhere are not guaranteed.`),
     plan.blockers?.length
@@ -628,13 +620,16 @@ window.nodePowerReview = async (node, action, force = false) => {
       ? UI.table([{ label: "Volume" }, { label: "Copies" }], volumes.map(v => [`<span class="mono">${esc(v.claim)}</span>`, UI.chip(...(risk[v.risk] || risk.resync))]))
       : `<div class="ui-empty">No Longhorn replica on this host was found.</div>`),
     budgets.length ? UI.section("Disruption budgets", UI.table([{ label: "Pod" }, { label: "Budget" }], budgets.map(b => [`<span class="mono">${esc(b.pod)}</span>`,
-      `${esc(b.budget)} · ${b.allowed == null ? "status unknown" : `${b.allowed} disruption(s) allowed`}${b.unhealthy_allowed ? " · unhealthy eviction allowed" : ""}${b.wait_for_drain && !forced ? " · waits for Longhorn during drain" : ""}`]))) : "",
-    local.length ? UI.section("Local and external storage", `<p class="ui-help">Drain deletes emptyDir data. Host-local paths do not move with pods. External storage may depend on this host; verify availability before proceeding.</p>`
+      `${esc(b.budget)} · ${b.allowed == null ? "status unknown" : `${b.allowed} disruption(s) allowed`}${b.unhealthy_allowed ? " · unhealthy eviction allowed" : ""}${b.wait_for_drain && !forced && !outage ? " · waits for Longhorn during drain" : ""}`]))) : "",
+    local.length ? UI.section("Local and external storage", `<p class="ui-help">${outage ? "Temporary pod data may be lost during restart. Host-local and external storage may be unavailable while this host is down." : "Drain deletes emptyDir data. Host-local paths do not move with pods. External storage may depend on this host; verify availability before proceeding."}</p>`
       + UI.table([{ label: "Pod" }, { label: "Storage" }], local.map(v => [`<span class="mono">${esc(v.pod)}</span>`, `${esc(v.kind)} · ${esc(v.source)}`]))) : "",
     plan.ready ? UI.field(`Type ${node} to confirm`, `<input type="text" id="pw_confirm" autocomplete="off" placeholder="${esc(node)}">`) : "",
-    plan.ready && plan.stranded?.length ? UI.ack("pw_allow", `I understand ${plan.stranded.length} workload${plan.stranded.length === 1 ? "" : "s"} may remain down`) : "",
+    plan.ready && outage ? UI.ack("pw_outage", action === "reboot"
+      ? "I understand the entire cluster, including Homestead, will be offline until this host returns"
+      : "I understand the entire cluster will be offline and I need console or physical access to power this host on again") : "",
+    plan.ready && !outage && plan.stranded?.length ? UI.ack("pw_allow", `I understand ${plan.stranded.length} workload${plan.stranded.length === 1 ? "" : "s"} may remain down`) : "",
     plan.ready && plan.requires_data_ack ? UI.ack("pw_data", "I understand the volume copies or storage visibility risk") : "",
-    UI.more("After the request", "Follow Recent jobs for the helper's events, logs and host status. Reboot checks use a changed boot ID; shutdown cannot be confirmed from NotReady alone. The host stays cordoned until you inspect it and allow scheduling."),
+    UI.more("After the request", "Follow Recent jobs for the helper's events, logs and host status. Reboot checks use a changed boot ID; shutdown cannot be confirmed from NotReady alone. " + (outage || forced ? "Scheduling is left unchanged; inspect workloads and storage when the host returns." : "The host stays cordoned until you inspect it and allow scheduling.")),
     UI.actions(plan.ready ? UI.cancel() + UI.button(`${forced ? "Force " + verb.toLowerCase() : verb + " host"}`, `nodePower(${jsArg(node)},${jsArg(action)})`, { kind: "danger", id: "pw_execute" }) : UI.cancel("Close")),
   ].join(""), true);
 };
@@ -643,20 +638,22 @@ window.nodePower = async (node, action) => {
   if (!plan || !plan.ready || plan.node !== node || plan.action !== action) return toast("review the host impact again", "bad");
   const c = $("#pw_confirm")?.value.trim();
   if (c !== node) return toast("type the host name exactly to confirm", "bad");
-  if (plan.stranded?.length && !$("#pw_allow")?.checked)
+  if (plan.planned_outage && !$("#pw_outage")?.checked)
+    return toast("acknowledge the whole-cluster outage", "bad");
+  if (!plan.planned_outage && plan.stranded?.length && !$("#pw_allow")?.checked)
     return toast("confirm the workloads that will remain down", "bad");
   if (plan.requires_data_ack && !$("#pw_data")?.checked)
     return toast("confirm the volume risk", "bad");
   // Consume approval before sending, including double clicks and lost replies.
   window.__nodePowerPlan = null;
   const button = $("#pw_execute");
-  if (button) { button.disabled = true; button.textContent = plan.force ? "Sending…" : "Draining host…"; }
+  if (button) { button.disabled = true; button.textContent = plan.force || plan.planned_outage ? "Sending…" : "Draining host…"; }
   try {
     const r = await api("/api/node/power", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node, action, confirm: c, review_token: plan.review_token, force: !!plan.force,
-        allow_stranded: !!$("#pw_allow")?.checked, allow_data_risk: !!$("#pw_data")?.checked }) });
+        allow_cluster_outage: !!$("#pw_outage")?.checked, allow_stranded: plan.planned_outage ? !!$("#pw_outage")?.checked : !!$("#pw_allow")?.checked, allow_data_risk: !!$("#pw_data")?.checked }) });
     if (r.operation) window.noteOperation?.(r.operation);
-    modal("Host maintenance", UI.lead(plan.force ? `Sent. Follow it in Recent jobs${plan.action === "reboot" ? "; this page comes back when the host does" : ""}. It was not cordoned, so its pods start again as it comes back.`
+    modal("Host maintenance", UI.lead(plan.force || plan.planned_outage ? `Sent. Follow it in Recent jobs${plan.action === "reboot" ? "; this page comes back when the host does" : ""}. Scheduling was left unchanged; inspect workloads and storage when the host returns.`
       : "Follow progress in Recent jobs. The host stays cordoned; check it before allowing scheduling.") +
       UI.more("Steps so far", `<pre>${esc((r.steps || []).join("\n"))}</pre>`) + UI.actions(UI.cancel("Close")));
   } catch (e) {

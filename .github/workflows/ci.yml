@@ -170,15 +170,21 @@ jobs:
             CONTAINER_SET_SCREENSHOTS=release-assets/dialogs/container-set node tests/integration/container-set.mjs
             PASSTHROUGH_SCREENSHOTS=release-assets/dialogs/passthrough node tests/integration/passthrough-devices.mjs
             VM_ISOLATION_SCREENSHOTS=release-assets/dialogs/vm-isolation node tests/integration/vm-network-isolation.mjs
+            FIREWALL_SCREENSHOTS=release-assets/dialogs/firewall node tests/integration/workload-firewall.mjs
           fi
           if [ "${{ matrix.audit }}" = pages ]; then
             if [ "${{ matrix.shard }}" = 0 ]; then
               PAGE_STANDARD_SCREENSHOTS=release-assets/pages/components node tests/integration/page-components.mjs
               HOMESTEAD_URL=http://127.0.0.1:4173 DASHBOARD_EDITOR_SCREENSHOTS=release-assets/pages/dashboard-editor node tests/integration/dashboard-editor.mjs
               HOMESTEAD_URL=http://127.0.0.1:4173 node tests/integration/dashboard-account.mjs
+              HOMESTEAD_URL=http://127.0.0.1:4173 DEPLOY_FORM_SCREENSHOTS=release-assets/pages/container-deploy node tests/integration/container-deploy-form.mjs
+              HOMESTEAD_URL=http://127.0.0.1:4173 WIDGET_OPTIONS_SCREENSHOTS=release-assets/pages/widget-options node tests/integration/dashboard-widget-options.mjs
+              HOMESTEAD_URL=http://127.0.0.1:4173 CUSTOM_WIDGET_SCREENSHOTS=release-assets/pages/custom-widget node tests/integration/dashboard-custom.mjs
               HOMESTEAD_URL=http://127.0.0.1:4173 INSIGHTS_OUTPUT=release-assets/pages/insights node tests/integration/health-insights.mjs
               HOMESTEAD_URL=http://127.0.0.1:4173 NODE_HEALTH_SCREENSHOTS=release-assets/pages/node-health node tests/integration/dashboard-node-health.mjs
               HOMESTEAD_URL=http://127.0.0.1:4173 RESOURCE_WIDGET_SCREENSHOTS=release-assets/pages/resources node tests/integration/dashboard-resources.mjs
+              HOMESTEAD_URL=http://127.0.0.1:4173 ARCHITECTURE_SCREENSHOTS=release-assets/pages/architecture node tests/integration/combined-architecture.mjs
+              HOMESTEAD_URL=http://127.0.0.1:4173 NOTIFICATION_SCREENSHOTS=release-assets/pages/notifications node tests/integration/mobile-notifications.mjs
               HOMESTEAD_URL=http://127.0.0.1:4173 ALERT_SCREENSHOTS=release-assets/pages/alerts node tests/integration/notification-alerts.mjs
             fi
             node scripts/check_setup_guide.mjs

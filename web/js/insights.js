@@ -90,12 +90,16 @@ const HealthInsights = (() => {
         memory:stopped?null:vm?r.usage?.mem:known(r.mem_mb)?r.mem_mb*1024**2:null};
     }).sort((a,b)=>a.name.localeCompare(b.name) || String(a.ns).localeCompare(String(b.ns)));
   }
-  function resourceList(id, records) {
-    const rows=resourceRows(id,records), running=rows.filter(r=>r.status==="Running").length;
+  function filteredRows(id, records, settings={}) {
+    return resourceRows(id,records).filter(r=>(!settings.groups || settings.groups.includes(r.record.group || "")) &&
+      (!settings.status || settings.status==="all" || (settings.status==="running"?r.status==="Running":settings.status==="stopped"?r.status==="Stopped":!["Running","Stopped"].includes(r.status))));
+  }
+  function resourceList(id, records, settings={}) {
+    const rows=filteredRows(id,records,settings), running=rows.filter(r=>r.status==="Running").length;
     const header=`<thead><tr><th>Name</th><th>State</th><th title="${id==="vms"?"Launcher CPU usage as a percentage of assigned cores":"100% equals one fully used CPU core"}">CPU</th><th>Memory</th></tr></thead>`;
     const row=r=>`<tr${clusterAttr(r.record)}><td><div class="dashboard-resource-name">${UI.statusDot(r.tone)}<span title="${esc([r.ns,r.name].filter(Boolean).join("/"))}">${esc(r.name)}</span></div></td><td><span class="dashboard-resource-state ${r.tone}" title="${esc(r.record.problem || r.status)}">${esc(r.status)}</span></td><td class="mono">${known(r.cpu)?esc(Math.round(r.cpu*10)/10)+"%":"—"}</td><td class="mono">${known(r.memory)?esc(vmBytes(r.memory)):"—"}</td></tr>`;
     const groups=Array.from({length:Math.ceil(rows.length/4)},(_,i)=>rows.slice(i*4,i*4+4));
-    const table=rows.length?`<div class="dashboard-resource-scroll" tabindex="0" role="region" aria-label="${titles[id]} list"><div class="dashboard-resource-columns">${groups.map(group=>`<table class="dashboard-resource-table">${header}<tbody>${group.map(row).join("")}</tbody></table>`).join("")}</div></div>`:'<div class="empty small">No '+(id==="vms"?"virtual machines":"app containers")+' reported.</div>';
+    const table=rows.length?`<div class="dashboard-resource-scroll" tabindex="0" role="region" aria-label="${titles[id]} list"><div class="dashboard-resource-columns">${groups.map(group=>`<table class="dashboard-resource-table">${header}<tbody>${group.map(row).join("")}</tbody></table>`).join("")}</div></div>`:'<div class="empty small">No '+(id==="vms"?"virtual machines":"app containers")+' match this view.</div>';
     return table+`<div class="dashboard-resource-footer">${rows.length} ${id==="vms"?"VMs":"containers"}<span>${running} running</span></div>`;
   }
   let data={}, request=null, generation=0, checkedAt=0;
@@ -108,11 +112,11 @@ const HealthInsights = (() => {
       (rows.length?list(rows,compact?3:Infinity):'<div class="empty small">No suggestions from the available checks.</div>')+
       (compact && rows.length>3?`<div class="ui-help">${rows.length-3} more in Cluster Health</div>`:"");
   }
-  function body(id) {
+  function body(id, settings={}) {
     if (!needs[id].every(key=>key in data))return '<div class="empty small">Loading checks…</div>';
     if(id==="health")return healthBody(true);
     if(id!=="updates" && needs[id].some(key=>data[key]===null))return UI.callout("warn","Checks unavailable","Retry to refresh this widget.")+UI.button("Retry","HealthInsights.load(true)");
-    if(id==="containers" || id==="vms")return resourceList(id,data[id==="containers"?"workloads":"vms"]);
+    if(id==="containers" || id==="vms")return resourceList(id,data[id==="containers"?"workloads":"vms"],settings);
     if(id==="backups")return `<div class="ui-help">Recorded external backups, oldest first. Check schedules in Protection.</div>`+(data.protection.volumes.length ? list(backupRows(data.protection).map(r=>({...r,label:r.severity==="medium"?"Missing":"Recorded"})),4) : '<div class="empty small">No Longhorn volumes reported.</div>');
     if(id==="workloads") {const s=workloadSummary(data.workloads,data.vms);return `<div class="insight-summary">${s.ready}/${s.active} apps ready<span>${s.stopped} stopped</span></div>`+(s.rows.length?list(s.rows,4):'<div class="empty small">No active workloads need attention.</div>');}
     if(id==="updates") {
@@ -125,8 +129,8 @@ const HealthInsights = (() => {
     if(id==="jobs") {const jobs=data.jobs, active=jobs.filter(j=>!["succeeded","failed","cancelled"].includes(j.status)), failed=jobs.filter(j=>j.status==="failed");return `<div class="insight-summary">${active.length} running<span>${failed.length} failed</span></div>`+list([...failed,...active].map(j=>({...item(j.id,j.status==="failed"?"critical":"low",j.title,j.message || j.status,"jobs"),label:j.status,tone:j.status==="failed"?"bad":"warn"})),4);}
     return "";
   }
-  function widget(id, settings={}) {const resource=["containers","vms"].includes(id);const route={containers:"workloads",vms:"vms",health:"health",workloads:"workloads",backups:"protect",updates:"updates",jobs:"jobs"}[id];return `<div class="card flat insight-widget${resource?" dashboard-resource-widget":""}"${resource?` style="--resource-list-height:${settings.height || 360}px"`:""}>${UI.moduleHeader(titles[id],"",UI.button("View all",`HealthInsights.open('${route}')`,{attrs:`aria-label="View all ${titles[id].toLowerCase()}"`}))}<div data-insight="${id}">${body(id)}</div></div>`;}
-  function paint() {for(const el of document.querySelectorAll("[data-insight]")){const next=el.cloneNode(false);next.innerHTML=el.dataset.insight==="full"?healthBody():body(el.dataset.insight);morph(el,next);}window.applyRole?.();}
+  function widget(id, settings={}) {const resource=["containers","vms"].includes(id);const route={containers:"workloads",vms:"vms",health:"health",workloads:"workloads",backups:"protect",updates:"updates",jobs:"jobs"}[id];return `<div class="card flat insight-widget${resource?" dashboard-resource-widget":""}"${resource?` style="--resource-list-height:${settings.height || 360}px"`:""}>${UI.moduleHeader(titles[id],"",UI.button("View all",`HealthInsights.open('${route}')`,{attrs:`aria-label="View all ${titles[id].toLowerCase()}"`}))}<div data-insight="${id}">${body(id,settings)}</div></div>`;}
+  function paint() {for(const el of document.querySelectorAll("[data-insight]")){const next=el.cloneNode(false);next.innerHTML=el.dataset.insight==="full"?healthBody():body(el.dataset.insight,window.Dashboard?.settings(el.dataset.insight));morph(el,next);}window.Dashboard?.refreshOptions();window.applyRole?.();}
   async function load(force=false) {
     if(request){await request;return load(force);}
     const ids=[...document.querySelectorAll("[data-insight]")].map(el=>el.dataset.insight==="full"?"health":el.dataset.insight);
@@ -149,7 +153,7 @@ const HealthInsights = (() => {
     })().finally(()=>{request=null;});return request;
   }
   function liveJobs(jobs,stale=false) {data.jobs=stale?null:jobs;for(const el of document.querySelectorAll('[data-insight="jobs"]'))el.innerHTML=body("jobs");}
-  return {titles,advice,backupRows,workloadSummary,resourceRows,widget,load,open,liveJobs,reset(){generation++;data={};checkedAt=0;},healthBody};
+  return {titles,advice,backupRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,reset(){generation++;data={};checkedAt=0;},healthBody};
 })();
 if(typeof window!=="undefined")window.HealthInsights=HealthInsights;
 if(typeof module!=="undefined")module.exports=HealthInsights;

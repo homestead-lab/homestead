@@ -446,6 +446,20 @@ Settings → Hardware and storage → Add-ons manages the SMB server afterwards.
 before anything of the share is made, so a share that cannot be served leaves
 nothing behind.
 
+### Workload firewall policies
+
+**Networking → Firewall** manages Kubernetes NetworkPolicies for individual
+workloads. Admins can use presets, choose allowed IP ranges or namespace peers,
+set inbound/outbound ports, and review affected pods and overlapping policies
+before applying. Viewer and operator roles can inspect policies. Editing and
+removal use resource identity and revision checks; externally managed or
+unsupported policies are inspect-only.
+
+Enforcement depends on the network provider and must be verified with real
+traffic. Host traffic and VM LAN/Multus interfaces require separate firewalls.
+See [the firewall guide](wiki/Networking.md#workload-firewall) for policy
+semantics, DNS exceptions, and backup scope.
+
 ### IP addresses
 
 Networking's **IP addresses** tab keeps, per subnet, what lives at each
@@ -941,7 +955,17 @@ requires a fresh host review, not a repeat of the previous request. A helper in
 image-pull backoff may still start later: inspect it before sending anything else.
 Missing creation receipts and replacement helpers are not treated as the original.
 
-Longhorn instance-manager budgets may allow zero disruptions before maintenance
+A verified single-host cluster offers normal **Reboot** and **Shut down** as a
+planned whole-cluster outage, without a forced override. Type the host name and
+acknowledge that applications, storage and Homestead go offline; shutdown also
+requires console or physical access to power it on again. This path leaves
+scheduling unchanged and sends the host's systemd power request without evicting
+pods. Running VMs, active data helpers and incomplete inventories still block it.
+A sole etcd member with worker nodes does not qualify. Topology, identity and
+reviewed impacts are rechecked before submission. Unattended OS rollouts cannot
+approve this outage.
+
+On multi-host clusters, Longhorn instance-manager budgets may allow zero disruptions before maintenance
 starts. The review explains that Homestead will cordon the host, evict workload
 pods first, and wait up to two minutes for Longhorn to permit storage pod eviction.
 It uses the Kubernetes Eviction API throughout; it does not delete these pods or
@@ -961,8 +985,9 @@ cordon and drain and is still refused when power control is off, the host is not
 Ready, a helper is active, or the host's identity or boot ID changed.
 
 A reboot is observed through the same Node identity returning Ready with a changed
-boot ID, followed by affected Longhorn health checks. The host stays cordoned;
-this does not verify application recovery or automatically allow scheduling.
+boot ID, followed by affected Longhorn health checks. After a multi-host drain
+the host stays cordoned; a planned single-host outage leaves scheduling unchanged.
+Neither verifies application recovery.
 For shutdown, [NotReady is not proof of physical power-off](https://kubernetes.io/docs/reference/node/node-status/).
 After ten minutes without confirmation the job reports that shutdown could not
 be verified. Check the host console or physical power; no automatic retry is sent.
@@ -1016,7 +1041,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.301/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/wjcloudy/homestead/v2.8.302-dev.1/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -1027,7 +1052,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.301 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.302-dev.1 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1941,10 +1966,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.301`, the workflow publishes:
+For a release such as `v2.8.302-dev.1`, the workflow publishes:
 
 ```text
-ghcr.io/wjcloudy/homestead:2.8.301
+ghcr.io/wjcloudy/homestead:2.8.302-dev.1
 ghcr.io/wjcloudy/homestead:2.8
 ghcr.io/wjcloudy/homestead:2
 ghcr.io/wjcloudy/homestead:latest
@@ -1955,8 +1980,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.301
-git push origin v2.8.301
+git tag v2.8.302-dev.1
+git push origin v2.8.302-dev.1
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

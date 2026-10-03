@@ -13,12 +13,30 @@ const ROB = r => r === "healthy" ? "#3ddc91" : r === "degraded" ? "#ffb020" : "#
    up what it depends on and what depends on it - following the lines away from
    it in each direction and never back, so a VIP that twelve apps share does
    not light up all twelve when one of them is pointed at. */
+// Prefix graph identities, never display names or operational resource names.
+// Even matching VIPs and node names on two clusters must remain separate paths.
+const archId = (id, site) => site ? `${id.slice(0,2)}${encodeURIComponent(site.id)}/${id.slice(2)}` : id;
+function architectureData(data) {
+  if(!Array.isArray(data.clusters))return data;
+  const graph={workloads:[],volumes:[],nodes:[],vips:[],missing:data.missing || []};
+  for(const cluster of data.clusters){
+    const site=cluster.site, key=id=>id?archId(id,site):id;
+    graph.workloads.push(...cluster.workloads.map(w=>({...w,site,id:key(w.id),claims:w.claims.map(c=>({...c,vid:key(c.vid)}))})));
+    graph.volumes.push(...cluster.volumes.map(v=>({...v,site,id:key(v.id)})));
+    graph.nodes.push(...cluster.nodes.map(n=>({...n,site,id:key(n.id),copies:n.copies.map(c=>({...c,vid:key(c.vid)}))})));
+    graph.vips.push(...cluster.vips.map(v=>({...v,site,id:key(v.id)})));
+  }
+  return graph;
+}
 async function viewFlow() {
-  const [f] = await Promise.all([api("/api/flow"), loadHardwareFeatures()]);
+  const navigation=window.NAV_TOKEN;
+  const [answer] = await Promise.all([api("/api/flow"), loadHardwareFeatures()]);
+  if(navigation!==window.NAV_TOKEN)return;
+  const f=architectureData(answer);
   STATE.data.flow = f;
   const links = [];
-  const portId = (ip, port) => `p:${ip}:${port}`;
-  f.workloads.forEach(w => w.ports.forEach(p => { if (p.vip) links.push([portId(p.vip, p.port), w.id, "access"]); }));
+  const portId = (ip, port, site) => archId(`p:${ip}:${port}`,site);
+  f.workloads.forEach(w => w.ports.forEach(p => { if (p.vip) links.push([portId(p.vip, p.port, w.site), w.id, "access"]); }));
   f.workloads.forEach(w => w.claims.forEach(c => { if (c.vid) links.push([w.id, c.vid, "mount"]); }));
   f.nodes.forEach(n => n.copies.forEach(c => links.push([c.vid, `${n.id}|${c.vid}`, "copy"])));
   STATE.data.alinks = links;
@@ -26,42 +44,33 @@ async function viewFlow() {
   const mountedVolumes = new Set(links.filter(([, , type]) => type === "mount").map(([, id]) => id));
   const host = w => (w.node || "").replace(/^harvester-/, "");
   const kind = w => w.kind === "vm" ? (w.running ? `VM · ${host(w) || w.state || "starting"}` : `VM · ${(w.state || "stopped").toLowerCase()}`) : host(w);
-  const containers = f.workloads.filter(w => w.kind !== "vm");
-  const vms = f.workloads.filter(w => w.kind === "vm");
-  const connectedVolumes = f.volumes.filter(v => mountedVolumes.has(v.id));
   const disconnectedVolumes = f.volumes.filter(v => !mountedVolumes.has(v.id));
   const workloadCard = w => `<div class="a2item a2wl ${used.has(w.id) ? "" : "a2alone"} ${w.kind === "vm" && !w.running ? "a2stopped" : ""}"
-          id="${esc(w.id)}" data-kind="workload" data-id="${esc(w.id)}"
+          id="${esc(w.id)}"${clusterAttr(w)} data-kind="workload" data-id="${esc(w.id)}"
           title="${esc(w.name)} · ${esc(kind(w))}${w.ip ? ` · ${esc(w.ip)}` : ""}${w.kind !== "vm" || w.running ? ` · ${workloadCpuPercent(w.cpu)} CPU · ${w.mem_mb || 0} MB` : ""}">
           ${appAvatar(w.name, w.icon)}<span class="a2name">${esc(w.name)}</span>
           <span class="a2meta">${esc(kind(w))}</span>
           ${w.kind === "vm" && !w.running ? "" : `<button class="a2act" data-need="operator" title="${w.kind === "vm" ? "Migrate" : "Move to another host"}"
             onclick="event.stopPropagation();${w.kind === "vm" ? `vmMove(${jsq(w.ns || "lab")},${jsq(w.name)})` : `moveWorkload(${jsq(w.name)},${jsq(w.ns || "lab")})`}">⇄</button>`}
         </div>`;
-  const volumeCard = (v, disconnected = false) => `<div class="a2item a2vol ${used.has(v.id) ? "" : "a2alone"} ${disconnected ? "a2disconnected" : ""}" id="${esc(v.id)}" data-kind="volume" data-id="${esc(v.id)}"
+  const volumeCard = (v, disconnected = false) => `<div class="a2item a2vol ${used.has(v.id) ? "" : "a2alone"} ${disconnected ? "a2disconnected" : ""}" id="${esc(v.id)}"${clusterAttr(v)} data-kind="volume" data-id="${esc(v.id)}"
           title="${esc(v.name)} · ${v.size_gb} GB · ${v.replicas} replicas · ${esc(v.robustness)}${v.attached ? ` · attached on ${esc(v.attached)}` : ""}">
           <span class="a2dot" style="background:${ROB(v.robustness)}"></span><span class="a2name">${esc(v.name)}</span>
           <span class="a2meta mono">${v.size_gb}G · ${v.replicas}×</span></div>`;
 
-  paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · hover anything to trace it`, `
-        ${disconnectedVolumes.length ? `<button class="btn sm ${STATE.archDisconnected ? "pri" : ""}" onclick="STATE.archDisconnected=!STATE.archDisconnected;viewFlow()"
-          data-tip="Volumes no container or VM is defined to mount. They stay hidden so old and retained data does not obscure the live paths.">${STATE.archDisconnected ? "Hide" : "Show"} ${disconnectedVolumes.length} disconnected</button>` : ""}
-        <div class="row hide-sm arch-legend">
-          <span><i style="background:var(--arch-access)"></i>port</span>
-          <span><i style="background:var(--arch-mount)"></i>mount</span>
-          <span><i style="background:var(--arch-copy)"></i>replica</span>
-        </div>
-      `, {actionsClass:`arch-head-actions`})}
-    <div class="arch2wrap"><svg id="archsvg" aria-hidden="true"></svg><div class="arch2">
+  const renderGraph = f => {
+    const containers=f.workloads.filter(w=>w.kind!=="vm"),vms=f.workloads.filter(w=>w.kind==="vm");
+    const connectedVolumes=f.volumes.filter(v=>mountedVolumes.has(v.id)),disconnectedVolumes=f.volumes.filter(v=>!mountedVolumes.has(v.id));
+    return `<div class="arch2wrap"><svg class="archsvg" aria-hidden="true"></svg><div class="arch2">
 
       <section class="a2col"><h4>Access</h4>
-      ${f.vips.map(v => `<div class="a2item a2vip ${v.state && !["ok", "idle"].includes(v.state) ? "a2broken" : ""}" data-kind="access" data-id="${esc(v.id)}"
+      ${f.vips.map(v => `<div class="a2item a2vip ${v.state && !["ok", "idle"].includes(v.state) ? "a2broken" : ""}" ${clusterAttr(v)} data-kind="access" data-id="${esc(v.id)}"
           data-node="${esc(v.node || "")}" title="${esc(archAddressWords(v))}">
           <div class="a2vipip"><span class="mono">${esc(v.ip)}</span>
             <span class="a2meta">${v.kind === "node" ? "node" : "VIP"}${v.node ? ` · ${esc(v.node.replace(/^harvester-/, ""))}` : ""}</span></div>
           ${v.state && !["ok", "idle"].includes(v.state) ? `<div class="a2why">${esc(v.state === "unrouted" ? "not reachable" : v.state === "pending" ? "port taken" : "no node answers")}</div>` : ""}
-          <div class="a2ports">${v.ports.map(p => `<span class="a2port" id="${esc(portId(v.ip, p.port))}" data-kind="access"
-            data-id="${esc(portId(v.ip, p.port))}" title="${esc(p.app)} · open ${esc(v.ip)}:${p.port}"
+          <div class="a2ports">${v.ports.map(p => `<span class="a2port" id="${esc(portId(v.ip, p.port, v.site))}" data-kind="access"
+            data-id="${esc(portId(v.ip, p.port, v.site))}" title="${esc(p.app)} · open ${esc(v.ip)}:${p.port}"
             onclick="openSvc(${jsq(v.ip)},${p.port})">${p.port}</span>`).join("")}</div></div>`).join("")
         || '<div class="dim xs">No load-balancer addresses</div>'}
       </section>
@@ -81,14 +90,27 @@ async function viewFlow() {
       </section>
 
       <section class="a2col"><h4>Nodes &amp; replica copies</h4>
-      ${f.nodes.map(n => `<div class="a2item a2node" data-kind="node" data-id="${esc(n.id)}">
+      ${f.nodes.map(n => `<div class="a2item a2node"${clusterAttr(n)} data-kind="node" data-id="${esc(n.id)}">
           <div class="a2nodehead"><b>${esc(n.name)}</b><span class="dim xs">${n.copies.length} cop${n.copies.length === 1 ? "y" : "ies"}</span></div>
           ${(n.ips || []).length || (n.vips || []).length ? `<div class="a2addrs">${(n.ips || []).map(ip => `<span class="a2addr mono" title="${esc(n.name)}'s own address">${esc(ip)}</span>`).join("")}${(n.vips || []).map(ip => `<span class="a2addr vip mono" title="${esc(n.name)} answers for VIP ${esc(ip)}">VIP ${esc(ip)}</span>`).join("")}</div>` : ""}
           <div class="a2copies">${n.copies.map(c => `<span class="a2copy ${c.running ? "" : "stopped"}" id="${esc(`${n.id}|${c.vid}`)}"
             data-kind="copy" data-id="${esc(`${n.id}|${c.vid}`)}" title="${esc(c.vol)} on ${esc(n.name)}${c.running ? "" : " · not running"}">${esc(c.vol)}</span>`).join("")
             || '<span class="dim xs">no replicas here</span>'}</div></div>`).join("")}
       </section>
-    </div></div>`);
+    </div></div>`;
+  };
+  const graphs=answer.clusters?.map(cluster=>({site:cluster.site,...Object.fromEntries(["workloads","volumes","nodes","vips"].map(key=>[key,f[key].filter(row=>row.site.id===cluster.site.id)]))}));
+  paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · hover anything to trace it`, `
+        ${disconnectedVolumes.length ? `<button class="btn sm ${STATE.archDisconnected ? "pri" : ""}" onclick="STATE.archDisconnected=!STATE.archDisconnected;viewFlow()"
+          data-tip="Volumes no container or VM is defined to mount. They stay hidden so old and retained data does not obscure the live paths.">${STATE.archDisconnected ? "Hide" : "Show"} ${disconnectedVolumes.length} disconnected</button>` : ""}
+        <div class="row hide-sm arch-legend">
+          <span><i style="background:var(--arch-access)"></i>port</span>
+          <span><i style="background:var(--arch-mount)"></i>mount</span>
+          <span><i style="background:var(--arch-copy)"></i>replica</span>
+        </div>
+      `, {actionsClass:`arch-head-actions`})}
+    ${f.missing?.length?UI.callout("warn","Architecture is incomplete",esc(f.missing.map(m=>m.name).join(", ")+" could not be loaded. Showing the clusters that answered.")):""}
+    ${graphs?graphs.map(graph=>`<section class="architecture-cluster" data-architecture-cluster="${esc(graph.site.id)}">${UI.moduleHeader(graph.site.name,"",`<span class="dim small">${graph.workloads.length} workloads · ${graph.nodes.length} nodes</span>`)}${renderGraph(graph)}</section>`).join(""):renderGraph(f)}`);
   // A live refresh redraws the page; whatever was being traced stays traced.
   if (STATE.data.archHover) archHighlight(STATE.data.archHover);
   else drawArch();
@@ -105,8 +127,8 @@ function archAddressWords(v) {
 /* Hover and resize, wired once for the page rather than per element, so a
    live refresh that adds a row does not leave it unwired. */
 function archWatch() {
-  const wrap = $(".arch2wrap");
-  if (!wrap || wrap.dataset.watched) return;
+  $$(".arch2wrap").forEach(wrap=>{
+  if (wrap.dataset.watched) return;
   wrap.dataset.watched = "1";
   wrap.addEventListener("mouseover", event => {
     const item = event.target.closest("[data-id]");
@@ -114,14 +136,16 @@ function archWatch() {
   });
   wrap.addEventListener("mouseleave", () => archHighlight(null));
   if (window.ResizeObserver) new ResizeObserver(() => drawArch(STATE.data.archKeep)).observe(wrap);
+  });
 }
 
 function archHighlight(id) {
   STATE.data.archHover = id;
   const keep = id ? archRelated(id) : null;
   STATE.data.archKeep = keep;
+  const selected=[...$$(".arch2 [data-id]")].find(el=>el.dataset.id===id)?.closest(".arch2wrap");
   $$(".arch2 [data-id]").forEach(el => {
-    const on = !keep || keep.has(el.dataset.id)
+    const on = el.closest(".arch2wrap")!==selected || !keep || keep.has(el.dataset.id)
       || (el.classList.contains("a2node") && [...keep].some(k => k.startsWith(el.dataset.id + "|")))
       || (el.classList.contains("a2vip") && [...keep].some(k => k.startsWith("p:" + el.dataset.id.slice(2) + ":")));
     el.classList.toggle("dimmed", !on);
@@ -141,8 +165,8 @@ function archRelated(id) {
   // Where an address lives: its node, and a node's addresses - not followed
   // further, or a node would light every app it answers for.
   const places = (STATE.data.flow?.vips || []).filter(v => v.node);
-  const beside = id.startsWith("i:") ? places.filter(v => v.id === id).map(v => "n:" + v.node)
-    : id.startsWith("n:") ? places.filter(v => "n:" + v.node === id).map(v => v.id) : [];
+  const beside = id.startsWith("i:") ? places.filter(v => v.id === id).map(v => archId("n:" + v.node,v.site))
+    : id.startsWith("n:") ? places.filter(v => archId("n:" + v.node,v.site) === id).map(v => v.id) : [];
   const keep = new Set(start);
   const walk = (from, forward) => {
     links.forEach(([a, b]) => {
@@ -156,13 +180,15 @@ function archRelated(id) {
 }
 
 function drawArch(keep = STATE.data.archKeep) {
-  const svg = $("#archsvg"), wrap = $(".arch2wrap");
-  if (!svg || !wrap) return;
+  $$(".arch2wrap").forEach(wrap=>{
+  const svg=wrap.querySelector(".archsvg");
+  if(!svg)return;
+  const localKeep=keep && [...wrap.querySelectorAll("[data-id]")].some(el=>el.dataset.id===STATE.data.archHover)?keep:null;
   const R = wrap.getBoundingClientRect();
   svg.setAttribute("viewBox", `0 0 ${R.width} ${R.height}`);
   const box = id => {
     const el = document.getElementById(id);
-    if (!el || !el.offsetParent) return null;
+    if (!el || !el.offsetParent || !wrap.contains(el)) return null;
     const b = el.getBoundingClientRect();
     // A port or a copy sits among others in its box; its line meets the box's
     // edge at its height rather than crossing its neighbours to reach it.
@@ -173,12 +199,13 @@ function drawArch(keep = STATE.data.archKeep) {
   svg.innerHTML = (STATE.data.alinks || []).map(([a, b, type]) => {
     const A = box(a), B = box(b);
     if (!A || !B) return "";
-    const lit = keep && keep.has(a) && keep.has(b);
+    const lit = localKeep && localKeep.has(a) && localKeep.has(b);
     const bend = Math.max(24, (B.l - A.r) / 2);
     const d = `M ${A.r} ${A.y} C ${A.r + bend} ${A.y} ${B.l - bend} ${B.y} ${B.l} ${B.y}`;
-    const cls = `a2link ${type}${keep ? (lit ? " lit" : " faded") : ""}`;
+    const cls = `a2link ${type}${localKeep ? (lit ? " lit" : " faded") : ""}`;
     return `<path class="${cls}" d="${d}"/>` + (lit && motion ? `<path class="a2flow ${type}" d="${d}"/>` : "");
   }).join("");
+  });
 }
 
 /* ---------------- volumes ---------------- */
@@ -469,16 +496,25 @@ function volumeDeleteConfirmationValid(name, value) {
 }
 window.volumeDeleteConfirmationValid = volumeDeleteConfirmationValid;
 
+let volumeDeleteTarget = null, volumeDeleteRequest = 0;
+window.volumeDeleteRefresh = () => volumeDeleteTarget && volumeDelete(volumeDeleteTarget);
 window.volumeDelete = async x => {
+  const request = ++volumeDeleteRequest;
+  volumeDeleteTarget = {name: x.name, pvc_name: x.pvc_name, namespace: x.namespace};
+  window.__volumeDeletePlan = null;
   const namespace = x.namespace || "lab", name = x.pvc_name || x.name;
   modal("Delete volume · " + name,
-    '<div class="empty"><span class="spin2"></span> checking mounts, snapshots, backups and reclaim policy…</div>', true);
+    '<div id="volumeDeleteReview" class="empty"><span class="spin2"></span> checking mounts, snapshots, backups and reclaim policy…</div>', true);
+  const waiting = $("#volumeDeleteReview");
   let p;
   try {
     p = await api(`/api/volumes/delete-plan?ns=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}&volume=${encodeURIComponent(x.name)}`);
   } catch (e) {
-    return void ($("#mbody").innerHTML = UI.callout("bad", "Impact check failed.", esc(e.message)) + UI.actions(UI.cancel("Close")));
+    if (request !== volumeDeleteRequest || $("#volumeDeleteReview") !== waiting) return;
+    return void ($("#mbody").innerHTML = UI.callout("bad", "Impact check failed.", esc(e.message)) +
+      UI.actions(UI.cancel("Close") + UI.button("Refresh review", "volumeDeleteRefresh()")));
   }
+  if (request !== volumeDeleteRequest || $("#volumeDeleteReview") !== waiting) return;
   window.__volumeDeletePlan = p;
   const stale = new Set((p.stale_consumers || []).map(c => `${c.kind}/${c.name}`));
   const lh = p.longhorn || {}, pv = p.pv || {};
@@ -486,6 +522,8 @@ window.volumeDelete = async x => {
   const permanentBlocked = !p.actions?.delete_data?.enabled;
   const detached = !!p.actions?.detach?.complete;
   const jobs = p.removable_jobs || [];
+  const verifyPending = !detached && p.inventory_complete === false && lh.state === "detached" &&
+    !lh.attached_node && !(p.consumers || []).length;
   const incomplete = (p.warnings || []).length
     ? `<p><b>Incomplete impact inventory</b></p><ul class="ui-list">${p.warnings.map(w => `<li>${esc(w)}</li>`).join("")}</ul>` : "";
   const consumers = (p.consumers || []).map(c => [
@@ -505,12 +543,14 @@ window.volumeDelete = async x => {
       ["External backups", esc(p.backups?.count ?? "?")],
     ]),
     UI.section("1. Detach", UI.checklist([
-      { state: detached ? "ok" : "bad", title: detached ? "Already detached." : "Stop and unmount this claim first.",
-        detailHtml: `Detaching keeps the PVC and all data. Homestead will not silently rewrite or stop the workloads listed below.${(p.stale_consumers || []).length ? " Entries marked finished have stopped for good and do not hold it." : ""}` },
+      { state: detached ? "ok" : verifyPending ? "warn" : "bad",
+        title: detached ? "Already detached." : verifyPending ? "Longhorn reports detached; safety checks are incomplete." : "Stop and unmount this claim first.",
+        detailHtml: verifyPending ? "Refresh the review to verify the remaining checks before deleting." :
+          `Detaching keeps the PVC and all data. Homestead will not silently rewrite or stop the workloads listed below.${(p.stale_consumers || []).length ? " Entries marked finished have stopped for good and do not hold it." : ""}` },
       jobs.length && { state: "ok", title: `Finished ${jobs.length === 1 ? "job" : "jobs"} will be removed first`,
         detailHtml: `<span class="mono">${jobs.map(esc).join(", ")}</span> already completed - typically the copy job from an import. Kubernetes could otherwise hold the claim in Terminating.` },
     ]) + (consumers.length ? UI.table([{ label: "Used by" }, { label: "Mounts" }], consumers)
-      : `<div class="ui-empty">No pods, controllers, jobs or virtual machines reference this claim.</div>`)),
+      : `<div class="ui-empty">${p.inventory_complete === false ? "No workload references found in the available inventory." : "No pods, controllers, jobs or virtual machines reference this claim."}</div>`)),
     UI.section("2. Choose what happens to the data", `<div class="volume-delete-grid">
       <label class="volume-delete-option ${blocked || p.orphan ? "disabled" : ""}"><input type="radio" name="vd_action" value="delete_claim" onchange="volumeDeleteGate()" ${blocked || p.orphan ? "disabled" : ""}>
         <span><b>Delete claim, keep data</b><small>The PV policy becomes Retain, then the PVC is deleted. The released data needs Kubernetes or Longhorn administration to recover or remove later.</small></span></label>
@@ -524,7 +564,8 @@ window.volumeDelete = async x => {
     ])),
     UI.section("3. Confirm", UI.field(`Type ${name} to confirm`,
       `<input id="vd_confirm" autocomplete="off" placeholder="${esc(name)}" oninput="volumeDeleteGate()">`)),
-    UI.actions(UI.cancel() + UI.button("Delete selected", `volumeDeleteNow(${jsArg(namespace)},${jsArg(name)},${jsArg(p.uid)})`,
+    UI.actions(UI.cancel() + (blocked || p.inventory_complete === false ? UI.button("Refresh review", "volumeDeleteRefresh()") : "") +
+      UI.button("Delete selected", `volumeDeleteNow(${jsArg(namespace)},${jsArg(name)},${jsArg(p.uid)})`,
       { kind: "danger", id: "vd_go", disabled: true, attrs: 'data-need="admin"' })),
   ].join("");
 };

@@ -339,10 +339,10 @@ function dialogSectionNavigation(id, sections, { current = 0, always = false, on
 
 /* All panes stay mounted, preserving unsaved fields when moving between sections.
    Create forms advance with Next; editors expose their save/review on every section. */
-function dialogSectionForm(id, sections, finishHtml, { always = false, noticeHtml = "" } = {}) {
+function dialogSectionForm(id, sections, finishHtml, { always = false, noticeHtml = "", cancelHtml = UI.cancel(), page = false } = {}) {
   const list = sections.filter(Boolean);
   if (!list.length) throw new Error("A section form needs at least one section");
-  return `<div class="stepper dialog-rail${always ? " section-editor" : ""}" id="${esc(id)}" data-step="0">
+  return `<div class="stepper dialog-rail${always ? " section-editor" : ""}${page ? " section-page" : ""}" id="${esc(id)}" data-step="0">
     ${dialogSectionNavigation(id, list, { always })}
     ${list.map((section, i) => {
       const key = String(section.key ?? i);
@@ -351,7 +351,7 @@ function dialogSectionForm(id, sections, finishHtml, { always = false, noticeHtm
     ${noticeHtml ? `<div class="dialog-rail-notice">${noticeHtml}</div>` : ""}
     ${UI.actions((always ? finishHtml : `<span data-finish${list.length > 1 ? " hidden" : ""}>${finishHtml}</span>`) +
       (!always && list.length > 1 ? UI.button("Next", `stepGo(${jsArg(id)},1,true)`, {kind:"pri",attrs:"data-next"}) : ""),
-      UI.cancel() + (always ? "" : UI.button("Back", `stepGo(${jsArg(id)},-1,true)`, {attrs:"data-back hidden"})), {className:"stepper-foot"})}
+      cancelHtml + (always ? "" : UI.button("Back", `stepGo(${jsArg(id)},-1,true)`, {attrs:"data-back hidden"})), {className:"stepper-foot"})}
   </div>`;
 }
 function selectDialogSection(id, key) {
