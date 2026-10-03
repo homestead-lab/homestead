@@ -166,22 +166,21 @@ window.imageUpdateCenter = async () => {
   const available = HomesteadUpdateState.availableWorkloads(report);
   const policy = report.policy || {};
   modal("Image updates", `<div class="update-center">
-    ${UI.lead(`<b>${esc(policy.policy === "notify_only" ? "Notify only" : policy.policy === "maintenance_window" ? "Maintenance window" : "Approval required")}.</b>
-      ${esc(policy.reason || "Every rollout requires an explicit review.")}`)}
+    ${UI.lead("Choose apps, review the changes, then start the update.")}
+    ${UI.more("Update policy", esc(policy.reason || "Updates require your approval before any app restarts."))}
     ${available.length ? `<div class="update-selectbar">
       <label class="switch"><input type="checkbox" id="updateSelectAll" checked onchange="toggleImageUpdateSelection(this.checked)"> Select all</label>
       <span id="updateSelectedCount">${available.length} of ${available.length} selected</span>
-      <button class="btn pri" id="updateStage" data-need="operator" onclick="imageUpdateBatchReview()">Stage selected (${available.length})</button>
     </div>` : ""}
     ${affected.length ? `<div class="settings-list">${affected.map(w => {
       const failures = (w.images || []).filter(image => image.error);
-      return `<div class="settings-list-row update-center-row">${w.available ? `<label class="update-pick" title="Stage ${esc(w.name)}"><input class="update-select" type="checkbox" checked data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" onchange="syncImageUpdateSelection()"><span></span></label>` : '<span class="update-pick-spacer"></span>'}<div><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.ns)}${updateVersions(w) ? ` · ${esc(updateVersions(w))}` : ""}</div>
+      return `<div class="settings-list-row update-center-row">${w.available ? `<label class="update-pick" title="Select ${esc(w.name)}"><input class="update-select" type="checkbox" checked data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" onchange="syncImageUpdateSelection()"><span></span></label>` : '<span class="update-pick-spacer"></span>'}<div><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.ns)}${updateVersions(w) ? ` · ${esc(updateVersions(w))}` : ""}</div>
         ${failures.map(image => `<div class="updateerror">${esc(image.container)} · ${esc(image.error)}</div>`).join("")}</div>
         <div class="row">${w.available ? '<span class="pill warn">update available</span>' : ""}
         ${failures.length ? '<span class="pill crit">check failed</span>' : ""}
         <button class="btn sm" onclick="openUpdateWorkload(${jsq(w.name)})">Open</button></div></div>`;
     }).join("")}</div>` : '<div class="empty small">Images are current and registry checks succeeded.</div>'}
-    ${UI.actions(UI.button("Check now", "checkImageUpdates()") + UI.button("Open Containers", "closeModal();go('workloads')"))}</div>`, true);
+    ${UI.actions(available.length ? UI.button(`Review selected (${available.length})`, "imageUpdateBatchReview()", {kind:"pri",id:"updateStage",attrs:'data-need="operator"'}) : "", UI.cancel("Close") + UI.button("Check now", "checkImageUpdates()"))}</div>`, true);
   if (window.applyRole) window.applyRole();
 };
 window.syncImageUpdateSelection = () => {
@@ -197,7 +196,7 @@ window.syncImageUpdateSelection = () => {
   const stage = document.getElementById("updateStage");
   if (stage) {
     stage.disabled = selected === 0;
-    stage.textContent = `Stage selected (${selected})`;
+    stage.textContent = `Review selected (${selected})`;
   }
 };
 window.toggleImageUpdateSelection = checked => {
@@ -207,7 +206,7 @@ window.toggleImageUpdateSelection = checked => {
 window.imageUpdateBatchReview = () => {
   const keys = new Set($$(".update-select:checked").map(box => updateKey(box.dataset.ns, box.dataset.name)));
   const items = HomesteadUpdateState.availableWorkloads(STATE.data.imageUpdates).filter(item => keys.has(updateKey(item.ns, item.name)));
-  if (!items.length) return toast("Select at least one update to stage", "bad");
+  if (!items.length) return toast("Select at least one update to review", "bad");
   return reviewImageActions(items.map(item => ({ns: item.ns, name: item.name})));
 };
 window.openUpdateWorkload = name => {
@@ -1109,7 +1108,7 @@ window.imageReviewedApply = async () => {
   const failures = [];
   modal("Reviewed image rollouts", '<div id="imageQueue"></div>', true);
   const active = () => sequence === IMAGE_REVIEW_SEQUENCE && $("#imageQueue") && !$("#modal").classList.contains("hidden");
-  const paint = () => {if (active()) $("#imageQueue").innerHTML = batchUpdateMarkup(items, states, failures, false, true);};
+  const paint = () => {if (active()) paintRollout($("#imageQueue"), batchUpdateMarkup(items, states, failures, false, true));};
   paint();
   for (let index = 0; index < rows.length; index++) {
     const {config, preview} = rows[index], key = rolloutKey(config);
@@ -1153,6 +1152,14 @@ window.imageReviewedApply = async () => {
   paint();
 };
 
+// Polling updates status without closing details the reader has opened.
+function paintRollout(host, html) {
+  if (!host) return;
+  const open=[...(host.querySelectorAll?.("details[open][data-disclosure]") || [])].map(el=>el.dataset.disclosure);
+  host.innerHTML=html;
+  for(const el of host.querySelectorAll?.("details[data-disclosure]") || [])if(open.includes(el.dataset.disclosure))el.open=true;
+}
+
 function batchUpdateMarkup(items, states, startFailures = [], reconnecting = false, queueMode = false) {
   const failureMap = Object.fromEntries(startFailures.map(item => [rolloutKey(item), item.error]));
   const complete = items.filter(item => failureMap[rolloutKey(item)] ||
@@ -1160,6 +1167,7 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
   const ready = items.filter(item => states[rolloutKey(item)]?.phase === "ready" && !failureMap[rolloutKey(item)]);
   const pending = items.filter(item => !ready.includes(item));
   const failed = items.some(item => failureMap[rolloutKey(item)] || states[rolloutKey(item)]?.phase === "failed");
+  const current = pending.find(item=>{const s=states[rolloutKey(item)];return s && !["queued","not started","failed"].includes(s.phase) && !failureMap[rolloutKey(item)];});
   const row = item => {
       const key = rolloutKey(item), state = states[key], startError = failureMap[key];
       const phase = startError ? "needs attention" : state?.phase || "starting";
@@ -1171,13 +1179,15 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
         ${waiting ? `<div class="dim xs">New pod waiting${waiting.node ? ` on ${esc(waiting.node)}` : ""}: ${esc(waiting.blocked)}</div>` : ""}</div>`;
     };
   return `<div class="batch-rollout">
+    ${reconnecting?UI.callout("warn","Some updates could not be checked","Showing last-known progress. Reconnecting automatically."):""}
     <div class="between"><div><b>${complete}/${items.length} rollouts finished</b>
-      <div class="dim xs">Each workload is tracked independently and keeps its own rollback image.</div></div>
+      <div class="dim xs">Updates run one app at a time.</div></div>
       ${failed ? `<span class="pill warn">${queueMode ? "queue stopped" : "needs attention"}</span>` : complete === items.length ? '<span class="pill ok">finished</span>' : reconnecting ? '<span class="pill warn">reconnecting</span>' : '<span class="pill ok">monitoring</span>'}</div>
-    <div class="rollout-meter"><span style="width:${items.length ? Math.round(complete / items.length * 100) : 100}%"></span></div>
-    <div class="batch-rollout-list">${pending.map(row).join("")}</div>
+    ${UI.progress(items.length ? ready.length/items.length*100 : 100, {label:`${ready.length} of ${items.length} apps updated`,kind:failed?"bad":"info"})}
+    ${current?UI.section(`Updating ${current.name}`,rolloutProgress(states[rolloutKey(current)])):""}
+    <div class="batch-rollout-list">${pending.filter(item=>item!==current).map(row).join("")}</div>
     ${ready.length ? UI.more(`Updated · ${ready.length}`, `<div class="batch-rollout-list">${ready.map(row).join("")}</div>`).replace(/data-disclosure="[^"]*"/, 'data-disclosure="Updated"') : ""}
-    ${queueMode ? '<p class="small dim">Closing stops unstarted updates. Submitted rollouts continue and can be monitored in Jobs. A stopped queue always needs a new review.</p>' : ""}
+    ${queueMode ? '<p class="ui-help">Closing stops the remaining queue. Updates already started continue in Jobs.</p>' : ""}
     ${UI.actions(UI.cancel(queueMode ? complete === items.length && !failed ? "Done" : "Close queue" : "Monitor in background"))}
   </div>`;
 }
@@ -1197,14 +1207,13 @@ window.monitorImageRollouts = (items, startFailures = [], initialStates = {}, al
       } catch (error) { return { item, error }; }
     }));
     const successful = results.filter(result => result.state);
-    misses = successful.length ? 0 : misses + 1;
+    misses = results.some(result=>result.error) ? misses + 1 : 0;
     successful.forEach(result => { states[rolloutKey(result.item)] = result.state; });
-    if ($("#mbody")) $("#mbody").innerHTML = batchUpdateMarkup(allItems, states, startFailures, misses > 0);
+    if ($("#mbody")) paintRollout($("#mbody"), batchUpdateMarkup(allItems, states, startFailures, misses > 0));
     if (window.applyRole) window.applyRole();
     const terminal = items.every(item => ["ready", "failed"].includes(states[rolloutKey(item)]?.phase));
-    if (terminal) {
+    if (terminal && !misses) {
       clearInterval(window.__updateTimer); window.__updateTimer = null;
-      if ($("#mbody")) $("#mbody").insertAdjacentHTML("beforeend", '<button class="btn pri" onclick="closeModal();go(\'workloads\')">Done</button>');
       setTimeout(() => loadImageUpdates(true, true), 1000);
     }
   };
@@ -1235,35 +1244,37 @@ function pullDetail(s) {
 
 function pullSize(b) { return b >= 1024 ** 3 ? `${(b / 1024 ** 3).toFixed(1)} GB` : `${Math.max(1, Math.round(b / 1024 ** 2))} MB`; }
 
+function rolloutProgress(s) {
+  const ready=s.phase === "ready", failed=s.phase === "failed", pull=s.pull || {};
+  const accepted=s.observed_generation >= s.generation;
+  const pulled=s.updated >= s.desired && pull.state !== "pulling" && pull.state !== "failed";
+  const pulling=pull.state === "pulling";
+  return `${failed?UI.callout("bad","Update needs attention","Review the failure details before retrying."):UI.progress(ready?100:pulling && pull.total_bytes?pull.percent:null, {
+    label:ready?"Update complete":failed?"Update needs attention":pulling?"Downloading image":"Waiting for the replacement pods",
+    detail:ready?`${s.ready}/${s.desired} pods ready`:pulling?pullDetail(s):`${s.updated || 0}/${s.desired ?? "?"} replacement pods created`,kind:failed?"bad":ready?"ok":"info"})}
+    ${UI.checklist([
+      {title:"Change accepted",state:accepted?"ok":"run"},
+      {title:pulling?"Downloading image":"Image and replacement pods",state:pull.state==="failed"?"bad":pulled?"ok":accepted?"run":"todo",detailHtml:pull.state==="failed"?esc(pull.detail || "Image download failed"):""},
+      {title:"Readiness checks",state:ready?"ok":failed?"bad":pulled?"run":"todo",detailHtml:esc(`${s.ready || 0}/${s.desired ?? "?"} pods ready; completion waits for the accepted update.`)}
+    ])}
+    ${s.problems?.length ? UI.callout("bad","Needs attention",s.problems.map(esc).join("<br>")):""}
+    ${s.pods?.length?UI.more("Pod details",UI.insightList(s.pods.map(p=>({title:p.name,detail:[p.node || "Scheduling",p.blocked,p.waiting?.[0]?.reason].filter(Boolean).join(" · "),label:p.pull?.state==="pulling"?"Pulling image":p.phase,tone:p.blocked?"warn":p.phase==="Running"?"ok":"info"})))):""}`;
+}
 function rolloutMarkup(s) {
-  // While the new image is fetched, the bar is the fetch: it is most of the wait.
-  const pulling = s.pull?.state === "pulling" && s.pull.total_bytes;
-  const pct = pulling ? Math.min(99, s.pull.percent || 0)
-    : s.desired ? Math.min(100, Math.round(s.ready / s.desired * 100)) : (s.phase === "ready" ? 100 : 0);
-  return `<div class="rollout-head"><span class="pill ${s.phase === "ready" ? "ok" : s.phase === "failed" ? "crit" : "warn"}">${esc(s.phase)}</span>
-    <span class="mono small">${s.ready}/${s.desired} ready · ${s.updated}/${s.desired} updated</span></div>
-    <div class="rollout-meter"><span style="width:${pct}%"></span></div>
-    <div class="rollout-steps">
-      <div class="${s.observed_generation >= s.generation ? "done" : "active"}"><i></i><span><b>Deployment accepted</b><small>Generation ${s.generation}</small></span></div>
-      <div class="${s.updated >= s.desired && s.pull?.state !== "pulling" ? "done" : s.pull?.state === "failed" ? "failed" : "active"}"><i></i><span><b>${s.pull?.state === "pulling" ? "Pulling new image" : s.pull?.state === "failed" ? "Image pull failed" : "New image pulled"}</b><small>${esc(pullDetail(s))}</small></span></div>
-      <div class="${s.phase === "ready" ? "done" : s.phase === "failed" ? "failed" : "active"}"><i></i><span><b>Readiness checks</b><small>${s.ready} pod${s.ready === 1 ? "" : "s"} serving</small></span></div>
-    </div>
-    ${s.problems?.length ? `<div class="gateerr">${s.problems.map(esc).join("<br>")}</div>` : ""}
-    <div class="podprogress">${(s.pods || []).map(p => `<div><span><b>${esc(p.name)}</b><small>${esc(p.node || "scheduling")}${p.pull?.state === "pulling" ? ` · pulling${p.pull.total_bytes ? ` ${p.pull.percent || 0}%` : ""} ${esc(pullElapsed(p.pull.seconds))}` : ""}</small>${p.blocked ? `<small class="pod-blocked">${esc(p.blocked)}</small>` : ""}</span>
-      <span class="pill ${p.phase === "Running" ? "ok" : "warn"}">${esc(p.pull?.state === "pulling" ? "pulling image" : p.waiting?.[0]?.reason || p.phase)}</span></div>`).join("")}</div>
-    ${UI.actions(`${s.can_rollback ? `<button class="btn ${s.phase === "failed" ? "danger" : ""}" data-need="operator" onclick="imageRollback(${jsq(s.ns)},${jsq(s.name)})">Rollback</button>` : ""}
-      ${s.phase === "ready" ? '<button data-dialog-dismiss="true" class="btn pri" onclick="closeModal();go(\'workloads\')">Done</button>' : '<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Monitor in background</button>'}`)}`;
+  return `<div class="ui-stack">${rolloutProgress(s)}${UI.actions(
+    (s.can_rollback?UI.button("Review rollback",`imageRollback(${jsArg(s.ns)},${jsArg(s.name)})`,{kind:s.phase==="failed"?"danger":"",attrs:'data-need="operator"'}):"") +
+    (s.phase==="ready"?UI.button("Done","closeModal();go('workloads')",{kind:"pri"}):""),s.phase==="ready"?"":UI.cancel("Monitor in background"))}</div>`;
 }
 
 window.monitorImageRollout = (ns, name) => {
   if (window.__updateTimer) clearInterval(window.__updateTimer);
   modal("Rollout · " + name, '<div class="empty"><span class="spin2"></span> waiting for Kubernetes…</div>', true);
-  let misses = 0;
+  let misses = 0, lastState = null;
   const poll = async () => {
     if ($("#modal").classList.contains("hidden")) return clearInterval(window.__updateTimer);
     try {
       const s = await api(`/api/image-updates/progress?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`);
-      misses = 0; $("#mbody").innerHTML = rolloutMarkup(s);
+      misses = 0; lastState = s; paintRollout($("#mbody"),rolloutMarkup(s));
       if (window.applyRole) window.applyRole();
       if (s.phase === "ready" || s.phase === "failed") {
         clearInterval(window.__updateTimer); window.__updateTimer = null;
@@ -1271,8 +1282,7 @@ window.monitorImageRollout = (ns, name) => {
       }
     } catch (e) {
       misses++;
-      $("#mbody").innerHTML = `<div class="empty"><span class="spin2"></span><b>Reconnecting to Homestead…</b><br>
-        <span class="dim small">The control-panel container may be replacing itself (${misses}). Monitoring will resume automatically.</span></div>`;
+      paintRollout($("#mbody"), UI.callout("warn","Connection lost","Retrying automatically. The update may still be running; showing the last known progress.") + (lastState ? rolloutMarkup(lastState) : UI.actions(UI.cancel("Monitor in background"))));
     }
   };
   poll(); window.__updateTimer = setInterval(poll, 2000);

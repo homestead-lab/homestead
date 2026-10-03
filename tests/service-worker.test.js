@@ -5,7 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 /* Runs web/sw.js against a stand-in for the browser's service worker scope. */
-function worker({ pending, subscription = { endpoint: "https://fcm.googleapis.com/x" }, windows = [] }) {
+function worker({ pending, subscription = { endpoint: "https://fcm.googleapis.com/x" }, windows = [], displayError = false }) {
   const handlers = {};
   const shown = [];
   const fetched = [];
@@ -15,7 +15,7 @@ function worker({ pending, subscription = { endpoint: "https://fcm.googleapis.co
     addEventListener: (type, fn) => { handlers[type] = fn; },
     registration: {
       pushManager: { getSubscription: async () => subscription },
-      showNotification: async (title, options) => { shown.push({ title, ...options }); },
+      showNotification: async (title, options) => { if(displayError)throw new Error("display failed");shown.push({ title, ...options }); },
     },
     clients: {
       matchAll: async () => windows,
@@ -68,7 +68,7 @@ test("many at once become one summary", async () => {
   await sw.fire("push");
 
   assert.equal(sw.shown.length, 1);
-  assert.equal(sw.shown[0].title, "5 updates from Homestead");
+  assert.equal(sw.shown[0].title, "5 Homestead notifications");
 });
 
 test("signed out, it still says to look", async () => {
@@ -103,4 +103,26 @@ test("a notification cannot send the app to another site", async () => {
   const sw = worker({ pending: answer({}) });
   await sw.fire("notificationclick", { notification: { data: { href: "https://evil.example/" }, close() {} } });
   assert.deepEqual(sw.opened, []);
+});
+
+
+test("delivery is confirmed only after notifications display successfully",async()=>{
+ const payload={known:true,latest:7,alerts:[{key:"disk",title:"Drive needs attention",severity:"critical",phase:"worsened"}]};
+ const good=worker({pending:answer(payload)});await good.fire("push");
+ assert.equal(good.fetched.at(-1).url,"/api/alerts/delivered");assert.equal(JSON.parse(good.fetched.at(-1).options.body).latest,7);
+ const failed=worker({pending:answer(payload),displayError:true});await assert.rejects(failed.fire("push"),/display failed/);
+ assert.equal(failed.fetched.length,1);assert.equal(good.shown[0].requireInteraction,true);
+});
+test("recovery is quiet and never requests persistent attention",async()=>{
+ const sw=worker({pending:answer({alerts:[{key:"disk",title:"Drive warnings cleared",severity:"critical",phase:"resolved"}]})});
+ await sw.fire("push");assert.equal(sw.shown[0].silent,true);assert.equal(sw.shown[0].renotify,false);assert.equal(sw.shown[0].requireInteraction,false);
+});
+test("connectivity failure does not claim a new cluster incident",async()=>{
+ const sw=worker({pending:async()=>{throw new Error("offline");}});await sw.fire("push");
+ assert.equal(sw.shown[0].title,"Homestead notification details unavailable");assert.equal(sw.shown[0].renotify,false);assert.doesNotMatch(sw.shown[0].body,/Something changed/);
+});
+test("summaries prioritize critical conditions and bound lock-screen text",async()=>{
+ const alerts=Array.from({length:6},(_,i)=>({key:String(i),title:i===0?"Critical disk":"x".repeat(200),severity:i===0?"critical":"degraded",phase:"raised",at:i}));
+ const sw=worker({pending:answer({alerts})});await sw.fire("push");
+ assert.match(sw.shown[0].body,/^Critical disk/);assert.ok(sw.shown[0].body.length<=300);assert.equal(sw.shown[0].data.href,"/settings?tab=device");
 });

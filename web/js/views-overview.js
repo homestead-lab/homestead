@@ -35,7 +35,7 @@ async function viewDash() {
   STATE.data.ov = o; STATE.data.stor = st; STATE.data.lhcap = cap || STATE.data.lhcap;
   // A node near its allocation limit takes no new replicas: said before it bites.
   const tight = (cap?.nodes || []).filter(n => n.level !== "ok");
-  pwaBadge((o.health_issues || []).length);
+  window.refreshPwaAlerts?.();
   const hp = $("#healthPill");
   const healthState = o.health_state || o.health;
   hp.className = "pill " + (healthState === "healthy" ? "ok" :
@@ -128,6 +128,7 @@ async function viewDash() {
   // Saved history must not hold the live refresh loop's busy flag.
   historyPaint();
   Dashboard.loadPortal();
+  HealthInsights.load();
 }
 
 function consumerTable(workloads, metric) {

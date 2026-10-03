@@ -77,14 +77,16 @@ function paintBell() {
       <span class="bell-job-top"><b>${esc(op.title)}</b><span>${op.progress != null ? `${Math.round(op.progress)}%` : esc(op.status)}</span></span>
       <span class="bell-job-msg">${esc(op.message || op.status || "")}</span>
       ${op.progress != null && Number.isFinite(Number(op.progress)) ? `<span class="jobmeter"><span style="width:${Math.max(0, Math.min(100, Number(op.progress)))}%"></span></span>` : ""}</button>`;
+  const alertCount=(window.PWA_ALERTS?.report?.active || []).filter(a=>!a.acknowledged).length;
   const rows = [
+    alertCount ? row("pwaAlertsDialog()", "alert", plural(alertCount, "active alert"), "danger") : "",
     waiting.length ? row("homesteadUpdateDialog()", "update", release ? `Homestead ${release} is available` : plural(waiting.length, "Homestead helper update")) : "",
     images ? row("imageUpdateCenter()", "box", plural(images, "container update")) : "",
     errors ? row("imageUpdateCenter()", "alert", `${plural(errors, "image check")} failed`, "danger") : "",
     ...failedJobs.slice(0, 3).map(op => row(`openOperation(${jsq(op.href || "/")},${jsq(op.id || "")})`, "alert", `${op.title} failed`, "danger")),
   ].filter(Boolean);
-  const count = images + (waiting.length ? 1 : 0) + failedJobs.length;
-  const words = [active.length ? `${plural(active.length, "job")} running` : "", waiting.length ? (release ? `Homestead ${release}` : "Homestead helpers") : "", images ? plural(images, "container update") : "",
+  const count = alertCount + images + (waiting.length ? 1 : 0) + failedJobs.length;
+  const words = [alertCount ? plural(alertCount,"active alert") : "", active.length ? `${plural(active.length, "job")} running` : "", waiting.length ? (release ? `Homestead ${release}` : "Homestead helpers") : "", images ? plural(images, "container update") : "",
     errors ? `${plural(errors, "failed check")}` : "", failedJobs.length ? plural(failedJobs.length, "failed job") : ""].filter(Boolean).join(", ") || "Nothing needs you";
   const badge = $("#bellCount"), dot = $("#bellErrors"), summary = bell.querySelector("summary");
   if (badge) { badge.textContent = count; badge.classList.toggle("hidden", !count); }
@@ -95,6 +97,7 @@ function paintBell() {
   const pop = $("#bellPop");
   if (pop) pop.innerHTML = (active.length ? `<div class="bell-head">Running now</div>${active.slice(0, 4).map(jobRow).join("")}` : "")
     + (rows.length ? `<div class="bell-head">Needs you</div>${rows.join("")}` : active.length ? "" : '<div class="bell-empty">Nothing needs you</div>')
+    + `<button class="bell-all" onclick="this.closest('details').open=false;pwaAlertsDialog()">All alerts</button>`
     + (operations.length ? `<button class="bell-all" onclick="this.closest('details').open=false;jobsDialog()">All jobs · ${operations.length}</button>` : "");
 }
 window.paintBell = paintBell;

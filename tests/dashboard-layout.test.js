@@ -16,3 +16,9 @@ test("default layouts are fresh independent objects",()=>{
   const changed=dashboard.defaults();changed[0].width=12;changed.reverse();
   assert.equal(dashboard.defaults()[0].id,"compute");assert.equal(dashboard.defaults()[0].width,4);
 });
+
+test("new health widgets are optional and retain sizes in saved layouts",()=>{
+ const ids=["health","workloads","backups","updates","jobs"];
+ assert.equal(dashboard.defaults().length,7);
+ assert.deepEqual(dashboard.normalize({version:1,items:ids.map(id=>({id,width:4,height:360}))}).map(w=>w.id),ids);
+});

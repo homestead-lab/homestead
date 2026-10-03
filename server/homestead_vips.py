@@ -391,7 +391,7 @@ def alert_facts(addresses):
         if row.get("state") not in ("unrouted", "unannounced"):
             continue
         facts.append({"key": f"address:{row['ip']}", "category": "degraded", "severity": "degraded",
-                      "title": f"{row['ip']} is not reachable",
-                      "resolved": f"{row['ip']} is reachable again",
-                      "body": row.get("reason", ""), "href": "/network"})
+                      "title": f"Service address {row['ip']} has no route",
+                      "resolved": f"Service routing warning cleared: {row['ip']}",
+                      "body": row.get("reason", ""), "href": "/networking"})
     return facts

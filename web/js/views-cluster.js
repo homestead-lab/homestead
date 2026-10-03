@@ -64,6 +64,7 @@ async function viewCluster() {
 
 
 
+  <section class="card flat" id="clusterHealth">${UI.moduleHeader("Health", "Prioritized suggestions across your cluster", UI.button("Refresh", "HealthInsights.load(true)"))}<div data-insight="full"><div class="empty small">Loading checks…</div></div></section>
   <div class="cluster-layout">
     <section class="card flat cluster-wide">${UI.moduleHeader(`Nodes and capacity pressure`, `Roles, scheduling state, resource use, and Kubernetes pressure conditions`, `${clusterPill((report.capacity?.unready || []).length ? "critical" : (report.capacity?.pressure || []).length ? "attention" : "healthy",
         `${(report.nodes || []).filter(node => node.ready).length}/${(report.nodes || []).length} ready`)}`)}
@@ -96,6 +97,7 @@ async function viewCluster() {
   // GitHub is asked at most hourly, so this is cheap; still, the page does not wait.
   clusterUpgradesPaint();
   clusterComponentsPaint();
+  HealthInsights.load();
 }
 
 /* ---------------- what the platform runs ----------------

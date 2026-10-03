@@ -140,7 +140,7 @@ class DiskHealthVerdictTests(unittest.TestCase):
         result = self.verdict(reallocated=24)
 
         self.assertEqual("attention", result["state"])
-        self.assertEqual("24 reallocated sector(s)", result["summary"])
+        self.assertEqual("24 reallocated sectors", result["summary"])
 
     def test_pending_sectors_are_critical_however_the_drive_feels(self):
         result = self.verdict(pending=2)
@@ -158,8 +158,8 @@ class DiskHealthVerdictTests(unittest.TestCase):
         result = self.verdict(reallocated=3, pending=1)
 
         self.assertEqual(2, len(result["issues"]))
-        self.assertIn("3 reallocated sector(s)", result["summary"])
-        self.assertIn("1 pending sector(s)", result["summary"])
+        self.assertIn("3 reallocated sectors", result["summary"])
+        self.assertIn("1 pending sector", result["summary"])
 
     def test_life_remaining_is_reported_with_what_measured_it(self):
         result = self.verdict(wear={"life_pct": 94, "basis": "NVMe endurance used",
@@ -179,7 +179,7 @@ class DiskHealthVerdictTests(unittest.TestCase):
         result = self.verdict(wear={"life_pct": 4, "basis": "NVMe endurance used"})
 
         self.assertEqual("critical", result["state"])
-        self.assertIn("only 4% of rated life remains", result["summary"])
+        self.assertIn("Only 4% of rated life remains", result["summary"])
 
     def test_spare_blocks_at_the_drives_own_floor_are_critical(self):
         result = self.verdict(wear={"life_pct": 80, "basis": "NVMe endurance used",
