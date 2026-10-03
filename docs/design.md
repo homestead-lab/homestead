@@ -616,3 +616,10 @@ gap). Do not stack short controls or facts merely because the screen is narrow.
 
 Validate 320px and 390px in light/dark themes and a desktop width, including
 keyboard focus, unsaved changes, empty dashboards and switching viewport mid-edit.
+
+Dashboard drag feedback: once the pointer moves past the drag threshold, a
+translucent copy follows it at the original grab offset. Keep the source in place
+and faded, and outline the destination. The preview must preserve card dimensions
+and container-query styling, remain inert and hidden from assistive technology,
+and disappear on drop, Escape, pointer cancellation, loss of focus or navigation.
+Keyboard reordering continues to use the normal card and live announcements.
