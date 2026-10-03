@@ -210,6 +210,13 @@ shareable (RWX) Longhorn class. On a migratable class (Harvester's default)
 Redundancy says so and offers **Move data**, which copies it to a shareable class
 and restarts Homestead once onto it.
 
+On the development branch, after a data move succeeds or recovery verifies
+Homestead back on its original volume, **Jobs → Dismiss** or **Clear finished**
+can hide its completed entry.
+Both data volumes, the saved log and required recovery records are retained.
+A move that still needs recovery cannot be cleared. See
+[storage move recovery](Storage#when-a-storage-move-needs-review).
+
 ## MQTT and Home Assistant
 
 **MQTT** publishes cluster and node stats to a broker, with Home Assistant
