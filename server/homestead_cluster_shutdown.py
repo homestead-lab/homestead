@@ -52,6 +52,23 @@ def inventory(get, path, optional_api=False):
     return value["items"]
 
 
+LH_ATTACHMENTS = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumeattachments"
+# Attachments that only rebuild a replica, with no frontend: Longhorn's offline
+# rebuilding, and Homestead's stand-in for it. Nothing writes to the volume.
+REBUILD_TICKETS = ("volume-rebuilding-controller",)
+REBUILD_IDS = ("homestead-rebuild",)
+
+
+def rebuild_only(attachments):
+    """Volumes attached only so a copy can be rebuilt."""
+    out = set()
+    for attachment in attachments:
+        tickets = (attachment.get("spec") or {}).get("attachmentTickets") or {}
+        if tickets and all(t.get("type") in REBUILD_TICKETS or key in REBUILD_IDS for key, t in tickets.items()):
+            out.add(attachment["metadata"]["name"])
+    return out
+
+
 def identity(obj):
     m = obj.get("metadata", {})
     return [m.get("namespace", ""), m["name"], m["uid"]]
@@ -178,7 +195,10 @@ class Shutdown:
         if any(p.get("spec", {}).get("csi", {}).get("driver") == "driver.longhorn.io" and
                p["spec"]["csi"].get("volumeHandle") not in handles for p in pvs):
             problems.append("A Longhorn persistent volume is missing from the volume inventory")
-        if any(v.get("status", {}).get("robustness") in ("faulted", "unknown") for v in volumes):
+        # Longhorn has no live health for a detached volume and says unknown.
+        if any(v.get("status", {}).get("robustness") == "faulted" or
+               (v.get("status", {}).get("robustness") == "unknown" and v.get("status", {}).get("state") != "detached")
+               for v in volumes):
             problems.append("Repair faulted or unknown Longhorn volumes before shutting down")
         old = self.state()
         if old and old["phase"] != "released" and not journal_uid:
@@ -260,8 +280,13 @@ class Shutdown:
         expected = self.state()["plan"]["volumes"]
         if sorted(identity(v) for v in volumes) != expected:
             raise ValueError("Longhorn volume inventory changed; power was not authorized")
+        try:
+            rebuilding = rebuild_only(inventory(self.get, LH_ATTACHMENTS, True))
+        except Exception:
+            rebuilding = set()      # unreadable: every attached volume is waited for
         attached = [v["metadata"]["name"] for v in volumes
-                    if v.get("status", {}).get("state") != "detached" or v.get("spec", {}).get("nodeID")]
+                    if (v.get("status", {}).get("state") != "detached" or v.get("spec", {}).get("nodeID"))
+                    and v["metadata"]["name"] not in rebuilding]
         attached.extend("CSI attachment " + a["metadata"]["name"] for a in
                         inventory(self.get, "/apis/storage.k8s.io/v1/volumeattachments")
                         if a.get("status", {}).get("attached") is not False)

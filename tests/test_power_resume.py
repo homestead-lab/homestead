@@ -144,3 +144,40 @@ class ResumedDrainTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnattendedRestartTests(unittest.TestCase):
+    """An OS update restarts hosts with nobody watching: it stops nothing and
+    moves no VM unasked, as before VMs could move or wait."""
+    def plan(self, hold):
+        return {"ready": True, "blockers": [], "stranded": [], "planned_outage": False, "requires_data_ack": False, "hold": hold}
+
+    def test_vms_and_waiting_apps_keep_a_host_from_an_unattended_restart(self):
+        vm = {"id": "VirtualMachine/vms/win", "kind": "VirtualMachine", "ns": "vms", "name": "win", "options": ["move"], "default": "move"}
+        app = {"id": "Deployment/lab/plex", "kind": "Deployment", "ns": "lab", "name": "plex", "options": ["wait"], "default": "wait"}
+        moves = {"id": "Deployment/lab/web", "kind": "Deployment", "ns": "lab", "name": "web", "options": ["move", "wait"], "default": "move"}
+        for hold, refusal in (([vm], "Running VMs"), ([app], "stop and wait")):
+            with mock.patch.object(server.POWER, "plan", return_value=self.plan(hold)), \
+                 mock.patch.object(server, "send_reviewed_power") as send:
+                with self.assertRaisesRegex(ValueError, refusal):
+                    server.rollout_reboot("k3s-1")
+                send.assert_not_called()
+        with mock.patch.object(server.POWER, "plan", return_value=self.plan([moves])), \
+             mock.patch.object(server, "send_reviewed_power", return_value={"operation": {"id": "op"}}) as send:
+            self.assertEqual("op", server.rollout_reboot("k3s-1"))
+            self.assertEqual({"Deployment/lab/web": "move"}, send.call_args.args[0]["choices"])
+
+
+class FailedBeforePowerTests(OneOwnerTests):
+    def test_what_was_stopped_starts_again_when_power_is_not_sent(self):
+        server.OPS.record_phase("job-1", "holding", 8, "", held=[{"kind": "Deployment", "ns": "lab", "name": "plex", "was": "1"}])
+        plan = {"node": "k3s-1", "action": "reboot", "drain_pods": [], "planned_outage": False}
+        with mock.patch.object(server, "POD_NAME", "homestead-new"), \
+             mock.patch.object(server.LC, "node_power", side_effect=ValueError("drain timed out")), \
+             mock.patch.object(server.HOLD, "restore", return_value=(["lab/plex"], [])) as restore:
+            with self.assertRaises(server.PowerNotSent):
+                server.run_power_job("job-1", plan)
+        restore.assert_called_once()
+        saved = server.OPS._read()[0]
+        self.assertEqual(["lab/plex"], saved["ref"]["restored"]["started"])
+        self.assertIn("Started again: lab/plex", saved["message"])

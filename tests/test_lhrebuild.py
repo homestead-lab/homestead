@@ -68,6 +68,11 @@ class ShortTests(unittest.TestCase):
     def test_attached_volumes_are_longhorns_to_rebuild(self):
         self.assertEqual([], R.short([volume("v1", state="attached", robustness="degraded")], [replica("v1", "k1", "running")]))
 
+    def test_no_more_copies_are_wanted_than_there_are_hosts(self):
+        rows = R.short([volume("v1", wanted=3)], [replica("v1", "k1"), replica("v1", "k2")], hosts_available=2)
+        self.assertEqual([], rows)
+        self.assertEqual(1, len(R.short([volume("v1", wanted=3)], [replica("v1", "k1")], hosts_available=2)))
+
     def test_a_copy_that_never_became_healthy_is_not_one(self):
         self.assertEqual(0, R.short([volume("v1")], [replica("v1", "k1", healthy=False)])[0]["whole"])
 
@@ -103,6 +108,7 @@ class FallbackTests(unittest.TestCase):
     """Longhorn without offline rebuilding: Homestead holds a short volume
     attached, with no frontend, until it is whole."""
     def setUp(self):
+        R._gave_up.clear()
         self.cluster = Cluster(setting=None)
         self.cluster.objects[f"{LH}/volumes"]["items"] = [volume("v1"), volume("v2", claim="other")]
         self.cluster.objects[f"{LH}/replicas"]["items"] = [replica("v1", "k1"), replica("v2", "k2")]

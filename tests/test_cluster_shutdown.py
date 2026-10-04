@@ -39,6 +39,7 @@ class Fake:
         self.volumes = [{"metadata": {"name": "data", "namespace": "longhorn-system", "uid": "data-uid"},
                          "spec": {"nodeID": "a"}, "status": {"state": "attached", "robustness": "healthy"}}]
         self.vmis = []
+        self.attachments = []
         self.budgets = []
         self.webhooks = []
         self.s = S.Shutdown(self.get, self.send, "lab", "homestead", "repo/image@sha256:" + "a" * 64,
@@ -65,6 +66,7 @@ class Fake:
             if not result: raise missing()
         elif "/deployments/" in path: result = {"spec": {"replicas": 1, "selector": {"matchLabels": {"app": "homestead"}}}}
         elif path == S.LH: result = {"items": self.volumes}
+        elif path == S.LH_ATTACHMENTS: result = {"items": self.attachments}
         elif path.startswith(S.ADMISSION): result = {"items": self.webhooks}
         elif "/services/" in path: result = {"spec":{"selector":{"app":path.rsplit("/",1)[1]}}}
         elif path in ("/api/v1/persistentvolumes", "/apis/storage.k8s.io/v1/volumeattachments"): result = {"items": []}
@@ -236,6 +238,25 @@ class ShutdownTests(unittest.TestCase):
         c.execute()
         self.assertNotIn("commit", self.f.journal["data"])
         self.assertIn("did not detach", self.f.s.state()["message"])
+
+    def test_a_detached_volume_is_not_an_unknown_one(self):
+        # Longhorn reports no live health for a detached volume: "unknown".
+        self.f.volumes.append({"metadata": {"name": "spare", "namespace": "longhorn-system", "uid": "spare-uid"},
+                               "spec": {}, "status": {"state": "detached", "robustness": "unknown"}})
+        self.assertTrue(self.f.s.review()["ready"], self.f.s.review()["blockers"])
+        self.f.volumes[-1]["status"]["state"] = "attached"
+        self.assertIn("Repair faulted or unknown Longhorn volumes before shutting down", self.f.s.review()["blockers"])
+
+    def test_a_volume_held_only_to_rebuild_a_copy_does_not_hold_up_power(self):
+        c = self.f.start()
+        self.f.detach = False
+        self.f.attachments = [{"metadata": {"name": "data"}, "spec": {"attachmentTickets": {
+            "volume-rebuilding-controller-data": {"type": "volume-rebuilding-controller", "parameters": {"disableFrontend": "any"}}}}}]
+        c.execute()
+        self.assertIn("commit", self.f.journal["data"], self.f.s.state()["message"])
+        # With anything else holding it, power still waits for it.
+        self.f.attachments[0]["spec"]["attachmentTickets"]["csi-x"] = {"type": "csi-attacher"}
+        self.assertEqual(["data"], self.f.s.volumes_detached())
 
     def test_power_helpers_must_be_ready_before_any_host_is_cordoned(self):
         self.f.auto_ready = False
