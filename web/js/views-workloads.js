@@ -732,58 +732,154 @@ window.wlScaleGo = async (ns, name, n, confirmed = false) => {
     toast(`${name} ${n ? "started" : "stopped"}`, "ok"); setTimeout(() => refresh(true), 900);
   } catch (e) { toast(e.message, "bad"); }
 };
-/* Moving containers so hosts carry similar CPU and memory: the fewest moves
-   worth their restart, one tickbox per container to leave it where it is,
-   then a job that moves one at a time and can be stopped in Jobs. */
-let CREBALANCE_EXCLUDE = new Set(), CREBALANCE_PLAN = null;
-window.containerRebalance = async (fresh = true) => {
-  if (fresh) CREBALANCE_EXCLUDE = new Set();
-  if (fresh) modal("Rebalance containers", '<div id="crebalanceReview" class="empty"><span class="spin2"></span> Working out the fewest moves…</div>', true);
-  let plan;
-  try { plan = CREBALANCE_PLAN = await api(`/api/workloads/rebalance/plan?${new URLSearchParams({ exclude: [...CREBALANCE_EXCLUDE].join(",") })}`); }
-  catch (e) { $("#mbody").innerHTML = UI.callout("bad", "Could not work out a rebalance", esc(e.message)) + UI.actions(UI.cancel("Close")); return; }
-  const moves = plan.moves || [];
+/* Balancing hosts, on demand: containers by CPU and memory - each move a
+   restart - then volume copies by space - none restart. Each step has its own
+   plan, a switch to leave that part out, and a tickbox per container or app
+   that plans it again without it; the review starts what is left. */
+const BALANCE = {};
+const balanceReset = () => {
+  BALANCE.containers = { on: true, exclude: new Set(), plan: null };
+  BALANCE.volumes = { on: true, exclude: new Set(), plan: null };
+};
+window.balanceHosts = async (start = "containers") => {
+  balanceReset();
+  const loading = text => `<div class="empty"><span class="spin2"></span> ${esc(text)}</div>`;
+  modal("Balance hosts", UI.sectionForm("balance", [
+    { key: "containers", title: "Containers", html: `<div id="balContainers">${loading("Working out container moves…")}</div>` },
+    { key: "volumes", title: "Volume copies", html: `<div id="balVolumes">${loading("Working out volume copy moves…")}</div>` },
+    { key: "review", title: "Review", html: '<div id="balReview"></div>' },
+  ], UI.button("Start balancing", "balanceStart()", { kind: "pri", id: "balanceGo", attrs: 'data-need="operator"' })), true);
+  if (start !== "containers") UI.selectSection("balance", start);
+  balanceReview();
+  await Promise.all([balancePlan("containers"), balancePlan("volumes")]);
+};
+window.containerRebalance = () => balanceHosts("containers");
+window.volumeRebalance = () => balanceHosts("volumes");
+
+async function balancePlan(kind) {
+  const b = BALANCE[kind], pane = $(kind === "containers" ? "#balContainers" : "#balVolumes");
+  if (!pane) return;
+  const path = kind === "containers" ? "/api/workloads/rebalance/plan" : "/api/longhorn/rebalance/plan";
+  try { b.plan = await api(`${path}?${new URLSearchParams({ exclude: [...b.exclude].join(",") })}`); }
+  catch (e) { b.plan = null; pane.innerHTML = UI.callout("bad", "Could not work out a plan", esc(e.message)); balanceReview(); return; }
+  if (!$(kind === "containers" ? "#balContainers" : "#balVolumes")) return;
+  pane.innerHTML = kind === "containers" ? balanceContainersHtml(b) : balanceVolumesHtml(b);
+  balanceReview();
+  window.applyRole?.();
+}
+
+const balanceSwitch = (kind, b, label) => `<label class="switch balance-switch"><input type="checkbox" ${b.on ? "checked" : ""}
+  onchange="balanceToggle(${jsq(kind)},this.checked)"> ${esc(label)}</label>`;
+const balanceTick = (kind, id, i, off) => `<label class="rb-app"><input type="checkbox" id="bal_${kind}_${i}" ${off ? "" : "checked"}
+  onchange="balanceItem(${jsq(kind)},${jsq(id)},this.checked)"> <span class="mono">${esc(id)}</span></label>`;
+const balanceSkipped = rows => rows.length ? UI.more(`Not moved · ${rows.length}`,
+  `<ul class="ui-list">${rows.map(([id, why]) => `<li><span class="mono">${esc(id)}</span>: ${esc(why)}</li>`).join("")}</ul>`) : "";
+
+function balanceContainersHtml(b) {
+  const plan = b.plan, moves = plan.moves || [];
   const meter = (before, after, label) => `${UI.meter({ now: before, after: after !== before ? after : null, warnAt: 80, label })}
     <span class="sub">${esc(label)} ${before}%${after !== before ? ` → ${after}%` : ""}</span>`;
   const hosts = UI.table([{ label: "Host" }, { label: "CPU", className: "grow" }, { label: "Memory", className: "grow" }], (plan.hosts || []).map(h => [
     `<span class="mono">${esc(h.name)}</span>${h.takes ? "" : ` ${UI.chip("takes no new containers", "warn")}`}`,
-    meter(h.cpu_before, h.cpu_after, "CPU"), meter(h.mem_before, h.mem_after, "Memory")]));
-  const apps = UI.table([{ label: "Container" }, { label: "Moves", className: "grow" }], (plan.apps || []).map((id, i) => {
-    const m = moves.find(x => x.id === id), off = CREBALANCE_EXCLUDE.has(id);
-    return [`<label class="rb-app"><input type="checkbox" id="crb_app_${i}" ${off ? "" : "checked"} onchange="containerRebalanceApp(${jsq(id)},this.checked)"> <span class="mono">${esc(id)}</span></label>`,
-      off || !m ? '<span class="ui-help">stays where it is</span>'
-        : `<span class="mono">${esc(m.from)} → ${esc(m.to)}</span> <span class="sub">${esc(m.cpu_m)}m CPU · ${esc(m.mem_gb)} GB${m.near ? " · its volumes have a copy there" : ""}</span>`];
-  }));
-  $("#mbody").innerHTML = [
-    UI.lead(moves.length
-      ? `Moves ${moves.length} container${moves.length === 1 ? "" : "s"} so hosts carry similar CPU and memory. Each one restarts once, on its new host.`
+    meter(h.cpu_before, b.on ? h.cpu_after : h.cpu_before, "CPU"), meter(h.mem_before, b.on ? h.mem_after : h.mem_before, "Memory")]));
+  const rows = (plan.apps || []).map((id, i) => {
+    const m = moves.find(x => x.id === id), off = b.exclude.has(id);
+    return [balanceTick("containers", id, i, off), off || !m ? '<span class="ui-help">stays where it is</span>'
+      : `<span class="mono">${esc(m.from)} → ${esc(m.to)}</span> <span class="sub">${esc(m.cpu_m)}m CPU · ${esc(m.mem_gb)} GB${m.near ? " · its volumes have a copy there" : ""}</span>`];
+  });
+  return [
+    balanceSwitch("containers", b, "Balance containers"),
+    UI.lead(!b.on ? "Containers are left where they are."
+      : moves.length ? `Moves ${moves.length} container${moves.length === 1 ? "" : "s"} so hosts carry similar CPU and memory. Each one restarts once, on its new host.`
       : "No move brings the busiest host down enough to be worth a restart."),
     plan.metrics === false ? UI.callout("warn", "Usage is partly unknown", "A host reports no live CPU and memory, so the plan may be off. Check metrics-server.") : "",
     UI.section("Hosts", hosts),
-    (plan.apps || []).length ? UI.section(`Containers · ${plan.apps.length}`, `<p class="ui-help">Untick a container to leave it where it is; the moves are worked out again without it.</p>` + apps) : "",
-    (plan.skipped || []).length ? UI.more(`Not moved · ${plan.skipped.length}`, `<ul class="ui-list">${plan.skipped.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`) : "",
-    moves.length ? `<p class="ui-help">One at a time, each with the same capacity check as a manual move. If one does not start on its new host, the rest wait for you. Stop it in Jobs at any time.</p>` : "",
-    moves.length ? UI.ack("crebalanceRestart", moves.length === 1 ? "Restart it now" : "Restart them now") : "",
-    UI.actions(moves.length ? UI.cancel() + UI.button(`Move ${moves.length} container${moves.length === 1 ? "" : "s"}`, "containerRebalanceStart()", { kind: "pri", id: "crebalanceGo", attrs: 'data-need="operator"' }) : UI.cancel("Close")),
+    b.on && rows.length ? UI.section(`Containers · ${rows.length}`, '<p class="ui-help">Untick a container to leave it where it is; the moves are worked out again without it.</p>'
+      + UI.table([{ label: "Container" }, { label: "Moves", className: "grow" }], rows)) : "",
+    balanceSkipped((plan.skipped || []).map(s => [s.id, s.why])),
   ].join("");
-  window.applyRole?.();
+}
+
+function balanceVolumesHtml(b) {
+  const plan = b.plan, moves = plan.moves || [], gb = n => `${n} GB`;
+  const hosts = UI.table([{ label: "Host" }, { label: "Copies held", className: "grow" }], (plan.hosts || []).map(h => {
+    const after = b.on ? h.after_gb : h.before_gb;
+    return [`<span class="mono">${esc(h.name)}</span>${h.takes ? "" : ` ${UI.chip("takes no new copies", "warn")}`}`,
+      `${UI.meter({ now: h.capacity_gb ? h.before_gb / h.capacity_gb * 100 : 0, after: h.capacity_gb && after !== h.before_gb ? after / h.capacity_gb * 100 : null, label: `${h.name} copies` })}
+       <span class="sub">${esc(gb(h.before_gb))}${after !== h.before_gb ? ` → ${esc(gb(after))}` : ""} of ${esc(gb(h.capacity_gb))}</span>`];
+  }));
+  const rows = (plan.apps || []).map((app, i) => {
+    const mine = moves.filter(m => m.app === app), off = b.exclude.has(app);
+    return [balanceTick("volumes", app, i, off), off ? '<span class="ui-help">left where they are</span>'
+      : mine.map(m => `<div><span class="mono">${esc(m.claim)}</span> <span class="sub">${esc(gb(m.size_gb))} · ${esc(m.from)} → ${esc(m.to)}</span></div>`).join("")];
+  });
+  return [
+    balanceSwitch("volumes", b, "Balance volume copies"),
+    UI.lead(!b.on ? "Volume copies are left where they are."
+      : moves.length ? `Moves ${moves.length} cop${moves.length === 1 ? "y" : "ies"} so hosts hold similar amounts. Nothing restarts: each copy is built on its new host before the old one is removed.`
+      : (plan.closed || []).length ? `Nothing can move now: ${plan.closed.map(esc).join(", ")} ${plan.closed.length === 1 ? "takes" : "take"} no new copies - cordoned, not Ready, or with scheduling off in Longhorn.`
+      : "The hosts are as even as moving copies can make them."),
+    UI.section("Hosts", hosts),
+    b.on && rows.length ? UI.section(`Apps · ${rows.length}`, '<p class="ui-help">Untick an app to leave its volumes where they are; the moves are worked out again without it.</p>'
+      + UI.table([{ label: "App" }, { label: "Copies it moves", className: "grow" }], rows)) : "",
+    balanceSkipped((plan.skipped || []).map(s => [s.claim, s.why])),
+  ].join("");
+}
+
+const balanceMoves = kind => BALANCE[kind]?.on && BALANCE[kind].plan ? (BALANCE[kind].plan.moves || []) : [];
+function balanceReview() {
+  const pane = $("#balReview");
+  if (!pane) return;
+  const containers = balanceMoves("containers"), volumes = balanceMoves("volumes");
+  const pending = ["containers", "volumes"].some(k => BALANCE[k].on && !BALANCE[k].plan);
+  pane.innerHTML = pending ? '<div class="empty"><span class="spin2"></span> Waiting for the plans…</div>' : [
+    UI.lead(containers.length || volumes.length ? "Starts what is below, as jobs you can follow and stop in Jobs." : "Nothing to balance with these choices."),
+    UI.facts([
+      ["Containers", !BALANCE.containers.on ? "left where they are" : containers.length
+        ? `${containers.length} move${containers.length === 1 ? "" : "s"} · each restarts once` : "nothing worth moving"],
+      ["Volume copies", !BALANCE.volumes.on ? "left where they are" : volumes.length
+        ? `${volumes.length} cop${volumes.length === 1 ? "y" : "ies"} · nothing restarts` : "nothing to move"]]),
+    containers.length ? '<p class="ui-help">Containers move one at a time, each with the same capacity check as a manual move; if one does not start on its new host, the rest wait for you. Volume copies are built one at a time; stopping drops the copy being built.</p>' : "",
+    containers.length ? UI.ack("balanceRestart", containers.length === 1 ? "Restart it now" : "Restart them now") : "",
+  ].join("");
+  const go = $("#balanceGo");
+  if (go) go.disabled = pending || !(containers.length || volumes.length);
+}
+window.balanceToggle = (kind, on) => {
+  BALANCE[kind].on = on;
+  const pane = $(kind === "containers" ? "#balContainers" : "#balVolumes");
+  if (pane && BALANCE[kind].plan) pane.innerHTML = kind === "containers" ? balanceContainersHtml(BALANCE[kind]) : balanceVolumesHtml(BALANCE[kind]);
+  balanceReview();
 };
-window.containerRebalanceApp = (id, on) => { on ? CREBALANCE_EXCLUDE.delete(id) : CREBALANCE_EXCLUDE.add(id); containerRebalance(false); };
-window.containerRebalanceStart = async () => {
-  const plan = CREBALANCE_PLAN, button = $("#crebalanceGo");
-  if (!plan?.moves?.length) return;
-  if (!$("#crebalanceRestart")?.checked) return toast("Tick Restart to confirm the restarts", "bad");
-  CREBALANCE_PLAN = null;
+window.balanceItem = (kind, id, on) => {
+  on ? BALANCE[kind].exclude.delete(id) : BALANCE[kind].exclude.add(id);
+  BALANCE[kind].plan = null; balanceReview();
+  balancePlan(kind);
+};
+window.balanceStart = async () => {
+  const containers = balanceMoves("containers"), volumes = balanceMoves("volumes");
+  if (!containers.length && !volumes.length) return;
+  if (containers.length && !$("#balanceRestart")?.checked) return toast("Tick Restart to confirm the container restarts", "bad");
+  const button = $("#balanceGo");
   if (button) { button.disabled = true; button.textContent = "Starting…"; }
+  const started = [];
   try {
-    await api("/api/workloads/rebalance", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ exclude: [...CREBALANCE_EXCLUDE], review_token: plan.review_token, restart: true }) });
-    closeModal(); toast("Rebalancing containers; follow it in Jobs", "ok");
-    window.refreshOperations?.(true);
+    if (containers.length) {
+      await api("/api/workloads/rebalance", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ exclude: [...BALANCE.containers.exclude], review_token: BALANCE.containers.plan.review_token, restart: true }) });
+      started.push(`${containers.length} container${containers.length === 1 ? "" : "s"}`);
+    }
+    if (volumes.length) {
+      await api("/api/longhorn/rebalance", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ exclude: [...BALANCE.volumes.exclude], review_token: BALANCE.volumes.plan.review_token }) });
+      started.push(`${volumes.length} volume cop${volumes.length === 1 ? "y" : "ies"}`);
+    }
+    closeModal(); toast(`Balancing ${started.join(" and ")}; follow it in Jobs`, "ok");
   } catch (e) {
-    toast(e.message, "bad");
-    if (e.body?.plan) containerRebalance(false);
-  }
+    toast((started.length ? `Started ${started.join(" and ")}, but ` : "") + e.message, "bad");
+    if (button) { button.disabled = false; button.textContent = "Start balancing"; }
+    if (e.body?.plan) { balancePlan("containers"); balancePlan("volumes"); }
+  } finally { window.refreshOperations?.(true); }
 };
 
 /* Homestead stopping itself takes this page with it, and nothing here can
