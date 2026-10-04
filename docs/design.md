@@ -154,7 +154,9 @@ after reloading the page. Returning rechecks the facts.
   cluster for everyone - Homestead, Updates, Monitoring, Hardware and
   storage, Linked clusters, Connections, Users and access, Troubleshooting - and **You** is
   yours and this browser's. A column beside them on a desktop; a list to tap
-  into on a phone.
+  into on a phone. Each section has an icon from the main menu's sprite
+  (`index.html`), drawn the same way - a 24px grid of 1.7 strokes - dimmed until
+  it is the section open. The setup guide's steps have none.
 - **A card names its topic** (`data-tab`); `SETTINGS_SECTIONS` in
   `views-settings.js` and the rules in `style.css` say which topics a section
   shows, and `tests/settings-sections.test.js` keeps the two in step and

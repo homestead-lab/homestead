@@ -2679,6 +2679,10 @@ html[data-theme="light"] .bottombar{background:rgba(255,255,255,.92)}
 .settings-nav button:hover{background:rgba(255,255,255,.05)}
 .settings-nav button.on{background:rgba(255,255,255,.08)}
 .settings-nav button i{font-style:normal;color:var(--dim);display:none}
+/* A section's icon, as the main menu draws its own: dimmed until chosen. */
+.settings-nav .settings-nav-icon{width:18px;height:18px;flex:0 0 auto;align-self:flex-start;margin-top:1px;color:var(--mut);opacity:.75;transition:opacity .2s var(--e),color .2s var(--e)}
+.settings-nav .settings-nav-icon+span{flex:1;min-width:0}
+.settings-nav button:hover .settings-nav-icon,.settings-nav button.on .settings-nav-icon{opacity:1;color:var(--tx)}
 .settings-back{display:none}
 html[data-theme="light"] .settings-nav button.on{background:rgba(0,0,0,.06)}
 @media(max-width:900px){
