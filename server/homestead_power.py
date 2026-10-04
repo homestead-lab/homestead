@@ -200,6 +200,11 @@ def recheck_after_drain(original):
         raise ValueError("Host remains cordoned; workload pods remain or appeared during drain. Power was not sent")
 
 
+# Set by server.py: whether a job's replica has gone, and carrying it on.
+WORKER_GONE = None
+RESUME = None
+
+
 def status(item):
     """Observe a power command without treating a lost API connection as success."""
     ref = item["ref"]
@@ -207,7 +212,15 @@ def status(item):
     now = time.time()
     phase = ref.get("phase")
     if phase in ("reviewed", "cordoning", "draining", "verifying"):
-        if now - ref.get("phase_at", ref.get("started_epoch", now)) > 240:
+        # A drain can evict the very replica running it. Its job names that
+        # replica; once it has gone, the leader carries the job on.
+        worker = ref.get("worker")
+        if worker and WORKER_GONE and RESUME and WORKER_GONE(worker) and RESUME(item):
+            return "running", item.get("progress", 0), "Homestead moved while preparing this host; carrying on from another replica"
+        # A live worker can wait a long time for Longhorn; one that recorded
+        # nothing for half an hour, or an older job with no worker named, stopped.
+        limit = 1800 if worker else 240
+        if now - ref.get("phase_at", ref.get("started_epoch", now)) > limit:
             return "failed", item.get("progress", 0), "Maintenance stopped before power was sent; inspect the host and its cordon state before retrying"
         return "running", item.get("progress", 0), item.get("message", "Preparing host maintenance")
     node = kget(f"/api/v1/nodes/{ref['node']}")

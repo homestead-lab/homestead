@@ -4050,6 +4050,60 @@ def homestead_running_on():
     return claim, ready
 
 
+# The Homestead replica a host power job is running in. A drain can evict
+# that very replica; the job then says which pod to look for, and the leader
+# carries it on from another replica (resume_power_job).
+POD_NAME = os.environ.get("HOSTNAME", "")
+_POWER_RESUMING = set()
+_POWER_RESUME_LOCK = threading.Lock()
+
+
+def run_power_job(operation_id, power_plan, force=False, resumed=False):
+    """Cordon, drain, recheck and send a reviewed reboot or shutdown, recording
+    each phase on the job. Cordon and drain may be repeated safely; the send is
+    guarded by the job's own receipts."""
+    node, action = power_plan["node"], power_plan["action"]
+    planned_outage = bool(power_plan.get("planned_outage")) and not force
+    phase_state = {"phase": "reviewed"}
+
+    def power_progress(phase, percent, message, **details):
+        updated = OPS.record_phase(operation_id, phase, percent, message, **details)
+        phase_state["phase"] = phase
+        return updated
+    try:
+        result = LC.node_power(node, action, True,
+                               before_send=(lambda: POWER.recheck_planned_outage(power_plan)) if planned_outage else
+                               (lambda: POWER.recheck_forced(power_plan)) if force
+                               else (lambda: POWER.recheck_after_drain(power_plan)),
+                               reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force, planned_outage=planned_outage,
+                               resumed=resumed)
+        result["operation"] = {"id": operation_id}
+        return result
+    except Exception as e:
+        uncertain = phase_state["phase"] in ("sending", "observing")
+        message = ("Power submission outcome is uncertain; inspect the existing job/helper before retrying" if uncertain else
+                   "Power was not sent. Inspect the host's cordon state: " + str(e))
+        power_progress("observing" if uncertain else "failed", 20 if uncertain else 10, message)
+        raise PowerNotSent(message, {"id": operation_id}) from e
+
+
+def _power_in_background(operation_id, power_plan, force, resumed=False):
+    def run():
+        try:
+            run_power_job(operation_id, power_plan, force, resumed)
+        except PowerNotSent:
+            pass  # recorded on the job
+        except Exception as error:  # never leave the job looking busy
+            try:
+                OPS.record_phase(operation_id, "failed", 10, f"Host power job stopped: {error}"[:400])
+            except Exception:
+                pass
+        finally:
+            with _POWER_RESUME_LOCK:
+                _POWER_RESUMING.discard(operation_id)
+    threading.Thread(target=run, name=f"node-power-{power_plan['node']}", daemon=True).start()
+
+
 def send_reviewed_power(power_plan, force=False, background=False):
     """Cordon, drain and send a reviewed reboot or shutdown, as a job - what
     Host actions does once its review is accepted, and what an OS update of
@@ -4063,44 +4117,58 @@ def send_reviewed_power(power_plan, force=False, background=False):
         {"node": node, "node_uid": power_plan["node_uid"], "action": action, "boot_id": power_plan["boot_id"],
          "volumes": [v["name"] for v in power_plan["volumes"]],
          "planned_outage": planned_outage, "forced": bool(force),
+         # What a resumed job needs: the reviewed plan, and which replica runs it.
+         "plan": power_plan, "worker": POD_NAME,
          "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
         "Planned whole-cluster outage; sending without cordon or drain" if planned_outage else
         "Forced by an admin; sending without cordon or drain" if force else "Host impact reviewed; preparing cordon and drain")
-    phase_state = {"phase": "reviewed"}
-
-    def power_progress(phase, percent, message, **details):
-        updated = OPS.record_phase(operation["id"], phase, percent, message, **details)
-        phase_state["phase"] = phase
-        return updated
-
-    def send():
-        try:
-            result = LC.node_power(node, action, True,
-                                   before_send=(lambda: POWER.recheck_planned_outage(power_plan)) if planned_outage else
-                                   (lambda: POWER.recheck_forced(power_plan)) if force
-                                   else (lambda: POWER.recheck_after_drain(power_plan)),
-                                   reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force, planned_outage=planned_outage)
-            result["operation"] = operation
-            return result
-        except Exception as e:
-            uncertain = phase_state["phase"] in ("sending", "observing")
-            message = ("Power submission outcome is uncertain; inspect the existing job/helper before retrying" if uncertain else
-                       "Power was not sent. Inspect the host's cordon state: " + str(e))
-            power_progress("observing" if uncertain else "failed", 20 if uncertain else 10, message)
-            raise PowerNotSent(message, operation) from e
-
     if not background:
-        return send()
-
-    def run():
-        try:
-            send()
-        except PowerNotSent:
-            pass  # send() recorded the outcome on the job
-        except Exception as error:  # never leave the job looking busy
-            power_progress("failed", 10, f"Host power job stopped: {error}"[:400])
-    threading.Thread(target=run, name=f"node-power-{node}", daemon=True).start()
+        result = run_power_job(operation["id"], power_plan, force)
+        result["operation"] = operation
+        return result
+    with _POWER_RESUME_LOCK:
+        _POWER_RESUMING.add(operation["id"])
+    _power_in_background(operation["id"], power_plan, force)
     return {"operation": operation, "steps": [], "background": True}
+
+
+def power_worker_gone(pod):
+    """Whether the replica a power job named has gone - evicted by the drain."""
+    try:
+        found = kget(f"/api/v1/namespaces/{SELF.NS}/pods/{urllib.parse.quote(pod, safe='')}")
+    except urllib.error.HTTPError as error:
+        return error.code == 404
+    except Exception:
+        return False  # unknown is not gone
+    return bool((found.get("metadata") or {}).get("deletionTimestamp")) or \
+        (found.get("status") or {}).get("phase") in ("Succeeded", "Failed")
+
+
+def resume_power_job(item):
+    """Carry on a host power job whose replica was evicted before it sent the
+    command. Only the leader does, once; called from the job's resolver, so it
+    writes nothing here - the thread claims the job, then cordons and drains
+    again (both safe to repeat), rechecks and sends."""
+    ref = item.get("ref") or {}
+    if not LEADER.is_leader() or not isinstance(ref.get("plan"), dict):
+        return False
+    with _POWER_RESUME_LOCK:
+        if item["id"] in _POWER_RESUMING:
+            return True
+        _POWER_RESUMING.add(item["id"])
+
+    def claim_then_run():
+        try:
+            OPS.record_phase(item["id"], ref.get("phase", "draining"), item.get("progress", 10),
+                             "Homestead moved while preparing this host; carrying on from another replica", worker=POD_NAME)
+        except Exception:
+            with _POWER_RESUME_LOCK:
+                _POWER_RESUMING.discard(item["id"])
+            return
+        _power_in_background(item["id"], ref["plan"], bool(ref.get("forced")), resumed=True)
+    threading.Thread(target=claim_then_run, name=f"node-power-resume-{ref.get('node', '')}", daemon=True).start()
+    return True
+
 
 def rollout_reboot(node, allow_single_copy=False):
     """A restart for an OS update: the same review Host actions shows, with
@@ -5749,6 +5817,7 @@ CAPACITY_REVIEW.bind(AUTH.review_signing_key)
 LH.bind(kget, ksend, _cache, STORAGE_CLASS)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
+POWER.WORKER_GONE, POWER.RESUME = power_worker_gone, resume_power_job
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
              channel=lambda: cached("settings", 15, get_app_settings)["updates"]["channel"])
 UPDATES.PART = homestead_part
