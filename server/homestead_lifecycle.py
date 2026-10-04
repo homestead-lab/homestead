@@ -819,7 +819,7 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
 
 
 def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=None, progress=None, force=False, planned_outage=False,
-               resumed=False, hold=None):
+               resumed=False, hold=None, send=None):
     """Reboot or shut down a host.
 
     Kubernetes cannot do this. We schedule a one-shot privileged pod pinned to
@@ -848,7 +848,9 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
         if hold and hold():
             steps.append("stopped the apps and VMs that wait for the host")
         steps.append("planned whole-cluster outage: no cordon or drain")
-        return _send_power(node, action, steps, rep, report)
+        # send: the caller's own last step - on a single host, a helper that
+        # waits for Homestead to stop before it powers the host.
+        return (send or _send_power)(node, action, steps, rep, report)
     if force:
         # Overridden by an admin: no cordon or drain - which on a one-node
         # cluster would evict Homestead before it could send anything, and
