@@ -100,13 +100,24 @@ async function announce() {
   await badge(answer.active || 0);
   const alerts=answer.alerts || [];
   const urgent=a=>a.severity==="critical" && a.phase!=="resolved";
-  if(alerts.length>3){
+  // Android bundles several notifications from one app under a summary it
+  // draws itself, with a generic stacked-squares icon instead of Homestead's.
+  // So one Homestead notification shows at a time: a lone alert as itself,
+  // and more - in this push, or with ones already showing - as one summary.
+  const showing=self.registration.getNotifications?await self.registration.getNotifications():[];
+  const keys=new Set(alerts.map(a=>a.key));
+  const summary=showing.find(n=>n.tag==="homestead-summary");
+  const singles=showing.filter(n=>!["homestead-summary","homestead-connection"].includes(n.tag) && !keys.has(n.tag));
+  const earlier=[...((summary && summary.data && summary.data.titles) || []), ...singles.map(n=>n.title)];
+  if(alerts.length && alerts.length+earlier.length>1){
     const sorted=[...alerts].sort((a,b)=>Number(urgent(b))-Number(urgent(a)) || b.at-a.at);
-    await self.registration.showNotification(`${alerts.length} Homestead notifications`, {
-      body:notificationText(sorted.slice(0,3).map(a=>a.title).join(" · "),300),
+    const titles=[...new Set([...sorted.map(a=>notificationText(a.title,100)), ...earlier])];
+    await self.registration.showNotification(`${titles.length} Homestead notifications`, {
+      body:notificationText(titles.slice(0,3).join(" · "),300),
       tag:"homestead-summary",renotify:alerts.some(a=>a.phase!=="resolved"),silent:alerts.every(a=>a.phase==="resolved"),
-      icon:ICON,badge:BADGE,requireInteraction:alerts.some(urgent),data:{href:"/settings?tab=device"},
+      icon:ICON,badge:BADGE,requireInteraction:alerts.some(urgent),data:{href:"/settings?tab=device",titles:titles.slice(0,20)},
     });
+    singles.forEach(n=>n.close());
   }else{
     await Promise.all(alerts.map(alert=>self.registration.showNotification(notificationText(alert.title,100),{
       body:notificationText(alert.body),tag:alert.key,renotify:alert.phase!=="resolved",silent:alert.phase==="resolved",

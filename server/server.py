@@ -4216,7 +4216,7 @@ def restore_held(item, uncordon=True):
     ref = item.get("ref") or {}
     if not LEADER.is_leader() or ref.get("restored") is not None:
         return ref.get("restored") is not None
-    if uncordon and not ref.get("planned_outage"):
+    if uncordon and not ref.get("planned_outage") and not ref.get("cordoned_before"):
         # What waited is for this host; it cannot start here while cordoned.
         node = kget(f"/api/v1/nodes/{urllib.parse.quote(ref['node'], safe='')}")
         if ref.get("node_uid") and (node.get("metadata") or {}).get("uid") == ref["node_uid"]:
@@ -4224,6 +4224,23 @@ def restore_held(item, uncordon=True):
             ref["uncordoned"] = True
     started, left = HOLD.restore(ref.get("held") or [], item["id"])
     ref["restored"] = {"started": started, "left": left, "at": time.time()}
+    return True
+
+
+def allow_scheduling(item):
+    """Uncordon a host its power job cordoned, now it is back. Leader only,
+    once; only the host the job was for, by identity."""
+    ref = item.get("ref") or {}
+    if not LEADER.is_leader():
+        return False
+    if ref.get("uncordoned"):
+        return True
+    node = kget(f"/api/v1/nodes/{urllib.parse.quote(ref['node'], safe='')}")
+    if ref.get("node_uid") and (node.get("metadata") or {}).get("uid") != ref["node_uid"]:
+        return False
+    if (node.get("spec") or {}).get("unschedulable"):
+        LC.set_cordon(ref["node"], False)
+    ref["uncordoned"] = True
     return True
 
 
@@ -4273,6 +4290,9 @@ def send_reviewed_power(power_plan, force=False, background=False):
         "/nodes?node=" + urllib.parse.quote(node),
         {"node": node, "node_uid": power_plan["node_uid"], "action": action, "boot_id": power_plan["boot_id"],
          "choices": power_plan.get("choices") or {},
+         # A host cordoned before the review stays so after it; one this job
+         # cordoned is allowed scheduling again when it is back.
+         "cordoned_before": bool(power_plan.get("cordoned")),
          "volumes": [v["name"] for v in power_plan["volumes"]],
          "planned_outage": planned_outage, "forced": bool(force),
          # What a resumed job needs: the reviewed plan, and which replica runs it.
@@ -4322,10 +4342,7 @@ def _power_jobs_loop():
             if not LEADER.is_leader():
                 continue
             active = [i for i in OPS._read() if i.get("kind") == "node-power"
-                      and i.get("status") not in OPS.TERMINAL
-                      and ((i.get("ref") or {}).get("phase") in POWER.BEFORE_SEND
-                           # or with apps waiting to be started again, whoever is looking
-                           or ((i.get("ref") or {}).get("held") and (i.get("ref") or {}).get("restored") is None))]
+                      and i.get("status") not in OPS.TERMINAL]
             if active:
                 OPS.list_operations()   # runs each job's resolver, which resumes it if needed
         except Exception as error:
@@ -6028,7 +6045,7 @@ LH.bind(kget, ksend, _cache, STORAGE_CLASS)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
 HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
-POWER.WORKER_GONE, POWER.RESUME, POWER.RESTORE = power_worker_gone, resume_power_job, restore_held
+POWER.WORKER_GONE, POWER.RESUME, POWER.RESTORE, POWER.UNCORDON = power_worker_gone, resume_power_job, restore_held, allow_scheduling
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
              channel=lambda: cached("settings", 15, get_app_settings)["updates"]["channel"])
 UPDATES.PART = homestead_part

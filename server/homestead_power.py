@@ -219,7 +219,8 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
             "drain_pods": drain_pods,
             "requires_data_ack": storage_unknown or bool(maintenance["local_storage"]) or any(v["risk"] in ("unavailable", "single-copy") for v in affected),
             "blockers": blockers, "warnings": warnings, "ready": not blockers,
-            "overridable": soft, "hard_blockers": hard, "force": bool(force), "planned_outage": planned_outage}
+            "overridable": soft, "hard_blockers": hard, "force": bool(force), "planned_outage": planned_outage,
+            "cordoned": bool((node_obj.get("spec") or {}).get("unschedulable"))}
 
 
 def recheck_planned_outage(original):
@@ -271,6 +272,30 @@ def recheck_after_drain(original):
 WORKER_GONE = None
 RESUME = None
 RESTORE = None
+UNCORDON = None     # allow scheduling on the host again (leader only)
+
+
+def _allow_scheduling(item, ref):
+    """The host is back and its volumes are available: the cordon this job
+    put on it comes off. Kept when the host was cordoned before the review,
+    when nothing was cordoned (a single host, a forced action), or for a job
+    from before this was recorded. A status while the leader has yet to."""
+    if (ref.get("planned_outage") or ref.get("forced") or ref.get("uncordoned")
+            or ref.get("cordoned_before") is not False):
+        return None
+    if UNCORDON and UNCORDON(item):
+        return None
+    return "running", 95, "Host is back; allowing scheduling on it again"
+
+
+def _scheduling(ref):
+    if ref.get("planned_outage"):
+        return "Scheduling was left unchanged"
+    if ref.get("uncordoned"):
+        return "Scheduling is allowed on it again"
+    if ref.get("cordoned_before"):
+        return "It stays cordoned, as it was before"
+    return "It remains cordoned"
 
 
 def _returned(item, ref, now, how):
@@ -352,10 +377,10 @@ def _status(item):
         return "running", 60, "Host is NotReady; waiting to confirm shutdown or return"
     if ref["action"] == "poweroff" and ref.get("boot_id") and boot and boot != ref["boot_id"]:
         # Off and on again - perhaps with Homestead, on a single host.
-        waiting = _returned(item, ref, now, "Host was powered off and has started again")
+        waiting = _returned(item, ref, now, "Host was powered off and has started again") or _allow_scheduling(item, ref)
         if waiting:
             return waiting
-        return "succeeded", 100, "Host was powered off and has started again" + _started(ref)
+        return "succeeded", 100, "Host was powered off and has started again. " + _scheduling(ref) + _started(ref)
     if ref["action"] == "poweroff" and ref.get("saw_down"):
         if ref.get("held") and ref.get("restored") is not None:
             return "succeeded", 100, "Host was powered off" + _started(ref)
@@ -367,7 +392,10 @@ def _status(item):
             return waiting
         volume_names = ref.get("volumes") or []
         if not volume_names:
-            return "succeeded", 100, "Host returned Ready with a new boot ID. " + scheduling + "; check workloads" + _started(ref)
+            waiting = _allow_scheduling(item, ref)
+            if waiting:
+                return waiting
+            return "succeeded", 100, "Host returned Ready with a new boot ID. " + _scheduling(ref) + "; check workloads" + _started(ref)
         volumes = _items(f"{LH}/volumes", absent_ok=True)
         if volumes is None:
             if now - ref["returned_at"] > 1800:
@@ -388,7 +416,10 @@ def _status(item):
                 return "failed", 90, ("Host rebooted, but these volumes did not become available within 30 minutes: " +
                                       ", ".join(pending[:4]))
             return "running", 90, f"Host is Ready; waiting for {len(pending)} volume(s) to become available: " + ", ".join(pending[:4])
-        return "succeeded", 100, ("Host is Ready and its volumes are available. " + scheduling + _started(ref)
+        waiting = _allow_scheduling(item, ref)
+        if waiting:
+            return waiting
+        return "succeeded", 100, ("Host is Ready and its volumes are available. " + _scheduling(ref) + _started(ref)
                                   + (f". Longhorn is rebuilding {len(rebuilding)} volume cop{'y' if len(rebuilding) == 1 else 'ies'} on it; "
                                      "Volumes shows their progress" if rebuilding else "")
                                   + ("" if ref.get("held") else "; workload recovery is not yet verified"))

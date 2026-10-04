@@ -642,7 +642,7 @@ window.nodePowerReview = async (node, action, force = false) => {
         + (overridable ? `<label class="switch" data-need="admin"><input type="checkbox" onchange="if (this.checked) nodePowerReview(${jsq(node)},${jsq(action)},true)">
             Override these checks - ${esc(action === "reboot" ? "reboot" : "shut down")} anyway, without cordon or drain</label>` : "")
       : concerns.length ? UI.callout(forced ? "bad" : "warn", forced ? "Forced - what happens" : "Check before going ahead", `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`) : "",
-    UI.more("After the request", "Follow Recent jobs for the helper's events, logs and host status. Reboot checks use a changed boot ID; shutdown cannot be confirmed from NotReady alone. " + (outage || forced ? "Scheduling is left unchanged; inspect workloads and storage when the host returns." : hold.length ? "The host stays cordoned while it is down. If anything waits for it, scheduling is allowed again when it is back so that can start there; otherwise it stays cordoned until you allow it." : "The host stays cordoned until you inspect it and allow scheduling.")),
+    UI.more("After the request", "Follow Recent jobs for the helper's events, logs and host status. Reboot checks use a changed boot ID; shutdown cannot be confirmed from NotReady alone. " + (outage || forced ? "Scheduling is left unchanged; inspect workloads and storage when the host returns." : plan.cordoned ? "The host was cordoned before this and stays so." : "The host is cordoned while it is down, and scheduling is allowed again when it is back with its volumes available.")),
   ].join("");
   const apps = plan.hold ? (hold.length
       ? `<p class="ui-help">${outage ? "Nothing can move off the only host: each is stopped cleanly first and started again when the host is back."
@@ -707,9 +707,9 @@ window.nodePower = async (node, action) => {
     if (r.operation) window.noteOperation?.(r.operation);
     if (r.operation?.id) return window.nodePowerFollow(r.operation.id, plan.force || plan.planned_outage
       ? "Sent without cordon or drain. Scheduling was left unchanged; inspect workloads and storage when the host returns."
-      : "The host is cordoned and drained before the command is sent. It stays cordoned afterwards: check it before allowing scheduling again.");
+      : `The host is cordoned and drained before the command is sent. ${plan.cordoned ? "It was cordoned before, and stays so." : "Scheduling is allowed again when it is back."}`);
     modal("Host maintenance", UI.lead(plan.force || plan.planned_outage ? `Sent. Follow it in Recent jobs${plan.action === "reboot" ? "; this page comes back when the host does" : ""}. Scheduling was left unchanged; inspect workloads and storage when the host returns.`
-      : "Follow progress in Recent jobs. The host stays cordoned; check it before allowing scheduling.") +
+      : `Follow progress in Recent jobs. ${plan.cordoned ? "The host stays cordoned, as it was before." : "Scheduling is allowed again when it is back."}`) +
       UI.more("Steps so far", `<pre>${esc((r.steps || []).join("\n"))}</pre>`) + UI.actions(UI.cancel("Close")));
   } catch (e) {
     // A power job already going for this host: follow it rather than start another.
