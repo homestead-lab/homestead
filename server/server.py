@@ -4087,13 +4087,17 @@ def run_power_job(operation_id, power_plan, force=False, resumed=False):
 
     def hold():
         return hold_for_power(operation_id, power_plan, power_progress)
+
+    def handoff(node, action, steps, rep, report):
+        return send_handoff(operation_id, power_plan, steps, rep, report)
     try:
         result = LC.node_power(node, action, True,
                                before_send=(lambda: POWER.recheck_planned_outage(power_plan)) if planned_outage else
                                (lambda: POWER.recheck_forced(power_plan)) if force
                                else (lambda: POWER.recheck_after_drain(power_plan)),
                                reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force, planned_outage=planned_outage,
-                               resumed=resumed, hold=None if force else hold)
+                               resumed=resumed, hold=None if force else hold,
+                               send=handoff if planned_outage else None)
         result["operation"] = {"id": operation_id}
         return result
     except OPS.Superseded:
@@ -4120,6 +4124,53 @@ def run_power_job(operation_id, power_plan, force=False, resumed=False):
                     message += f". What was stopped could not be started again ({str(error)[:120]}); start it by hand"
             power_progress("failed", 10, message, failed_phase=phase_state["phase"], **restored)
         raise PowerNotSent(message, {"id": operation_id}) from e
+
+
+def send_handoff(operation_id, power_plan, steps, rep, report):
+    """The last step on a cluster's only host. Homestead's data volume is on
+    that host: going down with Homestead still writing to it left the volume
+    faulted. So a helper on the host takes over - Homestead's own image and
+    account - and Homestead stops itself; the helper waits for its volume to
+    detach, then asks systemd for the reboot or power-off, and starts
+    Homestead again on the new boot (homestead_power_handoff)."""
+    node, action = power_plan["node"], power_plan["action"]
+    path = f"/apis/apps/v1/namespaces/{SELF.NS}/deployments/{NAMES.BRAND}"
+    try:
+        own, image = _self_data_helper_image(kget, SELF.NS)
+        claim, _ = homestead_running_on()
+        replicas = int((kget(path).get("spec") or {}).get("replicas", 1) or 1)
+    except Exception as error:
+        report("verifying", 15, f"Homestead cannot hand the last step to the host ({str(error)[:160]}); sending the {action} directly")
+        return LC._send_power(node, action, steps, rep, report)
+    spec = own.get("spec") or {}
+    pod_name = f"homestead-handoff-{action}-{int(time.time()) % 100000}"
+    body = {"apiVersion": "v1", "kind": "Pod",
+            "metadata": {"name": pod_name, "namespace": SELF.NS, "labels": NAMES.labels("node-power")},
+            "spec": {"nodeName": node, "hostPID": True, "restartPolicy": "OnFailure",
+                     "serviceAccountName": spec.get("serviceAccountName") or "default",
+                     "imagePullSecrets": spec.get("imagePullSecrets") or [],
+                     "tolerations": [{"operator": "Exists"}],
+                     "terminationGracePeriodSeconds": 1,
+                     "containers": [{"name": "handoff", "image": image,
+                                     "command": ["python3", "/srv/homestead_power_handoff.py", SELF.NS, NAMES.BRAND,
+                                                 operation_id, action, power_plan["boot_id"], claim],
+                                     "securityContext": {"privileged": True, "runAsUser": 0, "runAsGroup": 0},
+                                     "resources": {"requests": {"cpu": "10m", "memory": "32Mi"}, "limits": {"memory": "128Mi"}}}]}}
+    # The helper's identity is on the job before it exists, as for any power helper.
+    report("sending", 20, "Handing the last step to a helper on the host; power has not been sent",
+           helper_pod=pod_name, helper_namespace=SELF.NS, handoff=True, started_epoch=time.time())
+    receipt = ksend("POST", f"/api/v1/namespaces/{SELF.NS}/pods", body)
+    meta = (receipt or {}).get("metadata") or {}
+    if not meta.get("uid") or meta.get("name") != pod_name:
+        raise ValueError("The host helper was not confirmed; inspect it before retrying")
+    report("observing", 20, f"Homestead is stopping so its data volume detaches; the helper on the host then sends the {action}. "
+           "This page is offline until the host is back", helper_uid=meta["uid"])
+    # Homestead stops last, marked like anything else held for the host, so
+    # the helper starts it again - and only while that mark is the job's.
+    ksend("PATCH", path, {"metadata": {"annotations": {HOLD.HELD_BY: operation_id, HOLD.HELD_AS: str(replicas)}},
+                          "spec": {"replicas": 0}}, ctype="application/merge-patch+json")
+    steps.append(f"handed the {action} to {pod_name}; Homestead stopped so its data volume detaches")
+    return {"ok": True, "node": node, "action": action, "steps": steps, "helper_pod": pod_name, "quorum": rep}
 
 
 def hold_for_power(operation_id, power_plan, progress):

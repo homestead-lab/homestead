@@ -346,7 +346,7 @@ def _status(item):
         if now - ref.get("started_epoch", now) > 600:
             return "failed", 60, "Host did not return Ready within 10 minutes; inspect the host. " + scheduling
         return "running", 60, "Host is NotReady; waiting to confirm shutdown or return"
-    if ref["action"] == "poweroff" and ref.get("held") and ref.get("boot_id") and boot and boot != ref["boot_id"]:
+    if ref["action"] == "poweroff" and ref.get("boot_id") and boot and boot != ref["boot_id"]:
         # Off and on again - perhaps with Homestead, on a single host.
         waiting = _returned(item, ref, now, "Host was powered off and has started again")
         if waiting:
@@ -401,6 +401,9 @@ def _status(item):
             reason = next((c.get("reason") for c in waiting if c.get("reason")), "")
             if phase == "Failed":
                 return "failed", 20, f"Host power helper failed ({reason or phase}); host remains cordoned"
+            if phase == "Succeeded" and ref.get("handoff"):
+                return "failed", 20, ("The helper on the host did not send power: Homestead's data volume did not detach, "
+                                      "or the host did not go down. Homestead was started again; see the helper's log")
             if reason:
                 return "running", 20, f"Power helper waiting: {reason}. It may retry automatically; inspect Recent jobs logs, do not send another power request"
             return "running", 35 if phase == "Running" else 20, f"Power helper {phase.lower()}{': ' + reason if reason else ''}; waiting for host transition"
