@@ -61,11 +61,12 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
     # Each attached volume's engine says which replicas are whole (RW) and
     # which are still being rebuilt (WO): a rebuilding copy was counted as a
     # healthy one elsewhere, and the drain then stalled on Longhorn.
-    modes, rebuilding = {}, {}
+    modes, rebuilding, attached = {}, {}, set()
     for engine in _items(f"{LH}/engines", absent_ok=True) or []:
         status = engine.get("status") or {}
         if status.get("currentState") != "running":
             continue
+        attached.add((engine.get("spec") or {}).get("volumeName"))
         modes.update(status.get("replicaModeMap") or {})
         progress = [r.get("progress") for r in (status.get("rebuildStatus") or {}).values() if r.get("isRebuilding")]
         if progress:
@@ -75,9 +76,15 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
         spec, status = row.get("spec") or {}, row.get("status") or {}
         name = spec.get("volumeName")
         if name:
-            whole = modes.get((row.get("metadata") or {}).get("name"), "RW") == "RW"
-            by_volume.setdefault(name, []).append((spec.get("nodeID"),
-                status.get("currentState") == "running" and not spec.get("failedAt") and whole))
+            # A detached volume's replicas are stopped, not lost: Longhorn
+            # counts one that was healthy and has not failed as a whole copy,
+            # and so does this - or its only copy here went unseen.
+            whole = (status.get("currentState") == "running" and
+                     modes.get((row.get("metadata") or {}).get("name"), "RW") == "RW"
+                     or name not in attached and bool(spec.get("healthyAt")))
+            by_volume.setdefault(name, []).append((spec.get("nodeID"), not spec.get("failedAt") and whole))
+            if status.get("currentState") == "running":
+                attached.add(name)
     volume_obj = {row.get("metadata", {}).get("name"): row for row in volumes or []}
     affected = []
     for name in sorted(set(by_volume) | set(volume_names)):
@@ -95,6 +102,7 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
                          "robustness": (volume.get("status") or {}).get("robustness", "unknown"),
                          "last_copy_here": not elsewhere and any(host == node and healthy for host, healthy in copies),
                          "copies_wanted": int((volume.get("spec") or {}).get("numberOfReplicas") or 0),
+                         "detached": name not in attached,
                          **({"rebuilding_pct": rebuilding[name]} if name in rebuilding else {})})
     affected.sort(key=lambda row: ({"unavailable": 0, "single-copy": 1, "resync": 2}[row["risk"]], row["claim"]))
     vm_rows = sorted({(v.get("metadata") or {}).get("namespace", "") + "/" +
@@ -139,6 +147,10 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
                 if "rebuilding_pct" in v:
                     soft.append(f"{v['claim']}: this host holds its only complete copy while another is rebuilt "
                                 f"({v['rebuilding_pct']}% done). Longhorn will not let the host drain until that finishes; review again then")
+                elif v.get("detached") and v.get("copies_wanted") != 1:
+                    soft.append(f"{v['claim']} is detached with its only copy on this host, and Longhorn rebuilds copies only "
+                                "while a volume is attached. It will not let the host drain: start what uses the volume "
+                                "so a second copy is built, or restart without draining (Force)")
                 elif v.get("copies_wanted") == 1:
                     soft.append(f"{v['claim']} keeps one copy, on this host. Longhorn will not let the host drain: "
                                 "give it a second copy in Volumes, or restart without draining (Force)")
