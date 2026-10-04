@@ -4085,7 +4085,10 @@ def run_power_job(operation_id, power_plan, force=False, resumed=False):
         uncertain = phase_state["phase"] in ("sending", "observing")
         message = ("Power submission outcome is uncertain; inspect the existing job/helper before retrying" if uncertain else
                    "Power was not sent. Inspect the host's cordon state: " + str(e))
-        power_progress("observing" if uncertain else "failed", 20 if uncertain else 10, message)
+        if uncertain:
+            power_progress("observing", 20, message)
+        else:
+            power_progress("failed", 10, message, failed_phase=phase_state["phase"])
         raise PowerNotSent(message, {"id": operation_id}) from e
 
 

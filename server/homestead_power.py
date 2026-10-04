@@ -29,7 +29,7 @@ def _ready(node):
                for c in ((node.get("status") or {}).get("conditions") or []))
 
 
-def plan(node, action, force=False, volume_names=()):
+def plan(node, action, force=False, volume_names=(), after_drain=False):
     """What rebooting or shutting a host down would do, and what stops it.
 
     A verified single-host cluster uses an acknowledged planned outage.
@@ -58,13 +58,26 @@ def plan(node, action, force=False, volume_names=()):
     ready_hosts = {n.get("metadata", {}).get("name") for n in nodes if _ready(n)}
     vmis = _items("/apis/kubevirt.io/v1/virtualmachineinstances", absent_ok=True) or []
     storage_unknown = replicas is None or volumes is None
+    # Each attached volume's engine says which replicas are whole (RW) and
+    # which are still being rebuilt (WO): a rebuilding copy was counted as a
+    # healthy one elsewhere, and the drain then stalled on Longhorn.
+    modes, rebuilding = {}, {}
+    for engine in _items(f"{LH}/engines", absent_ok=True) or []:
+        status = engine.get("status") or {}
+        if status.get("currentState") != "running":
+            continue
+        modes.update(status.get("replicaModeMap") or {})
+        progress = [r.get("progress") for r in (status.get("rebuildStatus") or {}).values() if r.get("isRebuilding")]
+        if progress:
+            rebuilding[(engine.get("spec") or {}).get("volumeName")] = min(p or 0 for p in progress)
     by_volume = {}
     for row in replicas or []:
         spec, status = row.get("spec") or {}, row.get("status") or {}
         name = spec.get("volumeName")
         if name:
+            whole = modes.get((row.get("metadata") or {}).get("name"), "RW") == "RW"
             by_volume.setdefault(name, []).append((spec.get("nodeID"),
-                status.get("currentState") == "running" and not spec.get("failedAt")))
+                status.get("currentState") == "running" and not spec.get("failedAt") and whole))
     volume_obj = {row.get("metadata", {}).get("name"): row for row in volumes or []}
     affected = []
     for name in sorted(set(by_volume) | set(volume_names)):
@@ -79,7 +92,10 @@ def plan(node, action, force=False, volume_names=()):
         claim = "/".join(x for x in (k8s.get("namespace"), k8s.get("pvcName")) if x) or name
         affected.append({"name": name, "claim": claim, "healthy_elsewhere": elsewhere,
                          "risk": "unavailable" if not elsewhere else "single-copy" if elsewhere == 1 else "resync",
-                         "robustness": (volume.get("status") or {}).get("robustness", "unknown")})
+                         "robustness": (volume.get("status") or {}).get("robustness", "unknown"),
+                         "last_copy_here": not elsewhere and any(host == node and healthy for host, healthy in copies),
+                         "copies_wanted": int((volume.get("spec") or {}).get("numberOfReplicas") or 0),
+                         **({"rebuilding_pct": rebuilding[name]} if name in rebuilding else {})})
     affected.sort(key=lambda row: ({"unavailable": 0, "single-copy": 1, "resync": 2}[row["risk"]], row["claim"]))
     vm_rows = sorted({(v.get("metadata") or {}).get("namespace", "") + "/" +
                       (v.get("metadata") or {}).get("name", "") for v in vmis
@@ -110,6 +126,25 @@ def plan(node, action, force=False, volume_names=()):
         soft.append("Running VMs are on this host; migrate or stop them and review again")
     if storage_unknown:
         soft.append("Storage replica inventory is unavailable; volume impact cannot be verified")
+    # Before a drain only: one that finished had Longhorn's agreement. A
+    # policy that cannot be read is not guessed at; the data acknowledgement stays.
+    settings = None if planned_outage or after_drain else _items(f"{LH}/settings", absent_ok=True)
+    if settings:
+        policy = next((s.get("value") for s in settings if (s.get("metadata") or {}).get("name") == "node-drain-policy"),
+                      "block-if-contains-last-replica")
+        if policy in ("block-if-contains-last-replica", "block-for-eviction-if-contains-last-replica", "block-for-eviction"):
+            for v in affected:
+                if not v.get("last_copy_here"):
+                    continue
+                if "rebuilding_pct" in v:
+                    soft.append(f"{v['claim']}: this host holds its only complete copy while another is rebuilt "
+                                f"({v['rebuilding_pct']}% done). Longhorn will not let the host drain until that finishes; review again then")
+                elif v.get("copies_wanted") == 1:
+                    soft.append(f"{v['claim']} keeps one copy, on this host. Longhorn will not let the host drain: "
+                                "give it a second copy in Volumes, or restart without draining (Force)")
+                else:
+                    soft.append(f"{v['claim']}: this host holds its only complete copy. Longhorn will not let the host drain "
+                                "until another copy is rebuilt; review again then")
     blockers = hard if force else hard + soft
     warnings = []
     if not force and not planned_outage:
@@ -179,7 +214,7 @@ def recheck_after_drain(original):
     """Never send power using the pre-drain storage/quorum/VM snapshot."""
     # Eviction may remove the local replica entirely. Keep checking every
     # reviewed volume, even when it no longer appears on the drained host.
-    fresh = plan(original["node"], original["action"], volume_names=[v["name"] for v in original["volumes"]])
+    fresh = plan(original["node"], original["action"], volume_names=[v["name"] for v in original["volumes"]], after_drain=True)
     if not fresh["ready"]:
         raise ValueError("Host remains cordoned; power was not sent: " + "; ".join(fresh["blockers"]))
     before = {v["name"]: v for v in original["volumes"]}

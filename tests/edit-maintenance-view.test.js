@@ -252,3 +252,12 @@ test('a host power job shows its steps, the current one, and how it ended', () =
   assert.deepEqual(states(markup('sending', 'running', true)), ['ok', 'run', 'todo']);
   assert.match(markup('draining', 'running', false, true), /Stop new work on the host/);
 });
+
+test('a stopped host power job marks the step it stopped at, and says why once', () => {
+  const t = setup(review);
+  const html = t.c.nodePowerProgressMarkup({ status: 'failed', progress: 10, message: 'Longhorn still prevents eviction',
+    power: { phase: 'failed', failed_phase: 'draining', action: 'reboot', direct: false } });
+  const states = [...html.matchAll(/<li class="(\w+)">/g)].map(m => m[1]);
+  assert.deepEqual(states, ['ok', 'bad', 'todo', 'todo', 'todo'], 'the drain stopped, not the cordon');
+  assert.equal(html.split('Longhorn still prevents eviction').length - 1, 1, 'the reason appears once');
+});

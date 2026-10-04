@@ -51,6 +51,31 @@ class PowerPlanTests(unittest.TestCase):
         self.assertEqual(1, len(plan["stranded"]))
         self.assertEqual(plan["review_token"], power.plan("node1", "reboot")["review_token"])
 
+    def test_a_rebuilding_copy_is_not_a_copy_and_longhorn_would_block_the_drain(self):
+        # frigate-recordings2: its copy on k3s-3 was still rebuilding (WO), so
+        # the only whole one was on the host; the review counted both, and the
+        # drain stalled on Longhorn two minutes in.
+        self.objects["/apis/kubevirt.io/v1/virtualmachineinstances"]["items"] = []
+        replicas = self.objects[f"{power.LH}/replicas"]["items"]
+        replicas[0]["metadata"], replicas[1]["metadata"] = {"name": "vol-a-r-here"}, {"name": "vol-a-r-there"}
+        self.objects[f"{power.LH}/settings"] = {"items": [{"metadata": {"name": "node-drain-policy"}, "value": "block-if-contains-last-replica"}]}
+        self.objects[f"{power.LH}/engines"] = {"items": [{"spec": {"volumeName": "vol-a"}, "status": {
+            "currentState": "running", "replicaModeMap": {"vol-a-r-here": "RW", "vol-a-r-there": "WO"},
+            "rebuildStatus": {"tcp://x": {"isRebuilding": True, "progress": 5}}}}]}
+        plan = power.plan("node1", "reboot")
+        vol = next(v for v in plan["volumes"] if v["claim"] == "lab/appdata")
+        self.assertEqual(("unavailable", 0, 5), (vol["risk"], vol["healthy_elsewhere"], vol["rebuilding_pct"]))
+        self.assertFalse(plan["ready"])
+        self.assertTrue(any("lab/appdata" in b and "5% done" in b for b in plan["blockers"]), plan["blockers"])
+        self.assertTrue(any("lab/only-copy" in b for b in plan["blockers"]), "a one-copy volume blocks the drain too")
+        # Force restarts without draining, so Longhorn's drain rule does not apply.
+        self.assertFalse(any("lab/appdata" in b for b in power.plan("node1", "reboot", force=True)["blockers"]))
+        # Where Longhorn is set to allow it, only the data acknowledgement remains.
+        self.objects[f"{power.LH}/settings"] = {"items": [{"metadata": {"name": "node-drain-policy"}, "value": "always-allow"}]}
+        plan = power.plan("node1", "reboot")
+        self.assertFalse(any("Longhorn will not" in b for b in plan["blockers"]))
+        self.assertTrue(plan["requires_data_ack"])
+
     def test_unknown_replica_inventory_is_explicit(self):
         self.objects.pop(f"{power.LH}/replicas")
         plan = power.plan("node1", "poweroff")
@@ -60,6 +85,8 @@ class PowerPlanTests(unittest.TestCase):
 
     def test_ready_when_no_vms_and_storage_known(self):
         self.objects["/apis/kubevirt.io/v1/virtualmachineinstances"]["items"] = []
+        # A host holding a volume's only copy drains only where Longhorn allows it.
+        self.objects[f"{power.LH}/settings"] = {"items": [{"metadata": {"name": "node-drain-policy"}, "value": "always-allow"}]}
         self.assertTrue(power.plan("node1", "reboot")["ready"])
 
     def test_quorum_loss_blocks_power(self):

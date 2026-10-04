@@ -712,10 +712,11 @@ function nodePowerSteps(power) {
 function nodePowerProgressMarkup(op, offline = false) {
   const power = op.power || {}, steps = nodePowerSteps(power);
   const done = op.status === "succeeded", stopped = op.status === "failed" || op.status === "cancelled";
-  const at = Math.max(0, steps.findIndex(([phase]) => phase === power.phase));
+  const phase = stopped && power.failed_phase ? power.failed_phase : power.phase;
+  const at = Math.max(0, steps.findIndex(([name]) => name === phase));
   const items = steps.map(([, title], i) => ({ title,
     state: done || i < at ? "ok" : i === at ? (stopped ? "bad" : "run") : "todo",
-    detailHtml: i === at && !done && op.message ? esc(op.message) : "" }));
+    detailHtml: i === at && !done && !stopped && op.message ? esc(op.message) : "" }));
   return UI.progress(done ? 100 : op.progress, { label: done ? "Finished" : stopped ? "Stopped" : "In progress", kind: done ? "ok" : stopped ? "bad" : "info" })
     + UI.checklist(items)
     + (offline ? UI.callout("warn", "Reconnecting", "Homestead cannot be reached right now. While a host it runs on restarts, that is expected; this view carries on by itself.") : "")
