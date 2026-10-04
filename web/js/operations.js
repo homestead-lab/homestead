@@ -326,7 +326,7 @@ window.powerRecoveryReview = async (id, mutation = false) => {
         UI.more("Identity checks and recovery limits", (p.warnings || []).map(w => `<p>${esc(w)}</p>`).join("") +
           (p.resources || []).map(row => `<p style="overflow-wrap:anywhere">${esc(row.resource.name)}<br>Recorded UID: ${esc(row.expected?.uid || "unverified")}<br>Current UID: ${esc(row.current?.uid || "not found")}</p>`).join("")) +
         (!p.blocked ? UI.field(`Type ${esc(p.confirm)} to stop tracking`, '<input id="powerRecoveryName" autocomplete="off" oninput="powerRecoveryReady()">') +
-          UI.ack("powerRecoveryAck", "I inspected the planned VMs and retained resources. I accept the unknown outcome and that guest setup or an earlier request may still finish.", {onchange:"powerRecoveryReady()"}) : "") +
+          UI.ack("powerRecoveryAck", "I inspected the planned VMs; an earlier request may still finish.", {onchange:"powerRecoveryReady()"}) : "") +
         UI.actions(UI.cancel("Keep tracking") + UI.button("Stop tracking batch", "powerRecoveryResolve()", {kind:"pri", id:"powerRecoveryApply", disabled:true}));
       if ($(".modalbox")) $(".modalbox").scrollTop = 0;
       return;

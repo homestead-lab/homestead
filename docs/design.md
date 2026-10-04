@@ -312,7 +312,7 @@ Top to bottom, leaving out what the dialog does not need:
    visible. Combine related warnings into one notice.
 4. **Content** — the current section's fields, a concise review, or current job status.
 5. **Optional detail** (`UI.more`) — named disclosures such as `Optional settings`,
-   `Capacity and exact images`, or `Log and history`.
+   `Details` on a review, or `After the request`.
 6. **Confirmation** (`UI.ack`, or a typed name) — an existing required risk check.
 7. **Actions** (`UI.actions`) — one footer, always after the content.
 
@@ -382,6 +382,71 @@ Risky actions ask once for each distinct consequence. Preserve existing server
 review tokens, role checks, confirmations and recovery guards when restyling.
 Do not turn a visual simplification into weaker approval or automatic retry.
 
+### Reviews
+
+A review is the dialog before something happens: starting an app or VM, an
+update, a reboot, a delete. They share one shape, so a person learns it once:
+
+1. **One sentence** says what happens to what, and where - `Starts frigate on
+   one of 2 hosts.`, `Reboots k3s-1.` Placement facts (pinned, preferred, the
+   only host that can run it, a restart policy that changes) belong in that
+   sentence or as a chip on the host, not in a box of their own.
+2. **One notice** (`UI.callout`), only when there is something to act on or
+   accept: `Check first` for warnings, `Can't start` / `Update blocked` for
+   blockers. Say each concern once, however many apps, containers or checks
+   raised it, naming the apps it affects. A note that the action does not
+   change - a container that already had no memory limit, say - is not a
+   warning; it goes in Details.
+3. **The objects**, once each: one row per app with one change, not one per
+   container when they all move between the same two images.
+4. **Where it can run**: `capacityHostTable(plan)` - each host with the memory
+   it would be left with, and the reason a host is out. Start a container or a
+   VM with `startReview(plan, { what, name, extra, ackId, onAck, details })`,
+   which composes all of this; never write a launch-host box or a second host
+   table.
+5. **Details** (`UI.more`): requests, reservations, estimates, caveats, exact
+   digests (shortened, the whole one on hover), recovery images.
+6. **One acknowledgement** (`UI.ack`), only when there is a warning to accept
+   or an interruption the action always causes. One short sentence - at most
+   16 words - naming what is accepted (`Start it anyway`, `Restart it now`,
+   `Update despite the warnings`). The consequence is already in the notice.
+7. **The button names the result**: `Start`, `Restart`, `Resume`, `Update 2`,
+   `Reboot host` - not `Start reviewed VM` or `Apply`.
+
+A review with several kinds of things to look at - a reboot's apps, volume
+copies, disruption budgets and local storage - uses the section rail with a
+**Summary** first (lead, a facts row of counts, the one notice) and a section
+per kind, each titled with its count (`Volume copies · 2`). Sections with
+nothing in them are left out. Typed confirmations and acknowledgements go in
+the rail's `noticeHtml`, so they stay in view whichever section is open.
+
+An action list - Host actions, say - is one line per action: what it does in
+a few words, and its button on the right. Offer the action the state allows
+(Cordon or Uncordon, not both). Lists that belong to the object - its apps,
+its quorum - are sections beside the actions, not boxes under them.
+
+Restyling a review never weakens it: keep review tokens, one-shot approval,
+blocked states that cannot be forced, typed names and recovery guards.
+
+### Verbosity budget
+
+What a dialog shows before any Details is opened is its budget, and
+`scripts/audit_dialogs.mjs` fails CI when a dialog:
+
+- shows more than **300 visible words** - or **200** for a review or
+  confirmation (a name with review, start, update, reboot, shutdown, power,
+  delete, remove or confirm);
+- shows more than **one notice** (`UI.callout`, or an older `.note.warn` /
+  `.note.bad`): combine them;
+- **says the same thing twice**: the same sentence of 40 characters or more in
+  two places.
+
+Words count names and rows as well as prose, so the budgets sit just above
+today's longest dialogs: they stop a dialog growing, they do not make a long
+list wrong. When a dialog nears its budget, move explanations, identifiers and
+arithmetic into `UI.more`, or split it into sections - never raise the budget
+for one screen.
+
 ### Progress, container updates and Jobs
 
 Show current phase and the next useful action first. A percentage must represent
@@ -391,8 +456,8 @@ and explicitly leaves completion unverified. Failed and blocked states remain
 visible; diagnostic output can collapse.
 
 Container update review shows the apps and image changes, restart impact and
-warnings. Exact digests and capacity calculations collapse. The update button
-stays disabled until the reviewed change is acknowledged. During a queue, keep
+warnings, as a review (above). Exact digests and capacity collapse under Details.
+The update button stays disabled until the restart is acknowledged. During a queue, keep
 failed or waiting workloads and their reason visible. **Close queue** explicitly
 stops unstarted updates; submitted rollouts continue in Jobs. Never imply that
 the browser-managed queue continues after closing it.
@@ -400,9 +465,10 @@ the browser-managed queue continues after closing it.
 Jobs uses a list on the left and selected job detail on the right. On phones the
 list sits above the detail. Keep selection through polling. Failed jobs belong
 under **Needs attention**, active jobs under **Running**, and successful/cancelled
-history under **Completed**. Log and history controls collapse; recovery actions
-remain visible. **Clear completed** removes only dismissible successful or
-cancelled records, preserving failed and protected recovery records.
+history under **Completed**. A job's **Log** and **Dismiss** buttons sit at the start of
+its button row, its own actions (Open, Carry on, Cancel, recovery) at the end -
+never behind a collapse. **Clear finished** removes every record the server
+says may go, failed ones included; protected recovery records stay.
 
 ## Shared page and Settings structure
 
@@ -462,7 +528,9 @@ in the same module shell so controls do not change location as data arrives.
 | `Diagram.node(n)`, `Diagram.vip(ip, rows)`, `Diagram.mapping(rows)` | What a node holds, where a VIP leads, where each folder goes - drawn live | Decoration |
 | `settingRow(label, help, control)` | One setting: label and help left, its control right | A form of many fields (use a dialog) |
 | `serviceRow(name, state, detail, actions)` | Something Homestead runs or connects to, with its state and buttons | A list of like items |
-| `UI.ack(id, sentence)` | The one checkbox a risky action needs | Settings |
+| `UI.ack(id, sentence)` | The one checkbox a risky action needs - 16 words at most | Settings |
+| `startReview(plan, options)` | The review before a container or VM starts: sentence, notice, hosts, Details, acknowledgement | Writing a capacity box again |
+| `capacityHostTable(plan)` | Each host with its memory after a change, and why a host is out | A launch-host box |
 | `UI.fields(...)` / `UI.field(label, control, { help })` | Forms: two columns on a desktop, one on a phone | - |
 | `UI.chip(label, tone)` | A short status next to a name | Sentences |
 | `UI.button(label, onclick, { kind })` / `UI.cancel()` | Buttons | - |
@@ -518,7 +586,14 @@ file and line, when it finds:
 - rail, section navigation, pane or footer markup authored outside `ui.js`;
 - a hand-written dismissal row instead of `UI.actions`;
 - page headers, module headers, Settings wrappers, navigation or save bars written
-  outside the shared UI module.
+  outside the shared UI module;
+- a `UI.ack` sentence over 16 words;
+- a container or VM start that does not use `startReview`, an image update
+  review that does not use `capacityHostTable`, or the older placement blocks
+  used outside `views-workloads.js`;
+- more uses than today of older markup - `.note`, `.sec`, `deployCapacityHtml`,
+  hand-written acknowledgement checkboxes and "I accept" wording. That count
+  only shrinks: lower it in the same change that removes some.
 
 It also checks this file still states those rules. Change a rule in both
 places at once; never quiet the test for one screen.
@@ -537,7 +612,9 @@ node scripts/audit_dialogs.mjs
 Each opens every page or dialog it knows at a desktop and a phone width,
 saves it whole under `release-assets/pages/` or `release-assets/dialogs/`,
 and fails when something runs off the screen, a page scrolls sideways, text
-is smaller than 10px, or a page or dialog cannot be opened.
+is smaller than 10px, or a page or dialog cannot be opened. The dialog audit
+also holds the verbosity budget: too many visible words, more than one notice,
+or a dialog that says the same thing twice.
 `node scripts/dialog_sheets.mjs mobile 4 4 pages` lays captures side by side
 for review, and reading them is part of the check: the scripts catch what
 can be measured, not clutter.

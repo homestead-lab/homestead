@@ -648,42 +648,74 @@ function capacityHosts(candidates, { unavailable = "live RAM unavailable", reser
 }
 window.capacityHosts = capacityHosts;
 
+/* The review before something starts - a container's pods or a VM: one
+   sentence on what starts where, a warning only when there is one, each host
+   with the memory it would be left with, and one tickbox to accept a
+   warning. How it was worked out stays under Details. */
+/* Each host with the memory it would be left with, and why a host is out. */
+function capacityHostTable(plan) {
+  const placement = plan.placement || {}, hosts = plan.candidates || [];
+  const memory = host => !host.metrics_available || host.projected_percent == null
+    ? '<span class="ui-help">memory use unknown</span>'
+    : `${UI.meter({ now: host.capacity_gb ? host.used_gb / host.capacity_gb * 100 : 0, after: host.projected_percent, label: `${host.name} memory` })}
+       <span class="sub">${esc(host.projected_gb)} of ${esc(host.capacity_gb)} GiB after · ${esc(host.projected_percent)}%</span>`;
+  const tag = host => placement.resident === host.name ? UI.chip("current host", "info")
+    : placement.pinned === host.name ? UI.chip("pinned", "info")
+    : placement.preferred === host.name ? UI.chip("preferred", "info") : "";
+  return UI.table([{ label: "Host" }, { label: "Memory after it starts", className: "grow" }], [
+    ...hosts.filter(host => host.eligible).map(host => [`<span class="mono">${esc(host.name)}</span> ${tag(host)}`, memory(host)]),
+    ...hosts.filter(host => !host.eligible).map(host => [`<span class="mono">${esc(host.name)}</span>`,
+      `<span class="ui-help">can't run here: ${esc((host.reasons || []).join(" · ") || "not eligible")}</span>`])]);
+}
+window.capacityHostTable = capacityHostTable;
+
+function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "", details = "" }) {
+  const { concerns, caveats } = capacityNotes(plan);
+  const placement = plan.placement || {}, hosts = plan.candidates || [];
+  const ok = hosts.filter(host => host.eligible), out = hosts.filter(host => !host.eligible);
+  const fixed = placement.resident || placement.pinned || plan.vm?.resident_node;
+  const where = fixed ? ` on <b>${esc(fixed)}</b>`
+    : ok.length === 1 ? ` on <b>${esc(ok[0].name)}</b>, the only host that can run it`
+    : placement.preferred && ok.some(host => host.name === placement.preferred) ? ` on <b>${esc(placement.preferred)}</b> if it can, or another host`
+    : ok.length ? ` on one of ${ok.length} hosts` : "";
+  const topology = plan.topology_status === "blocked" ? "Its affinity and spread rules cannot fit all requested replicas."
+    : plan.topology_status && !["fits", "not-needed"].includes(plan.topology_status) ? "Its affinity and spread placement remains unverified." : "";
+  const problems = [...(plan.blockers || []), ...concerns,
+    ...(plan.unbounded?.length ? [`${plan.unbounded.join(", ")} ${plan.unbounded.length === 1 ? "has" : "have"} no memory limit, so it could use more than estimated`] : []),
+    ...(topology ? [topology] : [])];
+  const list = problems.length ? `<ul class="ui-list">${problems.map(p => `<li>${esc(p)}</li>`).join("")}</ul>` : "";
+  const rows = hosts.length;
+  const reservations = ok.filter(host => host.reservations_known).map(host =>
+    `<li>${esc(host.name)}: Already reserved: ${esc(host.reserved_gb)} / ${esc(host.allocatable_gb ?? "?")} GiB RAM · ${esc(host.reserved_cpu_percent ?? "?")}% CPU${host.request_slots != null ? ` · room for ${esc(host.request_slots)} more` : ""}</li>`)
+    .concat(ok.filter(host => !host.reservations_known).map(host => `<li>${esc(host.name)}: Scheduler reservations unavailable</li>`));
+  return [
+    UI.lead(plan.blocked ? `<b>${esc(name)}</b> can't start until what is below is resolved.`
+      : `${what} <b>${esc(name)}</b>${where}.${extra}`),
+    plan.blocked ? UI.callout("bad", "Can't start", list || "No host that may run it has room for it.")
+      : problems.length ? UI.callout("warn", "Check first", list) : "",
+    rows ? UI.section("Where it can run", capacityHostTable(plan)) : "",
+    UI.more("Details", `${UI.facts([
+        [plan.vm ? "VM reserves" : `Each pod reserves`, `${esc(plan.pod_request_gb ?? "?")} GiB RAM${plan.vm?.request_is_lower_bound ? " at least" : ""} · ${esc(plan.pod_cpu_request_percent ?? "?")}% CPU`],
+        ["Memory estimate", plan.pod_memory_gb ? `${esc(plan.pod_memory_gb)} GiB${plan.vm ? " with its launcher" : " per pod"}` : "unknown"],
+        plan.additional > 1 ? ["Pods starting", esc(plan.additional)] : null])}
+      ${reservations.length ? `<ul class="ui-list">${reservations.join("")}</ul>` : ""}
+      ${caveats.length ? `<ul class="ui-list">${caveats.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : ""}
+      ${details}
+      <p class="ui-help">Memory after it starts is the greater of live use and what is already reserved, plus this estimate. It is a snapshot, not a reservation: other starts can still change where it lands. The server checks again before anything starts.</p>`),
+    !plan.blocked && problems.length ? UI.ack(ackId, "Start it anyway", { onchange: onAck }) : "",
+  ].join("");
+}
+window.startReview = startReview;
+
 window.wlScale = async (ns, name, n) => {
   if (n > 0) {
     try {
       const plan = await api(`/api/workloads/start-plan?${new URLSearchParams({ ns, name, replicas: n })}`);
       if (plan.requires_confirmation || plan.blocked) {
-        const pods = `${plan.additional} pod${plan.additional === 1 ? "" : "s"}`;
-        const topology = plan.topology_status && plan.topology_status !== "not-needed"
-          ? plan.topology_status === "fits" ? "A scheduling order fits the checked pod affinity and spread rules in this snapshot."
-            : plan.topology_status === "blocked" ? "The checked pod affinity and spread rules cannot fit all requested replicas."
-            : "Pod affinity and spread placement remains unverified." : "";
-        const concerns = [...(plan.warnings || []),
-          ...(plan.unbounded?.length ? [`${plan.unbounded.join(", ")} ${plan.unbounded.length === 1 ? "has" : "have"} no memory limit, so actual use could exceed this estimate`] : []),
-          ...(topology && plan.topology_status !== "fits" ? [topology] : [])];
-        const concernHtml = concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "";
-        const slots = (plan.candidates || []).filter(x => x.eligible && x.reservations_known && x.request_slots !== null && x.request_slots !== undefined)
-          .map(x => `${esc(x.name)}: ${esc(x.request_slots)} additional pod(s)`);
-        modal(`Start ${name}?`, [
-          UI.lead(`Starting ${pods} of <b>${esc(name)}</b>. ${plan.blocked ? "There is not room for it on any host that may run it." : "It fits, but check where it would land first."}`),
-          plan.blocked
-            ? UI.callout("bad", "Not enough eligible capacity for the requested replicas.", concernHtml)
-            : UI.callout("warn", "Placement and memory need review.", concernHtml),
-          capacityPlacementHtml(plan),
-          capacityHosts(plan.candidates || [], { placement: plan.placement }),
-          UI.facts([
-            ["Each pod requests", `${esc(plan.pod_request_gb ?? "unknown")} GiB RAM · ${esc(plan.pod_cpu_request_percent ?? "unknown")}% CPU`],
-            ["Estimated peak memory", plan.pod_memory_gb ? `${esc(plan.pod_memory_gb)} GiB` : "unknown"],
-          ]),
-          UI.more("How this is estimated", `
-            <p>Requests reserve scheduler capacity (100% CPU is one core); limits bound container usage. Neither is the same as live usage. The peak estimate includes init and sidecar containers and overhead.</p>
-            <p>Projection uses the greater of live RAM and existing reservations, plus the estimated new pods that fit each host. This is a snapshot, not a reservation or an OOM guarantee; competing starts, storage and other scheduler constraints can change placement.</p>
-            ${slots.length ? `<p>Resource, port and storage upper bound - ${slots.join(" · ")}; topology may reduce this.</p>` : ""}
-            ${topology ? `<p>${esc(topology)}</p>` : ""}`),
-          plan.blocked ? "" : UI.ack("wl_capacity_ok", "Proceed despite capacity warnings: I accept the placement and memory risks"),
-          UI.actions(plan.blocked ? UI.cancel("Close")
-            : UI.cancel() + UI.button("Start anyway", `wlScaleGo(${jsArg(ns)},${jsArg(name)},${n},true)`, { kind: "danger" })),
-        ].join(""));
+        const pods = plan.additional > 1 ? `${plan.additional} pods of` : "";
+        modal(`Start ${name}`, startReview(plan, { what: `Starts ${pods}`.trim(), name, ackId: "wl_capacity_ok" })
+          + UI.actions(plan.blocked ? UI.cancel("Close")
+            : UI.cancel() + UI.button("Start", `wlScaleGo(${jsArg(ns)},${jsArg(name)},${n},true)`, { kind: "pri" })));
         return;
       }
     } catch (e) { return toast(`Could not check node memory: ${e.message}`, "bad"); }
@@ -691,7 +723,7 @@ window.wlScale = async (ns, name, n) => {
   return wlScaleGo(ns, name, n, false);
 };
 window.wlScaleGo = async (ns, name, n, confirmed = false) => {
-  if (confirmed && !$("#wl_capacity_ok")?.checked) return toast("confirm the memory warning first", "bad");
+  if (confirmed && $("#wl_capacity_ok") && !$("#wl_capacity_ok").checked) return toast("Tick Start it anyway to accept the warning", "bad");
   try {
     await api("/api/scale", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name, replicas: n, confirm_capacity: confirmed }) });
@@ -1007,15 +1039,18 @@ function imagePlacementBlocker(plan) {
 }
 /* The same concern for several updates is said once. A blocked review leads
    only with blockers; warnings for otherwise eligible apps remain in Details. */
+const UNCHANGED_BY_UPDATE = /^No memory limit is set/;
+const updateConcerns = plan => capacityNotes(plan).concerns.filter(text => !UNCHANGED_BY_UPDATE.test(text));
 function groupedConcerns(rows) {
   const byText = new Map();
   const blocked = rows.some(row => row.preview.capacity.blocked);
   rows.forEach(({config, preview}) => {
     const messages = blocked ? (preview.capacity.blocked ? [imagePlacementBlocker(preview.capacity)] : [])
-      : capacityNotes(preview.capacity).concerns;
-    messages.forEach(text => {
+      : updateConcerns(preview.capacity);
+    const who = config.clusterName ? `${config.clusterName} · ${config.name}` : config.name;
+    new Set(messages).forEach(text => {
       if (!byText.has(text)) byText.set(text, []);
-      byText.get(text).push(config.clusterName ? `${config.clusterName} · ${config.name}` : config.name);
+      if (!byText.get(text).includes(who)) byText.get(text).push(who);
     });
   });
   return [...byText].map(([text, names]) => rows.length > 1
@@ -1066,25 +1101,35 @@ async function reviewImageActions(items, action = "update") {
     const many = rows.length > 1;
     const concerns = groupedConcerns(rows);
     const list = concerns.length ? `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>` : "";
-    // One line per app: its name, and what its image moves from and to.
+    // One line per app: its name, and what its image moves from and to -
+    // once, when every container moves between the same two images.
+    const changeWords = i => imageChangeWords(i.before, i.after, i.before_tag, i.after_tag);
     const apps = rows.map(({config, preview}) => {
-      const flagged = preview.capacity.blocked || capacityNotes(preview.capacity).concerns.length;
-      const change = preview.images.map(i => `<span class="upd-change" title="${esc(i.before)} → ${esc(i.after)}">${preview.images.length > 1 ? `${esc(i.container)} ` : ""}${(([was, now]) => `<code>${esc(was)}</code> → <code>${esc(now)}</code>`)(imageChangeWords(i.before, i.after, i.before_tag, i.after_tag))}</span>`).join("");
+      const flagged = preview.capacity.blocked || updateConcerns(preview.capacity).length;
+      const words = preview.images.map(changeWords), same = words.every(w => w.join() === words[0]?.join());
+      const change = (same ? [[null, words[0]]] : preview.images.map((i, n) => [i.container, words[n]]))
+        .filter(([, w]) => w).map(([container, [was, now]]) => `<span class="upd-change">${container ? `${esc(container)} ` : ""}<code>${esc(was)}</code> → <code>${esc(now)}</code></span>`).join("");
       return `<li><span class="upd-name">${flagged ? `<span class="upd-flag ${preview.capacity.blocked ? "bad" : "warn"}" title="See the notes above">!</span>` : ""}<b>${esc(config.name)}</b> <span class="dim">${config.clusterName ? `${esc(config.clusterName)} · ` : ""}${esc(config.ns)}</span></span>${change}</li>`;
     }).join("");
+    // Details: per app, the exact images and where it can run; notes shared
+    // by every app, once.
+    const short = digest => String(digest || "").replace(/@sha256:([0-9a-f]{12})[0-9a-f]+$/, "@sha256:$1…");
+    const notes = [...new Set(rows.flatMap(({preview}) => [...capacityNotes(preview.capacity).caveats,
+      ...capacityNotes(preview.capacity).concerns.filter(text => UNCHANGED_BY_UPDATE.test(text))]))];
+    const images = preview => [...new Map(preview.images.map(i => [`${i.before}|${i.after}`, i])).values()];
+    const details = rows.map(({config, preview}) => UI.section(many ? `${config.clusterName ? `${config.clusterName} · ` : ""}${config.ns}/${config.name}` : "",
+      UI.facts(images(preview).flatMap(i => [[`Image ${rollback ? "back to" : "now"}`, `<code title="${esc(rollback ? i.after : i.before)}">${esc(short(rollback ? i.after : i.before))}</code>`],
+        [rollback ? "From" : "New", `<code title="${esc(rollback ? i.before : i.after)}">${esc(short(rollback ? i.before : i.after))}</code>`]]))
+      + capacityHostTable(preview.capacity))).join("");
     $("#mbody").innerHTML = `<div class="update-review ui-stack">
       <p class="ui-lead">${many ? "Apps update one at a time, with Homestead last. " : ""}${items.some(restartsHomestead) ? "Homestead will be briefly unavailable while it restarts. " : ""}${many ? "Each app restarts" : "The app restarts"} to ${rollback ? "return to its previous image" : "use the new image"}.</p>
       ${blocked ? UI.callout("bad", "Update blocked", list)
-        : concerns.length ? UI.callout("warn", "", list) : ""}
+        : concerns.length ? UI.callout("warn", "Check first", list) : ""}
       <ul class="upd-apps">${apps}</ul>
-      ${UI.more("Capacity and exact images", `
-        ${rows.map(({config, preview}) => `${many ? `<p><b>${esc(config.ns)}/${esc(config.name)}</b></p>` : ""}
-          ${UI.facts(preview.images.flatMap(i => [[`${i.container} now`, `<code>${esc(i.before)}</code>`],
-            [`${i.container} ${rollback ? "back to" : "new"}`, `<code>${esc(i.after)}</code>`], [`${i.container} recovery`, `<code>${esc(i.rollback)}</code>`]]))}
-          ${deployCapacityHtml(preview.capacity, false, true)}`).join("")}
-        <p>Exact image digests and full-pod capacity are checked again before each change. Failure, lost contact or an expired review stops the remaining queue.
-        Closing this dialog stops unstarted updates; a rollout already submitted continues.</p>`)}
-      ${blocked ? "" : `<label class="upd-ok"><input type="checkbox" id="imageCapacityApprove" onchange="imageReviewReady()"> ${concerns.length ? "I accept the restart and warnings above" : "I accept the service interruption"}</label>`}
+      ${UI.more("Details", `${details}
+        ${notes.length ? `<ul class="ui-list">${notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
+        <p class="ui-help">Exact images and capacity are checked again before each change. A failure, lost contact or an expired review stops the rest of the queue; closing this dialog stops updates not yet started.</p>`)}
+      ${blocked ? "" : UI.ack("imageCapacityApprove", concerns.length ? "Update despite the warnings" : many ? "Restart them now" : "Restart it now", { onchange: "imageReviewReady()" })}
       ${UI.actions(UI.button(rollback ? "Start rollback" : many ? `Update ${rows.length}` : "Update", "imageReviewedApply()", { kind: "pri", id: "imageCapacityApply", disabled: true }), UI.cancel())}
     </div>`;
   } catch (error) {
@@ -1126,7 +1171,7 @@ window.imageReviewedApply = async () => {
         let state;
         try {
           state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(config.ns)}&name=${encodeURIComponent(config.name)}`,
-            config.cluster ? {headers: clusterHeaders(config)} : undefined);
+            {timeout: 10000, ...(config.cluster ? {headers: clusterHeaders(config)} : {})});
         } catch (error) {
           // Homestead is replacing itself - here, or on a linked cluster the
           // relay cannot reach for that minute: wait for it to answer again.

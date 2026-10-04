@@ -71,7 +71,8 @@ function firewallDirectionHtml(direction, config) {
   return UI.field("Traffic", `<select id="fw_${direction}" onchange="firewallModeChanged()">
     <option value="unchanged" ${!restricted ? "selected" : ""}>Unrestricted by this policy</option>
     <option value="restricted" ${restricted ? "selected" : ""}>Allow listed traffic only</option></select>`,
-    {help:"Other matching policies still apply. With no allow rules, a restricted direction permits no connections through this policy."}) +
+    {help: direction === "egress" ? "As above, for outgoing connections."
+      : "Other matching policies still apply. With no allow rules, a restricted direction permits no connections through this policy."}) +
     `<div id="fw_${direction}_body" ${!restricted ? "hidden" : ""}>
       <div id="fw_${direction}_rules">${(config[direction + "_rules"] || []).map(firewallRuleHtml).join("")}</div>
       ${UI.button("＋ Allow connection", `firewallAddRule('${direction}')`, {attrs:'type="button"'})}

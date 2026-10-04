@@ -232,8 +232,8 @@ test('host actions exposes normal reviews even when quorum cannot lose a member'
   t.c.api=async path=>path==='/api/quorum'?{members:['host1'],can_lose:0,total:1,ready:['host1'],quorum_needs:1}:
     {workloads:[],stranded:[]};
   await t.c.window.nodeActions('host1');
-  assert.match(t.html(), /Review reboot/);
-  assert.match(t.html(), /Review shutdown/);
+  assert.match(t.html(), /nodePowerReview\("host1",'reboot'\)[^]*Reboot…/);
+  assert.match(t.html(), /nodePowerReview\("host1",'poweroff'\)[^]*Shut down…/);
   assert.match(t.html(), /planned whole-cluster outage/);
   assert.doesNotMatch(t.html(), /Override - reboot or shut down anyway|Review forced/);
 });
@@ -269,7 +269,7 @@ test('each app and VM may move or wait for the host, and the choice is sent', as
     {id:'Deployment/lab/<web>',kind:'Deployment',ns:'lab',name:'<web>',here:1,hosts:['host2'],options:['move'],default:'move',why:''}];
   const t=setup({...hostReview,hold,stranded:[]});hostFields(t);
   await t.c.window.nodePowerReview('host1','reboot');
-  assert.match(t.html(), /Apps and VMs on this host/);
+  assert.match(t.html(), /Apps and VMs · 3/);
   assert.match(t.html(), /id="pw_hold_0"[^]*Move to host2[^]*Stop and wait for this host/);
   assert.match(t.html(), /stops and waits[^]*it cannot live-migrate/);
   assert.match(t.html(), /&lt;web&gt;/);

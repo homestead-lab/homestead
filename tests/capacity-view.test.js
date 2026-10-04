@@ -33,17 +33,17 @@ test("unknown reservations are presented as unknown with explicit review", async
   const html = await review({ requires_confirmation: true, additional: 1, warnings: ["unknown <state>"],
     candidates: [{ name: "node", eligible: true, reservations_known: false, metrics_available: false }] });
   assert.match(html, /Scheduler reservations unavailable/);
-  assert.match(html, /live RAM unavailable/);
+  assert.match(html, /memory use unknown/);
   assert.match(html, /unknown &lt;state&gt;/);
   assert.match(html, /wl_capacity_ok/);
-  assert.match(html, /Proceed despite capacity warnings/);
+  assert.match(html, /Start it anyway/);
 });
 
 test("topology conflicts identify the next pod without claiming all resource slots fit", async () => {
   const html = await review({ blocked: true, additional: 3, topology_status: "blocked", warnings: [],
     candidates: [{ name: "host<1>", eligible: false, reasons: ["required pod anti-affinity conflicts in zone=<west>"] }] });
   assert.match(html, /cannot fit all requested replicas/);
-  assert.match(html, /Unavailable for the next pod/);
+  assert.match(html, /can't run here: required pod anti-affinity/);
   assert.match(html, /zone=&lt;west&gt;/);
   assert.doesNotMatch(html, /Start anyway/);
 });
@@ -57,21 +57,22 @@ test("inconclusive topology remains an explicit warning", async () => {
 test("start review distinguishes required preferred and scheduler-selected launch hosts", async () => {
   const candidates = [{ name: "host<a>", eligible: true, projected_pods: 1 }, { name: "host-b", eligible: true, projected_pods: 1 }];
   const base = { requires_confirmation: true, additional: 1, candidates, warnings: [] };
-  assert.match(await review({ ...base, placement: { pinned: "host<a>" } }), /Required host: host&lt;a&gt;/);
+  const pinned = await review({ ...base, placement: { pinned: "host<a>" } });
+  assert.match(pinned, /Starts <b>app<\/b> on <b>host&lt;a&gt;<\/b>\./);
+  assert.match(pinned, /ui-chip info">pinned/);
   const preferred = await review({ ...base, placement: { preferred: "host<a>" } });
-  assert.match(preferred, /Preferred host: host&lt;a&gt;/);
-  assert.match(preferred, /can choose another eligible host/);
+  assert.match(preferred, /on <b>host&lt;a&gt;<\/b> if it can, or another host/);
   const automatic = await review(base);
-  assert.match(automatic, /Host selected at launch/);
-  assert.match(automatic, /Eligible hosts:.*host&lt;a&gt;.*host-b/);
-  assert.doesNotMatch(automatic, /Chosen/);
-  assert.match(await review({ ...base, candidates: [candidates[0]] }), /Only eligible host: host&lt;a&gt;/);
+  assert.match(automatic, /on one of 2 hosts/);
+  assert.match(automatic, /host&lt;a&gt;[^]*host-b/);
+  assert.match(await review({ ...base, candidates: [candidates[0]] }), /on <b>host&lt;a&gt;<\/b>, the only host that can run it/);
 });
 
 test("unavailable preference and blocked launches do not promise a host", async () => {
   const html = await review({ requires_confirmation: true, blocked: true, additional: 1, warnings: [],
     placement: { preferred: "offline" }, candidates: [{ name: "offline", eligible: false }] });
-  assert.match(html, /Preferred host currently unavailable: offline/);
-  assert.match(html, /Launch is blocked/);
+  assert.match(html, /can't start until/);
+  assert.match(html, /can't run here/);
+  assert.doesNotMatch(html, /on <b>offline/);
   assert.doesNotMatch(html, /Start anyway/);
 });

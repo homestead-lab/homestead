@@ -85,3 +85,45 @@ test("page and Settings structure is authored only by the UI module", () => {
   assert.deepStrictEqual(found, [], "use UI.pageHeader, UI.moduleHeader, UI.workspace, UI.settingsGrid, UI.saveBar, UI.collectionHeader or settingRow");
   assert.deepStrictEqual(offences(/<section\b[^>]*\bdata-tab="/g), [], "use UI.settingsCard to retain topic/save/permission hooks consistently");
 });
+
+/* design.md, Reviews and verbosity. These hold the line where older markup
+   still exists: a count may go down as screens move to the components, never
+   up. When you remove some, lower the number in the same change. */
+const LEGACY = [
+  [/class="note\b/g, 215, 'UI.callout for a notice, UI.lead or ui-help for prose'],
+  [/class="sec"/g, 66, "UI.section"],
+  [/deployCapacityHtml\(/g, 14, "startReview or capacityHostTable for a new review"],
+  [/<label class="check"><input type="checkbox"/g, 7, "UI.ack for a risk acknowledgement"],
+  [/I accept\b/g, 10, 'a short UI.ack sentence that names what is accepted ("Start it anyway")'],
+];
+test("older markup only shrinks", () => {
+  for (const [pattern, limit, use] of LEGACY) {
+    const found = offences(pattern);
+    assert.ok(found.length <= limit, `${found.length} uses of ${pattern} (at most ${limit}); use ${use}. New: ${found.slice(-5).join(", ")}`);
+  }
+});
+
+test("an acknowledgement is one short sentence", () => {
+  // design.md, Reviews: "the one checkbox" - what is accepted, not everything that could happen.
+  const found = offences(/UI\.ack\([^,]+,\s*"([^"]+)"/g, match => match[1].split(/\s+/).length > 16);
+  assert.deepStrictEqual(found, [], "keep UI.ack sentences to 16 words or fewer; the consequence belongs in the callout");
+});
+
+test("start and update reviews use the shared review builders", () => {
+  // design.md, Reviews: one host table and one start review, not a capacity
+  // block written again for each dialog.
+  const source = name => FILES.find(file => file.name === `web/js/${name}`).text;
+  const between = (text, from, to) => text.slice(text.indexOf(from), text.indexOf(to, text.indexOf(from)));
+  assert.match(between(source("views-workloads.js"), "window.wlScale", "window.wlScaleGo"), /startReview\(/, "Start on a container uses startReview");
+  assert.match(between(source("views-vms.js"), "window.vmPowerReview", "window.vmPowerReviewReady"), /startReview\(/, "Start on a VM uses startReview");
+  assert.match(between(source("views-workloads.js"), "async function reviewImageActions", "window.imageReviewReady"), /capacityHostTable\(/, "the image update review uses capacityHostTable");
+  const outside = offences(/\b(?:capacityPlacementHtml|capacityHosts)\(/g, (_, file) => file.name !== "web/js/views-workloads.js");
+  assert.deepStrictEqual(outside, [], "new reviews use startReview or capacityHostTable, not the older placement blocks");
+});
+
+test("design.md states the review and verbosity rules", () => {
+  const design = fs.readFileSync(path.join(__dirname, "..", "docs", "design.md"), "utf8");
+  for (const phrase of ["Verbosity budget", "startReview", "capacityHostTable", "UI.ack", "only shrinks", "says the same thing twice"]) {
+    assert.ok(design.includes(phrase), `design.md mentions ${phrase}`);
+  }
+});

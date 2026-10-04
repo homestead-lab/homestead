@@ -1493,6 +1493,13 @@ ssh_pwauth: true
         message: reboot ? "Host rebooted and its volumes are healthy. The host stays cordoned." : "Host is powered off." }), (phases.length + 1) * 2500);
       return { operation: op, steps: [], background: true };
     },
+    "/api/quorum": { members: ["harvester-node1", "harvester-node2", "harvester-node3"], ready: ["harvester-node1", "harvester-node2", "harvester-node3"],
+      total: 3, quorum_needs: 2, can_lose: 1, power_enabled: true },
+    "/api/node/impact": url => ({ node: url.searchParams.get("node"),
+      workloads: [{ ns: "lab", name: "frigate", hardware: ["coral"], eligible: [], stranded: true, blocked: [{ name: "harvester-node2", why: ["no coral"] }] },
+        { ns: "lab", name: "home-assistant", hardware: [], eligible: ["harvester-node2", "harvester-node3"], stranded: false },
+        { ns: "lab", name: "paperless", hardware: [], eligible: ["harvester-node2"], stranded: false }],
+      stranded: [{ ns: "lab", name: "frigate" }] }),
     "/api/node/power/plan": url => {
       const plannedOutage = !!window.__demoSingleHostOutage && url.searchParams.get("force") !== "1";
       const plan = { node: url.searchParams.get("node"), action: url.searchParams.get("action"), review_token: "demo-power",
