@@ -296,7 +296,14 @@ def _public(item):
         ref = item.get("ref") or {}
         out["power"] = {"phase": ref.get("phase", ""), "action": ref.get("action", ""), "node": ref.get("node", ""),
                         "direct": bool(ref.get("planned_outage") or ref.get("forced")),
-                        "failed_phase": ref.get("failed_phase", "")}
+                        "failed_phase": ref.get("failed_phase", ""),
+                        # Apps and VMs stopped to wait for the host, or VMs moved first.
+                        "holds": bool(ref.get("held")) or any(
+                            choice == "wait" or (choice == "move" and key.startswith("VirtualMachine/"))
+                            for key, choice in (ref.get("choices") or {}).items()),
+                        "held": len(ref.get("held") or []),
+                        "waiting": bool(ref.get("held")) and ref.get("restored") is None,
+                        "restored": ref.get("restored")}
     if item.get("kind") == "vm-power":
         out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("prepared", "accepted")
         out["power_recovery"] = item.get("status") not in TERMINAL and item.get("ref", {}).get("phase") in ("uncertain", "dispatching")

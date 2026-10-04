@@ -76,6 +76,35 @@ class PowerPlanTests(unittest.TestCase):
         self.assertFalse(any("Longhorn will not" in b for b in plan["blockers"]))
         self.assertTrue(plan["requires_data_ack"])
 
+    def test_a_detached_volumes_only_copy_on_the_host_blocks_the_drain(self):
+        # nas-backup: detached, wanting two copies, its only one on the host.
+        # Its replica was stopped, so the review saw no copy at all - neither
+        # here nor elsewhere - and Longhorn then held the drain on it.
+        self.objects["/apis/kubevirt.io/v1/virtualmachineinstances"]["items"] = []
+        self.objects[f"{power.LH}/settings"] = {"items": [{"metadata": {"name": "node-drain-policy"}, "value": "block-if-contains-last-replica"}]}
+        self.objects[f"{power.LH}/replicas"]["items"] += [
+            {"spec": {"nodeID": "node1", "volumeName": "vol-c", "healthyAt": "2026-10-01T00:00:00Z"}, "status": {"currentState": "stopped"}},
+            {"spec": {"nodeID": "node1", "volumeName": "vol-d", "healthyAt": "2026-10-01T00:00:00Z"}, "status": {"currentState": "stopped"}},
+            {"spec": {"nodeID": "node2", "volumeName": "vol-d", "healthyAt": "2026-10-01T00:00:00Z"}, "status": {"currentState": "stopped"}}]
+        self.objects[f"{power.LH}/volumes"]["items"] += [
+            {"metadata": {"name": "vol-c"}, "spec": {"numberOfReplicas": 2}, "status": {"state": "detached", "robustness": "unknown",
+                "kubernetesStatus": {"namespace": "lab", "pvcName": "nas-backup"}}},
+            {"metadata": {"name": "vol-d"}, "spec": {"numberOfReplicas": 2}, "status": {"state": "detached", "robustness": "unknown",
+                "kubernetesStatus": {"namespace": "lab", "pvcName": "archive"}}}]
+        plan = power.plan("node1", "reboot")
+        volumes = {v["claim"]: v for v in plan["volumes"]}
+        self.assertEqual(("unavailable", True, True), (volumes["lab/nas-backup"]["risk"],
+                         volumes["lab/nas-backup"]["last_copy_here"], volumes["lab/nas-backup"]["detached"]))
+        self.assertEqual(("single-copy", 1), (volumes["lab/archive"]["risk"], volumes["lab/archive"]["healthy_elsewhere"]),
+                         "a stopped copy on another host is still a copy")
+        blocker = next(b for b in plan["blockers"] if "lab/nas-backup" in b)
+        self.assertIn("detached", blocker)
+        self.assertFalse(any("lab/archive" in b for b in plan["blockers"]))
+        self.assertFalse(volumes["lab/only-copy"]["detached"], "a running replica means the volume is attached")
+        # A failed copy is not one.
+        self.objects[f"{power.LH}/replicas"]["items"][-1]["spec"]["failedAt"] = "2026-10-02T00:00:00Z"
+        self.assertEqual(0, {v["claim"]: v for v in power.plan("node1", "reboot")["volumes"]}["lab/archive"]["healthy_elsewhere"])
+
     def test_unknown_replica_inventory_is_explicit(self):
         self.objects.pop(f"{power.LH}/replicas")
         plan = power.plan("node1", "poweroff")

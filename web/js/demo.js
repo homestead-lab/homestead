@@ -300,7 +300,9 @@
     { name: "pvc-demo-nextcloud", pvc_name: "nextcloud-data", namespace: "lab", attached_to: "",
       pod_status: "", state: "detached", robustness: "unknown", node: "", health_reason: "",
       size_gb: 100, actual_gb: 38.2, used_pct: 38, replicas: 2, access_modes: ["ReadWriteOnce"],
-      storage_class: "longhorn-r2", last_used_secs: 86400 * 6, used_by: ["Deployment/nextcloud"] },
+      storage_class: "longhorn-r2", last_used_secs: 86400 * 6, used_by: ["Deployment/nextcloud"],
+      // Detached a copy short: Longhorn will not rebuild it until something attaches it.
+      copies_short: { whole: 1, wanted: 2, offline: "ignored" } },
     // An original kept after a storage class change: its claim is the copy now.
     { name: "pvc-7f3e9c1a-2b44-4d1b-9a55-0c1f2e3d4a5b", pvc_name: "mosquitto-appdata", namespace: "lab", attached_to: "",
       pod_status: "", state: "detached", robustness: "unknown", node: "", health_reason: "",
@@ -1477,10 +1479,12 @@ ssh_pwauth: true
       const op = { id: "demo-power-" + Date.now(), kind: "node-power", title: `${body.action} ${body.node}`, status: "running",
         progress: 5, message: "Cordoning host; power has not been sent", started_at: new Date().toISOString(), finished_at: "",
         href: "/nodes?node=" + encodeURIComponent(body.node), resource: { kind: "Node", name: body.node, namespace: "" },
-        power: { phase: "cordoning", action: body.action, node: body.node, direct: !!(body.force || window.__demoSingleHostOutage) } };
+        power: { phase: "cordoning", action: body.action, node: body.node, direct: !!(body.force || window.__demoSingleHostOutage),
+          holds: !body.force && Object.values(body.choices || {}).length > 0, held: Object.values(body.choices || {}).filter(c => c === "wait").length } };
       const phases = op.power.direct
         ? [["verifying", 15, "Rechecking the host"], ["sending", 20, "Submitting power helper"], ["observing", 60, reboot ? "Waiting for the host to return" : "Waiting for the host to leave Ready"]]
-        : [["draining", 10, "Evicting workload and system pods: 9 left"], ["draining", 12, "Evicting workload and system pods: 3 left"],
+        : [...(op.power.holds ? [["holding", 8, "Waiting to stop or move: lab/frigate, vms/win11; power has not been sent"]] : []),
+           ["draining", 10, "Evicting workload and system pods: 9 left"], ["draining", 12, "Evicting workload and system pods: 3 left"],
            ["verifying", 15, "Drain completed; rechecking quorum, VMs, pods and volume replicas before power"],
            ["sending", 20, "Submitting power helper"], ["observing", 60, reboot ? "Host is Ready; waiting for 2 volume(s) to become healthy" : "Host is NotReady; waiting to confirm shutdown"]];
       (window.__demoOps ??= responses["/api/operations"]()).unshift(op);
@@ -1499,6 +1503,13 @@ ssh_pwauth: true
         { ns: "lab", name: "home-assistant", stranded: false, eligible: ["harvester-node2", "harvester-node3"] },
         { ns: "lab", name: "paperless", stranded: false, eligible: ["harvester-node2"] }],
       stranded: [{ ns: "lab", name: "frigate" }],
+      // What each app and VM on the host does while it is down.
+      hold: [
+        { id: "Deployment/lab/frigate", kind: "Deployment", ns: "lab", name: "frigate", here: 1, hosts: [], options: ["wait"], default: "wait", why: "no other host it can run on" },
+        { id: "Deployment/lab/home-assistant", kind: "Deployment", ns: "lab", name: "home-assistant", here: 1, hosts: ["harvester-node2", "harvester-node3"], options: ["move", "wait"], default: "move", why: "" },
+        { id: "Deployment/lab/paperless", kind: "Deployment", ns: "lab", name: "paperless", here: 1, hosts: ["harvester-node2"], options: ["move", "wait"], default: "move", why: "" },
+        { id: "VirtualMachine/vms/win11", kind: "VirtualMachine", ns: "vms", name: "win11", here: 1, hosts: ["harvester-node2", "harvester-node3"], options: ["move", "wait"], default: "move", why: "" },
+        { id: "VirtualMachine/vms/gpu-desktop", kind: "VirtualMachine", ns: "vms", name: "gpu-desktop", here: 1, hosts: [], options: ["wait"], default: "wait", why: "it cannot live-migrate: a host device is passed through" }],
       volumes: [{ name: "pvc-demo-frigate", claim: "lab/frigate-config", healthy_elsewhere: 1, risk: "single-copy" },
         { name: "pvc-demo-ha", claim: "lab/homeassistant-config", healthy_elsewhere: 2, risk: "resync" }],
       maintenance: { budgets: [{ pod: "lab/paperless-5c9d", budget: "minAvailable 1", allowed: 1 }], local_storage: [] },
@@ -1507,6 +1518,7 @@ ssh_pwauth: true
       if (plannedOutage) {
         plan.workloads = [{ns:"lab",name:"homestead",stranded:true,eligible:[]}];
         plan.stranded = [{ns:"lab",name:"homestead"}];
+        plan.hold = plan.hold.map(h => ({ ...h, hosts: [], options: ["wait"], default: "wait", why: "the only host" }));
         plan.volumes = [{name:"pvc-demo-homestead",claim:"lab/homestead-data",healthy_elsewhere:0,risk:"unavailable"}];
         plan.maintenance.budgets[0].allowed = 0;
         plan.warnings = ["All applications, storage and Homestead are unavailable while this host is down."];
@@ -1838,6 +1850,8 @@ ssh_pwauth: true
     "/api/longhorn/v2/prepare": () => {window.__demoV2State='running';return {operation:{id:'demo-v2',kind:'longhorn-v2-prepare',title:'Prepare Longhorn V2',status:'running',progress:25,message:'Preparing host prerequisites'}};},
     "/api/longhorn/v2/enable": () => {window.__demoV2State='enabled';return {ok:true};},
     "/api/longhorn/settings": { ok: true, detail: "Saved: over-provisioning 150%" },
+    "/api/longhorn/offline-rebuilding": { supported: true, enabled: false, short: [{ name: "pvc-demo-nextcloud", claim: "lab/nextcloud-data", whole: 1, wanted: 2, hosts: ["node-2"], offline: "ignored" }] },
+    "/api/longhorn/rebuild": { ok: true, detail: "Longhorn is rebuilding lab/nextcloud-data while it is detached" },
     "/api/disks": { harvester: true, nodes: demoDisks, disk_tags: ["hdd", "nvme", "ssd"], all_node_tags: ["rack-a"],
       node_tags: { "harvester-node1": ["rack-a"], "harvester-node2": [], "harvester-node3": ["rack-a"] } },
     "/api/disks/tags": (url, init) => ({ ok: true, detail: `tagged ${JSON.parse(init?.body || "{}").tags.join(", ")}` }),

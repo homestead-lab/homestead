@@ -4,6 +4,7 @@ import json
 import time
 import urllib.error
 import homestead_maintenance as MAINTENANCE
+import homestead_power_hold as HOLD
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 kget = impact = quorum = None
@@ -57,15 +58,22 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
                       control.get("members", []) in ([], [node]))
     ready_hosts = {n.get("metadata", {}).get("name") for n in nodes if _ready(n)}
     vmis = _items("/apis/kubevirt.io/v1/virtualmachineinstances", absent_ok=True) or []
+    hold = HOLD.candidates(node, pods, vmis,
+                           {((r.get("metadata") or {}).get("namespace"), (r.get("metadata") or {}).get("name")): r
+                            for r in _items("/apis/apps/v1/replicasets", absent_ok=True) or []},
+                           ready_hosts, {(w.get("ns"), w.get("name")): w.get("eligible") or []
+                                         for w in place.get("workloads", [])},
+                           single_host=planned_outage)
     storage_unknown = replicas is None or volumes is None
     # Each attached volume's engine says which replicas are whole (RW) and
     # which are still being rebuilt (WO): a rebuilding copy was counted as a
     # healthy one elsewhere, and the drain then stalled on Longhorn.
-    modes, rebuilding = {}, {}
+    modes, rebuilding, attached = {}, {}, set()
     for engine in _items(f"{LH}/engines", absent_ok=True) or []:
         status = engine.get("status") or {}
         if status.get("currentState") != "running":
             continue
+        attached.add((engine.get("spec") or {}).get("volumeName"))
         modes.update(status.get("replicaModeMap") or {})
         progress = [r.get("progress") for r in (status.get("rebuildStatus") or {}).values() if r.get("isRebuilding")]
         if progress:
@@ -75,9 +83,15 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
         spec, status = row.get("spec") or {}, row.get("status") or {}
         name = spec.get("volumeName")
         if name:
-            whole = modes.get((row.get("metadata") or {}).get("name"), "RW") == "RW"
-            by_volume.setdefault(name, []).append((spec.get("nodeID"),
-                status.get("currentState") == "running" and not spec.get("failedAt") and whole))
+            # A detached volume's replicas are stopped, not lost: Longhorn
+            # counts one that was healthy and has not failed as a whole copy,
+            # and so does this - or its only copy here went unseen.
+            whole = (status.get("currentState") == "running" and
+                     modes.get((row.get("metadata") or {}).get("name"), "RW") == "RW"
+                     or name not in attached and bool(spec.get("healthyAt")))
+            by_volume.setdefault(name, []).append((spec.get("nodeID"), not spec.get("failedAt") and whole))
+            if status.get("currentState") == "running":
+                attached.add(name)
     volume_obj = {row.get("metadata", {}).get("name"): row for row in volumes or []}
     affected = []
     for name in sorted(set(by_volume) | set(volume_names)):
@@ -95,6 +109,8 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
                          "robustness": (volume.get("status") or {}).get("robustness", "unknown"),
                          "last_copy_here": not elsewhere and any(host == node and healthy for host, healthy in copies),
                          "copies_wanted": int((volume.get("spec") or {}).get("numberOfReplicas") or 0),
+                         "detached": name not in attached,
+                         "state": (volume.get("status") or {}).get("state", ""),
                          **({"rebuilding_pct": rebuilding[name]} if name in rebuilding else {})})
     affected.sort(key=lambda row: ({"unavailable": 0, "single-copy": 1, "resync": 2}[row["risk"]], row["claim"]))
     vm_rows = sorted({(v.get("metadata") or {}).get("namespace", "") + "/" +
@@ -122,8 +138,10 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
                     if len(members) == 1 else "Shutting down this etcd member would lose quorum")
     if not _ready(node_obj) or (len(nodes) == 1 and nodes[0].get("metadata", {}).get("name") == node and not _ready(nodes[0])):
         hard.append("The host is not Ready; investigate it before issuing a new power command")
-    if vm_rows:
-        soft.append("Running VMs are on this host; migrate or stop them and review again")
+    loose = [f"{i['ns']}/{i['name']}" for i in hold if i["kind"] == "VirtualMachine" and not i["options"]]
+    if loose:
+        soft.append("Running VMs are on this host that no VirtualMachine manages, so Homestead can neither move nor "
+                    "stop them: " + ", ".join(loose) + ". Stop them by hand and review again")
     if storage_unknown:
         soft.append("Storage replica inventory is unavailable; volume impact cannot be verified")
     # Before a drain only: one that finished had Longhorn's agreement. A
@@ -139,6 +157,10 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
                 if "rebuilding_pct" in v:
                     soft.append(f"{v['claim']}: this host holds its only complete copy while another is rebuilt "
                                 f"({v['rebuilding_pct']}% done). Longhorn will not let the host drain until that finishes; review again then")
+                elif v.get("detached") and v.get("copies_wanted") != 1:
+                    soft.append(f"{v['claim']} is detached with its only copy on this host, and Longhorn rebuilds copies only "
+                                "while a volume is attached. It will not let the host drain: start what uses the volume "
+                                "so a second copy is built, or restart without draining (Force)")
                 elif v.get("copies_wanted") == 1:
                     soft.append(f"{v['claim']} keeps one copy, on this host. Longhorn will not let the host drain: "
                                 "give it a second copy in Volumes, or restart without draining (Force)")
@@ -150,9 +172,10 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
     if not force and not planned_outage:
         warnings.extend(maintenance.get("waiting", []))
     if planned_outage:
-        warnings.append("Planned whole-cluster outage: all applications, storage and Homestead stop with this host. "
-                        "Homestead does not cordon or evict pods; the host's systemd receives the power request. "
-                        "Shutdown requires console or physical access to power the host on again.")
+        warnings.append("Planned whole-cluster outage: Homestead stops the apps and VMs on this host first, so their "
+                        "volumes detach in order, then asks the host's systemd to " + ("reboot" if action == "reboot" else "power off")
+                        + "; they start again when it is back. "
+                        + ("" if action == "reboot" else "Powering it on again needs console or physical access."))
     if force and soft:
         warnings.append("Forced: no cordon or drain - pods and VMs on it stop with the host, and come back when it does "
                         "(or, on other hosts, once Kubernetes gives up on this one). Overridden: " + "; ".join(soft))
@@ -160,7 +183,13 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
     if storage_unknown:
         warnings.append("Longhorn replica inventory is unavailable; volume safety cannot be confirmed")
     if place.get("stranded"):
-        warnings.append(f"{len(place['stranded'])} workload(s) have no eligible failover host")
+        waits = {(i["ns"], i["name"]) for i in hold if i["options"] == ["wait"]}
+        loose = [w for w in place["stranded"] if (w.get("ns"), w.get("name")) not in waits]
+        if loose or force:
+            warnings.append(f"{len(place['stranded'])} workload(s) have no eligible failover host")
+        elif not planned_outage:
+            warnings.append(f"{len(place['stranded'])} workload(s) have no other host they can run on: "
+                            "they stop and wait for this one")
     if affected:
         warnings.append(f"{len(affected)} volume(s) lose a replica until this host returns or Longhorn rebuilds")
     if not affected and not storage_unknown:
@@ -176,6 +205,7 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
               "pods": sorted(((p.get("metadata") or {}).get("namespace", ""),
                               (p.get("metadata") or {}).get("name", "")) for p in pods_here),
               "storage_unknown": storage_unknown, "vms": vm_rows,
+              "hold": [(i["id"], i["options"]) for i in hold],
               "maintenance": maintenance,
               "drain_pods": drain_pods,
               "quorum": control.get("can_lose", 0), "force": bool(force), "planned_outage": planned_outage}
@@ -184,6 +214,7 @@ def plan(node, action, force=False, volume_names=(), after_drain=False):
             "quorum": control, "workloads": place.get("workloads", []),
             "stranded": place.get("stranded", []), "volumes": affected,
             "vms": vm_rows, "pods": len(pods_here), "storage_unknown": storage_unknown,
+            "hold": hold,
             "maintenance": maintenance,
             "drain_pods": drain_pods,
             "requires_data_ack": storage_unknown or bool(maintenance["local_storage"]) or any(v["risk"] in ("unavailable", "single-copy") for v in affected),
@@ -225,8 +256,9 @@ def recheck_after_drain(original):
         # surviving copies remain available on other Ready hosts.
         expected_degradation = (old and old["healthy_elsewhere"] > 0 and old["robustness"] == "healthy" and
                                 volume["robustness"] == "degraded")
+        stopped_to_wait = old and volume.get("state") == "detached"
         if (not old or volume["healthy_elsewhere"] < old["healthy_elsewhere"] or
-                (volume["robustness"] != old["robustness"] and not expected_degradation)):
+                (volume["robustness"] != old["robustness"] and not expected_degradation and not stopped_to_wait)):
             raise ValueError("Host remains cordoned; volume impact changed during drain. Power was not sent; review again")
     if fresh["boot_id"] != original["boot_id"] or fresh["node_uid"] != original["node_uid"]:
         raise ValueError("Host identity changed during drain; power was not sent")
@@ -238,12 +270,33 @@ def recheck_after_drain(original):
 # Set by server.py: whether a job's replica has gone, and carrying it on.
 WORKER_GONE = None
 RESUME = None
+RESTORE = None
+
+
+def _returned(item, ref, now, how):
+    """The host is back: start what waited for it, then the usual checks.
+    Returns a status to report now, or None to carry on to them."""
+    if not ref.get("held") or ref.get("restored") is not None:
+        return None
+    if not RESTORE or not RESTORE(item):
+        return "running", 88, f"{how}; starting the apps and VMs that waited for it"
+    return None
+
+
+def _started(ref):
+    restored = ref.get("restored")
+    if not ref.get("held") or restored is None:
+        return ""
+    started, left = restored.get("started") or [], restored.get("left") or []
+    return ((f". Started again: {', '.join(started[:6])}" if started else "") +
+            (f". Left as they are: {', '.join(left[:6])}" if left else ""))
 
 
 def status(item):
     """Observe a power command without treating a lost API connection as success."""
     ref = item["ref"]
-    scheduling = "Scheduling was left unchanged" if ref.get("planned_outage") else "It remains cordoned"
+    scheduling = ("Scheduling was left unchanged" if ref.get("planned_outage") else
+                  "Scheduling was allowed again, so what waited could start there" if ref.get("uncordoned") else "It remains cordoned")
     now = time.time()
     phase = ref.get("phase")
     if phase in ("reviewed", "cordoning", "draining", "verifying"):
@@ -266,6 +319,11 @@ def status(item):
     if not up:
         ref["saw_down"] = True
         ref.setdefault("down_at", now)
+        if ref["action"] == "poweroff" and ref.get("held") and ref.get("restored") is None:
+            return "running", 70, (f"Host is off. {len(ref['held'])} app(s) and VM(s) wait for it and start again when it "
+                                   "is back; or start them on other hosts now")
+        if ref["action"] == "poweroff" and ref.get("held"):
+            return "succeeded", 100, "Host is off; what waited for it was started on other hosts where it can run" + _started(ref)
         if ref["action"] == "poweroff":
             # NotReady can mean a network partition, not a powered-off host.
             # Never turn that observation into a green shutdown success.
@@ -275,27 +333,40 @@ def status(item):
         if now - ref.get("started_epoch", now) > 600:
             return "failed", 60, "Host did not return Ready within 10 minutes; inspect the host. " + scheduling
         return "running", 60, "Host is NotReady; waiting to confirm shutdown or return"
+    if ref["action"] == "poweroff" and ref.get("held") and ref.get("boot_id") and boot and boot != ref["boot_id"]:
+        # Off and on again - perhaps with Homestead, on a single host.
+        waiting = _returned(item, ref, now, "Host was powered off and has started again")
+        if waiting:
+            return waiting
+        return "succeeded", 100, "Host was powered off and has started again" + _started(ref)
     if ref["action"] == "poweroff" and ref.get("saw_down"):
+        if ref.get("held") and ref.get("restored") is not None:
+            return "succeeded", 100, "Host was powered off" + _started(ref)
         return "failed", 90, "Host returned Ready after shutdown was requested; check its power state"
     if ref["action"] == "reboot" and ref.get("boot_id") and boot and boot != ref["boot_id"]:
         ref.setdefault("returned_at", now)
+        waiting = _returned(item, ref, now, "Host rebooted")
+        if waiting:
+            return waiting
         volume_names = ref.get("volumes") or []
         if not volume_names:
-            return "succeeded", 100, "Host returned Ready with a new boot ID. " + scheduling + "; check workloads"
+            return "succeeded", 100, "Host returned Ready with a new boot ID. " + scheduling + "; check workloads" + _started(ref)
         volumes = _items(f"{LH}/volumes", absent_ok=True)
         if volumes is None:
             if now - ref["returned_at"] > 1800:
                 return "failed", 85, "Host rebooted, but Longhorn health could not be verified within 30 minutes"
             return "running", 85, "Host rebooted; Longhorn volume health is unavailable"
         by_name = {v.get("metadata", {}).get("name"): v for v in volumes}
-        pending = [name for name in volume_names if
-                   (by_name.get(name, {}).get("status") or {}).get("robustness") != "healthy"]
+        pending = [name for name in volume_names if name in by_name and
+                   (by_name[name].get("status") or {}).get("state") != "detached" and
+                   (by_name[name].get("status") or {}).get("robustness") != "healthy"]
         if pending:
             if now - ref["returned_at"] > 1800:
                 return "failed", 90, ("Host rebooted, but volumes did not become healthy within 30 minutes: " +
                                       ", ".join(pending[:4]))
             return "running", 90, f"Host is Ready; waiting for {len(pending)} volume(s) to become healthy: " + ", ".join(pending[:4])
-        return "succeeded", 100, "Host is Ready and affected Longhorn volumes are healthy. " + scheduling + "; workload recovery is not yet verified"
+        return "succeeded", 100, "Host is Ready and affected Longhorn volumes are healthy. " + scheduling + _started(ref) + (
+            "" if ref.get("held") else "; workload recovery is not yet verified")
     if now - ref.get("started_epoch", now) > 600:
         return "failed", 30, "Power transition was not verified within 10 minutes. A helper may still run; inspect its events and logs before any new request. Host remains cordoned"
     if ref.get("saw_down"):
