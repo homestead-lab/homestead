@@ -245,3 +245,15 @@ class ReturnTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HoldingIsBeforePowerTests(unittest.TestCase):
+    def test_a_job_stopping_apps_is_not_read_as_one_waiting_for_power(self):
+        # The holding step flipped between its own message and "Waiting for the
+        # host to leave Ready", and could have failed at ten minutes.
+        job = {"id": "job-1", "progress": 8, "message": "Waiting to stop or move: lab/plex",
+               "ref": {"node": "k1", "action": "reboot", "phase": "holding", "phase_at": time.time() - 900, "worker": "w"}}
+        with mock.patch.object(POWER, "WORKER_GONE", lambda pod: False), mock.patch.object(POWER, "kget") as kget:
+            state, _, message = POWER.status(job)
+        self.assertEqual(("running", "Waiting to stop or move: lab/plex"), (state, message))
+        kget.assert_not_called()

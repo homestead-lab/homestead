@@ -133,20 +133,26 @@ class PowerPlanTests(unittest.TestCase):
         self.assertEqual(60, power.status(item)[1])
         self.objects["/api/v1/nodes/node1"]["status"]["conditions"][0]["status"] = "True"
         self.objects["/api/v1/nodes/node1"]["status"]["nodeInfo"]["bootID"] = "new"
-        self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "degraded"
+        # Unavailable is waited for; degraded is available while Longhorn
+        # rebuilds the copy on the host, which can take hours for many volumes.
+        self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "faulted"
         self.assertEqual(90, power.status(item)[1])
+        self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "degraded"
+        state, _, message = power.status(item)
+        self.assertEqual("succeeded", state)
+        self.assertIn("Longhorn is rebuilding 1 volume copy", message)
         self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "healthy"
         self.assertEqual("succeeded", power.status(item)[0])
 
     def test_reboot_resync_timeout_is_actionable(self):
         self.objects["/api/v1/nodes/node1"]["status"]["nodeInfo"]["bootID"] = "new"
-        self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "degraded"
+        self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "faulted"
         item = {"ref": {"node": "node1", "action": "reboot", "boot_id": "old",
                         "saw_down": True, "volumes": ["vol-a"],
                         "returned_at": power.time.time() - 1801}}
         state, _, message = power.status(item)
         self.assertEqual("failed", state)
-        self.assertIn("vol-a", message)
+        self.assertIn("lab/appdata", message, "named by its claim, not the Longhorn volume")
 
     def test_helper_pull_backoff_keeps_monitoring_because_it_can_still_run(self):
         self.objects["/api/v1/namespaces/lab/pods/power-helper"] = {
