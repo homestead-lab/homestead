@@ -6795,6 +6795,17 @@ def _history_loop():
         time.sleep(30)
 
 
+class MissingParameter(ValueError):
+    """A route asked for without what it needs: 400, saying which."""
+
+
+class Query(dict):
+    """A request's query string. A route reading a parameter it was not
+    given gets a 400 naming it, not a 500 from a bare KeyError."""
+    def __missing__(self, key):
+        raise MissingParameter(f"missing parameter: {key}")
+
+
 def _moves_loop():
     """The move engine, on the leader only: a move's next step is taken once."""
     while True:
@@ -8686,7 +8697,7 @@ class H(HTTP.LimitedHandler):
     def do_GET(self):
         self._begin()
         u = urllib.parse.urlparse(self.path)
-        p, q = u.path, urllib.parse.parse_qs(u.query)
+        p, q = u.path, Query(urllib.parse.parse_qs(u.query))
         target = self._fleet_target(p)
         if target:
             return self._fleet_forward(target, p)
