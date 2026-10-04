@@ -39,6 +39,8 @@ class Fake:
         self.volumes = [{"metadata": {"name": "data", "namespace": "longhorn-system", "uid": "data-uid"},
                          "spec": {"nodeID": "a"}, "status": {"state": "attached", "robustness": "healthy"}}]
         self.vmis = []
+        self.vms = {}
+        self.deployment = {"metadata": {"annotations": {}}, "spec": {"replicas": 1, "selector": {"matchLabels": {"app": "homestead"}}}}
         self.attachments = []
         self.budgets = []
         self.webhooks = []
@@ -64,7 +66,11 @@ class Fake:
         elif "/pods/" in path:
             result = next((p for p in self.pods if p["metadata"]["name"] == path.split("/")[-1]), None)
             if not result: raise missing()
-        elif "/deployments/" in path: result = {"spec": {"replicas": 1, "selector": {"matchLabels": {"app": "homestead"}}}}
+        elif "/deployments/" in path: result = self.deployment
+        elif "/virtualmachines/" in path:
+            result = self.vms.get(path.rsplit("/", 1)[1])
+            if result is None: raise missing()
+        elif path == "/api/v1/namespaces/lab/pods": result = {"items": [p for p in self.pods if p["metadata"]["namespace"] == "lab"]}
         elif path == S.LH: result = {"items": self.volumes}
         elif path == S.LH_ATTACHMENTS: result = {"items": self.attachments}
         elif path.startswith(S.ADMISSION): result = {"items": self.webhooks}
@@ -99,6 +105,29 @@ class Fake:
             if self.detach and not any(p["metadata"]["name"] in ("app", "homestead") for p in self.pods):
                 self.volumes[0]["spec"]["nodeID"] = ""
                 self.volumes[0]["status"]["state"] = "detached"
+            return {}
+        if method == "PATCH" and "/deployments/" in path:
+            notes = self.deployment["metadata"]["annotations"]
+            for k, v in body["metadata"]["annotations"].items():
+                notes.pop(k, None) if v is None else notes.__setitem__(k, v)
+            self.deployment["spec"].update(body.get("spec") or {})
+            if self.deployment["spec"]["replicas"] == 1:      # the scheduler keeps the costly copy
+                self.pods = [p for p in self.pods if p["metadata"]["name"] != "homestead-2"]
+            return {}
+        if method == "PATCH" and "/virtualmachines/" in path:
+            vm = self.vms[path.rsplit("/", 1)[1]]
+            notes = vm["metadata"].setdefault("annotations", {})
+            for k, v in body["metadata"]["annotations"].items():
+                notes.pop(k, None) if v is None else notes.__setitem__(k, v)
+            vm["spec"].update(body.get("spec") or {})
+            return {}
+        if method == "PUT" and path.endswith("/stop"):
+            name = path.split("/")[-2]
+            self.vmis = [v for v in self.vmis if v["metadata"]["name"] != name]
+            self.pods = [p for p in self.pods if p["metadata"]["name"] != "virt-launcher-" + name]
+            self.vms[name]["spec"]["runStrategy"] = "Halted"
+            return {}
+        if method == "PATCH" and "/pods/" in path:
             return {}
         if method == "PATCH" and path.startswith("/api/v1/nodes/"):
             node = next(n for n in self.nodes if n["metadata"]["name"] == path.split("/")[-1])
@@ -212,10 +241,55 @@ class ShutdownTests(unittest.TestCase):
             with self.assertRaises(ValueError): self.f.s.start(body, Mock())
         self.assertFalse(self.f.calls)
 
-    def test_running_vms_block_before_any_mutation(self):
+    def test_a_vm_no_virtualmachine_manages_blocks_before_any_mutation(self):
         self.f.vmis = [pod("vm")]
-        self.assertIn("Gracefully stop", " ".join(self.f.s.review()["blockers"]))
+        self.assertIn("stop them by hand first: lab/vm", " ".join(self.f.s.review()["blockers"]))
         self.assertFalse(self.f.calls)
+
+    def managed_vm(self):
+        vmi = pod("vm", kind="VirtualMachine")
+        vmi["status"]["phase"] = "Running"
+        self.f.vmis = [vmi]
+        self.f.vms["vm"] = {"metadata": {"name": "vm", "annotations": {}}, "spec": {"runStrategy": "RerunOnFailure"}}
+        self.f.pods.append(pod("virt-launcher-vm", "b"))
+
+    def test_vms_are_shut_down_from_inside_first_and_started_again_on_recovery(self):
+        self.managed_vm()
+        review = self.f.s.review()
+        self.assertTrue(review["ready"], review["blockers"])
+        c = self.f.start()
+        c.execute()
+        self.assertIn(("PUT", "/apis/subresources.kubevirt.io/v1/namespaces/lab/virtualmachines/vm/stop", {}), self.f.calls)
+        stop = next(i for i, call in enumerate(self.f.calls) if call[1].endswith("/vm/stop"))
+        cordon = next(i for i, call in enumerate(self.f.calls) if call[0] == "PATCH" and call[1].startswith("/api/v1/nodes/"))
+        self.assertLess(stop, cordon, "VMs stop before any host is cordoned")
+        self.assertEqual(c.run, self.f.vms["vm"]["metadata"]["annotations"][S.HELD_BY])
+        self.f.s.release_holds(self.f.s.state()["plan"], c.run)
+        self.assertEqual("RerunOnFailure", self.f.vms["vm"]["spec"]["runStrategy"], "Harvester's restart policy is put back")
+        self.assertNotIn(S.HELD_BY, self.f.vms["vm"]["metadata"]["annotations"])
+
+    def test_several_homestead_copies_run_as_one_and_go_back_on_recovery(self):
+        self.f.deployment["spec"]["replicas"] = 2
+        self.f.pods.append(pod("homestead-2", "b"))
+        review = self.f.s.review()
+        self.assertTrue(review["ready"], review["blockers"])
+        self.assertEqual(2, review["homestead_copies"])
+        c = self.f.start()
+        c.execute()
+        self.assertIn("commit", self.f.journal["data"], self.f.s.state()["message"])
+        self.assertTrue(any(call[1] == "/api/v1/namespaces/lab/pods/homestead" and call[0] == "PATCH" for call in self.f.calls),
+                        "the coordinating copy is the one kept")
+        self.assertEqual("2", self.f.deployment["metadata"]["annotations"][S.HELD_AS])
+        self.f.s.release_holds(self.f.s.state()["plan"], c.run)
+        self.assertEqual(2, self.f.deployment["spec"]["replicas"])
+
+    def test_a_shutdown_that_fails_starts_its_vms_again(self):
+        self.managed_vm()
+        c = self.f.start()
+        self.f.blocked = True
+        c.execute()
+        self.assertEqual("failed", self.f.s.state()["phase"])
+        self.assertEqual("RerunOnFailure", self.f.vms["vm"]["spec"]["runStrategy"])
 
     def test_duplicate_and_lost_submission_do_not_create_another_shutdown(self):
         self.f.start()
