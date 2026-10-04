@@ -20,6 +20,8 @@ window.clusterShutdown = async () => {
       (plan.warnings?.length ? UI.callout('info', 'Temporary helpers', `<ul class="ui-list">${plan.warnings.map(p => `<li>${esc(p)}</li>`).join('')}</ul>`) : '') +
       UI.section('Shutdown order', UI.table([{label:'Stage'}, {label:'What happens'}], [
         ['Prepare', 'Verify an independent power helper on every host; cordon all hosts.'],
+        ...(plan.vms?.length ? [['VMs', `${esc(plan.vms.length)} VM${plan.vms.length === 1 ? ' is' : 's are'} shut down from inside first, and started again when you recover the cluster.`]] : []),
+        ...(plan.homestead_copies > 1 ? [['Homestead', `Runs as one copy for the shutdown, and goes back to ${esc(plan.homestead_copies)} when you recover the cluster.`]] : []),
         ['Drain', `${esc(plan.pods)} application pods stop through graceful eviction. Disruption budgets can block shutdown.`],
         ['Homestead last', `Stop Homestead on ${esc(plan.homestead_node)}. This page disconnects; the coordinator continues.`],
         ['Storage and power', `Wait for ${esc(plan.volumes)} Longhorn volumes to detach, then request host power-off. Homestead’s host is scheduled last.`]

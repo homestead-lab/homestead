@@ -28,6 +28,11 @@ LH = "/apis/longhorn.io/v1beta2/volumes"
 INFRA = {"kube-system", "longhorn-system"}
 LIFETIME = 1800
 ADMISSION = "/apis/admissionregistration.k8s.io/v1/"
+HELD_BY = "homestead.io/held-for-power"
+HELD_AS = "homestead.io/held-as"
+VMI = "/apis/kubevirt.io/v1/virtualmachineinstances"
+SUBRESOURCES = "/apis/subresources.kubevirt.io/v1"
+VM_API = "/apis/kubevirt.io/v1"
 
 
 def encode(value):
@@ -180,12 +185,19 @@ class Shutdown:
         siblings = [p for p in pods if p.get("metadata", {}).get("namespace") == self.ns
                     and M.selected(selector, p.get("metadata", {}).get("labels", {}))
                     and p.get("status", {}).get("phase") not in ("Succeeded", "Failed")]
-        if deployment.get("spec", {}).get("replicas", 1) != 1 or len(siblings) != 1 or identity(siblings[0]) != identity(own):
-            problems.append("Shutdown requires exactly one running Homestead replica")
-        vmis = inventory(self.get, "/apis/kubevirt.io/v1/virtualmachineinstances", True)
-        live_vms = ["/".join(identity(v)[:2]) for v in vmis if v.get("status", {}).get("phase") not in ("Succeeded", "Failed")]
-        if live_vms:
-            problems.append("Gracefully stop these VMs first: " + ", ".join(live_vms[:12]))
+        # Several copies run as one while the cluster shuts down - the one
+        # this review ran on - and go back to their number on recovery.
+        copies = int(deployment.get("spec", {}).get("replicas", 1) or 1)
+        if not any(identity(p) == identity(own) for p in siblings):
+            problems.append("Homestead's running pod is not one of its Deployment's; refresh and review again")
+        vmis = [v for v in inventory(self.get, VMI, True) if v.get("status", {}).get("phase") not in ("Succeeded", "Failed")]
+        managed = [v for v in vmis if any(o.get("kind") == "VirtualMachine" and o.get("controller")
+                                          for o in v.get("metadata", {}).get("ownerReferences") or [])]
+        loose = ["/".join(identity(v)[:2]) for v in vmis if v not in managed]
+        if loose:
+            problems.append("No VirtualMachine manages these, so they could not be started again: stop them by hand first: "
+                            + ", ".join(loose[:12]))
+        live_vms = ["/".join(identity(v)[:2]) for v in vmis]
         maintenance = M.inventory(self.get, targets, namespace=self.ns)
         problems.extend(maintenance["blockers"])
         problems.extend(str(v) for v in self.busy())
@@ -208,7 +220,8 @@ class Shutdown:
                     "service_account": own.get("spec", {}).get("serviceAccountName"),
                     "pull_secrets": own.get("spec", {}).get("imagePullSecrets", []),
                     "admission": M.pod_snapshot(list(admission.values())),
-                    "volumes": sorted(identity(v) for v in volumes), "budgets": maintenance["budgets"]}
+                    "volumes": sorted(identity(v) for v in volumes), "budgets": maintenance["budgets"],
+                    "copies": copies, "vms": sorted(identity(v) for v in managed)}
         if not snapshot["service_account"] or not re.search(r"@sha256:[a-f0-9]{64}$", self.image):
             problems.append("A verified Homestead image digest and service account are required")
         if len(encode(snapshot)) > 400000:
@@ -216,6 +229,7 @@ class Shutdown:
         return {"ready": not problems, "blockers": problems, "review_token": hashlib.sha256(encode(snapshot).encode()).hexdigest(),
                 "confirm": CONFIRM, "nodes": nodes, "homestead_node": own_node, "pods": len(targets) - 1,
                 "vms": live_vms, "volumes": len(volumes), "local_storage": maintenance["local_storage"],
+                "homestead_copies": copies,
                 "warnings": maintenance.get("waiting", []),
                 "snapshot": snapshot}
 
@@ -324,6 +338,7 @@ class Shutdown:
                and p.get("status", {}).get("phase") not in ("Succeeded", "Failed") for p in pods):
             raise ValueError("Shutdown helpers have not all terminated; inspect their status before recovering scheduling")
         self.restore(state["plan"], run)
+        self.release_holds(state["plan"], run)
         def release(data):
             current = json.loads(data["state"])
             if current["run"] != run:
@@ -332,6 +347,32 @@ class Shutdown:
             data["state"] = encode(current)
         self.change(release, journal["metadata"]["uid"])
         return {"ok": True}
+
+    def release_holds(self, plan, run):
+        """Start again the VMs this run shut down, and give Homestead back its
+        copies - only where the run's mark is still there, so anything
+        someone changed since is left as it is."""
+        for ns, name, _ in plan.get("vms") or []:
+            path = f"{VM_API}/namespaces/{ns}/virtualmachines/{name}"
+            vm = optional(self.get, path)
+            notes = (vm or {}).get("metadata", {}).get("annotations") or {}
+            if not vm or notes.get(HELD_BY) != run:
+                continue
+            was = notes.get(HELD_AS, "")
+            spec = ({"running": True} if was == "running" else
+                    {"runStrategy": was} if was and was not in ("Halted", "Manual") else {})
+            self.send("PATCH", path, {"metadata": {"annotations": {HELD_BY: None, HELD_AS: None}}, **({"spec": spec} if spec else {})},
+                      ctype="application/merge-patch+json")
+            if was == "Manual":
+                self.send("PUT", f"{SUBRESOURCES}/namespaces/{ns}/virtualmachines/{name}/start", {})
+        if int(plan.get("copies") or 1) > 1:
+            path = f"/apis/apps/v1/namespaces/{self.ns}/deployments/homestead"
+            deployment = self.get(path)
+            notes = deployment.get("metadata", {}).get("annotations") or {}
+            if notes.get(HELD_BY) == run:
+                self.send("PATCH", path, {"metadata": {"annotations": {HELD_BY: None, HELD_AS: None}},
+                                          "spec": {"replicas": int(notes.get(HELD_AS) or plan["copies"])}},
+                          ctype="application/merge-patch+json")
 
     @staticmethod
     def run_pod(pod, run):
@@ -398,6 +439,56 @@ class Coordinator:
             raise ValueError("Admission webhook dependencies changed during shutdown")
         return [p for p in pods if consumer(p) and not helper(p, self.uid) and p["metadata"]["uid"] not in admission]
 
+    def hold(self):
+        """Shut the VMs down from inside and run Homestead as one copy -
+        each marked with this run and what it was, for recovery."""
+        vms = self.plan.get("vms") or []
+        if vms:
+            self.report("stopping-vms", 5, f"Shutting down {len(vms)} VM(s) from inside; no host power sent")
+            for ns, name, _ in vms:
+                path = f"{VM_API}/namespaces/{ns}/virtualmachines/{name}"
+                vm = self.s.get(path)
+                spec = vm.get("spec") or {}
+                was = spec.get("runStrategy") or ("running" if spec.get("running") else "Halted")
+                self.s.send("PATCH", path, {"metadata": {"annotations": {HELD_BY: self.run, HELD_AS: was}}},
+                            ctype="application/merge-patch+json")
+                if was != "Halted":
+                    self.s.send("PUT", f"{SUBRESOURCES}/namespaces/{ns}/virtualmachines/{name}/stop", {})
+            names = {(ns, name) for ns, name, _ in vms}
+            until = self.s.clock() + 600
+            while True:
+                self.current()
+                running = sorted("/".join(identity(v)[:2]) for v in inventory(self.s.get, VMI, True)
+                                 if tuple(identity(v)[:2]) in names)
+                if not running:
+                    break
+                if self.s.clock() > until:
+                    raise ValueError("These VMs did not shut down within 10 minutes: " + ", ".join(running[:6])
+                                     + ". No host was powered off")
+                self.report("stopping-vms", 5, "Waiting for VMs to shut down: " + ", ".join(running[:6]))
+                self.s.sleep(3)
+        if int(self.plan.get("copies") or 1) > 1:
+            ns, own = self.plan["own"][0], self.plan["own"][1]
+            self.report("one-copy", 8, f"Running Homestead as one copy for the shutdown; it goes back to {self.plan['copies']} on recovery")
+            # The copy kept is the one the review ran on.
+            self.s.send("PATCH", f"/api/v1/namespaces/{ns}/pods/{own}",
+                        {"metadata": {"annotations": {"controller.kubernetes.io/pod-deletion-cost": "100000"}}},
+                        ctype="application/merge-patch+json")
+            path = f"/apis/apps/v1/namespaces/{ns}/deployments/homestead"
+            self.s.send("PATCH", path, {"metadata": {"annotations": {HELD_BY: self.run, HELD_AS: str(self.plan["copies"])}},
+                                        "spec": {"replicas": 1}}, ctype="application/merge-patch+json")
+            selector = self.s.get(path).get("spec", {}).get("selector")
+            until = self.s.clock() + 300
+            while True:
+                self.current()
+                others = [p for p in inventory(self.s.get, f"/api/v1/namespaces/{ns}/pods")
+                          if M.selected(selector, p.get("metadata", {}).get("labels", {})) and identity(p) != self.plan["own"]]
+                if not others:
+                    break
+                if self.s.clock() > until:
+                    raise ValueError("Homestead's other copies did not stop within 5 minutes; no host was powered off")
+                self.s.sleep(2)
+
     def drain(self, own=False):
         deadline = min(self.s.clock() + 600, self.current()[1]["deadline"])
         reviewed = {row[2] for row in self.plan["pods"]}
@@ -446,6 +537,7 @@ class Coordinator:
             review = self.s.review(self.uid)
             if not review["ready"] or review["review_token"] != state["review_token"]:
                 raise ValueError("Cluster changed before drain: " + "; ".join(review["blockers"]))
+            self.hold()
             for i, node in enumerate(self.plan["nodes"]):
                 self.current()
                 self.s.send("POST", f"/api/v1/namespaces/{self.s.ns}/pods",
@@ -501,7 +593,8 @@ class Coordinator:
             message = str(error)
             try:
                 self.s.restore(self.plan, self.run)
-                message += ". Original scheduling restored; check workloads before retrying"
+                self.s.release_holds(self.plan, self.run)
+                message += ". Original scheduling restored, and what was stopped started again; check workloads before retrying"
             except Exception as recovery:
                 message += ". Scheduling recovery needs attention: " + str(recovery)
             def failed(data):
