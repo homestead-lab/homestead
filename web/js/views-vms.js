@@ -308,16 +308,20 @@ window.vmPowerReview = async config => {
       throw new Error("VM capacity review unavailable. Nothing was sent; refresh before continuing.");
     VM_POWER_REVIEW = { ...review, config:frozen };
     const plan = review.capacity, facts = plan.vm || {};
-    $("#mbody").innerHTML = `<div class="update-review">
-      <p class="small muted">Review ${esc(frozen.name)} before ${frozen.action === "restart" ? "stopping and restarting its guest. Guest downtime is expected." : frozen.action === "unpause" ? "resuming its existing guest." : "starting its guest."}</p>
-      <div class="reviewbox"><b>VM memory and restart policy</b><p class="small">Guest memory: ${esc(facts.guest_memory_gb)} GiB · host RAM estimate: ${esc(plan.pod_memory_gb)} GiB.</p>
-        <p class="small muted">${facts.request_is_lower_bound ? (facts.cpu_request_is_estimate ? "CPU uses a conservative IO-thread allowance because this renderer version is unverified. RAM requests are lower bounds; the RAM estimate is not a configured memory limit." : "Scheduler requests are lower bounds; the launcher can need additional overhead. The RAM estimate is not a configured memory limit.") : "Uses the current launcher resources; its existing usage is not added twice."}</p>
-        <p class="small">Restart policy: ${esc(facts.policy_before || "unknown")}${facts.policy_after !== facts.policy_before ? ` → <b>${esc(facts.policy_after)}</b>` : " (unchanged)"}</p></div>
-      ${plan.blockers?.length ? `<div class="note bad">${plan.blockers.map(esc).join(" · ")}</div>` : ""}
-      ${deployCapacityHtml(plan)}
-      ${vmStateInitHtml(plan, "vmPower", "vmPowerReviewReady")}
-      ${!plan.blocked ? '<label class="check"><input type="checkbox" id="vmPowerApprove" onchange="vmPowerReviewReady()"> Proceed with this power action and accept the displayed memory, placement, storage/state and restart-policy risks</label>' : ""}
-      ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button><button class="btn pri" id="vmPowerApply" disabled onclick="vmPowerReviewedApply()">${esc(VM_ACTIONS[frozen.action]?.[0] || "Apply")} reviewed VM</button>`)}</div>`;
+    const policy = facts.policy_after && facts.policy_after !== facts.policy_before
+      ? ` Its restart policy changes from ${esc(facts.policy_before || "unknown")} to <b>${esc(facts.policy_after)}</b>.` : "";
+    const what = frozen.action === "restart" ? "Restarts" : frozen.action === "unpause" ? "Resumes" : "Starts";
+    const downtime = frozen.action === "restart" ? " The guest stops and starts again." : "";
+    const guest = facts.guest_memory_gb != null ? ` <span class="ui-help">${esc(facts.guest_memory_gb)} GiB guest memory.</span>` : "";
+    $("#mbody").innerHTML = startReview(plan, { what, name: frozen.name, extra: `${downtime}${policy}${guest}`,
+        ackId: "vmPowerApprove", onAck: "vmPowerReviewReady()",
+        details: facts.request_is_lower_bound ? `<p class="ui-help">${facts.cpu_request_is_estimate
+          ? "CPU uses a conservative IO-thread allowance because this renderer version is unverified. RAM requests are lower bounds; the RAM estimate is not a configured memory limit."
+          : "Scheduler requests are lower bounds; the launcher can need additional overhead. The RAM estimate is not a configured memory limit."}</p>` : "" })
+      + vmStateInitHtml(plan, "vmPower", "vmPowerReviewReady")
+      + UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="modalBack()">Cancel</button>${plan.blocked ? ""
+        : `<button class="btn pri" id="vmPowerApply" onclick="vmPowerReviewedApply()">${esc(VM_ACTIONS[frozen.action]?.[0] || "Apply")}</button>`}`);
+    vmPowerReviewReady();
   } catch (error) {
     if (sequence !== VM_POWER_SEQUENCE || !$("#vmPowerLoading")) return;
     VM_POWER_REVIEW = null;
@@ -325,17 +329,19 @@ window.vmPowerReview = async config => {
   }
 };
 window.vmPowerReviewReady = () => {
-  const ready = !!(VM_POWER_REVIEW && !VM_POWER_BUSY && !VM_POWER_REVIEW.capacity.blocked && $("#vmPowerApprove")?.checked && vmStateInitReady(VM_POWER_REVIEW.capacity, "vmPower"));
+  // The tickbox is there only when there is a warning to accept.
+  const ready = !!(VM_POWER_REVIEW && !VM_POWER_BUSY && !VM_POWER_REVIEW.capacity.blocked
+    && (!$("#vmPowerApprove") || $("#vmPowerApprove").checked) && vmStateInitReady(VM_POWER_REVIEW.capacity, "vmPower"));
   if ($("#vmPowerApply")) $("#vmPowerApply").disabled = !ready;
   return ready;
 };
 window.vmPowerReviewedApply = async () => {
-  if (!vmPowerReviewReady()) return toast("Review and acknowledge the VM power action first", "bad");
+  if (!vmPowerReviewReady()) return toast("Tick Start it anyway to accept the warning", "bad");
   const review = VM_POWER_REVIEW, button = $("#vmPowerApply");
   VM_POWER_REVIEW = null; // one shot, including errors and lost responses
   VM_POWER_BUSY = true;
   button.disabled = true;
-  button.textContent = "Sending reviewed power action…";
+  button.textContent = "Sending…";
   try {
     const result = await api("/api/vm/power", {method:"POST", headers:{"Content-Type":"application/json"},
       body:JSON.stringify({...review.config, ...vmStateInitBody(review.capacity, "vmPower"), capacity_token:review.capacity_token, confirm_capacity:true})});

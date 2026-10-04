@@ -70,8 +70,12 @@ test("routine rollout estimates stay in details while actual memory risks remain
     assert.doesNotMatch(visible, /post-stop capacity|updated pod estimates|live RAM still|intermediate rolling|RollingUpdate permits/);
     assert.match(html, /Capacity becomes available after old pods stop/);
     assert.match(html, /Homestead will be briefly unavailable/);
-    assert.equal(visible.includes("upd-flag"), !!extra.length);
-    if (extra[0]?.startsWith("memory")) assert.match(visible, /No memory limit is set for: data-permissions/);
+    assert.equal(visible.includes("upd-flag"), extra[0]?.startsWith("projected") || false);
+    // An update does not change whether a container has a memory limit.
+    if (extra[0]?.startsWith("memory")) {
+      assert.doesNotMatch(visible, /No memory limit/);
+      assert.match(html, /No memory limit is set for: data-permissions/);
+    }
     if (extra[0]?.startsWith("projected")) assert.match(visible, /projected RAM reaches 95%/);
     assert.equal(t.ctx.imageReviewReady(), false, "restart acknowledgement remains required");
   }
