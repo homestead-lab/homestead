@@ -62,8 +62,8 @@ function operationCard(operation) { return `<article class="jobitem" data-operat
     ${operation.progress != null && Number.isFinite(Number(operation.progress)) ? `<div class="jobmeter" role="progressbar" aria-label="Reported progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.max(0, Math.min(100, Number(operation.progress)))}"><span class="${operation.status === "failed" ? "failed" : ""}" style="width:${Math.max(0, Math.min(100, Number(operation.progress)))}%"></span></div>` : ""}
     <div class="jobfoot"><span>${esc(operation.message || "")}</span><span>${operationAge(operation.finished_at || operation.started_at)}</span></div>
     <div class="jobactions">
+      <span class="jobactions-side"><button class="btn sm" data-tip="Every step it has taken, and the output of what does its work" onclick="operationLog(${jsq(operation.id)})">${icon("log")}Log</button>${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" data-tip="Remove this finished entry from Jobs. Volumes and required recovery records are retained." onclick="dismissOperation(${jsq(operation.id)})">Dismiss</button>`}</span>
       <button class="btn sm" onclick="${operation.kind === 'cluster-shutdown' ? 'clusterShutdown()' : `openOperation(${jsq(operation.href || "/")},${jsq(operation.id || "")})`}">Open</button>
-      <button class="btn sm" data-tip="Every step it has taken, and the output of what does its work" onclick="operationLog(${jsq(operation.id)})">${icon("log")}Log</button>
       ${operation.preparation_archivable ? `<button class="btn sm" data-need="admin" onclick="selfDataArchiveReview(${jsq(operation.id)})">Archive preparation</button>` : ""}
       ${operation.power_recovery ? `<button class="btn sm" data-need="admin" onclick="powerRecoveryReview(${jsq(operation.id)})">Inspect outcome</button>` : ""}
       ${operation.storage_recovery ? `<button class="btn sm" data-need="admin" onclick="storageRecoveryReview(${jsq(operation.id)})">Review storage move</button>` : ""}
@@ -71,12 +71,11 @@ function operationCard(operation) { return `<article class="jobitem" data-operat
       ${operation.resumable ? `<button class="btn sm pri" data-need="admin" data-tip="Run the steps that are left, from the one it stopped at" onclick="resumeOperation(${jsq(operation.id)})">Carry on</button>` : ""}
       ${operation.cleanable ? `<button class="btn sm ${operation.tracking_only ? "" : "danger"}" data-need="admin" data-tip="${operation.tracking_only ? "Review retained resources and recovery choices; nothing is deleted" : "Says what it left behind and what cleanup removes"}" onclick="cancelOperation(${jsq(operation.id)})">${operation.tracking_only ? "Review retained resources" : "Clean up"}</button>` : ""}
       ${operation.cancellable ? `<button class="btn sm danger" data-need="${operation.copy_recovery ? "admin" : "operator"}" data-tip="Reviews what can be stopped or recovered before anything changes" onclick="cancelOperation(${jsq(operation.id)})">${operation.rename_recovery || operation.copy_recovery ? "Inspect outcome" : operation.status === "cancelling" ? "Cancel again" : "Cancel"}</button>` : ""}
-      ${operationActive(operation) || operation.dismissible === false ? "" : `<button class="btn sm" data-need="operator" data-tip="Remove this finished entry from Jobs. Volumes and required recovery records are retained." onclick="dismissOperation(${jsq(operation.id)})">Dismiss</button>`}
     </div>
   </article>`; }
 
 let selectedJobId = "";
-const completedJobs = items => items.filter(item => ["succeeded", "cancelled"].includes(item.status) && item.dismissible !== false);
+const completedJobs = items => items.filter(item => !operationActive(item) && item.dismissible !== false);
 window.selectJob = id => { selectedJobId = id; paintJobsDialog(); window.applyRole?.(); };
 function paintJobsDialog() {
   const host = $("#jobsDialogList");
@@ -98,24 +97,17 @@ function paintJobsDialog() {
     {key:"Completed", title:`Completed · ${completed.length}`, items:rows(completed), collapsed:true}
   ], selectedJobId, operationCard(selected), {label:"Jobs", detailLabel:"Selected job", onSelect:id => `selectJob(${jsArg(id)})`}) : '<div class="empty small">No jobs.</div>');
   if (selected) {
-    const actions = host.querySelector(".dialog-master-content .jobactions");
-    const secondary = [...actions.children].filter(button => /^(Log|Dismiss)$/.test(button.textContent.trim()));
-    if (secondary.length) {
-      const html = secondary.map(button => button.outerHTML).join("");
-      secondary.forEach(button => button.remove());
-      actions.insertAdjacentHTML("afterend", UI.more("Log and history", `<div class="jobactions">${html}</div>`));
-    }
     if (selected.dismissible === false) host.querySelector(".dialog-master-content .jobfoot").insertAdjacentHTML("afterend", '<p class="ui-help">This recovery record is retained until its outcome is resolved.</p>');
   }
   for (const detail of host.querySelectorAll("details[data-disclosure]")) {
     if (expanded.some(([label, id]) => label === detail.dataset.disclosure && id === (detail.closest("[data-operation]")?.dataset.operation || ""))) detail.open = true;
   }
   const clear = $("#jobsClearCompleted"), count = completedJobs(items).length;
-  if (clear) { clear.hidden = !count; clear.textContent = `Clear completed (${count})`; }
+  if (clear) { clear.hidden = !count; clear.textContent = `Clear finished (${count})`; }
   window.applyRole?.();
 }
 window.jobsDialog = () => {
-  modal("Jobs", `<div id="jobsDialogList"></div>${UI.actions(UI.button("Clear completed", "dismissCompletedOperations()", {id:"jobsClearCompleted", attrs:'data-need="operator"'}), UI.cancel("Close"))}`);
+  modal("Jobs", `<div id="jobsDialogList"></div>${UI.actions(UI.button("Clear finished", "dismissCompletedOperations()", {id:"jobsClearCompleted", attrs:'data-need="operator"'}), UI.cancel("Close"))}`);
   paintJobsDialog();
   window.applyRole?.();
 };
