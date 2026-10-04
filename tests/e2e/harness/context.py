@@ -42,6 +42,15 @@ class Context:
                 {"weight": 100, "preference": {"matchExpressions": [{"key": "kubernetes.io/hostname", "operator": "In", "values": [node]}]}}]}}
         loop = "while true; do :; done" if cpu_burn else "while true; do date > /data/now; sleep 5; done"
         classes = {c["metadata"]["name"]: c for c in self.kube.items("storageclass")}
+        if storage_class == "longhorn-r2" and storage_class not in classes and len(self.nodes) > 1:
+            # The installer's Longhorn keeps one copy (it starts on one host);
+            # a person running several hosts gives volumes two, as here, so a
+            # host can drain with its apps' data still whole elsewhere.
+            self.kube.apply(json.dumps({"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
+                                        "metadata": {"name": "longhorn-r2"}, "provisioner": "driver.longhorn.io",
+                                        "allowVolumeExpansion": True, "reclaimPolicy": "Delete", "volumeBindingMode": "Immediate",
+                                        "parameters": {"numberOfReplicas": "2", "staleReplicaTimeout": "30", "dataLocality": "disabled"}}))
+            classes = {c["metadata"]["name"]: c for c in self.kube.items("storageclass")}
         if storage_class not in classes:
             # A Longhorn class the installer made - the default one first - never local-path.
             longhorn = sorted((n for n, c in classes.items() if c.get("provisioner") == "driver.longhorn.io"),
@@ -70,8 +79,8 @@ class Context:
         pods = [p for p in self.kube.items("pods", "-n", ns, "-l", f"app={name}") if p["status"].get("phase") == "Running"]
         return pods[0]["spec"]["nodeName"] if pods else None
 
-    def exec(self, name, command, ns="lab"):
-        return self.kube.run("exec", "-n", ns, f"deploy/{name}", "--", "sh", "-c", command).strip()
+    def exec(self, name, command, ns="lab", timeout=120):
+        return self.kube.run("exec", "-n", ns, f"deploy/{name}", "--", "sh", "-c", command, timeout=timeout).strip()
 
     def mark(self, name, ns="lab"):
         """A line written to the app's volume now, to be found again later."""

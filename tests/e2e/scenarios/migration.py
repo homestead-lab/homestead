@@ -29,8 +29,14 @@ def run(ctx):
     body = {"cluster": SOURCE, "kind": "container", "name": "e2e-migrate", "namespace": "lab", "address_mode": "shared"}
     plan = target.api.post("/api/move/plan", body)
     log.info(f"Move plan: {str(plan)[:300]}")
-    if plan.get("storage_class"):
-        body["storage_class"] = plan["storage_class"]
+    longhorn = plan.get("storage_classes") or []
+    # The class offered first is Longhorn's: a moved volume is restored from
+    # a Longhorn backup. Checked at the end, so the move itself is still tested.
+    offered = plan.get("storage_class")
+    body["storage_class"] = offered if offered in longhorn else (longhorn or [""])[0]
+    if body["storage_class"] != offered:
+        plan = target.api.post("/api/move/plan", body)
+    assert not plan.get("blockers"), f"the move is blocked: {plan['blockers']}"
     target.api.post("/api/move/start", body)
 
     deadline, move = time.time() + 3600, None
@@ -46,5 +52,6 @@ def run(ctx):
     target.kube.deployment_ready("lab", "e2e-migrate")
     assert target.has_mark("e2e-migrate", mark), "the app arrived without its data"
     target.api.post("/api/move/moves/finish", {"id": move["id"], "volumes": True})
+    assert offered in longhorn, f"the move offered {offered!r} for the volume, not a Longhorn class of {longhorn}"
     source.kube.wait("the app gone from the source", lambda: not source.kube.items("deployments", "-n", "lab", "-l", "app=e2e-migrate"),
                      timeout=600)

@@ -32,7 +32,9 @@ def balance(ctx):
     uncordoned: Balance hosts moves copies and containers onto it."""
     ctx.api.post("/api/node/cordon", {"node": "node-3", "cordon": True})
     for i in range(3):
-        ctx.app(f"e2e-busy-{i}", node="node-1", cpu_burn=True, size="2Gi")
+        ctx.app(f"e2e-busy-{i}", node="node-1", cpu_burn=True, size="3Gi")
+        # Copies under a gigabyte are not worth moving: give each real data.
+        ctx.exec(f"e2e-busy-{i}", "dd if=/dev/urandom of=/data/fill bs=1M count=1200 status=none && sync", timeout=900)
     ctx.api.post("/api/node/cordon", {"node": "node-3", "cordon": False})
 
     volumes = ctx.api.get("/api/longhorn/rebalance/plan")
