@@ -129,7 +129,7 @@ test('host power consumes approval once and records the job',async()=>{
   await t.c.window.nodePowerReview('host1','reboot');
   await Promise.all([t.c.window.nodePower('host1','reboot'),t.c.window.nodePower('host1','reboot')]);
   assert.equal(t.sent.length,1);assert.equal(jobs[0].id,'power-job');assert.equal(refreshed,1);
-  assert.match(t.html(),/stays cordoned/);
+  assert.match(t.html(),/Scheduling is allowed again when it is back/);
 });
 test('lost power response cannot offer a blind retry',async()=>{
   const t=setup(hostReview);hostFields(t);t.fail();

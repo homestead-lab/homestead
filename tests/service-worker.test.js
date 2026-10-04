@@ -5,7 +5,7 @@ const path = require("node:path");
 const vm = require("node:vm");
 
 /* Runs web/sw.js against a stand-in for the browser's service worker scope. */
-function worker({ pending, subscription = { endpoint: "https://fcm.googleapis.com/x" }, windows = [], displayError = false }) {
+function worker({ pending, subscription = { endpoint: "https://fcm.googleapis.com/x" }, windows = [], displayError = false, showing = [] }) {
   const handlers = {};
   const shown = [];
   const fetched = [];
@@ -16,6 +16,8 @@ function worker({ pending, subscription = { endpoint: "https://fcm.googleapis.co
     registration: {
       pushManager: { getSubscription: async () => subscription },
       showNotification: async (title, options) => { if(displayError)throw new Error("display failed");shown.push({ title, ...options }); },
+      // What is in the notification shade already.
+      getNotifications: async () => showing,
     },
     clients: {
       matchAll: async () => windows,
@@ -121,6 +123,31 @@ test("connectivity failure does not claim a new cluster incident",async()=>{
  const sw=worker({pending:async()=>{throw new Error("offline");}});await sw.fire("push");
  assert.equal(sw.shown[0].title,"Homestead notification details unavailable");assert.equal(sw.shown[0].renotify,false);assert.doesNotMatch(sw.shown[0].body,/Something changed/);
 });
+test("a second alert while one shows becomes one summary, so Android does not bundle them under its own icon", async () => {
+  const closed = [];
+  const earlier = { tag: "health:Node:h1", title: "Node h1 is down", close: () => closed.push("health:Node:h1") };
+  const sw = worker({ showing: [earlier], pending: answer({ alerts: [{ key: "disk", title: "Drive needs attention", severity: "degraded", phase: "raised" }] }) });
+  await sw.fire("push");
+  assert.equal(sw.shown.length, 1);
+  assert.equal(sw.shown[0].title, "2 Homestead notifications");
+  assert.equal(sw.shown[0].tag, "homestead-summary");
+  assert.match(sw.shown[0].body, /Drive needs attention · Node h1 is down/);
+  assert.equal(sw.shown[0].badge, "/icons/badge-96.png");
+  assert.deepEqual(closed, ["health:Node:h1"]);
+  // The summary remembers what it holds, so the next push adds to it.
+  const next = worker({ showing: [{ tag: "homestead-summary", title: "2 Homestead notifications", data: sw.shown[0].data, close() {} }],
+    pending: answer({ alerts: [{ key: "vip", title: "Address conflict", severity: "degraded", phase: "raised" }] }) });
+  await next.fire("push");
+  assert.equal(next.shown[0].title, "3 Homestead notifications");
+});
+
+test("an update to the one alert showing stays that alert", async () => {
+  const sw = worker({ showing: [{ tag: "disk", title: "Drive needs attention", close() { throw new Error("not closed"); } }],
+    pending: answer({ alerts: [{ key: "disk", title: "Drive warnings cleared", severity: "degraded", phase: "resolved" }] }) });
+  await sw.fire("push");
+  assert.equal(sw.shown[0].tag, "disk");
+});
+
 test("summaries prioritize critical conditions and bound lock-screen text",async()=>{
  const alerts=Array.from({length:6},(_,i)=>({key:String(i),title:i===0?"Critical disk":"x".repeat(200),severity:i===0?"critical":"degraded",phase:"raised",at:i}));
  const sw=worker({pending:answer({alerts})});await sw.fire("push");

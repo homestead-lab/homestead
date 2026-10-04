@@ -4216,7 +4216,7 @@ def restore_held(item, uncordon=True):
     ref = item.get("ref") or {}
     if not LEADER.is_leader() or ref.get("restored") is not None:
         return ref.get("restored") is not None
-    if uncordon and not ref.get("planned_outage"):
+    if uncordon and not ref.get("planned_outage") and not ref.get("cordoned_before"):
         # What waited is for this host; it cannot start here while cordoned.
         node = kget(f"/api/v1/nodes/{urllib.parse.quote(ref['node'], safe='')}")
         if ref.get("node_uid") and (node.get("metadata") or {}).get("uid") == ref["node_uid"]:
@@ -4224,6 +4224,23 @@ def restore_held(item, uncordon=True):
             ref["uncordoned"] = True
     started, left = HOLD.restore(ref.get("held") or [], item["id"])
     ref["restored"] = {"started": started, "left": left, "at": time.time()}
+    return True
+
+
+def allow_scheduling(item):
+    """Uncordon a host its power job cordoned, now it is back. Leader only,
+    once; only the host the job was for, by identity."""
+    ref = item.get("ref") or {}
+    if not LEADER.is_leader():
+        return False
+    if ref.get("uncordoned"):
+        return True
+    node = kget(f"/api/v1/nodes/{urllib.parse.quote(ref['node'], safe='')}")
+    if ref.get("node_uid") and (node.get("metadata") or {}).get("uid") != ref["node_uid"]:
+        return False
+    if (node.get("spec") or {}).get("unschedulable"):
+        LC.set_cordon(ref["node"], False)
+    ref["uncordoned"] = True
     return True
 
 
@@ -4273,6 +4290,9 @@ def send_reviewed_power(power_plan, force=False, background=False):
         "/nodes?node=" + urllib.parse.quote(node),
         {"node": node, "node_uid": power_plan["node_uid"], "action": action, "boot_id": power_plan["boot_id"],
          "choices": power_plan.get("choices") or {},
+         # A host cordoned before the review stays so after it; one this job
+         # cordoned is allowed scheduling again when it is back.
+         "cordoned_before": bool(power_plan.get("cordoned")),
          "volumes": [v["name"] for v in power_plan["volumes"]],
          "planned_outage": planned_outage, "forced": bool(force),
          # What a resumed job needs: the reviewed plan, and which replica runs it.
@@ -4321,11 +4341,8 @@ def _power_jobs_loop():
         try:
             if not LEADER.is_leader():
                 continue
-            active = [i for i in OPS._read() if i.get("kind") == "node-power"
-                      and i.get("status") not in OPS.TERMINAL
-                      and ((i.get("ref") or {}).get("phase") in POWER.BEFORE_SEND
-                           # or with apps waiting to be started again, whoever is looking
-                           or ((i.get("ref") or {}).get("held") and (i.get("ref") or {}).get("restored") is None))]
+            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND)
+                      and i.get("status") not in OPS.TERMINAL]
             if active:
                 OPS.list_operations()   # runs each job's resolver, which resumes it if needed
         except Exception as error:
@@ -5973,6 +5990,7 @@ import homestead_vm_hardware as VM_HARDWARE
 import homestead_lhcapacity as LHCAP
 import homestead_lhrebuild as LHREBUILD
 import homestead_power_hold as HOLD
+import homestead_rebalance as REBALANCE
 import homestead_disks as DISKS
 import homestead_power as POWER
 import homestead_privileges as PRIV
@@ -6028,7 +6046,8 @@ LH.bind(kget, ksend, _cache, STORAGE_CLASS)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
 HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
-POWER.WORKER_GONE, POWER.RESUME, POWER.RESTORE = power_worker_gone, resume_power_job, restore_held
+REBALANCE.bind(kget, ksend, lambda: LEADER.is_leader())
+POWER.WORKER_GONE, POWER.RESUME, POWER.RESTORE, POWER.UNCORDON = power_worker_gone, resume_power_job, restore_held, allow_scheduling
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
              channel=lambda: cached("settings", 15, get_app_settings)["updates"]["channel"])
 UPDATES.PART = homestead_part
@@ -6059,6 +6078,8 @@ def _remove_cluster_vm(ns, node):
 K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: vm_address_problem(ip), _remove_cluster_vm)
 OPS.RESOLVERS["k3s-cluster"] = K3SC.status
 OPS.RESOLVERS["node-power"] = POWER.status
+OPS.RESOLVERS[REBALANCE.KIND] = REBALANCE.status
+OPS.CANCELLERS[REBALANCE.KIND] = (REBALANCE.cancel_plan, REBALANCE.cancel_run)
 OPS.RESOLVERS["cluster-shutdown"] = lambda item: cluster_shutdown().progress(item)
 OPS.RESOLVERS["vm-power"] = lambda item: VM_POWER_JOB.status(item, kget)
 OPS.CANCELLERS["vm-power"] = (VM_POWER_JOB.cancel_plan, VM_POWER_JOB.cancel_run)
@@ -9113,6 +9134,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("lhcap", 15, LHCAP.status))
             if p == "/api/longhorn/offline-rebuilding":
                 return self._send(200, cached("lhrebuild", 30, LHREBUILD.status))
+            if p == "/api/longhorn/rebalance/plan":
+                return self._send(200, REBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a]))
             if p == "/api/pvcs":
                 ns = (q.get("ns") or [DEFAULT_NS])[0]
                 items = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims")["items"]
@@ -10081,6 +10104,21 @@ class H(HTTP.LimitedHandler):
                 settings["longhorn"] = {"offline_rebuilding": enabled}
                 save_app_settings(settings)
                 return self._send(200, LHREBUILD.save(enabled))
+            if p == "/api/longhorn/rebalance":
+                running = next((i for i in OPS.list_operations() if i.get("kind") == REBALANCE.KIND
+                                and i.get("status") not in OPS.TERMINAL), None)
+                if running:
+                    return self._send(409, {"error": "A rebalance is already running; follow it in Jobs", "operation": running})
+                plan = REBALANCE.plan(b.get("exclude") or [])
+                if plan["review_token"] != b.get("review_token"):
+                    return self._send(409, {"error": "Volume copies changed since the review; review again", "plan": plan})
+                if not plan["moves"]:
+                    return self._send(409, {"error": "Nothing to move: the hosts are as even as they can be", "plan": plan})
+                operation = OPS.start(REBALANCE.KIND, f"Rebalance {len(plan['moves'])} volume cop{'y' if len(plan['moves']) == 1 else 'ies'}",
+                                      {"kind": "Volume", "name": "rebalance"}, "/volumes",
+                                      {"moves": plan["moves"], "index": 0, "moved": 0, "stage": "add", "excluded": plan["excluded"]},
+                                      "Starting with the first copy")
+                return self._send(202, {"operation": operation})
             if p == "/api/longhorn/rebuild":
                 _cache.pop("lhrebuild", None)
                 _cache.pop("volumes", None)
