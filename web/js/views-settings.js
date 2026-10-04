@@ -20,15 +20,16 @@ function thresholdEditor(id, label, unit, help, pair) {
    topic (data-tab); a section shows the cards of every topic it holds, and a
    link or button can still ask for a topic by its own name - settingsTab("fleet"). */
 const SETTINGS_SECTIONS = [
-  ["homestead", "Homestead", "Version, health, copies, backup", ["homestead", "about"], "Cluster"],
-  ["updates", "Updates", "Releases, platform, hosts, containers", ["updates"], "Cluster"],
-  ["monitoring", "Monitoring", "Thresholds, drives, MQTT", ["monitoring", "health", "mqtt"], "Cluster"],
-  ["hardware", "Hardware and storage", "Devices, add-ons, Longhorn", ["hardware", "cluster", "namespaces"], "Cluster"],
-  ["fleet", "Linked clusters", "Other Homesteads, moves", ["fleet"], "Cluster"],
-  ["connections", "Connections", "UniFi, App Store", ["connections", "apps", "integrations"], "Cluster"],
-  ["access", "Users and access", "Accounts and roles", ["access"], "Cluster"],
-  ["troubleshooting", "Troubleshooting", "Bug reports and logs", ["troubleshooting"], "Cluster"],
-  ["you", "You", "Appearance, this device, account", ["you", "device", "general"], "Just you"],
+  // [key, label, description, topics, group, icon from index.html's sprite]
+  ["homestead", "Homestead", "Version, health, copies, backup", ["homestead", "about"], "Cluster", "home"],
+  ["updates", "Updates", "Releases, platform, hosts, containers", ["updates"], "Cluster", "update"],
+  ["monitoring", "Monitoring", "Thresholds, drives, MQTT", ["monitoring", "health", "mqtt"], "Cluster", "pulse"],
+  ["hardware", "Hardware and storage", "Devices, add-ons, Longhorn", ["hardware", "cluster", "namespaces"], "Cluster", "chip"],
+  ["fleet", "Linked clusters", "Other Homesteads, moves", ["fleet"], "Cluster", "link"],
+  ["connections", "Connections", "UniFi, App Store", ["connections", "apps", "integrations"], "Cluster", "plug"],
+  ["access", "Users and access", "Accounts and roles", ["access"], "Cluster", "users"],
+  ["troubleshooting", "Troubleshooting", "Bug reports and logs", ["troubleshooting"], "Cluster", "bug"],
+  ["you", "You", "Appearance, this device, account", ["you", "device", "general"], "Just you", "user"],
 ];
 const settingsSection = topic => (SETTINGS_SECTIONS.find(([id, , , topics]) => id === topic || topics.includes(topic)) || SETTINGS_SECTIONS[0])[0];
 
@@ -86,7 +87,7 @@ async function viewSettings() {
 
   const tab = settingsTab();
   paint(`${UI.pageHeader(`Settings`, `Cluster policy, hardware, access, and installation information`, ``, {mobileSummary:"omit"})}
-    ${UI.workspace(UI.workspaceNav(SETTINGS_SECTIONS.map(([key,label,description,,group]) => ({key,label,descriptionHtml:esc(description),group})),
+    ${UI.workspace(UI.workspaceNav(SETTINGS_SECTIONS.map(([key,label,description,,group,icon]) => ({key,label,descriptionHtml:esc(description),group,icon})),
       {label:"Settings sections",selected:tab,onSelect:key => `settingsGo(${jsArg(key)})`}),
       UI.settingsGrid(`
       ${UI.settingsCard(`${UI.moduleHeader(`Appearance`, `This browser only; it changes as you choose`, ``)}

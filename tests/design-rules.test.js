@@ -127,3 +127,13 @@ test("design.md states the review and verbosity rules", () => {
     assert.ok(design.includes(phrase), `design.md mentions ${phrase}`);
   }
 });
+
+test("every Settings section has an icon from the menu's sprite", () => {
+  // design.md, Settings: each section is listed with its icon, drawn like the main menu's.
+  const settings = FILES.find(file => file.name === "web/js/views-settings.js").text;
+  const html = fs.readFileSync(path.join(__dirname, "..", "web", "index.html"), "utf8");
+  const block = settings.slice(settings.indexOf("const SETTINGS_SECTIONS = ["), settings.indexOf("];", settings.indexOf("const SETTINGS_SECTIONS = [")));
+  const rows = [...block.matchAll(/^\s*\["([^"]+)",.*,\s*"([^"]+)"\],?\s*$/gm)];
+  assert.ok(rows.length >= 9, "the Settings sections are found");
+  for (const [, key, icon] of rows) assert.match(html, new RegExp(`<symbol id="i-${icon}"`), `${key}: icon i-${icon} is in the sprite`);
+});
