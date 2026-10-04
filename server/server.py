@@ -4341,7 +4341,7 @@ def _power_jobs_loop():
         try:
             if not LEADER.is_leader():
                 continue
-            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND)
+            active = [i for i in OPS._read() if i.get("kind") in ("node-power", REBALANCE.KIND, CREBALANCE.KIND)
                       and i.get("status") not in OPS.TERMINAL]
             if active:
                 OPS.list_operations()   # runs each job's resolver, which resumes it if needed
@@ -5991,6 +5991,7 @@ import homestead_lhcapacity as LHCAP
 import homestead_lhrebuild as LHREBUILD
 import homestead_power_hold as HOLD
 import homestead_rebalance as REBALANCE
+import homestead_container_rebalance as CREBALANCE
 import homestead_disks as DISKS
 import homestead_power as POWER
 import homestead_privileges as PRIV
@@ -6047,6 +6048,21 @@ PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.featur
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
 HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
 REBALANCE.bind(kget, ksend, lambda: LEADER.is_leader())
+
+
+def rebalance_move(ns, name, node):
+    """One container of a rebalance: the manual move's capacity check and
+    placement - a preference, not a pin - or a reason to leave it."""
+    body = {"ns": ns, "name": name, "node": node, "pin": False}
+    proposed, capacity, _ = move_capacity_plan(body)
+    if capacity.get("blocked"):
+        raise ValueError("; ".join(capacity.get("blockers") or []) or f"{node} cannot take it now")
+    meta = proposed["metadata"]
+    ksend("PUT", f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}", proposed)
+    PLACE._bust("wl", "ov", "flow", "nodes", "impact:")
+
+
+CREBALANCE.bind(kget, PLACE.requirements, PLACE.satisfies, rebalance_move, (SELF.NS, NAMES.BRAND), lambda: LEADER.is_leader())
 POWER.WORKER_GONE, POWER.RESUME, POWER.RESTORE, POWER.UNCORDON = power_worker_gone, resume_power_job, restore_held, allow_scheduling
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
              channel=lambda: cached("settings", 15, get_app_settings)["updates"]["channel"])
@@ -6079,6 +6095,8 @@ K3SC.bind(kget, lambda cfg: create_vm_with_address(cfg), lambda ip: vm_address_p
 OPS.RESOLVERS["k3s-cluster"] = K3SC.status
 OPS.RESOLVERS["node-power"] = POWER.status
 OPS.RESOLVERS[REBALANCE.KIND] = REBALANCE.status
+OPS.RESOLVERS[CREBALANCE.KIND] = CREBALANCE.status
+OPS.CANCELLERS[CREBALANCE.KIND] = (CREBALANCE.cancel_plan, CREBALANCE.cancel_run)
 OPS.CANCELLERS[REBALANCE.KIND] = (REBALANCE.cancel_plan, REBALANCE.cancel_run)
 OPS.RESOLVERS["cluster-shutdown"] = lambda item: cluster_shutdown().progress(item)
 OPS.RESOLVERS["vm-power"] = lambda item: VM_POWER_JOB.status(item, kget)
@@ -9134,6 +9152,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("lhcap", 15, LHCAP.status))
             if p == "/api/longhorn/offline-rebuilding":
                 return self._send(200, cached("lhrebuild", 30, LHREBUILD.status))
+            if p == "/api/workloads/rebalance/plan":
+                return self._send(200, CREBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a]))
             if p == "/api/longhorn/rebalance/plan":
                 return self._send(200, REBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a]))
             if p == "/api/pvcs":
@@ -10104,6 +10124,23 @@ class H(HTTP.LimitedHandler):
                 settings["longhorn"] = {"offline_rebuilding": enabled}
                 save_app_settings(settings)
                 return self._send(200, LHREBUILD.save(enabled))
+            if p == "/api/workloads/rebalance":
+                running = next((i for i in OPS.list_operations() if i.get("kind") == CREBALANCE.KIND
+                                and i.get("status") not in OPS.TERMINAL), None)
+                if running:
+                    return self._send(409, {"error": "A container rebalance is already running; follow it in Jobs", "operation": running})
+                if b.get("restart") is not True:
+                    return self._send(409, {"error": "Moving a container restarts it; confirm the restarts"})
+                plan = CREBALANCE.plan(b.get("exclude") or [])
+                if plan["review_token"] != b.get("review_token"):
+                    return self._send(409, {"error": "Container load changed since the review; review again", "plan": plan})
+                if not plan["moves"]:
+                    return self._send(409, {"error": "Nothing worth moving: no move brings the busiest host down enough", "plan": plan})
+                operation = OPS.start(CREBALANCE.KIND, f"Rebalance {len(plan['moves'])} container{'' if len(plan['moves']) == 1 else 's'}",
+                                      {"kind": "Deployment", "name": "rebalance"}, "/containers",
+                                      {"moves": plan["moves"], "index": 0, "moved": 0, "stage": "move", "excluded": plan["excluded"]},
+                                      "Starting with the first container")
+                return self._send(202, {"operation": operation})
             if p == "/api/longhorn/rebalance":
                 running = next((i for i in OPS.list_operations() if i.get("kind") == REBALANCE.KIND
                                 and i.get("status") not in OPS.TERMINAL), None)

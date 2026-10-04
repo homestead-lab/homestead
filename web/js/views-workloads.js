@@ -386,7 +386,8 @@ function renderWorkloads() {
   const layout = viewLayout("containers");
   const items = [{ label: "Check for image updates", icon: "refresh", run: "checkImageUpdates()", tip: "Ask the registries for newer images" },
     { label: "Manage groups", icon: "list", run: "manageWorkloadGroups()", need: "operator" },
-    { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" }];
+    { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" },
+    { label: "Rebalance containers…", icon: "move", run: "containerRebalance()", need: "operator", tip: "Move containers so hosts carry similar CPU and memory" }];
   const updateButtons = `${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
     ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} check${updateErrors === 1 ? "" : "s"} failed</button>` : ""}`.trim();
   const deploy = '<button class="btn pri" data-need="operator" onclick="go(\'deploy\')">＋ Deploy</button>';
@@ -394,7 +395,7 @@ function renderWorkloads() {
         ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="Homestead and the helpers it runs - updated under Settings › Updates - and KubeVirt, CDI and the like, run by their own operators and upgraded under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
         : "system pods hidden"}${unchecked ? ` · <span data-tip="Marked ? in the list: stopped since Homestead started, so not yet compared with their registries">${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? " · images current" : ""}`, `<span class="dim xs scanprogress" id="scanprogress"></span>${updateButtons}
       ${layoutSwitch("containers", "renderWorkloads")}
-      ${moreMenu([items[0],items[1],{label:layout === "cards" ? "Show as rows" : "Show as cards",run:`setViewLayout('containers','renderWorkloads',${jsq(layout === "cards" ? "rows" : "cards")})`},items[2]])}
+      ${moreMenu([items[0],items[1],{label:layout === "cards" ? "Show as rows" : "Show as cards",run:`setViewLayout('containers','renderWorkloads',${jsq(layout === "cards" ? "rows" : "cards")})`},items[2],items[3]])}
       ${deploy}`, {extraHtml:`${all.length ? workloadGroupBar(all, group) : ""}`})}
     ${UI.collectionHeader(`${workloadGroupSelect(all, group)}${workloadListOptions(platform, layout, items)}${deploy}`, `<span>${rows.length} container${rows.length === 1 ? "" : "s"}</span>${updateButtons ? `<span aria-hidden="true">·</span>${updateButtons}` : ""}
         ${unchecked ? `<span class="dim" data-tip="Stopped or still starting; not yet compared with their registries">· ${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? '<span class="dim">· images current</span>' : ""}`)}
@@ -731,6 +732,60 @@ window.wlScaleGo = async (ns, name, n, confirmed = false) => {
     toast(`${name} ${n ? "started" : "stopped"}`, "ok"); setTimeout(() => refresh(true), 900);
   } catch (e) { toast(e.message, "bad"); }
 };
+/* Moving containers so hosts carry similar CPU and memory: the fewest moves
+   worth their restart, one tickbox per container to leave it where it is,
+   then a job that moves one at a time and can be stopped in Jobs. */
+let CREBALANCE_EXCLUDE = new Set(), CREBALANCE_PLAN = null;
+window.containerRebalance = async (fresh = true) => {
+  if (fresh) CREBALANCE_EXCLUDE = new Set();
+  if (fresh) modal("Rebalance containers", '<div id="crebalanceReview" class="empty"><span class="spin2"></span> Working out the fewest moves…</div>', true);
+  let plan;
+  try { plan = CREBALANCE_PLAN = await api(`/api/workloads/rebalance/plan?${new URLSearchParams({ exclude: [...CREBALANCE_EXCLUDE].join(",") })}`); }
+  catch (e) { $("#mbody").innerHTML = UI.callout("bad", "Could not work out a rebalance", esc(e.message)) + UI.actions(UI.cancel("Close")); return; }
+  const moves = plan.moves || [];
+  const meter = (before, after, label) => `${UI.meter({ now: before, after: after !== before ? after : null, warnAt: 80, label })}
+    <span class="sub">${esc(label)} ${before}%${after !== before ? ` → ${after}%` : ""}</span>`;
+  const hosts = UI.table([{ label: "Host" }, { label: "CPU", className: "grow" }, { label: "Memory", className: "grow" }], (plan.hosts || []).map(h => [
+    `<span class="mono">${esc(h.name)}</span>${h.takes ? "" : ` ${UI.chip("takes no new containers", "warn")}`}`,
+    meter(h.cpu_before, h.cpu_after, "CPU"), meter(h.mem_before, h.mem_after, "Memory")]));
+  const apps = UI.table([{ label: "Container" }, { label: "Moves", className: "grow" }], (plan.apps || []).map((id, i) => {
+    const m = moves.find(x => x.id === id), off = CREBALANCE_EXCLUDE.has(id);
+    return [`<label class="rb-app"><input type="checkbox" id="crb_app_${i}" ${off ? "" : "checked"} onchange="containerRebalanceApp(${jsq(id)},this.checked)"> <span class="mono">${esc(id)}</span></label>`,
+      off || !m ? '<span class="ui-help">stays where it is</span>'
+        : `<span class="mono">${esc(m.from)} → ${esc(m.to)}</span> <span class="sub">${esc(m.cpu_m)}m CPU · ${esc(m.mem_gb)} GB${m.near ? " · its volumes have a copy there" : ""}</span>`];
+  }));
+  $("#mbody").innerHTML = [
+    UI.lead(moves.length
+      ? `Moves ${moves.length} container${moves.length === 1 ? "" : "s"} so hosts carry similar CPU and memory. Each one restarts once, on its new host.`
+      : "No move brings the busiest host down enough to be worth a restart."),
+    plan.metrics === false ? UI.callout("warn", "Usage is partly unknown", "A host reports no live CPU and memory, so the plan may be off. Check metrics-server.") : "",
+    UI.section("Hosts", hosts),
+    (plan.apps || []).length ? UI.section(`Containers · ${plan.apps.length}`, `<p class="ui-help">Untick a container to leave it where it is; the moves are worked out again without it.</p>` + apps) : "",
+    (plan.skipped || []).length ? UI.more(`Not moved · ${plan.skipped.length}`, `<ul class="ui-list">${plan.skipped.map(s => `<li><span class="mono">${esc(s.id)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`) : "",
+    moves.length ? `<p class="ui-help">One at a time, each with the same capacity check as a manual move. If one does not start on its new host, the rest wait for you. Stop it in Jobs at any time.</p>` : "",
+    moves.length ? UI.ack("crebalanceRestart", moves.length === 1 ? "Restart it now" : "Restart them now") : "",
+    UI.actions(moves.length ? UI.cancel() + UI.button(`Move ${moves.length} container${moves.length === 1 ? "" : "s"}`, "containerRebalanceStart()", { kind: "pri", id: "crebalanceGo", attrs: 'data-need="operator"' }) : UI.cancel("Close")),
+  ].join("");
+  window.applyRole?.();
+};
+window.containerRebalanceApp = (id, on) => { on ? CREBALANCE_EXCLUDE.delete(id) : CREBALANCE_EXCLUDE.add(id); containerRebalance(false); };
+window.containerRebalanceStart = async () => {
+  const plan = CREBALANCE_PLAN, button = $("#crebalanceGo");
+  if (!plan?.moves?.length) return;
+  if (!$("#crebalanceRestart")?.checked) return toast("Tick Restart to confirm the restarts", "bad");
+  CREBALANCE_PLAN = null;
+  if (button) { button.disabled = true; button.textContent = "Starting…"; }
+  try {
+    await api("/api/workloads/rebalance", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ exclude: [...CREBALANCE_EXCLUDE], review_token: plan.review_token, restart: true }) });
+    closeModal(); toast("Rebalancing containers; follow it in Jobs", "ok");
+    window.refreshOperations?.(true);
+  } catch (e) {
+    toast(e.message, "bad");
+    if (e.body?.plan) containerRebalance(false);
+  }
+};
+
 /* Homestead stopping itself takes this page with it, and nothing here can
    start it again - so it is said plainly, with restart offered instead. */
 window.wlStopSelf = (ns, name) => {

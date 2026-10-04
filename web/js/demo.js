@@ -1858,6 +1858,18 @@ ssh_pwauth: true
     "/api/longhorn/v2/enable": () => {window.__demoV2State='enabled';return {ok:true};},
     "/api/longhorn/settings": { ok: true, detail: "Saved: over-provisioning 150%" },
     "/api/longhorn/offline-rebuilding": { supported: true, enabled: false, short: [{ name: "pvc-demo-nextcloud", claim: "lab/nextcloud-data", whole: 1, wanted: 2, hosts: ["node-2"], offline: "ignored" }] },
+    "/api/workloads/rebalance/plan": url => {
+      const exclude = (url.searchParams.get("exclude") || "").split(",").filter(Boolean);
+      const all = [{ ns: "lab", name: "frigate", id: "lab/frigate", from: "harvester-node2", to: "harvester-node1", cpu_m: 1400, mem_gb: 1.8, near: true },
+        { ns: "lab", name: "home-assistant", id: "lab/home-assistant", from: "harvester-node2", to: "harvester-node3", cpu_m: 310, mem_gb: 0.74, near: false }];
+      const moves = all.filter(m => !exclude.includes(m.id)), off = id => exclude.includes(id);
+      return { moves, apps: all.map(m => m.id), excluded: exclude, metrics: true, review_token: "demo-crebalance-" + exclude.join("."),
+        hosts: [{ name: "harvester-node1", takes: true, cpu_before: 22, cpu_after: off("lab/frigate") ? 22 : 40, mem_before: 44, mem_after: off("lab/frigate") ? 44 : 55 },
+          { name: "harvester-node2", takes: true, cpu_before: 78, cpu_after: 78 - (off("lab/frigate") ? 0 : 18) - (off("lab/home-assistant") ? 0 : 4), mem_before: 81, mem_after: 81 - (off("lab/frigate") ? 0 : 11) - (off("lab/home-assistant") ? 0 : 5) },
+          { name: "harvester-node3", takes: true, cpu_before: 16, cpu_after: off("lab/home-assistant") ? 16 : 20, mem_before: 35, mem_after: off("lab/home-assistant") ? 35 : 40 }],
+        skipped: [{ id: "lab/plex", why: "it is pinned to its host" }, { id: "lab/immich", why: "it runs more than one copy, which the scheduler spreads itself" }] };
+    },
+    "/api/workloads/rebalance": { operation: { id: "demo-crebalance", kind: "container-rebalance", title: "Rebalance 2 containers", status: "running", progress: 0, message: "Starting with the first container", cancellable: true } },
     "/api/longhorn/rebalance/plan": url => {
       const exclude = (url.searchParams.get("exclude") || "").split(",").filter(Boolean);
       const all = [{ volume: "pvc-demo-frigate", claim: "lab/frigate-recordings", app: "lab/frigate", from: "harvester-node2", to: "harvester-node1", size_gb: 120, attached: true },

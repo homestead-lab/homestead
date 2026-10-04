@@ -200,6 +200,7 @@ const DIALOGS = [
   ["workload-console", "workloads", "wlConsole('lab','frigate')"],
   ["workload-main-port", "workloads", "wlPrimaryPort('lab','frigate')"],
   ["volume-rebalance", "volumes", "volumeRebalance()"],
+  ["container-rebalance", "workloads", "containerRebalance()"],
   ["node-single-host-reboot", "nodes", "window.__demoSingleHostOutage=true;nodePowerReview('harvester-node1','reboot')"],
   ["node-single-host-shutdown", "nodes", "window.__demoSingleHostOutage=true;nodePowerReview('harvester-node1','poweroff')"],
   ["node-reboot", "nodes", "nodePowerReview('harvester-node1','reboot')"],
