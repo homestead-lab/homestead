@@ -105,6 +105,32 @@ class PlanTests(unittest.TestCase):
         c = Cluster(); bind(c, satisfies=lambda n, r: (n["metadata"]["name"] == "k3", []))
         self.assertTrue(all(m["to"] == "k3" for m in C.plan()["moves"]))
 
+    def test_hosts_are_checked_on_homesteads_summary_not_the_kubernetes_node(self):
+        # PLACE.satisfies reads status == "Ready"; a Kubernetes Node's status
+        # is a dict, so given one every host was refused and nothing moved.
+        import homestead_place as PLACE
+        c = Cluster()
+        summary = lambda: [{"name": n, "status": "Ready", "labels": {}, "allocatable": {}, "schedulable": True, "hardware": {}}
+                           for n in ("k1", "k2", "k3")]
+        C.bind(c.get, lambda dep: {"devices": [], "features": [], "resources": {}, "labels": {}},
+               PLACE.satisfies, c.apply, ("lab", "homestead"), lambda: True, summary)
+        self.assertEqual("lab/frigate", C.plan()["moves"][0]["id"])
+
+    def test_when_the_busiest_host_has_nothing_to_move_the_next_one_is_balanced(self):
+        c = Cluster()
+        c.deps["frigate"] = deployment("frigate", pinned="k2")
+        c.deps["ha"] = deployment("ha", pinned="k2")
+        c.deps["tiny"] = deployment("tiny", pinned="k2")
+        c.deps["busy"] = deployment("busy")
+        c.pods.append(pod("busy", "k3"))
+        c.objects["/apis/apps/v1/replicasets"]["items"].append(replicaset("busy"))
+        c.objects["/apis/metrics.k8s.io/v1beta1/pods"]["items"].append(
+            {"metadata": {"namespace": "lab", "name": "busy-abc-0"}, "containers": [{"usage": {"cpu": "1500m", "memory": "2Gi"}}]})
+        c.objects["/apis/metrics.k8s.io/v1beta1/nodes"]["items"][2]["usage"] = {"cpu": "2400m", "memory": "6Gi"}
+        bind(c)
+        moves = C.plan()["moves"]
+        self.assertEqual([("lab/busy", "k3", "k1")], [(m["id"], m["from"], m["to"]) for m in moves])
+
     def test_a_cordoned_host_takes_none(self):
         c = Cluster()
         c.objects["/api/v1/nodes"]["items"] = [node("k1", cordoned=True), node("k2"), node("k3")]
