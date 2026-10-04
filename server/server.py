@@ -1085,14 +1085,23 @@ def other_volumes():
                 reasons[(obj.get("namespace"), obj.get("name"))] = (event.get("message") or "")[:300]
     except Exception:
         reasons = {}
+    # A claim backed by a Longhorn volume is Longhorn whatever its class says:
+    # restored claims name a one-off restore class that older releases removed.
+    try:
+        drivers = {pv["metadata"]["name"]: ((pv.get("spec") or {}).get("csi") or {}).get("driver", "")
+                   for pv in kget("/api/v1/persistentvolumes").get("items", [])}
+    except Exception:
+        drivers = {}
     out = []
     for pvc in kget("/api/v1/persistentvolumeclaims").get("items", []):
         meta, spec, status = pvc["metadata"], pvc.get("spec") or {}, pvc.get("status") or {}
         klass = spec.get("storageClassName") or ""
-        if klass in longhorn or meta["namespace"] in SYS_NS:
+        if (klass in longhorn or meta["namespace"] in SYS_NS
+                or drivers.get(spec.get("volumeName") or "") == LONGHORN_PROVISIONER):
             continue
         phase = status.get("phase", "")
-        out.append({"namespace": meta["namespace"], "name": meta["name"], "storage_class": klass or "(none)",
+        out.append({"namespace": meta["namespace"], "name": meta["name"], "volume": spec.get("volumeName") or "",
+                    "storage_class": klass or "(none)",
                     "phase": phase, "access_modes": spec.get("accessModes") or [],
                     "size": (status.get("capacity") or {}).get("storage")
                             or ((spec.get("resources") or {}).get("requests") or {}).get("storage", ""),
@@ -4887,6 +4896,37 @@ def _restore_class_repair(pvc):
             "reclaimPolicy": reclaim, "volumeBindingMode": "Immediate", "parameters": parameters}
 
 
+def repair_restore_classes():
+    """Put back the restore classes older releases removed while claims still
+    used them. Those claims kept working, but Kubernetes will not resize a
+    claim whose class is gone, and Homestead listed them as "other" volumes.
+    Each class is rebuilt from its own bound volumes (_restore_class_repair),
+    which refuses anything it cannot match exactly."""
+    claims = kget("/api/v1/persistentvolumeclaims")
+    if "items" not in claims or (claims.get("metadata") or {}).get("continue"):
+        return []
+    classes = kget("/apis/storage.k8s.io/v1/storageclasses")
+    if "items" not in classes or (classes.get("metadata") or {}).get("continue"):
+        return []
+    present = {item["metadata"]["name"] for item in classes["items"]}
+    repaired = []
+    for pvc in claims["items"]:
+        name = (pvc.get("spec") or {}).get("storageClassName") or ""
+        if not name.startswith("homestead-restore-") or name in present:
+            continue
+        try:
+            ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", _restore_class_repair(pvc))
+            repaired.append(name)
+            present.add(name)
+        except (ValueError, urllib.error.HTTPError) as error:
+            print(f"restore class {name} not repaired: {str(error)[:160]}", flush=True)
+    if repaired:
+        for key in list(_cache):
+            if key.startswith(("stor", "sc", "vol")):
+                _cache.pop(key, None)
+    return repaired
+
+
 def repair_volume_class(cfg):
     ns, name = cfg.get("namespace") or DEFAULT_NS, cfg.get("name") or ""
     pvc = kget(f"/api/v1/namespaces/{urllib.parse.quote(ns, safe='')}/persistentvolumeclaims/{urllib.parse.quote(name, safe='')}")
@@ -6356,6 +6396,13 @@ def _host_fix_loop():
                         print(f"platform: {node + ': ' if node else ''}{change}", flush=True)
                     # Each host's OS - updates, restarts, failed services - every six hours.
                     HOST_OS.tick()
+                    # Restored volumes whose class an older release removed.
+                    try:
+                        repaired = repair_restore_classes()
+                        if repaired:
+                            print(f"storage: restore classes put back for resizing: {', '.join(repaired)}", flush=True)
+                    except Exception as error:
+                        print(f"storage: restore classes not checked: {str(error)[:160]}", flush=True)
                     # Linked clusters told this Homestead's address, once it is on its VIP.
                     try:
                         moved = FLEET.follow_address()
