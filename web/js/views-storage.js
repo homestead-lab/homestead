@@ -294,6 +294,58 @@ function volumeShortCell(x) {
   return `<span class="pill med" data-tip="Detached with ${short.whole} of ${short.wanted} copies. Longhorn rebuilds the rest only while the volume is attached, or offline when that is on">${short.whole} of ${short.wanted} copies</span>
     <button class="btn sm" data-need="operator" data-tip="Rebuild the missing copies now, with the volume attached where nothing can mount it" onclick="event.stopPropagation();volumeRebuild(${jsq(x.name)})">Rebuild now</button>`;
 }
+/* Moving volume copies so hosts hold similar amounts: a review of the
+   fewest moves, by app - untick one to leave its volumes where they are -
+   then a job that moves one copy at a time and can be stopped in Jobs. */
+let REBALANCE_EXCLUDE = new Set(), REBALANCE_PLAN = null;
+window.volumeRebalance = async (fresh = true) => {
+  if (fresh) REBALANCE_EXCLUDE = new Set();
+  const open = $("#rebalanceReview") ? null : modal("Rebalance volume copies", '<div id="rebalanceReview" class="empty"><span class="spin2"></span> Working out the fewest moves…</div>', true);
+  let plan;
+  try { plan = REBALANCE_PLAN = await api(`/api/longhorn/rebalance/plan?${new URLSearchParams({ exclude: [...REBALANCE_EXCLUDE].join(",") })}`); }
+  catch (e) { $("#mbody").innerHTML = UI.callout("bad", "Could not work out a rebalance", esc(e.message)) + UI.actions(UI.cancel("Close")); return; }
+  const moves = plan.moves || [], gb = n => `${n} GB`;
+  const hosts = UI.table([{ label: "Host" }, { label: "Copies held", className: "grow" }], (plan.hosts || []).map(h => [
+    `<span class="mono">${esc(h.name)}</span>${h.takes ? "" : ` ${UI.chip("takes no new copies", "warn")}`}`,
+    `${UI.meter({ now: h.capacity_gb ? h.before_gb / h.capacity_gb * 100 : 0, after: h.capacity_gb ? h.after_gb / h.capacity_gb * 100 : null, label: `${h.name} copies` })}
+     <span class="sub">${esc(gb(h.before_gb))}${h.after_gb !== h.before_gb ? ` → ${esc(gb(h.after_gb))}` : ""} of ${esc(gb(h.capacity_gb))}</span>`]));
+  const apps = UI.table([{ label: "App" }, { label: "Copies it moves", className: "grow" }], (plan.apps || []).map((app, i) => {
+    const mine = moves.filter(m => m.app === app), off = REBALANCE_EXCLUDE.has(app);
+    return [`<label class="rb-app"><input type="checkbox" id="rb_app_${i}" ${off ? "" : "checked"} onchange="volumeRebalanceApp(${jsq(app)},this.checked)"> <span class="mono">${esc(app)}</span></label>`,
+      off ? '<span class="ui-help">left where they are</span>'
+        : mine.map(m => `<div><span class="mono">${esc(m.claim)}</span> <span class="sub">${esc(gb(m.size_gb))} · ${esc(m.from)} → ${esc(m.to)}</span></div>`).join("")];
+  }));
+  $("#mbody").innerHTML = [
+    UI.lead(moves.length
+      ? `Moves ${moves.length} cop${moves.length === 1 ? "y" : "ies"} so hosts hold similar amounts. Nothing restarts: each copy is built on its new host before the old one is removed, and a copy is never moved off the host its app runs on.`
+      : (plan.closed || []).length
+        ? `Nothing can move now: ${plan.closed.map(esc).join(", ")} ${plan.closed.length === 1 ? "takes" : "take"} no new copies - cordoned, not Ready, or with scheduling off in Longhorn.`
+        : "The hosts are as even as moving copies can make them."),
+    UI.section("Hosts", hosts),
+    (plan.apps || []).length ? UI.section(`Apps · ${plan.apps.length}`, `<p class="ui-help">Untick an app to leave its volumes where they are; the moves are worked out again without it.</p>` + apps) : "",
+    (plan.skipped || []).length ? UI.more(`Not moved · ${plan.skipped.length}`, `<ul class="ui-list">${plan.skipped.map(s => `<li><span class="mono">${esc(s.claim)}</span>: ${esc(s.why)}</li>`).join("")}</ul>`) : "",
+    moves.length ? `<p class="ui-help">Copies are moved one at a time, using disk and network while they are built. Stop it in Jobs at any time: the copy being built is dropped, and those already moved stay.</p>` : "",
+    UI.actions(moves.length ? UI.cancel() + UI.button(`Move ${moves.length} cop${moves.length === 1 ? "y" : "ies"}`, "volumeRebalanceStart()", { kind: "pri", id: "rebalanceGo", attrs: 'data-need="operator"' }) : UI.cancel("Close")),
+  ].join("");
+  window.applyRole?.();
+};
+window.volumeRebalanceApp = (app, on) => { on ? REBALANCE_EXCLUDE.delete(app) : REBALANCE_EXCLUDE.add(app); volumeRebalance(false); };
+window.volumeRebalanceStart = async () => {
+  const plan = REBALANCE_PLAN, button = $("#rebalanceGo");
+  if (!plan?.moves?.length) return;
+  REBALANCE_PLAN = null;
+  if (button) { button.disabled = true; button.textContent = "Starting…"; }
+  try {
+    const r = await api("/api/longhorn/rebalance", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ exclude: [...REBALANCE_EXCLUDE], review_token: plan.review_token }) });
+    closeModal(); toast("Rebalancing volume copies; follow it in Jobs", "ok");
+    window.refreshOperations?.(true);
+    return r;
+  } catch (e) {
+    toast(e.message, "bad");
+    if (e.body?.plan) volumeRebalance(false);
+  }
+};
 window.volumeRebuild = async name => {
   try {
     const r = await api("/api/longhorn/rebuild", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ volume: name }) });
@@ -389,6 +441,7 @@ async function viewStorage() {
     && (!onlySpare || spare.includes(x)));
   paint(`${UI.pageHeader(`Volumes`, `${v.length} Longhorn volume${v.length === 1 ? "" : "s"} · replicated block storage${onlySpare ? ` · <a class="linkish" onclick="STATE.volSpare=false;viewStorage()">showing ${spare.length} unused · show all</a>` : ""}`, `${moreMenu([spare.length ? { label: onlySpare ? "Show all volumes" : `Show the ${spare.length} unused`, icon: "list", run: "STATE.volSpare=!STATE.volSpare;viewStorage()",
           tip: "Volumes nothing is defined to use - no container, VM or job - and ones kept after their claim went: the ones to look at when freeing space" } : null,
+        { label: "Rebalance copies…", icon: "layers", run: "volumeRebalance()", need: "operator", tip: "Move volume copies so hosts hold similar amounts; nothing restarts" },
         { label: "Storage classes", icon: "disk", run: "settingsTab('hardware');go('settings')", tip: "What new volumes are made from: in Settings › Hardware and storage" }])}
       <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button>`)}
   ${st ? summaryLine("volumes", [

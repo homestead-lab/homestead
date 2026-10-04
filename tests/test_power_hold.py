@@ -257,3 +257,45 @@ class HoldingIsBeforePowerTests(unittest.TestCase):
             state, _, message = POWER.status(job)
         self.assertEqual(("running", "Waiting to stop or move: lab/plex"), (state, message))
         kget.assert_not_called()
+
+
+class UncordonTests(unittest.TestCase):
+    """A host this job cordoned is allowed scheduling again when it is back;
+    one cordoned before the review stays cordoned."""
+    def status(self, cordoned_before, leader=True, action="reboot", forced=False):
+        node = {"metadata": {"uid": "u1"}, "status": {"conditions": [{"type": "Ready", "status": "True"}], "nodeInfo": {"bootID": "new"}}}
+        done = []
+        def uncordon(item):
+            if not leader:
+                return False
+            item["ref"]["uncordoned"] = True
+            done.append(item["id"])
+            return True
+        item = {"id": "job-1", "progress": 60, "ref": {"node": "k1", "node_uid": "u1", "action": action, "boot_id": "old",
+                "phase": "observing", "started_epoch": time.time() - 300, "volumes": [], "forced": forced,
+                "cordoned_before": cordoned_before}}
+        with mock.patch.object(POWER, "kget", lambda path: copy.deepcopy(node)), mock.patch.object(POWER, "UNCORDON", uncordon), \
+             mock.patch.object(POWER, "_items", lambda path, absent_ok=False: []):
+            return POWER.status(item), done
+
+    def test_back_from_a_reboot_it_is_allowed_scheduling_again(self):
+        (state, _, message), done = self.status(False)
+        self.assertEqual(("succeeded", ["job-1"]), (state, done))
+        self.assertIn("Scheduling is allowed on it again", message)
+
+    def test_one_cordoned_before_stays_cordoned(self):
+        (state, _, message), done = self.status(True)
+        self.assertEqual(("succeeded", []), (state, done))
+        self.assertIn("stays cordoned, as it was before", message)
+
+    def test_the_job_stays_open_until_the_leader_has_done_it(self):
+        (state, _, _), _ = self.status(False, leader=False)
+        self.assertEqual("running", state)
+
+    def test_forced_jobs_never_cordoned_so_nothing_to_undo(self):
+        (state, _, _), done = self.status(False, forced=True)
+        self.assertEqual(("succeeded", []), (state, done))
+
+    def test_a_power_off_returning_is_allowed_scheduling_too(self):
+        (state, _, message), done = self.status(False, action="poweroff")
+        self.assertEqual(("succeeded", ["job-1"]), (state, done))
