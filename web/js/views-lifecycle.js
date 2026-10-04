@@ -635,8 +635,8 @@ window.nodePowerReview = async (node, action, force = false) => {
     UI.facts([["On the host", `${plan.pods} pod${plan.pods === 1 ? "" : "s"} · ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"}`],
       hold.length ? ["Moves", String(hold.filter(h => h.default === "move").length)] : null,
       hold.length ? ["Waits for the host", String(hold.filter(h => h.default === "wait").length)] : null,
-      volumes.length ? ["Volume copies", volumes.some(v => v.risk === "unavailable") ? UI.chip("a volume has no copy elsewhere", "bad")
-        : volumes.some(v => v.risk === "single-copy") ? UI.chip("one copy left on some", "warn") : UI.chip("copies elsewhere", "ok")] : null]),
+      volumes.length ? ["Copies elsewhere", volumes.some(v => v.risk === "unavailable") ? UI.chip("none for some", "bad")
+        : volumes.some(v => v.risk === "single-copy") ? UI.chip("one for some", "warn") : UI.chip("yes", "ok")] : null]),
     plan.blockers?.length
       ? UI.callout("bad", "Blocked", `<ul class="ui-list">${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`)
         + (overridable ? `<label class="switch" data-need="admin"><input type="checkbox" onchange="if (this.checked) nodePowerReview(${jsq(node)},${jsq(action)},true)">
