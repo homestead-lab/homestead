@@ -24,7 +24,7 @@ import urllib.parse
 
 KIND = "container-rebalance"
 MAX_MOVES = 10
-GAIN = 5.0          # a move must bring the busiest host down by this many points
+GAIN = 3.0          # a move must bring its host's load down by this many points
 SYSTEM = ("kube-", "cattle-", "harvester-", "longhorn-", "fleet-")
 SYSTEM_NS = {"kube-system", "longhorn-system", "kubevirt", "cdi", "system-upgrade", "local"}
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
@@ -32,13 +32,15 @@ LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 kget = None
 own = ("", "")                  # Homestead's namespace and Deployment
 requirements = satisfies = None # homestead_place: what a workload needs, whether a host has it
+summaries = None                # homestead_place.get_nodes: the host summaries satisfies() reads
 apply = None                    # (ns, name, node) -> moves it, after the manual move's capacity check
 is_leader = lambda: True
 
 
-def bind(_kget, _requirements, _satisfies, _apply, _own=("", ""), _is_leader=None):
-    global kget, requirements, satisfies, apply, own, is_leader
+def bind(_kget, _requirements, _satisfies, _apply, _own=("", ""), _is_leader=None, _summaries=None):
+    global kget, requirements, satisfies, apply, own, is_leader, summaries
     kget, requirements, satisfies, apply, own = _kget, _requirements, _satisfies, _apply, tuple(_own)
+    summaries = _summaries
     if _is_leader:
         is_leader = _is_leader
 
@@ -167,28 +169,35 @@ def plan(exclude=()):
     exclude = set(exclude or ())
     load = {n: [h["cpu"], h["mem"]] for n, h in hosts.items()}
     score = lambda n: _score(hosts[n], *load[n])
+    # satisfies() reads Homestead's own host summary (status, labels,
+    # devices), not the Kubernetes Node.
+    summary = {n.get("name"): n for n in (summaries() if summaries else [])}
     eligible = {}
     for app in apps:
         if app["why"]:
             continue
         reqs = requirements(app["dep"])
-        eligible[app["id"]] = {n for n, h in hosts.items() if n != app["host"] and h["takes"] and satisfies(h["node"], reqs)[0]}
+        eligible[app["id"]] = {n for n, h in hosts.items() if n != app["host"] and h["takes"]
+                               and satisfies(summary.get(n, h["node"]), reqs)[0]}
     moves, moved = [], set()
     while len(moves) < MAX_MOVES:
-        busiest = max(load, key=score)
         best = None
-        for app in apps:
-            if app["host"] != busiest or app["why"] or app["id"] in exclude or app["id"] in moved:
-                continue
-            for target in eligible.get(app["id"], ()):
-                after_from = _score(hosts[busiest], load[busiest][0] - app["cpu"], load[busiest][1] - app["mem"])
-                after_to = _score(hosts[target], load[target][0] + app["cpu"], load[target][1] + app["mem"])
-                peak = max(after_from, after_to)
-                gain = score(busiest) - peak
-                near = bool(app["near"] and target in app["near"])
-                key = (gain - (0 if near else 2), near)      # a host with its volumes is worth two points
-                if gain >= GAIN and (best is None or key > best[0]):
-                    best = (key, app, target, near)
+        # The busiest host first; when nothing of its can move, the next one.
+        for busiest in sorted(load, key=score, reverse=True):
+            for app in apps:
+                if app["host"] != busiest or app["why"] or app["id"] in exclude or app["id"] in moved:
+                    continue
+                for target in eligible.get(app["id"], ()):
+                    after_from = _score(hosts[busiest], load[busiest][0] - app["cpu"], load[busiest][1] - app["mem"])
+                    after_to = _score(hosts[target], load[target][0] + app["cpu"], load[target][1] + app["mem"])
+                    peak = max(after_from, after_to)
+                    gain = score(busiest) - peak
+                    near = bool(app["near"] and target in app["near"])
+                    key = (gain - (0 if near else 2), near)      # a host with its volumes is worth two points
+                    if gain >= GAIN and (best is None or key > best[0]):
+                        best = (key, app, target, near)
+            if best:
+                break
         if not best:
             break
         _, app, target, near = best

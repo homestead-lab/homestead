@@ -3553,7 +3553,11 @@ def _note_default_class(rows):
     global STORAGE_CLASS
     usable = [row for row in rows if class_selectable(row)]
     names = {row["name"] for row in usable}
-    chosen = (next((row["name"] for row in usable if row["default"]), "")
+    # k3s marks local-path the default and Longhorn's chart marks its own:
+    # of several defaults, the one Homestead was installed with, then Longhorn.
+    defaults = sorted((row for row in usable if row["default"]),
+                      key=lambda row: (row["name"] != ENV_STORAGE_CLASS, row["provisioner"] != "driver.longhorn.io", row["name"]))
+    chosen = (next((row["name"] for row in defaults), "")
               or (ENV_STORAGE_CLASS if ENV_STORAGE_CLASS in names else "")
               or next((n for n in ("longhorn-r2", "harvester-longhorn", "longhorn") if n in names), "")
               or STORAGE_CLASS)
@@ -6062,7 +6066,8 @@ def rebalance_move(ns, name, node):
     PLACE._bust("wl", "ov", "flow", "nodes", "impact:")
 
 
-CREBALANCE.bind(kget, PLACE.requirements, PLACE.satisfies, rebalance_move, (SELF.NS, NAMES.BRAND), lambda: LEADER.is_leader())
+CREBALANCE.bind(kget, PLACE.requirements, PLACE.satisfies, rebalance_move, (SELF.NS, NAMES.BRAND), lambda: LEADER.is_leader(),
+                PLACE.get_nodes)
 POWER.WORKER_GONE, POWER.RESUME, POWER.RESTORE, POWER.UNCORDON = power_worker_gone, resume_power_job, restore_held, allow_scheduling
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
              channel=lambda: cached("settings", 15, get_app_settings)["updates"]["channel"])
