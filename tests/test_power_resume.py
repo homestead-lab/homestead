@@ -73,6 +73,56 @@ class ResumeTests(unittest.TestCase):
             self.assertFalse(server.resume_power_job(job(plan=False)))
 
 
+class OneOwnerTests(unittest.TestCase):
+    """With two or three Homestead copies, an evicted replica can still be
+    shutting down when another carries its job on: only one may send."""
+    def setUp(self):
+        import tempfile
+        directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
+        for patch in (mock.patch.object(server.OPS, "DATA_DIR", directory.name),
+                      mock.patch.object(server.OPS, "WRITE_GUARD", None)):
+            patch.start(); self.addCleanup(patch.stop)
+        server.OPS._write([{"id": "job-1", "kind": "node-power", "status": "running", "progress": 10, "message": "",
+                            "history": [], "ref": {"node": "k3s-1", "phase": "draining", "worker": "homestead-new"}}])
+
+    def test_a_superseded_worker_records_nothing_and_never_sends(self):
+        plan = {"node": "k3s-1", "action": "reboot", "drain_pods": [], "planned_outage": False}
+        sent = []
+        def node_power(*args, progress=None, **kwargs):
+            progress("sending", 20, "Submitting power helper")   # what precedes the send
+            sent.append(True)
+            return {}
+        with mock.patch.object(server, "POD_NAME", "homestead-old"),              mock.patch.object(server.LC, "node_power", side_effect=node_power):
+            with self.assertRaises(server.OPS.Superseded):
+                server.run_power_job("job-1", plan)
+        self.assertEqual([], sent)
+        saved = server.OPS._read()[0]
+        self.assertEqual(("running", "draining"), (saved["status"], saved["ref"]["phase"]), "the job is left to its owner")
+
+    def test_its_owner_carries_on(self):
+        server.OPS.record_phase("job-1", "verifying", 15, "Rechecking", owner="homestead-new")
+        self.assertEqual("verifying", server.OPS._read()[0]["ref"]["phase"])
+
+
+class WorkerGoneTests(unittest.TestCase):
+    def gone(self, pod=None, node_ready=True, missing=False):
+        import urllib.error
+        def kget(path):
+            if "/pods/" in path:
+                if missing:
+                    raise urllib.error.HTTPError(path, 404, "gone", None, None)
+                return pod or {"metadata": {}, "spec": {"nodeName": "k3s-1"}, "status": {"phase": "Running"}}
+            return {"status": {"conditions": [{"type": "Ready", "status": "True" if node_ready else "Unknown"}]}}
+        with mock.patch.object(server, "kget", kget):
+            return server.power_worker_gone("homestead-old")
+
+    def test_evicted_deleted_or_on_a_host_that_stopped_answering(self):
+        self.assertTrue(self.gone(missing=True))
+        self.assertTrue(self.gone({"metadata": {"deletionTimestamp": "now"}, "spec": {}, "status": {}}))
+        self.assertTrue(self.gone(node_ready=False), "a node shut down leaves its pods listed for minutes")
+        self.assertFalse(self.gone())
+
+
 class ResumedDrainTests(unittest.TestCase):
     def pod(self, name):
         return {"metadata": {"namespace": "lab", "name": name, "uid": f"uid-{name}"},

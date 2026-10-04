@@ -231,11 +231,22 @@ def _vm_targets(kind, ref):
     return {(ref.get("namespace"), name) for name in names if name}
 
 
-def record_phase(operation_id, phase, progress, message, **ref_updates):
-    """Persist synchronous maintenance progress before irreversible steps."""
+class Superseded(ValueError):
+    """Another replica has taken this job over; this one must stop quietly."""
+
+
+def record_phase(operation_id, phase, progress, message, owner=None, **ref_updates):
+    """Persist synchronous maintenance progress before irreversible steps.
+
+    owner: the replica writing. A job that names another worker has been
+    carried on elsewhere, so this replica's progress - and the send that
+    follows it - is refused rather than run twice."""
     with _lock:
         items = _read()
         item = next(i for i in items if i["id"] == operation_id)
+        worker = (item.get("ref") or {}).get("worker")
+        if owner and worker and worker != owner:
+            raise Superseded(f"{worker} carries this job on now")
         if item.get("status") in TERMINAL or (POWER_RECEIPTS.protected(item.get("kind"), item.get("ref") or {}) and item.get("status") == CANCELLING):
             raise ValueError("Maintenance job has ended; refusing further actions")
         item["ref"].update(ref_updates, phase=phase, phase_at=time.time())

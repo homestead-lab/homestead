@@ -4067,7 +4067,7 @@ def run_power_job(operation_id, power_plan, force=False, resumed=False):
     phase_state = {"phase": "reviewed"}
 
     def power_progress(phase, percent, message, **details):
-        updated = OPS.record_phase(operation_id, phase, percent, message, **details)
+        updated = OPS.record_phase(operation_id, phase, percent, message, owner=POD_NAME or None, **details)
         phase_state["phase"] = phase
         return updated
     try:
@@ -4079,6 +4079,8 @@ def run_power_job(operation_id, power_plan, force=False, resumed=False):
                                resumed=resumed)
         result["operation"] = {"id": operation_id}
         return result
+    except OPS.Superseded:
+        raise  # another replica owns the job; nothing to record or send here
     except Exception as e:
         uncertain = phase_state["phase"] in ("sending", "observing")
         message = ("Power submission outcome is uncertain; inspect the existing job/helper before retrying" if uncertain else
@@ -4091,8 +4093,8 @@ def _power_in_background(operation_id, power_plan, force, resumed=False):
     def run():
         try:
             run_power_job(operation_id, power_plan, force, resumed)
-        except PowerNotSent:
-            pass  # recorded on the job
+        except (PowerNotSent, OPS.Superseded):
+            pass  # recorded on the job, or carried on by another replica
         except Exception as error:  # never leave the job looking busy
             try:
                 OPS.record_phase(operation_id, "failed", 10, f"Host power job stopped: {error}"[:400])
@@ -4140,8 +4142,36 @@ def power_worker_gone(pod):
         return error.code == 404
     except Exception:
         return False  # unknown is not gone
-    return bool((found.get("metadata") or {}).get("deletionTimestamp")) or \
-        (found.get("status") or {}).get("phase") in ("Succeeded", "Failed")
+    if (found.get("metadata") or {}).get("deletionTimestamp") or \
+            (found.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
+        return True
+    # A host shut down or lost leaves its pods listed for minutes; one whose
+    # node is not Ready is not running anything.
+    node = (found.get("spec") or {}).get("nodeName")
+    if not node:
+        return False
+    try:
+        conditions = (kget(f"/api/v1/nodes/{urllib.parse.quote(node, safe='')}").get("status") or {}).get("conditions") or []
+    except Exception:
+        return False
+    return not any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
+
+
+def _power_jobs_loop():
+    """The leader looks after host power jobs itself: a job's resolver runs
+    when someone lists jobs, and that may be another replica, or nobody."""
+    while True:
+        time.sleep(15)
+        try:
+            if not LEADER.is_leader():
+                continue
+            active = [i for i in OPS._read() if i.get("kind") == "node-power"
+                      and i.get("status") not in OPS.TERMINAL
+                      and (i.get("ref") or {}).get("phase") in ("reviewed", "cordoning", "draining", "verifying")]
+            if active:
+                OPS.list_operations()   # runs each job's resolver, which resumes it if needed
+        except Exception as error:
+            print(f"host power jobs not checked: {str(error)[:160]}", flush=True)
 
 
 def resume_power_job(item):
@@ -10360,6 +10390,7 @@ def start_background_tasks():
     # Older join plans each kept a join token in a Secret.
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
+    threading.Thread(target=_power_jobs_loop, daemon=True).start()
     threading.Thread(target=_host_fix_loop, daemon=True).start()
     threading.Thread(target=_host_console_loop, daemon=True).start()
     threading.Thread(target=_storage_pending_loop, daemon=True).start()
