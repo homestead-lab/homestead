@@ -1,7 +1,7 @@
 """Which release tests to run, written as GitHub Actions outputs.
 
-A published release runs them by itself when it is x.y.0 - the large ones -
-and on demand, any published version and any suites and distributions."""
+Every published prod release runs them by itself - not a dev release - and
+on demand, any published version and any suites and distributions."""
 import json
 import os
 import re
@@ -29,7 +29,7 @@ def plan(tag="", version="", suites="", distros="", branch=""):
         version = version or newest_release()
     if tag:
         version = tag.lstrip("v")
-        run = bool(re.fullmatch(r"\d+\.\d+\.0", version))
+        run = bool(re.fullmatch(r"\d+\.\d+\.\d+", version))     # prod, not -dev.N
     else:
         version = version.strip().lstrip("v")
         run = bool(re.fullmatch(r"\d+\.\d+\.\d+(?:-dev\.\d+)?", version))

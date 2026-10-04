@@ -6,7 +6,7 @@ name: Release tests
 # back, rolling OS restarts, storage repair and balancing. One runner per
 # distribution and suite, in parallel; see tests/e2e/README.md.
 #
-# It runs by itself when a x.y.0 release is published, and on demand for any
+# It runs by itself when a prod release is published (not a dev one), and on demand for any
 # published version - a dev release included - from the Actions tab.
 
 on:
@@ -63,6 +63,9 @@ jobs:
     timeout-minutes: 240
     strategy:
       fail-fast: false
+      # Twenty jobs at once would take every runner the repository gets and
+      # hold up pull requests' CI for the hour: ten at a time leaves room.
+      max-parallel: 10
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

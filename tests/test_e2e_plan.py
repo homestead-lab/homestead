@@ -16,10 +16,11 @@ class PlanTests(unittest.TestCase):
     def matrix(self, out):
         return [(row["distro"], row["suite"]) for row in json.loads(out["matrix"])["include"]]
 
-    def test_only_x_y_0_releases_run_by_themselves(self):
+    def test_every_prod_release_runs_by_itself_and_no_dev_one(self):
         self.assertEqual("true", PLAN.plan(tag="v2.9.0")["run"])
-        self.assertEqual("false", PLAN.plan(tag="v2.8.312")["run"])
+        self.assertEqual("true", PLAN.plan(tag="v2.8.312")["run"])
         self.assertEqual("false", PLAN.plan(tag="v2.9.0-dev.1")["run"])
+        self.assertEqual("false", PLAN.plan(tag="v2.8.313-dev.2")["run"])
 
     def test_on_demand_any_published_version_suites_and_distros(self):
         out = PLAN.plan(version="2.8.312-dev.1", suites="power,single", distros="rke2")

@@ -39,7 +39,7 @@ back, rolling OS restarts, storage repair and balancing - on **k3s and RKE2**.
 
 ## When it runs
 
-- A published **x.y.0** release, by itself.
+- Every published **prod** release, by itself; dev releases are skipped.
 - **On demand** for any published version, dev releases included: Actions ›
   Release tests › Run workflow, with the suites and distributions to run.
 - A branch named **`e2e/<distro>-<suite>`** (`e2e/k3s-single`, `e2e/rke2-all`,
