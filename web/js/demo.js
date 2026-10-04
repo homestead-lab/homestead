@@ -59,14 +59,14 @@
       cpu_pct: 22.4, cpu_used: 1.79, cpu_cap: 8, mem_pct: 61.7, mem_used_gb: 9.6, mem_cap_gb: 15.6,
       fs_pct: 48.3, fs_used_gb: 168, fs_cap_gb: 348, rx_mbps: 8.4, tx_mbps: 3.1,
       pods: 54, pods_sys: 46, pods_wl: 8, vms: 1, workloads: ["home-assistant", "mosquitto", "homestead-smb"],
-      hardware: { igpu: true }, temps: { cpu_c: 39, max_c: 51, sensors: 4, smart_helper: { available: true },
+      hardware: { igpu: true }, temps: { cpu_c: 39, max_c: 51, max_source: "NVMe nvme0", cpu_model: "Intel(R) Core(TM) i5-12500T", sensors: 4, smart_helper: { available: true },
         disks: [withHealth({ name: "nvme0n1", model: "Samsung SSD 970 EVO Plus", serial: "DEMO-NVME-01", kind: "NVMe", size_gb: 465.8,
           read_mbps: 18.42, write_mbps: 6.17, smart: smartDisk("nvme0n1", "Samsung SSD 970 EVO Plus", "DEMO-NVME-01", 41, 8421) })] } },
     { name: "harvester-node2", status: "Ready", roles: ["control-plane", "etcd"], schedulable: true,
       cpu_pct: 41.8, cpu_used: 3.34, cpu_cap: 8, mem_pct: 54.1, mem_used_gb: 8.4, mem_cap_gb: 15.6,
       fs_pct: 28.4, fs_used_gb: 66, fs_cap_gb: 232, rx_mbps: 21.9, tx_mbps: 12.6,
       pods: 47, pods_sys: 42, pods_wl: 5, vms: 0, workloads: ["frigate", "homestead"],
-      hardware: { igpu: true, coral_usb: true }, temps: { cpu_c: 34, max_c: 47, sensors: 5, smart_helper: { available: true },
+      hardware: { igpu: true, coral_usb: true }, temps: { cpu_c: 34, max_c: 47, max_source: "CPU package", cpu_model: "Intel(R) N100", sensors: 5, smart_helper: { available: true },
         disks: [withHealth({ name: "sda", model: "WDC WD100EFAX", serial: "DEMO-SATA-02", kind: "HDD", size_gb: 931.5,
           read_mbps: 3.26, write_mbps: 12.91,
           smart: smartDisk("sda", "WDC WD100EFAX", "DEMO-SATA-02", 36, 16420,
@@ -75,7 +75,7 @@
       cpu_pct: 16.3, cpu_used: 0.65, cpu_cap: 4, mem_pct: 46.2, mem_used_gb: 7.2, mem_cap_gb: 15.6,
       fs_pct: 41.4, fs_used_gb: 144, fs_cap_gb: 348, rx_mbps: 5.8, tx_mbps: 2.4,
       pods: 31, pods_sys: 28, pods_wl: 3, vms: 0, workloads: ["paperless"],
-      hardware: {}, temps: { cpu_c: 36, max_c: 45, sensors: 3, smart_helper: { available: true },
+      hardware: {}, temps: { cpu_c: 36, max_c: 45, max_source: "Motherboard", cpu_model: "AMD Ryzen 5 5600G with Radeon Graphics", sensors: 3, smart_helper: { available: true },
         disks: [withHealth({ name: "nvme0n1", model: "Kingston NV2", serial: "DEMO-NVME-03", kind: "NVMe", size_gb: 465.8,
           read_mbps: 0.74, write_mbps: 1.15, smart: smartDisk("nvme0n1", "Kingston NV2", "DEMO-NVME-03", 38, 3912) })] } },
   ];
@@ -231,8 +231,8 @@
     // Homestead itself: its Stop asks first, since it takes this page with it.
     { name: "homestead", ns: "lab", kind: "Deployment", group: "Homestead", self: true, platform: "Homestead", homestead: "self", desired: 1, ready: 1, uptime: 86400,
       cpu: 0.04, mem_mb: 88, nodes: ["harvester-node1"], hardware: [],
-      images: ["ghcr.io/homestead-lab/homestead:2.8.306"], ports: [{ port: 8088, ip: "192.0.2.242" }],
-      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/homestead-lab/homestead:2.8.306")] },
+      images: ["ghcr.io/homestead-lab/homestead:2.8.309-dev.7"], ports: [{ port: 8088, ip: "192.0.2.242" }],
+      pod_count: 1, container_count: 1, pods: [pod("homestead", "harvester-node1", "ghcr.io/homestead-lab/homestead:2.8.309-dev.7")] },
     { name: "homestead-smb", ns: "lab", kind: "Deployment", group: "Homestead", managed_smb: true, platform: "Homestead", homestead: "smb",
       desired: 1, ready: 1, uptime: 86400, cpu: 0.01, mem_mb: 40, nodes: ["harvester-node2"], hardware: [],
       images: ["dperson/samba:latest"], ports: [{ port: 445, ip: "192.0.2.245" }],
@@ -300,7 +300,9 @@
     { name: "pvc-demo-nextcloud", pvc_name: "nextcloud-data", namespace: "lab", attached_to: "",
       pod_status: "", state: "detached", robustness: "unknown", node: "", health_reason: "",
       size_gb: 100, actual_gb: 38.2, used_pct: 38, replicas: 2, access_modes: ["ReadWriteOnce"],
-      storage_class: "longhorn-r2", last_used_secs: 86400 * 6, used_by: ["Deployment/nextcloud"] },
+      storage_class: "longhorn-r2", last_used_secs: 86400 * 6, used_by: ["Deployment/nextcloud"],
+      // Detached a copy short: Longhorn will not rebuild it until something attaches it.
+      copies_short: { whole: 1, wanted: 2, offline: "ignored" } },
     // An original kept after a storage class change: its claim is the copy now.
     { name: "pvc-7f3e9c1a-2b44-4d1b-9a55-0c1f2e3d4a5b", pvc_name: "mosquitto-appdata", namespace: "lab", attached_to: "",
       pod_status: "", state: "detached", robustness: "unknown", node: "", health_reason: "",
@@ -537,7 +539,7 @@
       uid: "demo-probe", resource_version: "1", detail: "Placement checks are disabled (demo; no host changes)",
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
     "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, site_name: "Main site",
-      info: { version: "2.8.306", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
+      info: { version: "2.8.309-dev.7", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
@@ -759,13 +761,13 @@
       { name: "staging", url: "http://192.0.2.252:8088", user: "admin", added: "2026-05-02 18:40" }],
     "/api/move/clusters/check": (url, init) => {
       const name = JSON.parse(init?.body || "{}").name;
-      if (name === "dr-site") return { name, version: "", protocol: null, local_version: "2.8.306", local_protocol: 1,
+      if (name === "dr-site") return { name, version: "", protocol: null, local_version: "2.8.309-dev.7", local_protocol: 1,
         state: "unreachable", message: "could not reach dr-site: no answer from http://192.0.2.251:8088" };
-      if (name === "staging") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.306",
+      if (name === "staging") return { name, version: "2.8.190", protocol: 1, local_version: "2.8.309-dev.7",
         local_protocol: 1, state: "differs", compatible: true,
-        message: "staging runs 2.8.190 and this one 2.8.306. Moves work between them; this Homestead is the newer of the two." };
-      return { name, version: "2.8.306", protocol: 1, local_version: "2.8.306", local_protocol: 1,
-        state: "same", compatible: true, message: "Both run Homestead 2.8.306." };
+        message: "staging runs 2.8.190 and this one 2.8.309-dev.7. Moves work between them; this Homestead is the newer of the two." };
+      return { name, version: "2.8.309-dev.7", protocol: 1, local_version: "2.8.309-dev.7", local_protocol: 1,
+        state: "same", compatible: true, message: "Both run Homestead 2.8.309-dev.7." };
     },
     "/api/move/clusters/add": [], "/api/move/clusters/remove": [],
     // branch is ready to move from; staging has no backup storage yet.
@@ -780,7 +782,7 @@
     "/api/move/clusters/storage": { ok: true, detail: "backup storage is starting on staging at http://192.0.2.244:9000" },
     "/api/move/inventory": { namespace: "lab", movable: 2, workloads: [] },
     "/api/move/remote": { cluster: "branch", url: "http://192.0.2.250:8088",
-      namespace: "lab", version: "2.8.306", protocol: 1, movable: 2, workloads: [
+      namespace: "lab", version: "2.8.309-dev.7", protocol: 1, movable: 2, workloads: [
         { name: "frigate", namespace: "lab", kind: "container", image: "ghcr.io/blakeblackshear/frigate:stable",
           replicas: 1, running: true, containers: ["frigate"], hardware: ["igpu"],
           ports: [{ container: 5000, protocol: "TCP" }], movable: true, blockers: [],
@@ -843,9 +845,9 @@
         volume_mode: isVm ? "Block" : "Filesystem", backing_image: "" }], total_gb: isVm ? 32 : 10 };
       })(),
     "/api/move/start": { id: "d1", status: "running" },
-    "/api/host-console": { version: "2.8.306", enabled: true, hosts: 2, installed: 2, current: 1, settled: false, harvester: false, nodes: [
+    "/api/host-console": { version: "2.8.309-dev.7", enabled: true, hosts: 2, installed: 2, current: 1, settled: false, harvester: false, nodes: [
       { name: "node-1", ready: true, enabled: true, version: "2.8.243", current: false, detail: "Installed 2.8.243; update available" },
-      { name: "node-2", ready: true, enabled: true, current: true, version: "2.8.306", detail: "Installed 2.8.306; matches this release" },
+      { name: "node-2", ready: true, enabled: true, current: true, version: "2.8.309-dev.7", detail: "Installed 2.8.309-dev.7; matches this release" },
       { name: "node-3", ready: true, native: true, detail: "Native Harvester console" }] },
     "/api/compose/preview": () => ({ capacity_token: "demo-compose-review", capacity: {
       status: "fits", blocked: false, requires_confirmation: true, pods: 3,
@@ -1415,7 +1417,7 @@ ssh_pwauth: true
     "/api/volumes/reclass/start": { ok: true, operation: { id: "op4" } },
     "/api/self/health": () => {
       const now = Date.now() / 1000;
-      return { version: "2.8.306", leader: true, identity: "homestead-6d9f-abcde",
+      return { version: "2.8.309-dev.7", leader: true, identity: "homestead-6d9f-abcde",
         api: { ok: true, ms: 38 },
         replicas: { desired: 1, pods: [{ name: "homestead-6d9f-abcde", node: "harvester-node1", ready: true, leader: true, this: true }] },
         loops: [{ name: "sampler", label: "Live charts", state: "ok", last_ok: now - 12, error: "", every: 30 },
@@ -1439,7 +1441,8 @@ ssh_pwauth: true
     "/api/self/nfs": { ok: true, detail: "NFS stopped; exports, shares and every PVC were kept" },
     "/api/addons/nfs/remove": { ok: true, detail: "NFS server removed. Export settings and PVCs were kept." },
     "/api/shares/nfs": { ok: true, detail: "NFS export saved" },
-    "/api/volumes/other": [],
+    "/api/volumes/other": [{ namespace: "lab", name: "scratch-cache", volume: "pvc-demo-local", storage_class: "local-path",
+      phase: "Bound", access_modes: ["ReadWriteOnce"], size: "5Gi", reason: "" }],
     "/api/volumes/old-copies": [{ pv: "pvc-7f3a9c1e-2b44-4d1b-9a55-0c1f2e3d4a5b", was: "lab/mosquitto-appdata",
       storage_class: "longhorn-r2", size: "10Gi", since: "2026-09-24T12:00:00Z" }],
     "/api/volumes/old-copies/remove": { ok: true, detail: "removing the old copy" },
@@ -1470,6 +1473,33 @@ ssh_pwauth: true
     "/api/workloads": workloads, "/api/network": network,
     // Rebooting a host: one app has nowhere else to go, one volume keeps a
     // single copy elsewhere while the host is down.
+    // A reviewed reboot or shutdown: a job that walks through the real phases.
+    "/api/node/power": (url, init) => {
+      const body = JSON.parse(init?.body || "{}"), reboot = body.action === "reboot";
+      const op = { id: "demo-power-" + Date.now(), kind: "node-power", title: `${body.action} ${body.node}`, status: "running",
+        progress: 5, message: "Cordoning host; power has not been sent", started_at: new Date().toISOString(), finished_at: "",
+        href: "/nodes?node=" + encodeURIComponent(body.node), resource: { kind: "Node", name: body.node, namespace: "" },
+        power: { phase: "cordoning", action: body.action, node: body.node, direct: !!(body.force || window.__demoSingleHostOutage),
+          holds: !body.force && Object.values(body.choices || {}).length > 0, held: Object.values(body.choices || {}).filter(c => c === "wait").length } };
+      const phases = op.power.direct
+        ? [["verifying", 15, "Rechecking the host"], ["sending", 20, "Submitting power helper"], ["observing", 60, reboot ? "Waiting for the host to return" : "Waiting for the host to leave Ready"]]
+        : [...(op.power.holds ? [["holding", 8, "Waiting to stop or move: lab/frigate, vms/win11; power has not been sent"]] : []),
+           ["draining", 10, "Evicting workload and system pods: 9 left"], ["draining", 12, "Evicting workload and system pods: 3 left"],
+           ["verifying", 15, "Drain completed; rechecking quorum, VMs, pods and volume replicas before power"],
+           ["sending", 20, "Submitting power helper"], ["observing", 60, reboot ? "Host is Ready; waiting for 2 volume(s) to become healthy" : "Host is NotReady; waiting to confirm shutdown"]];
+      (window.__demoOps ??= responses["/api/operations"]()).unshift(op);
+      phases.forEach(([phase, progress, message], i) => setTimeout(() => Object.assign(op, { progress, message, power: { ...op.power, phase } }), (i + 1) * 2500));
+      setTimeout(() => Object.assign(op, { status: "succeeded", progress: 100, finished_at: new Date().toISOString(),
+        message: reboot ? "Host rebooted and its volumes are healthy. The host stays cordoned." : "Host is powered off." }), (phases.length + 1) * 2500);
+      return { operation: op, steps: [], background: true };
+    },
+    "/api/quorum": { members: ["harvester-node1", "harvester-node2", "harvester-node3"], ready: ["harvester-node1", "harvester-node2", "harvester-node3"],
+      total: 3, quorum_needs: 2, can_lose: 1, power_enabled: true },
+    "/api/node/impact": url => ({ node: url.searchParams.get("node"),
+      workloads: [{ ns: "lab", name: "frigate", hardware: ["coral"], eligible: [], stranded: true, blocked: [{ name: "harvester-node2", why: ["no coral"] }] },
+        { ns: "lab", name: "home-assistant", hardware: [], eligible: ["harvester-node2", "harvester-node3"], stranded: false },
+        { ns: "lab", name: "paperless", hardware: [], eligible: ["harvester-node2"], stranded: false }],
+      stranded: [{ ns: "lab", name: "frigate" }] }),
     "/api/node/power/plan": url => {
       const plannedOutage = !!window.__demoSingleHostOutage && url.searchParams.get("force") !== "1";
       const plan = { node: url.searchParams.get("node"), action: url.searchParams.get("action"), review_token: "demo-power",
@@ -1480,6 +1510,13 @@ ssh_pwauth: true
         { ns: "lab", name: "home-assistant", stranded: false, eligible: ["harvester-node2", "harvester-node3"] },
         { ns: "lab", name: "paperless", stranded: false, eligible: ["harvester-node2"] }],
       stranded: [{ ns: "lab", name: "frigate" }],
+      // What each app and VM on the host does while it is down.
+      hold: [
+        { id: "Deployment/lab/frigate", kind: "Deployment", ns: "lab", name: "frigate", here: 1, hosts: [], options: ["wait"], default: "wait", why: "no other host it can run on" },
+        { id: "Deployment/lab/home-assistant", kind: "Deployment", ns: "lab", name: "home-assistant", here: 1, hosts: ["harvester-node2", "harvester-node3"], options: ["move", "wait"], default: "move", why: "" },
+        { id: "Deployment/lab/paperless", kind: "Deployment", ns: "lab", name: "paperless", here: 1, hosts: ["harvester-node2"], options: ["move", "wait"], default: "move", why: "" },
+        { id: "VirtualMachine/vms/win11", kind: "VirtualMachine", ns: "vms", name: "win11", here: 1, hosts: ["harvester-node2", "harvester-node3"], options: ["move", "wait"], default: "move", why: "" },
+        { id: "VirtualMachine/vms/gpu-desktop", kind: "VirtualMachine", ns: "vms", name: "gpu-desktop", here: 1, hosts: [], options: ["wait"], default: "wait", why: "it cannot live-migrate: a host device is passed through" }],
       volumes: [{ name: "pvc-demo-frigate", claim: "lab/frigate-config", healthy_elsewhere: 1, risk: "single-copy" },
         { name: "pvc-demo-ha", claim: "lab/homeassistant-config", healthy_elsewhere: 2, risk: "resync" }],
       maintenance: { budgets: [{ pod: "lab/paperless-5c9d", budget: "minAvailable 1", allowed: 1 }], local_storage: [] },
@@ -1488,6 +1525,7 @@ ssh_pwauth: true
       if (plannedOutage) {
         plan.workloads = [{ns:"lab",name:"homestead",stranded:true,eligible:[]}];
         plan.stranded = [{ns:"lab",name:"homestead"}];
+        plan.hold = plan.hold.map(h => ({ ...h, hosts: [], options: ["wait"], default: "wait", why: "the only host" }));
         plan.volumes = [{name:"pvc-demo-homestead",claim:"lab/homestead-data",healthy_elsewhere:0,risk:"unavailable"}];
         plan.maintenance.budgets[0].allowed = 0;
         plan.warnings = ["All applications, storage and Homestead are unavailable while this host is down."];
@@ -1819,6 +1857,8 @@ ssh_pwauth: true
     "/api/longhorn/v2/prepare": () => {window.__demoV2State='running';return {operation:{id:'demo-v2',kind:'longhorn-v2-prepare',title:'Prepare Longhorn V2',status:'running',progress:25,message:'Preparing host prerequisites'}};},
     "/api/longhorn/v2/enable": () => {window.__demoV2State='enabled';return {ok:true};},
     "/api/longhorn/settings": { ok: true, detail: "Saved: over-provisioning 150%" },
+    "/api/longhorn/offline-rebuilding": { supported: true, enabled: false, short: [{ name: "pvc-demo-nextcloud", claim: "lab/nextcloud-data", whole: 1, wanted: 2, hosts: ["node-2"], offline: "ignored" }] },
+    "/api/longhorn/rebuild": { ok: true, detail: "Longhorn is rebuilding lab/nextcloud-data while it is detached" },
     "/api/disks": { harvester: true, nodes: demoDisks, disk_tags: ["hdd", "nvme", "ssd"], all_node_tags: ["rack-a"],
       node_tags: { "harvester-node1": ["rack-a"], "harvester-node2": [], "harvester-node3": ["rack-a"] } },
     "/api/disks/tags": (url, init) => ({ ok: true, detail: `tagged ${JSON.parse(init?.body || "{}").tags.join(", ")}` }),
@@ -2043,7 +2083,7 @@ ssh_pwauth: true
         images: [{ container: "home-assistant", deployed: "ghcr.io/home-assistant/home-assistant:2026.8", candidate: "ghcr.io/home-assistant/home-assistant:2026.9", candidate_tag: "2026.9", remote_digest: "sha256:def", available: true }] },
       // Homestead's own release, offered on the top bar and under Settings › Updates.
       { ns: "lab", name: "homestead", homestead: "self", available: true, can_rollback: true,
-        images: [{ container: "homestead", deployed: `ghcr.io/homestead-lab/homestead:${typeof HOMESTEAD_VERSION === "string" ? HOMESTEAD_VERSION : "2.8.306"}`, candidate: "ghcr.io/homestead-lab/homestead:2.9.0", candidate_tag: "2.9.0", remote_digest: "sha256:ghi", available: true }] },
+        images: [{ container: "homestead", deployed: `ghcr.io/homestead-lab/homestead:${typeof HOMESTEAD_VERSION === "string" ? HOMESTEAD_VERSION : "2.8.309-dev.7"}`, candidate: "ghcr.io/homestead-lab/homestead:2.9.0", candidate_tag: "2.9.0", remote_digest: "sha256:ghi", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
     // The demo is a Harvester cluster: kube-vip and Multus come with it.
@@ -2220,7 +2260,7 @@ ssh_pwauth: true
   Object.assign(responses, {
     "/api/config/parts": demoConfigParts.map(([id, label, detail, dflt, caution]) => ({ id, label, detail, caution: caution || "",
       default: id !== "users", present: id !== "vmstore" })),
-    "/api/config/backup": { format: "homestead-config-backup", version: 1, homestead: "2.8.306", site: "Main site",
+    "/api/config/backup": { format: "homestead-config-backup", version: 1, homestead: "2.8.309-dev.7", site: "Main site",
       created: new Date().toISOString(), parts: [] },
     "/api/config/inspect": { homestead: "2.8.209", site: "Main site", created: "2026-09-26T21:40:00Z",
       parts: demoConfigParts.map(([id, label, detail, , caution], i) => ({ id, label, detail, caution: caution || "", default: id !== "users",
@@ -2343,7 +2383,7 @@ ssh_pwauth: true
       ? { ...row, status: "succeeded", progress: 100, message: "Image cached" } : row);
     const moves = responses["/api/move/moves"];
     responses["/api/move/moves"] = (...args) => moves(...args).filter(row => row.status !== "failed");
-    for (const site of demoSites.filter(row => !row.reachable)) Object.assign(site, { reachable: true, version: "2.8.306", error: "" });
+    for (const site of demoSites.filter(row => !row.reachable)) Object.assign(site, { reachable: true, version: "2.8.309-dev.7", error: "" });
     const mqtt = responses["/api/mqtt/preview"].states[0].payload;
     Object.assign(mqtt, { health: "healthy", vol_total: storage.volumes, vol_degraded: 0, vol_faulted: 0 });
   } else {

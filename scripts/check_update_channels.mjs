@@ -40,6 +40,19 @@ try {
     await page.evaluate(() => homesteadUpdateDialog());
     const modalPicker = page.locator("#hsUpdateBody select[aria-label='Homestead release channel']");
     await modalPicker.waitFor();
+    // Linked clusters: one list, each tickbox beside its own cluster's name,
+    // and the button saying which clusters it updates.
+    await page.waitForFunction(() => document.querySelectorAll("#hsUpdateBody .hs-cluster").length >= 3);
+    const rows = await page.locator("#hsUpdateBody .hs-cluster").evaluateAll(els => els.map(el => {
+      const box = el.querySelector("input")?.getBoundingClientRect(), name = el.querySelector(".hs-cluster-name b").getBoundingClientRect();
+      return { name: el.querySelector(".hs-cluster-name b").textContent, left: box && box.right <= name.left, level: box && Math.abs(box.top - name.top) < 14 };
+    }));
+    for (const row of rows) assert.ok(row.left && row.level, `the tickbox sits beside ${row.name} at ${width}px`);
+    const button = () => page.locator("#hsUpdateBody .hs-actions .btn.pri").textContent();
+    assert.match(await button(), /^Update to /);
+    await page.locator("#hsUpdateBody .hs-cluster", { hasText: "Branch office" }).locator("input").check();
+    assert.equal(await button(), "Update 2 clusters");
+    await page.locator("#hsUpdateBody .hs-cluster", { hasText: "Branch office" }).locator("input").uncheck();
     assert.equal(await modalPicker.inputValue(), "prod");
     await modalPicker.selectOption("dev");
     await page.waitForFunction(() => STATE.data.imageUpdates?.channel === "dev" && !HOMESTEAD_CHANNEL_SAVING);

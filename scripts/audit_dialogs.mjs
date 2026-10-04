@@ -15,6 +15,10 @@ const output = process.env.DIALOG_OUTPUT || "release-assets/dialogs";
 await mkdir(output, { recursive: true });
 const base = (process.env.HOMESTEAD_URL || "http://127.0.0.1:4173") + "/?demo=1&demo-scenario=incidents";
 const only = process.argv[2] || "";
+// design.md, Verbosity budget. Visible words count names and rows too, so the
+// budgets sit above today's longest dialogs: they stop growth, not content.
+const DIALOG_WORDS = 300, REVIEW_WORDS = 200;
+const REVIEW = /review|start|update|reboot|shutdown|power|delete|remove|confirm/;
 const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 
 // name, the page to open first, then the steps: JavaScript to run, or
@@ -298,6 +302,18 @@ async function audit([label, width, height, mobile], items) {
           buttons: body.querySelectorAll("button, .btn").length,
           checkboxes: body.querySelectorAll("input[type=checkbox]").length,
           words: body.innerText.split(/\s+/).filter(Boolean).length,
+          // Visible notices: design.md asks for one, combining related warnings.
+          attention: [...body.querySelectorAll(".ui-callout, .note.bad, .note.warn")].filter(e => e.checkVisibility()).length,
+          // The same sentence said twice in one dialog.
+          repeated: (() => {
+            const seen = new Map();
+            for (const e of body.querySelectorAll("p, li, .ui-lead, .ui-help, .ui-callout-body, .note")) {
+              if (!e.checkVisibility() || e.querySelector("p, li, .ui-lead, .ui-help, .ui-callout-body, .note")) continue;
+              const text = e.innerText.trim().replace(/\s+/g, " ");
+              if (text.length >= 40) seen.set(text, (seen.get(text) || 0) + 1);
+            }
+            return [...seen].filter(([, n]) => n > 1).map(([text]) => text.slice(0, 80));
+          })(),
           overflow: [...new Set(wide)].slice(0, 6),
           tiny: [...new Set(tiny)].slice(0, 6),
         };
@@ -312,6 +328,11 @@ async function audit([label, width, height, mobile], items) {
       report.push({ name, label, ...metrics });
       if (metrics.overflow.length) failures.push(`${name} (${label}): content wider than the dialog: ${metrics.overflow.join(", ")}`);
       if (metrics.tiny.length) failures.push(`${name} (${label}): text under 10px: ${metrics.tiny.join(", ")}`);
+      // design.md, Verbosity budget: what a dialog shows before Details is opened.
+      const limit = REVIEW.test(name) ? REVIEW_WORDS : DIALOG_WORDS;
+      if (metrics.words > limit) failures.push(`${name} (${label}): ${metrics.words} visible words, over ${limit}: move explanations, identifiers and calculations into UI.more`);
+      if (metrics.attention > 1) failures.push(`${name} (${label}): ${metrics.attention} visible notices: combine them into one UI.callout`);
+      if (metrics.repeated.length) failures.push(`${name} (${label}): says the same thing twice: "${metrics.repeated[0]}"`);
     } catch (error) {
       const toastText = await page.evaluate(() => [...document.querySelectorAll("#toast .tst")].map((t) => t.textContent.trim()).join(" | ")).catch(() => "");
       failures.push(`${name} (${label}): could not open: ${error.message.split("\n")[0]}${toastText ? ` - toast: ${toastText}` : ""}${errors.length ? ` - error: ${errors.at(-1)}` : ""}`);

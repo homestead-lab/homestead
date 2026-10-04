@@ -736,13 +736,17 @@ def set_cordon(node, unschedulable):
     return {"ok": True, "node": node, "cordoned": bool(unschedulable)}
 
 
-def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, progress=None):
+def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, progress=None, resumed=False):
     """Evict workload pods off a node. DaemonSets and mirror pods are skipped
     because the scheduler will simply recreate them on the same node."""
     pods = MAINTENANCE.items(kget, "/api/v1/pods")
     if reviewed_pods is not None:
         here = [p for p in pods if (p.get("spec") or {}).get("nodeName") == node]
-        if MAINTENANCE.pod_snapshot(here) != reviewed_pods or any(not row[2] for row in reviewed_pods):
+        now = [tuple(row) for row in MAINTENANCE.pod_snapshot(here)]
+        reviewed = [tuple(row) for row in reviewed_pods]
+        # A resumed drain finds some reviewed pods already gone; none may be new.
+        changed = not set(now) <= set(reviewed) if resumed else now != reviewed
+        if changed or any(not row[2] for row in reviewed):
             raise ValueError("Host pods changed after review; power was not sent. Review the host again")
     evicted, skipped, targets = [], [], {}
     for p in pods:
@@ -814,7 +818,8 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
     return {"ok": True, "node": node, "evicted": evicted, "skipped": skipped}
 
 
-def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=None, progress=None, force=False, planned_outage=False):
+def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=None, progress=None, force=False, planned_outage=False,
+               resumed=False, hold=None, send=None):
     """Reboot or shut down a host.
 
     Kubernetes cannot do this. We schedule a one-shot privileged pod pinned to
@@ -840,8 +845,12 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
         # token. Eviction would remove Homestead before it could send power.
         rep = quorum_report()
         before_send()
+        if hold and hold():
+            steps.append("stopped the apps and VMs that wait for the host")
         steps.append("planned whole-cluster outage: no cordon or drain")
-        return _send_power(node, action, steps, rep, report)
+        # send: the caller's own last step - on a single host, a helper that
+        # waits for Homestead to stop before it powers the host.
+        return (send or _send_power)(node, action, steps, rep, report)
     if force:
         # Overridden by an admin: no cordon or drain - which on a one-node
         # cluster would evict Homestead before it could send anything, and
@@ -859,9 +868,13 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
     report("cordoning", 5, "Cordoning host; power has not been sent")
     set_cordon(node, True)
     steps.append("cordoned")
+    held = bool(hold and hold())
+    if held:
+        steps.append("stopped what waits for the host and moved its VMs")
     if drain_first:
         report("draining", 10, "Evicting workload and system pods through disruption budgets; power has not been sent")
-        d = drain(node, include_system=True, reviewed_pods=reviewed_pods, wait=True, progress=report)
+        # What was stopped or moved has gone from the reviewed pods; nothing may be new.
+        d = drain(node, include_system=True, reviewed_pods=reviewed_pods, wait=True, progress=report, resumed=resumed or held)
         steps.append(f"drained {len(d['evicted'])} pod(s)")
         refused = [item for item in d["skipped"] if "(HTTP " in item]
         if refused:

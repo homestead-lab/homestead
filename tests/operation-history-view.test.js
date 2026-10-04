@@ -44,10 +44,10 @@ test("clearing the last dismissible job leaves the recovery job visible and hide
   assert.equal(fields["#jobClear"].hidden, true);
 });
 
-test("clear completed retains failed and protected moves", async () => {
+test("clear finished takes failed jobs the server lets go of and keeps protected moves", async () => {
   const {ctx} = setup([move("done", "succeeded", true), move("recovered", "cancelled", true), move("held", "failed", false), move("other-failure", "failed", true)]);
   const dismissed=[]; ctx.api=async (_url, options)=>{dismissed.push(JSON.parse(options.body).id);return {ok:true};};
   await ctx.dismissCompletedOperations();
-  assert.deepEqual(dismissed,["done","recovered"]);
-  assert.equal(ctx.STATE.data.operations.map(item=>item.id).join(","),"held,other-failure");
+  assert.deepEqual(dismissed,["done","recovered","other-failure"]);
+  assert.equal(ctx.STATE.data.operations.map(item=>item.id).join(","),"held");
 });

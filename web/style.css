@@ -2501,6 +2501,26 @@ html[data-theme="light"] .modalbox[data-context="cluster-shutdown"]{background:v
 
 /* Homestead updates: linked clusters, each with a tick to include it. */
 .hs-fleet{display:flex;flex-direction:column;gap:6px}
+/* Clusters to update: the tickbox on the left of each, the change on the right -
+   under the name on a phone, never apart from the cluster it belongs to. */
+.hs-clusters{display:flex;flex-direction:column;border-top:1px solid var(--line)}
+.hs-cluster{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:4px 12px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line);cursor:pointer;min-width:0;margin:0;color:var(--tx);font-size:13px;font-weight:400;text-transform:none;letter-spacing:0}
+.hs-cluster.single{grid-template-columns:minmax(0,1fr) auto}
+.hs-cluster.fixed{cursor:default}
+.hs-cluster>input{width:18px;height:18px;margin:0;align-self:start;margin-top:2px}
+.hs-cluster-main{display:flex;flex-direction:column;gap:3px;min-width:0}
+.hs-cluster-name{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.hs-cluster-meta{overflow-wrap:anywhere}
+.hs-cluster-parts{display:flex;flex-direction:column;gap:1px;margin-top:2px}
+.hs-cluster-state .pill{white-space:nowrap}
+.hs-note{margin:0}
+.hs-channel{border-top:1px solid var(--line);padding-top:4px}
+@media (max-width:560px){
+  .hs-cluster{grid-template-columns:22px minmax(0,1fr)}
+  .hs-cluster.single{grid-template-columns:minmax(0,1fr)}
+  .hs-cluster-state{grid-column:2}
+  .hs-cluster.single .hs-cluster-state{grid-column:1}
+}
 .hs-part-end{gap:8px;flex-wrap:nowrap}
 .hs-pick{display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;white-space:nowrap}
 .hs-pick input{width:16px;height:16px}
@@ -2659,6 +2679,10 @@ html[data-theme="light"] .bottombar{background:rgba(255,255,255,.92)}
 .settings-nav button:hover{background:rgba(255,255,255,.05)}
 .settings-nav button.on{background:rgba(255,255,255,.08)}
 .settings-nav button i{font-style:normal;color:var(--dim);display:none}
+/* A section's icon, as the main menu draws its own: dimmed until chosen. */
+.settings-nav .settings-nav-icon{width:18px;height:18px;flex:0 0 auto;align-self:flex-start;margin-top:1px;color:var(--mut);opacity:.75;transition:opacity .2s var(--e),color .2s var(--e)}
+.settings-nav .settings-nav-icon+span{flex:1;min-width:0}
+.settings-nav button:hover .settings-nav-icon,.settings-nav button.on .settings-nav-icon{opacity:1;color:var(--tx)}
 .settings-back{display:none}
 html[data-theme="light"] .settings-nav button.on{background:rgba(0,0,0,.06)}
 @media(max-width:900px){
@@ -3056,6 +3080,9 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 .dialog-master-content .jobitemtop{margin-bottom:12px}
 .dialog-master-content .jobfoot{margin:12px 0;gap:12px;overflow-wrap:anywhere}
 .dialog-master-content .jobactions{gap:8px;flex-wrap:wrap}
+/* Log and Dismiss belong to the job, not to what it is asking for: they sit
+   at the start of the row, its own actions at the end. */
+.jobactions-side{display:flex;gap:6px;margin-right:auto}
 .dialog-master-content .jobmeter.unknown{display:none}
 .dialog-master-content .ui-more{margin-top:18px}
 .jobs-dialog-actions{margin-top:18px}

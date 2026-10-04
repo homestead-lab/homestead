@@ -125,6 +125,24 @@ class StateTests(unittest.TestCase):
         self.assertEqual([], HOST_OS.tick())
         self.assertFalse(HOST_OS.report()["applies"])
 
+    def test_a_restart_since_the_read_clears_restart_needed_and_reads_again(self):
+        # A manual restart left "restart needed" until the next six-hourly read.
+        node = {"metadata": {"name": "node-1"},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}], "nodeInfo": {"bootID": "boot-a"}}}
+        self.nodes = {"items": [node]}
+        host = Host(UBUNTU)
+        HOST_OS.bind(lambda path: node if path.endswith("/node-1") else self.nodes, host,
+                     lambda force=False: {"distribution": "k3s"}, self.data)
+        self.assertEqual(["node-1"], HOST_OS.tick(now=10 ** 10))
+        self.assertIn("restart needed", HOST_OS.report("node-1")["hosts"]["node-1"]["summary"]["text"])
+        self.assertEqual([], HOST_OS.tick(now=10 ** 10 + 60), "same boot: not read again yet")
+        node["status"]["nodeInfo"]["bootID"] = "boot-b"
+        row = HOST_OS.report("node-1")["hosts"]["node-1"]
+        self.assertNotIn("restart needed", row["summary"]["text"])
+        self.assertTrue(row["restarted_since_read"])
+        self.assertNotIn("hostos:node-1:reboot", {fact["key"] for fact in HOST_OS.alert_facts()})
+        self.assertEqual(["node-1"], HOST_OS.tick(now=10 ** 10 + 120), "a restarted host is read again at once")
+
     def test_what_needs_someone_is_an_alert(self):
         self.bind(Host(UBUNTU))
         HOST_OS.read("node-1")

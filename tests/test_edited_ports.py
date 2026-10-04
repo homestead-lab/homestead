@@ -43,6 +43,11 @@ class EditedPortsReachTheServiceTests(unittest.TestCase):
 
         def send(method, path, body=None, **kwargs):
             self.sent.append((method, path, body))
+            if method == "DELETE":
+                name = path.rsplit("/", 1)[-1]
+                self.objects.pop(path, None)
+                for listing in ("/api/v1/namespaces/lab/services", "/api/v1/services"):
+                    self.objects[listing]["items"] = [s for s in self.objects[listing]["items"] if s["metadata"]["name"] != name]
             return body
 
         networking.bind(get, send, {"kube-system"}, "lab", "192.0.2.242")
@@ -76,3 +81,42 @@ class EditedPortsReachTheServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EditAddressStepTests(EditedPortsReachTheServiceTests):
+    """Edit's Address step, as Deploy's: the VIP and reachability are saved
+    with the edit, and only what differs from now changes."""
+    def setUp(self):
+        super().setUp()
+        service = copy.deepcopy(SERVICE)
+        service["metadata"].update(uid="svc-uid", resourceVersion="7")
+        service["metadata"]["annotations"]["homestead.io/vip-mode"] = "manual"
+        for path in ("/api/v1/namespaces/lab/services", "/api/v1/services"):
+            self.objects[path] = {"items": [copy.deepcopy(service)]}
+        self.objects["/api/v1/namespaces/lab/services/plex"] = copy.deepcopy(service)
+
+    def test_keeping_its_own_address_changes_nothing(self):
+        self.assertEqual("", networking.set_workload_address("lab", "plex", "loadbalancer", "manual", "192.0.2.245"))
+        self.assertEqual("", networking.set_workload_address("lab", "plex", "loadbalancer", "auto"),
+                         "an automatic choice keeps the address it already has")
+        self.assertEqual([], self.sent)
+
+    def test_another_specific_vip_moves_the_service_in_place(self):
+        networking.set_workload_address("lab", "plex", "loadbalancer", "manual", "192.0.2.250")
+        method, path, body = self.sent[-1]
+        self.assertEqual(("PUT", "/api/v1/namespaces/lab/services/plex"), (method, path))
+        self.assertIn("192.0.2.250", str(body["metadata"]["annotations"]))
+        self.assertEqual("10.43.0.30", body["spec"]["clusterIP"], "the Service is updated, not recreated")
+
+    def test_cluster_only_replaces_the_lan_service_with_an_internal_one(self):
+        networking.set_workload_address("lab", "plex", "internal")
+        self.assertEqual(("DELETE", "/api/v1/namespaces/lab/services/plex"), self.sent[0][:2])
+        method, path, body = self.sent[-1]
+        self.assertEqual("POST", method)
+        self.assertEqual("ClusterIP", body["spec"]["type"])
+        self.assertEqual(32400, body["spec"]["ports"][0]["port"])
+
+    def test_only_its_own_service_is_moved(self):
+        self.objects["/api/v1/namespaces/lab/services"]["items"][0]["metadata"]["name"] = "shared-plex"
+        self.assertEqual("", networking.set_workload_address("lab", "plex", "internal"))
+        self.assertEqual([], self.sent)

@@ -232,8 +232,67 @@ test('host actions exposes normal reviews even when quorum cannot lose a member'
   t.c.api=async path=>path==='/api/quorum'?{members:['host1'],can_lose:0,total:1,ready:['host1'],quorum_needs:1}:
     {workloads:[],stranded:[]};
   await t.c.window.nodeActions('host1');
-  assert.match(t.html(), /Review reboot/);
-  assert.match(t.html(), /Review shutdown/);
+  assert.match(t.html(), /nodePowerReview\("host1",'reboot'\)[^]*Reboot…/);
+  assert.match(t.html(), /nodePowerReview\("host1",'poweroff'\)[^]*Shut down…/);
   assert.match(t.html(), /planned whole-cluster outage/);
   assert.doesNotMatch(t.html(), /Override - reboot or shut down anyway|Review forced/);
+});
+
+test('a host power job shows its steps, the current one, and how it ended', () => {
+  const t = setup(review);
+  const markup = (phase, status = 'running', direct = false) =>
+    t.c.nodePowerProgressMarkup({ status, progress: 12, message: 'Evicting pods: 3 left', power: { phase, action: 'poweroff', direct } });
+  const states = html => [...html.matchAll(/<li class="(\w+)">/g)].map(m => m[1]);
+  assert.deepEqual(states(markup('draining')), ['ok', 'run', 'todo', 'todo', 'todo']);
+  assert.match(markup('draining'), /Evicting pods: 3 left/);
+  assert.deepEqual(states(markup('observing', 'succeeded')), ['ok', 'ok', 'ok', 'ok', 'ok']);
+  assert.deepEqual(states(markup('draining', 'failed')), ['ok', 'bad', 'todo', 'todo', 'todo']);
+  assert.match(markup('draining', 'failed'), /Check the host before making another request/);
+  // An outage or forced job skips cordon and drain.
+  assert.deepEqual(states(markup('sending', 'running', true)), ['ok', 'run', 'todo']);
+  assert.match(markup('draining', 'running', false, true), /Stop new work on the host/);
+});
+
+test('a stopped host power job marks the step it stopped at, and says why once', () => {
+  const t = setup(review);
+  const html = t.c.nodePowerProgressMarkup({ status: 'failed', progress: 10, message: 'Longhorn still prevents eviction',
+    power: { phase: 'failed', failed_phase: 'draining', action: 'reboot', direct: false } });
+  const states = [...html.matchAll(/<li class="(\w+)">/g)].map(m => m[1]);
+  assert.deepEqual(states, ['ok', 'bad', 'todo', 'todo', 'todo'], 'the drain stopped, not the cordon');
+  assert.equal(html.split('Longhorn still prevents eviction').length - 1, 1, 'the reason appears once');
+});
+
+test('each app and VM may move or wait for the host, and the choice is sent', async () => {
+  const hold = [
+    {id:'Deployment/lab/plex',kind:'Deployment',ns:'lab',name:'plex',here:1,hosts:['host2'],options:['move','wait'],default:'move',why:''},
+    {id:'VirtualMachine/vms/gpu',kind:'VirtualMachine',ns:'vms',name:'gpu',here:1,hosts:[],options:['wait'],default:'wait',why:'it cannot live-migrate'},
+    {id:'Deployment/lab/<web>',kind:'Deployment',ns:'lab',name:'<web>',here:1,hosts:['host2'],options:['move'],default:'move',why:''}];
+  const t=setup({...hostReview,hold,stranded:[]});hostFields(t);
+  await t.c.window.nodePowerReview('host1','reboot');
+  assert.match(t.html(), /Apps and VMs · 3/);
+  assert.match(t.html(), /id="pw_hold_0"[^]*Move to host2[^]*Stop and wait for this host/);
+  assert.match(t.html(), /stops and waits[^]*it cannot live-migrate/);
+  assert.match(t.html(), /&lt;web&gt;/);
+  assert.doesNotMatch(t.html(), /id="pw_allow"/);
+  t.fields['#pw_hold_0']={value:'wait'};
+  await t.c.window.nodePower('host1','reboot');
+  assert.deepEqual(t.sent[0].body.choices, {'Deployment/lab/plex':'wait'});
+});
+
+test('on the only host everything stops first and starts again', async () => {
+  const t=setup({...hostReview,action:'poweroff',planned_outage:true,stranded:[{ns:'lab',name:'plex'}],
+    hold:[{id:'Deployment/lab/plex',kind:'Deployment',ns:'lab',name:'plex',here:1,hosts:[],options:['wait'],default:'wait',why:'the only host'}]});
+  await t.c.window.nodePowerReview('host1','poweroff');
+  assert.match(t.html(), /stops the apps and VMs below first/);
+  assert.match(t.html(), /Nothing can move off the only host/);
+  assert.doesNotMatch(t.html(), /<select id="pw_hold_0"/);
+});
+
+test('a forced review stops and moves nothing', async () => {
+  const t=setup({...hostReview,force:true,hold:[{id:'Deployment/lab/plex',kind:'Deployment',ns:'lab',name:'plex',here:1,hosts:['host2'],options:['move','wait'],default:'move',why:''}]});
+  hostFields(t);
+  await t.c.window.nodePowerReview('host1','reboot',true);
+  assert.doesNotMatch(t.html(), /pw_hold_0/);
+  await t.c.window.nodePower('host1','reboot');
+  assert.deepEqual(t.sent[0].body.choices, {});
 });

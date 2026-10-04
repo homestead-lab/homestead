@@ -42,7 +42,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.306";
+const HOMESTEAD_VERSION = "2.8.309-dev.7";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -177,6 +177,11 @@ async function api(path, opts) {
   // `keep` marks a read whose answer matters after the page changes.
   const readOnly = (!opts || !opts.method || opts.method === "GET") && !opts?.keep;
   const startedAt = window.NAV_TOKEN;
+  // `timeout` (ms) gives up on a request nothing will answer: a host that went
+  // down mid-request leaves its connection open, and the browser waits on it
+  // long after Homestead is back.
+  if (opts?.timeout && !opts.signal && typeof AbortSignal !== "undefined" && AbortSignal.timeout)
+    opts = { ...opts, signal: AbortSignal.timeout(opts.timeout) };
   // Linked clusters: which one this goes to (fleet.js).
   if (window.fleetRoute) ({ path, opts } = window.fleetRoute(path, opts || {}));
   const diagnostic = window.HomesteadRecorder?.request(path, opts);
@@ -192,7 +197,7 @@ async function api(path, opts) {
   catch (error) { diagnostic?.done(r.status); throw error; }
   diagnostic?.done(r.status, b?.operation?.id);
   if (readOnly && startedAt !== window.NAV_TOKEN) return ABANDONED;
-  if (!r.ok) throw new Error((b && b.error) || r.statusText);
+  if (!r.ok) throw Object.assign(new Error((b && b.error) || r.statusText), { status: r.status, body: b });
   if (b && b.operation && window.noteOperation) window.noteOperation(b.operation);
   return b;
 }

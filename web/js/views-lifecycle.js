@@ -61,8 +61,8 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
       <div class="subsec">Hardware passed to this container</div>
       <div class="hwchoices">${hardwareChoices(`e_hw_${index}`, container.hardware || [])}</div>
       <div class="subsec">Privileges</div>
-      ${privilegeFields(`e_pv_${index}`, container.privileges || {})}
-      <div class="subsec">Ports ${tip("Container port is where the process listens inside the container. LAN port is the number clients use on the Service address; unexposed ports stay inside the cluster.")}</div>
+      ${privilegeFields(`e_pv_${index}`, container.privileges || {})}`,
+    address: () => `
       <div class="e-ports" id="e_ports_${index}">${ports.map(port => editPortRow(index, port)).join("")}</div>
       <button class="btn sm" type="button" onclick="editAddPort(${index})">＋ add port</button>`,
     environment: () => `
@@ -76,12 +76,12 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
       <button class="btn sm" type="button" onclick="editAddVol(${index})">＋ add storage mapping</button>`,
   };
   const count = section === "environment" ? `${env.length + refs.length} vars`
-    : section === "storage" ? `${mounts.length} mounts` : section === "hardware" ? `${ports.length} ports` : "";
+    : section === "storage" ? `${mounts.length} mounts` : section === "address" ? `${ports.length} ports` : "";
   return `<details class="edit-container card flat" data-index="${index}" data-section="${section}"
     ${section === "basics" || section === "all" ? `data-original-name="${esc(container.new ? "" : container.original_name || container.name)}" data-new="${container.new ? 1 : 0}"` : ""} ${index === 0 ? "open" : ""}>
     <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span>${count ? `<span class="pill">${count}</span>` : ""}</summary>
     <div class="edit-container-body">${section === "basics" || section === "all" ? `<div class="row"><button class="btn sm danger" type="button" data-container-remove onclick="containerRemove(${jsq(mode)},${index})">Remove container</button></div>` : ""}
-      ${section === "all" ? Object.entries(fields).map(([key, draw]) => `<div class="subsec">${({ basics: "Container", hardware: "Hardware and access", environment: "Environment", storage: "Storage" })[key]}</div>${draw()}`).join("") : fields[section]()}</div>
+      ${section === "all" ? Object.entries(fields).map(([key, draw]) => `<div class="subsec">${({ basics: "Container", hardware: "Hardware and access", environment: "Environment", storage: "Storage", address: "Ports" })[key]}</div>${draw()}`).join("") : fields[section]()}</div>
   </details>`;
 };
 
@@ -104,9 +104,36 @@ function placementRow(kind, row = {}) {
     <select class="aff-mode">${PLACEMENT_MODES.map(([value, label]) => `<option value="${value}" ${row.mode === value ? "selected" : ""}>${label}</option>`).join("")}</select>
     <button class="iconbtn row-remove" type="button" title="Remove this rule" onclick="this.closest('.aff-row').remove();placementChanged()">×</button></div>`;
 }
+/* How the workload is reached now, in the Address step's terms. */
+function editAddressNow(w, network, vips) {
+  const own = (network?.services || []).find(s => s.namespace === w.ns && s.name === w.name && !s.system);
+  const nodes = own && window.networkIsNodeAccess ? networkIsNodeAccess(own, network) : false;
+  const ip = own && !nodes ? (own.requested_ips?.[0] || own.external_ips?.[0] || "") : "";
+  const network_mode = w.network_mode === "host" ? "host" : w.lan && !w.has_service ? "lan" : own?.type === "ClusterIP" ? "internal" : "loadbalancer";
+  // An address of its own shows as that address, so keeping it changes nothing.
+  const vip_mode = !own ? (vips.shared ? "shared" : "auto") : nodes ? "nodes"
+    : own.vip_mode === "shared" || (ip && ip === vips.shared) ? "shared" : ip ? "manual" : "auto";
+  return { network_mode, vip_mode, lb_ip: vip_mode === "manual" ? ip : "" };
+}
+window.editAddressChanged = () => {
+  const access = $("#e_net")?.value, lan = access === "lan", lanBeside = $("#e_lan_beside");
+  const vip = $("#e_vip_mode")?.closest(".f");
+  if (vip) vip.hidden = access !== "loadbalancer";
+  if ($("#e_vip_wrap")) $("#e_vip_wrap").hidden = access !== "loadbalancer" || $("#e_vip_mode")?.value !== "manual";
+  // Its own LAN address is the mode itself, or an extra beside the VIP.
+  if (lanBeside) lanBeside.hidden = lan || access === "host";
+  // The LAN mode turns the extra address on; leaving it puts the choice back.
+  const on = $("#e_lan_on");
+  if (on && lan && on.dataset.before === undefined) { on.dataset.before = on.checked ? "1" : ""; on.checked = true; }
+  else if (on && !lan && on.dataset.before !== undefined) { on.checked = on.dataset.before === "1"; delete on.dataset.before; }
+  editLanToggle();
+  const note = $("#e_address_note");
+  if (note) note.hidden = !(lan || access === "host");
+};
 window.editLanToggle = async () => {
   const box = $("#e_lan_box");
-  box.hidden = !$("#e_lan_on").checked;
+  if (!box) return;
+  box.hidden = !($("#e_lan_on")?.checked || $("#e_net")?.value === "lan");
   if (!box.hidden && !box.dataset.filled) {
     let current = null;
     try { current = JSON.parse(box.dataset.current || "null"); } catch (e) { /* none */ }
@@ -161,9 +188,6 @@ function placementSection(p, w, nodes, containers) {
         <div class="f"><label>Keep off the node of ${tip("For pairs that should never share a host: two DNS servers, or two apps that would compete for one disk.")}</label>
           <div id="e_apart">${(p.apart || []).map(row => placementRow("apart", row)).join("")}</div>
           <button class="btn sm" type="button" onclick="placementAdd('apart')">＋ Add</button></div></div></div>
-    <div class="place-level"><div class="place-title">Its own LAN address</div>
-      <label class="switch"><input type="checkbox" id="e_lan_on" ${w.lan ? "checked" : ""} onchange="editLanToggle()"> An address of its own on the LAN, beside the pod network</label>
-      <div id="e_lan_box" ${w.lan ? "" : "hidden"} data-current="${esc(JSON.stringify(w.lan || null))}"></div></div>
     <div class="place-level"><div class="place-title">If its node fails</div>
       <div class="place-grid"><div class="f">${failoverSelect("e_failover", w.failover || "default")}</div>
         <div class="dim small">${esc(FAILOVER_HELP[w.failover || "default"])}</div></div></div>
@@ -214,6 +238,8 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       api(`/api/deploy/options?ns=${encodeURIComponent(ns)}`).catch(() => ({})),
       STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads").catch(() => []),
     ]);
+    const [vips, network] = await Promise.all([vipChoices(), api("/api/network").catch(() => null)]);
+    if (network) STATE.data.network = network;
     EDIT_SAVE_UNCERTAIN = false;
     EDIT_PLACEMENT = { ns, name, others: (others || []).filter(x => !(x.ns === ns && x.name === name)),
       nodes: nodes0(liveNodes).length };
@@ -245,8 +271,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       <div id="e_removed_containers" class="dim small"></div>`;
     const running = placementSection(w.placement || {}, w, nodes, containers);
     const access = `
-      ${panels("hardware")}
-      <div class="note" id="e_ports_note" hidden></div>`;
+      ${panels("hardware")}`;
     const environment = `
       ${panels("environment")}
       ${seeds.length ? `<div class="sec">Startup seed config ${tip("This ConfigMap is copied into the container's persistent storage by an init container before every start. It is authoritative: editing only the mounted file will be overwritten on restart.")}</div>
@@ -260,17 +285,18 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
         </div>`).join("")}` : ""}`;
     const storage = `${UI.more("Choosing storage", "<p>RWO is best for one workload; RWX permits multi-node sharing. An existing PVC keeps its current data; a volume already in this pod shares its backing storage with another container. Host paths reduce failover portability. Saving creates any new claim, then rolls the pod.</p>")}
       ${panels("storage")}`;
-    const address = `
-      <div id="e_vip_picture"></div>
-      <div class="row"><button class="btn" data-need="operator" onclick="networkManage(${jsq(ns)},${jsq(name)})">Choose its address</button>
-        ${tip("The address its ports answer on: the default workload VIP or one you pick. Applied on its own, without restarting the pod - save other changes first.")}</div>
+    const address = `${addressStepHtml("e", editAddressNow(w, network, vips), vips, vips.shared || "", {
+        onChange: "editAddressChanged()",
+        lanHtml: `<label class="switch" id="e_lan_beside"><input type="checkbox" id="e_lan_on" ${w.lan ? "checked" : ""} onchange="editAddressChanged()"> Also an address of its own on the LAN, beside its VIP</label>
+          <div id="e_lan_box" ${w.lan ? "" : "hidden"} data-current="${esc(JSON.stringify(w.lan || null))}"></div>`,
+        portsHtml: `<div class="note" id="e_address_note" hidden>With its own LAN address or the host's network, clients connect to it directly: its LAN ports and VIP are not used.</div>
+          ${panels("address")}<div class="note" id="e_ports_note" hidden></div>`})}
       ${UI.more("What saving does", "<p>Saving rolls the pod. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either workload.</p>")}`;
     $("#mbody").innerHTML = `<div id="e_containers">${stepper("e_steps", [
       { title: "Basics", html: basics }, { title: "Hardware and access", html: access },
       { title: "Environment values", html: environment }, { title: "Storage", html: storage },
       { title: "Where it runs", html: running }, { title: "Address", html: address }],
       `<button class="btn pri" id="e_save" onclick="editSave(${jsq(ns)},${jsq(name)})">Review changes</button>`, { always: true })}</div>`;
-    editVipPicture(w);
     containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
     window.__editHadService = !!w.has_service;
@@ -278,18 +304,9 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     window.__editPortBaseline = editPortSignature();
     containerRemoveButtons();
     placementChanged();
-    if ($("#e_lan_on")?.checked) editLanToggle();
+    editAddressChanged();
   } catch (e) { $("#mbody").innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 };
-/* Its address, drawn: the VIP its ports answer on, and where each leads. */
-function editVipPicture(w) {
-  const host = $("#e_vip_picture");
-  if (!host || !window.Diagram) return;
-  const ports = (w.ports || []).filter(p => p.expose !== false);
-  const ip = (STATE.data.wl || []).find(x => x.ns === w.ns && x.name === w.name)?.ports?.[0]?.ip || "";
-  host.innerHTML = Diagram.vip(ip, ports.map(p => ({ port: p.host || p.port || p.container, app: w.name, node: w.node || "" })),
-    { empty: "no port is exposed on the LAN", caption: ip ? "" : "Not on the LAN yet: choose an address to expose its ports." });
-}
 window.editAddEnv = (index, key = "", value = "") => $("#e_env_" + index).insertAdjacentHTML("beforeend", editEnvRow(index, key, value));
 window.editAddPort = (index, port = {}) => {
   $("#e_ports_" + index).insertAdjacentHTML("beforeend", editPortRow(index, port));
@@ -378,7 +395,7 @@ window.containerAdd = mode => {
   if (mode === "deploy") return deployAddContainer();
   const index = EDIT_CONTAINER_NEXT++;
   const container = { name: `container-${index + 1}`, image: "", new: true, env: {}, ports: [], volumes: [] };
-  for (const section of ["basics", "hardware", "environment", "storage"])
+  for (const section of ["basics", "hardware", "environment", "storage", "address"])
     $("#e_" + section + "_containers").insertAdjacentHTML("beforeend", editContainerPanel(container, index, section));
   renderVolumeRows(editVolumePicker(index), []);
   containerRemoveButtons();
@@ -414,7 +431,13 @@ window.editSave = async (ns, name) => {
     icon: $("#e_icon").value.trim(), replicas: Math.max(1, +$("#e_rep").value || 1),
     autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs, remove_containers: [...EDIT_REMOVED_CONTAINERS],
     placement: readPlacement(), failover: $("#e_failover")?.value || "" };
-  if ($("#e_lan_on")) body.lan = $("#e_lan_on").checked && $("#el_ip") ? containerLanRead("el") : null;
+  const access = $("#e_net")?.value;
+  if (["loadbalancer", "internal", "lan"].includes(access)) {
+    body.address = { network_mode: access, vip_mode: $("#e_vip_mode")?.value || "shared", lb_ip: ($("#e_lb_ip")?.value || "").trim() };
+    if (access === "loadbalancer" && body.address.vip_mode === "manual" && !body.address.lb_ip) return toast("Choose the specific VIP, or another VIP allocation", "bad");
+  }
+  if (access === "lan" && !$("#el_ip")?.value.trim()) return toast("Give it its own LAN address, or choose another access mode", "bad");
+  if ($("#e_lan_on")) body.lan = (access === "lan" || $("#e_lan_on").checked) && $("#el_ip") ? containerLanRead("el") : null;
   const nodeSelect = $("#e_node");
   if (nodeSelect.value !== (nodeSelect.dataset.current || "")) body.node = nodeSelect.value || null;
   if ((STATE.data.wl || []).some(x => x.self && x.ns === ns && x.name === name) && !body.autostart) {
@@ -532,43 +555,40 @@ window.nodeActions = async name => {
   window.__nodeImpact = impact;
   const isEtcd = (qr.members || []).includes(name);
   const off = qr.power_enabled === false;
-  childModal("Host actions · " + name, `
-    <div class="grid g2" style="gap:12px">
-      <div class="card flat"><div class="ctitle">Scheduling</div>
-        <p class="muted small" style="margin:6px 0 14px">Cordon stops new pods landing here.
-        Drain evicts the ones already running.</p>
-        <div class="row">
-          <button class="btn" onclick="nodeCordon(${jsq(name)},true)">Cordon</button>
-          <button class="btn" onclick="nodeCordon(${jsq(name)},false)">Uncordon</button>
-          <button class="btn" onclick="nodeDrain(${jsq(name)})">Drain</button>
-          <button class="btn" onclick="evacuateNode(${jsq(name)})">Move all off</button>
-        </div></div>
-      <div class="card flat"><div class="ctitle">Quorum</div>
-        <div class="drow"><div class="dl">etcd members</div><div class="dv mono">${qr.total || "?"}</div></div>
-        <div class="drow"><div class="dl">Ready</div><div class="dv mono">${(qr.ready || []).length}</div></div>
-        <div class="drow"><div class="dl">Needs</div><div class="dv mono">${qr.quorum_needs || "?"}</div></div>
-        <div class="drow"><div class="dl">Can lose</div><div class="dv mono">
-          <span class="pill ${qr.can_lose > 0 ? "ok" : "crit"}">${qr.can_lose ?? "?"}</span></div></div>
-        ${isEtcd ? '<div class="dim xs" style="margin-top:8px">This host is an etcd member.</div>' : ""}
-      </div>
-    </div>
-    <div class="sec">Workload dependencies</div>
-    ${(impact.workloads || []).length ? `<div class="dependency-list">${impactRows(impact)}</div>` : '<div class="empty small">No user workloads are currently running on this host.</div>'}
-    ${(impact.stranded || []).length ? `<div class="note dependency-danger" style="margin-top:12px"><b>Stopping this host strands ${impact.stranded.length} workload${impact.stranded.length === 1 ? "" : "s"}.</b> ${impact.stranded.map(w => `<span class="mono">${esc(w.name)}</span>`).join(", ")} cannot run on any other ready host with the required hardware.</div>` : `<div class="note" style="margin-top:12px">Every current user workload has at least one compatible destination.</div>`}
-    <div class="sec">Leaving the cluster</div>
-    <div class="row between removal-entry"><p class="muted small">Take this host out for good: Homestead checks quorum and
-      volume copies first, then removes it in Harvester's order.</p>
-      <button class="btn danger" data-need="admin" onclick="nodeRemoval(${jsq(name)})">Remove from cluster…</button></div>
-    <div class="sec">Power</div>
-    ${off ? `<div class="note"><b>Host power control is disabled.</b> Rebooting needs a privileged
-        helper pod that enters the host namespaces. This installation has disabled it. Set
-        <span class="mono">ENABLE_NODE_POWER=true</span> on the Homestead Deployment to enable it.
-        Cordon and drain above work regardless.</div>`
-      : `<p class="muted small">Review fresh workload, VM, quorum and Longhorn replica impacts before either action. On a multi-host cluster Homestead cordons and drains the host. A single-host cluster uses a planned whole-cluster outage with its own acknowledgement.</p>
-      <div class="row">
-        <button class="btn danger" onclick="nodePowerReview(${jsq(name)},'reboot')">Review reboot…</button>
-        <button class="btn danger" onclick="nodePowerReview(${jsq(name)},'poweroff')">Review shutdown…</button>
-      </div>`}`, true);
+  const host = ((typeof STATE !== "undefined" && STATE.data.nodes) || []).find(n => n.name === name) || {};
+  const cordoned = host.schedulable === false;
+  const workloads = impact.workloads || [], stranded = impact.stranded || [];
+  const action = (title, detail, buttonHtml, tone = "neutral") =>
+    `<div class="ui-insight-row">${UI.statusDot(tone)}<div><b>${esc(title)}</b><small>${esc(detail)}</small></div><div class="ui-insight-action">${buttonHtml}</div></div>`;
+  const actions = `<div class="ui-insight-list">
+    ${cordoned
+      ? action("Cordoned", "New pods do not land here. Allow scheduling again when the host is ready for work.", UI.button("Uncordon", `nodeCordon(${jsArg(name)},false)`, { attrs: 'data-need="admin"' }), "warn")
+      : action("Cordon", "Stop new pods landing here; what runs here keeps running.", UI.button("Cordon", `nodeCordon(${jsArg(name)},true)`, { attrs: 'data-need="admin"' }))}
+    ${action("Move apps off", "Move every app on this host to another, cordoning it first.", UI.button("Move all off", `evacuateNode(${jsArg(name)})`, { attrs: 'data-need="admin"' }))}
+    ${action("Drain", "Evict the pods here so they start elsewhere, through their disruption budgets.", UI.button("Drain", `nodeDrain(${jsArg(name)})`, { attrs: 'data-need="admin"' }))}
+    ${off ? action("Power control is off", "Reboot and shutdown need ENABLE_NODE_POWER=true on the Homestead Deployment.", "", "neutral")
+      : action("Reboot or shut down", (qr.total === 1 && isEtcd ? "The only host: a planned whole-cluster outage. " : "")
+          + "Reviewed first: what moves, what waits for the host, and its volume copies.",
+        UI.button("Reboot…", `nodePowerReview(${jsArg(name)},'reboot')`, { attrs: 'data-need="admin"' })
+        + UI.button("Shut down…", `nodePowerReview(${jsArg(name)},'poweroff')`, { kind: "danger", attrs: 'data-need="admin"' }))}
+    ${action("Remove from cluster", "Take this host out for good, after checking quorum and volume copies.",
+      UI.button("Remove…", `nodeRemoval(${jsArg(name)})`, { kind: "danger", attrs: 'data-need="admin"' }), "bad")}
+  </div>`;
+  const apps = workloads.length
+    ? (stranded.length ? UI.callout("warn", `${stranded.length} can only run here`, `${stranded.map(w => `<span class="mono">${esc(w.name)}</span>`).join(", ")} ${stranded.length === 1 ? "has" : "have"} no other ready host with what ${stranded.length === 1 ? "it needs" : "they need"}.`) : "")
+      + `<div class="dependency-list">${impactRows(impact)}</div>`
+    : '<div class="ui-empty">No apps run on this host.</div>';
+  const quorum = UI.facts([
+    ["etcd members", `${esc(qr.total ?? "?")} · ${(qr.ready || []).length} ready`],
+    ["Quorum needs", esc(qr.quorum_needs ?? "?")],
+    ["Can lose", UI.chip(String(qr.can_lose ?? "?"), qr.can_lose > 0 ? "ok" : "bad")],
+    ["This host", isEtcd ? "an etcd member" : "not an etcd member"]]);
+  childModal("Host actions · " + name, UI.sectionForm("hostActions", [
+    { key: "actions", title: "Actions", html: actions },
+    { key: "apps", title: `Apps · ${workloads.length}`, html: apps },
+    { key: "quorum", title: "Quorum", html: quorum },
+  ], "", { always: true, cancelHtml: UI.cancel("Close") }), true);
+  window.applyRole?.();
 };
 window.nodeCordon = async (node, cordon) => {
   try {
@@ -588,6 +608,7 @@ window.nodePowerReview = async (node, action, force = false) => {
   try { plan = await api(`/api/node/power/plan?${new URLSearchParams({ node, action, ...(force ? { force: "1" } : {}) })}`); }
   catch (e) { return toast(`Could not assess this host: ${e.message}`, "bad"); }
   if (sequence !== NODE_POWER_REVIEW_SEQUENCE) return;
+  if (plan.operation?.id) return window.nodePowerFollow(plan.operation.id);
   if (plan.node !== node || plan.action !== action || !plan.review_token || typeof plan.ready !== 'boolean')
     return toast("Host review is incomplete; refresh before continuing", "bad");
   window.__nodePowerPlan = plan;
@@ -597,41 +618,71 @@ window.nodePowerReview = async (node, action, force = false) => {
   const budgets = plan.maintenance?.budgets || [];
   const local = plan.maintenance?.local_storage || [];
   const risk = { unavailable: ["no healthy copy elsewhere", "bad"], "single-copy": ["one copy left · unprotected", "warn"], resync: ["replica resync needed", "info"] };
-  const concerns = [...(plan.vms?.length ? [`VMs to check: ${plan.vms.join(", ")}. Their migration or shutdown must be verified separately.`] : []), ...(plan.warnings || [])];
+  const concerns = [...(plan.vms?.length && !plan.hold ? [`VMs to check: ${plan.vms.join(", ")}. Their migration or shutdown must be verified separately.`] : []), ...(plan.warnings || [])];
   const overridable = !plan.force && (plan.overridable || []).length && !(plan.hard_blockers || []).length;
   const forced = window.__nodePowerForced = !!plan.force;
   const outage = !!plan.planned_outage;
-  childModal(`${forced ? "Forced " : ""}${verb.toLowerCase()} · ${node}`, [
-    UI.lead(outage
-      ? `${plan.pods} pod${plan.pods === 1 ? "" : "s"} and ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"} currently run on <b>${esc(node)}</b>, the cluster's only host. This is a planned whole-cluster outage. Homestead asks the host's systemd to ${action === "reboot" ? "reboot" : "power off"}; it leaves scheduling unchanged and does not evict pods. Applications, storage and this page go offline.`
-      : forced
-      ? `${plan.pods} pod${plan.pods === 1 ? "" : "s"} and ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"} run on <b>${esc(node)}</b>. Forced: Homestead does not cordon or drain it - it asks the host's own systemd to ${action === "reboot" ? "reboot" : "power off"}, which stops everything in order, as its power button would.`
-      : `${plan.pods} pod${plan.pods === 1 ? "" : "s"} and ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"} currently run on <b>${esc(node)}</b>. Homestead cordons it and waits for drained pods to leave; live migration and restart elsewhere are not guaranteed.`),
+  // Forced sends nothing but the command, so nothing is stopped or moved first.
+  const hold = forced ? [] : plan.hold || [];
+  const strandedMove = !outage && (plan.stranded || []).some(w => hold.some(h => h.ns === w.ns && h.name === w.name && h.options.includes("move")));
+  const lead = outage
+    ? `<b>${esc(node)}</b> is the cluster's only host, so this is a planned whole-cluster outage. Homestead stops the apps and VMs below first, so their volumes detach in order, then asks the host to ${action === "reboot" ? "reboot" : "power off"}; it leaves scheduling unchanged and does not evict pods. What was stopped starts again when the host is back.`
+    : forced
+    ? `Forced: Homestead does not cordon or drain <b>${esc(node)}</b>. It asks the host's own systemd to ${action === "reboot" ? "reboot" : "power off"}, which stops everything in order, as its power button would.`
+    : `Homestead cordons <b>${esc(node)}</b>, stops what waits for it, moves the rest and waits for drained pods to leave, then ${action === "reboot" ? "reboots" : "shuts down"} the host. Live migration and restart elsewhere are not guaranteed.`;
+  const summary = [
+    UI.lead(lead),
+    UI.facts([["On the host", `${plan.pods} pod${plan.pods === 1 ? "" : "s"} · ${plan.vms?.length || 0} VM${plan.vms?.length === 1 ? "" : "s"}`],
+      hold.length ? ["Moves", String(hold.filter(h => h.default === "move").length)] : null,
+      hold.length ? ["Waits for the host", String(hold.filter(h => h.default === "wait").length)] : null,
+      volumes.length ? ["Copies elsewhere", volumes.some(v => v.risk === "unavailable") ? UI.chip("none for some", "bad")
+        : volumes.some(v => v.risk === "single-copy") ? UI.chip("one for some", "warn") : UI.chip("yes", "ok")] : null]),
     plan.blockers?.length
       ? UI.callout("bad", "Blocked", `<ul class="ui-list">${plan.blockers.map(b => `<li>${esc(b)}</li>`).join("")}</ul>`)
         + (overridable ? `<label class="switch" data-need="admin"><input type="checkbox" onchange="if (this.checked) nodePowerReview(${jsq(node)},${jsq(action)},true)">
             Override these checks - ${esc(action === "reboot" ? "reboot" : "shut down")} anyway, without cordon or drain</label>` : "")
       : concerns.length ? UI.callout(forced ? "bad" : "warn", forced ? "Forced - what happens" : "Check before going ahead", `<ul class="ui-list">${concerns.map(c => `<li>${esc(c)}</li>`).join("")}</ul>`) : "",
-    UI.section("What goes down", workloads.length
+    UI.more("After the request", "Follow Recent jobs for the helper's events, logs and host status. Reboot checks use a changed boot ID; shutdown cannot be confirmed from NotReady alone. " + (outage || forced ? "Scheduling is left unchanged; inspect workloads and storage when the host returns." : hold.length ? "The host stays cordoned while it is down. If anything waits for it, scheduling is allowed again when it is back so that can start there; otherwise it stays cordoned until you allow it." : "The host stays cordoned until you inspect it and allow scheduling.")),
+  ].join("");
+  const apps = plan.hold ? (hold.length
+      ? `<p class="ui-help">${outage ? "Nothing can move off the only host: each is stopped cleanly first and started again when the host is back."
+          : "Move starts it on another host now. Wait stops it cleanly before the host goes and starts it here again when it is back - for what is tied to this host, or would rather wait than move."}</p>`
+        + UI.table([{ label: "App or VM" }, { label: "While the host is down" }], hold.map((h, i) => [
+          `<span class="mono">${esc(h.ns)}/${esc(h.name)}</span> <span class="sub">${h.kind === "VirtualMachine" ? "VM" : esc(h.kind)}${h.here > 1 ? ` · ${h.here} pods` : ""}</span>`,
+          !h.options.length ? UI.chip(h.why || "stop it by hand", "bad")
+          : h.options.length === 1 ? `${UI.chip(h.options[0] === "wait" ? "stops and waits" : h.kind === "VirtualMachine" ? "live-migrates" : "moves", h.options[0] === "wait" ? "warn" : "ok")}${h.why ? ` <span class="sub">${esc(h.why)}</span>` : ""}`
+          : `<select id="pw_hold_${i}" data-hold="${esc(h.id)}" aria-label="${esc(h.ns)}/${esc(h.name)} while the host is down">
+              <option value="move" ${h.default === "move" ? "selected" : ""}>${h.kind === "VirtualMachine" ? "Live-migrate" : "Move"} to ${esc(h.hosts.length === 1 ? h.hosts[0] : "another host")}</option>
+              <option value="wait" ${h.default === "wait" ? "selected" : ""}>Stop and wait for this host</option></select>`]))
+      : `<div class="ui-empty">No apps or VMs run on this host.</div>`)
+    : workloads.length
       ? UI.table([{ label: "Workload" }, { label: "During the outage" }], workloads.map(w => [`<span class="mono">${esc(w.ns)}/${esc(w.name)}</span>`,
         w.stranded ? UI.chip("no other eligible host", "bad") : `${UI.chip("may move", "ok")} <span class="sub">to ${esc((w.eligible || []).join(", "))}</span>`]))
-      : `<div class="ui-empty">No user Deployments are mapped to this host.</div>`),
-    UI.section("Volume copies during the outage", volumes.length
-      ? UI.table([{ label: "Volume" }, { label: "Copies" }], volumes.map(v => [`<span class="mono">${esc(v.claim)}</span>`, UI.chip(...(risk[v.risk] || risk.resync))]))
-      : `<div class="ui-empty">No Longhorn replica on this host was found.</div>`),
-    budgets.length ? UI.section("Disruption budgets", UI.table([{ label: "Pod" }, { label: "Budget" }], budgets.map(b => [`<span class="mono">${esc(b.pod)}</span>`,
-      `${esc(b.budget)} · ${b.allowed == null ? "status unknown" : `${b.allowed} disruption(s) allowed`}${b.unhealthy_allowed ? " · unhealthy eviction allowed" : ""}${b.wait_for_drain && !forced && !outage ? " · waits for Longhorn during drain" : ""}`]))) : "",
-    local.length ? UI.section("Local and external storage", `<p class="ui-help">${outage ? "Temporary pod data may be lost during restart. Host-local and external storage may be unavailable while this host is down." : "Drain deletes emptyDir data. Host-local paths do not move with pods. External storage may depend on this host; verify availability before proceeding."}</p>`
-      + UI.table([{ label: "Pod" }, { label: "Storage" }], local.map(v => [`<span class="mono">${esc(v.pod)}</span>`, `${esc(v.kind)} · ${esc(v.source)}`]))) : "",
-    plan.ready ? UI.field(`Type ${node} to confirm`, `<input type="text" id="pw_confirm" autocomplete="off" placeholder="${esc(node)}">`) : "",
-    plan.ready && outage ? UI.ack("pw_outage", action === "reboot"
+      : `<div class="ui-empty">No user Deployments are mapped to this host.</div>`;
+  const copies = volumes.length
+    ? UI.table([{ label: "Volume" }, { label: "Copies" }], volumes.map(v => [`<span class="mono">${esc(v.claim)}</span>`, UI.chip(...(risk[v.risk] || risk.resync))]))
+    : `<div class="ui-empty">No Longhorn replica on this host was found.</div>`;
+  const sections = [
+    { key: "summary", title: "Summary", html: summary },
+    { key: "apps", title: `${plan.hold ? "Apps and VMs" : "What goes down"} · ${plan.hold ? hold.length : workloads.length}`, html: apps },
+    { key: "volumes", title: `Volume copies · ${volumes.length}`, html: copies },
+    budgets.length ? { key: "budgets", title: `Disruption budgets · ${budgets.length}`, html: UI.table([{ label: "Pod" }, { label: "Budget" }], budgets.map(b => [`<span class="mono">${esc(b.pod)}</span>`,
+      `${esc(b.budget)} · ${b.allowed == null ? "status unknown" : `${b.allowed} disruption(s) allowed`}${b.unhealthy_allowed ? " · unhealthy eviction allowed" : ""}${b.wait_for_drain && !forced && !outage ? " · waits for Longhorn during drain" : ""}`])) } : null,
+    local.length ? { key: "local", title: `Local and external storage · ${local.length}`, html: `<p class="ui-help">${outage ? "Temporary pod data may be lost during restart. Host-local and external storage may be unavailable while this host is down." : "Drain deletes emptyDir data. Host-local paths do not move with pods. External storage may depend on this host; verify availability before proceeding."}</p>`
+      + UI.table([{ label: "Pod" }, { label: "Storage" }], local.map(v => [`<span class="mono">${esc(v.pod)}</span>`, `${esc(v.kind)} · ${esc(v.source)}`])) } : null,
+  ];
+  // The confirmation stays in view whichever section is open.
+  const confirm = plan.ready ? [
+    UI.field(`Type ${node} to confirm`, `<input type="text" id="pw_confirm" autocomplete="off" placeholder="${esc(node)}">`),
+    outage ? UI.ack("pw_outage", action === "reboot"
       ? "I understand the entire cluster, including Homestead, will be offline until this host returns"
       : "I understand the entire cluster will be offline and I need console or physical access to power this host on again") : "",
-    plan.ready && !outage && plan.stranded?.length ? UI.ack("pw_allow", `I understand ${plan.stranded.length} workload${plan.stranded.length === 1 ? "" : "s"} may remain down`) : "",
-    plan.ready && plan.requires_data_ack ? UI.ack("pw_data", "I understand the volume copies or storage visibility risk") : "",
-    UI.more("After the request", "Follow Recent jobs for the helper's events, logs and host status. Reboot checks use a changed boot ID; shutdown cannot be confirmed from NotReady alone. " + (outage || forced ? "Scheduling is left unchanged; inspect workloads and storage when the host returns." : "The host stays cordoned until you inspect it and allow scheduling.")),
-    UI.actions(plan.ready ? UI.cancel() + UI.button(`${forced ? "Force " + verb.toLowerCase() : verb + " host"}`, `nodePower(${jsArg(node)},${jsArg(action)})`, { kind: "danger", id: "pw_execute" }) : UI.cancel("Close")),
-  ].join(""), true);
+    !outage && (plan.hold ? strandedMove : plan.stranded?.length) ? UI.ack("pw_allow", `I understand ${plan.stranded.length} workload${plan.stranded.length === 1 ? "" : "s"} may remain down`) : "",
+    plan.requires_data_ack ? UI.ack("pw_data", "I understand the volume copies or storage visibility risk") : "",
+  ].join("") : "";
+  childModal(`${forced ? "Forced " : ""}${verb.toLowerCase()} · ${node}`, UI.sectionForm("hostPower", sections,
+    plan.ready ? UI.button(`${forced ? "Force " + verb.toLowerCase() : verb + " host"}`, `nodePower(${jsArg(node)},${jsArg(action)})`, { kind: "danger", id: "pw_execute" }) : "",
+    { always: true, noticeHtml: confirm, cancelHtml: UI.cancel(plan.ready ? "Cancel" : "Close") }), true);
 };
 window.nodePower = async (node, action) => {
   const plan = window.__nodePowerPlan;
@@ -640,29 +691,92 @@ window.nodePower = async (node, action) => {
   if (c !== node) return toast("type the host name exactly to confirm", "bad");
   if (plan.planned_outage && !$("#pw_outage")?.checked)
     return toast("acknowledge the whole-cluster outage", "bad");
-  if (!plan.planned_outage && plan.stranded?.length && !$("#pw_allow")?.checked)
+  const choices = Object.fromEntries((plan.force ? [] : plan.hold || []).map((h, i) => [h.id, $(`#pw_hold_${i}`)?.value]).filter(([, pick]) => pick));
+  if (!plan.planned_outage && $("#pw_allow") && !$("#pw_allow").checked)
     return toast("confirm the workloads that will remain down", "bad");
   if (plan.requires_data_ack && !$("#pw_data")?.checked)
     return toast("confirm the volume risk", "bad");
   // Consume approval before sending, including double clicks and lost replies.
   window.__nodePowerPlan = null;
   const button = $("#pw_execute");
-  if (button) { button.disabled = true; button.textContent = plan.force || plan.planned_outage ? "Sending…" : "Draining host…"; }
+  if (button) { button.disabled = true; button.textContent = "Starting…"; }
   try {
     const r = await api("/api/node/power", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ node, action, confirm: c, review_token: plan.review_token, force: !!plan.force,
+      body: JSON.stringify({ node, action, confirm: c, review_token: plan.review_token, force: !!plan.force, choices,
         allow_cluster_outage: !!$("#pw_outage")?.checked, allow_stranded: plan.planned_outage ? !!$("#pw_outage")?.checked : !!$("#pw_allow")?.checked, allow_data_risk: !!$("#pw_data")?.checked }) });
     if (r.operation) window.noteOperation?.(r.operation);
+    if (r.operation?.id) return window.nodePowerFollow(r.operation.id, plan.force || plan.planned_outage
+      ? "Sent without cordon or drain. Scheduling was left unchanged; inspect workloads and storage when the host returns."
+      : "The host is cordoned and drained before the command is sent. It stays cordoned afterwards: check it before allowing scheduling again.");
     modal("Host maintenance", UI.lead(plan.force || plan.planned_outage ? `Sent. Follow it in Recent jobs${plan.action === "reboot" ? "; this page comes back when the host does" : ""}. Scheduling was left unchanged; inspect workloads and storage when the host returns.`
       : "Follow progress in Recent jobs. The host stays cordoned; check it before allowing scheduling.") +
       UI.more("Steps so far", `<pre>${esc((r.steps || []).join("\n"))}</pre>`) + UI.actions(UI.cancel("Close")));
   } catch (e) {
+    // A power job already going for this host: follow it rather than start another.
+    if (e.body?.operation?.id) return window.nodePowerFollow(e.body.operation.id);
     toast(e.message + " — inspect Recent jobs and the host before making another request.", "bad");
     if (button) {
       button.disabled = false; button.textContent = "Review host again";
       button.onclick = () => window.nodePowerReview(node, action);
     }
   } finally { window.refreshOperations?.(true); }
+};
+
+/* A reboot or shutdown as it goes: its steps, from the job's recorded phase.
+   Homestead itself may be unreachable while a host restarts - on a host it
+   runs on, or the only one - so the view keeps asking until the job ends. */
+let NODE_POWER_FOLLOW = 0;
+function nodePowerSteps(power) {
+  const reboot = power.action === "reboot";
+  return [
+    ...(power.direct ? [["verifying", "Recheck the host"], ...(power.holds ? [["holding", "Stop the apps and VMs so their volumes detach"]] : [])] : [
+      ["cordoning", "Stop new work on the host (cordon)"],
+      ...(power.holds ? [["holding", "Stop what waits for the host; live-migrate VMs"]] : []),
+      ["draining", "Move workloads off the host (drain)"],
+      ["verifying", "Recheck quorum, VMs and volume copies"]]),
+    ["sending", `Send the ${reboot ? "restart" : "shutdown"} command`],
+    ["observing", reboot ? "Wait for the host to restart and its volumes to recover" : "Wait for the host to power off"],
+    ...(power.holds ? [["restoring", reboot ? "Start what waited for it again" : "Start what waited for it when it is back"]] : []),
+  ];
+}
+function nodePowerProgressMarkup(op, offline = false) {
+  const power = op.power || {}, steps = nodePowerSteps(power);
+  const done = op.status === "succeeded", stopped = op.status === "failed" || op.status === "cancelled";
+  const phase = stopped && power.failed_phase ? power.failed_phase : power.phase;
+  const at = Math.max(0, steps.findIndex(([name]) => name === phase));
+  const items = steps.map(([, title], i) => ({ title,
+    state: done || i < at ? "ok" : i === at ? (stopped ? "bad" : "run") : "todo",
+    detailHtml: i === at && !done && !stopped && op.message ? esc(op.message) : "" }));
+  return UI.progress(done ? 100 : op.progress, { label: done ? "Finished" : stopped ? "Stopped" : "In progress", kind: done ? "ok" : stopped ? "bad" : "info" })
+    + UI.checklist(items)
+    + (offline ? UI.callout("warn", "Reconnecting", "Homestead cannot be reached right now. While a host it runs on restarts, that is expected; this view carries on by itself.") : "")
+    + (done ? UI.callout("ok", "Done", esc(op.message || "")) : "")
+    + (stopped ? UI.callout("bad", "Stopped", `${esc(op.message || "The job did not finish.")} Check the host before making another request.`) : "")
+    + (power.waiting && !done && !stopped && power.phase === "observing"
+      ? UI.callout("info", `${power.held} waiting for this host`, "They start again when it is back. To start them on other hosts now instead - those that can run there - release them.")
+        + `<div class="row"><button class="btn" data-need="operator" onclick="nodePowerRelease(${jsq(op.id)})">Start them on other hosts now</button></div>` : "")
+    + UI.actions(UI.cancel("Close"));
+}
+window.nodePowerRelease = async id => {
+  try {
+    const r = await api("/api/node/power/release", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
+    toast(r.detail, "ok");
+  } catch (e) { toast(e.message, "bad"); }
+};
+window.nodePowerFollow = async (id, intro = "") => {
+  const sequence = ++NODE_POWER_FOLLOW;
+  modal("Host maintenance", (intro ? UI.lead(esc(intro)) : "") + '<div id="pwProgress"><div class="empty"><span class="spin2"></span>Starting…</div></div>', true);
+  let last = null;
+  while (sequence === NODE_POWER_FOLLOW && $("#pwProgress")) {
+    let offline = false;
+    try { last = (await api("/api/operations", { keep: true, timeout: 10000 })).find(o => o.id === id) || last; }
+    catch { offline = true; }
+    if (!$("#pwProgress") || sequence !== NODE_POWER_FOLLOW) return;
+    if (last) $("#pwProgress").innerHTML = nodePowerProgressMarkup(last, offline);
+    else if (!offline) { $("#pwProgress").innerHTML = UI.callout("warn", "Job not found", "It may have been cleared. Check Recent jobs and the host.") + UI.actions(UI.cancel("Close")); return; }
+    if (last && ["succeeded", "failed", "cancelled"].includes(last.status)) { window.refreshOperations?.(true); return; }
+    await new Promise(resolve => setTimeout(resolve, 2000));
+  }
 };
 
 /* ---------------- VMs: the page is views-vms.js; moving and creating stay here ---------------- */

@@ -29,7 +29,7 @@
 </script>
 <title>Homestead</title>
 <meta name="description" content="Homestead is a friendly homelab control plane for Harvester, Rancher, Longhorn, Fleet and Kubernetes workloads.">
-<link rel="icon" type="image/svg+xml" href="/assets/homestead-mark.svg?v=2.8.306">
+<link rel="icon" type="image/svg+xml" href="/assets/homestead-mark.svg?v=2.8.309-dev.7">
 <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <meta name="theme-color" content="#070708">
@@ -40,7 +40,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap">
-<link rel="stylesheet" href="/style.css?v=2.8.306">
+<link rel="stylesheet" href="/style.css?v=2.8.309-dev.7">
 </head>
 <body>
 
@@ -121,6 +121,14 @@
     <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7.5v.1"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></symbol>
     <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 2h-15z"/><path d="M10 20.5a2.2 2.2 0 0 0 4 0"/></symbol>
+    <!-- Settings sections: drawn like the menu's, a 24px grid of 1.7 strokes. -->
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3.6 10.6 12 3.9l8.4 6.7"/><path d="M5.9 9v11h12.2V9"/><path d="M10 20v-5.2h4V20"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12.5h3.8l2.4-5.8 4.6 11.4 2.6-5.6H21"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6.2" y="6.2" width="11.6" height="11.6" rx="2"/><rect x="9.6" y="9.6" width="4.8" height="4.8" rx=".9"/><path d="M9.5 3v3.2M14.5 3v3.2M9.5 17.8V21M14.5 17.8V21M3 9.5h3.2M3 14.5h3.2M17.8 9.5H21M17.8 14.5H21"/></symbol>
+    <symbol id="i-link" viewBox="0 0 24 24"><path d="M10.2 13.8a4 4 0 0 0 5.6 0l3-3a4 4 0 0 0-5.6-5.6l-1.1 1.1"/><path d="M13.8 10.2a4 4 0 0 0-5.6 0l-3 3a4 4 0 0 0 5.6 5.6l1.1-1.1"/></symbol>
+    <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8.2" r="3.4"/><path d="M2.9 19.8c.7-3.6 3.1-5.6 6.1-5.6s5.4 2 6.1 5.6"/><path d="M15.4 5a3.3 3.3 0 0 1 0 6.4M17.5 14.6c1.9.7 3.2 2.4 3.6 5.2"/></symbol>
+    <symbol id="i-bug" viewBox="0 0 24 24"><rect x="7.4" y="8.2" width="9.2" height="11.6" rx="4.6"/><path d="M9.2 8.6a2.8 2.8 0 0 1 5.6 0M12 12v7.6M3.6 13.4h3.8M16.6 13.4h3.8M4.6 8.6l2.9 1.8M19.4 8.6l-2.9 1.8M4.6 18.6l2.9-1.8M19.4 18.6l-2.9-1.8"/></symbol>
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.7"/><path d="M4.7 20.2c.8-4 3.6-6.3 7.3-6.3s6.5 2.3 7.3 6.3"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 3.5 2.5 20h19z"/><path d="M12 10v4.5M12 17.3v.1"/></symbol>
   </defs>
 </svg>
@@ -130,8 +138,8 @@
 <div id="app">
   <aside class="side">
     <div class="brand">
-      <img class="brandmark" src="/assets/homestead-mark.svg?v=2.8.306" alt="">
-      <div><div class="bname">Homestead</div><div class="bver" data-version="2.8.306">v2.8.306</div></div>
+      <img class="brandmark" src="/assets/homestead-mark.svg?v=2.8.309-dev.7" alt="">
+      <div><div class="bname">Homestead</div><div class="bver" data-version="2.8.309-dev.7">v2.8.309-dev.7</div></div>
     </div>
     <nav id="nav">
       <div class="navlbl">Overview</div>
@@ -215,57 +223,57 @@
     <div id="mbody"></div>
   </div>
 </div>
-<script src="/js/router.js?v=2.8.306"></script>
-<script src="/js/demo.js?v=2.8.306"></script>
-<script src="/js/metrics-utils.js?v=2.8.306"></script>
-<script src="/js/core.js?v=2.8.306"></script>
-<script src="/js/ui.js?v=2.8.306"></script>
-<script src="/js/diagrams.js?v=2.8.306"></script>
-<script src="/js/fleet.js?v=2.8.306"></script>
-<script src="/js/ipam-picker.js?v=2.8.306"></script>
-<script src="/js/config-backup.js?v=2.8.306"></script>
-<script src="/js/operations.js?v=2.8.306"></script>
-<script src="/js/update-state.js?v=2.8.306"></script>
-<script src="/js/volume-picker.js?v=2.8.306"></script>
-<script src="/js/insights.js?v=2.8.306"></script>
-<script src="/js/dashboard-custom.js?v=2.8.306"></script>
-<script src="/js/dashboard.js?v=2.8.306"></script>
-<script src="/js/views-overview.js?v=2.8.306"></script>
-<script src="/js/appstore-utils.js?v=2.8.306"></script>
-<script src="/js/views-workloads.js?v=2.8.306"></script>
-<script src="/js/homestead-update.js?v=2.8.306"></script>
-<script src="/js/views-storage.js?v=2.8.306"></script>
-<script src="/js/compose.js?v=2.8.306"></script>
-<script src="/js/views-network.js?v=2.8.306"></script>
-<script src="/js/views-ipam.js?v=2.8.306"></script>
-<script src="/js/views-firewall.js?v=2.8.306"></script>
-<script src="/js/views-helm.js?v=2.8.306"></script>
-<script src="/js/views-stats.js?v=2.8.306"></script>
-<script src="/js/platform.js?v=2.8.306"></script>
-<script src="/js/views-resources.js?v=2.8.306"></script>
-<script src="/js/move.js?v=2.8.306"></script>
-<script src="/js/views-lifecycle.js?v=2.8.306"></script>
-<script src="/js/views-vms.js?v=2.8.306"></script>
-<script src="/js/vm-hardware.js?v=2.8.306"></script>
-<script src="/js/cron.js?v=2.8.306"></script>
-<script src="/js/views-protect.js?v=2.8.306"></script>
-<script src="/js/snapshot-files.js?v=2.8.306"></script>
-<script src="/js/longhorn-v2-setup.js?v=2.8.306"></script>
-<script src="/js/longhorn-v2-upgrade.js?v=2.8.306"></script>
-<script src="/js/disk-v2.js?v=2.8.306"></script>
-<script src="/js/views-portal.js?v=2.8.306"></script>
-<script src="/js/vm-console.js?v=2.8.306"></script>
-<script src="/js/host-os.js?v=2.8.306"></script>
-<script src="/js/passthrough.js?v=2.8.306"></script>
-<script src="/js/welcome.js?v=2.8.306"></script>
-<script src="/js/views-settings.js?v=2.8.306"></script>
-<script src="/js/troubleshooting.js?v=2.8.306"></script>
-<script src="/js/views-cluster.js?v=2.8.306"></script>
-<script src="/js/cluster-shutdown.js?v=2.8.306"></script>
-<script src="/js/onboard.js?v=2.8.306"></script>
-<script src="/js/pwa.js?v=2.8.306"></script>
-<script src="/js/app.js?v=2.8.306"></script>
-<script src="/js/mobile-refresh.js?v=2.8.306"></script>
-<script src="/js/auth.js?v=2.8.306"></script>
+<script src="/js/router.js?v=2.8.309-dev.7"></script>
+<script src="/js/demo.js?v=2.8.309-dev.7"></script>
+<script src="/js/metrics-utils.js?v=2.8.309-dev.7"></script>
+<script src="/js/core.js?v=2.8.309-dev.7"></script>
+<script src="/js/ui.js?v=2.8.309-dev.7"></script>
+<script src="/js/diagrams.js?v=2.8.309-dev.7"></script>
+<script src="/js/fleet.js?v=2.8.309-dev.7"></script>
+<script src="/js/ipam-picker.js?v=2.8.309-dev.7"></script>
+<script src="/js/config-backup.js?v=2.8.309-dev.7"></script>
+<script src="/js/operations.js?v=2.8.309-dev.7"></script>
+<script src="/js/update-state.js?v=2.8.309-dev.7"></script>
+<script src="/js/volume-picker.js?v=2.8.309-dev.7"></script>
+<script src="/js/insights.js?v=2.8.309-dev.7"></script>
+<script src="/js/dashboard-custom.js?v=2.8.309-dev.7"></script>
+<script src="/js/dashboard.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-overview.js?v=2.8.309-dev.7"></script>
+<script src="/js/appstore-utils.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-workloads.js?v=2.8.309-dev.7"></script>
+<script src="/js/homestead-update.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-storage.js?v=2.8.309-dev.7"></script>
+<script src="/js/compose.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-network.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-ipam.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-firewall.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-helm.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-stats.js?v=2.8.309-dev.7"></script>
+<script src="/js/platform.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-resources.js?v=2.8.309-dev.7"></script>
+<script src="/js/move.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-lifecycle.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-vms.js?v=2.8.309-dev.7"></script>
+<script src="/js/vm-hardware.js?v=2.8.309-dev.7"></script>
+<script src="/js/cron.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-protect.js?v=2.8.309-dev.7"></script>
+<script src="/js/snapshot-files.js?v=2.8.309-dev.7"></script>
+<script src="/js/longhorn-v2-setup.js?v=2.8.309-dev.7"></script>
+<script src="/js/longhorn-v2-upgrade.js?v=2.8.309-dev.7"></script>
+<script src="/js/disk-v2.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-portal.js?v=2.8.309-dev.7"></script>
+<script src="/js/vm-console.js?v=2.8.309-dev.7"></script>
+<script src="/js/host-os.js?v=2.8.309-dev.7"></script>
+<script src="/js/passthrough.js?v=2.8.309-dev.7"></script>
+<script src="/js/welcome.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-settings.js?v=2.8.309-dev.7"></script>
+<script src="/js/troubleshooting.js?v=2.8.309-dev.7"></script>
+<script src="/js/views-cluster.js?v=2.8.309-dev.7"></script>
+<script src="/js/cluster-shutdown.js?v=2.8.309-dev.7"></script>
+<script src="/js/onboard.js?v=2.8.309-dev.7"></script>
+<script src="/js/pwa.js?v=2.8.309-dev.7"></script>
+<script src="/js/app.js?v=2.8.309-dev.7"></script>
+<script src="/js/mobile-refresh.js?v=2.8.309-dev.7"></script>
+<script src="/js/auth.js?v=2.8.309-dev.7"></script>
 </body>
 </html>

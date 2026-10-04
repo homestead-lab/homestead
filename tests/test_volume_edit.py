@@ -148,6 +148,44 @@ class VolumeEditTests(unittest.TestCase):
         self.assertEqual("Retain", body["reclaimPolicy"])
         self.assertEqual({"fromBackup": "s3://example/backup", "diskSelector": "hdd", "numberOfReplicas": "2", "fsType": "ext4"}, body["parameters"])
 
+    def test_missing_restore_classes_are_put_back_without_anyone_asking(self):
+        # Older releases removed a cluster transfer's restore class while its
+        # claims still used it: those listed as "other" volumes and would not
+        # resize. The maintenance pass now puts the class back by itself.
+        self.prepare_restore_repair()
+        self.objects["/apis/storage.k8s.io/v1/storageclasses"] = {"items": [{"metadata": {"name": "longhorn"}}]}
+        self.assertEqual([self.class_name], server.repair_restore_classes())
+        self.assertEqual([("POST", "/apis/storage.k8s.io/v1/storageclasses")], [s[:2] for s in self.sent])
+        self.assertTrue(self.sent[0][2]["allowVolumeExpansion"])
+        # With the class present nothing more is sent.
+        self.objects["/apis/storage.k8s.io/v1/storageclasses"]["items"].append({"metadata": {"name": self.class_name}})
+        self.sent.clear()
+        self.assertEqual([], server.repair_restore_classes())
+        self.assertEqual([], self.sent)
+
+    def test_a_claim_that_cannot_be_matched_is_left_alone(self):
+        self.prepare_restore_repair()
+        self.pv["spec"]["csi"]["volumeAttributes"].pop("fromBackup")
+        self.objects["/apis/storage.k8s.io/v1/storageclasses"] = {"items": []}
+        self.assertEqual([], server.repair_restore_classes())
+        self.assertEqual([], self.sent)
+
+    def test_restored_longhorn_claims_are_not_other_volumes(self):
+        self.prepare_restore_repair()
+        self.objects["/apis/storage.k8s.io/v1/storageclasses"] = {"items": []}
+        self.objects["/api/v1/events?fieldSelector=reason%3DProvisioningFailed"] = {"items": []}
+        self.objects["/api/v1/persistentvolumes"] = {"items": [{"metadata": {"name": "pvc-123"}, **self.pv}]}
+        local = {"metadata": {"name": "cache", "namespace": "lab"}, "spec": {"storageClassName": "local-path", "volumeName": "pvc-local"},
+                 "status": {"phase": "Bound"}}
+        self.objects["/api/v1/persistentvolumeclaims"] = {"items": [self.pvc, local]}
+        saved = server.storage_classes
+        server.storage_classes = lambda: [{"name": "longhorn", "provisioner": server.LONGHORN_PROVISIONER}]
+        try:
+            names = [row["name"] for row in server.other_volumes()]
+        finally:
+            server.storage_classes = saved
+        self.assertEqual(["cache"], names, "the restored Longhorn claim is not listed as other storage")
+
     def test_resize_support_repair_is_an_admin_action(self):
         self.assertEqual("admin", server.ROUTE_POLICY.role("/api/volumes/repair-class", "POST"))
 

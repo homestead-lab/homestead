@@ -231,11 +231,22 @@ def _vm_targets(kind, ref):
     return {(ref.get("namespace"), name) for name in names if name}
 
 
-def record_phase(operation_id, phase, progress, message, **ref_updates):
-    """Persist synchronous maintenance progress before irreversible steps."""
+class Superseded(ValueError):
+    """Another replica has taken this job over; this one must stop quietly."""
+
+
+def record_phase(operation_id, phase, progress, message, owner=None, **ref_updates):
+    """Persist synchronous maintenance progress before irreversible steps.
+
+    owner: the replica writing. A job that names another worker has been
+    carried on elsewhere, so this replica's progress - and the send that
+    follows it - is refused rather than run twice."""
     with _lock:
         items = _read()
         item = next(i for i in items if i["id"] == operation_id)
+        worker = (item.get("ref") or {}).get("worker")
+        if owner and worker and worker != owner:
+            raise Superseded(f"{worker} carries this job on now")
         if item.get("status") in TERMINAL or (POWER_RECEIPTS.protected(item.get("kind"), item.get("ref") or {}) and item.get("status") == CANCELLING):
             raise ValueError("Maintenance job has ended; refusing further actions")
         item["ref"].update(ref_updates, phase=phase, phase_at=time.time())
@@ -281,6 +292,18 @@ def _public(item):
         out["cleanable"] = False
     if item.get("kind") == "k3s-cluster":
         out["tracking_only"] = True
+    if item.get("kind") == "node-power":
+        ref = item.get("ref") or {}
+        out["power"] = {"phase": ref.get("phase", ""), "action": ref.get("action", ""), "node": ref.get("node", ""),
+                        "direct": bool(ref.get("planned_outage") or ref.get("forced")),
+                        "failed_phase": ref.get("failed_phase", ""),
+                        # Apps and VMs stopped to wait for the host, or VMs moved first.
+                        "holds": bool(ref.get("held")) or any(
+                            choice == "wait" or (choice == "move" and key.startswith("VirtualMachine/"))
+                            for key, choice in (ref.get("choices") or {}).items()),
+                        "held": len(ref.get("held") or []),
+                        "waiting": bool(ref.get("held")) and ref.get("restored") is None,
+                        "restored": ref.get("restored")}
     if item.get("kind") == "vm-power":
         out["cancellable"] = out["cancellable"] and item.get("ref", {}).get("phase") in ("prepared", "accepted")
         out["power_recovery"] = item.get("status") not in TERMINAL and item.get("ref", {}).get("phase") in ("uncertain", "dispatching")

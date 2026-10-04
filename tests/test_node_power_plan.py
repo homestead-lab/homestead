@@ -51,6 +51,60 @@ class PowerPlanTests(unittest.TestCase):
         self.assertEqual(1, len(plan["stranded"]))
         self.assertEqual(plan["review_token"], power.plan("node1", "reboot")["review_token"])
 
+    def test_a_rebuilding_copy_is_not_a_copy_and_longhorn_would_block_the_drain(self):
+        # frigate-recordings2: its copy on k3s-3 was still rebuilding (WO), so
+        # the only whole one was on the host; the review counted both, and the
+        # drain stalled on Longhorn two minutes in.
+        self.objects["/apis/kubevirt.io/v1/virtualmachineinstances"]["items"] = []
+        replicas = self.objects[f"{power.LH}/replicas"]["items"]
+        replicas[0]["metadata"], replicas[1]["metadata"] = {"name": "vol-a-r-here"}, {"name": "vol-a-r-there"}
+        self.objects[f"{power.LH}/settings"] = {"items": [{"metadata": {"name": "node-drain-policy"}, "value": "block-if-contains-last-replica"}]}
+        self.objects[f"{power.LH}/engines"] = {"items": [{"spec": {"volumeName": "vol-a"}, "status": {
+            "currentState": "running", "replicaModeMap": {"vol-a-r-here": "RW", "vol-a-r-there": "WO"},
+            "rebuildStatus": {"tcp://x": {"isRebuilding": True, "progress": 5}}}}]}
+        plan = power.plan("node1", "reboot")
+        vol = next(v for v in plan["volumes"] if v["claim"] == "lab/appdata")
+        self.assertEqual(("unavailable", 0, 5), (vol["risk"], vol["healthy_elsewhere"], vol["rebuilding_pct"]))
+        self.assertFalse(plan["ready"])
+        self.assertTrue(any("lab/appdata" in b and "5% done" in b for b in plan["blockers"]), plan["blockers"])
+        self.assertTrue(any("lab/only-copy" in b for b in plan["blockers"]), "a one-copy volume blocks the drain too")
+        # Force restarts without draining, so Longhorn's drain rule does not apply.
+        self.assertFalse(any("lab/appdata" in b for b in power.plan("node1", "reboot", force=True)["blockers"]))
+        # Where Longhorn is set to allow it, only the data acknowledgement remains.
+        self.objects[f"{power.LH}/settings"] = {"items": [{"metadata": {"name": "node-drain-policy"}, "value": "always-allow"}]}
+        plan = power.plan("node1", "reboot")
+        self.assertFalse(any("Longhorn will not" in b for b in plan["blockers"]))
+        self.assertTrue(plan["requires_data_ack"])
+
+    def test_a_detached_volumes_only_copy_on_the_host_blocks_the_drain(self):
+        # nas-backup: detached, wanting two copies, its only one on the host.
+        # Its replica was stopped, so the review saw no copy at all - neither
+        # here nor elsewhere - and Longhorn then held the drain on it.
+        self.objects["/apis/kubevirt.io/v1/virtualmachineinstances"]["items"] = []
+        self.objects[f"{power.LH}/settings"] = {"items": [{"metadata": {"name": "node-drain-policy"}, "value": "block-if-contains-last-replica"}]}
+        self.objects[f"{power.LH}/replicas"]["items"] += [
+            {"spec": {"nodeID": "node1", "volumeName": "vol-c", "healthyAt": "2026-10-01T00:00:00Z"}, "status": {"currentState": "stopped"}},
+            {"spec": {"nodeID": "node1", "volumeName": "vol-d", "healthyAt": "2026-10-01T00:00:00Z"}, "status": {"currentState": "stopped"}},
+            {"spec": {"nodeID": "node2", "volumeName": "vol-d", "healthyAt": "2026-10-01T00:00:00Z"}, "status": {"currentState": "stopped"}}]
+        self.objects[f"{power.LH}/volumes"]["items"] += [
+            {"metadata": {"name": "vol-c"}, "spec": {"numberOfReplicas": 2}, "status": {"state": "detached", "robustness": "unknown",
+                "kubernetesStatus": {"namespace": "lab", "pvcName": "nas-backup"}}},
+            {"metadata": {"name": "vol-d"}, "spec": {"numberOfReplicas": 2}, "status": {"state": "detached", "robustness": "unknown",
+                "kubernetesStatus": {"namespace": "lab", "pvcName": "archive"}}}]
+        plan = power.plan("node1", "reboot")
+        volumes = {v["claim"]: v for v in plan["volumes"]}
+        self.assertEqual(("unavailable", True, True), (volumes["lab/nas-backup"]["risk"],
+                         volumes["lab/nas-backup"]["last_copy_here"], volumes["lab/nas-backup"]["detached"]))
+        self.assertEqual(("single-copy", 1), (volumes["lab/archive"]["risk"], volumes["lab/archive"]["healthy_elsewhere"]),
+                         "a stopped copy on another host is still a copy")
+        blocker = next(b for b in plan["blockers"] if "lab/nas-backup" in b)
+        self.assertIn("detached", blocker)
+        self.assertFalse(any("lab/archive" in b for b in plan["blockers"]))
+        self.assertFalse(volumes["lab/only-copy"]["detached"], "a running replica means the volume is attached")
+        # A failed copy is not one.
+        self.objects[f"{power.LH}/replicas"]["items"][-1]["spec"]["failedAt"] = "2026-10-02T00:00:00Z"
+        self.assertEqual(0, {v["claim"]: v for v in power.plan("node1", "reboot")["volumes"]}["lab/archive"]["healthy_elsewhere"])
+
     def test_unknown_replica_inventory_is_explicit(self):
         self.objects.pop(f"{power.LH}/replicas")
         plan = power.plan("node1", "poweroff")
@@ -60,6 +114,8 @@ class PowerPlanTests(unittest.TestCase):
 
     def test_ready_when_no_vms_and_storage_known(self):
         self.objects["/apis/kubevirt.io/v1/virtualmachineinstances"]["items"] = []
+        # A host holding a volume's only copy drains only where Longhorn allows it.
+        self.objects[f"{power.LH}/settings"] = {"items": [{"metadata": {"name": "node-drain-policy"}, "value": "always-allow"}]}
         self.assertTrue(power.plan("node1", "reboot")["ready"])
 
     def test_quorum_loss_blocks_power(self):
@@ -77,20 +133,26 @@ class PowerPlanTests(unittest.TestCase):
         self.assertEqual(60, power.status(item)[1])
         self.objects["/api/v1/nodes/node1"]["status"]["conditions"][0]["status"] = "True"
         self.objects["/api/v1/nodes/node1"]["status"]["nodeInfo"]["bootID"] = "new"
-        self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "degraded"
+        # Unavailable is waited for; degraded is available while Longhorn
+        # rebuilds the copy on the host, which can take hours for many volumes.
+        self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "faulted"
         self.assertEqual(90, power.status(item)[1])
+        self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "degraded"
+        state, _, message = power.status(item)
+        self.assertEqual("succeeded", state)
+        self.assertIn("Longhorn is rebuilding 1 volume copy", message)
         self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "healthy"
         self.assertEqual("succeeded", power.status(item)[0])
 
     def test_reboot_resync_timeout_is_actionable(self):
         self.objects["/api/v1/nodes/node1"]["status"]["nodeInfo"]["bootID"] = "new"
-        self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "degraded"
+        self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "faulted"
         item = {"ref": {"node": "node1", "action": "reboot", "boot_id": "old",
                         "saw_down": True, "volumes": ["vol-a"],
                         "returned_at": power.time.time() - 1801}}
         state, _, message = power.status(item)
         self.assertEqual("failed", state)
-        self.assertIn("vol-a", message)
+        self.assertIn("lab/appdata", message, "named by its claim, not the Longhorn volume")
 
     def test_helper_pull_backoff_keeps_monitoring_because_it_can_still_run(self):
         self.objects["/api/v1/namespaces/lab/pods/power-helper"] = {

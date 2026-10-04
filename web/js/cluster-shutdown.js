@@ -69,7 +69,7 @@ function shutdownPoll(last) {
   shutdownTimer = setTimeout(async () => {
     if (!$('#shutdownLive')) return;
     try {
-      const result = await api('/api/cluster/shutdown', {keep:true});
+      const result = await api('/api/cluster/shutdown', {keep:true, timeout:10000});
       if (!$('#shutdownLive')) return;
       if (!result.state || result.state.run !== last.run) throw new Error('Shutdown journal changed');
       const next = result.state;
