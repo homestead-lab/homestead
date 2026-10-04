@@ -48,7 +48,8 @@ try {
     assert.match(await page.locator('.dialog-master-content').innerText(),/Move media/);
     await page.locator('.dialog-master-nav button').filter({hasText:'Update immich'}).click();
     assert.equal(await page.locator('.dialog-master-content [role="progressbar"]').count(),0);
-    const detail=page.locator('.dialog-master-content details');await detail.locator('summary').click();
+    assert.equal(await page.locator('.dialog-master-content details').count(),0,'Log and Dismiss are buttons, not a collapse');
+    const detail=page.locator('.dialog-master-nav details');await detail.locator('summary').click();
     await page.evaluate(()=>renderOperations());
     assert.equal(await detail.getAttribute('open'),'');
     assert.match(await page.locator('.dialog-master-content').innerText(),/Update immich/);
@@ -59,8 +60,8 @@ try {
     assert.equal(await page.locator('#mbody').evaluate(el=>el.scrollWidth<=el.clientWidth+1),true);
     await page.screenshot({path:`${output}/jobs-${theme}-${width}.png`});
     await page.locator('#jobsClearCompleted').click();
-    assert.deepEqual(await page.evaluate(()=>dismissed),['complete','recovered']);
-    assert.deepEqual(await page.evaluate(()=>STATE.data.operations.map(x=>x.id)),['failed','active','receipt']);
+    assert.deepEqual(await page.evaluate(()=>dismissed),['failed','complete','recovered']);
+    assert.deepEqual(await page.evaluate(()=>STATE.data.operations.map(x=>x.id)),['active','receipt']);
     assert.equal(await page.locator('#jobsClearCompleted').isVisible(),false);
     await page.evaluate(()=>{STATE.data.operations=[];renderOperations();});
     assert.equal(await page.getByText('No jobs.',{exact:true}).isVisible(),true);

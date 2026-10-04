@@ -3076,6 +3076,9 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 .dialog-master-content .jobitemtop{margin-bottom:12px}
 .dialog-master-content .jobfoot{margin:12px 0;gap:12px;overflow-wrap:anywhere}
 .dialog-master-content .jobactions{gap:8px;flex-wrap:wrap}
+/* Log and Dismiss belong to the job, not to what it is asking for: they sit
+   at the start of the row, its own actions at the end. */
+.jobactions-side{display:flex;gap:6px;margin-right:auto}
 .dialog-master-content .jobmeter.unknown{display:none}
 .dialog-master-content .ui-more{margin-top:18px}
 .jobs-dialog-actions{margin-top:18px}
