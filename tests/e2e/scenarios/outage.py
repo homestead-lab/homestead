@@ -16,7 +16,14 @@ def container_restart(ctx):
     """A container that crashes is restarted in place, with its data."""
     ctx.app("e2e-crash")
     mark = ctx.mark("e2e-crash")
-    ctx.kube.run("exec", "-n", "lab", "deploy/e2e-crash", "--", "sh", "-c", "kill 1", check=False)
+    # A container's PID 1 ignores signals it has no handler for, from inside;
+    # its host kills it as a crash would - found by the pod's UID in its cgroup.
+    pod = next(p for p in ctx.kube.items("pods", "-n", "lab", "-l", "app=e2e-crash") if p["status"].get("phase") == "Running")
+    uid = pod["metadata"]["uid"]
+    host = ctx.node(pod["spec"]["nodeName"])
+    killed = host.ssh(f"for p in $(pgrep -f /data/starts); do grep -qE '{uid}|{uid.replace('-', '_')}' /proc/$p/cgroup 2>/dev/null "
+                      f"&& sudo kill -9 $p && echo $p; done", check=False).split()
+    assert killed, f"no process of e2e-crash found on {host.name}"
     def restarted():
         pods = ctx.kube.items("pods", "-n", "lab", "-l", "app=e2e-crash")
         status = (pods[0]["status"].get("containerStatuses") or [{}])[0] if pods else {}

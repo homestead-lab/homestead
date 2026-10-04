@@ -17,6 +17,7 @@ class Context:
         self.distro, self.version, self.artifacts = distro, version, artifacts
         self.vip, self.nodes = vip, nodes or lab.nodes
         self.others = []        # further clusters, for moves between them
+        self._copies_checked = False
 
     def node(self, name):
         return next(n for n in self.lab.nodes if n.name == name)
@@ -42,14 +43,16 @@ class Context:
                 {"weight": 100, "preference": {"matchExpressions": [{"key": "kubernetes.io/hostname", "operator": "In", "values": [node]}]}}]}}
         loop = "while true; do :; done" if cpu_burn else "while true; do date > /data/now; sleep 5; done"
         classes = {c["metadata"]["name"]: c for c in self.kube.items("storageclass")}
-        if storage_class == "longhorn-r2" and storage_class not in classes and len(self.nodes) > 1:
-            # The installer's Longhorn keeps one copy (it starts on one host);
-            # a person running several hosts gives volumes two, as here, so a
-            # host can drain with its apps' data still whole elsewhere.
-            self.kube.apply(json.dumps({"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
-                                        "metadata": {"name": "longhorn-r2"}, "provisioner": "driver.longhorn.io",
-                                        "allowVolumeExpansion": True, "reclaimPolicy": "Delete", "volumeBindingMode": "Immediate",
-                                        "parameters": {"numberOfReplicas": "2", "staleReplicaTimeout": "30", "dataLocality": "disabled"}}))
+        if storage_class not in classes and len(self.nodes) > 1 and not self._copies_checked:
+            # The installer's Longhorn starts with one copy, on one host;
+            # Homestead raises the default as hosts join, so a host can drain
+            # with its apps' data whole elsewhere. Checked once, before any app.
+            want = min(3, len(self.nodes))
+            def raised():
+                cls = {c["metadata"]["name"]: c for c in self.kube.items("storageclass")}.get("longhorn") or {}
+                return int((cls.get("parameters") or {}).get("numberOfReplicas") or 0) >= want
+            self.kube.wait(f"Homestead raising Longhorn's default copies to {want}", raised, timeout=900, every=15)
+            self._copies_checked = True
             classes = {c["metadata"]["name"]: c for c in self.kube.items("storageclass")}
         if storage_class not in classes:
             # A Longhorn class the installer made - the default one first - never local-path.
