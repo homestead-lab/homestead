@@ -1,0 +1,86 @@
+"""Run a release test suite on real VMs.
+
+    python tests/e2e/run.py --distro k3s --suite power --version 2.8.312
+
+Needs Linux with KVM, qemu-system-x86, qemu-utils, cloud-image-utils,
+kubectl and sudo (for the VM bridge). In CI, .github/workflows/release-e2e.yml
+runs every suite on both distributions in parallel. --keep leaves the VMs
+running to look at afterwards; --scenario runs one scenario of the suite.
+"""
+import argparse
+import os
+import sys
+import tempfile
+import time
+import traceback
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from harness import diagnostics, install, log  # noqa: E402
+from harness.api import Homestead  # noqa: E402
+from harness.context import Context  # noqa: E402
+from harness.kube import Kube  # noqa: E402
+from harness.vms import Lab  # noqa: E402
+from suites import SUITES  # noqa: E402
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--distro", choices=("k3s", "rke2"), default="k3s")
+    parser.add_argument("--suite", choices=sorted(SUITES), required=True)
+    parser.add_argument("--version", required=True, help="a published Homestead release, e.g. 2.8.312 or 2.8.312-dev.1")
+    parser.add_argument("--scenario", help="run only this scenario of the suite")
+    parser.add_argument("--artifacts", default=os.environ.get("E2E_ARTIFACTS") or tempfile.mkdtemp(prefix="homestead-e2e-"))
+    parser.add_argument("--memory", type=int, default=int(os.environ.get("E2E_MEMORY", "4096")))
+    parser.add_argument("--keep", action="store_true")
+    args = parser.parse_args()
+
+    suite = SUITES[args.suite]
+    log.to(args.artifacts)
+    log.info(f"Suite {args.suite} on {suite['nodes']} {args.distro} host(s), Homestead {args.version}; artifacts in {args.artifacts}")
+    memory = args.memory if suite["nodes"] > 1 else max(args.memory, 6144)
+    lab = Lab(Path(args.artifacts) / "lab", suite["nodes"], memory=memory)
+    failures, ctx = [], None
+    try:
+        log.group("Hosts")
+        lab.up()
+        log.end_group()
+        log.group(f"Install {args.distro}, Longhorn and Homestead {args.version}")
+        kubeconfig = install.build(lab, args.distro, args.version, args.artifacts)
+        kube = Kube(kubeconfig)
+        kube.nodes_ready(len(lab.nodes))
+        kube.deployment_ready("lab", "homestead", timeout=1800)
+        log.end_group()
+        ctx = Context(lab, kube, None, args.distro, args.version, args.artifacts)
+        ctx.api = Homestead(ctx.homestead_urls())
+        ctx.api.sign_in()
+        for name, scenario in suite["scenarios"]:
+            if args.scenario and args.scenario != name:
+                continue
+            log.group(f"Scenario: {name}")
+            started = time.time()
+            try:
+                scenario(ctx)
+                log.info(f"PASSED {name} in {int(time.time() - started)}s")
+            except Exception as error:
+                log.error(f"{name}: {error}")
+                log.info(traceback.format_exc())
+                failures.append(name)
+                diagnostics.collect(ctx, name.replace(" ", "-"))
+            finally:
+                log.end_group()
+    except Exception as error:
+        log.error(f"setting up: {error}")
+        log.info(traceback.format_exc())
+        failures.append("setup")
+        if ctx:
+            diagnostics.collect(ctx, "setup")
+    finally:
+        if not args.keep:
+            lab.down()
+    log.info(("FAILED: " + ", ".join(failures)) if failures else f"Suite {args.suite} passed")
+    sys.exit(1 if failures else 0)
+
+
+if __name__ == "__main__":
+    main()

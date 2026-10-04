@@ -1,0 +1,72 @@
+"""What a scenario is given: the hosts, kubectl, Homestead's API, and test
+apps that write to their volumes so their data can be checked across a
+reboot or a shutdown."""
+import json
+import time
+
+from . import log
+from .vms import VIP
+
+# From registry.k8s.io, not Docker Hub, whose rate limits a CI runner meets.
+BUSYBOX = "registry.k8s.io/e2e-test-images/busybox:1.36.1-1"
+
+
+class Context:
+    def __init__(self, lab, kube, api, distro, version, artifacts):
+        self.lab, self.kube, self.api = lab, kube, api
+        self.distro, self.version, self.artifacts = distro, version, artifacts
+
+    def node(self, name):
+        return next(n for n in self.lab.nodes if n.name == name)
+
+    def homestead_urls(self):
+        urls = [f"http://{VIP}:8088"]
+        try:
+            port = next(p["nodePort"] for p in self.kube.get("service", "-n", "lab", "homestead")["spec"]["ports"] if p.get("nodePort"))
+            urls += [f"http://{n.ip}:{port}" for n in self.lab.nodes]
+        except Exception:
+            pass
+        return urls
+
+    # ------------------------------------------------------------ test apps
+    def app(self, name, node=None, pinned=False, size="1Gi", storage_class="longhorn-r2", cpu_burn=False, ns="lab"):
+        """A Deployment with a Longhorn volume, writing to it every few seconds.
+        node: where it starts - pinned (nodeSelector) or preferred (affinity)."""
+        placement = {}
+        if node and pinned:
+            placement["nodeSelector"] = {"kubernetes.io/hostname": node}
+        elif node:
+            placement["affinity"] = {"nodeAffinity": {"preferredDuringSchedulingIgnoredDuringExecution": [
+                {"weight": 100, "preference": {"matchExpressions": [{"key": "kubernetes.io/hostname", "operator": "In", "values": [node]}]}}]}}
+        loop = "while true; do :; done" if cpu_burn else "while true; do date > /data/now; sleep 5; done"
+        manifest = {"apiVersion": "v1", "kind": "List", "items": [
+            {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": f"{name}-data", "namespace": ns},
+             "spec": {"accessModes": ["ReadWriteOnce"], "storageClassName": storage_class, "resources": {"requests": {"storage": size}}}},
+            {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": name, "namespace": ns, "labels": {"app": name, "e2e": "true"}},
+             "spec": {"replicas": 1, "strategy": {"type": "Recreate"}, "selector": {"matchLabels": {"app": name}},
+                      "template": {"metadata": {"labels": {"app": name}},
+                                   "spec": {**placement, "terminationGracePeriodSeconds": 5, "containers": [{
+                                       "name": name, "image": BUSYBOX,
+                                       "command": ["sh", "-c", f"echo started $(date) >> /data/starts; {loop}"],
+                                       "resources": {"requests": {"cpu": "50m", "memory": "32Mi"}},
+                                       "volumeMounts": [{"name": "data", "mountPath": "/data"}]}],
+                                       "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": f"{name}-data"}}]}}}}]}
+        self.kube.apply(json.dumps(manifest))
+        self.kube.deployment_ready(ns, name)
+        log.info(f"Test app {ns}/{name} running on {self.app_node(name, ns)}")
+
+    def app_node(self, name, ns="lab"):
+        pods = [p for p in self.kube.items("pods", "-n", ns, "-l", f"app={name}") if p["status"].get("phase") == "Running"]
+        return pods[0]["spec"]["nodeName"] if pods else None
+
+    def exec(self, name, command, ns="lab"):
+        return self.kube.run("exec", "-n", ns, f"deploy/{name}", "--", "sh", "-c", command).strip()
+
+    def mark(self, name, ns="lab"):
+        """A line written to the app's volume now, to be found again later."""
+        marker = f"e2e-{name}-{int(time.time())}"
+        self.exec(name, f"echo {marker} >> /data/markers && sync", ns)
+        return marker
+
+    def has_mark(self, name, marker, ns="lab"):
+        return marker in self.exec(name, "cat /data/markers", ns)

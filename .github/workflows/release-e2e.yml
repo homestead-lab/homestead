@@ -1,0 +1,93 @@
+name: Release tests
+
+# The release suite: real k3s and RKE2 clusters on VMs, installed by
+# Homestead's own installer from a published release, then driven through
+# its API - host reboots and power-offs, the whole cluster shut down and
+# back, rolling OS restarts, storage repair and balancing. One runner per
+# distribution and suite, in parallel; see tests/e2e/README.md.
+#
+# It runs by itself when a x.y.0 release is published, and on demand for any
+# published version - a dev release included - from the Actions tab.
+
+on:
+  release:
+    types: [published]
+  # Working on the suite itself: a branch named e2e/<distro>-<suite> (or
+  # e2e/all) runs that much against the newest published release.
+  push:
+    branches: ["e2e/**"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published Homestead version to test, e.g. 2.8.312 or 2.8.312-dev.1"
+        required: true
+      suites:
+        description: "Suites, comma-separated, or all (core, power, single, shutdown, rolling, storage)"
+        default: all
+      distros:
+        description: "Distributions, comma-separated"
+        default: k3s,rke2
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-e2e-${{ github.event.release.tag_name || inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.plan.outputs.run }}
+      version: ${{ steps.plan.outputs.version }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: plan
+        env:
+          BRANCH: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          TAG: ${{ github.event.release.tag_name }}
+          VERSION: ${{ inputs.version }}
+          SUITES: ${{ inputs.suites }}
+          DISTROS: ${{ inputs.distros }}
+        run: python3 tests/e2e/plan.py >> "$GITHUB_OUTPUT"
+
+  e2e:
+    needs: plan
+    if: needs.plan.outputs.run == 'true'
+    name: ${{ matrix.distro }} · ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: KVM, QEMU and cloud-init tools
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+          sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils
+          test -w /dev/kvm
+          # The VMs' disks go where the runner has room.
+          sudo mkdir -p /mnt/e2e && sudo chown "$USER" /mnt/e2e
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/homestead-e2e
+          key: e2e-ubuntu-noble-${{ github.run_id }}
+          restore-keys: e2e-ubuntu-noble-
+      - name: ${{ matrix.suite }} on ${{ matrix.distro }}, Homestead ${{ needs.plan.outputs.version }}
+        run: python3 -u tests/e2e/run.py --distro "${{ matrix.distro }}" --suite "${{ matrix.suite }}" --version "${{ needs.plan.outputs.version }}" --artifacts /mnt/e2e
+      - name: Diagnostics
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2e-${{ matrix.distro }}-${{ matrix.suite }}
+          path: |
+            /mnt/e2e
+            !/mnt/e2e/lab/**/*.qcow2
+            !/mnt/e2e/lab/**/*.iso
+          retention-days: 14
