@@ -177,6 +177,11 @@ async function api(path, opts) {
   // `keep` marks a read whose answer matters after the page changes.
   const readOnly = (!opts || !opts.method || opts.method === "GET") && !opts?.keep;
   const startedAt = window.NAV_TOKEN;
+  // `timeout` (ms) gives up on a request nothing will answer: a host that went
+  // down mid-request leaves its connection open, and the browser waits on it
+  // long after Homestead is back.
+  if (opts?.timeout && !opts.signal && typeof AbortSignal !== "undefined" && AbortSignal.timeout)
+    opts = { ...opts, signal: AbortSignal.timeout(opts.timeout) };
   // Linked clusters: which one this goes to (fleet.js).
   if (window.fleetRoute) ({ path, opts } = window.fleetRoute(path, opts || {}));
   const diagnostic = window.HomesteadRecorder?.request(path, opts);

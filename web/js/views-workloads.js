@@ -1171,7 +1171,7 @@ window.imageReviewedApply = async () => {
         let state;
         try {
           state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(config.ns)}&name=${encodeURIComponent(config.name)}`,
-            config.cluster ? {headers: clusterHeaders(config)} : undefined);
+            {timeout: 10000, ...(config.cluster ? {headers: clusterHeaders(config)} : {})});
         } catch (error) {
           // Homestead is replacing itself - here, or on a linked cluster the
           // relay cannot reach for that minute: wait for it to answer again.

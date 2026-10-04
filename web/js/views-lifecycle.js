@@ -769,7 +769,7 @@ window.nodePowerFollow = async (id, intro = "") => {
   let last = null;
   while (sequence === NODE_POWER_FOLLOW && $("#pwProgress")) {
     let offline = false;
-    try { last = (await api("/api/operations", { keep: true })).find(o => o.id === id) || last; }
+    try { last = (await api("/api/operations", { keep: true, timeout: 10000 })).find(o => o.id === id) || last; }
     catch { offline = true; }
     if (!$("#pwProgress") || sequence !== NODE_POWER_FOLLOW) return;
     if (last) $("#pwProgress").innerHTML = nodePowerProgressMarkup(last, offline);

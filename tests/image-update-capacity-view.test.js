@@ -19,7 +19,7 @@ function setup({blocked = false, fail = "", missing = false, capacity = null} = 
       fields["#mbody"]={innerHTML:body};
     },
     api:async (path, options)=>{
-      const body = options ? JSON.parse(options.body) : null;
+      const body = options?.body ? JSON.parse(options.body) : null;
       sent.push({path,body});
       if(path.endsWith("/preview")) return {capacity: missing ? null : capacity || {blocked, warnings:["High RAM"], candidates:[]},
         capacity_token:"signed-"+body.name,images:[{container:"app",before:"old",after:"new@digest",rollback:"old@digest"}]};
