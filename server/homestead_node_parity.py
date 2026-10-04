@@ -19,9 +19,12 @@ machine do not:
   set already - journald's own default is up to 4 GB of the system disk;
 - Longhorn's copies: a one-machine cluster keeps one copy of each volume,
   since it can hold no more. Once more nodes are Ready, the default for new
-  volumes rises with them, up to three - only while it is still the
-  installer's own one copy, so a count someone chose is kept. Existing
-  volumes keep their count; the Volumes page raises those.
+  volumes rises with them, up to three - 1, then 2, then 3 as nodes join -
+  only while it is still the installer's one copy or the count Homestead
+  itself set, so a count someone chose is kept, and it is never lowered. A
+  change in Ready nodes is noticed within a minute (copies_tick), so apps
+  made just after the nodes join get the copies too. Existing volumes keep
+  their count; the Volumes page raises those.
 
 Each node's host is done once, and recorded in /data, like the inotify
 limits (homestead_host_limits); a host done by an older release, with fewer
@@ -331,14 +334,18 @@ def stale_services(now=None):
 
 def longhorn_copies(ready):
     """The default copies raised with the nodes, while it is the installer's
-    one. Returns (from, to), or None."""
+    one or the count Homestead set before. Returns (from, to), or None."""
     want = max(1, min(3, len(ready)))
     chart = _get(f"{HELMCHARTS}/longhorn")
     if not chart or want < 2:
         return None
     values = str((chart.get("spec") or {}).get("valuesContent") or "")
     match = INSTALLER_COPIES.fullmatch(values)
-    if not match or match.group(1) != "1" or match.group(2) != "1":
+    ours = {"1", str(_load().get("longhorn_copies") or "1")}
+    if not match or match.group(1) != match.group(2) or match.group(1) not in ours:
+        return None
+    have = int(match.group(1))
+    if want <= have:
         return None
     ksend("PATCH", f"{HELMCHARTS}/longhorn",
           {"spec": {"valuesContent": "\n".join(["persistence:", f"  defaultClassReplicaCount: {want}",
@@ -347,9 +354,37 @@ def longhorn_copies(ready):
     # The chart's defaults reach a running Longhorn only at its install; the
     # setting is what it reads for each new volume now.
     setting = _get(LONGHORN_SETTING)
-    if setting and str(setting.get("value") or "") == "1":
+    if setting and str(setting.get("value") or "") in ours:
         ksend("PATCH", LONGHORN_SETTING, {"value": str(want)}, ctype="application/merge-patch+json")
-    return (1, want)
+    state = _load()
+    state["longhorn_copies"] = want
+    SHARED.write_json(_path(), state, indent=1, sort_keys=True)
+    return (have, want)
+
+
+_seen_ready = None
+
+
+def copies_tick():
+    """Every minute: once the number of Ready nodes changes, the default
+    copies follow. Returns a line for the log, or None."""
+    global _seen_ready
+    p = platform() or {}
+    if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2") or not p.get("longhorn"):
+        return None
+    ready = _ready_nodes()
+    if len(ready) == _seen_ready:
+        return None
+    raised = longhorn_copies(ready)
+    _seen_ready = len(ready)
+    return _copies_note(raised, ready)
+
+
+def _copies_note(raised, ready):
+    if not raised:
+        return None
+    return (f"new Longhorn volumes keep {raised[1]} copies, now there are {len(ready)} nodes "
+            "(existing volumes keep theirs; raise them on the Volumes page)")
 
 
 def tick():
@@ -375,8 +410,7 @@ def tick():
     for name in stale_services():
         out.append(("", f"removed the LoadBalancer Service {name}: its workload is gone, and it still asked for its VIP"))
     if p.get("longhorn"):
-        raised = longhorn_copies(ready)
-        if raised:
-            out.append(("", f"new Longhorn volumes keep {raised[1]} copies, now there are {len(ready)} nodes "
-                            "(existing volumes keep theirs; raise them on the Volumes page)"))
+        note = _copies_note(longhorn_copies(ready), ready)
+        if note:
+            out.append(("", note))
     return out

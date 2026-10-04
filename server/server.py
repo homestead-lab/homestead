@@ -6703,6 +6703,22 @@ def _host_console_loop():
         time.sleep(600)
 
 
+def _longhorn_copies_loop():
+    """On the leader, every minute: Longhorn's default copies follow the
+    number of Ready nodes as they join (homestead_node_parity.copies_tick),
+    before apps made right after are given one copy."""
+    time.sleep(30)
+    while True:
+        if LEADER.is_leader():
+            try:
+                note = NODE_PARITY.copies_tick()
+                if note:
+                    print(f"platform: {note}", flush=True)
+            except Exception as error:
+                print(f"platform: Longhorn copies not checked: {str(error)[:160]}", flush=True)
+        time.sleep(60)
+
+
 def _host_fix_loop():
     """On the leader, what k3s and RKE2 hosts need or undo at each start: inotify
     limits a busy node outgrows (homestead_host_limits.py), what a node that
@@ -10687,6 +10703,7 @@ def start_background_tasks():
     threading.Thread(target=_power_jobs_loop, daemon=True).start()
     threading.Thread(target=_detached_copies_loop, daemon=True).start()
     threading.Thread(target=_host_fix_loop, daemon=True).start()
+    threading.Thread(target=_longhorn_copies_loop, daemon=True).start()
     threading.Thread(target=_host_console_loop, daemon=True).start()
     threading.Thread(target=_storage_pending_loop, daemon=True).start()
     threading.Thread(target=_snapshot_files_loop, daemon=True).start()

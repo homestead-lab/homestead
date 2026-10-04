@@ -209,6 +209,34 @@ class NodeParityTests(unittest.TestCase):
         self.assertIn("defaultReplicaCount: 3", chart["spec"]["valuesContent"])
         self.assertIn(("PATCH", PARITY.LONGHORN_SETTING, {"value": "3"}), cluster.sent)
 
+    def test_copies_rise_again_as_more_nodes_join_and_never_fall(self):
+        setting = {"value": "1"}
+        chart = {"spec": {"valuesContent": INSTALLER_LONGHORN}}
+        cluster = Cluster([node("a"), node("b")], {f"{HELM}/longhorn": chart, PARITY.LONGHORN_SETTING: setting})
+        cluster.ksend = lambda method, path, body=None, ctype="": (
+            cluster.sent.append((method, path, body)),
+            (chart if path.endswith("/longhorn") else setting).update(body))
+        self.bind(cluster)
+        PARITY._seen_ready = None
+        self.assertIn("keep 2 copies", PARITY.copies_tick())
+        self.assertEqual("2", setting["value"])
+        self.assertIsNone(PARITY.copies_tick(), "nothing changed: nothing asked")
+        cluster.objects["/api/v1/nodes"]["items"].append(node("c"))
+        self.assertIn("keep 3 copies", PARITY.copies_tick())
+        self.assertIn("defaultClassReplicaCount: 3", chart["spec"]["valuesContent"])
+        self.assertEqual("3", setting["value"])
+        cluster.objects["/api/v1/nodes"]["items"].pop()
+        self.assertIsNone(PARITY.copies_tick(), "a node leaving lowers nothing")
+        self.assertIn("defaultReplicaCount: 3", chart["spec"]["valuesContent"])
+
+    def test_a_count_someone_set_after_homestead_is_kept(self):
+        chart = {"spec": {"valuesContent": INSTALLER_LONGHORN.replace("1", "2")}}
+        cluster = Cluster([node("a"), node("b"), node("c")], {f"{HELM}/longhorn": chart})
+        self.bind(cluster)
+        PARITY._seen_ready = None
+        self.assertIsNone(PARITY.copies_tick(), "2 was not Homestead's: it stays")
+        self.assertEqual([], cluster.sent)
+
     def test_copies_someone_chose_are_kept(self):
         for values in ("persistence:\n  defaultClassReplicaCount: 2\ndefaultSettings:\n  defaultReplicaCount: 2\n",
                        INSTALLER_LONGHORN + "longhornUI:\n  replicas: 1\n"):
