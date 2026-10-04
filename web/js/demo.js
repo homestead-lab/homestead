@@ -1479,10 +1479,12 @@ ssh_pwauth: true
       const op = { id: "demo-power-" + Date.now(), kind: "node-power", title: `${body.action} ${body.node}`, status: "running",
         progress: 5, message: "Cordoning host; power has not been sent", started_at: new Date().toISOString(), finished_at: "",
         href: "/nodes?node=" + encodeURIComponent(body.node), resource: { kind: "Node", name: body.node, namespace: "" },
-        power: { phase: "cordoning", action: body.action, node: body.node, direct: !!(body.force || window.__demoSingleHostOutage) } };
+        power: { phase: "cordoning", action: body.action, node: body.node, direct: !!(body.force || window.__demoSingleHostOutage),
+          holds: !body.force && Object.values(body.choices || {}).length > 0, held: Object.values(body.choices || {}).filter(c => c === "wait").length } };
       const phases = op.power.direct
         ? [["verifying", 15, "Rechecking the host"], ["sending", 20, "Submitting power helper"], ["observing", 60, reboot ? "Waiting for the host to return" : "Waiting for the host to leave Ready"]]
-        : [["draining", 10, "Evicting workload and system pods: 9 left"], ["draining", 12, "Evicting workload and system pods: 3 left"],
+        : [...(op.power.holds ? [["holding", 8, "Waiting to stop or move: lab/frigate, vms/win11; power has not been sent"]] : []),
+           ["draining", 10, "Evicting workload and system pods: 9 left"], ["draining", 12, "Evicting workload and system pods: 3 left"],
            ["verifying", 15, "Drain completed; rechecking quorum, VMs, pods and volume replicas before power"],
            ["sending", 20, "Submitting power helper"], ["observing", 60, reboot ? "Host is Ready; waiting for 2 volume(s) to become healthy" : "Host is NotReady; waiting to confirm shutdown"]];
       (window.__demoOps ??= responses["/api/operations"]()).unshift(op);
@@ -1501,6 +1503,13 @@ ssh_pwauth: true
         { ns: "lab", name: "home-assistant", stranded: false, eligible: ["harvester-node2", "harvester-node3"] },
         { ns: "lab", name: "paperless", stranded: false, eligible: ["harvester-node2"] }],
       stranded: [{ ns: "lab", name: "frigate" }],
+      // What each app and VM on the host does while it is down.
+      hold: [
+        { id: "Deployment/lab/frigate", kind: "Deployment", ns: "lab", name: "frigate", here: 1, hosts: [], options: ["wait"], default: "wait", why: "no other host it can run on" },
+        { id: "Deployment/lab/home-assistant", kind: "Deployment", ns: "lab", name: "home-assistant", here: 1, hosts: ["harvester-node2", "harvester-node3"], options: ["move", "wait"], default: "move", why: "" },
+        { id: "Deployment/lab/paperless", kind: "Deployment", ns: "lab", name: "paperless", here: 1, hosts: ["harvester-node2"], options: ["move", "wait"], default: "move", why: "" },
+        { id: "VirtualMachine/vms/win11", kind: "VirtualMachine", ns: "vms", name: "win11", here: 1, hosts: ["harvester-node2", "harvester-node3"], options: ["move", "wait"], default: "move", why: "" },
+        { id: "VirtualMachine/vms/gpu-desktop", kind: "VirtualMachine", ns: "vms", name: "gpu-desktop", here: 1, hosts: [], options: ["wait"], default: "wait", why: "it cannot live-migrate: a host device is passed through" }],
       volumes: [{ name: "pvc-demo-frigate", claim: "lab/frigate-config", healthy_elsewhere: 1, risk: "single-copy" },
         { name: "pvc-demo-ha", claim: "lab/homeassistant-config", healthy_elsewhere: 2, risk: "resync" }],
       maintenance: { budgets: [{ pod: "lab/paperless-5c9d", budget: "minAvailable 1", allowed: 1 }], local_storage: [] },
@@ -1509,6 +1518,7 @@ ssh_pwauth: true
       if (plannedOutage) {
         plan.workloads = [{ns:"lab",name:"homestead",stranded:true,eligible:[]}];
         plan.stranded = [{ns:"lab",name:"homestead"}];
+        plan.hold = plan.hold.map(h => ({ ...h, hosts: [], options: ["wait"], default: "wait", why: "the only host" }));
         plan.volumes = [{name:"pvc-demo-homestead",claim:"lab/homestead-data",healthy_elsewhere:0,risk:"unavailable"}];
         plan.maintenance.budgets[0].allowed = 0;
         plan.warnings = ["All applications, storage and Homestead are unavailable while this host is down."];

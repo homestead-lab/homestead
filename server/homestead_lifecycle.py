@@ -819,7 +819,7 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
 
 
 def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=None, progress=None, force=False, planned_outage=False,
-               resumed=False):
+               resumed=False, hold=None):
     """Reboot or shut down a host.
 
     Kubernetes cannot do this. We schedule a one-shot privileged pod pinned to
@@ -845,6 +845,8 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
         # token. Eviction would remove Homestead before it could send power.
         rep = quorum_report()
         before_send()
+        if hold and hold():
+            steps.append("stopped the apps and VMs that wait for the host")
         steps.append("planned whole-cluster outage: no cordon or drain")
         return _send_power(node, action, steps, rep, report)
     if force:
@@ -864,9 +866,13 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
     report("cordoning", 5, "Cordoning host; power has not been sent")
     set_cordon(node, True)
     steps.append("cordoned")
+    held = bool(hold and hold())
+    if held:
+        steps.append("stopped what waits for the host and moved its VMs")
     if drain_first:
         report("draining", 10, "Evicting workload and system pods through disruption budgets; power has not been sent")
-        d = drain(node, include_system=True, reviewed_pods=reviewed_pods, wait=True, progress=report, resumed=resumed)
+        # What was stopped or moved has gone from the reviewed pods; nothing may be new.
+        d = drain(node, include_system=True, reviewed_pods=reviewed_pods, wait=True, progress=report, resumed=resumed or held)
         steps.append(f"drained {len(d['evicted'])} pod(s)")
         refused = [item for item in d["skipped"] if "(HTTP " in item]
         if refused:

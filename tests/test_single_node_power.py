@@ -29,7 +29,7 @@ class SingleNodePowerTests(unittest.TestCase):
             self.assertTrue(plan["ready"], plan["blockers"])
             self.assertTrue(plan["planned_outage"])
             self.assertFalse(plan["force"])
-            self.assertIn("all applications, storage and Homestead", " ".join(plan["warnings"]))
+            self.assertIn("Homestead stops the apps and VMs on this host first", " ".join(plan["warnings"]))
             self.assertTrue(plan["requires_data_ack"])
 
     def test_single_sqlite_control_plane_also_requires_the_outage_review(self):

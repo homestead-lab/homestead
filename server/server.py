@@ -4084,13 +4084,16 @@ def run_power_job(operation_id, power_plan, force=False, resumed=False):
         updated = OPS.record_phase(operation_id, phase, percent, message, owner=POD_NAME or None, **details)
         phase_state["phase"] = phase
         return updated
+
+    def hold():
+        return hold_for_power(operation_id, power_plan, power_progress)
     try:
         result = LC.node_power(node, action, True,
                                before_send=(lambda: POWER.recheck_planned_outage(power_plan)) if planned_outage else
                                (lambda: POWER.recheck_forced(power_plan)) if force
                                else (lambda: POWER.recheck_after_drain(power_plan)),
                                reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force, planned_outage=planned_outage,
-                               resumed=resumed)
+                               resumed=resumed, hold=None if force else hold)
         result["operation"] = {"id": operation_id}
         return result
     except OPS.Superseded:
@@ -4104,6 +4107,71 @@ def run_power_job(operation_id, power_plan, force=False, resumed=False):
         else:
             power_progress("failed", 10, message, failed_phase=phase_state["phase"])
         raise PowerNotSent(message, {"id": operation_id}) from e
+
+
+def hold_for_power(operation_id, power_plan, progress):
+    """Stop what waits for the host and live-migrate the VMs that move, then
+    wait for them to leave it. Safe to repeat: a resumed job finds its own
+    marks. Returns whether there was anything to do."""
+    node, picks = power_plan["node"], power_plan.get("choices") or {}
+    items = power_plan.get("hold") or []
+    waiting = [i for i in items if picks.get(i["id"]) == "wait"]
+    moving = [i for i in items if i["kind"] == "VirtualMachine" and picks.get(i["id"]) == "move"]
+    if not waiting and not moving:
+        return False
+    progress("holding", 8, f"Stopping {len(waiting)} app(s) and VM(s) to wait for the host"
+             + (f", moving {len(moving)} VM(s)" if moving else "") + "; power has not been sent")
+    held = [HOLD.stop(item, operation_id) for item in waiting]
+    progress("holding", 8, "Waiting for them to stop; power has not been sent", held=held)
+    for vm in moving:
+        HOLD.migrate(vm)
+    deadline = time.monotonic() + 600
+    while True:
+        pods = [p for p in kget("/api/v1/pods").get("items", []) if (p.get("spec") or {}).get("nodeName") == node]
+        vmis = [v for v in (kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", []) if items and any(
+            i["kind"] == "VirtualMachine" for i in items) else []) if (v.get("status") or {}).get("nodeName") == node]
+        pending = [f"{i['ns']}/{i['name']}" for i in waiting + moving if not HOLD.gone(i, node, pods, vmis)]
+        if not pending:
+            return True
+        if time.monotonic() >= deadline:
+            raise ValueError("These did not stop or move within 10 minutes: " + ", ".join(pending[:6])
+                             + ". What was stopped stays stopped until this job is released or the host is back")
+        progress("holding", 8, "Waiting to stop or move: " + ", ".join(pending[:6]) + "; power has not been sent")
+        time.sleep(3)
+
+
+def restore_held(item, uncordon=True):
+    """Start again what a power job stopped to wait for its host. Leader only,
+    once; the job's resolver calls it and records what happened."""
+    ref = item.get("ref") or {}
+    if not LEADER.is_leader() or ref.get("restored") is not None:
+        return ref.get("restored") is not None
+    if uncordon and not ref.get("planned_outage"):
+        # What waited is for this host; it cannot start here while cordoned.
+        node = kget(f"/api/v1/nodes/{urllib.parse.quote(ref['node'], safe='')}")
+        if ref.get("node_uid") and (node.get("metadata") or {}).get("uid") == ref["node_uid"]:
+            LC.set_cordon(ref["node"], False)
+            ref["uncordoned"] = True
+    started, left = HOLD.restore(ref.get("held") or [], item["id"])
+    ref["restored"] = {"started": started, "left": left, "at": time.time()}
+    return True
+
+
+def release_held_power(operation_id):
+    """Start what waits for a host on other hosts now, without waiting for it."""
+    with OPS._lock:
+        items = OPS._read()
+        item = next((i for i in items if i.get("id") == operation_id), None)
+        if not item or item.get("kind") != "node-power":
+            raise ValueError("host power job not found")
+        ref = item.get("ref") or {}
+        if not ref.get("held") or ref.get("restored") is not None:
+            raise ValueError("nothing is waiting for this host")
+        if ref.get("phase") not in ("observing",):
+            raise ValueError("wait until the power command has been sent")
+        restore_held(item, uncordon=False)
+        OPS._write(items)
+    return {"ok": True, "detail": "Started again: " + (", ".join(ref["restored"]["started"]) or "nothing")}
 
 
 def _power_in_background(operation_id, power_plan, force, resumed=False):
@@ -4134,6 +4202,7 @@ def send_reviewed_power(power_plan, force=False, background=False):
         "node-power", f"{action} {node}", {"kind": "Node", "name": node},
         "/nodes?node=" + urllib.parse.quote(node),
         {"node": node, "node_uid": power_plan["node_uid"], "action": action, "boot_id": power_plan["boot_id"],
+         "choices": power_plan.get("choices") or {},
          "volumes": [v["name"] for v in power_plan["volumes"]],
          "planned_outage": planned_outage, "forced": bool(force),
          # What a resumed job needs: the reviewed plan, and which replica runs it.
@@ -4241,6 +4310,7 @@ def rollout_reboot(node, allow_single_copy=False):
         raise ValueError("; ".join(power_plan["blockers"]))
     if power_plan["stranded"]:
         raise ValueError("some workloads have no other host to run on")
+    power_plan["choices"] = HOLD.choose(power_plan.get("hold") or [], None)
     if power_plan["requires_data_ack"] and not allow_single_copy:
         raise ValueError("a volume has its only healthy copy on this host (the settings do not accept that)")
     try:
@@ -5824,6 +5894,7 @@ import homestead_isos as ISOS
 import homestead_vm_hardware as VM_HARDWARE
 import homestead_lhcapacity as LHCAP
 import homestead_lhrebuild as LHREBUILD
+import homestead_power_hold as HOLD
 import homestead_disks as DISKS
 import homestead_power as POWER
 import homestead_privileges as PRIV
@@ -5878,7 +5949,8 @@ CAPACITY_REVIEW.bind(AUTH.review_signing_key)
 LH.bind(kget, ksend, _cache, STORAGE_CLASS)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
-POWER.WORKER_GONE, POWER.RESUME = power_worker_gone, resume_power_job
+HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND))
+POWER.WORKER_GONE, POWER.RESUME, POWER.RESTORE = power_worker_gone, resume_power_job, restore_held
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
              channel=lambda: cached("settings", 15, get_app_settings)["updates"]["channel"])
 UPDATES.PART = homestead_part
@@ -9770,7 +9842,10 @@ class H(HTTP.LimitedHandler):
                 if power_plan.get("planned_outage") and b.get("allow_cluster_outage") is not True:
                     return self._send(409, {"error": "acknowledge the whole-cluster outage before host power control",
                                             "plan": power_plan})
-                if power_plan["stranded"] and not b.get("allow_stranded"):
+                power_plan["choices"] = HOLD.choose(power_plan.get("hold") or [], b.get("choices") or {})
+                stranded = {(w["ns"], w["name"]) for w in power_plan["stranded"]}
+                if any((i["ns"], i["name"]) in stranded and power_plan["choices"].get(i["id"]) == "move"
+                       for i in power_plan.get("hold") or []) and not b.get("allow_stranded"):
                     return self._send(409, {"error": "some workloads have no eligible failover host",
                                             "plan": power_plan})
                 if power_plan["requires_data_ack"] and not b.get("allow_data_risk"):
@@ -9779,6 +9854,8 @@ class H(HTTP.LimitedHandler):
                 # Cordon and drain can take many minutes: the request returns
                 # the job at once and the browser follows its phases.
                 return self._send(202, send_reviewed_power(power_plan, force, background=True))
+            if p == "/api/node/power/release":
+                return self._send(200, release_held_power(str(b.get("id") or "")))
             if p == "/api/cluster/shutdown":
                 return self._send(202, cluster_shutdown(review=True).start(b, OPS))
             if p == "/api/cluster/shutdown/cancel":

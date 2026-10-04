@@ -294,6 +294,7 @@ POLICY = {
     ('POST', '/api/node/os/check'): 'admin',
     ('POST', '/api/node/os/upgrade'): 'admin',
     ('POST', '/api/node/power'): 'admin',
+    ('POST', '/api/node/power/release'): 'operator',
     ('POST', '/api/node/probe/allocation'): 'admin',
     ('POST', '/api/node/probe/install'): 'admin',
     ('POST', '/api/node/probe/remove'): 'admin',
