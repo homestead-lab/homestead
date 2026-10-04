@@ -27,6 +27,14 @@ def collect(ctx, label):
     save("longhorn-volumes.yaml", lambda: k.run("get", "volumes.longhorn.io", "-n", "longhorn-system", "-o", "yaml", check=False))
     save("longhorn-replicas.txt", lambda: k.run("get", "replicas.longhorn.io", "-n", "longhorn-system", "-o", "wide", check=False))
     save("jobs.json", lambda: ctx.api.get("/api/operations", wait=30))
+    # The first look, in the run's own log: what is not running, and why.
+    try:
+        pods = k.run("get", "pods", "-A", "-o", "wide", check=False).splitlines()
+        log.info("Pods not running:\n  " + "\n  ".join([pods[0]] + [p for p in pods[1:] if "Running" not in p and "Completed" not in p][:30]))
+        events = k.run("get", "events", "-A", "--sort-by=.lastTimestamp", "--field-selector=type=Warning", check=False).splitlines()
+        log.info("Recent warnings:\n  " + "\n  ".join(events[-25:]))
+    except Exception as error:
+        log.info(f"(no cluster summary: {error})")
     for node in ctx.lab.nodes:
         save(f"{node.name}-journal.txt", lambda node=node: node.ssh("sudo journalctl -b --no-pager | tail -500", check=False, timeout=60))
         save(f"{node.name}-previous-boot.txt", lambda node=node: node.ssh("sudo journalctl -b -1 --no-pager | tail -300", check=False, timeout=60))

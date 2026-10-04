@@ -25,15 +25,15 @@ class PlanTests(unittest.TestCase):
         out = PLAN.plan(version="2.8.312-dev.1", suites="power,single", distros="rke2")
         self.assertEqual(("true", "2.8.312-dev.1"), (out["run"], out["version"]))
         self.assertEqual([("rke2", "power"), ("rke2", "single")], self.matrix(out))
-        self.assertEqual(12, len(self.matrix(PLAN.plan(version="2.8.312"))), "every suite on both distributions")
+        self.assertEqual(2 * len(PLAN.SUITES), len(self.matrix(PLAN.plan(version="2.8.312"))), "every suite on both distributions")
         with self.assertRaises(SystemExit):
             PLAN.plan(version="2.8.312", suites="nonsense")
 
     def test_an_e2e_branch_names_what_runs_on_the_newest_release(self):
         with mock.patch.object(PLAN, "newest_release", return_value="2.8.312"):
             self.assertEqual([("k3s", "single")], self.matrix(PLAN.plan(branch="e2e/k3s-single")))
-            self.assertEqual(6, len(self.matrix(PLAN.plan(branch="e2e/rke2-all"))))
-            self.assertEqual(12, len(self.matrix(PLAN.plan(branch="e2e/all"))))
+            self.assertEqual(len(PLAN.SUITES), len(self.matrix(PLAN.plan(branch="e2e/rke2-all"))))
+            self.assertEqual(2 * len(PLAN.SUITES), len(self.matrix(PLAN.plan(branch="e2e/all"))))
             self.assertEqual("2.8.312", PLAN.plan(branch="e2e/all")["version"])
 
     def test_the_suite_compiles(self):

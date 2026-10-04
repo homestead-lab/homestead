@@ -12,18 +12,20 @@ BUSYBOX = "registry.k8s.io/e2e-test-images/busybox:1.36.1-1"
 
 
 class Context:
-    def __init__(self, lab, kube, api, distro, version, artifacts):
+    def __init__(self, lab, kube, api, distro, version, artifacts, vip=VIP, nodes=None):
         self.lab, self.kube, self.api = lab, kube, api
         self.distro, self.version, self.artifacts = distro, version, artifacts
+        self.vip, self.nodes = vip, nodes or lab.nodes
+        self.others = []        # further clusters, for moves between them
 
     def node(self, name):
         return next(n for n in self.lab.nodes if n.name == name)
 
     def homestead_urls(self):
-        urls = [f"http://{VIP}:8088"]
+        urls = [f"http://{self.vip}:8088"]
         try:
             port = next(p["nodePort"] for p in self.kube.get("service", "-n", "lab", "homestead")["spec"]["ports"] if p.get("nodePort"))
-            urls += [f"http://{n.ip}:{port}" for n in self.lab.nodes]
+            urls += [f"http://{n.ip}:{port}" for n in self.nodes]
         except Exception:
             pass
         return urls
@@ -39,6 +41,11 @@ class Context:
             placement["affinity"] = {"nodeAffinity": {"preferredDuringSchedulingIgnoredDuringExecution": [
                 {"weight": 100, "preference": {"matchExpressions": [{"key": "kubernetes.io/hostname", "operator": "In", "values": [node]}]}}]}}
         loop = "while true; do :; done" if cpu_burn else "while true; do date > /data/now; sleep 5; done"
+        classes = {c["metadata"]["name"]: c for c in self.kube.items("storageclass")}
+        if storage_class not in classes:
+            # What the installer made as the cluster's default, if not this one.
+            storage_class = next((n for n, c in classes.items() if (c["metadata"].get("annotations") or {}).get(
+                "storageclass.kubernetes.io/is-default-class") == "true"), storage_class)
         manifest = {"apiVersion": "v1", "kind": "List", "items": [
             {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": f"{name}-data", "namespace": ns},
              "spec": {"accessModes": ["ReadWriteOnce"], "storageClassName": storage_class, "resources": {"requests": {"storage": size}}}},
@@ -52,7 +59,8 @@ class Context:
                                        "volumeMounts": [{"name": "data", "mountPath": "/data"}]}],
                                        "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": f"{name}-data"}}]}}}}]}
         self.kube.apply(json.dumps(manifest))
-        self.kube.deployment_ready(ns, name)
+        log.info(f"Test app {ns}/{name}: volume on {storage_class}")
+        self.kube.deployment_ready(ns, name, timeout=600)
         log.info(f"Test app {ns}/{name} running on {self.app_node(name, ns)}")
 
     def app_node(self, name, ns="lab"):

@@ -90,4 +90,5 @@ jobs:
             /mnt/e2e
             !/mnt/e2e/lab/**/*.qcow2
             !/mnt/e2e/lab/**/*.iso
+            !/mnt/e2e/lab/**/*.sock
           retention-days: 14

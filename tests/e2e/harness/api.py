@@ -30,7 +30,10 @@ class Homestead:
         try:
             with self.opener.open(req, timeout=timeout) as response:
                 raw = response.read()
-                return response.status, json.loads(raw) if raw else {}
+                try:
+                    return response.status, json.loads(raw) if raw else {}
+                except ValueError:            # a file, a page, a metrics text
+                    return response.status, raw.decode(errors="replace")
         except urllib.error.HTTPError as error:
             raw = error.read()
             try:

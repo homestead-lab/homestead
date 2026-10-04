@@ -38,14 +38,26 @@ def run_installer(node, distro, version, role, extra=None, timeout=2400):
     log.debug(out)
 
 
-def kubeconfig(lab, distro, directory):
-    first = lab.nodes[0]
+def kubeconfig(lab, distro, directory, first=None, name="kubeconfig"):
+    first = first or lab.nodes[0]
     path = "/etc/rancher/k3s/k3s.yaml" if distro == "k3s" else "/etc/rancher/rke2/rke2.yaml"
     text = first.ssh(f"sudo cat {path}", quiet=True).replace("127.0.0.1", first.ip)
-    target = Path(directory) / "kubeconfig"
+    target = Path(directory) / name
     target.write_text(text)
     os.chmod(target, 0o600)
     return str(target)
+
+
+def build_separate(lab, distro, version, directory):
+    """One single-host cluster per VM, each with its own address - for moves
+    between clusters. Returns each cluster's kubeconfig and Homestead address."""
+    clusters = []
+    for i, node in enumerate(lab.nodes):
+        vip = f"{NET}.{100 + i}"
+        run_installer(node, distro, version, "new", {"HS_VIP": vip})
+        clusters.append((kubeconfig(lab, distro, directory, node, f"kubeconfig-{node.name}"), vip, [node]))
+    log.info(f"{len(clusters)} separate {distro} clusters ready")
+    return clusters
 
 
 def build(lab, distro, version, directory):

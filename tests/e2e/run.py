@@ -46,14 +46,23 @@ def main():
         lab.up()
         log.end_group()
         log.group(f"Install {args.distro}, Longhorn and Homestead {args.version}")
-        kubeconfig = install.build(lab, args.distro, args.version, args.artifacts)
-        kube = Kube(kubeconfig)
-        kube.nodes_ready(len(lab.nodes))
-        kube.deployment_ready("lab", "homestead", timeout=1800)
+        if suite.get("separate"):
+            contexts = []
+            for config, vip, nodes in install.build_separate(lab, args.distro, args.version, args.artifacts):
+                kube = Kube(config)
+                kube.nodes_ready(1)
+                kube.deployment_ready("lab", "homestead", timeout=1800)
+                contexts.append(Context(lab, kube, None, args.distro, args.version, args.artifacts, vip=vip, nodes=nodes))
+            ctx, ctx.others = contexts[0], contexts[1:]
+        else:
+            kube = Kube(install.build(lab, args.distro, args.version, args.artifacts))
+            kube.nodes_ready(len(lab.nodes))
+            kube.deployment_ready("lab", "homestead", timeout=1800)
+            ctx = Context(lab, kube, None, args.distro, args.version, args.artifacts)
         log.end_group()
-        ctx = Context(lab, kube, None, args.distro, args.version, args.artifacts)
-        ctx.api = Homestead(ctx.homestead_urls())
-        ctx.api.sign_in()
+        for c in [ctx] + ctx.others:
+            c.api = Homestead(c.homestead_urls())
+            c.api.sign_in()
         for name, scenario in suite["scenarios"]:
             if args.scenario and args.scenario != name:
                 continue
