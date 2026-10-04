@@ -111,10 +111,6 @@ jobs:
           python -m unittest discover -s tests -v
           python -m compileall -q server
           for file in web/js/*.js; do node --check "$file"; done
-      - name: Rehearse data moves before publication
-        # Isolated Docker k3s only; fail before pushing any container or chart.
-        if: steps.checks.outputs.here == 'true'
-        run: python3 tests/integration/self_data_cluster.py
       - name: Scan the candidate before publication
         env:
           VERSION: ${{ steps.version.outputs.version }}

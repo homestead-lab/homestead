@@ -34,6 +34,7 @@ back, rolling OS restarts, storage repair and balancing - on **k3s and RKE2**.
 | `outage` | 3 | a container crashing and restarting; a host failing with no warning, its apps back elsewhere |
 | `migration` | 2 clusters | an app and its data moved between two clusters, as Linked clusters does |
 | `network` | 3 + worker | an app VIP reached from outside and carried over when its host fails; a firewall letting one namespace in; an app on the LAN through Multus; a worker joined, the doctor's safe fixes, the installer run again changing nothing |
+| `self-data` | 3 | Homestead's own data moved to a new volume twice, the copy and Homestead on different hosts; account, jobs and old volumes kept, helpers gone |
 | `storage` | 3 | a detached volume rebuilt offline; Balance hosts moving copies and containers |
 
 ## When it runs

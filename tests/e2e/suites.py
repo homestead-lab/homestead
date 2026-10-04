@@ -1,7 +1,7 @@
 """Which scenarios run together, on how many hosts. Each suite gets its own
 runner and cluster in CI, so suites run in parallel and one failing does not
 hold up another; scenarios in a suite share its cluster and run in order."""
-from scenarios import migration, network, outage, power, rolling, shutdown, smoke, storage
+from scenarios import migration, network, outage, power, rolling, self_data, shutdown, smoke, storage
 
 SUITES = {
     # Every GET route and the node doctor, on three hosts.
@@ -24,6 +24,8 @@ SUITES = {
     "network": {"nodes": 4, "agents": 1, "memory": 3072, "installer": {"HS_MULTUS": "yes"},
                 "scenarios": [("vip", network.vip), ("firewall", network.firewall), ("lan network", network.lan),
                               ("installer", network.installer)]},
+    # Homestead's own data moved to a new volume twice, across hosts.
+    "self-data": {"nodes": 3, "scenarios": [("move Homestead's data", self_data.run)]},
     # Copies kept whole, and Balance hosts.
     "storage": {"nodes": 3, "scenarios": [("offline rebuild", storage.offline_rebuild), ("balance hosts", storage.balance)]},
 }

@@ -163,7 +163,6 @@ numbers counts as no change.
 | Backend and frontend tests | Any code changes | `python -m unittest` over `tests/`, `node --test`, a syntax check of every script, and the image built and run read-only with every capability dropped for the data-copy and file-permission tests |
 | Page and dialog checks | `web/` or the checks change | Every page and dialog opened against the demo data at desktop and phone widths, in light and dark, and held to `docs/design.md`: nothing wider than the screen, no text under 10px, nothing that stops opening. They run in eight groups of about two minutes in parallel (`scripts/ci_ui_checks.sh`) |
 | Installer screens | The installer or host console changes | The installer's and node doctor's menus driven in tmux as a person would |
-| Data moves on k3s | The self-data code changes | Two real data moves on a throwaway k3s cluster, with retained volumes and helper cleanup |
 | Source copy | Any code changes | SSH trust and interrupted copies rehearsed in an isolated container with no network |
 
 A release (`.github/workflows/release.yml`) waits for that CI run on its

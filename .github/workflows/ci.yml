@@ -18,7 +18,7 @@ jobs:
   changes:
     # What a change touches decides which of the slow checks it needs: the
     # page and dialog audits for the web app, the installer's screens for the
-    # installer, the real k3s data moves for the self-data code, and nothing
+    # installer, and nothing
     # but the docs for a change to the docs alone. A diff that only moves
     # version numbers (a release bump) touches none of them. A push to main
     # is judged the same way, by what it brought since main's last commit:
@@ -28,7 +28,6 @@ jobs:
     outputs:
       ui: ${{ steps.paths.outputs.ui }}
       installer: ${{ steps.paths.outputs.installer }}
-      self_data: ${{ steps.paths.outputs.self_data }}
       code: ${{ steps.paths.outputs.code }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,7 +39,7 @@ jobs:
           BEFORE: ${{ github.event.before }}
         run: |
           everything() {
-            for job in ui installer self_data code; do echo "$job=true" >> "$GITHUB_OUTPUT"; done
+            for job in ui installer code; do echo "$job=true" >> "$GITHUB_OUTPUT"; done
             echo "$1: running every check"; exit 0
           }
           # A pull request's checkout is it merged into main, whose first
@@ -71,25 +70,9 @@ jobs:
           installer=$(either "$(touches scripts/install.sh scripts/install-console.sh scripts/host-console.py scripts/capture_tui.sh scripts/render_tui.mjs)" "$(job_changed installer-screens)")
           echo "ui=$ui installer=$installer"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"; echo "installer=$installer" >> "$GITHUB_OUTPUT"
-          # server.py is in nearly every change: only its lines that wire the
-          # data moves count, as do their own modules and tests.
-          self_data=$(either "$(touches server/homestead_self_data_*.py server/homestead_storage_journal.py tests/integration/self_data_cluster.py tests/integration/self-data-http.py tests/test_self_data*.py)" "$(job_changed self-data-k3s)")
-          if [ "$self_data" = false ] && git diff -U0 "$BASE" HEAD -- server/server.py | grep -E '^[+-][^+-]' | grep -Eqi 'self_data|self-data|storage_journal|SELF_DATA|STORAGE_JOURNAL'; then self_data=true; fi
-          echo "self_data=$self_data"; echo "self_data=$self_data" >> "$GITHUB_OUTPUT"
           # Only docs and Markdown: no code to test or image to build.
           if git diff --name-only "$BASE" HEAD | grep -Evq '^docs/|\.md$'; then code=true; else code=false; fi
           echo "code=$code"; echo "code=$code" >> "$GITHUB_OUTPUT"
-  self-data-k3s:
-    needs: changes
-    if: needs.changes.outputs.self_data == 'true'
-    runs-on: ubuntu-latest
-    # The test stops itself well inside this, with what the cluster looked
-    # like; this is only the backstop.
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Two real data moves with retained volumes and helper cleanup
-        run: python3 -u tests/integration/self_data_cluster.py
   source-copy:
     needs: changes
     if: needs.changes.outputs.code == 'true'
