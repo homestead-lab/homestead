@@ -300,7 +300,9 @@
     { name: "pvc-demo-nextcloud", pvc_name: "nextcloud-data", namespace: "lab", attached_to: "",
       pod_status: "", state: "detached", robustness: "unknown", node: "", health_reason: "",
       size_gb: 100, actual_gb: 38.2, used_pct: 38, replicas: 2, access_modes: ["ReadWriteOnce"],
-      storage_class: "longhorn-r2", last_used_secs: 86400 * 6, used_by: ["Deployment/nextcloud"] },
+      storage_class: "longhorn-r2", last_used_secs: 86400 * 6, used_by: ["Deployment/nextcloud"],
+      // Detached a copy short: Longhorn will not rebuild it until something attaches it.
+      copies_short: { whole: 1, wanted: 2, offline: "ignored" } },
     // An original kept after a storage class change: its claim is the copy now.
     { name: "pvc-7f3e9c1a-2b44-4d1b-9a55-0c1f2e3d4a5b", pvc_name: "mosquitto-appdata", namespace: "lab", attached_to: "",
       pod_status: "", state: "detached", robustness: "unknown", node: "", health_reason: "",
@@ -1838,6 +1840,8 @@ ssh_pwauth: true
     "/api/longhorn/v2/prepare": () => {window.__demoV2State='running';return {operation:{id:'demo-v2',kind:'longhorn-v2-prepare',title:'Prepare Longhorn V2',status:'running',progress:25,message:'Preparing host prerequisites'}};},
     "/api/longhorn/v2/enable": () => {window.__demoV2State='enabled';return {ok:true};},
     "/api/longhorn/settings": { ok: true, detail: "Saved: over-provisioning 150%" },
+    "/api/longhorn/offline-rebuilding": { supported: true, enabled: false, short: [{ name: "pvc-demo-nextcloud", claim: "lab/nextcloud-data", whole: 1, wanted: 2, hosts: ["node-2"], offline: "ignored" }] },
+    "/api/longhorn/rebuild": { ok: true, detail: "Longhorn is rebuilding lab/nextcloud-data while it is detached" },
     "/api/disks": { harvester: true, nodes: demoDisks, disk_tags: ["hdd", "nvme", "ssd"], all_node_tags: ["rack-a"],
       node_tags: { "harvester-node1": ["rack-a"], "harvester-node2": [], "harvester-node3": ["rack-a"] } },
     "/api/disks/tags": (url, init) => ({ ok: true, detail: `tagged ${JSON.parse(init?.body || "{}").tags.join(", ")}` }),

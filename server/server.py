@@ -105,6 +105,9 @@ DEFAULT_APP_SETTINGS = {
     # Where the App Store reads its catalogue: any feed in the Community
     # Applications format. Blank means the public Community Applications feed.
     "catalog_url": "",
+    # Rebuild missing copies of detached volumes. Longhorn's own setting where
+    # it has one; this drives Homestead's stand-in where it has not.
+    "longhorn": {"offline_rebuilding": True},
 }
 
 SYS_NS = {
@@ -469,6 +472,10 @@ def validate_app_settings(value):
         raise ValueError("maintenance duration must be between 15 and 1440 minutes")
     out["updates"]["maintenance"] = {
         "days": days, "start": start, "duration_minutes": duration}
+    rebuild = ((value or {}).get("longhorn") or {}).get("offline_rebuilding", True)
+    if not isinstance(rebuild, bool):
+        raise ValueError("offline rebuilding must be true or false")
+    out["longhorn"] = {"offline_rebuilding": rebuild}
     site = str((value or {}).get("site_name", out["site_name"]) or "").strip()
     if len(site) > 40:
         raise ValueError("site name must be 40 characters or fewer")
@@ -1135,6 +1142,7 @@ def volume_copies():
         out.setdefault(spec["volumeName"], []).append({
             "node": spec.get("nodeID", ""), "path": path, "disk": label, "os": os_disk,
             "healthy": status.get("currentState") == "running" and not spec.get("failedAt"),
+            "whole": LHREBUILD.whole(r),
             "state": status.get("currentState", "") or ("failed" if spec.get("failedAt") else "stopped")})
     for rows in out.values():
         rows.sort(key=lambda c: (c["node"], c["disk"]))
@@ -1218,6 +1226,12 @@ def get_volumes():
             "size_gb": round(int(sp.get("size", 0) or 0) / 1024**3, 1),
             "replicas": sp.get("numberOfReplicas", 0),
             "copies": copies.get(v["metadata"]["name"], []),
+            # Detached with fewer whole copies than it asks for: Longhorn
+            # repairs that only offline, or while something uses the volume.
+            "copies_short": (lambda whole: {"whole": whole, "wanted": int(sp.get("numberOfReplicas") or 0),
+                                            "offline": sp.get("offlineRebuilding") or "ignored"}
+                             if st.get("state") == "detached" and whole < int(sp.get("numberOfReplicas") or 0) else None)(
+                len({c["node"] for c in copies.get(v["metadata"]["name"], []) if c.get("whole")})),
             "engine": str(sp.get("dataEngine") or "v1").lower(),
             "actual_gb": round(int(st.get("actualSize", 0) or 0) / 1024**3, 2),
             "filesystem": filesystem,
@@ -4177,6 +4191,19 @@ def _power_jobs_loop():
             print(f"host power jobs not checked: {str(error)[:160]}", flush=True)
 
 
+def _detached_copies_loop():
+    """Offline rebuilding on by default, and Homestead's stand-in for it on
+    Longhorn without one; the leader only."""
+    while True:
+        time.sleep(60)
+        try:
+            if LEADER.is_leader():
+                LHREBUILD.tick()
+                _cache.pop("lhrebuild", None)
+        except Exception as error:
+            print(f"detached volume copies not checked: {str(error)[:160]}", flush=True)
+
+
 def resume_power_job(item):
     """Carry on a host power job whose replica was evicted before it sent the
     command. Only the leader does, once; called from the job's resolver, so it
@@ -5796,6 +5823,7 @@ import homestead_vms as VMS
 import homestead_isos as ISOS
 import homestead_vm_hardware as VM_HARDWARE
 import homestead_lhcapacity as LHCAP
+import homestead_lhrebuild as LHREBUILD
 import homestead_disks as DISKS
 import homestead_power as POWER
 import homestead_privileges as PRIV
@@ -6114,6 +6142,7 @@ VMS.bind(kget, ksend, RESOURCES.events_for)
 VMUSAGE.bind(kget)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
 LHCAP.bind(kget, ksend, v2_engine_status)
+LHREBUILD.bind(kget, ksend, lambda: (get_app_settings().get("longhorn") or {}).get("offline_rebuilding", True))
 import homestead_lhv2_setup as LHV2_SETUP
 LHV2_SETUP.bind(kget, ksend, v2_engine_status, OPS, DEFAULT_NS)
 OPS.RESOLVERS["longhorn-v2-prepare"] = LHV2_SETUP.progress
@@ -6279,6 +6308,7 @@ def _alert_sources():
     take("joins", lambda: ALERTS.join_facts(kget("/api/v1/nodes").get("items", [])))
     take("addresses", lambda: VIPS.alert_facts(cached("network", 5, NETWORK.inventory).get("addresses")))
     take("capacity", lambda: LHCAP.alert_facts(cached("lhcap", 15, LHCAP.status)))
+    take("detached-copies", lambda: LHREBUILD.alert_facts(cached("lhrebuild", 30, LHREBUILD.status)))
     take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
     take("hostos", HOST_OS.alert_facts)
     take("rootguard", ROOT_GUARD.alert_facts)
@@ -8931,6 +8961,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("disks", 10, DISKS.inventory))
             if p == "/api/longhorn/capacity":
                 return self._send(200, cached("lhcap", 15, LHCAP.status))
+            if p == "/api/longhorn/offline-rebuilding":
+                return self._send(200, cached("lhrebuild", 30, LHREBUILD.status))
             if p == "/api/pvcs":
                 ns = (q.get("ns") or [DEFAULT_NS])[0]
                 items = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims")["items"]
@@ -9885,6 +9917,19 @@ class H(HTTP.LimitedHandler):
                     if "v2" in b and not b["v2"] and DISK_V2.tasks():
                         raise ValueError("Finish or stop the saved V2 disk preparation task before disabling V2")
                     return self._send(200, LHCAP.save(b))
+            if p == "/api/longhorn/offline-rebuilding":
+                _cache.pop("lhrebuild", None)
+                enabled = b.get("enabled")
+                if not isinstance(enabled, bool):
+                    raise ValueError("enabled must be true or false")
+                settings = get_app_settings()
+                settings["longhorn"] = {"offline_rebuilding": enabled}
+                save_app_settings(settings)
+                return self._send(200, LHREBUILD.save(enabled))
+            if p == "/api/longhorn/rebuild":
+                _cache.pop("lhrebuild", None)
+                _cache.pop("volumes", None)
+                return self._send(200, LHREBUILD.rebuild_now(str(b.get("volume") or "")))
             if p == "/api/longhorn/v2/prepare":
                 return self._send(200, LHV2_SETUP.prepare(b))
             if p == "/api/longhorn/v2/upgrade/review":
@@ -10394,6 +10439,7 @@ def start_background_tasks():
     threading.Thread(target=ONBOARD.tidy_old_plans, daemon=True).start()
     threading.Thread(target=_alerts_loop, daemon=True).start()
     threading.Thread(target=_power_jobs_loop, daemon=True).start()
+    threading.Thread(target=_detached_copies_loop, daemon=True).start()
     threading.Thread(target=_host_fix_loop, daemon=True).start()
     threading.Thread(target=_host_console_loop, daemon=True).start()
     threading.Thread(target=_storage_pending_loop, daemon=True).start()

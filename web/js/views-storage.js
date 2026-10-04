@@ -281,8 +281,25 @@ function volumeHealthCell(x) {
     // Detached is where a volume sits when nothing is using it - a stopped
     // workload, not a fault. Longhorn calls it detached, so do we.
     : `<span class="pill neutral" data-tip="Nothing is mounting this volume, so Longhorn reports no live replica health">detached</span>`}
+    ${volumeShortCell(x)}
     ${volumeReason(x) ? `<span class="dim xs volume-reason">${esc(x.health_reason)}</span>` : ""}`;
 }
+
+/* Longhorn rebuilds a missing copy only while a volume is attached, unless
+   offline rebuilding is on. A detached volume a copy short stays that way. */
+function volumeShortCell(x) {
+  const short = x.copies_short;
+  if (!short) return "";
+  if (!short.whole) return `<span class="pill crit" data-tip="No whole copy of this volume is left; Longhorn cannot rebuild it">no whole copy</span>`;
+  return `<span class="pill med" data-tip="Detached with ${short.whole} of ${short.wanted} copies. Longhorn rebuilds the rest only while the volume is attached, or offline when that is on">${short.whole} of ${short.wanted} copies</span>
+    <button class="btn sm" data-need="operator" data-tip="Rebuild the missing copies now, with the volume attached where nothing can mount it" onclick="event.stopPropagation();volumeRebuild(${jsq(x.name)})">Rebuild now</button>`;
+}
+window.volumeRebuild = async name => {
+  try {
+    const r = await api("/api/longhorn/rebuild", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ volume: name }) });
+    toast(r.detail, "ok"); refresh(true);
+  } catch (e) { toast(e.message, "bad"); }
+};
 
 function volumeUsageCell(x) {
   const fs = x.filesystem;
@@ -1649,10 +1666,11 @@ async function lhSettingsPaint() {
     host.innerHTML = `<div class="ctitle">Longhorn storage</div><div class="empty small">Longhorn is not installed on this cluster.</div>`;
     return;
   }
-  let cap;
-  try { cap = await api("/api/longhorn/capacity"); }
+  let cap, offline = null;
+  try { [cap, offline] = await Promise.all([api("/api/longhorn/capacity"), api("/api/longhorn/offline-rebuilding").catch(() => null)]); }
   catch (e) { host.innerHTML = `<div class="ctitle">Longhorn storage</div><div class="empty small">${esc(e.message)}</div>`; return; }
   STATE.data.lhcap = cap;
+  STATE.data.lhOffline = offline;
   const admin = can("admin"), v2 = cap.v2 || {};
   host.innerHTML = `${UI.moduleHeader(`Longhorn storage`, `How much Longhorn may promise on each disk, and its V2 data engine`, `<button class="btn sm" onclick="lhDisks()">Disks</button>
       ${admin ? "" : '<span class="pill neutral">admin managed</span>'}`)}
@@ -1663,6 +1681,11 @@ async function lhSettingsPaint() {
         <div class="row" style="flex-wrap:nowrap"><input id="lh_min" type="number" min="0" max="100" value="${cap.minimal_available}" ${admin ? "" : "disabled"}><span class="dim">%</span></div></div></div>
     <div class="f" style="margin-top:10px"><label>Replicas rebuilt at once, per node ${tip("When a node or disk comes back, or a volume is a copy short, Longhorn rebuilds replicas by copying them from a healthy one. More at once makes volumes whole sooner; fewer keeps the disks and network free for everything else while it runs. Longhorn's default is 5.")}</label>
       <input id="lh_rebuild" type="number" min="1" max="10" value="${cap.rebuild_limit ?? 5}" ${admin ? "" : "disabled"}></div>
+    ${offline ? `<label class="switch" style="margin-top:10px"><input type="checkbox" id="lh_offline" ${offline.enabled ? "checked" : ""} ${admin ? "" : "disabled"}>
+      Rebuild copies of detached volumes ${tip(offline.supported
+        ? "Longhorn rebuilds a missing copy only while its volume is attached. With this on, it also attaches a detached volume by itself - nothing can mount it meanwhile - until its copies are whole, so a volume nothing uses is not left with one copy."
+        : "Longhorn rebuilds a missing copy only while its volume is attached, and this version cannot do it offline. With this on, Homestead attaches a detached volume short of copies itself - nothing can mount it meanwhile - one at a time, until its copies are whole, and lets go as soon as anything else asks for it.")}</label>
+      ${(offline.short || []).length ? `<div class="dim xs">${offline.short.length} detached volume${offline.short.length === 1 ? " is" : "s are"} short of copies now.</div>` : ""}` : ""}
     <div class="f" style="margin-top:10px"><label>Pods on a failed node ${tip("What Longhorn does with the pods of a node that stops answering. Left at do-nothing, such a pod keeps its volume attached to the dead node, so a container moving to another node cannot mount it there until the node is back. Containers > If a node fails chooses which containers move.")}</label>
       <select id="lh_nodedown" ${admin ? "" : "disabled"}>${[["do-nothing", "keep them - their volumes wait for the node"], ["delete-deployment-pod", "delete containers' pods, so their volumes can move"],
         ["delete-statefulset-pod", "delete stateful sets' pods only"], ["delete-both-statefulset-and-deployment-pod", "delete both, so every volume can move"]]
@@ -1703,6 +1726,9 @@ window.lhSettingsSave = async () => {
     node_down: $("#lh_nodedown")?.value || "", ...($("#lh_rebuild") ? { rebuild_limit: +$("#lh_rebuild").value } : {}) };
   try {
     const r = await api("/api/longhorn/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const offline = $("#lh_offline"), was = STATE.data.lhOffline;
+    if (offline && was && offline.checked !== !!was.enabled)
+      await api("/api/longhorn/offline-rebuilding", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: offline.checked }) });
     toast(r.detail, "ok"); lhSettingsPaint();
   } catch (e) { toast(e.message, "bad"); throw e; }
 };
