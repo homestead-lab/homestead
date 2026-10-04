@@ -344,12 +344,14 @@ function otherVolumesHtml(rows) {
       ${tip("Volumes on storage classes other than Longhorn, such as k3s's local-path. They have no replicas, snapshots or backups here; their data lives where that class keeps it.")}</div></div>
     ${stuck.length ? `<div class="note warn small" style="margin-bottom:10px"><b>${stuck.length} volume${stuck.length === 1 ? " is" : "s are"} not made.</b>
       Usually a shared (ReadWriteMany) volume asked of a class that serves one node - local-path does - which never makes it. Delete it and make it again on a class that shares, or as a single-node volume.</div>` : ""}
-    <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Volume</th><th>Class</th><th>Size</th><th>Mode</th><th>State</th></tr></thead><tbody>
+    <div class="card flat pad0"><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>Volume</th><th>Class</th><th>Size</th><th>Mode</th><th>State</th><th></th></tr></thead><tbody>
     ${rows.map(r => `<tr><td><b>${esc(r.name)}</b><div class="dim xs">${esc(r.namespace)}</div></td>
       <td data-label="Class" class="mono">${esc(r.storage_class)}</td><td data-label="Size" class="mono">${esc(r.size || "—")}</td>
       <td data-label="Mode"><span class="tag">${esc(r.access_modes.map(m => m === "ReadWriteMany" ? "RWX" : m === "ReadWriteOnce" ? "RWO" : m).join(", ") || "?")}</span></td>
       <td data-label="State"><span class="pill ${r.phase === "Bound" ? "ok" : "crit"}">${esc(r.phase === "Bound" ? "in use" : r.phase || "unknown")}</span>
-        ${r.reason ? `<div class="dim xs" style="margin-top:4px">${esc(r.reason)}</div>` : ""}</td></tr>`).join("")}</tbody></table></div></div>`;
+        ${r.reason ? `<div class="dim xs" style="margin-top:4px">${esc(r.reason)}</div>` : ""}</td>
+      <td data-label="">${UI.button("Delete", `volumeDelete(${JSON.stringify({ name: r.volume || "", pvc_name: r.name, namespace: r.namespace })})`,
+        { kind: "danger", attrs: 'data-need="admin" title="Review what uses it and what would be lost before deleting"' })}</td></tr>`).join("")}</tbody></table></div></div>`;
 }
 
 async function viewStorage() {
