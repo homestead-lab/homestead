@@ -1858,6 +1858,19 @@ ssh_pwauth: true
     "/api/longhorn/v2/enable": () => {window.__demoV2State='enabled';return {ok:true};},
     "/api/longhorn/settings": { ok: true, detail: "Saved: over-provisioning 150%" },
     "/api/longhorn/offline-rebuilding": { supported: true, enabled: false, short: [{ name: "pvc-demo-nextcloud", claim: "lab/nextcloud-data", whole: 1, wanted: 2, hosts: ["node-2"], offline: "ignored" }] },
+    "/api/longhorn/rebalance/plan": url => {
+      const exclude = (url.searchParams.get("exclude") || "").split(",").filter(Boolean);
+      const all = [{ volume: "pvc-demo-frigate", claim: "lab/frigate-recordings", app: "lab/frigate", from: "harvester-node2", to: "harvester-node1", size_gb: 120, attached: true },
+        { volume: "pvc-demo-media", claim: "lab/jellyfin-media", app: "lab/jellyfin", from: "harvester-node3", to: "harvester-node1", size_gb: 64, attached: true },
+        { volume: "pvc-demo-nextcloud", claim: "lab/nextcloud-data", app: "lab/nextcloud", from: "harvester-node2", to: "harvester-node1", size_gb: 38, attached: false }];
+      const moves = all.filter(m => !exclude.includes(m.app)), moved = n => moves.filter(m => m.from === n).reduce((s, m) => s + m.size_gb, 0);
+      return { moves, apps: all.map(m => m.app), excluded: exclude, review_token: "demo-rebalance-" + exclude.join("."),
+        hosts: [{ name: "harvester-node1", before_gb: 40, after_gb: 40 + moves.reduce((s, m) => s + m.size_gb, 0), capacity_gb: 900, takes: true },
+          { name: "harvester-node2", before_gb: 410, after_gb: 410 - moved("harvester-node2"), capacity_gb: 900, takes: true },
+          { name: "harvester-node3", before_gb: 380, after_gb: 380 - moved("harvester-node3"), capacity_gb: 900, takes: true }],
+        skipped: [{ claim: "lab/nas-backup", why: "its copies are being rebuilt or changed" }] };
+    },
+    "/api/longhorn/rebalance": { operation: { id: "demo-rebalance", kind: "volume-rebalance", title: "Rebalance 3 volume copies", status: "running", progress: 0, message: "Starting with the first copy", cancellable: true } },
     "/api/longhorn/rebuild": { ok: true, detail: "Longhorn is rebuilding lab/nextcloud-data while it is detached" },
     "/api/disks": { harvester: true, nodes: demoDisks, disk_tags: ["hdd", "nvme", "ssd"], all_node_tags: ["rack-a"],
       node_tags: { "harvester-node1": ["rack-a"], "harvester-node2": [], "harvester-node3": ["rack-a"] } },
