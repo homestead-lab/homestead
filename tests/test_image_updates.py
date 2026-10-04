@@ -542,3 +542,52 @@ class ImageUpdateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RateLimitTests(unittest.TestCase):
+    """A registry answering 429 - Docker Hub does, often - is a check put off,
+    not a failed one: faster-whisper, piper and rustdesk showed "check failed"."""
+    def limited(self):
+        import urllib.error
+        return urllib.error.HTTPError("https://registry/v2/x", 429, "Too Many Requests", {"Retry-After": "0"}, None)
+
+    def test_a_429_is_waited_on_and_asked_again(self):
+        calls = []
+        def opener(req, credential=None, timeout=12):
+            calls.append(req.full_url)
+            if len(calls) < 3:
+                raise self.limited()
+            class Answer:
+                headers = {}
+                def read(self): return b'{"tags": ["1.0.0"]}'
+                def __enter__(self): return self
+                def __exit__(self, *a): return False
+            return Answer()
+        with mock.patch.object(updates, "_open", opener), mock.patch.object(updates.time, "sleep"):
+            body, _ = updates._registry_json(updates.parse_image("nginx:1.0.0"), "tags/list", {})
+        self.assertEqual(3, len(calls))
+        self.assertIn(b"1.0.0", body)
+
+    def test_still_limited_it_is_unchecked_with_what_the_last_scan_found(self):
+        dep = copy.deepcopy(DEPLOYMENT)
+        pod = {"metadata": {"namespace": "lab", "labels": {"app": "demo"}},
+               "status": {"containerStatuses": [{"name": "demo", "imageID": "repo@sha256:" + "a" * 64}]}}
+        last = {"workloads": [{"ns": "lab", "name": "demo", "images": [
+            {"container": "demo", "available": True, "candidate_tag": "1.28.0", "candidate": "nginx:1.28.0"}]}]}
+        def limited(*args, **kwargs):
+            raise self.limited()
+        with mock.patch.object(updates, "registry_tags", limited), mock.patch.object(updates, "manifest_info", limited), \
+             mock.patch.object(updates, "_secret_credentials", lambda *a: {}), \
+             mock.patch.dict(updates._LATEST, {"report": last}):
+            result = updates._check_deployment(dep, [pod], persist=False)
+        image = result["images"][0]
+        self.assertEqual("", image["error"], "not a failed check")
+        self.assertTrue(image["unchecked"] and image["rate_limited"] and image["stale"])
+        self.assertTrue(image["available"], "a known update stays visible")
+        self.assertTrue(result["available"])
+        self.assertEqual(0, updates._summary([dict(result, homestead=False)])["errors"])
+        self.assertEqual(1, updates._summary([dict(result, homestead=False)])["rate_limited"])
+
+    def test_a_report_with_checks_put_off_is_asked_again_in_half_an_hour(self):
+        self.assertEqual(updates.RETRY_RATE_LIMITED, updates._fresh_for({"rate_limited": 2}))
+        self.assertEqual(updates.FRESH_FOR, updates._fresh_for({"rate_limited": 0}))

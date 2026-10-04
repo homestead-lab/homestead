@@ -218,12 +218,28 @@ def _open(req, credential=None, timeout=12):
         return urllib.request.urlopen(retry, context=ctx, timeout=timeout)
 
 
+RATE_LIMIT_WAITS = (1.0, 3.0)    # Docker Hub and others answer 429 under load; a pause usually clears it
+
+
+def _retry_after(error, default):
+    try:
+        return max(0.0, min(5.0, float((error.headers or {}).get("Retry-After", default))))
+    except (TypeError, ValueError):
+        return default
+
+
 def _registry_json(parsed, path, auths, accept="application/json"):
     url = f"https://{parsed['endpoint']}/v2/{parsed['repo']}/{path}"
-    req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "Homestead/2.0"})
-    with _open(req, _credential(auths, parsed)) as response:
-        body = response.read()
-        return body, response.headers
+    for attempt in range(len(RATE_LIMIT_WAITS) + 1):
+        req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "Homestead/2.0"})
+        try:
+            with _open(req, _credential(auths, parsed)) as response:
+                body = response.read()
+                return body, response.headers
+        except urllib.error.HTTPError as error:
+            if error.code != 429 or attempt == len(RATE_LIMIT_WAITS):
+                raise
+            time.sleep(_retry_after(error, RATE_LIMIT_WAITS[attempt]))
 
 
 def manifest_info(ref, auths=None, force=False):
@@ -348,6 +364,19 @@ def _matching_pods(dep, pods):
             all(p["metadata"].get("labels", {}).get(k) == v for k, v in labels.items())]
 
 
+def _last_known(ns, name, container):
+    """What the last scan found for this container, kept while the registry
+    asks Homestead to slow down."""
+    with _SCAN_LOCK:
+        report = _LATEST.get("report") or {}
+    workload = next((w for w in report.get("workloads") or [] if (w.get("ns"), w.get("name")) == (ns, name)), {})
+    image = next((i for i in workload.get("images") or [] if i.get("container") == container), {})
+    if not image or image.get("rate_limited") or image.get("error"):
+        return {}
+    kept = {k: image[k] for k in ("current_digest", "remote_digest", "candidate", "candidate_tag", "available") if k in image}
+    return dict(kept, stale=True) if kept else {}
+
+
 def _check_deployment(dep, pods, force=False, persist=True, channel=None):
     ns, name = dep["metadata"]["namespace"], dep["metadata"]["name"]
     tracked = _annotation_json(dep, TRACKED)
@@ -412,8 +441,13 @@ def _check_deployment(dep, pods, force=False, persist=True, channel=None):
                 item["error"] = ("no release tag recorded for this image, so newer "
                                  "versions cannot be found — redeploy it from a tag")
         except urllib.error.HTTPError as error:
-            item["error"] = ("registry authentication required" if error.code in (401, 403)
-                             else f"registry returned HTTP {error.code}")
+            if error.code == 429:
+                # Rate limited: a check still to come, not a broken image. What
+                # the last scan found stands meanwhile, marked as such.
+                item.update(unchecked=True, rate_limited=True, **_last_known(ns, name, container["name"]))
+            else:
+                item["error"] = ("registry authentication required" if error.code in (401, 403)
+                                 else f"registry returned HTTP {error.code}")
         except Exception as error:
             item["error"] = str(error)[:180]
         images.append(item)
@@ -495,6 +529,8 @@ def _summary(workloads, checked_at=None, channel=None):
     return {"channel": channel or CHANNEL(),
             "checked_at": checked_at or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "updates": sum(1 for x in apps if x["available"]),
+            # Checks a registry put off: the next quiet request tries again soon.
+            "rate_limited": sum(1 for x in workloads for image in x["images"] if image.get("rate_limited")),
             "errors": sum(1 for x in apps for image in x["images"] if image.get("error")),
             "homestead": {"updates": sum(1 for x in own if x["available"]),
                           "errors": sum(1 for x in own for image in x["images"] if image.get("error"))},
@@ -511,6 +547,14 @@ _RUN_LOCK = threading.Lock()
 # again: twice a day. Check images asks for a fresh one whenever it is pressed,
 # and the leader checks on this same rhythm with no page open.
 FRESH_FOR = 12 * 3600
+
+
+RETRY_RATE_LIMITED = 1800
+
+
+def _fresh_for(report):
+    """A report with checks a registry put off is asked again in half an hour."""
+    return RETRY_RATE_LIMITED if (report or {}).get("rate_limited") else FRESH_FOR
 
 
 def invalidate():
@@ -547,7 +591,7 @@ def report(force=False):
     """
     with _SCAN_LOCK:
         latest, begun = dict(_LATEST), _STARTED[0]
-    if not force and latest["report"] and latest["report"].get("channel", "prod") == CHANNEL() and time.time() - latest["finished"] < FRESH_FOR:
+    if not force and latest["report"] and latest["report"].get("channel", "prod") == CHANNEL() and time.time() - latest["finished"] < _fresh_for(latest["report"]):
         return latest["report"]
     with _RUN_LOCK:
         with _SCAN_LOCK:
@@ -555,7 +599,7 @@ def report(force=False):
         if latest["report"] and latest["report"].get("channel", "prod") == CHANNEL():
             if force and latest["number"] > begun:
                 return latest["report"]
-            if not force and time.time() - latest["finished"] < FRESH_FOR:
+            if not force and time.time() - latest["finished"] < _fresh_for(latest["report"]):
                 return latest["report"]
         with _SCAN_LOCK:
             _STARTED[0] += 1

@@ -518,7 +518,9 @@ function workloadTable(rows, sections = null, folded = new Set()) {
    on hover; the page subtitle gives the count. */
 function uncheckedMark(update) {
   if (!update?.unchecked) return "";
-  const tip = update.images?.some(i => i.starting)
+  const tip = update.images?.some(i => i.rate_limited)
+    ? "Image not checked yet: its registry asked Homestead to slow down. It is checked again within half an hour."
+    : update.images?.some(i => i.starting)
     ? "Image not checked yet: still starting. It is compared with the registry once it runs."
     : "Image not checked yet: stopped, and not seen running here. It is compared with the registry once it has run.";
   return `<span class="tip unchecked-tip" tabindex="0" role="img" aria-label="${tip}" data-tip="${tip}">?</span>`;
