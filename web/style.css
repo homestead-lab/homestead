@@ -2501,6 +2501,26 @@ html[data-theme="light"] .modalbox[data-context="cluster-shutdown"]{background:v
 
 /* Homestead updates: linked clusters, each with a tick to include it. */
 .hs-fleet{display:flex;flex-direction:column;gap:6px}
+/* Clusters to update: the tickbox on the left of each, the change on the right -
+   under the name on a phone, never apart from the cluster it belongs to. */
+.hs-clusters{display:flex;flex-direction:column;border-top:1px solid var(--line)}
+.hs-cluster{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:4px 12px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line);cursor:pointer;min-width:0;margin:0;color:var(--tx);font-size:13px;font-weight:400;text-transform:none;letter-spacing:0}
+.hs-cluster.single{grid-template-columns:minmax(0,1fr) auto}
+.hs-cluster.fixed{cursor:default}
+.hs-cluster>input{width:18px;height:18px;margin:0;align-self:start;margin-top:2px}
+.hs-cluster-main{display:flex;flex-direction:column;gap:3px;min-width:0}
+.hs-cluster-name{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.hs-cluster-meta{overflow-wrap:anywhere}
+.hs-cluster-parts{display:flex;flex-direction:column;gap:1px;margin-top:2px}
+.hs-cluster-state .pill{white-space:nowrap}
+.hs-note{margin:0}
+.hs-channel{border-top:1px solid var(--line);padding-top:4px}
+@media (max-width:560px){
+  .hs-cluster{grid-template-columns:22px minmax(0,1fr)}
+  .hs-cluster.single{grid-template-columns:minmax(0,1fr)}
+  .hs-cluster-state{grid-column:2}
+  .hs-cluster.single .hs-cluster-state{grid-column:1}
+}
 .hs-part-end{gap:8px;flex-wrap:nowrap}
 .hs-pick{display:inline-flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;white-space:nowrap}
 .hs-pick input{width:16px;height:16px}

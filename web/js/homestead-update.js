@@ -103,25 +103,14 @@ function paintBell() {
 window.paintBell = paintBell;
 window.paintHomesteadNotice = paintHomesteadNotice;
 
-/* One line per part: what it runs and what it would move to. */
-function homesteadPartRows(parts) {
-  return parts.map(w => {
-    const running = (w.images || []).map(i => imageVersion(i.source || i.deployed).tag).filter(Boolean).join(", ");
-    const failure = (w.images || []).find(i => i.error)?.error;
-    const state = w.available ? `<span class="pill warn">${esc(updateVersions(w) || "update available")}</span>`
-      : failure ? `<span class="pill crit" data-tip="${esc(failure)}">check failed</span>`
-      : w.unchecked ? '<span class="pill neutral">not checked yet</span>' : '<span class="pill ok">current</span>';
-    return `<div class="hs-part"><div><b>${esc(HOMESTEAD_PARTS[w.homestead] || w.name)}</b>
-        <span class="dim xs mono">${esc(w.name)}${running ? ` · ${esc(running)}` : ""}</span></div>${state}</div>`;
-  }).join("");
-}
-
 /* ---------- linked clusters ----------
    Each linked Homestead's own parts, asked through this one's relay, so one
    review can update them all. A cluster from before 2.8.220 does not tag its
    parts: its Homestead is the Deployment named homestead. Nothing is picked
    until someone ticks it. */
-const FLEET_UPDATES = { rows: {}, picked: new Set(), loading: false, at: 0 };
+const FLEET_UPDATES = { rows: {}, picked: new Set(), loading: false, at: 0, local: null };
+const localPicked = waiting => waiting.length > 0 && FLEET_UPDATES.local !== false;
+window.homesteadLocalPick = on => { FLEET_UPDATES.local = !!on; homesteadUpdateRepaint(); };
 
 function linkedMembers() {
   return (window.FLEET?.view?.linked ? FLEET.view.members || [] : []).filter(m => !m.self);
@@ -154,10 +143,19 @@ async function fleetUpdatesLoad(force = false) {
   homesteadUpdateRepaint();
 }
 
+/* One row per cluster - this one first - with its tickbox on the left and
+   what it would change, the same on a phone. */
+function clusterUpdateRow({ name, self = false, meta, state, pick = "", picked = false, pickable = false, detail = "" }) {
+  const box = pick ? `<input type="checkbox" ${picked ? "checked" : ""} ${pickable ? "" : "disabled"} onchange="${pick}"
+      aria-label="Update ${esc(name)}">` : "";
+  return `<label class="hs-cluster${pick ? "" : " single"}${pickable ? "" : " fixed"}">${box}
+    <span class="hs-cluster-main"><span class="hs-cluster-name"><b>${esc(name)}</b>${self ? '<span class="tag">This cluster</span>' : ""}</span>
+      <span class="dim xs mono hs-cluster-meta">${meta}</span>${detail}</span>
+    <span class="hs-cluster-state">${state}</span></label>`;
+}
+
 function fleetUpdateRows() {
-  const members = linkedMembers();
-  if (!members.length) return "";
-  const rows = members.map(m => {
+  return linkedMembers().map(m => {
     const row = FLEET_UPDATES.rows[m.id];
     const self = row?.parts?.find(w => w.homestead === "self");
     const release = (self?.images || []).find(i => i.available && i.candidate_tag)?.candidate_tag || "";
@@ -165,16 +163,11 @@ function fleetUpdateRows() {
     const state = !row ? '<span class="pill neutral">checking…</span>'
       : row.error ? `<span class="pill crit" data-tip="${esc(row.error)}">not answering</span>`
       : waiting.length ? `<span class="pill warn">${esc(release ? `${m.version || "?"} → ${release}` : `${waiting.length} helper update${waiting.length === 1 ? "" : "s"}`)}</span>`
-      : '<span class="pill ok">current</span>';
-    const pick = waiting.length ? `<label class="hs-pick" title="Update ${esc(m.name)} too"><input type="checkbox" ${FLEET_UPDATES.picked.has(m.id) ? "checked" : ""}
-        onchange="fleetUpdatePick(${jsq(m.id)}, this.checked)"><span>Include</span></label>` : "";
-    return `<div class="hs-part"><div><b>${esc(m.name)}</b><span class="dim xs mono">${m.version ? `v${esc(m.version)}` : "version unknown"}${row?.channel ? ` · ${row.channel === "dev" ? "Dev" : "Prod"}` : ""}${m.url ? ` · ${esc(m.url)}` : ""}</span></div>
-      <div class="row hs-part-end">${state}${pick}</div></div>`;
+      : '<span class="pill ok">up to date</span>';
+    return clusterUpdateRow({ name: m.name, state, pick: `fleetUpdatePick(${jsq(m.id)}, this.checked)`,
+      picked: FLEET_UPDATES.picked.has(m.id), pickable: waiting.length > 0,
+      meta: `${m.version ? `v${esc(m.version)}` : "version unknown"}${row?.channel ? ` · ${row.channel === "dev" ? "Dev" : "Prod"}` : ""}${m.url ? ` · ${esc(m.url)}` : ""}` });
   }).join("");
-  return `<div class="hs-fleet"><div class="between"><span class="dim xs">LINKED CLUSTERS</span>
-      <button class="btn sm" onclick="fleetUpdatesLoad(true)" ${FLEET_UPDATES.loading ? "disabled" : ""}>${FLEET_UPDATES.loading ? "Checking…" : "↻ Check"}</button></div>
-    <div class="hs-parts">${rows}</div>
-    <p class="dim xs">Ticked clusters are updated in the same review, before this one. Keeping every linked Homestead on one release keeps moves between them working.</p></div>`;
 }
 
 window.fleetUpdatePick = (id, on) => {
@@ -200,25 +193,40 @@ function homesteadUpdateRepaint() {
 function homesteadUpdateBody(inCard = false) {
   const { report, parts, release, waiting, failed } = homesteadUpdates();
   const picker = homesteadChannelPicker();
-  if (!report) return picker + '<div class="empty small"><span class="spin2"></span> Asking the registries…</div>';
-  const checked = checkedAgo();
+  if (!report) return '<div class="empty small"><span class="spin2"></span> Asking the registries…</div>' + picker;
+  const checked = checkedAgo(), linked = linkedMembers();
   const head = release
     ? `<div class="hs-release"><span class="dim xs">NEW RELEASE</span><b>Homestead ${esc(release)}</b>
-        <span class="dim small">You run v${esc(HOMESTEAD_VERSION)} · <a href="${safeHref(`${HOMESTEAD_RELEASES}/tag/v${release}`)}" target="_blank" rel="noopener">what's new ${icon("ext")}</a></span></div>`
+        <span class="dim small"><a href="${safeHref(`${HOMESTEAD_RELEASES}/tag/v${release}`)}" target="_blank" rel="noopener">What's new ${icon("ext")}</a></span></div>`
     : `<div class="hs-release current"><span class="dim xs">RELEASE</span><b>Homestead v${esc(HOMESTEAD_VERSION)}</b>
-        <span class="dim small">${failed.length ? "Release check needs attention" : waiting.length ? "Current; a helper has an update" : "Up to date"}${checked ? ` · ${esc(checked)}` : ""} · <a href="${safeHref(HOMESTEAD_RELEASES)}" target="_blank" rel="noopener">releases ${icon("ext")}</a></span></div>`;
-  const others = [...FLEET_UPDATES.picked].filter(id => FLEET_UPDATES.rows[id]);
-  const label = waiting.length
-    ? (release ? `Update to ${release}` : `Update ${waiting.length === 1 ? "helper" : "helpers"}`)
-      + (others.length ? ` and ${others.length} linked cluster${others.length === 1 ? "" : "s"}` : "")
-    : others.length ? `Update ${others.length} linked cluster${others.length === 1 ? "" : "s"}` : "";
-  return `${picker}${head}
-    ${parts.length ? `<div class="hs-parts">${homesteadPartRows(parts)}</div>` : ""}
-    ${failed.length ? '<p class="dim small">A part whose check failed is compared with its registry again on the next check.</p>' : ""}
-    ${fleetUpdateRows()}
-    ${label ? `<p class="dim small">${inCard ? "" : "Each part restarts while it changes, this Homestead last; this page reconnects when it is back. "}Nothing changes until you review and accept it.</p>` : ""}
+        <span class="dim small">${failed.length ? "Release check needs attention" : waiting.length ? "A helper has an update" : "Up to date"}${checked ? ` · ${esc(checked)}` : ""} · <a href="${safeHref(HOMESTEAD_RELEASES)}" target="_blank" rel="noopener">releases ${icon("ext")}</a></span></div>`;
+  // This cluster's row: its version, and each part that would change.
+  const me = (window.FLEET?.view?.members || []).find(m => m.self);
+  const channel = (STATE.data.appSettings?.updates?.channel || report.channel || "prod") === "dev" ? "Dev" : "Prod";
+  const localState = waiting.length
+    ? `<span class="pill warn">${esc(release ? `${HOMESTEAD_VERSION} → ${release}` : `${waiting.length} helper update${waiting.length === 1 ? "" : "s"}`)}</span>`
+    : failed.length ? '<span class="pill crit">check failed</span>' : '<span class="pill ok">up to date</span>';
+  const changing = parts.filter(w => w.available || (w.images || []).some(i => i.error));
+  const detail = changing.length > (release ? 1 : 0) ? `<span class="hs-cluster-parts">${changing.map(w => {
+    const failure = (w.images || []).find(i => i.error)?.error;
+    return `<span class="dim xs">${esc(HOMESTEAD_PARTS[w.homestead] || w.name)} · ${esc(failure ? "check failed" : updateVersions(w) || "update available")}</span>`;
+  }).join("")}</span>` : "";
+  const picking = linked.length > 0;
+  const rows = clusterUpdateRow({ name: me?.name || "This Homestead", self: picking, state: localState, detail,
+      meta: `v${esc(HOMESTEAD_VERSION)} · ${channel}`, pick: picking ? "homesteadLocalPick(this.checked)" : "",
+      picked: localPicked(waiting), pickable: waiting.length > 0 }) + fleetUpdateRows();
+  // The button says which clusters it updates.
+  const others = [...FLEET_UPDATES.picked].filter(id => FLEET_UPDATES.rows[id]).length;
+  const here = localPicked(waiting) ? 1 : 0, count = here + others;
+  const one = others === 1 && !here ? FLEET_UPDATES.rows[[...FLEET_UPDATES.picked][0]]?.member?.name : "";
+  const label = !count ? "" : count > 1 ? `Update ${count} clusters`
+    : here ? (release ? `Update to ${release}` : `Update ${waiting.length === 1 ? "helper" : "helpers"}`) : `Update ${one || "1 cluster"}`;
+  return `${head}
+    <div class="hs-clusters" role="group" aria-label="${picking ? "Clusters to update" : "This cluster"}">${rows}</div>
+    ${label || picking ? `<p class="dim small hs-note">${picking ? "Ticked clusters update one after another, linked ones first and this one last, so every linked Homestead stays on one release. " : ""}${inCard ? "" : "Each part restarts while it changes; this page reconnects. "}Nothing changes until you review it.</p>` : ""}
     <div class="row hs-actions">${label ? `<button class="btn pri" data-need="operator" onclick="homesteadUpdateReview()" ${HOMESTEAD_CHANNEL_SAVING ? "disabled" : ""}>${esc(label)}</button>` : ""}
-      <button class="btn" onclick="homesteadUpdateCheck(this)" ${HOMESTEAD_CHANNEL_SAVING ? "disabled" : ""}>↻ Check now</button></div>`;
+      <button class="btn" onclick="homesteadUpdateCheck(this)" ${HOMESTEAD_CHANNEL_SAVING || FLEET_UPDATES.loading ? "disabled" : ""}>${FLEET_UPDATES.loading ? "Checking…" : "↻ Check now"}</button></div>
+    <div class="hs-channel">${picker}</div>`;
 }
 
 window.homesteadUpdateDialog = async () => {
@@ -236,8 +244,8 @@ window.homesteadUpdateDialog = async () => {
    reached through it. */
 window.homesteadUpdateReview = () => {
   const { waiting } = homesteadUpdates();
-  const items = [...pickedFleetItems(), ...waiting.map(w => ({ ns: w.ns, name: w.name, part: w.homestead }))];
-  if (!items.length) return toast("Homestead is up to date", "ok");
+  const items = [...pickedFleetItems(), ...(localPicked(waiting) ? waiting.map(w => ({ ns: w.ns, name: w.name, part: w.homestead })) : [])];
+  if (!items.length) return toast("Tick a cluster to update", "bad");
   return reviewImageActions(items);
 };
 
