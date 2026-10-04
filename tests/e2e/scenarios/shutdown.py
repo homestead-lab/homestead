@@ -25,6 +25,11 @@ def run(ctx):
     for node in ctx.lab.nodes:
         node.wait_ssh()
         assert node.boot_id() != boots[node.name], f"{node.name} did not boot again"
+    # As the shutdown dialog says: the hosts stay cordoned, so one is
+    # uncordoned from a console for Homestead to start, which then recovers
+    # the rest.
+    ctx.kube.nodes_ready(len(ctx.lab.nodes))
+    ctx.kube.run("uncordon", ctx.lab.nodes[0].name)
 
     state = ctx.api.get("/api/cluster/shutdown", wait=1800)["state"]
     assert state and state["run"], "the shutdown's record did not survive"

@@ -6,6 +6,7 @@ The installer fetches its scripts and Homestead's manifest from the release
 tag and pulls the image from GHCR, so what is tested is what was published.
 """
 import os
+import threading
 import time
 from pathlib import Path
 
@@ -66,10 +67,34 @@ def build(lab, distro, version, directory, agents=0, extra=None):
     first = lab.nodes[0]
     run_installer(first, distro, version, "new", extra)
     token = first.ssh(f"sudo cat /var/lib/rancher/{distro}/server/node-token", quiet=True).strip()
-    # etcd members join one at a time.
+    joins, failed = [], []
+
+    def join(node):
+        try:
+            run_installer(node, distro, version, node.role, dict(extra or {}, HS_SERVER=first.ip, HS_TOKEN=token))
+        except Exception as error:
+            failed.append(f"{node.name}: {error}")
+
     for i, node in enumerate(lab.nodes[1:], start=1):
         node.role = "agent" if i >= len(lab.nodes) - agents else "server"
-        run_installer(node, distro, version, node.role, dict(extra or {}, HS_SERVER=first.ip, HS_TOKEN=token))
+    # Workers join all at once; etcd members one at a time - but only the
+    # join itself: the next starts once the last one's service is up, while
+    # the rest of its installer carries on alongside.
+    service = "k3s" if distro == "k3s" else "rke2-server"
+    for node in [n for n in lab.nodes[1:] if n.role == "server"] + [n for n in lab.nodes[1:] if n.role == "agent"]:
+        thread = threading.Thread(target=join, args=(node,), daemon=True)
+        thread.start()
+        joins.append(thread)
+        if node.role == "server":
+            deadline = time.time() + 900
+            while thread.is_alive() and time.time() < deadline:
+                if node.ssh(f"systemctl is-active {service} 2>/dev/null || true", check=False, quiet=True).strip() == "active":
+                    break
+                time.sleep(5)
+    for thread in joins:
+        thread.join(timeout=2400)
+    if failed:
+        raise RuntimeError("joining failed: " + "; ".join(failed))
     config = kubeconfig(lab, distro, directory)
     log.info(f"Cluster ready: {len(lab.nodes)} {distro} host(s); kubeconfig {config}")
     return config

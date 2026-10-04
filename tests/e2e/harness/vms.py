@@ -27,6 +27,7 @@ BRIDGE = "hsbr0"
 VIP = f"{NET}.100"
 IMAGE_URL = os.environ.get("E2E_IMAGE_URL", "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img")
 CACHE = Path(os.environ.get("E2E_CACHE", Path.home() / ".cache" / "homestead-e2e"))
+PREPARED = CACHE / "noble-prepared.qcow2"
 USER = "e2e"
 
 
@@ -182,6 +183,35 @@ class Lab:
                 sh("sudo", "ip", "link", "set", node.tap, "up")
 
     def _base_image(self):
+        """The prepared image when the cache has it (prepare_base), else the
+        cloud image as published - slower: each host updates itself."""
+        if PREPARED.exists():
+            return str(PREPARED)
+        return self._cloud_image()
+
+    def prepare_base(self):
+        """Ubuntu updated, with the packages Homestead's installer adds, made
+        once a week in CI and cached: a host then starts in seconds, and a
+        rolling update has little to download. Cloud-init is reset, so each
+        host made from it sets itself up as a new machine."""
+        self.dir.mkdir(parents=True, exist_ok=True)
+        if not os.path.exists(self.key):
+            sh("ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", self.key)
+        self._network()
+        node = self.nodes[0]
+        node.dir.mkdir(parents=True, exist_ok=True)
+        sh("qemu-img", "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", self._cloud_image(), node.dir / "disk.qcow2", "8G")
+        self._seed(node, prepare=True)
+        started = time.time()
+        node.power_on()
+        node.wait_off(timeout=1500)
+        part = PREPARED.with_suffix(".part")
+        sh("qemu-img", "convert", "-O", "qcow2", "-c", node.dir / "disk.qcow2", part, timeout=1200)
+        part.rename(PREPARED)
+        (CACHE / "noble-server-cloudimg-amd64.img").unlink(missing_ok=True)     # not cached twice
+        log.info(f"Base image prepared in {int(time.time() - started)}s: {PREPARED}")
+
+    def _cloud_image(self):
         CACHE.mkdir(parents=True, exist_ok=True)
         image = CACHE / "noble-server-cloudimg-amd64.img"
         if not image.exists():
@@ -192,7 +222,7 @@ class Lab:
             part.rename(image)
         return str(image)
 
-    def _seed(self, node):
+    def _seed(self, node, prepare=False):
         public = Path(self.key + ".pub").read_text().strip()
         (node.dir / "user-data").write_text(f"""#cloud-config
 hostname: {node.name}
@@ -207,7 +237,14 @@ growpart: {{mode: auto, devices: ["/"]}}
 runcmd:
   - systemctl disable --now unattended-upgrades apt-daily.timer apt-daily-upgrade.timer || true
   - systemctl enable --now iscsid || true
-""")
+""" + ("""  - DEBIAN_FRONTEND=noninteractive apt-get -q update
+  - DEBIAN_FRONTEND=noninteractive apt-get -yq -o Dpkg::Options::=--force-confold dist-upgrade
+  - DEBIAN_FRONTEND=noninteractive apt-get -yq install open-iscsi nfs-common
+  - apt-get -q clean
+  - cloud-init clean --logs --machine-id
+  - fstrim -av || true
+  - systemctl poweroff
+""" if prepare else ""))
         (node.dir / "meta-data").write_text(f"instance-id: {node.name}-{int(time.time())}\nlocal-hostname: {node.name}\n")
         (node.dir / "network-config").write_text(f"""version: 2
 ethernets:

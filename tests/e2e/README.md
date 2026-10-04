@@ -19,10 +19,17 @@ back, rolling OS restarts, storage repair and balancing - on **k3s and RKE2**.
   browser does (`harness/api.py`), and check the outcome on the hosts and in
   Kubernetes. Test apps write to their Longhorn volumes, and a marker written
   before each reboot or shutdown must be there after it.
-- **Suites** (`suites.py`) group scenarios on 1 to 4 hosts. In CI each
-  distribution × suite has its own runner and cluster, in parallel; a failure
-  saves diagnostics - Homestead's log and jobs, events, Longhorn, each host's
-  journal and console - as an artifact.
+- **Suites** (`suites.py`) group scenarios on 1 to 4 hosts, and split them
+  into CI jobs: each scenario its own job, or a few short ones together, so
+  no job takes much over fifteen minutes. Every job has its own runner and
+  cluster, all at once; a failure saves diagnostics - Homestead's log and
+  jobs, events, Longhorn, each host's journal and console - as an artifact.
+- **Speed**: the hosts start from a cached base image (Ubuntu updated, with
+  the installer's packages; remade weekly by the `base` job), and servers
+  join side by side - each starts once the last has joined etcd. A prod
+  release runs every job on k3s and, on RKE2, those where the distribution
+  matters (`"rke2"` in `suites.py`): twenty jobs, what a repository runs at
+  once.
 
 | Suite | Hosts | Covers |
 |---|---|---|

@@ -5,7 +5,9 @@
 Needs Linux with KVM, qemu-system-x86, qemu-utils, cloud-image-utils,
 kubectl and sudo (for the VM bridge). In CI, .github/workflows/release-e2e.yml
 runs every suite on both distributions in parallel. --keep leaves the VMs
-running to look at afterwards; --scenario runs one scenario of the suite.
+running to look at afterwards; --scenario runs only those scenarios of the
+suite (comma-separated). --prepare-base makes the cached base image - Ubuntu
+updated, with the packages the installer adds - and exits.
 """
 import argparse
 import os
@@ -27,13 +29,24 @@ from suites import SUITES  # noqa: E402
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--distro", choices=("k3s", "rke2"), default="k3s")
-    parser.add_argument("--suite", choices=sorted(SUITES), required=True)
-    parser.add_argument("--version", required=True, help="a published Homestead release, e.g. 2.8.312 or 2.8.312-dev.1")
-    parser.add_argument("--scenario", help="run only this scenario of the suite")
+    parser.add_argument("--suite", choices=sorted(SUITES))
+    parser.add_argument("--version", help="a published Homestead release, e.g. 2.8.312 or 2.8.312-dev.1")
+    parser.add_argument("--scenario", help="run only these scenarios of the suite, comma-separated")
+    parser.add_argument("--prepare-base", action="store_true", help="make the cached base image and exit")
     parser.add_argument("--artifacts", default=os.environ.get("E2E_ARTIFACTS") or tempfile.mkdtemp(prefix="homestead-e2e-"))
     parser.add_argument("--memory", type=int, default=int(os.environ.get("E2E_MEMORY", "4096")))
     parser.add_argument("--keep", action="store_true")
     args = parser.parse_args()
+    if args.prepare_base:
+        log.to(args.artifacts)
+        Lab(Path(args.artifacts) / "lab", 1).prepare_base()
+        return
+    if not (args.suite and args.version):
+        parser.error("--suite and --version are needed")
+    only = {s.strip() for s in (args.scenario or "").split(",") if s.strip()}
+    unknown = only - {name for name, _ in SUITES[args.suite]["scenarios"]}
+    if unknown:
+        parser.error(f"{args.suite} has no scenario {', '.join(sorted(unknown))}")
 
     suite = SUITES[args.suite]
     log.to(args.artifacts)
@@ -65,7 +78,7 @@ def main():
             c.api = Homestead(c.homestead_urls())
             c.api.sign_in()
         for name, scenario in suite["scenarios"]:
-            if args.scenario and args.scenario != name:
+            if only and name not in only:
                 continue
             log.group(f"Scenario: {name}")
             started = time.time()

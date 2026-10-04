@@ -55,17 +55,53 @@ jobs:
           DISTROS: ${{ inputs.distros }}
         run: python3 tests/e2e/plan.py >> "$GITHUB_OUTPUT"
 
-  e2e:
+  base:
+    # The hosts' disk: Ubuntu updated, with the installer's packages, made
+    # once a week and cached - each host then starts in seconds.
     needs: plan
     if: needs.plan.outputs.run == 'true'
-    name: ${{ matrix.distro }} · ${{ matrix.suite }}
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    outputs:
+      key: ${{ steps.key.outputs.key }}
+    steps:
+      - id: key
+        run: echo "key=e2e-noble-prepared-$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - id: cached
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/homestead-e2e
+          key: ${{ steps.key.outputs.key }}
+          lookup-only: true
+      - if: steps.cached.outputs.cache-hit != 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: KVM, QEMU and cloud-init tools
+        if: steps.cached.outputs.cache-hit != 'true'
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+          sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends qemu-system-x86 qemu-utils cloud-image-utils
+          test -w /dev/kvm
+          # The VMs' disks go where the runner has room.
+          sudo mkdir -p /mnt/e2e && sudo chown "$USER" /mnt/e2e
+      - name: Prepare the base image
+        if: steps.cached.outputs.cache-hit != 'true'
+        run: python3 -u tests/e2e/run.py --prepare-base --artifacts /mnt/e2e
+      - if: steps.cached.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/homestead-e2e
+          key: ${{ steps.key.outputs.key }}
+
+  e2e:
+    needs: [plan, base]
+    if: needs.plan.outputs.run == 'true'
+    name: ${{ matrix.distro }} · ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
-      # Twenty jobs at once would take every runner the repository gets and
-      # hold up pull requests' CI for the hour: ten at a time leaves room.
-      max-parallel: 10
+      # One job per scenario (or a few short ones), all at once: a release
+      # is planned to fit the twenty jobs a repository runs together.
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -77,18 +113,19 @@ jobs:
           test -w /dev/kvm
           # The VMs' disks go where the runner has room.
           sudo mkdir -p /mnt/e2e && sudo chown "$USER" /mnt/e2e
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/homestead-e2e
-          key: e2e-ubuntu-noble-${{ github.run_id }}
-          restore-keys: e2e-ubuntu-noble-
-      - name: ${{ matrix.suite }} on ${{ matrix.distro }}, Homestead ${{ needs.plan.outputs.version }}
-        run: python3 -u tests/e2e/run.py --distro "${{ matrix.distro }}" --suite "${{ matrix.suite }}" --version "${{ needs.plan.outputs.version }}" --artifacts /mnt/e2e
+          key: ${{ needs.base.outputs.key }}
+      - name: ${{ matrix.label }} on ${{ matrix.distro }}, Homestead ${{ needs.plan.outputs.version }}
+        run: >-
+          python3 -u tests/e2e/run.py --distro "${{ matrix.distro }}" --suite "${{ matrix.suite }}"
+          --scenario "${{ matrix.scenarios }}" --version "${{ needs.plan.outputs.version }}" --artifacts /mnt/e2e
       - name: Diagnostics
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: e2e-${{ matrix.distro }}-${{ matrix.suite }}
+          name: e2e-${{ matrix.slug }}
           path: |
             /mnt/e2e
             !/mnt/e2e/lab/**/*.qcow2

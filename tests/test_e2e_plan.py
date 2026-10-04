@@ -14,7 +14,16 @@ import plan as PLAN  # noqa: E402
 
 class PlanTests(unittest.TestCase):
     def matrix(self, out):
-        return [(row["distro"], row["suite"]) for row in json.loads(out["matrix"])["include"]]
+        """The (distribution, suite) pairs, once each, in order: a suite may be several jobs."""
+        return list(dict.fromkeys((row["distro"], row["suite"]) for row in json.loads(out["matrix"])["include"]))
+
+    def test_a_release_fits_the_twenty_jobs_a_repository_runs_at_once(self):
+        rows = json.loads(PLAN.plan(tag="v2.9.0")["matrix"])["include"]
+        self.assertLessEqual(len(rows), 20)
+        self.assertTrue(any(r["distro"] == "rke2" for r in rows), "RKE2 runs where it differs")
+        self.assertEqual(len({r["slug"] for r in rows}), len(rows), "each job its own artifact name")
+        self.assertIn({"distro": "k3s", "suite": "single", "scenarios": "single-host power-off",
+                       "label": "single: single-host power-off", "slug": "k3s-single-single-host-power-off"}, rows)
 
     def test_every_prod_release_runs_by_itself_and_no_dev_one(self):
         self.assertEqual("true", PLAN.plan(tag="v2.9.0")["run"])

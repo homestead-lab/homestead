@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from suites import SUITES  # noqa: E402
+from suites import SUITES, jobs, on_rke2_release  # noqa: E402
 
 DISTROS = ("k3s", "rke2")
 
@@ -40,7 +40,18 @@ def plan(tag="", version="", suites="", distros="", branch=""):
     dists = [d.strip() for d in (distros or ",".join(DISTROS)).split(",") if d.strip()]
     if any(d not in DISTROS for d in dists):
         raise SystemExit(f"distributions are {', '.join(DISTROS)}")
-    matrix = {"include": [{"distro": d, "suite": s} for d in dists for s in chosen]}
+    rows = []
+    for d in dists:
+        for s in chosen:
+            for job in jobs(s):
+                # A release runs RKE2 where the distribution matters; asked
+                # for by hand or by a branch, everything.
+                if tag and d == "rke2" and not on_rke2_release(s, job):
+                    continue
+                label = s if len(jobs(s)) == 1 else f"{s}: {', '.join(job)}"
+                slug = "-".join([d, s] + ([job[0].replace(" ", "-").replace("'", "")] if len(jobs(s)) > 1 else []))
+                rows.append({"distro": d, "suite": s, "scenarios": ",".join(job), "label": label, "slug": slug})
+    matrix = {"include": rows}
     return {"run": "true" if run else "false", "version": version, "matrix": json.dumps(matrix)}
 
 
