@@ -305,6 +305,10 @@ def status(item):
     return state
 
 
+# The steps before power is sent: nothing about the host's power to observe yet.
+BEFORE_SEND = ("reviewed", "cordoning", "holding", "draining", "verifying")
+
+
 def _status(item):
     """Observe a power command without treating a lost API connection as success."""
     ref = item["ref"]
@@ -312,7 +316,7 @@ def _status(item):
                   "Scheduling was allowed again, so what waited could start there" if ref.get("uncordoned") else "It remains cordoned")
     now = time.time()
     phase = ref.get("phase")
-    if phase in ("reviewed", "cordoning", "draining", "verifying"):
+    if phase in BEFORE_SEND:
         # A drain can evict the very replica running it. Its job names that
         # replica; once it has gone, the leader carries the job on.
         worker = ref.get("worker")
@@ -370,16 +374,24 @@ def _status(item):
                 return "failed", 85, "Host rebooted, but Longhorn health could not be verified within 30 minutes"
             return "running", 85, "Host rebooted; Longhorn volume health is unavailable"
         by_name = {v.get("metadata", {}).get("name"): v for v in volumes}
-        pending = [name for name in volume_names if name in by_name and
-                   (by_name[name].get("status") or {}).get("state") != "detached" and
-                   (by_name[name].get("status") or {}).get("robustness") != "healthy"]
+        # A degraded volume is readable and writable from a whole copy while
+        # Longhorn rebuilds the rest - hours, for a host's worth of volumes,
+        # five at a time. The host is back when nothing is unavailable.
+        live = {name: (by_name[name].get("status") or {}) for name in volume_names
+                if name in by_name and (by_name[name].get("status") or {}).get("state") != "detached"}
+        claim = lambda name: "/".join(x for x in ((live[name].get("kubernetesStatus") or {}).get("namespace"),
+                                                 (live[name].get("kubernetesStatus") or {}).get("pvcName")) if x) or name
+        pending = [claim(name) for name, st in live.items() if st.get("robustness") not in ("healthy", "degraded")]
+        rebuilding = [name for name, st in live.items() if st.get("robustness") == "degraded"]
         if pending:
             if now - ref["returned_at"] > 1800:
-                return "failed", 90, ("Host rebooted, but volumes did not become healthy within 30 minutes: " +
+                return "failed", 90, ("Host rebooted, but these volumes did not become available within 30 minutes: " +
                                       ", ".join(pending[:4]))
-            return "running", 90, f"Host is Ready; waiting for {len(pending)} volume(s) to become healthy: " + ", ".join(pending[:4])
-        return "succeeded", 100, "Host is Ready and affected Longhorn volumes are healthy. " + scheduling + _started(ref) + (
-            "" if ref.get("held") else "; workload recovery is not yet verified")
+            return "running", 90, f"Host is Ready; waiting for {len(pending)} volume(s) to become available: " + ", ".join(pending[:4])
+        return "succeeded", 100, ("Host is Ready and its volumes are available. " + scheduling + _started(ref)
+                                  + (f". Longhorn is rebuilding {len(rebuilding)} volume cop{'y' if len(rebuilding) == 1 else 'ies'} on it; "
+                                     "Volumes shows their progress" if rebuilding else "")
+                                  + ("" if ref.get("held") else "; workload recovery is not yet verified"))
     if now - ref.get("started_epoch", now) > 600:
         return "failed", 30, "Power transition was not verified within 10 minutes. A helper may still run; inspect its events and logs before any new request. Host remains cordoned"
     if ref.get("saw_down"):

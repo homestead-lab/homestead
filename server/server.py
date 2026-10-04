@@ -4323,7 +4323,7 @@ def _power_jobs_loop():
                 continue
             active = [i for i in OPS._read() if i.get("kind") == "node-power"
                       and i.get("status") not in OPS.TERMINAL
-                      and ((i.get("ref") or {}).get("phase") in ("reviewed", "cordoning", "draining", "verifying")
+                      and ((i.get("ref") or {}).get("phase") in POWER.BEFORE_SEND
                            # or with apps waiting to be started again, whoever is looking
                            or ((i.get("ref") or {}).get("held") and (i.get("ref") or {}).get("restored") is None))]
             if active:
