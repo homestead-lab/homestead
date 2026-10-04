@@ -152,6 +152,17 @@ class StopRestoreTests(unittest.TestCase):
         self.assertIn(("PUT", "/apis/subresources.kubevirt.io/v1/namespaces/vms/virtualmachines/gpu/start", {}), self.k.sent)
 
 
+class OwnPodTests(unittest.TestCase):
+    def test_homestead_is_never_stopped_whatever_its_deployment_is_called(self):
+        HOLD.OWN, HOLD.OWN_POD = ("lab", "homestead"), "harvui-5c-x"
+        try:
+            items = HOLD.candidates("k1", [pod("lab", "harvui-5c-x", "k1", owner="harvui-5c")],
+                                    [], {("lab", "harvui-5c"): rs("lab", "harvui-5c", "harvui")}, {"k1"}, single_host=True)
+            self.assertEqual([], items)
+        finally:
+            HOLD.OWN_POD = ""
+
+
 class OrderTests(unittest.TestCase):
     """Single host: the review is rechecked before anything stops. Several
     hosts: cordon, then stop and move, then drain what is left."""
@@ -209,6 +220,22 @@ class ReturnTests(unittest.TestCase):
         self.assertEqual("running", state, "an hour off is not a failure while apps wait for it")
         self.assertIn("wait for it", message)
         self.assertEqual([], self.restored)
+
+    def test_a_job_that_ends_without_its_host_starts_what_waited(self):
+        calls = []
+        POWER.RESTORE = lambda item, uncordon=True: calls.append(uncordon) or item["ref"].update(
+            restored={"started": ["lab/plex"], "left": []}) or True
+        self.node["status"]["conditions"][0]["status"] = "Unknown"
+        job = self.job("reboot", started_epoch=time.time() - 3600)
+        state, _, message = POWER.status(job)
+        self.assertEqual(("failed", [False]), (state, calls), "started on other hosts; this one is not uncordoned")
+        self.assertIn("Started again: lab/plex", message)
+
+    def test_only_the_leader_starts_them_and_the_job_waits_for_it(self):
+        POWER.RESTORE = lambda item, uncordon=True: False
+        self.node["status"]["conditions"][0]["status"] = "Unknown"
+        state, _, _ = POWER.status(self.job("reboot", started_epoch=time.time() - 3600))
+        self.assertEqual("running", state)
 
     def test_back_after_a_power_off_even_with_homestead_down_meanwhile(self):
         state, _, message = POWER.status(self.job("poweroff"))

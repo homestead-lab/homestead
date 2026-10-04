@@ -4105,7 +4105,20 @@ def run_power_job(operation_id, power_plan, force=False, resumed=False):
         if uncertain:
             power_progress("observing", 20, message)
         else:
-            power_progress("failed", 10, message, failed_phase=phase_state["phase"])
+            # Power was not sent: what was stopped to wait for the host starts
+            # again now. The host stays cordoned, so an app tied to it waits
+            # for scheduling to be allowed.
+            restored = {}
+            held = next((((i.get("ref") or {}).get("held") or []) for i in OPS._read() if i.get("id") == operation_id), [])
+            if held:
+                try:
+                    started, left = HOLD.restore(held, operation_id)
+                    restored = {"restored": {"started": started, "left": left, "at": time.time()}}
+                    message += (". Started again: " + ", ".join(started)) if started else ""
+                    message += (". Left as they are: " + ", ".join(left)) if left else ""
+                except Exception as error:
+                    message += f". What was stopped could not be started again ({str(error)[:120]}); start it by hand"
+            power_progress("failed", 10, message, failed_phase=phase_state["phase"], **restored)
         raise PowerNotSent(message, {"id": operation_id}) from e
 
 
@@ -4123,8 +4136,14 @@ def hold_for_power(operation_id, power_plan, progress):
              + (f", moving {len(moving)} VM(s)" if moving else "") + "; power has not been sent")
     held = [HOLD.stop(item, operation_id) for item in waiting]
     progress("holding", 8, "Waiting for them to stop; power has not been sent", held=held)
-    for vm in moving:
-        HOLD.migrate(vm)
+    if moving:
+        # A resumed job finds some already moved: only what is still here moves.
+        here = {((v.get("metadata") or {}).get("namespace"), (v.get("metadata") or {}).get("name"))
+                for v in kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", [])
+                if (v.get("status") or {}).get("nodeName") == node}
+        for vm in moving:
+            if (vm["ns"], vm["name"]) in here:
+                HOLD.migrate(vm)
     deadline = time.monotonic() + 600
     while True:
         pods = [p for p in kget("/api/v1/pods").get("items", []) if (p.get("spec") or {}).get("nodeName") == node]
@@ -4253,7 +4272,9 @@ def _power_jobs_loop():
                 continue
             active = [i for i in OPS._read() if i.get("kind") == "node-power"
                       and i.get("status") not in OPS.TERMINAL
-                      and (i.get("ref") or {}).get("phase") in ("reviewed", "cordoning", "draining", "verifying")]
+                      and ((i.get("ref") or {}).get("phase") in ("reviewed", "cordoning", "draining", "verifying")
+                           # or with apps waiting to be started again, whoever is looking
+                           or ((i.get("ref") or {}).get("held") and (i.get("ref") or {}).get("restored") is None))]
             if active:
                 OPS.list_operations()   # runs each job's resolver, which resumes it if needed
         except Exception as error:
@@ -4266,7 +4287,7 @@ def _detached_copies_loop():
     while True:
         time.sleep(60)
         try:
-            if LEADER.is_leader():
+            if LEADER.is_leader() and (cluster_shutdown().state() or {}).get("phase") in (None, "released"):
                 LHREBUILD.tick()
                 _cache.pop("lhrebuild", None)
         except Exception as error:
@@ -4310,7 +4331,13 @@ def rollout_reboot(node, allow_single_copy=False):
         raise ValueError("; ".join(power_plan["blockers"]))
     if power_plan["stranded"]:
         raise ValueError("some workloads have no other host to run on")
-    power_plan["choices"] = HOLD.choose(power_plan.get("hold") or [], None)
+    hold = power_plan.get("hold") or []
+    if any(i["kind"] == "VirtualMachine" for i in hold):
+        raise ValueError("Running VMs are on this host; migrate or stop them and review again")
+    waits = [f"{i['ns']}/{i['name']}" for i in hold if i["default"] != "move"]
+    if waits:
+        raise ValueError("These would have to stop and wait for the host: " + ", ".join(waits[:6]))
+    power_plan["choices"] = HOLD.choose(hold, None)
     if power_plan["requires_data_ack"] and not allow_single_copy:
         raise ValueError("a volume has its only healthy copy on this host (the settings do not accept that)")
     try:
@@ -5949,7 +5976,7 @@ CAPACITY_REVIEW.bind(AUTH.review_signing_key)
 LH.bind(kget, ksend, _cache, STORAGE_CLASS)
 PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
-HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND))
+HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
 POWER.WORKER_GONE, POWER.RESUME, POWER.RESTORE = power_worker_gone, resume_power_job, restore_held
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
              channel=lambda: cached("settings", 15, get_app_settings)["updates"]["channel"])

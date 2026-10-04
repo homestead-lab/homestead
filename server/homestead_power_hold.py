@@ -25,11 +25,12 @@ VM_API = "/apis/kubevirt.io/v1"
 
 kget = ksend = None
 OWN = ("", "")          # Homestead's own namespace and Deployment: never stopped
+OWN_POD = ""            # and the workload of the pod this runs in, whatever its name
 
 
-def bind(_kget, _ksend, own=("", "")):
-    global kget, ksend, OWN
-    kget, ksend, OWN = _kget, _ksend, tuple(own)
+def bind(_kget, _ksend, own=("", ""), own_pod=""):
+    global kget, ksend, OWN, OWN_POD
+    kget, ksend, OWN, OWN_POD = _kget, _ksend, tuple(own), own_pod
 
 
 def _q(text):
@@ -70,13 +71,19 @@ def candidates(node, pods, vmis, replicasets, ready_hosts, eligible=None, single
     others = sorted(h for h in ready_hosts if h != node)
     running = [p for p in pods if (p.get("status") or {}).get("phase") not in ("Succeeded", "Failed")
                and not (p.get("metadata") or {}).get("deletionTimestamp")]
-    found = {}
+    found, own = {}, set()
+    for pod in running:
+        meta = pod.get("metadata") or {}
+        if OWN_POD and meta.get("name") == OWN_POD and meta.get("namespace") == OWN[0]:
+            workload = _workload(pod, replicasets)
+            if workload:
+                own.add(workload)
     for pod in running:
         meta = pod.get("metadata") or {}
         if _system(meta.get("namespace", "")) or (meta.get("labels") or {}).get("kubevirt.io") == "virt-launcher":
             continue
         workload = _workload(pod, replicasets)
-        if not workload or workload[1:] == OWN:
+        if not workload or workload[1:] == OWN or workload in own:
             continue
         row = found.setdefault(workload, {"here": 0, "elsewhere": 0})
         row["here" if (pod.get("spec") or {}).get("nodeName") == node else "elsewhere"] += 1

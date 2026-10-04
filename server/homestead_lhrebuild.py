@@ -19,6 +19,7 @@ DEFAULTED = "homestead.io/offline-rebuilding-default"
 TICKET = "homestead-rebuild"
 # A fallback attachment that has not made the volume whole by then is let go.
 TICKET_LIMIT = 6 * 3600
+_gave_up = {}           # volume -> when a hold on it ran out; tried again a day later
 
 kget = ksend = None
 _enabled = lambda: True     # Homestead's own preference, for Longhorn without the setting
@@ -49,9 +50,11 @@ def whole(replica):
     return status.get("currentState") == "running" or bool(spec.get("healthyAt"))
 
 
-def short(volumes, replicas):
+def short(volumes, replicas, hosts_available=None):
     """Detached volumes holding fewer whole copies, on separate hosts, than
-    they ask for - the ones Longhorn will not repair by itself."""
+    they ask for - the ones Longhorn will not repair by itself. A volume
+    asking for more copies than there are hosts is short only of what the
+    hosts can hold."""
     hosts = {}
     for replica in replicas:
         spec = replica.get("spec") or {}
@@ -61,6 +64,8 @@ def short(volumes, replicas):
     for volume in volumes:
         meta, spec, status = volume.get("metadata") or {}, volume.get("spec") or {}, volume.get("status") or {}
         wanted = int(spec.get("numberOfReplicas") or 0)
+        if hosts_available:
+            wanted = min(wanted, hosts_available)
         name = meta.get("name", "")
         have = hosts.get(name, set())
         if status.get("state") != "detached" or not wanted or len(have) >= wanted:
@@ -84,10 +89,15 @@ def setting():
     return str(item.get("value") or "").lower() == "true", item
 
 
+def _hosts():
+    """Longhorn hosts that can take a replica."""
+    return len([n for n in _items(f"{LH}/nodes") if (n.get("spec") or {}).get("allowScheduling", True)]) or None
+
+
 def status():
     found = setting()
     volumes, replicas = _items(f"{LH}/volumes"), _items(f"{LH}/replicas")
-    rows = short(volumes, replicas)
+    rows = short(volumes, replicas, _hosts())
     held = _tickets()
     for row in rows:
         row["rebuilding"] = row["name"] in held
@@ -121,7 +131,7 @@ def save(enabled):
 def rebuild_now(volume):
     """Repair one detached volume now: Longhorn's own offline rebuild where it
     has one, Homestead's no-frontend attachment where not."""
-    rows = {row["name"]: row for row in short(_items(f"{LH}/volumes"), _items(f"{LH}/replicas"))}
+    rows = {row["name"]: row for row in short(_items(f"{LH}/volumes"), _items(f"{LH}/replicas"), _hosts())}
     row = rows.get(volume)
     if not row:
         raise ValueError("This volume is not a detached volume short of copies; refresh")
@@ -174,11 +184,15 @@ def tick():
         others = [t for t in info["tickets"] if t != TICKET]
         healthy = (volume.get("status") or {}).get("robustness") == "healthy"
         expired = info["since"].isdigit() and time.time() - int(info["since"]) > TICKET_LIMIT
+        if expired:
+            _gave_up[name] = time.time()
         if others or healthy or expired or not volume:
             _release(name)
     if held or not _enabled():
         return
-    for row in short(list(volumes.values()), _items(f"{LH}/replicas")):
+    for row in short(list(volumes.values()), _items(f"{LH}/replicas"), _hosts()):
+        if time.time() - _gave_up.get(row["name"], 0) < 86400:
+            continue
         if row["whole"]:
             try:
                 _hold(row["name"], row["hosts"][0])

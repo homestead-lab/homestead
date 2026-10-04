@@ -293,6 +293,19 @@ def _started(ref):
 
 
 def status(item):
+    """Observe a power command; a job that ends without its host coming back
+    starts again what waited for it, on other hosts where it can run."""
+    state = _status(item)
+    ref = item.get("ref") or {}
+    if state[0] == "failed" and ref.get("held") and ref.get("restored") is None:
+        if RESTORE and RESTORE(item, False):
+            return state[0], state[1], state[2] + _started(ref)
+        # Only the leader starts things; the job stays open until it has.
+        return "running", state[1], state[2] + ". Starting again what waited for the host"
+    return state
+
+
+def _status(item):
     """Observe a power command without treating a lost API connection as success."""
     ref = item["ref"]
     scheduling = ("Scheduling was left unchanged" if ref.get("planned_outage") else
