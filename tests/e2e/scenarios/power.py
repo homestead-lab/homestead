@@ -46,6 +46,8 @@ def multi(ctx):
     log.info(f"Reboot job: {done['message']}")
 
     assert node.boot_id() != boot, "node-2 did not boot again"
+    for name in marks:              # started again, now running
+        ctx.kube.deployment_ready("lab", name)
     k8s = ctx.kube.get("node", "node-2")
     assert not k8s["spec"].get("unschedulable"), "node-2 is still cordoned after coming back"
     waits = ctx.kube.deployment_ready("lab", "e2e-waits")
@@ -71,6 +73,7 @@ def single(ctx):
     done = ctx.api.wait_job(job, timeout=3600)
     log.info(f"Reboot job: {done['message']}")
     assert node.boot_id() != boot, "the host did not boot again"
+    ctx.kube.deployment_ready("lab", "e2e-single")
     assert ctx.has_mark("e2e-single", mark), "the app lost data across the reboot"
     # Homestead's own volume stopped cleanly: no I/O errors under a mounted filesystem.
     errors = node.ssh("sudo journalctl -k -b -1 --no-pager | grep -c -E 'Buffer I/O error|JBD2: I/O error' || true", quiet=True).strip()
@@ -94,4 +97,5 @@ def single_poweroff(ctx):
     node.wait_ssh()
     done = ctx.api.wait_job(job, timeout=3600)
     assert "powered off and has started again" in done["message"], done["message"]
+    ctx.kube.deployment_ready("lab", "e2e-off")
     assert ctx.has_mark("e2e-off", mark), "the app lost data across the power-off"

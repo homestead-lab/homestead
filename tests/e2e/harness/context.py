@@ -43,9 +43,12 @@ class Context:
         loop = "while true; do :; done" if cpu_burn else "while true; do date > /data/now; sleep 5; done"
         classes = {c["metadata"]["name"]: c for c in self.kube.items("storageclass")}
         if storage_class not in classes:
-            # What the installer made as the cluster's default, if not this one.
-            storage_class = next((n for n, c in classes.items() if (c["metadata"].get("annotations") or {}).get(
-                "storageclass.kubernetes.io/is-default-class") == "true"), storage_class)
+            # A Longhorn class the installer made - the default one first - never local-path.
+            longhorn = sorted((n for n, c in classes.items() if c.get("provisioner") == "driver.longhorn.io"),
+                              key=lambda n: (classes[n]["metadata"].get("annotations") or {}).get(
+                                  "storageclass.kubernetes.io/is-default-class") != "true")
+            assert longhorn, f"no Longhorn storage class among {sorted(classes)}"
+            storage_class = longhorn[0]
         manifest = {"apiVersion": "v1", "kind": "List", "items": [
             {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": f"{name}-data", "namespace": ns},
              "spec": {"accessModes": ["ReadWriteOnce"], "storageClassName": storage_class, "resources": {"requests": {"storage": size}}}},

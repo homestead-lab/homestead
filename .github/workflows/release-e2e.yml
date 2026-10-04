@@ -32,7 +32,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: release-e2e-${{ github.event.release.tag_name || inputs.version }}
+  group: release-e2e-${{ github.event.release.tag_name || inputs.version || github.ref }}
   cancel-in-progress: false
 
 jobs:

@@ -41,7 +41,7 @@ class Homestead:
             except ValueError:
                 return error.code, raw.decode(errors="replace")
 
-    def request(self, method, path, body=None, ok=(200, 202), wait=300, timeout=30):
+    def request(self, method, path, body=None, ok=(200, 202), wait=300, timeout=120):
         """One call, trying each address; while Homestead is away (connection
         refused, 502/503) it keeps asking for up to `wait` seconds."""
         deadline, last = time.time() + wait, None
@@ -53,7 +53,8 @@ class Homestead:
                     last = error
                     continue
                 if status == 401 and path not in ("/api/auth/login", "/api/auth/setup", "/api/auth/state"):
-                    self.sign_in()
+                    # A session belongs to the address it was made on: sign in there.
+                    self.sign_in(base)
                     status, answer = self._once(base, method, path, body, timeout)
                 if status in (502, 503, 504):
                     last = HomesteadError(status, answer, path)
@@ -72,13 +73,22 @@ class Homestead:
     def post(self, path, body=None, **kw):
         return self.request("POST", path, body if body is not None else {}, **kw)
 
-    def sign_in(self):
-        state = self.get("/api/auth/state", wait=900)
-        if state.get("setup") or state.get("needs_setup"):
-            self.post("/api/auth/setup", {"username": self.username, "password": self.password, "remember": True})
+    def sign_in(self, base=None):
+        """Sign in - on one address, or the first that answers."""
+        if base is None:
+            state = self.get("/api/auth/state", wait=900)
+        else:
+            _, state = self._once(base, "GET", "/api/auth/state", None, 30)
+        creds = {"username": self.username, "password": self.password, "remember": True}
+        if isinstance(state, dict) and state.get("setup"):
+            path = "/api/auth/setup"
             log.info("Homestead: first administrator created")
         else:
-            self.post("/api/auth/login", {"username": self.username, "password": self.password, "remember": True})
+            path = "/api/auth/login"
+        if base is None:
+            self.post(path, creds)
+        else:
+            self._once(base, "POST", path, creds, 30)
 
     # ------------------------------------------------------------ jobs
     def job(self, operation_id):
