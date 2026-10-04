@@ -60,13 +60,16 @@ def build_separate(lab, distro, version, directory):
     return clusters
 
 
-def build(lab, distro, version, directory):
+def build(lab, distro, version, directory, agents=0, extra=None):
+    """The first host makes the cluster; the rest join as servers, and the
+    last `agents` of them as workers."""
     first = lab.nodes[0]
-    run_installer(first, distro, version, "new")
+    run_installer(first, distro, version, "new", extra)
     token = first.ssh(f"sudo cat /var/lib/rancher/{distro}/server/node-token", quiet=True).strip()
     # etcd members join one at a time.
-    for node in lab.nodes[1:]:
-        run_installer(node, distro, version, "server", {"HS_SERVER": first.ip, "HS_TOKEN": token})
+    for i, node in enumerate(lab.nodes[1:], start=1):
+        node.role = "agent" if i >= len(lab.nodes) - agents else "server"
+        run_installer(node, distro, version, node.role, dict(extra or {}, HS_SERVER=first.ip, HS_TOKEN=token))
     config = kubeconfig(lab, distro, directory)
     log.info(f"Cluster ready: {len(lab.nodes)} {distro} host(s); kubeconfig {config}")
     return config

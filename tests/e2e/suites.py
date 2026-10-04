@@ -1,7 +1,7 @@
 """Which scenarios run together, on how many hosts. Each suite gets its own
 runner and cluster in CI, so suites run in parallel and one failing does not
 hold up another; scenarios in a suite share its cluster and run in order."""
-from scenarios import migration, outage, power, rolling, shutdown, smoke, storage
+from scenarios import migration, network, outage, power, rolling, shutdown, smoke, storage
 
 SUITES = {
     # Every GET route and the node doctor, on three hosts.
@@ -19,6 +19,11 @@ SUITES = {
     "outage": {"nodes": 3, "scenarios": [("container restart", outage.container_restart), ("host outage", outage.host_outage)]},
     # An app moved between two clusters, as Linked clusters does.
     "migration": {"nodes": 2, "separate": True, "scenarios": [("move between clusters", migration.run)]},
+    # VIPs (and their failover), the firewall, Multus LAN networks and the
+    # installer: three servers and a worker, Multus installed.
+    "network": {"nodes": 4, "agents": 1, "memory": 3072, "installer": {"HS_MULTUS": "yes"},
+                "scenarios": [("vip", network.vip), ("firewall", network.firewall), ("lan network", network.lan),
+                              ("installer", network.installer)]},
     # Copies kept whole, and Balance hosts.
     "storage": {"nodes": 3, "scenarios": [("offline rebuild", storage.offline_rebuild), ("balance hosts", storage.balance)]},
 }

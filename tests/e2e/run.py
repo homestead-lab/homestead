@@ -38,7 +38,7 @@ def main():
     suite = SUITES[args.suite]
     log.to(args.artifacts)
     log.info(f"Suite {args.suite} on {suite['nodes']} {args.distro} host(s), Homestead {args.version}; artifacts in {args.artifacts}")
-    memory = args.memory if suite["nodes"] > 1 else max(args.memory, 6144)
+    memory = suite.get("memory") or (args.memory if suite["nodes"] > 1 else max(args.memory, 6144))
     lab = Lab(Path(args.artifacts) / "lab", suite["nodes"], memory=memory)
     failures, ctx = [], None
     try:
@@ -55,7 +55,8 @@ def main():
                 contexts.append(Context(lab, kube, None, args.distro, args.version, args.artifacts, vip=vip, nodes=nodes))
             ctx, ctx.others = contexts[0], contexts[1:]
         else:
-            kube = Kube(install.build(lab, args.distro, args.version, args.artifacts))
+            kube = Kube(install.build(lab, args.distro, args.version, args.artifacts,
+                                           agents=suite.get("agents", 0), extra=suite.get("installer")))
             kube.nodes_ready(len(lab.nodes))
             kube.deployment_ready("lab", "homestead", timeout=1800)
             ctx = Context(lab, kube, None, args.distro, args.version, args.artifacts)

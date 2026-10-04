@@ -19,7 +19,7 @@ back, rolling OS restarts, storage repair and balancing - on **k3s and RKE2**.
   browser does (`harness/api.py`), and check the outcome on the hosts and in
   Kubernetes. Test apps write to their Longhorn volumes, and a marker written
   before each reboot or shutdown must be there after it.
-- **Suites** (`suites.py`) group scenarios on 1 or 3 hosts. In CI each
+- **Suites** (`suites.py`) group scenarios on 1 to 4 hosts. In CI each
   distribution × suite has its own runner and cluster, in parallel; a failure
   saves diagnostics - Homestead's log and jobs, events, Longhorn, each host's
   journal and console - as an artifact.
@@ -31,6 +31,9 @@ back, rolling OS restarts, storage repair and balancing - on **k3s and RKE2**.
 | `single` | 1 | routes; reboot through the handoff (no I/O errors on Homestead's volume); power-off and power-on |
 | `shutdown` | 3 | the whole cluster down, powered on, recovered; apps and data back |
 | `rolling` | 3 | OS updates restarting every host, never more than one down |
+| `outage` | 3 | a container crashing and restarting; a host failing with no warning, its apps back elsewhere |
+| `migration` | 2 clusters | an app and its data moved between two clusters, as Linked clusters does |
+| `network` | 3 + worker | an app VIP reached from outside and carried over when its host fails; a firewall letting one namespace in; an app on the LAN through Multus; a worker joined, the doctor's safe fixes, the installer run again changing nothing |
 | `storage` | 3 | a detached volume rebuilt offline; Balance hosts moving copies and containers |
 
 ## When it runs

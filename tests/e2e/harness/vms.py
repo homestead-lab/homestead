@@ -45,6 +45,7 @@ class Node:
         self.lab, self.index = lab, index
         self.name = f"node-{index + 1}"
         self.ip = f"{NET}.{11 + index}"
+        self.role = "new" if index == 0 else "server"     # as the installer joined it
         self.mac = f"52:54:00:10:00:{11 + index:02x}"
         self.tap = f"hstap{index}"
         self.dir = lab.dir / self.name
