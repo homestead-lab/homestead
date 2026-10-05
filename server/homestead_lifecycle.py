@@ -802,8 +802,15 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
             break
         live = [p for p in MAINTENANCE.items(kget, "/api/v1/pods")
                 if (p.get("spec") or {}).get("nodeName") == node]
-        if any(row not in frozen for row in MAINTENANCE.pod_snapshot(live)):
-            raise ValueError("Host remains cordoned; pods changed during drain. Power was not sent; review the host again")
+        changed = [row for row in MAINTENANCE.pod_snapshot(live) if row not in frozen]
+        if changed:
+            # Which: a pod that arrived, or one whose spec or labels changed -
+            # by name, so the next look starts from it rather than a guess.
+            before = {(row[0], row[1]) for row in frozen}
+            which = ", ".join(f"{ns}/{name} {'changed' if (ns, name) in before else 'arrived'}"
+                              for ns, name, *_ in changed[:4])
+            raise ValueError(f"Host remains cordoned; pods changed during drain ({which}). "
+                             "Power was not sent; review the host again")
         remaining = {p["metadata"]["namespace"] + "/" + p["metadata"]["name"]: p for p in live
                      if MAINTENANCE.drainable(p)}
         targets = {name: remaining[name] for name in targets if name in remaining}
