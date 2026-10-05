@@ -35,5 +35,31 @@ class ApiPathTests(unittest.TestCase):
         opened.assert_not_called()
 
 
+class BusyApiServerTests(unittest.TestCase):
+    """A read the API server's priority and fairness turns away is asked again."""
+
+    def response(self, body):
+        answer = mock.MagicMock()
+        answer.__enter__.return_value.read.return_value = body
+        return answer
+
+    def busy(self):
+        import urllib.error
+        return urllib.error.HTTPError("/api/v1/nodes", 429, "Too Many Requests", {"Retry-After": "1"}, None)
+
+    def test_a_read_turned_away_for_a_moment_is_asked_again(self):
+        with mock.patch.object(server.urllib.request, "urlopen",
+                               side_effect=[self.busy(), self.busy(), self.response(b'{"items": []}')]) as opened,              mock.patch.object(server.time, "sleep") as slept:
+            self.assertEqual({"items": []}, server.kget("/api/v1/nodes"))
+        self.assertEqual(3, opened.call_count)
+        self.assertEqual([mock.call(1.0), mock.call(1.0)], slept.call_args_list, "Retry-After is honoured")
+
+    def test_a_server_that_stays_busy_is_reported(self):
+        import urllib.error
+        with mock.patch.object(server.urllib.request, "urlopen", side_effect=[self.busy() for _ in range(4)]),              mock.patch.object(server.time, "sleep"):
+            with self.assertRaises(urllib.error.HTTPError):
+                server.kget("/api/v1/nodes")
+
+
 if __name__ == "__main__":
     unittest.main()
