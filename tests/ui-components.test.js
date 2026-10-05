@@ -42,6 +42,10 @@ test("a meter turns amber past its warning mark and red past full", () => {
   assert.match(UI.meter({ now: 80, after: 91, warnAt: 88 }), /ui-meter warn/);
   assert.match(UI.meter({ now: 95, after: 104 }), /ui-meter bad/);
   assert.match(UI.meter({ now: 95, after: 104 }), /width:5%/, "the change is drawn only up to the edge");
+  const down = UI.meter({ now: 70, after: 45 });
+  assert.match(down, /class="now" style="width:45%"/, "a host giving work up shows what it keeps");
+  assert.match(down, /class="freed" style="left:45%;width:25%"/, "and the part it gives up");
+  assert.doesNotMatch(down, /class="after"/);
 });
 
 test("progress without a value is shown as under way", () => {

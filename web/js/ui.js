@@ -94,8 +94,11 @@ const UI = (() => {
     const peak = after === null ? now : after;
     const kind = peak >= 100 ? "bad" : peak >= warnAt ? "warn" : "ok";
     return `<div class="ui-meter ${kind}" role="meter" aria-valuenow="${Math.round(peak)}" aria-valuemin="0" aria-valuemax="100"${label ? ` aria-label="${text(label)}"` : ""}>
-      <i class="now" style="width:${clamp(now)}%"></i>
-      ${after !== null ? `<i class="after" style="left:${clamp(now)}%;width:${Math.max(0, clamp(after) - clamp(now))}%"></i>` : ""}
+      ${after !== null && clamp(after) < clamp(now)
+        // Going down: what stays, then the part given up, struck through.
+        ? `<i class="now" style="width:${clamp(after)}%"></i><i class="freed" style="left:${clamp(after)}%;width:${clamp(now) - clamp(after)}%"></i>`
+        : `<i class="now" style="width:${clamp(now)}%"></i>
+      ${after !== null ? `<i class="after" style="left:${clamp(now)}%;width:${Math.max(0, clamp(after) - clamp(now))}%"></i>` : ""}`}
       <b class="mark" style="left:${clamp(warnAt)}%"></b></div>`;
   };
 
