@@ -97,6 +97,12 @@ def main():
         log.error(f"setting up: {error}")
         log.info(traceback.format_exc())
         failures.append("setup")
+        if not ctx and (Path(args.artifacts) / "kubeconfig").exists():
+            # Homestead never came up: the cluster still says why.
+            try:
+                ctx = Context(lab, Kube(str(Path(args.artifacts) / "kubeconfig")), None, args.distro, args.version, args.artifacts)
+            except Exception:
+                ctx = None
         if ctx:
             diagnostics.collect(ctx, "setup")
     finally:
