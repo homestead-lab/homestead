@@ -1,14 +1,26 @@
 """Volume copies kept whole and balanced: a detached volume short of a copy
 is rebuilt offline, and Balance hosts moves copies and containers to a host
 that holds too little."""
+import json
 import time
 
 from harness import log
 
+TWO = "e2e-two-copies"
+
+
+def _two_copies(ctx):
+    """Two copies on three hosts - one host without one, to rebuild onto and
+    balance onto. Homestead's own default follows the hosts, to three."""
+    ctx.kube.apply(json.dumps({"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass", "metadata": {"name": TWO},
+                               "provisioner": "driver.longhorn.io", "allowVolumeExpansion": True, "reclaimPolicy": "Delete",
+                               "volumeBindingMode": "Immediate", "parameters": {"numberOfReplicas": "2", "staleReplicaTimeout": "30"}}))
+
 
 def offline_rebuild(ctx):
     """Detached, with one of its two copies gone: Longhorn rebuilds it."""
-    ctx.app("e2e-detached")
+    _two_copies(ctx)
+    ctx.app("e2e-detached", storage_class=TWO)
     ctx.kube.run("scale", "-n", "lab", "deploy/e2e-detached", "--replicas=0")
     volume = ctx.kube.wait("e2e-detached detached", lambda: (lambda v: v["status"]["state"] == "detached" and v)(
         ctx.kube.volume("lab", "e2e-detached-data")))
@@ -30,9 +42,10 @@ def offline_rebuild(ctx):
 def balance(ctx):
     """node-3 cordoned while volumes and busy containers are made, then
     uncordoned: Balance hosts moves copies and containers onto it."""
+    _two_copies(ctx)
     ctx.api.post("/api/node/cordon", {"node": "node-3", "cordon": True})
     for i in range(3):
-        ctx.app(f"e2e-busy-{i}", node="node-1", cpu_burn=True, size="3Gi")
+        ctx.app(f"e2e-busy-{i}", node="node-1", cpu_burn=True, size="3Gi", storage_class=TWO)
         # Copies under a gigabyte are not worth moving: give each real data.
         ctx.exec(f"e2e-busy-{i}", "dd if=/dev/urandom of=/data/fill bs=1M count=1200 status=none && sync", timeout=900)
     ctx.api.post("/api/node/cordon", {"node": "node-3", "cordon": False})

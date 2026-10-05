@@ -110,7 +110,8 @@ def vip(ctx):
     added = ctx.api.post("/api/network/vips/add", {"ip": APP_VIP, "label": "e2e"})
     assert APP_VIP in added.get("added", []), f"the address was not added: {added}"
     pool = ctx.api.get("/api/network")
-    assert any(row.get("ip") == APP_VIP for row in pool.get("vips") or []), "the added VIP is not listed under Networking"
+    assert any(row.get("ip") == APP_VIP for row in pool.get("registered_vips") or []), \
+        f"the added VIP is not listed under Networking: {pool.get('registered_vips')}"
 
     service = _until_api(ctx, lambda: ctx.api.post("/api/network/services", {
         "namespace": "lab", "workload": "e2e-web", "name": "e2e-web", "type": "LoadBalancer",
@@ -170,7 +171,9 @@ def firewall(ctx):
     assert _reaches(ctx, "lab", url), "the firewall keeps out the namespace it lets in"
     log.info(f"Firewall on {ctx.distro}: lab let in, e2e-outside kept out")
 
-    ctx.api.post("/api/firewall/delete", {"namespace": "lab", "name": "homestead-fw-e2e-guarded"})
+    meta = ctx.kube.get("networkpolicy", "-n", "lab", "homestead-fw-e2e-guarded")["metadata"]
+    ctx.api.post("/api/firewall/delete", {"namespace": "lab", "name": "homestead-fw-e2e-guarded",
+                                          "uid": meta["uid"], "resource_version": meta["resourceVersion"]})
     _until("the other namespace let in again", lambda: _reaches(ctx, "e2e-outside", url), timeout=120)
     ctx.kube.run("delete", "namespace", "e2e-outside", "--wait=false", check=False)
 

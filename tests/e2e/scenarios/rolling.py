@@ -37,8 +37,10 @@ def run(ctx):
         stop.set()
     log.info(f"Rollout: {done['message']}; most hosts down at once: {worst[0]}")
     assert worst[0] <= 1, f"{worst[0]} hosts were down at once"
+    rollout = ctx.api.get("/api/os-updates").get("rollout") or {}
+    results = {r.get("node"): r.get("note") for r in rollout.get("results") or []}
     for node in ctx.lab.nodes:
-        assert node.boot_id() != boots[node.name], f"{node.name} was not restarted"
+        assert node.boot_id() != boots[node.name], f"{node.name} was not restarted: {results.get(node.name) or done['message']}"
     assert not any(n["spec"].get("unschedulable") for n in ctx.kube.items("nodes")), "a host is still cordoned"
     ctx.kube.deployment_ready("lab", "e2e-rolling")
     assert ctx.has_mark("e2e-rolling", mark), "the app lost data across the rollout"

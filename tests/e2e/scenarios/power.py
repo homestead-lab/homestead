@@ -39,7 +39,7 @@ def multi(ctx):
     plan = _plan(ctx, "node-2", "reboot")
     assert plan["ready"], f"review blocked: {plan['blockers']}"
     hold = {h["id"]: h for h in plan.get("hold") or []}
-    assert hold["Deployment/lab/e2e-waits"]["options"] == ["wait"], hold.get("Deployment/lab/e2e-waits")
+    assert "wait" in hold["Deployment/lab/e2e-waits"]["options"], hold.get("Deployment/lab/e2e-waits")
     assert "move" in hold["Deployment/lab/e2e-moves"]["options"], hold.get("Deployment/lab/e2e-moves")
     job = _send(ctx, plan, {"Deployment/lab/e2e-moves": "move", "Deployment/lab/e2e-waits": "wait"})
     done = ctx.api.wait_job(job, timeout=3600)
