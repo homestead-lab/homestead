@@ -79,7 +79,7 @@ def admission(read, ref, *, clock=time.time):
         raise J.Held("Destination capacity review expired; check again")
     # Provisioning warnings are displayed separately and acknowledged as a
     # preparation risk, not a RAM override. Their wording changes after creation.
-    receipt = {"proposal": J.digest(pod), "warnings": sorted(J.digest(w) for w in report["warnings"] if w not in expected)}
+    receipt = {"proposal": J.digest(pod), "warnings": sorted({D.warning_key(w) for w in report["warnings"] if w not in expected})}
     return report, receipt
 
 

@@ -35,6 +35,22 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
 
 
+def warning_key(message):
+    """A capacity warning as approved, its live figures in bands: "projected
+    RAM reaches 83.2%" at review and 84.9% a minute later is the warning that
+    was accepted - memory use on a running cluster never holds still - while
+    pressure that rises a band (5 points, or half a GiB less reserve), any
+    rise once memory is projected full (100% and over), a new kind of
+    warning, or one about another host needs a new review."""
+    def band(match):
+        value, unit = float(match.group(1)), match.group(2)
+        if unit == "%" and value >= 100:
+            return match.group(0)
+        step = 0.5 if unit == " GiB" else 5
+        return f"{int(value // step)}~{unit}"
+    return digest(re.sub(r"(\d+(?:\.\d+)?)(%| GiB)", band, message))
+
+
 def validate_policy(policy):
     if (not isinstance(policy, dict) or set(policy) != {"threshold", "reviews"}
             or type(policy["threshold"]) is not int or not 1 <= policy["threshold"] <= 100
@@ -218,7 +234,7 @@ def review(read, namespace, purpose, proposal, pinned_nodes, threshold, *, clock
         raise Held("The data move capacity check took too long; obtain a fresh review")
     report["warnings"] = warnings
     report["receipt"] = {"proposal": _review_key(fingerprint, threshold, pinned_nodes),
-                         "warnings": sorted(digest(w) for w in warnings)}
+                         "warnings": sorted({warning_key(w) for w in warnings})}
     return report
 
 

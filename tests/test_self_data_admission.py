@@ -283,5 +283,29 @@ class AdmissionTests(unittest.TestCase):
         self.assertNotIn(self.cluster.job_path, self.cluster.objects)
 
 
+
+class WarningKeyTests(unittest.TestCase):
+    def test_an_approved_warning_whose_figures_moved_is_still_the_one_approved(self):
+        # Live memory use moves between the review and the start of a move on
+        # a busy cluster; the warning accepted is the same warning.
+        self.assertEqual(D.warning_key("projected RAM reaches 81.2% (warning at 80%)"),
+                         D.warning_key("projected RAM reaches 84.9% (warning at 80%)"))
+        self.assertEqual(D.warning_key("less than 1.4 GiB host reserve remains"),
+                         D.warning_key("less than 1.1 GiB host reserve remains"))
+
+    def test_pressure_that_rises_a_band_needs_a_new_review(self):
+        self.assertNotEqual(D.warning_key("projected RAM reaches 84.9% (warning at 80%)"),
+                            D.warning_key("projected RAM reaches 85.1% (warning at 80%)"))
+        self.assertNotEqual(D.warning_key("less than 1.1 GiB host reserve remains"),
+                            D.warning_key("less than 0.9 GiB host reserve remains"))
+        self.assertNotEqual(D.warning_key("2 unscheduled pod(s) also compete for capacity"),
+                            D.warning_key("3 unscheduled pod(s) also compete for capacity"))
+
+    def test_a_new_kind_of_warning_or_another_host_is_not(self):
+        self.assertNotEqual(D.warning_key("projected RAM reaches 83.2% (warning at 80%)"),
+                            D.warning_key("less than 1.3 GiB host reserve remains"))
+        self.assertNotEqual(D.warning_key("node-2: conservative batch RAM upper estimate 91% exceeds warning threshold 80%"),
+                            D.warning_key("node-3: conservative batch RAM upper estimate 91% exceeds warning threshold 80%"))
+
 if __name__ == "__main__":
     unittest.main()
