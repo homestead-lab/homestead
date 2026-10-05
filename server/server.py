@@ -6353,7 +6353,7 @@ UNRAID_VMS.bind(IMP, kget, ksend, OPS, lambda: PLATFORM.detect())
 OPS.RESOLVERS[UNRAID_VMS.KIND] = UNRAID_VMS.status
 MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
-NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR)
+NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR, (SELF.NS, NAMES.BRAND))
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 OPS.RESOLVERS["host-os"] = HOST_OS.status
 ROOT_GUARD.bind(kget, ksend, PLATFORM.detect, node_temps, DATA_DIR)
@@ -10163,9 +10163,18 @@ class H(HTTP.LimitedHandler):
                     return self._send(409, {"error": "A container rebalance is already running; follow it in Jobs", "operation": running})
                 if b.get("restart") is not True:
                     return self._send(409, {"error": "Moving a container restarts it; confirm the restarts"})
-                plan = CREBALANCE.plan(b.get("exclude") or [])
-                if plan["review_token"] != b.get("review_token"):
-                    return self._send(409, {"error": "Container load changed since the review; review again", "plan": plan})
+                if b.get("moves") is not None:
+                    # The moves reviewed, checked against the cluster now -
+                    # not a plan made again from load that moves by the second.
+                    try:
+                        moves = CREBALANCE.reviewed(b["moves"], b.get("exclude") or [], b.get("review_token"))
+                    except ValueError as error:
+                        return self._send(409, {"error": str(error), "plan": CREBALANCE.plan(b.get("exclude") or [])})
+                    plan = {"moves": moves, "excluded": sorted(b.get("exclude") or [])}
+                else:
+                    plan = CREBALANCE.plan(b.get("exclude") or [])
+                    if plan["review_token"] != b.get("review_token"):
+                        return self._send(409, {"error": "Container load changed since the review; review again", "plan": plan})
                 if not plan["moves"]:
                     return self._send(409, {"error": "Nothing worth moving: no move brings the busiest host down enough", "plan": plan})
                 operation = OPS.start(CREBALANCE.KIND, f"Rebalance {len(plan['moves'])} container{'' if len(plan['moves']) == 1 else 's'}",

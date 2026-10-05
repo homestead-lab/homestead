@@ -131,6 +131,30 @@ class PlanTests(unittest.TestCase):
         moves = C.plan()["moves"]
         self.assertEqual([("lab/busy", "k3", "k1")], [(m["id"], m["from"], m["to"]) for m in moves])
 
+    def test_the_reviewed_moves_start_though_the_load_moved_since(self):
+        c = Cluster(); bind(c)
+        plan = C.plan()
+        # Live CPU moves by the second: the same moves are the review.
+        c.objects["/apis/metrics.k8s.io/v1beta1/pods"]["items"][0]["containers"][0]["usage"]["cpu"] = "1450m"
+        self.assertEqual(plan["review_token"], C.plan()["review_token"])
+        moves = C.reviewed(plan["moves"], [], plan["review_token"])
+        self.assertEqual([(m["id"], m["from"], m["to"]) for m in plan["moves"]], [(m["id"], m["from"], m["to"]) for m in moves])
+
+    def test_reviewed_moves_that_differ_or_no_longer_fit_need_a_new_review(self):
+        c = Cluster(); bind(c)
+        plan = C.plan()
+        forged = [dict(plan["moves"][0], to="k2")]
+        with self.assertRaisesRegex(ValueError, "differ from the review"):
+            C.reviewed(forged, [], plan["review_token"])
+        c.pods[0]["spec"]["nodeName"] = "k3"                       # frigate moved meanwhile
+        with self.assertRaisesRegex(ValueError, "changed since the review"):
+            C.reviewed(plan["moves"], [], plan["review_token"])
+        c.pods[0]["spec"]["nodeName"] = "k2"
+        target = plan["moves"][0]["to"]
+        c.objects["/api/v1/nodes"]["items"] = [node(n, cordoned=(n == target)) for n in ("k1", "k2", "k3")]
+        with self.assertRaisesRegex(ValueError, "cannot take"):
+            C.reviewed(plan["moves"], [], plan["review_token"])
+
     def test_a_cordoned_host_takes_none(self):
         c = Cluster()
         c.objects["/api/v1/nodes"]["items"] = [node("k1", cordoned=True), node("k2"), node("k3")]

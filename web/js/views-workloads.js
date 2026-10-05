@@ -868,7 +868,8 @@ window.balanceStart = async () => {
   try {
     if (containers.length) {
       await api("/api/workloads/rebalance", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ exclude: [...BALANCE.containers.exclude], review_token: BALANCE.containers.plan.review_token, restart: true }) });
+        body: JSON.stringify({ exclude: [...BALANCE.containers.exclude], review_token: BALANCE.containers.plan.review_token,
+          moves: BALANCE.containers.plan.moves, restart: true }) });
       started.push(`${containers.length} container${containers.length === 1 ? "" : "s"}`);
     }
     if (volumes.length) {

@@ -207,7 +207,7 @@ def plan(exclude=()):
                       "cpu_m": round(app["cpu"]), "mem_gb": round(app["mem"] / 1024 ** 3, 2), "near": near})
         moved.add(app["id"])
     shown = {m["id"] for m in moves} | (exclude & {a["id"] for a in apps})
-    token = hashlib.sha256(json.dumps([moves, sorted(exclude)], sort_keys=True).encode()).hexdigest()[:20]
+    token = review_token(moves, exclude)
     return {"hosts": [{"name": n, "takes": hosts[n]["takes"], "metrics": hosts[n]["metrics"],
                        "cpu_before": round(100 * hosts[n]["cpu"] / hosts[n]["cpu_total"]),
                        "cpu_after": round(100 * load[n][0] / hosts[n]["cpu_total"]),
@@ -216,6 +216,40 @@ def plan(exclude=()):
             "moves": moves, "apps": sorted(shown), "excluded": sorted(exclude),
             "skipped": [{"id": a["id"], "why": a["why"]} for a in apps if a["why"]],
             "metrics": all(h["metrics"] for h in hosts.values()), "review_token": token}
+
+
+def review_token(moves, exclude):
+    """What was reviewed: which container goes from where to where, and what
+    was vetoed - not the live load figures, which move by the second."""
+    return hashlib.sha256(json.dumps([[[m["id"], m["from"], m["to"]] for m in moves], sorted(exclude or ())],
+                                     sort_keys=True).encode()).hexdigest()[:20]
+
+
+def reviewed(moves, exclude, token):
+    """The moves a person reviewed, checked against the cluster now: each
+    container still on the host it was to leave, still movable, and its new
+    host still able to take it. Load that changed since does not matter -
+    each move gets the manual move's capacity check as it is made."""
+    if not isinstance(moves, list) or not moves or len(moves) > MAX_MOVES:
+        raise ValueError("Review the containers to move again")
+    keys = ("ns", "name", "id", "from", "to")
+    if any(not isinstance(m, dict) or not all(isinstance(m.get(k), str) and m.get(k) for k in keys) for m in moves):
+        raise ValueError("Review the containers to move again")
+    if review_token(moves, exclude) != token:
+        raise ValueError("The moves differ from the review; review again")
+    hosts, apps = inventory()
+    by_id = {a["id"]: a for a in apps}
+    summary = {n.get("name"): n for n in (summaries() if summaries else [])}
+    out = []
+    for m in moves:
+        app, host = by_id.get(m["id"]), hosts.get(m["to"])
+        if not app or app["why"] or app["host"] != m["from"] or m["id"] in set(exclude or ()):
+            raise ValueError(f"{m['id']} changed since the review; review again")
+        if not host or not host["takes"] or not satisfies(summary.get(m["to"], host["node"]), requirements(app["dep"]))[0]:
+            raise ValueError(f"{m['to']} cannot take {m['id']} now; review again")
+        out.append({**{k: m[k] for k in keys}, "cpu_m": round(app["cpu"]), "mem_gb": round(app["mem"] / 1024 ** 3, 2),
+                    "near": bool(app["near"] and m["to"] in app["near"])})
+    return out
 
 
 # --------------------------------------------------------------- the job
