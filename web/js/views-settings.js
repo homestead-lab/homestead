@@ -757,9 +757,10 @@ window.updateWindowSave = async button => {
   catch (e) { toast(e.message, "bad"); if (button) button.disabled = false; }
 };
 window.catalogEdit = () => modal("App Store catalogue", UI.lead("Any feed in the Community Applications format: the public one, a mirror, or your own list of templates.") +
-  UI.field(`Feed URL ${tip("A JSON feed shaped like applicationFeed.json - an object with an applist, or a plain list of templates. Blank uses the public feed.")}`,
-    `<input id="set_catalog" type="url" maxlength="500" placeholder="blank: the public Community Applications feed" value="${esc(STATE.data.appSettings?.catalog_url || "")}">`) +
-  UI.actions(UI.button("Use Community Applications", "catalogSave(true)") + UI.cancel() + UI.button("Save", "catalogSave(false)", { kind: "pri" }), true));
+  UI.field("Feed URL",
+    `<input id="set_catalog" type="url" maxlength="500" placeholder="blank: the public Community Applications feed" value="${esc(STATE.data.appSettings?.catalog_url || "")}">`,
+    { tipHtml: " " + tip("A JSON feed shaped like applicationFeed.json - an object with an applist, or a plain list of templates. Blank uses the public feed.") }) +
+  UI.actions(UI.cancel() + UI.button("Save", "catalogSave(false)", { kind: "pri" }), UI.button("Use Community Applications", "catalogSave(true)")));
 window.catalogSave = async reset => { await saveCatalog(reset); closeModal(); };
 
 window.updatePolicyFields = () => {
