@@ -26,7 +26,10 @@ or use consistent snapshot/backup paths; this is not live application migration.
 2. **Pick a container.** **Import containers** on the server's card lists what
    Docker runs there, with its appdata folders below for anything Docker does
    not describe. The chosen container's image, ports, variables, devices and privileges
-   become the Deploy form here.
+   become the Deploy form here. Pick its **Namespace**: the app, its volumes and
+   the copy all go there. A copy outside the default namespace borrows the
+   source's password in a Secret beside it, owned by the copy Job and removed
+   once the copy finishes.
 3. **Decide where each folder goes.** An Unraid container maps several host
    folders, and they do not all belong in one place: appdata wants a small
    volume with copies, recordings or media a large one. Define the volumes,
@@ -50,7 +53,8 @@ or use consistent snapshot/backup paths; this is not live application migration.
    capacity warnings. Hard placement blockers cannot be overridden. The server
    repeats admission before creating resources; review tokens expire after ten minutes.
    Choose **Source data safety**: all writers stopped, or consistent snapshot/backup
-   paths. For Docker-discovered imports in stopped mode, the copy checks the original
+   paths; it is asked on the Storage step, which will not move on without it.
+   For Docker-discovered imports in stopped mode, the copy checks the original
    container ID is stopped, unpaused and not restarting before copying and after
    each folder. It never stops the source for you. Other writers and changes between
    checks remain your responsibility; snapshot mode skips the Docker check.

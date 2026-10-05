@@ -488,8 +488,8 @@ class OtherKindTests(Store):
         for claim in ("frigate-appdata", "media"):
             self.cluster.objects[f"/api/v1/namespaces/lab/persistentvolumeclaims/{claim}"] = {}
         op = self.job("import", {"namespace": "lab", "name": "homestead-import-frigate"})
-        with mock.patch.object(IMP, "import_cleanup_plan", lambda name: plan), \
-                mock.patch.object(IMP, "delete_import", lambda name: {}), \
+        with mock.patch.object(IMP, "import_cleanup_plan", lambda name, ns=None: plan), \
+                mock.patch.object(IMP, "delete_import", lambda name, ns=None: {}), \
                 mock.patch.object(IMP, "wait_for_pods_gone", lambda *a: True):
             shown = OPS.cancel_plan(op)
             self.assertIn("frigate-appdata", shown["options"][0]["label"])

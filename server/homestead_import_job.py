@@ -26,7 +26,24 @@ def planned(prepared, ns):
         if obj:
             out.append({"apiVersion": obj["apiVersion"], "kind": obj["kind"],
                         "namespace": ns, "name": obj["metadata"]["name"]})
+    if prepared.get("source_secret"):
+        out.append({"apiVersion": "v1", "kind": "Secret", "namespace": ns, "name": prepared["source_secret"]["copy"]})
     return out
+
+
+def source_copy(spec, ns, job, read):
+    """The source's password, beside a copy that runs in another namespace.
+    Owned by the copy Job, so it goes with it; the import page removes it
+    as soon as the copy has finished."""
+    original = read(f"/api/v1/namespaces/{spec['namespace']}/secrets/{spec['name']}")
+    if not (original.get("data") or {}).get("password"):
+        raise ValueError("The source's password is unavailable; check the source before importing")
+    return {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+            "metadata": {"name": spec["copy"], "namespace": ns,
+                         "labels": {"homestead.io/import-source-copy": job["metadata"]["name"]},
+                         "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": job["metadata"]["name"],
+                                              "uid": job["metadata"]["uid"]}]},
+            "data": {"password": original["data"]["password"]}}
 
 
 def pin(ns, names, read):
@@ -111,6 +128,9 @@ def dispatch(body, prepared, context, read, send, ops, create_claim, admission):
                             current["spec"].get("replicas") != 0 or current["metadata"].get("annotations", {}).get(GUARD.DISPATCH) != ident):
                         raise ValueError("Imported workload changed before copying")
                 job = writer("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", obj)
+                if prepared.get("source_secret"):
+                    # The copy waits for its password, then starts.
+                    writer("POST", f"/api/v1/namespaces/{ns}/secrets", source_copy(prepared["source_secret"], ns, job, read))
                 ops.record_phase(ident, "writing", 30, "Copy Job identity confirmed", job=job["metadata"]["name"],
                     job_uid=job["metadata"]["uid"], job_template_digest=COPY.digest(job["spec"]["template"]))
                 if dep:

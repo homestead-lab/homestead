@@ -241,3 +241,34 @@ class ImportJobRemovalTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "unknown import job"):
                     imports.delete_import(name)
         self.assertEqual([], self.sent)
+
+
+class ImportStatusNamespaceTests(unittest.TestCase):
+    """Transfers lists imports in every namespace, and a copy elsewhere gives
+    back the source password it borrowed once it has finished."""
+
+    def test_every_namespace_is_listed_and_a_finished_copy_drops_its_password(self):
+        label = imports.NAMES.key("task")
+        jobs = {"items": [
+            {"metadata": {"name": "homestead-import-a", "namespace": "lab", "labels": {label: "import"}},
+             "status": {"succeeded": 1}},
+            {"metadata": {"name": "homestead-import-b", "namespace": "media", "labels": {label: "import"}},
+             "status": {"succeeded": 1}},
+            {"metadata": {"name": "homestead-import-c", "namespace": "media", "labels": {label: "import"}},
+             "status": {"active": 1}}]}
+        asked, sent = [], []
+
+        def get(path):
+            asked.append(path)
+            if path.startswith("/apis/batch/v1/jobs?"):
+                return jobs
+            return {"items": []}
+        with mock.patch.object(imports, "kget", side_effect=get), \
+             mock.patch.object(imports.NAMES, "kget", side_effect=get), \
+             mock.patch.object(imports, "ksend", side_effect=lambda *a, **k: sent.append(a[:2])), \
+             mock.patch.object(imports, "NS", "lab"):
+            rows = imports.import_status()
+        self.assertEqual({("lab", "homestead-import-a"), ("media", "homestead-import-b"), ("media", "homestead-import-c")},
+                         {(r["namespace"], r["name"]) for r in rows})
+        self.assertEqual([("DELETE", "/api/v1/namespaces/media/secrets/homestead-import-b-source")], sent,
+                         "only the finished copy outside the default namespace, never the source's own")

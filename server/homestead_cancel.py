@@ -350,7 +350,7 @@ def job_cancel(item, _options):
 
 # ----------------------------------------------------------------- imports
 def import_plan(item):
-    plan = IMP.import_cleanup_plan(item["ref"]["name"])
+    plan = IMP.import_cleanup_plan(item["ref"]["name"], item["ref"].get("namespace"))
     made = [row["name"] for row in plan["volumes"] if row["created"]]
     borrowed = [row["name"] for row in plan["volumes"] if not row["created"]]
     keeps = ["The source is not touched"]
@@ -369,8 +369,8 @@ def import_plan(item):
 
 
 def import_cancel(item, options):
-    plan = IMP.import_cleanup_plan(item["ref"]["name"])
-    IMP.delete_import(item["ref"]["name"])
+    plan = IMP.import_cleanup_plan(item["ref"]["name"], item["ref"].get("namespace"))
+    IMP.delete_import(item["ref"]["name"], item["ref"].get("namespace"))
     done = ["copy stopped"]
     if plan["workload"]:
         if remove_workload:
