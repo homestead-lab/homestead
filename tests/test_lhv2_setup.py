@@ -134,6 +134,19 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(plan['can_enable'])
         self.assertIn('needs at least 2 CPUs', ' '.join(plan['blockers']))
 
+    def test_a_host_without_cpu_room_for_v2s_instance_manager_says_so(self):
+        # An RKE2 server on 2 CPUs: the control plane and V1 reserve 1875m,
+        # V2's instance manager wants 12% (240m) and is never scheduled.
+        self.c.configure(); self.c.capacity()
+        self.c.node['status']['allocatable']['cpu'] = '2'
+        self.c.pods = [{'spec': {'nodeName': 'k3s-test', 'containers': [{'resources': {'requests': {'cpu': '1875m'}}}]},
+                        'status': {'phase': 'Running'}}]
+        plan = V.plan()
+        self.assertFalse(plan['can_enable'])
+        self.assertIn("reserves 240m of CPU and Kubernetes has 125m left", ' '.join(plan['blockers']))
+        self.c.pods[0]['spec']['containers'][0]['resources']['requests']['cpu'] = '1500m'
+        self.assertTrue(V.plan()['can_enable'], "room for it: enable")
+
     def test_reboot_requires_fresh_module_observations(self):
         self.c.configure(); self.c.capacity()
         self.c.node['status']['nodeInfo']['bootID'] = 'a' * 36

@@ -87,6 +87,16 @@ def cpu_mask():
     return bin(int(mask, 16)).count("1"), isolated, raw
 
 
+def v2_cpu_percent():
+    """The share of a host's CPU Longhorn reserves for V2's instance manager."""
+    setting = _get(LH + "/settings/guaranteed-instance-manager-cpu")
+    try:
+        value = json.loads(_value(setting, "{}")).get("v2", "12") if setting else "12"
+        return max(0.0, min(40.0, float(value)))
+    except (TypeError, ValueError):
+        return 12.0
+
+
 def _cpus(node):
     try:
         return int(R.quantity(((node.get("status") or {}).get("capacity") or {}).get("cpu"), "cpu") // 1000)
@@ -120,6 +130,7 @@ def plan():
     pods = _items("/api/v1/pods")
     managers = _items(LH + "/instancemanagers")
     saved = {i.get("ref", {}).get("name"): i.get("ref", {}) for i in ops._read() if i.get("kind") == KIND}
+    cpu_percent = v2_cpu_percent()
     rows = []
     for lh_node in sorted(lh_nodes, key=lambda n: n["metadata"]["name"]):
         name = lh_node["metadata"]["name"]
@@ -153,7 +164,16 @@ def plan():
                            and m.get("status", {}).get("currentState") == "running" for m in managers)
         memory_ready = required == 0 or (capacity >= required and allocatable * 1048576 - (0 if enabled else used) >= required * 1048576)
         supported = distribution in ("k3s", "rke2") and info.get("operatingSystem") == "linux" and bool(re.fullmatch(r"[a-fA-F0-9-]{32,36}", boot))
+        # V2's instance manager reserves a share of the host's CPU; on a small
+        # host whose control plane has taken the rest it is never scheduled.
+        cpu_alloc = R.quantity(node_status.get("allocatable", {}).get("cpu"), "cpu")
+        cpu_used = sum(R.pod_request(p.get("spec", {}), "cpu") for p in pods if p.get("spec", {}).get("nodeName") == name
+                       and p.get("status", {}).get("phase") not in ("Failed", "Succeeded"))
+        cpu_need = int(cpu_alloc * cpu_percent / 100 + 0.999)
         problems = ([] if ready else ["Host is not Ready"]) + ([] if cpu else ["CPU support needs verification"]) + ([] if modules else ["Kernel modules need preparation"])
+        if cpu_alloc and not engine_ready and cpu_alloc - cpu_used < cpu_need:
+            problems.append(f"V2's instance manager reserves {cpu_need}m of CPU and Kubernetes has {max(0, cpu_alloc - cpu_used)}m "
+                            f"left on this host: free some, give the host more CPUs, or lower guaranteed-instance-manager-cpu")
         if not memory_ready:
             problems.append(f"Kubernetes reports {capacity} MiB capacity / {allocatable} MiB allocatable; V2 needs {required} MiB plus other hugepage requests")
         if not (managed or configured or engine_ready):
