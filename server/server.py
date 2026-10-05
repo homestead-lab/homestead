@@ -4396,11 +4396,20 @@ SYSTEM_HOST_PATHS = ("/var/lib/kubelet", "/run", "/var/run", "/dev", "/sys", "/p
                      "/etc/localtime", "/var/log", "/var/lib/rancher", "/etc/rancher")
 
 
+SYSTEM_POD_NAMESPACES = ("kube-system", "longhorn-system", "kubevirt", "cdi", "cattle-system", "system-upgrade",
+                         "cattle-fleet-system", "harvester-system")
+
+
 def _system_host_path(row):
     """A host path that is the host's own plumbing - kubelet's plugin and pod
-    directories, sockets, devices, logs - not data a pod keeps there."""
+    directories, sockets, devices, logs - not data a pod keeps there. Nor
+    is anything Kubernetes or Longhorn itself mounts: an instance manager
+    mounts / and /var/lib/longhorn, and the volumes it serves are judged by
+    their copies, not by its mounts."""
     if not str(row.get("kind", "")).startswith("host-local path"):
         return False
+    if str(row.get("pod") or "").split("/", 1)[0] in SYSTEM_POD_NAMESPACES:
+        return True
     path = "/" + str(row.get("source") or "").strip("/")
     return any(path == p or path.startswith(p + "/") for p in SYSTEM_HOST_PATHS)
 
