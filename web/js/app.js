@@ -149,8 +149,11 @@ function go(v, options = {}) {
   window.HomesteadRecorder?.note("navigation", { action: v });
   if (window.setupNavigation) setupNavigation(v);
   if (!$("#modal").classList.contains("hidden")) closeModal(false);
-  // Anything still loading belongs to the page being left behind.
+  // Anything still loading belongs to the page being left behind - and a
+  // quiet refresh waiting on it never finishes (its reads are abandoned), so
+  // it no longer counts as running.
   window.NAV_TOKEN++;
+  STATE.busy = false;
   STATE.view = v;
   // A search narrows the page it was typed on. Going somewhere else starts
   // unfiltered - unless a search result was what led here, or the address
@@ -206,11 +209,14 @@ async function refresh(force) {
   if (!$("#gate").classList.contains("hidden")) return false;
   const [, , fn, live] = VIEWS[STATE.view];
   if (!live && !force) return false;
-  if (STATE.busy) return false;
-  STATE.busy = true;
+  // One at a time - on this page. A refresh of a page since left waits on
+  // abandoned reads for ever, and must not hold up the next.
+  const page = window.NAV_TOKEN;
+  if (STATE.busy && STATE.busyFor === page) return false;
+  STATE.busy = true; STATE.busyFor = page;
   try { await fn(); return true; }
   catch (e) { if (force) toast(e.message || "Could not refresh this page", "bad"); return false; }
-  finally { STATE.busy = false; }
+  finally { if (STATE.busyFor === page) STATE.busy = false; }
 }
 window.refresh = refresh;
 

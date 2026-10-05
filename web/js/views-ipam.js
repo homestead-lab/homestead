@@ -16,13 +16,37 @@ const ipamCategoryIcon = category => IPAM_CATEGORIES[category]
 const ipamCategoryOptions = (selected, blank = "not set") => `<option value="">${esc(blank)}</option>` +
   Object.entries(IPAM_CATEGORIES).map(([k, [label]]) => `<option value="${k}" ${selected === k ? "selected" : ""}>${esc(label)}</option>`).join("");
 
+const NETWORK_TABS = ["services", "ip", "firewall"];
+/* The Networking page's tab: in the address (/networking?tab=ip), so Back,
+   Forward, a reload and a shared link all show the tab that was open; else
+   the one last used. Choosing one is a step in the history. */
 function networkTab(pick) {
   if (pick) {
+    if (!NETWORK_TABS.includes(pick)) pick = "services";
     try { localStorage.setItem("homestead.network.tab", pick); } catch (e) { /* this visit only */ }
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("tab") !== pick) {
+      url.searchParams.set("tab", pick);
+      window.history.pushState({ view: "network" }, "", url.pathname + url.search);
+    }
+    // What the last tab was still loading is for a tab nobody is looking at.
+    window.NAV_TOKEN++;
+    STATE.busy = false;
     resetPaint(); refresh(true);
     return pick;
   }
-  try { const saved = localStorage.getItem("homestead.network.tab"); return ["ip", "firewall"].includes(saved) ? saved : "services"; } catch (e) { return "services"; }
+  const asked = typeof location !== "undefined" ? new URLSearchParams(location.search).get("tab") : "";
+  if (NETWORK_TABS.includes(asked)) return asked;
+  let tab = "services";
+  try { const saved = localStorage.getItem("homestead.network.tab"); if (NETWORK_TABS.includes(saved)) tab = saved; } catch (e) { /* default */ }
+  // Opened without one (the sidebar, a bare link): the address takes the tab
+  // shown, so going back to this entry later shows it again.
+  if (typeof STATE !== "undefined" && STATE.view === "network" && typeof history !== "undefined") {
+    const url = new URL(window.location.href);
+    url.searchParams.set("tab", tab);
+    history.replaceState(history.state, "", url.pathname + url.search);
+  }
+  return tab;
 }
 window.networkTab = networkTab;
 
