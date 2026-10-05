@@ -61,6 +61,17 @@ class PlatformTests(unittest.TestCase):
                          pools[0]["spec"]["ranges"])
         self.assertEqual({}, PLATFORM.vip_annotations(""))
 
+    def test_rke2_with_its_servicelb_on_has_kube_vip_take_only_its_class(self):
+        # Homestead's installer turns RKE2's ServiceLB on: kube-vip beside it
+        # must take only its own class, or it announces the nodes' addresses.
+        p = self.use({"helm.cattle.io"}, "v1.31.4+rke2r1", daemonsets=("svclb-homestead-abc", "rke2-canal"))
+        self.assertTrue(p["servicelb"])
+        self.assertEqual("servicelb", p["load_balancer"])
+
+    def test_rke2_without_servicelb_has_none(self):
+        p = self.use({"helm.cattle.io"}, "v1.31.4+rke2r1", daemonsets=("rke2-canal",))
+        self.assertFalse(p["servicelb"])
+
     def test_rke2_join_uses_the_supervisor_port(self):
         self.use(set(), "v1.31.4+rke2r1")
         guide = PLATFORM.join_guide()

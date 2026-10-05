@@ -45,6 +45,16 @@ def _items(path):
 
 # Where kube-vip runs outside Harvester: its own manifests' name, and the
 # name its Helm chart - Homestead's add-on - gives it.
+def _servicelb_running():
+    """ServiceLB's svclb- DaemonSets, which it makes for each LoadBalancer
+    Service it serves."""
+    try:
+        return any((d.get("metadata") or {}).get("name", "").startswith("svclb-")
+                   for d in _items("/apis/apps/v1/namespaces/kube-system/daemonsets"))
+    except Exception:
+        return False
+
+
 KUBE_VIP_DAEMONSETS = ("/apis/apps/v1/namespaces/kube-system/daemonsets/kube-vip-ds",
                        "/apis/apps/v1/namespaces/kube-system/daemonsets/kube-vip")
 VIP_CLASS = "kube-vip.io/kube-vip-class"
@@ -111,8 +121,12 @@ def detect(force=False):
     metallb = "metallb.io" in groups
     # k3s's own load balancer, unless something else is doing the job. Its
     # svclb- DaemonSets only appear with the first LoadBalancer Service, so
-    # a k3s cluster with none yet still has it.
-    servicelb = distribution == "k3s" and not metallb
+    # a k3s cluster with none yet still has it. RKE2 has the same ServiceLB,
+    # off unless asked for - Homestead's installer asks - and there its
+    # DaemonSets are the evidence. Missing it there put kube-vip on every
+    # Service ServiceLB also served: it announced the nodes' own addresses
+    # as VIPs, and taking one away took the node's address with it.
+    servicelb = not metallb and (distribution == "k3s" or (distribution == "rke2" and _servicelb_running()))
     load_balancer = "kube-vip" if kube_vip else "metallb" if metallb else "servicelb" if servicelb else ""
     value = {
         "distribution": distribution,
