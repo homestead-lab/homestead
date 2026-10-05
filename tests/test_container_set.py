@@ -159,12 +159,18 @@ class ContainerSetTests(unittest.TestCase):
                 mock.patch.object(server, "prepare_lan", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server.VOLOWNER, "prepare", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server, "ensure_claim", return_value=False) as claim, \
+                mock.patch.object(server, "kget", side_effect=urllib.error.HTTPError("", 404, "missing", {}, None)), \
                 mock.patch.object(server, "ksend") as send, \
                 mock.patch.object(server.OPS, "start", return_value={"id": "created"}):
             server.run_deploy(config)
         claim.assert_called_once_with("lab", "metrics-data", 3, server.STORAGE_CLASS, "ReadWriteOnce")
         deployment = next(call.args[2] for call in send.call_args_list if call.args[1].endswith("/deployments"))
         self.assertEqual(["main", "metrics"], [c["name"] for c in deployment["spec"]["template"]["spec"]["containers"]])
+        # The sidecar's API_TOKEN is kept in the workload's Secret, written first.
+        writes = [call.args[1] for call in send.call_args_list]
+        self.assertLess(writes.index("/api/v1/namespaces/lab/secrets"), writes.index("/apis/apps/v1/namespaces/lab/deployments"))
+        token = next(e for e in deployment["spec"]["template"]["spec"]["containers"][1]["env"] if e["name"] == "API_TOKEN")
+        self.assertEqual({"secretKeyRef": {"name": deployment["metadata"]["name"] + "-env", "key": "metrics.API_TOKEN"}}, token["valueFrom"])
         service = next(call.args[2] for call in send.call_args_list if call.args[1].endswith("/services"))
         self.assertEqual([8080, 9090], [p["targetPort"] for p in service["spec"]["ports"]])
 

@@ -3133,6 +3133,8 @@ def run_deploy(b, *, reviewed_current=None):
     b["_reused_claims"] = reused
     if b.get("network_mode") == "lan" and target_mode == "new":
         LAN.ensure_nad(ns, target, b["lan"])
+    masked = {item.get("key") for item in b.get("env_meta") or [] if item.get("masked")}
+    ENVSEC.externalize(ns, dep, kget, ksend, masked)
     if target_mode == "existing":
         ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{target}", dep)
     else:
@@ -5987,6 +5989,7 @@ _shim.raw_get = raw_get
 sys.modules["homestead_shim"] = _shim
 
 import homestead_lifecycle as LC
+import homestead_env_secrets as ENVSEC
 import homestead_imports as IMP
 import homestead_auth as AUTH
 import homestead_longhorn as LH
@@ -6518,7 +6521,16 @@ def delete_workload(ns, name):
     # workload's name: a sidecar or a hand-made listener is named
     # differently and would otherwise keep its VIP port forever.
     services = set(NETWORK.workload_service_names(ns, name)) | {name}
+    try:
+        current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    except Exception:
+        current = None
     ksend("DELETE", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    if current:
+        try:
+            ENVSEC.remove(ns, current, kget, ksend)  # its variables' Secret goes with it
+        except Exception:
+            pass
     removed = []
     for service in sorted(services):
         try:
@@ -7898,6 +7910,8 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
     listeners = _service_listeners(deployment, services)
     annotations = deployment["metadata"].get("annotations", {}) or {}
     definitions = hardware_definitions if hardware_definitions is not None else HW.features()
+    # Variables kept in the workload's own Secret are edited like any other.
+    kept, own_secret = ENVSEC.values(ns, deployment, kget), ENVSEC.own(deployment)
     volumes = {volume.get("name"): volume for volume in pspec.get("volumes", []) or []}
 
     def source_label(volume):
@@ -7965,17 +7979,20 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
                            "sub_path": mount.get("subPath", ""),
                            "kind": kind, "value": value,
                            "managed": device or kind in ("configMap", "secret", "other")})
-        literals = {item["name"]: item.get("value", "") for item in container.get("env", []) or []
-                    if item.get("name") and "valueFrom" not in item}
+        own_values = kept.get(container.get("name"), {})
+        literals = {item["name"]: item.get("value", "") if "valueFrom" not in item else own_values[item["name"]]
+                    for item in container.get("env", []) or []
+                    if item.get("name") and ("valueFrom" not in item or item["name"] in own_values)}
         refs = [{"name": item["name"], "source": env_reference(item)}
-                for item in container.get("env", []) or [] if item.get("name") and item.get("valueFrom")]
+                for item in container.get("env", []) or []
+                if item.get("name") and item.get("valueFrom") and item["name"] not in own_values]
         requests = (container.get("resources", {}) or {}).get("requests", {}) or {}
         limits = (container.get("resources", {}) or {}).get("limits", {}) or {}
         containers.append({
             "original_name": container.get("name", ""), "name": container.get("name", ""),
             "image": container.get("image", ""), "cpu": requests.get("cpu", ""), "memory": requests.get("memory", ""),
             "memory_limit": limits.get("memory", ""),
-            "env": literals, "env_refs": refs,
+            "env": literals, "env_refs": refs, "secret_env": sorted(own_values),
             "ports": [{"container": port.get("containerPort"), "name": port.get("name", ""),
                        "protocol": port.get("protocol", "TCP"),
                        "host": listeners.get((str(port.get("protocol") or "TCP").upper(),
