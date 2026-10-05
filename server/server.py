@@ -1636,6 +1636,9 @@ def get_workloads():
             "transition_age": min(transition_ages),
             "problems": fatal_waits + progress_errors,
             "images": [c["image"] for c in pspec.get("containers", [])],
+            # Its volumes, by claim, so the row can lead to them.
+            "claims": sorted({(v.get("persistentVolumeClaim") or {}).get("claimName") for v in pspec.get("volumes") or []
+                              if (v.get("persistentVolumeClaim") or {}).get("claimName")}),
             "nodes": sorted({p["spec"].get("nodeName", "") for p in mine if p["spec"].get("nodeName")}),
             "pods": pod_rows,
             "pod_count": len(pod_rows),

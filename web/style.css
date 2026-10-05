@@ -2083,6 +2083,8 @@ div.ipam-line.dim{display:block}
 .ui-meter .now{left:0;background:rgba(255,255,255,.55);border-radius:5px 0 0 5px}
 .ui-meter .after{background:var(--ok)}
 .ui-meter.warn .after{background:var(--med)}.ui-meter.bad .after{background:var(--crit)}
+.wl-inline-detail .wl-detail-volumes{grid-column:1/-1}
+.wl-inline-detail .wl-detail-volumes .row{gap:6px;flex-wrap:wrap}
 .ui-meter .freed{background:repeating-linear-gradient(135deg,var(--crit) 0 3px,transparent 3px 6px);opacity:.8}
 .ui-meter .mark{position:absolute;top:-2px;bottom:-2px;width:2px;background:rgba(255,255,255,.35)}
 

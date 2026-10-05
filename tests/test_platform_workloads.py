@@ -33,5 +33,18 @@ class PlatformWorkloadTests(unittest.TestCase):
         self.assertIn("kubevirt", server.SYS_NS)
 
 
+    def test_a_row_names_its_volume_claims(self):
+        # So the expanded row can lead to them on Volumes.
+        plex = deployment("lab", "plex", "lscr.io/linuxserver/plex:latest")
+        plex["spec"]["template"]["spec"]["volumes"] = [
+            {"name": "config", "persistentVolumeClaim": {"claimName": "plex-config"}},
+            {"name": "media", "persistentVolumeClaim": {"claimName": "media"}},
+            {"name": "scratch", "emptyDir": {}}]
+        items = {"/apis/apps/v1/deployments": {"items": [plex]}, "/api/v1/pods": {"items": []}}
+        with mock.patch.object(server, "kget", side_effect=lambda path, **kw: items.get(path, {"items": []})):
+            row = next(w for w in server.get_workloads() if w["name"] == "plex")
+        self.assertEqual(["media", "plex-config"], row["claims"])
+
+
 if __name__ == "__main__":
     unittest.main()
