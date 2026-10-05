@@ -4,20 +4,42 @@ with a new boot, scheduling allowed again, and every app's data intact."""
 import time
 
 from harness import log
+from harness.api import HomesteadError
+
+BUSY = "host command may still be changing this host"
 
 
-def _plan(ctx, node, action):
-    plan = ctx.api.get(f"/api/node/power/plan?node={node}&action={action}")
-    assert plan.get("review_token"), f"no review for {node}: {plan}"
-    return plan
+def _plan(ctx, node, action, wait=180):
+    deadline = time.time() + wait
+    while True:
+        plan = ctx.api.get(f"/api/node/power/plan?node={node}&action={action}")
+        assert plan.get("review_token"), f"no review for {node}: {plan}"
+        busy = [b for b in plan.get("blockers") or [] if BUSY in str(b)]
+        if not busy or time.time() > deadline:
+            return plan
+        log.info(f"{node}: a host command is still running; reviewing again")
+        time.sleep(10)
 
 
-def _send(ctx, plan, choices=None):
-    body = {"node": plan["node"], "action": plan["action"], "confirm": plan["node"], "review_token": plan["review_token"],
-            "force": False, "choices": choices or {}, "allow_cluster_outage": bool(plan.get("planned_outage")),
-            "allow_stranded": True, "allow_data_risk": True}
-    answer = ctx.api.post("/api/node/power", body)
-    return answer["operation"]["id"]
+def _send(ctx, plan, choices=None, wait=180):
+    """Send a reviewed power action. Homestead's own short host commands
+    (reading a host's OS, holding its updates) run for a moment after
+    install, and the review rightly waits for them: so does this, reviewing
+    again until they end."""
+    deadline = time.time() + wait
+    while True:
+        body = {"node": plan["node"], "action": plan["action"], "confirm": plan["node"], "review_token": plan["review_token"],
+                "force": False, "choices": choices or {}, "allow_cluster_outage": bool(plan.get("planned_outage")),
+                "allow_stranded": True, "allow_data_risk": True}
+        try:
+            answer = ctx.api.post("/api/node/power", body)
+            return answer["operation"]["id"]
+        except HomesteadError as error:
+            if error.status != 409 or BUSY not in str(error) or time.time() > deadline:
+                raise
+            log.info(f"{plan['node']}: a host command is still running; reviewing again")
+            time.sleep(10)
+            plan = _plan(ctx, plan["node"], plan["action"])
 
 
 def _volumes_available(ctx, apps, wait=120):
