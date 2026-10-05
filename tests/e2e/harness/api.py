@@ -77,7 +77,17 @@ class Homestead:
     def sign_in(self, base=None):
         """Sign in - on one address, or the first that answers."""
         if base is None:
-            state = self.get("/api/auth/state", wait=900)
+            # While Homestead hands its data over it answers only the
+            # handoff's own routes: anything else is 404 for a while.
+            deadline = time.time() + 900
+            while True:
+                try:
+                    state = self.get("/api/auth/state", wait=900)
+                    break
+                except HomesteadError as error:
+                    if error.status != 404 or time.time() > deadline:
+                        raise
+                    time.sleep(5)
         else:
             _, state = self._once(base, "GET", "/api/auth/state", None, 30)
         creds = {"username": self.username, "password": self.password, "remember": True}

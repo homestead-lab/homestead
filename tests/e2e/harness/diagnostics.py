@@ -22,6 +22,7 @@ def collect(ctx, label):
     k = ctx.kube
     save("nodes.txt", lambda: k.run("get", "nodes", "-o", "wide", check=False))
     save("pods.txt", lambda: k.run("get", "pods", "-A", "-o", "wide", check=False))
+    save("services.txt", lambda: k.run("get", "services", "-A", "-o", "wide", check=False))
     save("events.txt", lambda: k.run("get", "events", "-A", "--sort-by=.lastTimestamp", check=False))
     save("homestead.log", lambda: k.run("logs", "-n", "lab", "-l", "app=homestead", "--all-containers", "--tail=2000", "--prefix", check=False, timeout=60))
     save("longhorn-volumes.yaml", lambda: k.run("get", "volumes.longhorn.io", "-n", "longhorn-system", "-o", "yaml", check=False))
