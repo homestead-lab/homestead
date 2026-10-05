@@ -64,6 +64,36 @@ def memory_mib():
     return int(value)
 
 
+def cpu_mask():
+    """V2's polling cores - (cores, CPU isolation on, the setting's value) -
+    or None where Longhorn has no such setting. With isolation on, SPDK keeps
+    those cores to itself and refuses to start when they are all the host
+    has: Longhorn 1.13's default of two (0x3) never starts on a 2-CPU host."""
+    setting = _get(LH + "/settings/data-engine-cpu-mask")
+    if not setting:
+        return None
+    raw = _value(setting, "")
+    try:
+        mask = json.loads(raw).get("v2", "") if raw.strip().startswith("{") else raw.strip()
+    except ValueError:
+        raise ValueError("Longhorn's V2 CPU mask is unrecognized") from None
+    if not re.fullmatch(r"0x[0-9a-fA-F]+", str(mask)) or int(mask, 16) == 0:
+        raise ValueError("Longhorn's V2 CPU mask is unrecognized")
+    isolation = _get(LH + "/settings/data-engine-cpu-isolation-enabled")
+    try:
+        isolated = bool(isolation) and json.loads(_value(isolation, "{}")).get("v2", "false") == "true"
+    except ValueError:
+        isolated = False
+    return bin(int(mask, 16)).count("1"), isolated, raw
+
+
+def _cpus(node):
+    try:
+        return int(R.quantity(((node.get("status") or {}).get("capacity") or {}).get("cpu"), "cpu") // 1000)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _job_state(job):
     state = job.get("status", {})
     if any(c.get("type") == "Failed" and c.get("status") == "True" for c in state.get("conditions", [])):
@@ -138,13 +168,28 @@ def plan():
                      "needs_reboot": configured and not memory_ready,
                      "problems": problems, "job": {"name": job["metadata"]["name"], "state": _job_state(job)} if job else None})
     blockers = [] if base.get("longhorn_ok") else ["Verify Longhorn 1.8 or newer before continuing"]
+    # SPDK's polling cores must leave each host at least one of its own.
+    mask, cpu_fix = cpu_mask(), None
+    counts = {row["node"]: _cpus(kube[row["node"]]) for row in rows}
+    if mask and mask[1] and counts and all(counts.values()):
+        fewest = min(counts.values())
+        if mask[0] >= fewest:
+            if fewest < 2:
+                blockers.extend(f"{name}: Longhorn V2 needs at least 2 CPUs - one to poll, one kept for the host - and it has {n}"
+                                for name, n in counts.items() if n < 2)
+            else:
+                cores = fewest - 1
+                value = f"0x{(1 << cores) - 1:x}"
+                cpu_fix = {"from": mask[2], "to": json.dumps({"v2": value}) if mask[2].strip().startswith("{") else value,
+                           "cores": cores, "was": mask[0], "host_cpus": fewest}
     if not rows:
         blockers.append("No Longhorn hosts were found")
     if not managed:
         blockers.extend(f"{n['node']}: {p}" for n in rows for p in n["problems"])
     out = {"namespace": NS, "enabled": enabled, "harvester": managed, "harvester_requested": managed and _value(harvester) == "true",
            "distribution": distribution, "required_mib": required, "nodes": rows, "blockers": blockers,
-           "can_enable": not enabled and not blockers and not (managed and _value(harvester) == "true"), "engine_ready": bool(rows) and enabled and all(n["ready"] and n["engine_ready"] for n in rows)}
+           "can_enable": not enabled and not blockers and not (managed and _value(harvester) == "true"), "engine_ready": bool(rows) and enabled and all(n["ready"] and n["engine_ready"] for n in rows),
+           "cpu_mask_fix": None if managed else cpu_fix}
     out["review_token"] = _hash(out)
     return out
 
@@ -314,5 +359,13 @@ def enable(body):
         raise ValueError('V2 setup changed; check and confirm the enable step again')
     if not current['can_enable']:
         raise ValueError('; '.join(current['blockers']) or 'V2 is already enabled')
+    fix = current.get('cpu_mask_fix')
+    if fix:
+        # Fewer polling cores, so each host keeps one: SPDK refuses otherwise.
+        setting = kget(LH + '/settings/data-engine-cpu-mask')
+        if _value(setting, '') != fix['from']:
+            raise ValueError("Longhorn's V2 CPU mask changed; check and confirm the enable step again")
+        setting['value'] = fix['to']
+        ksend('PUT', LH + '/settings/data-engine-cpu-mask', setting)
     CAP.save({'v2': True}, allow_v2_enable=True)
     return plan()
