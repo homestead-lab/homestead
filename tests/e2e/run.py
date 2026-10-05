@@ -51,7 +51,7 @@ def main():
     suite = SUITES[args.suite]
     log.to(args.artifacts)
     log.info(f"Suite {args.suite} on {suite['nodes']} {args.distro} host(s), Homestead {args.version}; artifacts in {args.artifacts}")
-    memory = suite.get("memory") or (args.memory if suite["nodes"] > 1 else max(args.memory, 6144))
+    memory = (args.distro == "rke2" and suite.get("rke2_memory")) or suite.get("memory") or         (args.memory if suite["nodes"] > 1 else max(args.memory, 6144))
     lab = Lab(Path(args.artifacts) / "lab", suite["nodes"], memory=memory, cpus=suite.get("cpus", 2),
               data_disk=suite.get("data_disk", ""), hugepages=suite.get("hugepages", 0))
     failures, ctx = [], None

@@ -37,8 +37,10 @@ SUITES = {
                 "scenarios": [("vip", network.vip), ("firewall", network.firewall), ("lan network", network.lan),
                               ("installer", network.installer)],
                 "jobs": [["vip"], ["firewall", "lan network", "installer"]], "rke2": ["firewall"]},
-    # Homestead's own data moved to a new volume twice, across hosts.
-    "self-data": {"nodes": 3, "scenarios": [("move Homestead's data", self_data.run)]},
+    # Homestead's own data moved to a new volume twice, across hosts. RKE2's
+    # control plane takes more of a host than k3s's: at 4 GiB the copy left
+    # under its 1 GiB reserve, a new warning that held the move.
+    "self-data": {"nodes": 3, "rke2_memory": 4608, "scenarios": [("move Homestead's data", self_data.run)]},
     # Copies kept whole, and Balance hosts.
     "storage": {"nodes": 3, "scenarios": [("offline rebuild", storage.offline_rebuild), ("balance hosts", storage.balance)],
                 "jobs": [["offline rebuild", "balance hosts"]]},
