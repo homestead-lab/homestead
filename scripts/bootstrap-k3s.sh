@@ -340,8 +340,10 @@ install_k3s() {
   # CDI runs without root and must own the block devices assigned to its pods.
   # Enable on workers too: an importer can be scheduled on any joined node.
   set -- "$@" --nonroot-devices
-  attempts "Installing k3s" sh -c 'curl -sfL --retry 5 --retry-all-errors https://get.k3s.io | sh -s - "$@"' k3s "$@" \
-    || fail "k3s could not be installed; see the output above"
+  attempts "Installing k3s" get_k3s "$@" || fail "k3s could not be installed; see the output above"
+}
+get_k3s() {
+  curl -sfL --retry 5 --retry-all-errors https://get.k3s.io | sh -s - "$@"
 }
 
 # RKE2 reads its settings from a file rather than flags: written first, then
@@ -369,10 +371,13 @@ install_rke2() { # server|agent [url token]
     true
   } > /etc/rancher/rke2/config.yaml
   if [ -n "$RKE2_VERSION" ]; then export INSTALL_RKE2_VERSION="$RKE2_VERSION"; fi
-  attempts "Installing RKE2" sh -c 'curl -sfL --retry 5 --retry-all-errors https://get.rke2.io | INSTALL_RKE2_TYPE="$1" sh -' rke2 "$type" \
-    || fail "RKE2 could not be installed; see the output above"
+  attempts "Installing RKE2" get_rke2 "$type" || fail "RKE2 could not be installed; see the output above"
   say "Starting RKE2 (the first start takes several minutes while images are downloaded)"
   systemctl enable --now "rke2-$type.service"
+}
+
+get_rke2() {
+  curl -sfL --retry 5 --retry-all-errors https://get.rke2.io | INSTALL_RKE2_TYPE="$1" sh -
 }
 
 parse_common() { # sets DIST, NODE_IP, versions; leaves the rest to the caller
