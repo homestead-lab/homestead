@@ -1979,7 +1979,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
         <div style="margin-top:8px"><button class="btn sm" onclick="imStorageAnyway()">Add storage anyway</button></div></div>`}
     <div id="im_storage" ${keeps ? "" : "hidden"}>
     ${UI.field("Source data safety", '<select id="im_consistency" onchange="imSafetyNote(false)"><option value="">Choose before copying…</option><option value="stopped">All source writers are stopped</option><option value="snapshot">These paths are a consistent snapshot or backup</option></select>', {help: cfg.source_container_id ? "The original Docker container must stay stopped. Snapshot mode skips that check; verify the paths really point to the snapshot." : "Homestead does not stop source applications. Stop every writer or choose stable backup paths before copying."})}
-    <div class="note bad small" id="im_consistency_err" hidden>Choose how the source's data stays still while it is copied: every writer stopped, or a consistent snapshot or backup.</div>
+    <div id="im_consistency_err" hidden>${UI.callout("bad", "Choose Source data safety", "How the source's data stays still while it is copied: every writer stopped, or a consistent snapshot or backup.")}</div>
     <div id="im_map_picture"></div>
     <div class="sec">Folders ${tip("Each folder the container mounts: copied into a volume, mounted empty, or left out. Several can share one volume, each in its own subfolder, mounted back where the container expects it.")}</div>
     ${keeps && cfg.guessed_path ? `<div class="note warn">Nothing this container mounts sits under <span class="mono">${esc(src.base_path || "/mnt/user/appdata")}</span>,
