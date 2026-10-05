@@ -105,6 +105,35 @@ class SetupTests(unittest.TestCase):
         with patch.object(V.CAP, 'save') as save:
             V.enable({'confirm': True, 'review_token': plan['review_token']})
         save.assert_called_once_with({'v2': True}, allow_v2_enable=True)
+    def cpus(self, n, mask='{"v2":"0x3"}', isolation='{"v2":"true"}'):
+        self.c.node['status']['capacity']['cpu'] = str(n)
+        self.c.settings['data-engine-cpu-mask'] = {'value': mask}
+        self.c.settings['data-engine-cpu-isolation-enabled'] = {'value': isolation}
+
+    def test_two_cpu_hosts_get_one_polling_core_when_v2_is_enabled(self):
+        # Longhorn 1.13 polls with two cores and keeps them: on a 2-CPU host
+        # SPDK refuses to start at all.
+        self.c.configure(); self.c.capacity(); self.cpus(2)
+        plan = V.plan()
+        self.assertTrue(plan['can_enable'])
+        self.assertEqual({'from': '{"v2":"0x3"}', 'to': '{"v2": "0x1"}', 'cores': 1, 'was': 2, 'host_cpus': 2}, plan['cpu_mask_fix'])
+        with patch.object(V.CAP, 'save') as save:
+            V.enable({'confirm': True, 'review_token': plan['review_token']})
+        self.assertIn(('PUT', V.LH + '/settings/data-engine-cpu-mask', {'value': '{"v2": "0x1"}'}), self.c.sent)
+        save.assert_called_once_with({'v2': True}, allow_v2_enable=True)
+
+    def test_hosts_with_cpus_to_spare_keep_longhorns_mask(self):
+        self.c.configure(); self.c.capacity(); self.cpus(4)
+        self.assertIsNone(V.plan()['cpu_mask_fix'])
+        self.cpus(2, isolation='{"v2":"false"}')
+        self.assertIsNone(V.plan()['cpu_mask_fix'], "without isolation SPDK shares the cores")
+
+    def test_a_one_cpu_host_cannot_run_v2(self):
+        self.c.configure(); self.c.capacity(); self.cpus(1)
+        plan = V.plan()
+        self.assertFalse(plan['can_enable'])
+        self.assertIn('needs at least 2 CPUs', ' '.join(plan['blockers']))
+
     def test_reboot_requires_fresh_module_observations(self):
         self.c.configure(); self.c.capacity()
         self.c.node['status']['nodeInfo']['bootID'] = 'a' * 36

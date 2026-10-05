@@ -70,7 +70,8 @@ window.lhV2ReviewEnable = () => {
   clearTimeout(lhV2Timer); ++lhV2Sequence;
   lhV2Approval={action:'enable',review_token:lhV2Plan.review_token};
   childModal('Enable Longhorn V2', UI.lead(lhV2Plan.harvester ? 'Harvester will configure its hosts and enable Longhorn V2 through its own setting.' : 'Host prerequisites are verified. Longhorn will start its V2 instance managers.') +
-    UI.callout('warn','CPU and memory stay allocated','V2 consumes CPU and memory even before you create a V2 volume.' + (lhV2Plan.harvester?' Harvester may restart hosts to apply its configuration.':'')) +
+    UI.callout('warn','CPU and memory stay allocated','V2 consumes CPU and memory even before you create a V2 volume.' + (lhV2Plan.harvester?' Harvester may restart hosts to apply its configuration.':'') +
+      (lhV2Plan.cpu_mask_fix ? ` V2 will poll with ${lhV2Plan.cpu_mask_fix.cores} CPU core${lhV2Plan.cpu_mask_fix.cores === 1 ? '' : 's'} on each host instead of Longhorn's ${lhV2Plan.cpu_mask_fix.was}: the smallest host has ${lhV2Plan.cpu_mask_fix.host_cpus}, and V2 keeps its cores to itself.` : '')) +
     UI.ack('lhV2Confirm','Enable V2 with these host resource costs' + (lhV2Plan.harvester?' and Harvester-managed host changes and restarts':''),{onchange:"$('#lhV2Apply').disabled=!this.checked"}) +
     UI.actions(UI.button('Back to setup','lhV2Setup()') + UI.button('Enable V2','lhV2Apply()',{kind:'pri',id:'lhV2Apply',disabled:true})),true,'longhorn-v2');
   lhV2ReturnToSetup();
