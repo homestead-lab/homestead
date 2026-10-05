@@ -149,8 +149,32 @@ if __name__ == "__main__":
 class UnattendedRestartTests(unittest.TestCase):
     """An OS update restarts hosts with nobody watching: it stops nothing and
     moves no VM unasked, as before VMs could move or wait."""
-    def plan(self, hold):
-        return {"ready": True, "blockers": [], "stranded": [], "planned_outage": False, "requires_data_ack": False, "hold": hold}
+    def plan(self, hold, **extra):
+        return {"ready": True, "blockers": [], "stranded": [], "planned_outage": False, "requires_data_ack": False, "hold": hold,
+                **extra}
+
+    def test_scratch_space_alone_does_not_keep_a_host_from_its_restart(self):
+        # Every k3s host runs pods with an emptyDir: counted as data at risk,
+        # no host was ever restarted by an OS update.
+        plan = self.plan([], requires_data_ack=True, volumes=[{"claim": "lab/app-data", "risk": "resync"}],
+                         maintenance={"local_storage": [{"pod": "kube-system/metrics-server", "kind": "emptyDir (deleted by drain)",
+                                                         "source": "tmp-dir"}]})
+        with mock.patch.object(server.POWER, "plan", return_value=plan), \
+             mock.patch.object(server, "send_reviewed_power", return_value={"operation": {"id": "op"}}):
+            self.assertEqual("op", server.rollout_reboot("k3s-1"))
+
+    def test_what_keeps_a_host_from_its_restart_is_named(self):
+        cases = (({"volumes": [{"claim": "lab/plex-config", "risk": "single-copy"}]},
+                  "only healthy copy on this host: lab/plex-config"),
+                 ({"maintenance": {"local_storage": [{"pod": "lab/frigate", "kind": "host-local path (not moved)", "source": "/mnt/media"}]}},
+                  r"pods keep data on this host itself: lab/frigate \(/mnt/media\)"),
+                 ({"storage_unknown": True}, "could not be read"))
+        for extra, refusal in cases:
+            with self.subTest(refusal=refusal), mock.patch.object(server.POWER, "plan", return_value=self.plan([], requires_data_ack=True, **extra)), \
+                    mock.patch.object(server, "send_reviewed_power") as send:
+                with self.assertRaisesRegex(ValueError, refusal):
+                    server.rollout_reboot("k3s-1")
+                send.assert_not_called()
 
     def test_vms_and_waiting_apps_keep_a_host_from_an_unattended_restart(self):
         vm = {"id": "VirtualMachine/vms/win", "kind": "VirtualMachine", "ns": "vms", "name": "win", "options": ["move"], "default": "move"}

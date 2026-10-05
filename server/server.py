@@ -4411,7 +4411,21 @@ def rollout_reboot(node, allow_single_copy=False):
         raise ValueError("These would have to stop and wait for the host: " + ", ".join(waits[:6]))
     power_plan["choices"] = HOLD.choose(hold, None)
     if power_plan["requires_data_ack"] and not allow_single_copy:
-        raise ValueError("a volume has its only healthy copy on this host (the settings do not accept that)")
+        # What a person would have to accept, said as it is. A pod's emptyDir
+        # is scratch space every drain deletes - on a k3s host metrics-server
+        # and Traefik have one - and is no reason to leave a host unrestarted.
+        reasons = []
+        single = [v["claim"] for v in power_plan.get("volumes") or [] if v.get("risk") in ("unavailable", "single-copy")]
+        if single:
+            reasons.append("a volume has its only healthy copy on this host: " + ", ".join(single[:4]))
+        kept = [f"{row['pod']} ({row['source']})" for row in (power_plan.get("maintenance") or {}).get("local_storage") or []
+                if not str(row.get("kind", "")).startswith("emptyDir")]
+        if kept:
+            reasons.append("pods keep data on this host itself: " + ", ".join(kept[:4]))
+        if power_plan.get("storage_unknown"):
+            reasons.append("Longhorn's volumes could not be read")
+        if reasons:
+            raise ValueError("; ".join(reasons) + " (the settings do not accept that)")
     try:
         return send_reviewed_power(power_plan)["operation"]["id"]
     except PowerNotSent as e:
