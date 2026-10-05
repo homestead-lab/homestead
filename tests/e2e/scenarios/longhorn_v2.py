@@ -7,8 +7,10 @@ reboots and it starts on the other.
 The hosts reserve their hugepages at boot, before Kubernetes starts, as a
 host already prepared does: Kubernetes counts hugepages only when it starts,
 so reserving them later needs a reboot of every host first."""
+import json
 import secrets
 import time
+from pathlib import Path
 
 from harness import log
 from scenarios.power import _plan, _send
@@ -43,7 +45,21 @@ def run(ctx):
         if not ready:
             time.sleep(10)
     ctx.api.post("/api/longhorn/v2/enable", {"confirm": True, "review_token": plan["review_token"]})
-    ctx.kube.wait("V2 instance managers running on every host", lambda: _v2_plan(ctx).get("engine_ready"), timeout=600, every=10)
+    # V2's instance managers can start and fail within seconds, and Longhorn
+    # replaces them: their output is kept as it happens, for the diagnostics.
+    seen = Path(ctx.artifacts) / "v2-instance-managers.txt"
+
+    def engine_ready():
+        for pod in ctx.kube.items("pods", "-n", "longhorn-system", "-l", "longhorn.io/data-engine=v2"):
+            name = pod["metadata"]["name"]
+            states = [{"name": c.get("name"), "state": c.get("state"), "last": c.get("lastState")}
+                      for c in (pod.get("status") or {}).get("containerStatuses") or []]
+            logs = ctx.kube.run("logs", "-n", "longhorn-system", name, "--all-containers", "--tail=60", check=False, timeout=20)
+            with open(seen, "a", encoding="utf-8") as out:
+                out.write(f"===== {time.strftime('%H:%M:%S')} {name} on {pod['spec'].get('nodeName')} "
+                          f"{(pod.get('status') or {}).get('phase')}\n{json.dumps(states)}\n{logs}\n")
+        return _v2_plan(ctx).get("engine_ready")
+    ctx.kube.wait("V2 instance managers running on every host", engine_ready, timeout=600, every=10)
     log.info("V2 data engine on")
 
     for node in ctx.lab.nodes:
