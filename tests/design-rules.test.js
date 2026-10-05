@@ -137,3 +137,30 @@ test("every Settings section has an icon from the menu's sprite", () => {
   assert.ok(rows.length >= 9, "the Settings sections are found");
   for (const [, key, icon] of rows) assert.match(html, new RegExp(`<symbol id="i-${icon}"`), `${key}: icon i-${icon} is in the sprite`);
 });
+
+test("a field's label is text: its tip goes in tipHtml", () => {
+  // UI.field escapes its label, so a tip written into it shows its markup -
+  // '<span class="tip" ...>?</span>' on the screen.
+  const found = offences(/UI\.field\(\s*`[^`]*\$\{tip\(/g);
+  assert.deepStrictEqual(found, [], 'use UI.field("Label", control, { tipHtml: " " + tip("...") })');
+});
+
+test("a dialog's footer is given HTML on its left, never a flag", () => {
+  // UI.actions(buttons, startHtml): a true or false there was printed after
+  // the buttons - "Canceltrue".
+  const found = offences(/UI\.actions\(/g, (match, file) => {
+    let depth = 0, i = match.index + "UI.actions".length, args = 0, start = i + 1;
+    const second = [];
+    for (; i < file.text.length; i++) {
+      const c = file.text[i];
+      if ("([{".includes(c)) depth++;
+      else if (")]}".includes(c)) { if (--depth === 0) break; }
+      else if (c === "`") { i++; let t = 0; while (i < file.text.length && !(file.text[i] === "`" && !t)) { if (file.text[i] === "$" && file.text[i + 1] === "{") { t++; i++; } else if (file.text[i] === "}" && t) t--; i++; } }
+      else if (c === '"' || c === "'") { const q = c; i++; while (file.text[i] !== q) { if (file.text[i] === "\\") i++; i++; } }
+      else if (c === "," && depth === 1) { if (++args === 2) { second.push(file.text.slice(start, i)); break; } start = i + 1; }
+    }
+    if (args === 1) second.push(file.text.slice(start, i));       // the second argument ran to the closing bracket
+    return second.length > 0 && /^\s*(true|false)\s*$/.test(second[0]);
+  });
+  assert.deepStrictEqual(found, [], "pass the extra buttons' HTML as UI.actions' second argument, or leave it out");
+});

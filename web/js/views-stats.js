@@ -34,7 +34,7 @@ window.mqttConfigure = () => {
       <div class="f"><label>Device name</label><input id="mq_name" value="${esc(m.device_name || "")}"></div>
     </div>
     <label class="switch"><input type="checkbox" id="mq_tls" ${m.tls ? "checked" : ""}> TLS ${tip("For a broker on 8883 with a certificate the system trusts.")}</label>` +
-    UI.actions(UI.button("Test connection", "mqttTest()") + UI.cancel() + UI.button("Save", "mqttSave(true)", { kind: "pri" }), true));
+    UI.actions(UI.cancel() + UI.button("Save", "mqttSave(true)", { kind: "pri" }), UI.button("Test connection", "mqttTest()")));
 };
 window.mqttPaint = mqttPaint;
 const mqttBody = () => ({ enabled: $("#mq_on").checked, host: $("#mq_host").value.trim(), port: +$("#mq_port").value,
