@@ -104,6 +104,40 @@ class RolloutTests(unittest.TestCase):
         self.assertIn("(node-1: Running VMs are on this host", done["message"], "the job says why")
         self.assertEqual({"node-1", "node-2"}, set(self.hosts.began))
 
+    def test_a_host_waits_for_copies_still_rebuilding_then_restarts(self):
+        self.refuse["node-1"] = "a volume has its only healthy copy on this host (the settings do not accept that)"
+        self.bind(own="node-3")
+        ROLLOUT.start(now=1000)
+        clock, waited = 1000, False
+        for _ in range(80):
+            clock += 30
+            ROLLOUT.tick(now=clock)
+            rollout = ROLLOUT._load().get("rollout") or {}
+            if "waiting for volume copies" in rollout.get("message", ""):
+                waited = True
+                self.refuse.pop("node-1", None)        # the copies are whole again
+            self.finish_restarts()
+            if rollout.get("status") != "running":
+                break
+        self.assertTrue(waited, "it waited for the copies")
+        self.assertIn("node-1", self.restarts, "and then restarted the host")
+        self.assertNotIn("needing a restart", rollout["message"])
+
+    def test_a_host_still_holding_the_only_copy_after_the_wait_is_left_for_someone(self):
+        self.refuse["node-1"] = "a volume has its only healthy copy on this host (the settings do not accept that)"
+        self.bind(own="node-3")
+        ROLLOUT.start(now=1000)
+        clock = 1000
+        for _ in range(200):
+            clock += 30
+            ROLLOUT.tick(now=clock)
+            self.finish_restarts()
+            rollout = ROLLOUT._load().get("rollout") or {}
+            if rollout.get("status") != "running":
+                break
+        self.assertIn("needing a restart: node-1", rollout["message"])
+        self.assertNotIn("node-1", self.restarts)
+
     def test_a_host_cordoned_before_stays_cordoned(self):
         self.nodes["node-1"] = node("node-1", cordoned=True)
         self.bind(own="node-3")

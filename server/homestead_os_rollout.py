@@ -46,6 +46,9 @@ DEFAULTS = {"schedule": {"enabled": False, "days": ["sun"], "hour": 3, "tz": "",
             "reboot": "when-needed", "single_copy": False, "manage": "ubuntu"}
 INSTALL_LIMIT = 2 * 3600
 RESTART_LIMIT = 45 * 60
+# The hosts restarted before this one leave their copies of volumes rebuilding
+# for a while; meanwhile this host can hold a volume's only healthy copy.
+COPIES_WAIT = 15 * 60
 _lock = SHARED.SharedLock("os-rollout")
 
 
@@ -279,6 +282,12 @@ def step(state, now=None):
         try:
             node["op"] = reboot(name, config["single_copy"])
         except Exception as error:
+            if "only healthy copy" in str(error) and now - node.setdefault("copies_since", now) < COPIES_WAIT:
+                # Copies on the hosts restarted before are still rebuilding:
+                # wait for them rather than leave this host unrestarted.
+                node["attempts"] -= 1
+                rollout["message"] = f"{name}: waiting for volume copies to finish rebuilding before restarting it"
+                return True
             # Refused by the review, or stopped before power was sent: the
             # host keeps its updates and waits for someone.
             _uncordon(rollout)
