@@ -17,7 +17,7 @@ const VIEWS = {
   images:    ["Image Cache",    "storage",   viewImages,    false],
   protect:   ["Data Protection","storage",   viewProtect,   true],
   schedules: ["Schedules",      "system",    viewSchedules, true],
-  imports:   ["Import",         "system",    viewImport,    false],
+  imports:   ["Import",         "system",    viewImport,    true],
   events:    ["Events",         "system",    viewEvents,    true],
   resources: ["Resources",      "system",    viewResources, true],
   cluster:   ["Cluster",        "system",    viewCluster,   true],

@@ -175,6 +175,10 @@ def disk_activity():
             continue
         if os.path.exists(os.path.join(block, "partition")):
             continue
+        # An optical or floppy drive is no disk to store anything on: sr0
+        # was offered to Longhorn as a 1 GB SSD.
+        if name.startswith(("sr", "fd")) or _read(os.path.join(block, "device/type")) == "5":
+            continue
         try:
             sectors_read = int(fields[5])
             sectors_written = int(fields[9])

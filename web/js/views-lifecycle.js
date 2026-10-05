@@ -1387,6 +1387,10 @@ async function viewImport() {
     </tbody></table></div></div>` : ""}
 
 `);
+  // A copy under way moves faster than the page's 15-second refresh.
+  clearTimeout(window.__importFollow);
+  if (jobs.some(j => !["done", "failed", "complete", "completed", "succeeded"].includes(String(j.state || "").toLowerCase())))
+    window.__importFollow = setTimeout(() => { if (STATE.view === "imports") refresh(); }, 5000);
 }
 
 const SOURCE_KINDS = { unraid: "Unraid", proxmox: "Proxmox", ssh: "Docker host" };
