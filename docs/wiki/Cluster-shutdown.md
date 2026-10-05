@@ -61,21 +61,29 @@ retiring that old journal. Do not treat editing its phase as recovery.
 
 ## Starting again
 
-Power the hosts on through their consoles or power buttons. Cordons persist
-across boots. From a control-plane console, verify node health and use
-`kubectl uncordon <host>` on a suitable host so Homestead can start. Open
-**Cluster → More → Shut down cluster → Recover scheduling** once the helper
-deadline has passed (up to 33 minutes from the original request). Recovery
-requires all original hosts to be Ready, all shutdown helpers to have terminated,
-and (after a power handoff) every host to have a new boot ID. If a host stayed on,
-inspect it and restart it through its console before recovery. Recovery restores only scheduling that was
-allowed before shutdown. It never replays the power request.
+Power the hosts on through their consoles or power buttons. **Homestead comes
+back by itself**: just before power was committed, the shutdown left a small
+recovery helper (no volumes, tolerating the cordons). It starts with the hosts,
+and once every original host is Ready on a new boot it recovers scheduling as
+it was before the shutdown, starts again the VMs the shutdown stopped and
+Homestead's copies, and removes itself. Homestead then starts on the uncordoned
+hosts - a few minutes after the last host is Ready.
+
+If a host stays off, the helper waits for it. To start without it, use
+`kubectl uncordon <host>` on a suitable host from a control-plane console so
+Homestead can start, then open **Cluster → More → Shut down cluster → Recover
+scheduling** once the helper deadline has passed (up to 33 minutes from the
+original request). Recovery by hand requires all original hosts to be Ready, all
+shutdown helpers to have terminated, and (after a power handoff) every host to
+have a new boot ID. If a host stayed on, inspect it and restart it through its
+console before recovery. Either way, recovery restores only scheduling that was
+allowed before shutdown, and never replays the power request.
 
 Sign-in, password changes and session revocation remain available during shutdown
 and recovery. Login attempt limits still persist across restarts; ordinary
 workload and Secret edits remain held by the shutdown guard.
 
-Inspect application and storage health, then start VMs explicitly. A recovered
+Inspect application and storage health. A recovered
 job means scheduling was restored, not that physical shutdown was verified.
 
 A failed shutdown that never committed power can be recovered sooner, once its

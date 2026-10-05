@@ -3,6 +3,13 @@
 The Secret is both a singleton lock and a durable journal. Power helpers only
 act on a short-lived commit for their own boot, after every consumer has left.
 Neither a missing API nor an expired worker is evidence that a host is off.
+
+Coming back needs no console: just before power is committed a small
+recovery Deployment is made - Homestead's image and account, no volumes,
+tolerating cordoned hosts. It starts again with the hosts, and once every
+one is Ready on a new boot it recovers as the dialog would - scheduling as it
+was, the VMs and Homestead's copies started again - and removes itself.
+Homestead then starts on the uncordoned hosts.
 """
 import base64
 import hashlib
@@ -252,6 +259,36 @@ class Shutdown:
                              "ownerReferences": [{"apiVersion": "v1", "kind": "Secret", "name": NAME, "uid": uid}]},
                 "spec": spec}
 
+    def recovery_name(self, run):
+        return f"homestead-shutdown-{run}-recovery"
+
+    def recovery_body(self, state, uid):
+        """The Deployment that brings the cluster back after power-on."""
+        run = state["run"]
+        labels = {"homestead.io/task": KIND, "homestead.io/shutdown-recovery": run}
+        args = ["python3", "/srv/homestead_cluster_shutdown.py", "recover", self.ns, uid, run]
+        return {"apiVersion": "apps/v1", "kind": "Deployment",
+                "metadata": {"name": self.recovery_name(run), "namespace": self.ns, "labels": labels,
+                             "ownerReferences": [{"apiVersion": "v1", "kind": "Secret", "name": NAME, "uid": uid}]},
+                "spec": {"replicas": 1, "selector": {"matchLabels": {"homestead.io/shutdown-recovery": run}},
+                         "template": {"metadata": {"labels": labels},
+                                      "spec": {"serviceAccountName": state["plan"]["service_account"],
+                                               "imagePullSecrets": state["plan"]["pull_secrets"],
+                                               # Every host is cordoned until it recovers them.
+                                               "tolerations": [{"operator": "Exists"}],
+                                               "terminationGracePeriodSeconds": 1,
+                                               "containers": [{"name": "recover", "image": self.image, "command": args,
+                                                               "resources": {"requests": {"cpu": "10m", "memory": "32Mi"},
+                                                                             "limits": {"memory": "128Mi"}}}]}}}}
+
+    def remove_recovery(self, run):
+        try:
+            self.send("DELETE", f"/apis/apps/v1/namespaces/{self.ns}/deployments/{self.recovery_name(run)}",
+                      {"apiVersion": "v1", "kind": "DeleteOptions", "propagationPolicy": "Background"})
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+
     def start(self, body, ops):
         if body.get("confirm") != CONFIRM:
             raise ValueError("Type " + CONFIRM + " to confirm the entire cluster outage")
@@ -325,10 +362,12 @@ class Shutdown:
         state = json.loads(journal["data"]["state"])
         if run != state["run"] or state["phase"] == "released":
             raise ValueError("Shutdown changed; refresh its progress")
-        # A timed-out helper can never consume an old commit after recovery.
-        if state["phase"] != "failed" and self.clock() <= state["deadline"] + 180:
-            raise ValueError("Wait for the shutdown helper deadline before recovering scheduling")
         live = [node_row(self.get("/api/v1/nodes/" + n["name"])) for n in state["plan"]["nodes"]]
+        # Every host on a new boot: no helper of the old one can act any more.
+        rebooted = "commit" in journal["data"] and all(n["boot_id"] != old["boot_id"] for n, old in zip(live, state["plan"]["nodes"]))
+        # Otherwise a timed-out helper can never consume an old commit after recovery.
+        if state["phase"] != "failed" and not rebooted and self.clock() <= state["deadline"] + 180:
+            raise ValueError("Wait for the shutdown helper deadline before recovering scheduling")
         if any(not n["ready"] for n in live):
             raise ValueError("Every original host must be Ready before recovering scheduling")
         if "commit" in journal["data"] and any(n["boot_id"] == old["boot_id"] for n, old in zip(live, state["plan"]["nodes"])):
@@ -585,6 +624,12 @@ class Coordinator:
             self.nodes_unchanged()
             if self.s.volumes_detached():
                 raise ValueError("A Longhorn volume reattached before power handoff")
+            # What brings the cluster back after power-on, without a console.
+            try:
+                self.s.send("POST", f"/apis/apps/v1/namespaces/{self.s.ns}/deployments", self.s.recovery_body(state, self.uid))
+            except urllib.error.HTTPError as error:
+                if error.code != 409:
+                    raise
             self.report("handoff", 90, "Power handoff committed. Host timers request power-off in 30 seconds; Homestead's host in 90 seconds. Physical power is unverified", commit=True)
         except Exception as error:
             journal = self.s.read()
@@ -604,6 +649,38 @@ class Coordinator:
                 current.update(phase="failed", message=message[:1500])
                 data["state"] = encode(current)
             self.s.change(failed, self.uid)
+
+
+def recovery(shutdown, uid, run, every=10):
+    """After power-on: once every host is Ready on a new boot, recover - as
+    the dialog would - then remove this Deployment. Before the power-off, and
+    while hosts are still starting, it waits; a run that failed or was
+    recovered by hand needs nothing more."""
+    said = ""
+    while True:
+        try:
+            journal = shutdown.read()
+            state = json.loads(journal["data"]["state"]) if journal else {}
+            if (not journal or journal["metadata"]["uid"] != uid or state.get("run") != run
+                    or state.get("phase") in ("failed", "released")):
+                shutdown.remove_recovery(run)
+                return
+            if "commit" in journal["data"]:
+                try:
+                    shutdown.recover(run)
+                    print("Every host is back: scheduling restored, Homestead starting", flush=True)
+                    shutdown.remove_recovery(run)
+                    return
+                except ValueError as waiting:
+                    if str(waiting) != said:
+                        said = str(waiting)
+                        print("Waiting: " + said, flush=True)
+        except (OSError, urllib.error.URLError, ValueError, KeyError) as error:
+            # The API starting with the hosts, or a write that raced another.
+            if str(error) != said:
+                said = str(error)
+                print("Waiting: " + said[:300], flush=True)
+        shutdown.sleep(every)
 
 
 HOST = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--", "sh", "-c"]
@@ -672,6 +749,8 @@ def main():
         agent(s, uid, run, int(sys.argv[5]))
     elif mode == "coordinator":
         Coordinator(s, uid, run).execute()
+    elif mode == "recover":
+        recovery(s, uid, run)
     else:
         raise ValueError("Unknown shutdown helper mode")
 

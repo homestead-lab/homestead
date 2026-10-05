@@ -129,6 +129,13 @@ class Fake:
             return {}
         if method == "PATCH" and "/pods/" in path:
             return {}
+        if path.endswith("/deployments") and method == "POST":
+            self.recovery = copy.deepcopy(body)
+            return body
+        if method == "DELETE" and "/deployments/" in path:
+            if not getattr(self, "recovery", None): raise missing()
+            self.recovery = None
+            return {}
         if method == "PATCH" and path.startswith("/api/v1/nodes/"):
             node = next(n for n in self.nodes if n["metadata"]["name"] == path.split("/")[-1])
             for patch in body:
@@ -392,6 +399,67 @@ class ShutdownTests(unittest.TestCase):
         self.f.s.recover(state["run"])
         self.assertEqual(self.f.s.state()["phase"], "released")
         self.assertEqual([n["spec"]["unschedulable"] for n in self.f.nodes], [False, False, True])
+
+    def test_a_recovery_deployment_is_made_just_before_power_and_tolerates_cordoned_hosts(self):
+        self.f.start().execute()
+        body = self.f.recovery
+        posts = [path for method, path, _ in self.f.calls if method == "POST"]
+        self.assertLess(posts.index("/apis/apps/v1/namespaces/lab/deployments"), len(posts))
+        self.assertIn("commit", self.f.journal["data"])
+        spec = body["spec"]["template"]["spec"]
+        self.assertEqual([{"operator": "Exists"}], spec["tolerations"])
+        self.assertEqual(self.f.s.image, spec["containers"][0]["image"])
+        self.assertNotIn("volumes", spec)
+        self.assertEqual("recover", spec["containers"][0]["command"][2])
+        self.assertEqual("journal-uid", body["metadata"]["ownerReferences"][0]["uid"])
+
+    def test_a_shutdown_that_fails_before_power_makes_no_recovery(self):
+        self.f.detach = False
+        self.f.start().execute()
+        self.assertEqual("failed", self.f.s.state()["phase"])
+        self.assertIsNone(getattr(self.f, "recovery", None))
+
+    def test_after_power_on_the_cluster_recovers_itself_without_waiting_out_the_deadline(self):
+        self.f.nodes[2]["spec"]["unschedulable"] = True
+        self.f.start().execute()
+        run = self.f.s.state()["run"]
+        def hosts_back():                       # the hosts come back while it waits
+            for n in self.f.nodes:
+                if not n["status"]["nodeInfo"]["bootID"].endswith("-new"):
+                    n["status"]["nodeInfo"]["bootID"] += "-new"
+            for p in self.f.pods:
+                if S.helper(p, "journal-uid"): p["status"] = {"phase": "Succeeded"}
+        self.f.on_sleep = hosts_back
+        S.recovery(self.f.s, "journal-uid", run)
+        self.assertLess(self.f.now, self.f.s.state()["deadline"], "no waiting out the helpers' deadline")
+        self.assertEqual("released", self.f.s.state()["phase"])
+        self.assertEqual([False, False, True], [n["spec"]["unschedulable"] for n in self.f.nodes], "a cordon from before stays")
+        self.assertIsNone(self.f.recovery, "it removes itself")
+
+    def test_recovery_waits_while_any_host_is_on_its_old_boot(self):
+        self.f.start().execute()
+        run = self.f.s.state()["run"]
+        self.f.nodes[0]["status"]["nodeInfo"]["bootID"] += "-new"
+        sleeps = []
+        def stop():
+            sleeps.append(1)
+            if len(sleeps) > 3: raise KeyboardInterrupt
+        self.f.on_sleep = stop
+        with self.assertRaises(KeyboardInterrupt):
+            S.recovery(self.f.s, "journal-uid", run)
+        self.assertEqual("handoff", self.f.s.state()["phase"])
+        self.assertTrue(all(n["spec"]["unschedulable"] for n in self.f.nodes))
+
+    def test_a_run_recovered_by_hand_leaves_the_recovery_to_remove_itself(self):
+        self.f.start().execute()
+        state = self.f.s.state()
+        self.f.now = state["deadline"] + 181
+        for n in self.f.nodes: n["status"]["nodeInfo"]["bootID"] += "-new"
+        for p in self.f.pods:
+            if S.helper(p, "journal-uid"): p["status"] = {"phase": "Succeeded"}
+        self.f.s.recover(state["run"])
+        S.recovery(self.f.s, "journal-uid", state["run"])
+        self.assertIsNone(self.f.recovery)
 
     def test_agents_only_schedule_power_for_fresh_matching_commit(self):
         self.f.start()
