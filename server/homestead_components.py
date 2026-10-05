@@ -59,7 +59,8 @@ CHARTS = {"longhorn": "longhorn", "kubevirt": "homestead-kubevirt", "cdi": "home
 CHART_INDEX = {"kube-vip": ("https://kube-vip.github.io/helm-charts/index.yaml", "kube-vip"),
                "multus": ("https://rke2-charts.rancher.io/index.yaml", "rke2-multus")}
 NOTES.update({"kube-vip": "https://github.com/kube-vip/helm-charts/releases/tag/kube-vip-{}",
-              "multus": "https://github.com/rancher/rke2-charts/tree/main/packages/rke2-multus"})
+              # rke2-charts keeps its sources on main-source; its main branch has no packages.
+              "multus": "https://github.com/rancher/rke2-charts/tree/main-source/packages/rke2-multus"})
 SUC_CHART = "homestead-system-upgrade"
 SUC_NS = "system-upgrade"
 SUC = "https://github.com/rancher/system-upgrade-controller/releases"
