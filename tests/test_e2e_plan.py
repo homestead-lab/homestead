@@ -53,3 +53,26 @@ class PlanTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SeedTests(unittest.TestCase):
+    """The hosts' cloud-init: a line YAML misreads drops the whole file, and
+    with it the user and key the suite signs in with."""
+    def test_every_host_setup_is_valid_cloud_config(self):
+        try:
+            import yaml
+        except ImportError:
+            self.skipTest("PyYAML is not installed")
+        import tempfile
+        from harness import vms
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(vms, "sh", lambda *a, **k: ""):
+            for prepare, pages in ((False, 0), (False, 1100), (True, 0)):
+                lab = vms.Lab(Path(tmp) / f"lab-{prepare}-{pages}", 1, hugepages=pages)
+                lab.dir.mkdir(parents=True)
+                Path(lab.key + ".pub").write_text("ssh-ed25519 AAAA e2e")
+                node = lab.nodes[0]
+                node.dir.mkdir(parents=True)
+                lab._seed(node, prepare=prepare)
+                doc = yaml.safe_load((node.dir / "user-data").read_text())
+                self.assertEqual(vms.USER, doc["users"][0]["name"])
+                self.assertTrue(all(isinstance(c, str) for c in doc["runcmd"]), doc["runcmd"])

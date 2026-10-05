@@ -28,6 +28,21 @@ VIP = f"{NET}.100"
 IMAGE_URL = os.environ.get("E2E_IMAGE_URL", "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img")
 CACHE = Path(os.environ.get("E2E_CACHE", Path.home() / ".cache" / "homestead-e2e"))
 PREPARED = CACHE / "noble-prepared.qcow2"
+# The host's addresses, routes and a DNS answer every 30 seconds, through the
+# kernel log onto the serial console the diagnostics keep - when the host
+# stops answering, they still show what its network became. (The login
+# prompt on ttyS0 drops anything written to it directly.) A file, not a
+# runcmd line: YAML reads "word: " inside one as a mapping.
+NETLOG = """write_files:
+  - path: /usr/local/bin/e2e-netlog
+    permissions: "0755"
+    content: |
+      while sleep 30; do
+        { echo "== net"; ip -br addr; ip route
+          getent hosts github.com || echo "dns: github.com no answer"; } |
+        while read -r line; do echo "netlog: $line" > /dev/kmsg; done
+      done
+"""
 USER = "e2e"
 
 
@@ -249,14 +264,11 @@ bootcmd:
   # console the diagnostics keep, even when the host stops answering.
   - sysctl -w kernel.printk="7 4 1 7"
 """ + (f"""  - sysctl -w vm.nr_hugepages={self.hugepages}
-""" if self.hugepages and not prepare else "") + """runcmd:
+""" if self.hugepages and not prepare else "") + ("" if prepare else NETLOG) + """runcmd:
   - systemctl disable --now unattended-upgrades apt-daily.timer apt-daily-upgrade.timer || true
   - systemctl enable --now iscsid || true
-  # The host's addresses and routes on the console every 30 seconds: when it
-  # stops answering, the diagnostics still show what its network became.
-  # Through the kernel log: the login prompt on ttyS0 drops other writers.
-  - systemd-run --unit=e2e-netlog sh -c 'while sleep 30; do { echo "== net"; ip -br addr; ip route; getent hosts github.com || echo "dns: github.com no answer"; } | while read -r l; do echo "netlog: $l" > /dev/kmsg; done; done' 
-""" + ("""  - DEBIAN_FRONTEND=noninteractive apt-get -q update
+""" + ("" if prepare else """  - systemd-run --unit=e2e-netlog /bin/sh /usr/local/bin/e2e-netlog
+""") + ("""  - DEBIAN_FRONTEND=noninteractive apt-get -q update
   - DEBIAN_FRONTEND=noninteractive apt-get -yq -o Dpkg::Options::=--force-confold dist-upgrade
   - DEBIAN_FRONTEND=noninteractive apt-get -yq install open-iscsi nfs-common
   - apt-get -q clean
