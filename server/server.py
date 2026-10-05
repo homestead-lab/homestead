@@ -2710,11 +2710,22 @@ def rollout_review_context(current):
     return {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}
 
 
+def import_namespace(value):
+    """Where an import goes: the default, or an app namespace that exists."""
+    ns = str(value or DEFAULT_NS).strip()
+    if ns == DEFAULT_NS:
+        return ns
+    ns = _dns_name(ns, "namespace")
+    if ns in SYS_NS or ns not in NSMOD.names(False):
+        raise ValueError(f"namespace {ns} is not one an app can be imported into; create it under Namespaces first")
+    return ns
+
+
 def import_capacity_plan(body):
     """Review both sequential phases before an import creates any resources."""
     cfg = copy.deepcopy(body)
-    cfg["namespace"] = DEFAULT_NS
-    guard_managed_smb(DEFAULT_NS, cfg.get("name"))
+    ns = cfg["namespace"] = import_namespace(body.get("namespace"))
+    guard_managed_smb(ns, cfg.get("name"))
     cfg = NETWORK.prepare_deploy(cfg)  # read-only VIP selection and validation
     prepared = IMP.prepare_import(cfg)
     if prepared["job"] and cfg.get("source_consistency") not in ("stopped", "snapshot"):
@@ -2727,7 +2738,7 @@ def import_capacity_plan(body):
     for kind, title in (("job", "Copy files"), ("deployment", "Imported application")):
         manifest = prepared[kind]
         if manifest:
-            plan = PLACE.manifest_plan(manifest, DEFAULT_NS, manifest["metadata"]["name"], 1,
+            plan = PLACE.manifest_plan(manifest, ns, manifest["metadata"]["name"], 1,
                                        threshold, planned_claims=claims, pod_snapshot=pods,
                                        nodes_snapshot=nodes)
             phases.append({"title": title, "capacity": plan})
@@ -2737,7 +2748,7 @@ def import_capacity_plan(body):
                 "The application stays stopped while copying. Starting it later requires a fresh capacity check."]
     capacity = {"blocked": any(row["capacity"]["blocked"] for row in phases),
                 "requires_confirmation": True, "warnings": warnings}
-    context = {"action": "import", "namespace": DEFAULT_NS, **inventory, "prepared": prepared}
+    context = {"action": "import", "namespace": ns, **inventory, "prepared": prepared}
     return cfg, prepared, phases, capacity, context
 
 
@@ -9767,7 +9778,7 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, IMP.measure_source_paths(
                     b.get("name"), b.get("paths") or [], b.get("seconds", 25)))
             if p == "/api/imports/delete":
-                plan = IMP.import_cleanup_plan(b.get("name"))
+                plan = IMP.import_cleanup_plan(b.get("name"), b.get("namespace"))
                 if plan.get("journalled") and any(b.get(key) for key in ("remove_workload", "remove_volume", "remove_volumes")):
                     raise ValueError("This import retains workloads and volumes. Manage them separately after inspecting the copy.")
                 made = {row["name"] for row in plan["volumes"] if row["created"]}
@@ -9782,7 +9793,7 @@ class H(HTTP.LimitedHandler):
                                      "without creating it, so it will not delete it")
                 if b.get("remove_workload") and plan["workload"]:
                     guard_managed_smb(plan["namespace"], plan["workload"])
-                result = IMP.delete_import(b.get("name"))
+                result = IMP.delete_import(b.get("name"), b.get("namespace"))
                 if result.get("journalled"):
                     return self._send(200, {**result, "removed": [], "releasing": []})
                 removed = []
@@ -9826,7 +9837,7 @@ class H(HTTP.LimitedHandler):
                 result["removed"] = removed
                 return self._send(200, result)
             if p == "/api/imports/cleanup-plan":
-                return self._send(200, IMP.import_cleanup_plan(b.get("name")))
+                return self._send(200, IMP.import_cleanup_plan(b.get("name"), b.get("namespace")))
             if p == "/api/network/service/delete":
                 guard_managed_smb(b.get("namespace"), b.get("name"))
                 result = NETWORK.delete_service(b.get("namespace"), b.get("name"), b.get("force"))

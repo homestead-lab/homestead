@@ -1378,13 +1378,13 @@ async function viewImport() {
     ${jobs.length ? `<div class="sec">Transfers</div>
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="imports" class="tbl stack"><thead><tr>
       <th>App</th><th>Job</th><th>State</th><th>Progress</th><th data-nosort>Started</th><th></th></tr></thead><tbody>
-      ${jobs.map(j => `<tr><td><b>${esc(j.app || "—")}</b>${j.kind === "chown" ? '<span class="tag">ownership</span>' : ""}</td>
+      ${jobs.map(j => `<tr><td><b>${esc(j.app || "—")}</b>${j.kind === "chown" ? '<span class="tag">ownership</span>' : ""}${j.namespace && j.namespace !== "lab" ? `<div class="dim xs mono">${esc(j.namespace)}</div>` : ""}</td>
         <td class="mono small dim">${esc(j.name)}</td>
         <td><span class="pill ${j.state === "done" ? "ok" : j.state === "failed" ? "crit" : "med"}">${esc(j.state)}</span></td>
         <td style="min-width:150px">${importProgressCell(j)}</td>
         <td class="small dim">${esc((j.start || "").replace("T", " ").replace("Z", ""))}</td>
-        <td>${actionBar([{ label: "Logs", run: `jobLogs('lab',${jsq(j.name)})` },
-          { label: j.state === "running" ? "Cancel" : "Remove", run: `importRemove(${jsq(j.name)},${jsq(j.state)})`, need: "admin", danger: j.state === "failed",
+        <td>${actionBar([{ label: "Logs", run: `jobLogs(${jsq(j.namespace || "lab")},${jsq(j.name)})` },
+          { label: j.state === "running" ? "Cancel" : "Remove", run: `importRemove(${jsq(j.name)},${jsq(j.state)},${jsq(j.namespace || "lab")})`, need: "admin", danger: j.state === "failed",
             tip: j.state === "running" ? "Stop this copy and remove its job" : "Remove this job; it keeps referencing the volume until it is gone" }])}</td></tr>`).join("")}
     </tbody></table></div></div>` : ""}
 
@@ -1431,14 +1431,14 @@ function importSourceSteps() {
       <span class="dim small">Imported apps start stopped, and run once their data has been copied.</span></div>
   </div>`;
 }
-window.importRemove = async (name, state) => {
+window.importRemove = async (name, state, namespace = "lab") => {
   const running = state === "running";
   const plan = await api("/api/imports/cleanup-plan", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ name }) }).catch(() => ({ workload: "", volume: "", volume_created: false, volumes: [], known: false }));
+    body: JSON.stringify({ name, namespace }) }).catch(() => ({ workload: "", volume: "", volume_created: false, volumes: [], known: false }));
   if (plan.journalled) {
     modal(`Remove import Job · ${name}`, UI.lead("Remove the copy Job after a verified successful import. The app, Services and all volumes stay in place.") +
       UI.callout("info", "Incomplete import?", "Open Recent jobs → Inspect import. An active or uncertain copy cannot be removed here.") +
-      UI.actions(UI.cancel("Keep it") + UI.button("Remove completed Job", `importRemoveNow(${jsArg(name)},this)`, {kind:"danger",id:"imr_go"})));
+      UI.actions(UI.cancel("Keep it") + UI.button("Remove completed Job", `importRemoveNow(${jsArg(name)},this,${jsArg(namespace)})`, {kind:"danger",id:"imr_go"})));
     return;
   }
   // An import can have filled several volumes; every one it created is offered.
@@ -1467,13 +1467,13 @@ window.importRemove = async (name, state) => {
         <span><b>The volume</b><small>No volume is recorded for this import.</small></span></label>`}
     </div>
     ${plan.known === false ? '<div class="note">This import predates the record of what it created, so only the job is removed.</div>' : ""}
-    ${UI.actions(`<button class="btn danger" id="imr_go" data-need="admin" onclick="importRemoveNow(${jsq(name)},this)">${running ? "Cancel import" : "Remove"}</button>
+    ${UI.actions(`<button class="btn danger" id="imr_go" data-need="admin" onclick="importRemoveNow(${jsq(name)},this,${jsq(namespace)})">${running ? "Cancel import" : "Remove"}</button>
       <button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Keep it</button>`)}`);
   if (window.applyRole) window.applyRole();
 };
-window.importRemoveNow = async (name, button) => {
+window.importRemoveNow = async (name, button, namespace = "lab") => {
   const volumes = $$(".imr-volume").filter(box => box.checked).map(box => box.value);
-  const body = { name, remove_workload: !!$("#imr_workload")?.checked,
+  const body = { name, namespace, remove_workload: !!$("#imr_workload")?.checked,
     remove_volume: volumes.length > 0, remove_volumes: volumes };
   if (volumes.length && !(await ask(`Delete ${volumes.length === 1 ? volumes[0] : volumes.join(" and ")} `
       + "and everything copied into " + (volumes.length === 1 ? "it" : "them") + "?\n\nThis cannot be undone."))) return;
@@ -1903,6 +1903,31 @@ window.importSourcePaths = () => $$("#im_maps .im-map")
 const imMode = row => row.dataset.medium === "memory" ? ($(".imm-on", row).checked ? "copy" : "skip")
   : ($(".imm-mode", row)?.value || "copy");
 
+/* Source data safety is asked on the Storage step, so it is answered there -
+   not discovered missing two steps later at Review. */
+window.imSafetyNote = show => {
+  const note = $("#im_consistency_err"), select = $("#im_consistency");
+  if (note) note.hidden = !show;
+  if (select) select.toggleAttribute("aria-invalid", !!show);
+  if (show && select) { select.scrollIntoView({ block: "center" }); select.focus(); }
+};
+const imSafetyMissing = () => !["stopped", "snapshot"].includes($("#im_consistency")?.value)
+  && importMappings().some(row => !row.medium && row.copy !== false);
+window.imStepGuard = step => {
+  if (step !== 1 || !imSafetyMissing()) return true;
+  imSafetyNote(true);
+  return false;
+};
+
+/* Existing volumes live in a namespace: choosing another one offers its own. */
+window.imNamespace = async ns => {
+  const storage = await api(`/api/deploy/options?ns=${encodeURIComponent(ns)}`).catch(() => null);
+  if (!storage || $("#im_ns")?.value !== ns) return;
+  STATE.data.importStorage = storage;
+  const options = (storage.pvcs || []).map(claim => `<option value="${esc(claim.name)}">${esc(claim.size || "")} ${esc((claim.access_modes || []).join("/"))}</option>`).join("");
+  $$("datalist#im_pvc_list").forEach(list => { list.innerHTML = options; });
+};
+
 window.importMappings = () => {
   const all = importSourcePaths();
   return $$("#im_maps .im-map")
@@ -1937,7 +1962,10 @@ window.importSetup = async (source, dir, cfg = {}) => {
   // stay out of the way, offered only if someone wants to add some anyway.
   const keeps = (cfg.mounts || []).some(m => m.source || m.type === "tmpfs") || !!cfg.shm_mb;
   const appStep = `
-    <div class="f"><label>Workload name</label><input type="text" id="im_name" value="${esc(name)}"></div>
+    <div class="f2"><div class="f"><label>Workload name</label><input type="text" id="im_name" value="${esc(name)}"></div>
+      <div class="f"><label>Namespace ${tip("The app, its volumes and the copy are all created here. Existing volumes to merge into are offered from this namespace.")}</label>
+        <select id="im_ns" onchange="imNamespace(this.value)">${[...new Set(["lab", ...(STATE.data.importNamespaces || [])])].map(n =>
+          `<option value="${esc(n)}" ${n === "lab" ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div></div>
     <div class="f"><label>Remote path</label>
       <input type="text" id="im_path" value="${esc(cfg.remote_path || "")}" placeholder="${esc((src.base_path || "") + "/" + dir)}"></div>
     <div class="f"><label>Docker image ${tip("Read from Docker on the source host. You can change the tag before importing.")}</label>
@@ -1952,7 +1980,8 @@ window.importSetup = async (source, dir, cfg = {}) => {
         volume to create. Import will bring across its image, ports and environment alone.
         <div style="margin-top:8px"><button class="btn sm" onclick="imStorageAnyway()">Add storage anyway</button></div></div>`}
     <div id="im_storage" ${keeps ? "" : "hidden"}>
-    ${UI.field("Source data safety", '<select id="im_consistency"><option value="">Choose before copying…</option><option value="stopped">All source writers are stopped</option><option value="snapshot">These paths are a consistent snapshot or backup</option></select>', {help: cfg.source_container_id ? "The original Docker container must stay stopped. Snapshot mode skips that check; verify the paths really point to the snapshot." : "Homestead does not stop source applications. Stop every writer or choose stable backup paths before copying."})}
+    ${UI.field("Source data safety", '<select id="im_consistency" onchange="imSafetyNote(false)"><option value="">Choose before copying…</option><option value="stopped">All source writers are stopped</option><option value="snapshot">These paths are a consistent snapshot or backup</option></select>', {help: cfg.source_container_id ? "The original Docker container must stay stopped. Snapshot mode skips that check; verify the paths really point to the snapshot." : "Homestead does not stop source applications. Stop every writer or choose stable backup paths before copying."})}
+    <div id="im_consistency_err" hidden>${UI.callout("bad", "Choose Source data safety", "How the source's data stays still while it is copied: every writer stopped, or a consistent snapshot or backup.")}</div>
     <div id="im_map_picture"></div>
     <div class="sec">Folders ${tip("Each folder the container mounts: copied into a volume, mounted empty, or left out. Several can share one volume, each in its own subfolder, mounted back where the container expects it.")}</div>
     ${keeps && cfg.guessed_path ? `<div class="note warn">Nothing this container mounts sits under <span class="mono">${esc(src.base_path || "/mnt/user/appdata")}</span>,
@@ -1994,6 +2023,7 @@ window.importSetup = async (source, dir, cfg = {}) => {
     { title: "App", html: appStep }, { title: "Storage", html: storageStep },
     { title: "Network", html: networkStep }, { title: "Memory and review", html: reviewStep }],
     `<button class="btn pri" onclick="doImport(${jsq(source)})">Review import</button>`), true);
+  $("#im_steps").dataset.guard = "imStepGuard";
   if (keeps) $("#im_volumes").innerHTML = importVolumeRow({ name: `${name}-appdata`, size_gb: 10 }, 0);
   $("#im_storage")?.addEventListener("input", importMapPicture);
   vipChoices().then(choices => { const host = $("#im_vip_pick"); if (host) host.innerHTML = vipPicker("im", "", choices); });
@@ -2567,7 +2597,7 @@ window.doImport = async source => {
   const keepsNothing = !mappings.some(row => !row.medium && (row.remote_path || row.copy === false));
   if (!first && !keepsNothing) return toast("add at least one volume", "bad");
   const existing = !!first && !first.create;
-  const body = { source, name: $("#im_name").value.trim(), remote_path: $("#im_path").value.trim(),
+  const body = { source, name: $("#im_name").value.trim(), namespace: $("#im_ns")?.value || "lab", remote_path: $("#im_path").value.trim(),
     source_consistency: $("#im_consistency")?.value || "", source_container_id: cfg.source_container_id || "",
     image: $("#im_image").value.trim(), icon: $("#im_icon").value.trim(),
     mappings, volumes: keepsNothing ? [] : volumes,
@@ -2594,8 +2624,10 @@ window.doImport = async source => {
   // A RAM scratch mapping has no source by design, so only copied folders are
   // asked for one.
   const copied = body.mappings.filter(row => !row.medium && row.copy !== false);
-  if (copied.length && !["stopped", "snapshot"].includes(body.source_consistency))
-    return toast("Choose Source data safety: stop all source writers or copy a consistent snapshot/backup.", "bad");
+  if (copied.length && !["stopped", "snapshot"].includes(body.source_consistency)) {
+    stepGo("im_steps", 1);
+    return imSafetyNote(true);
+  }
   const bad = body.mappings.find(row => row.medium || row.copy === false
     ? !String(row.mount_path || "").startsWith("/")
     : !String(row.remote_path || "").startsWith("/") || !String(row.mount_path || "").startsWith("/"));

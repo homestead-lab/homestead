@@ -47,7 +47,8 @@ class ImportCapacityTests(unittest.TestCase):
         handler._send = mock.Mock()
         def send(method, path, obj=None, **kwargs):
             result = copy.deepcopy(obj or {})
-            result.setdefault("metadata", {}).update(uid="created-uid", resourceVersion="1", namespace="lab")
+            result.setdefault("metadata", {}).update(uid="created-uid", resourceVersion="1",
+                                                     namespace=result["metadata"].get("namespace") or "lab")
             self.objects[path + ("/" + result["metadata"]["name"] if method == "POST" else "")] = copy.deepcopy(result)
             return result
         with mock.patch.object(server, "ksend", side_effect=send) as writes, \
@@ -70,6 +71,44 @@ class ImportCapacityTests(unittest.TestCase):
         self.assertEqual(["Copy files", "Imported application"], [p["title"] for p in response[1]["phases"]])
         self.assertEqual(.12, response[1]["phases"][0]["capacity"]["pod_request_gb"])
         self.reviewed()
+
+    def test_an_import_goes_into_the_namespace_chosen_with_the_source_password_borrowed(self):
+        self.objects["/api/v1/namespaces/lab/secrets/source-credentials"] = {
+            "metadata": {"name": "source-credentials", "uid": "s"}, "data": {"password": "c2VjcmV0"}}
+        self.body["namespace"] = "media"
+        with mock.patch.object(server.NSMOD, "names", return_value=["lab", "media"]):
+            body = self.reviewed()
+            response, writes, pvc, _, _ = self.call("/api/import", body)
+        self.assertEqual(200, response[0], response)
+        paths = [c.args[1] for c in writes.call_args_list if c.args[0] == "POST"]
+        self.assertIn("/apis/apps/v1/namespaces/media/deployments", paths)
+        self.assertIn("/apis/batch/v1/namespaces/media/jobs", paths)
+        self.assertEqual("media", pvc.call_args.args[0])
+        # The copy reads the password from a copy beside it, owned by the Job,
+        # made after the Job so it can name it - never from the source's own.
+        job = next(c.args[2] for c in writes.call_args_list if c.args[1].endswith("/jobs"))
+        ref = job["spec"]["template"]["spec"]["containers"][0]["env"][0]["valueFrom"]["secretKeyRef"]
+        self.assertEqual("homestead-import-imported-source", ref["name"])
+        secret = next(c.args[2] for c in writes.call_args_list if c.args[1] == "/api/v1/namespaces/media/secrets")
+        self.assertGreater(paths.index("/api/v1/namespaces/media/secrets"), paths.index("/apis/batch/v1/namespaces/media/jobs"))
+        self.assertEqual(("Job", "homestead-import-imported"), (secret["metadata"]["ownerReferences"][0]["kind"],
+                                                                secret["metadata"]["ownerReferences"][0]["name"]))
+        self.assertEqual({"password": "c2VjcmV0"}, secret["data"])
+        journal = str(server.OPS._read())
+        self.assertNotIn("c2VjcmV0", journal)
+
+    def test_an_import_into_a_system_or_missing_namespace_is_refused(self):
+        with mock.patch.object(server.NSMOD, "names", return_value=["lab", "media"]):
+            for ns in ("kube-system", "longhorn-system", "nowhere", "Bad_Name"):
+                response, writes, *_ = self.call("/api/import/preview", {**self.body, "namespace": ns})
+                self.assertEqual(400, response[0], (ns, response))
+                writes.assert_not_called()
+
+    def test_the_default_namespace_uses_the_sources_own_password(self):
+        prepared = imports.prepare_import(dict(self.body))
+        ref = prepared["job"]["spec"]["template"]["spec"]["containers"][0]["env"][0]["valueFrom"]["secretKeyRef"]
+        self.assertEqual("source-credentials", ref["name"])
+        self.assertIsNone(prepared["source_secret"])
 
     def test_copy_requires_explicit_source_consistency_choice(self):
         for choice in (None, "", "live"):

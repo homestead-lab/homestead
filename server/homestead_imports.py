@@ -407,10 +407,10 @@ def run_probe(tag, script, src, timeout=70, *, authenticated=True):
     return [l.strip() for l in out.splitlines() if l.strip()]
 
 
-def _pod_logs(pod):
+def _pod_logs(pod, ns=None):
     import urllib.request
     from homestead_shim import raw_get  # provided by server.py
-    return raw_get(f"/api/v1/namespaces/{NS}/pods/{pod}/log?tailLines=400")
+    return raw_get(f"/api/v1/namespaces/{ns or NS}/pods/{pod}/log?tailLines=400")
 
 
 # --------------------------------------------------------------- import job
@@ -780,10 +780,10 @@ def _excludes(remote, requested, asked):
     return sorted(nested)
 
 
-def _claim_capacity_gb(pvc):
+def _claim_capacity_gb(pvc, ns=None):
     """What an existing claim actually offers, or 0 when it cannot be read."""
     try:
-        claim = kget(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{pvc}")
+        claim = kget(f"/api/v1/namespaces/{ns or NS}/persistentvolumeclaims/{pvc}")
     except Exception:
         return 0.0
     quantity = ((claim.get("status", {}) or {}).get("capacity", {}) or {}).get("storage", "")
@@ -802,6 +802,9 @@ def prepare_import(cfg):
     name = cfg["name"]
     if not SAFE.match(name):
         raise ValueError("name must be lowercase letters, numbers and dashes")
+    # Where the app, its volumes and its copy Job go. The source's password
+    # lives beside the source, so a copy elsewhere borrows it (see dispatch).
+    ns = cfg.get("namespace") or NS
     src = _source(cfg["source"])
     volumes = import_volumes(cfg)
     mappings = import_mappings(cfg)
@@ -820,7 +823,7 @@ def prepare_import(cfg):
                 continue
             capacity_gb = float(volume["size_gb"])
             if not volume["create"]:
-                capacity_gb = _claim_capacity_gb(volume["name"])
+                capacity_gb = _claim_capacity_gb(volume["name"], ns)
                 # Longhorn actualSize is physical snapshot allocation, not
                 # guest filesystem usage. Free space is unknown here.
             needed_gb = needed / 1024 ** 3
@@ -834,7 +837,7 @@ def prepare_import(cfg):
         if volume["create"]:
             continue
         try:
-            existing = kget(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{volume['name']}")
+            existing = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{volume['name']}")
         except urllib.error.HTTPError as error:
             if error.code == 404:
                 raise ValueError(f"existing PVC {volume['name']} was not found") from error
@@ -847,6 +850,7 @@ def prepare_import(cfg):
     access_mode = volumes[0]["access_mode"] if volumes else ""
 
     job = f"homestead-import-{name}"
+    password = source_secret(src["name"], src) if ns == NS else f"{job}-source"
 
     # Every interpolated value arrives from the UI, so all of it is quoted.
     # Each step announces itself on its own line before rsync's own progress,
@@ -933,7 +937,7 @@ def prepare_import(cfg):
 
     body = {
         "apiVersion": "batch/v1", "kind": "Job",
-        "metadata": {"name": job, "namespace": NS,
+        "metadata": {"name": job, "namespace": ns,
                      "labels": NAMES.labels("import", app=name),
                      # What this import made, so cleaning it up later does not
                      # have to guess - and cannot offer to delete a volume it
@@ -957,7 +961,7 @@ def prepare_import(cfg):
                                                          "limits": {"memory": "512Mi"}},
                                            "command": ["sh", "-c", script],
                                            "env": [{"name": "SSHPASS", "valueFrom": {"secretKeyRef": {
-                                               "name": source_secret(src["name"], src), "key": "password"}}}],
+                                               "name": password, "key": "password"}}}],
                                            "volumeMounts": [
                                                {"name": f"vol{index}", "mountPath": mount_of[volume["name"]]}
                                                for index, volume in enumerate(volumes)],
@@ -973,7 +977,7 @@ def prepare_import(cfg):
     created = None
     if cfg.get("create_workload", True):
         dcfg = {
-            "name": name, "namespace": NS, "image": cfg["image"],
+            "name": name, "namespace": ns, "image": cfg["image"],
             # An application must never write into a claim while rsync is
             # importing it. Starting later goes through a fresh start review.
             "replicas": 0 if copied or cfg.get("start_after_copy", True) else 1,
@@ -1006,7 +1010,11 @@ def prepare_import(cfg):
             "note": "Workload created stopped. After copying, review capacity again before starting."
                     if copied or cfg.get("start_after_copy", True) else ""}
     return {"job": body if copied else None, "deployment": dep, "service": svc,
-            "volumes": volumes, "result": result}
+            "volumes": volumes, "result": result, "namespace": ns,
+            # Copied beside the Job for as long as the copy runs: it never
+            # outlives the Job, and is removed once the copy has finished.
+            "source_secret": {"namespace": NS, "name": source_secret(src["name"], src), "copy": password}
+                             if copied and ns != NS else None}
 
 
 def commit_import(prepared):
@@ -1016,12 +1024,13 @@ def commit_import(prepared):
     The stopped workload is created before a copy can start writing data.
     """
     prepared = copy.deepcopy(prepared)
+    ns = prepared.get("namespace") or NS
     for volume in prepared["volumes"]:
         if volume["create"]:
-            create_pvc(NS, volume["name"], volume["size_gb"], volume["storage_class"],
+            create_pvc(ns, volume["name"], volume["size_gb"], volume["storage_class"],
                        volume["access_mode"])
     if prepared["deployment"]:
-        created = ksend("POST", f"/apis/apps/v1/namespaces/{NS}/deployments", prepared["deployment"])
+        created = ksend("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", prepared["deployment"])
         uid = (created.get("metadata") or {}).get("uid")
         if prepared["job"] and not uid:
             raise ValueError("Created workload identity is unavailable; copy was not started. Keep its volumes and inspect the workload before retrying.")
@@ -1029,9 +1038,9 @@ def commit_import(prepared):
             prepared["job"]["metadata"]["ownerReferences"] = [{"apiVersion": "apps/v1", "kind": "Deployment",
                 "name": created["metadata"]["name"], "uid": uid}]
     if prepared["service"]:
-        ksend("POST", f"/api/v1/namespaces/{NS}/services", prepared["service"])
+        ksend("POST", f"/api/v1/namespaces/{ns}/services", prepared["service"])
     if prepared["job"]:
-        ksend("POST", f"/apis/batch/v1/namespaces/{NS}/jobs", prepared["job"])
+        ksend("POST", f"/apis/batch/v1/namespaces/{ns}/jobs", prepared["job"])
     _bust("wl", "ov", "flow")
     return prepared["result"]
 
@@ -1043,6 +1052,7 @@ def import_container(cfg):
 
 def import_inventory(prepared, read):
     """Fail closed on collisions and active writers; return identities to sign."""
+    ns = prepared.get("namespace") or NS
     def optional(path):
         try:
             obj = read(path)
@@ -1059,12 +1069,12 @@ def import_inventory(prepared, read):
         if obj:
             prefix = "/apis/apps/v1" if kind == "deployment" else "/apis/batch/v1" if kind == "job" else "/api/v1"
             name = obj["metadata"]["name"]
-            if optional(f"{prefix}/namespaces/{NS}/{resource}/{name}") is not None:
+            if optional(f"{prefix}/namespaces/{ns}/{resource}/{name}") is not None:
                 raise ValueError(f"{kind} {name} already exists. Review or clean up that import first; it will not be replaced.")
     claims = {}
     for volume in prepared["volumes"]:
         name = volume["name"]
-        obj = optional(f"/api/v1/namespaces/{NS}/persistentvolumeclaims/{name}")
+        obj = optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{name}")
         if volume["create"]:
             if obj is not None:
                 raise ValueError(f"PVC {name} already exists. Explicitly select an existing volume or choose a new name.")
@@ -1082,7 +1092,7 @@ def import_inventory(prepared, read):
         raise ValueError("Pod inventory is incomplete; volume consumers cannot be verified")
     if prepared["job"]:
         for pod in pods["items"]:
-            if (pod.get("metadata") or {}).get("namespace") != NS or (pod.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
+            if (pod.get("metadata") or {}).get("namespace") != ns or (pod.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
                 continue
             mounted = {(row.get("persistentVolumeClaim") or {}).get("claimName") for row in (pod.get("spec") or {}).get("volumes") or []}
             conflicts = mounted & claims.keys()
@@ -1178,19 +1188,28 @@ def import_progress(log):
             "error": error, "error_detail": error_detail}
 
 
-def import_cleanup_plan(name):
+def _job_ns(ns):
+    """The namespace an import job was named in: its own, or the default."""
+    ns = str(ns or NS)
+    if not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", ns):
+        raise ValueError("unknown namespace")
+    return ns
+
+
+def import_cleanup_plan(name, ns=None):
     """What an import job left behind, read from the job itself."""
     if not re.fullmatch(r"homestead-import-[a-z0-9][a-z0-9-]{0,60}", str(name or "")):
         raise ValueError("unknown import job")
+    ns = _job_ns(ns)
     try:
-        job = kget(f"/apis/batch/v1/namespaces/{NS}/jobs/{name}")
+        job = kget(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}")
     except Exception:
-        if IMPORT_JOB.journalled(NS, name, {}, OPS):
-            return {"job": name, "namespace": NS, "workload": "", "volume": "", "volumes": [], "known": True, "journalled": True}
+        if IMPORT_JOB.journalled(ns, name, {}, OPS):
+            return {"job": name, "namespace": ns, "workload": "", "volume": "", "volumes": [], "known": True, "journalled": True}
         return {"job": name, "workload": "", "volume": "", "volume_created": False,
-                "volumes": [], "namespace": NS, "known": False}
-    if IMPORT_JOB.journalled(NS, name, job, OPS):
-        return {"job": name, "namespace": NS, "workload": "", "volume": "", "volumes": [], "known": True, "journalled": True}
+                "volumes": [], "namespace": ns, "known": False}
+    if IMPORT_JOB.journalled(ns, name, job, OPS):
+        return {"job": name, "namespace": ns, "workload": "", "volume": "", "volumes": [], "known": True, "journalled": True}
     meta = job.get("metadata", {}) or {}
     annotations = meta.get("annotations", {}) or {}
     app = NAMES.label_of(meta, "app")
@@ -1200,11 +1219,11 @@ def import_cleanup_plan(name):
     exists = False
     if workload:
         try:
-            kget(f"/apis/apps/v1/namespaces/{NS}/deployments/{workload}")
+            kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{workload}")
             exists = True
         except Exception:
             exists = False
-    return {"job": name, "namespace": NS, "workload": workload if exists else "",
+    return {"job": name, "namespace": ns, "workload": workload if exists else "",
             "volume": volume, "volume_created": created,
             # An import can fill several volumes - appdata on one, recordings on
             # another - and cleaning it up has to offer all of them, not just the
@@ -1229,7 +1248,7 @@ def _plan_volumes(annotations, volume, created):
     return [{"name": claim, "created": claim in made} for claim in used]
 
 
-def delete_import(name):
+def delete_import(name, ns=None):
     """Remove an import Job, cancelling the copy if it is still running.
 
     A failed import leaves its Job behind, and while that Job exists it still
@@ -1238,24 +1257,25 @@ def delete_import(name):
     """
     if not re.fullmatch(r"homestead-import-[a-z0-9][a-z0-9-]{0,60}", str(name or "")):
         raise ValueError("unknown import job")
+    ns = _job_ns(ns)
     # Preserve successful completion before removing its proof. Failed copies
     # deliberately leave the workload interlocked, never silently startable.
     try:
-        job = kget(f"/apis/batch/v1/namespaces/{NS}/jobs/{name}")
+        job = kget(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}")
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
         job = {}
     except ValueError:
         job = {}  # legacy client reports a missing Job this way
-    if IMPORT_JOB.journalled(NS, name, job, OPS):
-        return IMPORT_JOB.remove_completed_job(NS, name, job, kget, ksend, OPS)
+    if IMPORT_JOB.journalled(ns, name, job, OPS):
+        return IMPORT_JOB.remove_completed_job(ns, name, job, kget, ksend, OPS)
     complete = any(c.get("type") == "Complete" and c.get("status") == "True"
                    for c in (job.get("status") or {}).get("conditions") or [])
     for owner in (job.get("metadata") or {}).get("ownerReferences") or []:
         if not complete or owner.get("kind") != "Deployment":
             continue
-        path = f"/apis/apps/v1/namespaces/{NS}/deployments/{owner['name']}"
+        path = f"/apis/apps/v1/namespaces/{ns}/deployments/{owner['name']}"
         try:
             dep = kget(path)
         except urllib.error.HTTPError as error:
@@ -1271,12 +1291,13 @@ def delete_import(name):
             dep["metadata"]["annotations"] = annotations
             ksend("PUT", path, dep)  # resourceVersion protects concurrent edits
     try:
-        ksend("DELETE", f"/apis/batch/v1/namespaces/{NS}/jobs/{name}"
+        ksend("DELETE", f"/apis/batch/v1/namespaces/{ns}/jobs/{name}"
                         "?propagationPolicy=Background")
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
-    stopped = _stop_job_pods(name)
+    stopped = _stop_job_pods(name, ns=ns)
+    _drop_source_copy(name, ns)
     # A pre-pull started for this app outlives the import that wanted it: it is
     # a DaemonSet, so deleting its pods only makes it build new ones.
     app = re.sub(r"^homestead-import-", "", name)
@@ -1312,7 +1333,7 @@ def wait_for_pods_gone(namespace, selector, seconds=20):
         time.sleep(1)
 
 
-def _stop_job_pods(job, seconds=20):
+def _stop_job_pods(job, seconds=20, ns=None):
     """Kill the copy pod now, and wait for it to actually be gone.
 
     Deleting the Job in the background hands the pod to the garbage collector
@@ -1321,15 +1342,15 @@ def _stop_job_pods(job, seconds=20):
     Terminating behind the pvc-protection finaliser. Cancelling a copy means
     cancelling it, so the pod goes first and the claims are free afterwards.
     """
-    removed = []
+    removed, ns = [], ns or NS
     try:
-        pods = kget(f"/api/v1/namespaces/{NS}/pods?labelSelector=job-name%3D{job}").get("items", [])
+        pods = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=job-name%3D{job}").get("items", [])
     except Exception:
         return removed
     for pod in pods:
         pod_name = pod["metadata"]["name"]
         try:
-            ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{pod_name}?gracePeriodSeconds=0")
+            ksend("DELETE", f"/api/v1/namespaces/{ns}/pods/{pod_name}?gracePeriodSeconds=0")
             removed.append(pod_name)
         except urllib.error.HTTPError as error:
             if error.code != 404:
@@ -1337,7 +1358,7 @@ def _stop_job_pods(job, seconds=20):
     deadline = time.time() + max(0, seconds)
     while removed and time.time() < deadline:
         try:
-            left = kget(f"/api/v1/namespaces/{NS}/pods?labelSelector=job-name%3D{job}").get("items", [])
+            left = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=job-name%3D{job}").get("items", [])
         except Exception:
             break
         if not left:
@@ -1346,9 +1367,21 @@ def _stop_job_pods(job, seconds=20):
     return removed
 
 
-def _job_pod(job):
+def _drop_source_copy(job, ns):
+    """The source password borrowed for a copy in another namespace, once the
+    copy no longer needs it. Only ever the copy: the original stays."""
+    if ns == NS:
+        return
     try:
-        pods = kget(f"/api/v1/namespaces/{NS}/pods?labelSelector=job-name%3D{job}").get("items", [])
+        ksend("DELETE", f"/api/v1/namespaces/{ns}/secrets/{job}-source")
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+
+
+def _job_pod(job, ns=None):
+    try:
+        pods = kget(f"/api/v1/namespaces/{ns or NS}/pods?labelSelector=job-name%3D{job}").get("items", [])
     except Exception:
         return ""
     pods.sort(key=lambda pod: pod["metadata"].get("creationTimestamp", ""), reverse=True)
@@ -1357,18 +1390,25 @@ def _job_pod(job):
 
 def import_status():
     try:
+        # Every namespace: an import can be put in any of them.
         jobs = [job for job in
-                NAMES.find(f"/apis/batch/v1/namespaces/{NS}/jobs", "task")
+                NAMES.find("/apis/batch/v1/jobs", "task")
                 if NAMES.label_of(job["metadata"], "task") in ("import", "chown")]
     except Exception:
         return []
     out = []
     for j in jobs:
         st = j.get("status", {})
+        ns = j["metadata"].get("namespace") or NS
         state = ("running" if st.get("active") else "done" if st.get("succeeded")
                  else "failed" if st.get("failed") else "pending")
+        if state in ("done", "failed") and ns != NS:
+            try:
+                _drop_source_copy(j["metadata"]["name"], ns)
+            except Exception:
+                pass
         row = {
-            "name": j["metadata"]["name"],
+            "name": j["metadata"]["name"], "namespace": ns,
             "kind": NAMES.label_of(j["metadata"], "task", "import"),
             "app": NAMES.label_of(j["metadata"], "app"),
             "active": st.get("active", 0), "succeeded": st.get("succeeded", 0),
@@ -1377,10 +1417,10 @@ def import_status():
             "state": state,
         }
         if state in ("running", "failed"):
-            pod = _job_pod(j["metadata"]["name"])
+            pod = _job_pod(j["metadata"]["name"], ns)
             if pod:
                 try:
-                    log = _pod_logs(pod)
+                    log = _pod_logs(pod, ns)
                     row.update(import_progress(log) or {})
                     if state == "failed" and not row.get("error"):
                         tail = [line for line in str(log or "").splitlines() if line.strip()]

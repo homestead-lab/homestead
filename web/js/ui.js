@@ -379,6 +379,10 @@ function stepGo(id, to, relative) {
   if (!root) return;
   const panes = [...root.querySelectorAll(":scope > .stepper-pane")], chips = [...root.querySelectorAll(".stepper-chip")];
   const next = Math.max(0, Math.min(panes.length - 1, relative ? +root.dataset.step + to : to));
+  // A step can hold the form until it is answered: data-guard names a
+  // function given the step being left, which returns false to stay.
+  const guard = root.dataset.guard && window[root.dataset.guard];
+  if (guard && next > +(root.dataset.step || 0) && guard(+(root.dataset.step || 0)) === false) return;
   root.dataset.step = next;
   panes.forEach((pane, i) => { pane.hidden = i !== next; });
   chips.forEach((chip, i) => { chip.classList.toggle("on", i === next); chip.setAttribute("aria-selected", String(i === next)); chip.tabIndex = i === next ? 0 : -1; });
