@@ -101,6 +101,7 @@ class RolloutTests(unittest.TestCase):
         done = self.run_until_done() if ROLLOUT.start(now=1000) else None
         self.assertEqual("succeeded", done["status"])
         self.assertIn("needing a restart: node-1", done["message"])
+        self.assertIn("(node-1: Running VMs are on this host", done["message"], "the job says why")
         self.assertEqual({"node-1", "node-2"}, set(self.hosts.began))
 
     def test_a_host_cordoned_before_stays_cordoned(self):

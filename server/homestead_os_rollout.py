@@ -319,13 +319,16 @@ def _finish(state, rollout, now):
         _holds(state, False, rollout["nodes"])
     results = rollout["results"]
     restarted = sum(1 for r in results if r.get("restarted"))
-    waiting = [r["node"] for r in results if r.get("restart_needed")]
+    waiting = [r for r in results if r.get("restart_needed")]
     rollout["status"] = "failed" if rollout.get("failed") else "stopped" if rollout.get("stop") and \
         rollout["index"] < len(rollout["nodes"]) else "succeeded"
     rollout["finished"] = int(now)
     words = [f"{len(results)} host{'s' if len(results) != 1 else ''} done", f"{restarted} restarted"]
     if waiting:
-        words.append("needing a restart: " + ", ".join(waiting))
+        # Why the first was not restarted - the review's reason - so the job
+        # says what to fix, not only who waits.
+        why = waiting[0]["note"].split("restart not done: ", 1)[-1]
+        words.append("needing a restart: " + ", ".join(r["node"] for r in waiting) + f" ({waiting[0]['node']}: {why})")
     failed = [r for r in results if not r["ok"]]
     if failed:
         words.append(f"{failed[-1]['node']}: {failed[-1]['note']}")
