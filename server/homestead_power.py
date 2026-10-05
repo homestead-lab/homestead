@@ -277,7 +277,13 @@ def recheck_after_drain(original, clock=time.time, sleep=time.sleep):
         stopped_to_wait = old and volume.get("state") == "detached"
         if (not old or volume["healthy_elsewhere"] < old["healthy_elsewhere"] or
                 (volume["robustness"] != old["robustness"] and not expected_degradation and not stopped_to_wait)):
-            raise ValueError("Host remains cordoned; volume impact changed during drain. Power was not sent; review again")
+            # Say which, and how - the review is for a person to act on.
+            what = ("it is new since the review" if not old else
+                    f"healthy copies elsewhere went from {old['healthy_elsewhere']} to {volume['healthy_elsewhere']}"
+                    if volume["healthy_elsewhere"] < old["healthy_elsewhere"] else
+                    f"it went from {old['robustness']} to {volume['robustness']} ({volume.get('state') or 'state unknown'})")
+            raise ValueError(f"Host remains cordoned; volume impact changed during drain - {volume.get('claim') or volume['name']}: "
+                             f"{what}. Power was not sent; review again")
     if fresh["boot_id"] != original["boot_id"] or fresh["node_uid"] != original["node_uid"]:
         raise ValueError("Host identity changed during drain; power was not sent")
     remaining = [p for p in _items("/api/v1/pods") if (p.get("spec") or {}).get("nodeName") == original["node"] and MAINTENANCE.drainable(p)]
