@@ -163,9 +163,12 @@ class Journal:
         self.ref["retain_resources"] = True
         try:
             self.checkpoint(self.item)
-        except Exception:
+        except Exception as error:
             self.failed = True
-            raise Held("Storage write progress could not be saved; inspect its retained intent before continuing") from None
+            # Said with its cause: a full disk, a stale data mount and a fenced
+            # write each want a different next step.
+            raise Held("Storage write progress could not be saved; inspect its retained intent before continuing "
+                       f"({type(error).__name__}: {str(error)[:160]})") from None
 
     def observe(self, entry):
         """Observe a confirmed receipt, never adopt or resend an uncertain one."""
