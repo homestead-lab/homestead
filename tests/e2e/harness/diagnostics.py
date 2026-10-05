@@ -79,8 +79,11 @@ def collect(ctx, label):
             "sudo journalctl -b --no-pager | grep -v ' netlog: ' | tail -3000", check=False, timeout=90))
         # The services that hold storage and the network up, and the kernel.
         save(f"{node.name}-services-journal.txt", lambda node=node: node.ssh(
-            "sudo journalctl -b --no-pager -k -u k3s -u k3s-agent -u rke2-server -u rke2-agent -u iscsid "
-            "| grep -vE 'netlog|level=info' | tail -1500", check=False, timeout=90))
+            # -k with -u asks for kernel lines from those units - none - so
+            # the two are read separately.
+            "{ sudo journalctl -b --no-pager -k | tail -400; echo; "
+            "sudo journalctl -b --no-pager -u k3s -u k3s-agent -u rke2-server -u rke2-agent -u iscsid "
+            "| grep -vE 'netlog|level=info' | tail -1200; }", check=False, timeout=90))
         # What the host's network became: addresses, routes, its resolver and
         # whether it answers, and the packet filter that can stand in the way.
         save(f"{node.name}-network.txt", lambda node=node: node.ssh(

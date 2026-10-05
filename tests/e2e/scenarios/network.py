@@ -226,6 +226,10 @@ def installer(ctx):
                        f"sudo sh /tmp/install.sh --report < /dev/null; echo EXIT=$?", check=False, timeout=900)
         code = out.strip().rsplit("EXIT=", 1)[-1].strip()
         log.info(f"{node.name}: doctor exit {code} after its safe fixes")
+        # What it fixed and what it still warns about: a safe fix that
+        # disturbs storage shows here first.
+        lines = [line for line in out.splitlines() if line.strip() and not line.startswith("EXIT=")]
+        log.info("  " + "\n  ".join(lines[-40:]))
         assert code in ("0", "1"), f"{node.name}: failures remain after the safe fixes:\n{out[-3000:]}"
 
     before = sorted(p["metadata"]["uid"] for p in ctx.kube.items("pods", "-n", "lab", "-l", "app=homestead"))
