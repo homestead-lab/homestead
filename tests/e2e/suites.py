@@ -10,7 +10,7 @@ distribution changes what happens (installs, drains and reboots, the CNI's
 firewall). The rest run on k3s, keeping a release inside the twenty jobs a
 repository runs at once. Asked for by hand or by an e2e/ branch, RKE2 runs
 everything."""
-from scenarios import migration, network, outage, power, rolling, self_data, shutdown, smoke, storage
+from scenarios import longhorn_v2, migration, network, outage, power, rolling, self_data, shutdown, smoke, storage
 
 SUITES = {
     # Every GET route and the node doctor, on three hosts.
@@ -40,7 +40,13 @@ SUITES = {
     # Homestead's own data moved to a new volume twice, across hosts.
     "self-data": {"nodes": 3, "scenarios": [("move Homestead's data", self_data.run)]},
     # Copies kept whole, and Balance hosts.
-    "storage": {"nodes": 3, "scenarios": [("offline rebuild", storage.offline_rebuild), ("balance hosts", storage.balance)]},
+    "storage": {"nodes": 3, "scenarios": [("offline rebuild", storage.offline_rebuild), ("balance hosts", storage.balance)],
+                "jobs": [["offline rebuild", "balance hosts"]]},
+    # Longhorn's V2 data engine, prepared, enabled and given a disk through
+    # Homestead; a V2 volume across a host reboot. Two hosts: hugepages and
+    # a polling core each leave room for no third on a runner.
+    "longhorn-v2": {"nodes": 2, "memory": 6144, "data_disk": "20G", "hugepages": 1100,
+                    "scenarios": [("longhorn v2", longhorn_v2.run)]},
 }
 
 

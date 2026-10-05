@@ -22,7 +22,7 @@ on:
         description: "Published Homestead version to test, e.g. 2.8.312 or 2.8.312-dev.1"
         required: true
       suites:
-        description: "Suites, comma-separated, or all (core, power, single, shutdown, rolling, outage, migration, network, self-data, storage)"
+        description: "Suites, comma-separated, or all (core, power, single, shutdown, rolling, outage, migration, network, self-data, storage, longhorn-v2)"
         default: all
       distros:
         description: "Distributions, comma-separated"

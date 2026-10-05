@@ -62,6 +62,8 @@ class Node:
                 "-smp", str(self.lab.cpus), "-m", str(self.lab.memory), "-name", self.name,
                 "-drive", f"file={self.dir / 'disk.qcow2'},if=virtio,cache=unsafe,discard=unmap",
                 "-drive", f"file={self.dir / 'seed.iso'},if=virtio,format=raw,readonly=on",
+                *(["-drive", f"file={self.dir / 'data.qcow2'},if=virtio,serial=e2e-data,cache=unsafe,discard=unmap"]
+                  if self.lab.data_disk else []),
                 "-netdev", f"tap,id=lan,ifname={self.tap},script=no,downscript=no",
                 "-device", f"virtio-net-pci,netdev=lan,mac={self.mac}",
                 "-qmp", f"unix:{self.dir / 'qmp.sock'},server=on,wait=off",
@@ -138,9 +140,13 @@ class Node:
 class Lab:
     """The VMs, their network, and the runner's hand on their power."""
 
-    def __init__(self, directory, count, memory=4096, cpus=2, disk="40G"):
+    def __init__(self, directory, count, memory=4096, cpus=2, disk="40G", data_disk="", hugepages=0):
+        """data_disk: a second, blank disk on each host (serial e2e-data), as
+        a disk to give Longhorn. hugepages: 2 MiB pages reserved at every
+        boot, before Kubernetes starts - as a host prepared for Longhorn V2."""
         self.dir = Path(directory)
         self.memory, self.cpus, self.disk = memory, cpus, disk
+        self.data_disk, self.hugepages = data_disk, hugepages
         self.nodes = [Node(self, i) for i in range(count)]
         self.key = str(self.dir / "id_ed25519")
 
@@ -153,6 +159,8 @@ class Lab:
         for node in self.nodes:
             node.dir.mkdir(parents=True, exist_ok=True)
             sh("qemu-img", "create", "-q", "-f", "qcow2", "-F", "qcow2", "-b", base, node.dir / "disk.qcow2", self.disk)
+            if self.data_disk:
+                sh("qemu-img", "create", "-q", "-f", "qcow2", node.dir / "data.qcow2", self.data_disk)
             self._seed(node)
             node.power_on()
         for node in self.nodes:
@@ -234,7 +242,9 @@ users:
     shell: /bin/bash
     ssh_authorized_keys: ["{public}"]
 growpart: {{mode: auto, devices: ["/"]}}
-runcmd:
+""" + (f"""bootcmd:
+  - sysctl -w vm.nr_hugepages={self.hugepages}
+""" if self.hugepages and not prepare else "") + """runcmd:
   - systemctl disable --now unattended-upgrades apt-daily.timer apt-daily-upgrade.timer || true
   - systemctl enable --now iscsid || true
 """ + ("""  - DEBIAN_FRONTEND=noninteractive apt-get -q update
