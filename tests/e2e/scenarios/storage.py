@@ -58,7 +58,7 @@ def balance(ctx):
     containers = ctx.api.get("/api/workloads/rebalance/plan")
     log.info(f"Planned: {len(volumes['moves'])} copies, {len(containers['moves'])} containers")
 
-    job = ctx.api.post("/api/longhorn/rebalance", {"exclude": [], "review_token": volumes["review_token"]})["operation"]["id"]
+    job = ctx.api.post("/api/longhorn/rebalance", {"exclude": [], "review_token": volumes["review_token"], "moves": volumes["moves"]})["operation"]["id"]
     ctx.api.wait_job(job, timeout=3600)
     held = {r["spec"]["nodeID"] for r in ctx.kube.items("replicas.longhorn.io", "-n", "longhorn-system")
             if r["spec"]["volumeName"] in {m["volume"] for m in volumes["moves"]}}
