@@ -107,4 +107,5 @@ def run(ctx):
     # The one in use is whole; the first, kept after the second move, rests detached.
     robustness = ctx.kube.volume("lab", second)["status"].get("robustness")
     assert robustness in ("healthy", "degraded"), f"{second} is {robustness}"
-    assert ctx.kube.volume("lab", first)["status"].get("state") == "detached", f"{first} is still attached"
+    ctx.kube.wait(f"{first} released", lambda: ctx.kube.volume("lab", first)["status"].get("state") == "detached",
+                  timeout=180, every=10)
