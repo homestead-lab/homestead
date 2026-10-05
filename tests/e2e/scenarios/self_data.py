@@ -81,8 +81,14 @@ def run(ctx):
     claims_before = {c["metadata"]["name"] for c in ctx.kube.items("pvc", "-n", "lab")}
     jobs_before = len(ctx.api.get("/api/operations") or [])
 
-    first = _move(ctx, TARGET, away[0], away[1])
-    second = _move(ctx, "longhorn", away[1], away[0])
+    # A move's handoff is followed on the address that started it: its cookie
+    # belongs there, as it does in the browser that started the move.
+    urls, ctx.api.urls = ctx.api.urls, ctx.api.urls[:1]
+    try:
+        first = _move(ctx, TARGET, away[0], away[1])
+        second = _move(ctx, "longhorn", away[1], away[0])
+    finally:
+        ctx.api.urls = urls
     ctx.kube.deployment_ready("lab", "homestead")
     log.info(f"Homestead's data moved to {first}, then {second}")
 

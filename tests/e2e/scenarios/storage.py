@@ -64,7 +64,7 @@ def balance(ctx):
 
     if containers["moves"]:
         job = ctx.api.post("/api/workloads/rebalance", {"exclude": [], "review_token": containers["review_token"],
-                                                        "restart": True})["operation"]["id"]
+                                                        "moves": containers["moves"], "restart": True})["operation"]["id"]
         ctx.api.wait_job(job, timeout=1800)
         for move in containers["moves"]:
             assert ctx.app_node(move["name"]) == move["to"], f"{move['id']} did not move to {move['to']}"

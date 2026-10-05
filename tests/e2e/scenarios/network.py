@@ -82,7 +82,7 @@ def _reaches(ctx, ns, url):
 def _holder(ctx, address):
     """The host the address is up on now."""
     for node in ctx.lab.nodes:
-        if node.running() and address in node.ssh(f"ip -4 -o addr show | grep -F ' {address}/' || true", check=False, quiet=True):
+        if node.running and address in node.ssh(f"ip -4 -o addr show | grep -F ' {address}/' || true", check=False, quiet=True):
             return node
     return None
 
