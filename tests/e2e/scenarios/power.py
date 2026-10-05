@@ -20,11 +20,18 @@ def _send(ctx, plan, choices=None):
     return answer["operation"]["id"]
 
 
-def _volumes_available(ctx, apps):
+def _volumes_available(ctx, apps, wait=120):
+    """Each app's volume healthy or degraded. Longhorn reports "unknown" for a
+    while after the host it is attached on comes back, even once the app
+    reads its data again - so it is given a couple of minutes to settle."""
     for name in apps:
-        volume = ctx.kube.volume("lab", f"{name}-data")
-        robustness = volume["status"].get("robustness")
-        assert robustness in ("healthy", "degraded"), f"{name}'s volume is {robustness} after the host came back"
+        deadline = time.time() + wait
+        while True:
+            robustness = ctx.kube.volume("lab", f"{name}-data")["status"].get("robustness")
+            if robustness in ("healthy", "degraded"):
+                break
+            assert time.time() < deadline, f"{name}'s volume is {robustness} {wait}s after the host came back"
+            time.sleep(5)
 
 
 def multi(ctx):

@@ -96,10 +96,22 @@ class Homestead:
             log.info("Homestead: first administrator created")
         else:
             path = "/api/auth/login"
-        if base is None:
-            self.post(path, creds)
-        else:
-            self._once(base, "POST", path, creds, 30)
+        try:
+            if base is None:
+                self.post(path, creds)
+            else:
+                self._once(base, "POST", path, creds, 30)
+        except HomesteadError as error:
+            # The setup went through but its answer was lost (the pod moved
+            # or the address changed hands mid-request), so the retry was
+            # refused: the administrator exists - sign in as it.
+            if path != "/api/auth/setup" or error.status != 403 or "already been completed" not in str(error):
+                raise
+            log.info("Homestead: setup had already gone through; signing in")
+            if base is None:
+                self.post("/api/auth/login", creds)
+            else:
+                self._once(base, "POST", "/api/auth/login", creds, 30)
 
     # ------------------------------------------------------------ jobs
     def job(self, operation_id):
