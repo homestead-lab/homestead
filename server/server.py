@@ -9582,6 +9582,7 @@ class H(HTTP.LimitedHandler):
                     {"component": result["component"], "name": result["name"], "from": result["from"],
                      "to": result["to"], "started": time.time(),
                      "phase": "controller" if result["component"] == "cluster" else "",
+                     **({"held": result["held"]} if "held" in result else {}),
                      **({"v2_mode": result["v2_mode"]} if result.get("v2_mode") else {})},
                     result["detail"])
                 return self._send(200, result)

@@ -67,6 +67,7 @@ PLANS = "/apis/upgrade.cattle.io/v1/namespaces/system-upgrade/plans"
 PLAN_NAMES = ("homestead-server", "homestead-agent")
 CONTROL_PLANE = "node-role.kubernetes.io/control-plane"
 CONTROLLER_WAIT = 15 * 60
+JOB_FINISH_WAIT = 10 * 60
 
 
 def bind(_kget, _ksend, _platform, _helm_upgrade, _addons, _fetch_json=None):
@@ -359,7 +360,9 @@ def upgrade(component, target, options=None):
     if target != found["next"]:
         raise ValueError(f"{found['name']} goes from {found['installed']} to {found['next']} next; "
                          f"{target} would skip a step")
+    held = []
     if component == "cluster":
+        held = cordoned()
         detail = _start_cluster(target)
     elif component == "longhorn":
         import homestead_lhv2_upgrade as V2
@@ -384,7 +387,8 @@ def upgrade(component, target, options=None):
         detail = _start_operator(component, target)
     return {"ok": True, "component": component, "name": found["name"], "from": found["installed"],
             "to": target, "detail": detail,
-            **({"v2_mode": mode} if component == "longhorn" else {})}
+            **({"v2_mode": mode} if component == "longhorn" else {}),
+            **({"held": held} if component == "cluster" else {})}
 
 
 def _start_operator(component, target):
@@ -505,6 +509,39 @@ def _failed_upgrade_job():
     return ""
 
 
+def cordoned():
+    """Hosts someone had already cordoned: an upgrade leaves them so."""
+    return sorted(n["metadata"]["name"] for n in _items("/api/v1/nodes") if (n.get("spec") or {}).get("unschedulable"))
+
+
+def _upgrade_jobs_running():
+    """Nodes whose upgrade job has not finished. A node reports its new
+    version when k3s or RKE2 restarts, before its job ends - and it is the
+    job's end that has the controller uncordon it."""
+    out = []
+    for job in _items(f"/apis/batch/v1/namespaces/{SUC_NS}/jobs"):
+        labels = (job.get("metadata") or {}).get("labels") or {}
+        status = job.get("status") or {}
+        if labels.get("upgrade.cattle.io/plan") in PLAN_NAMES and not status.get("succeeded") and not status.get("failed"):
+            out.append(labels.get("upgrade.cattle.io/node") or job["metadata"]["name"])
+    return sorted(out)
+
+
+def _uncordon_upgraded(held):
+    """Removing the Plans removes their jobs, and a job removed before the
+    controller saw it end leaves its node cordoned. Uncordon the nodes the
+    Plans touched, except those someone had cordoned before the upgrade."""
+    freed = []
+    for node in _items("/api/v1/nodes"):
+        name, labels = node["metadata"]["name"], node["metadata"].get("labels") or {}
+        touched = any(f"plan.upgrade.cattle.io/{plan}" in labels for plan in PLAN_NAMES)
+        if touched and (node.get("spec") or {}).get("unschedulable") and name not in held:
+            ksend("PATCH", f"/api/v1/nodes/{name}", [{"op": "add", "path": "/spec/unschedulable", "value": False}],
+                  ctype="application/json-patch+json")
+            freed.append(name)
+    return freed
+
+
 def _elapsed(item):
     try:
         return time.time() - float(item["ref"].get("started") or 0)
@@ -597,8 +634,13 @@ def status(item):
         versions = node_versions()
         done = sum(1 for v in versions.values() if v == target)
         if versions and done == len(versions):
+            finishing = _upgrade_jobs_running()
+            since = time.time() - ref.setdefault("versions_at", time.time())
+            if finishing and since < JOB_FINISH_WAIT:
+                return "running", 98, f"Every node runs {target}; waiting for the upgrade job on {', '.join(finishing[:3])} to finish"
             remove_plans()
-            return "succeeded", 100, f"Every node runs {target}"
+            freed = _uncordon_upgraded(set(ref.get("held") or []))
+            return "succeeded", 100, f"Every node runs {target}" + (f"; uncordoned {', '.join(freed)}" if freed else "")
         failed = _failed_upgrade_job()
         if failed:
             return "failed", int(100 * done / max(1, len(versions))), failed
