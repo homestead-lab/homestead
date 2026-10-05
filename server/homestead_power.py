@@ -242,11 +242,28 @@ def recheck_forced(original):
         raise ValueError("Host identity changed since the review; power was not sent")
 
 
-def recheck_after_drain(original):
+SETTLE = 180       # seconds a moved app's volume may take to attach on its new host
+
+
+def _in_transit(volume):
+    """Between hosts: an app that moved off has its volume detaching here and
+    attaching there, its health unknown for that moment."""
+    state = volume.get("state") or ""
+    return state in ("attaching", "detaching") or (volume.get("robustness") in ("unknown", "") and state not in ("detached", ""))
+
+
+def recheck_after_drain(original, clock=time.time, sleep=time.sleep):
     """Never send power using the pre-drain storage/quorum/VM snapshot."""
     # Eviction may remove the local replica entirely. Keep checking every
     # reviewed volume, even when it no longer appears on the drained host.
-    fresh = plan(original["node"], original["action"], volume_names=[v["name"] for v in original["volumes"]], after_drain=True)
+    # A volume still moving with its app is given a moment to settle first.
+    names = [v["name"] for v in original["volumes"]]
+    deadline = clock() + SETTLE
+    while True:
+        fresh = plan(original["node"], original["action"], volume_names=names, after_drain=True)
+        if not any(_in_transit(v) for v in fresh["volumes"]) or clock() >= deadline:
+            break
+        sleep(5)
     if not fresh["ready"]:
         raise ValueError("Host remains cordoned; power was not sent: " + "; ".join(fresh["blockers"]))
     before = {v["name"]: v for v in original["volumes"]}

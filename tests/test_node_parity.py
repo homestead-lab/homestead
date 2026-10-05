@@ -237,6 +237,34 @@ class NodeParityTests(unittest.TestCase):
         self.assertIsNone(PARITY.copies_tick(), "2 was not Homestead's: it stays")
         self.assertEqual([], cluster.sent)
 
+    def own_cluster(self, nodes, copies):
+        deployment = {"spec": {"template": {"spec": {"volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "homestead-data"}}]}}}}
+        volume = {"spec": {"numberOfReplicas": copies}}
+        cluster = Cluster([node(n) for n in nodes], {
+            "/apis/apps/v1/namespaces/lab/deployments/homestead": deployment,
+            "/api/v1/namespaces/lab/persistentvolumeclaims/homestead-data": {"spec": {"volumeName": "pvc-1"}},
+            f"{PARITY.LH_VOLUMES}/pvc-1": volume})
+        cluster.ksend = lambda method, path, body=None, ctype="": (cluster.sent.append((method, path, body)),
+                                                                   volume["spec"].update(body["spec"]))
+        hostrun = type("H", (), {"run": staticmethod(cluster.run)})
+        PARITY.bind(cluster.kget, cluster.ksend, hostrun, lambda force=False: {"distribution": "k3s", "longhorn": True},
+                    lambda: cluster.probes, self.data, ("lab", "homestead"))
+        return cluster, volume
+
+    def test_homesteads_own_data_volume_rises_with_the_nodes(self):
+        cluster, volume = self.own_cluster(["a", "b"], 1)
+        self.assertEqual([("homestead-data", 2)], PARITY.own_copies(PARITY._ready_nodes()))
+        cluster.objects["/api/v1/nodes"]["items"].append(node("c"))
+        self.assertEqual([("homestead-data", 3)], PARITY.own_copies(PARITY._ready_nodes()))
+        self.assertEqual(3, volume["spec"]["numberOfReplicas"])
+        cluster.objects["/api/v1/nodes"]["items"].pop()
+        self.assertEqual([], PARITY.own_copies(PARITY._ready_nodes()), "never lowered")
+
+    def test_homesteads_data_volume_set_by_someone_else_is_kept(self):
+        cluster, volume = self.own_cluster(["a", "b", "c"], 2)
+        self.assertEqual([], PARITY.own_copies(PARITY._ready_nodes()))
+        self.assertEqual([], cluster.sent)
+
     def test_copies_someone_chose_are_kept(self):
         for values in ("persistence:\n  defaultClassReplicaCount: 2\ndefaultSettings:\n  defaultReplicaCount: 2\n",
                        INSTALLER_LONGHORN + "longhornUI:\n  replicas: 1\n"):

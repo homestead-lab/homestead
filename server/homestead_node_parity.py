@@ -24,7 +24,10 @@ machine do not:
   itself set, so a count someone chose is kept, and it is never lowered. A
   change in Ready nodes is noticed within a minute (copies_tick), so apps
   made just after the nodes join get the copies too. Existing volumes keep
-  their count; the Volumes page raises those.
+  their count; the Volumes page raises those - except Homestead's own data
+  volume, made by the installer on the first machine with its one copy: it
+  rises with the default, on the same terms, or the host holding it could
+  never be drained for a restart.
 
 Each node's host is done once, and recorded in /data, like the inotify
 limits (homestead_host_limits); a host done by an older release, with fewer
@@ -82,9 +85,14 @@ echo END
 """
 
 
-def bind(_kget, _ksend, _hostrun, _platform, _probes, data_dir="/data"):
-    global kget, ksend, hostrun, platform, probes, DATA_DIR
+OWN = ("", "")      # Homestead's namespace and Deployment, whose data volume follows the nodes
+LH_VOLUMES = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes"
+
+
+def bind(_kget, _ksend, _hostrun, _platform, _probes, data_dir="/data", own=("", "")):
+    global kget, ksend, hostrun, platform, probes, DATA_DIR, OWN
     kget, ksend, hostrun, platform, probes, DATA_DIR = _kget, _ksend, _hostrun, _platform, _probes, data_dir
+    OWN = tuple(own)
 
 
 def _path():
@@ -362,6 +370,36 @@ def longhorn_copies(ready):
     return (have, want)
 
 
+def own_copies(ready):
+    """Homestead's own data volume raised with the nodes, while it keeps the
+    installer's one copy or the count Homestead set before. Returns the
+    claims raised, as (claim, to)."""
+    want = max(1, min(3, len(ready)))
+    ns, name = OWN
+    if want < 2 or not ns or not name:
+        return []
+    deployment = _get(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}") or {}
+    claims = [v["persistentVolumeClaim"]["claimName"] for v in
+              (((deployment.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or []
+              if (v.get("persistentVolumeClaim") or {}).get("claimName")]
+    state = _load()
+    ours = {1, int(state.get("own_copies") or 1)}
+    raised = []
+    for claim in claims:
+        pv = ((_get(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}") or {}).get("spec") or {}).get("volumeName")
+        volume = _get(f"{LH_VOLUMES}/{pv}") if pv else None
+        have = int(((volume or {}).get("spec") or {}).get("numberOfReplicas") or 0)
+        if not volume or have not in ours or have >= want:
+            continue
+        ksend("PATCH", f"{LH_VOLUMES}/{pv}", {"spec": {"numberOfReplicas": want}}, ctype="application/merge-patch+json")
+        raised.append((claim, want))
+    if raised:
+        state = _load()
+        state["own_copies"] = want
+        SHARED.write_json(_path(), state, indent=1, sort_keys=True)
+    return raised
+
+
 _seen_ready = None
 
 
@@ -376,8 +414,11 @@ def copies_tick():
     if len(ready) == _seen_ready:
         return None
     raised = longhorn_copies(ready)
+    own = own_copies(ready)
     _seen_ready = len(ready)
-    return _copies_note(raised, ready)
+    notes = [n for n in [_copies_note(raised, ready)] + [f"Homestead's data volume {claim} keeps {to} copies now"
+                                                          for claim, to in own] if n]
+    return "; ".join(notes) or None
 
 
 def _copies_note(raised, ready):

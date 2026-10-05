@@ -291,6 +291,29 @@ class MaintenanceSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "volume impact changed"):
             power.recheck_after_drain(original)
 
+    def test_a_volume_still_attaching_with_its_moved_app_is_given_time_to_settle(self):
+        original = power.plan("node1", "reboot")
+        self.objects["/api/v1/pods"]["items"] = []
+        volume = self.objects[f"{power.LH}/volumes"]["items"][0]
+        volume["status"].update(state="attaching", robustness="unknown")
+        now = [0]
+        def sleep(seconds):
+            now[0] += seconds
+            if now[0] >= 20:                   # attached on its new host
+                volume["status"].update(state="attached", robustness="healthy")
+        power.recheck_after_drain(original, clock=lambda: now[0], sleep=sleep)
+        self.assertEqual(20, now[0])
+
+    def test_a_volume_that_never_settles_still_stops_power(self):
+        original = power.plan("node1", "reboot")
+        self.objects["/api/v1/pods"]["items"] = []
+        self.objects[f"{power.LH}/volumes"]["items"][0]["status"].update(state="attaching", robustness="unknown")
+        now = [0]
+        def sleep(seconds): now[0] += seconds
+        with self.assertRaisesRegex(ValueError, "volume impact changed"):
+            power.recheck_after_drain(original, clock=lambda: now[0], sleep=sleep)
+        self.assertGreaterEqual(now[0], power.SETTLE)
+
     def test_evicted_local_replica_does_not_hide_survivor_loss_or_missing_volume(self):
         original = power.plan("node1", "reboot")
         self.objects["/api/v1/pods"]["items"] = []
