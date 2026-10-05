@@ -170,7 +170,10 @@ class UnattendedRestartTests(unittest.TestCase):
                          maintenance={"local_storage": [
                              {"pod": "longhorn-system/csi-attacher-a", "kind": "host-local path (not moved)",
                               "source": "/var/lib/kubelet/plugins/driver.longhorn.io"},
-                             {"pod": "kube-system/svclb-x", "kind": "host-local path (not moved)", "source": "/run/xtables.lock"}]})
+                             {"pod": "kube-system/svclb-x", "kind": "host-local path (not moved)", "source": "/run/xtables.lock"},
+                             {"pod": "longhorn-system/instance-manager-a", "kind": "host-local path (not moved)", "source": "/"},
+                             {"pod": "longhorn-system/instance-manager-a", "kind": "host-local path (not moved)",
+                              "source": "/var/lib/longhorn/engine-binaries/"}]})
         with mock.patch.object(server.POWER, "plan", return_value=plan), \
              mock.patch.object(server, "send_reviewed_power", return_value={"operation": {"id": "op"}}):
             self.assertEqual("op", server.rollout_reboot("k3s-1"))
