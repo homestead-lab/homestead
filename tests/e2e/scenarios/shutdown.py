@@ -1,7 +1,7 @@
 """The whole cluster shut down from Homestead and brought back: apps and
 Homestead stop in order, every volume detaches, the hosts power themselves
 off, the runner powers them on again, and recovery restores scheduling and
-the apps - with their data."""
+the apps - with their data - by itself, with nobody at a console."""
 import time
 
 from harness import log
@@ -25,23 +25,19 @@ def run(ctx):
     for node in ctx.lab.nodes:
         node.wait_ssh()
         assert node.boot_id() != boots[node.name], f"{node.name} did not boot again"
-    # As the shutdown dialog says: the hosts stay cordoned, so one is
-    # uncordoned from a console for Homestead to start, which then recovers
-    # the rest.
+    # Nobody at a console: Homestead brings the cluster back by itself once
+    # every host is Ready - no uncordon, no waiting out the helpers' deadline.
+    started = time.time()
     ctx.kube.nodes_ready(len(ctx.lab.nodes))
-    ctx.kube.run("uncordon", ctx.lab.nodes[0].name)
-
-    state = ctx.api.get("/api/cluster/shutdown", wait=1800)["state"]
+    state = ctx.api.get("/api/cluster/shutdown", wait=900)["state"]
     assert state and state["run"], "the shutdown's record did not survive"
-    # Recovery is offered once the helpers' deadline has passed.
-    deadline = state["deadline"] + 200
-    while time.time() < deadline:
-        log.info(f"Waiting {int(deadline - time.time())}s for the shutdown helpers' deadline before recovering")
-        time.sleep(min(60, max(1, deadline - time.time())))
-    ctx.api.post("/api/cluster/shutdown/recover", {"run": state["run"]}, wait=600)
+    ctx.kube.wait("the shutdown recovered by itself", lambda: (ctx.api.get("/api/cluster/shutdown", wait=60)["state"] or {}).get("phase") == "released",
+                  timeout=600, every=10)
+    log.info(f"Recovered by itself {int(time.time() - started)}s after the hosts were powered on")
     nodes = ctx.kube.items("nodes")
     assert not any(n["spec"].get("unschedulable") for n in nodes), "a host is still cordoned after recovery"
+    ctx.kube.wait("the recovery helper gone", lambda: not ctx.kube.items("deployments", "-n", "lab", "-l", "homestead.io/task=cluster-shutdown"),
+                  timeout=120)
     ctx.kube.deployment_ready("lab", "e2e-shutdown")
     assert ctx.has_mark("e2e-shutdown", mark), "the app lost data across the shutdown"
-    after = ctx.api.get("/api/cluster/shutdown")["state"]
-    assert after["phase"] == "released", f"shutdown is {after['phase']} after recovery"
+
