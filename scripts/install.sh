@@ -1060,6 +1060,12 @@ detect_node() {
   for c in "$DATA/bin/crictl" /var/lib/rancher/rke2/bin/crictl; do [ -x "$c" ] && CRICTL="$c" && break; done
   if [ -z "$CRICTL" ] && have k3s && { [ "$SERVICE" = k3s ] || [ "$SERVICE" = k3s-agent ]; }; then CRICTL="k3s crictl"; fi
   [ -z "$CRICTL" ] && have crictl && CRICTL=crictl
+  # RKE2's crictl (and a plain one on a k3s host) needs the distribution's
+  # config to find containerd at /run/k3s/containerd; without it every
+  # check called the runtime dead, and its fix restarted the node's service.
+  for f in "$DATA/agent/etc/crictl.yaml" /var/lib/rancher/rke2/agent/etc/crictl.yaml; do
+    [ -n "$CRICTL" ] && [ -z "${CRI_CONFIG_FILE:-}" ] && [ -r "$f" ] && export CRI_CONFIG_FILE="$f"
+  done
   NODE=$(hostname)
 }
 # A cluster that does not respond must not stall the checks.
