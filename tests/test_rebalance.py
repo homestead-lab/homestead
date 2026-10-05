@@ -114,6 +114,28 @@ class PlanTests(unittest.TestCase):
             R.bind(c.get, c.send, lambda: True)
             self.assertEqual(k1_has_hdd, bool(R.plan()["moves"]))
 
+    def test_the_reviewed_copies_move_though_the_apps_wrote_since(self):
+        c = lopsided()
+        R.bind(c.get, c.send, lambda: True)
+        plan = R.plan()
+        for v in c.objects[f"{LH}/volumes"]["items"]:      # apps keep writing
+            v["status"]["actualSize"] = int(v["status"]["actualSize"]) + GIB // 3
+        self.assertEqual(plan["review_token"], R.plan()["review_token"])
+        moves = R.reviewed(plan["moves"], [], plan["review_token"])
+        self.assertEqual([(m["volume"], m["from"], m["to"]) for m in plan["moves"]], [(m["volume"], m["from"], m["to"]) for m in moves])
+
+    def test_reviewed_copies_that_differ_or_changed_need_a_new_review(self):
+        c = lopsided()
+        R.bind(c.get, c.send, lambda: True)
+        plan = R.plan()
+        with self.assertRaisesRegex(ValueError, "differ from the review"):
+            R.reviewed([dict(plan["moves"][0], to="k2")], [], plan["review_token"])
+        name = plan["moves"][0]["volume"]
+        c.objects[f"{LH}/replicas"]["items"].append(replica(name, "k1"))     # someone put a copy there meanwhile
+        next(v for v in c.objects[f"{LH}/volumes"]["items"] if v["metadata"]["name"] == name)["spec"]["numberOfReplicas"] = 3
+        with self.assertRaisesRegex(ValueError, "changed since the review"):
+            R.reviewed(plan["moves"], [], plan["review_token"])
+
     def test_a_cordoned_host_takes_no_copies(self):
         c = lopsided()
         c.objects["/api/v1/nodes"]["items"][0]["spec"]["unschedulable"] = True

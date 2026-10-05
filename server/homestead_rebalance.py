@@ -180,7 +180,7 @@ def plan(exclude=()):
     before = {name: h["load"] for name, h in hosts.items()}
     apps = sorted({v["app"] for v in volumes if not v["why"] and v["size"] > 0
                    and any(m["app"] == v["app"] for m in moves)} | (exclude & {v["app"] for v in volumes}))
-    token = hashlib.sha256(json.dumps([moves, sorted(exclude)], sort_keys=True).encode()).hexdigest()[:20]
+    token = review_token(moves, exclude)
     return {"hosts": [{"name": name, "before_gb": round(before[name] / GIB, 1), "after_gb": round(load[name] / GIB, 1),
                        "capacity_gb": round(hosts[name]["maximum"] / GIB, 1), "takes": hosts[name]["takes"]}
                       for name in sorted(hosts)],
@@ -192,6 +192,39 @@ def plan(exclude=()):
 
 
 # --------------------------------------------------------------- the job
+def review_token(moves, exclude):
+    """What was reviewed: which volume's copy goes from where to where, and
+    what was vetoed - not sizes, which grow while the apps write."""
+    return hashlib.sha256(json.dumps([[[m["volume"], m["from"], m["to"]] for m in moves], sorted(exclude or ())],
+                                     sort_keys=True).encode()).hexdigest()[:20]
+
+
+def reviewed(moves, exclude, token):
+    """The copy moves a person reviewed, checked against Longhorn now: each
+    volume still whole, with a copy on the host it leaves and none on the one
+    it goes to, not attached where it leaves, and that host still taking
+    copies. Data written since does not matter."""
+    if not isinstance(moves, list) or not moves or len(moves) > MAX_MOVES:
+        raise ValueError("Review the copies to move again")
+    keys = ("volume", "claim", "app", "from", "to")
+    if any(not isinstance(m, dict) or not all(isinstance(m.get(k), str) and m.get(k) for k in keys) for m in moves):
+        raise ValueError("Review the copies to move again")
+    if review_token(moves, exclude) != token:
+        raise ValueError("The moves differ from the review; review again")
+    hosts, volumes = inventory()
+    by_name = {v["name"]: v for v in volumes}
+    out = []
+    for m in moves:
+        v, host = by_name.get(m["volume"]), hosts.get(m["to"])
+        if (not v or v["why"] or m["from"] not in v["hosts"] or m["to"] in v["hosts"] or v["attached"] == m["from"]
+                or v["app"] in set(exclude or ())):
+            raise ValueError(f"{m['claim']} changed since the review; review again")
+        if not host or not host["takes"]:
+            raise ValueError(f"{m['to']} does not take copies now; review again")
+        out.append({**{k: m[k] for k in keys}, "size_gb": round(v["size"] / GIB, 1), "attached": bool(v["attached"])})
+    return out
+
+
 def _volume(name):
     return kget(f"{LH}/volumes/{name}")
 
