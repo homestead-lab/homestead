@@ -56,7 +56,8 @@ class Placement(unittest.TestCase):
         vip = next(row for row in view["addresses"] if row["ip"] == "192.0.2.108")
         self.assertEqual((vip["kind"], vip["node"], vip["state"]), ("vip", "k3s", "unrouted"))
         self.assertIn("k3s answers for 192.0.2.108", vip["reason"])
-        self.assertEqual(len(vip["unrouted"]), 3)
+        # plex has nothing ready: kube-vip leaves that off on purpose.
+        self.assertEqual(sorted(s["name"] for s in vip["unrouted"]), ["homestead-objectstore", "homestead-vip"])
         self.assertEqual([l["port"] for l in vip["listeners"]], [8088, 9000, 9001, 32400])
         self.assertEqual(next(l for l in vip["listeners"] if l["port"] == 32400)["workloads"], ["plex"])
         node = view["nodes"][0]
@@ -106,6 +107,22 @@ class Placement(unittest.TestCase):
         self.assertIn("other", own["reason"])
 
 
+class CrashedApp(unittest.TestCase):
+    def test_an_app_that_is_down_on_a_shared_address_is_not_a_missing_route(self):
+        services = [service("plex", [32400], "192.0.2.108", SHARED, status=["192.0.2.108"]),
+                    service("beamng", [30814], "192.0.2.108", SHARED)]
+        view = VIPS.address_map(services, [NODE], [lease(SHARED, "k3s")], K3S,
+                                endpoints={("lab", "plex"): 1, ("lab", "beamng"): 0}, now=NOW)
+        row = next(r for r in view["addresses"] if r["ip"] == "192.0.2.108")
+        self.assertEqual("ok", row["state"], row["reason"])
+        self.assertEqual([], VIPS.alert_facts(view))
+        # The same Service with a pod ready and still left off is the real fault.
+        view = VIPS.address_map(services, [NODE], [lease(SHARED, "k3s")], K3S,
+                                endpoints={("lab", "plex"): 1, ("lab", "beamng"): 1}, now=NOW)
+        row = next(r for r in view["addresses"] if r["ip"] == "192.0.2.108")
+        self.assertEqual("unrouted", row["state"])
+
+
 class Keeping(unittest.TestCase):
     def test_records_what_the_answering_node_serves(self):
         fixes = VIPS.repairs(k3s_test(), [lease(SHARED, "k3s")], K3S, now=NOW)
@@ -114,6 +131,19 @@ class Keeping(unittest.TestCase):
         self.assertEqual(store["node"], "k3s")
         self.assertEqual(store["status"], {"loadBalancer": {"ingress": [{"ip": "192.0.2.108", "ports": [
             {"port": 9000, "protocol": "TCP"}, {"port": 9001, "protocol": "TCP"}]}]}})
+
+    def test_a_service_with_nothing_ready_is_not_recorded(self):
+        # A crash-looping app: kube-vip leaves it off the shared address on
+        # purpose, and recording it only had kube-vip take it off again.
+        fixes = VIPS.repairs(k3s_test(), [lease(SHARED, "k3s")], K3S, now=NOW,
+                             ready={"lab/homestead-vip", "lab/homestead-objectstore"})
+        self.assertEqual(sorted(f["name"] for f in fixes), ["homestead-objectstore", "homestead-vip"])
+
+    def test_ready_services_come_from_ready_endpoints(self):
+        def slice_(name, ready):
+            return {"metadata": {"namespace": "lab", "labels": {"kubernetes.io/service-name": name}},
+                    "endpoints": [{"conditions": {"ready": ready}}]}
+        self.assertEqual({"lab/plex"}, VIPS.ready_services([slice_("plex", True), slice_("beamng", False)]))
 
     def test_leaves_alone_what_no_node_answers_for(self):
         self.assertEqual(VIPS.repairs(k3s_test(), [lease(SHARED, "")], K3S, now=NOW), [])
@@ -126,7 +156,10 @@ class Keeping(unittest.TestCase):
 
     def test_keep_patches_status_and_remembers(self):
         sent = []
-        VIPS.bind(lambda path: {"items": k3s_test() if path.endswith("/services") else [lease(SHARED, "k3s", renewed=None)]},
+        ready = [{"metadata": {"namespace": "lab", "labels": {"kubernetes.io/service-name": svc["metadata"]["name"]}},
+                  "endpoints": [{"conditions": {"ready": True}}]} for svc in k3s_test()]
+        VIPS.bind(lambda path: {"items": k3s_test() if path.endswith("/services") else ready
+                                if path.endswith("/endpointslices") else [lease(SHARED, "k3s", renewed=None)]},
                   lambda method, path, body=None, ctype="": sent.append((method, path, body, ctype)) or {})
         done = VIPS.keep(K3S)
         self.assertEqual(len(done), 3)
