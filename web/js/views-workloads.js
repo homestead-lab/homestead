@@ -526,6 +526,15 @@ function uncheckedMark(update) {
   return `<span class="tip unchecked-tip" tabindex="0" role="img" aria-label="${tip}" data-tip="${tip}">?</span>`;
 }
 
+/* A container's volume, on the Volumes page: filtered to it, with the
+   page's own "Showing matches" bar to clear it again. */
+window.openWorkloadVolume = claim => {
+  STATE.q = claim;
+  const search = $("#globalSearch");
+  if (search) search.value = claim;
+  go("storage", { keepSearch: true });
+};
+
 const workloadExpanded = new Set();
 const workloadRowKey = w => JSON.stringify([w.site?.id || "", w.ns, w.name]);
 function workloadTableRows(rows) {
@@ -563,6 +572,8 @@ function workloadTableRows(rows) {
           <div><span>Namespace · uptime</span><b>${esc(w.ns)} · ${esc(off ? "Stopped" : w.uptime ? fmtUp(w.uptime) : "Starting")}</b></div>
           <div class="wl-detail-image"><span>Image</span><b class="mono small">${w.images.map(esc).join("<br>") || "—"}</b><div class="wl-detail-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</div></div>
           <div class="wl-detail-access"><span>Access</span><b class="waccess">${accessPorts(w.ports)}</b></div>
+          ${(w.claims || []).length && !remoteRow(w) ? `<div class="wl-detail-volumes"><span>Volumes</span><b class="row">${w.claims.map(claim =>
+            `<button type="button" class="tag info linkish" title="Open ${esc(claim)} in Volumes" onclick="openWorkloadVolume(${jsq(claim)})">${esc(claim)}</button>`).join("")}</b></div>` : ""}
         </div>
         ${workloadHierarchy(w)}
         <div class="wl-detail-actions">${workloadActions(w, update, off)}</div>

@@ -376,12 +376,16 @@ async function viewStorage() {
   const [v, st, classes, v2, cap] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null),
     api("/api/storage/classes").catch(() => []), api("/api/storage/v2").catch(() => null),
     api("/api/longhorn/capacity").catch(() => null)]);
-  const [oldCopies, others] = await Promise.all([api("/api/volumes/old-copies").catch(() => []), api("/api/volumes/other").catch(() => [])]);
+  const [allOldCopies, allOthers] = await Promise.all([api("/api/volumes/old-copies").catch(() => []), api("/api/volumes/other").catch(() => [])]);
   STATE.data.lhcap = cap || STATE.data.lhcap;
   STATE.data.storageClasses = classes;
   STATE.data.v2 = v2;
   STATE.data.vols = v;
   const q = STATE.q.toLowerCase();
+  // A search narrows every list on the page, not only Longhorn's.
+  const matches = (...fields) => !q || fields.some(f => String(f || "").toLowerCase().includes(q));
+  const oldCopies = allOldCopies.filter(o => matches(o.was, o.pv));
+  const others = allOthers.filter(r => matches(r.name, r.namespace));
   const spare = v.filter(x => ["orphaned", "unclaimed"].includes(volumeUse(x).kind));
   const onlySpare = STATE.volSpare && spare.length;
   const rows = v.filter(x => (!q || x.name.includes(q) || (x.node || "").includes(q) ||
