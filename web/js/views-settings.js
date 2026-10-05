@@ -37,6 +37,15 @@ function settingsTab(pick) {
   if (pick) {
     const section = settingsSection(pick);
     try { localStorage.setItem("homestead.settings.tab", section); } catch (e) { /* this visit only */ }
+    // The address follows, so a re-render or a reload stays on this section
+    // rather than going back to the one a link first named.
+    if (typeof location !== "undefined" && typeof history !== "undefined") {
+      const url = new URL(location.href);
+      if (url.searchParams.get("tab") && url.searchParams.get("tab") !== section) {
+        url.searchParams.set("tab", section);
+        history.replaceState(history.state, "", url.pathname + url.search);
+      }
+    }
     // Asked for: open it, on a phone as well, where the list comes first.
     STATE.settingsOpen = true;
     UI.selectWorkspace($(".settings-layout"), section, {gridSelector:".settings-grid"});
