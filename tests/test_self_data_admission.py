@@ -75,7 +75,10 @@ class AdmissionTests(unittest.TestCase):
     def test_override_is_explicit_and_new_pressure_requires_new_review(self):
         admit = self.admit()
         self.metrics[0]["usage"]["memory"] = "7Gi"
-        with self.assertRaisesRegex(Held, "new warnings"): admit("start", self.dep)
+        with self.assertRaisesRegex(Held, "new warnings") as held: admit("start", self.dep)
+        # It says which step, and the warning itself, not only that something changed.
+        self.assertIn("at the restart step", str(held.exception))
+        self.assertIn("new warning: ", str(held.exception))
         approved = self.admit()  # Simulate the user approving the new exact review.
         self.assertTrue(approved("start", self.dep))
         self.metrics[0]["usage"]["memory"] = "7.2Gi"
