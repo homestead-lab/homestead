@@ -62,8 +62,8 @@ class Node:
                 "-smp", str(self.lab.cpus), "-m", str(self.lab.memory), "-name", self.name,
                 "-drive", f"file={self.dir / 'disk.qcow2'},if=virtio,cache=unsafe,discard=unmap",
                 "-drive", f"file={self.dir / 'seed.iso'},if=virtio,format=raw,readonly=on",
-                *(["-drive", f"file={self.dir / 'data.qcow2'},if=virtio,serial=e2e-data,cache=unsafe,discard=unmap"]
-                  if self.lab.data_disk else []),
+                *(["-drive", f"file={self.dir / 'data.qcow2'},if=none,id=data,cache=unsafe,discard=unmap",
+                   "-device", "virtio-blk-pci,drive=data,serial=e2e-data"] if self.lab.data_disk else []),
                 "-netdev", f"tap,id=lan,ifname={self.tap},script=no,downscript=no",
                 "-device", f"virtio-net-pci,netdev=lan,mac={self.mac}",
                 "-qmp", f"unix:{self.dir / 'qmp.sock'},server=on,wait=off",
@@ -250,6 +250,9 @@ bootcmd:
 """ if self.hugepages and not prepare else "") + """runcmd:
   - systemctl disable --now unattended-upgrades apt-daily.timer apt-daily-upgrade.timer || true
   - systemctl enable --now iscsid || true
+  # The host's addresses and routes on the console every 30 seconds: when it
+  # stops answering, the diagnostics still show what its network became.
+  - nohup sh -c 'while sleep 30; do echo "== $(date +%T) net"; ip -br addr; ip route; done > /dev/ttyS0 2>&1' >/dev/null 2>&1 &
 """ + ("""  - DEBIAN_FRONTEND=noninteractive apt-get -q update
   - DEBIAN_FRONTEND=noninteractive apt-get -yq -o Dpkg::Options::=--force-confold dist-upgrade
   - DEBIAN_FRONTEND=noninteractive apt-get -yq install open-iscsi nfs-common

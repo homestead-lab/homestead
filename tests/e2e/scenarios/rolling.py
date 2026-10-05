@@ -13,6 +13,11 @@ def run(ctx):
     for node in ctx.lab.nodes:          # as an update that needs a restart leaves it
         node.ssh("echo '*** System restart required ***' | sudo tee /var/run/reboot-required >/dev/null")
 
+    # As a person would: every volume whole before restarting hosts - copies
+    # Homestead added as the hosts joined may still be building.
+    ctx.kube.wait("every volume healthy", lambda: all(
+        (v.get("status") or {}).get("robustness") == "healthy" for v in ctx.kube.items("volumes.longhorn.io", "-n", "longhorn-system")
+        if (v.get("status") or {}).get("state") == "attached"), timeout=900, every=15)
     ctx.api.post("/api/os-updates/settings", {"reboot": "when-needed", "manage": "ubuntu", "schedule": {"enabled": False}})
     started = ctx.api.post("/api/os-updates/start")
     job = (started.get("operation") or {}).get("id") or started.get("operation")

@@ -104,6 +104,7 @@ def run(ctx):
     assert second in used, f"Homestead runs on {sorted(used)}, not the volume it moved to"
     ctx.kube.wait("the move helpers retired", lambda: not ctx.kube.items("pods", "-n", "lab", "-l", "homestead.io/self-data-handoff"),
                   timeout=120)
-    for claim in (first, second):
-        robustness = ctx.kube.volume("lab", claim)["status"].get("robustness")
-        assert robustness in ("healthy", "degraded"), f"{claim} is {robustness}"
+    # The one in use is whole; the first, kept after the second move, rests detached.
+    robustness = ctx.kube.volume("lab", second)["status"].get("robustness")
+    assert robustness in ("healthy", "degraded"), f"{second} is {robustness}"
+    assert ctx.kube.volume("lab", first)["status"].get("state") == "detached", f"{first} is still attached"
