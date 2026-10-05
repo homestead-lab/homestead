@@ -4508,7 +4508,8 @@ def rollout_reboot(node, allow_single_copy=False):
 def rollout_power_job(node, since):
     """A restart of this host started since the rollout began and not failed:
     the one a drained leader left running."""
-    for item in OPS.list_operations():
+    # The stored records: the public list leaves each job's ref out.
+    for item in OPS._read():
         ref = item.get("ref") or {}
         if (item.get("kind") == "node-power" and ref.get("node") == node and ref.get("action") == "reboot"
                 and float(ref.get("started_epoch") or 0) >= float(since or 0)
