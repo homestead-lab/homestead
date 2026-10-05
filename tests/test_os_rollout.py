@@ -2,6 +2,7 @@ import datetime
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -122,6 +123,41 @@ class RolloutTests(unittest.TestCase):
         self.assertTrue(waited, "it waited for the copies")
         self.assertIn("node-1", self.restarts, "and then restarted the host")
         self.assertNotIn("needing a restart", rollout["message"])
+
+    def test_a_busy_api_server_is_waited_out_not_taken_as_a_refusal(self):
+        # Right after a host rejoins, the API server can answer 429 for a while.
+        busy = urllib.error.HTTPError("/api/v1/nodes/node-1", 429, "Too Many Requests", {}, None)
+        self.bind(own="node-3")
+        calls = []
+        original = ROLLOUT.reboot
+        def reboot(name, single_copy):
+            calls.append(name)
+            if len(calls) < 3:
+                raise busy
+            return original(name, single_copy)
+        ROLLOUT.reboot = reboot
+        ROLLOUT.start(now=1000)
+        clock = 1000
+        for _ in range(80):
+            clock += 30
+            ROLLOUT.tick(now=clock)
+            self.finish_restarts()
+            rollout = ROLLOUT._load().get("rollout") or {}
+            if rollout.get("status") != "running":
+                break
+        self.assertEqual(["node-1"], self.restarts, "restarted once the API server answered")
+        self.assertNotIn("needing a restart", rollout["message"])
+
+    def test_a_restart_a_drained_leader_left_running_is_taken_up_not_asked_again(self):
+        # The leader ran node-1's drain and was itself drained off; the job it
+        # started carries on elsewhere. The new leader adopts it.
+        self.bind(own="node-3")
+        self.ops["op-left"] = {"id": "op-left", "status": "running"}
+        ROLLOUT.power_job = lambda name, since: "op-left" if name == "node-1" else ""
+        ROLLOUT.start(now=1000)
+        done = self.run_until_done(on_step=self.finish_restarts)
+        self.assertEqual([], self.restarts, "no second restart was asked for")
+        self.assertIn("updates installed and restarted", {r["node"]: r["note"] for r in done["results"]}["node-1"])
 
     def test_a_host_still_holding_the_only_copy_after_the_wait_is_left_for_someone(self):
         self.refuse["node-1"] = "a volume has its only healthy copy on this host (the settings do not accept that)"

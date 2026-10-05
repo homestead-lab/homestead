@@ -192,10 +192,26 @@ def api_path(path):
     return path
 
 
+KGET_RETRY = (0.5, 1.0, 2.0)  # a busy API server (priority and fairness) answers reads 429 for a moment
+
+
 def kget(path, timeout=10):
-    req = urllib.request.Request(API + api_path(path), headers={"Authorization": f"Bearer {TOKEN}"})
-    with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
-        return json.loads(r.read().decode())
+    for attempt in range(len(KGET_RETRY) + 1):
+        req = urllib.request.Request(API + api_path(path), headers={"Authorization": f"Bearer {TOKEN}"})
+        try:
+            with urllib.request.urlopen(req, context=CTX, timeout=timeout) as r:
+                return json.loads(r.read().decode())
+        except urllib.error.HTTPError as error:
+            # A read is safe to ask again; a write's 429 (an eviction a
+            # disruption budget refuses) is an answer, and ksend keeps it.
+            if error.code != 429 or attempt == len(KGET_RETRY):
+                raise
+            try:
+                delay = float((error.headers or {}).get("Retry-After") or KGET_RETRY[attempt])
+            except (TypeError, ValueError):
+                delay = KGET_RETRY[attempt]
+            error.close()
+            time.sleep(max(0.1, min(3.0, delay)))
 
 
 def ksend(method, path, body=None, ctype="application/json", timeout=15):
@@ -4469,6 +4485,18 @@ def rollout_reboot(node, allow_single_copy=False):
         raise ValueError(str(e)) from e
 
 
+def rollout_power_job(node, since):
+    """A restart of this host started since the rollout began and not failed:
+    the one a drained leader left running."""
+    for item in OPS.list_operations():
+        ref = item.get("ref") or {}
+        if (item.get("kind") == "node-power" and ref.get("node") == node and ref.get("action") == "reboot"
+                and float(ref.get("started_epoch") or 0) >= float(since or 0)
+                and item.get("status") not in ("failed", "cancelled")):
+            return item["id"]
+    return ""
+
+
 def operation_item(operation_id):
     """A job-tray item as it stands now, or None."""
     return next((item for item in OPS.list_operations() if item.get("id") == operation_id), None) if operation_id else None
@@ -6460,7 +6488,8 @@ OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, rollout_reboot, operation_item, 
                 lambda rollout: OPS.start("os-rollout", f"Update every host's OS ({len(rollout['nodes'])} hosts)",
                                           {"kind": "Node", "name": ", ".join(rollout["nodes"])[:200]}, "/nodes",
                                           {"rollout": rollout["id"]},
-                                          "In the weekly window" if rollout["reason"] == "schedule" else "Starting"))
+                                          "In the weekly window" if rollout["reason"] == "schedule" else "Starting"),
+                lambda node, since: rollout_power_job(node, since))
 OPS.RESOLVERS["os-rollout"] = OS_ROLLOUT.status
 DISK_SETUP.bind(HOSTRUN)
 HOST_BRIDGE.bind(HOSTRUN, kget, ksend)

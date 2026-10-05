@@ -31,6 +31,7 @@ import datetime
 import json
 import os
 import time
+import urllib.error
 
 import homestead_shared as SHARED
 
@@ -38,6 +39,7 @@ kget = platform = host_os = None
 reboot = None           # (node, allow_data_risk) -> operation id; raises with the review's reason
 operation = None        # operation id -> the job-tray item, or None
 set_cordon = None       # (node, bool)
+power_job = None        # (node, since epoch) -> id of a power job for it not failed, or ""
 own_node = lambda: ""
 announce = lambda rollout: None   # rollout -> its job-tray entry
 DATA_DIR = "/data"
@@ -49,14 +51,25 @@ RESTART_LIMIT = 45 * 60
 # The hosts restarted before this one leave their copies of volumes rebuilding
 # for a while; meanwhile this host can hold a volume's only healthy copy.
 COPIES_WAIT = 15 * 60
+# An API server busy with a host rejoining answers 429 or 5xx for a while.
+TRANSIENT_WAIT = 10 * 60
 _lock = SHARED.SharedLock("os-rollout")
 
 
-def bind(_kget, _platform, _host_os, _reboot, _operation, _set_cordon, _own_node, data_dir="/data", _announce=None):
-    global kget, platform, host_os, reboot, operation, set_cordon, own_node, DATA_DIR, announce
+def bind(_kget, _platform, _host_os, _reboot, _operation, _set_cordon, _own_node, data_dir="/data", _announce=None,
+         _power_job=None):
+    global kget, platform, host_os, reboot, operation, set_cordon, own_node, DATA_DIR, announce, power_job
     kget, platform, host_os, reboot, operation, set_cordon = _kget, _platform, _host_os, _reboot, _operation, _set_cordon
     own_node, DATA_DIR = _own_node, data_dir
     announce = _announce or (lambda rollout: None)
+    power_job = _power_job
+
+
+def _transient(error):
+    """The API server busy or briefly away - not a review's refusal."""
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code == 429 or error.code >= 500
+    return isinstance(error, (urllib.error.URLError, TimeoutError, ConnectionError))
 
 
 def _path():
@@ -278,10 +291,24 @@ def step(state, now=None):
             _result(rollout, True, "updates installed" + ("; needs a restart" if facts.get("reboot") else ""))
         return True
     if phase == "restart":
+        # The restart runs its drain from here, and Homestead itself may be
+        # drained off the host mid-way. The job it started carries on under
+        # another replica, so a new leader takes that job up rather than
+        # asking for a second restart, which the cordoned host would refuse.
+        existing = power_job(name, rollout.get("started", 0)) if power_job else ""
+        if existing:
+            node["op"] = existing
+            rollout["phase"], node["since"] = "restarting", now
+            rollout["message"] = f"{name}: draining and restarting"
+            return True
         node["attempts"] = node.get("attempts", 0) + 1
         try:
             node["op"] = reboot(name, config["single_copy"])
         except Exception as error:
+            if _transient(error) and now - node.setdefault("busy_since", now) < TRANSIENT_WAIT:
+                node["attempts"] -= 1
+                rollout["message"] = f"{name}: the Kubernetes API is busy ({str(error)[:60]}); trying again"
+                return True
             if "only healthy copy" in str(error) and now - node.setdefault("copies_since", now) < COPIES_WAIT:
                 # Copies on the hosts restarted before are still rebuilding:
                 # wait for them rather than leave this host unrestarted.
