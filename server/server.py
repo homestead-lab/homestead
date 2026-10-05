@@ -6029,6 +6029,7 @@ sys.modules["homestead_shim"] = _shim
 
 import homestead_lifecycle as LC
 import homestead_env_secrets as ENVSEC
+import homestead_stale_mount as STALE_MOUNT
 import homestead_imports as IMP
 import homestead_auth as AUTH
 import homestead_longhorn as LH
@@ -10902,9 +10903,20 @@ def finish_self_data_boot():
         time.sleep(2)
 
 
+def _replace_own_pod():
+    """Delete this pod so the Deployment makes one with a fresh data mount.
+    Straight to the API: the usual guards read the data that is stale."""
+    if not POD_NAME:
+        raise ValueError("this pod's name is unknown")
+    _ksend("DELETE", f"/api/v1/namespaces/{SELF.NS}/pods/{urllib.parse.quote(POD_NAME, safe='')}", shutdown_bypass=True)
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8080"))
     http_server = HTTP.BoundedHTTPServer(("0.0.0.0", port), H)
+    # First, and independent of everything that reads the data: a stale data
+    # mount is mended only by a new pod.
+    threading.Thread(target=STALE_MOUNT.watch, args=(DATA_DIR, _replace_own_pod), name="data-mount", daemon=True).start()
     if _self_data_boot_pending:
         threading.Thread(target=finish_self_data_boot, name="data-move-startup", daemon=True).start()
     else:
