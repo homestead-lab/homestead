@@ -126,7 +126,7 @@ def inventory(get, pods, namespace=None, draining=True):
                          "wait_for_drain": wait_for_drain})
             if wait_for_drain:
                 waiting.append(identity + ": Longhorn currently protects this storage pod. Homestead will cordon, "
-                               "drain workloads and wait up to 2 minutes for eviction to be allowed. "
+                               "drain workloads and wait up to 5 minutes for eviction to be allowed. "
                                "If Longhorn keeps it protected, power will not be sent and the host stays cordoned")
             if draining and not unhealthy_allowed and (not fresh or not isinstance(allowed, int) or allowed < 1):
                 if not wait_for_drain:

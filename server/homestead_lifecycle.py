@@ -741,6 +741,9 @@ def set_cordon(node, unschedulable):
     return {"ok": True, "node": node, "cordoned": bool(unschedulable)}
 
 
+LONGHORN_DRAIN_WAIT = 300   # seconds a drain waits on Longhorn's instance managers alone
+
+
 def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, progress=None, resumed=False):
     """Evict workload pods off a node. DaemonSets and mirror pods are skipped
     because the scheduler will simply recreate them on the same node."""
@@ -775,7 +778,8 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
     # its instance-manager budget. Never delete pods or edit that budget.
     targets = dict(sorted(targets.items(), key=lambda row: (MAINTENANCE.longhorn_instance_manager(row[1]), row[0])))
     frozen = MAINTENANCE.pod_snapshot([p for p in pods if (p.get("spec") or {}).get("nodeName") == node])
-    deadline = time.monotonic() + 120
+    started = time.monotonic()
+    deadline = started + 120
     while targets:
         retrying = []
         for identity, p in targets.items():
@@ -819,8 +823,12 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
         waiting = [name for name in retrying if name in targets]
         reason = ("Longhorn still prevents eviction" if waiting else "Pods have not left the host")
         names = ", ".join(sorted(waiting or targets)[:6])
-        if time.monotonic() >= deadline:
-            raise ValueError(f"Host remains cordoned; drain timed out after 2 minutes. {reason}: {names}. "
+        # Longhorn lets its instance managers go once their engines have
+        # moved off; V2 engines take longer than V1. When nothing but those
+        # is left, waiting longer is safe - it never forces anything.
+        limit = LONGHORN_DRAIN_WAIT if waiting and len(waiting) == len(targets) else 120
+        if time.monotonic() >= started + limit:
+            raise ValueError(f"Host remains cordoned; drain timed out after {limit // 60} minutes. {reason}: {names}. "
                              "Power was not sent; inspect Longhorn volumes, disruption budgets and pod events")
         if progress:
             progress("draining", 10, ("Waiting for Longhorn to allow storage pod eviction: " if waiting else

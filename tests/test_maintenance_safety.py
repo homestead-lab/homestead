@@ -122,9 +122,12 @@ class MaintenanceSafetyTests(unittest.TestCase):
                 mock.patch.object(lifecycle, "set_cordon") as cordon, \
                 mock.patch.object(lifecycle, "kget", side_effect=self.get), \
                 mock.patch.object(lifecycle, "ksend", side_effect=send), \
-                mock.patch.object(lifecycle.time, "monotonic", side_effect=[0, 121]), \
+                mock.patch.object(lifecycle.time, "monotonic", side_effect=[0, 121, 301]), \
+                mock.patch.object(lifecycle.time, "sleep"), \
                 mock.patch.object(lifecycle, "_send_power") as helper:
-            with self.assertRaisesRegex(ValueError, "Longhorn still prevents eviction.*Power was not sent"):
+            # Longhorn alone holding the host is waited on past the usual two
+            # minutes - V2 engines let go slowly - and still never forced.
+            with self.assertRaisesRegex(ValueError, "after 5 minutes. Longhorn still prevents eviction.*Power was not sent"):
                 lifecycle.node_power("node1", "reboot", reviewed_pods=original["drain_pods"], before_send=lambda: None)
         cordon.assert_called_once_with("node1", True)
         helper.assert_not_called()
