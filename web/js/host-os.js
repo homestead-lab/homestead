@@ -221,14 +221,11 @@ window.osUpdates = async (child = false) => {
     $("#mbody").innerHTML = osUpdatesUnavailableHtml();
     return;
   }
-  const s = r.settings, run = r.rollout && r.rollout.status === "running" ? r.rollout : null, last = r.rollout && !run ? r.rollout : null;
-  const results = rollout => (rollout.results || []).map(x => `<li><b>${esc(x.node)}</b> · ${esc(x.note)}</li>`).join("");
+  const s = r.settings, run = osUpdatesRunning(r);
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "this browser's time";
   $("#mbody").innerHTML = `<div class="ui-stack">
-    ${run ? `${UI.progress(Math.round((run.index || 0) * 100 / Math.max(1, run.nodes.length)), { label: `Updating ${run.nodes.length} hosts, one at a time`, detail: run.message || "" })}
-      ${results(run) ? `<ul class="osu-results small">${results(run)}</ul>` : ""}` : ""}
-    ${last ? `<div class="note ${last.status === "failed" ? "bad" : ""} small"><b>Last run ${esc(last.status)}</b>${last.finished ? ` · ${esc(hostOsAge(last.finished))}` : ""}<br>${esc(last.message || "")}</div>` : ""}
-    ${osUpdatesHostsHtml(r)}
+    <div id="osu_status">${osUpdatesStatusHtml(r)}</div>
+    <div id="osu_hosts">${osUpdatesHostsHtml(r)}</div>
     ${UI.section("Settings", `
       <div class="f"><label>Who installs updates ${tip("Ubuntu's unattended-upgrades installs security updates on each host by itself, and with Automatic-Reboot restarts it without a drain; Homestead then holds it off only while it updates every host. Chosen, Homestead switches it off on every host and installs updates itself, one host at a time, restarting through its review and drain.")}</label>
         <select id="osu_manage">
@@ -245,12 +242,44 @@ window.osUpdates = async (child = false) => {
       <label class="check"><input type="checkbox" id="osu_single" ${s.single_copy ? "checked" : ""}> Restart a host even when a volume has its only healthy copy there - that volume is unavailable until the host is back</label>
       ${UI.actions(UI.button("Save settings", "osUpdatesSave()", { id: "osu_save", attrs: 'data-need="admin"' }))}`)}
     ${UI.more("What an update of every host does", `<p class="small">Updates run one host at a time, with Homestead's leader last. Restarts use Host actions checks: running VMs, a sole etcd member or a volume's only copy can block them. Hosts drain through disruption budgets and resume scheduling once Ready with healthy storage. Failed installs stop the queue. Ubuntu automatic updates pause during the run.</p>`)}
-    ${UI.actions([
-      run ? UI.button("Stop after this host", "osUpdatesStop()", { attrs: 'data-need="admin"' }) : "",
-      !run ? UI.button("Update every host now", "osUpdatesStart()", { kind: "pri", attrs: 'data-need="admin"' }) : "",
-    ].join(""))}</div>`;
+    <div id="osu_run">${osUpdatesRunActions(run)}</div></div>`;
   if (window.applyRole) applyRole();
+  osUpdatesFollow(run);
 };
+
+const osUpdatesRunning = r => r.rollout && r.rollout.status === "running" ? r.rollout : null;
+const osuHosts = n => `${n} host${n === 1 ? "" : "s"}`;
+function osUpdatesStatusHtml(r) {
+  const run = osUpdatesRunning(r), last = r.rollout && !run ? r.rollout : null;
+  const results = rollout => (rollout.results || []).map(x => `<li><b>${esc(x.node)}</b> · ${esc(x.note)}</li>`).join("");
+  if (run) return `${UI.progress(Math.round((run.index || 0) * 100 / Math.max(1, run.nodes.length)),
+      { label: run.nodes.length === 1 ? "Updating the host" : `Updating ${osuHosts(run.nodes.length)}, one at a time`, detail: run.message || "" })}
+    ${results(run) ? `<ul class="osu-results small">${results(run)}</ul>` : ""}`;
+  return last ? `<div class="note ${last.status === "failed" ? "bad" : ""} small"><b>Last run ${esc(last.status)}</b>${last.finished ? ` · ${esc(hostOsAge(last.finished))}` : ""}<br>${esc(last.message || "")}</div>` : "";
+}
+const osUpdatesRunActions = run => UI.actions(run
+  ? UI.button("Stop after this host", "osUpdatesStop()", { attrs: 'data-need="admin"' })
+  : UI.button("Update every host now", "osUpdatesStart()", { kind: "pri", attrs: 'data-need="admin"' }));
+
+/* While an update runs, its progress, the hosts and the buttons follow it -
+   without redrawing the settings someone may be editing. */
+let osUpdatesTimer = null;
+function osUpdatesFollow(run) {
+  clearTimeout(osUpdatesTimer);
+  if (!run) return;
+  osUpdatesTimer = setTimeout(async () => {
+    if (!$("#osu_status")) return;                       // the dialog was closed
+    let r;
+    try { r = await api("/api/os-updates", { keep: true }); } catch (e) { return osUpdatesFollow(run); }
+    if (!$("#osu_status")) return;
+    const now = osUpdatesRunning(r);
+    $("#osu_status").innerHTML = osUpdatesStatusHtml(r);
+    $("#osu_hosts").innerHTML = osUpdatesHostsHtml(r);
+    if (!now !== !run) { $("#osu_run").innerHTML = osUpdatesRunActions(now); if (window.applyRole) applyRole(); }
+    if (!now) { osUpdatesCardPaint(); return; }
+    osUpdatesFollow(now);
+  }, 3000);
+}
 window.osUpdatesWindow = () => { $("#osu_window").hidden = !$("#osu_on").checked; };
 window.osUpdatesSave = async () => {
   const body = { manage: $("#osu_manage").value, reboot: $("#osu_reboot").value, single_copy: $("#osu_single").checked,
@@ -278,7 +307,11 @@ window.osUpdatesStop = async () => {
   try {
     const r = await api("/api/os-updates/stop", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
     toast(r.detail, "ok");
-    osUpdates();
-    osUpdatesCardPaint();
-  } catch (e) { toast(e.message, "bad"); }
+  } catch (e) {
+    // It finished between the last look and the click: show how it ended.
+    if (/no update of every host is running/.test(e.message)) toast("The update had already finished", "ok");
+    else toast(e.message, "bad");
+  }
+  osUpdates();
+  osUpdatesCardPaint();
 };
