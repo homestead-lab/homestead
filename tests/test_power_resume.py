@@ -163,6 +163,18 @@ class UnattendedRestartTests(unittest.TestCase):
              mock.patch.object(server, "send_reviewed_power", return_value={"operation": {"id": "op"}}):
             self.assertEqual("op", server.rollout_reboot("k3s-1"))
 
+    def test_the_hosts_own_plumbing_is_not_data(self):
+        # Longhorn's CSI attacher mounts kubelet's plugin directory: every
+        # host has it, and it kept every host from its restart.
+        plan = self.plan([], requires_data_ack=True, volumes=[],
+                         maintenance={"local_storage": [
+                             {"pod": "longhorn-system/csi-attacher-a", "kind": "host-local path (not moved)",
+                              "source": "/var/lib/kubelet/plugins/driver.longhorn.io"},
+                             {"pod": "kube-system/svclb-x", "kind": "host-local path (not moved)", "source": "/run/xtables.lock"}]})
+        with mock.patch.object(server.POWER, "plan", return_value=plan), \
+             mock.patch.object(server, "send_reviewed_power", return_value={"operation": {"id": "op"}}):
+            self.assertEqual("op", server.rollout_reboot("k3s-1"))
+
     def test_what_keeps_a_host_from_its_restart_is_named(self):
         cases = (({"volumes": [{"claim": "lab/plex-config", "risk": "single-copy"}]},
                   "only healthy copy on this host: lab/plex-config"),

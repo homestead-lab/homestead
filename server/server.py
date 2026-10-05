@@ -4392,6 +4392,19 @@ def resume_power_job(item):
     return True
 
 
+SYSTEM_HOST_PATHS = ("/var/lib/kubelet", "/run", "/var/run", "/dev", "/sys", "/proc", "/lib/modules",
+                     "/etc/localtime", "/var/log", "/var/lib/rancher", "/etc/rancher")
+
+
+def _system_host_path(row):
+    """A host path that is the host's own plumbing - kubelet's plugin and pod
+    directories, sockets, devices, logs - not data a pod keeps there."""
+    if not str(row.get("kind", "")).startswith("host-local path"):
+        return False
+    path = "/" + str(row.get("source") or "").strip("/")
+    return any(path == p or path.startswith(p + "/") for p in SYSTEM_HOST_PATHS)
+
+
 def rollout_reboot(node, allow_single_copy=False):
     """A restart for an OS update: the same review Host actions shows, with
     nobody to accept its warnings - so what a person would have to accept
@@ -4418,8 +4431,10 @@ def rollout_reboot(node, allow_single_copy=False):
         single = [v["claim"] for v in power_plan.get("volumes") or [] if v.get("risk") in ("unavailable", "single-copy")]
         if single:
             reasons.append("a volume has its only healthy copy on this host: " + ", ".join(single[:4]))
+        # Nor are the host's own sockets and devices data: Longhorn's CSI
+        # attacher mounts /var/lib/kubelet/plugins/driver.longhorn.io.
         kept = [f"{row['pod']} ({row['source']})" for row in (power_plan.get("maintenance") or {}).get("local_storage") or []
-                if not str(row.get("kind", "")).startswith("emptyDir")]
+                if not str(row.get("kind", "")).startswith("emptyDir") and not _system_host_path(row)]
         if kept:
             reasons.append("pods keep data on this host itself: " + ", ".join(kept[:4]))
         if power_plan.get("storage_unknown"):

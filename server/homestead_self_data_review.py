@@ -55,12 +55,21 @@ def recheck_binding(approved, current):
     old, new = approved.get("approvals", {}), current.get("approvals", {})
     def receipt(a, b):
         return a.get("proposal") == b.get("proposal") and set(b.get("warnings", [])) <= set(a.get("warnings", []))
+    def differences(stage, a, b):
+        # Which part, by name only: the work itself, or a warning it did not have.
+        return ([f"{stage} workload"] if a.get("proposal") != b.get("proposal") else []) + \
+               ([f"{stage} new warning"] if not set(b.get("warnings", [])) <= set(a.get("warnings", [])) else [])
     try:
-        worker_ok = (old["worker"]["threshold"] == new["worker"]["threshold"] and old["worker"]["nodes"] == new["worker"]["nodes"]
-                     and receipt(old["worker"]["receipt"], new["worker"]["receipt"]))
-        policy_ok = (old["policy"]["threshold"] == new["policy"]["threshold"] and all(
-            receipt(old["policy"]["reviews"][s], new["policy"]["reviews"][s]) for s in ("copy", "restart")))
-        if not worker_ok or not policy_ok: changed.append("capacity")
+        parts = []
+        if old["worker"]["threshold"] != new["worker"]["threshold"] or old["policy"]["threshold"] != new["policy"]["threshold"]:
+            parts.append("threshold")
+        if old["worker"]["nodes"] != new["worker"]["nodes"]:
+            parts.append("worker hosts")
+        parts += differences("worker", old["worker"]["receipt"], new["worker"]["receipt"])
+        for s in ("copy", "restart"):
+            parts += differences(s, old["policy"]["reviews"][s], new["policy"]["reviews"][s])
+        if parts:
+            changed.append("capacity: " + ", ".join(parts))
     except (KeyError, TypeError):
         changed.append("capacity")
     if changed:
