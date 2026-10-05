@@ -144,6 +144,7 @@ def address_map(services, nodes, leases, platform, endpoints=None, targets=None,
     (namespace, service) to its ready endpoint count, targets to the
     workloads it selects.
     """
+    known = endpoints is not None
     endpoints, targets = endpoints or {}, targets or {}
     holders = live_holders(leases, now)
     node_rows, node_of_ip = [], {}
@@ -207,7 +208,9 @@ def address_map(services, nodes, leases, platform, endpoints=None, targets=None,
                 row["announced"] = True
             if controller == "servicelb" and ip in assigned:
                 row["announced"] = True
-            if ip not in assigned and controller in ("kube-vip", "metallb"):
+            # kube-vip leaves a Service with nothing ready off its address;
+            # that is the app being down, not the address lacking a route.
+            if ip not in assigned and controller in ("kube-vip", "metallb") and (ready or not known):
                 row["unrouted"].append({"namespace": ns, "name": name})
 
     for row in addresses.values():
@@ -249,10 +252,21 @@ def address_map(services, nodes, leases, platform, endpoints=None, targets=None,
             "kept": kept()}
 
 
-def repairs(services, leases, platform, now=None):
+def ready_services(slices):
+    """namespace/name of each Service with at least one ready endpoint."""
+    return {(s.get("metadata") or {}).get("namespace", "") + "/" + ((s.get("metadata") or {}).get("labels") or {}).get("kubernetes.io/service-name", "")
+            for s in slices or []
+            if any((e.get("conditions") or {}).get("ready") for e in s.get("endpoints") or [])}
+
+
+def repairs(services, leases, platform, now=None, ready=None):
     """The status each Service should carry and does not: kube-vip Services
     whose address a node is answering for - through its own lease or that
-    of another Service sharing the address - that do not list it."""
+    of another Service sharing the address - that do not list it.
+
+    Not a Service with nothing ready (ready: namespace/name of those with
+    something): kube-vip leaves those off on purpose, and recording one
+    only had kube-vip take it off again, every pass, while its app crashed."""
     holders = live_holders(leases, now)
     answered = {}
     for service in services:
@@ -273,6 +287,8 @@ def repairs(services, leases, platform, now=None):
         if not all(ip in answered for ip in requested):
             continue
         meta = service.get("metadata") or {}
+        if ready is not None and f"{meta.get('namespace', '')}/{meta.get('name', '')}" not in ready:
+            continue
         ports = [{"port": p.get("port"), "protocol": p.get("protocol") or "TCP"} for p in spec.get("ports") or []]
         out.append({"namespace": meta.get("namespace", ""), "name": meta.get("name", ""),
                     "node": answered[requested[0]], "ips": requested,
@@ -296,9 +312,7 @@ def stranded(services, leases, slices, platform, now=None):
     if (platform or {}).get("vip_service_election") is not True:
         return []
     holders = live_holders(leases, now)
-    ready = {(s.get("metadata") or {}).get("namespace", "") + "/" + ((s.get("metadata") or {}).get("labels") or {}).get("kubernetes.io/service-name", "")
-             for s in slices
-             if any((e.get("conditions") or {}).get("ready") for e in s.get("endpoints") or [])}
+    ready = ready_services(slices)
     groups = {}
     for service in services:
         meta = service.get("metadata") or {}
@@ -353,12 +367,13 @@ def keep(platform):
         return []
     services = _items("/api/v1/services")
     leases = _items("/apis/coordination.k8s.io/v1/leases")
+    slices = _items("/apis/discovery.k8s.io/v1/endpointslices")
     try:
-        revive(services, leases, _items("/apis/discovery.k8s.io/v1/endpointslices"), platform)
+        revive(services, leases, slices, platform)
     except Exception as error:
         print(f"VIPs: could not restart kube-vip: {str(error)[:160]}", flush=True)
     done = []
-    for fix in repairs(services, leases, platform):
+    for fix in repairs(services, leases, platform, ready=ready_services(slices)):
         path = f"/api/v1/namespaces/{fix['namespace']}/services/{fix['name']}/status"
         try:
             ksend("PATCH", path, {"status": fix["status"]}, ctype="application/merge-patch+json")
