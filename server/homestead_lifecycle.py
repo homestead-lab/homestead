@@ -13,6 +13,7 @@ import re
 import time
 import urllib.error
 import homestead_names as NAMES
+import homestead_env_secrets as ENVSEC
 import homestead_restructure as RESTRUCTURE
 import homestead_affinity as AFFINITY
 import homestead_failover as FAILOVER
@@ -210,7 +211,7 @@ def _container_feature_ids(spec, container, definitions):
     return found
 
 
-def _apply_container_edit(container, change, workload_name):
+def _apply_container_edit(container, change, workload_name, own_secret=""):
     if "name" in change:
         container["name"] = dns_label(change.get("name"), "container name")
     if "image" in change:
@@ -223,8 +224,11 @@ def _apply_container_edit(container, change, workload_name):
             import homestead_updates as UPDATES
             container["image"] = UPDATES.with_tag(image)
     if "env" in change:
+        # References to the workload's own Secret came to the form as plain
+        # values and return in change["env"]; other references are kept.
         refs = [copy.deepcopy(item) for item in container.get("env", []) or []
-                if item.get("valueFrom") and item.get("name")]
+                if item.get("valueFrom") and item.get("name")
+                and not (own_secret and ((item["valueFrom"].get("secretKeyRef") or {}).get("name") == own_secret))]
         protected = {item["name"] for item in refs}
         literals = [{"name": str(key), "value": str(value)}
                     for key, value in (change.get("env") or {}).items()
@@ -572,7 +576,7 @@ def prepare_edit(cfg, current=None):
         if len(final_names) != len(set(final_names)) or set(final_names) & init_names:
             raise ValueError(f"container names must be unique in {name}, including init containers")
         for container, change in container_requests:
-            _apply_container_edit(container, change, name)
+            _apply_container_edit(container, change, name, ENVSEC.own(dep))
     else:
         # Backward-compatible single-container request used by older clients.
         if not containers:
@@ -584,7 +588,7 @@ def prepare_edit(cfg, current=None):
             final_name = dns_label(legacy.get("name") or containers[0].get("name"), "container name")
             if any(other is not containers[0] and other.get("name") == final_name for other in containers):
                 raise ValueError(f"container {final_name} already exists in {name}")
-            _apply_container_edit(containers[0], legacy, name)
+            _apply_container_edit(containers[0], legacy, name, ENVSEC.own(dep))
     if not containers:
         raise ValueError("a workload must keep at least one container")
     pending_claims = _apply_container_volumes(ns, spec, container_requests)
@@ -663,6 +667,7 @@ def edit_workload(cfg, hold=False, prepared=None):
         ksend("PUT", path, cm)
     _create_pending_pvcs(ns, prepared["claims"])
     held = RESTRUCTURE.hold(dep) if hold else None
+    ENVSEC.externalize(ns, dep, kget, ksend, cfg.get("masked_env") or ())
     saved = ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     _bust("wl", "ov", "flow", "impact:")
     return {"ok": True, "name": name, **({"held_replicas": held, "_held_receipt": saved} if hold else {})}

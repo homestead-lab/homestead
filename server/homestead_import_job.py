@@ -8,6 +8,7 @@ import hashlib
 import urllib.error
 
 import homestead_copy_job as COPY
+import homestead_env_secrets as ENVSEC
 import homestead_capacity_review as REVIEW
 import homestead_import_guard as GUARD
 import homestead_rename as IDENT
@@ -92,6 +93,8 @@ def dispatch(body, prepared, context, read, send, ops, create_claim, admission):
                 if obj["spec"].get("replicas", 1):
                     if admission(obj).get("blocked") is not False:
                         raise ValueError("Imported workload no longer fits current placement")
+                # Imported passwords and keys go into the app's Secret, not its manifest.
+                ENVSEC.externalize(ns, obj, read, writer)
                 dep = writer("POST", IDENT.base(ns), obj)
             if prepared["service"]:
                 writer("POST", f"/api/v1/namespaces/{ns}/services", prepared["service"])

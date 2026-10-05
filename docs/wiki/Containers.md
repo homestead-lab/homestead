@@ -15,6 +15,14 @@ people start from the [App Store](App-Store) instead, which fills all of that in
 from the app's template, or [import](Importing) one from Unraid or a Compose
 file.
 
+Passwords, tokens and keys - a field the form masks, or a variable named like
+one (`*_PASSWORD`, `*TOKEN*`, `*SECRET*`, `*API_KEY*`, `*PEPPER*` and so on) -
+are kept in a Secret named `<app>-env`, not in the Deployment. The container
+reads them with `secretKeyRef`; **Edit** shows them as ordinary variables, typed
+blind, and saving puts changes back in the Secret. A container saved before
+this moves its values over the next time it is edited. The Secret is deleted
+with the app.
+
 Below the image field, **Will pull** shows the fully resolved registry,
 repository and tag. It does not rewrite the image: for example,
 `openspeedtest/latest` is a repository actually named `latest`, so its default
