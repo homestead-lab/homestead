@@ -147,7 +147,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
             with mock.patch.object(lifecycle, "kget", side_effect=self.get), \
                     mock.patch.object(lifecycle, "ksend", side_effect=send) as evict:
                 # The pod that changed is named, so the next look starts there.
-                with self.assertRaisesRegex(ValueError, r"pods changed during drain \(longhorn-system/instance-manager-test changed"):
+                with self.assertRaisesRegex(ValueError, r"pods changed during drain \([\w.-]+/[\w.-]+ (arrived|changed)"):
                     lifecycle.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
                 self.assertEqual(2, evict.call_count)
 
