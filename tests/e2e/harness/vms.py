@@ -117,7 +117,7 @@ class Node:
             log.debug(f"{self.name}$ {command[:300]}")
         result = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout)
         if check and result.returncode:
-            raise RuntimeError(f"{self.name}: `{command[:120]}` failed ({result.returncode}): {result.stdout[-3000:]}")
+            raise RuntimeError(f"{self.name}: `{command}` failed ({result.returncode}): {result.stdout[-3000:]}")
         return result.stdout
 
     def wait_ssh(self, timeout=600):
