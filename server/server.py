@@ -4558,7 +4558,28 @@ def setup_state(user, role):
         step("osupdates", lambda: {"done": bool((OS_ROLLOUT.settings().get("schedule") or {}).get("enabled")), "applies": kube})
         step("people", lambda: {"done": sum(1 for u in AUTH.list_users() if u["role"] == "admin") >= 2, "applies": True,
                                 "users": len(AUTH.list_users())})
-        step("unifi", lambda: {"done": bool((IPAM.load()[0].get("unifi") or {}).get("url")), "applies": True})
+        ipam_read = {}
+
+        def ipam_data():
+            # One read of the IP-address record for both its steps.
+            if "data" not in ipam_read:
+                ipam_read["data"] = IPAM.load()[0]
+            return ipam_read["data"]
+        step("unifi", lambda: {"done": bool((ipam_data().get("unifi") or {}).get("url")), "applies": True})
+
+        def ipam():
+            # IP addresses: subnets known, each scanned, and - with UniFi
+            # connected - its devices and reservations brought in.
+            data = ipam_data()
+            unifi = data.get("unifi") or {}
+            subnets = [{"id": s.get("id"), "cidr": s.get("cidr"), "name": s.get("name", ""),
+                        "scanned": int((data.get("scans", {}).get(s.get("cidr")) or {}).get("at") or 0)}
+                       for s in data.get("subnets") or []]
+            connected = bool(unifi.get("url") and unifi.get("has_key"))
+            synced = int(unifi.get("last_sync") or 0)
+            return {"done": bool(subnets) and all(s["scanned"] for s in subnets) and (bool(synced) or not connected),
+                    "applies": True, "subnets": subnets, "unifi": connected, "synced": synced}
+        step("ipam", ipam)
         step("unraid", lambda: {"done": bool(IMP.list_sources()), "applies": True})
         step("homeassistant", lambda: {"done": any(not k["expired"] for k in API_KEYS.list_keys()), "applies": True})
         step("linked", lambda: {"done": bool(FLEET.summary().get("linked")), "applies": True})

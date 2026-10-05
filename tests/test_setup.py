@@ -143,6 +143,23 @@ class UniFiSetupStateTests(unittest.TestCase):
                 read.assert_called_once_with(f"/api/v1/namespaces/{ipam.NAMESPACE}/configmaps/{ipam._map()}")
                 write.assert_not_called(); probe.assert_not_called()
 
+    def test_ip_addresses_are_done_with_subnets_scanned_and_unifi_synced_when_connected(self):
+        ipam = self.server.IPAM
+        lan = {"id": "s1", "cidr": "192.0.2.0/24", "name": "LAN"}
+        cases = (({}, False),                                                          # nothing yet
+                 ({"subnets": [lan]}, False),                                          # added, not scanned
+                 ({"subnets": [lan], "scans": {"192.0.2.0/24": {"at": 100}}}, True),   # scanned; no UniFi
+                 ({"subnets": [lan], "scans": {"192.0.2.0/24": {"at": 100}},
+                   "unifi": {"url": "https://unifi.example", "has_key": True}}, False), # UniFi connected, not synced
+                 ({"subnets": [lan], "scans": {"192.0.2.0/24": {"at": 100}},
+                   "unifi": {"url": "https://unifi.example", "has_key": True, "last_sync": 200}}, True))
+        for saved, done in cases:
+            with self.subTest(saved=saved), mock.patch.object(ipam, "kget", return_value={"metadata": {"resourceVersion": "7"},
+                    "data": {ipam.DATA_KEY: json.dumps(saved)}}):
+                step = self.server.setup_state("admin", "admin")["steps"]["ipam"]
+                self.assertEqual(done, step["done"], step)
+                self.assertEqual(len(saved.get("subnets") or []), len(step["subnets"]))
+
     def test_missing_ipam_configuration_is_an_unfinished_step_without_an_error(self):
         with mock.patch.object(self.server.IPAM, "kget", side_effect=urllib.error.HTTPError("/configmap", 404, "Not found", None, None)):
             self.assertEqual({"done": False, "applies": True}, self.server.setup_state("admin", "admin")["steps"]["unifi"])
