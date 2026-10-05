@@ -43,7 +43,7 @@ class Homestead:
 
     def request(self, method, path, body=None, ok=(200, 202), wait=300, timeout=120):
         """One call, trying each address; while Homestead is away (connection
-        refused, 502/503) it keeps asking for up to `wait` seconds."""
+        refused, 429/502/503) it keeps asking for up to `wait` seconds."""
         deadline, last = time.time() + wait, None
         while True:
             for base in self.urls:
@@ -56,7 +56,8 @@ class Homestead:
                     # A session belongs to the address it was made on: sign in there.
                     self.sign_in(base)
                     status, answer = self._once(base, method, path, body, timeout)
-                if status in (502, 503, 504):
+                # Away, or asking to come back shortly ("storage is initializing").
+                if status in (429, 502, 503, 504):
                     last = HomesteadError(status, answer, path)
                     continue
                 if status not in ok:

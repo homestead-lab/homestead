@@ -33,7 +33,7 @@ def installer_env(distro, version, node, role, extra=None):
 def run_installer(node, distro, version, role, extra=None, timeout=2400):
     env = installer_env(distro, version, node, role, extra)
     log.info(f"{node.name}: installer, {role} ({distro}, Homestead {version})")
-    out = node.ssh(f"curl -sfL {RAW}/v{version}/scripts/install.sh -o /tmp/install.sh && "
+    out = node.ssh(f"curl -sfL --retry 6 --retry-all-errors --retry-delay 5 {RAW}/v{version}/scripts/install.sh -o /tmp/install.sh && "
                    f"sudo env {env} sh /tmp/install.sh --install --text < /dev/null > /tmp/install.log 2>&1; "
                    f"code=$?; tail -40 /tmp/install.log; exit $code", timeout=timeout)
     log.debug(out)

@@ -34,7 +34,7 @@ def run(ctx):
 def doctor(ctx):
     """The node doctor's report on each host: 0 healthy, 1 warnings, 2 failures."""
     for node in ctx.lab.nodes:
-        out = node.ssh(f"curl -sfL https://raw.githubusercontent.com/homestead-lab/homestead/v{ctx.version}/scripts/install.sh"
+        out = node.ssh(f"curl -sfL --retry 6 --retry-all-errors --retry-delay 5 https://raw.githubusercontent.com/homestead-lab/homestead/v{ctx.version}/scripts/install.sh"
                        f" -o /tmp/install.sh && sudo sh /tmp/install.sh --report < /dev/null; echo EXIT=$?", check=False, timeout=600)
         code = out.strip().rsplit("EXIT=", 1)[-1].strip()
         log.info(f"{node.name}: doctor exit {code}")

@@ -220,7 +220,7 @@ def installer(ctx):
     mark = ctx.mark("e2e-worker")
     assert ctx.has_mark("e2e-worker", mark)
 
-    script = f"curl -sfL {RAW}/v{ctx.version}/scripts/install.sh -o /tmp/install.sh"
+    script = f"curl -sfL --retry 6 --retry-all-errors --retry-delay 5 {RAW}/v{ctx.version}/scripts/install.sh -o /tmp/install.sh"
     for node in ctx.lab.nodes:
         out = node.ssh(f"{script} && sudo sh /tmp/install.sh --fix-safe < /dev/null; "
                        f"sudo sh /tmp/install.sh --report < /dev/null; echo EXIT=$?", check=False, timeout=900)
