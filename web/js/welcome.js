@@ -6,8 +6,9 @@
    appearance is a person's confirmation on their device. Admins see every chapter; everyone sees the
    steps that are theirs - how it looks, their phone, their notifications.
 
-   A pulsing book button offers the guide until it is completed or reminders
-   are dismissed. The button remains available afterwards, on every cluster. */
+   Until it is completed or reminders are dismissed, it opens over the
+   Dashboard after an administrator signs in, and a pulsing book button
+   offers it. The button remains available afterwards, on every cluster. */
 
 const SETUP_CHAPTERS = [
   ["Cluster health", ["health", "quorum", "clocks"]],
@@ -91,9 +92,10 @@ function setupIntroHtml(ids, status) {
     ${UI.steps([
       { title: "Review the checks", detailHtml: "Automatic checks use cluster reports. Each step explains what is checked; some choices need your confirmation." },
       { title: "Configure your cluster", detailHtml: "Use Return to setup after visiting a configuration page. Next moves to the following step without marking the current one complete." },
-      { title: "Return when needed", detailHtml: "Open this guide from the book icon in the top bar or Settings › Homestead. Finish guide or Don’t show again stops the reminder; the icon remains available." },
+      { title: "Return when needed", detailHtml: "This guide opens each time an administrator signs in, until it is finished or you choose Don’t show again. The book icon in the top bar always opens it." },
     ])}
-    ${UI.actions(UI.button(next ? `Begin: ${SETUP_STEPS[next].title}` : "Back to the Dashboard", next ? `setupOpen(${jsArg(next)})` : "go('dash')", { kind: "pri" }))}
+    ${UI.actions(UI.button(next ? `Begin: ${SETUP_STEPS[next].title}` : "Back to the Dashboard", next ? `setupOpen(${jsArg(next)})` : "go('dash')", { kind: "pri" }),
+      UI.button("Don’t show this again", "setupReminders(true)"))}
   </section>`;
 }
 
@@ -607,16 +609,18 @@ window.setupTunnelDeploy = kind => {
 window.setupStore = q => { STATE.q = q; go("store", { keepSearch: true }); };
 
 /* ---------------- opening it ---------------- */
-// The first time an administrator signs in, the guide opens itself, once.
+// After an administrator signs in, the guide opens itself until it is
+// finished or hidden.
 // The live demo never opens it: the top bar offers it instead.
 window.welcomeCheck = async (force = false) => {
   if (force) return go("setup");
   let state;
   try { state = await api("/api/setup"); } catch (e) { return; }
   setupOffer(state);
-  // Once, for an administrator who has not opened, finished or hidden it -
-  // and only over the Dashboard, never over a page a link asked for.
-  if (setupDemo() || !state.admin || state.opened || state.hidden || state.completed || STATE.view !== "dash") return;
+  // At each sign-in, for an administrator, until the guide is finished or
+  // they choose Don't show again - and only over the Dashboard, never over a
+  // page a link asked for.
+  if (setupDemo() || !state.admin || state.hidden || state.completed || STATE.view !== "dash") return;
   try { await api("/api/setup/opened", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); }
   catch (e) { return; }
   if (STATE.view === "dash") go("setup");
