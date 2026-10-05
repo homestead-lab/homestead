@@ -102,6 +102,13 @@ class Homestead:
             else:
                 self._once(base, "POST", path, creds, 30)
         except HomesteadError as error:
+            if error.status == 400 and "changed elsewhere" in str(error) and getattr(self, "_busy", 0) < 5:
+                # Homestead wrote its account store at the same moment (its
+                # own start-up does); the answer says to try again.
+                log.info("Homestead: the account store was busy; asking again")
+                self._busy = getattr(self, "_busy", 0) + 1
+                time.sleep(3)
+                return self.sign_in(base)
             # The setup went through but its answer was lost (the pod moved
             # or the address changed hands mid-request), so the retry was
             # refused: the administrator exists - sign in as it.
