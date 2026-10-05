@@ -193,6 +193,10 @@ data:
                 continue
             if os.path.exists(os.path.join(block, "partition")):
                 continue
+            # An optical or floppy drive is no disk to store anything on: sr0
+            # was offered to Longhorn as a 1 GB SSD.
+            if name.startswith(("sr", "fd")) or _read(os.path.join(block, "device/type")) == "5":
+                continue
             try:
                 sectors_read = int(fields[5])
                 sectors_written = int(fields[9])
@@ -584,6 +588,9 @@ data:
             if not os.path.isdir(os.path.join(block, "device")):
                 continue
             if os.path.exists(os.path.join(block, "partition")):
+                continue
+            # Optical and floppy drives have no SMART data worth reading or storing on.
+            if name.startswith(("sr", "fd")) or read(os.path.join(block, "device/type")) == "5":
                 continue
             model = read(os.path.join(block, "device/model"))
             vendor = read(os.path.join(block, "device/vendor"))

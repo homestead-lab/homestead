@@ -128,6 +128,40 @@ class K3sTests(unittest.TestCase):
             for node in NODES["items"]:
                 node["status"]["nodeInfo"]["kubeletVersion"] = "v1.31.12+k3s1"
 
+    def test_the_plans_stay_until_each_job_ends_and_no_node_is_left_cordoned(self):
+        # A node reports its new version when k3s restarts, before its job
+        # ends; removing the Plan then removed the job, and the node stayed
+        # cordoned with nothing left to uncordon it.
+        nodes = {"items": [
+            {"metadata": {"name": "node-1", "labels": {"plan.upgrade.cattle.io/homestead-server": "h"}},
+             "spec": {"unschedulable": True}, "status": {"nodeInfo": {"kubeletVersion": "v1.32.8+k3s1"}}},
+            {"metadata": {"name": "node-2", "labels": {"plan.upgrade.cattle.io/homestead-server": "h"}},
+             "spec": {"unschedulable": True}, "status": {"nodeInfo": {"kubeletVersion": "v1.32.8+k3s1"}}}]}
+        self.c.objects["/api/v1/nodes"] = nodes
+        jobs = {"items": [{"metadata": {"name": "apply-homestead-server-on-node-1", "labels": {
+            "upgrade.cattle.io/plan": "homestead-server", "upgrade.cattle.io/node": "node-1"}}, "status": {"active": 1}}]}
+        self.c.objects["/apis/batch/v1/namespaces/system-upgrade/jobs"] = jobs
+        item = {"ref": {"component": "cluster", "to": "v1.32.8+k3s1", "phase": "nodes", "held": ["node-2"]}}
+        status, _, message = C.status(item)
+        self.assertEqual("running", status)
+        self.assertIn("job on node-1", message)
+        self.assertFalse(self.c.sent)
+        jobs["items"][0]["status"] = {"succeeded": 1}
+        status, _, message = C.status(item)
+        self.assertEqual("succeeded", status)
+        patched = [p for m, p, _ in self.c.sent if m == "PATCH"]
+        self.assertEqual(["/api/v1/nodes/node-1"], patched, "node-2 was cordoned before the upgrade and stays so")
+        self.assertIn("uncordoned node-1", message)
+
+    def test_a_job_that_never_ends_does_not_hold_the_upgrade_forever(self):
+        self.c.objects["/api/v1/nodes"] = {"items": [
+            {"metadata": {"name": "node-1"}, "status": {"nodeInfo": {"kubeletVersion": "v1.32.8+k3s1"}}}]}
+        self.c.objects["/apis/batch/v1/namespaces/system-upgrade/jobs"] = {"items": [{"metadata": {
+            "name": "j", "labels": {"upgrade.cattle.io/plan": "homestead-agent"}}, "status": {"active": 1}}]}
+        item = {"ref": {"component": "cluster", "to": "v1.32.8+k3s1", "phase": "nodes",
+                        "versions_at": time.time() - C.JOB_FINISH_WAIT - 1}}
+        self.assertEqual("succeeded", C.status(item)[0])
+
     def test_a_failed_node_job_fails_the_upgrade(self):
         self.c.objects["/apis/upgrade.cattle.io/v1"] = {}
         self.c.objects["/apis/batch/v1/namespaces/system-upgrade/jobs"] = {"items": [{

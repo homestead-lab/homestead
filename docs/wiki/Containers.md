@@ -64,7 +64,8 @@ logs, console, edit - and:
 - **Placement** - where it runs (below).
 - **Rename** - replaces the Deployment under its new Kubernetes name; Services
   and volumes keep their existing names and addresses.
-- **Move** - to another namespace, or [another cluster](Moving-between-clusters).
+- **Move** - to [another cluster](Moving-between-clusters), into the namespace
+  you pick there. Moving to another namespace on the same cluster is not offered.
 
 **Edit** opens the same form as Deploy, with everything the container has now.
 Storage can be restructured there: two volumes combined into folders of one, a

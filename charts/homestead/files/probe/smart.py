@@ -30,6 +30,9 @@ def disks():
             continue
         if os.path.exists(os.path.join(block, "partition")):
             continue
+        # Optical and floppy drives have no SMART data worth reading or storing on.
+        if name.startswith(("sr", "fd")) or read(os.path.join(block, "device/type")) == "5":
+            continue
         model = read(os.path.join(block, "device/model"))
         vendor = read(os.path.join(block, "device/vendor"))
         if vendor.upper() in ("IET", "LIO-ORG") or "VIRTUAL-DISK" in model.upper():
