@@ -242,8 +242,11 @@ users:
     shell: /bin/bash
     ssh_authorized_keys: ["{public}"]
 growpart: {{mode: auto, devices: ["/"]}}
-""" + (f"""bootcmd:
-  - sysctl -w vm.nr_hugepages={self.hugepages}
+bootcmd:
+  # Kernel messages - out of memory, hung tasks, network - reach the serial
+  # console the diagnostics keep, even when the host stops answering.
+  - sysctl -w kernel.printk="7 4 1 7"
+""" + (f"""  - sysctl -w vm.nr_hugepages={self.hugepages}
 """ if self.hugepages and not prepare else "") + """runcmd:
   - systemctl disable --now unattended-upgrades apt-daily.timer apt-daily-upgrade.timer || true
   - systemctl enable --now iscsid || true
