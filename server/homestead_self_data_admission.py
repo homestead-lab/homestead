@@ -295,7 +295,12 @@ class Admitter:
             approved = (self.handoff or {}).get("recovery", {}).get("restart")
             if not approved:
                 raise Held("Original-volume restart needs its own reviewed capacity receipt")
-        if (report["receipt"]["proposal"] != approved["proposal"]
-                or not set(report["receipt"]["warnings"]) <= set(approved["warnings"])):
-            raise Held("Capacity or the workload changed; review the new warnings before continuing")
+        new = sorted(set(report["receipt"]["warnings"]) - set(approved["warnings"]))
+        if report["receipt"]["proposal"] != approved["proposal"] or new:
+            # Which: the work itself, or a warning the review did not have -
+            # said in the warning's own words, so it can be acted on.
+            what = ([f"the {stage} workload changed"] if report["receipt"]["proposal"] != approved["proposal"] else []) +                    [f"new warning: {str(text)[:160]}" for text in
+                    [next((w for w in report.get("warnings") or [] if warning_key(w) == key), "") for key in new[:2]] if text]
+            raise Held(f"Capacity or the workload changed at the {stage} step ({'; '.join(what)}); "
+                       "review the new warnings before continuing")
         return True
