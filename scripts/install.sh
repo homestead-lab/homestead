@@ -1041,11 +1041,16 @@ menu() { # title text tag item... -> tag, or 1 when cancelled
 
 # ------------------------------------------------------------------ the node
 KIND=none; SERVICE=""; DATA=""; KC=""
+unit_exists() { systemctl list-unit-files "$1" 2>/dev/null | grep -q "^$1"; }
 detect_node() {
   KIND=none; SERVICE=""; DATA=""; KC=""
   if grep -qi harvester /etc/os-release 2>/dev/null || [ -f /etc/rancher/rancherd/config.yaml ]; then KIND=harvester; fi
-  for s in k3s k3s-agent rke2-server rke2-agent kubelet; do
-    if systemctl list-unit-files "$s.service" 2>/dev/null | grep -q "^$s.service"; then SERVICE=$s; break; fi
+  # RKE2 installs both rke2-server and rke2-agent units on every host and
+  # enables one: the running unit decides, then the enabled one, then any.
+  for test in "systemctl is-active --quiet" "systemctl is-enabled --quiet" unit_exists; do
+    for s in k3s k3s-agent rke2-server rke2-agent kubelet; do
+      if $test "$s.service" 2>/dev/null; then SERVICE=$s; break 2; fi
+    done
   done
   case "$SERVICE" in
     k3s) [ "$KIND" = none ] && KIND=k3s-server; DATA=/var/lib/rancher/k3s; KC="k3s kubectl" ;;
