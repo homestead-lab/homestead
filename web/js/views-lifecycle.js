@@ -1,9 +1,10 @@
 /* Edit / move containers, node power actions, VMs, images, schedules, import */
 
 /* ---------------- edit a pod and its containers ---------------- */
-const editEnvRow = (index, key = "", value = "") => `<div class="f3 e-env-row">
+/* A value kept in the workload's Secret is still edited here, typed blind. */
+const editEnvRow = (index, key = "", value = "", secret = false) => `<div class="f3 e-env-row">
   <div><label>Key</label><input class="ek" type="text" value="${esc(key)}"></div>
-  <div><label>Value</label><input class="ev" type="text" value="${esc(value)}"></div>
+  <div><label>Value${secret ? ` ${tip("Kept in this app's Secret, not in its Deployment. Change it here as usual.")}` : ""}</label><input class="ev" type="${secret ? "password" : "text"}" autocomplete="off" value="${esc(value)}"></div>
   <button class="btn sm danger row-remove" type="button" onclick="this.parentNode.remove()">✕</button></div>`;
 
 const editPortRow = (index, port = {}) => `<div class="edit-port-row">
@@ -68,8 +69,9 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
     environment: () => `
       <div class="subsec">Environment</div>
       ${refs.length ? `<div class="managed-env-list">${refs.map(ref => `<div><span class="mono">${esc(ref.name)}</span><span>${esc(ref.source)}</span><span class="pill info">managed reference</span></div>`).join("")}</div><div class="dim xs managed-env-note">References remain connected to Kubernetes and are not exposed or replaced when you save.</div>` : ""}
-      <div class="e-env" id="e_env_${index}">${(env.length ? env : [["", ""]]).map(([key, value]) => editEnvRow(index, key, value)).join("")}</div>
-      <button class="btn sm" type="button" onclick="editAddEnv(${index})">＋ add variable</button>`,
+      <div class="e-env" id="e_env_${index}">${(env.length ? env : [["", ""]]).map(([key, value]) => editEnvRow(index, key, value, (container.secret_env || []).includes(key))).join("")}</div>
+      <button class="btn sm" type="button" onclick="editAddEnv(${index})">＋ add variable</button>
+      <div class="dim xs">Passwords, tokens and keys are kept in this app's Secret rather than in its Deployment when you save.</div>`,
     storage: () => `
       ${managed.length ? `<div class="edit-mount-list">${managed.map(volume => `<span class="tag info">${esc(volume.source || "?")} → ${esc(volume.path)}${volume.read_only ? " · read-only" : ""}</span>`).join("")}</div><div class="dim xs edit-mount-note">ConfigMap, Secret and hardware device mounts are managed by Homestead and stay as they are.</div>` : ""}
       <div class="e-vols" id="e_vols_${index}"></div>

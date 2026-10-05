@@ -108,7 +108,11 @@ class ImportJobTests(unittest.TestCase):
     def test_success_records_every_write_and_manual_start_only(self):
         result = self.start()
         self.assertEqual("running", result["operation"]["status"])
-        self.assertEqual(["PersistentVolumeClaim", "Deployment", "Service", "Job", "Deployment"], [r["resource"]["kind"] for r in self.item()["ref"]["writes"]])
+        # The imported PASSWORD goes into the app's own Secret, before the app.
+        self.assertEqual(["PersistentVolumeClaim", "Secret", "Deployment", "Service", "Job", "Deployment"], [r["resource"]["kind"] for r in self.item()["ref"]["writes"]])
+        env = self.objects[self.dep_path]["spec"]["template"]["spec"]["containers"][0]["env"]
+        self.assertEqual([{"name": "PASSWORD", "valueFrom": {"secretKeyRef": {"name": "app-env", "key": "app.PASSWORD"}}}], env)
+        self.assertNotIn("credential-never-journalled", json.dumps(self.objects[self.dep_path]))
         self.assertTrue(all(r["phase"] == "accepted" for r in self.item()["ref"]["writes"]))
         self.assertNotIn("credential-never-journalled", json.dumps(ops._read()))
         self.assertTrue(guard.pending(self.objects[self.dep_path], "lab", self.read))
@@ -120,7 +124,7 @@ class ImportJobTests(unittest.TestCase):
 
     def test_lost_response_at_each_step_is_durable_and_never_retried(self):
         # Each subcase owns an independent journal, like separate processes.
-        for fail_at in range(1, 6):
+        for fail_at in range(1, 7):
             with self.subTest(step=fail_at), tempfile.TemporaryDirectory() as directory, mock.patch.object(ops, "DATA_DIR", directory):
                 self.objects.clear(); self.sent.clear()
                 def lose(*args):
@@ -138,7 +142,7 @@ class ImportJobTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.start()
                 self.assertEqual(fail_at, len(self.sent))
-                if fail_at >= 2:
+                if fail_at >= 3:
                     self.assertTrue(guard.pending(self.objects[self.dep_path], "lab", self.read))
 
     def test_journal_failure_sends_nothing(self):
@@ -234,8 +238,8 @@ class ImportJobTests(unittest.TestCase):
         before = copy.deepcopy(self.objects)
         view, body = self.recovery_body()
         self.assertFalse(view["plan"]["blocked"])
-        self.assertEqual(4, len(view["plan"]["resources"]))
-        self.assertTrue(view["plan"]["resources"][-1]["current"] is None)
+        self.assertEqual(5, len(view["plan"]["resources"]))
+        self.assertIsNone(next(r for r in view["plan"]["resources"] if (r.get("kind") or r.get("resource", {}).get("kind")) == "Job")["current"])
         with self.assertRaises(ValueError):
             recovery.resolve({**body, "acknowledge_unknown": False}, ops, self.read, "admin")
         resolved = recovery.resolve(body, ops, self.read, "admin")

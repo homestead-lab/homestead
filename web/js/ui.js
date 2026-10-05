@@ -130,6 +130,7 @@ const UI = (() => {
   /* The dialog's buttons. Pass the primary (or dangerous) button last; extra
      buttons that are not the main choice go in `start`, on the left. */
   const actions = (buttonsHtml, startHtml = "", { className = "", attrs = "" } = {}) => {
+    if (typeof startHtml !== "string") startHtml = "";     // HTML for the left, never a flag
     // Existing callers may include Cancel among their actions. Move only explicitly
     // marked dismissals, preserving their original handler and keyboard order.
     const dismissals = [];
