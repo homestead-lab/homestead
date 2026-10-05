@@ -10187,9 +10187,18 @@ class H(HTTP.LimitedHandler):
                                 and i.get("status") not in OPS.TERMINAL), None)
                 if running:
                     return self._send(409, {"error": "A rebalance is already running; follow it in Jobs", "operation": running})
-                plan = REBALANCE.plan(b.get("exclude") or [])
-                if plan["review_token"] != b.get("review_token"):
-                    return self._send(409, {"error": "Volume copies changed since the review; review again", "plan": plan})
+                if b.get("moves") is not None:
+                    # The copies reviewed, checked against Longhorn now - not a
+                    # plan made again from sizes that grow while apps write.
+                    try:
+                        moves = REBALANCE.reviewed(b["moves"], b.get("exclude") or [], b.get("review_token"))
+                    except ValueError as error:
+                        return self._send(409, {"error": str(error), "plan": REBALANCE.plan(b.get("exclude") or [])})
+                    plan = {"moves": moves, "excluded": sorted(b.get("exclude") or [])}
+                else:
+                    plan = REBALANCE.plan(b.get("exclude") or [])
+                    if plan["review_token"] != b.get("review_token"):
+                        return self._send(409, {"error": "Volume copies changed since the review; review again", "plan": plan})
                 if not plan["moves"]:
                     return self._send(409, {"error": "Nothing to move: the hosts are as even as they can be", "plan": plan})
                 operation = OPS.start(REBALANCE.KIND, f"Rebalance {len(plan['moves'])} volume cop{'y' if len(plan['moves']) == 1 else 'ies'}",

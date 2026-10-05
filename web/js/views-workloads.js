@@ -874,7 +874,8 @@ window.balanceStart = async () => {
     }
     if (volumes.length) {
       await api("/api/longhorn/rebalance", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ exclude: [...BALANCE.volumes.exclude], review_token: BALANCE.volumes.plan.review_token }) });
+        body: JSON.stringify({ exclude: [...BALANCE.volumes.exclude], review_token: BALANCE.volumes.plan.review_token,
+          moves: BALANCE.volumes.plan.moves }) });
       started.push(`${volumes.length} volume cop${volumes.length === 1 ? "y" : "ies"}`);
     }
     closeModal(); toast(`Balancing ${started.join(" and ")}; follow it in Jobs`, "ok");
