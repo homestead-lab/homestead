@@ -25,8 +25,10 @@ def offline_rebuild(ctx):
     volume = ctx.kube.wait("e2e-detached detached", lambda: (lambda v: v["status"]["state"] == "detached" and v)(
         ctx.kube.volume("lab", "e2e-detached-data")))
     name = volume["metadata"]["name"]
-    replicas = [r for r in ctx.kube.items("replicas.longhorn.io", "-n", "longhorn-system") if r["spec"]["volumeName"] == name]
-    assert len(replicas) == 2, f"expected two copies, found {len(replicas)}"
+    # Both copies made before one is taken away.
+    replicas = ctx.kube.wait("the volume's two copies", lambda: (lambda rs: len(rs) == 2 and rs)(
+        [r for r in ctx.kube.items("replicas.longhorn.io", "-n", "longhorn-system") if r["spec"]["volumeName"] == name]),
+        timeout=300, every=10)
     ctx.kube.run("delete", "replicas.longhorn.io", "-n", "longhorn-system", replicas[0]["metadata"]["name"])
     log.info("One copy of a detached volume removed; waiting for it to be rebuilt")
     status = ctx.api.get("/api/longhorn/offline-rebuilding")

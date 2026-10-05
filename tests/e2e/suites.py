@@ -45,7 +45,10 @@ SUITES = {
     # Longhorn's V2 data engine, prepared, enabled and given a disk through
     # Homestead; a V2 volume across a host reboot. Two hosts: hugepages and
     # a polling core each leave room for no third on a runner.
-    "longhorn-v2": {"nodes": 2, "memory": 6144, "data_disk": "20G", "hugepages": 1100,
+    # A server and a worker, 3 CPUs each: V2 polls with one core and its
+    # instance manager reserves CPU beside the control plane; the worker is
+    # the host that reboots, so etcd keeps its one member.
+    "longhorn-v2": {"nodes": 2, "agents": 1, "cpus": 3, "memory": 6144, "data_disk": "20G", "hugepages": 1100,
                     "scenarios": [("longhorn v2", longhorn_v2.run)]},
 }
 

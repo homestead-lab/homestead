@@ -83,7 +83,18 @@ class Context:
         return pods[0]["spec"]["nodeName"] if pods else None
 
     def exec(self, name, command, ns="lab", timeout=120):
-        return self.kube.run("exec", "-n", ns, f"deploy/{name}", "--", "sh", "-c", command, timeout=timeout).strip()
+        """Run in the app's container; retried while the host's kubelet is
+        coming back - the API server cannot reach it for a moment (502)."""
+        deadline = time.time() + 180
+        while True:
+            try:
+                return self.kube.run("exec", "-n", ns, f"deploy/{name}", "--", "sh", "-c", command, timeout=timeout).strip()
+            except RuntimeError as error:
+                transient = any(s in str(error) for s in ("error dialing backend", "502", "unable to upgrade connection",
+                                                          "container not found", "is not running"))
+                if not transient or time.time() > deadline:
+                    raise
+                time.sleep(5)
 
     def mark(self, name, ns="lab"):
         """A line written to the app's volume now, to be found again later."""

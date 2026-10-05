@@ -80,8 +80,8 @@ def run(ctx):
     ctx.kube.wait("the V2 disks schedulable", disks_ready, timeout=600, every=10)
 
     ctx.api.post("/api/storage/classes", {"name": CLASS, "engine": "v2", "replicas": 2, "reclaim_policy": "Delete"})
-    first = ctx.lab.nodes[0].name
-    ctx.app("e2e-v2", node=first, storage_class=CLASS)
+    worker = next((n.name for n in ctx.lab.nodes if n.role == "agent"), ctx.lab.nodes[-1].name)
+    ctx.app("e2e-v2", node=worker, pinned=False, storage_class=CLASS)
     mark = ctx.mark("e2e-v2")
     volume = ctx.kube.volume("lab", "e2e-v2-data")
     assert volume["spec"].get("dataEngine") == "v2", f"the volume is on {volume['spec'].get('dataEngine')}"
