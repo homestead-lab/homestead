@@ -21,19 +21,27 @@ def _v2_plan(ctx):
 
 
 def run(ctx):
-    plan = _v2_plan(ctx)
+    hosts = {n.name for n in ctx.lab.nodes}
+    # Longhorn lists a host once its manager runs there: wait for all of them.
+    plan = ctx.kube.wait("every host in the V2 plan", lambda: (lambda p: {r["node"] for r in p["nodes"]} >= hosts and p)(_v2_plan(ctx)),
+                         timeout=600, every=10)
     assert not plan["enabled"], "V2 is on before Homestead turned it on"
-    for row in plan["nodes"]:
-        if row["configured"] and not row["problems"]:
-            continue
-        assert row["can_prepare"], f"{row['node']} cannot be prepared: {row['problems']}"
-        started = ctx.api.post("/api/longhorn/v2/prepare", {"node": row["node"], "review_token": row["review_token"],
-                                                            "request_id": secrets.token_hex(12), "confirm": True})
-        ctx.api.wait_job(started["operation"]["id"], timeout=900)
-        log.info(f"{row['node']}: prepared for V2 by Homestead")
-
-    plan = ctx.kube.wait("every host ready for V2", lambda: (lambda p: p["can_enable"] and p)(_v2_plan(ctx)),
-                         timeout=300, every=10)
+    deadline, prepared = time.time() + 900, set()
+    while True:
+        plan = _v2_plan(ctx)
+        if plan["can_enable"]:
+            break
+        waiting = [r for r in plan["nodes"] if r["problems"]]
+        ready = [r for r in waiting if r["can_prepare"] and r["node"] not in prepared]
+        assert time.time() < deadline, f"V2 cannot be enabled: {plan['blockers']}"
+        for row in ready:
+            started = ctx.api.post("/api/longhorn/v2/prepare", {"node": row["node"], "review_token": row["review_token"],
+                                                                "request_id": secrets.token_hex(12), "confirm": True})
+            ctx.api.wait_job(started["operation"]["id"], timeout=900)
+            prepared.add(row["node"])
+            log.info(f"{row['node']}: prepared for V2 by Homestead")
+        if not ready:
+            time.sleep(10)
     ctx.api.post("/api/longhorn/v2/enable", {"confirm": True, "review_token": plan["review_token"]})
     ctx.kube.wait("V2 instance managers running on every host", lambda: _v2_plan(ctx).get("engine_ready"), timeout=600, every=10)
     log.info("V2 data engine on")
