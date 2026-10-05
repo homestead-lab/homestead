@@ -60,6 +60,13 @@ class Cluster:
             name = path.rsplit("/", 1)[1]
             v = next(v for v in self.objects[f"{LH}/volumes"]["items"] if v["metadata"]["name"] == name)
             v["spec"].update(body["spec"])
+            # A merge patch: a null annotation is removed.
+            notes = v.setdefault("metadata", {}).setdefault("annotations", {})
+            for key, value in ((body.get("metadata") or {}).get("annotations") or {}).items():
+                if value is None:
+                    notes.pop(key, None)
+                else:
+                    notes[key] = value
         if method == "DELETE" and "/replicas/" in path:
             name = path.rsplit("/", 1)[1]
             self.objects[f"{LH}/replicas"]["items"] = [r for r in self.objects[f"{LH}/replicas"]["items"] if r["metadata"]["name"] != name]
@@ -170,6 +177,27 @@ class JobTests(unittest.TestCase):
         state, progress, message = R.status(self.item)
         self.assertEqual(("succeeded", 100), (state, progress))
         self.assertIn("Moved 1 copy", message)
+
+    def test_the_volume_is_marked_as_moving_a_copy_until_it_settles(self):
+        # Longhorn calls a volume asking for one more copy than it has
+        # "degraded"; the mark says it keeps every copy it had meanwhile.
+        notes = lambda: self.c.objects[f"{LH}/volumes"]["items"][0]["metadata"].get("annotations") or {}
+        R.status(self.item)
+        self.assertEqual("2", notes().get(R.MOVING))
+        self.c.objects[f"{LH}/replicas"]["items"].append(replica("v0", "k1", n=1, healthy=True))
+        new = self.c.objects[f"{LH}/replicas"]["items"][-1]
+        new["spec"]["healthyAt"] = "now"
+        self.c.objects[f"{LH}/engines"]["items"] = [{"spec": {"volumeName": "v0"}, "status": {"replicaModeMap": {new["metadata"]["name"]: "RW"}}}]
+        R.status(self.item)                                  # old copy removed: still marked
+        self.assertEqual("2", notes().get(R.MOVING))
+        R.status(self.item)                                  # settled
+        self.assertNotIn(R.MOVING, notes())
+
+    def test_a_move_given_up_or_cancelled_leaves_no_mark(self):
+        notes = lambda: self.c.objects[f"{LH}/volumes"]["items"][0]["metadata"].get("annotations") or {}
+        R.status(self.item)
+        R.cancel_run(self.item, {})
+        self.assertNotIn(R.MOVING, notes())
 
     def test_copies_changed_since_the_review_are_left_alone(self):
         self.c.objects[f"{LH}/replicas"]["items"].append(replica("v0", "k1"))

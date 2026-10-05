@@ -99,3 +99,21 @@ class VolumeHealthReasonTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MovingCopyTests(unittest.TestCase):
+    """A rebalance builds the new copy first, so Longhorn calls the volume
+    degraded meanwhile; it is not, as long as every copy it had is whole."""
+
+    def test_a_volume_moving_a_copy_with_every_copy_whole_is_not_degraded(self):
+        moving = volume(robustness="degraded", annotations={server.REBALANCE.MOVING: "2"})
+        self.assertEqual(2, server._moving_copy(moving, whole=2))
+        self.assertEqual(2, server._moving_copy(moving), "the storage map has no copy detail and trusts the mark")
+
+    def test_a_copy_lost_meanwhile_is_still_degraded(self):
+        moving = volume(robustness="degraded", annotations={server.REBALANCE.MOVING: "2"})
+        self.assertEqual(0, server._moving_copy(moving, whole=1))
+
+    def test_faulted_and_unmarked_volumes_are_reported_as_they_are(self):
+        self.assertEqual(0, server._moving_copy(volume(robustness="faulted", annotations={server.REBALANCE.MOVING: "2"}), whole=2))
+        self.assertEqual(0, server._moving_copy(volume(robustness="degraded"), whole=3))

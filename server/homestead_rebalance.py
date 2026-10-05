@@ -23,6 +23,11 @@ import urllib.error
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 KIND = "volume-rebalance"
+# On a Longhorn volume while one of its copies moves: the copies it keeps.
+# Building the new copy first means asking Longhorn for one more than that,
+# and Longhorn calls a volume short of its asked-for count "degraded" - though
+# every copy it had is still whole. Homestead reads this to say so instead.
+MOVING = "homestead.io/rebalancing"
 GIB = 1024 ** 3
 MAX_MOVES = 40
 
@@ -233,8 +238,12 @@ def _copies(name):
     return [r for r in _items(f"{LH}/replicas") if (r.get("spec") or {}).get("volumeName") == name]
 
 
-def _replicas(name, count):
-    ksend("PATCH", f"{LH}/volumes/{name}", {"spec": {"numberOfReplicas": int(count)}}, ctype="application/merge-patch+json")
+def _replicas(name, count, keeps=None):
+    """Set the copy count; `keeps` marks the volume as moving a copy (the
+    count it keeps meanwhile), and None clears that mark."""
+    ksend("PATCH", f"{LH}/volumes/{name}", {"metadata": {"annotations": {MOVING: str(keeps) if keeps else None}},
+                                           "spec": {"numberOfReplicas": int(count)}},
+          ctype="application/merge-patch+json")
 
 
 def _built(volume, replica):
@@ -267,7 +276,7 @@ def status(item):
     stage, now = ref.get("stage", "add"), time.time()
 
     def skip(why):
-        if stage in ("building",) and ref.get("original"):
+        if stage in ("building", "settling") and ref.get("original"):
             _replicas(move["volume"], ref["original"])
         ref.setdefault("skipped", []).append(f"{move['claim']}: {why}")
         ref.update(index=i + 1, stage="add", original=None, before=None)
@@ -289,7 +298,7 @@ def status(item):
             return skip("its copies changed since the review")
         ref.update(stage="building", original=int(spec["numberOfReplicas"]), started=now,
                    before=sorted((r.get("metadata") or {}).get("name") for r in copies))
-        _replicas(move["volume"], ref["original"] + 1)
+        _replicas(move["volume"], ref["original"] + 1, keeps=ref["original"])
         return "running", progress, f"Building a copy of {label}"
     if stage == "building":
         new = [r for r in copies if (r.get("metadata") or {}).get("name") not in (ref.get("before") or [])]
@@ -312,15 +321,18 @@ def status(item):
         old = hosts.get(move["from"])
         if old:
             ksend("DELETE", f"{LH}/replicas/{(old.get('metadata') or {}).get('name')}")
-        _replicas(move["volume"], ref["original"])
+        # Still marked: until the old copy is gone it is one over, not short.
+        _replicas(move["volume"], ref["original"], keeps=ref["original"])
         ref.update(stage="settling", settle_from=now)
         return "running", progress, f"Removing the copy of {move['claim']} on {move['from']}"
     if stage == "settling":
         whole = [r for r in copies if _whole(r)]
         if len(copies) == len(whole) == int(spec.get("numberOfReplicas") or 0):
+            _replicas(move["volume"], ref["original"])
             ref.update(index=i + 1, stage="add", original=None, before=None, moved=done + 1)
             return "running", int(100 * (i + 1) / len(moves)), f"Moved {move['claim']} to {move['to']}"
         if now - ref.get("settle_from", now) > 900:
+            _replicas(move["volume"], ref["original"])
             ref.update(index=i + 1, stage="add", original=None, before=None, moved=done + 1)
             return "running", progress, f"{move['claim']} moved; Longhorn is still tidying its copies"
         return "running", progress, f"Waiting for {move['claim']} to settle at {spec.get('numberOfReplicas')} copies"
@@ -336,6 +348,6 @@ def cancel_plan(item):
 def cancel_run(work, chosen):
     ref = work.get("ref") or {}
     moves, i = ref.get("moves") or [], ref.get("index", 0)
-    if i < len(moves) and ref.get("stage") == "building" and ref.get("original"):
+    if i < len(moves) and ref.get("stage") in ("building", "settling") and ref.get("original"):
         _replicas(moves[i]["volume"], ref["original"])
     return f"Stopped after moving {ref.get('moved', 0)} cop{'y' if ref.get('moved', 0) == 1 else 'ies'}"
