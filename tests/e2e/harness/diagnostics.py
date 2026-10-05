@@ -48,6 +48,23 @@ def collect(ctx, label):
                 break
         return "\n".join(out_text) or "no failing pods"
     save("failing-pod-logs.txt", failing_logs)
+    # Longhorn's own account of a volume going wrong - a replica faulting, an
+    # engine salvaged, a share-manager moved - is in its managers and
+    # instance managers, which stay Running through it.
+    def longhorn_logs():
+        out_text = []
+        for pod in k.items("pods", "-n", "longhorn-system"):
+            name = pod["metadata"]["name"]
+            if not name.startswith(("longhorn-manager-", "instance-manager-", "share-manager-")):
+                continue
+            text = k.run("logs", "-n", "longhorn-system", name, "--all-containers", "--tail=400",
+                         check=False, timeout=30)
+            lines = [line for line in text.splitlines()
+                     if "level=info" not in line or any(word in line.lower() for word in
+                        ("fault", "salvag", "error", "detach", "remount", "replica", "stale", "export"))]
+            out_text.append(f"===== {name}\n" + "\n".join(lines[-250:]))
+        return "\n".join(out_text) or "no Longhorn pods"
+    save("longhorn-logs.txt", longhorn_logs)
     # The first look, in the run's own log: what is not running, and why.
     try:
         pods = k.run("get", "pods", "-A", "-o", "wide", check=False).splitlines()
@@ -57,7 +74,13 @@ def collect(ctx, label):
     except Exception as error:
         log.info(f"(no cluster summary: {error})")
     for node in ctx.lab.nodes:
-        save(f"{node.name}-journal.txt", lambda node=node: node.ssh("sudo journalctl -b --no-pager | tail -500", check=False, timeout=60))
+        # Without the netlog lines: they filled the whole tail before.
+        save(f"{node.name}-journal.txt", lambda node=node: node.ssh(
+            "sudo journalctl -b --no-pager | grep -v ' netlog: ' | tail -3000", check=False, timeout=90))
+        # The services that hold storage and the network up, and the kernel.
+        save(f"{node.name}-services-journal.txt", lambda node=node: node.ssh(
+            "sudo journalctl -b --no-pager -k -u k3s -u k3s-agent -u rke2-server -u rke2-agent -u iscsid "
+            "| grep -vE 'netlog|level=info' | tail -1500", check=False, timeout=90))
         # What the host's network became: addresses, routes, its resolver and
         # whether it answers, and the packet filter that can stand in the way.
         save(f"{node.name}-network.txt", lambda node=node: node.ssh(
