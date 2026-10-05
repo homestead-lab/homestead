@@ -273,6 +273,11 @@ function volumeHealthCell(x) {
     ${volumeProgressBar(restore.pct)}`;
   if (rebuild && rebuild.error) return `<span class="pill crit">rebuild failed</span>
     <span class="dim xs volume-reason">${esc(rebuild.error)}</span>`;
+  // Rebalancing builds the new copy before the old one goes: nothing is short.
+  if (rebuild && x.rebalancing) return `<span class="pill ok" data-tip="${esc(x.health_reason || "Building a copy on another host before the old one is removed; every copy it had stays whole meanwhile")}">moving a copy ${rebuild.pct}%</span>
+    ${volumeProgressBar(rebuild.pct)}`;
+  if (x.rebalancing && x.state === "attached") return `<span class="pill ok" data-tip="${esc(x.health_reason)}">healthy</span> <span class="tag info">moving a copy</span>
+    ${volumeShortCell(x)}`;
   if (rebuild) return `<span class="pill med" data-tip="Longhorn is copying a replica from a healthy one; the volume is readable and writable meanwhile">rebuilding ${rebuild.pct}%</span>
     ${volumeProgressBar(rebuild.pct)}
     <span class="dim xs volume-reason">${rebuild.replicas === 1 ? "1 replica" : `${rebuild.replicas} replicas`} catching up</span>`;

@@ -963,6 +963,18 @@ def get_nodes():
     return out
 
 
+def _moving_copy(volume, whole=None):
+    """The copies a volume keeps while Homestead moves one of them, or 0.
+
+    Moving a copy builds the new one first, so the volume asks Longhorn for
+    one more than it keeps and Longhorn calls it degraded meanwhile. With at
+    least that many whole copies (when known) it is not short of anything."""
+    keeps = ((volume.get("metadata") or {}).get("annotations") or {}).get(REBALANCE.MOVING) or ""
+    if not str(keeps).isdigit() or str((volume.get("status") or {}).get("robustness") or "").lower() != "degraded":
+        return 0
+    return int(keeps) if whole is None or whole >= int(keeps) else 0
+
+
 def _volume_health_reason(volume):
     """Why Longhorn is unhappy with a volume, in its own words.
 
@@ -1224,6 +1236,10 @@ def get_volumes():
         if unclaimed or ks.get("lastPodRefAt"):
             wls = []
         filesystem = filesystems.get((ks.get("namespace", ""), ks.get("pvcName", ""))) if not unclaimed and st.get("state") == "attached" else None
+        moving = _moving_copy(v, len({c["node"] for c in copies.get(v["metadata"]["name"], []) if c.get("whole")}))
+        if moving:
+            health_reason = (f"moving a copy to another host: the new one is built first, and the volume keeps its "
+                             f"{moving} whole cop{'y' if moving == 1 else 'ies'} meanwhile")
         out.append({
             "name": v["metadata"]["name"],
             "pvc_name": ks.get("pvcName", ""),
@@ -1237,10 +1253,11 @@ def get_volumes():
             "last_used_secs": age_secs(ks.get("lastPodRefAt") or ks.get("lastPVCRefAt") or ""),
             "created": v["metadata"].get("creationTimestamp", ""),
             "state": st.get("state", "?"),
-            "robustness": st.get("robustness", "?"),
+            "robustness": "healthy" if moving else st.get("robustness", "?"),
+            "rebalancing": bool(moving),
             "node": st.get("currentNodeID", ""),
             "size_gb": round(int(sp.get("size", 0) or 0) / 1024**3, 1),
-            "replicas": sp.get("numberOfReplicas", 0),
+            "replicas": moving or sp.get("numberOfReplicas", 0),
             "copies": copies.get(v["metadata"]["name"], []),
             # Detached with fewer whole copies than it asks for: Longhorn
             # repairs that only offline, or while something uses the volume.
@@ -1881,8 +1898,8 @@ def get_flow2():
         vid = v["metadata"]["name"]
         entry = {
             "id": "v:" + vid, "name": pvc or vid[:18], "raw": vid, "pvc": pvc,
-            "replicas": v.get("spec", {}).get("numberOfReplicas", 0),
-            "robustness": st.get("robustness", "unknown"),
+            "replicas": _moving_copy(v) or v.get("spec", {}).get("numberOfReplicas", 0),
+            "robustness": "healthy" if _moving_copy(v) else st.get("robustness", "unknown"),
             "state": st.get("state", ""),
             "size_gb": round(int(v.get("spec", {}).get("size", 0) or 0) / 1024**3, 1),
             "attached": st.get("currentNodeID", ""),
