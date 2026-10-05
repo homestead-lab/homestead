@@ -37,6 +37,16 @@ def collect(ctx, label):
         log.info(f"(no cluster summary: {error})")
     for node in ctx.lab.nodes:
         save(f"{node.name}-journal.txt", lambda node=node: node.ssh("sudo journalctl -b --no-pager | tail -500", check=False, timeout=60))
+        # What the host's network became: addresses, routes, its resolver and
+        # whether it answers, and the packet filter that can stand in the way.
+        save(f"{node.name}-network.txt", lambda node=node: node.ssh(
+            "ip -br addr; echo; ip route; echo; resolvectl status 2>&1 | head -40; echo; cat /etc/resolv.conf; echo; "
+            "for h in github.com registry-1.docker.io; do getent hosts $h || echo \"$h: no answer\"; done; "
+            "resolvectl query github.com 2>&1 | head -5; echo; "
+            "sudo journalctl -u systemd-resolved -b --no-pager | tail -40; echo; "
+            "sudo iptables-save 2>/dev/null | grep -cE '^-A' ; sudo iptables-save -t filter 2>/dev/null | grep -E 'DROP|REJECT' | head -40; "
+            "sudo nft list ruleset 2>/dev/null | grep -cE 'drop|reject'; ip -s link show eth0",
+            check=False, timeout=90))
         save(f"{node.name}-previous-boot.txt", lambda node=node: node.ssh("sudo journalctl -b -1 --no-pager | tail -300", check=False, timeout=60))
         for console in sorted(node.dir.glob("console-*.log"))[-2:]:
             (out / f"{node.name}-{console.name}").write_text(console.read_text(errors="replace")[-200000:])

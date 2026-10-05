@@ -254,7 +254,8 @@ bootcmd:
   - systemctl enable --now iscsid || true
   # The host's addresses and routes on the console every 30 seconds: when it
   # stops answering, the diagnostics still show what its network became.
-  - systemd-run --unit=e2e-netlog sh -c 'while sleep 30; do echo "== $(date +%T) net"; ip -br addr; ip route; resolvectl dns 2>/dev/null | head -3; done > /dev/ttyS0 2>&1' 
+  # Through the kernel log: the login prompt on ttyS0 drops other writers.
+  - systemd-run --unit=e2e-netlog sh -c 'while sleep 30; do { echo "== net"; ip -br addr; ip route; getent hosts github.com || echo "dns: github.com no answer"; } | while read -r l; do echo "netlog: $l" > /dev/kmsg; done; done' 
 """ + ("""  - DEBIAN_FRONTEND=noninteractive apt-get -q update
   - DEBIAN_FRONTEND=noninteractive apt-get -yq -o Dpkg::Options::=--force-confold dist-upgrade
   - DEBIAN_FRONTEND=noninteractive apt-get -yq install open-iscsi nfs-common
