@@ -279,7 +279,7 @@ def status(item):
         if stage in ("building", "settling") and ref.get("original"):
             _replicas(move["volume"], ref["original"])
         ref.setdefault("skipped", []).append(f"{move['claim']}: {why}")
-        ref.update(index=i + 1, stage="add", original=None, before=None)
+        ref.update(index=i + 1, stage="add", original=None, before=None, placed=False, gone_since=None)
         return "running", progress, f"Skipped {move['claim']}: {why}"
 
     try:
@@ -303,9 +303,20 @@ def status(item):
     if stage == "building":
         new = [r for r in copies if (r.get("metadata") or {}).get("name") not in (ref.get("before") or [])]
         if not new:
+            if ref.get("placed"):
+                # It was placed and is gone: Longhorn drops a copy whose
+                # rebuild failed and makes another. That is not "never
+                # placed", and the hour already spent building is no reason
+                # to give up on the first look without it.
+                gone = ref.setdefault("gone_since", now)
+                if now - gone > 600:
+                    return skip("Longhorn dropped the new copy and did not make another within 10 minutes")
+                return "running", progress, f"Longhorn is replacing the new copy of {label}"
             if now - ref["started"] > 600:
                 return skip("Longhorn did not place the new copy within 10 minutes")
             return "running", progress, f"Waiting for Longhorn to place a copy of {label}"
+        ref["placed"] = True
+        ref.pop("gone_since", None)
         host = (new[0].get("spec") or {}).get("nodeID")
         if host == move["from"]:
             return skip("Longhorn placed the new copy on the same host")
@@ -329,11 +340,11 @@ def status(item):
         whole = [r for r in copies if _whole(r)]
         if len(copies) == len(whole) == int(spec.get("numberOfReplicas") or 0):
             _replicas(move["volume"], ref["original"])
-            ref.update(index=i + 1, stage="add", original=None, before=None, moved=done + 1)
+            ref.update(index=i + 1, stage="add", original=None, before=None, moved=done + 1, placed=False, gone_since=None)
             return "running", int(100 * (i + 1) / len(moves)), f"Moved {move['claim']} to {move['to']}"
         if now - ref.get("settle_from", now) > 900:
             _replicas(move["volume"], ref["original"])
-            ref.update(index=i + 1, stage="add", original=None, before=None, moved=done + 1)
+            ref.update(index=i + 1, stage="add", original=None, before=None, moved=done + 1, placed=False, gone_since=None)
             return "running", progress, f"{move['claim']} moved; Longhorn is still tidying its copies"
         return "running", progress, f"Waiting for {move['claim']} to settle at {spec.get('numberOfReplicas')} copies"
     return skip("an unknown step")
