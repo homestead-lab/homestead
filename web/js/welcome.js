@@ -15,7 +15,7 @@ const SETUP_CHAPTERS = [
   ["LAN networking", ["lan"]],
   ["Storage and backups", ["disks", "storage", "smb", "backups", "config", "osupdates"]],
   ["Preferences and users", ["appearance", "phone", "notifications", "people"]],
-  ["Connections", ["unifi", "unraid", "homeassistant", "linked"]],
+  ["Connections", ["unifi", "ipam", "unraid", "homeassistant", "linked"]],
   ["Applications and console", ["starter", "console"]],
 ];
 const SETUP_PERSONAL = ["appearance", "phone", "notifications"];
@@ -75,6 +75,7 @@ const SETUP_CHECKS = {
   notifications: "Checks for a registered notification device on this account, not delivery.",
   people: "Checks that at least two administrator accounts exist.",
   unifi: "Checks that a UniFi address is configured, not that the connection is healthy.",
+  ipam: "Checks that subnets are added and scanned, and synced from UniFi when it is connected - not that every address is documented.",
   unraid: "Checks that an import source is added, not that an import has succeeded.",
   homeassistant: "Checks for an unexpired API key, not a working Home Assistant connection.",
   linked: "Checks that another cluster is linked.",
@@ -123,7 +124,7 @@ function setupStatusLabel(id, status, facts = {}) {
     if (id === "appearance") return "Confirmed by you";
     if (id === "https" && !facts.here) return "Previously checked";
     if (id === "config") return "Export recorded";
-    if (["lan", "smb", "backups", "osupdates", "unifi", "unraid", "homeassistant", "linked", "starter", "console"].includes(id)) return "Configuration found";
+    if (["lan", "smb", "backups", "osupdates", "unifi", "ipam", "unraid", "homeassistant", "linked", "starter", "console"].includes(id)) return "Configuration found";
     return "Check passed";
   }
   if (status === "skipped") return "Skipped by choice";
@@ -281,6 +282,39 @@ const SETUP_STEPS = {
     title: "UniFi", lead: s => s.done ? "A UniFi Network address is configured. Check the connection in Settings." :
       "Connect UniFi Network to import devices and address reservations and help avoid DHCP conflicts when assigning VIPs.",
     actions: s => s.done ? [] : [{ label: "Connect UniFi", run: "settingsTab('connections');go('settings')", pri: true }],
+  },
+  ipam: {
+    title: "IP addresses",
+    lead: s => s.done ? "Your subnets are added and scanned. Networking › IP addresses shows what each address is used for, and Homestead suggests free ones for VIPs and LAN workloads."
+      : "Keep track of your LAN's addresses: add your subnets with their DHCP ranges, bring in what UniFi knows, and scan to see what answers. Homestead then warns about conflicts and suggests free addresses for VIPs and LAN workloads.",
+    body: s => {
+      const subnets = s.subnets || [];
+      const unscanned = subnets.filter(n => !n.scanned);
+      const stage = !subnets.length ? 0 : s.unifi && !s.synced ? 1 : unscanned.length ? 2 : 3;
+      return UI.steps([
+        { title: "Add your subnets", detailHtml: subnets.length
+          ? `${subnets.map(n => `<span class="mono">${esc(n.cidr)}</span>${n.name ? ` ${esc(n.name)}` : ""}`).join(", ")}. Add each subnet's gateway and DHCP range so addresses inside it are not offered as static ones.`
+          : "Add each subnet up to /22 with its gateway and DHCP range. The subnets your hosts are on are suggested." },
+        { title: "Sync from UniFi", detailHtml: !s.unifi ? "Optional: connect UniFi in the previous step to bring in its networks, devices and DHCP reservations."
+          : s.synced ? `Synced ${esc(fmtAgo(Math.max(1, Math.round(Date.now() / 1000 - s.synced))))}. Sync again after changing reservations in UniFi.`
+          : "Bring in UniFi's networks, devices and DHCP reservations." },
+        { title: "Scan for what answers", detailHtml: !subnets.length ? "After adding a subnet, scan it to find the devices that answer on it."
+          : unscanned.length ? `${unscanned.length} subnet${unscanned.length === 1 ? " has" : "s have"} not been scanned yet. A scan takes a minute or two and runs in the background.`
+          : "Every subnet has been scanned. Scan again from the page whenever devices change." },
+      ], stage);
+    },
+    actions: s => {
+      const subnets = s.subnets || [];
+      const unscanned = subnets.filter(n => !n.scanned);
+      const open = "go('network', { params: { tab: 'ip' } })";
+      return [
+        { label: subnets.length ? "Edit subnets" : "Add subnets", run: `${open};setTimeout(() => window.ipamSubnets && ipamSubnets(), 900)`, pri: !subnets.length },
+        s.unifi ? { label: "Sync UniFi", run: `${open};setTimeout(() => window.ipamSync && ipamSync(), 900)`, pri: subnets.length && !s.synced } : null,
+        subnets.length ? { label: unscanned.length ? "Scan subnets" : "Scan again",
+          run: `${open};setTimeout(() => ${JSON.stringify((unscanned.length ? unscanned : subnets).map(n => n.id))}.forEach(id => window.ipamScan && ipamScan(id)), 900)`,
+          pri: !!unscanned.length && (!s.unifi || !!s.synced) } : null,
+      ].filter(Boolean);
+    },
   },
   unraid: {
     title: "Unraid imports", lead: s => s.done ? "An import source has been added. Review its connection before importing containers or VMs." :
@@ -580,6 +614,12 @@ window.welcomeCheck = async (force = false) => {
   let state;
   try { state = await api("/api/setup"); } catch (e) { return; }
   setupOffer(state);
+  // Once, for an administrator who has not opened, finished or hidden it -
+  // and only over the Dashboard, never over a page a link asked for.
+  if (setupDemo() || !state.admin || state.opened || state.hidden || state.completed || STATE.view !== "dash") return;
+  try { await api("/api/setup/opened", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }); }
+  catch (e) { return; }
+  if (STATE.view === "dash") go("setup");
 };
 
 function setupOffer(state = STATE.data.setup) {

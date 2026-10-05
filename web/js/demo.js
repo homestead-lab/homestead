@@ -2326,6 +2326,8 @@ ssh_pwauth: true
     backups: { done: true, applies: true }, config: { done: false, applies: true, at: null }, osupdates: { done: false, applies: false },
     notifications: { done: false, applies: true }, people: { done: false, applies: true, users: 3 },
     unifi: { done: true, applies: true }, unraid: { done: true, applies: true }, homeassistant: { done: true, applies: true },
+    ipam: { done: true, applies: true, unifi: true, synced: Math.floor(Date.now() / 1000) - 3600,
+      subnets: [{ id: "192.0.2.0/24", cidr: "192.0.2.0/24", name: "LAN", scanned: Math.floor(Date.now() / 1000) - 7200 }] },
     linked: { done: true, applies: true }, starter: { done: true, applies: true }, console: { done: false, applies: false } } };
   responses["/api/setup"] = () => ({ ...demoSetup, skips: [...demoSetup.skips] });
   responses["/api/setup/skip"] = (url, init) => {
