@@ -60,7 +60,9 @@ class Node:
         self.dir.mkdir(parents=True, exist_ok=True)
         args = ["qemu-system-x86_64", "-enable-kvm", "-cpu", "host", "-machine", "q35",
                 "-smp", str(self.lab.cpus), "-m", str(self.lab.memory), "-name", self.name,
-                "-drive", f"file={self.dir / 'disk.qcow2'},if=virtio,cache=unsafe,discard=unmap",
+                # The system disk boots first, whatever other disks there are.
+                "-drive", f"file={self.dir / 'disk.qcow2'},if=none,id=root,cache=unsafe,discard=unmap",
+                "-device", "virtio-blk-pci,drive=root,bootindex=0",
                 "-drive", f"file={self.dir / 'seed.iso'},if=virtio,format=raw,readonly=on",
                 *(["-drive", f"file={self.dir / 'data.qcow2'},if=none,id=data,cache=unsafe,discard=unmap",
                    "-device", "virtio-blk-pci,drive=data,serial=e2e-data"] if self.lab.data_disk else []),
@@ -252,7 +254,7 @@ bootcmd:
   - systemctl enable --now iscsid || true
   # The host's addresses and routes on the console every 30 seconds: when it
   # stops answering, the diagnostics still show what its network became.
-  - nohup sh -c 'while sleep 30; do echo "== $(date +%T) net"; ip -br addr; ip route; done > /dev/ttyS0 2>&1' >/dev/null 2>&1 &
+  - systemd-run --unit=e2e-netlog sh -c 'while sleep 30; do echo "== $(date +%T) net"; ip -br addr; ip route; resolvectl dns 2>/dev/null | head -3; done > /dev/ttyS0 2>&1' 
 """ + ("""  - DEBIAN_FRONTEND=noninteractive apt-get -q update
   - DEBIAN_FRONTEND=noninteractive apt-get -yq -o Dpkg::Options::=--force-confold dist-upgrade
   - DEBIAN_FRONTEND=noninteractive apt-get -yq install open-iscsi nfs-common
