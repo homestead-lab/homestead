@@ -199,6 +199,36 @@ class JobTests(unittest.TestCase):
         R.cancel_run(self.item, {})
         self.assertNotIn(R.MOVING, notes())
 
+    def test_a_new_copy_longhorn_drops_and_remakes_is_waited_for_not_given_up(self):
+        # A long rebuild failed part-way: Longhorn dropped the new copy and was
+        # about to make another. The move was an hour old - that is not a copy
+        # "never placed", and giving up cut the volume's count mid-rebuild.
+        replicas = self.c.objects[f"{LH}/replicas"]["items"]
+        R.status(self.item)
+        replicas.append(replica("v0", "k1", n=1, healthy=False))
+        R.status(self.item)                                   # placed, building
+        self.item["ref"]["started"] = time.time() - 5400
+        replicas.pop()                                        # dropped by Longhorn
+        state, _, message = R.status(self.item)
+        self.assertEqual("running", state)
+        self.assertIn("replacing the new copy", message)
+        self.assertEqual(3, self.c.objects[f"{LH}/volumes"]["items"][0]["spec"]["numberOfReplicas"], "count kept up")
+        replicas.append(replica("v0", "k1", n=2, healthy=False))  # remade
+        self.assertIn("on k1", R.status(self.item)[2])
+        self.assertNotIn("gone_since", self.item["ref"])
+
+    def test_a_new_copy_dropped_and_never_remade_is_given_up_with_the_right_reason(self):
+        replicas = self.c.objects[f"{LH}/replicas"]["items"]
+        R.status(self.item)
+        replicas.append(replica("v0", "k1", n=1, healthy=False))
+        R.status(self.item)
+        replicas.pop()
+        R.status(self.item)
+        self.item["ref"]["gone_since"] = time.time() - 700
+        R.status(self.item)
+        self.assertIn("dropped the new copy", " ".join(self.item["ref"]["skipped"]))
+        self.assertEqual(2, self.c.objects[f"{LH}/volumes"]["items"][0]["spec"]["numberOfReplicas"])
+
     def test_copies_changed_since_the_review_are_left_alone(self):
         self.c.objects[f"{LH}/replicas"]["items"].append(replica("v0", "k1"))
         R.status(self.item)
