@@ -22,6 +22,32 @@ def function(name):
     return text[start:text.index("\n}", start) + 2]
 
 
+HELPERS ='fail() { echo "$*" >&2; exit 1; }\n' + function("channel_release") + "\n" + function("attempts") + "\n"
+
+
+@unittest.skipUnless(SH and os.name != "nt", "requires a POSIX shell")
+class ChannelReleaseTests(unittest.TestCase):
+    def release(self, answers):
+        """channel_release with curl answering each URL as `answers` says
+        (an empty answer is a failed request)."""
+        cases = " ".join(f'*{key}*) {"echo " + value if value else "return 22"} ;;' for key, value in answers.items())
+        stub = 'curl() { for a; do last=$a; done; case "$last" in ' + cases + ' *) return 22 ;; esac; }\n'
+        result = subprocess.run([SH], input="set -eu\n" + stub + HELPERS + "channel_release rke2 stable || true\n",
+                                text=True, capture_output=True, timeout=10)
+        return result.stdout.strip()
+
+    def test_the_channel_server_names_the_release(self):
+        self.assertEqual("v1.36.5+rke2r1", self.release({"update.rke2.io": "https://github.com/rancher/rke2/releases/tag/v1.36.5+rke2r1"}))
+
+    def test_github_stands_in_while_the_channel_server_is_down(self):
+        # update.rke2.io answering 404: never "stable" taken as a version.
+        self.assertEqual("v1.37.1+rke2r1", self.release({"update.rke2.io": "",
+                                                         "releases/latest": "https://github.com/rancher/rke2/releases/tag/v1.37.1+rke2r1"}))
+
+    def test_nothing_when_neither_answers(self):
+        self.assertEqual("", self.release({}))
+
+
 @unittest.skipUnless(SH and os.name != "nt", "requires a POSIX shell")
 class BootstrapDeviceTests(unittest.TestCase):
     def test_k3s_servers_and_workers_keep_options_and_enable_device_ownership(self):
@@ -34,7 +60,7 @@ class BootstrapDeviceTests(unittest.TestCase):
             env = dict(os.environ, PATH=tmp + os.pathsep + os.environ["PATH"], TEST_ARGS=str(output))
             for args in ("server --cluster-init", "server --server https://192.0.2.10:6443", "agent"):
                 script = "set -eu\nsay() { :; }\nK3S_VERSION=v1.34.6+k3s1\nNODE_IP=192.0.2.11\n"
-                script += function("install_k3s") + "\ninstall_k3s " + args + "\n"
+                script += HELPERS + function("install_k3s") + "\n" + function("get_k3s") + "\ninstall_k3s " + args + "\n"
                 result = subprocess.run([SH], input=script, text=True, capture_output=True, env=env, timeout=10)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(output.read_text().splitlines(), args.split() +
@@ -44,8 +70,10 @@ class BootstrapDeviceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config = Path(tmp, "rke2")
             # Only the extracted function is run, with host paths redirected to a fixture.
-            body = function("install_rke2").replace("/etc/rancher/rke2", str(config))
-            prelude = 'set -eu\nsay() { :; }\ncurl() { echo ":"; }\nsystemctl() { :; }\n'
+            body = (HELPERS + function("install_rke2") + "\n" + function("get_rke2")).replace("/etc/rancher/rke2", str(config))
+            # The release is looked up (a redirect to its tag); the installer itself is a no-op.
+            prelude = ('set -eu\nsay() { :; }\nsystemctl() { :; }\n'
+                       'curl() { case "$*" in *url_effective*) echo https://github.com/rancher/rke2/releases/tag/v1.34.6+rke2r1 ;; *) echo ":" ;; esac; }\n')
             prelude += 'NODE_IP=192.0.2.11\nJOIN_TAINT=homestead.io/storage-pending=longhorn:PreferNoSchedule\nRKE2_VERSION=""\n'
             for role in ("server", "agent"):
                 result = subprocess.run([SH], input=prelude + body +

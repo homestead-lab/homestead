@@ -306,20 +306,52 @@ wait_crd() {
     i=$((i+1)); if [ $i -gt 60 ]; then echo "  $1 is not available yet; $DIST will retry."; return 0; fi; sleep 3; done
 }
 
+# The release a channel points at, asked of k3s's or RKE2's update server
+# with retries. Their own install scripts ask once, and when that answer does
+# not come they carry on with the channel's name as the version - and fail
+# downloading "releases/download/stable/...". When the update server does
+# not answer at all, the project's newest GitHub release stands in. Empty
+# when neither can be found.
+channel_release() { # k3s|rke2 channel
+  repo=k3s-io/k3s; [ "$1" = rke2 ] && repo=rancher/rke2
+  for url in "https://update.$1.io/v1-release/channels/$2" "https://github.com/$repo/releases/latest"; do
+    where=$(curl -sfL --retry 5 --retry-all-errors --retry-delay 3 --max-time 60 -o /dev/null \
+      -w '%{url_effective}' "$url" 2>/dev/null) || where=""
+    case "${where##*/}" in v[0-9]*) echo "${where##*/}"; return 0 ;; esac
+  done
+}
+
+# A download that fails for a moment is tried again before the install stops.
+attempts() { # what command...
+  what="$1"; shift; n=1
+  until "$@"; do
+    [ "$n" -ge 4 ] && return 1
+    echo "  $what did not finish; trying again in $((n * 10)) seconds"
+    sleep $((n * 10)); n=$((n + 1))
+  done
+}
+
 install_k3s() {
+  [ -n "$K3S_VERSION" ] || K3S_VERSION=$(channel_release k3s stable)
+  [ -n "$K3S_VERSION" ] || fail "k3s's release could not be found (update.k3s.io and GitHub did not answer); try again, or give a version with --k3s-version"
   say "Installing k3s${K3S_VERSION:+ $K3S_VERSION} ($1)"
   if [ -n "$K3S_VERSION" ]; then export INSTALL_K3S_VERSION="$K3S_VERSION"; fi
   if [ -n "$NODE_IP" ]; then set -- "$@" --node-ip "$NODE_IP"; fi
   # CDI runs without root and must own the block devices assigned to its pods.
   # Enable on workers too: an importer can be scheduled on any joined node.
   set -- "$@" --nonroot-devices
-  curl -sfL https://get.k3s.io | sh -s - "$@"
+  attempts "Installing k3s" get_k3s "$@" || fail "k3s could not be installed; see the output above"
+}
+get_k3s() {
+  curl -sfL --retry 5 --retry-all-errors https://get.k3s.io | sh -s - "$@"
 }
 
 # RKE2 reads its settings from a file rather than flags: written first, then
 # RKE2 installed and its service started (which waits for it to come up).
 install_rke2() { # server|agent [url token]
   type="$1"; url="${2:-}"; token="${3:-}"
+  [ -n "$RKE2_VERSION" ] || RKE2_VERSION=$(channel_release rke2 stable)
+  [ -n "$RKE2_VERSION" ] || fail "RKE2's release could not be found (update.rke2.io and GitHub did not answer); try again, or give a version with --rke2-version"
   say "Installing RKE2${RKE2_VERSION:+ $RKE2_VERSION} ($type)"
   mkdir -p /etc/rancher/rke2
   # The file holds the cluster token, so only root may read it.
@@ -339,9 +371,13 @@ install_rke2() { # server|agent [url token]
     true
   } > /etc/rancher/rke2/config.yaml
   if [ -n "$RKE2_VERSION" ]; then export INSTALL_RKE2_VERSION="$RKE2_VERSION"; fi
-  curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE="$type" sh -
+  attempts "Installing RKE2" get_rke2 "$type" || fail "RKE2 could not be installed; see the output above"
   say "Starting RKE2 (the first start takes several minutes while images are downloaded)"
   systemctl enable --now "rke2-$type.service"
+}
+
+get_rke2() {
+  curl -sfL --retry 5 --retry-all-errors https://get.rke2.io | INSTALL_RKE2_TYPE="$1" sh -
 }
 
 parse_common() { # sets DIST, NODE_IP, versions; leaves the rest to the caller

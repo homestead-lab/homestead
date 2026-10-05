@@ -430,10 +430,19 @@ cached() { # key command... -> the command's output, retrieved once per run
   cat "$f" 2>/dev/null
 }
 channels() { # k3s|rke2 -> "channel version" lines, releases only
-  fetch "https://update.$1.io/v1-release/channels" | tr -d '\n' \
+  found=$(fetch "https://update.$1.io/v1-release/channels" | tr -d '\n' \
     | grep -o '"name":"[^"]*","latest":"[^"]*"' \
     | sed 's/"name":"\([^"]*\)","latest":"\([^"]*\)"/\1 \2/' \
-    | grep -v '^testing ' | grep -Ev ' v[0-9.]+-'
+    | grep -v '^testing ' | grep -Ev ' v[0-9.]+-')
+  if [ -n "$found" ]; then printf '%s\n' "$found"; return; fi
+  # The update server is down (update.rke2.io has answered 404): the project's
+  # own releases stand in - the newest as stable, and the newest of each minor.
+  repo=k3s-io/k3s; [ "$1" = rke2 ] && repo=rancher/rke2
+  fetch "https://api.github.com/repos/$repo/releases?per_page=60" | grep -o '"tag_name": *"[^"]*"' \
+    | sed 's/.*"\([^"]*\)"$/\1/' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+\+(k3s|rke2r)[0-9]+$' \
+    | sort -t. -k1,1V -k2,2nr -k3,3nr | awk -F. '
+      NR == 1 { print "stable " $0 }
+      !seen[$1 "." $2]++ { print $1 "." $2 " " $0 }'
 }
 releases() { # owner/repo -> release tags, newest first, without pre-releases
   fetch "https://api.github.com/repos/$1/releases?per_page=50" | grep -o '"tag_name": *"[^"]*"' \
