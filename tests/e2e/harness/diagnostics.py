@@ -27,6 +27,26 @@ def collect(ctx, label):
     save("longhorn-volumes.yaml", lambda: k.run("get", "volumes.longhorn.io", "-n", "longhorn-system", "-o", "yaml", check=False))
     save("longhorn-replicas.txt", lambda: k.run("get", "replicas.longhorn.io", "-n", "longhorn-system", "-o", "wide", check=False))
     save("jobs.json", lambda: ctx.api.get("/api/operations", wait=30))
+    save("longhorn-nodes.yaml", lambda: k.run("get", "nodes.longhorn.io", "-n", "longhorn-system", "-o", "yaml", check=False))
+    # Logs of what keeps failing: a pod that restarted, or is not ready, in
+    # Longhorn and Homestead's own namespace - its last crash included.
+    def failing_logs():
+        out_text = []
+        for pod in k.items("pods", "-n", "longhorn-system") + k.items("pods", "-n", "lab"):
+            meta, status = pod["metadata"], pod.get("status") or {}
+            statuses = status.get("containerStatuses") or []
+            if status.get("phase") == "Succeeded" or (statuses and all(c.get("ready") for c in statuses)
+                                                      and not any(c.get("restartCount") for c in statuses)):
+                continue
+            for previous in ("--previous", ""):
+                text = k.run("logs", "-n", meta["namespace"], meta["name"], "--all-containers", "--tail=80",
+                             *([previous] if previous else []), check=False, timeout=30)
+                if text.strip():
+                    out_text.append(f"===== {meta['namespace']}/{meta['name']} {previous or '(current)'}\n{text}")
+            if len(out_text) > 40:
+                break
+        return "\n".join(out_text) or "no failing pods"
+    save("failing-pod-logs.txt", failing_logs)
     # The first look, in the run's own log: what is not running, and why.
     try:
         pods = k.run("get", "pods", "-A", "-o", "wide", check=False).splitlines()
