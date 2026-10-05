@@ -243,8 +243,8 @@ class Server:
         h.path = "/api/push/key"; h.do_GET()
         assert h._send.call_args.args[0] == 503
         assert not root.exists(), "read-only startup wrote the copied data directory"
-        assert len(threads.call_args_list) == 1
-        assert threads.call_args.kwargs["name"] == "data-move-startup"
+        # The handoff's own startup, and the read-only data-mount watchdog.
+        assert sorted(c.kwargs["name"] for c in threads.call_args_list) == ["data-mount", "data-move-startup"], threads.call_args_list
         print("full-app-read-only-startup")
 with mock.patch("builtins.open", side_effect=file_open), mock.patch("os.path.exists", side_effect=present), \
      mock.patch.object(F, "Fence") as fence, mock.patch("threading.Thread") as threads, \
