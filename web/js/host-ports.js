@@ -110,13 +110,14 @@ function portsAcrossHostsBody(report) {
    every refresh, so the card keeps its rows while the next report loads
    instead of emptying and filling again. */
 const PORTS_VIEW = { report: null, error: "" };
+window.PORTS_VIEW = PORTS_VIEW;
 window.portsAcrossHostsCard = () => {
   const report = PORTS_VIEW.report;
   const line = report ? `${report.counts?.hosts || 0} host${report.counts?.hosts === 1 ? "" : "s"} · ${report.counts?.ports || 0} ports`
     + ((report.conditions || []).length ? ` · ${(report.conditions || []).length} need attention` : "") : "reading ports…";
   const body = PORTS_VIEW.error ? `<div class="dim small">Port status is unavailable: ${esc(PORTS_VIEW.error)}</div>`
     : report ? portsAcrossHostsBody(report) : "";
-  return `<div class="csub">${esc(line)}</div><div class="ports-body" style="margin-top:8px">${body}</div>`;
+  return `<div class="ctitle">Hosts</div><div class="csub">${esc(line)}</div><div class="ports-body" style="margin-top:8px">${body}</div>`;
 };
 
 window.portsAcrossHostsPaint = async () => {

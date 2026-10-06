@@ -425,5 +425,5 @@ def alert_facts(addresses):
         facts.append({"key": f"address:{row['ip']}", "category": "degraded", "severity": "degraded", "hold": ADDRESS_HOLD,
                       "title": f"Service address {row['ip']} has no route",
                       "resolved": f"Service routing warning cleared: {row['ip']}",
-                      "body": row.get("reason", ""), "href": "/networking"})
+                      "body": row.get("reason", ""), "href": "/networking?tab=addresses"})
     return facts

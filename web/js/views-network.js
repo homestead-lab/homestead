@@ -29,17 +29,17 @@ function networkAttention(data) {
   const items = [];
   for (const row of data.addresses?.addresses || []) {
     if (!["unrouted", "unannounced"].includes(row.state)) continue;
-    items.push({kind: "address", what: `${row.ip} not reachable`, why: row.reason || "", where: `.addr-row[data-ip="${CSS.escape(row.ip)}"]`});
+    items.push({kind: "address", section: "addresses", what: `${row.ip} not reachable`, why: row.reason || "", where: `.addr-row[data-ip="${CSS.escape(row.ip)}"]`});
   }
   for (const c of data.conflicts || []) {
     const owners = (c.owners || []).map(o => `${o.namespace}/${o.service}`);
-    items.push({kind: "conflict", what: `${c.ip}:${c.port}/${c.protocol} · ${owners.join(" and ")}`,
+    items.push({kind: "conflict", section: "services", what: `${c.ip}:${c.port}/${c.protocol} · ${owners.join(" and ")}`,
       why: "Both Services claim this address and port, so only one answers. Give one of them another port or address.",
       where: owners[0] ? `tr[data-svc="${CSS.escape(owners[0])}"]` : ""});
   }
   for (const row of data.services || []) {
     if (row.system || ["healthy", "conflict"].includes(row.health)) continue;
-    items.push({kind: "service", what: `${row.namespace}/${row.name} · ${row.health}`, why: row.reason || "",
+    items.push({kind: "service", section: "services", what: `${row.namespace}/${row.name} · ${row.health}`, why: row.reason || "",
       where: `tr[data-svc="${CSS.escape(row.namespace + "/" + row.name)}"]`});
   }
   return items;
@@ -50,11 +50,16 @@ function networkAttentionCounts(items) {
     .filter(([n]) => n).map(([n, noun, after]) => `${n} ${noun}${n === 1 ? "" : noun.endsWith("s") ? "es" : "s"}${after ? " " + after : ""}`);
   return parts.join(" · ") || "nothing needs attention";
 }
-window.networkShow = selector => {
+/* Opens a section and shows one row in it (an Overview item's Show). */
+window.networkShow = async (section, selector) => {
+  if (section && section !== networkTab()) {
+    networkTab(section);
+    for (let i = 0; i < 30 && !(selector && document.querySelector(selector)); i++) await new Promise(r => setTimeout(r, 100));
+  }
   const el = selector && document.querySelector(selector);
-  if (!el) return toast("Its row is filtered out or hidden; clear the search or show system Services", "bad");
+  if (!el) return selector ? toast("Its row is filtered out or hidden; clear the search or show system Services", "bad") : undefined;
   el.closest("details")?.setAttribute("open", "");
-  el.scrollIntoView({block: "center", behavior: "smooth"});
+  el.scrollIntoView({ block: "center", behavior: "smooth" });
   el.classList.add("flash-find");
   setTimeout(() => el.classList.remove("flash-find"), 2600);
 };
@@ -120,76 +125,160 @@ function networkAddressesHtml(data) {
       <div class="addr-node-head"><div><b>No node</b><span class="dim xs">addresses nothing answers for</span></div></div>
       ${loose.map(row => addressRow(row, data)).join("")}</article>`);
   const kept = (map.kept || []).slice(-3);
-  return `<div class="between"><div class="sec">Nodes &amp; addresses ${tip("Which node answers for each address, and what is reached there. An address works when a node answers for it on the LAN and the Services on it carry it - kube-proxy forwards only addresses a Service carries.")}</div></div>
-    ${kept.length ? `<div class="note small addr-kept">${kept.map(k => `kube-vip answered for <span class="mono">${esc(k.ips.join(", "))}</span> on ${esc(k.node)} but left it off <span class="mono">${esc(k.namespace)}/${esc(k.name)}</span>, so its ports were refused. Homestead recorded it ${esc(fmtAgo(Math.max(1, Math.round(Date.now() / 1000 - k.at))))}.`).join("<br>")}</div>` : ""}
+  return `    ${kept.length ? `<div class="note small addr-kept">${kept.map(k => `kube-vip answered for <span class="mono">${esc(k.ips.join(", "))}</span> on ${esc(k.node)} but left it off <span class="mono">${esc(k.namespace)}/${esc(k.name)}</span>, so its ports were refused. Homestead recorded it ${esc(fmtAgo(Math.max(1, Math.round(Date.now() / 1000 - k.at))))}.`).join("<br>")}</div>` : ""}
     <div class="addr-nodes">${nodes.join("") || '<div class="card flat empty">No nodes</div>'}</div>`;
 }
 
+/* Networking, in sections as Settings and a host's page have them: a list on
+   the left, grouped by what you came to find out, and one section at a time.
+   On a phone the list comes first and a section opens on its own. Overview
+   opens by default and says what needs attention, each item opening its
+   section; alerts and links name a section with ?tab=. */
+const NETWORK_SECTIONS = [
+  // [key, label, group, icon from index.html's sprite, what the header says]
+  ["overview", "Overview", "", "dash", "What needs attention, and how a connection reaches your apps"],
+  ["services", "Services", "Apps", "route", "Every Service on the LAN: its address, ports, the path to its pods and their health"],
+  ["vips", "Workload VIPs", "Addresses", "vip", "Stable LAN addresses for containers and pod-network VMs, separate from your hosts' own"],
+  ["addresses", "Address map", "Addresses", "addrmap", "Each host's own address and the VIPs it holds now, with what listens on each"],
+  ["ip", "IP addresses", "Addresses", "ipam", "Every address on your subnets: static, reserved, DHCP, and what the cluster uses"],
+  ["lan", "LAN networks", "Network", "network", "Networks that put a VM or container on your LAN like any other machine"],
+  ["ports", "Host ports", "Network", "port", "Each host's network ports, bonds and uplinks: link, speed and errors"],
+  ["firewall", "Firewall", "Protection", "shield", "Policies for workloads' pod-network traffic"],
+];
+const networkSectionRow = key => NETWORK_SECTIONS.find(row => row[0] === key) || NETWORK_SECTIONS[0];
+const networkSectionLabel = key => key === "ports" && STATE.platform?.harvester ? "Ports and uplinks" : networkSectionRow(key)[1];
+
+/* What each section's line in the list says: a count that is true now, from
+   whatever this page last read, and in amber what needs attention there. */
+function networkSectionLine(key) {
+  const data = STATE.data.network, ports = window.PORTS_VIEW?.report;
+  const due = networkAttentionAll().filter(item => key === "overview" || item.section === key).length;
+  const plural = (n, word, many = word + "s") => `${n} ${n === 1 ? word : many}`;
+  const said = {
+    overview: () => networkAttentionAll().length ? "" : data ? "Nothing needs attention" : "Status and attention",
+    services: () => data && plural(data.summary.app_services, "app Service"),
+    vips: () => data && `${plural((data.registered_vips || []).length, "VIP")}${data.shared_vip?.ip ? ` · default ${data.shared_vip.ip}` : ""}`,
+    addresses: () => data && `${plural((data.addresses?.nodes || []).length, "host")} · ${data.summary.listeners} listening`,
+    ip: () => STATE.data.ipam ? plural((STATE.data.ipam.subnets || []).length, "subnet") : "Subnets, DHCP and reservations",
+    lan: () => window.__vmCreateOptions ? plural((window.__vmCreateOptions.network_details || []).length, "network") : "VLANs and bridges",
+    ports: () => ports && `${plural(ports.counts?.ports || 0, "port")} on ${plural(ports.counts?.hosts || 0, "host")}`,
+    firewall: () => STATE.data.firewall ? plural(STATE.data.firewall.policies.length, "policy", "policies") : "Workload policies",
+  }[key]?.() || "";
+  const attention = due ? `<span class="net-nav-due">${due} need${due === 1 ? "s" : ""} attention</span>` : "";
+  return [esc(said), attention].filter(Boolean).join(" · ");
+}
+
+/* Everything the Overview lists, each with the section it is in and the row
+   to show there. */
+function networkAttentionAll() {
+  const items = STATE.data.network ? networkAttention(STATE.data.network) : [];
+  for (const c of window.PORTS_VIEW?.report?.conditions || []) {
+    if (c.severity === "info") continue;
+    items.push({ kind: "port", section: "ports", what: c.title, why: c.body, where: "" });
+  }
+  return items;
+}
+
+function networkOpen() {
+  // A section asked for by name opens, on a phone too; Networking from the
+  // sidebar shows the list there first, and the Overview beside it elsewhere.
+  const params = new URLSearchParams(location.search);
+  return !!(params.get("tab") || params.get("section"));
+}
+
+/* The page: header, the section list, and the one section's body. */
+function networkPage(key, bodyHtml, { actions = "", actionsClass = "" } = {}) {
+  const items = NETWORK_SECTIONS.map(([id, , group, icon]) => ({ key: id, label: networkSectionLabel(id), group, icon,
+    descriptionHtml: networkSectionLine(id) }));
+  paint(`${UI.pageHeader("Networking", esc(networkSectionRow(key)[4]), actions
+      || `<button class="btn pri" data-need="operator" onclick="networkExpose()">＋ Expose workload</button>`, { mobileSummary: "omit", actionsClass })}
+    ${UI.workspace(UI.workspaceNav(items, { label: "Networking sections", selected: key, onSelect: id => `networkTab(${jsArg(id)})` }),
+      `<div class="network-pane" data-pane="${esc(key)}">${bodyHtml}</div>`,
+      { open: networkOpen(), backLabel: "All sections", currentLabel: networkSectionLabel(key), back: "networkBack()" })}`);
+}
+window.networkPage = networkPage;
+
+window.networkBack = () => {
+  const url = new URL(location.href); url.searchParams.delete("tab");
+  history.replaceState(history.state, "", url.pathname + url.search);
+  UI.selectWorkspace($(".settings-layout"), "");
+};
+
 async function viewNetworking() {
-  if (networkTab() === "ip") return viewIpam();
-  if (networkTab() === "firewall") return viewFirewall();
-  const [data, baseline] = await Promise.all([api("/api/network"), api("/api/platform/baseline").catch(() => null)]);
+  const key = networkTab();
+  if (key === "ip") return viewIpam();
+  if (key === "firewall") return viewFirewall();
+  const [data, baseline] = await Promise.all([api("/api/network"),
+    key === "overview" ? api("/api/platform/baseline").catch(() => null) : null,
+    key === "overview" || key === "ports" || !window.PORTS_VIEW?.report ? window.portsAcrossHostsPaint?.(true) : null]);
   STATE.data.network = data;
-  const q = STATE.q.toLowerCase();
-  const showSystem = !!STATE.networkSystem;
-  const attention = networkAttention(data);
-  const services = data.services.filter(row => (showSystem || !row.system) && (!q ||
-    [row.namespace, row.name, row.cluster_ip, ...row.external_ips, networkPortText(row), ...row.targets]
-      .join(" ").toLowerCase().includes(q)));
-  const controller = data.controller;
-  const orphans = services.filter(row => row.orphaned).length;
-  paint(`${UI.pageHeader(`Networking`, `Addresses, listeners and the live path from your LAN to each workload`, `${moreMenu([{ label: `${showSystem ? "Hide" : "Show"} system services`, icon: "layers", run: "networkToggleSystem()" }])}
-      <button class="btn pri" data-need="operator" onclick="networkExpose()">＋ Expose workload</button>`)}
-    ${networkTabs("services")}
-    ${baselineHtml(baseline, "network")}
-    ${UI.guide("How addresses work here", `
-      <p><b>${esc(controller.name)}</b> handles service addresses. Multus adds separate LAN interfaces; it does not provide VIP failover.
-      ${STATE.platform?.servicelb ? "ServiceLB also exposes unclassified Services on node IPs, not a movable VIP." : ""}</p>
-      <p><b>Default workload VIP:</b> ${esc(data.shared_vip?.ip || "not configured")}. Choose a default below, then select <b>Default workload VIP</b> or <b>Specific VIP</b> when deploying.
-      VMs on the pod network can be exposed through a Service; bridged VMs use their own DHCP/static address, not a service VIP.</p>
-      <p>VIP failover is not full-cluster HA: multiple eligible hosts, a surviving control-plane quorum, portable storage with healthy replicas, and workload restart policies are also needed.
-      ${Object.keys(data.node_names || {}).length < 2 ? "This is a single-node cluster: there is no second host to take over." : "Test host failure before relying on recovery."}</p>`)}
-    ${summaryLine("network", [
-      `<span class="tag ${controller.healthy ? "ok" : "bad"}">${controller.ready}/${controller.desired} load balancer</span>`,
-      `<b>${data.summary.vips}</b> VIP${data.summary.vips === 1 ? "" : "s"} · ${data.summary.listeners} listening`,
-      `<b>${data.summary.app_services}</b> app service${data.summary.app_services === 1 ? "" : "s"}`,
-      attention.length ? `<span class="tag warn">${esc(networkAttentionCounts(attention))}</span>` : "no conflicts"],
-      UI.stats([
+  const body = {
+    overview: () => networkOverviewHtml(data, baseline),
+    services: () => networkServicesHtml(data),
+    vips: () => networkVipsHtml(data),
+    addresses: () => networkAddressesHtml(data),
+    lan: () => networkLanHtml(),
+    ports: () => networkPortsHtml(),
+  }[key] || (() => networkOverviewHtml(data, baseline));
+  const actions = key === "services" ? `${moreMenu([{ label: `${STATE.networkSystem ? "Hide" : "Show"} system services`, icon: "layers", run: "networkToggleSystem()" }])}
+      <button class="btn pri" data-need="operator" onclick="networkExpose()">＋ Expose workload</button>` : "";
+  networkPage(key, body(), { actions });
+  if (key === "overview" || key === "vips") selfAddressPaint();
+  if (key === "lan") await networkVmNetsPaint();
+  if (key === "ports" && window.uplinksPaint && STATE.platform?.harvester) uplinksPaint();
+}
+
+function networkOverviewHtml(data, baseline) {
+  const controller = data.controller, attention = networkAttentionAll();
+  const go = (key, words) => `<button type="button" class="net-path-step" onclick="networkTab(${jsq(key)})">${words}</button>`;
+  const ports = window.PORTS_VIEW?.report;
+  return `${baselineHtml(baseline, "network")}
+    ${networkProblemsHtml(data)}
+    ${UI.stats([
       { title: "Load balancer", value: controller.ready, unit: `/${controller.desired}`, tone: controller.healthy ? "ok" : "bad",
         sub: `${controller.name} agents ready · ${controller.mode}` },
       { title: "Virtual IPs", value: data.summary.vips, sub: `${data.summary.listeners} LAN listeners · ${data.available_vip_count} unused in pools` },
       { title: "Application services", value: data.summary.app_services, sub: `${data.summary.ready_endpoints} ready endpoints` },
-      // One count, of the items listed below it - not a figure of one kind beside a line of another.
-      { title: "Attention", value: attention.length, tone: attention.length ? "warn" : "", sub: networkAttentionCounts(attention) },
-    ]))}
-    ${attention.length ? UI.more(`What needs attention · ${attention.length}`, `<ul class="net-attention">${attention.map(item => `<li>
-      <div><b>${esc(item.what)}</b>${item.why ? `<div class="dim xs">${esc(item.why)}</div>` : ""}</div>
-      ${item.where ? `<button class="btn sm" onclick="networkShow(${jsq(item.where)})">Show</button>` : ""}</li>`).join("")}</ul>`, true, "network-attention") : ""}
-    ${(data.platform_clashes || []).length ? `<div class="note bad" style="margin-bottom:14px"><b>${data.platform_clashes.length === 1 ? "An app is" : `${data.platform_clashes.length} apps are`} on the cluster's own address.</b>
+    ])}
+    <div class="card flat">${UI.moduleHeader("What needs attention", attention.length ? `${attention.length} item${attention.length === 1 ? "" : "s"}, each in its section` : "Every address answers, every Service is healthy and every port has link")}
+      ${attention.length ? `<ul class="net-attention">${attention.map(item => `<li>
+        <div><b>${esc(item.what)}</b>${item.why ? `<div class="dim xs">${esc(item.why)}</div>` : ""}</div>
+        <button class="btn sm" onclick="networkShow(${jsq(item.section)},${jsq(item.where || "")})">${esc(networkSectionLabel(item.section))} ›</button></li>`).join("")}</ul>` : ""}</div>
+    <div class="card flat">${UI.moduleHeader("How a connection reaches your apps", "From your LAN to each app; each step opens its section")}
+      <div class="net-path">${go("ports", `<b>Host ports</b><small>${ports ? `${ports.counts?.ports || 0} ports` : "links and bonds"}</small>`)}<i aria-hidden="true">→</i>
+        ${go("vips", `<b>Workload VIPs</b><small>${data.summary.vips} VIPs</small>`)}<i aria-hidden="true">→</i>
+        ${go("addresses", `<b>Address map</b><small>${data.summary.listeners} listening</small>`)}<i aria-hidden="true">→</i>
+        ${go("services", `<b>Services</b><small>${data.summary.app_services} on the LAN</small>`)}</div></div>
+    <div id="selfAddress">${STATE.data.selfAddress ? selfAddressHtml(STATE.data.selfAddress, data) : ""}</div>
+    ${UI.guide("How addresses work here", `
+      <p><b>${esc(controller.name)}</b> handles service addresses. Multus adds separate LAN interfaces; it does not provide VIP failover.
+      ${STATE.platform?.servicelb ? "ServiceLB also exposes unclassified Services on node IPs, not a movable VIP." : ""}</p>
+      <p><b>Default workload VIP:</b> ${esc(data.shared_vip?.ip || "not configured")}. Choose a default under Workload VIPs, then select <b>Default workload VIP</b> or <b>Specific VIP</b> when deploying.
+      VMs on the pod network can be exposed through a Service; bridged VMs use their own DHCP/static address, not a service VIP.</p>
+      <p>VIP failover is not full-cluster HA: multiple eligible hosts, a surviving control-plane quorum, portable storage with healthy replicas, and workload restart policies are also needed.
+      ${Object.keys(data.node_names || {}).length < 2 ? "This is a single-node cluster: there is no second host to take over." : "Test host failure before relying on recovery."}</p>`)}`;
+}
+
+/* Things wrong with the cluster's own addresses, said where they matter. */
+function networkProblemsHtml(data) {
+  return `${(data.platform_clashes || []).length ? `<div class="note bad"><b>${data.platform_clashes.length === 1 ? "An app is" : `${data.platform_clashes.length} apps are`} on the cluster's own address.</b>
       ${esc(data.platform_clashes.map(c => `${c.namespace}/${c.service}`).join(", "))} ${data.platform_clashes.length === 1 ? "uses" : "use"}
       <span class="mono">${esc(data.platform_clashes[0].ip)}</span>, which ${esc(data.platform_clashes[0].owner)} holds: the dashboard answers there and new hosts join
       through it, so sharing it can stop hosts joining. Give ${data.platform_clashes.length === 1 ? "it an address" : "each an address"} of its own (Edit → Network).</div>` : ""}
-    ${(data.shared_vip || {}).problem ? `<div class="note bad" style="margin-bottom:14px"><b>Homestead's shared address is the cluster's own.</b> ${esc(data.shared_vip.problem)}.
-      Choose a separate default workload VIP below; do not use the control-plane address.</div>` : ""}
-    <section class="vip-section" aria-label="Workload VIPs">
-    <div class="vip-section-heading"><div><h3>Workload VIPs</h3><p class="dim small">Stable LAN addresses for containers and pod-network VMs, separate from your hosts' addresses.</p></div>
-      <button class="btn sm pri" data-need="admin" onclick="vipAdd()">＋ Add VIP</button></div>
-    ${(data.registered_vips || []).length ? "" : `<ol class="vip-steps"><li><b>1 · Add an address</b><span>Reserve an unused address outside DHCP, then save it here.</span></li>
-      <li><b>2 · Choose a default</b><span>Use <b>Make default</b> for the address suggested to new workloads.</span></li>
-      <li><b>3 · Connect a workload</b><span>Use a card below, or choose <b>Default workload VIP</b> / <b>Specific VIP</b> in Deploy → Networking.</span></li></ol>`}
-    <div id="selfAddress">${STATE.data.selfAddress ? selfAddressHtml(STATE.data.selfAddress, data) : ""}</div>
-    <p class="small vip-default-summary">A saved VIP is advertised once a workload's Service requests it. <b>Current default:</b> <span class="mono">${esc(data.shared_vip?.ip || "Not configured")}</span> · Multiple workloads can share it on different ports. Changing it does not move existing services.</p>
-    ${(data.registered_vips || []).length ? `<div class="vip-cards">${data.registered_vips.map(v => networkVipCard(v, data)).join("")}</div>`
-      : '<div class="card flat empty small">No saved VIPs. Start with <b>Add VIP</b> above. Adding an address does not change your router or start a workload.</div>'}
-    </section>
-    <div class="between" id="lanNetworks" style="scroll-margin-top:150px"><div class="sec">LAN networks ${tip("Networks bridged to the LAN - Harvester calls them VM networks. A VM, or a container given an address of its own, joins one to be on the LAN like any machine there.")}</div>
-      <button class="btn sm" data-need="admin" onclick="vmNetworkAdd()">＋ LAN network</button></div>
-    <div id="netVmNets">${window.__vmCreateOptions ? networkVmNetsHtml(window.__vmCreateOptions) : '<div class="dim small">reading LAN networks…</div>'}</div>
-    ${networkAddressesHtml(data)}
-    <div style="margin-top:22px">${UI.section("Host ports", `<div class="card flat" id="netPorts">${window.portsAcrossHostsCard ? portsAcrossHostsCard() : ""}</div><div id="netUplinks"></div>`,
-      tip("Every host's network ports: link, speed, errors and bonds, read from the hosts by the node probe. Open a host for its picture."))}</div>
-    <div class="sec" style="margin-top:22px">Services &amp; endpoint paths</div>
-    ${orphans ? `<div class="note" style="margin-bottom:12px">${orphans === 1
+    ${(data.shared_vip || {}).problem ? `<div class="note bad"><b>Homestead's shared address is the cluster's own.</b> ${esc(data.shared_vip.problem)}.
+      Choose a separate default workload VIP under Workload VIPs; do not use the control-plane address.</div>` : ""}`;
+}
+
+function networkServicesHtml(data) {
+  const q = STATE.q.toLowerCase();
+  const showSystem = !!STATE.networkSystem;
+  const services = data.services.filter(row => (showSystem || !row.system) && (!q ||
+    [row.namespace, row.name, row.cluster_ip, ...row.external_ips, networkPortText(row), ...row.targets]
+      .join(" ").toLowerCase().includes(q)));
+  const orphans = services.filter(row => row.orphaned).length;
+  const due = networkAttention(data).filter(item => item.section === "services");
+  return `${due.length ? UI.callout("warn", `${due.length} need${due.length === 1 ? "s" : ""} attention`, esc(due.map(item => item.what).join("; "))) : ""}
+    ${orphans ? `<div class="note">${orphans === 1
       ? "<b>1 Service no longer points at a workload.</b> It still owns its VIP and port, so that number stays taken until the Service is removed."
       : `<b>${orphans} Services no longer point at a workload.</b> They still own their VIPs and ports, so those numbers stay taken until the Services are removed.`}</div>` : ""}
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="services" class="tbl stack dense"><thead><tr><th>Service</th><th>Listeners</th><th>Traffic path</th><th>Health</th><th></th></tr></thead>
@@ -200,12 +289,33 @@ async function viewNetworking() {
         <td><span class="pill ${networkPill(row.health)}">${esc(row.health)}</span><div class="dim xs" style="margin-top:5px">${esc(row.reason)}</div></td>
         <td>${row.system ? "" : actionBar([{ label: row.orphaned ? "Release" : "Remove", icon: "trash", run: `networkServiceDelete(${jsq(row.namespace)},${jsq(row.name)})`,
       need: "admin", danger: row.orphaned, tip: row.orphaned ? "Release this listener" : "Remove this Service and take its workload off the LAN" }])}</td></tr>`).join("") || '<tr><td colspan="5" class="empty">No matching services</td></tr>'}</tbody></table></div></div>
-    ${data.ingresses.length ? `<div class="sec" style="margin-top:22px">Ingress routes</div><div class="card flat pad0"><div class="tblwrap"><table data-sort="ingresses" class="tbl stack dense"><thead><tr><th>Ingress</th><th>Address</th><th>Route</th><th>Backend</th></tr></thead><tbody>${data.ingresses.filter(x => showSystem || !x.system).flatMap(row => row.rules.map(rule => `<tr><td>${esc(row.namespace)}/${esc(row.name)}</td><td class="mono">${esc(row.addresses.join(", ") || "pending")}</td><td>${esc(rule.host)}${esc(rule.path)}</td><td>${esc(rule.service)}:${esc(rule.port)}</td></tr>`)).join("")}</tbody></table></div></div>` : ""}`);
-  await networkVmNetsPaint();
-  if (!STATE.busy && new URLSearchParams(location.search).get("section") === "lan") $("#lanNetworks")?.scrollIntoView({ block: "start" });
-  selfAddressPaint();
-  if (window.portsAcrossHostsPaint) portsAcrossHostsPaint();
-  if (window.uplinksPaint && STATE.platform?.harvester) uplinksPaint();
+    ${data.ingresses.length ? UI.section("Ingress routes", `<div class="card flat pad0"><div class="tblwrap"><table data-sort="ingresses" class="tbl stack dense"><thead><tr><th>Ingress</th><th>Address</th><th>Route</th><th>Backend</th></tr></thead><tbody>${data.ingresses.filter(x => showSystem || !x.system).flatMap(row => row.rules.map(rule => `<tr><td>${esc(row.namespace)}/${esc(row.name)}</td><td class="mono">${esc(row.addresses.join(", ") || "pending")}</td><td>${esc(rule.host)}${esc(rule.path)}</td><td>${esc(rule.service)}:${esc(rule.port)}</td></tr>`)).join("")}</tbody></table></div></div>`) : ""}`;
+}
+
+function networkVipsHtml(data) {
+  return `${networkProblemsHtml(data)}
+    <section class="vip-section" aria-label="Workload VIPs">
+    <div class="vip-section-heading"><p class="dim small">A saved VIP is advertised once a workload's Service requests it. <b>Default:</b> <span class="mono">${esc(data.shared_vip?.ip || "not configured")}</span> · several workloads can share it on different ports; changing it does not move existing services.</p>
+      <button class="btn sm pri" data-need="admin" onclick="vipAdd()">＋ Add VIP</button></div>
+    ${(data.registered_vips || []).length ? "" : `<ol class="vip-steps"><li><b>1 · Add an address</b><span>Reserve an unused address outside DHCP, then save it here.</span></li>
+      <li><b>2 · Choose a default</b><span>Use <b>Make default</b> for the address suggested to new workloads.</span></li>
+      <li><b>3 · Connect a workload</b><span>Use a card below, or choose <b>Default workload VIP</b> / <b>Specific VIP</b> in Deploy → Networking.</span></li></ol>`}
+    ${(data.registered_vips || []).length ? `<div class="vip-cards">${data.registered_vips.map(v => networkVipCard(v, data)).join("")}</div>`
+      : '<div class="card flat empty small">No saved VIPs. Start with <b>Add VIP</b> above. Adding an address does not change your router or start a workload.</div>'}
+    </section>
+    <div id="selfAddress">${STATE.data.selfAddress ? selfAddressHtml(STATE.data.selfAddress, data) : ""}</div>`;
+}
+
+function networkLanHtml() {
+  return `<div class="between" id="lanNetworks"><p class="dim small">${esc("Harvester calls them VM networks. A VM, or a container given an address of its own, joins one to be on the LAN like any machine there.")}</p>
+      <button class="btn sm pri" data-need="admin" onclick="vmNetworkAdd()">＋ LAN network</button></div>
+    <div id="netVmNets">${window.__vmCreateOptions ? networkVmNetsHtml(window.__vmCreateOptions) : '<div class="dim small">reading LAN networks…</div>'}</div>`;
+}
+
+function networkPortsHtml() {
+  return `<div class="card flat" id="netPorts">${window.portsAcrossHostsCard ? portsAcrossHostsCard() : ""}</div>
+    <div class="dim xs">Open a host for its picture: each port's link and speed, its bond, and what it carries.</div>
+    <div id="netUplinks"></div>`;
 }
 
 /* ---------------- Homestead itself ----------------

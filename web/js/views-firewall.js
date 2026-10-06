@@ -15,9 +15,7 @@ async function viewFirewall() {
   STATE.data.firewall = data;
   const q = (STATE.q || "").toLowerCase();
   const rows = data.policies.filter(row => `${row.namespace} ${row.name} ${row.config?.target?.name || ""}`.toLowerCase().includes(q));
-  paint(`${UI.pageHeader("Networking", "Firewall policies for workload pod-network traffic",
-    UI.button("＋ New policy", "firewallEdit()", { kind: "pri", attrs: 'data-need="admin"' }))}
-    ${networkTabs("firewall")}
+  networkPage("firewall", `
     ${summaryLine("firewall", [`<b>${data.policies.length}</b> ${data.policies.length === 1 ? "policy" : "policies"}`, `${esc(data.provider.name)} · enforcement unverified`])}
     ${UI.guide("How workload firewall policies work", `<p>${esc(data.provider.detail)}</p>
       <p>A policy selects a workload's pods. Restrict inbound or outbound traffic, then add the connections it needs.
@@ -33,7 +31,8 @@ async function viewFirewall() {
       actionBar([{label:"Inspect", run:`firewallInspect(${jsq(row.namespace)},${jsq(row.name)})`},
         row.managed && {label:"Edit", run:`firewallEdit(${jsq(row.namespace)},${jsq(row.name)})`, need:"admin"},
         row.managed && {label:"Remove", run:`firewallRemove(${jsq(row.namespace)},${jsq(row.name)})`, need:"admin", danger:true}])
-    ]), {empty:"No policies yet. Create a policy to control a workload's inbound or outbound connections."})}`);
+    ]), {empty:"No policies yet. Create a policy to control a workload's inbound or outbound connections."})}`,
+    { actions: UI.button("＋ New policy", "firewallEdit()", { kind: "pri", attrs: 'data-need="admin"' }) });
 }
 window.viewFirewall = viewFirewall;
 

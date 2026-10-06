@@ -141,7 +141,7 @@ what to do next.
 
 ## 6. After installing
 
-- **Keep addresses for apps.** **Networking → Services & VIPs → ＋ Add VIPs**,
+- **Keep addresses for apps.** **Networking → Workload VIPs → ＋ Add VIP**,
   and add the free range from step 1. Harvester has nothing that hands out
   addresses to apps on its own; Homestead gives them out from this list.
   See [Networking](Networking).

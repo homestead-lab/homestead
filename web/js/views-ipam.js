@@ -16,47 +16,33 @@ const ipamCategoryIcon = category => IPAM_CATEGORIES[category]
 const ipamCategoryOptions = (selected, blank = "not set") => `<option value="">${esc(blank)}</option>` +
   Object.entries(IPAM_CATEGORIES).map(([k, [label]]) => `<option value="${k}" ${selected === k ? "selected" : ""}>${esc(label)}</option>`).join("");
 
-const NETWORK_TABS = ["services", "ip", "firewall"];
-/* The Networking page's tab: in the address (/networking?tab=ip), so Back,
-   Forward, a reload and a shared link all show the tab that was open; else
-   the one last used. Choosing one is a step in the history. */
+const NETWORK_TABS = ["overview", "services", "vips", "addresses", "ip", "lan", "ports", "firewall"];
+/* The Networking page's section: in the address (/networking?tab=ip), so
+   Back, Forward, a reload and a shared link all show the section that was
+   open. Without one the Overview shows (beside the list; on a phone, the list
+   first). Choosing one is a step in the history and opens it on a phone. */
 function networkTab(pick) {
   if (pick) {
-    if (!NETWORK_TABS.includes(pick)) pick = "services";
-    try { localStorage.setItem("homestead.network.tab", pick); } catch (e) { /* this visit only */ }
+    if (!NETWORK_TABS.includes(pick)) pick = "overview";
     const url = new URL(window.location.href);
+    url.searchParams.delete("section");
     if (url.searchParams.get("tab") !== pick) {
       url.searchParams.set("tab", pick);
       window.history.pushState({ view: "network" }, "", url.pathname + url.search);
     }
-    // What the last tab was still loading is for a tab nobody is looking at.
+    // What the last section was still loading is for one nobody is looking at.
     window.NAV_TOKEN++;
     STATE.busy = false;
-    resetPaint(); refresh(true);
+    refresh(true);
+    if (window.scrollPageTop) window.scrollPageTop();
     return pick;
   }
-  const asked = typeof location !== "undefined" ? new URLSearchParams(location.search).get("tab") : "";
-  if (NETWORK_TABS.includes(asked)) return asked;
-  let tab = "services";
-  try { const saved = localStorage.getItem("homestead.network.tab"); if (NETWORK_TABS.includes(saved)) tab = saved; } catch (e) { /* default */ }
-  // Opened without one (the sidebar, a bare link): the address takes the tab
-  // shown, so going back to this entry later shows it again.
-  if (typeof STATE !== "undefined" && STATE.view === "network" && typeof history !== "undefined") {
-    const url = new URL(window.location.href);
-    url.searchParams.set("tab", tab);
-    history.replaceState(history.state, "", url.pathname + url.search);
-  }
-  return tab;
+  const params = typeof location !== "undefined" ? new URLSearchParams(location.search) : new URLSearchParams();
+  const asked = params.get("tab") || params.get("section");
+  return NETWORK_TABS.includes(asked) ? asked : "overview";
 }
 window.networkTab = networkTab;
 
-function networkTabs(active) {
-  return `<div class="seg network-tabs" role="tablist">
-    <button class="${active === "services" ? "on" : ""}" onclick="networkTab('services')">Services &amp; VIPs</button>
-    <button class="${active === "ip" ? "on" : ""}" onclick="networkTab('ip')">IP addresses</button>
-    <button class="${active === "firewall" ? "on" : ""}" onclick="networkTab('firewall')">Firewall</button></div>`;
-}
-window.networkTabs = networkTabs;
 
 function ipamSubnetPick(subnets) {
   let saved = "";
@@ -124,26 +110,25 @@ function ipamFiltered(rows) {
 
 function renderIpam() {
   const data = STATE.data.ipam || { subnets: [], suggested: [], unifi: {} };
-  const head = `${UI.pageHeader(`Networking`, `Every address on your subnets: documented, used by the cluster${(data.unifi || {}).configured ? ", answering, or known to UniFi" : " or answering a scan"}`, `<button class="btn" data-need="operator" onclick="ipamSubnets()">Subnets</button>
+  const actions = `<button class="btn" data-need="operator" onclick="ipamSubnets()">Subnets</button>
       ${data.subnets.length ? `<button class="btn ipam-wide" data-need="operator" onclick="ipamImport()">Import CSV</button>
       <button class="btn ipam-wide" onclick="ipamExport()">Export CSV</button>
       <details class="actionmenu ipam-narrow"><summary class="btn" title="Import or export">⋯</summary><div class="actionmenu-pop">
         <button data-need="operator" onclick="this.closest('details').open=false;ipamImport()">${icon("import")}Import CSV</button>
         <button onclick="this.closest('details').open=false;ipamExport()">${icon("ext")}Export CSV</button></div></details>
-      <button class="btn pri" data-need="operator" onclick="ipamEdit()">＋ Address</button>` : ""}`, {actionsClass:`ipam-head-acts`})}
-    ${networkTabs("ip")}`;
+      <button class="btn pri" data-need="operator" onclick="ipamEdit()">＋ Address</button>` : ""}`;
   if (!data.subnets.length) {
-    return paint(`${head}<div class="empty ipam-empty"><b>No subnets yet.</b> Add the LAN the cluster sits on, with its DHCP range, and Homestead fills in what the cluster uses.
+    return networkPage("ip", `<div class="empty ipam-empty"><b>No subnets yet.</b> Add the LAN the cluster sits on, with its DHCP range, and Homestead fills in what the cluster uses.
       <div class="row" style="justify-content:center;margin-top:12px">${(data.suggested || []).map(cidr =>
         `<button class="btn pri" data-need="operator" onclick="ipamSubnets(${jsq(cidr)})">Add ${esc(cidr)}</button>`).join("")}
-        <button class="btn" data-need="operator" onclick="ipamSubnets()">Add a subnet</button></div></div>`);
+        <button class="btn" data-need="operator" onclick="ipamSubnets()">Add a subnet</button></div></div>`, { actions, actionsClass: "ipam-head-acts" });
   }
   const subnet = ipamSubnetPick(data.subnets);
   const rows = ipamFiltered(ipamRows(subnet));
   const flagged = subnet.rows.filter(r => r.flags.length).length;
   const scanning = subnet.scan.state === "running";
   const u = data.unifi || {};
-  paint(`${head}
+  networkPage("ip", `
     ${data.subnets.length > 1 ? `<div class="seg ipam-subnets">${data.subnets.map(s => `<button class="${s.id === subnet.id ? "on" : ""}" onclick="ipamPickSubnet(${jsq(s.id)})">${esc(s.name || s.cidr)} <span class="dim">${s.used}</span></button>`).join("")}</div>` : ""}
     <div class="grid g4 statgrid ipam-stats" style="margin:12px 0 16px">
       <div class="card flat"><div class="ctitle">${esc(subnet.name || "Subnet")}</div><div class="bignum" style="margin-top:8px">${subnet.used}<span class="unit">/${subnet.usable}</span></div>
@@ -179,7 +164,7 @@ function renderIpam() {
       <th>Address</th><th>Name</th><th>MAC</th><th>Kind</th><th data-nosort>Seen</th><th data-nosort>Notes</th></tr></thead>
       ${rows.length ? ipamBodies(rows, subnet, !STATE.ipamFilter && !STATE.q)
         : `<tbody><tr><td colspan="7" class="empty">Nothing here yet. Scan the subnet${u.configured ? ", sync UniFi," : ""} or add an address.</td></tr></tbody>`}
-      </table></div></div>`);
+      </table></div></div>`, { actions, actionsClass: "ipam-head-acts" });
   if (scanning) setTimeout(() => { if (STATE.view === "network" && networkTab() === "ip") viewIpam(); }, 3000);
 }
 
