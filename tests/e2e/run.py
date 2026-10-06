@@ -22,7 +22,7 @@ from harness import diagnostics, install, log  # noqa: E402
 from harness.api import Homestead  # noqa: E402
 from harness.context import Context  # noqa: E402
 from harness.kube import Kube  # noqa: E402
-from harness.vms import Lab  # noqa: E402
+from harness.vms import NET, Lab  # noqa: E402
 from suites import SUITES  # noqa: E402
 
 
@@ -60,7 +60,16 @@ def main():
         lab.up()
         log.end_group()
         log.group(f"Install {args.distro}, Longhorn and Homestead {args.version}")
-        if suite.get("separate"):
+        if suite.get("bare"):
+            # Clusters without Homestead: the suite's scenarios install it.
+            contexts = []
+            for i, node in enumerate(lab.nodes):
+                kube = Kube(install.build_bare(lab, args.distro, args.artifacts, [node], name=f"kubeconfig-{node.name}"))
+                kube.nodes_ready(1)
+                contexts.append(Context(lab, kube, None, args.distro, args.version, args.artifacts,
+                                        vip=f"{NET}.{100 + i}", nodes=[node]))
+            ctx, ctx.others = contexts[0], contexts[1:]
+        elif suite.get("separate"):
             contexts = []
             for config, vip, nodes in install.build_separate(lab, args.distro, args.version, args.artifacts):
                 kube = Kube(config)
@@ -76,6 +85,8 @@ def main():
             ctx = Context(lab, kube, None, args.distro, args.version, args.artifacts)
         log.end_group()
         for c in [ctx] + ctx.others:
+            if suite.get("bare"):
+                break
             c.api = Homestead(c.homestead_urls())
             c.api.sign_in()
         for name, scenario in suite["scenarios"]:

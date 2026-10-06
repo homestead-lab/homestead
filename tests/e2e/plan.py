@@ -43,6 +43,10 @@ def plan(tag="", version="", suites="", distros="", branch=""):
     rows = []
     for d in dists:
         for s in chosen:
+            # A release fills the twenty jobs a repository runs at once: an
+            # on-demand suite runs when asked for, by hand or by a branch.
+            if tag and SUITES[s].get("on_demand"):
+                continue
             for job in jobs(s):
                 # A release runs RKE2 where the distribution matters; asked
                 # for by hand or by a branch, everything.

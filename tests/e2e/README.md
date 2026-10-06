@@ -44,6 +44,7 @@ back, rolling OS restarts, storage repair and balancing - on **k3s and RKE2**.
 | `self-data` | 3 | Homestead's own data moved to a new volume twice, the copy and Homestead on different hosts; account, jobs and old volumes kept, helpers gone |
 | `longhorn-v2` | 2 | Longhorn's V2 engine prepared and enabled through Homestead, a blank disk on each host given to it, a V2 class; an app on a V2 volume across its host's reboot |
 | `storage` | 3 | a detached volume rebuilt offline; Balance hosts moving copies and containers |
+| `existing` | 2 clusters | Homestead added by the installer (HS_ROLE=addons) to clusters k3s's or RKE2's own installer built: one with no Longhorn, one whose Longhorn came first and is used as it is; what ran before untouched, every host seen, a second run changing nothing. On demand: a release's twenty jobs are full |
 
 ## When it runs
 

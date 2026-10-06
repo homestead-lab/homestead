@@ -10,7 +10,7 @@ distribution changes what happens (installs, drains and reboots, the CNI's
 firewall). The rest run on k3s, keeping a release inside the twenty jobs a
 repository runs at once. Asked for by hand or by an e2e/ branch, RKE2 runs
 everything."""
-from scenarios import longhorn_v2, migration, network, outage, power, rolling, self_data, shutdown, smoke, storage
+from scenarios import existing, longhorn_v2, migration, network, outage, power, rolling, self_data, shutdown, smoke, storage
 
 SUITES = {
     # Every GET route and the node doctor, on three hosts.
@@ -29,6 +29,13 @@ SUITES = {
     # A host failing with no warning; a container crashing.
     "outage": {"nodes": 3, "scenarios": [("container restart", outage.container_restart), ("host outage", outage.host_outage)],
                "rke2": ["host outage"]},
+    # Homestead added to clusters someone already runs (HS_ROLE=addons): one
+    # with no Longhorn, one whose Longhorn came first. Each host is a
+    # single-host cluster of its own, built by k3s's or RKE2's own installer,
+    # in one job. On demand: a release already fills its twenty jobs.
+    "existing": {"nodes": 2, "bare": True, "on_demand": True, "rke2_memory": 5120,
+                 "scenarios": [("plain cluster", existing.plain), ("longhorn first", existing.longhorn_first_on_its_cluster)],
+                 "jobs": [["plain cluster", "longhorn first"]]},
     # An app moved between two clusters, as Linked clusters does.
     "migration": {"nodes": 2, "separate": True, "scenarios": [("move between clusters", migration.run)]},
     # VIPs (and their failover), the firewall, Multus LAN networks and the

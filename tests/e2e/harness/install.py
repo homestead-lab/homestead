@@ -49,6 +49,51 @@ def kubeconfig(lab, distro, directory, first=None, name="kubeconfig"):
     return str(target)
 
 
+def _bare_k3s(node, first=None, token="", role="server"):
+    version = f"INSTALL_K3S_VERSION={os.environ['HS_K8S_VERSION']} " if os.environ.get("HS_K8S_VERSION") else ""
+    if first is None:
+        mode = f"server --cluster-init --node-ip {node.ip}"
+        join = ""
+    else:
+        mode = f"{role} --node-ip {node.ip}"
+        join = f"K3S_URL=https://{first.ip}:6443 K3S_TOKEN={token} "
+    node.ssh(f"curl -sfL --retry 6 --retry-all-errors --retry-delay 5 https://get.k3s.io -o /tmp/k3s-install.sh && "
+             f"sudo env {version}{join}INSTALL_K3S_EXEC='{mode}' sh /tmp/k3s-install.sh > /tmp/k3s-install.log 2>&1 "
+             f"|| {{ tail -40 /tmp/k3s-install.log; exit 1; }}", timeout=1200)
+
+
+def _bare_rke2(node, first=None, token="", role="server"):
+    version = f"INSTALL_RKE2_VERSION={os.environ['HS_K8S_VERSION']} " if os.environ.get("HS_K8S_VERSION") else ""
+    kind = "agent" if role == "agent" else "server"
+    config = f"node-ip: {node.ip}\\n" + (f"server: https://{first.ip}:9345\\ntoken: {token}\\n" if first else "")
+    node.ssh(f"curl -sfL --retry 6 --retry-all-errors --retry-delay 5 https://get.rke2.io -o /tmp/rke2-install.sh && "
+             f"sudo env {version}INSTALL_RKE2_TYPE={kind} sh /tmp/rke2-install.sh > /tmp/rke2-install.log 2>&1 && "
+             f"sudo mkdir -p /etc/rancher/rke2 && printf '{config}' | sudo tee /etc/rancher/rke2/config.yaml >/dev/null && "
+             f"sudo systemctl enable --now rke2-{kind} >> /tmp/rke2-install.log 2>&1 "
+             f"|| {{ tail -40 /tmp/rke2-install.log; exit 1; }}", timeout=1800)
+
+
+def build_bare(lab, distro, directory, nodes=None, agents=0, name="kubeconfig"):
+    """A cluster as someone built it before they met Homestead: k3s or RKE2
+    from its own installer (get.k3s.io, get.rke2.io), at its stable channel
+    unless HS_K8S_VERSION pins it, and nothing else - for the installer to
+    add Homestead to. The first of `nodes` (every host, unless given) makes
+    it, the rest join, the last `agents` of them as workers."""
+    nodes = nodes or lab.nodes
+    first = nodes[0]
+    bare = _bare_k3s if distro == "k3s" else _bare_rke2
+    log.info(f"{first.name}: {distro} from its own installer, new cluster")
+    bare(first)
+    token = first.ssh(f"sudo cat /var/lib/rancher/{distro}/server/node-token", quiet=True).strip()
+    for i, node in enumerate(nodes[1:], start=1):
+        node.role = "agent" if i >= len(nodes) - agents else "server"
+        log.info(f"{node.name}: {distro} from its own installer, joining as {node.role}")
+        bare(node, first, token, node.role)
+    config = kubeconfig(lab, distro, directory, first, name)
+    log.info(f"Cluster ready without Homestead: {len(nodes)} {distro} host(s); kubeconfig {config}")
+    return config
+
+
 def build_separate(lab, distro, version, directory):
     """One single-host cluster per VM, each with its own address - for moves
     between clusters. Returns each cluster's kubeconfig and Homestead address."""

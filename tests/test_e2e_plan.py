@@ -25,6 +25,16 @@ class PlanTests(unittest.TestCase):
         self.assertIn({"distro": "k3s", "suite": "single", "scenarios": "single-host power-off",
                        "label": "single: single-host power-off", "slug": "k3s-single-single-host-power-off"}, rows)
 
+    def test_an_on_demand_suite_is_left_out_of_a_release_but_runs_when_asked_for(self):
+        on_demand = sorted(s for s, spec in PLAN.SUITES.items() if spec.get("on_demand"))
+        self.assertIn("existing", on_demand)
+        released = {row["suite"] for row in json.loads(PLAN.plan(tag="v2.9.0")["matrix"])["include"]}
+        self.assertFalse(released & set(on_demand))
+        asked = json.loads(PLAN.plan(version="2.9.0", suites="all")["matrix"])["include"]
+        self.assertEqual({"k3s", "rke2"}, {r["distro"] for r in asked if r["suite"] == "existing"})
+        self.assertEqual(["plain cluster,longhorn first"],
+                         sorted({r["scenarios"] for r in asked if r["suite"] == "existing"}), "one job, one runner")
+
     def test_every_prod_release_runs_by_itself_and_no_dev_one(self):
         self.assertEqual("true", PLAN.plan(tag="v2.9.0")["run"])
         self.assertEqual("true", PLAN.plan(tag="v2.8.312")["run"])
