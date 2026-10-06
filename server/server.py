@@ -6367,11 +6367,13 @@ import homestead_host_limits as HOST_LIMITS
 import homestead_node_parity as NODE_PARITY
 import homestead_host_os as HOST_OS
 import homestead_ports as PORTS
+import homestead_uplinks as UPLINKS
 import homestead_root_guard as ROOT_GUARD
 import homestead_os_rollout as OS_ROLLOUT
 import homestead_passthrough as PASSTHROUGH
 import homestead_self_address as SELF_ADDRESS
 import homestead_host_bridge as HOST_BRIDGE
+import homestead_host_bonds as HOST_BONDS
 import homestead_manifests as MANIFESTS
 import homestead_disk_setup as DISK_SETUP
 import homestead_disk_v2 as DISK_V2
@@ -6552,6 +6554,39 @@ OPS.RESOLVERS["os-rollout"] = OS_ROLLOUT.status
 DISK_SETUP.bind(HOSTRUN)
 HOST_BRIDGE.bind(HOSTRUN, kget, ksend)
 OPS.RESOLVERS["host-bridge"] = HOST_BRIDGE.status
+HOST_BONDS.bind(HOSTRUN, kget, ksend)
+OPS.RESOLVERS[HOST_BONDS.KIND] = HOST_BONDS.status
+
+
+def host_network_guard(node):
+    """What a host network change waits for: another host's change still
+    being checked, and the other servers' readiness (ready, total)."""
+    busy = next((op.get("title", "") for op in OPS.list_operations()
+                 if op.get("kind") in (HOST_BONDS.KIND, "host-bridge") and op.get("status") not in OPS.TERMINAL), "")
+    servers = [n for n in kget("/api/v1/nodes").get("items", [])
+               if n["metadata"]["name"] != node and any(k in (n["metadata"].get("labels") or {}) for k in
+                   ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master"))]
+    ready = sum(1 for n in servers if any(c.get("type") == "Ready" and c.get("status") == "True"
+                                          for c in (n.get("status") or {}).get("conditions") or []))
+    return busy, (ready, len(servers))
+
+
+def host_bonds_apply(body, start=False):
+    if (PLATFORM.detect() or {}).get("harvester"):
+        raise ValueError("on Harvester, bonds are cluster network uplinks: Networking > Ports and uplinks")
+    node = str(body.get("node") or "")
+    if not node:
+        raise ValueError("which host?")
+    busy, servers = host_network_guard(node)
+    if not start:
+        plan = HOST_BONDS.plan(node, body, HOST_BONDS.inspect(node), busy, servers)
+        plan.pop("spec", None)
+        return plan
+    if str(body.get("confirm") or "").strip() != node:
+        raise ValueError(f"type the host's name, {node}, to confirm")
+    return HOST_BONDS.start(node, body, OPS, busy, servers)
+UPLINKS.bind(kget, ksend)
+OPS.RESOLVERS[UPLINKS.KIND] = UPLINKS.status
 DISKS.setup_module = DISK_SETUP
 DISK_SETUP.longhorn_block_paths = DISKS.longhorn_block_paths
 PASSTHROUGH.longhorn_block_paths = DISKS.longhorn_block_paths
@@ -9025,6 +9060,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("ov", 5, get_overview))
             if p == "/api/nodes":
                 return self._send(200, cached("nodes", 5, get_nodes))
+            if p == "/api/network/uplinks":
+                return self._send(200, UPLINKS.inventory(node_temps()))
             if p == "/api/nodes/ports":
                 report = cached("ports", 20, ports_report)
                 node = (q.get("node") or [""])[0]
@@ -10285,6 +10322,23 @@ class H(HTTP.LimitedHandler):
                     raise ValueError("which host?")
                 return self._send(200, {"ok": True, "operation": HOST_OS.upgrade_start(node, OPS),
                                         "detail": f"Installing updates on {node}; follow it in the job tray"})
+            if p == "/api/network/uplinks/preview":
+                return self._send(200, UPLINKS.preview(b, node_temps()))
+            if p == "/api/network/uplinks/apply":
+                op = UPLINKS.apply(b, OPS, node_temps())
+                _cache.pop("ports", None); _cache.pop("network", None)
+                return self._send(200, {"ok": True, "operation": op,
+                                        "detail": "Sent to Harvester; follow each host in the job tray"})
+            if p == "/api/node/bond/inspect":
+                node = str(b.get("node") or "")
+                return self._send(200, HOST_BONDS.summary(node, HOST_BONDS.inspect(node)))
+            if p == "/api/node/bond/preview":
+                return self._send(200, host_bonds_apply(b))
+            if p == "/api/node/bond":
+                op = host_bonds_apply(b, start=True)
+                _cache.pop("ports", None); _cache.pop("network", None)
+                return self._send(200, {"ok": True, "operation": op,
+                                        "detail": f"{b.get('node')}'s network is changing; follow it in the job tray"})
             if p == "/api/node/bridge/inspect":
                 return self._send(200, HOST_BRIDGE.inspect(str(b.get("node") or "")))
             if p == "/api/node/bridge":

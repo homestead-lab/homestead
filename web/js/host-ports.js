@@ -56,7 +56,8 @@ function hostPortsBody(n, host) {
     ${UI.table([{ label: "Port" }, { label: "Link" }, { label: "Speed" }, { label: "Errors", className: "num" },
       { label: "Flaps", className: "num" }, { label: "Carries" }], portRows(host),
       { empty: "The probe found no network ports on this host." })}
-    <div class="dim xs" style="margin-top:6px">Errors and flaps (link lost or regained) are counted over the last hour. A slower speed than before, errors, or a bond member without link raise an alert.</div>`;
+    <div class="dim xs" style="margin-top:6px">Errors and flaps (link lost or regained) are counted over the last hour. A slower speed than before, errors, or a bond member without link raise an alert.</div>
+    ${STATE.platform?.harvester ? "" : `<div class="row" style="margin-top:10px">${hostBondButton(n.name, (host.ports || []).find(p => p.kind === "bond" && p.uplink), "btn")}</div>`}`;
 }
 
 window.nodePortsPaint = async n => {
@@ -89,7 +90,7 @@ function portsAcrossHostsBody(report) {
   if (!hosts.length) return `<div class="dim small">No node probe answers, so there is no port status.</div>`;
   const rows = hosts.map(h => {
     if (!h.available) return [`<a class="linkish" onclick="portsHostGo(${jsq(h.node)})">${esc(h.node)}</a>`,
-      `<span class="dim xs">${esc(h.reason || "")}</span>`, "", ""];
+      `<span class="dim xs">${esc(h.reason || "")}</span>`, "", "", ""];
     const nics = (h.ports || []).filter(p => p.kind === "nic");
     // What the uplink stands on: a bridge over a bond, or over one NIC.
     const ports = h.ports || [];
@@ -100,22 +101,336 @@ function portsAcrossHostsBody(report) {
     return [`<a class="linkish" onclick="portsHostGo(${jsq(h.node)})">${esc(h.node)}</a>`,
       `<span class="mono">${esc(h.uplink || "—")}</span>${uplink && uplink.name !== h.uplink ? ` <span class="dim xs">on</span> <span class="mono">${esc(uplink.name)}</span>` : ""}`
         + (uplink?.kind === "bond" ? ` <span class="dim xs">${esc(uplink.bond?.mode || "")}</span>` : uplink?.speed_mbps ? ` <span class="dim xs">${esc(portSpeed(uplink.speed_mbps))}</span>` : ""),
-      lights, worst || `<span class="dim xs">—</span>`];
+      lights, worst || `<span class="dim xs">—</span>`, hostBondButton(h.node, uplink?.kind === "bond" ? uplink : null)];
   });
   const cluster = (report.conditions || []).filter(c => !c.node);
-  return `${portConditions(cluster)}${UI.table([{ label: "Host" }, { label: "Uplink" }, { label: "Ports" }, { label: "Needs attention" }], rows)}`;
+  const columns = [{ label: "Host" }, { label: "Uplink" }, { label: "Ports" }, { label: "Needs attention" }];
+  if (!STATE.platform?.harvester) columns.push({ label: "" });
+  else rows.forEach(row => row.pop());
+  return `${portConditions(cluster)}${UI.table(columns, rows)}`;
 }
 
+/* The card's inside, from the last report: the page draws it from this on
+   every refresh, so the card keeps its rows while the next report loads
+   instead of emptying and filling again. */
+const PORTS_VIEW = { report: null, error: "" };
+window.PORTS_VIEW = PORTS_VIEW;
+window.portsAcrossHostsCard = () => {
+  const report = PORTS_VIEW.report;
+  const line = report ? `${report.counts?.hosts || 0} host${report.counts?.hosts === 1 ? "" : "s"} · ${report.counts?.ports || 0} ports`
+    + ((report.conditions || []).length ? ` · ${(report.conditions || []).length} need attention` : "") : "reading ports…";
+  const body = PORTS_VIEW.error ? `<div class="dim small">Port status is unavailable: ${esc(PORTS_VIEW.error)}</div>`
+    : report ? portsAcrossHostsBody(report) : "";
+  return `<div class="ctitle">Hosts</div><div class="csub">${esc(line)}</div><div class="ports-body" style="margin-top:8px">${body}</div>`;
+};
+
 window.portsAcrossHostsPaint = async () => {
-  const card = $("#netPorts .ports-body");
-  if (!card) return;
   try {
-    const report = await api("/api/nodes/ports");
-    card.innerHTML = portsAcrossHostsBody(report);
-    const line = $("#netPorts .csub");
-    if (line) line.textContent = `${report.counts?.hosts || 0} host${report.counts?.hosts === 1 ? "" : "s"} · ${report.counts?.ports || 0} ports`
-      + ((report.conditions || []).length ? ` · ${(report.conditions || []).length} need attention` : "");
+    PORTS_VIEW.report = await api("/api/nodes/ports");
+    PORTS_VIEW.error = "";
   } catch (e) {
-    card.innerHTML = `<div class="dim small">Port status is unavailable: ${esc(e.message)}</div>`;
+    PORTS_VIEW.error = e.message;
+  }
+  const card = $("#netPorts");
+  if (!card) return;
+  const next = document.createElement("div");
+  next.innerHTML = portsAcrossHostsCard();
+  morph(card, next);
+};
+
+/* Harvester: which NICs carry each cluster network, bonded or not
+   (homestead_uplinks.py). Homestead writes a VlanConfig and Harvester builds
+   the bond and bridge on each host; mgmt's uplink is Harvester's own and is
+   only shown. Every change is reviewed first: what stands in its way (running
+   VMs, NICs in use or without link) and the picture of what it makes. */
+const UPLINKS = { inv: null };
+
+function uplinkHostChips(config) {
+  return config.nodes.map(n => {
+    const s = config.status[n] || {};
+    return `<span class="ui-chip ${s.ready ? "ok" : s.ready === false ? "bad" : "warn"}" data-tip="${esc(s.message || (s.ready ? "ready" : "not reported yet"))}">${esc(n)}</span>`;
+  }).join(" ");
+}
+
+function uplinksBody(inv) {
+  const mgmtNics = Object.entries(inv.hosts || {}).map(([host, nics]) =>
+    `${esc(host)} <span class="mono">${esc(nics.filter(n => n.used_by === "mgmt").map(n => n.name).join(" + ") || "—")}</span>`).join(" · ");
+  return inv.networks.map(net => {
+    const head = `<div class="between uplink-head"><div><b class="mono">${esc(net.name)}</b>
+        ${net.mgmt ? UI.chip("set when Harvester installed · shown only", "") : ""}
+        <span class="dim xs">${net.lan_networks.length ? esc(net.lan_networks.join(", ")) : "no LAN networks on it yet"}</span></div>
+      ${net.mgmt ? "" : `<button class="btn sm" data-need="admin" onclick="uplinkDialog({cn:${jsq(net.name)}})">＋ Uplink</button>`}</div>`;
+    if (net.mgmt) return `<div class="uplink-net">${head}<div class="dim xs">The management NICs: ${mgmtNics || "not reported"}. Change them with Harvester's own procedure.</div></div>`;
+    const rows = net.configs.map(c => [
+      `<b class="mono">${esc(c.name)}</b>${c.homestead ? "" : ` <span class="dim xs">from Harvester</span>`}`,
+      uplinkHostChips(c),
+      `<span class="mono">${esc(c.nics.join(" + ") || "—")}</span>`,
+      `${esc(c.nics.length > 1 ? c.mode : "single NIC")}${c.mtu ? ` <span class="dim xs">MTU ${esc(c.mtu)}</span>` : ""}`,
+      `<span class="row" style="gap:6px"><button class="btn sm" data-need="admin" onclick="uplinkDialog({config:${jsq(c.name)}})">Change…</button>
+        <button class="btn sm" data-need="admin" onclick="uplinkReview({action:'remove',config:${jsq(c.name)}})">Remove</button></span>`]);
+    return `<div class="uplink-net">${head}
+      ${rows.length ? UI.table([{ label: "Uplink" }, { label: "Hosts" }, { label: "NICs" }, { label: "Bond" }, { label: "" }], rows) : ""}
+      ${net.uncovered.length ? `<div class="dim xs">No uplink on ${esc(net.uncovered.join(", "))}: VMs there cannot use ${esc(net.name)}'s networks.</div>` : ""}</div>`;
+  }).join("");
+}
+
+window.uplinksPaint = async () => {
+  const box = $("#netUplinks");
+  if (!box) return;
+  try {
+    const inv = await api("/api/network/uplinks");
+    UPLINKS.inv = inv;
+    if (!inv.applies) { box.innerHTML = ""; return; }
+    box.innerHTML = UI.section("Cluster network uplinks", `<div class="card flat">${uplinksBody(inv)}</div>`,
+      `<button class="btn sm" data-need="admin" onclick="uplinkDialog({fresh:true})">＋ New cluster network</button>`);
+    if (window.applyRole) applyRole();
+  } catch (e) {
+    box.innerHTML = `<div class="dim small">Uplinks are unavailable: ${esc(e.message)}</div>`;
+  }
+};
+
+/* The form: which network, which hosts, which NICs and how to bond them. */
+window.uplinkDialog = async (opts = {}) => {
+  const inv = UPLINKS.inv || (UPLINKS.inv = await api("/api/network/uplinks"));
+  const config = opts.config ? inv.networks.flatMap(n => n.configs).find(c => c.name === opts.config) : null;
+  const choices = inv.networks.filter(n => !n.mgmt);
+  const form = UPLINKS.form = { config, fresh: !config && (!!opts.fresh || !choices.length),
+    cn: config?.cluster_network || opts.cn || choices[0]?.name || "" };
+  const net = choices.find(n => n.name === form.cn);
+  const hosts = config ? config.nodes : form.fresh ? Object.keys(inv.hosts) : (net?.uncovered || []);
+  const where = form.fresh
+    ? UI.field("Cluster network name", `<input id="ul_cn" class="mono" maxlength="12" placeholder="data" autocomplete="off">`,
+        { help: "Up to 12 lower-case letters, digits or hyphens. LAN networks are made on it afterwards." })
+    : config ? "" : UI.field("Cluster network", `<select id="ul_cn" onchange="uplinkDialog({cn:this.value})">${choices.map(n =>
+        `<option ${n.name === form.cn ? "selected" : ""}>${esc(n.name)}</option>`).join("")}</select>`);
+  const hostField = config ? UI.field("Hosts", uplinkHostChips(config), { wide: true }) : UI.field("Hosts", hosts.length
+    ? `<div class="uplink-checks">${hosts.map(h => `<label><input type="checkbox" name="ul_host" value="${esc(h)}" checked onchange="uplinkNicsPaint()"> ${esc(h)}</label>`).join("")}</div>`
+    : `<span class="dim small">Every host already has an uplink for ${esc(form.cn)}; change one instead.</span>`, { wide: true });
+  modal(config ? `Change ${config.name}` : form.fresh ? "New cluster network" : `Uplink for ${form.cn}`, `<div class="ui-stack">
+    ${UI.lead(config ? `Harvester rebuilds ${config.cluster_network}'s uplink on ${config.nodes.join(", ")} with what you choose.`
+      : "Choose the NICs that carry this network on each host. Two or more are bonded: if one fails, traffic carries on through the rest.")}
+    ${UI.fields(where, hostField,
+      UI.field("NICs", `<div id="ul_nics"></div>`, { wide: true, help: "The chosen hosts' NICs, with each host's link. NICs that carry mgmt or another network cannot be chosen." }),
+      UI.field("Bond mode", `<select id="ul_mode" onchange="uplinkModeHelp()">${(inv.modes || ["active-backup"]).map(m =>
+        `<option ${m === (config?.mode || "active-backup") ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>`,
+        { help: "active-backup works on any switch: one NIC carries traffic and the next takes over if it fails." }),
+      UI.field("MTU", `<input id="ul_mtu" type="number" min="576" max="9000" placeholder="1500" value="${esc(config?.mtu || "")}">`,
+        { help: "Leave empty for 1500. Jumbo frames (9000) need every switch port to allow them." }))}
+    <div id="ul_lacp" hidden>${UI.ack("ul_lacp_ok", "The switch ports these NICs plug into are one LACP group")}</div>
+    ${UI.ack("ul_down", "Use a NIC even if it has no link yet")}
+    ${UI.actions(UI.cancel() + UI.button("Review", "uplinkReview()", { kind: "pri", attrs: 'data-need="admin"' }))}</div>`);
+  uplinkNicsPaint();
+  uplinkModeHelp();
+  if (window.applyRole) applyRole();
+};
+
+function uplinkChosenHosts() {
+  const form = UPLINKS.form || {};
+  if (form.config) return form.config.nodes;
+  return [...document.querySelectorAll('input[name="ul_host"]:checked')].map(i => i.value);
+}
+
+window.uplinkNicsPaint = () => {
+  const box = $("#ul_nics");
+  if (!box) return;
+  const form = UPLINKS.form, hosts = uplinkChosenHosts(), inv = UPLINKS.inv;
+  const names = [...new Set(hosts.flatMap(h => (inv.hosts[h] || []).map(n => n.name)))].sort();
+  const chosen = new Set(form.config?.nics || []);
+  box.innerHTML = names.map(name => {
+    const per = hosts.map(h => [h, (inv.hosts[h] || []).find(n => n.name === name)]);
+    const taken = per.find(([, n]) => n?.used_by && n.used_by !== form.cn);
+    const lights = per.map(([h, n]) => `<span class="port-led ${!n ? "off" : n.link === "up" ? "up" : n.link}" data-tip="${esc(`${h}: ${!n ? "no such NIC" : n.link === "up" ? portSpeed(n.speed_mbps) || "link" : n.link}`)}"></span>`).join("");
+    return `<label class="uplink-nic${taken ? " taken" : ""}"><input type="checkbox" name="ul_nic" value="${esc(name)}" ${chosen.has(name) ? "checked" : ""} ${taken ? "disabled" : ""}>
+      <b class="mono">${esc(name)}</b> ${lights} ${taken ? `<span class="dim xs">carries ${esc(taken[1].used_by)} on ${esc(taken[0])}</span>` : ""}</label>`;
+  }).join("") || `<span class="dim small">The node probe has not reported these hosts' NICs.</span>`;
+};
+
+window.uplinkModeHelp = () => { const lacp = $("#ul_lacp"); if (lacp) lacp.hidden = $("#ul_mode")?.value !== "802.3ad"; };
+
+function uplinkRequest(opts) {
+  if (opts?.action === "remove") return { action: "remove", config: opts.config };
+  const form = UPLINKS.form;
+  const req = { action: form.config ? "change" : "create", nics: [...document.querySelectorAll('input[name="ul_nic"]:checked')].map(i => i.value),
+    mode: $("#ul_mode").value, mtu: $("#ul_mtu").value || "", allow_down: !!$("#ul_down")?.checked, lacp_confirmed: !!$("#ul_lacp_ok")?.checked };
+  if (form.config) req.config = form.config.name;
+  else Object.assign(req, { cluster_network: form.fresh ? ($("#ul_cn").value || "").trim() : form.cn, new_network: form.fresh, nodes: uplinkChosenHosts() });
+  return req;
+}
+
+/* What the change makes on the first host, drawn as the Ports picture is. */
+function uplinkPicture(plan) {
+  if (!window.Diagram || plan.action === "remove" || !plan.nics?.length) return "";
+  const host = plan.nodes[0], cn = plan.cluster_network, bonded = plan.nics.length > 1;
+  const nics = UPLINKS.inv?.hosts?.[host] || [];
+  const carries = plan.lan_networks?.length ? plan.lan_networks : [`${cn}'s LAN networks`];
+  const ports = plan.nics.map((name, i) => {
+    const n = nics.find(x => x.name === name) || {};
+    return { name, kind: "nic", link: n.link || "up", speed_mbps: n.speed_mbps, master: bonded ? `${cn}-bo` : `${cn}-br`, carries,
+      bond_member: bonded ? { state: plan.mode === "active-backup" && i ? "backup" : "active" } : null };
+  });
+  if (bonded) ports.push({ name: `${cn}-bo`, kind: "bond", link: "up", master: `${cn}-br`, carries, bond: { mode: plan.mode } });
+  ports.push({ name: `${cn}-br`, kind: "bridge", link: "up", carries });
+  return `<div class="ports-picture">${Diagram.ports({ ports, conditions: [] })}</div>
+    <div class="dim xs">On ${esc(host)}${plan.nodes.length > 1 ? `, and the same on ${esc(plan.nodes.slice(1).join(", "))}` : ""}: Harvester builds ${bonded ? `${esc(cn)}-bo and ` : ""}${esc(cn)}-br.</div>`;
+}
+
+window.uplinkBack = () => {
+  const form = UPLINKS.form || {};
+  uplinkDialog(form.config ? { config: form.config.name } : { cn: form.cn, fresh: form.fresh });
+};
+
+window.uplinkReview = async opts => {
+  const req = uplinkRequest(opts);
+  const back = req.action === "remove" ? "" : UI.button("Back", "uplinkBack()");
+  modal("Review the uplink", '<div class="empty"><span class="spin2"></span> Checking the hosts…</div>');
+  let plan;
+  try {
+    plan = await api("/api/network/uplinks/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) });
+  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "It could not be checked", esc(e.message)) + UI.actions(UI.cancel("Close") + back); return; }
+  UPLINKS.pending = { ...req, digest: plan.digest };
+  const verb = { create: "Make it", change: "Change it", remove: "Remove it" }[plan.action];
+  const what = plan.action === "remove" ? `${plan.config} is removed: ${plan.cluster_network} has no uplink on ${plan.nodes.join(", ")} afterwards.`
+    : `${plan.nics.join(" + ")}${plan.nics.length > 1 ? ` bonded as ${plan.mode}` : ""} carry ${plan.cluster_network}${plan.new_network ? " (a new cluster network)" : ""} on ${plan.nodes.join(", ")}${plan.mtu ? `, MTU ${plan.mtu}` : ""}.`;
+  $("#mbody").innerHTML = `<div class="ui-stack">${UI.lead(what)}
+    ${uplinkPicture(plan)}
+    ${UI.checklist([...plan.refusals.map(r => ({ state: "bad", title: r })), ...plan.warnings.map(w => ({ state: "warn", title: w })),
+      !plan.refusals.length && { state: "ok", title: "Harvester makes the change and reports each host; Homestead follows it as a job" }])}
+    ${plan.refusals.length ? "" : UI.callout("warn", `${plan.cluster_network}'s networks pause on ${plan.nodes.join(", ")}`,
+      "For a few seconds while Harvester rebuilds the bond and bridge. The hosts' own addresses are on mgmt and are not touched.")}
+    ${UI.actions(UI.cancel() + back + (plan.refusals.length ? "" : UI.button(verb, "uplinkApply()", { kind: "danger", id: "ul_go", attrs: 'data-need="admin"' })))}</div>`;
+  if (window.applyRole) applyRole();
+};
+
+window.uplinkApply = async () => {
+  const go = $("#ul_go");
+  if (go) { go.disabled = true; go.textContent = "Sending…"; }
+  try {
+    const r = await api("/api/network/uplinks/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(UPLINKS.pending) });
+    toast(r.detail, "ok"); closeModal(); UPLINKS.inv = null;
+    uplinksPaint();
+  } catch (e) {
+    toast(e.message, "bad");
+    if (go) { go.disabled = false; go.textContent = "Try again"; }
+  }
+};
+
+/* k3s and RKE2: bond a host's NICs (homestead_host_bonds.py). Homestead edits
+   the host's netplan with a rollback armed on the host first, checks it from
+   outside, and only then disarms it. The review draws the host's ports as
+   they are and as they would be. */
+const HOST_BOND = {};
+
+function hostBondButton(node, bond, cls = "btn sm") {
+  if (STATE.platform?.harvester) return "";
+  return `<button class="${cls}" data-need="admin" onclick="hostBondDialog(${jsq(node)})">${bond ? `Change ${esc(bond.name)}…` : "Bond ports…"}</button>`;
+}
+
+/* A host's ports as the picture draws them, from what the host said. */
+function hostBondPorts(info, members, bond, mode, carriesOn) {
+  const set = new Set(members);
+  const ports = (info.nics || []).map(n => ({ name: n.name, kind: "nic", link: n.carrier ? "up" : n.carrier === null && !set.has(n.name) ? "off" : n.carrier === null ? "up" : "down", speed_mbps: n.speed,
+    master: set.has(n.name) ? bond : n.name === info.shape.carrier_nic && !set.size ? info.shape.bridge : "",
+    carries: set.has(n.name) || (n.name === info.shape.carrier_nic && !set.size) ? ["host address"] : [],
+    uplink: set.has(n.name) || (n.name === info.shape.carrier_nic && !set.size),
+    bond_member: set.has(n.name) ? { state: mode === "active-backup" && members[0] !== n.name ? "backup" : "active" } : null }));
+  if (set.size) ports.push({ name: bond, kind: "bond", link: "up", master: info.shape.bridge || "", carries: ["host address"], uplink: true, bond: { mode } });
+  if (info.shape.bridge) ports.push({ name: info.shape.bridge, kind: "bridge", link: "up", carries: ["host address"], uplink: true });
+  return { uplink: carriesOn, ports, conditions: [] };
+}
+
+window.hostBondDialog = async node => {
+  modal(`Bond ports · ${node}`, '<div class="empty"><span class="spin2"></span> Looking at the host\'s network…</div>');
+  let info;
+  try {
+    info = await api("/api/node/bond/inspect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ node }) });
+  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The host's network could not be read.", esc(e.message)) + UI.actions(UI.cancel("Close")); return; }
+  HOST_BOND.info = info;
+  const shape = info.shape || {}, bonded = !!shape.bond;
+  if (info.problem) {
+    $("#mbody").innerHTML = `<div class="ui-stack">${UI.callout("warn", "This host's network is not changed", esc(info.problem[0].toUpperCase() + info.problem.slice(1)) + ".")}${UI.actions(UI.cancel("Close"))}</div>`;
+    return;
+  }
+  const now = bonded ? `${node} carries ${info.address} on ${shape.iface}, bonding ${shape.members.join(" + ")} (${shape.mode}).`
+    : `${node} carries ${info.address} on ${shape.iface}${shape.bridge ? `, a bridge over ${shape.carrier_nic}` : ""}. Add NICs to make a bond: if one fails, traffic carries on through the others.`;
+  const nics = info.nics.map(n => {
+    const mine = bonded ? shape.members.includes(n.name) : n.name === shape.carrier_nic;
+    const taken = n.master && !mine && n.master !== shape.bridge && n.master !== shape.bond;
+    return `<label class="uplink-nic${taken ? " taken" : ""}"><input type="checkbox" name="hb_nic" value="${esc(n.name)}" ${mine ? "checked" : ""} ${taken || (!bonded && mine) ? "disabled" : ""} onchange="hostBondPrimaries()">
+      <span class="port-led ${n.carrier ? "up" : n.carrier === null ? "off" : "down"}"></span><b class="mono">${esc(n.name)}</b>
+      <span class="dim xs">${esc(n.carrier ? portSpeed(n.speed) || "link" : n.carrier === null ? "switched off" : "no link")}${!bonded && mine ? " · carries the host now" : ""}${taken ? ` · in ${n.master}` : ""}</span></label>`;
+  }).join("");
+  $("#mbody").innerHTML = `<div class="ui-stack">${UI.lead(now)}
+    ${bonded ? UI.field("Change", `<div class="seg" id="hb_action"><button type="button" class="on" data-v="change" onclick="hostBondAction(this)">Members or mode</button><button type="button" data-v="remove" onclick="hostBondAction(this)">Back to one NIC</button></div>`) : ""}
+    <div id="hb_form">${UI.fields(
+      UI.field("NICs", `<div>${nics}</div>`, { wide: true, help: "Members of the bond. A NIC in another bridge or bond cannot be chosen." }),
+      UI.field("Mode", `<select id="hb_mode" onchange="hostBondPrimaries()">${info.modes.map(m => `<option ${m === (shape.mode || "active-backup") ? "selected" : ""}>${esc(m)}</option>`).join("")}</select>`,
+        { help: "active-backup works on any switch: one NIC carries traffic and the next takes over." }),
+      UI.field("Carries traffic first", `<select id="hb_primary"></select>`, { help: "In active-backup, the NIC used while it has link." }))}
+      <div id="hb_lacp" hidden>${UI.ack("hb_lacp_ok", "The switch ports these NICs plug into are one LACP group")}</div>
+      ${UI.ack("hb_down", "Use a NIC even if it has no link yet")}</div>
+    <div id="hb_keep" hidden>${UI.field("Keep", `<select id="hb_keep_nic">${(shape.members || []).map(m => `<option>${esc(m)}</option>`).join("")}</select>`, { help: "The NIC that carries the host afterwards." })}</div>
+    ${UI.actions(UI.cancel() + UI.button("Review", `hostBondReview(${jsArg(node)})`, { kind: "pri", attrs: 'data-need="admin"' }))}</div>`;
+  hostBondPrimaries();
+  if (window.applyRole) applyRole();
+};
+
+window.hostBondAction = button => {
+  button.parentElement.querySelectorAll("button").forEach(b => b.classList.toggle("on", b === button));
+  const remove = button.dataset.v === "remove";
+  $("#hb_form").hidden = remove; $("#hb_keep").hidden = !remove;
+};
+
+window.hostBondPrimaries = () => {
+  const picked = [...document.querySelectorAll('input[name="hb_nic"]:checked')].map(i => i.value);
+  const select = $("#hb_primary"), was = select?.value || HOST_BOND.info?.shape?.carrier_nic;
+  if (select) select.innerHTML = picked.map(m => `<option ${m === was ? "selected" : ""}>${esc(m)}</option>`).join("");
+  const mode = $("#hb_mode")?.value;
+  if ($("#hb_lacp")) $("#hb_lacp").hidden = mode !== "802.3ad";
+  if (select) select.closest(".ui-field").hidden = mode !== "active-backup";
+};
+
+function hostBondRequest(node) {
+  const info = HOST_BOND.info, remove = $("#hb_action .on")?.dataset.v === "remove";
+  if (remove) return { node, action: "remove", keep: $("#hb_keep_nic").value };
+  return { node, action: info.shape.bond ? "change" : "create", members: [...document.querySelectorAll('input[name="hb_nic"]:checked')].map(i => i.value),
+    mode: $("#hb_mode").value, primary: $("#hb_primary").value, lacp_confirmed: !!$("#hb_lacp_ok")?.checked, allow_down: !!$("#hb_down")?.checked };
+}
+
+window.hostBondReview = async node => {
+  const req = hostBondRequest(node), info = HOST_BOND.info;
+  modal(`Review · ${node}`, '<div class="empty"><span class="spin2"></span> Checking the host…</div>');
+  let p;
+  try {
+    p = await api("/api/node/bond/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(req) });
+  } catch (e) { $("#mbody").innerHTML = UI.callout("bad", "It could not be checked", esc(e.message)) + UI.actions(UI.cancel("Close") + UI.button("Back", `hostBondDialog(${jsArg(node)})`)); return; }
+  HOST_BOND.pending = { ...req, digest: p.digest };
+  const before = window.Diagram ? Diagram.ports(hostBondPorts(info, info.shape.members || [], info.shape.bond || "bond0", info.shape.mode, info.shape.iface)) : "";
+  const after = window.Diagram ? Diagram.ports(hostBondPorts(info, p.action === "remove" ? [] : p.members, p.bond, p.mode, p.carries_on)) : "";
+  const what = p.action === "remove" ? `${p.bond} goes, and ${p.keep} carries ${p.address} on its own.`
+    : `${p.members.join(" + ")} carry ${p.address} as ${p.bond} (${p.mode})${p.shape.bridge ? `, under ${p.shape.bridge}` : ""}. It keeps its address${info.dhcp ? " and asks DHCP with the same MAC, so the lease stays" : ""}.`;
+  $("#mbody").innerHTML = `<div class="ui-stack">${UI.lead(what)}
+    <div class="bond-compare"><div><div class="ui-help">Now</div><div class="ports-picture">${before}</div></div>
+      <div><div class="ui-help">After</div><div class="ports-picture">${after}</div></div></div>
+    ${UI.checklist([...p.refusals.map(r => ({ state: "bad", title: r })), ...p.warnings.map(w => ({ state: "warn", title: w })),
+      !p.refusals.length && { state: "ok", title: `Checked from outside: ${p.address} on ${p.carries_on}, the default route, the gateway, every member${p.mode === "802.3ad" ? ", the switch's LACP answer" : ""}` }])}
+    ${p.refusals.length ? UI.actions(UI.cancel("Close") + UI.button("Back", `hostBondDialog(${jsArg(node)})`)) : `
+      ${UI.callout("warn", `${node}'s network stops for a few seconds`, `netplan's files are copied aside and a rollback is armed on the host first. Unless Homestead sees
+        every check pass, ${esc(node)} puts its old network back by itself ${Math.round(p.rollback_seconds / 60)} minutes after the change${p.mode === "802.3ad" ? ", or at once if the switch does not answer LACP within a minute" : ""}. Containers keep running.`)}
+      <div class="f"><label>Type <span class="mono">${esc(node)}</span> to confirm</label><input id="hb_confirm" class="mono" autocomplete="off"></div>
+      ${UI.actions(UI.cancel() + UI.button("Back", `hostBondDialog(${jsArg(node)})`) + UI.button({ create: "Bond them", change: `Change ${p.bond}`, remove: `Remove ${p.bond}` }[p.action],
+        `hostBondGo(${jsArg(node)})`, { kind: "danger", id: "hb_go", attrs: 'data-need="admin"' }))}`}</div>`;
+  if (window.applyRole) applyRole();
+};
+
+window.hostBondGo = async node => {
+  const go = $("#hb_go");
+  if (go) { go.disabled = true; go.textContent = "Changing…"; }
+  try {
+    const r = await api("/api/node/bond", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...HOST_BOND.pending, confirm: $("#hb_confirm").value }) });
+    toast(r.detail, "ok"); closeModal();
+  } catch (e) {
+    toast(e.message, "bad");
+    if (go) { go.disabled = false; go.textContent = "Try again"; }
   }
 };

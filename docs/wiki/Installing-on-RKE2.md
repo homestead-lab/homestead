@@ -201,7 +201,7 @@ its own port. For an address per app, Homestead installs **kube-vip** and
 **Multus** after it starts, as on [k3s](Installing-on-k3s#4-addresses-for-apps);
 an older installation offers them from **Settings →
 Cluster → Add-ons**, then list the addresses apps may have under
-**Networking → Your VIPs** - the same as on [k3s](Installing-on-k3s#4-addresses-for-apps).
+**Networking → Workload VIPs** - the same as on [k3s](Installing-on-k3s#4-addresses-for-apps).
 
 ## 5. kubectl on RKE2
 

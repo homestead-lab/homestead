@@ -131,6 +131,7 @@ const DIALOGS = [
   ["vm-cluster-copy-picker", "vms", "[...document.querySelectorAll('[onclick]')].find(e => e.getAttribute('onclick').includes('moveToCluster(') && e.getAttribute('onclick').includes(\"'copy'\")).click()"],
   ["container-cluster-copy-picker", "workloads", "[...document.querySelectorAll('[onclick]')].find(e => e.getAttribute('onclick').includes('moveToCluster(') && e.getAttribute('onclick').includes(\"'copy'\")).click()"],
   ["vip-add", "network", "vipAdd()"],
+  ["host-bond", "network", "hostBondDialog('harvester-node1')"],
   ["smart-disk", "nodes", "smartDisk('harvester-node1','nvme0n1')"],
   ["probe-install", "nodes", "probeInstallConfirm()"],
   ["vm-placement-checks", "nodes", "allocationProbeSettings()"],

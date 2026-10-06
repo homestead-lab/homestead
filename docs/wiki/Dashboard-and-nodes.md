@@ -245,7 +245,7 @@ counted over the last hour. A picture draws the ports as they connect: each
 port's cable, green with its speed or red with none, the bond it is in
 (violet, the active member solid and a backup dashed), the bridge, and what
 it all carries - the host's address, its VIPs and any LAN networks.
-**Networking → Host ports** lists every host's uplink and ports together.
+**Networking → Host ports** (on Harvester, **Ports and uplinks**) lists every host's uplink and ports together.
 
 A port matters by what it carries: a spare with no cable raises nothing.
 These raise an alert:

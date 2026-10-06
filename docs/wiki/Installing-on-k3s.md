@@ -340,7 +340,7 @@ kube-vip runs beside ServiceLB rather than replacing it: it takes only the
 Services given a VIP, and everything else - Homestead and Traefik included -
 stays on the machines' own addresses. Then:
 
-1. Add the addresses apps may have under **Networking → Your VIPs**, outside
+1. Add the addresses apps may have under **Networking → Workload VIPs**, outside
    your router's DHCP range.
 2. When deploying, editing, importing or exposing an app, choose **Every
    node's own address**, **New automatic VIP** (the next free one from your

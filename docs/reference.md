@@ -401,7 +401,7 @@ live path from each VIP and listener through its Service to ready pod endpoints,
 including the owning node and a direct access link where the protocol is
 browser-friendly.
 
-**Nodes & addresses** (`homestead_vips.py`) groups every address by the node
+The **Address map** (`homestead_vips.py`) groups every address by the node
 answering for it: the node's own addresses, and each VIP whose kube-vip lease
 that node holds (per Service, the shared `kube-vip.io/leaseName` lease, or
 `plndr-svcs-lock`). An address is reachable only when a node announces it and
@@ -429,10 +429,10 @@ pools. Service creation uses the existing Service permission and copies the
 selected Deployment's selector from the server rather than trusting browser
 input.
 
-### Your VIPs
+### Workload VIPs
 
 kube-vip announces whatever address a Service asks for, and a plain Harvester
-install has nothing handing addresses out. **Networking → Services & VIPs →
+install has nothing handing addresses out. **Networking → Workload VIPs →
 ＋ Add VIPs** keeps addresses for Homestead to give to Services - one, or a
 range of up to 64, with a label saying what they are for. Keep them outside
 your router's DHCP range. Automatic VIPs come from these first, then from any
@@ -462,7 +462,7 @@ semantics, DNS exceptions, and backup scope.
 
 ### IP addresses
 
-Networking's **IP addresses** tab keeps, per subnet, what lives at each
+Networking's **IP addresses** section keeps, per subnet, what lives at each
 address: a name, the MAC, how it gets the address (static, DHCP reservation,
 DHCP, held for later, network gear), a device category (router or firewall,
 switch, access point, server, NAS, IoT, CCTV, printer, computer, phone, TV or

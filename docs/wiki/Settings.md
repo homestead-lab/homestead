@@ -91,7 +91,7 @@ on Harvester too:
   using the correct kubectl and kubeconfig paths for k3s or RKE2.
 
 - **kube-vip** - VIPs for apps, as Harvester has: a container can have a LAN
-  address of its own from **Networking → Your VIPs**. On k3s it runs beside
+  address of its own from **Networking → Workload VIPs**. On k3s it runs beside
   ServiceLB and takes only the Services given a VIP. It announces addresses
   on the interface each node's default route uses.
 
