@@ -187,6 +187,26 @@ def _ours(row):
             or row["namespace"] == DEFAULT_NAMESPACE)
 
 
+SHARE_KEY = "share-vip"     # homestead.io/share-vip: "true" - share the address, without being Homestead's
+
+
+def _shares(row, ip, platform_info):
+    """A Service another tool made - Flux, Argo CD, a chart - that shares a
+    VIP the way Homestead's own do, not one that takes it: kube-vip announces
+    them together and only a port both claim conflicts, which is reported as
+    that. It uses Homestead's shared lease for the address; or kube-vip here
+    elects once for every Service, so all on an address go together; or it
+    says so (homestead.io/share-vip). Who created it does not matter (#306)."""
+    annotations = row.get("annotations") or {}
+    if NAMES.read(annotations, SHARE_KEY) == "true":
+        return True
+    if platform_info.get("load_balancer") != "kube-vip":
+        return False
+    if row.get("vip_lease") == "homestead-vip-" + ip.replace(".", "-").replace(":", "-"):
+        return True
+    return not platform_info.get("vip_shared_lease") and platform_info.get("vip_service_election") is not True
+
+
 def _address_owners(raw_rows, node_ips):
     """Addresses that are not Homestead's to hand out, and whose they are.
 
@@ -194,8 +214,13 @@ def _address_owners(raw_rows, node_ips):
     the cluster's own - Harvester's management VIP, an ingress controller's.
     Putting an app there shares it with the thing hosts join through. Node
     addresses are left out: k3s's ServiceLB publishes every Service on them by
-    design, and they are refused for a Service's own VIP separately.
+    design, and they are refused for a Service's own VIP separately. Then an
+    address a Service holds that neither Homestead made nor shares (_shares).
     """
+    try:
+        platform_info = PLATFORM.detect() or {}
+    except Exception:
+        platform_info = {}
     platform, foreign = {}, {}
     for row in raw_rows:
         for ip in row["external_ips"]:
@@ -203,7 +228,7 @@ def _address_owners(raw_rows, node_ips):
                 continue
             if row["system"] and row["type"] == "LoadBalancer":
                 platform.setdefault(ip, f"{row['namespace']}/{row['name']}")
-            elif not row["system"] and not _ours(row):
+            elif not row["system"] and not _ours(row) and not _shares(row, ip, platform_info):
                 foreign.setdefault(ip, f"{row['namespace']}/{row['name']}")
     try:
         vip = str(((kget(HARVESTER_VIP) or {}).get("data") or {}).get("ip") or "").strip()
@@ -227,7 +252,10 @@ def address_problem(ip, state=None):
                 "address of its own")
     owner = state.get("foreign_addresses", {}).get(ip)
     if owner:
-        return f"{ip} belongs to {owner}, which Homestead did not create; choose another address"
+        return (f"{ip} is held by {owner}, which Homestead did not create and which does not share it: it uses "
+                f"its own kube-vip lease, so kube-vip would announce the address twice. Give that Service the lease "
+                f"homestead-vip-{ip.replace('.', '-').replace(':', '-')} or the annotation homestead.io/share-vip: \"true\" "
+                "to share it, or choose another address")
     return ""
 
 
@@ -341,6 +369,7 @@ def inventory():
                          "assigned_ips": assigned, "requested_ips": requested,
                          "vip_host": annotations.get("kube-vip.io/vipHost") or "",
                          "vip_lease": annotations.get("kube-vip.io/leaseName") or "",
+                         "annotations": annotations,
                          "selector": selector, "targets": targets,
                          # A Service whose selector matches no Deployment still owns
                          # its VIP and port: that is how a deleted workload leaves a
@@ -629,7 +658,10 @@ def service_plan(cfg, require_workload=True):
         vip = _ipv4(cfg.get("vip"), "specific VIP")
         if vip in state["node_ips"]:
             raise ValueError(f"{vip} is a cluster node address and cannot be used as a Service VIP")
-        check_address(vip, state)
+        # An address this Service already carries stays its own: an edit
+        # elsewhere in the workload never fails on the address it has (#306).
+        if not (existing and vip in (existing.get("external_ips") or [])):
+            check_address(vip, state)
         in_pool = vip in state["available_vips"] or any(vip == row["ip"] for row in state["vips"])
         if not in_pool:
             warnings.append("This address is outside the visible Harvester IP pools; verify DHCP and static reservations before creating it.")

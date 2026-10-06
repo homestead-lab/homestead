@@ -21,6 +21,44 @@ function networkVipCard(v, data) {
       { label: `More actions for ${v.ip}` })}</div></article>`;
 }
 
+/* What needs attention on this page, item by item (#305): an address no
+   connection reaches, two Services claiming one address and port, an app
+   Service that is not healthy. A conflicted Service is counted once, as its
+   conflict. Each item says why and where its row is. */
+function networkAttention(data) {
+  const items = [];
+  for (const row of data.addresses?.addresses || []) {
+    if (!["unrouted", "unannounced"].includes(row.state)) continue;
+    items.push({kind: "address", what: `${row.ip} not reachable`, why: row.reason || "", where: `.addr-row[data-ip="${CSS.escape(row.ip)}"]`});
+  }
+  for (const c of data.conflicts || []) {
+    const owners = (c.owners || []).map(o => `${o.namespace}/${o.service}`);
+    items.push({kind: "conflict", what: `${c.ip}:${c.port}/${c.protocol} · ${owners.join(" and ")}`,
+      why: "Both Services claim this address and port, so only one answers. Give one of them another port or address.",
+      where: owners[0] ? `tr[data-svc="${CSS.escape(owners[0])}"]` : ""});
+  }
+  for (const row of data.services || []) {
+    if (row.system || ["healthy", "conflict"].includes(row.health)) continue;
+    items.push({kind: "service", what: `${row.namespace}/${row.name} · ${row.health}`, why: row.reason || "",
+      where: `tr[data-svc="${CSS.escape(row.namespace + "/" + row.name)}"]`});
+  }
+  return items;
+}
+function networkAttentionCounts(items) {
+  const count = kind => items.filter(i => i.kind === kind).length;
+  const parts = [[count("service"), "service", "unhealthy"], [count("conflict"), "listener conflict", ""], [count("address"), "address", "not reachable"]]
+    .filter(([n]) => n).map(([n, noun, after]) => `${n} ${noun}${n === 1 ? "" : noun.endsWith("s") ? "es" : "s"}${after ? " " + after : ""}`);
+  return parts.join(" · ") || "nothing needs attention";
+}
+window.networkShow = selector => {
+  const el = selector && document.querySelector(selector);
+  if (!el) return toast("Its row is filtered out or hidden; clear the search or show system Services", "bad");
+  el.closest("details")?.setAttribute("open", "");
+  el.scrollIntoView({block: "center", behavior: "smooth"});
+  el.classList.add("flash-find");
+  setTimeout(() => el.classList.remove("flash-find"), 2600);
+};
+
 /* Nodes & addresses: each node with its own address and the VIPs it answers
    for, and on every address the ports, the Services behind them and what
    they run. An address works only when a node answers for it and its
@@ -94,6 +132,7 @@ async function viewNetworking() {
   STATE.data.network = data;
   const q = STATE.q.toLowerCase();
   const showSystem = !!STATE.networkSystem;
+  const attention = networkAttention(data);
   const services = data.services.filter(row => (showSystem || !row.system) && (!q ||
     [row.namespace, row.name, row.cluster_ip, ...row.external_ips, networkPortText(row), ...row.targets]
       .join(" ").toLowerCase().includes(q)));
@@ -114,18 +153,18 @@ async function viewNetworking() {
       `<span class="tag ${controller.healthy ? "ok" : "bad"}">${controller.ready}/${controller.desired} load balancer</span>`,
       `<b>${data.summary.vips}</b> VIP${data.summary.vips === 1 ? "" : "s"} · ${data.summary.listeners} listening`,
       `<b>${data.summary.app_services}</b> app service${data.summary.app_services === 1 ? "" : "s"}`,
-      data.summary.unhealthy || data.conflicts.length || data.addresses?.problems
-        ? `<span class="tag warn">${data.addresses?.problems ? `${data.addresses.problems} address${data.addresses.problems === 1 ? "" : "es"} not reachable` : data.conflicts.length ? `${data.conflicts.length} listener conflict${data.conflicts.length === 1 ? "" : "s"}` : `${data.summary.unhealthy} need attention`}</span>`
-        : "no conflicts"],
+      attention.length ? `<span class="tag warn">${esc(networkAttentionCounts(attention))}</span>` : "no conflicts"],
       UI.stats([
       { title: "Load balancer", value: controller.ready, unit: `/${controller.desired}`, tone: controller.healthy ? "ok" : "bad",
         sub: `${controller.name} agents ready · ${controller.mode}` },
       { title: "Virtual IPs", value: data.summary.vips, sub: `${data.summary.listeners} LAN listeners · ${data.available_vip_count} unused in pools` },
       { title: "Application services", value: data.summary.app_services, sub: `${data.summary.ready_endpoints} ready endpoints` },
-      { title: "Attention", value: data.summary.unhealthy, tone: data.summary.unhealthy || data.conflicts.length || data.addresses?.problems ? "warn" : "",
-        sub: data.addresses?.problems ? `${data.addresses.problems} address${data.addresses.problems === 1 ? "" : "es"} not reachable - see Nodes & addresses`
-          : data.conflicts.length ? `${data.conflicts.length} listener conflict(s)` : "no VIP/port conflicts" },
+      // One count, of the items listed below it - not a figure of one kind beside a line of another.
+      { title: "Attention", value: attention.length, tone: attention.length ? "warn" : "", sub: networkAttentionCounts(attention) },
     ]))}
+    ${attention.length ? UI.more(`What needs attention · ${attention.length}`, `<ul class="net-attention">${attention.map(item => `<li>
+      <div><b>${esc(item.what)}</b>${item.why ? `<div class="dim xs">${esc(item.why)}</div>` : ""}</div>
+      ${item.where ? `<button class="btn sm" onclick="networkShow(${jsq(item.where)})">Show</button>` : ""}</li>`).join("")}</ul>`, true, "network-attention") : ""}
     ${(data.platform_clashes || []).length ? `<div class="note bad" style="margin-bottom:14px"><b>${data.platform_clashes.length === 1 ? "An app is" : `${data.platform_clashes.length} apps are`} on the cluster's own address.</b>
       ${esc(data.platform_clashes.map(c => `${c.namespace}/${c.service}`).join(", "))} ${data.platform_clashes.length === 1 ? "uses" : "use"}
       <span class="mono">${esc(data.platform_clashes[0].ip)}</span>, which ${esc(data.platform_clashes[0].owner)} holds: the dashboard answers there and new hosts join
@@ -152,7 +191,7 @@ async function viewNetworking() {
       ? "<b>1 Service no longer points at a workload.</b> It still owns its VIP and port, so that number stays taken until the Service is removed."
       : `<b>${orphans} Services no longer point at a workload.</b> They still own their VIPs and ports, so those numbers stay taken until the Services are removed.`}</div>` : ""}
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="services" class="tbl stack dense"><thead><tr><th>Service</th><th>Listeners</th><th>Traffic path</th><th>Health</th><th></th></tr></thead>
-      <tbody>${services.map(row => `<tr><td class="netsvc"><b>${esc(row.name)}</b>${row.orphaned ? '<span class="tag warn" data-tip="No Deployment matches this Service selector, so nothing answers on it. Its VIP and port stay reserved until it is removed.">no workload</span>' : ""}<div class="dim xs mono">${esc(row.namespace)} · ${esc(row.type)}</div><div class="dim xs mono" title="Address inside the cluster">ClusterIP ${esc(row.cluster_ip || "—")}</div></td>
+      <tbody>${services.map(row => `<tr data-svc="${esc(row.namespace + "/" + row.name)}"><td class="netsvc"><b>${esc(row.name)}</b>${row.orphaned ? '<span class="tag warn" data-tip="No Deployment matches this Service selector, so nothing answers on it. Its VIP and port stay reserved until it is removed.">no workload</span>' : ""}<div class="dim xs mono">${esc(row.namespace)} · ${esc(row.type)}</div><div class="dim xs mono" title="Address inside the cluster">ClusterIP ${esc(row.cluster_ip || "—")}</div></td>
         <td>${row.ports.map(p => `<span class="tag">${p.port}/${esc(p.protocol)} → ${esc(p.target_port)}</span>`).join(" ")}</td>
         <td class="netpathcell"><div class="netpath"><span title="${esc(row.external_ips.join(", ") || "cluster only")}">${esc(row.external_ips[0] || row.cluster_ip || "pending")}${row.external_ips.length > 1 ? ` +${row.external_ips.length - 1}` : ""}</span><i>→</i><span>${esc(row.name)}</span><i>→</i><span>${row.ready_endpoints} endpoint${row.ready_endpoints === 1 ? "" : "s"}</span></div>
           <div class="dim xs">${row.endpoints.ready.map(e => `${esc(e.target || e.addresses[0] || "endpoint")} @ ${esc(e.node || "unknown node")}`).join(" · ") || "No ready target"}</div></td>

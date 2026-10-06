@@ -2172,7 +2172,7 @@ function addressStepHtml(prefix, cfg, vips, sharedVip, { lanHtml = "", portsHtml
           <option value="auto" ${vip("auto")}>New automatic VIP${vips.freeCount ? ` · ${vips.freeCount} free` : ""}</option>
           <option value="manual" ${vip("manual")}>Specific VIP</option>`}</select></div></div>
       ${editing && host ? '<p class="ui-help">It uses its host\'s network, set when it was deployed. Deploy it again to change that.</p>' : ""}
-      <div class="f" id="${prefix}_vip_wrap"><label>Specific VIP</label>${vipPicker(prefix, cfg.lb_ip || "", vips)}</div>
+      <div class="f" id="${prefix}_vip_wrap"><label>Specific VIP</label>${vipPicker(prefix, cfg.lb_ip || "", vips, editing)}</div>
       ${lanHtml}
       ${UI.more("How addresses work", nodeAddressesOnly()
         ? "Node addresses expose each port on every node. Each port can belong to one Service. Add kube-vip in Settings for dedicated addresses. Host networking binds directly to one node."
@@ -2181,20 +2181,25 @@ function addressStepHtml(prefix, cfg, vips, sharedVip, { lanHtml = "", portsHtml
 }
 window.addressStepHtml = addressStepHtml;
 
-function vipPicker(prefix, current, choices) {
-  if (choices.blocked?.[current]) current = "";
+function vipPicker(prefix, current, choices, keep = false) {
+  // Editing a workload keeps the address it has, whatever else is said of
+  // it: a change elsewhere in it is never refused for its address (#306).
+  const kept = keep && current && choices.blocked?.[current];
+  if (choices.blocked?.[current] && !kept) current = "";
   const own = choices.own || [], labels = choices.labels || {};
-  const known = choices.free.includes(current) || choices.used.some(v => v.ip === current) || own.some(v => v.ip === current);
+  const known = kept || choices.free.includes(current) || choices.used.some(v => v.ip === current) || own.some(v => v.ip === current);
   const typed = !!current && !known;
   const option = (value, label) => `<option value="${esc(value)}" ${value === current ? "selected" : ""}>${esc(label)}</option>`;
   return `<select id="${prefix}_lb_pick" onchange="vipPicked(${jsq(prefix)})">
       <option value="" ${!current ? "selected" : ""}>Choose an address…</option>
+      ${kept ? option(current, `${current} · its address now`) : ""}
       ${own.some(v => v.free) ? `<optgroup label="Your VIPs - free">${own.filter(v => v.free).map(v => option(v.ip, `${v.ip}${v.label ? ` · ${v.label}` : ""}`)).join("")}</optgroup>` : ""}
       ${choices.free.length ? `<optgroup label="Free in the IP pools (${choices.free.length})">${choices.free.slice(0, 60).map(ip => option(ip, ip)).join("")}</optgroup>` : ""}
       ${choices.used.length ? `<optgroup label="In use - shared with what is there">${choices.used.map(v =>
         option(v.ip, `${v.ip}${labels[v.ip] ? ` · ${labels[v.ip]}` : ""} · ${v.services} service${v.services === 1 ? "" : "s"} · ports ${v.listeners.map(l => l.port).slice(0, 5).join(", ")}`)).join("")}</optgroup>` : ""}
       <option value="__typed" ${typed ? "selected" : ""}>Type an address…</option></select>
-    <input id="${prefix}_lb_ip" class="mono" value="${esc(current || "")}" placeholder="192.0.2.250" data-ipam ${typed ? "" : 'style="display:none"'}>`;
+    <input id="${prefix}_lb_ip" class="mono" value="${esc(current || "")}" placeholder="192.0.2.250" data-ipam ${typed && !kept ? "" : 'style="display:none"'}>
+    ${kept ? `<p class="ui-help">${esc(choices.blocked[current])}</p>` : ""}`;
 }
 
 window.vipPicked = prefix => {

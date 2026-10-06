@@ -92,6 +92,54 @@ class ClusterAddressTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "monitoring/grafana, which Homestead did not create"):
             plan("manual", "192.0.2.230")
 
+    def flux(self, lease=None, annotations=None):
+        row = service("192.0.2.242", "n8n", "automation", 5678,
+                      labels={"kustomize.toolkit.fluxcd.io/name": "apps", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"})
+        if lease:
+            row["metadata"]["annotations"]["kube-vip.io/leaseName"] = lease
+        row["metadata"]["annotations"].update(annotations or {})
+        return row
+
+    def test_a_service_gitops_made_on_the_shared_lease_shares_the_vip(self):
+        # #306: Flux's Services carried Homestead's lease and class; the VIP read Unavailable.
+        from unittest.mock import patch
+        Cluster([service("192.0.2.242", "homestead", port=8088), self.flux("homestead-vip-192-0-2-242")], shared="192.0.2.242")
+        # kube-vip electing once for every Service: everything on an address goes together.
+        with patch.object(NET.PLATFORM, "detect", return_value={"load_balancer": "kube-vip", "vip_shared_lease": True, "vip_service_election": False}):
+            self.assertEqual("192.0.2.242", plan("shared")["vip"])
+            self.assertEqual("192.0.2.242", plan("manual", "192.0.2.242", 9000)["vip"])
+            with self.assertRaisesRegex(ValueError, "already used by automation/n8n"):
+                plan("manual", "192.0.2.242", 5678)   # a port both claim is still a conflict
+
+    def test_a_service_on_its_own_lease_takes_the_address_and_says_how_to_share_it(self):
+        from unittest.mock import patch
+        Cluster([self.flux("kubevip-n8n")], shared="192.0.2.242")
+        with patch.object(NET.PLATFORM, "detect", return_value={"load_balancer": "kube-vip", "vip_shared_lease": True, "vip_service_election": True}):
+            with self.assertRaisesRegex(ValueError, "automation/n8n.*homestead-vip-192-0-2-242.*share-vip"):
+                plan("manual", "192.0.2.242")
+
+    def test_a_service_that_says_it_shares_shares(self):
+        from unittest.mock import patch
+        Cluster([self.flux("kubevip-n8n", {"homestead.io/share-vip": "true"})], shared="192.0.2.242")
+        with patch.object(NET.PLATFORM, "detect", return_value={"load_balancer": "kube-vip", "vip_shared_lease": True, "vip_service_election": False}):
+            self.assertEqual("192.0.2.242", plan("manual", "192.0.2.242")["vip"])
+
+    def test_one_election_per_service_still_needs_one_lease_in_one_namespace(self):
+        # Each Service's lease lives in its own namespace: automation's and
+        # lab's are two elections, which could announce the address twice.
+        from unittest.mock import patch
+        Cluster([self.flux("homestead-vip-192-0-2-242")], shared="192.0.2.242")
+        with patch.object(NET.PLATFORM, "detect", return_value={"load_balancer": "kube-vip", "vip_shared_lease": True, "vip_service_election": True}):
+            self.assertEqual("", NET.address_problem("192.0.2.242"), "not held against it: it shares")
+            with self.assertRaisesRegex(ValueError, "common kube-vip lease in the same namespace"):
+                plan("manual", "192.0.2.242", 9000)
+
+    def test_one_election_for_every_service_shares_every_address(self):
+        from unittest.mock import patch
+        Cluster([self.flux()], shared="192.0.2.242")
+        with patch.object(NET.PLATFORM, "detect", return_value={"load_balancer": "kube-vip", "vip_shared_lease": False, "vip_service_election": False}):
+            self.assertEqual("192.0.2.242", plan("manual", "192.0.2.242")["vip"])
+
     def test_homesteads_own_services_still_share(self):
         Cluster([service("192.0.2.242", "homestead", port=8088),
                  service("192.0.2.242", "plex", "media", 32400,
