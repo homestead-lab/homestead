@@ -73,7 +73,8 @@ def run(ctx):
     bond = _until("bond0 carrying the host", lambda: (b := _bond(host)) and b.get("addr") and b, timeout=120)
     assert bond["mode"] == ["active-backup"], bond
     assert sorted(bond["slaves"]) == sorted([first, spare["name"]]), bond
-    assert bond["addr"] == [f"{host.ip}/24"], bond
+    # VIPs kube-vip holds here move onto bond0 too; the host's own address must be there.
+    assert f"{host.ip}/24" in bond["addr"], bond
     ctx.kube.nodes_ready(len(ctx.lab.nodes))
     _until("Homestead seeing bond0 as the uplink",
            lambda: ctx.api.get(f"/api/nodes/ports?node={HOST}").get("uplink") == "bond0", timeout=180)
@@ -102,7 +103,8 @@ def run(ctx):
     assert "LACP" in job.get("message", ""), job.get("message")
     bond = _until("the active-backup bond back", lambda: (b := _bond(host)).get("mode") == ["active-backup"] and b.get("addr") and b,
                   timeout=300)
-    assert bond["addr"] == [f"{host.ip}/24"], bond
+    # VIPs kube-vip holds here move onto bond0 too; the host's own address must be there.
+    assert f"{host.ip}/24" in bond["addr"], bond
     ctx.kube.nodes_ready(len(ctx.lab.nodes))
     log.info(f"{HOST}: 802.3ad without a partner rolled back to active-backup")
 
