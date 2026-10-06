@@ -66,6 +66,12 @@ class PlanTests(unittest.TestCase):
         self.assertIn("one host at a time", said)
         self.assertIn("quorum", said)
 
+    def test_an_empty_bond_left_behind_is_made_again_not_refused(self):
+        p = BONDS.plan("h1", {"members": ["enp2s0"]}, facts(bond_exists=True, bond_empty=True))
+        self.assertEqual([], p["refusals"])
+        self.assertTrue(p["spec"]["recreate"])
+        self.assertIn("not carrying its address", " ".join(BONDS.plan("h1", {"members": ["enp2s0"]}, facts(bond_exists=True))["refusals"]))
+
     def test_a_switched_off_spare_is_allowed_and_said(self):
         nics = [nic("enp1s0"), dict(nic("enp2s0"), carrier=None, speed=None)]
         p = BONDS.plan("h1", {"members": ["enp2s0"]}, facts(nics=nics))
@@ -97,6 +103,9 @@ class PlanTests(unittest.TestCase):
         self.assertIn("--on-active=3 /bin/sh -c 'ip link delete bond0 2>/dev/null; netplan apply'", script)
         rollback = next(line for line in script.splitlines() if "--unit=homestead-bond-rollback" in line)
         self.assertIn("ip link delete bond0 2>/dev/null; netplan apply'", rollback)
+        # Back to one NIC: netplan would leave bond0 behind, empty and down.
+        removed = BONDS.plan("h1", {"action": "remove", "keep": "enp1s0"}, self.bonded())
+        self.assertIn("--on-active=3 /bin/sh -c 'ip link delete bond0 2>/dev/null; netplan apply'", BONDS.change_script(removed["spec"], "1"))
         same = BONDS.plan("h1", {"action": "change", "members": ["enp1s0", "enp2s0", "enp3s0"]}, self.bonded())
         self.assertFalse(same["spec"]["recreate"])
         self.assertIn("--on-active=3 /bin/sh -c 'netplan apply'", BONDS.change_script(same["spec"], "1"))

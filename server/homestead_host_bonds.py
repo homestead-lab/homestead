@@ -124,7 +124,10 @@ print("FACTS " + json.dumps({"iface": iface, "kind": kind, "address": address, "
                              "netplan": netplan == "1", "networkd": networkd == "1", "nm": nm == "1", "systemd_run": run == "1",
                              "pyyaml": pyyaml, "armed": armed == "1", "services": services.split(), "flannel_iface": flannel == "1",
                              "nics": nics, "files": files, "bond": bond, "bridge_ports": under,
-                             "bond_exists": os.path.exists("/sys/class/net/__BOND__")}))
+                             "bond_exists": os.path.exists("/sys/class/net/__BOND__"),
+                             # Left behind, empty, when netplan stopped naming it.
+                             "bond_empty": os.path.exists("/sys/class/net/__BOND__") and
+                                           not (read("/sys/class/net/__BOND__/bonding/slaves") or "").strip()}))
 PY
 echo END""".replace("__BOND__", BOND)
 
@@ -252,7 +255,7 @@ def plan(node, req, facts, busy=None, servers_ready=None):
             refusals.append(f"{node} is on {shape['bond']} already: change it instead")
         elif shape["shape"] not in ("nic", "bridge"):
             pass
-        elif facts.get("bond_exists"):
+        elif facts.get("bond_exists") and not facts.get("bond_empty"):
             refusals.append(f"{node} has a {BOND} already, not carrying its address; Homestead does not reuse it")
     elif action in ("change", "remove") and not shape["bond"]:
         refusals.append(f"{node} has no bond to {action}")
@@ -327,7 +330,10 @@ def plan(node, req, facts, busy=None, servers_ready=None):
             "bridge": shape["bridge"], "keep": keep, "dhcp": bool(facts.get("dhcp")),
             # networkd cannot change a live bond's mode: the bond is deleted
             # just before netplan makes it again, in the same detached step.
-            "recreate": action == "change" and mode != (shape["mode"] or mode)}
+            # Going back to one NIC deletes it too: netplan leaves a bond it no
+            # longer names in place, empty, and the next bond would be refused.
+            "recreate": action == "remove" or action == "change" and mode != (shape["mode"] or mode)
+                        or action == "create" and bool(facts.get("bond_empty"))}
     after = (shape["bridge"] or (keep if action == "remove" else bond))
     out = {"node": node, "action": action, "shape": shape, "bond": bond, "members": members, "mode": mode, "primary": primary,
            "keep": keep, "address": facts.get("address", ""), "carries_on": after, "renamed": renamed,
