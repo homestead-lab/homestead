@@ -70,6 +70,48 @@ class ImageUpdateTests(unittest.TestCase):
         self.assertEqual(before, self.dep)
         self.assertEqual([], self.sent)
 
+    def test_apps_gitops_or_an_administrator_updates_are_named_and_not_updated_here(self):
+        # #296: Flux and Argo CD by the marks they leave; an administrator's mark for the rest.
+        cases = {
+            "Flux Kustomization": ({"kustomize.toolkit.fluxcd.io/name": "apps", "kustomize.toolkit.fluxcd.io/namespace": "flux-system"}, {},
+                                   {"by": "Flux", "source": "Kustomization flux-system/apps", "detected": True}),
+            "Flux HelmRelease": ({"helm.toolkit.fluxcd.io/name": "loki", "helm.toolkit.fluxcd.io/namespace": "monitoring"}, {},
+                                 {"by": "Flux", "source": "HelmRelease monitoring/loki", "detected": True}),
+            "Argo CD annotation": ({}, {"argocd.argoproj.io/tracking-id": "media:apps/Deployment:lab/demo"},
+                                   {"by": "Argo CD", "source": "Application media", "detected": True}),
+            "Argo CD label": ({"argocd.argoproj.io/instance": "media"}, {}, {"by": "Argo CD", "source": "Application media", "detected": True}),
+            "administrator": ({}, {updates.MANAGED: "Renovate"}, {"by": "Renovate", "source": "", "detected": False}),
+        }
+        for why, (labels, annotations, expected) in cases.items():
+            with self.subTest(why=why):
+                self.dep = copy.deepcopy(DEPLOYMENT)
+                self.dep["metadata"]["labels"] = labels
+                self.dep["metadata"]["annotations"] = annotations
+                self.assertEqual(expected, updates.managed_by(self.dep))
+                for prepare in (updates.prepare_update, updates.prepare_rollback):
+                    with self.assertRaisesRegex(ValueError, expected["by"]):
+                        prepare("lab", "demo")
+                self.assertEqual([], self.sent, "nothing written")
+
+    def test_helm_alone_is_not_gitops(self):
+        self.dep["metadata"]["labels"] = {"app.kubernetes.io/instance": "demo", "app.kubernetes.io/managed-by": "Helm"}
+        self.assertEqual({}, updates.managed_by(self.dep))
+
+    def test_an_administrator_marks_and_clears_but_never_unmarks_what_gitops_owns(self):
+        updates.set_managed("lab", "demo", "  Renovate ")
+        method, path, body = self.sent[-1]
+        self.assertEqual(("PATCH", "/apis/apps/v1/namespaces/lab/deployments/demo"), (method, path))
+        self.assertEqual({updates.MANAGED: "Renovate"}, body["metadata"]["annotations"])
+        self.dep = copy.deepcopy(DEPLOYMENT)
+        updates.set_managed("lab", "demo", "")
+        self.assertEqual({updates.MANAGED: None}, self.sent[-1][2]["metadata"]["annotations"], "cleared")
+        with self.assertRaisesRegex(ValueError, "60 characters"):
+            updates.set_managed("lab", "demo", "x" * 61)
+        self.dep = copy.deepcopy(DEPLOYMENT)
+        self.dep["metadata"]["labels"] = {"kustomize.toolkit.fluxcd.io/name": "apps"}
+        with self.assertRaisesRegex(ValueError, "no mark to clear"):
+            updates.set_managed("lab", "demo", "")
+
     def test_an_image_without_a_tag_is_given_latest(self):
         self.assertEqual("n8nio/n8n:latest", updates.with_tag("n8nio/n8n"))
         self.assertEqual("localhost:5000/app:latest", updates.with_tag("localhost:5000/app"))

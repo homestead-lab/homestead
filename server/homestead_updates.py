@@ -36,6 +36,9 @@ LAST_ACTION = NAMES.key("update-action")
 # compared with the registry: without a pod there is nothing else to ask.
 RAN = NAMES.key("ran-digests")
 ROLLOUT_AT = NAMES.key("update-rollout-at")
+# An administrator's mark that something else updates this app - plain CI,
+# Renovate - where no GitOps tool leaves a marker of its own (#296).
+MANAGED = NAMES.key("updates-managed")
 MANIFEST_ACCEPT = ", ".join((
     "application/vnd.oci.image.index.v1+json",
     "application/vnd.oci.image.manifest.v1+json",
@@ -110,6 +113,54 @@ def _annotation(dep, key, default=""):
 
 def _write(annotations, key, value):
     annotations[key] = value
+
+
+def managed_by(dep):
+    """Who updates this app instead of Homestead, if anyone (#296): Flux and
+    Argo CD by the marks they leave on what they apply, or an administrator's
+    mark. {} when Homestead does. An update made here would be undone at
+    the owner's next sync, so Homestead keeps the notice and not the action."""
+    meta = dep.get("metadata") or {}
+    labels, annotations = meta.get("labels") or {}, meta.get("annotations") or {}
+    own = str(_annotation(dep, MANAGED) or "").strip()
+    if own:
+        return {"by": own, "source": "", "detected": False}
+    for kind, group in (("Kustomization", "kustomize.toolkit.fluxcd.io"), ("HelmRelease", "helm.toolkit.fluxcd.io")):
+        if labels.get(f"{group}/name"):
+            where = "/".join(x for x in (labels.get(f"{group}/namespace", ""), labels[f"{group}/name"]) if x)
+            return {"by": "Flux", "source": f"{kind} {where}", "detected": True}
+    # Argo CD: its tracking annotation (<app>:<group>/<kind>:<ns>/<name>), or
+    # the label it sets when told to track by label.
+    tracking = str(annotations.get("argocd.argoproj.io/tracking-id") or "")
+    app = tracking.split(":", 1)[0] if tracking else str(labels.get("argocd.argoproj.io/instance") or "")
+    if app:
+        return {"by": "Argo CD", "source": f"Application {app}", "detected": True}
+    return {}
+
+
+def managed_message(ns, name, managed):
+    where = f" ({managed['source']})" if managed.get("source") else ""
+    if managed.get("detected"):
+        return (f"{ns}/{name} is updated by {managed['by']}{where}: a change made here would be undone at its next "
+                f"sync. Change its image where {managed['by']} reads it")
+    return (f"{ns}/{name} is marked as updated elsewhere ({managed['by']}): change its image there, or clear "
+            "the mark under Image updates to update it here")
+
+
+def set_managed(ns, name, by):
+    """Mark an app as updated elsewhere (by: who, in a few words), or clear
+    the mark with an empty by. A GitOps tool's own marks are not changed."""
+    by = str(by or "").strip()
+    if len(by) > 60 or any(ord(ch) < 32 for ch in by):
+        raise ValueError("say who updates it in 60 characters or fewer")
+    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    if not by and managed_by(dep).get("detected") and not str(_annotation(dep, MANAGED) or "").strip():
+        raise ValueError(f"{ns}/{name} is managed by {managed_by(dep)['by']}, which Homestead detects; there is no mark to clear")
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
+          {"metadata": {"annotations": {MANAGED: by or None}}}, ctype="application/merge-patch+json")
+    invalidate()
+    return {"ok": True, "ns": ns, "name": name,
+            "managed": managed_by(kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"))}
 
 
 def _annotation_json(dep, key):
@@ -461,6 +512,7 @@ def _check_deployment(dep, pods, force=False, persist=True, channel=None):
     return {"ns": ns, "name": name, "images": images,
             "unchecked": any(x.get("unchecked") for x in images),
             "available": any(x["available"] for x in images),
+            "managed": managed_by(dep),
             "can_rollback": bool(_annotation_json(dep, PREVIOUS)),
             "last_action": _annotation(dep, LAST_ACTION)}
 
@@ -714,6 +766,8 @@ def prepare_update(ns, name):
     if _managed_smb(ns, name):
         raise ValueError("SMB is managed from Network Shares")
     current = copy.deepcopy(kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"))
+    if managed_by(current):
+        raise ValueError(managed_message(ns, name, managed_by(current)))
     dep = copy.deepcopy(current)
     pods = _review_pods(current)
     check = _check_deployment(dep, pods, True, persist=False)
@@ -768,6 +822,8 @@ def prepare_rollback(ns, name):
     if _managed_smb(ns, name):
         raise ValueError("SMB is managed from Network Shares")
     original = copy.deepcopy(kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"))
+    if managed_by(original):
+        raise ValueError(managed_message(ns, name, managed_by(original)))
     dep = copy.deepcopy(original)
     previous = _annotation_json(dep, PREVIOUS)
     restore = previous.get("images") or {}

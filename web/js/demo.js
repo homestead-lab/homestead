@@ -2097,6 +2097,13 @@ ssh_pwauth: true
     },
     "/api/image-updates/apply": {uid: "demo-rollout", generation: 4, phase: "progressing", desired: 1, ready: 0},
     "/api/image-updates/rollback": {uid: "demo-rollout", generation: 4, phase: "progressing", desired: 1, ready: 0},
+    // An administrator marking an app as updated elsewhere, or clearing it.
+    "/api/image-updates/managed": (url, init) => {
+      const body = JSON.parse(init?.body || "{}"), by = String(body.by || "").trim();
+      const row = (responses["/api/image-updates"].workloads || []).find(w => w.ns === body.ns && w.name === body.name);
+      if (row) row.managed = by ? {by, source: "", detected: false} : {};
+      return {ok: true, ns: body.ns, name: body.name, managed: row?.managed || {}};
+    },
     "/api/image-updates/scan-progress": () => {
       const at = (window.__demoScan = (window.__demoScan || 0) + 1);
       const total = 8, done = Math.min(total, at * 2);
@@ -2104,7 +2111,7 @@ ssh_pwauth: true
         current: ["frigate", "home-assistant", "paperless", "homestead-smb"][at % 4],
         started_at: 0, finished_at: 0, elapsed: at * 0.5 };
     },
-    "/api/image-updates": { checked_at: new Date().toISOString(), updates: 2, errors: 1, homestead: { updates: 1, errors: 0 },
+    "/api/image-updates": { checked_at: new Date().toISOString(), updates: 3, errors: 1, homestead: { updates: 1, errors: 0 },
       policy: { policy: "approval_required", allows_install: true, reason: "Explicit operator approval is required before rollout." },
       workloads: [{ ns: "lab", name: "frigate", available: true, can_rollback: true,
         images: [{ container: "frigate", deployed: "ghcr.io/blakeblackshear/frigate:stable", candidate: "ghcr.io/blakeblackshear/frigate:stable", candidate_tag: "stable", remote_digest: "sha256:abc", available: true }] },
@@ -2113,6 +2120,10 @@ ssh_pwauth: true
       // Homestead's own release, offered on the top bar and under Settings › Updates.
       { ns: "lab", name: "homestead", homestead: "self", available: true, can_rollback: true,
         images: [{ container: "homestead", deployed: `ghcr.io/homestead-lab/homestead:${typeof HOMESTEAD_VERSION === "string" ? HOMESTEAD_VERSION : "2.8.316-dev.1"}`, candidate: "ghcr.io/homestead-lab/homestead:2.9.0", candidate_tag: "2.9.0", remote_digest: "sha256:ghi", available: true }] },
+      // Deployed by Flux from git: its update is a notice, made in git (#296).
+      { ns: "monitoring", name: "loki", available: true, can_rollback: false,
+        managed: { by: "Flux", source: "Kustomization flux-system/monitoring", detected: true },
+        images: [{ container: "loki", deployed: "grafana/loki:3.4.2", candidate: "grafana/loki:3.5.0", candidate_tag: "3.5.0", remote_digest: "sha256:aaa", available: true }] },
       { ns: "lab", name: "paperless", available: false, can_rollback: false,
         images: [{ container: "paperless", deployed: "registry.lan/paperless-ngx:2.11", candidate: "registry.lan/paperless-ngx:2.11", available: false, error: "registry authentication required" }] }] },
     // The demo is a Harvester cluster: kube-vip and Multus come with it.

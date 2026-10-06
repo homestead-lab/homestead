@@ -48,3 +48,12 @@ test("Homestead and its helpers are updated apart from apps, Homestead first", (
   assert.deepEqual(state.orderApply(state.homesteadWorkloads(report).filter(w => w.available)).map(item => item.name),
     ["homestead-nfs", "homestead"]);
 });
+
+test("an app something else updates keeps its notice but is not offered for update (#296)", () => {
+  const report = { workloads: [
+    { ns: "lab", name: "loki", available: true, managed: { by: "Flux", source: "Kustomization flux-system/apps", detected: true } },
+    { ns: "lab", name: "radarr", available: true, managed: { by: "Renovate", source: "", detected: false } },
+    { ns: "lab", name: "sonarr", available: true, managed: {} },
+  ] };
+  assert.deepEqual(state.availableWorkloads(report).map(w => w.name), ["sonarr"]);
+});

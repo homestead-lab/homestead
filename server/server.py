@@ -9788,6 +9788,12 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, save_app_settings(settings))
             if p == "/api/image-updates/preview":
                 return self._send(200, preview_image_update(b))
+            if p == "/api/image-updates/managed":
+                ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
+                guard_managed_smb(ns, name)
+                result = UPDATES.set_managed(ns, name, b.get("by"))
+                _cache.pop("wl", None)
+                return self._send(200, result)
             if p == "/api/image-updates/apply":
                 guard_managed_smb(b.get("ns"), b.get("name"))
                 enforce_update_policy(b)

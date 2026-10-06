@@ -11,6 +11,39 @@ async function viewWorkloads() {
 const updateKey = (ns, name) => `${ns}/${name}`;
 const workloadUpdate = (ns, name) => (STATE.data.imageUpdateMap || {})[updateKey(ns, name)];
 
+/* An app something else updates - Flux, Argo CD, or as an administrator
+   marked it (#296). Its update stays a notice; the action is not offered,
+   because a change made here would be undone at the owner's next sync. */
+const updateOwner = update => update?.managed?.by ? update.managed : null;
+function updateOwnerTip(owner) {
+  return owner.detected
+    ? `Updated by ${owner.by}${owner.source ? ` (${owner.source})` : ""}. Homestead shows when a newer image exists; change it in ${owner.by}.`
+    : `Marked as updated elsewhere: ${owner.by}. Homestead shows when a newer image exists; clear the mark under Image updates to update it here.`;
+}
+function updateOwnerPill(update, slim = false) {
+  const owner = updateOwner(update);
+  if (!owner) return "";
+  return `<span class="pill${slim ? " slim" : ""} info" tabindex="0" data-tip="${esc(updateOwnerTip(owner))}">${update.available ? "update in " : "updated by "}${esc(owner.by)}</span>`;
+}
+window.markUpdatesElsewhere = async (ns, name) => {
+  const by = await askText(`Who updates ${name} - Renovate, CI, git? Homestead then shows its updates as a notice and does not offer to update it here.`,
+    "", {title:"Updated elsewhere", placeholder:"Renovate", ok:"Mark"});
+  if (by === null) return;
+  if (!by.trim()) return toast("Say who updates it", "bad");
+  await setUpdateOwner(ns, name, by.trim());
+};
+window.clearUpdatesElsewhere = (ns, name) => setUpdateOwner(ns, name, "");
+async function setUpdateOwner(ns, name, by) {
+  try {
+    const result = await api("/api/image-updates/managed", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ns, name, by})});
+    const row = (STATE.data.imageUpdates?.workloads || []).find(w => w.ns === ns && w.name === name);
+    if (row) row.managed = result.managed || {};
+    toast(by ? `${name} is marked as updated elsewhere` : `${name} can be updated here again`, "ok");
+    if ($("#mtitle")?.textContent === "Image updates") imageUpdateCenter();
+    if (STATE.view === "workloads") renderWorkloads();
+  } catch (error) { toast(error.message, "bad"); }
+}
+
 function paintUpdateBadge(count, errors = 0) {
   const badge = $("#updateBadge");
   if (badge) {
@@ -164,22 +197,28 @@ window.imageUpdateCenter = async () => {
   const affected = (report.workloads || []).filter(w => !w.homestead && (w.available || w.images?.some(image => image.error)))
     .sort((a, b) => Number(!!b.available) - Number(!!a.available));
   const available = HomesteadUpdateState.availableWorkloads(report);
+  // What Homestead updates first; what Flux, Argo CD or a mark says is updated elsewhere after, apart (#296).
+  const here = affected.filter(w => !updateOwner(w)), elsewhere = affected.filter(w => updateOwner(w));
   const policy = report.policy || {};
   modal("Image updates", `<div class="update-center">
-    ${UI.lead("Choose apps, review the changes, then start the update.")}
+    ${UI.lead("Choose apps, review the changes, then start the update. Apps something else updates - Flux, Argo CD, or as you marked them - are listed for the notice and updated where they come from.")}
     ${UI.more("Update policy", esc(policy.reason || "Updates require your approval before any app restarts."))}
     ${available.length ? `<div class="update-selectbar">
       <label class="switch"><input type="checkbox" id="updateSelectAll" checked onchange="toggleImageUpdateSelection(this.checked)"> Select all</label>
       <span id="updateSelectedCount">${available.length} of ${available.length} selected</span>
     </div>` : ""}
-    ${affected.length ? `<div class="settings-list">${affected.map(w => {
+    ${affected.length ? [here, elsewhere].map((rows, i) => !rows.length ? "" : `${i ? UI.section(`Updated elsewhere · ${rows.length}`, "") : ""}<div class="settings-list">${rows.map(w => {
       const failures = (w.images || []).filter(image => image.error);
-      return `<div class="settings-list-row update-center-row">${w.available ? `<label class="update-pick" title="Select ${esc(w.name)}"><input class="update-select" type="checkbox" checked data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" onchange="syncImageUpdateSelection()"><span></span></label>` : '<span class="update-pick-spacer"></span>'}<div><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.ns)}${updateVersions(w) ? ` · ${esc(updateVersions(w))}` : ""}</div>
+      const owner = updateOwner(w), pick = w.available && !owner;
+      return `<div class="settings-list-row update-center-row">${pick ? `<label class="update-pick" title="Select ${esc(w.name)}"><input class="update-select" type="checkbox" checked data-ns="${esc(w.ns)}" data-name="${esc(w.name)}" onchange="syncImageUpdateSelection()"><span></span></label>` : '<span class="update-pick-spacer"></span>'}<div><b>${esc(w.name)}</b><div class="dim xs mono">${esc(w.ns)}${updateVersions(w) ? ` · ${esc(updateVersions(w))}` : ""}</div>
+        ${owner ? `<div class="dim xs">${esc(updateOwnerTip(owner))}</div>` : ""}
         ${failures.map(image => `<div class="updateerror">${esc(image.container)} · ${esc(image.error)}</div>`).join("")}</div>
-        <div class="row">${w.available ? '<span class="pill warn">update available</span>' : ""}
+        <div class="row">${owner ? updateOwnerPill(w) : w.available ? '<span class="pill warn">update available</span>' : ""}
         ${failures.length ? '<span class="pill crit">check failed</span>' : ""}
+        ${owner && !owner.detected ? `<button class="btn sm" data-need="operator" onclick="clearUpdatesElsewhere(${jsq(w.ns)},${jsq(w.name)})">Update here</button>`
+          : !owner && w.available ? `<button class="btn sm" data-need="operator" onclick="markUpdatesElsewhere(${jsq(w.ns)},${jsq(w.name)})">Updated elsewhere…</button>` : ""}
         <button class="btn sm" onclick="openUpdateWorkload(${jsq(w.name)})">Open</button></div></div>`;
-    }).join("")}</div>` : '<div class="empty small">Images are current and registry checks succeeded.</div>'}
+    }).join("")}</div>`).join("") : '<div class="empty small">Images are current and registry checks succeeded.</div>'}
     ${UI.actions(available.length ? UI.button(`Review selected (${available.length})`, "imageUpdateBatchReview()", {kind:"pri",id:"updateStage",attrs:'data-need="operator"'}) : "", UI.cancel("Close") + UI.button("Check now", "checkImageUpdates()"))}</div>`, true);
   if (window.applyRole) window.applyRole();
 };
@@ -449,7 +488,7 @@ function workloadActions(w, update, off, compact = false) {
     item(w.homestead === "self" ? "Settings" : "Migration", `homesteadPartManage(${jsq(w.homestead)})`, "gear")]);
   if (w.platform) return bar([logs, restart]);
   return bar([
-    update?.available && item("Update", `imageUpdateReview(${ns},${name})`, "update", {pri:true,need:"operator"}),
+    update?.available && !updateOwner(update) && item("Update", `imageUpdateReview(${ns},${name})`, "update", {pri:true,need:"operator"}),
     logs,
     off ? item("Start", `wlScale(${ns},${name},1)`, "play", {need:"operator"}) : restart,
     !off && item("Stop", w.self ? `wlStopSelf(${ns},${name})` : `wlScale(${ns},${name},0)`, "stop", {need:"operator"}),
@@ -478,7 +517,7 @@ function workloadCard(w) {
               <div class="dim xs">${esc(w.ns)} · ${w.managed_smb || w.managed_nfs ? esc(w.nodes.join(", ") || "unscheduled") : `<span class="nodelink"
                 onclick="moveWorkload(${jsq(w.name)},${jsq(w.ns)})">${esc(w.nodes.join(", ") || "unscheduled")}</span>`}</div></div>
           </div>
-          <div class="row">${w.platform ? platformTag(w) : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info" data-tip="Managed by Homestead under Network Shares">managed ${w.managed_nfs ? "NFS" : "SMB"}</span>` : ""}${update?.available ? '<span class="pill warn">update available</span>' : ""}${uncheckedMark(update)}
+          <div class="row">${w.platform ? platformTag(w) : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info" data-tip="Managed by Homestead under Network Shares">managed ${w.managed_nfs ? "NFS" : "SMB"}</span>` : ""}${updateOwner(update) ? updateOwnerPill(update) : update?.available ? '<span class="pill warn">update available</span>' : ""}${uncheckedMark(update)}
           ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
           <span class="pill ${ok ? "ok" : off ? "low" : "crit"}">${w.ready}/${w.desired}</span></div>
         </div>
@@ -552,7 +591,7 @@ function workloadTableRows(rows) {
         <div class="wl-row-meta dim xs">${w.platform ? `${platformTag(w)} ` : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info">managed ${w.managed_nfs ? "NFS" : "SMB"}</span> ` : ""}${esc(w.ns)} · ${esc(off ? "stopped" : (w.nodes || []).join(", ") || "unscheduled")}</div></td>
       <td class="wl-status" data-status data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row wl-state-tags">
         <span class="pill slim wl-ready ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${off ? "Stopped" : `${w.ready}/${w.desired}`}</span>
-        ${update?.available ? '<span class="tag warn">Update</span>' : ""}${uncheckedMark(update)}
+        ${updateOwner(update) ? updateOwnerPill(update, true) : update?.available ? '<span class="tag warn">Update</span>' : ""}${uncheckedMark(update)}
         ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
         ${pull ? `<span class="tag" title="Fetching ${esc(pull.image || "image")}">Pulling ${Math.min(100, pull.percent || 0)}%</span>` : ""}
         ${blocked ? `<span class="tag bad" data-tip="${esc(blocked)}">Blocked</span>` : ""}</div></td>

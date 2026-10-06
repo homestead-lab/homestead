@@ -224,6 +224,7 @@ POLICY = {
     ('POST', '/api/image-updates/channel'): 'admin',
     ('POST', '/api/image-updates/preview'): 'operator',
     ('POST', '/api/image-updates/rollback'): 'operator',
+    ('POST', '/api/image-updates/managed'): 'operator',
     ('POST', '/api/images/cleanup'): 'admin',
     ('POST', '/api/images/forget-rollback'): 'admin',
     ('POST', '/api/images/prepull'): 'operator',
