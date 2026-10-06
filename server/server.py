@@ -6421,7 +6421,7 @@ PLATFORM.bind(kget)
 ADDONS.bind(kget, ksend, PLATFORM.detect, node_temps)
 MACVTAP.bind(kget, ksend, ADDONS, PLATFORM.detect)
 BASELINE.bind(kget, ADDONS, PLATFORM.detect, DEFAULT_NS, DATA_DIR, MACVTAP, PROBE, HOMESTEAD_VERSION)
-COMPONENTS.bind(kget, ksend, PLATFORM.detect, lambda cfg: HELM.upgrade(cfg), ADDONS)
+COMPONENTS.bind(kget, ksend, PLATFORM.detect, lambda cfg: HELM.upgrade(cfg), ADDONS, _ktext=lambda path: raw_get(path))
 import homestead_lhv2_upgrade as LHV2_UPGRADE
 LHV2_UPGRADE.bind(kget, ksend, PLATFORM.detect, COMPONENTS.longhorn_version, COMPONENTS.parse)
 STORAGE_RESIZE.upgrade_guard = LHV2_UPGRADE.ensure_resize_idle

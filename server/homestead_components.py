@@ -34,6 +34,7 @@ import urllib.request
 import homestead_helm as HELM
 
 kget = ksend = None
+ktext = None            # path -> plain text: a pod's log
 platform = None        # force -> what the cluster has, from homestead_platform
 helm_upgrade = None    # HELM.upgrade
 addons = None          # homestead_addons: chart_archive, kubevirt_cr, cdi_cr, fetch
@@ -71,9 +72,10 @@ CONTROLLER_WAIT = 15 * 60
 JOB_FINISH_WAIT = 10 * 60
 
 
-def bind(_kget, _ksend, _platform, _helm_upgrade, _addons, _fetch_json=None):
-    global kget, ksend, platform, helm_upgrade, addons, fetch_json
+def bind(_kget, _ksend, _platform, _helm_upgrade, _addons, _fetch_json=None, _ktext=None):
+    global kget, ksend, platform, helm_upgrade, addons, fetch_json, ktext
     kget, ksend, platform, helm_upgrade, addons = _kget, _ksend, _platform, _helm_upgrade, _addons
+    ktext = _ktext
     fetch_json = _fetch_json or _get_json
     import homestead_lhv2_upgrade as V2
     V2.bind(_kget, _ksend, _platform, longhorn_version, parse)
@@ -501,13 +503,43 @@ def remove_plans():
 
 
 def _failed_upgrade_job():
+    """An upgrade job Kubernetes has given up on, with what its last pod said.
+
+    Only the Job's Failed condition counts. k3s's and RKE2's upgrade replaces
+    the binary and then stops the server - its own pod with it - so the first
+    pod of a server's job routinely ends failed and the Job runs another,
+    which finds the binary in place and completes. That retry is the plan."""
     for job in _items(f"/apis/batch/v1/namespaces/{SUC_NS}/jobs"):
-        labels = (job.get("metadata") or {}).get("labels") or {}
-        status = job.get("status") or {}
-        if labels.get("upgrade.cattle.io/plan") in PLAN_NAMES and status.get("failed") and not status.get("active"):
-            node = labels.get("upgrade.cattle.io/node") or job["metadata"]["name"]
-            return f"the upgrade job on {node} failed; its log in the {SUC_NS} namespace says why"
+        meta = job.get("metadata") or {}
+        labels = meta.get("labels") or {}
+        conditions = (job.get("status") or {}).get("conditions") or []
+        if labels.get("upgrade.cattle.io/plan") not in PLAN_NAMES:
+            continue
+        if not any(c.get("type") == "Failed" and c.get("status") == "True" for c in conditions):
+            continue
+        node = labels.get("upgrade.cattle.io/node") or meta.get("name", "")
+        why = next((c.get("message") or c.get("reason") or "" for c in conditions if c.get("type") == "Failed"), "")
+        tail = _job_log_tail(meta.get("name", ""))
+        return (f"the upgrade job on {node} failed" + (f" ({why})" if why else "")
+                + (f". Its last output: {tail}" if tail else f". kubectl -n {SUC_NS} logs job/{meta.get('name', '')} shows why"))
     return ""
+
+
+def _job_log_tail(job, lines=8):
+    """The last lines its newest pod wrote, on one line - what to read first."""
+    if not ktext or not job:
+        return ""
+    try:
+        pods = _items(f"/api/v1/namespaces/{SUC_NS}/pods?labelSelector=" + urllib.parse.quote(f"job-name={job}", safe=""))
+        pods.sort(key=lambda p: (p.get("metadata") or {}).get("creationTimestamp") or "")
+        if not pods:
+            return ""
+        text = str(ktext(f"/api/v1/namespaces/{SUC_NS}/pods/{pods[-1]['metadata']['name']}/log?tailLines={lines * 3}") or "")
+    except Exception:
+        return ""
+    # The upgrade script traces every command (set -x); what it says is the rest.
+    said = [line.strip() for line in text.splitlines() if line.strip() and not line.lstrip().startswith("+")]
+    return " | ".join(said[-lines:])[:600]
 
 
 def cordoned():
@@ -633,6 +665,10 @@ def status(item):
                 return "failed", 5, str(error)
             ref["phase"] = "nodes"
         versions = node_versions()
+        if not versions:
+            # A server restarting on its new version: the API answers with
+            # no nodes, or not at all, for a moment. Not a step of its own.
+            return "running", item.get("progress") or 5, item.get("message") or "Waiting for the cluster's API while a server restarts"
         done = sum(1 for v in versions.values() if v == target)
         if versions and done == len(versions):
             finishing = _upgrade_jobs_running()
