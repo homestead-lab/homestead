@@ -224,6 +224,37 @@ LAN like any other machine. **＋ LAN network** makes one:
   `deviceID is required`. macvtap's device plugin watches files, so Homestead
   also raises each host's inotify limits (below).
 
+### Cluster network uplinks (Harvester)
+
+On Harvester a cluster network's LAN networks leave each host through its
+**uplink**: one or more NICs, bonded when there are several, which Harvester
+builds into a bond (`<network>-bo`) and a bridge (`<network>-br`).
+**Networking → Host ports → Cluster network uplinks** lists each cluster
+network, its uplinks and whether each host reports its uplink ready.
+
+- **＋ Uplink** gives a cluster network NICs on hosts that have none for it.
+  **＋ New cluster network** makes the network first. Homestead writes one
+  VlanConfig per host, named `<network>-<host>`.
+- **Change…** changes an uplink's NICs, bond mode or MTU. An uplink made in
+  Harvester's dashboard for several hosts changes on all of them, and the
+  review names each one.
+- **Remove** takes the uplink away.
+
+Every change is reviewed first, with a picture of the bond it makes, and
+refused before anything is sent when:
+
+- the NIC carries mgmt or another cluster network, is not on a chosen host,
+  or has no link (unless you say to use it anyway);
+- the mode is 802.3ad and you have not confirmed the switch ports are one
+  LACP group (**active-backup**, the default, works on any switch);
+- VMs on the cluster network's LAN networks run on the hosts it changes:
+  Harvester refuses that too, so stop or move them first.
+
+Harvester makes the change; Homestead follows each host's VlanStatus as a job
+until it reports ready. The LAN networks on that cluster network pause for a
+few seconds. **mgmt** is shown but never changed: its NICs are set when
+Harvester installs.
+
 ### A host bridge
 
 When a host must reach its own VMs, or a network should carry VMs and

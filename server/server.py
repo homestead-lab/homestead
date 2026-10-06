@@ -6367,6 +6367,7 @@ import homestead_host_limits as HOST_LIMITS
 import homestead_node_parity as NODE_PARITY
 import homestead_host_os as HOST_OS
 import homestead_ports as PORTS
+import homestead_uplinks as UPLINKS
 import homestead_root_guard as ROOT_GUARD
 import homestead_os_rollout as OS_ROLLOUT
 import homestead_passthrough as PASSTHROUGH
@@ -6552,6 +6553,8 @@ OPS.RESOLVERS["os-rollout"] = OS_ROLLOUT.status
 DISK_SETUP.bind(HOSTRUN)
 HOST_BRIDGE.bind(HOSTRUN, kget, ksend)
 OPS.RESOLVERS["host-bridge"] = HOST_BRIDGE.status
+UPLINKS.bind(kget, ksend)
+OPS.RESOLVERS[UPLINKS.KIND] = UPLINKS.status
 DISKS.setup_module = DISK_SETUP
 DISK_SETUP.longhorn_block_paths = DISKS.longhorn_block_paths
 PASSTHROUGH.longhorn_block_paths = DISKS.longhorn_block_paths
@@ -9025,6 +9028,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("ov", 5, get_overview))
             if p == "/api/nodes":
                 return self._send(200, cached("nodes", 5, get_nodes))
+            if p == "/api/network/uplinks":
+                return self._send(200, UPLINKS.inventory(node_temps()))
             if p == "/api/nodes/ports":
                 report = cached("ports", 20, ports_report)
                 node = (q.get("node") or [""])[0]
@@ -10285,6 +10290,13 @@ class H(HTTP.LimitedHandler):
                     raise ValueError("which host?")
                 return self._send(200, {"ok": True, "operation": HOST_OS.upgrade_start(node, OPS),
                                         "detail": f"Installing updates on {node}; follow it in the job tray"})
+            if p == "/api/network/uplinks/preview":
+                return self._send(200, UPLINKS.preview(b, node_temps()))
+            if p == "/api/network/uplinks/apply":
+                op = UPLINKS.apply(b, OPS, node_temps())
+                _cache.pop("ports", None); _cache.pop("network", None)
+                return self._send(200, {"ok": True, "operation": op,
+                                        "detail": "Sent to Harvester; follow each host in the job tray"})
             if p == "/api/node/bridge/inspect":
                 return self._send(200, HOST_BRIDGE.inspect(str(b.get("node") or "")))
             if p == "/api/node/bridge":
