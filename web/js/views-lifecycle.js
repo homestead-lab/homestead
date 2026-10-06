@@ -158,6 +158,7 @@ function failoverSelect(id, current, extra = "") {
     `<option value="${value}" ${value === current ? "selected" : ""}>${label}</option>`).join("")}</select>`;
 }
 window.FAILOVER_WORDS = FAILOVER_WORDS;
+window.FAILOVER_HELP = FAILOVER_HELP;
 window.failoverSelect = failoverSelect;
 
 /* Where it runs, at the three levels there are: the containers in one pod
@@ -191,8 +192,9 @@ function placementSection(p, w, nodes, containers) {
           <div id="e_apart">${(p.apart || []).map(row => placementRow("apart", row)).join("")}</div>
           <button class="btn sm" type="button" onclick="placementAdd('apart')">＋ Add</button></div></div></div>
     <div class="place-level"><div class="place-title">If its node fails</div>
-      <div class="place-grid"><div class="f">${failoverSelect("e_failover", w.failover || "default")}</div>
-        <div class="dim small">${esc(FAILOVER_HELP[w.failover || "default"])}</div></div></div>
+      <div class="place-grid failover"><div class="f">${failoverSelect("e_failover", w.failover || "default",
+          `onchange="$('#e_failover_help').textContent = FAILOVER_HELP[this.value] || ''"`)}</div>
+        <div class="dim small" id="e_failover_help">${esc(FAILOVER_HELP[w.failover || "default"])}</div></div></div>
     <div class="note" id="e_place_note" hidden></div></section>`;
 }
 /* From a container's menu: the editor, opened at its placement. */
