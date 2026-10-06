@@ -186,7 +186,7 @@ async function viewNetworking() {
       <button class="btn sm" data-need="admin" onclick="vmNetworkAdd()">＋ LAN network</button></div>
     <div id="netVmNets">${window.__vmCreateOptions ? networkVmNetsHtml(window.__vmCreateOptions) : '<div class="dim small">reading LAN networks…</div>'}</div>
     ${networkAddressesHtml(data)}
-    <div style="margin-top:22px">${UI.section("Host ports", `<div class="card flat" id="netPorts">${window.portsAcrossHostsCard ? portsAcrossHostsCard() : ""}</div>`,
+    <div style="margin-top:22px">${UI.section("Host ports", `<div class="card flat" id="netPorts">${window.portsAcrossHostsCard ? portsAcrossHostsCard() : ""}</div><div id="netUplinks"></div>`,
       tip("Every host's network ports: link, speed, errors and bonds, read from the hosts by the node probe. Open a host for its picture."))}</div>
     <div class="sec" style="margin-top:22px">Services &amp; endpoint paths</div>
     ${orphans ? `<div class="note" style="margin-bottom:12px">${orphans === 1
@@ -205,6 +205,7 @@ async function viewNetworking() {
   if (!STATE.busy && new URLSearchParams(location.search).get("section") === "lan") $("#lanNetworks")?.scrollIntoView({ block: "start" });
   selfAddressPaint();
   if (window.portsAcrossHostsPaint) portsAcrossHostsPaint();
+  if (window.uplinksPaint && STATE.platform?.harvester) uplinksPaint();
 }
 
 /* ---------------- Homestead itself ----------------
