@@ -2800,6 +2800,11 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 .ports-picture{overflow-x:auto;margin-bottom:10px}
 .ports-picture .diagram{margin:0;min-width:540px}.ports-picture .diagram svg{max-height:none}
 #nodePorts .ui-callout{margin-bottom:8px}
+#netUplinks{margin-top:14px}
+.uplink-net{display:grid;gap:8px;padding-block:10px;border-top:1px solid var(--line)}.uplink-net:first-child{border-top:0;padding-top:0}
+.uplink-head{gap:10px;flex-wrap:wrap}.uplink-head>div{display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-width:0}
+.uplink-checks{display:flex;gap:14px;flex-wrap:wrap}
+.uplink-nic{display:flex;align-items:center;gap:8px;padding:5px 0;flex-wrap:wrap}.uplink-nic.taken{opacity:.55}
 /* A long form in steps. */
 .stepper-head{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px}
 .stepper-chip{display:inline-flex;align-items:center;flex-shrink:0;white-space:nowrap;gap:7px;border:1px solid var(--line2);background:transparent;color:var(--mut);border-radius:99px;padding:5px 12px 5px 5px;font:600 12.5px "Inter Tight",sans-serif;cursor:pointer}
@@ -3436,3 +3441,14 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .net-attention li{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:8px 0;border-top:1px solid var(--line)}
 .net-attention li:first-child{border-top:0}
 .net-attention b{overflow-wrap:anywhere}
+/* Networking in sections (views-network.js): what needs attention on each
+   section's line, and the path a connection takes on the Overview. */
+.network-pane{display:flex;flex-direction:column;gap:14px;min-width:0}
+.network-pane>.note{margin:0}
+.net-nav-due{color:var(--med);font-weight:600}
+.net-path{display:flex;align-items:stretch;gap:8px;flex-wrap:wrap;margin-top:10px}
+.net-path>i{align-self:center;color:var(--dim);font-style:normal}
+.net-path-step{display:flex;flex-direction:column;gap:2px;text-align:left;border:1px solid var(--line2);background:rgba(255,255,255,.02);color:var(--tx);border-radius:12px;padding:8px 12px;font:inherit;cursor:pointer;min-width:0}
+.net-path-step b{font-size:13px}.net-path-step small{color:var(--mut);font-size:11.5px}
+.net-path-step:hover{border-color:var(--tx)}.net-path-step:focus-visible{outline:2px solid var(--low);outline-offset:2px}
+@media(max-width:640px){.net-path{flex-direction:column}.net-path>i{transform:rotate(90deg)}}

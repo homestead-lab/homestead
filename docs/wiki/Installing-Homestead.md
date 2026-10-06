@@ -155,7 +155,7 @@ The setup guide walks through all of these; in short:
 2. **Check node telemetry.** Homestead installs the node probe automatically,
    unless explicitly declined in the installer. It adds temperatures, host
    devices, disks and SMART drive health. Review its status in **Settings → Homestead**.
-3. **Networking → Your VIPs** - keep a few addresses for apps (Harvester, or
+3. **Networking → Workload VIPs** - keep a few addresses for apps (Harvester, or
    MetalLB). See [Networking](Networking).
 4. **Data protection → Plans** - snapshots and backups in one go. See
    [Data protection](Data-protection).

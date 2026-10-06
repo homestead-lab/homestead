@@ -54,6 +54,22 @@
 
   const withHealth = disk => Object.assign(disk, { health: diskHealth(disk.smart) });
 
+  function demoUplinks() {
+    const nic = (name, used_by = "", link = "up", speed_mbps = 2500) => ({ name, link, speed_mbps: link === "up" ? speed_mbps : null, master: "", used_by });
+    const ready = (...names) => Object.fromEntries(names.map(n => [n, { ready: true, message: "" }]));
+    return { applies: true, modes: ["active-backup", "802.3ad", "balance-tlb", "balance-alb", "balance-xor", "balance-rr", "broadcast"],
+      networks: [
+        { name: "mgmt", mgmt: true, ready: true, message: "", configs: [], uncovered: [], lan_networks: ["lab/untagged"] },
+        { name: "data", mgmt: false, ready: true, message: "", uncovered: ["harvester-node3"], lan_networks: ["lab/vlan20"], configs: [
+          { name: "data-harvester-node1", cluster_network: "data", nodes: ["harvester-node1"], nics: ["enp2s0", "enp3s0"], mode: "active-backup",
+            miimon: 100, mtu: null, homestead: true, status: ready("harvester-node1") },
+          { name: "data-uplink", cluster_network: "data", nodes: ["harvester-node2"], nics: ["enp4s0"], mode: "active-backup",
+            miimon: 100, mtu: 9000, homestead: false, status: { "harvester-node2": { ready: false, message: "nic enp4s0 has no carrier" } } }] }],
+      hosts: {
+        "harvester-node1": [nic("eno1", "mgmt"), nic("enp2s0", "data"), nic("enp3s0", "data"), nic("enp4s0", "", "down")],
+        "harvester-node2": [nic("enp1s0", "mgmt"), nic("enp2s0", "mgmt"), nic("enp4s0", "data", "down"), nic("enp5s0")],
+        "harvester-node3": [nic("ens5", "mgmt"), nic("ens6", "mgmt"), nic("ens7"), nic("ens8", "", "up", 1000)] } };
+  }
   function demoPorts() {
     const nic = (name, extra = {}) => ({ name, kind: "nic", link: "up", speed_mbps: 2500, duplex: "full", mtu: 1500, driver: "igc",
       master: "", carries: [], uplink: false, errors: 0, flaps: 0, drops: 0, window_s: 3600, crc: 0, was_mbps: null, bond: null, bond_member: null, ...extra });
@@ -587,6 +603,25 @@
     // Each host's ports (host-ports.js): one plain uplink with a spare, one
     // bond running on a slow member with CRC errors, one LACP bond the switch
     // is not answering.
+    // Harvester uplinks (host-ports.js): mgmt shown only, a data network
+    // bonded on two hosts and missing on the third.
+    "/api/network/uplinks": () => demoUplinks(),
+    "/api/network/uplinks/preview": (url, init) => {
+      const req = JSON.parse(init.body), inv = demoUplinks();
+      const config = inv.networks.flatMap(n => n.configs).find(c => c.name === req.config);
+      const cn = config?.cluster_network || req.cluster_network, nodes = config?.nodes || req.nodes || [];
+      const nics = req.action === "remove" ? config.nics : req.nics || [];
+      const refusals = [];
+      if (cn === "mgmt") refusals.push("mgmt's uplink is set when Harvester installs, and Harvester does not change it afterwards.");
+      if (req.action !== "remove" && !nics.length) refusals.push("choose at least one NIC");
+      if (req.action === "remove") refusals.push("Harvester will not take the uplink away while these VMs on data's networks run on harvester-node1, harvester-node2: lab/nas. Stop or move them first.");
+      if (req.mode === "802.3ad" && nics.length > 1 && !req.lacp_confirmed) refusals.push("802.3ad needs the switch ports to be one LACP group: confirm they are, or choose active-backup, which works on any switch");
+      return { action: req.action, cluster_network: cn, config: req.config || "", nodes, nics, mode: req.mode || config?.mode || "active-backup",
+        mtu: req.mtu || null, new_network: !!req.new_network, lan_networks: cn === "data" ? ["lab/vlan20"] : [], refusals,
+        warnings: config && config.nodes.length > 1 && req.action === "change" ? [`${config.name} is the uplink of ${config.nodes.length} hosts (${config.nodes.join(", ")}): they all change`] : [],
+        digest: "demo" };
+    },
+    "/api/network/uplinks/apply": () => ({ ok: true, detail: "Sent to Harvester; follow each host in the job tray" }),
     "/api/nodes/ports": url => {
       const report = demoPorts();
       const node = url.searchParams.get("node");

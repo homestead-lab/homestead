@@ -34,7 +34,8 @@ test("one count, broken down by kind", () => {
   assert.equal(ctx.networkAttentionCounts([]), "nothing needs attention");
 });
 
-test("the card's figure is the list's length, and every Services row can be found", () => {
-  assert.match(source, /\{ title: "Attention", value: attention\.length,/);
+test("the Overview counts what it lists, and every Services row can be found", () => {
+  // The Overview lists every item, each opening its section; its line in the list counts them.
+  assert.match(source, /const due = networkAttentionAll\(\)\.filter\(item => key === "overview" \|\| item\.section === key\)\.length;/);
   assert.match(source, /<tr data-svc="\$\{esc\(row\.namespace \+ "\/" \+ row\.name\)\}">/);
 });

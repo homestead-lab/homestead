@@ -526,7 +526,7 @@ still there. Homestead's temporary browser, copy and import pods are hidden.
 
 Each address is marked **VIP** or **node** (a node's own address) with the
 node answering for it, and an address no connection reaches is outlined in
-red with the reason (see [Nodes & addresses](Networking#nodes--addresses)).
+red with the reason (see [Address map](Networking#address-map)).
 Each node lists its own address and the VIPs it answers for; hovering a node
 highlights its addresses, and hovering an address highlights its node.
 

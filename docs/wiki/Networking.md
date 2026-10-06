@@ -3,9 +3,25 @@
 **Networking** shows how everything is reached: each address, the Service
 behind it, the pods it leads to, and whether they answer.
 
+It is laid out in sections, as Settings and a host's page are: a list on the
+left, grouped by what you came to find out, and one section at a time. On a
+phone the list comes first. A link or alert can name a section with
+`?tab=` (for example `/networking?tab=ports`).
+
+| Group | Section | What it holds |
+|---|---|---|
+| | **Overview** | What needs attention, each item opening its section; how a connection reaches your apps; Homestead itself |
+| Apps | **Services** | Every Service on the LAN, its ports, path and health; ingress routes |
+| Addresses | **Workload VIPs** | The addresses kept for apps, the default, Homestead itself |
+| | **Address map** | Each host's own address and the VIPs it holds now, with what listens on each |
+| | **IP addresses** | Every address on your subnets |
+| Network | **LAN networks** | Networks that put a VM or container on your LAN; host bridges |
+| | **Host ports** | Every host's ports and bonds; on Harvester, **Ports and uplinks** with cluster network uplinks |
+| Protection | **Firewall** | Workload NetworkPolicies |
+
 ![Networking](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-networking.jpg)
 
-## Services & VIPs
+## Services and VIPs
 
 Every LAN address in use, with the ports on it and the app behind each. A VIP
 is an address a load balancer announces on your network - kube-vip on
@@ -23,7 +39,7 @@ on the LAN. On the LAN it takes an address:
 
 Every change shows its plan and checks for clashes before anything is made.
 
-### Nodes & addresses
+### Address map
 
 One card per node: its own address, then each VIP it answers for right now,
 and under every address the ports on it, the Service behind each port and
@@ -127,7 +143,7 @@ See the upstream [k3s network guide](https://docs.k3s.io/networking/networking-s
 ## Add, default and choose workload VIPs
 
 Harvester announces whatever address a Service asks for, but nothing hands
-addresses out. So Homestead keeps a list for itself: **Services & VIPs →
+addresses out. So Homestead keeps a list for itself: **Workload VIPs →
 ＋ Add VIP** takes one address or a range (up to 64), with a label saying what
 they are for - "media apps", "DNS".
 
@@ -223,6 +239,37 @@ LAN like any other machine. **＋ LAN network** makes one:
   names - without it the VM's pod never gets one and Multus reports
   `deviceID is required`. macvtap's device plugin watches files, so Homestead
   also raises each host's inotify limits (below).
+
+### Cluster network uplinks (Harvester)
+
+On Harvester a cluster network's LAN networks leave each host through its
+**uplink**: one or more NICs, bonded when there are several, which Harvester
+builds into a bond (`<network>-bo`) and a bridge (`<network>-br`).
+**Networking → Ports and uplinks → Cluster network uplinks** lists each cluster
+network, its uplinks and whether each host reports its uplink ready.
+
+- **＋ Uplink** gives a cluster network NICs on hosts that have none for it.
+  **＋ New cluster network** makes the network first. Homestead writes one
+  VlanConfig per host, named `<network>-<host>`.
+- **Change…** changes an uplink's NICs, bond mode or MTU. An uplink made in
+  Harvester's dashboard for several hosts changes on all of them, and the
+  review names each one.
+- **Remove** takes the uplink away.
+
+Every change is reviewed first, with a picture of the bond it makes, and
+refused before anything is sent when:
+
+- the NIC carries mgmt or another cluster network, is not on a chosen host,
+  or has no link (unless you say to use it anyway);
+- the mode is 802.3ad and you have not confirmed the switch ports are one
+  LACP group (**active-backup**, the default, works on any switch);
+- VMs on the cluster network's LAN networks run on the hosts it changes:
+  Harvester refuses that too, so stop or move them first.
+
+Harvester makes the change; Homestead follows each host's VlanStatus as a job
+until it reports ready. The LAN networks on that cluster network pause for a
+few seconds. **mgmt** is shown but never changed: its NICs are set when
+Harvester installs.
 
 ### A host bridge
 

@@ -143,7 +143,7 @@ Homestead's own shared address (`LB_IP` on its Deployment) is the cluster's
 address, change it to a free one. Homestead no longer offers the cluster's
 address, or one another program owns, anywhere it asks for one.
 
-**An app's address does not answer.** **Networking → Nodes & addresses**
+**An app's address does not answer.** **Networking → Address map**
 states each address's condition:
 
 - **not reachable** - a node answers for it (ping works) but its Service does
