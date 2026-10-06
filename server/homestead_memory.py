@@ -27,6 +27,10 @@ def bytes_for(value, label="memory"):
         raise ValueError(f"{label} must be a positive size such as 128Mi or 2Gi") from error
     if amount <= 0 or amount > 2**63 - 1:
         raise ValueError(f"{label} is outside the supported positive memory range")
+    # Less than a mebibyte is a slip, not a size: "390m" is 0.39 bytes in
+    # Kubernetes and a bare "390" is 390 bytes - both mean 390Mi (#311).
+    if amount < 1024 ** 2:
+        raise ValueError(f"{label} {value} is less than 1 MiB; did you mean {match.group(1)}Mi?")
     return amount
 
 

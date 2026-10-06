@@ -53,9 +53,9 @@ try {
     await page.locator("#e_image_0").fill("example/app:next");
     await page.evaluate(() => { window.testImageInput = document.querySelector("#e_image_0"); });
     await page.evaluate(() => stepGo("e_steps", 1));
-    await page.locator("#e_cpu_0").fill("75m");
-    await page.locator("#e_mem_0").fill("384Mi");
-    await page.locator("#e_mem_limit_0").fill("2Gi");
+    await page.locator('.qty[data-target="e_cpu_0"] .qty-text').fill("75m");
+    await page.locator('.qty[data-target="e_mem_0"] .qty-text').fill("384Mi");
+    await page.locator('.qty[data-target="e_mem_limit_0"] .qty-text').fill("2Gi");
     await page.locator("#e_pv_0_caps").fill("SYS_TIME");
     // Ports are in the Address step now, as in Deploy, not under Hardware.
     assert.equal(await page.locator('[data-section="hardware"] .e-ports').count(), 0);

@@ -3441,6 +3441,12 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .net-attention li{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:8px 0;border-top:1px solid var(--line)}
 .net-attention li:first-child{border-top:0}
 .net-attention b{overflow-wrap:anywhere}
+/* A CPU or memory amount with its unit (UI.quantity, #311). */
+.qty{display:flex;gap:6px;min-width:0}.qty .qty-text{flex:1 1 auto;min-width:0}.qty .qty-unit{flex:0 0 auto;width:auto}
+.qty.bad .qty-text{border-color:var(--crit)}
+.qty-said{display:flex;flex-wrap:wrap;gap:0 6px}.qty-read:empty{display:none}
+.qty-read:not(:empty)+.qty-usage::before{content:"· ";color:var(--dim)}
+.qty-warn{color:var(--crit)}
 /* Networking in sections (views-network.js): what needs attention on each
    section's line, and the path a connection takes on the Overview. */
 .network-pane{display:flex;flex-direction:column;gap:14px;min-width:0}

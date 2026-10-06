@@ -11,7 +11,7 @@ try{for(const width of [1440,390,320])for(const theme of ['dark','light']){
  await page.locator('#d_container_name').fill('web');await page.locator('#d_workload_name').fill('web-stack');await page.locator('#d_image').fill('nginx:alpine');
  assert.equal(await page.locator('#containerDeploy>.stepper-foot').count(),1);
  assert.equal(await page.getByRole('button',{name:'Review deployment',exact:true}).isVisible(),false);
- await page.getByRole('button',{name:'Next',exact:true}).click();assert.equal(await page.locator('#d_cpu').isVisible(),true);await page.locator('#d_cpu').fill('125m');
+ await page.getByRole('button',{name:'Next',exact:true}).click();assert.equal(await page.locator('.qty[data-target="d_cpu"] .qty-text').isVisible(),true);await page.locator('.qty[data-target="d_cpu"] .qty-text').fill('125m');
  await select('environment');await page.getByRole('button',{name:'＋ add variable',exact:true}).click();await page.locator('#d_env .ek').last().fill('MODE');await page.locator('#d_env .ev').last().fill('production');
  await select('address');await page.locator('#d_net').selectOption('internal');
  await select('storage');assert.equal(await page.getByText('Choose a storage type',{exact:true}).isVisible(),true);
