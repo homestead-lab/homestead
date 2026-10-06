@@ -49,6 +49,13 @@ def kubeconfig(lab, distro, directory, first=None, name="kubeconfig"):
     return str(target)
 
 
+# k3s's and RKE2's own installers fetch from GitHub's release downloads
+# without retrying, and those answer 500 now and then: the whole install is
+# asked again, twice, before it counts as failed.
+_RETRY = ("{{ ok=0; for try in 1 2 3; do {run} > {log} 2>&1 && {{ ok=1; break; }}; sleep 15; done; "
+          "[ $ok = 1 ] || {{ tail -40 {log}; exit 1; }}; }}")
+
+
 def _bare_k3s(node, first=None, token="", role="server"):
     version = f"INSTALL_K3S_VERSION={os.environ['HS_K8S_VERSION']} " if os.environ.get("HS_K8S_VERSION") else ""
     if first is None:
@@ -57,17 +64,18 @@ def _bare_k3s(node, first=None, token="", role="server"):
     else:
         mode = f"{role} --node-ip {node.ip}"
         join = f"K3S_URL=https://{first.ip}:6443 K3S_TOKEN={token} "
-    node.ssh(f"curl -sfL --retry 6 --retry-all-errors --retry-delay 5 https://get.k3s.io -o /tmp/k3s-install.sh && "
-             f"sudo env {version}{join}INSTALL_K3S_EXEC='{mode}' sh /tmp/k3s-install.sh > /tmp/k3s-install.log 2>&1 "
-             f"|| {{ tail -40 /tmp/k3s-install.log; exit 1; }}", timeout=1200)
+    run = f"sudo env {version}{join}INSTALL_K3S_EXEC='{mode}' sh /tmp/k3s-install.sh"
+    node.ssh("curl -sfL --retry 6 --retry-all-errors --retry-delay 5 https://get.k3s.io -o /tmp/k3s-install.sh && "
+             + _RETRY.format(run=run, log="/tmp/k3s-install.log"), timeout=1200)
 
 
 def _bare_rke2(node, first=None, token="", role="server"):
     version = f"INSTALL_RKE2_VERSION={os.environ['HS_K8S_VERSION']} " if os.environ.get("HS_K8S_VERSION") else ""
     kind = "agent" if role == "agent" else "server"
     config = f"node-ip: {node.ip}\\n" + (f"server: https://{first.ip}:9345\\ntoken: {token}\\n" if first else "")
-    node.ssh(f"curl -sfL --retry 6 --retry-all-errors --retry-delay 5 https://get.rke2.io -o /tmp/rke2-install.sh && "
-             f"sudo env {version}INSTALL_RKE2_TYPE={kind} sh /tmp/rke2-install.sh > /tmp/rke2-install.log 2>&1 && "
+    run = f"sudo env {version}INSTALL_RKE2_TYPE={kind} sh /tmp/rke2-install.sh"
+    node.ssh("curl -sfL --retry 6 --retry-all-errors --retry-delay 5 https://get.rke2.io -o /tmp/rke2-install.sh && "
+             + _RETRY.format(run=run, log="/tmp/rke2-install.log") + " && "
              f"sudo mkdir -p /etc/rancher/rke2 && printf '{config}' | sudo tee /etc/rancher/rke2/config.yaml >/dev/null && "
              f"sudo systemctl enable --now rke2-{kind} >> /tmp/rke2-install.log 2>&1 "
              f"|| {{ tail -40 /tmp/rke2-install.log; exit 1; }}", timeout=1800)
