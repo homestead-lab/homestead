@@ -162,15 +162,44 @@ class K3sTests(unittest.TestCase):
                         "versions_at": time.time() - C.JOB_FINISH_WAIT - 1}}
         self.assertEqual("succeeded", C.status(item)[0])
 
-    def test_a_failed_node_job_fails_the_upgrade(self):
+    def node_job(self, status):
         self.c.objects["/apis/upgrade.cattle.io/v1"] = {}
         self.c.objects["/apis/batch/v1/namespaces/system-upgrade/jobs"] = {"items": [{
             "metadata": {"name": "apply-homestead-server-on-node-1", "labels": {
                 "upgrade.cattle.io/plan": "homestead-server", "upgrade.cattle.io/node": "node-1"}},
-            "status": {"failed": 1}}]}
-        status, _, message = C.status({"ref": {"component": "cluster", "to": "v1.32.8+k3s1", "phase": "nodes"}})
+            "status": status}]}
+        return C.status({"ref": {"component": "cluster", "to": "v1.32.8+k3s1", "phase": "nodes"}})
+
+    def test_a_server_stopping_its_own_upgrade_pod_is_retried_not_a_failure(self):
+        # Seen on a real cluster: k3s-upgrade replaces the binary and stops
+        # k3s, its own pod with it; the Job's next pod completed the upgrade.
+        status, _, message = self.node_job({"failed": 1})
+        self.assertEqual("running", status)
+        self.assertNotIn("failed", message)
+
+    def test_a_node_job_kubernetes_gave_up_on_fails_the_upgrade_with_what_it_said(self):
+        LOG = "\n".join(["+ set -e", "[INFO]  Comparing old and new binaries", "[ERROR] no space left on device", "+ exit 1", ""])
+        pods = f"/api/v1/namespaces/{C.SUC_NS}/pods?labelSelector=job-name%3Dapply-homestead-server-on-node-1"
+        self.c.objects[pods] = {"items": [{"metadata": {"name": "apply-1-a", "creationTimestamp": "2026-10-06T12:47:00Z"}},
+                                          {"metadata": {"name": "apply-1-b", "creationTimestamp": "2026-10-06T12:48:00Z"}}]}
+        read = []
+        C.ktext = lambda path: read.append(path) or LOG
+        try:
+            status, _, message = self.node_job({"failed": 6, "conditions": [
+                {"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded", "message": "Job has reached the specified backoff limit"}]})
+        finally:
+            C.ktext = None
         self.assertEqual("failed", status)
-        self.assertIn("node-1 failed", message)
+        self.assertIn("node-1 failed (Job has reached the specified backoff limit)", message)
+        self.assertIn("[ERROR] no space left on device", message, "what it said, not where to look")
+        self.assertNotIn("+ set -e", message, "the script's trace is left out")
+        self.assertIn("/pods/apply-1-b/log", read[0], "its newest pod")
+
+    def test_a_server_restarting_mid_upgrade_is_not_a_step_of_its_own(self):
+        self.c.objects["/api/v1/nodes"] = {"items": []}
+        item = {"progress": 35, "message": "1 of 3 nodes on v1.32.8+k3s1; next k3s-1, k3s-2",
+                "ref": {"component": "cluster", "to": "v1.32.8+k3s1", "phase": "nodes"}}
+        self.assertEqual(("running", 35, "1 of 3 nodes on v1.32.8+k3s1; next k3s-1, k3s-2"), C.status(item))
 
     def test_external_upgrade_controller_is_not_taken_over(self):
         self.c.objects["/apis/upgrade.cattle.io/v1"] = {}
