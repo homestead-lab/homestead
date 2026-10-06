@@ -261,7 +261,10 @@ def recheck_after_drain(original, clock=time.time, sleep=time.sleep):
     deadline = clock() + SETTLE
     while True:
         fresh = plan(original["node"], original["action"], volume_names=names, after_drain=True)
-        if not any(_in_transit(v) for v in fresh["volumes"]) or clock() >= deadline:
+        # Homestead's own short host command, started on this host while it
+        # drained, holds it only until its script ends.
+        own_command = fresh["blockers"] and all(MAINTENANCE.HOST_COMMAND_BLOCKER in str(b) for b in fresh["blockers"])
+        if (not any(_in_transit(v) for v in fresh["volumes"]) and not own_command) or clock() >= deadline:
             break
         sleep(5)
     if not fresh["ready"]:
@@ -286,7 +289,8 @@ def recheck_after_drain(original, clock=time.time, sleep=time.sleep):
                              f"{what}. Power was not sent; review again")
     if fresh["boot_id"] != original["boot_id"] or fresh["node_uid"] != original["node_uid"]:
         raise ValueError("Host identity changed during drain; power was not sent")
-    remaining = [p for p in _items("/api/v1/pods") if (p.get("spec") or {}).get("nodeName") == original["node"] and MAINTENANCE.drainable(p)]
+    remaining = [p for p in _items("/api/v1/pods") if (p.get("spec") or {}).get("nodeName") == original["node"]
+                 and MAINTENANCE.drainable(p) and not MAINTENANCE.own_host_command(p)]
     if remaining:
         raise ValueError("Host remains cordoned; workload pods remain or appeared during drain. Power was not sent")
 

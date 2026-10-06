@@ -154,6 +154,31 @@ class MaintenanceSafetyTests(unittest.TestCase):
                     lifecycle.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
                 self.assertEqual(2, evict.call_count)
 
+    def test_homesteads_own_host_command_arriving_mid_drain_is_not_a_changed_pod(self):
+        # Seen on RKE2: Homestead read node-3's OS while draining it, and its
+        # own host helper - pinned past the cordon - stopped the restart.
+        self.with_longhorn_manager()
+        snapshot = power.plan("node1", "reboot")["drain_pods"]
+        calls = []
+        def send(method, path, body):
+            calls.append(body["metadata"]["name"])
+            if body["metadata"]["name"] == "instance-manager-test":
+                if calls.count("instance-manager-test") == 1:
+                    helper = copy.deepcopy(self.pod)
+                    helper["metadata"].update(name="homestead-host-node1", uid="helper",
+                                              labels=lifecycle.NAMES.labels("host-run"), ownerReferences=[])
+                    self.objects["/api/v1/pods"]["items"].append(helper)
+                    raise urllib.error.HTTPError(path, 429, "budget", {}, None)
+                self.objects["/api/v1/pods"]["items"] = [p for p in self.objects["/api/v1/pods"]["items"]
+                                                         if p["metadata"]["name"] != "instance-manager-test"]
+            else:
+                self.objects["/api/v1/pods"]["items"] = [p for p in self.objects["/api/v1/pods"]["items"]
+                                                         if p["metadata"]["name"] != body["metadata"]["name"]]
+        with mock.patch.object(lifecycle, "kget", side_effect=self.get),                 mock.patch.object(lifecycle, "ksend", side_effect=send),                 mock.patch.object(lifecycle.time, "sleep"):
+            result = lifecycle.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
+        self.assertTrue(result["ok"])
+        self.assertNotIn("homestead-host-node1", calls, "Homestead's own helper is not evicted")
+
     def test_non_budget_refusal_is_not_retried_or_followed_by_power(self):
         self.with_longhorn_manager()
         snapshot = power.plan("node1", "reboot")["drain_pods"]
