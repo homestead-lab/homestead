@@ -692,3 +692,37 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
   window.addEventListener("resize", place);
   window.addEventListener("scroll", event => { if (event.target !== pop) place(); }, { passive: true, capture: true });
 }
+
+/* Back to top (#292): on any page, once it is scrolled more than a screen
+   and a half down, a small button bottom-right takes it back to the top -
+   smoothly, or at once where motion is reduced. The page scrolls the
+   window in a browser and .main in the installed app. */
+if (typeof document !== "undefined" && typeof document.addEventListener === "function"
+    && typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  let button = null, pending = false;
+  const scroller = () => document.documentElement.dataset.display === "standalone"
+    ? document.querySelector(".main") : document.scrollingElement;
+  const update = () => {
+    pending = false;
+    const page = scroller();
+    if (!page) return;
+    const show = page.scrollTop > page.clientHeight * 1.5;
+    if (show && !button) {
+      button = document.createElement("button");
+      button.type = "button";
+      button.className = "backtop";
+      button.setAttribute("aria-label", "Back to top");
+      button.title = "Back to top";
+      button.innerHTML = '<svg aria-hidden="true"><use href="#i-chevron-down"/></svg>';
+      button.addEventListener("click", () => {
+        const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+        scroller()?.scrollTo({ top: 0, behavior: still ? "auto" : "smooth" });
+      });
+      document.body.appendChild(button);
+    }
+    button?.classList.toggle("on", show);
+  };
+  const soon = () => { if (!pending) { pending = true; setTimeout(update, 60); } };
+  window.addEventListener("scroll", soon, { passive: true, capture: true });
+  window.addEventListener("resize", soon);
+}

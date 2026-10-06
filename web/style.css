@@ -3399,3 +3399,16 @@ html[data-theme="light"] .notification-center>button.danger{color:#a1242a}
   border:1px solid var(--line2);border-radius:11px;background:var(--surf2);color:var(--tx);box-shadow:0 16px 45px rgba(0,0,0,.45)}
 .suggest-pop li{padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;overflow-wrap:anywhere}
 .suggest-pop li:hover,.suggest-pop li[aria-selected="true"]{background:var(--surf3)}
+
+/* Back to top (ui.js): bottom-right, above the job tray and the phone's
+   bottom bar; hidden near the top and while an overlay is open. */
+.backtop{position:fixed;right:22px;bottom:calc(18px + var(--tray-lift, 4px));z-index:41;display:grid;place-items:center;width:40px;height:40px;
+  border:1px solid var(--line2);border-radius:50%;background:var(--surf2);color:var(--tx);cursor:pointer;box-shadow:0 10px 30px rgba(0,0,0,.35);
+  opacity:0;visibility:hidden;transform:translateY(8px);transition:opacity .2s var(--e),transform .2s var(--e),visibility 0s .2s,bottom .2s var(--e)}
+.backtop.on{opacity:1;visibility:visible;transform:none;transition:opacity .2s var(--e),transform .2s var(--e),bottom .2s var(--e)}
+.backtop svg{width:18px;height:18px;transform:rotate(180deg);stroke:currentColor;fill:none;stroke-width:1.9}
+.backtop:hover{background:var(--surf3)}
+.backtop:focus-visible{outline:2px solid var(--low);outline-offset:2px}
+html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.drawer.open) .backtop,html:has(body.navopen) .backtop{display:none}
+@media(max-width:900px){.backtop{right:16px;bottom:calc(84px + env(safe-area-inset-bottom,0px) + var(--tray-lift, 4px) - 4px)}}
+@media(prefers-reduced-motion:reduce){.backtop,.backtop.on{transition:none}}
