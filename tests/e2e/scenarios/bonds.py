@@ -55,6 +55,10 @@ def _change(ctx, request, until=("succeeded",)):
 
 def run(ctx):
     host = ctx.node(HOST)
+    # A scenario before this one may have pulled a host's plug: Homestead
+    # rightly refuses to change a server's network while another is not
+    # Ready (quorum), so wait as a person would.
+    ctx.kube.nodes_ready(len(ctx.lab.nodes))
     info = ctx.api.post("/api/node/bond/inspect", {"node": HOST})
     assert not info["problem"], info["problem"]
     assert info["shape"]["shape"] == "nic", f"{HOST} is on {info['shape']}, not a plain NIC"
