@@ -73,7 +73,8 @@ function paintBell() {
   const operations = STATE.data.operations || [];
   const active = operations.filter(op => window.operationActive ? operationActive(op) : !["succeeded", "failed", "cancelled"].includes(op.status));
   const failedJobs = operations.filter(op => op.status === "failed");
-  const jobRow = op => `<button class="bell-job" onclick="closeNotifications();openOperation(${jsq(op.href || "/")},${jsq(op.id || "")})">
+  // A job in the bell opens the job itself, not the page it is about.
+  const jobRow = op => `<button class="bell-job" onclick="closeNotifications();openJob(${jsq(op.id || "")})">
       <span class="bell-job-top"><b>${esc(op.title)}</b><span>${op.progress != null ? `${Math.round(op.progress)}%` : esc(op.status)}</span></span>
       <span class="bell-job-msg">${esc(op.message || op.status || "")}</span>
       ${op.progress != null && Number.isFinite(Number(op.progress)) ? `<span class="jobmeter"><span style="width:${Math.max(0, Math.min(100, Number(op.progress)))}%"></span></span>` : ""}</button>`;
@@ -83,7 +84,7 @@ function paintBell() {
     waiting.length ? row("homesteadUpdateDialog()", "update", release ? `Homestead ${release} is available` : plural(waiting.length, "Homestead helper update")) : "",
     images ? row("imageUpdateCenter()", "box", plural(images, "container update")) : "",
     errors ? row("imageUpdateCenter()", "alert", `${plural(errors, "image check")} failed`, "danger") : "",
-    ...failedJobs.slice(0, 3).map(op => row(`openOperation(${jsq(op.href || "/")},${jsq(op.id || "")})`, "alert", `${op.title} failed`, "danger")),
+    ...failedJobs.slice(0, 3).map(op => row(`openJob(${jsq(op.id || "")})`, "alert", `${op.title} failed`, "danger")),
   ].filter(Boolean);
   const count = alertCount + images + (waiting.length ? 1 : 0) + failedJobs.length;
   const words = [alertCount ? plural(alertCount,"active alert") : "", active.length ? `${plural(active.length, "job")} running` : "", waiting.length ? (release ? `Homestead ${release}` : "Homestead helpers") : "", images ? plural(images, "container update") : "",

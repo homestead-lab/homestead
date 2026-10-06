@@ -97,7 +97,8 @@ function paintJobsDialog() {
     {key:"Completed", title:`Completed · ${completed.length}`, items:rows(completed), collapsed:true}
   ], selectedJobId, operationCard(selected), {label:"Jobs", detailLabel:"Selected job", onSelect:id => `selectJob(${jsArg(id)})`}) : '<div class="empty small">No jobs.</div>');
   if (selected) {
-    if (selected.dismissible === false) host.querySelector(".dialog-master-content .jobfoot").insertAdjacentHTML("afterend", '<p class="ui-help">This recovery record is retained until its outcome is resolved.</p>');
+    // A running job is never cleared; only a finished one kept back is a record.
+    if (selected.dismissible === false && !operationActive(selected)) host.querySelector(".dialog-master-content .jobfoot").insertAdjacentHTML("afterend", '<p class="ui-help">This recovery record is retained until its outcome is resolved.</p>');
   }
   for (const detail of host.querySelectorAll("details[data-disclosure]")) {
     if (expanded.some(([label, id]) => label === detail.dataset.disclosure && id === (detail.closest("[data-operation]")?.dataset.operation || ""))) detail.open = true;
@@ -106,13 +107,18 @@ function paintJobsDialog() {
   if (clear) { clear.hidden = !count; clear.textContent = `Clear finished (${count})`; }
   window.applyRole?.();
 }
-// Jobs, opened on one job: fetched first when the page has just started.
+// The job itself - from the bell, a notification or an alert: its own
+// progress view where it has one, otherwise its card in Jobs, with its log,
+// error and actions. Open on that card goes to what the job is about.
 window.openJob = async id => {
   if (!(STATE.data.operations || []).some(item => item.id === id)) {
     try { STATE.data.operations = await api("/api/operations", { keep: true }); } catch (_) { /* the list says why */ }
   }
   operationPanelOpen = false;
   renderOperations();
+  const operation = (STATE.data.operations || []).find(item => item.id === id);
+  if (operation?.kind === "cluster-shutdown" && window.clusterShutdown) return clusterShutdown();
+  if (operation?.kind === "disk-v2-convert" && window.diskV2Watch) return diskV2Watch(id);
   jobsDialog();
   selectJob(id);
 };
@@ -177,9 +183,6 @@ window.openOperation = (href, id = "", savedOperation = null) => {
   if (operation?.power_recovery) return powerRecoveryReview(id);
   if (operation?.status === "failed" && operation.storage_recovery) return storageRecoveryReview(id);
   if (operation?.tracking_only && operation?.cleanable) return cancelOperation(id);
-  // A failed job is opened for what went wrong - its error and log in Jobs -
-  // not the page its work was about, where nothing says why.
-  if (operation?.status === "failed") return openJob(id);
   // The link names what the job is about. It used to become the site-wide
   // search, which then narrowed every page until cleared by hand; now the
   // page opens whole and the item is brought into view and marked.
