@@ -40,7 +40,7 @@ back, rolling OS restarts, storage repair and balancing - on **k3s and RKE2**.
 | `rolling` | 3 | OS updates restarting every host, never more than one down |
 | `outage` | 3 | a container crashing and restarting; a host failing with no warning, its apps back elsewhere |
 | `migration` | 2 clusters | an app and its data moved between two clusters, as Linked clusters does |
-| `network` | 3 + worker | an app VIP reached from outside and carried over when its host fails; a firewall letting one namespace in; an app on the LAN through Multus; a worker joined, the doctor's safe fixes, the installer run again changing nothing |
+| `network` | 3 + worker | an app VIP reached from outside and carried over when its host fails; a host's two NICs bonded, a cable pulled and the bond carrying on, an 802.3ad change the switch cannot answer putting the host's network back, and back to one NIC; a firewall letting one namespace in; an app on the LAN through Multus; a worker joined, the doctor's safe fixes, the installer run again changing nothing |
 | `self-data` | 3 | Homestead's own data moved to a new volume twice, the copy and Homestead on different hosts; account, jobs and old volumes kept, helpers gone |
 | `longhorn-v2` | 2 | Longhorn's V2 engine prepared and enabled through Homestead, a blank disk on each host given to it, a V2 class; an app on a V2 volume across its host's reboot |
 | `storage` | 3 | a detached volume rebuilt offline; Balance hosts moving copies and containers |

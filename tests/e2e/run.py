@@ -53,7 +53,7 @@ def main():
     log.info(f"Suite {args.suite} on {suite['nodes']} {args.distro} host(s), Homestead {args.version}; artifacts in {args.artifacts}")
     memory = (args.distro == "rke2" and suite.get("rke2_memory")) or suite.get("memory") or         (args.memory if suite["nodes"] > 1 else max(args.memory, 6144))
     lab = Lab(Path(args.artifacts) / "lab", suite["nodes"], memory=memory, cpus=suite.get("cpus", 2),
-              data_disk=suite.get("data_disk", ""), hugepages=suite.get("hugepages", 0))
+              data_disk=suite.get("data_disk", ""), hugepages=suite.get("hugepages", 0), nics=suite.get("nics", 1))
     failures, ctx = [], None
     try:
         log.group("Hosts")

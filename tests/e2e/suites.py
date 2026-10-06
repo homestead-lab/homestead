@@ -10,7 +10,7 @@ distribution changes what happens (installs, drains and reboots, the CNI's
 firewall). The rest run on k3s, keeping a release inside the twenty jobs a
 repository runs at once. Asked for by hand or by an e2e/ branch, RKE2 runs
 everything."""
-from scenarios import existing, longhorn_v2, migration, network, outage, power, rolling, self_data, shutdown, smoke, storage
+from scenarios import bonds, existing, longhorn_v2, migration, network, outage, power, rolling, self_data, shutdown, smoke, storage
 
 SUITES = {
     # Every GET route and the node doctor, on three hosts.
@@ -38,12 +38,14 @@ SUITES = {
                  "jobs": [["plain cluster", "longhorn first"]]},
     # An app moved between two clusters, as Linked clusters does.
     "migration": {"nodes": 2, "separate": True, "scenarios": [("move between clusters", migration.run)]},
-    # VIPs (and their failover), the firewall, Multus LAN networks and the
-    # installer: three servers and a worker, Multus installed.
-    "network": {"nodes": 4, "agents": 1, "memory": 3072, "installer": {"HS_MULTUS": "yes"},
-                "scenarios": [("vip", network.vip), ("firewall", network.firewall), ("lan network", network.lan),
-                              ("installer", network.installer)],
-                "jobs": [["vip"], ["firewall", "lan network", "installer"]], "rke2": ["firewall"]},
+    # VIPs (and their failover), the firewall, Multus LAN networks, the
+    # installer, and a host's NICs bonded: three servers and a worker, Multus
+    # installed, each host with a spare second NIC. Bonds share the VIP job:
+    # a release already fills its twenty.
+    "network": {"nodes": 4, "agents": 1, "memory": 3072, "nics": 2, "installer": {"HS_MULTUS": "yes"},
+                "scenarios": [("vip", network.vip), ("bonds", bonds.run), ("firewall", network.firewall),
+                              ("lan network", network.lan), ("installer", network.installer)],
+                "jobs": [["vip", "bonds"], ["firewall", "lan network", "installer"]], "rke2": ["firewall"]},
     # Homestead's own data moved to a new volume twice, across hosts. RKE2's
     # control plane takes more of a host than k3s's: at 4 GiB the copy left
     # under its 1 GiB reserve, a new warning that held the move.

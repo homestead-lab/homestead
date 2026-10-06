@@ -64,6 +64,10 @@ class Node:
         self.role = "new" if index == 0 else "server"     # as the installer joined it
         self.mac = f"52:54:00:10:00:{11 + index:02x}"
         self.tap = f"hstap{index}"
+        # A second NIC on the same bridge (Lab(nics=2)), as a spare port a
+        # person would bond: netplan does not name it, so it starts switched off.
+        self.mac2 = f"52:54:00:10:01:{11 + index:02x}"
+        self.tap2 = f"hstap{index}b"
         self.dir = lab.dir / self.name
         self.process = None
 
@@ -82,7 +86,9 @@ class Node:
                 *(["-drive", f"file={self.dir / 'data.qcow2'},if=none,id=data,cache=unsafe,discard=unmap",
                    "-device", "virtio-blk-pci,drive=data,serial=e2e-data"] if self.lab.data_disk else []),
                 "-netdev", f"tap,id=lan,ifname={self.tap},script=no,downscript=no",
-                "-device", f"virtio-net-pci,netdev=lan,mac={self.mac}",
+                "-device", f"virtio-net-pci,netdev=lan,mac={self.mac},id=nic-lan",
+                *(["-netdev", f"tap,id=lan2,ifname={self.tap2},script=no,downscript=no",
+                   "-device", f"virtio-net-pci,netdev=lan2,mac={self.mac2},id=nic-lan2"] if self.lab.nics > 1 else []),
                 "-qmp", f"unix:{self.dir / 'qmp.sock'},server=on,wait=off",
                 "-serial", f"file:{self.dir / f'console-{int(time.time())}.log'}",
                 "-display", "none"]
@@ -93,14 +99,21 @@ class Node:
     def running(self):
         return self.process is not None and self.process.poll() is None
 
-    def qmp(self, command):
+    def qmp(self, command, arguments=None):
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
             s.settimeout(10)
             s.connect(str(self.dir / "qmp.sock"))
             s.recv(65536)
-            for message in ({"execute": "qmp_capabilities"}, {"execute": command}):
+            run = {"execute": command, **({"arguments": arguments} if arguments else {})}
+            for message in ({"execute": "qmp_capabilities"}, run):
                 s.sendall(json.dumps(message).encode() + b"\n")
                 s.recv(65536)
+
+    def cable(self, nic, plugged):
+        """Pull a NIC's cable or plug it back (nic: "lan" or "lan2"): the
+        guest sees its carrier go, as a cable pulled from a switch."""
+        self.qmp("set_link", {"name": f"nic-{nic}", "up": bool(plugged)})
+        log.info(f"{self.name}: {nic} cable {'plugged in' if plugged else 'pulled'}")
 
     def power_button(self):
         """An ACPI press: the OS shuts down in order, as a short press does."""
@@ -157,13 +170,13 @@ class Node:
 class Lab:
     """The VMs, their network, and the runner's hand on their power."""
 
-    def __init__(self, directory, count, memory=4096, cpus=2, disk="40G", data_disk="", hugepages=0):
+    def __init__(self, directory, count, memory=4096, cpus=2, disk="40G", data_disk="", hugepages=0, nics=1):
         """data_disk: a second, blank disk on each host (serial e2e-data), as
         a disk to give Longhorn. hugepages: 2 MiB pages reserved at every
         boot, before Kubernetes starts - as a host prepared for Longhorn V2."""
         self.dir = Path(directory)
         self.memory, self.cpus, self.disk = memory, cpus, disk
-        self.data_disk, self.hugepages = data_disk, hugepages
+        self.data_disk, self.hugepages, self.nics = data_disk, hugepages, nics
         self.nodes = [Node(self, i) for i in range(count)]
         self.key = str(self.dir / "id_ed25519")
 
@@ -202,10 +215,11 @@ class Lab:
             sh("sudo", "iptables", "-I", "FORWARD", "-i", BRIDGE, "-j", "ACCEPT")
             sh("sudo", "iptables", "-I", "FORWARD", "-o", BRIDGE, "-j", "ACCEPT")
         for node in self.nodes:
-            if node.tap not in sh("ip", "-o", "link", "show", quiet=True):
-                sh("sudo", "ip", "tuntap", "add", node.tap, "mode", "tap", "user", user)
-                sh("sudo", "ip", "link", "set", node.tap, "master", BRIDGE)
-                sh("sudo", "ip", "link", "set", node.tap, "up")
+            for tap in [node.tap] + ([node.tap2] if self.nics > 1 else []):
+                if tap not in sh("ip", "-o", "link", "show", quiet=True):
+                    sh("sudo", "ip", "tuntap", "add", tap, "mode", "tap", "user", user)
+                    sh("sudo", "ip", "link", "set", tap, "master", BRIDGE)
+                    sh("sudo", "ip", "link", "set", tap, "up")
 
     def _base_image(self):
         """The prepared image when the cache has it (prepare_base), else the

@@ -86,3 +86,31 @@ class SeedTests(unittest.TestCase):
                 doc = yaml.safe_load((node.dir / "user-data").read_text())
                 self.assertEqual(vms.USER, doc["users"][0]["name"])
                 self.assertTrue(all(isinstance(c, str) for c in doc["runcmd"]), doc["runcmd"])
+
+
+class SecondNicTests(unittest.TestCase):
+    """A lab with a spare NIC per host, and the runner pulling its cable."""
+
+    def test_a_second_nic_on_the_bridge_and_a_cable_to_pull(self):
+        import tempfile
+        from harness import vms
+        calls, sent = [], []
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(vms, "sh", lambda *a, **k: calls.append(a) or ""), \
+                mock.patch.object(vms.subprocess, "Popen") as popen:
+            lab = vms.Lab(Path(tmp) / "lab", 1, nics=2)
+            lab._network()
+            node = lab.nodes[0]
+            node.power_on()
+            args = popen.call_args[0][0]
+            popen.call_args[1]["stdout"].close()
+            node.qmp = lambda command, arguments=None: sent.append((command, arguments))
+            node.cable("lan2", False)
+        self.assertIn(f"tap,id=lan2,ifname={node.tap2},script=no,downscript=no", args)
+        self.assertIn(f"virtio-net-pci,netdev=lan2,mac={node.mac2},id=nic-lan2", args)
+        self.assertTrue(any(node.tap2 in call for call in calls))
+        self.assertEqual([("set_link", {"name": "nic-lan2", "up": False})], sent)
+
+    def test_bonds_ride_in_the_network_suites_vip_job(self):
+        from suites import SUITES, jobs
+        self.assertEqual(2, SUITES["network"]["nics"])
+        self.assertIn(["vip", "bonds"], jobs("network"))
