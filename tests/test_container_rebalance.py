@@ -95,6 +95,65 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn("lab/plex", [m["id"] for m in plan["moves"]])
         self.assertIn({"id": "lab/plex", "why": "it is pinned to its host"}, plan["skipped"])
 
+    @staticmethod
+    def place(c, name, kind, other, required=False):
+        """Give an app a run-with (podAffinity) or keep-apart (podAntiAffinity) rule, as Edit › Where it runs does."""
+        for dep in c.deps.values():
+            dep["spec"]["template"].setdefault("metadata", {"labels": {"app": dep["metadata"]["name"]}})
+        term = {"labelSelector": {"matchLabels": {"app": other}}, "namespaces": ["lab"], "topologyKey": "kubernetes.io/hostname"}
+        rule = {"requiredDuringSchedulingIgnoredDuringExecution": [term]} if required else \
+            {"preferredDuringSchedulingIgnoredDuringExecution": [{"weight": 100, "podAffinityTerm": term}]}
+        c.deps[name]["spec"]["template"]["spec"]["affinity"] = {kind: rule}
+
+    def test_an_app_that_runs_with_another_is_not_moved_away_from_it_alone(self):
+        # Seen on a real cluster: Home Assistant preferred to run with
+        # Mosquitto; Balance moved it alone and it came back beside Mosquitto.
+        c = Cluster(); self.place(c, "frigate", "podAffinity", "ha"); bind(c)
+        plan = C.plan()
+        moved = [m["id"] for m in plan["moves"]]
+        self.assertNotIn("lab/frigate", moved)
+        self.assertNotIn("lab/ha", moved, "nor the one it runs with")
+        why = {s["id"]: s["why"] for s in plan["skipped"]}
+        self.assertIn("it runs with lab/ha (its placement)", why["lab/frigate"])
+        self.assertIn("lab/frigate runs with it (their placement)", why["lab/ha"])
+
+    def test_nothing_goes_to_a_host_it_is_kept_apart_from(self):
+        c = Cluster()
+        c.deps["dns"] = deployment("dns"); c.pods.append(pod("dns", "k1"))
+        c.objects["/apis/apps/v1/replicasets"]["items"].append(replicaset("dns"))
+        self.place(c, "frigate", "podAntiAffinity", "dns"); bind(c)
+        frigate = next(m for m in C.plan()["moves"] if m["id"] == "lab/frigate")
+        self.assertEqual("k3", frigate["to"], "not k1, where what it is kept apart from runs")
+
+    def locality(self, mode, copies):
+        c = Cluster()
+        c.deps["frigate"] = deployment("frigate", claim="frigate-data")
+        c.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes"] = {"items": [
+            {"metadata": {"name": "pvc-f"}, "spec": {"dataLocality": mode},
+             "status": {"kubernetesStatus": {"namespace": "lab", "pvcName": "frigate-data"}}}]}
+        c.objects["/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas"] = {"items": [
+            {"spec": {"volumeName": "pvc-f", "nodeID": host}} for host in copies]}
+        bind(c)
+        return C.plan()
+
+    def test_strict_local_data_keeps_its_app_on_its_host(self):
+        plan = self.locality("strict-local", ["k2"])
+        self.assertNotIn("lab/frigate", [m["id"] for m in plan["moves"]])
+        self.assertIn("strict-local", {s["id"]: s["why"] for s in plan["skipped"]}["lab/frigate"])
+
+    def test_an_app_reading_its_data_locally_moves_only_where_a_copy_is(self):
+        for _ in range(5):      # whichever quiet host would score best, never the one without a copy
+            frigate = next(m for m in self.locality("disabled", ["k2", "k3"])["moves"] if m["id"] == "lab/frigate")
+            self.assertEqual(("k3", True), (frigate["to"], frigate["near"]))
+
+    def test_data_that_follows_its_app_moves_only_where_a_copy_already_is(self):
+        frigate = next(m for m in self.locality("best-effort", ["k1"])["moves"] if m["id"] == "lab/frigate")
+        self.assertEqual("k1", frigate["to"], "best-effort would build a whole new copy anywhere else")
+
+    def test_data_read_over_the_network_anyway_still_lets_its_app_move_anywhere(self):
+        moves = self.locality("disabled", ["k1"])["moves"]
+        self.assertIn("lab/frigate", [m["id"] for m in moves])
+
     def test_a_vetoed_app_stays_and_the_plan_works_round_it(self):
         c = Cluster(); bind(c)
         plan = C.plan(["lab/frigate"])

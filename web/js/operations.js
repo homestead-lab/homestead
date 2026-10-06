@@ -106,6 +106,16 @@ function paintJobsDialog() {
   if (clear) { clear.hidden = !count; clear.textContent = `Clear finished (${count})`; }
   window.applyRole?.();
 }
+// Jobs, opened on one job: fetched first when the page has just started.
+window.openJob = async id => {
+  if (!(STATE.data.operations || []).some(item => item.id === id)) {
+    try { STATE.data.operations = await api("/api/operations", { keep: true }); } catch (_) { /* the list says why */ }
+  }
+  operationPanelOpen = false;
+  renderOperations();
+  jobsDialog();
+  selectJob(id);
+};
 window.jobsDialog = () => {
   modal("Jobs", `<div id="jobsDialogList"></div>${UI.actions(UI.button("Clear finished", "dismissCompletedOperations()", {id:"jobsClearCompleted", attrs:'data-need="operator"'}), UI.cancel("Close"))}`);
   paintJobsDialog();
@@ -154,6 +164,8 @@ window.toggleOperations = () => {
 };
 window.openOperation = (href, id = "", savedOperation = null) => {
   const url = new URL(href || "/", window.location.origin);
+  // A failed job's notification names the job: open it in Jobs, with its error.
+  if (url.searchParams.get("job") && !id) return openJob(url.searchParams.get("job"));
   const route = HomesteadRouter.resolve(url.pathname);
   const operation = savedOperation?.id === id ? savedOperation : (STATE.data.operations || []).find(item => item.id === id);
   operationPanelOpen = false;
@@ -165,6 +177,9 @@ window.openOperation = (href, id = "", savedOperation = null) => {
   if (operation?.power_recovery) return powerRecoveryReview(id);
   if (operation?.status === "failed" && operation.storage_recovery) return storageRecoveryReview(id);
   if (operation?.tracking_only && operation?.cleanable) return cancelOperation(id);
+  // A failed job is opened for what went wrong - its error and log in Jobs -
+  // not the page its work was about, where nothing says why.
+  if (operation?.status === "failed") return openJob(id);
   // The link names what the job is about. It used to become the site-wide
   // search, which then narrowed every page until cleared by hand; now the
   // page opens whole and the item is brought into view and marked.

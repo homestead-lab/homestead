@@ -286,7 +286,8 @@ def health_facts(overview):
 def job_facts(operations):
     return [{"key": f"jobs:{op['id']}", "category": "jobs", "severity": "degraded", "event": True,
              "title": f"Job failed: {op.get('title', 'Unnamed job')}", "body": op.get("message", ""),
-             "href": op.get("href") or "/"}
+             # The job itself, with its error - not the page its work is about.
+             "href": f"/?job={op['id']}"}
             for op in operations if op.get("status") == "failed"]
 
 
