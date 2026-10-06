@@ -2,8 +2,8 @@ apiVersion: v2
 name: homestead
 description: Homelab control panel for Harvester, k3s and RKE2 - containers, VMs, Longhorn storage, shares and backups in one place.
 type: application
-version: 2.8.317-dev.4
-appVersion: "2.8.317-dev.4"
+version: 2.8.317-dev.5
+appVersion: "2.8.317-dev.5"
 kubeVersion: ">=1.25.0-0"
 home: https://github.com/homestead-lab/homestead
 sources:
@@ -20,6 +20,6 @@ annotations:
       url: https://github.com/homestead-lab/homestead
   artifacthub.io/images: |
     - name: homestead
-      image: ghcr.io/homestead-lab/homestead:2.8.317-dev.4
+      image: ghcr.io/homestead-lab/homestead:2.8.317-dev.5
     - name: probe
       image: python:3.12-alpine
