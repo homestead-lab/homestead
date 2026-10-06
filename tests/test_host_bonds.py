@@ -66,6 +66,12 @@ class PlanTests(unittest.TestCase):
         self.assertIn("one host at a time", said)
         self.assertIn("quorum", said)
 
+    def test_a_switched_off_spare_is_allowed_and_said(self):
+        nics = [nic("enp1s0"), dict(nic("enp2s0"), carrier=None, speed=None)]
+        p = BONDS.plan("h1", {"members": ["enp2s0"]}, facts(nics=nics))
+        self.assertEqual([], p["refusals"])
+        self.assertTrue(any("switched off" in w for w in p["warnings"]))
+
     def test_a_nic_with_an_address_of_its_own_is_not_taken(self):
         files = facts()["files"]
         files["/etc/netplan/50-cloud-init.yaml"]["ethernets"]["enp2s0"] = {"match": {}, "set-name": "", "addressed": True}

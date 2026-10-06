@@ -70,7 +70,12 @@ for name in sorted(os.listdir("/sys/class/net")):
         continue
     master = os.path.basename(os.path.realpath(base + "/master")) if os.path.exists(base + "/master") else ""
     speed = read(base + "/speed")
-    nics.append({"name": name, "mac": (read(base + "/address") or "").lower(), "carrier": read(base + "/carrier") == "1",
+    # A NIC nothing has turned on (a spare netplan does not name) cannot say
+    # whether it has link: None, not False.
+    flags = read(base + "/flags") or "0x0"
+    up = int(flags, 16) & 1 if flags.startswith("0x") else 0
+    carrier = read(base + "/carrier") if up else None
+    nics.append({"name": name, "mac": (read(base + "/address") or "").lower(), "carrier": None if carrier is None else carrier == "1",
                  "speed": int(speed) if speed and speed.lstrip("-").isdigit() and int(speed) > 0 else None, "master": master})
 kind = "bridge" if os.path.isdir(f"/sys/class/net/{iface}/bridge") else "bond" if os.path.isdir(f"/sys/class/net/{iface}/bonding") \
     else "nic" if os.path.exists(f"/sys/class/net/{iface}/device") else "other"
@@ -276,7 +281,10 @@ def plan(node, req, facts, busy=None, servers_ready=None):
                 key = _eth_key(facts, path, m)
                 if ((facts.get("files") or {}).get(path, {}).get("ethernets") or {}).get(key, {}).get("addressed"):
                     refusals.append(f"{m} has an address of its own in {path}: it carries something else")
-            if not nic["carrier"] and m not in current:
+            if nic["carrier"] is None and m not in current:
+                warnings.append(f"{m} is switched off, so its link cannot be seen yet: the bond turns it on, "
+                                "and the checks afterwards say whether it has link")
+            elif not nic["carrier"] and m not in current:
                 if req.get("allow_down"):
                     warnings.append(f"{m} has no link; the bond starts without it")
                 else:

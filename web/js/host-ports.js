@@ -328,7 +328,7 @@ function hostBondButton(node, bond, cls = "btn sm") {
 /* A host's ports as the picture draws them, from what the host said. */
 function hostBondPorts(info, members, bond, mode, carriesOn) {
   const set = new Set(members);
-  const ports = (info.nics || []).map(n => ({ name: n.name, kind: "nic", link: n.carrier ? "up" : "down", speed_mbps: n.speed,
+  const ports = (info.nics || []).map(n => ({ name: n.name, kind: "nic", link: n.carrier ? "up" : n.carrier === null && !set.has(n.name) ? "off" : n.carrier === null ? "up" : "down", speed_mbps: n.speed,
     master: set.has(n.name) ? bond : n.name === info.shape.carrier_nic && !set.size ? info.shape.bridge : "",
     carries: set.has(n.name) || (n.name === info.shape.carrier_nic && !set.size) ? ["host address"] : [],
     uplink: set.has(n.name) || (n.name === info.shape.carrier_nic && !set.size),
@@ -356,8 +356,8 @@ window.hostBondDialog = async node => {
     const mine = bonded ? shape.members.includes(n.name) : n.name === shape.carrier_nic;
     const taken = n.master && !mine && n.master !== shape.bridge && n.master !== shape.bond;
     return `<label class="uplink-nic${taken ? " taken" : ""}"><input type="checkbox" name="hb_nic" value="${esc(n.name)}" ${mine ? "checked" : ""} ${taken || (!bonded && mine) ? "disabled" : ""} onchange="hostBondPrimaries()">
-      <span class="port-led ${n.carrier ? "up" : "down"}"></span><b class="mono">${esc(n.name)}</b>
-      <span class="dim xs">${esc(n.carrier ? portSpeed(n.speed) || "link" : "no link")}${!bonded && mine ? " · carries the host now" : ""}${taken ? ` · in ${n.master}` : ""}</span></label>`;
+      <span class="port-led ${n.carrier ? "up" : n.carrier === null ? "off" : "down"}"></span><b class="mono">${esc(n.name)}</b>
+      <span class="dim xs">${esc(n.carrier ? portSpeed(n.speed) || "link" : n.carrier === null ? "switched off" : "no link")}${!bonded && mine ? " · carries the host now" : ""}${taken ? ` · in ${n.master}` : ""}</span></label>`;
   }).join("");
   $("#mbody").innerHTML = `<div class="ui-stack">${UI.lead(now)}
     ${bonded ? UI.field("Change", `<div class="seg" id="hb_action"><button type="button" class="on" data-v="change" onclick="hostBondAction(this)">Members or mode</button><button type="button" data-v="remove" onclick="hostBondAction(this)">Back to one NIC</button></div>`) : ""}
