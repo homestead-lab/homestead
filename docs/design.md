@@ -256,6 +256,15 @@ inside its box that offers the free addresses from Networking › IP addresses
 (`web/js/ipam-picker.js`), so nobody has to go and look one up. A field for
 an address that already exists - a gateway, a broker, a NAS - is not marked.
 
+### Suggested values
+
+A text field that suggests values - an existing group, a namespace, a
+section - names a `<datalist>` with `list=` as usual. `ui.js` shows those
+values in a list of its own instead of the browser's popup: under the field
+and its width, inside the dialog, above the field when there is no room
+below, with the arrow keys, Enter and Escape. Fill or change the
+`<datalist>`; nothing else is needed.
+
 ### Density
 
 Homestead is a working tool: show more at once, pad less.
