@@ -54,6 +54,39 @@ def handshake(pod, execution, anchor_uid):
 
 
 def reconcile_completed(ops, directory, namespace, deployment):
+    proven = _reconcile_receipt(ops, directory, namespace, deployment)
+    return release_superseded(ops, namespace, deployment) or proven
+
+
+def release_superseded(ops, namespace, deployment):
+    """A move cancelled back to its original volume keeps its hold until its
+    own completion receipt is read - and the next move of this Homestead
+    writes a receipt of its own over it, so an older one missed then is never
+    read. A later move that succeeded from the very volume the cancelled one
+    recovered to proves that recovery started: the earlier hold keeps nothing
+    any more, so it is released and its record can be cleared. Failed moves,
+    and cancellations no later move started from, keep theirs."""
+    with ops._lock:
+        ops.require_write()
+        items = ops._read()
+        mine = [i for i in items if i.get("kind") == KIND and (i.get("ref") or {}).get("namespace") == namespace
+                and (i.get("ref") or {}).get("deployment") == deployment]
+        settled = [i for i in mine if i.get("status") == "succeeded" and i["ref"].get("retain_resources") is False]
+        released = False
+        for item in mine:
+            ref = item["ref"]
+            if item.get("status") != "cancelled" or ref.get("retain_resources") is False or not ref.get("source"):
+                continue
+            if any(str(later.get("started_at", "")) > str(item.get("started_at", "")) and later["ref"].get("source") == ref["source"]
+                   for later in settled):
+                ref["retain_resources"] = False
+                released = True
+        if released:
+            ops._write(items)
+        return released
+
+
+def _reconcile_receipt(ops, directory, namespace, deployment):
     """Persist proven completion without polling or advancing any other job.
 
     The caller holds the writable-app activity guard. A copied running job can

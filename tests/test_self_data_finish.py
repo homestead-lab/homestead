@@ -194,3 +194,57 @@ class PreparationRecoveryTests(unittest.TestCase):
 
 
 if __name__ == "__main__": unittest.main()
+
+
+class SupersededHoldTests(unittest.TestCase):
+    """A move cancelled back to its original volume on an older release kept
+    its hold for good: the next move's receipt replaced the one that would
+    have released it, and Jobs could never clear it (seen on a real cluster)."""
+
+    class Store:
+        def __init__(self, items):
+            import threading
+            self._lock, self.items, self.writes = threading.RLock(), items, 0
+
+        def require_write(self):
+            pass
+
+        def _read(self):
+            return self.items
+
+        def _write(self, items):
+            self.items, self.writes = items, self.writes + 1
+
+    @staticmethod
+    def move(started, status, source, retained):
+        return {"kind": E.KIND, "status": status, "started_at": started,
+                "ref": {"namespace": "lab", "deployment": "homestead", "source": source,
+                        "destination": source + "-next", "retain_resources": retained}}
+
+    def test_a_later_move_from_the_recovered_volume_releases_the_cancelled_ones_hold(self):
+        cancelled = self.move("2026-10-02T00:18:45Z", "cancelled", "data-a", True)
+        store = self.Store([cancelled, self.move("2026-10-03T22:56:54Z", "succeeded", "data-a", False)])
+        self.assertTrue(E.release_superseded(store, "lab", "homestead"))
+        self.assertFalse(cancelled["ref"]["retain_resources"])
+        self.assertTrue(OPS._dismissible(cancelled), "Jobs can clear it now")
+        self.assertFalse(E.release_superseded(store, "lab", "homestead"), "and only once")
+        self.assertEqual(1, store.writes)
+
+    def test_holds_with_nothing_proving_the_recovery_are_kept(self):
+        cases = {
+            "no later move": [self.move("2026-10-02T00:00:00Z", "cancelled", "data-a", True)],
+            "a later move from another volume": [self.move("2026-10-02T00:00:00Z", "cancelled", "data-a", True),
+                                                 self.move("2026-10-03T00:00:00Z", "succeeded", "data-b", False)],
+            "a later move still held": [self.move("2026-10-02T00:00:00Z", "cancelled", "data-a", True),
+                                        self.move("2026-10-03T00:00:00Z", "succeeded", "data-a", True)],
+            "an earlier move only": [self.move("2026-10-03T00:00:00Z", "cancelled", "data-a", True),
+                                     self.move("2026-10-02T00:00:00Z", "succeeded", "data-a", False)],
+            "a failed move": [self.move("2026-10-02T00:00:00Z", "failed", "data-a", True),
+                              self.move("2026-10-03T00:00:00Z", "succeeded", "data-a", False)],
+        }
+        for why, items in cases.items():
+            with self.subTest(why=why):
+                store = self.Store(items)
+                self.assertFalse(E.release_superseded(store, "lab", "homestead"))
+                self.assertTrue(items[0]["ref"]["retain_resources"])
+                self.assertEqual(0, store.writes)
