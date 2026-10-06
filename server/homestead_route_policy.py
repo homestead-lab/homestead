@@ -104,6 +104,7 @@ POLICY = {
     ('GET', '/api/node/smart'): 'viewer',
     ('GET', '/api/nodes'): 'viewer',
     ('GET', '/api/nodes/uptime'): 'viewer',
+    ('GET', '/api/nodes/ports'): 'viewer',
     ('GET', '/api/objectstore'): 'viewer',
     ('GET', '/api/objectstore/transfers'): 'admin',
     ('GET', '/api/onboard/guide'): 'admin',

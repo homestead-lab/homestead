@@ -227,7 +227,7 @@ its health. Administrators can retry from **Settings → Hardware and storage �
 
 It has two parts:
 
-- **Telemetry**: read-only, non-root, no capabilities. Temperatures, host
+- **Telemetry**: read-only, non-root, no capabilities. Temperatures, network ports, host
   devices, disks and mounts, per-disk throughput.
 - **SMART**: a separate container that runs `smartctl`, which needs the raw
   drives and so runs privileged. It accepts only requests signed by Homestead.
@@ -235,6 +235,33 @@ It has two parts:
   everything else keeps working.
 
 Homestead keeps the probe's scripts up to date itself when it updates.
+
+### Network ports
+
+A host's **Network** section shows each of its network ports, read from the
+host by the probe: whether it has link, the speed and duplex it negotiated,
+its MTU and driver, and the errors and flaps (link lost or regained) it
+counted over the last hour. A picture draws the ports as they connect: each
+port's cable, green with its speed or red with none, the bond it is in
+(violet, the active member solid and a backup dashed), the bridge, and what
+it all carries - the host's address, its VIPs and any LAN networks.
+**Networking → Host ports** lists every host's uplink and ports together.
+
+A port matters by what it carries: a spare with no cable raises nothing.
+These raise an alert:
+
+| Condition | When |
+|---|---|
+| No link | A port that carries the host's address or a LAN network has no carrier |
+| Bond members missing | A bond member has no link; critical when none is left |
+| Switch not aggregating | An 802.3ad bond has had no LACP partner for two minutes |
+| Slower than before | A port negotiated a lower speed than it ran at in the last month, or than its bond peers |
+| Errors | 100 or more receive and transmit errors within the hour |
+| Flaps | 3 or more link changes within the hour |
+
+The same LAN network on different MTUs on different hosts is shown, not
+alerted. Counts start again when a host restarts. Nothing here changes a
+host's network.
 
 ### Drive health
 

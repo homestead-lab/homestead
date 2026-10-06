@@ -192,5 +192,100 @@
     return figure(svg(392, 112, b + text(6, 106, clip(url ? url : "needed for notifications on a phone", 64), "dg-xs dg-dim"), said));
   }
 
-  root.Diagram = Object.freeze({ node, vip, mapping, vmImport, quorum, copies, remote });
+  /* A host's network ports, from homestead_ports: each NIC with its link
+     light and cable - green with its speed, red dashed with none, dim dashed
+     when switched off - then the bond it is in (violet: the active member
+     solid, a backup dashed), the bridge, and on the right what it all
+     carries: the host's address, its VIPs as blue pills, LAN networks
+     dashed. host: {ports, conditions, uplink}; opts: {address, vips}. */
+  const speedWords = mbps => !mbps ? "" : mbps >= 1000 ? `${+(mbps / 1000).toFixed(1)} Gb/s` : `${mbps} Mb/s`;
+  function ports(host, opts = {}) {
+    const all = (host && host.ports) || [];
+    const by = Object.fromEntries(all.map(p => [p.name, p]));
+    const nics = all.filter(p => p.kind === "nic");
+    const top = name => { let p = by[name], seen = 0; while (p && p.master && by[p.master] && seen++ < 4) p = by[p.master]; return p; };
+    const flagged = new Set(((host && host.conditions) || []).map(c => c.iface));
+    // Uplink's NICs first, then those that carry something, then spares.
+    const rank = p => p.uplink ? 0 : p.carries?.length ? 1 : 2;
+    nics.sort((a, b) => rank(a) - rank(b) || (top(a.name)?.name || "").localeCompare(top(b.name)?.name || "") || a.name.localeCompare(b.name));
+    const ROW = 46, Y0 = 34, NX = 62, NW = 150, BX = 244, BW = 112;
+    const centre = {}, kids = {};
+    let b = "";
+    nics.forEach((p, i) => { centre[p.name] = Y0 + i * ROW + 18; });
+    // Bonds and bridges sit at the middle of what is in them.
+    for (const kind of ["bond", "bridge"]) for (const p of all.filter(x => x.kind === kind)) {
+      const inside = all.filter(x => x.master === p.name && centre[x.name] != null);
+      kids[p.name] = inside;
+      if (inside.length) centre[p.name] = inside.reduce((t, x) => t + centre[x.name], 0) / inside.length;
+    }
+    const hasBond = all.some(p => p.kind === "bond" && kids[p.name]?.length);
+    const brX = hasBond ? BX + BW + 28 : BX;
+    nics.forEach(p => {
+      const y = centre[p.name], warn = flagged.has(p.name);
+      const cable = p.link === "up" ? "dg-up" : p.link === "down" ? "dg-down" : "dg-line dg-dash-line";
+      const said = p.link === "up" ? speedWords(p.speed_mbps) || "link" : p.link === "down" ? "no link" : "off";
+      b += line(`M6 ${y}H${NX}`, cable, false) + text(34, y - 6, said, `dg-xxs ${p.link === "up" ? (p.was_mbps ? "dg-amber" : "dg-green") : p.link === "down" ? "dg-red" : "dg-dim"}`, "middle");
+      b += box(NX, y - 18, NW, 36, p.link === "down" && p.carries?.length ? "dg-nic dg-bad" : "dg-nic", 7);
+      b += `<circle cx="${NX + 14}" cy="${y}" r="4.5" class="dg-led-${p.link === "up" ? (warn ? "warn" : "up") : p.link === "down" ? "down" : "off"}"/>`;
+      b += text(NX + 26, y - 3, clip(p.name, 16), "dg-s dg-mono dg-b");
+      const sub = p.was_mbps ? `was ${speedWords(p.was_mbps)}` : p.errors ? `${p.errors} errors / ${Math.round((p.window_s || 3600) / 60)} min`
+        : p.flaps ? `${p.flaps} link changes` : !p.carries?.length && !p.master ? "carries nothing" : [p.driver, p.duplex && `${p.duplex} duplex`].filter(Boolean).join(" · ");
+      b += text(NX + 26, y + 11, clip(sub, 24), `dg-xxs ${warn ? "dg-amber" : "dg-dim"}`);
+    });
+    for (const p of all.filter(x => x.kind === "bond" && kids[x.name]?.length)) {
+      const y = centre[p.name], members = kids[p.name], mode = p.bond?.mode || "bond";
+      const h = Math.max(48, (Math.max(...members.map(m => centre[m.name])) - Math.min(...members.map(m => centre[m.name]))) + 20);
+      members.forEach(m => {
+        const my = centre[m.name], state = m.bond_member?.state, down = m.link !== "up";
+        const cls = down ? "dg-down" : mode === "active-backup" && state === "backup" ? "dg-standby" : "dg-active";
+        b += `<path d="M${NX + NW} ${my}C${NX + NW + 22} ${my} ${BX - 22} ${y + (my - y) * .4} ${BX} ${y + (my - y) * .4}" class="${cls}"/>`;
+        if (mode === "active-backup") b += text(NX + NW + 18, my + (my < y ? -5 : 13), down ? "lost" : state || "", `dg-xxs ${down ? "dg-red" : "dg-violet"}`, "middle");
+      });
+      b += box(BX, y - h / 2, BW, h, flagged.has(p.name) ? "dg-bond dg-warn" : "dg-bond", 10);
+      b += text(BX + 12, y - 4, clip(p.name, 16), "dg-b dg-mono") + text(BX + 12, y + 11, clip(mode, 20), "dg-xxs dg-violet");
+    }
+    for (const p of all.filter(x => x.kind === "bridge" && kids[x.name]?.length)) {
+      const y = centre[p.name];
+      kids[p.name].forEach(k => {
+        const from = k.kind === "bond" ? BX + BW : NX + NW;
+        b += `<path d="M${from} ${centre[k.name]}C${from + 16} ${centre[k.name]} ${brX - 16} ${y} ${brX} ${y}" class="dg-line"/>`;
+      });
+      b += box(brX, y - 21, 76, 42, "dg-bridge", 8) + text(brX + 38, y - 2, clip(p.name, 9), "dg-b dg-mono", "middle") + text(brX + 38, y + 12, "bridge", "dg-xxs dg-dim", "middle");
+    }
+    // What it carries: drawn once against the outermost thing carrying it.
+    const outer = [...new Map(nics.map(p => top(p.name)).filter(t => t && t.carries?.length).map(t => [t.name, t])).values()];
+    const cx = outer.some(t => t.kind === "bridge") ? brX + 104 : outer.some(t => t.kind === "bond") ? BX + BW + 34 : NX + NW + 34;
+    let cursor = 12;
+    const vips = opts.vips || [];
+    outer.forEach(t => {
+      const items = [];
+      for (const what of t.carries) {
+        if (what === "host address") {
+          items.push(["addr", opts.address ? `${opts.address} · this host` : "this host's address"]);
+          vips.slice(0, 2).forEach(ip => items.push(["vip", ip]));
+          if (vips.length > 2) items.push(["more", `+${vips.length - 2} more VIPs`]);
+        } else items.push(["lan", what]);
+      }
+      const from = t.kind === "bridge" ? brX + 76 : t.kind === "bond" ? BX + BW : NX + NW, y = centre[t.name];
+      let iy = Math.max(cursor, y - items.length * 15);
+      items.forEach(([kind, label]) => {
+        const my = iy + 12;
+        b += `<path d="M${from} ${y}C${from + 18} ${y} ${cx - 18} ${my} ${cx - 2} ${my}" class="dg-line"/>`;
+        if (kind === "vip") b += pill(cx + 66, iy, label, 132);
+        else if (kind === "more") b += text(cx + 4, my + 4, label, "dg-xxs dg-dim");
+        else b += box(cx, iy, 160, 24, kind === "lan" ? "dg-vlan" : "dg-nic", 6) + text(cx + 10, my + 4, clip(label, 24), "dg-xs dg-mono");
+        iy += 30;
+      });
+      cursor = iy + 6;
+    });
+    const w = Math.max(cx + 166, 420), h = Math.max(Y0 + nics.length * ROW, cursor) + 8;
+    const frame = box(NX - 10, 4, w - NX + 6, h - 8, "dg-node", 12) + text(NX + 2, 22, opts.title || "", "dg-xs dg-dim");
+    const bad = ((host && host.conditions) || []).map(c => c.title);
+    const label = `${nics.length} network port${nics.length === 1 ? "" : "s"}: `
+      + nics.map(p => `${p.name} ${p.link === "up" ? speedWords(p.speed_mbps) || "up" : p.link}${p.master ? ` in ${p.master}` : ""}`).join(", ")
+      + (bad.length ? `. ${bad.join(". ")}` : "");
+    return figure(svg(w, h, frame + b, label));
+  }
+
+  root.Diagram = Object.freeze({ node, vip, mapping, vmImport, quorum, copies, remote, ports });
 })(typeof window !== "undefined" ? window : globalThis);

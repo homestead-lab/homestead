@@ -691,6 +691,7 @@ def _hardware_loop():
             try:
                 with self_data_activity():
                     reconcile_hardware()
+                    PORTS.observe(node_temps())
                 beat("hardware", 30, leader_only=True)
             except Exception as error:
                 beat("hardware", 30, error, leader_only=True)
@@ -6365,6 +6366,7 @@ import homestead_hostrun as HOSTRUN
 import homestead_host_limits as HOST_LIMITS
 import homestead_node_parity as NODE_PARITY
 import homestead_host_os as HOST_OS
+import homestead_ports as PORTS
 import homestead_root_guard as ROOT_GUARD
 import homestead_os_rollout as OS_ROLLOUT
 import homestead_passthrough as PASSTHROUGH
@@ -6478,6 +6480,40 @@ MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR, (SELF.NS, NAMES.BRAND))
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
+PORTS.bind(DATA_DIR)
+
+
+def port_contexts(probes):
+    """What each host's ports carry beyond its own uplink: the LAN networks
+    on its interfaces, read from their NetworkAttachmentDefinitions."""
+    networks = {}
+    try:
+        nads = kget("/apis/k8s.cni.cncf.io/v1/network-attachment-definitions").get("items", [])
+    except Exception:
+        nads = []
+    for nad in nads:
+        meta = nad.get("metadata") or {}
+        try:
+            config = json.loads((nad.get("spec") or {}).get("config") or "{}")
+        except ValueError:
+            config = {}
+        iface = config.get("master") or config.get("bridge") or ""
+        resource = (meta.get("annotations") or {}).get("k8s.v1.cni.cncf.io/resourceName", "")
+        if not iface and resource.startswith("macvtap.network.kubevirt.io/"):
+            iface = resource.split("/", 1)[1]
+        if iface:
+            networks.setdefault(iface, []).append(f"{meta.get('namespace', '')}/{meta.get('name', '')}")
+    return {node: {"uplink": (probe or {}).get("default_interface") or "", "networks": networks}
+            for node, probe in (probes or {}).items()}
+
+
+def ports_report():
+    # Every host, so one whose probe is not answering is said to be unknown,
+    # not quietly well.
+    probes = dict(node_temps())
+    for n in kget("/api/v1/nodes").get("items", []):
+        probes.setdefault(n["metadata"]["name"], None)
+    return PORTS.report(probes, port_contexts(probes))
 OPS.RESOLVERS["host-os"] = HOST_OS.status
 ROOT_GUARD.bind(kget, ksend, PLATFORM.detect, node_temps, DATA_DIR)
 PASSTHROUGH.bind(kget, ksend, HOSTRUN, PLATFORM.detect, DATA_DIR)
@@ -6638,6 +6674,7 @@ def _alert_sources():
     take("detached-copies", lambda: LHREBUILD.alert_facts(cached("lhrebuild", 30, LHREBUILD.status)))
     take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
     take("hostos", HOST_OS.alert_facts)
+    take("ports", lambda: PORTS.alert_facts(cached("ports", 20, ports_report)))
     take("rootguard", ROOT_GUARD.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
@@ -8988,6 +9025,13 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("ov", 5, get_overview))
             if p == "/api/nodes":
                 return self._send(200, cached("nodes", 5, get_nodes))
+            if p == "/api/nodes/ports":
+                report = cached("ports", 20, ports_report)
+                node = (q.get("node") or [""])[0]
+                if node:
+                    return self._send(200, report["hosts"].get(node) or {"node": node, "available": False, "ports": [],
+                                      "conditions": [], "reason": "No node probe answers on this host."})
+                return self._send(200, report)
             if p == "/api/nodes/uptime":
                 return self._send(200, cached("uptime", 60, HISTORY.uptime))
             if p == "/api/workloads":

@@ -339,9 +339,62 @@ data:
             else:
                 continue
             master = os.path.basename(os.path.realpath(f"{path}/master")) if os.path.exists(f"{path}/master") else ""
-            out.append({"name": name, "kind": kind, "up": _read(f"{path}/operstate") in ("up", "unknown"),
-                        "master": master})
+            row = {"name": name, "kind": kind, "up": _read(f"{path}/operstate") in ("up", "unknown"),
+                   "master": master}
+            row.update(port_facts(path, kind))
+            out.append(row)
         return out
+
+    # Counters a port keeps from boot; a rise in an hour is a cable, a port or a
+    # driver going bad. carrier_changes sits beside statistics, not in it.
+    PORT_COUNTERS = ("rx_errors", "tx_errors", "rx_crc_errors", "rx_dropped", "tx_dropped")
+
+    def _int(raw):
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
+    def port_facts(path, kind):
+        """What a port says of its link, all from world-readable sysfs: carrier,
+        negotiated speed and duplex, MTU, MAC, driver, its error counters, and a
+        bond's or bond member's state. Nothing is written. carrier and speed
+        cannot be read while the interface is down by choice (admin-down), so
+        those read as None: off, not broken."""
+        try:
+            flags = int(_read(f"{path}/flags") or "", 16)
+        except ValueError:
+            flags = None
+        carrier = _read(f"{path}/carrier")
+        speed = _int(_read(f"{path}/speed"))
+        driver = os.path.realpath(f"{path}/device/driver") if os.path.exists(f"{path}/device/driver") else ""
+        row = {"admin_up": bool(flags & 1) if flags is not None else None,
+               "carrier": None if carrier is None else carrier == "1",
+               # -1 or 2^32-1 when a driver cannot say (virtual NICs, no link).
+               "speed_mbps": speed if speed and 0 < speed < 4000000 else None,
+               "duplex": _read(f"{path}/duplex") if carrier == "1" else None,
+               "mtu": _int(_read(f"{path}/mtu")), "mac": _read(f"{path}/address") or "",
+               "driver": os.path.basename(driver) if driver else "",
+               "counters": {key: _int(_read(f"{path}/statistics/{key}")) for key in PORT_COUNTERS}}
+        row["counters"]["carrier_changes"] = _int(_read(f"{path}/carrier_changes"))
+        if kind == "bond":
+            bonding = f"{path}/bonding"
+            partner = _read(f"{bonding}/ad_partner_mac")
+            row["bond"] = {"mode": (_read(f"{bonding}/mode") or "").split(" ")[0],
+                           "slaves": (_read(f"{bonding}/slaves") or "").split(),
+                           "active_slave": _read(f"{bonding}/active_slave") or "",
+                           "mii_status": _read(f"{bonding}/mii_status") or "",
+                           "miimon": _int(_read(f"{bonding}/miimon")),
+                           "primary": (_read(f"{bonding}/primary") or "").split(" ")[0],
+                           # 802.3ad only: all zeros until the switch answers LACP.
+                           "ad_partner_mac": partner or None}
+        member = f"{path}/bonding_slave"
+        if os.path.isdir(member):
+            row["bond_member"] = {"state": _read(f"{member}/state") or "",
+                                  "mii_status": _read(f"{member}/mii_status") or "",
+                                  "link_failure_count": _int(_read(f"{member}/link_failure_count")),
+                                  "aggregator": _int(_read(f"{member}/ad_aggregator_id"))}
+        return row
 
     # Kernel modules Longhorn's V2 (SPDK) engine needs on a host.
     V2_MODULES = ("vfio_pci", "uio_pci_generic", "nvme_tcp")
