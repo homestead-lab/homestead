@@ -3412,3 +3412,9 @@ html[data-theme="light"] .notification-center>button.danger{color:#a1242a}
 html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.drawer.open) .backtop,html:has(body.navopen) .backtop{display:none}
 @media(max-width:900px){.backtop{right:16px;bottom:calc(84px + env(safe-area-inset-bottom,0px) + var(--tray-lift, 4px) - 4px)}}
 @media(prefers-reduced-motion:reduce){.backtop,.backtop.on{transition:none}}
+
+/* Networking › What needs attention (#305): each item, why, and Show. */
+.net-attention{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.net-attention li{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:8px 0;border-top:1px solid var(--line)}
+.net-attention li:first-child{border-top:0}
+.net-attention b{overflow-wrap:anywhere}
