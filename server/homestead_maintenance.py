@@ -31,6 +31,17 @@ def drainable(pod):
                     for o in meta.get("ownerReferences") or []))
 
 
+def own_host_command(pod):
+    """Homestead's own one-script host helper (homestead_hostrun): pinned to
+    its host past any cordon, gone as soon as its script ends. Something
+    elsewhere in Homestead - reading a host's OS - can start one on a host
+    being drained; it is waited out, not taken for a workload."""
+    return NAMES.label_of(pod.get("metadata"), "task") == "host-run"
+
+
+HOST_COMMAND_BLOCKER = "host command may still be changing this host"
+
+
 def longhorn_instance_manager(pod):
     """Recognize Longhorn's per-node manager by ownership, not a name prefix."""
     meta, spec = pod.get("metadata") or {}, pod.get("spec") or {}
