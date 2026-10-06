@@ -49,16 +49,21 @@ def _controller_fact(obj):
     return _fact({**obj, "kind": "ReplicaSet", "apiVersion": "apps/v1"})
 
 
-def recheck_binding(approved, current):
-    """Fresh checks may remove a warning, never add one or change the work."""
+def recheck_binding(approved, current, stages=None):
+    """Fresh checks may remove a warning, never add one or change the work.
+    `stages` is the fresh review's public stages: a new warning is named in
+    its own words from there, the same text the administrator reviews."""
     changed = sorted(k for k in set(approved) | set(current) if k != "approvals" and approved.get(k) != current.get(k))
     old, new = approved.get("approvals", {}), current.get("approvals", {})
-    def receipt(a, b):
-        return a.get("proposal") == b.get("proposal") and set(b.get("warnings", [])) <= set(a.get("warnings", []))
+    said = {s.get("id"): (s.get("capacity") or {}).get("warnings") or [] for s in stages or [] if isinstance(s, dict)}
     def differences(stage, a, b):
-        # Which part, by name only: the work itself, or a warning it did not have.
+        # Which part: the work itself, or a warning it did not have.
+        added = set(b.get("warnings", [])) - set(a.get("warnings", []))
+        if not added:
+            return [f"{stage} workload"] if a.get("proposal") != b.get("proposal") else []
+        texts = [str(w)[:160] for w in said.get(stage, []) if isinstance(w, str) and D.warning_key(w) in added][:2]
         return ([f"{stage} workload"] if a.get("proposal") != b.get("proposal") else []) + \
-               ([f"{stage} new warning"] if not set(b.get("warnings", [])) <= set(a.get("warnings", [])) else [])
+               ([f"{stage} new warning: {text}" for text in texts] or [f"{stage} new warning"])
     try:
         parts = []
         if old["worker"]["threshold"] != new["worker"]["threshold"] or old["policy"]["threshold"] != new["policy"]["threshold"]:
@@ -73,7 +78,8 @@ def recheck_binding(approved, current):
     except (KeyError, TypeError):
         changed.append("capacity")
     if changed:
-        # Field names only: no configuration, secret, or API response values.
+        # Field names and the review's own capacity warnings only: no
+        # configuration, secret, or API response values.
         raise Held("Move review changed during preparation (" + ", ".join(changed) + "). Homestead has not been stopped. Keep the original volume, then review a new move.")
     return True
 
