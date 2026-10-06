@@ -160,6 +160,61 @@ class LonghornTests(unittest.TestCase):
         self.assertFalse(status["longhorn"]["installed"])
 
 
+class PreemptionTests(unittest.TestCase):
+    """A chart's install job outranks Longhorn's default priority: on a node
+    with no CPU to spare it would preempt the instance manager serving the
+    volumes attached there (the release suite saw Homestead's own data lost
+    this way). Homestead waits instead."""
+
+    def cluster(self, *, priority=1000000000, cpu="2", used="1900m", attached=True):
+        def pod(name, ns, node, cpu, labels=None, prio=0, phase="Running"):
+            return {"metadata": {"name": name, "namespace": ns, "labels": labels or {}},
+                    "spec": {"nodeName": node, "priority": prio,
+                             "containers": [{"resources": {"requests": {"cpu": cpu}}}]},
+                    "status": {"phase": phase}}
+        objects = {
+            "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes": {"items": [
+                {"status": {"state": "attached" if attached else "detached", "currentNodeID": "node-1"}}]},
+            "/api/v1/pods": {"items": [
+                pod("instance-manager-a", "longhorn-system", "node-1", "100m",
+                    {"longhorn.io/component": "instance-manager"}, priority),
+                pod("homestead", "lab", "node-1", used),
+                pod("done", "lab", "node-1", "4", phase="Succeeded")]},
+            "/api/v1/nodes": {"items": [{"metadata": {"name": "node-1"}, "status": {"allocatable": {"cpu": cpu}}}]},
+        }
+        sent = []
+        ADDONS.bind(lambda path: objects[path], lambda *a, **k: sent.append(a),
+                    lambda force=False: {"helm_controller": True}, lambda: {})
+        ADDONS._helmcharts = lambda: {}
+        return sent
+
+    def tearDown(self):
+        import importlib
+        importlib.reload(ADDONS)
+
+    def test_a_full_node_serving_volumes_holds_the_chart_and_sends_nothing(self):
+        sent = self.cluster()
+        self.assertEqual([("node-1", 0, 1)], ADDONS.preemption_risk())
+        with self.assertRaises(ADDONS.Held) as held:
+            ADDONS._post_chart("kube-vip", {"chart": "kube-vip"})
+        self.assertEqual([], sent)
+        self.assertIn("node-1 has 0m CPU unrequested", str(held.exception))
+        self.assertIn("system-node-critical", str(held.exception))
+
+    def test_room_or_a_high_enough_priority_or_nothing_attached_lets_it_through(self):
+        for why, kwargs in {"room": {"used": "1500m"}, "priority": {"priority": 2000001000},
+                            "detached": {"attached": False}}.items():
+            with self.subTest(why=why):
+                sent = self.cluster(**kwargs)
+                self.assertEqual([], ADDONS.preemption_risk())
+                ADDONS._post_chart("kube-vip", {"chart": "kube-vip"})
+                self.assertEqual("POST", sent[0][0])
+
+    def test_finished_pods_do_not_count_against_the_room(self):
+        self.cluster(used="1600m")
+        self.assertEqual([], ADDONS.preemption_risk(), "the Succeeded pod's 4 CPUs are free again")
+
+
 class ClusterCreatorTests(unittest.TestCase):
     CFG = {"name": "lab", "servers": 1, "agents": 1, "network": "lan", "addresses": ["192.0.2.50", "192.0.2.51"],
            "password": "long enough pass", "setup": "homestead"}

@@ -243,6 +243,9 @@ def install(cfg=None):
             return {"ok": True, "name": CHART, "detail": "KubeVirt's macvtap binding is registered"}
         raise ValueError("macvtap is installed already")
     content = addons.chart_archive("macvtap", version, manifests(p.get("distribution", ""), version), "")
+    # Its DaemonSet runs at system-node-critical: on a full node it would
+    # preempt the Longhorn instance manager serving the volumes there.
+    addons.preemption_hold("macvtap")
     try:
         chart = kget(f"/apis/helm.cattle.io/v1/namespaces/{NS}/helmcharts/{CHART}")
     except Exception:

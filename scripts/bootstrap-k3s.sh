@@ -495,6 +495,10 @@ if [ "$LONGHORN" = 1 ] && [ "$MODE" = addons ] && $KUBECTL get crd volumes.longh
 elif [ "$LONGHORN" = 1 ]; then
   say "Installing Longhorn${LONGHORN_VERSION:+ $LONGHORN_VERSION}"
   # One replica until more nodes join; raise it on the Volumes page later.
+  # system-node-critical: the Job that installs any HelmChart runs at
+  # system-cluster-critical, which outranks Longhorn's own default and can
+  # preempt the instance manager holding a node's attached volumes. The same
+  # values as homestead_addons.longhorn_values.
   CHART_VERSION=""
   [ -n "$LONGHORN_VERSION" ] && CHART_VERSION="  version: ${LONGHORN_VERSION#v}"
   cat > "$MANIFESTS/longhorn.yaml" <<EOF
@@ -516,6 +520,7 @@ $CHART_VERSION
       defaultClassReplicaCount: 1
     defaultSettings:
       defaultReplicaCount: 1
+      priorityClass: system-node-critical
 EOF
   apply "$MANIFESTS/longhorn.yaml"
   CLASS=longhorn; MODE_RW=ReadWriteMany

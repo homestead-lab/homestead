@@ -25,6 +25,7 @@ import urllib.error
 
 import homestead_names as NAMES
 import homestead_multus as MULTUS
+import homestead_pod_resources as RESOURCES
 
 kget = ksend = None
 platform = None          # what the cluster has, from homestead_platform
@@ -177,16 +178,108 @@ def _can_install(what):
     return p
 
 
+class Held(ValueError):
+    """Not now, and nothing was changed: asking again later can succeed."""
+
+
+# The Helm controller runs each chart's install Job at system-cluster-critical,
+# and a chart's own DaemonSet pods often run as high. Where Longhorn's
+# instance managers rank lower and a node has no CPU to spare, the scheduler
+# makes room by preempting the instance manager there, and every volume
+# attached on that node loses its disk mid-write. CHART_HEADROOM is the CPU,
+# in millicores, a node keeps unrequested for a chart's pods to fit beside it.
+CHART_JOB_PRIORITY = 2000000000
+CHART_HEADROOM = 250
+
+
+def preemption_risk():
+    """The nodes where installing a chart now could preempt the Longhorn
+    instance manager serving attached volumes: (node, free millicores,
+    volumes attached there), with the least room first. [] when there is no
+    Longhorn, nothing attached, or nothing it runs ranks below a chart."""
+    try:
+        volumes = (kget("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes") or {}).get("items") or []
+    except Exception:
+        return []
+    attached = {}
+    for volume in volumes:
+        status = volume.get("status") or {}
+        if status.get("state") == "attached" and status.get("currentNodeID"):
+            attached[status["currentNodeID"]] = attached.get(status["currentNodeID"], 0) + 1
+    if not attached:
+        return []
+    pods = (kget("/api/v1/pods") or {}).get("items") or []
+    running = [p for p in pods if (p.get("spec") or {}).get("nodeName")
+               and (p.get("status") or {}).get("phase") not in ("Succeeded", "Failed")]
+    exposed = set()
+    for pod in running:
+        meta, spec = pod.get("metadata") or {}, pod.get("spec") or {}
+        # The pod's own resolved priority: whatever class Longhorn was given.
+        if (meta.get("namespace") == "longhorn-system"
+                and (meta.get("labels") or {}).get("longhorn.io/component") == "instance-manager"
+                and spec["nodeName"] in attached and int(spec.get("priority") or 0) < CHART_JOB_PRIORITY):
+            exposed.add(spec["nodeName"])
+    if not exposed:
+        return []
+    requested = {}
+    for pod in running:
+        node = pod["spec"]["nodeName"]
+        requested[node] = requested.get(node, 0) + RESOURCES.pod_request(pod["spec"], "cpu")
+    risky = []
+    for node in (kget("/api/v1/nodes") or {}).get("items") or []:
+        name = (node.get("metadata") or {}).get("name")
+        if name not in exposed:
+            continue
+        allocatable = RESOURCES.quantity(((node.get("status") or {}).get("allocatable") or {}).get("cpu"), "cpu")
+        free = allocatable - requested.get(name, 0)
+        if free < CHART_HEADROOM:
+            risky.append((name, free, attached[name]))
+    return sorted(risky, key=lambda row: row[1])
+
+
+def preemption_hold(what):
+    """Refuse to start `what` while a chart's pods could preempt a Longhorn
+    instance manager serving attached volumes."""
+    risky = preemption_risk()
+    if not risky:
+        return
+    name, free, count = risky[0]
+    raise Held(f"{what} is waiting: {name} has {max(0, free)}m CPU unrequested, and installing a chart there now "
+               f"could stop the Longhorn instance manager serving its {count} attached volume{'s' if count != 1 else ''}, "
+               "which ranks below the chart's install job. Free some CPU on that host, or give Longhorn the "
+               f"{LONGHORN_PRIORITY} priority class (Longhorn's Priority Class setting, applied with every volume detached).")
+
+
 def _post_chart(name, spec):
     body = {"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
             "metadata": {"name": name, "namespace": CONTROLLER_NS, "labels": {NAMES.key("managed"): "true"}},
             "spec": spec}
     if name in _helmcharts():
         raise ValueError(f"{name} is already being installed; follow it in the job tray or on the Helm page")
+    preemption_hold(name)
     ksend("POST", f"/apis/helm.cattle.io/v1/namespaces/{CONTROLLER_NS}/helmcharts", body)
 
 
 # ------------------------------------------------------------------ Longhorn
+# Longhorn's instance managers run the engine of every volume attached on
+# their node. At Longhorn's own default priority (longhorn-critical,
+# 1000000000) the Job that installs any HelmChart - k3s and RKE2 run it at
+# system-cluster-critical - can preempt one on a node with no CPU to spare,
+# and each volume attached there loses its disk mid-write: Homestead's own
+# data among them. At system-node-critical nothing a chart starts outranks it.
+LONGHORN_PRIORITY = "system-node-critical"
+
+
+def longhorn_values(copies, priority=True):
+    """The chart values Homestead writes for Longhorn - here, in the
+    installer (bootstrap-k3s.sh) and as nodes join (homestead_node_parity)."""
+    lines = ["persistence:", f"  defaultClassReplicaCount: {copies}",
+             "defaultSettings:", f"  defaultReplicaCount: {copies}"]
+    if priority:
+        lines.append(f"  priorityClass: {LONGHORN_PRIORITY}")
+    return "\n".join(lines + [""])
+
+
 def install_longhorn(cfg=None):
     """Longhorn from its chart, keeping as many copies as there are nodes, up
     to three - one node can hold only one."""
@@ -198,8 +291,7 @@ def install_longhorn(cfg=None):
     except Exception:
         nodes = 1
     copies = max(1, min(3, nodes))
-    values = "\n".join(["persistence:", f"  defaultClassReplicaCount: {copies}",
-                        "defaultSettings:", f"  defaultReplicaCount: {copies}", ""])
+    values = longhorn_values(copies)
     _post_chart(CHARTS["longhorn"], {"repo": LONGHORN_REPO, "chart": "longhorn", "targetNamespace": "longhorn-system",
                                      "createNamespace": True, "valuesContent": values})
     return {"ok": True, "name": CHARTS["longhorn"], "job": f"helm-install-{CHARTS['longhorn']}", "copies": copies,
