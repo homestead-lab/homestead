@@ -90,6 +90,17 @@ class PlanTests(unittest.TestCase):
         nics = [nic("enp1s0", master="bond0"), nic("enp2s0", master="bond0"), nic("enp3s0")]
         return facts("bond", "bond0", nics, files, bond={"mode": "active-backup", "slaves": ["enp1s0", "enp2s0"], "active": "enp1s0"})
 
+    def test_a_mode_change_makes_the_bond_again_and_a_rollback_always_does(self):
+        p = BONDS.plan("h1", {"action": "change", "members": ["enp1s0", "enp2s0"], "mode": "802.3ad", "lacp_confirmed": True}, self.bonded())
+        self.assertTrue(p["spec"]["recreate"])
+        script = BONDS.change_script(p["spec"], "1")
+        self.assertIn("--on-active=3 /bin/sh -c 'ip link delete bond0 2>/dev/null; netplan apply'", script)
+        rollback = next(line for line in script.splitlines() if "--unit=homestead-bond-rollback" in line)
+        self.assertIn("ip link delete bond0 2>/dev/null; netplan apply'", rollback)
+        same = BONDS.plan("h1", {"action": "change", "members": ["enp1s0", "enp2s0", "enp3s0"]}, self.bonded())
+        self.assertFalse(same["spec"]["recreate"])
+        self.assertIn("--on-active=3 /bin/sh -c 'netplan apply'", BONDS.change_script(same["spec"], "1"))
+
     def test_change_and_remove_a_bond(self):
         p = BONDS.plan("h1", {"action": "change", "members": ["enp1s0", "enp2s0", "enp3s0"]}, self.bonded())
         self.assertEqual([], p["refusals"])

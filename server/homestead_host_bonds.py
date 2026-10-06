@@ -319,7 +319,10 @@ def plan(node, req, facts, busy=None, servers_ready=None):
     spec = {"action": action, "shape": shape["shape"], "file": shape["file"], "bond": bond, "members": members,
             "params": _params(mode, primary if mode == "active-backup" else ""), "mac": carrier_mac,
             "carrier_key": _eth_key(facts, shape["file"], shape["carrier_nic"]) if shape["carrier_nic"] else "",
-            "bridge": shape["bridge"], "keep": keep, "dhcp": bool(facts.get("dhcp"))}
+            "bridge": shape["bridge"], "keep": keep, "dhcp": bool(facts.get("dhcp")),
+            # networkd cannot change a live bond's mode: the bond is deleted
+            # just before netplan makes it again, in the same detached step.
+            "recreate": action == "change" and mode != (shape["mode"] or mode)}
     after = (shape["bridge"] or (keep if action == "remove" else bond))
     out = {"node": node, "action": action, "shape": shape, "bond": bond, "members": members, "mode": mode, "primary": primary,
            "keep": keep, "address": facts.get("address", ""), "carries_on": after, "renamed": renamed,
@@ -410,8 +413,8 @@ if ! netplan generate 2>/tmp/homestead-netplan.err; then
   echo "ERR netplan did not accept the new configuration ($(head -c 200 /tmp/homestead-netplan.err)); the old one is back"
   exit 1
 fi
-systemd-run --unit={UNIT} --on-active={ROLLBACK_SECONDS} /bin/sh -c 'rm -f /etc/netplan/*.yaml; cp -a {backup}/. /etc/netplan/; rm -f /etc/cloud/cloud.cfg.d/99-homestead-bond.cfg; netplan apply' >/dev/null
-systemd-run --unit=homestead-bond-apply --on-active=3 /usr/sbin/netplan apply >/dev/null
+systemd-run --unit={UNIT} --on-active={ROLLBACK_SECONDS} /bin/sh -c 'rm -f /etc/netplan/*.yaml; cp -a {backup}/. /etc/netplan/; rm -f /etc/cloud/cloud.cfg.d/99-homestead-bond.cfg; ip link delete {spec["bond"]} 2>/dev/null; netplan apply' >/dev/null
+systemd-run --unit=homestead-bond-apply --on-active=3 /bin/sh -c '{f"ip link delete {spec['bond']} 2>/dev/null; " if spec.get("recreate") else ""}netplan apply' >/dev/null
 echo "OK {backup}"
 """
 
