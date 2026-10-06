@@ -173,6 +173,32 @@ class Keeping(unittest.TestCase):
         VIPS.bind(lambda path: (_ for _ in ()).throw(AssertionError("read")), None)
         self.assertEqual(VIPS.keep({"load_balancer": "servicelb"}), [])
 
+    def test_after_the_cluster_was_off_an_old_vip_host_is_not_someone_answering(self):
+        # Seen after a full shutdown: Services kept the address and the
+        # node kube-vip named before, while kube-vip itself was starting
+        # again and held nothing. Nothing answered; it is not "k3s answers".
+        def old(name):
+            row = service(name, [8088], "192.0.2.108", SHARED, status=["192.0.2.108"])
+            row["metadata"]["annotations"][VIPS.HOST_KEY] = "k3s"
+            return row
+        services = [old("homestead-vip"), service("speedtest", [3002], "192.0.2.108", SHARED)]
+        ready = {("lab", "homestead-vip"): 1, ("lab", "speedtest"): 1}
+        booting = VIPS.address_map(services, [NODE], [lease(SHARED, "k3s", renewed="2026-09-29T20:20:57Z")], K3S,
+                                   endpoints=ready, now=NOW)
+        vip = next(row for row in booting["addresses"] if row["ip"] == "192.0.2.108")
+        self.assertNotEqual(vip["state"], "unrouted")
+        self.assertNotIn("answers for", vip["reason"])
+        # Once kube-vip holds its lease again, the node it names is believed.
+        elected = VIPS.address_map(services, [NODE], [lease("plndr-svcs-lock", "k3s", ns="kube-system")],
+                                   {**K3S, "vip_service_election": False}, endpoints=ready, now=NOW)
+        vip = next(row for row in elected["addresses"] if row["ip"] == "192.0.2.108")
+        self.assertEqual((vip["state"], vip["node"]), ("unrouted", "k3s"))
+
+    def test_an_address_alert_waits_out_the_cluster_starting(self):
+        facts = VIPS.alert_facts({"addresses": [{"ip": "a", "state": "unrouted", "reason": "r"}]})
+        self.assertEqual(VIPS.ADDRESS_HOLD, facts[0]["hold"])
+        self.assertGreaterEqual(VIPS.ADDRESS_HOLD, 300)
+
     def test_alert_only_for_addresses_that_need_someone(self):
         facts = VIPS.alert_facts({"addresses": [{"ip": "a", "state": "unrouted", "reason": "r"},
                                                 {"ip": "b", "state": "idle"}, {"ip": "c", "state": "ok"}]})

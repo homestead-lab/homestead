@@ -132,6 +132,15 @@ def _announcer(service, holders, platform):
     return next((holders[key] for key in candidates if key in holders), "")
 
 
+def kube_vip_electing(services, holders):
+    """Whether kube-vip holds any lease of its own now: the one election
+    for every Service, one named for a Service, or a lease Services share."""
+    shared = {((s.get("metadata") or {}).get("namespace", ""), ((s.get("metadata") or {}).get("annotations") or {}).get(LEASE_KEY))
+              for s in services}
+    return any(key == ("kube-system", "plndr-svcs-lock") or key[1].startswith("kubevip-") or key in shared
+               for key in holders)
+
+
 def _ip_key(ip):
     return tuple(int(part) if part.isdigit() else 999 for part in str(ip).split("."))
 
@@ -147,6 +156,7 @@ def address_map(services, nodes, leases, platform, endpoints=None, targets=None,
     known = endpoints is not None
     endpoints, targets = endpoints or {}, targets or {}
     holders = live_holders(leases, now)
+    electing = kube_vip_electing(services, holders)
     node_rows, node_of_ip = [], {}
     for node in nodes:
         meta, status = node.get("metadata") or {}, node.get("status") or {}
@@ -188,9 +198,11 @@ def address_map(services, nodes, leases, platform, endpoints=None, targets=None,
         else:
             ips = requested or assigned
             announcer = _announcer(service, holders, platform) if controller == "kube-vip" else ""
-            if not announcer and controller == "kube-vip" and assigned:
+            if not announcer and controller == "kube-vip" and assigned and electing:
                 # A Service kube-vip recorded, elected somewhere Homestead
                 # cannot see: the node it last named is the best there is.
+                # Not while kube-vip holds none of its leases - starting
+                # again after the cluster was off - when that name is old.
                 announcer = (meta.get("annotations") or {}).get(HOST_KEY) or ""
         for ip in ips:
             row = entry(ip, "node" if ip in node_of_ip else "vip", node_of_ip.get(ip, ""))
@@ -397,6 +409,9 @@ def kept():
         return list(_kept)
 
 
+ADDRESS_HOLD = 300
+
+
 def alert_facts(addresses):
     """An address no connection reaches, as a condition: one Homestead
     records itself clears before the alert's hold time, so what is left is
@@ -405,7 +420,9 @@ def alert_facts(addresses):
     for row in (addresses or {}).get("addresses") or []:
         if row.get("state") not in ("unrouted", "unannounced"):
             continue
-        facts.append({"key": f"address:{row['ip']}", "category": "degraded", "severity": "degraded",
+        # kube-vip electing again and Homestead recording what it left off
+        # take a few minutes after the cluster starts: held that long.
+        facts.append({"key": f"address:{row['ip']}", "category": "degraded", "severity": "degraded", "hold": ADDRESS_HOLD,
                       "title": f"Service address {row['ip']} has no route",
                       "resolved": f"Service routing warning cleared: {row['ip']}",
                       "body": row.get("reason", ""), "href": "/networking"})

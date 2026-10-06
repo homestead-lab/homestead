@@ -138,3 +138,23 @@ class AcknowledgementTests(unittest.TestCase):
         identity.return_value=None;self.assertEqual(401,post("/api/alerts/acknowledge",body))
 
 if __name__=="__main__":unittest.main()
+
+
+class HoldTests(unittest.TestCase):
+    """A condition can ask to be held longer than the usual minute: a
+    service address after the cluster starts settles by itself in minutes."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        A.bind(self.temp.name)
+
+    def test_a_longer_hold_is_waited_out_and_one_that_clears_inside_it_is_never_raised(self):
+        import homestead_vips as VIPS
+        fact = VIPS.alert_facts({"addresses": [{"ip": "192.0.2.108", "state": "unrouted", "reason": "r"}]})
+        self.assertEqual([], A.observe({"addresses": fact}, 1000))
+        self.assertEqual([], A.observe({"addresses": fact}, 1000 + A.HOLD + 5), "past the usual minute, still held")
+        self.assertEqual([], A.observe({"addresses": []}, 1200), "it cleared: never news")
+        self.assertEqual([], A.observe({"addresses": []}, 1400))
+        A.observe({"addresses": fact}, 2000)
+        raised = A.observe({"addresses": fact}, 2000 + VIPS.ADDRESS_HOLD)
+        self.assertEqual(["raised"], [e["phase"] for e in raised], "still there after its hold: raised")

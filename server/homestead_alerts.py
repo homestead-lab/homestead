@@ -146,7 +146,10 @@ def observe(results, now=None):
                     continue
                 if fact.get("event") and seeding:
                     row["announced"] = -1
-                elif fact.get("event") or now - row["since"] >= HOLD:
+                # A condition may ask to be held longer before it is raised:
+                # one that settles by itself on its own time (a cluster
+                # coming back) is not news within it.
+                elif fact.get("event") or now - row["since"] >= max(HOLD, int(fact.get("hold") or 0)):
                     entry = _append(state, row, "raised", now)
                     row["announced"], row["notice"] = entry["id"], _snapshot(row)
                     fresh.append(entry)
