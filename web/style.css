@@ -3452,3 +3452,5 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .net-path-step b{font-size:13px}.net-path-step small{color:var(--mut);font-size:11.5px}
 .net-path-step:hover{border-color:var(--tx)}.net-path-step:focus-visible{outline:2px solid var(--low);outline-offset:2px}
 @media(max-width:640px){.net-path{flex-direction:column}.net-path>i{transform:rotate(90deg)}}
+.bond-compare{display:grid;grid-template-columns:minmax(0,1fr);gap:10px;min-width:0}
+.bond-compare>div{min-width:0}.bond-compare .ports-picture .diagram{min-width:420px}
