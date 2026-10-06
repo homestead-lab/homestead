@@ -261,6 +261,8 @@ class NetworkUpgradeStatusTests(unittest.TestCase):
 
 
 class FakeAddons:
+    Held = type("Held", (ValueError,), {})
+
     def __init__(self, status):
         self._status, self.installed = status, []
 
@@ -373,6 +375,22 @@ class BaselineTests(unittest.TestCase):
         self.addons.install_kube_vip = refuse
         results = BASELINE.install(["kube-vip"])
         self.assertEqual((False, "kube-vip is already being installed"), (results[0]["ok"], results[0]["detail"]))
+
+    def test_a_part_held_back_to_spare_longhorns_volumes_is_asked_again(self):
+        held, original = [True], self.addons.install_kube_vip
+        def maybe(cfg):
+            if held[0]:
+                raise FakeAddons.Held("kube-vip is waiting: node-1 has 0m CPU unrequested")
+            return original(cfg)
+        self.addons.install_kube_vip = maybe
+        first = {row["id"]: row for row in BASELINE.tick()}
+        self.assertTrue(first["kube-vip"]["held"])
+        self.assertNotIn("kube-vip", BASELINE._load().get("done", {}), "held is not tried: it is not recorded")
+        self.assertEqual(["multus"], [part for part, _ in self.addons.installed])
+        held[0] = False
+        self.assertEqual(["kube-vip"], [row["id"] for row in BASELINE.tick()])
+        self.assertEqual(["multus", "kube-vip"], [part for part, _ in self.addons.installed])
+        self.assertEqual([], BASELINE.tick(), "and then, as any part, never again")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -228,6 +229,30 @@ class NodeParityTests(unittest.TestCase):
         cluster.objects["/api/v1/nodes"]["items"].pop()
         self.assertIsNone(PARITY.copies_tick(), "a node leaving lowers nothing")
         self.assertIn("defaultReplicaCount: 3", chart["spec"]["valuesContent"])
+
+    def test_copies_rise_on_an_install_that_gave_longhorn_its_priority_and_it_is_kept(self):
+        chart = {"spec": {"valuesContent": PARITY.addons.longhorn_values(1)}}
+        cluster = Cluster([node("a"), node("b"), node("c")], {f"{HELM}/longhorn": chart, PARITY.LONGHORN_SETTING: {"value": "1"}})
+        self.bind(cluster)
+        PARITY._seen_ready = None
+        self.assertIn("keep 3 copies", PARITY.copies_tick())
+        sent = next(body for _, path, body in cluster.sent if path == f"{HELM}/longhorn")["spec"]["valuesContent"]
+        self.assertEqual(PARITY.addons.longhorn_values(3), sent)
+        self.assertIn("priorityClass: system-node-critical", sent)
+
+    def test_an_older_install_rises_without_gaining_a_priority_longhorn_would_refuse(self):
+        cluster = Cluster([node("a"), node("b")], {f"{HELM}/longhorn": {"spec": {"valuesContent": INSTALLER_LONGHORN}},
+                                                  PARITY.LONGHORN_SETTING: {"value": "1"}})
+        self.bind(cluster)
+        PARITY._seen_ready = None
+        self.assertIn("keep 2 copies", PARITY.copies_tick())
+        sent = next(body for _, path, body in cluster.sent if path == f"{HELM}/longhorn")["spec"]["valuesContent"]
+        self.assertNotIn("priorityClass", sent)
+
+    def test_the_installer_writes_the_same_longhorn_values_as_homestead(self):
+        script = (Path(__file__).resolve().parents[1] / "scripts" / "bootstrap-k3s.sh").read_text(encoding="utf-8")
+        block = script.split("  valuesContent: |\n", 1)[1].split("EOF\n", 1)[0]
+        self.assertEqual(PARITY.addons.longhorn_values(1), textwrap.dedent(block))
 
     def test_a_count_someone_set_after_homestead_is_kept(self):
         chart = {"spec": {"valuesContent": INSTALLER_LONGHORN.replace("1", "2")}}

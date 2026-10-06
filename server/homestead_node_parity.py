@@ -51,8 +51,10 @@ LONGHORN_SETTING = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/setting
 VIP_INTERFACE = re.compile(r'(?m)^  vip_interface: "?([A-Za-z0-9_.:-]{1,15})"?\n')
 # Exactly what the installer (bootstrap-k3s.sh) and Add-ons write for one
 # machine: nothing else in the values, so nothing anyone chose is changed.
+# Newer installs also give Longhorn its priority (addons.longhorn_values).
 INSTALLER_COPIES = re.compile(r"\s*persistence:\s*\n\s+defaultClassReplicaCount:\s*(\d+)\s*\n"
-                              r"\s*defaultSettings:\s*\n\s+defaultReplicaCount:\s*(\d+)\s*")
+                              r"\s*defaultSettings:\s*\n\s+defaultReplicaCount:\s*(\d+)\s*"
+                              r"(?:priorityClass:\s*(" + re.escape(addons.LONGHORN_PRIORITY) + r")\s*)?")
 
 # The host steps this release takes; a host done with fewer is done again.
 HOST_STEPS = 2
@@ -356,8 +358,9 @@ def longhorn_copies(ready):
     if want <= have:
         return None
     ksend("PATCH", f"{HELMCHARTS}/longhorn",
-          {"spec": {"valuesContent": "\n".join(["persistence:", f"  defaultClassReplicaCount: {want}",
-                                                "defaultSettings:", f"  defaultReplicaCount: {want}", ""])}},
+          # The priority stays as the install wrote it: an older install's
+          # Longhorn changes it only with every volume detached.
+          {"spec": {"valuesContent": addons.longhorn_values(want, priority=bool(match.group(3)))}},
           ctype="application/merge-patch+json")
     # The chart's defaults reach a running Longhorn only at its install; the
     # setting is what it reads for each new volume now.

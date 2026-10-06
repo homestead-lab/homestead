@@ -202,6 +202,9 @@ def install(which=None, versions=None, reason="asked"):
                 result = installers[part](cfg)
                 done[part] = {"at": int(time.time()), "version": cfg.get("version", ""), "reason": reason, "error": ""}
                 results.append({"id": part, "ok": True, "detail": result.get("detail", ""), "job": result.get("job", "")})
+            except addons.Held as error:
+                # Not tried, so not recorded: the next tick asks again.
+                results.append({"id": part, "ok": False, "held": True, "detail": str(error)[:400]})
             except Exception as error:
                 done[part] = {"at": int(time.time()), "version": cfg.get("version", ""), "reason": reason,
                               "error": str(error)[:240]}
@@ -238,10 +241,15 @@ def tick():
     results = install(pending, wanted, reason="installer")
     for row in results:
         print(f"platform: {NAMES[row['id']]} (requested at installation): "
-              f"{'installing' if row['ok'] else 'installation failed'}: {row['detail']}", flush=True)
-    # Marked as seen even when already there, so it is not asked again.
+              f"{'installing' if row['ok'] else 'waiting' if row.get('held') else 'installation failed'}: "
+              f"{row['detail']}", flush=True)
+    # Marked as seen even when already there, so it is not asked again -
+    # except a part held back, which is asked again on the next tick.
+    held = {row["id"] for row in results if row.get("held")}
     state = _load()
     for part in pending:
+        if part in held:
+            continue
         state.setdefault("done", {}).setdefault(part, {"at": int(time.time()), "version": "", "reason": "present",
                                                        "error": ""})
     _save(state)

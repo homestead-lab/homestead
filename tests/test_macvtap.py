@@ -35,6 +35,7 @@ class Cluster:
         class Addons:
             chart_archive = staticmethod(lambda name, version, manifests, extra: {"version": version, "manifests": manifests})
             _post_chart = staticmethod(lambda name, spec: self.charts.append((name, spec)))
+            preemption_hold = staticmethod(lambda what: None)
         MACVTAP.bind(self.get, self.send, Addons, lambda force=False: self.platform)
 
     def get(self, path):
@@ -176,7 +177,8 @@ class ChartTests(unittest.TestCase):
         original = cluster.get
         cluster.get = lambda path: chart if path.endswith("/helmcharts/" + MACVTAP.CHART) else original(path)
         MACVTAP.bind(cluster.get, cluster.send, type("A", (), {"chart_archive": staticmethod(lambda *a: "new"),
-                     "_post_chart": staticmethod(lambda *a: cluster.charts.append(a))}), lambda force=False: cluster.platform)
+                     "_post_chart": staticmethod(lambda *a: cluster.charts.append(a)),
+                     "preemption_hold": staticmethod(lambda what: None)}), lambda force=False: cluster.platform)
         MACVTAP.install()
         put = next(body for method, path, body in cluster.sent if method == "PUT")
         self.assertEqual("new", put["spec"]["chartContent"])
