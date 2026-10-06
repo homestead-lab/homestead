@@ -366,34 +366,49 @@ def newer_semver(current, tags):
     return max(valid, default=(None, None))[1]
 
 
-def channel_release(current, tags, channel):
-    """Newest release in this channel, including a return to an older prod.
+RELEASE = r"v?(\d+)\.(\d+)\.(\d+)(?:-dev\.(\d+))?"
 
-    Only Homestead uses channels; apps keep their existing tag policy. The
-    major stays fixed so choosing a channel cannot cross a major upgrade.
-    """
-    pattern = r"v?(\d+)\.(\d+)\.(\d+)(?:-dev\.(\d+))?"
-    installed = re.fullmatch(pattern, current or "")
+
+def release_key(tag):
+    """A release's place in time: 2.8.317-dev.1 < 2.8.317-dev.2 < 2.8.317 <
+    2.8.318-dev.1. A release comes after its own previews; None if not one."""
+    match = re.fullmatch(RELEASE, tag or "")
+    if not match:
+        return None
+    return tuple(int(match[i]) for i in (1, 2, 3)) + ((0, int(match[4])) if match[4] is not None else (1, 0))
+
+
+def channel_newest(current, tags, channel):
+    """This channel's newest release in the installed major version."""
+    installed = re.fullmatch(RELEASE, current or "")
     if not installed:
         raise ValueError("No release version is known for Homestead; redeploy it from a numbered release tag")
     major = int(installed[1])
-    releases = []
-    for tag in tags:
-        match = re.fullmatch(pattern, tag)
-        if not match or (channel == "dev") != (match[4] is not None):
-            continue
-        version = tuple(int(match[i]) for i in (1, 2, 3))
-        if version[0] == major:
-            releases.append((version + (int(match[4] or 0),), tag))
+    releases = [(release_key(tag), tag) for tag in tags if re.fullmatch(RELEASE, tag)
+                and (channel == "dev") == ("-dev." in tag) and release_key(tag)[0] == major]
     if not releases:
         raise ValueError(f"No {channel} release is published for this Homestead major version")
-    newest, tag = max(releases)
-    installed_version = tuple(int(installed[i]) for i in (1, 2, 3)) + (int(installed[4] or 0),)
-    # A partial registry listing must not offer a downgrade within a channel.
-    # Returning from dev to prod intentionally selects that channel's newest.
-    if (channel == "dev") == (installed[4] is not None) and newest < installed_version:
-        return current
-    return tag
+    return max(releases)[1]
+
+
+def channel_release(current, tags, channel):
+    """What to update to: this channel's newest release, if it is newer than
+    the one installed - never an older one. A dev build ahead of prod, or a
+    prod release ahead of the last dev build, stays put until its channel
+    catches up (channel_behind says so). The major stays fixed, so choosing a
+    channel cannot cross a major upgrade."""
+    newest = channel_newest(current, tags, channel)
+    return newest if release_key(newest) > release_key(current) else current
+
+
+def channel_behind(current, tags, channel):
+    """The channel's newest release when it is older than the one installed,
+    else "": what the page says instead of offering it."""
+    try:
+        newest = channel_newest(current, tags, channel)
+    except ValueError:
+        return ""
+    return newest if release_key(newest) < release_key(current) else ""
 
 
 def _pod_digest(pods, container):
@@ -456,8 +471,15 @@ def _check_deployment(dep, pods, force=False, persist=True, channel=None):
                        or ran.get(container["name"], ""))
             candidate_tag = None
             if own:
-                version = parsed["tag"] if re.fullmatch(r"v?\d+\.\d+\.\d+(?:-dev\.\d+)?", parsed["tag"]) else VERSION()
-                candidate_tag = channel_release(version, registry_tags(source, auths, force), channel)
+                # What is installed: the newer of the tag recorded for this
+                # image and the version running. An update made outside this
+                # page (the installer, Helm) leaves the record behind, and
+                # comparing with it offered releases older than the one running.
+                known = [v for v in (parsed["tag"], VERSION()) if release_key(v)]
+                version = max(known, key=release_key) if known else parsed["tag"]
+                tags = registry_tags(source, auths, force)
+                candidate_tag = channel_release(version, tags, channel)
+                item["channel_behind"] = channel_behind(version, tags, channel)
             else:
                 try:
                     candidate_tag = newer_semver(parsed["tag"], registry_tags(source, auths, force))

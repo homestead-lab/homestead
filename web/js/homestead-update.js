@@ -192,15 +192,18 @@ function homesteadUpdateRepaint() {
 }
 
 function homesteadUpdateBody(inCard = false) {
-  const { report, parts, release, waiting, failed } = homesteadUpdates();
+  const { report, parts, self, release, waiting, failed } = homesteadUpdates();
   const picker = homesteadChannelPicker();
   if (!report) return '<div class="empty small"><span class="spin2"></span> Asking the registries…</div>' + picker;
   const checked = checkedAgo(), linked = linkedMembers();
+  // The channel's newest is older than this build: said, never offered.
+  const behind = (self?.images || []).map(i => i.channel_behind).find(Boolean) || "";
   const head = release
     ? `<div class="hs-release"><span class="dim xs">NEW RELEASE</span><b>Homestead ${esc(release)}</b>
         <span class="dim small"><a href="${safeHref(`${HOMESTEAD_RELEASES}/tag/v${release}`)}" target="_blank" rel="noopener">What's new ${icon("ext")}</a></span></div>`
     : `<div class="hs-release current"><span class="dim xs">RELEASE</span><b>Homestead v${esc(HOMESTEAD_VERSION)}</b>
-        <span class="dim small">${failed.length ? "Release check needs attention" : waiting.length ? "A helper has an update" : "Up to date"}${checked ? ` · ${esc(checked)}` : ""} · <a href="${safeHref(HOMESTEAD_RELEASES)}" target="_blank" rel="noopener">releases ${icon("ext")}</a></span></div>`;
+        <span class="dim small">${failed.length ? "Release check needs attention" : waiting.length ? "A helper has an update" : "Up to date"}${checked ? ` · ${esc(checked)}` : ""} · <a href="${safeHref(HOMESTEAD_RELEASES)}" target="_blank" rel="noopener">releases ${icon("ext")}</a></span>
+        ${behind ? `<span class="dim small hs-behind">${esc(channelBehindWords(behind, report))}</span>` : ""}</div>`;
   // This cluster's row: its version, and each part that would change.
   const me = (window.FLEET?.view?.members || []).find(m => m.self);
   const channel = (STATE.data.appSettings?.updates?.channel || report.channel || "prod") === "dev" ? "Dev" : "Prod";
@@ -228,6 +231,14 @@ function homesteadUpdateBody(inCard = false) {
     <div class="row hs-actions">${label ? `<button class="btn pri" data-need="operator" onclick="homesteadUpdateReview()" ${HOMESTEAD_CHANNEL_SAVING ? "disabled" : ""}>${esc(label)}</button>` : ""}
       <button class="btn" onclick="homesteadUpdateCheck(this)" ${HOMESTEAD_CHANNEL_SAVING || FLEET_UPDATES.loading ? "disabled" : ""}>${FLEET_UPDATES.loading ? "Checking…" : "↻ Check now"}</button></div>
     <div class="hs-channel">${picker}</div>`;
+}
+
+/* A dev build ahead of prod, or a prod release ahead of the last dev
+   build: Homestead stays on it until its channel publishes a newer one. */
+function channelBehindWords(behind, report) {
+  const dev = (STATE.data.appSettings?.updates?.channel || report?.channel || "prod") === "dev";
+  return `${dev ? "Dev" : "Prod"}'s newest is v${behind}, older than this ${/-dev\./.test(HOMESTEAD_VERSION) ? "preview" : "release"}: `
+    + `Homestead stays on v${HOMESTEAD_VERSION} until ${dev ? "a newer preview" : "a newer prod release"} is published.`;
 }
 
 window.homesteadUpdateDialog = async () => {
