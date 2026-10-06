@@ -59,12 +59,24 @@ window.clusterShutdownProgress = state => {
   shutdownPaint(state);
   shutdownPoll(state);
 };
+// What a pod still on its host is waiting for, while the hosts drain.
+const SHUTDOWN_DRAIN_WORDS = {evicting:'Being evicted', stopping:'Stopping',
+  budget:'Its disruption budget · stopped directly within 30 s'};
 function shutdownPaint(state, disconnected = false) {
   const box = $('#shutdownLive');
   if (!box) return;
-  box.innerHTML = UI.lead(esc(state.message)) + UI.progress(state.progress, {label:'Last verified stage', detail:state.phase}) +
+  const drain = ['draining', 'stopping-homestead'].includes(state.phase) && state.drain?.total ? state.drain : null;
+  const left = name => (drain?.pods || []).filter(p => p.node === name).length;
+  // The table says which pods and why; the lead says only what is happening.
+  const lead = drain && state.phase === 'draining'
+    ? 'Stopping applications on every host. Homestead stays online until they have stopped. A pod whose disruption budget can no longer be met, with every host cordoned, is stopped directly after 30 seconds.'
+    : state.message;
+  box.innerHTML = UI.lead(esc(lead)) +
+    UI.progress(state.progress, {label: drain ? `${drain.done} of ${drain.total} pod${drain.total === 1 ? '' : 's'} stopped` : 'Last verified stage', detail:state.phase}) +
     (disconnected ? UI.callout('warn', 'Connection lost · power state unverified', 'Showing the last observation. The independent coordinator may still be working. This page will check again automatically.') : '') +
-    UI.table([{label:'Host'}, {label:'Last observation'}], state.plan.nodes.map(n => [esc(n.name), `${esc(state.hosts?.find(h => h.name === n.name)?.state || 'Waiting for helper')}<span class="sub">${n.name === state.plan.own_node ? 'Last · Homestead host' : 'Power after all applications and volumes stop'}</span>`]));
+    (drain && drain.pods.length ? UI.section('Still stopping', UI.table([{label:'Pod'}, {label:'Host'}, {label:'Waiting for'}],
+      drain.pods.map(p => [esc(p.pod), esc(p.node), esc(SHUTDOWN_DRAIN_WORDS[p.state] || p.state)]))) : '') +
+    UI.table([{label:'Host'}, {label:'Last observation'}], state.plan.nodes.map(n => [esc(n.name), `${esc(state.hosts?.find(h => h.name === n.name)?.state || 'Waiting for helper')}${left(n.name) ? ` · ${left(n.name)} pod${left(n.name) === 1 ? '' : 's'} still stopping` : ''}<span class="sub">${n.name === state.plan.own_node ? 'Last · Homestead host' : 'Power after all applications and volumes stop'}</span>`]));
 }
 function shutdownPoll(last) {
   if (!$('#shutdownLive')) return;
