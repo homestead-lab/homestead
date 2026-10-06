@@ -128,7 +128,7 @@ async function viewSettings() {
         ${UI.moduleHeader(`Drive health`, `SMART warnings shown on node cards and in cluster health`, `${can("admin") ? "" : '<span class="pill neutral">admin managed</span>'}`)}
         <div class="threshold-grid">
           ${thresholdEditor("drive_temperature", "Drive temperature", "°C", "SATA, SAS, and NVMe temperature", smart.temperature)}
-          <div class="threshold-card"><div><b>Media counters</b><div class="dim xs">Recommended: 1 for each counter (first reported sector).</div></div>
+          <div class="threshold-card counters"><div><b>Media counters</b><div class="dim xs">Recommended: 1 for each counter (first reported sector).</div></div>
             <div class="smart-threshold-values">
               <label>Reallocated · warning ${tip("Sectors already replaced with spares. A stable count can be historical; review increases and verify backups. Recommended: 1.")} <input id="set_smart_reallocated" type="number" min="1" max="1000000" value="${smart.reallocated_warning}" ${can("admin") ? "" : "disabled"}></label>
               <label>Pending · critical ${tip("Sectors the drive cannot currently read reliably. Verify backups and investigate any nonzero count. Recommended: 1.")} <input id="set_smart_pending" type="number" min="1" max="1000000" value="${smart.pending_critical}" ${can("admin") ? "" : "disabled"}></label>

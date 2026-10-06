@@ -123,6 +123,15 @@ async function audit([label, width, height, mobile], items) {
         const texts = visible.filter((e) => [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()));
         const tiny = texts.filter((e) => parseFloat(getComputedStyle(e).fontSize) < 10)
           .map((e) => `${e.tagName.toLowerCase()}.${[...e.classList].slice(0, 2).join(".")} ${getComputedStyle(e).fontSize}`);
+        // Text squeezed into a narrow column beside a row's pill or buttons:
+        // under 90px and three or more lines (the phone Image updates rows).
+        const squeezed = texts.filter((e) => {
+          if (e.closest("pre, code, table, svg, .monaco-editor, .xterm")) return false;
+          const r = e.getBoundingClientRect(), range = document.createRange();
+          range.selectNodeContents(e);
+          const lines = new Set([...range.getClientRects()].map((x) => Math.round(x.top))).size;
+          return r.width < 90 && lines >= 3 && e.textContent.trim().length > 12;
+        }).map((e) => `${e.tagName.toLowerCase()}.${[...e.classList].slice(0, 2).join(".")} "${e.textContent.trim().slice(0, 30)}"`);
         return {
           title: document.querySelector("#views .phead h1, #views .phead h2, #views .phead")?.textContent.trim().split("\n")[0].slice(0, 40),
           height: document.documentElement.scrollHeight,
@@ -131,6 +140,7 @@ async function audit([label, width, height, mobile], items) {
           words: root.innerText.split(/\s+/).filter(Boolean).length,
           overflow: [...new Set(wide)].slice(0, 6),
           tiny: [...new Set(tiny)].slice(0, 8),
+          squeezed: [...new Set(squeezed)].slice(0, 6),
         };
       });
       await page.screenshot({ path: `${output}/${name}-${label}.png`, fullPage: true });
@@ -138,6 +148,7 @@ async function audit([label, width, height, mobile], items) {
       if (metrics.sideways) failures.push(`${name} (${label}): the page scrolls sideways`);
       if (metrics.overflow.length) failures.push(`${name} (${label}): runs off the screen: ${metrics.overflow.join(", ")}`);
       if (metrics.tiny.length) failures.push(`${name} (${label}): text under 10px: ${metrics.tiny.join(", ")}`);
+      if (metrics.squeezed.length) failures.push(`${name} (${label}): text squeezed into a narrow column: ${metrics.squeezed.join(", ")}`);
     } catch (error) {
       failures.push(`${name} (${label}): could not open: ${error.message.split("\n")[0]}${errors.length ? ` - error: ${errors.at(-1)}` : ""}`);
     }
