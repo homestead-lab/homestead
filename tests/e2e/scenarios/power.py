@@ -7,6 +7,7 @@ from harness import log
 from harness.api import HomesteadError
 
 BUSY = "host command may still be changing this host"
+CHANGED = "host impact changed; review the plan again"
 
 
 def _plan(ctx, node, action, wait=180):
@@ -25,7 +26,10 @@ def _send(ctx, plan, choices=None, wait=180):
     """Send a reviewed power action. Homestead's own short host commands
     (reading a host's OS, holding its updates) run for a moment after
     install, and the review rightly waits for them: so does this, reviewing
-    again until they end."""
+    again until they end. An app started just before the review may still be
+    settling its volume when the action is sent, so the host's impact has
+    changed and Homestead refuses the old review: as a person would, this
+    reviews again and sends the new one."""
     deadline = time.time() + wait
     while True:
         body = {"node": plan["node"], "action": plan["action"], "confirm": plan["node"], "review_token": plan["review_token"],
@@ -35,9 +39,11 @@ def _send(ctx, plan, choices=None, wait=180):
             answer = ctx.api.post("/api/node/power", body)
             return answer["operation"]["id"]
         except HomesteadError as error:
-            if error.status != 409 or BUSY not in str(error) or time.time() > deadline:
+            busy, changed = BUSY in str(error), CHANGED in str(error)
+            if error.status != 409 or not (busy or changed) or time.time() > deadline:
                 raise
-            log.info(f"{plan['node']}: a host command is still running; reviewing again")
+            log.info(f"{plan['node']}: " + ("a host command is still running" if busy else "its impact changed since the review")
+                     + "; reviewing again")
             time.sleep(10)
             plan = _plan(ctx, plan["node"], plan["action"])
 

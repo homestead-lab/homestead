@@ -9,6 +9,9 @@ import urllib.request
 
 from . import log
 
+# A data move's own progress server answers every change with this.
+PROGRESS_ONLY = "This endpoint only reports progress"
+
 
 class HomesteadError(RuntimeError):
     def __init__(self, status, body, path):
@@ -57,7 +60,10 @@ class Homestead:
                     self.sign_in(base)
                     status, answer = self._once(base, method, path, body, timeout)
                 # Away, or asking to come back shortly ("storage is initializing").
-                if status in (429, 502, 503, 504):
+                # Right after a data move the move's progress server can still
+                # hold the address for a moment, refusing anything but its own
+                # status: Homestead is not back yet, so ask again.
+                if status in (429, 502, 503, 504) or (status == 405 and PROGRESS_ONLY in str(answer)):
                     last = HomesteadError(status, answer, path)
                     continue
                 if status not in ok:

@@ -100,6 +100,37 @@ def _until_api(ctx, call, what, timeout=900):
     raise AssertionError(f"{what}: {last}")
 
 
+def _expose(ctx, name, vip, port, target_port, timeout=900):
+    """Expose a workload on a VIP, asking again while Homestead refuses it.
+    A busy host can take Homestead down after it made the Service but before
+    it answered; the next ask is then told the Service already exists. That
+    Service is this one when Homestead made it for this workload on this VIP,
+    so it counts as exposed - the address answering is checked after. (The
+    lost answer may already have been asked again inside the API client, so
+    this can be the first answer seen here.)"""
+    deadline, last = time.time() + timeout, None
+    while time.time() < deadline:
+        try:
+            return ctx.api.post("/api/network/services", {
+                "namespace": "lab", "workload": name, "name": name, "type": "LoadBalancer",
+                "vip_mode": "manual", "vip": vip, "ports": [{"port": port, "target_port": target_port}]})
+        except HomesteadError as error:
+            last = error
+            if error.status == 400 and f"Service lab/{name} already exists" in str(error):
+                service = ctx.kube.get("service", "-n", "lab", name)
+                meta = service.get("metadata") or {}
+                annotations = meta.get("annotations") or {}
+                ours = (meta.get("labels") or {}).get("homestead.io/managed") == "true" \
+                    and annotations.get("homestead.io/workload") == name
+                on_vip = vip in (annotations.get("kube-vip.io/loadbalancerIPs"), annotations.get("metallb.universe.tf/loadBalancerIPs"),
+                                 (service.get("spec") or {}).get("loadBalancerIP"))
+                assert ours and on_vip, f"lab/{name} exists but is not Homestead's Service for it on {vip}: {meta}"
+                log.info(f"lab/{name}: Homestead made the Service before its answer was lost; carrying on")
+                return {"vip": vip}
+            time.sleep(10)
+    raise AssertionError(f"expose {name}: {last}")
+
+
 # ------------------------------------------------------------------- VIP
 def vip(ctx):
     """Homestead's own VIP answers; an app given a VIP from the pool answers
@@ -113,9 +144,7 @@ def vip(ctx):
     _until(f"{APP_VIP} listed under Networking", lambda: any(
         row.get("ip") == APP_VIP for row in ctx.api.get("/api/network").get("registered_vips") or []), timeout=60)
 
-    service = _until_api(ctx, lambda: ctx.api.post("/api/network/services", {
-        "namespace": "lab", "workload": "e2e-web", "name": "e2e-web", "type": "LoadBalancer",
-        "vip_mode": "manual", "vip": APP_VIP, "ports": [{"port": 80, "target_port": 8080}]}), "expose e2e-web")
+    service = _expose(ctx, "e2e-web", APP_VIP, 80, 8080)
     assert service.get("vip") == APP_VIP, f"Homestead gave {service.get('vip')!r}, not {APP_VIP}"
     if service.get("operation"):
         ctx.api.wait_job(service["operation"]["id"], timeout=600)
