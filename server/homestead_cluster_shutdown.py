@@ -103,6 +103,32 @@ def consumer(pod):
     return M.drainable(pod) and pod.get("metadata", {}).get("namespace") not in INFRA
 
 
+# How long a disruption budget may refuse an eviction, once every host is
+# cordoned, before its pod is stopped with a graceful delete: long enough for
+# a budget waiting on a pod that is already stopping, nothing more.
+BUDGET_WAIT = 30
+DRAIN_STATES = {"evicting": "evicting", "stopping": "stopping",
+                "budget": f"held by a disruption budget, stopped directly within {BUDGET_WAIT} s"}
+
+
+def drain_message(rows, done, total, own=False):
+    """One line on where a drain has got to: how many of the reviewed pods
+    have stopped, and what the rest are waiting for."""
+    if own:
+        head = "Stopping Homestead"
+    else:
+        head = f"Stopping applications: {done} of {total} pod{'s' if total != 1 else ''} stopped"
+    parts = []
+    for state, words in DRAIN_STATES.items():
+        names = [row["pod"] for row in rows if row["state"] == state]
+        if names:
+            more = f" and {len(names) - 4} more" if len(names) > 4 else ""
+            parts.append(f"{words}: {', '.join(names[:4])}{more}")
+    if parts:
+        parts[0] = parts[0][:1].upper() + parts[0][1:]
+    return head + (". " + "; ".join(parts) if parts else "") + ". Homestead stays online" * (not own)
+
+
 def admission_pods(get, pods):
     """Keep webhook backends alive so eviction and recovery can still be admitted."""
     services = set()
@@ -402,8 +428,15 @@ class Shutdown:
                     {"runStrategy": was} if was and was not in ("Halted", "Manual") else {})
             self.send("PATCH", path, {"metadata": {"annotations": {HELD_BY: None, HELD_AS: None}}, **({"spec": spec} if spec else {})},
                       ctype="application/merge-patch+json")
-            if was == "Manual":
-                self.send("PUT", f"{SUBRESOURCES}/namespaces/{ns}/virtualmachines/{name}/start", {})
+            # Only Always (and running: true) start a VM by themselves. The
+            # others leave a VM that was stopped cleanly where it is - the
+            # shutdown stopped it - so it is started as it was before.
+            if was in ("Manual", "RerunOnFailure", "Once"):
+                try:
+                    self.send("PUT", f"{SUBRESOURCES}/namespaces/{ns}/virtualmachines/{name}/start", {})
+                except urllib.error.HTTPError as error:
+                    if error.code != 409:   # already running
+                        raise
         if int(plan.get("copies") or 1) > 1:
             path = f"/apis/apps/v1/namespaces/{self.ns}/deployments/homestead"
             deployment = self.get(path)
@@ -455,12 +488,17 @@ class Coordinator:
             raise ValueError("Shutdown cancelled before final power handoff")
         return journal, state
 
-    def report(self, phase, percent, message, commit=False):
+    def report(self, phase, percent, message, commit=False, drain=None):
         def update(data):
             state = json.loads(data["state"])
             if state["run"] != self.run or data.get("cancel") or self.s.clock() >= state["deadline"]:
                 raise ValueError("Shutdown cancelled or expired before power handoff")
             state.update(phase=phase, progress=percent, message=message)
+            # Where the drain has got to; gone once it is over.
+            if drain is None:
+                state.pop("drain", None)
+            else:
+                state["drain"] = drain
             data["state"] = encode(state)
             if commit:
                 data["commit"] = encode({"run": self.run, "until": min(state["deadline"], self.s.clock() + 30)})
@@ -529,9 +567,16 @@ class Coordinator:
                 self.s.sleep(2)
 
     def drain(self, own=False):
+        """Evict every reviewed pod, and say how far it has got. Every host is
+        cordoned by now, so a pod a disruption budget holds can never be
+        replaced anywhere and the budget can never be met again: after
+        BUDGET_WAIT it is stopped with an ordinary graceful delete instead,
+        as kubectl drain --disable-eviction does. The outage was confirmed."""
         deadline = min(self.s.clock() + 600, self.current()[1]["deadline"])
         reviewed = {row[2] for row in self.plan["pods"]}
-        sent = set()
+        sent, deleted, budget = set(), set(), {}
+        total = None
+        base, span = (70, 0) if own else (25, 40)
         while True:
             self.current()
             self.nodes_unchanged()
@@ -539,28 +584,54 @@ class Coordinator:
             targets = [p for p in self.consumers(pods)
                        if bool(identity(p) == self.plan["own"]) == own
                        and p.get("spec", {}).get("nodeName")]
+            total = len(targets) if total is None else total
             if not targets:
                 return
             if any(p["metadata"]["uid"] not in reviewed for p in targets):
                 raise ValueError("A new application pod started during shutdown; review again")
-            pending = []
+            rows = []
             for pod in targets:
                 ns, name, uid = identity(pod)
-                pending.append(ns + "/" + name)
-                if uid in sent or pod["metadata"].get("deletionTimestamp"):
+                node = pod["spec"]["nodeName"]
+                if pod["metadata"].get("deletionTimestamp"):
+                    rows.append({"pod": ns + "/" + name, "node": node, "state": "stopping"})
+                    continue
+                if uid in deleted:
+                    rows.append({"pod": ns + "/" + name, "node": node, "state": "stopping"})
+                    continue
+                if uid in sent:
+                    rows.append({"pod": ns + "/" + name, "node": node, "state": "evicting"})
                     continue
                 try:
                     self.s.send("POST", f"/api/v1/namespaces/{ns}/pods/{name}/eviction",
                                 {"apiVersion": "policy/v1", "kind": "Eviction", "metadata": {"name": name, "namespace": ns},
                                  "deleteOptions": {"preconditions": {"uid": uid}}})
                     sent.add(uid)
+                    budget.pop(uid, None)
+                    rows.append({"pod": ns + "/" + name, "node": node, "state": "evicting"})
+                    continue
                 except urllib.error.HTTPError as error:
-                    if error.code not in (404, 429):
+                    if error.code == 404:
+                        continue
+                    if error.code != 429:
                         raise
-            self.report("stopping-homestead" if own else "draining", 70 if own else 35,
-                        "Waiting for graceful eviction (including disruption budgets): " + ", ".join(pending[:6]))
+                since = budget.setdefault(uid, self.s.clock())
+                if self.s.clock() - since < BUDGET_WAIT:
+                    rows.append({"pod": ns + "/" + name, "node": node, "state": "budget"})
+                    continue
+                try:
+                    self.s.send("DELETE", f"/api/v1/namespaces/{ns}/pods/{name}",
+                                {"apiVersion": "v1", "kind": "DeleteOptions", "preconditions": {"uid": uid}})
+                except urllib.error.HTTPError as error:
+                    if error.code not in (404, 409):
+                        raise
+                deleted.add(uid)
+                rows.append({"pod": ns + "/" + name, "node": node, "state": "stopping"})
+            done = max(0, total - len(rows))
+            self.report("stopping-homestead" if own else "draining", base + (span * done // total if total else 0),
+                        drain_message(rows, done, total, own), drain={"done": done, "total": total, "pods": rows[:40]})
             if self.s.clock() >= deadline:
-                raise ValueError("Drain timed out: " + ", ".join(pending[:6]) + ". No power sent")
+                raise ValueError("Drain timed out: " + ", ".join(row["pod"] for row in rows[:6]) + ". No power sent")
             self.s.sleep(2)
 
     def execute(self):

@@ -1460,9 +1460,13 @@ ssh_pwauth: true
     "/api/cluster/shutdown/plan": () => ({ready: !window.__demoShutdownBlocked, blockers: window.__demoShutdownBlocked ? ['Gracefully stop these VMs first: default/home-assistant-os', 'lab/paperless: disruption budget permits no verified eviction'] : [],
       confirm:'SHUT DOWN CLUSTER', review_token:'demo-shutdown', nodes: nodes.map(n => ({name:n.name, cordoned:false})), pods:12, volumes:8, homestead_node:nodes[0].name, local_storage:[]}),
     "/api/cluster/shutdown": (url, init) => {
-      if (init?.method === 'POST') window.__demoShutdown = {run:'demo-shutdown', phase:'draining', progress:35, deadline:Date.now()/1000+1800,
+      if (init?.method === 'POST') window.__demoShutdown = {run:'demo-shutdown', phase:'draining', progress:55, deadline:Date.now()/1000+1800,
         hosts:nodes.map(n=>({name:n.name,state:'Helper ready'})),
-        message:'Waiting for graceful eviction: lab/paperless, lab/frigate. Homestead stays online.', plan:{own:['lab','homestead','demo'], own_node:nodes[0].name, nodes:nodes.map(n=>({name:n.name}))}};
+        drain:{done:9, total:12, pods:[{pod:'lab/paperless', node:nodes[0].name, state:'stopping'},
+          {pod:'lab/frigate', node:nodes[1 % nodes.length].name, state:'evicting'},
+          {pod:'kubevirt/virt-controller-7d66d7487-sbqc4', node:nodes[2 % nodes.length].name, state:'budget'}]},
+        message:'Stopping applications: 9 of 12 pods stopped. Evicting: lab/frigate; stopping: lab/paperless; held by a disruption budget, stopped directly within 30 s: kubevirt/virt-controller-7d66d7487-sbqc4. Homestead stays online',
+        plan:{own:['lab','homestead','demo'], own_node:nodes[0].name, nodes:nodes.map(n=>({name:n.name}))}};
       return {state:window.__demoShutdown || null};
     },
     "/api/cluster/shutdown/cancel": () => {

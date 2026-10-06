@@ -30,6 +30,8 @@ class Fake:
         self.configmap = None
         self.calls = []
         self.blocked = False
+        self.budgeted = set()      # pods a disruption budget never lets go
+        self.stuck = False         # evicted pods that never finish stopping
         self.detach = True
         self.auto_ready = True
         self.on_sleep = lambda: None
@@ -99,8 +101,12 @@ class Fake:
                 self.journal["data"]["ready-" + str(i)] = self.nodes[i]["status"]["nodeInfo"]["bootID"]
             return p
         if path.endswith("/eviction"):
-            if self.blocked: raise missing(429)
+            if self.blocked or path.split("/")[-2] in self.budgeted: raise missing(429)
             uid = body["deleteOptions"]["preconditions"]["uid"]
+            if self.stuck:
+                for p in self.pods:
+                    if p["metadata"]["uid"] == uid: p["metadata"]["deletionTimestamp"] = "2026-10-06T00:00:00Z"
+                return {}
             self.pods = [p for p in self.pods if p["metadata"]["uid"] != uid]
             if self.detach and not any(p["metadata"]["name"] in ("app", "homestead") for p in self.pods):
                 self.volumes[0]["spec"]["nodeID"] = ""
@@ -120,6 +126,16 @@ class Fake:
             for k, v in body["metadata"]["annotations"].items():
                 notes.pop(k, None) if v is None else notes.__setitem__(k, v)
             vm["spec"].update(body.get("spec") or {})
+            return {}
+        if method == "PUT" and path.endswith("/start"):
+            self.vms[path.split("/")[-2]]["started"] = True
+            return {}
+        if method == "DELETE" and "/pods/" in path:
+            uid = body["preconditions"]["uid"]
+            self.pods = [p for p in self.pods if p["metadata"]["uid"] != uid]
+            if self.detach and not any(p["metadata"]["name"] in ("app", "homestead") for p in self.pods):
+                self.volumes[0]["spec"]["nodeID"] = ""
+                self.volumes[0]["status"]["state"] = "detached"
             return {}
         if method == "PUT" and path.endswith("/stop"):
             name = path.split("/")[-2]
@@ -243,6 +259,43 @@ class ShutdownTests(unittest.TestCase):
         self.assertTrue(all(n["spec"]["unschedulable"] for n in self.f.nodes))
         self.assertIn("commit", self.f.journal["data"])
 
+    def journal_states(self):
+        seen = []
+        self.f.on_sleep = lambda: seen.append(json.loads(self.f.journal["data"]["state"]))
+        return seen
+
+    def test_a_pod_a_disruption_budget_holds_is_stopped_directly_once_every_host_is_cordoned(self):
+        # KubeVirt's virt-controller: its budget wants one copy up, and with
+        # every host cordoned no copy can start anywhere, so it never would.
+        self.f.budgeted = {"app"}
+        seen = self.journal_states()
+        c = self.f.start()
+        c.execute()
+        self.assertEqual("handoff", self.f.s.state()["phase"], self.f.s.state()["message"])
+        deletes = [(i, path) for i, (method, path, _) in enumerate(self.f.calls) if method == "DELETE" and "/pods/" in path]
+        self.assertEqual(["/api/v1/namespaces/lab/pods/app"], [path for _, path in deletes])
+        self.assertEqual({"preconditions": {"uid": "app-uid"}},
+                         {k: v for k, v in self.f.calls[deletes[0][0]][2].items() if k == "preconditions"})
+        held = [s for s in seen if s.get("drain") and any(p["state"] == "budget" for p in s["drain"]["pods"])]
+        self.assertTrue(held, "the wait is shown while the budget holds it")
+        self.assertIn("Held by a disruption budget", held[0]["message"])
+        waited = sum(1 for s in held) * 2
+        self.assertGreaterEqual(waited, S.BUDGET_WAIT, "the budget gets its chance first")
+
+    def test_the_drain_says_how_many_pods_have_stopped_and_where_the_rest_are(self):
+        self.f.budgeted = {"app"}
+        seen = self.journal_states()
+        self.f.start().execute()
+        draining = [s for s in seen if s["phase"] == "draining" and s.get("drain")]
+        self.assertTrue(draining)
+        first = draining[0]
+        self.assertEqual((0, 1), (first["drain"]["done"], first["drain"]["total"]))
+        self.assertEqual([{"pod": "lab/app", "node": "b", "state": "budget"}], first["drain"]["pods"])
+        self.assertTrue(first["message"].startswith("Stopping applications: 0 of 1 pod stopped."))
+        self.assertTrue(25 <= first["progress"] < 65)
+        later = [s for s in seen if s["phase"] not in ("draining", "stopping-homestead")]
+        self.assertTrue(all("drain" not in s for s in later), "gone once the drain is over")
+
     def test_typed_confirmation_and_changed_review_have_no_effect(self):
         for body in ({"confirm": "yes"}, {"confirm": S.CONFIRM, "review_token": "old"}):
             with self.assertRaises(ValueError): self.f.s.start(body, Mock())
@@ -273,6 +326,7 @@ class ShutdownTests(unittest.TestCase):
         self.assertEqual(c.run, self.f.vms["vm"]["metadata"]["annotations"][S.HELD_BY])
         self.f.s.release_holds(self.f.s.state()["plan"], c.run)
         self.assertEqual("RerunOnFailure", self.f.vms["vm"]["spec"]["runStrategy"], "Harvester's restart policy is put back")
+        self.assertTrue(self.f.vms["vm"].get("started"), "RerunOnFailure leaves a cleanly stopped VM stopped: it is started")
         self.assertNotIn(S.HELD_BY, self.f.vms["vm"]["metadata"]["annotations"])
 
     def test_several_homestead_copies_run_as_one_and_go_back_on_recovery(self):
@@ -293,7 +347,7 @@ class ShutdownTests(unittest.TestCase):
     def test_a_shutdown_that_fails_starts_its_vms_again(self):
         self.managed_vm()
         c = self.f.start()
-        self.f.blocked = True
+        self.f.stuck = True
         c.execute()
         self.assertEqual("failed", self.f.s.state()["phase"])
         self.assertEqual("RerunOnFailure", self.f.vms["vm"]["spec"]["runStrategy"])
@@ -304,9 +358,9 @@ class ShutdownTests(unittest.TestCase):
         with self.assertRaises(ValueError): self.f.start()
         self.assertEqual(len(self.f.calls), before)
 
-    def test_pdb_timeout_never_stops_homestead_or_commits_power(self):
+    def test_a_drain_that_never_finishes_never_stops_homestead_or_commits_power(self):
         c = self.f.start()
-        self.f.blocked = True
+        self.f.stuck = True
         c.execute()
         self.assertEqual(self.f.s.state()["phase"], "failed")
         self.assertNotIn("commit", self.f.journal["data"])

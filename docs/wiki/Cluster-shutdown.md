@@ -10,11 +10,17 @@ control. Homestead must have one replica and host power control enabled.
 
 The job verifies an independent helper on every host before cordoning anything.
 It then cordons every host and evicts application pods, respecting disruption
-budgets and each pod's termination grace period. Admission webhook backends, Kubernetes and Longhorn system
+budgets and each pod's termination grace period. With every host cordoned, a
+budget that refuses an eviction can never be met again - no host is left to
+start a replacement (KubeVirt's virt-controller is one) - so after 30 seconds
+that pod is stopped with an ordinary graceful delete instead, as
+`kubectl drain --disable-eviction` would. Admission webhook backends, Kubernetes and Longhorn system
 pods, DaemonSets and static pods stay until host shutdown. Controllers and
 persistent volumes are retained; emptyDir contents are lost during eviction.
 
-Progress can be reopened from Jobs or the Cluster menu. Homestead stays online
+Progress can be reopened from Jobs or the Cluster menu. While hosts drain it
+shows how many of the reviewed pods have stopped, and each one still stopping
+with its host and what it waits for. Homestead stays online
 until the other applications have drained. An independent coordinator then
 evicts Homestead and waits for every reviewed Longhorn volume to detach.
 It commits power requests only after those checks pass. Host-side systemd
@@ -32,8 +38,9 @@ that all helpers received the final request. Inspect their logs and the journal.
 You can cancel until the final power handoff. A blocked drain gets up to ten
 minutes; Longhorn detachment gets up to five. If either fails, no power commit
 is issued, and the coordinator restores the original scheduling where possible.
-Applications can then restart. Shutdown never deletes a disruption budget,
-forces pod deletion, stops a VM by killing its launcher, or deletes a volume.
+Applications can then restart, and the VMs it shut down are started again.
+Shutdown never deletes a disruption budget, force-deletes a pod (skipping its
+grace period), stops a VM by killing its launcher, or deletes a volume.
 
 If the coordinator itself fails or the API is unavailable, scheduling may remain
 cordoned. The journal is retained even when submission has an uncertain outcome:
