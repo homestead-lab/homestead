@@ -83,3 +83,15 @@ class MemoryLimitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MemorySlipTests(unittest.TestCase):
+    """A small m, or no unit, is a slip for Mi (#311): refused, with the fix."""
+
+    def test_less_than_a_mebibyte_is_refused_with_the_likely_meaning(self):
+        import homestead_memory as M
+        for slip in ("390m", "390", "512k"):
+            with self.subTest(slip=slip), self.assertRaisesRegex(ValueError, r"less than 1 MiB; did you mean \d+Mi\?"):
+                M.bytes_for(slip, "memory reserved")
+        self.assertEqual(390 * 1024 ** 2, M.bytes_for("390Mi"))
+        self.assertEqual(10 ** 9, M.bytes_for("1G"))

@@ -130,7 +130,7 @@ try {
     const newIndex = +(await extra.getAttribute('data-index'));
     await page.locator(`#e_container_name_${newIndex}`).fill('helper');
     await page.locator(`#e_image_${newIndex}`).fill('example/helper:1');
-    await page.locator(`#e_mem_${newIndex}`).fill('192Mi');
+    await page.locator(`.qty[data-target="e_mem_${newIndex}"] .qty-text`).fill('192Mi');
     await page.locator(`#e_env_${newIndex} .ek`).fill('MODE');
     await page.locator(`#e_env_${newIndex} .ev`).fill('shared-pod');
     const created = await page.evaluate(() => collect());

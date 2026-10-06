@@ -55,10 +55,11 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
       </div>`,
     hardware: () => `
       <div class="f2">
-        <div class="f"><label>CPU reserved ${tip("Guaranteed scheduling capacity. 1000m = one core; it is not a hard usage limit.")}</label><input id="e_cpu_${index}" type="text" value="${esc(container.cpu || "")}" placeholder="50m"></div>
-        <div class="f"><label>Memory reserved ${tip("Guaranteed scheduling capacity in Mi or Gi; it is not a hard usage limit.")}</label><input id="e_mem_${index}" type="text" value="${esc(container.memory || "")}" placeholder="128Mi"></div>
+        <div class="f"><label>CPU reserved ${tip('The share of a CPU core the scheduler keeps for this container: 100% is one core. It is not a limit; the container can use more when the host has it spare.')}</label>${UI.quantity("cpu", `e_cpu_${index}`, container.cpu || "", { placeholder: "5", label: "CPU reserved" })}</div>
+        <div class="f"><label>Memory reserved ${tip('The RAM the scheduler keeps for this container. It is not a limit. 1 GiB = 1024 MiB.')}</label>${UI.quantity("memory", `e_mem_${index}`, container.memory || "", { placeholder: "128", label: "Memory reserved",
+          usage: container.usage_mb ? `the app uses about ${esc(workloadMemory(container.usage_mb))} now` : "" })}</div>
       </div>
-      <div class="f"><label>Memory max (optional) ${tip("The container's memory ceiling. Exceeding it can cause an OOM kill and restart. Leave blank for no limit; it must be at least Memory reserved.")}</label><input id="e_mem_limit_${index}" type="text" value="${esc(container.memory_limit || "")}" placeholder="No limit · e.g. 1Gi"></div>
+      <div class="f"><label>Memory max (optional) ${tip('The most memory this container may use: past it, it is stopped and restarted. Leave empty for no limit; it cannot be below Memory reserved.')}</label>${UI.quantity("memory", `e_mem_limit_${index}`, container.memory_limit || "", { placeholder: "No limit", label: "Memory max", reserved: `e_mem_${index}` })}</div>
       <div class="subsec">Hardware passed to this container</div>
       <div class="hwchoices">${hardwareChoices(`e_hw_${index}`, container.hardware || [])}</div>
       <div class="subsec">Privileges</div>
@@ -245,6 +246,9 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     const [vips, network] = await Promise.all([vipChoices(), api("/api/network").catch(() => null)]);
     if (network) STATE.data.network = network;
     EDIT_SAVE_UNCERTAIN = false;
+    // What it uses now, beside what it reserves: with one container, all of it is that container's.
+    const listed = (others || []).find(x => x.ns === ns && x.name === name);
+    if (listed?.mem_mb && (w.containers || []).length <= 1 && w.containers?.[0]) w.containers[0].usage_mb = listed.mem_mb;
     EDIT_PLACEMENT = { ns, name, others: (others || []).filter(x => !(x.ns === ns && x.name === name)),
       nodes: nodes0(liveNodes).length };
     if (liveNodes.length) STATE.data.nodes = liveNodes;
@@ -2017,8 +2021,8 @@ window.importSetup = async (source, dir, cfg = {}) => {
     <button class="btn sm" onclick="imAddEnv()">＋ add variable</button>`;
   const reviewStep = `
     <div class="sec">Memory</div>
-    <div class="f2"><div class="f"><label>Memory reserved ${tip("The scheduler reserves this much RAM for the application. This is not its maximum usage.")}</label><input id="im_memory" value="${esc(cfg.memory || '256Mi')}" placeholder="256Mi"></div>
-      <div class="f"><label>Memory max ${tip("Optional hard ceiling. Exceeding it can cause an OOM kill. Must be at least the reserved memory; blank means unlimited.")}</label><input id="im_memory_limit" value="${esc(cfg.memory_limit || '')}" placeholder="No limit · e.g. 1Gi"></div></div>
+    <div class="f2"><div class="f"><label>Memory reserved ${tip('The RAM the scheduler keeps for this container. It is not a limit. 1 GiB = 1024 MiB.')}</label>${UI.quantity("memory", "im_memory", cfg.memory || "256Mi", { placeholder: "256", label: "Memory reserved" })}</div>
+      <div class="f"><label>Memory max ${tip('The most memory this container may use: past it, it is stopped and restarted. Leave empty for no limit; it cannot be below Memory reserved.')}</label>${UI.quantity("memory", "im_memory_limit", cfg.memory_limit || "", { placeholder: "No limit", label: "Memory max", reserved: "im_memory" })}</div></div>
     ${UI.more("How the import runs", `<p>The copy runs as a Job: you can close this and watch it on the Import page, folder by folder; large appdata directories take a while. Its helper reserves 128 MiB and is limited to 512 MiB.</p>
       <p>The application is created stopped. Once the copy is done, Start in Containers checks capacity again before it runs.</p>`)}`;
   childModal("Import · " + dir, stepper("im_steps", [

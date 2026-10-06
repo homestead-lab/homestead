@@ -16,6 +16,7 @@
      UI.ack         the confirmation a risky action needs
      UI.fields      a grid of form fields, one column on a phone
      UI.field       one labelled form control, with help beneath
+     UI.quantity    a CPU or memory amount, with its unit
      UI.chip        a short status label
      UI.button      a button
      UI.actions     one footer: dismissal left, primary action last on the right
@@ -201,11 +202,105 @@ const UI = (() => {
     });
   };
 
+
+  /* A CPU or memory amount, in the units the rest of Homestead shows (#311):
+     memory as a number with MiB or GiB, CPU as a percentage of one core or
+     cores. Typed amounts are understood ("390 MB", "1.5 GB", "1Gi", "50m"),
+     and the line under the field says what was understood, or why not. The
+     Kubernetes quantity the form sends is kept in a hidden input with the
+     id the form reads, so nothing that reads it changes. */
+  const MEMORY_UNITS = { Mi: ["mi", "mib", "mb", "m", "megabyte", "megabytes"], Gi: ["gi", "gib", "gb", "g", "gigabyte", "gigabytes"],
+    Ki: ["ki", "kib", "kb", "k"], Ti: ["ti", "tib", "tb", "t"] };
+  const MIB = { Ki: 1 / 1024, Mi: 1, Gi: 1024, Ti: 1024 * 1024 };
+  const parseMemory = (raw, unit = "Mi") => {
+    const text = String(raw ?? "").trim();
+    if (!text) return { value: "", mib: null, said: "" };
+    const match = text.match(/^(\d+(?:\.\d+)?)\s*([a-zA-Z]*)$/);
+    if (!match) return { error: "Write a number, like 390 or 1.5" };
+    const number = Number(match[1]), suffix = match[2];
+    if (suffix === "m") return { error: "A small m means thousandths of a byte in Kubernetes; for megabytes choose MiB" };
+    const found = suffix ? Object.keys(MEMORY_UNITS).find(key => MEMORY_UNITS[key].includes(suffix.toLowerCase())) : unit;
+    if (!found) return { error: `${suffix} is not a memory unit; choose MiB or GiB` };
+    const mib = number * MIB[found];
+    if (mib <= 0) return { error: "Give more than zero" };
+    const whole = Number.isInteger(mib / 1024) && mib >= 1024;
+    const value = whole ? `${mib / 1024}Gi` : `${Math.max(1, Math.round(mib))}Mi`;
+    const said = whole ? `= ${mib / 1024} GiB` : mib >= 1024 ? `= ${+(mib / 1024).toFixed(2)} GiB (${Math.round(mib)} MiB)` : `= ${Math.round(mib)} MiB`;
+    return { value, mib: whole ? mib : Math.max(1, Math.round(mib)), said };
+  };
+  const parseCpu = (raw, unit = "%") => {
+    const text = String(raw ?? "").trim();
+    if (!text) return { value: "", millicores: null, said: "" };
+    const match = text.match(/^(\d+(?:\.\d+)?)\s*(%|m|cores?|cpus?)?$/i);
+    if (!match) return { error: "Write a number: a percentage of one core, or cores" };
+    const number = Number(match[1]), suffix = (match[2] || "").toLowerCase();
+    const how = suffix === "%" ? "%" : suffix === "m" ? "m" : suffix ? "cores" : unit;
+    const millicores = Math.round(how === "%" ? number * 10 : how === "m" ? number : number * 1000);
+    if (millicores < 1) return { error: "Give at least 1m (0.1% of a core)" };
+    const share = millicores >= 1000 ? `${+(millicores / 1000).toFixed(2)} core${millicores === 1000 ? "" : "s"}` : `${+(millicores / 10).toFixed(1)}% of one core`;
+    return { value: `${millicores}m`, millicores, said: `= ${share} (${millicores}m)` };
+  };
+  const quantityShown = (kind, value) => {
+    const text = String(value ?? "").trim();
+    if (kind === "memory") {
+      const m = text.match(/^(\d+(?:\.\d+)?)(Mi|Gi)$/);
+      if (m) return [m[1], m[2]];
+      const parsed = parseMemory(text, "Mi");
+      return parsed.mib ? (parsed.mib >= 1024 && Number.isInteger(parsed.mib / 1024) ? [String(parsed.mib / 1024), "Gi"] : [String(parsed.mib), "Mi"]) : [text, "Mi"];
+    }
+    const parsed = parseCpu(text, "cores");
+    if (!parsed.millicores) return [text, "%"];
+    return parsed.millicores >= 1000 && parsed.millicores % 500 === 0 ? [String(parsed.millicores / 1000), "cores"] : [String(+(parsed.millicores / 10).toFixed(1)), "%"];
+  };
+  /* kind: memory | cpu. id: the hidden input the form reads. opts:
+     placeholder, label (for screen readers), usage (HTML said beside it),
+     reserved (the id of the memory reserved field a maximum is checked against). */
+  const quantity = (kind, id, value = "", { placeholder = "", label = "", usage = "", reserved = "" } = {}) => {
+    const [shown, unit] = value ? quantityShown(kind, value) : ["", kind === "memory" ? "Mi" : "%"];
+    const units = kind === "memory" ? [["Mi", "MiB"], ["Gi", "GiB"]] : [["%", "% of a core"], ["cores", "cores"]];
+    const said = value ? (kind === "memory" ? parseMemory(shown, unit) : parseCpu(shown, unit)).said || "" : "";
+    return `<div class="qty" data-kind="${text(kind)}" data-target="${text(id)}"${reserved ? ` data-reserved="${text(reserved)}"` : ""}>
+      <input class="qty-text mono" type="text" inputmode="decimal" autocomplete="off" value="${text(shown)}" placeholder="${text(placeholder)}" aria-label="${text(label || kind)}">
+      <select class="qty-unit" aria-label="${text(label ? label + " unit" : "unit")}">${units.map(([v, l]) => `<option value="${text(v)}"${v === unit ? " selected" : ""}>${text(l)}</option>`).join("")}</select>
+      <input type="hidden" id="${text(id)}" value="${text(value)}"></div>
+      <div class="ui-help qty-said"><span class="qty-read" id="${text(id)}_said">${text(said)}</span>${usage ? `<span class="qty-usage">${usage}</span>` : ""}</div>`;
+  };
+  const quantityUpdate = box => {
+    const kind = box.dataset.kind, input = box.querySelector(".qty-text"), select = box.querySelector(".qty-unit");
+    const hidden = document.getElementById(box.dataset.target), said = document.getElementById(box.dataset.target + "_said");
+    let parsed = kind === "memory" ? parseMemory(input.value, select.value) : parseCpu(input.value, select.value);
+    // A unit typed into the box moves into the picker.
+    const typed = input.value.trim().match(/^(\d+(?:\.\d+)?)\s*([a-zA-Z%]+)$/);
+    if (typed && !parsed.error) {
+      const [number, unit] = quantityShown(kind, parsed.value);
+      if (document.activeElement !== input) { input.value = number; select.value = unit; }
+    }
+    let warn = parsed.error || "";
+    if (!warn && kind === "memory" && box.dataset.reserved && parsed.mib) {
+      const floor = parseMemory(document.getElementById(box.dataset.reserved)?.value || "", "Mi").mib;
+      if (floor && parsed.mib < floor) warn = "Below Memory reserved: Kubernetes refuses a maximum under the reservation";
+    }
+    box.classList.toggle("bad", !!warn);
+    if (hidden) {
+      hidden.value = parsed.error ? input.value.trim() : parsed.value;
+      hidden.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    if (said) said.innerHTML = warn ? `<span class="qty-warn">${text(warn)}</span>` : text(parsed.said || "");
+    // A maximum checked against this reservation is checked again.
+    if (kind === "memory" && !box.dataset.reserved) document.querySelectorAll(`.qty[data-reserved="${CSS.escape(box.dataset.target)}"]`).forEach(quantityUpdate);
+  };
+  if (typeof document !== "undefined" && document.addEventListener) {
+    document.addEventListener("input", event => { const box = event.target.closest?.(".qty"); if (box && !event.target.matches('input[type="hidden"]')) quantityUpdate(box); });
+    document.addEventListener("change", event => { const box = event.target.closest?.(".qty"); if (box && !event.target.matches('input[type="hidden"]')) quantityUpdate(box); });
+    document.addEventListener("focusout", event => { const box = event.target.closest?.(".qty"); if (box) quantityUpdate(box); });
+  }
+
   return { lead, callout, section, facts, checklist, steps, progress, meter, table, more, ack,
     fields, field, chip, button, actions, cancel, stats, guide,
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,
-    statusDot, insightList, selectSection: selectDialogSection, masterDetail: dialogMasterDetail };
+    statusDot, insightList, selectSection: selectDialogSection, masterDetail: dialogMasterDetail,
+    quantity, parseMemory, parseCpu };
 })();
 window.UI = UI;
 
