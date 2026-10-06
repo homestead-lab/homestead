@@ -605,6 +605,26 @@
     // is not answering.
     // Harvester uplinks (host-ports.js): mgmt shown only, a data network
     // bonded on two hosts and missing on the third.
+    // Bonding a k3s host's NICs (host-ports.js): a host on enp1s0 with a spare
+    // enp2s0 at the same speed and enp3s0 without a cable.
+    "/api/node/bond/inspect": (url, init) => ({ node: JSON.parse(init.body).node, address: "192.0.2.12/24", dhcp: true, problem: "",
+      modes: ["active-backup", "802.3ad", "balance-alb", "balance-tlb"], rollback_seconds: 240,
+      shape: { iface: "enp1s0", shape: "nic", bond: "", members: [], mode: "", carrier_nic: "enp1s0", bridge: "", file: "/etc/netplan/50-cloud-init.yaml" },
+      nics: [{ name: "enp1s0", mac: "52:54:00:0a:00:01", carrier: true, speed: 2500, master: "" },
+             { name: "enp2s0", mac: "52:54:00:0a:00:02", carrier: true, speed: 2500, master: "" },
+             { name: "enp3s0", mac: "52:54:00:0a:00:03", carrier: false, speed: null, master: "" }] }),
+    "/api/node/bond/preview": (url, init) => {
+      const req = JSON.parse(init.body), members = req.members || [];
+      const refusals = [];
+      if (members.length < 2) refusals.push("a bond needs two or more NICs");
+      if (members.includes("enp3s0") && !req.allow_down) refusals.push("enp3s0 has no link: plug it in, or confirm you want it in the bond anyway");
+      if (req.mode === "802.3ad" && !req.lacp_confirmed) refusals.push("802.3ad needs the switch ports to be one LACP group: confirm they are, or choose active-backup, which works on any switch");
+      return { node: req.node, action: req.action, bond: "bond0", members, mode: req.mode || "active-backup", primary: req.primary, keep: "",
+        address: "192.0.2.12/24", carries_on: "bond0", renamed: true, refusals, digest: "demo", rollback_seconds: 240,
+        shape: { iface: "enp1s0", shape: "nic", bridge: "", carrier_nic: "enp1s0" },
+        warnings: ["the host's address moves to bond0: kube-vip restarts there, and on a cluster of several hosts k3s restarts so flannel follows. Containers keep running"] };
+    },
+    "/api/node/bond": (url, init) => ({ ok: true, detail: `${JSON.parse(init.body).node}'s network is changing; follow it in the job tray` }),
     "/api/network/uplinks": () => demoUplinks(),
     "/api/network/uplinks/preview": (url, init) => {
       const req = JSON.parse(init.body), inv = demoUplinks();

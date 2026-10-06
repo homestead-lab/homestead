@@ -271,6 +271,49 @@ until it reports ready. The LAN networks on that cluster network pause for a
 few seconds. **mgmt** is shown but never changed: its NICs are set when
 Harvester installs.
 
+### Bonds on k3s and RKE2 hosts
+
+A bond joins two or more NICs into one link, so a cable, switch port or NIC
+can fail without the host going quiet. On Harvester that is a cluster network
+uplink (above). On k3s and RKE2, **Networking → Host ports → Bond ports…** (or
+the **Ports** card on a host's Network section) bonds the NICs of the host's
+own network:
+
+- **A plain NIC** becomes `bond0` with the NICs you add. The bond takes the
+  NIC's address, routes and DNS, and its MAC address, and asks DHCP as that
+  MAC, so the router hands out the same lease. Because the host's address moves
+  to a new interface, kube-vip's pod there restarts, and on a cluster of
+  several hosts k3s or RKE2 restarts so flannel follows. Containers keep
+  running.
+- **A host bridge (`br0`) over one NIC** keeps its address; the NIC under it is
+  swapped for a bond. Nothing restarts.
+- **A bond already there** can change members or mode, or go back to one NIC.
+
+**active-backup**, the default, works on any switch: one NIC carries traffic
+and the next takes over if it loses link. **802.3ad** (LACP) needs the switch
+ports set up as one LACP group, and you confirm they are.
+
+The review draws the host's ports now and after, and refuses before anything
+changes when:
+
+- the host's network is not netplan through systemd-networkd (Ubuntu Server's
+  way), or a NetworkManager host;
+- a NIC is in another bridge or bond, has an address of its own, or has no link
+  (unless you say to use it anyway);
+- no chosen NIC has link, or the change takes out the member carrying traffic;
+- another host's network change is still being checked, or another server is
+  not Ready (two hosts quiet at once could cost the cluster its quorum);
+- k3s or RKE2 names a flannel interface that would change.
+
+The change is the bridge conversion's: netplan's files are copied aside, a
+rollback is armed as a timer on the host, and the new files must pass
+`netplan generate` before they are applied, detached. Homestead then checks
+from outside: the address on the interface that carries it, the default route,
+the gateway answering, every member in the bond, and for 802.3ad the switch's
+LACP answer. Only then is the rollback disarmed. A failed LACP check puts the
+old network back at once; a host that never answers puts itself back four
+minutes after the change.
+
 ### A host bridge
 
 When a host must reach its own VMs, or a network should carry VMs and
