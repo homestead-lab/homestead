@@ -1320,47 +1320,71 @@ window.imageReviewedApply = async () => {
   modal("Reviewed image rollouts", '<div id="imageQueue"></div>', true);
   const active = () => sequence === IMAGE_REVIEW_SEQUENCE && $("#imageQueue") && !$("#modal").classList.contains("hidden");
   const paint = () => {if (active()) paintRollout($("#imageQueue"), batchUpdateMarkup(items, states, failures, false, true));};
-  paint();
-  for (let index = 0; index < rows.length; index++) {
-    const {config, preview} = rows[index], key = rolloutKey(config);
-    if (!active()) break;
-    try {
-      const result = await api(config.action === "rollback" ? "/api/image-updates/rollback" : "/api/image-updates/apply",
-        {method: "POST", headers: {"Content-Type": "application/json", ...clusterHeaders(config)},
-         body: JSON.stringify({...rolloutBody(config), capacity_token: preview.capacity_token, confirm_capacity: true})});
-      states[key] = result; paint();
-      // Never start the next workload until this exact accepted generation is ready.
-      if (!result.uid || !Number.isInteger(result.generation)) throw new Error("Rollout identity unavailable; check Jobs before continuing");
-      const deadline = Date.now() + 15 * 60 * 1000;
-      while (true) {
-        if (!active()) return;
-        let state;
-        try {
-          state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(config.ns)}&name=${encodeURIComponent(config.name)}`,
-            {timeout: 10000, ...(config.cluster ? {headers: clusterHeaders(config)} : {})});
-        } catch (error) {
-          // Homestead is replacing itself - here, or on a linked cluster the
-          // relay cannot reach for that minute: wait for it to answer again.
-          if (!restartsHomestead(config) || Date.now() > deadline) throw error;
-          states[key] = {...(states[key] || {}), phase: "restarting"}; paint();
-          await new Promise(resolve => setTimeout(resolve, 3000));
+  // Runs the queue from `start`; a failure stops it there, and Skip and
+  // continue (#295) picks it up again after the failed app.
+  const run = async start => {
+    IMAGE_QUEUE = null;
+    for (let index = start; index < rows.length; index++) {
+      const {config, preview} = rows[index], key = rolloutKey(config);
+      if (!active()) return;
+      let job = "";
+      try {
+        const result = await api(config.action === "rollback" ? "/api/image-updates/rollback" : "/api/image-updates/apply",
+          {method: "POST", headers: {"Content-Type": "application/json", ...clusterHeaders(config)},
+           body: JSON.stringify({...rolloutBody(config), capacity_token: preview.capacity_token, confirm_capacity: true})});
+        job = result.operation?.id || "";
+        states[key] = result; paint();
+        // Never start the next workload until this exact accepted generation is ready.
+        if (!result.uid || !Number.isInteger(result.generation)) throw new Error("Rollout identity unavailable; check its job before continuing");
+        const deadline = Date.now() + 15 * 60 * 1000;
+        while (true) {
+          if (!active()) return;
+          let state;
+          try {
+            state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(config.ns)}&name=${encodeURIComponent(config.name)}`,
+              {timeout: 10000, ...(config.cluster ? {headers: clusterHeaders(config)} : {})});
+          } catch (error) {
+            // Homestead is replacing itself - here, or on a linked cluster the
+            // relay cannot reach for that minute: wait for it to answer again.
+            if (!restartsHomestead(config) || Date.now() > deadline) throw error;
+            states[key] = {...(states[key] || {}), phase: "restarting"}; paint();
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            continue;
+          }
+          states[key] = state; paint();
+          if (rolloutChanged(result, state)) throw new Error("Workload changed during monitoring; review remaining updates again");
+          if (state.phase === "failed") throw new Error("Rollout failed");
+          if (state.phase === "ready") break;
+          if (Date.now() > deadline) throw new Error("Monitoring timed out; check its job before continuing");
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      } catch (error) {
+        // Already on the newest image - updated elsewhere since the review,
+        // by GitOps for one: nothing to do, and no reason to stop the rest.
+        if (!job && /no image update is currently available/i.test(error.message || "")) {
+          states[key] = {phase: "up to date", ready: 0, desired: 0}; paint();
           continue;
         }
-        states[key] = state; paint();
-        if (rolloutChanged(result, state)) throw new Error("Workload changed during monitoring; review remaining updates again");
-        if (state.phase === "failed") throw new Error("Rollout failed; remaining updates were not started");
-        if (state.phase === "ready") break;
-        if (Date.now() > deadline) throw new Error("Monitoring timed out; check Jobs before continuing");
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        failures.push({...config, job, error: `${asSentence(error.message)} No automatic retry: ${job ? "check its job" : "review it again"} before trying it again.`});
+        const rest = rows.slice(index + 1);
+        for (const remaining of rest) states[rolloutKey(remaining.config)] = {phase: "not started", ready: 0, desired: 1};
+        IMAGE_QUEUE = rest.length ? {skip: () => run(index + 1)} : null;
+        paint();
+        return;
       }
-    } catch (error) {
-      failures.push({...config, error: error.message + " No automatic retry: check Jobs for this rollout before reviewing again."});
-      for (const remaining of rows.slice(index + 1)) states[rolloutKey(remaining.config)] = {phase: "not started", ready: 0, desired: 1};
-      paint();
-      return;
     }
-  }
+    paint();
+  };
   paint();
+  await run(0);
+};
+let IMAGE_QUEUE = null;     // the stopped queue, while Skip and continue can resume it
+window.imageQueueSkip = () => IMAGE_QUEUE?.skip();
+// A rollout's job from the queue, opened over it: Back returns to the queue.
+window.imageQueueJob = id => { pushModal(); jobsDialog(); selectJob(id); };
+const asSentence = text => {
+  const words = String(text || "Rollout failed").trim();
+  return words.charAt(0).toUpperCase() + words.slice(1) + (/[.!?]$/.test(words) ? "" : ".");
 };
 
 // Polling updates status without closing details the reader has opened.
@@ -1372,34 +1396,47 @@ function paintRollout(host, html) {
 }
 
 function batchUpdateMarkup(items, states, startFailures = [], reconnecting = false, queueMode = false) {
-  const failureMap = Object.fromEntries(startFailures.map(item => [rolloutKey(item), item.error]));
-  const complete = items.filter(item => failureMap[rolloutKey(item)] ||
-    ["ready", "failed"].includes(states[rolloutKey(item)]?.phase)).length;
-  const ready = items.filter(item => states[rolloutKey(item)]?.phase === "ready" && !failureMap[rolloutKey(item)]);
-  const pending = items.filter(item => !ready.includes(item));
-  const failed = items.some(item => failureMap[rolloutKey(item)] || states[rolloutKey(item)]?.phase === "failed");
-  const current = pending.find(item=>{const s=states[rolloutKey(item)];return s && !["queued","not started","failed"].includes(s.phase) && !failureMap[rolloutKey(item)];});
+  const failureMap = Object.fromEntries(startFailures.map(item => [rolloutKey(item), item]));
+  const phaseOf = item => states[rolloutKey(item)]?.phase;
+  const ready = items.filter(item => phaseOf(item) === "ready" && !failureMap[rolloutKey(item)]);
+  const current = items.filter(item => phaseOf(item) === "up to date");
+  const failedItems = items.filter(item => failureMap[rolloutKey(item)] || phaseOf(item) === "failed");
+  const notStarted = items.filter(item => phaseOf(item) === "not started");
+  const done = ready.length + current.length;
+  const pending = items.filter(item => !ready.includes(item) && !current.includes(item));
+  const failed = failedItems.length > 0;
+  const running = pending.find(item=>{const s=states[rolloutKey(item)];return s && !["queued","not started","failed"].includes(s.phase) && !failureMap[rolloutKey(item)];});
+  // One count, the same everywhere: the header and the bar agree (#295).
+  const counts = [[ready.length, "updated"], [current.length, "already up to date"], [failedItems.length, "failed"], [notStarted.length, "not started"]]
+    .filter(([n]) => n).map(([n, words]) => `${n} ${words}`).join(" · ");
   const row = item => {
       const key = rolloutKey(item), state = states[key], startError = failureMap[key];
-      const phase = startError ? "needs attention" : state?.phase || "starting";
-      const tone = phase === "ready" ? "ok" : phase === "failed" || startError ? "crit" : "warn";
+      const phase = startError ? "failed" : state?.phase || "starting";
+      const tone = phase === "ready" || phase === "up to date" ? "ok" : phase === "failed" ? "crit" : phase === "not started" ? "neutral" : "warn";
       // The ready count can be the old pod's: what the new one waits for says more.
-      const waiting = phase !== "ready" && (state?.pods || []).find(pod => pod.blocked);
-      return `<div><span><b>${esc(item.name)}</b><small>${item.clusterName ? `${esc(item.clusterName)} · ` : ""}${esc(item.ns)}${state && state.desired != null ? ` · ${state.ready || 0}/${state.desired} ready` : ""}</small></span>
-        <span class="pill ${tone}">${esc(phase)}</span>${startError ? `<div class="updateerror">${esc(startError)}</div>` : ""}
+      const waiting = !["ready", "up to date"].includes(phase) && (state?.pods || []).find(pod => pod.blocked);
+      const actions = startError && queueMode ? [startError.job ? UI.button("Open job", `imageQueueJob(${jsArg(startError.job)})`) : "",
+        IMAGE_QUEUE && notStarted.length ? UI.button(`Skip and continue with ${notStarted.length} more`, "imageQueueSkip()") : ""].join("") : "";
+      return `<div><span><b>${esc(item.name)}</b><small>${item.clusterName ? `${esc(item.clusterName)} · ` : ""}${esc(item.ns)}${state && state.desired ? ` · ${state.ready || 0}/${state.desired} ready` : ""}</small></span>
+        <span class="pill ${tone}">${esc(phase)}</span>${startError ? `<div class="updateerror">${esc(startError.error)}</div>` : ""}
+        ${actions ? `<div class="row" style="gap:8px;margin-top:6px;flex-wrap:wrap">${actions}</div>` : ""}
         ${waiting ? `<div class="dim xs">New pod waiting${waiting.node ? ` on ${esc(waiting.node)}` : ""}: ${esc(waiting.blocked)}</div>` : ""}</div>`;
     };
+  const left = notStarted.length;
+  const closing = !queueMode ? ""
+    : left ? `<p class="ui-help">Closing ends the queue. ${left === 1 ? "The app not started keeps its" : `The ${left} apps not started keep their`} current image; review ${left === 1 ? "it" : "them"} again to update. Updates already started carry on in Jobs.</p>`
+    : done + failedItems.length < items.length ? '<p class="ui-help">Closing stops the queue before the apps still waiting. Updates already started carry on in Jobs.</p>' : "";
   return `<div class="batch-rollout">
     ${reconnecting?UI.callout("warn","Some updates could not be checked","Showing last-known progress. Reconnecting automatically."):""}
-    <div class="between"><div><b>${complete}/${items.length} rollouts finished</b>
-      <div class="dim xs">Updates run one app at a time.</div></div>
-      ${failed ? `<span class="pill warn">${queueMode ? "queue stopped" : "needs attention"}</span>` : complete === items.length ? '<span class="pill ok">finished</span>' : reconnecting ? '<span class="pill warn">reconnecting</span>' : '<span class="pill ok">monitoring</span>'}</div>
-    ${UI.progress(items.length ? ready.length/items.length*100 : 100, {label:`${ready.length} of ${items.length} apps updated`,kind:failed?"bad":"info"})}
-    ${current?UI.section(`Updating ${current.name}`,rolloutProgress(states[rolloutKey(current)])):""}
-    <div class="batch-rollout-list">${pending.filter(item=>item!==current).map(row).join("")}</div>
-    ${ready.length ? UI.more(`Updated · ${ready.length}`, `<div class="batch-rollout-list">${ready.map(row).join("")}</div>`).replace(/data-disclosure="[^"]*"/, 'data-disclosure="Updated"') : ""}
-    ${queueMode ? '<p class="ui-help">Closing stops the remaining queue. Updates already started continue in Jobs.</p>' : ""}
-    ${UI.actions(UI.cancel(queueMode ? complete === items.length && !failed ? "Done" : "Close queue" : "Monitor in background"))}
+    <div class="between"><div><b>${items.length} app${items.length === 1 ? "" : "s"}${counts ? ` · ${counts}` : ""}</b>
+      <div class="dim xs">Updates run one app at a time${queueMode ? "; a failure stops the ones after it" : ""}.</div></div>
+      ${failed ? `<span class="pill warn">${queueMode ? (IMAGE_QUEUE ? "queue stopped" : "queue ended") : "needs attention"}</span>` : done === items.length ? '<span class="pill ok">finished</span>' : reconnecting ? '<span class="pill warn">reconnecting</span>' : '<span class="pill ok">monitoring</span>'}</div>
+    ${UI.progress(items.length ? done/items.length*100 : 100, {label:`${done} of ${items.length} done`,kind:failed?"bad":"info"})}
+    ${running?UI.section(`Updating ${running.name}`,rolloutProgress(states[rolloutKey(running)])):""}
+    <div class="batch-rollout-list">${pending.filter(item=>item!==running).map(row).join("")}</div>
+    ${done ? UI.more(`Done · ${done}`, `<div class="batch-rollout-list">${[...ready, ...current].map(row).join("")}</div>`).replace(/data-disclosure="[^"]*"/, 'data-disclosure="Updated"') : ""}
+    ${closing}
+    ${UI.actions(UI.cancel(queueMode ? done === items.length ? "Done" : "Close queue" : "Monitor in background"))}
   </div>`;
 }
 

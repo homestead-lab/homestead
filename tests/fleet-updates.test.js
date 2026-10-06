@@ -59,7 +59,7 @@ test("a linked cluster's rollout is reviewed, applied and followed there, and th
   assert.equal(applies[1].body.capacity_token, "signed-b2c0de-homestead", "the token that cluster issued");
   for (const s of applies) assert.equal(s.body.cluster, undefined, "the cluster is a header, not part of the body");
   assert.ok(t.sent.some(s => s.path.endsWith("/progress") && s.cluster === "b2c0de"));
-  assert.match(t.fields["#imageQueue"].innerHTML, /3\/3 rollouts finished/, "the two homestead rollouts are kept apart");
+  assert.match(t.fields["#imageQueue"].innerHTML, /3 apps · 3 updated/, "the two homestead rollouts are kept apart");
 });
 
 test("a Homestead restarting mid-rollout is waited for, not counted as a failure", async () => {
@@ -67,8 +67,35 @@ test("a Homestead restarting mid-rollout is waited for, not counted as a failure
   await t.ctx.reviewImageActions([ITEMS[0]]);
   t.fields["#imageCapacityApprove"].checked = true;
   await t.ctx.imageReviewedApply();
-  assert.match(t.fields["#imageQueue"].innerHTML, /1\/1 rollouts finished/);
+  assert.match(t.fields["#imageQueue"].innerHTML, /1 app · 1 updated/);
   assert.doesNotMatch(t.fields["#imageQueue"].innerHTML, /needs attention/);
+});
+
+test("a queue says one thing, passes over an app already up to date, and can skip a failure (#295)", async () => {
+  const t = setup();
+  const apps = [{ ns: "lab", name: "uptime-kuma" }, { ns: "lab", name: "loki" }, { ns: "lab", name: "pot-provider" }];
+  await t.ctx.reviewImageActions(apps);
+  t.fields["#imageCapacityApprove"].checked = true;
+  const api = t.ctx.api;
+  t.ctx.api = async (path, options) => {
+    const body = options?.body ? JSON.parse(options.body) : null;
+    if (path.endsWith("/apply") && body.name === "uptime-kuma") throw new Error("no image update is currently available");
+    if (path.endsWith("/apply") && body.name === "loki") return { uid: "uid", generation: 2, phase: "starting", ready: 0, desired: 1, operation: { id: "job-loki" } };
+    if (path.includes("/progress") && path.includes("name=loki")) return { uid: "uid", generation: 2, phase: "failed", ready: 0, desired: 1 };
+    return api(path, options);
+  };
+  await t.ctx.imageReviewedApply();
+  let html = t.fields["#imageQueue"].innerHTML;
+  assert.match(html, /3 apps · 1 already up to date · 1 failed · 1 not started/, "the header and the bar agree");
+  assert.match(html, /1 of 3 done/);
+  assert.match(html, /Rollout failed\. No automatic retry: check its job before trying it again\./, "sentences, not a run-on");
+  assert.match(html, /imageQueueJob\(&quot;job-loki&quot;\)|imageQueueJob\("job-loki"\)/, "its job is one click away");
+  assert.match(html, /Skip and continue with 1 more/);
+  assert.match(html, /The app not started keeps its current image; review it again to update/, "what closing does");
+  await t.ctx.imageQueueSkip();
+  html = t.fields["#imageQueue"].innerHTML;
+  assert.match(html, /3 apps · 1 updated · 1 already up to date · 1 failed/);
+  assert.doesNotMatch(html, /Skip and continue/, "nothing left to skip to");
 });
 
 test("a request naming its cluster goes there, whatever the page is pointed at", () => {

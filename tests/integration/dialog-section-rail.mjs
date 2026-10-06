@@ -69,10 +69,12 @@ try {
       [{ns:"lab",name:"plex"},{ns:"lab",name:"immich"}],
       {[rolloutKey({ns:"lab",name:"plex"})]:{phase:"ready",ready:1,desired:1},[rolloutKey({ns:"lab",name:"immich"})]:{phase:"failed",pods:[{blocked:"Image could not be pulled"}]}}, [],false,true)));
     assert.equal(await page.getByText('Image could not be pulled',{exact:false}).isVisible(),true);
-    assert.equal(await page.locator('#mbody .pill').filter({hasText:'queue stopped'}).isVisible(),true);
+    // The failed app was the last: nothing to skip to, so the queue has ended (#295).
+    assert.equal(await page.locator('#mbody .pill').filter({hasText:'queue ended'}).isVisible(),true);
+    assert.match(await page.locator('#mbody .batch-rollout b').first().innerText(),/2 apps · 1 updated · 1 failed/);
     assert.equal(await page.locator('#mbody details').getAttribute('open'),null);
     assert.equal(await page.getByRole('button',{name:'Close queue',exact:true}).isVisible(),true);
-    assert.equal(await page.getByText('Closing stops the remaining queue. Updates already started continue in Jobs.',{exact:false}).isVisible(),true);
+    assert.equal(await page.getByRole('button',{name:/Skip and continue/}).count(),0);
     await page.screenshot({path:`${output}/updates-${theme}-${width}.png`});
     await page.evaluate(()=>modal('Field disclosure',stepper('test',[
       {title:'Basics',html:'<input id="first" value="unchanged">'},
