@@ -559,7 +559,9 @@ async function nodePage(name) {
         ${fact("In / out since boot", `<span class="mono">${n.rx_total_gb || 0} / ${n.tx_total_gb || 0} GB</span>`)}
       </div></div>
       <div class="card flat"><div class="ctitle">Addresses it answers for</div><div class="csub">Its own, and the VIPs that move to another host if it goes down</div>
-        <div style="margin-top:10px">${nodeAddressTags(n) || "—"}</div></div>`],
+        <div style="margin-top:10px">${nodeAddressTags(n) || "—"}</div></div>
+      <div class="card flat" id="nodePorts"><div class="ctitle">Ports ${tip("Each network port's link, speed, errors and bond, read from the host by the node probe")}</div><div class="csub">Link, speed and errors, and what each port carries</div>
+        <div class="ports-body" style="margin-top:10px"><div class="dim small"><span class="spin2"></span> reading ports</div></div></div>`],
     ["hostos", "Host OS", esc(n.os || "the host's own system"), `
       <div class="card flat" id="nodeHostOs"><div class="ctitle">Updates and services</div><div class="csub">Updates, restarts and services on the host itself</div>
         <div class="hos-body" style="margin-top:10px"><div class="dim small"><span class="spin2"></span> reading</div></div></div>
@@ -571,6 +573,9 @@ async function nodePage(name) {
       </div>
       <div style="margin-top:10px">${(n.conditions || []).map(c => `<span class="tag ${c.type === "Ready" ? (c.status === "True" ? "ok" : "bad") : (c.status === "True" ? "warn" : "")}">${esc(c.type)}: ${esc(c.status)}</span>`).join("")}</div></div>`],
   ];
+  // ?section= opens one directly: an alert about a port links to Network.
+  const asked = new URLSearchParams(location.search).get("section");
+  if (asked && sections.some(([id]) => id === asked) && !STATE.busy) { STATE.nodeSection = asked; STATE.nodeSectionOpen = true; }
   const current = sections.some(([id]) => id === STATE.nodeSection) ? STATE.nodeSection : "overview";
   paint(`${UI.pageHeader(`${esc(n.name)}`, `${esc(n.roles.join(" · ") || "worker")} · <span class="mono">${esc((n.addresses || {}).InternalIP || "")}</span>`, `<button class="btn" data-need="admin" onclick="nodeShell(${jsq(n.name)})" title="A root shell on the host itself, as SSH would give">${icon("console")}Terminal</button>
         <button class="btn pri" onclick="nodeActions(${jsq(n.name)})">Host actions</button>`)}
@@ -586,6 +591,7 @@ async function nodePage(name) {
   nodeUptimePaint(n);
   if (window.nodeHostOsPaint) nodeHostOsPaint(n.name, true);
   if (window.nodeDevicesPaint) nodeDevicesPaint(n.name);
+  if (window.nodePortsPaint) nodePortsPaint(n);
 }
 function nodePageSummary(n) {
   return `<span class="sumitem"><span class="pill ${n.status === "Ready" ? "ok" : "crit"}">${esc(n.status)}</span></span>

@@ -2782,6 +2782,24 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 .dg-track{fill:var(--surf3)}.dg-sys{fill:var(--dim)}.dg-vol{fill:var(--ok)}.dg-vol-room{fill:color-mix(in srgb,var(--ok) 25%,transparent)}
 .dg-vol-box{fill:color-mix(in srgb,var(--ok) 16%,transparent);stroke:var(--ok);stroke-width:1.2}
 .dg-empty{fill:none;stroke:var(--line2);stroke-width:1.2}
+/* Ports (Diagram.ports): cable colour is link state; a bond is violet, its
+   active member solid and a backup dashed; LAN networks dashed blue. */
+.dg-green{fill:var(--ok)}.dg-amber{fill:var(--med)}.dg-red{fill:var(--crit)}.dg-violet{fill:var(--vio)}
+.dg-up{fill:none;stroke:var(--ok);stroke-width:2}
+.dg-down{fill:none;stroke:var(--crit);stroke-width:1.6;stroke-dasharray:4 3}
+.dg-active{fill:none;stroke:var(--vio);stroke-width:2.2}
+.dg-standby{fill:none;stroke:var(--vio);stroke-width:1.6;stroke-dasharray:5 4}
+.dg-nic{fill:var(--surf3);stroke:var(--line2);stroke-width:1.2}.dg-nic.dg-bad{stroke:var(--crit)}
+.dg-led-up{fill:var(--ok)}.dg-led-down{fill:var(--crit)}.dg-led-warn{fill:var(--med)}.dg-led-off{fill:var(--dim)}
+.dg-bond{fill:color-mix(in srgb,var(--vio) 14%,transparent);stroke:var(--vio);stroke-width:1.4}.dg-bond.dg-warn{stroke:var(--med)}
+.dg-bridge{fill:none;stroke:var(--tx);stroke-width:1.2;stroke-opacity:.55}
+.dg-vlan{fill:none;stroke:var(--low);stroke-width:1.2;stroke-dasharray:4 3}
+.port-led{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;background:var(--dim)}
+.port-led.up{background:var(--ok)}.port-led.warn{background:var(--med)}.port-led.down{background:var(--crit)}
+.port-count.warn{color:var(--med);font-weight:600}
+.ports-picture{overflow-x:auto;margin-bottom:10px}
+.ports-picture .diagram{margin:0;min-width:540px}.ports-picture .diagram svg{max-height:none}
+#nodePorts .ui-callout{margin-bottom:8px}
 /* A long form in steps. */
 .stepper-head{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 14px}
 .stepper-chip{display:inline-flex;align-items:center;flex-shrink:0;white-space:nowrap;gap:7px;border:1px solid var(--line2);background:transparent;color:var(--mut);border-radius:99px;padding:5px 12px 5px 5px;font:600 12.5px "Inter Tight",sans-serif;cursor:pointer}

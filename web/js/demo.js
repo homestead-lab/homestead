@@ -54,6 +54,40 @@
 
   const withHealth = disk => Object.assign(disk, { health: diskHealth(disk.smart) });
 
+  function demoPorts() {
+    const nic = (name, extra = {}) => ({ name, kind: "nic", link: "up", speed_mbps: 2500, duplex: "full", mtu: 1500, driver: "igc",
+      master: "", carries: [], uplink: false, errors: 0, flaps: 0, drops: 0, window_s: 3600, crc: 0, was_mbps: null, bond: null, bond_member: null, ...extra });
+    const up = ["host address"], lan = ["host address", "lab/iot"];
+    const hosts = {
+      "harvester-node1": { node: "harvester-node1", available: true, uplink: "mgmt-br", conditions: [], ports: [
+        nic("eno1", { master: "mgmt-br", carries: up, uplink: true }),
+        nic("enp1s0", { link: "down", speed_mbps: null, duplex: null, driver: "r8169" }),
+        { name: "mgmt-br", kind: "bridge", link: "up", carries: up, uplink: true, mtu: 1500 }] },
+      "harvester-node2": { node: "harvester-node2", available: true, uplink: "mgmt-br", ports: [
+        nic("enp1s0", { master: "mgmt-bo", carries: lan, uplink: true, bond_member: { state: "active", mii_status: "up", link_failure_count: 0 } }),
+        nic("enp2s0", { master: "mgmt-bo", carries: lan, uplink: true, speed_mbps: 1000, was_mbps: 2500, errors: 142, crc: 139,
+          bond_member: { state: "backup", mii_status: "up", link_failure_count: 2 } }),
+        nic("enp3s0", { link: "down", speed_mbps: null, duplex: null, driver: "r8169" }),
+        { name: "mgmt-bo", kind: "bond", link: "up", master: "mgmt-br", carries: lan, uplink: true, mtu: 1500,
+          bond: { mode: "active-backup", slaves: ["enp1s0", "enp2s0"], active_slave: "enp1s0", mii_status: "up" } },
+        { name: "mgmt-br", kind: "bridge", link: "up", carries: lan, uplink: true, mtu: 1500 }],
+        conditions: [
+          { key: "harvester-node2:enp2s0:slower", node: "harvester-node2", iface: "enp2s0", kind: "slower", severity: "degraded",
+            title: "enp2s0 on harvester-node2 runs slower than the rest of mgmt-bo", body: "It negotiated 1 Gb/s; its bond peers run at 2.5 Gb/s. Usually a cable or a switch port." },
+          { key: "harvester-node2:enp2s0:errors", node: "harvester-node2", iface: "enp2s0", kind: "errors", severity: "degraded",
+            title: "enp2s0 on harvester-node2 is seeing errors", body: "142 errors in the last 60 minutes, 139 of them CRC errors. Usually a cable, a switch port or a failing NIC." }] },
+      "harvester-node3": { node: "harvester-node3", available: true, uplink: "mgmt-br", ports: [
+        nic("ens5", { master: "mgmt-bo", carries: up, uplink: true, bond_member: { state: "active", mii_status: "up" } }),
+        nic("ens6", { master: "mgmt-bo", carries: up, uplink: true, bond_member: { state: "active", mii_status: "up" } }),
+        { name: "mgmt-bo", kind: "bond", link: "up", master: "mgmt-br", carries: up, uplink: true, mtu: 1500,
+          bond: { mode: "802.3ad", slaves: ["ens5", "ens6"], mii_status: "up", ad_partner_mac: "00:00:00:00:00:00" } },
+        { name: "mgmt-br", kind: "bridge", link: "up", carries: up, uplink: true, mtu: 1500 }],
+        conditions: [{ key: "harvester-node3:mgmt-bo:lacp", node: "harvester-node3", iface: "mgmt-bo", kind: "lacp", severity: "degraded",
+          title: "The switch is not aggregating mgmt-bo on harvester-node3",
+          body: "This 802.3ad bond has had no LACP partner for over two minutes: the switch ports are not one LACP group, so the bond uses one member at a time. Group the ports on the switch, or change the bond to active-backup." }] },
+    };
+    return { hosts, conditions: Object.values(hosts).flatMap(h => h.conditions), counts: { hosts: 3, ports: 7 } };
+  }
   const nodes = [
     { name: "harvester-node1", status: "Ready", roles: ["control-plane", "etcd"], schedulable: true,
       cpu_pct: 22.4, cpu_used: 1.79, cpu_cap: 8, mem_pct: 61.7, mem_used_gb: 9.6, mem_cap_gb: 15.6,
@@ -549,7 +583,15 @@
       top_cpu: [{ name: "frigate", ns: "lab", nodes: ["harvester-node2"], cpu: .84 }, { name: "home-assistant", ns: "lab", nodes: ["harvester-node1"], cpu: .31 }, { name: "paperless", ns: "lab", nodes: ["harvester-node3"], cpu: .18 }],
       top_mem: [{ name: "frigate", ns: "lab", nodes: ["harvester-node2"], mem_mb: 1840 }, { name: "home-assistant", ns: "lab", nodes: ["harvester-node1"], mem_mb: 738 }, { name: "paperless", ns: "lab", nodes: ["harvester-node3"], mem_mb: 512 }] },
     "/api/history": history, "/api/storage": storage, "/api/volumes": volumes,
-    "/api/nodes": nodes, "/api/nodes/uptime": demoUptime, "/api/node": url => nodes.find(n => n.name === url.searchParams.get("name")) || {},
+    "/api/nodes": nodes, "/api/nodes/uptime": demoUptime,
+    // Each host's ports (host-ports.js): one plain uplink with a spare, one
+    // bond running on a slow member with CRC errors, one LACP bond the switch
+    // is not answering.
+    "/api/nodes/ports": url => {
+      const report = demoPorts();
+      const node = url.searchParams.get("node");
+      return node ? report.hosts[node] || { node, available: false, ports: [], conditions: [], reason: "No node probe answers on this host." } : report;
+    }, "/api/node": url => nodes.find(n => n.name === url.searchParams.get("name")) || {},
     // A host's own OS, as the leader reads it on k3s and RKE2 (host-os.js).
     // Homestead's own services, on node addresses until put on a VIP (views-network.js).
     "/api/self/address": { on_vip: false, url: "", shared_vip: "192.0.2.242", components: [

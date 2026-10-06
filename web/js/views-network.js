@@ -147,6 +147,8 @@ async function viewNetworking() {
       <button class="btn sm" data-need="admin" onclick="vmNetworkAdd()">＋ LAN network</button></div>
     <div id="netVmNets">${window.__vmCreateOptions ? networkVmNetsHtml(window.__vmCreateOptions) : '<div class="dim small">reading LAN networks…</div>'}</div>
     ${networkAddressesHtml(data)}
+    <div style="margin-top:22px">${UI.section("Host ports", `<div class="card flat" id="netPorts"><div class="csub">reading ports…</div><div class="ports-body" style="margin-top:8px"></div></div>`,
+      tip("Every host's network ports: link, speed, errors and bonds, read from the hosts by the node probe. Open a host for its picture."))}</div>
     <div class="sec" style="margin-top:22px">Services &amp; endpoint paths</div>
     ${orphans ? `<div class="note" style="margin-bottom:12px">${orphans === 1
       ? "<b>1 Service no longer points at a workload.</b> It still owns its VIP and port, so that number stays taken until the Service is removed."
@@ -163,6 +165,7 @@ async function viewNetworking() {
   await networkVmNetsPaint();
   if (!STATE.busy && new URLSearchParams(location.search).get("section") === "lan") $("#lanNetworks")?.scrollIntoView({ block: "start" });
   selfAddressPaint();
+  if (window.portsAcrossHostsPaint) portsAcrossHostsPaint();
 }
 
 /* ---------------- Homestead itself ----------------
