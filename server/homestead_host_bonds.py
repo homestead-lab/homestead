@@ -43,6 +43,11 @@ LACP_WAIT = 60
 BACKUP_ROOT = "/var/lib/homestead"
 KIND = "host-bond"
 UNIT = "homestead-bond-rollback"
+LACP_UNIT = "homestead-bond-lacp"
+# Left by the host when it put its network back because the switch did not
+# answer LACP: an 802.3ad bond with no partner can carry nothing, so Homestead
+# may not reach the host to see it - the host checks for itself.
+LACP_FAILED = "/run/homestead-bond-lacp-failed"
 NAME = re.compile(r"[A-Za-z0-9_.:-]{1,15}")
 MODES = ("active-backup", "802.3ad", "balance-alb", "balance-tlb")
 
@@ -397,6 +402,12 @@ os.replace(path + ".homestead", path)
 
 def change_script(spec, stamp):
     backup = f"{BACKUP_ROOT}/netplan-{stamp}"
+    # 802.3ad: the host itself checks for a partner a minute after the change
+    # and, with none, puts its old network back at once and says why.
+    lacp_watch = "" if (spec.get("params") or {}).get("mode") != "802.3ad" else (
+        f"systemd-run --unit={LACP_UNIT} --on-active={3 + LACP_WAIT} /bin/sh -c '"
+        f"P=$(cat /sys/class/net/{spec['bond']}/bonding/ad_partner_mac 2>/dev/null); "
+        f"if [ -z \"$P\" ] || [ \"$P\" = 00:00:00:00:00:00 ]; then touch {LACP_FAILED}; systemctl start {UNIT}.service; fi' >/dev/null\n")
     arg = json.dumps(spec).replace("'", "'\"'\"'")
     return f"""set -e
 mkdir -p {backup}
@@ -413,9 +424,10 @@ if ! netplan generate 2>/tmp/homestead-netplan.err; then
   echo "ERR netplan did not accept the new configuration ($(head -c 200 /tmp/homestead-netplan.err)); the old one is back"
   exit 1
 fi
-systemd-run --unit={UNIT} --on-active={ROLLBACK_SECONDS} /bin/sh -c 'rm -f /etc/netplan/*.yaml; cp -a {backup}/. /etc/netplan/; rm -f /etc/cloud/cloud.cfg.d/99-homestead-bond.cfg; ip link delete {spec["bond"]} 2>/dev/null; netplan apply' >/dev/null
+rm -f {LACP_FAILED}
+systemd-run --unit={UNIT} --on-active={ROLLBACK_SECONDS} /bin/sh -c 'systemctl stop {UNIT}.timer {LACP_UNIT}.timer 2>/dev/null; rm -f /etc/netplan/*.yaml; cp -a {backup}/. /etc/netplan/; rm -f /etc/cloud/cloud.cfg.d/99-homestead-bond.cfg; ip link delete {spec["bond"]} 2>/dev/null; netplan apply' >/dev/null
 systemd-run --unit=homestead-bond-apply --on-active=3 /bin/sh -c '{f"ip link delete {spec['bond']} 2>/dev/null; " if spec.get("recreate") else ""}netplan apply' >/dev/null
-echo "OK {backup}"
+{lacp_watch}echo "OK {backup}"
 """
 
 
@@ -434,10 +446,11 @@ GW=$(ip -4 route show default | awk '{{print $3; exit}}')
 {member_checks}
 {lacp}
 systemctl is-active -q {UNIT}.timer && echo "ARMED"
+[ -f {LACP_FAILED} ] && echo "LACPFAILED"
 echo END"""
 
 
-CONFIRM_SCRIPT = f"systemctl stop {UNIT}.timer && echo CONFIRMED"
+CONFIRM_SCRIPT = f"systemctl stop {UNIT}.timer && {{ systemctl stop {LACP_UNIT}.timer 2>/dev/null; true; }} && echo CONFIRMED"
 ROLLBACK_NOW = f"systemctl start {UNIT}.service >/dev/null 2>&1 & echo STARTED"
 
 
@@ -502,6 +515,10 @@ def status(item, now=None):
         seen = set(out.split("\n"))
         words = set(out.split())
         bonded = ref["action"] == "remove" or all(f"IN {m}" in seen for m in ref["members"])
+        if "LACPFAILED" in words:
+            ref.update(stage="done")
+            return ("failed", 100, f"The switch did not answer LACP on {ref['bond']} within {LACP_WAIT} seconds, so {node} "
+                    "put its old network back by itself. Group the switch ports as one LACP (802.3ad) group, or choose active-backup")
         if {"ADDR", "ROUTE", "GATEWAY", "ARMED"} <= words and bonded:
             needs_partner = ref["action"] != "remove" and ref["mode"] == "802.3ad"
             if needs_partner and "PARTNER" not in words:

@@ -236,6 +236,22 @@ class JobTests(unittest.TestCase):
         self.assertNotIn(BONDS.CONFIRM_SCRIPT, host.ran)
         self.assertEqual("failed", BONDS.status(item, now=ref["since"] + BONDS.LACP_WAIT + 60)[0])
 
+    def test_lacp_is_checked_on_the_host_too(self):
+        # An 802.3ad bond with no partner can carry nothing: Homestead cannot
+        # reach the host to check, so the host checks for itself and says why.
+        p = BONDS.plan("h1", {"members": ["enp2s0"], "mode": "802.3ad", "lacp_confirmed": True}, facts())
+        script = BONDS.change_script(p["spec"], "1")
+        self.assertIn(f"--unit={BONDS.LACP_UNIT} --on-active={3 + BONDS.LACP_WAIT}", script)
+        self.assertIn(f"touch {BONDS.LACP_FAILED}; systemctl start {BONDS.UNIT}.service", script)
+        self.assertIn(f"systemctl stop {BONDS.UNIT}.timer {BONDS.LACP_UNIT}.timer", script)
+        plain = BONDS.change_script(BONDS.plan("h1", {"members": ["enp2s0"]}, facts())["spec"], "1")
+        self.assertNotIn(BONDS.LACP_UNIT + " --on", plain.replace(".timer", ""))
+        host, (_, _, ref) = self.start("LACPFAILED\nEND\n", {"members": ["enp2s0"], "mode": "802.3ad", "lacp_confirmed": True})
+        status, _, message = BONDS.status({"ref": ref}, now=ref["since"] + 90)
+        self.assertEqual("failed", status)
+        self.assertIn("did not answer LACP", message)
+        self.assertNotIn(BONDS.CONFIRM_SCRIPT, host.ran)
+
     def test_a_stale_review_changes_nothing(self):
         host = Host(facts())
         BONDS.hostrun = host
