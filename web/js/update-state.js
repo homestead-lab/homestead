@@ -16,7 +16,9 @@
   // Apps' updates. Homestead's own - itself and the helpers it runs - are
   // updated apart, from the top bar's Homestead button and Settings › Updates.
   function availableWorkloads(report) {
-    return (report?.workloads || []).filter(workload => workload?.available && !workload.homestead);
+    // An app something else updates (Flux, Argo CD, or marked so) keeps its
+    // notice but is not one Homestead offers to update.
+    return (report?.workloads || []).filter(workload => workload?.available && !workload.homestead && !workload.managed?.by);
   }
 
   // Homestead and its helpers, Homestead first: what each runs and whether a

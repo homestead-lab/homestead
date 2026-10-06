@@ -48,7 +48,7 @@ test("public and local demos start with consistent healthy cluster data", async 
     const imageUpdates = await api("/api/image-updates");
     assert.equal(imageUpdates.errors, 0);
     assert.ok(imageUpdates.workloads.every(row => row.images.every(image => !image.error)));
-    assert.equal(imageUpdates.updates, 2, "available updates are compatible with healthy checks");
+    assert.equal(imageUpdates.updates, 3, "available updates are compatible with healthy checks (one in Flux, a notice)");
     assert.ok(operations.every(row => row.status !== "failed"));
     assert.ok(events.every(row => row.type !== "Warning"));
     assert.deepEqual(alerts.active, []);
