@@ -211,6 +211,25 @@ class NetworkingTests(unittest.TestCase):
         self.assertTrue(rows["ghost"]["orphaned"])
         self.assertFalse(rows["homestead"]["orphaned"], "a served Service is not orphaned")
 
+    def test_a_stopped_apps_service_is_stopped_not_unavailable(self):
+        def pihole_service():
+            return {"metadata": {"name": "pihole", "namespace": "lab"},
+                    "spec": {"type": "ClusterIP", "selector": {"app": "pihole"},
+                             "ports": [{"name": "dns", "port": 53, "targetPort": 53, "protocol": "UDP"}]}}
+        self.objects["/api/v1/services"]["items"].append(pihole_service())
+        # Running but with no ready pod: that needs attention.
+        report = networking.inventory()
+        rows = {row["name"]: row for row in report["services"]}
+        self.assertEqual("unavailable", rows["pihole"]["health"])
+        self.assertEqual(1, report["summary"]["unhealthy"])
+        # Stopped on purpose (no copies): nothing should answer, and nothing is wrong.
+        self.objects["/apis/apps/v1/deployments"]["items"][1]["spec"]["replicas"] = 0
+        report = networking.inventory()
+        rows = {row["name"]: row for row in report["services"]}
+        self.assertEqual("stopped", rows["pihole"]["health"])
+        self.assertIn("app is stopped", rows["pihole"]["reason"])
+        self.assertEqual(0, report["summary"]["unhealthy"])
+
     def test_an_orphaned_listener_can_be_released(self):
         self.objects["/api/v1/services"]["items"].append({
             "metadata": {"name": "ghost", "namespace": "lab",

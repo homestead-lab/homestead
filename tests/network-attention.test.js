@@ -18,7 +18,9 @@ const data = {
                            { ip: "192.0.2.251", state: "ok" }] },
   conflicts: [{ ip: "192.0.2.242", protocol: "TCP", port: 3100, owners: [{ namespace: "lab", service: "loki" }, { namespace: "monitoring", service: "loki" }] }],
   services: [{ namespace: "lab", name: "loki", health: "conflict" }, { namespace: "lab", name: "n8n", health: "unavailable", reason: "No ready endpoints" },
-             { namespace: "lab", name: "plex", health: "healthy" }, { namespace: "kube-system", name: "traefik", health: "pending", system: true }],
+             { namespace: "lab", name: "plex", health: "healthy" }, { namespace: "kube-system", name: "traefik", health: "pending", system: true },
+             // Its app is stopped on purpose: nothing to answer with, nothing to fix.
+             { namespace: "lab", name: "rustdesk", health: "stopped", reason: "Its app is stopped" }],
 };
 
 test("each item says what, why and where; a conflicted Service is counted once, as its conflict", () => {
