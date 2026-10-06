@@ -46,6 +46,21 @@ class ReviewTests(unittest.TestCase):
             changed = copy.deepcopy(current); mutate(changed)
             with self.assertRaises(Held): R.recheck_binding(original, changed)
 
+    def test_a_new_warning_holds_the_move_and_says_it_in_its_own_words(self):
+        old_text, new_text = "node1: projected RAM reaches 71.0%", "node1: projected RAM reaches 93.4%"
+        receipt = {"proposal": "work", "warnings": [D.warning_key(old_text)]}
+        original = {"approvals": {
+            "worker": {"threshold": 88, "nodes": [], "receipt": copy.deepcopy(receipt)},
+            "policy": {"threshold": 88, "reviews": {s: copy.deepcopy(receipt) for s in ("copy", "restart")}}}}
+        current = copy.deepcopy(original)
+        current["approvals"]["policy"]["reviews"]["restart"]["warnings"].append(D.warning_key(new_text))
+        stages = [{"id": "restart", "capacity": {"warnings": [old_text, new_text]}}]
+        with self.assertRaises(Held) as held: R.recheck_binding(original, current, stages)
+        self.assertIn(f"capacity: restart new warning: {new_text}", str(held.exception))
+        self.assertNotIn(old_text, str(held.exception), "only the warning that was not reviewed")
+        # Without the fresh review's words it still says which step.
+        with self.assertRaisesRegex(Held, r"capacity: restart new warning\)"): R.recheck_binding(original, current)
+
     def setUp(self):
         self.f = admission_fixture.AdmissionTests(); self.f.setUp()
         self.c = self.f.cluster
