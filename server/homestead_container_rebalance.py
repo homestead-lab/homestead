@@ -8,7 +8,14 @@ busiest host down, each one worth its restart, and each can be vetoed.
 What can move is what the scheduler could already place elsewhere: a
 Deployment with one copy, not Homestead itself, not pinned to a host, not
 on host-local storage, and only to hosts its hardware allows (the same
-check a manual move uses). A host that already holds a copy of its volumes
+check a manual move uses). Its data stays near it: an app whose volume
+keeps its only copy on its host (strict-local) stays there, and one that
+reads its volumes locally now - or whose volumes follow it, best-effort,
+which would build a whole new copy - moves only to a host that already
+holds a copy of each. Its placement is kept too: an app set to run
+with others, or one others run with, is not moved alone - the scheduler
+would keep it beside them and the move would never come up - and nothing
+goes to a host it is kept apart from. A host that already holds a copy of its volumes
 is preferred, so its reads stay local.
 
 The job moves one container at a time with the same capacity check and
@@ -123,10 +130,11 @@ def inventory():
             sum(mem((c.get("usage") or {}).get("memory")) for c in m.get("containers") or []))
     sets = {((r.get("metadata") or {}).get("namespace"), (r.get("metadata") or {}).get("name")): r for r in _items("/apis/apps/v1/replicasets")}
     # Where each Longhorn volume has a copy: a host holding one keeps reads local.
-    claims = {}
+    claims, locality = {}, {}
     for volume in _items(f"{LH}/volumes"):
         k8s = (volume.get("status") or {}).get("kubernetesStatus") or {}
         claims[(k8s.get("namespace"), k8s.get("pvcName"))] = (volume.get("metadata") or {}).get("name")
+        locality[(volume.get("metadata") or {}).get("name")] = (volume.get("spec") or {}).get("dataLocality") or "disabled"
     copies = {}
     for replica in _items(f"{LH}/replicas"):
         spec = replica.get("spec") or {}
@@ -154,10 +162,77 @@ def inventory():
             why = "it uses storage on its host"
         volumes = [claims.get((ns, (v.get("persistentVolumeClaim") or {}).get("claimName")))
                    for v in template.get("volumes") or [] if v.get("persistentVolumeClaim")]
+        modes = {locality.get(v) for v in volumes if v}
+        if not why and "strict-local" in modes:
+            why = "its volume keeps its only copy on its host (strict-local), so it runs there"
         apps.append({"ns": ns, "name": name, "id": f"{ns}/{name}", "host": where[0], "dep": dep,
                      "cpu": sum(u[0] for u in use), "mem": sum(u[1] for u in use), "why": why,
-                     "near": set.intersection(*[copies.get(v, set()) for v in volumes]) if volumes and all(volumes) else None})
+                     "near": set.intersection(*[copies.get(v, set()) for v in volumes]) if volumes and all(volumes) else None,
+                     "follows": "best-effort" in modes})
+    _placement(apps)
     return hosts, apps
+
+
+def _pod_terms(template, kind):
+    """A pod template's terms of one kind (podAffinity, podAntiAffinity),
+    required and preferred alike, that place it by host."""
+    affinity = (template.get("affinity") or {}).get(kind) or {}
+    terms = list(affinity.get("requiredDuringSchedulingIgnoredDuringExecution") or [])
+    terms += [weighted.get("podAffinityTerm") or {} for weighted in affinity.get("preferredDuringSchedulingIgnoredDuringExecution") or []]
+    return [term for term in terms if term.get("topologyKey") == "kubernetes.io/hostname"]
+
+
+def _term_matches(term, term_ns, ns, labels):
+    """Whether a pod in ns with labels is one the term (written in term_ns) names."""
+    if ns not in (term.get("namespaces") or [term_ns]):
+        return False
+    selector = term.get("labelSelector") or {}
+    match, expressions = selector.get("matchLabels") or {}, selector.get("matchExpressions") or []
+    if not match and not expressions:
+        return False
+    if any(labels.get(key) != value for key, value in match.items()):
+        return False
+    for expression in expressions:
+        key, op, values = expression.get("key"), expression.get("operator"), expression.get("values") or []
+        if (op == "In" and labels.get(key) not in values) or (op == "NotIn" and labels.get(key) in values) or \
+                (op == "Exists" and key not in labels) or (op == "DoesNotExist" and key in labels):
+            return False
+    return True
+
+
+def _placement(apps):
+    """Keep each app's placement in the plan: one set to run with others,
+    or one others run with, stays where they are; each remembers what it is
+    kept apart from, so no move takes it there."""
+    for app in apps:
+        template = (((app["dep"].get("spec") or {}).get("template") or {}))
+        app["labels"] = (template.get("metadata") or {}).get("labels") or {}
+        app["with"], app["apart"] = _pod_terms(template.get("spec") or {}, "podAffinity"), _pod_terms(template.get("spec") or {}, "podAntiAffinity")
+    followers = {}
+    for app in apps:
+        partners = [other["id"] for other in apps if other is not app and
+                    any(_term_matches(term, app["ns"], other["ns"], other["labels"]) for term in app["with"])]
+        if partners and not app["why"]:
+            app["why"] = f"it runs with {', '.join(partners[:3])} (its placement), so it is not moved away from them alone"
+        for partner in partners:
+            followers.setdefault(partner, []).append(app["id"])
+    for app in apps:
+        if followers.get(app["id"]) and not app["why"]:
+            who = followers[app["id"]]
+            app["why"] = f"{', '.join(who[:3])} {'runs' if len(who) == 1 else 'run'} with it (their placement), so it is not moved away from {'it' if len(who) == 1 else 'them'}"
+
+
+def _kept_apart(app, other):
+    return (any(_term_matches(term, app["ns"], other["ns"], other["labels"]) for term in app.get("apart") or ())
+            or any(_term_matches(term, other["ns"], app["ns"], app["labels"]) for term in other.get("apart") or ()))
+
+
+def _keeps_local(app):
+    """Moves only where a copy of each of its volumes already is: it reads
+    them on its host now, or Longhorn would build a new copy wherever it
+    went (best-effort)."""
+    near = app.get("near")
+    return near is not None and (app["host"] in near or app.get("follows"))
 
 
 def _score(host, cpu_m, mem_b):
@@ -178,7 +253,10 @@ def plan(exclude=()):
             continue
         reqs = requirements(app["dep"])
         eligible[app["id"]] = {n for n, h in hosts.items() if n != app["host"] and h["takes"]
-                               and satisfies(summary.get(n, h["node"]), reqs)[0]}
+                               and satisfies(summary.get(n, h["node"]), reqs)[0]
+                               # Not to a host running something it is kept apart from.
+                               and not any(other["host"] == n and _kept_apart(app, other) for other in apps if other is not app)
+                               and (not _keeps_local(app) or n in app["near"])}
     moves, moved = [], set()
     while len(moves) < MAX_MOVES:
         best = None

@@ -158,3 +158,10 @@ class HoldTests(unittest.TestCase):
         A.observe({"addresses": fact}, 2000)
         raised = A.observe({"addresses": fact}, 2000 + VIPS.ADDRESS_HOLD)
         self.assertEqual(["raised"], [e["phase"] for e in raised], "still there after its hold: raised")
+
+
+class JobAlertTests(unittest.TestCase):
+    def test_a_failed_jobs_alert_opens_the_job_not_the_page_it_was_about(self):
+        # Seen on a phone: "Balance containers failed" opened Containers, with nothing there saying why.
+        fact = A.job_facts([{"id": "7df5", "status": "failed", "title": "Balance containers", "href": "/containers"}])[0]
+        self.assertEqual("/?job=7df5", fact["href"])

@@ -74,6 +74,13 @@ async function applyDeepLink(v, params) {
   if (STATE.deepLinkToken === token) return;
   STATE.deepLinkToken = token;
 
+  // ?job=<id>, from a failed job's notification opened in a new window.
+  if (params.job) {
+    const url = new URL(window.location.href);
+    url.searchParams.delete("job");
+    window.history.replaceState({ view: v }, "", url.pathname + url.search);
+    return window.openJob?.(params.job);
+  }
   if(v === "cluster" && params.section === "health") {
     const section=document.getElementById("clusterHealth");
     section?.setAttribute("tabindex","-1");
