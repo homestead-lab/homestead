@@ -347,7 +347,14 @@ def inventory():
                                   "access": access, "browser": browser})
         service_type = spec.get("type", "ClusterIP")
         ready_count, not_ready_count = len(endpoint["ready"]), len(endpoint["not_ready"])
-        if selector and ready_count == 0:
+        replicas = {(ns, row["name"] if row["kind"] == "Deployment" else "VirtualMachine/" + row["name"]): row["replicas"]
+                    for row in deployment_rows if row["namespace"] == ns}
+        stopped = bool(targets) and all(replicas.get((ns, t), 1) == 0 for t in targets)
+        if selector and ready_count == 0 and stopped:
+            # Its app is stopped on purpose: nothing should answer, and
+            # nothing needs attention. It answers again when the app starts.
+            health, reason = "stopped", "Its app is stopped; it answers again when the app starts"
+        elif selector and ready_count == 0:
             health, reason = "unavailable", "No ready endpoints match the Service selector"
         elif service_type == "LoadBalancer" and not assigned:
             health, reason = "pending", ("Waiting for ServiceLB to publish it on the nodes - another Service on "
@@ -474,7 +481,7 @@ def inventory():
             "summary": {"services": len(raw_rows), "app_services": sum(not row["system"] for row in raw_rows),
                         "load_balancers": sum(row["type"] == "LoadBalancer" for row in raw_rows),
                         "vips": len(vip_rows), "listeners": sum(len(row["listeners"]) for row in vip_rows),
-                        "unhealthy": sum(row["health"] not in ("healthy",) for row in raw_rows if not row["system"]),
+                        "unhealthy": sum(row["health"] not in ("healthy", "stopped") for row in raw_rows if not row["system"]),
                         "ready_endpoints": sum(row["ready_endpoints"] for row in raw_rows)}}
 
 

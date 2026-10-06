@@ -1,6 +1,6 @@
 /* Services, VIPs, listeners, endpoints and ingress */
 
-const networkPill = health => health === "healthy" ? "ok" : health === "pending" ? "med" : "crit";
+const networkPill = health => health === "healthy" ? "ok" : health === "pending" ? "med" : health === "stopped" ? "neutral" : "crit";
 const networkPortText = row => (row.ports || []).map(p => `${p.port}/${p.protocol}`).join(", ");
 
 function networkVipCard(v, data) {
@@ -38,7 +38,8 @@ function networkAttention(data) {
       where: owners[0] ? `tr[data-svc="${CSS.escape(owners[0])}"]` : ""});
   }
   for (const row of data.services || []) {
-    if (row.system || ["healthy", "conflict"].includes(row.health)) continue;
+    // A stopped app's Service has nothing to answer with, on purpose.
+    if (row.system || ["healthy", "conflict", "stopped"].includes(row.health)) continue;
     items.push({kind: "service", section: "services", what: `${row.namespace}/${row.name} · ${row.health}`, why: row.reason || "",
       where: `tr[data-svc="${CSS.escape(row.namespace + "/" + row.name)}"]`});
   }
@@ -277,7 +278,9 @@ function networkServicesHtml(data) {
       .join(" ").toLowerCase().includes(q)));
   const orphans = services.filter(row => row.orphaned).length;
   const due = networkAttention(data).filter(item => item.section === "services");
-  return `${due.length ? UI.callout("warn", `${due.length} need${due.length === 1 ? "s" : ""} attention`, esc(due.map(item => item.what).join("; "))) : ""}
+  return `${due.length ? UI.callout("warn", `${due.length} need${due.length === 1 ? "s" : ""} attention`,
+      `<ul class="net-attention">${due.map(item => `<li><div><b>${esc(item.what)}</b>${item.why ? `<div class="dim xs">${esc(item.why)}</div>` : ""}</div>
+        ${item.where ? `<button class="btn sm" onclick="networkShow('',${jsq(item.where)})">Show</button>` : ""}</li>`).join("")}</ul>`) : ""}
     ${orphans ? `<div class="note">${orphans === 1
       ? "<b>1 Service no longer points at a workload.</b> It still owns its VIP and port, so that number stays taken until the Service is removed."
       : `<b>${orphans} Services no longer point at a workload.</b> They still own their VIPs and ports, so those numbers stay taken until the Services are removed.`}</div>` : ""}
