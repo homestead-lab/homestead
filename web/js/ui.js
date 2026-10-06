@@ -560,3 +560,135 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
     if (event.target.closest?.("#mbody")) window.revealDialogField(event.target);
   }, true);
 }
+
+/* Suggestions for a text field. A <datalist> list is drawn by the browser,
+   which places and sizes it as it likes: offset from its field, narrower
+   than it, and spilling out of a dialog (#290). So every input with a
+   list= shows the same suggestions in a list of ours instead - under the
+   field, its width, kept inside the dialog, and above the field when there
+   is no room below. The <datalist> stays the source, read when the list
+   opens, so a page that fills it later needs nothing more. */
+if (typeof document !== "undefined" && typeof document.addEventListener === "function"
+    && typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  let pop = null, field = null, active = -1, shown = [], picking = false;
+  const upgrade = input => {
+    if (!input?.matches?.("input[list]")) return input?.dataset?.suggest ? input : null;
+    input.dataset.suggest = input.getAttribute("list");
+    input.removeAttribute("list");
+    input.setAttribute("autocomplete", "off");
+    input.setAttribute("role", "combobox");
+    input.setAttribute("aria-autocomplete", "list");
+    input.setAttribute("aria-expanded", "false");
+    return input;
+  };
+  const choices = input => {
+    const list = document.getElementById(input.dataset.suggest || "");
+    const all = [...new Set([...(list?.options || [])].map(option => option.value).filter(Boolean))];
+    const typed = input.value.trim().toLowerCase();
+    return typed ? all.filter(value => value.toLowerCase().includes(typed) && value.toLowerCase() !== typed) : all;
+  };
+  const place = () => {
+    if (!pop || !field?.isConnected) return close();
+    const at = field.getBoundingClientRect();
+    const box = field.closest(".modalbox")?.getBoundingClientRect() || { top: 0, bottom: window.innerHeight };
+    const top = Math.max(8, box.top + 8), bottom = Math.min(window.innerHeight - 8, box.bottom - 8);
+    pop.style.left = `${at.left}px`;
+    pop.style.width = `${at.width}px`;
+    pop.style.maxHeight = "";
+    const wanted = Math.min(pop.scrollHeight, 240), below = bottom - at.bottom - 4, above = at.top - top - 4;
+    const up = wanted > below && above > below;
+    const room = Math.max(80, up ? above : below);
+    pop.style.maxHeight = `${Math.min(240, room)}px`;
+    pop.style.top = `${up ? at.top - 4 - Math.min(wanted, room) : at.bottom + 4}px`;
+    pop.dataset.side = up ? "above" : "below";
+  };
+  const mark = index => {
+    active = index;
+    [...(pop?.children || [])].forEach((item, i) => item.setAttribute("aria-selected", String(i === index)));
+    const item = pop?.children[index];
+    if (item) { field.setAttribute("aria-activedescendant", item.id); item.scrollIntoView({ block: "nearest" }); }
+    else field?.removeAttribute("aria-activedescendant");
+  };
+  const close = () => {
+    pop?.remove();
+    pop = null; shown = []; active = -1;
+    if (field) { field.setAttribute("aria-expanded", "false"); field.removeAttribute("aria-activedescendant"); field.removeAttribute("aria-controls"); }
+    field = null;
+  };
+  const open = input => {
+    const found = choices(input);
+    if (!found.length || field !== input) close();
+    if (!found.length) return;
+    field = input;
+    shown = found;
+    if (!pop) {
+      pop = document.createElement("ul");
+      pop.className = "suggest-pop";
+      pop.id = "suggestPop";
+      pop.setAttribute("role", "listbox");
+      // Pressing an item must not take focus from the field first.
+      pop.addEventListener("mousedown", event => event.preventDefault());
+      pop.addEventListener("click", event => {
+        const item = event.target.closest("li");
+        if (item) pick(+item.dataset.index);
+      });
+      document.body.appendChild(pop);
+    }
+    pop.replaceChildren(...shown.map((value, i) => {
+      const item = document.createElement("li");
+      item.id = `suggestPop${i}`;
+      item.dataset.index = String(i);
+      item.setAttribute("role", "option");
+      item.setAttribute("aria-selected", "false");
+      item.textContent = value;
+      return item;
+    }));
+    input.setAttribute("aria-expanded", "true");
+    input.setAttribute("aria-controls", pop.id);
+    active = -1;
+    place();
+  };
+  const pick = index => {
+    const input = field, value = shown[index];
+    if (!input || value === undefined) return;
+    input.value = value;
+    close();
+    // Tell the page, without opening the list again on its own input event.
+    picking = true;
+    try {
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    } finally { picking = false; }
+  };
+  // Before the browser can show its own list: on the press, and on focus by keyboard.
+  document.addEventListener("pointerdown", event => upgrade(event.target), true);
+  document.addEventListener("focusin", event => upgrade(event.target), true);
+  document.addEventListener("click", event => {
+    const input = upgrade(event.target);
+    if (input) open(input);
+    else if (pop && !pop.contains(event.target)) close();
+  });
+  document.addEventListener("input", event => {
+    if (!picking && event.target?.dataset?.suggest && event.target === document.activeElement) open(event.target);
+  });
+  document.addEventListener("focusout", event => { if (event.target === field) close(); });
+  document.addEventListener("keydown", event => {
+    const input = upgrade(event.target);
+    if (!input) return;
+    const isOpen = pop && field === input;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      if (!isOpen) { open(input); if (pop) mark(event.key === "ArrowDown" ? 0 : shown.length - 1); return; }
+      mark((active + (event.key === "ArrowDown" ? 1 : -1) + shown.length) % shown.length);
+    } else if (event.key === "Enter" && isOpen && active >= 0) {
+      event.preventDefault();
+      pick(active);
+    } else if (event.key === "Escape" && isOpen) {
+      // Close the list, not the dialog around it.
+      event.preventDefault(); event.stopPropagation();
+      close();
+    } else if (event.key === "Tab" && isOpen) close();
+  }, true); // before the page's own Escape, which closes the dialog
+  window.addEventListener("resize", place);
+  window.addEventListener("scroll", event => { if (event.target !== pop) place(); }, { passive: true, capture: true });
+}
