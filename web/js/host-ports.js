@@ -106,16 +106,29 @@ function portsAcrossHostsBody(report) {
   return `${portConditions(cluster)}${UI.table([{ label: "Host" }, { label: "Uplink" }, { label: "Ports" }, { label: "Needs attention" }], rows)}`;
 }
 
+/* The card's inside, from the last report: the page draws it from this on
+   every refresh, so the card keeps its rows while the next report loads
+   instead of emptying and filling again. */
+const PORTS_VIEW = { report: null, error: "" };
+window.portsAcrossHostsCard = () => {
+  const report = PORTS_VIEW.report;
+  const line = report ? `${report.counts?.hosts || 0} host${report.counts?.hosts === 1 ? "" : "s"} · ${report.counts?.ports || 0} ports`
+    + ((report.conditions || []).length ? ` · ${(report.conditions || []).length} need attention` : "") : "reading ports…";
+  const body = PORTS_VIEW.error ? `<div class="dim small">Port status is unavailable: ${esc(PORTS_VIEW.error)}</div>`
+    : report ? portsAcrossHostsBody(report) : "";
+  return `<div class="csub">${esc(line)}</div><div class="ports-body" style="margin-top:8px">${body}</div>`;
+};
+
 window.portsAcrossHostsPaint = async () => {
-  const card = $("#netPorts .ports-body");
-  if (!card) return;
   try {
-    const report = await api("/api/nodes/ports");
-    card.innerHTML = portsAcrossHostsBody(report);
-    const line = $("#netPorts .csub");
-    if (line) line.textContent = `${report.counts?.hosts || 0} host${report.counts?.hosts === 1 ? "" : "s"} · ${report.counts?.ports || 0} ports`
-      + ((report.conditions || []).length ? ` · ${(report.conditions || []).length} need attention` : "");
+    PORTS_VIEW.report = await api("/api/nodes/ports");
+    PORTS_VIEW.error = "";
   } catch (e) {
-    card.innerHTML = `<div class="dim small">Port status is unavailable: ${esc(e.message)}</div>`;
+    PORTS_VIEW.error = e.message;
   }
+  const card = $("#netPorts");
+  if (!card) return;
+  const next = document.createElement("div");
+  next.innerHTML = portsAcrossHostsCard();
+  morph(card, next);
 };

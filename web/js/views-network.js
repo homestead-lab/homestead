@@ -177,7 +177,7 @@ async function viewNetworking() {
     ${(data.registered_vips || []).length ? "" : `<ol class="vip-steps"><li><b>1 · Add an address</b><span>Reserve an unused address outside DHCP, then save it here.</span></li>
       <li><b>2 · Choose a default</b><span>Use <b>Make default</b> for the address suggested to new workloads.</span></li>
       <li><b>3 · Connect a workload</b><span>Use a card below, or choose <b>Default workload VIP</b> / <b>Specific VIP</b> in Deploy → Networking.</span></li></ol>`}
-    <div id="selfAddress"></div>
+    <div id="selfAddress">${STATE.data.selfAddress ? selfAddressHtml(STATE.data.selfAddress, data) : ""}</div>
     <p class="small vip-default-summary">A saved VIP is advertised once a workload's Service requests it. <b>Current default:</b> <span class="mono">${esc(data.shared_vip?.ip || "Not configured")}</span> · Multiple workloads can share it on different ports. Changing it does not move existing services.</p>
     ${(data.registered_vips || []).length ? `<div class="vip-cards">${data.registered_vips.map(v => networkVipCard(v, data)).join("")}</div>`
       : '<div class="card flat empty small">No saved VIPs. Start with <b>Add VIP</b> above. Adding an address does not change your router or start a workload.</div>'}
@@ -186,7 +186,7 @@ async function viewNetworking() {
       <button class="btn sm" data-need="admin" onclick="vmNetworkAdd()">＋ LAN network</button></div>
     <div id="netVmNets">${window.__vmCreateOptions ? networkVmNetsHtml(window.__vmCreateOptions) : '<div class="dim small">reading LAN networks…</div>'}</div>
     ${networkAddressesHtml(data)}
-    <div style="margin-top:22px">${UI.section("Host ports", `<div class="card flat" id="netPorts"><div class="csub">reading ports…</div><div class="ports-body" style="margin-top:8px"></div></div>`,
+    <div style="margin-top:22px">${UI.section("Host ports", `<div class="card flat" id="netPorts">${window.portsAcrossHostsCard ? portsAcrossHostsCard() : ""}</div>`,
       tip("Every host's network ports: link, speed, errors and bonds, read from the hosts by the node probe. Open a host for its picture."))}</div>
     <div class="sec" style="margin-top:22px">Services &amp; endpoint paths</div>
     ${orphans ? `<div class="note" style="margin-bottom:12px">${orphans === 1
@@ -214,21 +214,30 @@ async function selfAddressPaint() {
   const host = $("#selfAddress");
   if (!host) return;
   let r;
-  try { r = await api("/api/self/address"); } catch (e) { host.innerHTML = ""; return; }
+  // A failed read keeps what was shown, rather than the card vanishing.
+  try { r = await api("/api/self/address"); } catch (e) { return; }
   STATE.data.selfAddress = r;
+  const next = document.createElement("div");
+  next.innerHTML = selfAddressHtml(r, STATE.data.network || {});
+  morph(host, next);
+  if (window.applyRole) applyRole();
+}
+/* Drawn from the last answer on every refresh of the page too, so the card
+   stays put while the next answer loads rather than vanishing and coming
+   back - which moved everything below it. */
+function selfAddressHtml(r, network) {
   const rows = r.components.filter(c => c.present).map(c => [
     `<b>${esc(c.label)}</b>`,
     c.vip ? `<span class="mono">${esc(c.vip)}</span> ${UI.chip("VIP", "ok")}` : "",
     c.node_addresses.length ? `<span class="dim xs mono">${esc(c.node_addresses.join(", "))}</span>` : '<span class="dim xs">—</span>',
     `<span class="mono xs">${esc(c.ports.map(p => p.port).join(", "))}</span>`]);
-  const vips = (STATE.data.network?.registered_vips || []).filter(v => !v.blocked);
-  host.innerHTML = `<div class="card flat self-address">
+  const vips = (network.registered_vips || []).filter(v => !v.blocked);
+  return `<div class="card flat self-address">
     <div class="between"><div><div class="ctitle">Homestead itself</div>
       <div class="csub">${r.on_vip ? `On <span class="mono">${esc(r.components.find(c => c.id === "web").vip)}</span>: <a class="linkish" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a>`
         : "On the nodes' own addresses: they stop answering when that node is down. Put Homestead on a VIP."}</div></div>
       ${!r.on_vip && vips.length && !nodeAddressesOnly() ? UI.button("Put Homestead on a VIP", "selfAddressMove()", { kind: "pri", attrs: 'data-need="admin"' }) : ""}</div>
     ${UI.table([{ label: "Service" }, { label: "VIP" }, { label: "Node addresses" }, { label: "Ports" }], rows)}</div>`;
-  if (window.applyRole) applyRole();
 }
 window.selfAddressPaint = selfAddressPaint;
 
