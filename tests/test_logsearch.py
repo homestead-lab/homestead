@@ -98,6 +98,24 @@ class SearchTests(unittest.TestCase):
         self.assertEqual(("", LS.MAX_LINE), (d["matches"][0]["at"], len(d["matches"][0]["line"])))
 
 
+class OneAtATimeTests(unittest.TestCase):
+    def test_a_second_search_waits_for_the_first(self):
+        started, release = threading.Event(), threading.Event()
+
+        def slow(*args):
+            started.set()
+            release.wait(5)
+            return ""
+        first = threading.Thread(target=LS.search, args=([app("x", [pod("x-1")])], "a", slow))
+        first.start()
+        started.wait(5)
+        with self.assertRaises(ValueError):
+            LS.search(WORKLOADS, "error", reader())
+        release.set()
+        first.join(5)
+        self.assertEqual(2, LS.search(WORKLOADS, "error", reader())["total"], "and runs once it has finished")
+
+
 class RouteTests(unittest.TestCase):
     def test_route_is_open_to_viewers(self):
         import homestead_route_policy as POLICY

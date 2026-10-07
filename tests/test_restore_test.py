@@ -149,6 +149,18 @@ class CopyTests(Base):
         self.assertEqual({"cpu": "100m", "memory": "512Mi"}, container["resources"]["requests"])
         self.assertEqual({"memory": "1Gi"}, container["resources"]["limits"])
 
+    def test_no_projected_service_account_token(self):
+        dep = deployment()
+        dep["spec"]["template"]["spec"]["volumes"] += [
+            {"name": "token", "projected": {"sources": [{"serviceAccountToken": {"path": "token"}}]}},
+            {"name": "mixed", "projected": {"sources": [{"serviceAccountToken": {"path": "t"}}, {"configMap": {"name": "c"}}]}}]
+        volumes = {v["name"]: v for v in RT.copy_of(dep, self.item, [])["spec"]["template"]["spec"]["volumes"]}
+        self.assertEqual({"name": "token", "emptyDir": {}}, volumes["token"])
+        self.assertEqual([{"configMap": {"name": "c"}}], volumes["mixed"]["projected"]["sources"])
+        self.assertFalse(RT.privileged(dep))
+        dep["spec"]["template"]["spec"]["containers"][0]["securityContext"] = {"privileged": True}
+        self.assertTrue(RT.privileged(dep))
+
     def test_no_service_selects_it_and_no_lan_attachment(self):
         dep = self.copy()
         labels = dep["spec"]["template"]["metadata"]["labels"]

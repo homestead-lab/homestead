@@ -12,6 +12,7 @@ Plain text matching by default; a regular expression on request, refused when
 it could take ages to run (a repeated group holding a repeat or a choice).
 """
 import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
@@ -21,6 +22,7 @@ MAX_LINE = 2000
 MAX_MATCHES = 500
 WINDOWS = {"15m": 900, "1h": 3600, "6h": 21600, "24h": 86400}
 _SLOW = re.compile(r"\([^)]*[*+|][^)]*\)\s*[*+{]")   # (a+)+, (a|aa)* and the like
+_ONE_AT_A_TIME = threading.Lock()   # each search reads up to MAX_PODS x MAX_BYTES
 _STAMP = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z) (.*)$")
 
 
@@ -68,6 +70,15 @@ def search(workloads, query, read, window="1h", apps=None, regex=False, case=Fal
     since = WINDOWS.get(window)
     if not since:
         raise ValueError("choose 15m, 1h, 6h or 24h")
+    if not _ONE_AT_A_TIME.acquire(blocking=False):
+        raise ValueError("another log search is running; try again in a moment")
+    try:
+        return _search(workloads, match, since, read, window, apps, now)
+    finally:
+        _ONE_AT_A_TIME.release()
+
+
+def _search(workloads, match, since, read, window, apps, now):
     every = targets(workloads, apps)
     asked, skipped = every[:MAX_PODS], max(0, len(every) - MAX_PODS)
     errors, full = [], []

@@ -33,6 +33,7 @@ ANSWER_WAIT = 300               # then the app this long to answer again
 STEADY = 120                    # an app with no check: ready this long is enough
 KEEP_SNAPSHOTS = 2              # before-update snapshots kept per volume
 CHECKED_OFF = ("checks are off for this app", "no address to ask")
+_tidied = set()                 # jobs whose snapshots have been tidied since start
 
 # Bound by server.py.
 kget = ksend = None
@@ -265,11 +266,15 @@ def _done(item, how):
 def tidy(operations):
     """After updates that worked, keep only the newest before-update snapshots
     of their volumes. The leader runs it outside any job, as removing a
-    snapshot is a job of its own."""
+    snapshot is a job of its own. Each job once: the list keeps finished jobs
+    for a while, and asking Longhorn about them every minute is waste. After
+    a restart each is tidied once more, which finds nothing to do."""
     for op in operations or []:
         summary = op.get("auto_update") or {}
-        if op.get("kind") != KIND or op.get("status") != "succeeded":
+        if op.get("kind") != KIND or op.get("status") != "succeeded" or op.get("id") in _tidied:
             continue
+        if op.get("id"):
+            _tidied.add(op["id"])
         for row in summary.get("snapshots") or []:
             try:
                 _prune(row["volume"], row["snapshot"])
