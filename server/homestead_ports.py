@@ -71,6 +71,7 @@ def observe(probes, now=None):
     now = now or time.time()
     with _lock:
         state = _load()
+        before = json.dumps(state, sort_keys=True)
         for node, probe in (probes or {}).items():
             rows = _ports(probe)
             if rows is None:
@@ -84,13 +85,17 @@ def observe(probes, now=None):
             if not samples or now - samples[-1]["t"] >= SAMPLE_EVERY:
                 samples.append({"t": round(now), "c": _counters(rows)})
             host["samples"] = [s for s in samples if s["t"] >= now - WINDOW - SAMPLE_EVERY]
-            host["boot"], host["seen"] = boot or host.get("boot"), round(now)
+            if boot and (not host.get("boot") or abs(boot - host["boot"]) > 120):
+                host["boot"] = boot                # uptime jitters a second; only a restart moves it
+            if now - (host.get("seen") or 0) >= SAMPLE_EVERY:
+                host["seen"] = round(now)          # only forgetting a host reads it, a day on
             best, no_partner = host.setdefault("best", {}), host.setdefault("no_partner", {})
             for row in rows:
                 speed, name = row.get("speed_mbps"), row["name"]
                 if row.get("carrier") and speed:
                     was = best.get(name)
-                    if not was or speed >= was["speed"] or now - was["at"] > KEEP_SPEED:
+                    if (not was or speed > was["speed"] or now - was["at"] > KEEP_SPEED
+                            or speed == was["speed"] and now - was["at"] >= SAMPLE_EVERY):
                         best[name] = {"speed": speed, "at": round(now)}
                 bond = row.get("bond") or {}
                 if bond.get("mode") == "802.3ad" and (bond.get("ad_partner_mac") or ZERO_MAC) == ZERO_MAC:
@@ -102,7 +107,8 @@ def observe(probes, now=None):
             host["no_partner"] = {k: v for k, v in no_partner.items() if k in names}
         for node in [n for n, host in state.items() if now - (host.get("seen") or 0) > FORGET_HOST]:
             state.pop(node)
-        _save(state)
+        if json.dumps(state, sort_keys=True) != before:
+            _save(state)                           # a sample, a speed or a partner changed; else no write
     return state
 
 

@@ -193,3 +193,19 @@ class SharedJobSafetyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UnchangedWriteTests(unittest.TestCase):
+    def test_the_same_content_is_not_written_again(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "state.json")
+            shared.write_json(path, {"a": 1, "b": [1, 2]}, indent=1, sort_keys=True)
+            with mock.patch.object(shared.os, "replace", wraps=os.replace) as replace:
+                shared.write_json(path, {"b": [1, 2], "a": 1}, indent=1, sort_keys=True)
+                self.assertEqual(0, replace.call_count)
+                shared.write_json(path, {"a": 2, "b": [1, 2]}, indent=1, sort_keys=True)
+                self.assertEqual(1, replace.call_count)
+                shared.write_json(path, {"a": 2, "b": [1, 2]}, indent=1, sort_keys=True, durable=True)
+                self.assertEqual(2, replace.call_count, "a durable write always lands")
+            with open(path, encoding="utf-8") as handle:
+                self.assertEqual({"a": 2, "b": [1, 2]}, json.load(handle))

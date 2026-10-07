@@ -162,18 +162,34 @@ def write_json(path, value, *, durable=False, mode=None, **dump):
         _write_json(path, value, durable=durable, mode=mode, **dump)
 
 
+def _same(path, text):
+    """Whether path already holds exactly text. Never follows a link."""
+    data = text.encode("utf-8")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return False
+    with os.fdopen(descriptor, "rb") as handle:
+        if os.fstat(handle.fileno()).st_size != len(data):
+            return False
+        return handle.read(len(data) + 1) == data
+
+
 def _write_json(path, value, *, durable=False, mode=None, **dump):
     if WRITE_GUARD is not None:
         WRITE_GUARD(path)
+    text = json.dumps(value, **dump)
+    if not durable and mode is None and _same(path, text):
+        return                       # loops save each round; what has not changed is not written again
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
     tmp = temporary(path)
     descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), mode if mode is not None else 0o666)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+    with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
         if mode is not None:
             os.chmod(tmp, mode)
-        json.dump(value, handle, **dump)
+        handle.write(text)
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(tmp, path)
