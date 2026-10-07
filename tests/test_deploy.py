@@ -455,7 +455,7 @@ class HomesteadManifestTests(unittest.TestCase):
     def test_runtime_workload_uses_homestead_names_and_image(self):
         manifest = (ROOT / "deploy" / "deploy.yaml").read_text()
         self.assertIn("kind: Deployment\nmetadata:\n  name: homestead", manifest)
-        self.assertIn("- name: homestead\n          image: ghcr.io/homestead-lab/homestead:2.8.318-dev.4",
+        self.assertIn("- name: homestead\n          image: ghcr.io/homestead-lab/homestead:2.8.318-dev.5",
                       manifest)
         self.assertIn("homestead.io/update-sources: '{\"homestead\":", manifest)
 
