@@ -39,7 +39,8 @@ function schedNext(s, now = new Date(), count = 3) {
 
 const schedWhen = at => new Date(at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
 
-/* A small mark on a row that has a schedule, saying it in words. */
+/* A small mark on a row that has a schedule, saying it in words. Phone rows
+   leave it out: their status column has room for the state alone. */
 function scheduleTag(row) {
   if (!row?.schedule) return "";
   const words = schedWords(row.schedule);

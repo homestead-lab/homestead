@@ -3631,4 +3631,4 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .sched-list{display:grid}.sched-item{display:grid;grid-template-columns:minmax(120px,1fr) minmax(0,2fr) auto;gap:12px;align-items:center;padding:9px 2px;border-top:1px solid var(--line)}
 .sched-item:first-child{border-top:0}.sched-name{display:grid;min-width:0}.sched-name b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sched-what{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;min-width:0}
-@media (max-width:560px){.sched-item{grid-template-columns:minmax(0,1fr) auto}.sched-what{grid-column:1/-1;grid-row:2}}
+@media (max-width:560px){.sched-item{grid-template-columns:minmax(0,1fr) auto}.sched-what{grid-column:1/-1;grid-row:2}.sched-tag{display:none}}
