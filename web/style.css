@@ -3580,3 +3580,10 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .signin-lapsed{position:fixed;left:50%;top:calc(12px + env(safe-area-inset-top,0px));transform:translateX(-50%);z-index:10000;
   display:flex;align-items:center;gap:10px;padding:10px 16px;border-radius:12px;border:1px solid var(--line2);
   background:var(--surf2);color:var(--tx);box-shadow:0 10px 30px rgba(0,0,0,.45);font-size:13.5px;max-width:calc(100vw - 32px)}
+
+/* Filling up: the storage forecast on Volumes (views-storage.js). */
+.forecast-card{margin-bottom:14px}.forecast-list{display:grid;gap:8px;margin-top:10px}
+.forecast-row{display:flex;align-items:center;gap:12px;min-width:0}.forecast-row .tag{flex:none}
+.forecast-name{display:grid;min-width:0}.forecast-name b,.forecast-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.forecast-empty{margin-top:8px}.forecast-tag{justify-self:start;align-self:flex-start;width:max-content;max-width:100%}
+@media (max-width:560px){.forecast-row{align-items:flex-start;flex-direction:column;gap:4px}.forecast-name span{white-space:normal}}
