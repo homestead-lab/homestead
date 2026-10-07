@@ -3648,3 +3648,9 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .wg-fold[aria-expanded=false] .btnicon{transform:rotate(-90deg)}
 .wg-members{display:grid;gap:2px}.wg-members .wg-item{grid-template-columns:auto auto 1fr}
 @media (max-width:560px){.wg-tools{grid-template-columns:minmax(0,1fr)}.wg-tools select{max-width:none;width:100%}}
+
+/* When it is down (uptime.js). */
+.outage-actions .switch{margin:0}
+.outage-unit{display:flex;align-items:center;gap:8px}.outage-unit input{width:90px}
+.outage-url{display:flex;gap:8px;align-items:center}.outage-url input{flex:1;min-width:0}
+@media (max-width:560px){.outage-url{flex-wrap:wrap}.outage-url .btn{width:100%;justify-content:center}}

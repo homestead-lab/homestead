@@ -2177,6 +2177,13 @@ ssh_pwauth: true
       return { ok: true, schedule: body.schedule ? { ...body.schedule, since: Math.round(Date.now() / 1000) } : null,
         detail: body.schedule ? `${body.name}: on its new schedule` : `${body.name} is no longer on a schedule` };
     },
+    // When it is down (uptime.js): saved as given; a test always lands.
+    "/api/monitoring/actions": (url, init) => {
+      const body = JSON.parse(init?.body || "{}"), a = body.actions;
+      const said = [a?.restart && `restarted after ${a.restart.after_min} min down, at most ${a.restart.max} times`, a?.webhook && "its webhook called"].filter(Boolean);
+      return { ok: true, actions: a || null, detail: `When ${body.name} is down: ${said.join(" and ") || "nothing is done"}` };
+    },
+    "/api/monitoring/actions/test": () => ({ ok: true, detail: "The webhook took the test" }),
     "/api/uptime/setting": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const port = body.mode !== "off" && body.port ? `:${body.port}` : "", path = body.path || "/";

@@ -41,6 +41,7 @@ STORES = [
     ("Storage forecast", ["storage-forecast.json"], "a figure a day for 90 days"),
     ("Alerts", ["alerts.json"], "what is active, and recent alerts"),
     ("Schedules", ["schedules.json"], "the last stop or start of each schedule"),
+    ("Outage actions", ["outage-actions.json"], "restarts done during the current outage of each app"),
     ("Jobs", ["operations-v2.json", "operations*.json"], "the last 100 jobs"),
     ("Image update history", ["image-update-history.jsonl"], f"{LOG_DAYS} days, at most {LOG_LINES} entries"),
     ("Console sessions", ["console-audit.jsonl"], f"{LOG_DAYS} days, at most {LOG_LINES} entries"),
