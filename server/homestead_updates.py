@@ -659,6 +659,52 @@ def refresh_one(ns, name):
     return item
 
 
+RECONCILE_EVERY = 10
+_RECONCILED = [0.0]
+
+
+def reconcile(now=None):
+    """Bring the last report in line with the cluster as it is now.
+
+    The report is held by each replica. An update or rollback refreshes that
+    app's line only on the replica that ran it (refresh_one); the other went on
+    offering the update that was already installed - and its review then said
+    no update was available. So before the report is handed out, each app whose
+    images are not what its line was worked out from - updated, rolled back,
+    edited with kubectl - is asked again, and one that is gone is dropped. One
+    list of Deployments, at most every RECONCILE_EVERY seconds."""
+    now = now or time.time()
+    with _SCAN_LOCK:
+        latest = _LATEST.get("report")
+        if not latest or now - _RECONCILED[0] < RECONCILE_EVERY:
+            return []
+        _RECONCILED[0] = now
+    deps = {(d["metadata"]["namespace"], d["metadata"]["name"]): d
+            for d in kget("/apis/apps/v1/deployments").get("items", [])}
+    stale, gone = [], []
+    for w in latest.get("workloads") or []:
+        dep = deps.get((w.get("ns"), w.get("name")))
+        if dep is None:
+            gone.append((w.get("ns"), w.get("name")))
+            continue
+        now_images = {c["name"]: c.get("image", "") for c in dep["spec"]["template"]["spec"].get("containers", [])}
+        seen = {i.get("container"): i.get("deployed") for i in w.get("images") or [] if i.get("container")}
+        if seen and seen != now_images:
+            stale.append((w["ns"], w["name"]))
+    if gone:
+        with _SCAN_LOCK:
+            latest = _LATEST.get("report")
+            if latest:
+                rows = [w for w in latest.get("workloads") or [] if (w.get("ns"), w.get("name")) not in gone]
+                _LATEST["report"] = _summary(rows, checked_at=latest.get("checked_at"), channel=latest.get("channel"))
+    for ns, name in stale:
+        try:
+            refresh_one(ns, name)
+        except Exception:
+            pass                    # the line stays as it was; the next scan settles it
+    return stale
+
+
 def refresh_soon(ns, name):
     """refresh_one in the background; if it cannot, the next request scans again."""
     def run():
@@ -695,6 +741,11 @@ def report(force=False):
     rather than trusting its older answers. Whoever waits reuses what the
     running scan found if that is good enough, instead of starting another.
     """
+    if not force:
+        try:
+            reconcile()
+        except Exception:
+            pass                    # a report a little behind beats none
     with _SCAN_LOCK:
         latest, begun = dict(_LATEST), _STARTED[0]
     if not force and latest["report"] and latest["report"].get("channel", "prod") == CHANNEL() and time.time() - latest["finished"] < _fresh_for(latest["report"]):

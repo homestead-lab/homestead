@@ -33,6 +33,29 @@ class RefreshOneTests(unittest.TestCase):
         self.assertEqual("2026-10-07T02:00:00Z", report["checked_at"])
         self.assertIs(False, check.call_args.kwargs["persist"])
 
+    def test_every_replica_notices_an_update_another_installed(self):
+        UPDATES._LATEST.update(report=UPDATES._summary([
+            {"ns": "lab", "name": "sonarr", "available": True, "homestead": "",
+             "images": [{"container": "sonarr", "deployed": "lscr.io/linuxserver/sonarr:latest", "available": True}]},
+            {"ns": "lab", "name": "radarr", "available": True, "homestead": "",
+             "images": [{"container": "radarr", "deployed": "lscr.io/linuxserver/radarr:latest", "available": True}]},
+            {"ns": "lab", "name": "deleted", "available": True, "homestead": "",
+             "images": [{"container": "x", "deployed": "x:1", "available": True}]}],
+            checked_at="2026-10-07T02:00:00Z", channel="prod"), number=3, finished=1.0)
+        UPDATES._RECONCILED[0] = 0.0
+        dep = lambda name, image: {"metadata": {"namespace": "lab", "name": name},
+                                    "spec": {"template": {"spec": {"containers": [{"name": name, "image": image}]}}}}
+        cluster = {"items": [dep("sonarr", "lscr.io/linuxserver/sonarr:latest@sha256:" + "a" * 64),
+                             dep("radarr", "lscr.io/linuxserver/radarr:latest")]}
+        asked = []
+        with mock.patch.object(UPDATES, "kget", return_value=cluster), \
+                mock.patch.object(UPDATES, "refresh_one", side_effect=lambda ns, name: asked.append(name)):
+            self.assertEqual([("lab", "sonarr")], UPDATES.reconcile(now=100))
+            self.assertEqual([], UPDATES.reconcile(now=105), "at most every ten seconds")
+        self.assertEqual(["sonarr"], asked, "only the app whose image changed is asked again")
+        names = {w["name"] for w in UPDATES._LATEST["report"]["workloads"]}
+        self.assertEqual({"sonarr", "radarr"}, names, "an app that is gone is dropped")
+
     def test_nothing_to_refresh_without_a_report(self):
         UPDATES._LATEST.update(report=None)
         with mock.patch.object(UPDATES, "_check_deployment") as check:
