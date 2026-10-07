@@ -865,7 +865,9 @@ def set_vm_monitoring(b):
     """How a VM is monitored: automatic, a port, a web page on a port, or off.
     An annotation on the VM, so it does not restart."""
     ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "VM name")
-    value = UPTIME.check_setting(b.get("mode"), b.get("path"), b.get("port"))
+    mode = b.get("mode")
+    # Automatic on a VM tries the usual ports; a port belongs to the other two.
+    value = UPTIME.check_setting(mode, b.get("path"), b.get("port") if mode in ("tcp", "http") else None)
     if value in ("tcp",) or (value and value.startswith("/")):
         raise ValueError("choose the port to ask on this VM")
     ksend("PATCH", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}",
@@ -963,14 +965,21 @@ def _schedules_loop():
 
 
 def set_uptime_setting(b):
-    """An app's own check: auto, an HTTP path, TCP only, or off. An annotation, so nothing restarts."""
+    """An app's own check: auto, an HTTP path, TCP only, or off - on any of its
+    published ports, or one chosen. An annotation, so nothing restarts."""
     ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
-    value = UPTIME.check_setting(b.get("mode"), b.get("path"))
+    port = b.get("port") if b.get("mode") != "off" else None
+    if port not in (None, ""):
+        w = next((w for w in cached("wl", 5, get_workloads) if w["ns"] == ns and w["name"] == name), None)
+        published = {int(p["port"]) for p in (w or {}).get("ports") or [] if p.get("port")}
+        if w is not None and str(port).isdigit() and int(port) not in published:
+            raise ValueError(f"{name} does not publish port {port}; choose one of "
+                             + (", ".join(str(p) for p in sorted(published)) or "its ports"))
+    value = UPTIME.check_setting(b.get("mode"), b.get("path"), port)
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
           {"metadata": {"annotations": {NAMES.key("uptime"): value or None}}}, ctype="application/merge-patch+json")
     _cache.pop("wl", None)
-    words = {"": "checked automatically", "off": "not checked", "tcp": "checked by TCP connection"}
-    return {"ok": True, "detail": f"{name} is {words.get(value, f'checked at {value}')}"}
+    return {"ok": True, "value": value, "detail": f"{name} is {UPTIME.describe_setting(value)}"}
 
 
 def node_stats(name):
@@ -8729,6 +8738,9 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "start_replicas": replicas or parked or 1, "containers": containers,
         "pod_volumes": reusable,
         "hardware": detected, "icon": NAMES.read(annotations, "icon-source") or NAMES.read(annotations, "icon"),
+        # How it is monitored, so Edit shows it rather than Automatic - and
+        # saving an edit keeps it.
+        "answer_check": NAMES.read(annotations, "uptime"),
         "node": pspec.get("nodeSelector", {}).get("kubernetes.io/hostname", ""),
         "placement": AFFINITY.public(deployment),
         "failover": FAILOVER.mode_of(pspec),

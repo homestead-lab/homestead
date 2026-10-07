@@ -363,29 +363,153 @@ window.wlGroup = (ns, name) => {
   setTimeout(() => $("#wg_name")?.focus(), 30);
 };
 
-/* Several at once: tick the workloads, then name the group they go in. */
-window.manageWorkloadGroups = () => {
-  const rows = STATE.data.wl || [], names = workloadGroupNames(rows);
-  modal("Groups", `<p class="muted small">Select workloads to group or ungroup. Empty groups are removed automatically.</p>
-    <div class="wg-list">${rows.map(w => `<label class="wg-item"><input type="checkbox" data-ns="${esc(w.ns)}" data-name="${esc(w.name)}">
-      ${appAvatar(w.name, w.icon)}<span><b>${esc(w.name)}</b><span class="dim xs"> ${esc(w.ns)}</span></span>
-      <span class="pill slim ${w.group ? "" : "neutral"}">${esc(w.group || "ungrouped")}</span></label>`).join("")}</div>
-    <div class="wg-apply"><div class="f"><label>Group</label><input id="wg_bulk" list="wg_bulk_names" maxlength="40" placeholder="e.g. Media">
+/* Several at once: tick containers - across groups, and across filters, which
+   keep what is ticked - then move them into a group or out of every group.
+   A group is a label on each container, so it exists while something is in
+   it: renaming one moves its containers to the new name, and ungrouping them
+   all removes it. */
+const WG = { picked: new Set(), q: "", group: "", folded: new Set(), keys: [] };
+const wgKey = w => `${w.ns}/${w.name}`;
+const wgRows = () => (STATE.data.wl || []).filter(w => !w.site && (!w.platform || platformShown()));
+
+window.manageWorkloadGroups = (keep = false) => {
+  if (!keep) Object.assign(WG, { picked: new Set(), q: "", group: "", folded: new Set() });
+  const rows = wgRows(), names = workloadGroupNames(rows);
+  const count = g => rows.filter(w => g === NO_GROUP ? !w.group : w.group === g).length;
+  modal("Groups", `<div class="ui-stack">
+    ${UI.lead("Tick containers, then move them into a group or out of every group. What you tick stays ticked when you change the filter. A group lasts while something is in it.")}
+    <div class="wg-tools">
+      <input id="wg_q" type="search" placeholder="Filter by name or namespace" aria-label="Filter containers" value="${esc(WG.q)}" oninput="wgFilter()">
+      <select id="wg_group" aria-label="Show group" onchange="wgFilter()"><option value="">Every group</option>
+        ${names.map(n => `<option value="${esc(n)}"${WG.group === n ? " selected" : ""}>${esc(n)} (${count(n)})</option>`).join("")}
+        ${count(NO_GROUP) ? `<option value="${NO_GROUP}"${WG.group === NO_GROUP ? " selected" : ""}>Ungrouped (${count(NO_GROUP)})</option>` : ""}</select></div>
+    <div class="wg-selbar"><b id="wg_count" aria-live="polite"></b>
+      ${UI.button("Tick all shown", "wgTickShown(true)")}${UI.button("Clear", "wgClear()")}</div>
+    <div class="wg-list" id="wg_list"></div>
+    <div class="wg-apply"><div class="f"><label for="wg_bulk">Group</label><input id="wg_bulk" list="wg_bulk_names" maxlength="40" placeholder="e.g. Media">
       <datalist id="wg_bulk_names">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist></div>
-      <button class="btn pri" onclick="saveWorkloadGroup(checkedWorkloads(), $('#wg_bulk').value)">Move ticked</button>
-      <button class="btn" onclick="saveWorkloadGroup(checkedWorkloads(), '')">Ungroup ticked</button></div>`);
-  loadAppIcons($("#mbody"));
+      ${UI.button("Ungroup ticked", "wgApply(false)")}${UI.button("Move ticked", "wgApply(true)", { kind: "pri" })}</div>
+    ${UI.actions(UI.cancel("Close"))}</div>`);
+  wgRender();
 };
-window.checkedWorkloads = () => $$("#mbody .wg-item input:checked").map(box => ({ ns: box.dataset.ns, name: box.dataset.name }));
-window.saveWorkloadGroup = async (items, group) => {
-  if (!items || !items.length) return toast("Tick at least one workload", "bad");
+
+function wgShown() {
+  const q = WG.q.toLowerCase();
+  return wgRows().filter(w => (!q || w.name.toLowerCase().includes(q) || w.ns.toLowerCase().includes(q))
+    && (!WG.group || (WG.group === NO_GROUP ? !w.group : w.group === WG.group)));
+}
+
+function wgRender() {
+  const list = $("#wg_list");
+  if (!list) return;
+  const shown = wgShown();
+  const groups = [...workloadGroupNames(shown), ...(shown.some(w => !w.group) ? [NO_GROUP] : [])];
+  WG.keys = groups;          // handlers name a group by its index here
+  list.innerHTML = shown.length ? groups.map((g, i) => {
+    const members = shown.filter(w => g === NO_GROUP ? !w.group : w.group === g);
+    const all = wgRows().filter(w => g === NO_GROUP ? !w.group : w.group === g);
+    const ticked = members.filter(w => WG.picked.has(wgKey(w))).length;
+    const folded = WG.folded.has(g);
+    return `<section class="wg-group">
+      <div class="wg-head"><button type="button" class="wg-fold" aria-expanded="${!folded}" onclick="wgFold(${i})">
+          <svg class="btnicon" aria-hidden="true"><use href="#i-chevron-down"/></svg><b>${esc(g === NO_GROUP ? "Ungrouped" : g)}</b>
+          <span class="dim xs">${members.length < all.length ? `${members.length} of ${all.length}` : all.length}${ticked ? ` · ${ticked} ticked` : ""}</span></button>
+        ${actionBar([{ label: ticked === members.length ? "Untick these" : "Tick these", run: `wgTickGroup(${i},${ticked !== members.length})` },
+          ...(g === NO_GROUP ? [] : [{ label: "Rename…", run: `wgRename(${i})`, need: "operator" }, { label: "Ungroup all…", run: `wgUngroupAll(${i})`, need: "operator" }])], { shown: 1, label: `More for ${g === NO_GROUP ? "ungrouped" : g}` })}</div>
+      <div class="wg-members"${folded ? " hidden" : ""}>${members.map(w => `<label class="wg-item"><input type="checkbox" data-key="${esc(wgKey(w))}"${WG.picked.has(wgKey(w)) ? " checked" : ""} onchange="wgTick(this)">
+        ${appAvatar(w.name, w.icon)}<span><b>${esc(w.name)}</b><span class="dim xs"> ${esc(w.ns)}</span></span></label>`).join("")}</div></section>`;
+  }).join("") : '<div class="empty small">No container matches.</div>';
+  loadAppIcons(list);
+  wgCount();
+}
+
+function wgCount() {
+  const n = WG.picked.size, host = $("#wg_count");
+  if (host) host.textContent = n ? `${n} ticked` : "None ticked";
+}
+
+window.wgFilter = () => {
+  WG.q = $("#wg_q")?.value || "";
+  WG.group = $("#wg_group")?.value || "";
+  wgRender();
+};
+window.wgTick = box => {
+  box.checked ? WG.picked.add(box.dataset.key) : WG.picked.delete(box.dataset.key);
+  wgRender();
+};
+window.wgTickShown = on => {
+  wgShown().forEach(w => on ? WG.picked.add(wgKey(w)) : WG.picked.delete(wgKey(w)));
+  wgRender();
+};
+window.wgClear = () => { WG.picked.clear(); wgRender(); };
+const wgMembers = (i, shownOnly = false) => {
+  const g = WG.keys[i];
+  return (shownOnly ? wgShown() : wgRows()).filter(w => g === NO_GROUP ? !w.group : w.group === g);
+};
+window.wgTickGroup = (i, on) => {
+  wgMembers(i, true).forEach(w => on ? WG.picked.add(wgKey(w)) : WG.picked.delete(wgKey(w)));
+  wgRender();
+};
+window.wgFold = i => {
+  const g = WG.keys[i];
+  WG.folded.has(g) ? WG.folded.delete(g) : WG.folded.add(g);
+  wgRender();
+};
+const wgItems = rows => rows.map(w => ({ ns: w.ns, name: w.name }));
+window.wgApply = into => {
+  const items = wgRows().filter(w => WG.picked.has(wgKey(w)));
+  const group = into ? ($("#wg_bulk")?.value || "").trim() : "";
+  if (into && !group) return toast("Name the group to move them into", "bad");
+  saveWorkloadGroup(wgItems(items), group, true);
+};
+
+/* Renaming moves every container in the group to the new name. */
+window.wgRename = i => {
+  const g = WG.keys[i], members = wgMembers(i), names = workloadGroupNames(wgRows()).filter(n => n !== g);
+  window.__wgGroup = { items: wgItems(members), from: g };
+  modal(`Rename ${g}`, `<div class="ui-stack">
+    ${UI.lead(esc(`Its ${members.length} container${members.length === 1 ? "" : "s"} move to the new name. A name another group has merges the two.`))}
+    ${UI.field("New name", `<input id="wg_rename" maxlength="40" value="${esc(g)}" list="wg_rename_names"><datalist id="wg_rename_names">${names.map(n => `<option value="${esc(n)}">`).join("")}</datalist>`)}
+    ${UI.actions(UI.button("Back", "manageWorkloadGroups(true)") + UI.button("Rename", "wgRenameApply()", { kind: "pri", attrs: 'data-need="operator"' }))}</div>`);
+  setTimeout(() => { const input = $("#wg_rename"); input?.focus(); input?.select(); }, 30);
+};
+window.wgRenameApply = () => {
+  const name = ($("#wg_rename")?.value || "").trim(), { items, from } = window.__wgGroup || {};
+  if (!name) return toast("Name the group", "bad");
+  if (name === from) return manageWorkloadGroups(true);
+  if (WG.group === from) WG.group = name;
+  saveWorkloadGroup(items, name, true);
+};
+
+/* Ungrouping every container in a group removes it. */
+window.wgUngroupAll = i => {
+  const g = WG.keys[i], members = wgMembers(i);
+  window.__wgGroup = { items: wgItems(members), from: g };
+  modal(`Ungroup ${g}`, `<div class="ui-stack">
+    ${UI.lead(esc(`Its ${members.length} container${members.length === 1 ? "" : "s"} leave the group, and ${g} is gone: a group lasts while something is in it. Nothing restarts.`))}
+    ${UI.actions(UI.button("Back", "manageWorkloadGroups(true)") + UI.button("Ungroup all", "wgUngroupApply()", { kind: "danger", attrs: 'data-need="operator"' }))}</div>`);
+};
+window.wgUngroupApply = () => {
+  const { items, from } = window.__wgGroup || {};
+  if (WG.group === from) WG.group = "";
+  saveWorkloadGroup(items, "", true);
+};
+
+window.checkedWorkloads = () => wgItems(wgRows().filter(w => WG.picked.has(wgKey(w))));
+window.saveWorkloadGroup = async (items, group, stay = false) => {
+  if (!items || !items.length) return toast("Tick at least one container", "bad");
   try {
     const result = await api("/api/workloads/group", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items, group: String(group || "").trim() }) });
     toast(result.detail, "ok");
     const moved = new Set(items.map(item => `${item.ns}/${item.name}`));
     (STATE.data.wl || []).forEach(w => { if (moved.has(`${w.ns}/${w.name}`)) w.group = result.group; });
-    closeModal(); renderWorkloads();
+    if (stay) {
+      WG.picked.clear();
+      if (WG.group && WG.group !== NO_GROUP && !workloadGroupNames(wgRows()).includes(WG.group)) WG.group = "";
+      manageWorkloadGroups(true);
+    } else closeModal();
+    renderWorkloads();
   } catch (e) { toast(e.message, "bad"); }
 };
 

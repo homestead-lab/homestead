@@ -1708,7 +1708,7 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .wgroup.folded .wgroup-head{margin-bottom:4px}
 .wltable tbody.grouphead td{padding:0 12px;background:rgba(255,255,255,.02)}
 .wltable tbody.grouphead .wgroup-head{margin:0;border-bottom:0}
-.wg-list{display:grid;gap:4px;max-height:48vh;overflow:auto;margin:12px 0;padding-right:4px}
+.wg-list{display:grid;gap:8px;max-height:48vh;overflow:auto;padding-right:4px}
 .wg-item{display:grid;grid-template-columns:auto auto 1fr auto;align-items:center;gap:10px;padding:7px 9px;border-radius:9px;cursor:pointer}
 .wg-item:hover{background:rgba(255,255,255,.04)}
 .wg-apply{display:flex;gap:8px;align-items:end;flex-wrap:wrap}
@@ -3632,3 +3632,19 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .sched-item:first-child{border-top:0}.sched-name{display:grid;min-width:0}.sched-name b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sched-what{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:baseline;min-width:0}
 @media (max-width:560px){.sched-item{grid-template-columns:minmax(0,1fr) auto}.sched-what{grid-column:1/-1;grid-row:2}.sched-tag{display:none}}
+
+/* Monitoring: which port to ask (uptime.js). */
+.monitoring-row .monitoring-port select{width:auto;max-width:220px}
+.answer-port select{width:auto;max-width:100%}
+@media (max-width:560px){.monitoring-row{flex-wrap:wrap}.monitoring-row .monitoring-port,.monitoring-row .monitoring-port select{width:100%;max-width:none}}
+
+/* Groups dialog: filter, keep ticks, a section per group (views-workloads.js). */
+.wg-tools{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}.wg-tools select{width:auto;max-width:220px}
+.wg-selbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.wg-selbar b{margin-right:auto;font-size:13px}
+.wg-group{border:1px solid var(--line2);border-radius:10px;padding:4px}
+.wg-head{display:flex;align-items:center;gap:8px;padding:2px 4px}
+.wg-fold{display:flex;align-items:center;gap:8px;flex:1;min-width:0;background:none;border:0;color:inherit;padding:6px 2px;cursor:pointer;text-align:left;font:inherit}
+.wg-fold b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.wg-fold .btnicon{transition:transform .15s}
+.wg-fold[aria-expanded=false] .btnicon{transform:rotate(-90deg)}
+.wg-members{display:grid;gap:2px}.wg-members .wg-item{grid-template-columns:auto auto 1fr}
+@media (max-width:560px){.wg-tools{grid-template-columns:minmax(0,1fr)}.wg-tools select{max-width:none;width:100%}}

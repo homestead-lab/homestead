@@ -664,7 +664,8 @@ def prepare_edit(cfg, current=None):
 
     if "monitoring" in cfg:
         chosen = cfg.get("monitoring") or {}
-        value = UPTIME.check_setting(chosen.get("mode") or "auto", chosen.get("path"))
+        value = UPTIME.check_setting(chosen.get("mode") or "auto", chosen.get("path"),
+                                     chosen.get("port") if chosen.get("mode") != "off" else None)
         ann = dep["metadata"].setdefault("annotations", {})
         if value:
             ann[NAMES.key("uptime")] = value

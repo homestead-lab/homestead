@@ -56,33 +56,72 @@ function answerCardRow(w, vm = false) {
   </button>`;
 }
 
-const answerModeOf = value => !value ? "auto" : value === "off" || value === "tcp" ? value : "http";
+/* An app's setting in its parts: how, on which one port (or its main one),
+   and at which path - "", "off", "tcp", "/health", "auto:8080", "tcp:9090",
+   "http:9090/health". */
+function monitorParts(value) {
+  const ported = /^(auto|tcp|http):(\d+)(\/.*)?$/.exec(value || "");
+  if (ported) return { mode: ported[1], port: ported[2], path: ported[1] === "http" ? ported[3] || "/" : "/" };
+  if (!value) return { mode: "auto", port: "", path: "/" };
+  if (value === "off" || value === "tcp") return { mode: value, port: "", path: "/" };
+  return { mode: "http", port: "", path: value };
+}
+const answerModeOf = value => monitorParts(value).mode;
+
+/* The TCP ports an app publishes, each number once, lowest first. */
+function monitorPorts(ports) {
+  const byPort = new Map();
+  for (const p of ports || []) {
+    if (!p.port || (p.protocol || "TCP") !== "TCP") continue;
+    const seen = byPort.get(String(p.port));
+    byPort.set(String(p.port), { port: +p.port, primary: !!(p.primary || seen?.primary), name: p.name || seen?.name || "" });
+  }
+  return [...byPort.values()].sort((a, b) => a.port - b.port);
+}
+
+/* Which port to ask: its main one (or any it publishes), or one chosen. Only
+   offered when there is a choice - or when one was chosen before. */
+function monitorPortSelect(id, ports, chosen = "") {
+  const list = monitorPorts(ports);
+  if (list.length < 2 && !chosen) return "";
+  const main = list.some(p => p.primary) ? "Its main port" : "Any port it publishes";
+  const gone = chosen && !list.some(p => String(p.port) === String(chosen));
+  return `<select id="${id}" aria-label="Port to ask"><option value="">${main}</option>
+    ${list.map(p => `<option value="${p.port}"${String(p.port) === String(chosen) ? " selected" : ""}>Port ${p.port}${p.name ? ` · ${esc(p.name)}` : ""}${p.primary ? " · main" : ""}</option>`).join("")}
+    ${gone ? `<option value="${esc(chosen)}" selected>Port ${esc(chosen)} · no longer published</option>` : ""}</select>`;
+}
 
 /* The Monitoring field in Deploy's and Edit's Address step. */
-function monitoringFieldHtml(prefix, value = "") {
-  const mode = answerModeOf(value);
+function monitoringFieldHtml(prefix, value = "", ports = null) {
+  const { mode, port, path } = monitorParts(value);
   const choice = (v, label) => `<option value="${v}" ${mode === v ? "selected" : ""}>${label}</option>`;
+  const portSelect = ports ? monitorPortSelect(`${prefix}_mon_port`, ports, port) : "";
   return `<div class="f monitoring-field"><label for="${prefix}_mon">Monitoring ${typeof tip === "function" ? tip("Homestead asks the app at its address every minute and alerts you when it is down. Changing this never restarts it.") : ""}</label>
     <div class="row monitoring-row"><select id="${prefix}_mon" onchange="monitoringModeChanged(this)">
-      ${choice("auto", "Automatic: its main port")}${choice("http", "A web page at a path")}${choice("tcp", "A connection to its port")}${choice("off", "Not monitored")}</select>
-    <input id="${prefix}_mon_path" placeholder="/health" value="${esc(mode === "http" ? value : "")}" ${mode === "http" ? "" : "hidden"} aria-label="Path to ask"></div></div>`;
+      ${choice("auto", "Automatic")}${choice("http", "A web page at a path")}${choice("tcp", "A connection to its port")}${choice("off", "Not monitored")}</select>
+    ${portSelect ? `<span class="monitoring-port"${mode === "off" ? " hidden" : ""}>${portSelect}</span>` : ""}
+    <input id="${prefix}_mon_path" class="monitoring-path" placeholder="/health" value="${esc(mode === "http" ? path : "")}" ${mode === "http" ? "" : "hidden"} aria-label="Path to ask"></div></div>`;
 }
 
 window.monitoringModeChanged = select => {
-  const path = select.closest(".monitoring-row")?.querySelector("input");
+  const row = select.closest(".monitoring-row");
+  const path = row?.querySelector(".monitoring-path"), port = row?.querySelector(".monitoring-port");
   if (path) path.hidden = select.value !== "http";
+  if (port) port.hidden = select.value === "off";
 };
 
 function monitoringFieldValue(prefix) {
   const mode = $(`#${prefix}_mon`)?.value || "auto";
-  return { mode, path: mode === "http" ? (($(`#${prefix}_mon_path`)?.value || "").trim() || "/") : "" };
+  return { mode, path: mode === "http" ? (($(`#${prefix}_mon_path`)?.value || "").trim() || "/") : "",
+    port: mode === "off" ? "" : $(`#${prefix}_mon_port`)?.value || "" };
 }
 
 window.wlMonitoring = window.wlAnswering = (ns, name) => {
   const w = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) || { ns, name };
   const a = answerOf(w) || { state: "unknown", strip: [] };
   const u = STATE.data.uptime || {};
-  const mode = answerModeOf(w.answer_check);
+  const { mode, port, path } = monitorParts(w.answer_check);
+  const portSelect = monitorPortSelect("ans_port", w.ports, port);
   const option = (value, label, help) => `<label class="answer-mode"><input type="radio" name="ans_mode" value="${value}" ${mode === value ? "checked" : ""}
     onchange="answerModeChanged()"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span></span></label>`;
   modal(`Monitoring · ${name}`, `<div class="ui-stack">
@@ -94,29 +133,32 @@ window.wlMonitoring = window.wlAnswering = (ns, name) => {
     <div class="answer-figures"><div><span class="dim xs">LAST 24 HOURS</span><b class="mono">${answerShare(a.uptime_24h)}</b></div>
       <div><span class="dim xs">LAST 30 DAYS</span><b class="mono">${answerShare(a.uptime_30d)}</b></div></div>`}
     ${UI.section("How it is checked", `<div class="answer-modes">
-      ${option("auto", "Automatic", "Its main port: an HTTP answer below 500, or an accepted connection if it does not speak HTTP")}
+      ${option("auto", "Automatic", "An HTTP answer below 500, or an accepted connection if it does not speak HTTP")}
       ${option("http", "A web page", "Only an HTTP answer below 500 at this path counts")}
-      <div class="f answer-path"${mode === "http" ? "" : " hidden"}><label for="ans_path">Path</label><input id="ans_path" value="${esc(mode === "http" ? w.answer_check : "/")}" placeholder="/health"></div>
+      <div class="f answer-path"${mode === "http" ? "" : " hidden"}><label for="ans_path">Path</label><input id="ans_path" value="${esc(mode === "http" ? path : "/")}" placeholder="/health"></div>
       ${option("tcp", "A connection", "The port accepting a TCP connection is enough")}
-      ${option("off", "Not monitored", "No checks and no alerts for this app")}</div>`)}
+      ${option("off", "Not monitored", "No checks and no alerts for this app")}</div>
+      ${portSelect ? `<div class="f answer-port"${mode === "off" ? " hidden" : ""}><label for="ans_port">Port to ask</label>${portSelect}</div>` : ""}`)}
     ${UI.actions(UI.cancel() + UI.button("Save", "answerSave()", { kind: "pri", attrs: `data-need="operator" data-ns="${esc(ns)}" data-name="${esc(name)}" id="ans_go"` }))}</div>`);
 };
 
 window.answerModeChanged = () => {
   const mode = $("#mbody input[name=ans_mode]:checked")?.value;
-  const path = $("#mbody .answer-path");
+  const path = $("#mbody .answer-path"), port = $("#mbody .answer-port");
   if (path) path.hidden = mode !== "http";
+  if (port) port.hidden = mode === "off";
 };
 
 window.answerSave = async () => {
   const go = $("#ans_go"), mode = $("#mbody input[name=ans_mode]:checked")?.value || "auto";
-  const body = { ns: go.dataset.ns, name: go.dataset.name, mode, path: ($("#ans_path")?.value || "").trim() };
+  const body = { ns: go.dataset.ns, name: go.dataset.name, mode, path: ($("#ans_path")?.value || "").trim(),
+    port: mode === "off" ? "" : $("#ans_port")?.value || "" };
   go.disabled = true;
   try {
     const result = await api("/api/uptime/setting", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(result.detail, "ok");
     const w = (STATE.data.wl || []).find(x => x.ns === body.ns && x.name === body.name);
-    if (w) w.answer_check = mode === "auto" ? "" : mode === "http" ? body.path || "/" : mode;
+    if (w) w.answer_check = result.value ?? (mode === "auto" ? "" : mode === "http" ? body.path || "/" : mode);
     closeModal();
     if (STATE.view === "workloads") renderWorkloads();
   } catch (e) { toast(e.message, "bad"); go.disabled = false; }
@@ -275,5 +317,5 @@ function monitoringStepHtml(w) {
     ${a ? `<div class="answer-head"><span class="answer-state"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
       <span class="dim small">${esc(answerDetail(a))}</span></div>${a.target ? `<div class="dim xs mono">${esc(a.target)}</div>` : ""}
       ${a.state === "off" || !(a.strip || []).length ? "" : `<div class="answer-day">${answerStrip(a.strip, "wide")}<div class="answer-axis dim xs"><span>24 h ago</span><span>now</span></div></div>`}` : ""}
-    ${monitoringFieldHtml("e", w.answer_check || "")}`;
+    ${monitoringFieldHtml("e", w.answer_check || "", w.ports || [])}`;
 }

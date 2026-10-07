@@ -164,6 +164,56 @@ class VmTests(Base):
         self.assertIsNone(UP.report(1060)["vm:lab/ha"]["port"])
 
 
+
+def two_ports(**extra):
+    return app(ports=[{"ip": "192.0.2.10", "port": 8080, "protocol": "TCP", "primary": True},
+                      {"ip": "192.0.2.10", "port": 9090, "protocol": "TCP"},
+                      {"ip": "192.0.2.11", "port": 9090, "protocol": "TCP", "lan": True}], **extra)
+
+
+class ChosenPortTests(unittest.TestCase):
+    def test_any_published_port_can_be_chosen(self):
+        self.assertEqual(8080, UP.target(two_ports())[0]["port"], "by default its main port")
+        t = UP.target(two_ports(answer_check="auto:9090"))[0]
+        self.assertEqual(({9090}, False), ({a["port"] for a in t["asks"]}, t["strict"]))
+        t = UP.target(two_ports(answer_check="http:9090/health"))[0]
+        self.assertEqual((9090, "/health", True), (t["port"], t["path"], t["strict"]))
+        self.assertEqual(("tcp", 9090), (UP.target(two_ports(answer_check="tcp:9090"))[0]["kind"],
+                                         UP.target(two_ports(answer_check="tcp:9090"))[0]["port"]))
+
+    def test_a_port_no_longer_published_says_so(self):
+        t, why = UP.target(two_ports(answer_check="tcp:7000"))
+        self.assertIsNone(t)
+        self.assertIn("port 7000 is no longer published", why)
+
+    def test_settings_with_a_port(self):
+        self.assertEqual("auto:9090", UP.check_setting("auto", "", 9090))
+        self.assertEqual("http:9090/x", UP.check_setting("http", "/x", "9090"))
+        self.assertEqual("off", UP.check_setting("off", "", 9090))
+        self.assertEqual({"mode": "auto"}, UP.setting("auto:9090/x"), "auto takes no path")
+        self.assertEqual("checked automatically on port 9090", UP.describe_setting("auto:9090"))
+        self.assertEqual("checked at /x on port 9090", UP.describe_setting("http:9090/x"))
+        self.assertEqual("checked by a connection to its port", UP.describe_setting("tcp"))
+
+    def test_the_route_takes_only_a_published_port(self):
+        import server
+        sent = []
+        with mock.patch.object(server, "ksend", side_effect=lambda *a, **k: sent.append(a)), \
+             mock.patch.object(server, "cached", return_value=[{"ns": "lab", "name": "sonarr", **two_ports()}]):
+            result = server.set_uptime_setting({"ns": "lab", "name": "sonarr", "mode": "tcp", "port": 9090})
+            with self.assertRaises(ValueError):
+                server.set_uptime_setting({"ns": "lab", "name": "sonarr", "mode": "tcp", "port": 7000})
+        self.assertEqual("tcp:9090", sent[0][2]["metadata"]["annotations"]["homestead.io/uptime"])
+        self.assertEqual("tcp:9090", result["value"])
+
+    def test_a_vms_automatic_check_takes_no_port(self):
+        import server
+        sent = []
+        with mock.patch.object(server, "ksend", side_effect=lambda *a, **k: sent.append(a)):
+            server.set_vm_monitoring({"ns": "lab", "name": "ha", "mode": "auto", "port": 22})
+        self.assertIsNone(sent[0][2]["metadata"]["annotations"]["homestead.io/uptime"])
+
+
 class VmSettingRouteTests(unittest.TestCase):
     def test_only_the_vms_annotation_changes_and_a_port_is_needed(self):
         import server

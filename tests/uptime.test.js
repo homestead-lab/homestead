@@ -100,3 +100,24 @@ test("a VM's chosen port reads back", () => {
   assert.equal(run('vmMonitorChoice("")').mode, "auto");
   assert.equal(run('vmMonitorChoice("off")').mode, "off");
 });
+
+test("an app's setting splits into how, which port and which path", () => {
+  const parts = v => JSON.parse(JSON.stringify(run(`monitorParts(${JSON.stringify(v)})`)));
+  assert.deepEqual(parts(""), { mode: "auto", port: "", path: "/" });
+  assert.deepEqual(parts("/health"), { mode: "http", port: "", path: "/health" });
+  assert.deepEqual(parts("tcp"), { mode: "tcp", port: "", path: "/" });
+  assert.deepEqual(parts("auto:9090"), { mode: "auto", port: "9090", path: "/" });
+  assert.deepEqual(parts("http:9090/x"), { mode: "http", port: "9090", path: "/x" });
+  assert.equal(run(`answerModeOf("tcp:22")`), "tcp");
+});
+
+test("a port is offered only when there is a choice", () => {
+  const one = [{ port: 8080, ip: "192.0.2.10" }];
+  const two = [{ port: 8080, ip: "192.0.2.10", primary: true }, { port: 9090, ip: "192.0.2.10" }, { port: 9090, ip: "192.0.2.11" }];
+  assert.equal(run(`monitorPortSelect("p", ${JSON.stringify(one)})`), "");
+  const html = run(`monitorPortSelect("p", ${JSON.stringify(two)}, "9090")`);
+  assert.match(html, /Its main port/);
+  assert.equal((html.match(/value="9090"/g) || []).length, 1, "each port number once");
+  assert.match(html, /value="9090" selected/);
+  assert.match(run(`monitorPortSelect("p", ${JSON.stringify(one)}, "7000")`), /Port 7000 · no longer published/);
+});
