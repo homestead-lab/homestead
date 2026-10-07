@@ -38,6 +38,7 @@ _lock = threading.Lock()
 _notes = []                 # (at, ns, name, who) of Homestead's own writes
 _notes_lock = threading.Lock()
 REQUEST = threading.local() # who the request on this thread is for
+BY_SCHEDULE = "schedule"    # a power schedule's stop or start: not a change to record
 
 
 def bind(data_dir="/data"):
@@ -62,7 +63,8 @@ def _save(data):
     SHARED.write_json(_path(), data, separators=(",", ":"), sort_keys=True, mode=0o600)
 
 
-_DEPLOYMENT = re.compile(r"^/apis/apps/v1/namespaces/([a-z0-9-]+)/deployments(?:/([a-z0-9.-]+))?(?:\?.*)?$")
+# A Deployment, or its scale - how Stop, Start and schedules change copies.
+_DEPLOYMENT = re.compile(r"^/apis/apps/v1/namespaces/([a-z0-9-]+)/deployments(?:/([a-z0-9.-]+)(?:/scale)?)?(?:\?.*)?$")
 
 
 def note_write(method, path, body=None, now=None):
@@ -208,6 +210,11 @@ def observe(deployments, now=None, since=None):
             rows = diff(app.get("last") or {}, now_summary)
             if rows:
                 source, who = _attribution(meta.get("namespace"), meta.get("name"), since, now)
+                if who == BY_SCHEDULE and all(r["field"] == "Copies" for r in rows):
+                    # Stopped or started on its schedule, twice a day: kept as
+                    # the app now is, but not an entry crowding out real changes.
+                    app["last"], app["kept"], changed = now_summary, _template(dep), True
+                    continue
                 entry = {"id": hashlib.sha256(f"{key}{now}".encode()).hexdigest()[:12], "at": round(now),
                          "source": source, "by": who, "changes": rows, "before": app.get("kept")}
                 app["entries"] = ([entry] + app.get("entries", []))[:KEEP]

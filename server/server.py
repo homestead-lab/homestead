@@ -875,6 +875,93 @@ def set_vm_monitoring(b):
     return {"ok": True, "detail": f"{name} is {words.get(value, f'checked at {value}')}"}
 
 
+def set_schedule(b):
+    """Stop and start an app or VM on a schedule, or no longer. An annotation,
+    so nothing restarts."""
+    kind = b.get("kind")
+    ns = _dns_name(b.get("ns"), "namespace")
+    if kind == "app":
+        name = _dns_name(b.get("name"), "workload name")
+        guard_managed_smb(ns, name)
+        require_workload_target(ns, name)
+        if is_self(ns, name):
+            raise ValueError("Homestead cannot be put on a schedule: it is what runs the schedules")
+        path = f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"
+    elif kind == "vm":
+        name = _dns_name(b.get("name"), "VM name")
+        path = f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}"
+    else:
+        raise ValueError("a schedule is for an app or a VM")
+    schedule = SCHEDULES.clean(b.get("schedule"))
+    ksend("PATCH", path, {"metadata": {"annotations": {
+        NAMES.key(SCHEDULES.KEY): json.dumps(schedule, separators=(",", ":")) if schedule else None}}},
+        ctype="application/merge-patch+json")
+    _cache.pop("wl" if kind == "app" else "vms", None)
+    return {"ok": True, "schedule": schedule,
+            "detail": f"{name}: {SCHEDULES.describe(schedule).lower()}" if schedule else f"{name} is no longer on a schedule"}
+
+
+def scheduled_items():
+    return SCHEDULES.items(cached("wl", 5, get_workloads), cached("vms", 5, VMS.list_vms))
+
+
+def schedule_act(item, action):
+    """Do a scheduled stop or start as the buttons do, with their checks."""
+    ns, name = item["ns"], item["name"]
+    if item["kind"] == "app":
+        dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+        current = int((dep.get("spec") or {}).get("replicas") or 0)
+        if action == "stop":
+            if not current:
+                return f"{name} was already stopped"
+            ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
+                  {"metadata": {"annotations": {NAMES.key(SCHEDULES.REPLICAS_KEY): str(current)}}},
+                  ctype="application/merge-patch+json")
+            api_scale(ns, name, 0)
+            return f"stopped {name}"
+        if current:
+            return f"{name} was already running"
+        try:
+            copies = int(NAMES.read((dep.get("metadata") or {}).get("annotations") or {}, SCHEDULES.REPLICAS_KEY) or 1)
+        except ValueError:
+            copies = 1
+        try:
+            api_scale(ns, name, max(1, min(copies, 100)))
+        except API_V1.ApiError as error:
+            raise ValueError(error.message) from None
+        return f"started {name}" + (f" with {copies} copies" if copies > 1 else "")
+    if action == "stop":
+        if not item["running"]:
+            return f"{name} was already stopped"
+        api_vm_power(ns, name, "stop")
+        return f"shutting {name} down"
+    if item["running"]:
+        return f"{name} was already running"
+    try:
+        api_vm_power(ns, name, "start")
+    except API_V1.ApiError as error:
+        raise ValueError(error.message) from None
+    return f"starting {name}"
+
+
+def _schedules_loop():
+    """Every minute on the leader: any scheduled stop or start that is due.
+    Its writes are noted as the schedule's, so change history leaves them out."""
+    CHANGES.REQUEST.user = CHANGES.BY_SCHEDULE
+    while True:
+        started = time.time()
+        if LEADER.is_leader():
+            try:
+                if SCHEDULES.tick(scheduled_items(), schedule_act):
+                    _cache.pop("wl", None)
+                    _cache.pop("vms", None)
+                beat("schedules", 60, leader_only=True)
+            except Exception as error:
+                beat("schedules", 60, error, leader_only=True)
+                print(f"schedules: {str(error)[:160]}", flush=True)
+        time.sleep(max(5, 60 - (time.time() - started)))
+
+
 def set_uptime_setting(b):
     """An app's own check: auto, an HTTP path, TCP only, or off. An annotation, so nothing restarts."""
     ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
@@ -1862,6 +1949,7 @@ def get_workloads():
             # The Helm release it belongs to, whose chart may name a logo.
             "helm_release": annotations.get("meta.helm.sh/release-name", ""),
             "answer_check": NAMES.read(annotations, "uptime"),
+            "schedule": SCHEDULES.read(annotations, NAMES),
             "update_mode": "auto" if NAMES.read(annotations, AUTOUPDATE.MODE) == "auto" else "manual",
             "restore_tested": RESTORE_TEST.last_result(annotations),
             "group": NAMES.read(annotations, "group") or own_group(ns, name),
@@ -6699,6 +6787,7 @@ import homestead_host_os as HOST_OS
 import homestead_ports as PORTS
 import homestead_uptime as UPTIME
 import homestead_housekeeping as HOUSEKEEPING
+import homestead_schedules as SCHEDULES
 
 
 import homestead_impact as IMPACT
@@ -6825,6 +6914,7 @@ HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 PORTS.bind(DATA_DIR)
 UPTIME.bind(DATA_DIR)
 HOUSEKEEPING.bind(DATA_DIR)
+SCHEDULES.bind(DATA_DIR)
 CHANGES.bind(DATA_DIR)
 FORECAST.bind(DATA_DIR)
 
@@ -7180,6 +7270,7 @@ def _alert_sources():
     take("hostos", HOST_OS.alert_facts)
     take("ports", lambda: PORTS.alert_facts(cached("ports", 20, ports_report)))
     take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
+    take("schedules", lambda: SCHEDULES.alert_facts())
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 600, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("rootguard", ROOT_GUARD.alert_facts)
@@ -7901,7 +7992,7 @@ OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
 LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
-              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "changes": "Change history", "housekeeping": "Data housekeeping"}
+              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "changes": "Change history", "housekeeping": "Data housekeeping", "schedules": "Schedules"}
 
 
 def samba_state():
@@ -9907,6 +9998,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, {"entries": CHANGES.history(ns or None, name or None)})
             if p == "/api/homestead/data":
                 return self._send(200, cached("housekeeping", 60, HOUSEKEEPING.report))
+            if p == "/api/power-schedules":
+                return self._send(200, {"items": SCHEDULES.report(scheduled_items()), "grace": SCHEDULES.GRACE})
 
 
             if p == "/api/nodes/impact":
@@ -10374,6 +10467,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_uptime_setting(b))
             if p == "/api/vms/monitoring":
                 return self._send(200, set_vm_monitoring(b))
+            if p == "/api/power-schedules/set":
+                return self._send(200, set_schedule(b))
             if p == "/api/image-updates/mode":
                 return self._send(200, set_update_mode(b))
             if p == "/api/changes/undo/preview":
@@ -11535,6 +11630,7 @@ def start_background_tasks():
     threading.Thread(target=_hardware_loop, daemon=True).start()
     threading.Thread(target=_uptime_loop, name="uptime", daemon=True).start()
     threading.Thread(target=_housekeeping_loop, name="housekeeping", daemon=True).start()
+    threading.Thread(target=_schedules_loop, name="schedules", daemon=True).start()
     threading.Thread(target=_changes_loop, name="changes", daemon=True).start()
     threading.Thread(target=_forecast_loop, name="forecast", daemon=True).start()
     threading.Thread(target=_autoupdate_loop, name="auto-updates", daemon=True).start()

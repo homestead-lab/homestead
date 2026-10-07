@@ -228,6 +228,7 @@
       ns: "lab", name: `k3s-demo-${role}-1`, status: "Running", run_strategy: "RerunOnFailure", running: true, node: "harvester-node2",
       cores: 2, memory: "1Gi", ip, ips, network: "default/lan", os: "Ubuntu 26.04.1 LTS", description: "",
       cluster: "k3s-demo", cluster_role: role,
+      schedule: { stop: "19:00", start: "08:00", days: [0, 1, 2, 3, 4], tz: "UTC", since: 0 },
       usage: role === "server" ? { cpu: 0.71, cpu_pct: 35.5, mem: 0.84 * 1024 ** 3, mem_pct: 84, read_bps: 40960, write_bps: 2.4 * 1024 ** 2 }
         : { cpu: 0.12, cpu_pct: 6, mem: 0.52 * 1024 ** 3, mem_pct: 52, read_bps: 0, write_bps: 120 * 1024 },
       nics: [{ name: "default", model: "virtio", network: "default/lan", mac: "52:54:00:12:34:" + (role === "server" ? "01" : "02"), ips }],
@@ -270,6 +271,7 @@
       images: ["ghcr.io/home-assistant/home-assistant:stable"], ports: [{ port: 8123, ip: "192.0.2.215" }],
       pod_count: 1, container_count: 1, pods: [pod("home-assistant", "harvester-node1", "ghcr.io/home-assistant/home-assistant:stable")] },
     { name: "paperless", ns: "lab", kind: "Deployment", failover: "move", desired: 1, ready: 1, uptime: 220190,
+      schedule: { stop: "01:00", start: "07:00", days: [0, 1, 2, 3, 4], tz: "UTC", since: 0 },
       cpu: 0.18, mem_mb: 512, nodes: ["harvester-node3"], hardware: [],
       images: ["ghcr.io/paperless-ngx/paperless-ngx:latest"], ports: [{ port: 8000, ip: "192.0.2.216" }],
       pod_count: 1, container_count: 1, pods: [pod("paperless", "harvester-node3", "ghcr.io/paperless-ngx/paperless-ngx:latest")] },
@@ -2151,6 +2153,29 @@ ssh_pwauth: true
       const w = workloads.find(x => x.ns === body.ns && x.name === body.name);
       if (w) w.update_mode = body.mode;
       return { ok: true, mode: body.mode, detail: body.mode === "auto" ? `${body.name} updates itself in the maintenance window` : `${body.name} waits for you to update it` };
+    },
+    // Schedules (schedules.js): paperless overnight, the k3s test VMs out of
+    // working hours - one of whose last starts was refused for room.
+    "/api/power-schedules": () => {
+      const t = Date.now() / 1000, day = 86400;
+      const words = "Stops 19:00, starts 08:00, weekdays";
+      return { grace: 1800, items: [
+        { kind: "app", ns: "lab", name: "paperless", running: true, words: "Stops 01:00, starts 07:00, weekdays",
+          schedule: { stop: "01:00", start: "07:00", days: [0, 1, 2, 3, 4], tz: "UTC" },
+          next: [{ at: t + 5 * 3600, action: "stop" }, { at: t + 11 * 3600, action: "start" }],
+          last: { at: t - 13 * 3600, action: "start", ok: true, detail: "started paperless" } },
+        { kind: "vm", ns: "lab", name: "k3s-demo-agent-1", running: true, words,
+          schedule: { stop: "19:00", start: "08:00", days: [0, 1, 2, 3, 4], tz: "UTC" },
+          next: [{ at: t + 2 * 3600, action: "stop" }], last: { at: t - 9 * 3600, action: "start", ok: true, detail: "starting k3s-demo-agent-1" } },
+        { kind: "vm", ns: "lab", name: "k3s-demo-server-1", running: true, words,
+          schedule: { stop: "19:00", start: "08:00", days: [0, 1, 2, 3, 4], tz: "UTC" },
+          next: [{ at: t + 2 * 3600, action: "stop" }],
+          last: { at: t - day + 600, action: "start", ok: false, detail: "it cannot start: harvester-node2 has 0.6 GiB of memory free and it needs 1 GiB" } }] };
+    },
+    "/api/power-schedules/set": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      return { ok: true, schedule: body.schedule ? { ...body.schedule, since: Math.round(Date.now() / 1000) } : null,
+        detail: body.schedule ? `${body.name}: on its new schedule` : `${body.name} is no longer on a schedule` };
     },
     "/api/uptime/setting": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
