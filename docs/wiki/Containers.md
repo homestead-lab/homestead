@@ -69,6 +69,7 @@ logs, console, edit - and:
 - **Main port** - which of its ports the card links to first, usually its web
   page.
 - **Group** - put it in a group (below).
+- **Monitoring** - how Homestead checks that it answers (below).
 - **Placement** - where it runs (below).
 - **Rename** - replaces the Deployment under its new Kubernetes name; Services
   and volumes keep their existing names and addresses.
@@ -339,11 +340,54 @@ each is, which nodes hold a copy, and which VMs' disks came from it. An image
 nothing was made from can be deleted there; one a disk came from stays, since
 the disk keeps reading from it.
 
+## Monitoring
+
+Every minute Homestead asks each running app at its address whether it answers,
+as a browser would. Three misses in a row and it is **Down**, which raises an
+alert; its first answer brings it back up. The **Monitoring** page shows each
+app's last 24 hours and 30 days, and a container's **Monitoring** (in its menu,
+or the Monitoring step of Edit) chooses how it is asked:
+
+- **Automatic** - an HTTP answer below 500, or an accepted connection if the app
+  does not speak HTTP.
+- **A web page** - only an HTTP answer below 500 at the path you give counts.
+- **A connection** - the port accepting a TCP connection is enough.
+- **Not monitored** - no checks and no alerts.
+
+An app that publishes more than one port also has **Port to ask**: its main
+port (see **Main port** above) by default, or any one of the ports it publishes.
+If that port is later removed from the app, it stops being checked and its
+Monitoring says why, until another is chosen. None of this restarts the app.
+
 ## Groups
 
 Groups gather containers under a heading - Media, Home, Monitoring - that folds
-away. **Group** in a container's menu puts it in one; **Groups** at the top of
-the page ticks several at once. A chip per group shows that group alone.
+away, with a chip per group at the top of the page that shows that group alone.
+
+A group is a label on each container (the `homestead.io/group` annotation), not
+a list of its own, so **a group exists while at least one container is in it**.
+There is no empty group to create in advance, and moving or ungrouping the last
+container in a group removes it. Changing a container's group never restarts it.
+
+- **To create a group**, put a container in it: **Group** in the container's
+  menu, then type a new name (names already in use are suggested). Names are free
+  text of up to 40 characters, so a typo makes a second group.
+- **To move several at once**, use **⋯ → Manage groups**. Filter the list by name
+  or namespace, or show one group (or **Ungrouped**); tick containers - what you
+  tick stays ticked while you change the filter, and the count says how many -
+  then name a group and **Move ticked**, or **Ungroup ticked**. Each group's
+  heading folds, and **Tick these** ticks all of its shown containers.
+- **To rename a group**, use **Rename…** on its heading in Manage groups: every
+  container in it moves to the new name. A name another group already has
+  merges the two.
+- **To remove a group**, use **Ungroup all…** on its heading, or **Ungroup
+  ticked** with its containers ticked. For one container, **Remove from
+  <group>** in its **Group** dialog.
+
+Which group's chip is chosen, and which groups are folded on the page, are kept
+in the browser, so each device remembers its own.
+
+## Platform containers
 
 Homestead's own containers - Homestead, the SMB and NFS servers that serve your
 shares, and the object store moves use - are platform containers: hidden until

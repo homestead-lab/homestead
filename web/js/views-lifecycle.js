@@ -304,7 +304,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     $("#mbody").innerHTML = `<div id="e_containers">${stepper("e_steps", [
       { title: "Basics", html: basics }, { title: "Hardware and access", html: access },
       { title: "Environment values", html: environment }, { title: "Storage", html: storage },
-      { title: "Placement", html: running }, { title: "Address", html: address }, { title: "Monitoring", html: monitoringStepHtml(w) }],
+      { title: "Placement", html: running }, { title: "Address", html: address }, { title: "Monitoring", html: monitoringStepHtml({ ...w, ns, name, answer_check: w.answer_check ?? listed?.answer_check ?? "", ports: listed?.ports || [] }) }],
       `<button class="btn pri" id="e_save" onclick="editSave(${jsq(ns)},${jsq(name)})">Review changes</button>`, { always: true })}</div>`;
     containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));

@@ -264,7 +264,7 @@
   const workloads = [
     { name: "frigate", ns: "lab", kind: "Deployment", group: "Home", failover: "wait", desired: 1, ready: 1, uptime: 472221,
       cpu: 0.84, mem_mb: 1840, nodes: ["harvester-node2"], hardware: ["igpu", "coral_usb"],
-      images: ["ghcr.io/blakeblackshear/frigate:stable"], ports: [{ port: 5000, ip: "192.0.2.214" }], claims: ["frigate-config"],
+      images: ["ghcr.io/blakeblackshear/frigate:stable"], ports: [{ port: 5000, ip: "192.0.2.214", name: "web", primary: true }, { port: 8554, ip: "192.0.2.214", name: "rtsp" }], claims: ["frigate-config"],
       pod_count: 1, container_count: 1, pods: [pod("frigate", "harvester-node2", "ghcr.io/blakeblackshear/frigate:stable")] },
     { name: "home-assistant", ns: "lab", kind: "Deployment", failover: "move", group: "Home", desired: 1, ready: 1, uptime: 912400,
       cpu: 0.31, mem_mb: 738, nodes: ["harvester-node1"], hardware: [],
@@ -2179,7 +2179,10 @@ ssh_pwauth: true
     },
     "/api/uptime/setting": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
-      return { ok: true, detail: `${body.name} is ${({ auto: "checked automatically", off: "not checked", tcp: "checked by TCP connection" })[body.mode] || `checked at ${body.path || "/"}`}` };
+      const port = body.mode !== "off" && body.port ? `:${body.port}` : "", path = body.path || "/";
+      const value = body.mode === "off" ? "off" : port ? `${body.mode}${port}${body.mode === "http" ? path : ""}` : body.mode === "auto" ? "" : body.mode === "tcp" ? "tcp" : path;
+      const on = port ? ` on port ${body.port}` : "";
+      return { ok: true, value, detail: `${body.name} is ${({ auto: `checked automatically${on}`, off: "not monitored", tcp: `checked by a connection${on || " to its port"}` })[body.mode] || `checked at ${path}${on}`}` };
     },
     // Logos (logos.js): a small catalogue drawn from the demo's own apps.
     // Most match their image; paperless matches by name only; the last has none.

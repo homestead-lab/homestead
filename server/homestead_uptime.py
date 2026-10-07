@@ -106,12 +106,12 @@ def _save(now):
     _state["saved_at"], _state["mtime"] = now, _mtime()
 
 
-_PORTED = re.compile(r"^(tcp|http):([0-9]{1,5})(/.*)?$")
+_PORTED = re.compile(r"^(auto|tcp|http):([0-9]{1,5})(/.*)?$")
 
 
 def setting(value):
     """An app's or VM's own setting, from its annotation: auto, off, tcp, an
-    HTTP path, or - for a VM - tcp:PORT or http:PORT/path."""
+    HTTP path, or any of those on one port - auto:PORT, tcp:PORT, http:PORT/path."""
     value = str(value or "").strip()
     if value in ("", "auto"):
         return {"mode": "auto"}
@@ -120,7 +120,7 @@ def setting(value):
     ported = _PORTED.match(value)
     if ported and 1 <= int(ported.group(2)) <= 65535:
         mode, port, path = ported.group(1), int(ported.group(2)), ported.group(3) or "/"
-        if mode == "tcp" and ported.group(3):
+        if mode in ("auto", "tcp") and ported.group(3):
             return {"mode": "auto"}
         if mode == "http" and not PATH.match(path):
             return {"mode": "auto"}
@@ -130,9 +130,23 @@ def setting(value):
     return {"mode": "auto"}
 
 
+def describe_setting(value):
+    """A setting in words: "checked automatically on port 8080"."""
+    chosen = setting(value)
+    on = f" on port {chosen['port']}" if chosen.get("port") else ""
+    if chosen["mode"] == "off":
+        return "not monitored"
+    if chosen["mode"] == "tcp":
+        return f"checked by a connection{on or ' to its port'}"
+    if chosen["mode"] == "http":
+        return f"checked at {chosen.get('path', '/')}{on}"
+    return f"checked automatically{on}"
+
+
 def check_setting(mode, path="", port=None):
     """What an operator asks for, as the annotation value; ValueError if it is not one.
-    port is for a VM, which publishes none of its own."""
+    port is the one port to ask: an app's choice of its published ports, or
+    for a VM, which publishes none of its own, the one it answers on."""
     mode = str(mode or "auto")
     if port not in (None, ""):
         try:
@@ -143,8 +157,10 @@ def check_setting(mode, path="", port=None):
             raise ValueError("a port is a number from 1 to 65535")
     else:
         port = None
-    if mode in ("auto", "off"):
-        return "" if mode == "auto" else mode
+    if mode == "off":
+        return mode
+    if mode == "auto":
+        return f"auto:{port}" if port else ""
     if mode == "tcp":
         return f"tcp:{port}" if port else "tcp"
     if mode == "http":
@@ -197,7 +213,11 @@ def target(w):
     ports = [p for p in w.get("ports") or [] if p.get("ip") and p.get("port") and (p.get("protocol") or "TCP") == "TCP"]
     if not ports:
         return None, "no address to ask"
-    if any(p.get("primary") for p in ports):
+    if chosen.get("port"):
+        ports = [p for p in ports if int(p["port"]) == chosen["port"]]
+        if not ports:
+            return None, f"port {chosen['port']} is no longer published: choose another under Monitoring"
+    elif any(p.get("primary") for p in ports):
         ports = [p for p in ports if p.get("primary")][:1]
     pod_ip = next((p.get("ip") for p in w.get("pods") or [] if p.get("ip") and p.get("ready")), "") or \
         next((p.get("ip") for p in w.get("pods") or [] if p.get("ip")), "")
