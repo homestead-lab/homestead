@@ -573,6 +573,8 @@ window.nodeActions = async name => {
     ${cordoned
       ? action("Cordoned", "New pods do not land here. Allow scheduling again when the host is ready for work.", UI.button("Uncordon", `nodeCordon(${jsArg(name)},false)`, { attrs: 'data-need="admin"' }), "warn")
       : action("Cordon", "Stop new pods landing here; what runs here keeps running.", UI.button("Cordon", `nodeCordon(${jsArg(name)},true)`, { attrs: 'data-need="admin"' }))}
+    ${action("If this host goes down", "What stops, what waits, what moves and where, which volumes are at risk and which addresses move.",
+      UI.button("Preview", `nodeIfDown(${jsArg(name)},() => nodeActions(${jsArg(name)}))`))}
     ${action("Move apps off", "Move every app on this host to another, cordoning it first.", UI.button("Move all off", `evacuateNode(${jsArg(name)})`, { attrs: 'data-need="admin"' }))}
     ${action("Drain", "Evict the pods here so they start elsewhere, through their disruption budgets.", UI.button("Drain", `nodeDrain(${jsArg(name)})`, { attrs: 'data-need="admin"' }))}
     ${off ? action("Power control is off", "Reboot and shutdown need ENABLE_NODE_POWER=true on the Homestead Deployment.", "", "neutral")

@@ -32,6 +32,7 @@ POLICY = {
     ('GET', '/api/logos'): 'viewer',
     ('GET', '/api/uptime'): 'viewer',
     ('GET', '/api/homestead/data'): 'admin',
+    ('GET', '/api/nodes/impact'): 'viewer',
     ('GET', '/api/changes'): 'viewer',
     ('GET', '/api/storage/forecast'): 'viewer',
     ('GET', '/api/restore-tests'): 'viewer',

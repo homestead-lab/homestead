@@ -201,6 +201,7 @@ const DIALOGS = [
   ["workload-history", "workloads", "wlHistory('lab','frigate')"],
   ["change-history", "workloads", "wlHistory()"],
   ["history-undo", "workloads", "historyUndo('lab','paperless','c2')"],
+  ["node-if-down", "nodes", "nodeIfDown('harvester-node2')"],
   ["workload-update-mode", "workloads", "wlUpdateMode('lab','frigate')"],
   ["workload-start-capacity", "workloads", "wlScale('lab','doublecommander',1)"],
   ["stop-homestead", "workloads", "wlStopSelf('lab','homestead')"],

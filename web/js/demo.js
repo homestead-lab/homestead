@@ -2188,6 +2188,21 @@ ssh_pwauth: true
           { label: "Settings and other state", size: 150 * KB, files: 24, kept: "as long as it is needed" }] };
     },
     "/api/homestead/data/tidy": () => ({ ok: true, freed: 0, notes: [], detail: "Nothing to tidy", report: null }),
+    // If this host goes down (impact.js): one of each outcome.
+    "/api/nodes/impact": url => {
+      const node = url.searchParams.get("node") || "harvester-node2";
+      return { node, others_ready: ["harvester-node1", "harvester-node3"].filter(n => n !== node),
+        counts: { stops: 1, waits: 1, moves: 2, at_risk: 1, fewer_copies: 1, addresses: 1 },
+        apps: [
+          { kind: "app", ns: "lab", name: "frigate", outcome: "stops", why: "no other host can run it: lacks the Google Coral USB", notes: [] },
+          { kind: "app", ns: "lab", name: "paperless", outcome: "waits", why: "set to wait for its host to come back", notes: [] },
+          { kind: "app", ns: "lab", name: "home-assistant", outcome: "moves", to: ["harvester-node1", "harvester-node3"], why: "about 15 seconds after the host stops answering", notes: [] },
+          { kind: "vm", ns: "lab", name: "k3s-demo-server-1", os_logo: "ubuntu", outcome: "moves", to: ["harvester-node1"], migratable: true,
+            why: "restarts on another host once this one is declared down; on a drain it moves live, without stopping", notes: [] }],
+        at_risk: [{ name: "scratch-test", namespace: "lab", volume: "pvc-demo-scratch", left: 0, wanted: 1 }],
+        fewer_copies: [{ name: "frigate-config", namespace: "lab", volume: "pvc-demo-frigate", left: 1, wanted: 2 }],
+        addresses: [{ ip: "192.0.2.214", kind: "vip", services: ["lab/frigate"] }] };
+    },
     // Change history (changes.js): an update by the demo user, a memory change
     // made outside Homestead, and a job of Homestead's own.
     "/api/changes": url => {
