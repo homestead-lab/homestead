@@ -1699,7 +1699,7 @@ Each container chooses what happens when its node stops answering: move to
 another node after about 15 seconds (new containers' default), wait for its
 node to come back (for hardware-bound apps), or Kubernetes' five-minute
 default. **If a node fails** on Containers sets every container in one list;
-each editor has it under *Where it runs*. The choice is the pod's tolerations
+each editor has it under *Placement*. The choice is the pod's tolerations
 for the unreachable and not-ready taints, so it shows for containers made
 elsewhere too. A moved container's single-node volume follows it only if
 Longhorn's *Pod Deletion Policy When Node is Down* lets go of the dead node's
@@ -1727,7 +1727,7 @@ Kubernetes chooses from the eligible hosts when the workload launches. Per-host
 memory projections do not mean that a host has already been selected. Resuming
 a paused VM identifies the host of its existing launcher.
 
-A container's editor has a **Where it runs** section - also reached from
+A container's editor has a **Placement** step - also reached from
 **Placement** in its menu - at the three levels there are. The containers in
 one pod always run together on one node; that is what a pod is, so to run one
 apart it becomes a workload of its own. The workload's copies can be spread

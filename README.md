@@ -149,16 +149,24 @@ step by step.
 volumes, ports, hardware and updates handled for you.
 
 **Containers** - deploy, edit, logs and console; groups, autostart and
-placement; update checks with a monitored rollout and one-click rollback.
+placement; update checks with a monitored rollout and one-click rollback, or
+automatic updates in your maintenance window - snapshotted first, rolled back if
+the app stops answering. Logos from the app store, change history with undo,
+log search across every app, and start and stop schedules.
 Homestead updates itself from its own button on the top bar.
+
+**Monitoring** - every app and VM asked every minute whether it answers, with
+30 days of history, alerts, a Monitoring page and dashboard widget, and - only
+if you ask - a restart or a webhook when one is down.
 
 **Virtual machines** - KubeVirt VMs from a store of cloud images, your own
 disks, or ISOs from your shares; hardware settings with Windows and Linux
 presets (UEFI, Secure Boot, TPM, CPU model and pinning); a console, power
-actions and live migration.
+actions, live migration, monitoring and start and stop schedules.
 
 **Data protection** - snapshots, recurring backups, restores, and moving
-containers and VMs between clusters. [Browse snapshot files](docs/snapshot-browsing.md)
+containers and VMs between clusters, and restore tests that prove a backup
+brings an app back. [Browse snapshot files](docs/snapshot-browsing.md)
 read-only and download them while the live container or SMB volume stays online.
 
 **Networking** - a virtual IP per app, collision-free port exposure, which
@@ -184,7 +192,8 @@ platform versions: k3s or RKE2, Longhorn, KubeVirt, CDI, kube-vip and Multus
 upgraded a step at a time, Harvester upgrades followed.
 
 **Dashboard and alerts** - 90 days of history, push notifications, and MQTT
-with Home Assistant discovery.
+with Home Assistant discovery; a forecast of when storage fills, and what
+would stop or move if a host went down.
 
 **Network shares and Portal** - Samba shares from any volume, and a tile for
 every web interface on your network.
@@ -232,6 +241,9 @@ grow into a cluster, on supported **x86-64 or ARM64** hardware.
 | Workload snapshots and backups | ✅ | ⚪ | ✅ | ⚪ | ✅ | ⚪ | ✅ | ⚪ |
 | Home Assistant / MQTT monitoring | ✅ | ⚪ | ✅ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ |
 | Guided setup and upgrades | ✅ | ✅ | ✅ | ✅ | ✅ | ⚪ | ✅ | ⚪ |
+| App uptime checks and alerts | ✅ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ |
+| Automatic app updates with rollback | ✅ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ |
+| Scheduled start and stop | ✅ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ | ⚪ |
 
 Helm means managing charts through a UI. Headlamp's ticks include its official
 App Catalog; infrastructure features depend on the connected Kubernetes cluster.
@@ -240,6 +252,8 @@ Application containers package apps or services such as Jellyfin, Pi-hole or MQT
 Homestead runs Docker / OCI images through Kubernetes. LXC/LXD system containers provide a fuller
 Linux environment, like a lightweight server sharing the host's kernel.
 SSO means identity-provider login to management; an external access gate alone does not count.
+The last three rows mean built into the management interface: elsewhere they take a separate
+monitor (Uptime Kuma, say), an update tool (Watchtower, Renovate) or scheduled scripts.
 
 **Compared with Proxmox:** Homestead brings an app store, hardware-aware app
 placement, managed file shares, LAN address inventory and MQTT discovery together
@@ -249,7 +263,7 @@ backups, IPAM, alerts and mobile access.
 
 Homestead is **beta**. Hardware, architecture and HA requirements vary by stack;
 device-bound workloads restrict migration and failover. Large-scale deployments
-have not been benchmarked. Reviewed 3 October 2026;
+have not been benchmarked. Reviewed 3 October 2026, with the last three rows added 7 October;
 [details, qualifications and sources](docs/comparison.md).
 
 ## On your phone
@@ -287,7 +301,7 @@ Every screenshot is taken from Homestead's demo data by each release, so they
 always show the current version. The same demo runs live at
 **[homestead-lab.github.io/homestead](https://homestead-lab.github.io/homestead/)**, updated with each release.
 
-## Where it runs
+## Platforms
 
 **k3s is preferred for home self-hosting and is the most widely tested platform
 with Homestead.** RKE2 and Harvester remain supported alternatives. Homestead

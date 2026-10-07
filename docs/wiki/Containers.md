@@ -564,7 +564,7 @@ their data are retained. Init containers and managed references stay as they are
 
 ## Placement
 
-**Where it runs** (in Edit, or **Placement** in the menu):
+**Placement** (a step of Edit, and **Placement** in the menu):
 
 - **Spread instances** - its copies on different hosts, so losing one host does
   not take them all;
@@ -643,7 +643,7 @@ A container can have an address of its own on the LAN, beside its pod
 network - for an app that wants to be found there (discovery, broadcasts), or
 simply to be reached on an address that is only its. In Deploy choose
 **Access mode → Its own LAN address (bridged)**, or in a container's editor
-tick *Its own LAN address* under *Where it runs*; pick the VM network and one
+choose *Its own LAN address* in the *Address* step; pick the VM network and one
 of the free addresses [IP addresses](Networking#ip-addresses) knows of.
 
 The container joins that network as a second interface, `lan0`, and keeps
@@ -657,7 +657,7 @@ named `<container>-lan`; it goes when the container does.
 
 When a node stops answering, each container does one of three things -
 **If a node fails** on Containers sets them all in one list, and each
-container's editor has it under *Where it runs*:
+container's editor has it under *Placement*:
 
 | Choice | What happens |
 |---|---|
