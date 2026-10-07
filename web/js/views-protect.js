@@ -194,6 +194,8 @@ async function viewProtect() {
   </div>
 `)}
 
+  <div id="restore-tests" class="restore-tests"><div class="sec">Restore tests</div><div class="empty small"><span class="spin2"></span> Finding each app's newest backups…</div></div>
+
   <div class="sec">Recurring jobs</div>
   ${d.jobs.length ? `<div class="cardlist">${d.jobs.map(j => `<div class="card flat wcard">
     <div class="between">
@@ -253,6 +255,7 @@ async function viewProtect() {
       <td>${actionBar([{ label: "Backups", run: `lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})` }])}</td></tr>`).join("")}
   </tbody></table></div></div>`
   : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`);
+  loadRestoreTests();
 }
 
 /* A group, what is in it and what protects it. */
@@ -891,5 +894,49 @@ window.lhTargetSave = async () => {
       body: JSON.stringify({ url: $("#bt_url").value.trim(), secret: $("#bt_secret").value.trim(),
         poll: $("#bt_poll").value.trim() || "5m", ...(keys.access_key || keys.secret_key ? { keys } : {}) }) });
     toast("backup target saved", "ok"); closeModal(); resetPaint(); viewProtect();
+  } catch (e) { toast(e.message, "bad"); }
+};
+
+
+/* ---------------- restore tests (homestead_restore_test.py) ----------------
+   Each app with Longhorn volumes: what a test restores, its last result, and
+   Test now. Switched on, Homestead tests each app with backups monthly. */
+const restoreWhen = at => at ? (typeof answerSince === "function" ? answerSince(at) : new Date(at * 1000).toLocaleString()) : "";
+
+async function loadRestoreTests() {
+  const host = document.getElementById("restore-tests");
+  if (!host) return;
+  let d;
+  try { d = await api("/api/restore-tests"); }
+  catch (e) { host.innerHTML = `<div class="sec">Restore tests</div>${UI.callout("warn", "Restore tests could not be listed", esc(e.message))}`; return; }
+  STATE.data.restoreTests = d;
+  const row = r => {
+    const last = r.last, restores = r.restores.map(x => `${x.claim} · ${x.backup}`).join(", ");
+    const result = r.running ? '<span class="pill info">testing now</span>'
+      : last ? `<span class="pill ${last.ok ? "ok" : "crit"}" data-tip="${esc(last.message || "")}">${last.ok ? "passed" : "failed"}</span> <span class="dim xs">${esc(restoreWhen(last.at))}${last.seconds ? ` · ${Math.round(last.seconds / 60)} min` : ""}</span>`
+      : '<span class="dim xs">never tested</span>';
+    return `<tr><td class="cell-name"><div class="vm-name-cell">${appAvatar(r.name, r.icon)}<div class="vm-name-text"><b>${esc(r.name)}</b><div class="dim xs">${esc(r.ns)}</div></div></div></td>
+      <td data-label="Restores" class="small">${r.restores.length ? esc(restores) : '<span class="dim">nothing: ' + esc(r.without.map(w => `${w.claim} has ${w.why}`).join("; ")) + "</span>"}
+        ${r.restores.length && r.without.length ? `<div class="dim xs">Not tested: ${esc(r.without.map(w => `${w.claim} (${w.why})`).join("; "))}</div>` : ""}</td>
+      <td data-label="Last test">${result}${last && !last.ok ? `<div class="dim xs restore-why">${esc(last.message || "")}</div>` : ""}</td>
+      <td data-actions>${r.restores.length && !r.running ? actionBar([{ label: "Test now", icon: "play", run: `restoreTestRun(${jsq(r.ns)},${jsq(r.name)})`, need: "admin" }], { label: `Restore test for ${r.name}` }) : ""}</td></tr>`;
+  };
+  host.innerHTML = `<div class="between restore-head"><div class="sec">Restore tests</div>
+      <label class="switch" data-need="admin"><input type="checkbox" id="rt_on" ${d.enabled ? "checked" : ""} onchange="restoreTestsSwitch(this.checked)"> Test each app every ${d.every_days} days</label></div>
+    <p class="dim small">A test restores an app's newest backups into new volumes, starts a copy of it on them - cut off from the network, its other volumes left empty so it cannot touch real data - and checks it starts and answers. Then it removes everything it made. One runs at a time, outside the maintenance window, when Longhorn has room.</p>
+    ${d.apps.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact restore-table"><thead><tr><th>App</th><th>Restores</th><th>Last test</th><th data-nosort></th></tr></thead>
+      <tbody>${d.apps.map(row).join("")}</tbody></table></div></div>` : '<div class="empty small">No app has Longhorn volumes to test.</div>'}`;
+}
+
+window.restoreTestsSwitch = async on => {
+  try { const r = await api("/api/restore-tests/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) }); toast(r.detail, "ok"); }
+  catch (e) { toast(e.message, "bad"); const box = $("#rt_on"); if (box) box.checked = !on; }
+};
+
+window.restoreTestRun = async (ns, name) => {
+  try {
+    await api("/api/restore-tests/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ns, name }) });
+    toast(`Restore test of ${name} started; follow it under Jobs`, "ok");
+    loadRestoreTests();
   } catch (e) { toast(e.message, "bad"); }
 };

@@ -108,6 +108,8 @@ DEFAULT_APP_SETTINGS = {
     # Rebuild missing copies of detached volumes. Longhorn's own setting where
     # it has one; this drives Homestead's stand-in where it has not.
     "longhorn": {"offline_rebuilding": True},
+    # Monthly restore tests of every app with backups (homestead_restore_test).
+    "restore_tests": {"enabled": False},
 }
 
 SYS_NS = {
@@ -492,6 +494,10 @@ def validate_app_settings(value):
     if not isinstance(rebuild, bool):
         raise ValueError("offline rebuilding must be true or false")
     out["longhorn"] = {"offline_rebuilding": rebuild}
+    tests = ((value or {}).get("restore_tests") or {}).get("enabled", False)
+    if not isinstance(tests, bool):
+        raise ValueError("restore tests must be on or off")
+    out["restore_tests"] = {"enabled": tests}
     site = str((value or {}).get("site_name", out["site_name"]) or "").strip()
     if len(site) > 40:
         raise ValueError("site name must be 40 characters or fewer")
@@ -1715,6 +1721,7 @@ def get_workloads():
             "helm_release": annotations.get("meta.helm.sh/release-name", ""),
             "answer_check": NAMES.read(annotations, "uptime"),
             "update_mode": "auto" if NAMES.read(annotations, AUTOUPDATE.MODE) == "auto" else "manual",
+            "restore_tested": RESTORE_TEST.last_result(annotations),
             "group": NAMES.read(annotations, "group") or own_group(ns, name),
             "self": is_self(ns, name),
             "managed_smb": is_managed_smb(ns, name),
@@ -6550,6 +6557,7 @@ import homestead_host_os as HOST_OS
 import homestead_ports as PORTS
 import homestead_uptime as UPTIME
 import homestead_autoupdate as AUTOUPDATE
+import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
 import homestead_root_guard as ROOT_GUARD
 import homestead_os_rollout as OS_ROLLOUT
@@ -6772,6 +6780,66 @@ def host_bonds_apply(body, start=False):
 UPLINKS.bind(kget, ksend)
 OPS.RESOLVERS[UPLINKS.KIND] = UPLINKS.status
 OPS.RESOLVERS[AUTOUPDATE.KIND] = lambda item: AUTOUPDATE.resolve(item, OPS.checkpoint)
+OPS.RESOLVERS[RESTORE_TEST.KIND] = lambda item: RESTORE_TEST.resolve(item, OPS.checkpoint)
+RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume: LH.backups(volume), LH.restore_backup, OPS._volume_restore,
+                  LH.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS)
+
+
+def _storage_classes():
+    return {c["metadata"]["name"]: c.get("parameters") or {}
+            for c in kget("/apis/storage.k8s.io/v1/storageclasses").get("items", [])}
+
+
+def start_restore_test(ns, name, why="Test now"):
+    """Start one restore test as a job."""
+    return OPS.start(RESTORE_TEST.KIND, f"Restore test of {name}",
+                     {"kind": "Deployment", "name": name, "namespace": ns},
+                     "/data-protection#restore-tests", {"namespace": ns, "name": name, "phase": "plan", "why": why},
+                     "Finding each volume's newest backup")
+
+
+def restore_tests_tick():
+    """On the leader, hourly: test the app longest untested, when switched on."""
+    settings = get_app_settings()
+    chosen = RESTORE_TEST.pick(cached("wl", 5, get_workloads), OPS.list_operations(),
+                               settings.get("restore_tests", {}).get("enabled", False),
+                               update_policy_status(settings)["window_open"], time.time(), _storage_classes())
+    if chosen:
+        start_restore_test(chosen["ns"], chosen["name"], "monthly")
+    return chosen
+
+
+def _restore_tests_loop():
+    while True:
+        if LEADER.is_leader():
+            try:
+                restore_tests_tick()
+                beat("restore-tests", 3600, leader_only=True)
+            except Exception as error:
+                beat("restore-tests", 3600, error, leader_only=True)
+                print(f"restore-tests: {str(error)[:160]}", flush=True)
+        time.sleep(3600)
+
+
+def restore_tests_view():
+    """Every app with Longhorn volumes: what a test would restore, and its last result."""
+    out = []
+    running = {(o.get("resource") or {}).get("namespace", "") + "/" + (o.get("resource") or {}).get("name", "")
+               for o in OPS.list_operations() if o.get("kind") == RESTORE_TEST.KIND and o.get("status") in ("queued", "running")}
+    for w in cached("wl", 5, get_workloads):
+        if not w.get("claims") or w.get("platform") or w.get("self") or w.get("homestead") or w.get("managed_smb") \
+                or w.get("managed_nfs") or w.get("site"):
+            continue
+        dep = kget(f"/apis/apps/v1/namespaces/{w['ns']}/deployments/{w['name']}")
+        rows, without = RESTORE_TEST.plan(w["ns"], dep)
+        if not rows and not without:
+            continue
+        out.append({"ns": w["ns"], "name": w["name"], "icon": w.get("icon", ""), "restores": rows, "without": without,
+                    "last": w.get("restore_tested"), "running": f"{w['ns']}/{w['name']}" in running,
+                    "due": RESTORE_TEST.due(w, time.time())})
+    settings = get_app_settings()
+    return {"enabled": settings.get("restore_tests", {}).get("enabled", False), "every_days": RESTORE_TEST.EVERY // 86400,
+            "apps": sorted(out, key=lambda r: (not r["restores"], r["ns"], r["name"]))}
 
 
 def _prune_snapshot(volume, name):
@@ -7679,7 +7747,7 @@ OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
 LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
-              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates"}
+              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests"}
 
 
 def samba_state():
@@ -9679,6 +9747,8 @@ class H(HTTP.LimitedHandler):
                                                         (q.get("q") or [None])[0], (q.get("kind") or ["workload"])[0]))
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
+            if p == "/api/restore-tests":
+                return self._send(200, restore_tests_view())
             if p == "/api/uptime":
                 return self._send(200, {"apps": UPTIME.report(), "every": UPTIME.CHECK_EVERY,
                                         "down_after": UPTIME.DOWN_AFTER, "slow_ms": UPTIME.SLOW_MS})
@@ -10131,6 +10201,20 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_vm_monitoring(b))
             if p == "/api/image-updates/mode":
                 return self._send(200, set_update_mode(b))
+            if p == "/api/restore-tests/settings":
+                enabled = b.get("enabled")
+                if not isinstance(enabled, bool):
+                    raise ValueError("enabled must be true or false")
+                settings = get_app_settings()
+                settings["restore_tests"] = {"enabled": enabled}
+                save_app_settings(settings)
+                return self._send(200, {"ok": True, "enabled": enabled,
+                                        "detail": "Apps with backups are restore-tested monthly" if enabled else "Monthly restore tests are off"})
+            if p == "/api/restore-tests/run":
+                ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
+                if any(o.get("kind") == RESTORE_TEST.KIND and o.get("status") in ("queued", "running") for o in OPS.list_operations()):
+                    raise ValueError("a restore test is already running; one runs at a time")
+                return self._send(200, {"ok": True, "operation": start_restore_test(ns, name)})
             if p == "/api/scale":
                 try:
                     scale_workload(b["ns"], b["name"], int(b["replicas"]),
@@ -11256,6 +11340,7 @@ def start_background_tasks():
     threading.Thread(target=_hardware_loop, daemon=True).start()
     threading.Thread(target=_uptime_loop, name="uptime", daemon=True).start()
     threading.Thread(target=_autoupdate_loop, name="auto-updates", daemon=True).start()
+    threading.Thread(target=_restore_tests_loop, name="restore-tests", daemon=True).start()
     threading.Thread(target=_samba_loop, daemon=True).start()
     threading.Thread(target=_vmstore_loop, daemon=True).start()
     threading.Thread(target=finish_self_data_helpers, name="data-move-cleanup", daemon=True).start()
