@@ -62,6 +62,42 @@ class TargetTests(unittest.TestCase):
                 UP.check_setting(mode, path)
 
 
+class PortChoiceTests(Base):
+    def couch(self, extra=None):
+        extra = extra or {}
+        return app(name="obsidian-livesync", ports=[{"ip": "192.0.2.10", "port": p, "protocol": "TCP", **extra.get(p, {})}
+                                                    for p in (4369, 5984, 9100)])
+
+    def test_without_a_main_port_any_published_port_answering_will_do(self):
+        asked = []
+
+        def ask(t):
+            asked.append(t["port"])
+            return OK if t["port"] == 5984 else MISS
+        UP.observe([self.couch()], now=1000, ask=ask)
+        self.assertEqual([4369, 5984], asked, "it stops at the first that answers")
+        rep = UP.report(1000)["lab/obsidian-livesync"]
+        self.assertEqual(("up", "http://192.0.2.10:5984/"), (rep["state"], rep["target"]))
+
+    def test_a_chosen_main_port_is_the_only_one_asked(self):
+        asked = []
+        w = self.couch({4369: {"primary": True}})
+        UP.observe([w], now=1000, ask=lambda t: asked.append(t["port"]) or MISS)
+        self.assertEqual([4369], asked)
+
+    def test_when_none_answer_it_says_how_many_were_asked(self):
+        UP.observe([self.couch()], now=1000, ask=lambda t: MISS)
+        self.assertEqual("3 ports at 192.0.2.10", UP.report(1000)["lab/obsidian-livesync"]["target"])
+
+    def test_a_lan_app_is_asked_at_its_pod_not_its_macvtap_address(self):
+        w = app(ports=[{"ip": "192.0.2.50", "port": 8123, "protocol": "TCP", "lan": True}],
+                pods=[{"ip": "10.42.1.7", "ready": True}])
+        t, _ = UP.target(w)
+        self.assertEqual(("10.42.1.7", 8123), (t["host"], t["port"]))
+        no_pod = app(ports=[{"ip": "192.0.2.50", "port": 8123, "protocol": "TCP", "lan": True}], pods=[])
+        self.assertEqual("192.0.2.50", UP.target(no_pod)[0]["host"], "with no pod address it still tries the LAN one")
+
+
 class StateTests(Base):
     def run_round(self, result, now, apps=None):
         return UP.observe(apps or [app()], now=now, ask=lambda t: result)

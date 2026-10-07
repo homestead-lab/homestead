@@ -1585,7 +1585,7 @@ def get_workloads():
         # with no Service in between.
         lan_ip = (LAN.read(d) or {}).get("address", "")
         if lan_ip and not ports:
-            ports = [{"port": cp.get("containerPort"), "ip": lan_ip, "name": cp.get("name", ""),
+            ports = [{"port": cp.get("containerPort"), "ip": lan_ip, "name": cp.get("name", ""), "lan": True,
                       "protocol": str(cp.get("protocol") or "TCP").upper()}
                      for c in pspec.get("containers", []) or [] for cp in c.get("ports", []) or []
                      if cp.get("containerPort")]
@@ -1647,6 +1647,7 @@ def get_workloads():
                 except Exception:
                     pull = {}
             pod_rows.append({"name": p["metadata"]["name"], "hostname": p["spec"].get("hostname", ""),
+                             "ip": (p.get("status") or {}).get("podIP", ""),
                              "phase": p["status"].get("phase"),
                              "node": p["spec"].get("nodeName", ""), "ready": ready,
                              # Told to stop, and not stopped yet.
