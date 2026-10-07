@@ -56,7 +56,7 @@
 set -u
 
 RAW="https://raw.githubusercontent.com/homestead-lab/homestead"
-REF="${HOMESTEAD_REF:-v2.8.318-dev.12}"
+REF="${HOMESTEAD_REF:-v2.8.318-dev.13}"
 DRY=0
 DIST=k3s
 ROLE=""

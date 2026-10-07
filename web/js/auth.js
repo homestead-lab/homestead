@@ -69,7 +69,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error, cause = "") {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.318-dev.12" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.318-dev.13" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     ${cause ? `<p class="dim xs gatecause"><b>Cause:</b> ${esc(cause)}</p>` : ""}
@@ -162,7 +162,7 @@ function stopAuthenticatedWork() {
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.318-dev.12" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.318-dev.13" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
