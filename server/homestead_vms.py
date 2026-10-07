@@ -27,6 +27,7 @@ import urllib.parse
 
 import homestead_logos as LOGOS
 import homestead_names as NAMES
+import homestead_schedules as SCHEDULES
 import homestead_vm_hardware as HARDWARE
 import homestead_hvimage as HVIMAGE
 import homestead_vmusage as VMUSAGE
@@ -375,6 +376,7 @@ def _row(vm, vmi, claims=None, dvs=None, instance_known=True):
             "logo_os_set": bool(NAMES.read(annotations, "logo-os")),
             # How it is monitored (homestead_uptime): blank is automatic.
             "monitoring": NAMES.read(annotations, "uptime"),
+            "schedule": SCHEDULES.read(annotations, NAMES),
             "os_logo": (NAMES.read(annotations, "logo-os") if NAMES.read(annotations, "logo-os") in LOGOS.OS_KEYS else "")
                        or LOGOS.os_logo(guest.get("id"), guest.get("prettyName"), guest.get("name"), labels.get(OS_LABEL)),
             "description": annotations.get(DESCRIPTION, ""), "created": meta.get("creationTimestamp", ""),

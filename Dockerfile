@@ -21,7 +21,7 @@ ENV PORT=8080 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-RUN apk add --no-cache smartmontools rsync \
+RUN apk add --no-cache smartmontools rsync tzdata \
     && addgroup -S -g 10001 homestead && adduser -S -D -H -u 10001 -G homestead homestead \
     && mkdir -p /srv /web /data \
     && chown -R homestead:homestead /data
