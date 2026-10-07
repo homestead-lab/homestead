@@ -9131,6 +9131,9 @@ class H(HTTP.LimitedHandler):
         if not any(k.lower() == "cache-control" for k, _ in (self._extra_headers or [])):
             self.send_header("Cache-Control", "no-store")
         self._security_headers()
+        # Which Homestead answered: a page left open across an update of
+        # Homestead itself sees it and offers to reload (auth.js).
+        self.send_header("X-Homestead-Version", HOMESTEAD_VERSION)
         for k, v in (self._extra_headers or []):
             self.send_header(k, v)
         self.end_headers()

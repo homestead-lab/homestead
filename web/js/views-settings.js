@@ -150,7 +150,9 @@ async function viewSettings() {
             </select>`)}
           ${settingRow("Tell me about new images", "", `<label class="toggle"><input id="set_notify_available" type="checkbox" ${updates.notify_available !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}><span></span></label>`)}
           ${settingRow("Tell me when a registry check fails", "", `<label class="toggle"><input id="set_notify_failures" type="checkbox" ${updates.notify_failures !== false ? "checked" : ""} ${can("admin") ? "" : "disabled"}><span></span></label>`)}
-          ${settingRow("Update window", esc(updateWindowText(maintenance)) + (updates.policy === "maintenance_window" ? "" : " - used with the maintenance-window policy"),
+          ${settingRow("Update window", esc(updateWindowText(maintenance)) + (updates.policy === "maintenance_window" ? ""
+            : `<div class="dim xs">${updates.policy === "notify_only" ? "Not used while the policy is notify only: nothing is installed, not even by apps set to update themselves."
+              : "Rollouts you approve start straight away under this policy; only apps set to update themselves wait for this window."}</div>`),
             can("admin") ? '<button class="btn sm" onclick="updateWindowEdit()">Change</button>' : "")}
         </div>
       `, {tab:`updates`, save:`app`})}
@@ -775,9 +777,27 @@ window.settingsGo = async id => {
 
 /* ---------------- dialogs for settings with many fields ---------------- */
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-function updateWindowText(m) {
-  const days = (m?.days || []).map(d => DAYS[d]).join(", ") || "no days";
-  return `${days} · ${m?.start || "02:00"} UTC · ${+(m?.duration_minutes || 120)} min`;
+/* "Weekdays", "Tue–Sun", "Mon, Wed, Fri": the days at a glance. */
+function updateWindowDays(days) {
+  const on = [...new Set(days || [])].filter(d => d >= 0 && d <= 6).sort((a, b) => a - b);
+  if (!on.length) return "No days";
+  if (on.length === 7) return "Every day";
+  if (on.join() === "0,1,2,3,4") return "Weekdays";
+  if (on.join() === "5,6") return "Weekends";
+  const run = on.every((d, i) => !i || d === on[i - 1] + 1);
+  return run && on.length > 2 ? `${DAYS[on[0]]}–${DAYS[on[on.length - 1]]}` : on.map(d => DAYS[d]).join(", ");
+}
+
+/* "Weekdays · 02:00–04:00 UTC (03:00 your time)": its end, not its length,
+   and the local time beside UTC when they differ. */
+function updateWindowText(m, now = new Date()) {
+  const start = /^\d\d:\d\d$/.test(m?.start || "") ? m.start : "02:00";
+  const [h, min] = start.split(":").map(Number), length = +(m?.duration_minutes || 120);
+  const endAt = (h * 60 + min + length) % 1440, pad = n => String(n).padStart(2, "0");
+  const end = `${pad(Math.floor(endAt / 60))}:${pad(endAt % 60)}`;
+  const local = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, min));
+  const yours = `${pad(local.getHours())}:${pad(local.getMinutes())}`;
+  return `${updateWindowDays(m?.days)} · ${start}–${end} UTC${yours === start ? "" : ` (${yours} your time)`}`;
 }
 window.updateWindowEdit = () => {
   const m = (STATE.data.appSettings?.updates || {}).maintenance || {};

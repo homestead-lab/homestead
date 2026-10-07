@@ -1488,6 +1488,11 @@ window.imageUpdateApply = () => imageReviewedApply();
 window.imageReviewedApply = async () => {
   if (!imageReviewReady()) return toast("Review and acknowledge the image and capacity changes first", "bad");
   const rows = IMAGE_REVIEW; IMAGE_REVIEW = null;
+  // Updating Homestead itself from this page: when the new one answers, the
+  // page reloads into it rather than going on as the old one (auth.js).
+  if (rows.some(r => restartsHomestead(r.config) && !r.config.cluster && r.config.action !== "rollback")) {
+    try { sessionStorage.setItem("homestead.selfUpdate", String(Date.now())); } catch (e) { /* the bar offers Reload */ }
+  }
   const sequence = ++IMAGE_REVIEW_SEQUENCE;
   const items = rows.map(r => r.config);
   const states = Object.fromEntries(items.map(item => [rolloutKey(item), {phase: "queued", ready: 0, desired: 1}]));
