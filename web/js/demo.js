@@ -2203,6 +2203,23 @@ ssh_pwauth: true
         fewer_copies: [{ name: "frigate-config", namespace: "lab", volume: "pvc-demo-frigate", left: 1, wanted: 2 }],
         addresses: [{ ip: "192.0.2.214", kind: "vip", services: ["lab/frigate"] }] };
     },
+    // Search logs (logsearch.js): lines from three apps, one of which wrote
+    // more than is read at once, and a pod that could not be read.
+    "/api/logs/search": url => {
+      const q = url.searchParams.get("q") || "", only = url.searchParams.get("apps") || "", t = Date.now();
+      const at = s => new Date(t - s * 1000).toISOString();
+      const lines = [
+        { at: at(42), ns: "lab", app: "frigate", pod: "frigate-7d9c6b5f4-x2kqp", container: "frigate", line: "[2026-10-07 09:41:18] frigate.video ERROR : front_door: Unable to read frames from ffmpeg process." },
+        { at: at(95), ns: "lab", app: "paperless", pod: "paperless-5b7f8c9d6-mm4tz", container: "paperless", line: "[2026-10-07 09:40:25,301] [ERROR] [paperless.consumer] Error while consuming document scan_0412.pdf: timeout waiting for OCR" },
+        { at: at(380), ns: "lab", app: "immich-server", pod: "immich-server-6c8d7f-p9wlr", container: "immich-server", line: "[Nest] 17 - ERROR [Microservices:JobService] Unable to run job handler (thumbnailGeneration): Error: Input file is missing" },
+        { at: at(1250), ns: "lab", app: "frigate", pod: "frigate-7d9c6b5f4-x2kqp", container: "frigate", line: "[2026-10-07 09:20:30] watchdog.front_door INFO : No frames received from front_door in 20 seconds. Exiting ffmpeg..." },
+        { at: at(2900), ns: "media", app: "jellyfin", pod: "jellyfin-0", container: "jellyfin", line: "[09:53:00] [WRN] [12] Emby.Server.Implementations.HttpServer.WebSocketManager: WS error: timeout" }];
+      const needle = q.toLowerCase();
+      const matches = lines.filter(r => (!only || `${r.ns}/${r.app}` === only) && r.line.toLowerCase().includes(needle));
+      return { matches, total: matches.length, truncated: false, asked: only ? 1 : 14, skipped_pods: 0,
+        errors: only ? [] : ["home-assistant (home-assistant-0): pod is being replaced"], capped: only ? [] : ["frigate"],
+        window: url.searchParams.get("window") || "1h", searched_at: Math.round(t / 1000) };
+    },
     // Change history (changes.js): an update by the demo user, a memory change
     // made outside Homestead, and a job of Homestead's own.
     "/api/changes": url => {

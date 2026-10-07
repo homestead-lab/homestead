@@ -428,7 +428,8 @@ function renderWorkloads() {
     { label: "If a node fails", icon: "node", run: "wlFailover()", tip: "What each container does when its node fails: move, or wait for the node" },
     { label: "Rebalance containers…", icon: "move", run: "containerRebalance()", need: "operator", tip: "Move containers so hosts carry similar CPU and memory" },
     { label: "Logos for apps without one", icon: "logo", run: "logoFixup()", need: "operator", tip: "Match apps with no logo to the app store's" },
-    { label: "Change history", icon: "clock", run: "wlHistory()", tip: "Every app's changes: who, when and what" }];
+    { label: "Change history", icon: "clock", run: "wlHistory()", tip: "Every app's changes: who, when and what" },
+    { label: "Search logs", icon: "search", run: "logSearch()", tip: "Find a line in every app's recent logs" }];
   const logoless = all.filter(logoCanHave).length;
   const updateButtons = `${updateCount ? `<button class="pill warn pillbtn" title="Review and stage image updates" onclick="imageUpdateCenter()">${updateCount} update${updateCount === 1 ? "" : "s"}</button>` : ""}
     ${updateErrors ? `<button class="pill crit pillbtn" data-tip="${updateErrors} image${updateErrors === 1 ? "" : "s"} could not be compared with ${updateErrors === 1 ? "its" : "their"} registry; every other image was" onclick="imageUpdateCenter()">${updateErrors} check${updateErrors === 1 ? "" : "s"} failed</button>` : ""}`.trim();
@@ -437,7 +438,7 @@ function renderWorkloads() {
         ? `<a class="linkish" onclick="togglePlatformContainers()" data-tip="Homestead and the helpers it runs - updated under Settings › Updates - and KubeVirt, CDI and the like, run by their own operators and upgraded under System → Cluster">${platformShown() ? "hide" : "show"} ${platform.length} platform container${platform.length === 1 ? "" : "s"}</a>`
         : "system pods hidden"}${unchecked ? ` · <span data-tip="Marked ? in the list: stopped since Homestead started, so not yet compared with their registries">${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? " · images current" : ""}${logoless ? ` · <a class="linkish" data-need="operator" onclick="logoFixup()">${logoless} without a logo</a>` : ""}`, `<span class="dim xs scanprogress" id="scanprogress"></span>${updateButtons}
       ${layoutSwitch("containers", "renderWorkloads")}
-      ${moreMenu([items[0],items[1],{label:layout === "cards" ? "Show as rows" : "Show as cards",run:`setViewLayout('containers','renderWorkloads',${jsq(layout === "cards" ? "rows" : "cards")})`},items[2],items[3],items[4],items[5]])}
+      ${moreMenu([items[0],items[1],{label:layout === "cards" ? "Show as rows" : "Show as cards",run:`setViewLayout('containers','renderWorkloads',${jsq(layout === "cards" ? "rows" : "cards")})`},items[2],items[3],items[4],items[5],items[6]])}
       ${deploy}`, {extraHtml:`${all.length ? workloadGroupBar(all, group) : ""}`})}
     ${UI.collectionHeader(`${workloadGroupSelect(all, group)}${workloadListOptions(platform, layout, items)}${deploy}`, `<span>${rows.length} container${rows.length === 1 ? "" : "s"}</span>${updateButtons ? `<span aria-hidden="true">·</span>${updateButtons}` : ""}
         ${unchecked ? `<span class="dim" data-tip="Stopped or still starting; not yet compared with their registries">· ${unchecked} not checked yet</span>` : report && !updateCount && !updateErrors ? '<span class="dim">· images current</span>' : ""}${logoless ? `<span class="dim">·</span> <a class="linkish" data-need="operator" onclick="logoFixup()">${logoless} without a logo</a>` : ""}`)}
@@ -505,6 +506,7 @@ function workloadActions(w, update, off, compact = false) {
     item("Logo", `wlLogo(${ns},${name})`, "logo", {need:"operator",tip:"Pick a logo from the app store"}),
     item("Monitoring", `wlMonitoring(${ns},${name})`, "pulse", {tip:"Whether it is up at its address, checked every minute"}),
     item("History", `wlHistory(${ns},${name})`, "clock", {tip:"Who changed it, when and what, with Undo"}),
+    item("Search logs", `logSearch(${ns},${name})`, "search", {tip:"Find a line in its recent logs"}),
     !updateOwner(update) && item("Updates", `wlUpdateMode(${ns},${name})`, "update", {need:"operator",tip:"Update it yourself, or let it update itself in the maintenance window"}),
     item("Move", `moveWorkload(${name},${ns})`, "move", {need:"operator"}),
     update?.can_rollback && item("Rollback", `imageRollback(${ns},${name})`, "rollback", {need:"operator"}),

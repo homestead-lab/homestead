@@ -200,6 +200,8 @@ const DIALOGS = [
   ["workload-monitoring", "workloads", "wlMonitoring('lab','paperless')"],
   ["workload-history", "workloads", "wlHistory('lab','frigate')"],
   ["change-history", "workloads", "wlHistory()"],
+  ["log-search", "workloads", "logSearch()"],
+  ["log-search-results", "workloads", "logSearch();document.querySelector('#ls_q').value='error';logSearchRun()"],
   ["history-undo", "workloads", "historyUndo('lab','paperless','c2')"],
   ["node-if-down", "nodes", "nodeIfDown('harvester-node2')"],
   ["workload-update-mode", "workloads", "wlUpdateMode('lab','frigate')"],

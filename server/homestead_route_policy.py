@@ -85,6 +85,7 @@ POLICY = {
     ('GET', '/api/lh/snapshot/revert/plan'): 'viewer',
     ('GET', '/api/lh/snapshots'): 'viewer',
     ('GET', '/api/logs'): 'viewer',
+    ('GET', '/api/logs/search'): 'viewer',
     ('GET', '/api/longhorn/capacity'): 'viewer',
     ('GET', '/api/longhorn/offline-rebuilding'): 'viewer',
     ('GET', '/api/longhorn/rebalance/plan'): 'viewer',
