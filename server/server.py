@@ -1666,6 +1666,9 @@ def get_workloads():
             "gpu": "igpu" in hardware,
             "hardware": hardware,
             "icon": display_icon(annotations),
+            # A logo whose cached copy is being fetched again still counts as one.
+            "has_logo": bool(NAMES.read(annotations, "icon")),
+            "logo_skipped": NAMES.read(annotations, "logo-skipped") == "true",
             "group": NAMES.read(annotations, "group") or own_group(ns, name),
             "self": is_self(ns, name),
             "managed_smb": is_managed_smb(ns, name),
@@ -1707,6 +1710,57 @@ def set_workload_groups(b):
     count = len(items)
     return {"ok": True, "group": group,
             "detail": f"{count} workload{'s' if count != 1 else ''} " + (f"moved to {group}" if group else "ungrouped")}
+
+
+def set_workload_logos(b):
+    """Gives workloads a logo, or takes it away with a blank one.
+
+    Only the Deployment's own annotations change, never its pod template, so
+    nothing restarts. Each logo is fetched and kept like one typed in Edit."""
+    items = b.get("items") or []
+    if not items:
+        raise ValueError("choose at least one workload")
+    if len(items) > 200:
+        raise ValueError("at most 200 workloads at a time")
+    plans = []
+    for item in items:
+        ns, name = _dns_name(item.get("ns"), "namespace"), _dns_name(item.get("name"), "workload name")
+        guard_managed_smb(ns, name)
+        source = str(item.get("icon") or "").strip()
+        if source and not source.startswith(("https://", "http://")):
+            raise ValueError("a logo is a public http:// or https:// image URL")
+        plans.append((ns, name, source, item.get("skip") is True))
+    done, saved, skipped, failed = 0, 0, 0, []
+    for ns, name, source, skip in plans:
+        try:
+            if skip:      # no logo, on purpose: it is not counted as missing again
+                patch = {"metadata": {"annotations": {NAMES.key("logo-skipped"): "true"}}}
+            else:
+                cached_ref = ICONS.persist(source, DATA_DIR) if source else ""
+                patch = {"metadata": {"annotations": {NAMES.key("icon"): cached_ref or None,
+                                                      NAMES.key("icon-source"): source or None,
+                                                      NAMES.key("logo-skipped"): None}}}
+            ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", patch,
+                  ctype="application/merge-patch+json")
+            done += 1
+            saved += bool(source and not skip)
+            skipped += skip
+        except Exception as e:
+            failed.append(f"{name}: {e}")
+    _cache.pop("wl", None)
+    detail = ", ".join(part for part in (saved and f"{saved} logo{'s' if saved != 1 else ''} saved",
+                                         skipped and f"{skipped} left without one",
+                                         done and not saved and not skipped and "logo removed") if part)
+    return {"ok": not failed, "done": done, "failed": failed,
+            "detail": detail + (f"; {len(failed)} could not be: " + "; ".join(failed[:3]) if failed else "")}
+
+
+def logo_choices(ns, name, term):
+    """The picker's tiles for one workload: its image's match, then a search."""
+    workload = next((w for w in cached("wl", 5, get_workloads) if w.get("ns") == ns and w.get("name") == name), None)
+    images = (workload or {}).get("images") or []
+    return {"tiles": LOGOS.suggest(fetch_appstore(), images, term if term is not None else name, search_appstore),
+            "images": images}
 
 
 def protection_issues(jobs, target):
@@ -6065,6 +6119,7 @@ import homestead_console as CONSOLE
 import homestead_files as FILES
 import homestead_snapshot_files as SNAPSHOT_FILES
 import homestead_icons as ICONS
+import homestead_logos as LOGOS
 import homestead_volumes as VOLUMES
 import homestead_smart as SMART
 import homestead_shares as SHARES
@@ -9420,6 +9475,18 @@ class H(HTTP.LimitedHandler):
             if p == "/api/deploy/options":
                 ns = (q.get("ns") or [DEFAULT_NS])[0]
                 return self._send(200, deploy_options(ns))
+            if p == "/api/logos":
+                try:
+                    return self._send(200, logo_choices((q.get("ns") or [""])[0], (q.get("name") or [""])[0],
+                                                        (q.get("q") or [None])[0]))
+                except Exception as e:
+                    return self._send(502, {"error": f"app feed unavailable: {e}"})
+            if p == "/api/logos/missing":
+                try:
+                    apps = fetch_appstore()
+                except Exception as e:
+                    return self._send(502, {"error": f"app feed unavailable: {e}"})
+                return self._send(200, {"apps": LOGOS.missing(cached("wl", 5, get_workloads), apps)})
             if p == "/api/appstore":
                 term = (q.get("q") or [""])[0].lower().strip()
                 cat = (q.get("cat") or [""])[0].lower().strip()
@@ -9853,6 +9920,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, IPAM.sync_unifi())
             if p == "/api/workloads/group":
                 return self._send(200, set_workload_groups(b))
+            if p == "/api/workloads/logo":
+                return self._send(200, set_workload_logos(b))
             if p == "/api/scale":
                 try:
                     scale_workload(b["ns"], b["name"], int(b["replicas"]),
