@@ -394,16 +394,30 @@ async function ipamAfterUnifi() {
 }
 
 /* Settings > Connections: where UniFi is connected. */
-function ipamUnifiCard() {
+/* The controller, and how fresh what came from it is: synced hourly while
+   connected, so a sync more than a day old means something is wrong (#351). */
+const UNIFI_STALE = 24 * 3600;
+function ipamUnifiCard(now = Date.now() / 1000) {
   const u = ((STATE.data.ipam || {}).unifi) || {};
-  const state = !u.configured ? '<span class="pill neutral">not connected</span>' : u.last_error ? '<span class="pill crit">error</span>' : '<span class="pill ok">connected</span>';
+  const age = u.last_sync ? now - u.last_sync : null;
+  const stale = u.configured && (age === null || age > UNIFI_STALE);
+  const state = !u.configured ? '<span class="pill neutral">not connected</span>' : u.last_error ? '<span class="pill crit">sync failing</span>'
+    : stale ? '<span class="pill warn">out of date</span>' : '<span class="pill ok">connected</span>';
+  const when = t => new Date(t * 1000).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+  const facts = u.configured ? UI.facts([
+    ["Controller", `<span class="mono">${esc(u.url)}</span>${u.site_name ? ` <span class="dim xs">· ${esc(u.site_name)}</span>` : ""}`],
+    ["Last sync", u.last_sync ? `<span data-tip="${esc(when(u.last_sync))}">${esc(fmtAgo(age))}</span> <span class="dim xs">· every hour while connected</span>` : "not yet"],
+    ...(u.last_error && u.last_attempt ? [["Last attempt", `${esc(fmtAgo(now - u.last_attempt))} <span class="dim xs">· failed</span>`]] : [])]) : "";
   return `${UI.settingsCard(`
     ${UI.moduleHeader(`UniFi Network`, `Its clients, devices, reserved addresses and networks, and the names it knows, on the IP addresses page`, ``)}
     ${serviceRow(u.configured ? "UniFi controller" : "No controller", state,
-      u.configured ? `${esc(u.url)}${u.last_sync ? ` · synced ${esc(fmtAgo(Date.now() / 1000 - u.last_sync))}` : " · not synced yet"}` : "Optional: without it, IP addresses works from scans and what you write",
-      actionBar([u.configured ? { label: "Sync now", run: "ipamSync()", need: "operator" } : null,
+      u.configured ? "" : "Optional: without it, IP addresses works from scans and what you write",
+      actionBar([u.configured ? { label: "Sync now", run: "ipamSync()", need: "operator", pri: true } : null,
         { label: u.configured ? "Edit" : "Connect UniFi", run: "ipamUnifi()", need: "admin", pri: !u.configured }]))}
-    ${u.configured && u.last_error ? `<div class="note bad" style="margin-top:8px">${esc(u.last_error)}</div>` : ""}`, {tab:`connections`, id:`unifiCard`})}`;
+    ${facts}
+    ${u.configured && u.last_error ? UI.callout("bad", "The last sync failed", esc(u.last_error)) : ""}
+    ${u.configured && !u.last_error && stale ? UI.callout("warn", u.last_sync ? `Last synced ${fmtAgo(age)}` : "Not synced yet",
+      "Addresses and names may have changed since. Sync to refresh.") : ""}`, {tab:`connections`, id:`unifiCard`})}`;
 }
 window.ipamUnifiCard = ipamUnifiCard;
 

@@ -30,8 +30,10 @@ tag correctly resolves to `docker.io/openspeedtest/latest:latest`.
 
 The form asks, in order:
 
-- **Name and namespace.** Apps go in `lab` unless you make others under
-  **Settings → Hardware and storage → Namespaces**.
+- **Name and namespace.** Apps go in the default namespace (`lab` unless
+  another was chosen at install) or any other you make under
+  **Settings → Hardware and storage → Namespaces** - see
+  [Namespaces](Settings#namespaces).
 - **Containers in each pod.** **Add container** adds another program to the
   same workload. Give each its own name, image, resources, ports, variables
   and storage. **Remove container** removes a draft definition; at least one

@@ -709,7 +709,8 @@ def sync_unifi(get=None):
 
     def change(data):
         touched = merge_unifi(data, fetched)
-        data["unifi"] = {**(data.get("unifi") or {}), "last_sync": int(time.time()), "last_error": "",
+        now = int(time.time())
+        data["unifi"] = {**(data.get("unifi") or {}), "last_sync": now, "last_attempt": now, "last_error": "",
                          "note": fetched["note"], "site_name": fetched["site"]}
         return touched
     touched = update(change)
@@ -717,6 +718,20 @@ def sync_unifi(get=None):
             f"{len(fetched['reservations'])} reserved" + (f"; {fetched['note']}" if fetched["note"] else ""),
             "clients": len(fetched["clients"]), "devices": len(fetched["devices"]),
             "reservations": len(fetched["reservations"]), "networks": len(fetched.get("networks") or [])}
+
+
+SYNC_EVERY = 3600
+
+
+def sync_due(now=None):
+    """Whether a connected controller is due its hourly sync: an hour since the
+    last attempt, so a console that is down is asked hourly, not every minute."""
+    data, _ = load()
+    cfg = data.get("unifi") or {}
+    if not cfg.get("url") or not _unifi_key():
+        return False
+    last = max(int(cfg.get("last_sync") or 0), int(cfg.get("last_attempt") or 0))
+    return (now or time.time()) - last >= SYNC_EVERY
 
 
 def _record_sync(ok, message):

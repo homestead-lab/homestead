@@ -187,12 +187,12 @@ async function viewSettings() {
 
       ${UI.settingsCard(`
         ${UI.moduleHeader(`App Store catalogue`, `The feed the App Store lists apps from: any feed in the Community Applications format`, ``)}
-        ${serviceRow(STATE.data.appSettings?.catalog_url ? "Your own feed" : "Community Applications", '<span class="pill neutral">in use</span>',
+        ${serviceRow(STATE.data.appSettings?.catalog_url ? "Your own feed" : "Community Applications", '<span class="pill ok">in use</span>',
           esc(STATE.data.appSettings?.catalog_url || "The public feed"), can("admin") ? actionBar([{ label: "Change", run: "catalogEdit()" }]) : "")}
       `, {tab:`connections`})}
 
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`Namespaces`, `The namespaces apps are deployed into. Harvester, Rancher and Kubernetes keep their own, which are hidden here and in every picker.`, `${can("admin") ? `<div class="row ns-new"><input id="nsName" placeholder="new-namespace" maxlength="63" autocomplete="off"
+        ${UI.moduleHeader(`Namespaces`, `The namespaces apps are deployed into; Deploy offers each of them. Harvester, Rancher and Kubernetes keep their own, which are hidden here and in every picker.`, `${can("admin") ? `<div class="row ns-new"><input id="nsName" placeholder="new-namespace" maxlength="63" autocomplete="off"
             onkeydown="if(event.key==='Enter')namespaceCreate()"><button class="btn sm pri" onclick="namespaceCreate()">Create</button></div>` : ""}`)}
         <div class="ns-body"><div class="empty small"><span class="spin2"></span></div></div>
       `, {tab:`namespaces`, id:`nsCard`})}
@@ -591,10 +591,11 @@ async function namespacesPaint() {
         ${r.name === inv.default ? '<span class="tag ok">default for new apps</span>' : ""}${r.homestead ? '<span class="tag">made here</span>' : ""}</td>
       <td class="small">${esc(what(r))}</td>
       <td class="dim xs">${r.created ? esc(new Date(r.created).toLocaleDateString()) : ""}</td>
-      <td class="right">${can("admin") ? (r.protected ? `<span class="dim xs" title="${esc(r.protected)}">kept</span>`
+      <td class="right">${can("admin") ? (r.protected ? `<span class="dim xs ns-kept">Kept: ${esc(r.protected)}</span>`
         : actionBar([{ label: "Delete", run: `namespaceDelete(${jsq(r.name)})`, danger: true, disabled: !r.empty,
             tip: r.empty ? "" : "Move or delete what it holds first" }])) : ""}</td></tr>`).join("")}</tbody></table></div>
-    <div class="dim xs" style="margin-top:8px">${inv.system_hidden} platform namespace${inv.system_hidden === 1 ? "" : "s"} hidden.</div>`;
+    <div class="dim xs" style="margin-top:8px">${inv.system_hidden} platform namespace${inv.system_hidden === 1 ? "" : "s"} hidden.</div>
+    ${UI.more("Changing the default namespace", `<p class="small">New apps go in <b class="mono">${esc(inv.default)}</b> unless you pick another in Deploy. The default was chosen when Homestead was installed - <span class="mono">workloadNamespace.name</span> in the Helm chart, <span class="mono">DEFAULT_NS</span> in the manifest - and Homestead keeps its own settings, network shares and node probe there too, so it is not changed from here: moving them on a running cluster would leave them behind. To use another namespace for your apps, create it above and pick it in Deploy.</p>`)}`;
   sortTables(host);
 }
 

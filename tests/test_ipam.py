@@ -147,6 +147,16 @@ class IpamTests(unittest.TestCase):
         self.assertTrue(host["up"])
         self.assertEqual([port], host["ports"])
 
+    def test_a_connected_controller_is_due_hourly_after_its_last_attempt(self):
+        self.assertFalse(IPAM.sync_due(), "not connected, nothing is due")
+        IPAM.save_unifi({"url": "https://192.0.2.1", "api_key": "k", "site": "default"})
+        self.assertTrue(IPAM.sync_due(), "never synced")
+        data, _ = IPAM.load()
+        now = 1_800_000_000
+        IPAM.update(lambda d: d["unifi"].update(last_sync=now - 7200, last_attempt=now - 600))
+        self.assertFalse(IPAM.sync_due(now), "a failed attempt ten minutes ago waits the hour")
+        self.assertTrue(IPAM.sync_due(now + 3000))
+
     def test_unifi_sync_adds_what_the_controller_knows_without_overwriting_people(self):
         IPAM.save_unifi({"url": "https://192.0.2.1", "api_key": "k", "site": "default"})
         self.assertIn("api_key", self.store.secret["data"])
