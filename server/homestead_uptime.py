@@ -11,6 +11,14 @@ to - as a person's browser would:
 * If the port takes the connection but does not answer in HTTP, the accepted
   connection counts: databases, MQTT and game servers close, reset or wait.
 
+Which port: the app's main port when one is chosen; otherwise each of its
+published TCP ports in turn, up to MAX_PORTS, and it answers if any does - so
+CouchDB's Erlang port or a proxy's spare port beside the web UI is not taken
+for the app. An app on the LAN through macvtap is asked at its pod's own
+address instead: a host cannot reach a macvtap address on its own NIC, so
+asking the LAN address from Homestead's pod on the same host would fail
+while the app is fine.
+
 An app is down after DOWN_AFTER misses in a row and up again on its first
 answer, so one dropped packet raises nothing. An answer slower than SLOW_MS is
 marked slow but is not an outage. Stopped apps (no replicas wanted) are not
@@ -43,6 +51,7 @@ STRIP_HOURS = 24
 SAVE_EVERY = 300
 FORGET_AFTER = 7 * 86400     # an app gone this long is dropped from the history
 HTTPS_PORTS = (443, 8443, 9443, 5001)
+MAX_PORTS = 4
 PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,199}$")
 USER_AGENT = "Homestead-uptime/1"
 _lock = threading.Lock()
@@ -125,12 +134,38 @@ def target(w):
     ports = [p for p in w.get("ports") or [] if p.get("ip") and p.get("port") and (p.get("protocol") or "TCP") == "TCP"]
     if not ports:
         return None, "no address to ask"
-    first = ports[0]
-    port = int(first["port"])
-    scheme = "https" if port in HTTPS_PORTS else "http"
+    if any(p.get("primary") for p in ports):
+        ports = [p for p in ports if p.get("primary")][:1]
+    pod_ip = next((p.get("ip") for p in w.get("pods") or [] if p.get("ip") and p.get("ready")), "") or \
+        next((p.get("ip") for p in w.get("pods") or [] if p.get("ip")), "")
+    asks = []
+    for p in ports[:MAX_PORTS]:
+        port = int(p["port"])
+        host = pod_ip if p.get("lan") and pod_ip else str(p["ip"])
+        asks.append({"host": host, "port": port, "scheme": "https" if port in HTTPS_PORTS else "http", "lan": bool(p.get("lan"))})
     kind = "tcp" if chosen["mode"] == "tcp" else "http"
-    return {"kind": kind, "host": str(first["ip"]), "port": port, "scheme": scheme,
+    first = asks[0]
+    return {"kind": kind, "host": first["host"], "port": first["port"], "scheme": first["scheme"], "asks": asks,
             "path": chosen.get("path", "/"), "strict": chosen["mode"] == "http"}, ""
+
+
+def ask_ports(t, ask=None):
+    """Ask each of an app's ports in turn: the first that answers is the app
+    answering. The result names the port asked last."""
+    ask = ask or probe
+    result = None
+    for one in t.get("asks") or [t]:
+        single = {**t, **one}
+        result = {**ask(single), "host": single["host"], "port": single["port"], "scheme": single["scheme"]}
+        if result["ok"]:
+            break
+    return result
+
+
+def _describe(t, result=None):
+    host, port, scheme = ((result or {}).get("host") or t["host"]), ((result or {}).get("port") or t["port"]), \
+        ((result or {}).get("scheme") or t["scheme"])
+    return f"{scheme}://{host}:{port}{t['path']}" if t["kind"] == "http" else f"tcp {host}:{port}"
 
 
 def _tcp(host, port, timeout):
@@ -234,7 +269,7 @@ def observe(workloads, now=None, ask=probe):
 
     def run(key, t):
         try:
-            results[key] = ask(t)
+            results[key] = ask_ports(t, ask)
         except Exception as e:      # a check never stops the round
             results[key] = {"ok": False, "ms": None, "code": None, "error": _why(e)}
 
@@ -256,8 +291,11 @@ def observe(workloads, now=None, ask=probe):
                     app.update({"state": "off", "why": why, "misses": 0, "since": round(now)})
                 continue
             app.pop("why", None)
-            app["target"] = f"{t['scheme']}://{t['host']}:{t['port']}{t['path']}" if t["kind"] == "http" else f"tcp {t['host']}:{t['port']}"
             result = results.get(key) or {"ok": False, "ms": None, "code": None, "error": "the check did not finish"}
+            app["target"] = _describe(t, result)
+            if len(t.get("asks") or []) > 1 and not result["ok"]:
+                app["target"] = f"{len(t['asks'])} ports at {t['host']}"
+            result = {k: v for k, v in result.items() if k not in ("host", "port", "scheme")}
             closing = str(_hour(now)) not in app.get("hours", {})
             changed = _record(app, result, now) or closing or changed
         oldest = _hour(now) - KEEP_HOURS * 3600
