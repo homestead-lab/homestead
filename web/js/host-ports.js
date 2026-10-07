@@ -207,8 +207,8 @@ window.uplinkDialog = async (opts = {}) => {
     ? `<div class="uplink-checks">${hosts.map(h => `<label><input type="checkbox" name="ul_host" value="${esc(h)}" checked onchange="uplinkNicsPaint()"> ${esc(h)}</label>`).join("")}</div>`
     : `<span class="dim small">Every host already has an uplink for ${esc(form.cn)}; change one instead.</span>`, { wide: true });
   modal(config ? `Change ${config.name}` : form.fresh ? "New cluster network" : `Uplink for ${form.cn}`, `<div class="ui-stack">
-    ${UI.lead(config ? `Harvester rebuilds ${config.cluster_network}'s uplink on ${config.nodes.join(", ")} with what you choose.`
-      : "Choose the NICs that carry this network on each host. Two or more are bonded: if one fails, traffic carries on through the rest.")}
+    ${UI.lead(esc(config ? `Harvester rebuilds ${config.cluster_network}'s uplink on ${config.nodes.join(", ")} with what you choose.`
+      : "Choose the NICs that carry this network on each host. Two or more are bonded: if one fails, traffic carries on through the rest."))}
     ${UI.fields(where, hostField,
       UI.field("NICs", `<div id="ul_nics"></div>`, { wide: true, help: "The chosen hosts' NICs, with each host's link. NICs that carry mgmt or another network cannot be chosen." }),
       UI.field("Bond mode", `<select id="ul_mode" onchange="uplinkModeHelp()">${(inv.modes || ["active-backup"]).map(m =>
@@ -291,7 +291,7 @@ window.uplinkReview = async opts => {
   const verb = { create: "Make it", change: "Change it", remove: "Remove it" }[plan.action];
   const what = plan.action === "remove" ? `${plan.config} is removed: ${plan.cluster_network} has no uplink on ${plan.nodes.join(", ")} afterwards.`
     : `${plan.nics.join(" + ")}${plan.nics.length > 1 ? ` bonded as ${plan.mode}` : ""} carry ${plan.cluster_network}${plan.new_network ? " (a new cluster network)" : ""} on ${plan.nodes.join(", ")}${plan.mtu ? `, MTU ${plan.mtu}` : ""}.`;
-  $("#mbody").innerHTML = `<div class="ui-stack">${UI.lead(what)}
+  $("#mbody").innerHTML = `<div class="ui-stack">${UI.lead(esc(what))}
     ${uplinkPicture(plan)}
     ${UI.checklist([...plan.refusals.map(r => ({ state: "bad", title: r })), ...plan.warnings.map(w => ({ state: "warn", title: w })),
       !plan.refusals.length && { state: "ok", title: "Harvester makes the change and reports each host; Homestead follows it as a job" }])}
@@ -357,9 +357,9 @@ window.hostBondDialog = async node => {
     const taken = n.master && !mine && n.master !== shape.bridge && n.master !== shape.bond;
     return `<label class="uplink-nic${taken ? " taken" : ""}"><input type="checkbox" name="hb_nic" value="${esc(n.name)}" ${mine ? "checked" : ""} ${taken || (!bonded && mine) ? "disabled" : ""} onchange="hostBondPrimaries()">
       <span class="port-led ${n.carrier ? "up" : n.carrier === null ? "off" : "down"}"></span><b class="mono">${esc(n.name)}</b>
-      <span class="dim xs">${esc(n.carrier ? portSpeed(n.speed) || "link" : n.carrier === null ? "switched off" : "no link")}${!bonded && mine ? " · carries the host now" : ""}${taken ? ` · in ${n.master}` : ""}</span></label>`;
+      <span class="dim xs">${esc(n.carrier ? portSpeed(n.speed) || "link" : n.carrier === null ? "switched off" : "no link")}${!bonded && mine ? " · carries the host now" : ""}${taken ? ` · in ${esc(n.master)}` : ""}</span></label>`;
   }).join("");
-  $("#mbody").innerHTML = `<div class="ui-stack">${UI.lead(now)}
+  $("#mbody").innerHTML = `<div class="ui-stack">${UI.lead(esc(now))}
     ${bonded ? UI.field("Change", `<div class="seg" id="hb_action"><button type="button" class="on" data-v="change" onclick="hostBondAction(this)">Members or mode</button><button type="button" data-v="remove" onclick="hostBondAction(this)">Back to one NIC</button></div>`) : ""}
     <div id="hb_form">${UI.fields(
       UI.field("NICs", `<div>${nics}</div>`, { wide: true, help: "Members of the bond. A NIC in another bridge or bond cannot be chosen." }),
@@ -408,7 +408,7 @@ window.hostBondReview = async node => {
   const after = window.Diagram ? Diagram.ports(hostBondPorts(info, p.action === "remove" ? [] : p.members, p.bond, p.mode, p.carries_on)) : "";
   const what = p.action === "remove" ? `${p.bond} goes, and ${p.keep} carries ${p.address} on its own.`
     : `${p.members.join(" + ")} carry ${p.address} as ${p.bond} (${p.mode})${p.shape.bridge ? `, under ${p.shape.bridge}` : ""}. It keeps its address${info.dhcp ? " and asks DHCP with the same MAC, so the lease stays" : ""}.`;
-  $("#mbody").innerHTML = `<div class="ui-stack">${UI.lead(what)}
+  $("#mbody").innerHTML = `<div class="ui-stack">${UI.lead(esc(what))}
     <div class="bond-compare"><div><div class="ui-help">Now</div><div class="ports-picture">${before}</div></div>
       <div><div class="ui-help">After</div><div class="ports-picture">${after}</div></div></div>
     ${UI.checklist([...p.refusals.map(r => ({ state: "bad", title: r })), ...p.warnings.map(w => ({ state: "warn", title: w })),

@@ -116,6 +116,17 @@ class PortsTests(unittest.TestCase):
         rep = PORTS.report({"h1": self.probe(rows, uplink="eth0")}, {"h1": {"networks": {"eth1": ["iot/cams"]}}})
         self.assertEqual("critical", self.kinds(rep)[("eth1", "down")]["severity"])
 
+    def test_a_round_with_nothing_new_writes_nothing(self):
+        from unittest import mock
+        rows = [nic("eth0")]
+        with mock.patch.object(PORTS, "_save", wraps=PORTS._save) as save:
+            PORTS.observe({"h1": self.probe(rows, uptime=100000)}, now=1000)
+            for step in range(1, 9):     # every 30 s, uptime keeping pace give or take a second
+                PORTS.observe({"h1": self.probe(rows, uptime=100000 + step * 30 + step % 2)}, now=1000 + step * 30)
+            self.assertEqual(1, save.call_count)
+            PORTS.observe({"h1": self.probe(rows, uptime=100300)}, now=1300)   # the next five-minute sample
+            self.assertEqual(2, save.call_count)
+
     def test_lacp_without_partner_after_two_minutes(self):
         rows = [nic("enp1s0", master="bond0", member=member()), nic("enp2s0", master="bond0", member=member()),
                 bond("bond0", ["enp1s0", "enp2s0"], mode="802.3ad", partner="00:00:00:00:00:00")]

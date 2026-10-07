@@ -33,6 +33,7 @@ CN_LABEL = "network.harvesterhci.io/clusternetwork"
 MANAGED = "homestead.io/managed"
 MODES = ("active-backup", "802.3ad", "balance-tlb", "balance-alb", "balance-xor", "balance-rr", "broadcast")
 NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,10}[a-z0-9])?$")   # <name>-br fits Linux's 15 characters
+NIC = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")                    # a Linux interface name
 WAIT = 300                    # how long a host has to report its uplink ready
 KIND = "harvester-uplink"
 
@@ -239,6 +240,9 @@ def preview(cfg, probes=None):
     mtu = _int(cfg.get("mtu"), (config or {}).get("mtu") or 0)
     if not nics:
         refusals.append("choose at least one NIC")
+    for nic in nics:
+        if not NIC.match(nic):
+            refusals.append(f"{nic[:40]} is not a NIC name")
     if mode not in MODES:
         refusals.append(f"{mode} is not a bond mode Harvester knows")
     if mode == "802.3ad" and len(nics) > 1 and not cfg.get("lacp_confirmed"):
