@@ -392,6 +392,39 @@ async function afterAuth() {
   if (window.welcomeCheck) setTimeout(() => welcomeCheck(), 900);
 }
 
+/* Settings › Users and access (#350): a role changed where it is shown, and a
+   user added from the card. Manage users stays for doing several at once. */
+window.userRoleSet = async (name, select) => {
+  const role = select.value, was = select.dataset.was;
+  select.disabled = true;
+  try {
+    await api("/api/auth/role", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: name, role }) });
+    select.dataset.was = role;
+    select.closest("tr")?.setAttribute("data-role", role);
+    toast(`${name} is now ${role}`, "ok");
+  } catch (e) { select.value = was; toast(e.message, "bad"); }
+  finally { select.disabled = false; }
+};
+
+window.userAdd = () => modal("Add a user", `<div class="ui-stack">
+  ${UI.fields(UI.field("Username", '<input type="text" id="nu_user" autocapitalize="none" autocomplete="off">'),
+    UI.field("Password", '<input type="password" id="nu_pass" autocomplete="new-password">'))}
+  ${UI.field("Role", `<select id="nu_role">${["viewer", "operator", "admin"].map(r =>
+    `<option value="${r}"${r === "operator" ? " selected" : ""}>${typeof ROLE_NAMES === "object" ? ROLE_NAMES[r] : r} - ${typeof ROLE_SHORT === "object" ? esc(ROLE_SHORT[r]) : ""}</option>`).join("")}</select>`,
+    { help: "Compare roles on the card says what each can do." })}
+  ${UI.actions(UI.cancel() + UI.button("Add user", "userAddSave(this)", { kind: "pri" }))}</div>`);
+
+window.userAddSave = async button => {
+  if (button) button.disabled = true;
+  try {
+    await api("/api/auth/users", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: $("#nu_user").value.trim(), password: $("#nu_pass").value, role: $("#nu_role").value }) });
+    toast("User added", "ok"); closeModal();
+    if (STATE.view === "settings") { resetPaint(); viewSettings(); }
+  } catch (e) { toast(e.message, "bad"); if (button) button.disabled = false; }
+};
+
 window.setRole = async (name, role) => {
   try {
     await api("/api/auth/role", { method: "POST", headers: { "Content-Type": "application/json" },

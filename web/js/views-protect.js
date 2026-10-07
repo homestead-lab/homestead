@@ -133,6 +133,7 @@ async function viewProtect() {
     api("/api/lh/backupvolumes").catch(() => []),
   ]);
   STATE.data.lh = d;
+  protectFilterRead();
   STATE.data.objectStore = objects;
   STATE.data.lhBackupVolumes = backupVolumes;
   const tgt = d.target || {};
@@ -160,9 +161,13 @@ async function viewProtect() {
       </div>
       ${meter(cover, 'style="margin-top:12px"')}
       ${d.unprotected.length ? `<div style="margin-top:12px">
-        <div class="dim xs" style="margin-bottom:6px">NOT COVERED</div>
-        ${d.unprotected.slice(0, 6).map(v => `<span class="tag warn">${esc(v)}</span>`).join("")}
-        ${d.unprotected.length > 6 ? `<span class="tag">+${d.unprotected.length - 6}</span>` : ""}</div>` : ""}
+        <button type="button" class="linkish dim xs pf-jump" onclick="protectFilter({show:'uncovered'},true)">NOT COVERED · show all ${d.unprotected.length}</button>
+        <div class="pf-chips">${d.unprotected.slice(0, 6).map(name => {
+          const v = d.volumes.find(x => (x.pvc || x.name) === name);
+          return v ? `<button type="button" class="tag warn tagbtn" data-need="operator" data-tip="Protect ${esc(name)}" onclick="lhAssign(${jsq(v.name)},${jsq(name)})">${esc(name)}</button>`
+            : `<span class="tag warn">${esc(name)}</span>`;
+        }).join("")}
+        ${d.unprotected.length > 6 ? `<button type="button" class="tag tagbtn" data-tip="Show every volume not covered" onclick="protectFilter({show:'uncovered'},true)">+${d.unprotected.length - 6}</button>` : ""}</div></div>` : ""}
     </div>
 
     <div class="card flat">
@@ -185,8 +190,9 @@ async function viewProtect() {
         <button class="btn sm" data-need="operator" onclick="lhGroup()">＋ Group</button></div>
       <div style="margin-top:12px">${d.groups.map(g => {
         const n = d.volumes.filter(v => v.groups.includes(g)).length;
-        return `<span class="tag ${g === "default" ? "info" : ""}" role="button" tabindex="0" style="cursor:pointer"
-          data-tip="Edit ${esc(g)}" onclick="lhGroup(${jsq(g)})">${esc(g)} · ${n}</span>`;
+        return `<span class="pf-group"><button type="button" class="tag tagbtn ${g === "default" ? "info" : ""}" aria-pressed="${PROTECT_FILTER.group === g}"
+          data-tip="Show the volumes in ${esc(g)}" onclick="protectFilter({group:${jsq(g)}},true)">${esc(g)} · ${n}</button><button type="button" class="pf-edit"
+          data-need="operator" aria-label="Edit ${esc(g)}" data-tip="Edit ${esc(g)}" onclick="lhGroup(${jsq(g)})">${icon("edit")}</button></span>`;
       }).join("")}</div>
       <div class="dim xs" style="margin-top:12px">Longhorn puts every volume without a group in
         <span class="mono">default</span>. Give some volumes a plan of their own with a group.</div>
@@ -227,21 +233,11 @@ async function viewProtect() {
     <button class="btn sm" data-need="operator" onclick="lhGroup()">＋ New group</button></div>
   <div class="cardlist">${(d.group_rows || []).map(groupCard).join("")}</div>
 
-  <div class="sec">Volumes</div>
+  <div class="sec" id="protect-volumes">Volumes</div>
+  <div class="pf-bar" id="pf_bar"></div>
   <div class="card flat pad0"><div class="tblwrap"><table data-sort="protect" class="tbl stack"><thead><tr>
     <th>Volume</th><th>Size</th><th>Health</th><th>Groups</th><th>Protected by</th><th data-nosort>Last backup</th><th></th>
-  </tr></thead><tbody>
-  ${d.volumes.map(v => `<tr>
-    <td><b>${esc(v.pvc || v.name.slice(0, 16))}</b><div class="dim xs mono">${esc(v.namespace)}</div></td>
-    <td class="mono">${v.size_gb} GB</td>
-    <td><span class="pill ${v.robustness === "healthy" ? "ok" : v.robustness === "degraded" ? "med" : "crit"}">${esc(v.robustness || "?")}</span></td>
-    <td>${v.groups.map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("") || '<span class="dim">—</span>'}</td>
-    <td>${(v.protected_by || []).map(j => `<span class="tag ok">${esc(j)}</span>`).join("")
-      || '<span class="tag warn" data-tip="No snapshot or backup job covers it">nothing</span>'}</td>
-    <td class="small dim">${v.last_backup_at ? esc(v.last_backup_at.replace("T", " ").replace("Z", "")) : "never"}</td>
-    <td>${actionBar([{ label: "Snapshots", run: `lhSnaps(${jsq(v.name)},${jsq(v.pvc || v.name)})` },
-      { label: "Protect", run: `lhAssign(${jsq(v.name)},${jsq(v.pvc || v.name)})`, need: "operator" }])}</td></tr>`).join("")}
-  </tbody></table></div></div>
+  </tr></thead><tbody id="pf_rows"></tbody></table></div></div>
 
   <div class="sec">Backups</div>
   ${backupVolumes.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="backupvols" class="tbl stack"><thead><tr>
@@ -255,8 +251,93 @@ async function viewProtect() {
       <td>${actionBar([{ label: "Backups", run: `lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})` }])}</td></tr>`).join("")}
   </tbody></table></div></div>`
   : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`);
+  protectVolumesPaint();
   loadRestoreTests();
 }
+
+/* ---------------- the Volumes list, filtered (#345) ----------------
+   The cards above lead here: Not covered, a group, never backed up. The
+   filter is kept in the address, so a refresh, Back or a shared link keeps it. */
+const PROTECT_FILTER = { show: "all", group: "", q: "" };
+const PROTECT_SHOWS = [
+  ["all", "All", () => true],
+  ["uncovered", "Not covered", v => !(v.protected_by || []).length],
+  ["protected", "Protected", v => (v.protected_by || []).length > 0],
+  ["never", "Never backed up", v => !v.last_backup_at],
+  ["unhealthy", "Unhealthy", v => v.robustness !== "healthy"],
+];
+
+function protectMatches(v, f = PROTECT_FILTER) {
+  const show = (PROTECT_SHOWS.find(s => s[0] === f.show) || PROTECT_SHOWS[0])[2];
+  const q = (f.q || "").toLowerCase();
+  return show(v) && (!f.group || (v.groups || []).includes(f.group))
+    && (!q || [v.pvc, v.name, v.namespace].some(x => String(x || "").toLowerCase().includes(q)));
+}
+
+function protectFilterRead() {
+  try {
+    const p = new URLSearchParams(location.search);
+    PROTECT_FILTER.show = PROTECT_SHOWS.some(s => s[0] === p.get("show")) ? p.get("show") : "all";
+    PROTECT_FILTER.group = p.get("group") || "";
+  } catch (e) { /* the filter starts at All */ }
+}
+
+function protectFilterWrite() {
+  try {
+    const url = new URL(location.href);
+    PROTECT_FILTER.show !== "all" ? url.searchParams.set("show", PROTECT_FILTER.show) : url.searchParams.delete("show");
+    PROTECT_FILTER.group ? url.searchParams.set("group", PROTECT_FILTER.group) : url.searchParams.delete("group");
+    history.replaceState(history.state, "", url);
+  } catch (e) { /* the filter still applies */ }
+}
+
+function protectVolumeRow(v) {
+  return `<tr>
+    <td><b>${esc(v.pvc || v.name.slice(0, 16))}</b><div class="dim xs mono">${esc(v.namespace)}</div></td>
+    <td class="mono">${v.size_gb} GB</td>
+    <td><span class="pill ${v.robustness === "healthy" ? "ok" : v.robustness === "degraded" ? "med" : "crit"}">${esc(v.robustness || "?")}</span></td>
+    <td>${v.groups.map(g => `<span class="tag ${g === "default" ? "info" : ""}">${esc(g)}</span>`).join("") || '<span class="dim">—</span>'}</td>
+    <td>${(v.protected_by || []).map(j => `<span class="tag ok">${esc(j)}</span>`).join("")
+      || '<span class="tag warn" data-tip="No snapshot or backup job covers it">nothing</span>'}</td>
+    <td class="small dim">${v.last_backup_at ? esc(v.last_backup_at.replace("T", " ").replace("Z", ""))
+      : (v.protected_by || []).length ? '<span class="tag warn" data-tip="A job covers it, but no backup of it has been made yet">never</span>' : "never"}</td>
+    <td>${actionBar([{ label: "Snapshots", run: `lhSnaps(${jsq(v.name)},${jsq(v.pvc || v.name)})` },
+      { label: "Protect", run: `lhAssign(${jsq(v.name)},${jsq(v.pvc || v.name)})`, need: "operator" }])}</td></tr>`;
+}
+
+function protectVolumesPaint() {
+  const d = STATE.data.lh || {}, vols = d.volumes || [], bar = $("#pf_bar"), body = $("#pf_rows");
+  if (!bar || !body) return;
+  const f = PROTECT_FILTER, count = test => vols.filter(v => test(v) && (!f.group || (v.groups || []).includes(f.group))).length;
+  const shown = vols.filter(v => protectMatches(v));
+  const label = (PROTECT_SHOWS.find(s => s[0] === f.show) || PROTECT_SHOWS[0])[1];
+  const narrowed = f.show !== "all" || f.group || f.q;
+  if (!bar.dataset.ready) {
+    bar.dataset.ready = "1";
+    bar.innerHTML = `<div class="pf-shows" role="group" aria-label="Show"></div>
+      <div class="pf-more"><select id="pf_group" aria-label="Group" onchange="protectFilter({group:this.value})"></select>
+        <input id="pf_q" type="search" placeholder="Find a volume" aria-label="Find a volume" oninput="protectFilter({q:this.value})"></div>
+      <div class="pf-showing dim small" aria-live="polite"></div>`;
+  }
+  $(".pf-shows", bar).innerHTML = PROTECT_SHOWS.map(([key, name, test]) =>
+    `<button type="button" class="pf-chip" aria-pressed="${f.show === key}" onclick="protectFilter({show:${jsq(key)}})">${esc(name)} <span class="pf-n">${count(test)}</span></button>`).join("");
+  $("#pf_group").innerHTML = `<option value="">Every group</option>${(d.groups || []).map(g =>
+    `<option value="${esc(g)}"${f.group === g ? " selected" : ""}>${esc(g)}</option>`).join("")}`;
+  if ($("#pf_q").value !== f.q) $("#pf_q").value = f.q;
+  $(".pf-showing", bar).innerHTML = narrowed ? `Showing ${shown.length} of ${vols.length}: ${esc([f.show !== "all" && label, f.group && `group ${f.group}`, f.q && `“${f.q}”`].filter(Boolean).join(" · "))}
+      · <button type="button" class="linkish" onclick="protectFilter({show:'all',group:'',q:''})">Clear</button>` : "";
+  body.innerHTML = shown.length ? shown.map(protectVolumeRow).join("")
+    : `<tr><td colspan="7"><div class="empty small">No volume matches.</div></td></tr>`;
+  if (typeof sortTables === "function") sortTables(body.closest("table").parentElement);
+}
+
+window.protectFilter = (change, jump = false) => {
+  Object.assign(PROTECT_FILTER, change);
+  protectFilterWrite();
+  protectVolumesPaint();
+  document.querySelectorAll(".pf-group > .tagbtn").forEach(b => b.setAttribute("aria-pressed", String(b.textContent.startsWith(`${PROTECT_FILTER.group} ·`) && !!PROTECT_FILTER.group)));
+  if (jump) $("#protect-volumes")?.scrollIntoView({ behavior: "smooth", block: "start" });
+};
 
 /* A group, what is in it and what protects it. */
 function groupCard(g) {

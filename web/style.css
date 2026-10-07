@@ -3654,3 +3654,22 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .outage-unit{display:flex;align-items:center;gap:8px}.outage-unit input{width:90px}
 .outage-url{display:flex;gap:8px;align-items:center}.outage-url input{flex:1;min-width:0}
 @media (max-width:560px){.outage-url{flex-wrap:wrap}.outage-url .btn{width:100%;justify-content:center}}
+
+/* Data protection: the cards filter the Volumes list (views-protect.js). */
+.pf-chips{display:flex;flex-wrap:wrap;gap:4px;margin-top:6px}.pf-jump{padding:0;margin:0 0 2px}
+.pf-group{display:inline-flex;align-items:center;margin:0 6px 6px 0}.pf-group .tagbtn{margin:0}
+.pf-group .tagbtn[aria-pressed=true]{outline:2px solid var(--tx);outline-offset:1px}
+.pf-edit{display:inline-grid;place-items:center;width:24px;height:24px;border:0;background:none;color:var(--mut);cursor:pointer;border-radius:6px}
+.pf-edit:hover{color:var(--tx);background:var(--surf2)}.pf-edit .btnicon{width:13px;height:13px}
+.pf-bar{display:grid;gap:8px;margin-bottom:10px}
+.pf-shows{display:flex;flex-wrap:wrap;gap:6px}
+.pf-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;border:1px solid var(--line2);background:none;color:var(--mut);font:inherit;font-size:12.5px;cursor:pointer}
+.pf-chip[aria-pressed=true]{background:var(--tx);color:var(--bg);border-color:var(--tx);font-weight:600}
+.pf-chip .pf-n{font-variant-numeric:tabular-nums;opacity:.75}
+.pf-more{display:grid;grid-template-columns:auto minmax(0,260px);gap:8px;justify-content:start}.pf-more select{width:auto}
+@media (max-width:560px){.pf-more{grid-template-columns:minmax(0,1fr)}.pf-more select{width:100%}}
+
+/* Users and roles (#350): the role chosen where it is shown. */
+.users-filter{margin-bottom:10px}
+.role-select{width:auto;max-width:100%;padding:5px 9px;font-size:12.5px}
+.roles-table td.center,.roles-table th:not(:first-child){text-align:center}

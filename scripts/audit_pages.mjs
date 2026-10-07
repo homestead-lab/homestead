@@ -49,6 +49,7 @@ const PAGES = [
   ["volumes", "storage"],
   ["image-cache", "images"],
   ["data-protection", "protect"],
+  ["data-protection-filtered", "protect", "protectFilter({show:'never'},true)"],
   ["cluster", "cluster"],
   ["resources", "resources"],
   ["networking", "network", "networkTab('overview')"],

@@ -206,6 +206,8 @@ const DIALOGS = [
   ["workload-history", "workloads", "wlHistory('lab','frigate')"],
   ["change-history", "workloads", "wlHistory()"],
   ["log-search", "workloads", "logSearch()"],
+  ["roles-compare", "settings", "rolesCompare()"],
+  ["user-add", "settings", "userAdd()"],
   ["workload-schedule", "workloads", "wlSchedule('lab','paperless')"],
   ["workload-schedule-new", "workloads", "wlSchedule('lab','frigate')"],
   ["vm-schedule", "vms", "vmSchedule('lab','k3s-demo-server-1')"],
