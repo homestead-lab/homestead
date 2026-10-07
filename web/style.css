@@ -3587,3 +3587,13 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .forecast-name{display:grid;min-width:0}.forecast-name b,.forecast-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .forecast-empty{margin-top:8px}.forecast-tag{justify-self:start;align-self:flex-start;width:max-content;max-width:100%}
 @media (max-width:560px){.forecast-row{align-items:flex-start;flex-direction:column;gap:4px}.forecast-name span{white-space:normal}}
+
+/* Change history (changes.js). */
+.history-list{display:grid;gap:10px;max-height:min(60vh,560px);overflow:auto}
+.history-entry{display:grid;gap:6px;padding:10px 12px;border:1px solid var(--line2);border-radius:10px}
+.history-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.history-app{font-weight:600}
+.history-acts{margin-left:auto}
+.history-rows{display:grid;gap:4px}
+.history-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(0,2fr);gap:10px;font-size:12.5px;align-items:baseline}
+.history-field{color:var(--mut);overflow-wrap:anywhere}.history-values{overflow-wrap:anywhere}
+@media (max-width:560px){.history-row{grid-template-columns:minmax(0,1fr)}.history-field{font-size:11.5px}}

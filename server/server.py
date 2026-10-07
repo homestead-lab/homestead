@@ -224,6 +224,7 @@ def _guarded_ksend(method, path, body=None, ctype="application/json", timeout=15
     with self_data_activity():
         require_self_data_write()
         authorize_workload_write(method, path, body)
+        CHANGES.note_write(method, path, body)
         return STORAGE_GUARD.send(method, path, body,
                                   lambda: _ksend(method, path, body, ctype, timeout, shutdown_bypass=shutdown_bypass), OPS, kget,
                                   own_controller=(SELF.NS, NAMES.BRAND))
@@ -730,6 +731,55 @@ def _forecast_loop():
                 beat("forecast", 3600, error, leader_only=True)
                 print(f"forecast: {str(error)[:160]}", flush=True)
         time.sleep(3600)
+
+
+def _changes_loop():
+    """Every minute on the leader: what changed in each app since the last look."""
+    last = time.time()
+    while True:
+        started = time.time()
+        if LEADER.is_leader():
+            try:
+                deps = [d for d in kget("/apis/apps/v1/deployments").get("items", [])
+                        if d["metadata"]["namespace"] not in SYS_NS]
+                CHANGES.observe(deps, now=started, since=last)
+                beat("changes", 60, leader_only=True)
+            except Exception as error:
+                beat("changes", 60, error, leader_only=True)
+                print(f"changes: {str(error)[:160]}", flush=True)
+        last = started
+        time.sleep(max(5, 60 - (time.time() - started)))
+
+
+def change_undo_plan(body):
+    """Undo one change: the app's settings from before it, reviewed like any rollout."""
+    ns, name = _dns_name(body.get("ns"), "namespace"), _dns_name(body.get("name"), "workload name")
+    guard_managed_smb(ns, name)
+    if is_self(ns, name):
+        raise ValueError("Homestead's own settings are changed from Settings, not undone here")
+    entry = CHANGES.kept_before(ns, name, str(body.get("id") or ""))
+    current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    proposed, rows = CHANGES.undo_plan(current, entry)
+    missing = sorted({(v.get("persistentVolumeClaim") or {}).get("claimName")
+                      for v in proposed["spec"]["template"]["spec"].get("volumes") or []
+                      if (v.get("persistentVolumeClaim") or {}).get("claimName")}
+                     - {p["metadata"]["name"] for p in kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims").get("items", [])})
+    if missing:
+        raise ValueError(f"those settings used {', '.join(missing)}, which no longer exist{'s' if len(missing) == 1 else ''}")
+    context = {"action": "change-undo", **rollout_review_context(current), "proposed_spec": proposed["spec"], "entry": entry["id"]}
+    cache = {f"/apis/apps/v1/namespaces/{ns}/deployments/{name}": current}
+
+    def read(path):
+        if path not in cache:
+            cache[path] = kget(path)
+        return copy.deepcopy(cache[path])
+
+    def planner(*args, **kwargs):
+        return PLACE.manifest_plan(*args, **kwargs, read=read)
+    capacity = ROLLOUT_CAPACITY.plan(current, proposed, ns, read, PLACE.get_nodes, planner,
+                                     get_app_settings()["thresholds"]["memory"]["critical"])
+    capacity["requires_confirmation"] = True
+    return current, proposed, rows, capacity, context
 
 
 def set_vm_monitoring(b):
@@ -6569,6 +6619,7 @@ import homestead_node_parity as NODE_PARITY
 import homestead_host_os as HOST_OS
 import homestead_ports as PORTS
 import homestead_uptime as UPTIME
+import homestead_changes as CHANGES
 import homestead_forecast as FORECAST
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
@@ -6689,6 +6740,7 @@ NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR, (S
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 PORTS.bind(DATA_DIR)
 UPTIME.bind(DATA_DIR)
+CHANGES.bind(DATA_DIR)
 FORECAST.bind(DATA_DIR)
 
 
@@ -7763,7 +7815,7 @@ OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
 LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
-              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast"}
+              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "changes": "Change history"}
 
 
 def samba_state():
@@ -9128,6 +9180,7 @@ class H(HTTP.LimitedHandler):
 
     def _begin(self):
         """Per request: a connection can carry several, and the handler stays."""
+        CHANGES.REQUEST.user = None
         self.api_key = None
         self._extra_headers = []
         self._raw = None
@@ -9763,6 +9816,9 @@ class H(HTTP.LimitedHandler):
                                                         (q.get("q") or [None])[0], (q.get("kind") or ["workload"])[0]))
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
+            if p == "/api/changes":
+                ns, name = (q.get("ns") or [""])[0], (q.get("name") or [""])[0]
+                return self._send(200, {"entries": CHANGES.history(ns or None, name or None)})
             if p == "/api/storage/forecast":
                 return self._send(200, {"rows": FORECAST.report(), "warn_days": FORECAST.WARN_DAYS,
                                         "show_days": FORECAST.SHOW_DAYS, "min_days": FORECAST.MIN_DAYS})
@@ -9869,6 +9925,8 @@ class H(HTTP.LimitedHandler):
         try:
             if self._guard(p):
                 return
+            # Whose request this is, for the change history (homestead_changes).
+            CHANGES.REQUEST.user = getattr(self, "user", None)
             if int(self.headers.get("Content-Length") or 0) > MAX_BODY:
                 return self._send(413, {"error": "that request is larger than Homestead accepts"})
             b = self._body()
@@ -10220,6 +10278,21 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_vm_monitoring(b))
             if p == "/api/image-updates/mode":
                 return self._send(200, set_update_mode(b))
+            if p == "/api/changes/undo/preview":
+                current, proposed, rows, capacity, context = change_undo_plan(b)
+                return self._send(200, {"changes": rows, "capacity": capacity,
+                                        "capacity_token": CAPACITY_REVIEW.issue(b, context)})
+            if p == "/api/changes/undo":
+                current, proposed, rows, capacity, context = change_undo_plan(b)
+                CAPACITY_REVIEW.enforce(b, capacity, context)
+                ns, name = proposed["metadata"]["namespace"], proposed["metadata"]["name"]
+                proposed["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[NAMES.key("editedAt")] = \
+                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", proposed)
+                _cache.pop("wl", None)
+                UPDATES.refresh_soon(ns, name)
+                return self._send(200, {"ok": True, "changes": rows,
+                                        "detail": f"{name} is back to its settings from before that change; its pods are being replaced"})
             if p == "/api/restore-tests/settings":
                 enabled = b.get("enabled")
                 if not isinstance(enabled, bool):
@@ -11358,6 +11431,7 @@ def start_background_tasks():
     threading.Thread(target=fit_own_strategy, daemon=True).start()
     threading.Thread(target=_hardware_loop, daemon=True).start()
     threading.Thread(target=_uptime_loop, name="uptime", daemon=True).start()
+    threading.Thread(target=_changes_loop, name="changes", daemon=True).start()
     threading.Thread(target=_forecast_loop, name="forecast", daemon=True).start()
     threading.Thread(target=_autoupdate_loop, name="auto-updates", daemon=True).start()
     threading.Thread(target=_restore_tests_loop, name="restore-tests", daemon=True).start()
