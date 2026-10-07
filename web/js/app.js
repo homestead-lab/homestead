@@ -108,6 +108,9 @@ async function applyDeepLink(v, params) {
       detail = params.workload + " logs";
       open = () => wlLogs(params.ns, pod, params.workload, true);
     }
+  } else if (v === "workloads" && params.panel === "answering" && params.ns && params.workload) {
+    detail = params.workload + " answering";
+    open = () => wlAnswering(params.ns, params.workload);
   } else if (v === "workloads" && params.panel === "console" && params.ns && params.workload) {
     const workload = (STATE.data.wl || []).find(x => x.ns === params.ns && x.name === params.workload);
     if (workload) {

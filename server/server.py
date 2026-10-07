@@ -699,6 +699,31 @@ def _hardware_loop():
         time.sleep(30)
 
 
+def _uptime_loop():
+    """Every minute on the leader: does each running app answer at its address."""
+    while True:
+        started = time.time()
+        if LEADER.is_leader():
+            try:
+                UPTIME.observe(cached("wl", 5, get_workloads))
+                beat("uptime", UPTIME.CHECK_EVERY, leader_only=True)
+            except Exception as error:
+                beat("uptime", UPTIME.CHECK_EVERY, error, leader_only=True)
+                print(f"uptime: {str(error)[:160]}", flush=True)
+        time.sleep(max(5, UPTIME.CHECK_EVERY - (time.time() - started)))
+
+
+def set_uptime_setting(b):
+    """An app's own check: auto, an HTTP path, TCP only, or off. An annotation, so nothing restarts."""
+    ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
+    value = UPTIME.check_setting(b.get("mode"), b.get("path"))
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
+          {"metadata": {"annotations": {NAMES.key("uptime"): value or None}}}, ctype="application/merge-patch+json")
+    _cache.pop("wl", None)
+    words = {"": "checked automatically", "off": "not checked", "tcp": "checked by TCP connection"}
+    return {"ok": True, "detail": f"{name} is {words.get(value, f'checked at {value}')}"}
+
+
 def node_stats(name):
     """Per-node network + filesystem counters from the kubelet summary API."""
     try:
@@ -1549,7 +1574,8 @@ def get_workloads():
                 ing = s.get("status", {}).get("loadBalancer", {}).get("ingress", [])
                 if ing: ip = ing[0].get("ip", "")
                 for pt in s["spec"].get("ports", []):
-                    ports.append({"port": pt.get("port"), "ip": ip, "name": pt.get("name", "")})
+                    ports.append({"port": pt.get("port"), "ip": ip, "name": pt.get("name", ""),
+                                  "protocol": str(pt.get("protocol") or "TCP").upper()})
         starts = [p["status"].get("startTime") for p in mine if p["status"].get("startTime")]
         uptime = max([age_secs(x) for x in starts], default=0) if starts else 0
         st = d.get("status", {})
@@ -1559,7 +1585,8 @@ def get_workloads():
         # with no Service in between.
         lan_ip = (LAN.read(d) or {}).get("address", "")
         if lan_ip and not ports:
-            ports = [{"port": cp.get("containerPort"), "ip": lan_ip, "name": cp.get("name", "")}
+            ports = [{"port": cp.get("containerPort"), "ip": lan_ip, "name": cp.get("name", ""),
+                      "protocol": str(cp.get("protocol") or "TCP").upper()}
                      for c in pspec.get("containers", []) or [] for cp in c.get("ports", []) or []
                      if cp.get("containerPort")]
         # The port chosen as the app's own - its web UI, usually - comes
@@ -1669,6 +1696,7 @@ def get_workloads():
             # A logo whose cached copy is being fetched again still counts as one.
             "has_logo": bool(NAMES.read(annotations, "icon")),
             "logo_skipped": NAMES.read(annotations, "logo-skipped") == "true",
+            "answer_check": NAMES.read(annotations, "uptime"),
             "group": NAMES.read(annotations, "group") or own_group(ns, name),
             "self": is_self(ns, name),
             "managed_smb": is_managed_smb(ns, name),
@@ -6422,6 +6450,7 @@ import homestead_host_limits as HOST_LIMITS
 import homestead_node_parity as NODE_PARITY
 import homestead_host_os as HOST_OS
 import homestead_ports as PORTS
+import homestead_uptime as UPTIME
 import homestead_uplinks as UPLINKS
 import homestead_root_guard as ROOT_GUARD
 import homestead_os_rollout as OS_ROLLOUT
@@ -6538,6 +6567,7 @@ HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR, (SELF.NS, NAMES.BRAND))
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 PORTS.bind(DATA_DIR)
+UPTIME.bind(DATA_DIR)
 
 
 def port_contexts(probes):
@@ -6765,6 +6795,7 @@ def _alert_sources():
     take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
     take("hostos", HOST_OS.alert_facts)
     take("ports", lambda: PORTS.alert_facts(cached("ports", 20, ports_report)))
+    take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
     take("rootguard", ROOT_GUARD.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
@@ -7484,7 +7515,7 @@ OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
 LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
-              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares"}
+              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks"}
 
 
 def samba_state():
@@ -9481,6 +9512,9 @@ class H(HTTP.LimitedHandler):
                                                         (q.get("q") or [None])[0]))
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
+            if p == "/api/uptime":
+                return self._send(200, {"apps": UPTIME.report(), "every": UPTIME.CHECK_EVERY,
+                                        "down_after": UPTIME.DOWN_AFTER, "slow_ms": UPTIME.SLOW_MS})
             if p == "/api/logos/missing":
                 try:
                     apps = fetch_appstore()
@@ -9922,6 +9956,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_workload_groups(b))
             if p == "/api/workloads/logo":
                 return self._send(200, set_workload_logos(b))
+            if p == "/api/uptime/setting":
+                return self._send(200, set_uptime_setting(b))
             if p == "/api/scale":
                 try:
                     scale_workload(b["ns"], b["name"], int(b["replicas"]),
@@ -11045,6 +11081,7 @@ def start_background_tasks():
     threading.Thread(target=_history_loop, daemon=True).start()
     threading.Thread(target=fit_own_strategy, daemon=True).start()
     threading.Thread(target=_hardware_loop, daemon=True).start()
+    threading.Thread(target=_uptime_loop, name="uptime", daemon=True).start()
     threading.Thread(target=_samba_loop, daemon=True).start()
     threading.Thread(target=_vmstore_loop, daemon=True).start()
     threading.Thread(target=finish_self_data_helpers, name="data-move-cleanup", daemon=True).start()

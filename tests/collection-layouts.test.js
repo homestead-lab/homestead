@@ -9,7 +9,7 @@ function context() {
     ratePair:()=>["0","Mb/s"],sizePair:()=>"0/10 GB",sizeText:()=>"10 GB",meter:()=>"",sev:()=>""};
   c.window=c;vm.createContext(c);
   vm.runInContext(core.slice(0,core.indexOf("/* Put text on the clipboard.")),c);
-  for(const file of ["metrics-utils.js","ui.js","views-workloads.js","views-overview.js"])
+  for(const file of ["metrics-utils.js","ui.js","uptime.js","views-workloads.js","views-overview.js"])
     vm.runInContext(fs.readFileSync(`web/js/${file}`,"utf8"),c);
   vm.runInContext("this.workloadRowKey=workloadRowKey;this.nodeComparisonKey=nodeComparisonKey",c);
   return c;

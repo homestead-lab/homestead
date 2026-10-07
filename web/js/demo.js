@@ -2112,6 +2112,26 @@ ssh_pwauth: true
       { title: "frigate", ns: "lab", name: "frigate", url: "http://192.0.2.214:5000", port: 5000, port_name: "http", icon: "workload:lab/frigate", has_logo: false, group: "Home" },
       { title: "home-assistant", ns: "lab", name: "home-assistant", url: "http://192.0.2.215:8123", port: 8123, port_name: "", icon: "workload:lab/home-assistant", has_logo: false, group: "Home" },
       { title: "paperless", ns: "lab", name: "paperless", url: "http://192.0.2.216:8000", port: 8000, port_name: "", icon: "workload:lab/paperless", has_logo: false, group: "" }],
+    // Answering (uptime.js): frigate healthy, home-assistant slow this hour,
+    // paperless down since a quarter of an hour ago, the last one not checked.
+    "/api/uptime": () => {
+      const now = Date.now() / 1000, day = (bad = []) => Array.from({ length: 24 }, (_, i) => bad.includes(i) ? "down" : i < 3 ? null : "up");
+      const apps = {};
+      workloads.forEach((w, i) => {
+        const key = `${w.ns}/${w.name}`, ip = (w.ports || [])[0]?.ip || "192.0.2.10", port = (w.ports || [])[0]?.port || 80;
+        const target = `http://${ip}:${port}/`;
+        apps[key] = [
+          { state: "up", since: now - 86400 * 4, target, last: { ok: true, ms: 38, code: 200, error: "" }, strip: day(), uptime_24h: 100, uptime_30d: 99.98 },
+          { state: "slow", since: now - 900, target, last: { ok: true, ms: 2840, code: 200, error: "" }, strip: [...day([9]).slice(0, 23), "slow"], uptime_24h: 99.4, uptime_30d: 99.71 },
+          { state: "down", since: now - 960, target, last: { ok: false, ms: null, code: 502, error: "HTTP 502" }, strip: [...day([14]).slice(0, 23), "down"], uptime_24h: 96.5, uptime_30d: 99.2 },
+        ][i] || { state: "off", why: "checks are off for this app", target: "", last: {}, strip: [], uptime_24h: null, uptime_30d: null };
+      });
+      return { apps, every: 60, down_after: 3, slow_ms: 2000 };
+    },
+    "/api/uptime/setting": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      return { ok: true, detail: `${body.name} is ${({ auto: "checked automatically", off: "not checked", tcp: "checked by TCP connection" })[body.mode] || `checked at ${body.path || "/"}`}` };
+    },
     // Logos (logos.js): a small catalogue drawn from the demo's own apps.
     // Most match their image; paperless matches by name only; the last has none.
     "/api/logos": url => {
