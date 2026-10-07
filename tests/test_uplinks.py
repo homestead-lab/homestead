@@ -109,6 +109,7 @@ class UplinkTests(unittest.TestCase):
             ({"cluster_network": "toolongname-x", "new_network": True, "nodes": ["h1"], "nics": ["enp2s0"]}, "15-character"),
             ({"cluster_network": "data", "new_network": True, "nodes": ["h1"], "nics": ["enp2s0"]}, "already has a cluster network"),
             ({"cluster_network": "data", "nodes": [], "nics": ["enp2s0"]}, "at least one host"),
+            ({"cluster_network": "data", "nodes": ["h1"], "nics": ["<img src=x>"]}, "is not a NIC name"),
         ]
         for cfg, words in cases:
             with self.subTest(words=words):

@@ -953,7 +953,7 @@ window.uvmImport = async (source, name) => {
     ${UI.field("Network card", `<select id="uvm_nic" onchange="uvmPicture()">${["virtio", "e1000e", "e1000", "rtl8139"].map(m => `<option ${m === vm.nic.nic_model ? "selected" : ""}>${m}</option>`).join("")}</select>`,
       { tipHtml: tip("As on Unraid. VirtIO needs its driver in the guest; Windows has it if it used VirtIO on Unraid.") })}`;
   const behind = [...vm.dropped.map(d => `<p><b>${esc(d.what)}</b> ${esc(d.detail)}: ${esc(d.reason)}.</p>`), ...vm.notes.map(n => `<p>${esc(n)}.</p>`)];
-  modal(`Import ${name}`, UI.lead(`From ${source}. The VM here is made stopped once its disks have arrived; ${name} on Unraid is left as it is.`)
+  modal(`Import ${name}`, UI.lead(`From ${esc(source)}. The VM here is made stopped once its disks have arrived; ${esc(name)} on Unraid is left as it is.`)
     + '<div id="uvm_picture"></div>'
     + stepper("uvm_steps", [{ title: "Settings", html: settings }, { title: "Disks", html: disks }, { title: "Network", html: network }],
       '<button class="btn pri" data-need="admin" id="uvm_go" onclick="uvmStart()">Import</button>')

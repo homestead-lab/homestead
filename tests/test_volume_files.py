@@ -89,6 +89,11 @@ class SessionPodTests(unittest.TestCase):
                          spec["volumes"][0]["persistentVolumeClaim"]["claimName"])
         self.assertEqual("/data", spec["containers"][0]["volumeMounts"][0]["mountPath"])
         self.assertTrue(spec["activeDeadlineSeconds"] > 0, "a held RWO claim must not be forgotten")
+        self.assertIs(False, spec["automountServiceAccountToken"], "the helper never talks to the cluster")
+        self.assertEqual("RuntimeDefault", spec["securityContext"]["seccompProfile"]["type"])
+        container = spec["containers"][0]["securityContext"]
+        self.assertIs(False, container["allowPrivilegeEscalation"])
+        self.assertEqual(["ALL"], container["capabilities"]["drop"])
 
     def test_a_running_session_is_reused_rather_than_recreated(self):
         files.open_session("lab", "frigate-config")
