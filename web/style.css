@@ -3597,3 +3597,6 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .history-row{display:grid;grid-template-columns:minmax(120px,1fr) minmax(0,2fr);gap:10px;font-size:12.5px;align-items:baseline}
 .history-field{color:var(--mut);overflow-wrap:anywhere}.history-values{overflow-wrap:anywhere}
 @media (max-width:560px){.history-row{grid-template-columns:minmax(0,1fr)}.history-field{font-size:11.5px}}
+
+/* Homestead's data (views-settings.js). */
+.hd-volume{display:grid;gap:6px;margin:10px 0}.hd-table{margin-top:6px}

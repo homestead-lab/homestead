@@ -226,6 +226,7 @@ async function viewSettings() {
       ${UI.settingsCard(`${window.configCardHtml ? configCardHtml() : ""}`, {tab:`about`, id:`configCard`})}
       ${UI.settingsCard(`<div class="empty small"><span class="spin2"></span> checking Homestead</div>`, {tab:`about`, id:`selfHealthCard`})}
       ${UI.settingsCard(`${STATE.data.replicaHtml || ""}`, {tab:`about`, id:`replicaCard`})}
+      ${UI.settingsCard(`<div class="empty small"><span class="spin2"></span> reading Homestead's data</div>`, {tab:`about`, id:`homestead-data`})}
     `, tab) + UI.saveBar({id:"settingsSaveBar",messageId:"settingsSaveMsg",save:"settingsSave(this)",discard:"settingsDiscard()"}),
       {open:STATE.settingsOpen,backLabel:"All settings",currentLabel:SETTINGS_SECTIONS.find(([id])=>id===tab)?.[1],back:"settingsGo('')"})}`);
   STATE.settingsDirty = new Set();
@@ -234,6 +235,7 @@ async function viewSettings() {
   if (window.troubleshootingPaint) troubleshootingPaint();
   namespacesPaint();
   replicasPaint();
+  homesteadDataPaint();
   mqttPaint();
   lhSettingsPaint();
   if (window.storageClassesPaint) storageClassesPaint();
@@ -254,6 +256,41 @@ async function viewSettings() {
 /* ---------------- Homestead's own redundancy ----------------
    More than one copy: a node failure leaves another already serving, and
    the leader lease (alerts, moves) moves within seconds. */
+/* Homestead's own data (homestead_housekeeping.py): its volume, what each
+   store holds and for how long, and Clean up now. */
+const hdSize = bytes => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(1)} GB` : bytes >= 1024 ** 2 ? `${(bytes / 1024 ** 2).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+
+function homesteadDataHtml(d) {
+  const v = d.volume || {}, last = d.last;
+  return `${UI.moduleHeader("Homestead's data", "What Homestead keeps on its volume, and for how long. Each store trims itself; once a day the logs, unused logos and leftovers from interrupted writes are tidied too.",
+      can("admin") ? UI.button("Clean up now", "homesteadDataTidy()", { attrs: 'data-need="admin" id="hd_go"' }) : "")}
+    ${v.pct != null ? `<div class="hd-volume"><div class="between"><span class="small"><b>${hdSize(v.used)}</b> used of ${hdSize(v.size)}</span><span class="dim xs">${esc(v.pct)}% · ${hdSize(v.free)} free</span></div>
+      ${meter(v.pct)}${v.pct >= d.pressure_pct ? UI.callout("warn", `Over ${d.pressure_pct}% full`, "Homestead keeps half as much of its logs and drops unused logos at once. Make its data volume larger under Volumes.") : ""}</div>` : ""}
+    <table class="tbl dense stack hd-table"><thead><tr><th>Store</th><th>Size</th><th>Kept</th></tr></thead><tbody>
+      ${(d.stores || []).map(s => `<tr><td><b>${esc(s.label)}</b>${s.files > 1 ? `<span class="dim xs"> · ${s.files} files</span>` : ""}</td>
+        <td data-label="Size" class="mono small">${s.files ? hdSize(s.size) : '<span class="dim">—</span>'}</td><td data-label="Kept" class="small dim">${esc(s.kept)}</td></tr>`).join("")}</tbody></table>
+    ${last ? `<div class="dim xs" style="margin-top:8px">Last tidied ${esc(new Date(d.last_at * 1000).toLocaleString())}: ${last.notes?.length ? esc(last.notes.join("; ")) + ` (${hdSize(last.freed)} freed)` : "nothing needed doing"}.</div>` : ""}`;
+}
+
+async function homesteadDataPaint() {
+  const host = $("#homestead-data");
+  if (!host) return;
+  if (!can("admin")) { host.hidden = true; return; }      // sizes and housekeeping are an admin's
+  try { const d = await api("/api/homestead/data"); host.innerHTML = homesteadDataHtml(d); }
+  catch (e) { host.innerHTML = `${UI.moduleHeader("Homestead's data", "")}${UI.callout("warn", "It could not be read", esc(e.message))}`; }
+}
+
+window.homesteadDataTidy = async () => {
+  const go = $("#hd_go");
+  if (go) go.disabled = true;
+  try {
+    const r = await api("/api/homestead/data/tidy", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    toast(r.detail, "ok");
+    const host = $("#homestead-data");
+    if (host && r.report) host.innerHTML = homesteadDataHtml(r.report);
+  } catch (e) { toast(e.message, "bad"); if (go) go.disabled = false; }
+};
+
 async function replicasPaint() {
   let r;
   try { r = await api("/api/self/replicas"); } catch (e) { return; }
