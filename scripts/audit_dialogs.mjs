@@ -297,6 +297,16 @@ async function audit([label, width, height, mobile], items) {
         const texts = [...body.querySelectorAll("*")].filter((e) => [...e.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()));
         const tiny = texts.filter((e) => parseFloat(getComputedStyle(e).fontSize) < 10 && e.offsetParent)
           .map((e) => `${e.tagName.toLowerCase()}.${[...e.classList].join(".")} ${getComputedStyle(e).fontSize}`);
+        // Text squeezed into a narrow column beside a row's pill or buttons:
+        // under 90px and three or more lines (the phone Image updates rows).
+        const squeezed = texts.filter((e) => {
+          if (!e.offsetParent) return false;
+          if (e.closest("pre, code, table, svg, .monaco-editor, .xterm")) return false;
+          const r = e.getBoundingClientRect(), range = document.createRange();
+          range.selectNodeContents(e);
+          const lines = new Set([...range.getClientRects()].map((x) => Math.round(x.top))).size;
+          return r.width < 90 && lines >= 3 && e.textContent.trim().length > 12;
+        }).map((e) => `${e.tagName.toLowerCase()}.${[...e.classList].slice(0, 2).join(".")} "${e.textContent.trim().slice(0, 30)}"`);
         return {
           title: document.querySelector("#mtitle").textContent,
           copy: body.innerText,
@@ -320,6 +330,7 @@ async function audit([label, width, height, mobile], items) {
           })(),
           overflow: [...new Set(wide)].slice(0, 6),
           tiny: [...new Set(tiny)].slice(0, 6),
+          squeezed: [...new Set(squeezed)].slice(0, 6),
         };
       });
       // The whole dialog, not only what fits on the screen - with the page
@@ -332,6 +343,7 @@ async function audit([label, width, height, mobile], items) {
       report.push({ name, label, ...metrics });
       if (metrics.overflow.length) failures.push(`${name} (${label}): content wider than the dialog: ${metrics.overflow.join(", ")}`);
       if (metrics.tiny.length) failures.push(`${name} (${label}): text under 10px: ${metrics.tiny.join(", ")}`);
+      if (metrics.squeezed.length) failures.push(`${name} (${label}): text squeezed into a narrow column: ${metrics.squeezed.join(", ")}`);
       // design.md, Verbosity budget: what a dialog shows before Details is opened.
       const limit = REVIEW.test(name) ? REVIEW_WORDS : DIALOG_WORDS;
       if (metrics.words > limit) failures.push(`${name} (${label}): ${metrics.words} visible words, over ${limit}: move explanations, identifiers and calculations into UI.more`);
