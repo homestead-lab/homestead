@@ -46,6 +46,10 @@ function lastRunText(j) {
    use at all as the only copy of anything. Both facts belong on screen. */
 function objectStoreCard(store, target) {
   if (!store.deployed) {
+    // A backup target of your own - a NAS, S3 - is somewhere for backups and
+    // moves to go: its card says whether it is reachable, and Homestead's own
+    // storage is only one way to have one (#346).
+    if (target?.configured) return "";
     return `<div class="note between" style="margin-bottom:18px"><span>
       <b>No backup storage.</b> Longhorn writes volume backups to an S3 bucket, and nothing here
       provides one — so backups, and moving a workload to another cluster, have nowhere to go.</span>

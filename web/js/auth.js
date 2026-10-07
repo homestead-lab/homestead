@@ -23,7 +23,34 @@ window.fetch = async (url, opts = {}) => {
     signInLapsed();
     throw Object.assign(new Error("Your sign-in has expired; signing you in again"), { status: 0, signIn: true });
   }
+  const served = r.headers?.get?.("X-Homestead-Version");
+  if (served && typeof HOMESTEAD_VERSION === "string" && served !== HOMESTEAD_VERSION) homesteadUpdated(served);
   return r;
+};
+
+/* The Homestead answering is not the one this page was loaded from: it has
+   been updated, and this page still runs the old one - its version, its
+   update card, its code. Right after updating Homestead from this page it
+   reloads by itself; otherwise (another tab, an update made elsewhere) it
+   says so and offers to. During a rolling update the old copy may still
+   answer in between, so it only ever moves forward to the new one. */
+window.homesteadUpdated = served => {
+  if (window.__homesteadUpdated === served) return;
+  window.__homesteadUpdated = served;
+  let mine = false;
+  try { mine = Date.now() - (+sessionStorage.getItem("homestead.selfUpdate") || 0) < 30 * 60 * 1000; } catch (e) { /* no storage: ask */ }
+  if (mine) {
+    try { sessionStorage.removeItem("homestead.selfUpdate"); } catch (e) { /* it reloads anyway */ }
+    setTimeout(() => location.reload(), 1500);
+  }
+  document.querySelector(".homestead-updated")?.remove();
+  const bar = document.createElement("div");
+  bar.className = "signin-lapsed homestead-updated";
+  bar.setAttribute("role", "status");
+  const version = String(served).replace(/[^0-9A-Za-z.+-]/g, "");
+  bar.innerHTML = mine ? `<span class="spin2"></span><span>Homestead is now v${version}. Loading it…</span>`
+    : `<span>Homestead was updated to v${version}.</span><button class="btn sm pri" type="button" onclick="location.reload()">Reload</button>`;
+  document.body.appendChild(bar);
 };
 const _fetch = window.fetch;
 

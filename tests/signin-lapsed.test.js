@@ -55,3 +55,34 @@ test("ordinary answers pass through, and writes carry the auth header", async ()
   await t.ctx.fetch("https://example.com/x");
   assert.equal(t.answers[1][1].redirect, undefined, "other sites are left alone");
 });
+
+test("a page older than the Homestead answering it offers to reload, or reloads after its own update", async () => {
+  const answer = version => ({ type: "basic", status: 200, headers: { get: name => name === "X-Homestead-Version" ? version : null } });
+  const t = load(0);
+  t.ctx.HOMESTEAD_VERSION = "2.8.317";
+  t.ctx.document.querySelector = () => null;
+  const reloads = [];
+  t.ctx.location.reload = () => reloads.push(1);
+  t.answers.next = () => answer("2.8.317");
+  await t.ctx.fetch("/api/workloads");
+  assert.equal(t.appended.length, 0, "the same version says nothing");
+  t.answers.next = () => answer("2.8.318");
+  await t.ctx.fetch("/api/workloads");
+  await t.ctx.fetch("/api/nodes");
+  assert.equal(t.appended.length, 1, "one bar");
+  assert.match(t.appended[0].innerHTML, /updated to v2\.8\.318[\s\S]*Reload/);
+  t.timers.forEach(fn => fn());
+  assert.equal(reloads.length, 0, "an update made elsewhere is only offered");
+
+  const mine = load(0);
+  mine.ctx.HOMESTEAD_VERSION = "2.8.317";
+  mine.ctx.document.querySelector = () => null;
+  const own = [];
+  mine.ctx.location.reload = () => own.push(1);
+  mine.store["homestead.selfUpdate"] = String(Date.now());
+  mine.answers.next = () => answer("2.8.318");
+  await mine.ctx.fetch("/api/workloads");
+  assert.match(mine.appended[0].innerHTML, /Loading it/);
+  mine.timers.forEach(fn => fn());
+  assert.equal(own.length, 1, "right after updating it from this page, it reloads by itself");
+});
