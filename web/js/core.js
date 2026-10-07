@@ -439,6 +439,8 @@ function closeModal(updateRoute = true) {
   if (window.__nodeTermResize) { window.__nodeTermResize.disconnect(); window.__nodeTermResize = null; }
   if (window.__nodeTerm) { try { window.__nodeTerm.dispose(); } catch (_) { /* already gone */ } window.__nodeTerm = null; }
   if (updateRoute && window.clearModalRoute) window.clearModalRoute();
+  // Something a dialog did changed the page behind it (a rollout finished): show it now.
+  if (window.__repaintAfterModal) { const repaint = window.__repaintAfterModal; window.__repaintAfterModal = null; try { repaint(); } catch (_) { /* the next refresh shows it */ } }
 }
 
 /* ---------------- shared, viewport-safe tooltips ---------------- */

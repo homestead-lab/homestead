@@ -174,6 +174,7 @@ def resolve(item, checkpoint, now=None):
             return "failed", 25, "Nothing was updated: the waiting update is a new version, which waits for someone to choose it"
         to("updating", before=prepared["before"])
         updates.commit_prepared(prepared)
+        _refresh(ns, name)
         to("watch", updated_at=now)
         return "running", 50, "Update installed; waiting for the new pods"
     if phase == "watch":
@@ -204,6 +205,13 @@ def resolve(item, checkpoint, now=None):
     if phase == "rolling-back":
         return _roll_back(item, to, ref.get("why") or "it failed after the update")
     return "failed", item.get("progress", 0), f"Unknown step {phase}"
+
+
+def _refresh(ns, name):
+    """Containers shows the new image, not a waiting update."""
+    refresh = getattr(updates, "refresh_soon", None)
+    if refresh:
+        refresh(ns, name)
 
 
 def _waiting(prepared):
@@ -240,6 +248,7 @@ def _roll_back(item, to, why):
         to("rolling-back", why=why)
     try:
         updates.rollback(ref["namespace"], ref["name"])
+        _refresh(ref["namespace"], ref["name"])
     except ValueError as error:
         if "does not change" not in str(error):
             return ("failed", 100, f"The update failed - {why} - and rolling back did not work either: "
