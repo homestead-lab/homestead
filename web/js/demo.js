@@ -242,6 +242,9 @@
       disks: [vmDisk("ubuntu-test-disk-0", "40Gi")], migratable: false, restart_required: true,
       problem: "0/3 nodes are available: 3 Insufficient memory.", created: "2026-09-23T10:00:00Z", actions: ["stop", "force-stop"] },
   ];
+  // Each VM's logo as the server works it out (homestead_logos.os_logo).
+  demoVms.forEach(v => { v.os_logo = /home\s*assistant/i.test(v.os) ? "homeassistant" : /windows/i.test(v.os) ? "windows" : /ubuntu/i.test(v.os) ? "ubuntu" : ""; });
+
   let portalLinks = [
     { id: "demo0", title: "Home Assistant", url: "http://192.0.2.215:8123", section: "Home", icon: "workload:lab/home-assistant", note: "", shown: { kind: "letter" } },
     { id: "demo1", title: "Frigate", url: "http://192.0.2.214:5000", section: "Home", icon: "workload:lab/frigate", note: "cameras", shown: { kind: "letter" } },
@@ -2107,7 +2110,11 @@ ssh_pwauth: true
     "/api/self/data/move/preview": { capacity_token: "demo-only", downtime: "Homestead will be unavailable while data is copied and checked. Both volumes are retained.",
       stages: ["Start move coordinator", "Copy and verify", "Restart Homestead"].map((label, i) => ({ label, detail: i ? "Conditional on stopping Homestead first. Capacity is checked again before acting." : "Starts alongside Homestead.", capacity: { blocked: false, warnings: [], candidates: [] } })) },
     "/api/self/data/move": { ok: true, detail: "copying homestead-data to homestead-data-shared on longhorn; Homestead restarts onto it when done" },
-    "/api/portal/status": () => Object.fromEntries(portalLinks.map((link, i) => [link.id, i === 3 ? { up: false, ms: null } : { up: true, ms: 3 + i }])),
+    // App links carry the app's Answering state, as the server's portal_status gives it.
+    "/api/portal/status": () => Object.fromEntries(portalLinks.map((link, i) => [link.id,
+      link.icon === "workload:lab/home-assistant" ? { up: true, ms: 2840, state: "slow", source: "answering", error: "", code: 200 }
+        : link.icon === "workload:lab/frigate" ? { up: true, ms: 38, state: "up", source: "answering", error: "", code: 200 }
+        : i === 3 ? { up: false, ms: null } : { up: true, ms: 3 + i }])),
     "/api/portal/candidates": [
       { title: "frigate", ns: "lab", name: "frigate", url: "http://192.0.2.214:5000", port: 5000, port_name: "http", icon: "workload:lab/frigate", has_logo: false, group: "Home" },
       { title: "home-assistant", ns: "lab", name: "home-assistant", url: "http://192.0.2.215:8123", port: 8123, port_name: "", icon: "workload:lab/home-assistant", has_logo: false, group: "Home" },
@@ -2147,6 +2154,18 @@ ssh_pwauth: true
         const suggestion = i === rows.length - 1 ? null : w.name === "paperless" ? { ...t, name: "Paperless-ngx", match: "name" } : t ? { ...t, match: "image" } : null;
         return { ns: w.ns, name: w.name, images: w.images, suggestion };
       }).sort((a, b) => ({ image: 0, name: 1 }[a.suggestion?.match] ?? 2) - ({ image: 0, name: 1 }[b.suggestion?.match] ?? 2)) }),
+    "/api/vms/logo": (url, init) => {
+      const items = JSON.parse(init?.body || "{}").items || [];
+      for (const item of items) {
+        const v = demoVms.find(x => x.ns === item.ns && x.name === item.name);
+        if (!v) continue;
+        v.icon = item.icon || "";
+        v.has_logo = !!item.icon;
+        v.logo_os_set = !!item.os;
+        if (item.os) v.os_logo = item.os;
+      }
+      return { ok: true, done: items.length, failed: [], detail: items.some(i => i.icon || i.os) ? "1 logo saved" : "back to its OS's logo" };
+    },
     "/api/workloads/logo": (url, init) => {
       const items = JSON.parse(init?.body || "{}").items || [];
       for (const item of items) {

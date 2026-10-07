@@ -423,6 +423,7 @@ POLICY = {
     ('POST', '/api/workloads/failover'): 'operator',
     ('POST', '/api/workloads/group'): 'operator',
     ('POST', '/api/workloads/logo'): 'operator',
+    ('POST', '/api/vms/logo'): 'operator',
     ('POST', '/api/uptime/setting'): 'operator',
 }
 

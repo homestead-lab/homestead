@@ -199,3 +199,23 @@ class ProbeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PortalTests(unittest.TestCase):
+    def test_app_links_take_the_answering_state_and_others_keep_their_connection_check(self):
+        import server
+        links = [{"id": "a", "url": "http://192.0.2.10:8989", "icon": "workload:lab/sonarr"},
+                 {"id": "b", "url": "http://192.0.2.1", "icon": "builtin:router"},
+                 {"id": "c", "url": "http://192.0.2.11", "icon": "workload:lab/stopped"}]
+        tcp = {"a": {"up": True, "ms": 2}, "b": {"up": False, "ms": None}, "c": {"up": True, "ms": 3}}
+        answers = {"lab/sonarr": {"state": "down", "since": 1000, "last": {"error": "HTTP 502", "code": 502, "ms": 40}},
+                   "lab/stopped": {"state": "off", "why": "stopped", "last": {}}}
+        with mock.patch.object(server.PORTAL, "status", return_value=tcp), \
+                mock.patch.object(server.PORTAL, "stored", return_value=links), \
+                mock.patch.object(server.UPTIME, "report", return_value=answers):
+            status = server.portal_status()
+        self.assertEqual((False, "down", "answering", "HTTP 502"),
+                         (status["a"]["up"], status["a"]["state"], status["a"]["source"], status["a"]["error"]),
+                         "the port takes connections, but the app answers 502")
+        self.assertEqual({"up": False, "ms": None}, status["b"], "a router is not an app: its connection check stays")
+        self.assertEqual({"up": True, "ms": 3}, status["c"], "an app not being checked keeps the connection check")

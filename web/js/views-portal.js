@@ -69,8 +69,13 @@ function portalDots() {
   $$(".portal-tile").forEach(tile => {
     const s = status[tile.dataset.link], dot = $(".portal-dot", tile);
     if (!dot) return;
-    dot.className = "portal-dot" + (s ? (s.up ? " up" : " down") : "");
-    dot.dataset.tip = !s ? "not checked yet" : s.up ? `answering · ${s.ms} ms` : "not answering on its port";
+    // An app's link carries its Answering state (uptime.js); anything else, whether its port takes a connection.
+    const state = !s ? "" : s.state || (s.up ? "up" : "down");
+    dot.className = "portal-dot" + (state ? ` ${state}` : "");
+    dot.dataset.tip = !s ? "not checked yet"
+      : s.source === "answering" ? (state === "down" ? `Not answering${s.since && typeof answerSince === "function" ? ` since ${answerSince(s.since)}` : ""} · ${s.error || "no answer"}`
+        : `${state === "slow" ? "Slow" : "Answering"}${s.ms != null ? ` · ${s.ms} ms` : ""} · checked every minute`)
+      : s.up ? `answering · ${s.ms} ms` : "not answering on its port";
   });
 }
 

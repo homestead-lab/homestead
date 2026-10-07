@@ -25,6 +25,8 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_logos as LOGOS
+import homestead_names as NAMES
 import homestead_vm_hardware as HARDWARE
 import homestead_hvimage as HVIMAGE
 import homestead_vmusage as VMUSAGE
@@ -51,9 +53,14 @@ platform = lambda: {}
 images = lambda: []
 
 
-def bind(_kget, _ksend, _events_for):
-    global kget, ksend, events_for
+display_icon = lambda annotations: ""
+
+
+def bind(_kget, _ksend, _events_for, _display_icon=None):
+    global kget, ksend, events_for, display_icon
     kget, ksend, events_for = _kget, _ksend, _events_for
+    if _display_icon:
+        display_icon = _display_icon
 
 
 def _strategy(vm):
@@ -361,6 +368,13 @@ def _row(vm, vmi, claims=None, dvs=None, instance_known=True):
             # A node of a k3s cluster made here, and which.
             "cluster": labels.get("homestead.io/k3s-cluster", ""), "cluster_role": labels.get("homestead.io/k3s-role", ""),
             "os": guest.get("prettyName") or labels.get(OS_LABEL, ""), "hostname": guest.get("hostname") or istatus.get("guestOSInfo", {}).get("name", ""),
+            # Its logo: one set for it, else its OS's, from what the guest
+            # agent says, Harvester's label, or the OS chosen for it.
+            "icon": display_icon(annotations),
+            "has_logo": bool(NAMES.read(annotations, "icon")),
+            "logo_os_set": bool(NAMES.read(annotations, "logo-os")),
+            "os_logo": (NAMES.read(annotations, "logo-os") if NAMES.read(annotations, "logo-os") in LOGOS.OS_KEYS else "")
+                       or LOGOS.os_logo(guest.get("id"), guest.get("prettyName"), guest.get("name"), labels.get(OS_LABEL)),
             "description": annotations.get(DESCRIPTION, ""), "created": meta.get("creationTimestamp", ""),
             "uid": meta.get("uid", ""), "migratable": migratable, "restart_required": restart_required,
             "problem": _problem(vm, vmi, instance_known) or _stuck_problem(filling),

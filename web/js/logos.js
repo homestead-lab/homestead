@@ -4,21 +4,46 @@
    same tiles under its logo field; logoFixup lists every app with no logo and
    its best guess. A logo that matches the app's own image comes first: that is
    the same software, so nearly always the right picture. Saving changes only
-   the Deployment's annotations, so nothing restarts. */
-const LOGO = { ns: "", name: "", tiles: [], chosen: -1, timer: 0, field: "", seq: 0, back: null, missing: [] };
+   the Deployment's annotations, so nothing restarts.
+
+   vmLogo is the same picker for a VM: the operating systems Homestead has a
+   logo for come first (web/assets/os-*.svg), the one the VM reports marked,
+   then the app store. A VM with no logo of its own shows its OS's. */
+const LOGO = { kind: "workload", ns: "", name: "", tiles: [], chosen: -1, timer: 0, field: "", seq: 0, back: null, missing: [], os: "" };
+
+const OS_NAMES = { ubuntu: "Ubuntu", debian: "Debian", rockylinux: "Rocky Linux", almalinux: "AlmaLinux", centos: "CentOS",
+  redhat: "Red Hat", opensuse: "openSUSE", suse: "SUSE", archlinux: "Arch Linux", alpinelinux: "Alpine Linux", linuxmint: "Linux Mint",
+  kalilinux: "Kali Linux", nixos: "NixOS", freebsd: "FreeBSD", openbsd: "OpenBSD", truenas: "TrueNAS", homeassistant: "Home Assistant",
+  proxmox: "Proxmox", opnsense: "OPNsense", pfsense: "pfSense", gentoo: "Gentoo", manjaro: "Manjaro", popos: "Pop!_OS",
+  talos: "Talos", k3s: "k3s", unraid: "Unraid", elementary: "elementary OS", zorin: "Zorin OS", kubernetes: "Kubernetes",
+  android: "Android", windows: "Windows", linux: "Linux" };
+const osLogoUrl = key => `/assets/os-${key}.svg`;
 
 const logoQuery = (ns, name, q) =>
-  `/api/logos?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}${q === null ? "" : `&q=${encodeURIComponent(q)}`}`;
+  `/api/logos?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}${LOGO.kind === "vm" ? "&kind=vm" : ""}${q === null ? "" : `&q=${encodeURIComponent(q)}`}`;
 
-const logoMatchTag = match => match === "image"
+const logoMatchTag = match => match === "chart"
+  ? '<span class="pill slim ok" data-tip="The logo its own Helm chart names">its chart</span>'
+  : match === "image"
   ? '<span class="pill slim ok" data-tip="This app store entry uses the same image as the app">image match</span>'
+  : match === "its-os" ? '<span class="pill slim ok" data-tip="What the VM reports it runs">its OS</span>'
+  : match === "os" ? '<span class="pill slim neutral">OS</span>'
   : '<span class="pill slim neutral">name</span>';
+
+/* The OS tiles for a VM's picker: its own first, then those the search names. */
+function logoOsTiles(q) {
+  const term = String(q ?? "").trim().toLowerCase();
+  return Object.entries(OS_NAMES)
+    .filter(([key, name]) => key === LOGO.os || q === null || !term || name.toLowerCase().includes(term) || key.includes(term))
+    .sort(([a], [b]) => (b === LOGO.os) - (a === LOGO.os))
+    .map(([key, name]) => ({ name, icon: osLogoUrl(key), os: key, match: key === LOGO.os ? "its-os" : "os" }));
+}
 
 function logoTilesHtml(tiles, chosen, onpick) {
   if (!tiles.length) return '<div class="empty">Nothing in the app store matches. Try another name, or paste a URL.</div>';
   return `<div class="logo-tiles" role="listbox" aria-label="Logos">${tiles.map((t, i) => `<button type="button" role="option"
     class="logo-tile${i === chosen ? " on" : ""}" aria-selected="${i === chosen}" onclick="${onpick}(${i})">
-    ${appAvatar(t.name, t.icon, "av-logo")}<span class="logo-name">${esc(t.name)}</span>${logoMatchTag(t.match)}</button>`).join("")}</div>`;
+    ${appAvatar(t.name, t.icon, t.os ? "av-logo os-logo" : "av-logo")}<span class="logo-name">${esc(t.name)}</span>${logoMatchTag(t.match)}</button>`).join("")}</div>`;
 }
 
 async function logoLoad(q, paintTo, onpick) {
@@ -27,8 +52,8 @@ async function logoLoad(q, paintTo, onpick) {
   try {
     const found = await api(logoQuery(LOGO.ns, LOGO.name, q));
     if (seq !== LOGO.seq || !$(paintTo)) return;
-    LOGO.tiles = found.tiles || [];
-    LOGO.chosen = LOGO.tiles[0]?.match === "image" && q === null ? 0 : -1;
+    LOGO.tiles = [...(LOGO.kind === "vm" ? logoOsTiles(q) : []), ...(found.tiles || [])];
+    LOGO.chosen = ["chart", "image", "its-os"].includes(LOGO.tiles[0]?.match) && q === null ? 0 : -1;
     $(paintTo).innerHTML = logoTilesHtml(LOGO.tiles, LOGO.chosen, onpick);
   } catch (e) {
     if (seq === LOGO.seq && $(paintTo)) $(paintTo).innerHTML = UI.callout("bad", "The app store could not be searched", esc(e.message));
@@ -44,19 +69,31 @@ function logoSyncSave() {
 /* One app: the picker as its own dialog. back reopens what sent you here. */
 window.wlLogo = (ns, name, back = null) => {
   const w = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) || {};
-  Object.assign(LOGO, { ns, name, tiles: [], chosen: -1, back });
+  Object.assign(LOGO, { kind: "workload", ns, name, tiles: [], chosen: -1, back, os: "" });
+  logoDialog(name, "Pick a logo from the app store. Homestead keeps its own copy, so it stays if the store drops the app. Nothing restarts.",
+    w.icon ? UI.button("Remove logo", "logoSave(true)", { attrs: 'data-need="operator"' }) : "");
+};
+
+/* One VM: its OS's logo, another OS's, or one from the app store. */
+window.vmLogo = (ns, name) => {
+  const v = (STATE.data.vms || []).find(x => x.ns === ns && x.name === name) || {};
+  Object.assign(LOGO, { kind: "vm", ns, name, tiles: [], chosen: -1, back: null, os: v.os_logo || "" });
+  logoDialog(name, "Pick its operating system's logo, or one from the app store. Without one of its own, a VM shows the logo of the OS it reports. Nothing restarts.",
+    v.has_logo || v.logo_os_set ? UI.button("Use its OS's logo", "logoSave(true)", { attrs: 'data-need="operator"' }) : "", "");
+};
+
+function logoDialog(name, lead, removeButton, search = name) {
   modal(`Logo · ${name}`, `<div class="ui-stack">
-    ${UI.lead("Pick a logo from the app store. Homestead keeps its own copy, so it stays if the store drops the app. Nothing restarts.")}
-    <div class="f"><label for="lg_q">Search the app store</label><input id="lg_q" type="search" value="${esc(name)}" autocomplete="off"
+    ${UI.lead(esc(lead))}
+    <div class="f"><label for="lg_q">${LOGO.kind === "vm" ? "Search" : "Search the app store"}</label><input id="lg_q" type="search" value="${esc(search)}" autocomplete="off"
       oninput="logoSearchSoon()"></div>
     <div id="lg_tiles"></div>
     ${UI.more("Use an address instead", `<div class="f"><label for="lg_url">Image or site address</label><input id="lg_url" type="url" placeholder="https://…/logo.png or https://example.com" oninput="logoSyncSave()">
       <div class="ui-help">A site's own logo is used if it is an SVG or at least 64 px.</div></div>`)}
-    ${UI.actions((back ? UI.button("Back", "logoBack()") : UI.cancel())
-      + (w.icon ? UI.button("Remove logo", "logoSave(true)", { attrs: 'data-need="operator"' }) : "")
+    ${UI.actions((LOGO.back ? UI.button("Back", "logoBack()") : UI.cancel()) + removeButton
       + UI.button("Use this logo", "logoSave()", { kind: "pri", id: "lg_go", disabled: true, attrs: 'data-need="operator"' }))}</div>`);
   logoLoad(null, "#lg_tiles", "logoPick");
-};
+}
 
 window.logoSearchSoon = (field = "#lg_q", paintTo = "#lg_tiles", onpick = "logoPick") => {
   clearTimeout(LOGO.timer);
@@ -71,23 +108,29 @@ window.logoPick = i => {
 
 window.logoBack = () => { const back = LOGO.back; LOGO.back = null; back ? back() : closeModal(); };
 
-async function logoPost(items) {
-  return api("/api/workloads/logo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) });
+async function logoPost(items, kind = "workload") {
+  return api(kind === "vm" ? "/api/vms/logo" : "/api/workloads/logo", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ items }) });
 }
 
 window.logoSave = async (remove = false) => {
   const url = ($("#lg_url")?.value || "").trim();
-  const icon = remove ? "" : url || LOGO.tiles[LOGO.chosen]?.icon || "";
-  if (!remove && !icon) return toast("Choose a logo first", "bad");
+  const tile = LOGO.tiles[LOGO.chosen];
+  // An OS tile is a choice of OS, kept as its key; anything else is a picture to keep.
+  const item = remove ? { icon: "", os: "" } : url ? { icon: url } : tile?.os ? { icon: "", os: tile.os } : { icon: tile?.icon || "" };
+  if (!remove && !item.icon && !item.os) return toast("Choose a logo first", "bad");
   const go = $("#lg_go");
   if (go) go.disabled = true;
   try {
-    const result = await logoPost([{ ns: LOGO.ns, name: LOGO.name, icon }]);
+    const result = await logoPost([{ ns: LOGO.ns, name: LOGO.name, ...item }], LOGO.kind);
     toast(result.detail, result.ok ? "ok" : "bad");
-    await refreshWorkloadsAfterLogo();
+    if (LOGO.kind === "vm") await refreshVmsAfterLogo(); else await refreshWorkloadsAfterLogo();
     logoBack();
   } catch (e) { toast(e.message, "bad"); if (go) go.disabled = false; }
 };
+
+async function refreshVmsAfterLogo() {
+  try { await window.viewVMs?.(); } catch (e) { /* the next refresh shows it */ }
+}
 
 async function refreshWorkloadsAfterLogo() {
   try { STATE.data.wl = await api("/api/workloads"); } catch (e) { /* the next refresh shows it */ }
@@ -127,14 +170,16 @@ window.logoFixup = async () => {
   LOGO.missing = found.apps || [];
   const rows = LOGO.missing;
   if (!rows.length) { $("#mbody").innerHTML = UI.callout("ok", "Every app has a logo") + UI.actions(UI.cancel("Close")); return; }
-  const images = rows.filter(r => r.suggestion?.match === "image").length, named = rows.filter(r => r.suggestion?.match === "name").length;
-  const parts = [images && `${images} match their image`, named && `${named} by name only`, rows.length - images - named && `${rows.length - images - named} not found`].filter(Boolean);
+  const sure = r => ["image", "chart"].includes(r.suggestion?.match);
+  const charts = rows.filter(r => r.suggestion?.match === "chart").length, images = rows.filter(r => r.suggestion?.match === "image").length;
+  const named = rows.filter(r => r.suggestion?.match === "name").length, none = rows.length - charts - images - named;
+  const parts = [charts && `${charts} from their Helm chart`, images && `${images} match their image`, named && `${named} by name only`, none && `${none} not found`].filter(Boolean);
   $("#mbody").innerHTML = `<div class="ui-stack">
-    ${UI.lead(esc(`${rows.length} app${rows.length === 1 ? "" : "s"} have no logo: ${parts.join(", ")}. Tick the ones to use; image matches are ticked for you.`))}
+    ${UI.lead(esc(`${rows.length} app${rows.length === 1 ? "" : "s"} have no logo: ${parts.join(", ")}. Tick the ones to use; chart and image matches are ticked for you.`))}
     <div class="logo-fix">${rows.map((r, i) => {
       const s = r.suggestion;
       return `<div class="logo-fix-row">
-        <label class="logo-fix-pick">${s ? `<input type="checkbox" data-i="${i}" ${s.match === "image" ? "checked" : ""} onchange="logoFixCount()">` : '<span class="logo-fix-nobox" aria-hidden="true"></span>'}
+        <label class="logo-fix-pick">${s ? `<input type="checkbox" data-i="${i}" ${sure(r) ? "checked" : ""} onchange="logoFixCount()">` : '<span class="logo-fix-nobox" aria-hidden="true"></span>'}
           ${appAvatar(r.name, "")}<span class="logo-fix-name"><b>${esc(r.name)}</b><span class="dim xs mono">${esc(r.images[0] || r.ns)}</span></span></label>
         <span class="logo-fix-guess">${s ? `${appAvatar(s.name, s.icon)}<span class="logo-fix-name"><b>${esc(s.name)}</b>${logoMatchTag(s.match)}</span>` : '<span class="dim small">No match</span>'}</span>
         <span class="logo-fix-acts">${UI.button("Choose…", `wlLogo(${jsArg(r.ns)},${jsArg(r.name)},logoFixup)`, { attrs: 'data-need="operator"' })}
