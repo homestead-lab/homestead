@@ -214,7 +214,7 @@ def list_users():
 _DASHBOARD_WIDTHS = {"compute": (4, 6, 8, 12), "throughput": (4, 6, 8, 12),
                      "storage": (4, 6, 8, 12), "nodes": (4, 6, 8, 12), "cpu": (4, 6, 8, 12),
                      "memory": (4, 6, 8, 12), "history": (8, 12), "portal": (4, 6, 8, 12),
-                     **{key: (4, 6, 8, 12) for key in ("health", "workloads", "containers", "vms", "backups", "updates", "jobs", "custom", "custom2", "custom3", "custom4")}}
+                     **{key: (4, 6, 8, 12) for key in ("health", "workloads", "containers", "vms", "backups", "updates", "jobs", "custom", "custom2", "custom3", "custom4", "monitoring")}}
 
 
 def _dashboard_layout(layout):

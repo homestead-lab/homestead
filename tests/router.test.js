@@ -70,7 +70,7 @@ test("a page folded into another is a tab of it, under it in the breadcrumbs", (
   assert.equal(router.navView("images"), "workloads");
   assert.equal(router.navView("events"), "cluster");
   assert.equal(router.navView("nodes"), "nodes");
-  assert.deepEqual(router.tabsFor("schedules").map(([view]) => view), ["workloads", "images", "schedules", "imports"]);
+  assert.deepEqual(router.tabsFor("schedules").map(([view]) => view), ["workloads", "monitoring", "images", "schedules", "imports"]);
   assert.deepEqual(router.tabsFor("deploy"), [], "Deploy is a form, not a tab");
   assert.deepEqual(router.tabsFor("nodes"), []);
   assert.deepEqual(router.breadcrumbs("helm").map(item => item.label), ["Apps", "App Store", "Helm"]);

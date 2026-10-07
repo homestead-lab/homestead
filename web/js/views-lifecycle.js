@@ -299,8 +299,9 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
         lanHtml: `<label class="switch" id="e_lan_beside"><input type="checkbox" id="e_lan_on" ${w.lan ? "checked" : ""} onchange="editAddressChanged()"> Also an address of its own on the LAN, beside its VIP</label>
           <div id="e_lan_box" ${w.lan ? "" : "hidden"} data-current="${esc(JSON.stringify(w.lan || null))}"></div>`,
         portsHtml: `<div class="note" id="e_address_note" hidden>With its own LAN address or the host's network, clients connect to it directly: its LAN ports and VIP are not used.</div>
-          ${panels("address")}<div class="note" id="e_ports_note" hidden></div>`})}
-      ${UI.more("What saving does", "<p>Saving rolls the pod. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either workload.</p>")}`;
+          ${panels("address")}<div class="note" id="e_ports_note" hidden></div>
+          ${monitoringFieldHtml("e", w.answer_check || "")}`})}
+      ${UI.more("What saving does", "<p>Saving restarts the pods only when something they run with changes: the image, ports, environment, storage, hardware or where it runs. A logo, its group or how it is monitored is saved without a restart. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either workload.</p>")}`;
     $("#mbody").innerHTML = `<div id="e_containers">${stepper("e_steps", [
       { title: "Basics", html: basics }, { title: "Hardware and access", html: access },
       { title: "Environment values", html: environment }, { title: "Storage", html: storage },
@@ -439,7 +440,7 @@ window.editSave = async (ns, name) => {
   const body = { ns, name, workload_name: workloadName, pod_hostname: $("#e_pod_name").value.trim(),
     icon: $("#e_icon").value.trim(), replicas: Math.max(1, +$("#e_rep").value || 1),
     autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs, remove_containers: [...EDIT_REMOVED_CONTAINERS],
-    placement: readPlacement(), failover: $("#e_failover")?.value || "" };
+    placement: readPlacement(), failover: $("#e_failover")?.value || "", monitoring: monitoringFieldValue("e") };
   const access = $("#e_net")?.value;
   if (["loadbalancer", "internal", "lan"].includes(access)) {
     body.address = { network_mode: access, vip_mode: $("#e_vip_mode")?.value || "shared", lb_ip: ($("#e_lb_ip")?.value || "").trim() };

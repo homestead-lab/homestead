@@ -1,12 +1,12 @@
 /* Whether each app answers at its address: checked every minute by the
-   leading replica (homestead_uptime.py). Called "Answering" on screen, since
+   leading replica (homestead_uptime.py). Called Monitoring on screen, since
    a card's Uptime is how long its pod has run.
 
-   A row says nothing while an app answers, and "Not answering" or "Slow" when
+   A row says nothing while an app is up, and "Down" or "Slow" when
    it does not; a card shows the last day hour by hour and the last 30 days as
-   a share; the Answering dialog shows what is asked and lets an operator change
+   a share; the Monitoring dialog shows what is asked and lets an operator change
    it: automatic, an HTTP path, a TCP connection, or no check. */
-const ANSWER_WORDS = { up: "Answering", slow: "Slow", down: "Not answering", unknown: "Checking", off: "Not checked" };
+const ANSWER_WORDS = { up: "Up", slow: "Slow", down: "Down", unknown: "Checking", off: "Not monitored" };
 
 const answerOf = w => (STATE.data.uptime?.apps || {})[`${w.ns}/${w.name}`] || null;
 
@@ -31,11 +31,13 @@ function answerTag(w) {
   const a = answerOf(w);
   if (!a || !["down", "slow"].includes(a.state)) return "";
   return `<button type="button" class="tag ${a.state === "down" ? "bad" : "warn"} tagbtn" data-tip="${esc(answerDetail(a))}"
-    aria-label="${esc(`${ANSWER_WORDS[a.state]}: ${answerDetail(a)}`)}" onclick="wlAnswering(${jsq(w.ns)},${jsq(w.name)})">${a.state === "down" ? "Down" : "Slow"}</button>`;
+    aria-label="${esc(`${ANSWER_WORDS[a.state]}: ${answerDetail(a)}`)}" onclick="wlMonitoring(${jsq(w.ns)},${jsq(w.name)})">${a.state === "down" ? "Down" : "Slow"}</button>`;
 }
 
-function answerStrip(strip, cls = "") {
+function answerStrip(strip, cls = "", range = "day") {
   const hours = strip || [];
+  if (range === "month") return `<span class="answer-strip ${cls}" role="img" aria-label="Last ${hours.length} days: ${hours.filter(h => h === "down" || h === "dip").length} with missed checks">${hours.map((h, i) =>
+    `<i class="${h || "none"}" title="${esc(`${hours.length - i === 1 ? "Today" : `${hours.length - i - 1} days ago`}: ${h ? ({ up: "up", slow: "slow", dip: "a few missed checks", down: "down" })[h] : "not monitored"}`)}"></i>`).join("")}</span>`;
   return `<span class="answer-strip ${cls}" role="img" aria-label="Last ${hours.length} hours: ${hours.filter(h => h === "down").length} with missed checks">${hours.map((h, i) =>
     `<i class="${h || "none"}" title="${esc(`${hours.length - i === 1 ? "This hour" : `${hours.length - i - 1} h ago`}: ${h ? ({ up: "answered", slow: "slow", down: "missed checks" })[h] : "not checked"}`)}"></i>`).join("")}</span>`;
 }
@@ -44,9 +46,9 @@ function answerStrip(strip, cls = "") {
 function answerCardRow(w) {
   const a = answerOf(w);
   if (!a || (a.state === "off" && a.why === "not an app of yours")) return "";
-  return `<button type="button" class="wanswer ${esc(a.state)}" onclick="wlAnswering(${jsq(w.ns)},${jsq(w.name)})"
+  return `<button type="button" class="wanswer ${esc(a.state)}" onclick="wlMonitoring(${jsq(w.ns)},${jsq(w.name)})"
       aria-label="${esc(`${ANSWER_WORDS[a.state] || a.state}: ${answerDetail(a)}`)}">
-    <span class="dim xs">ANSWERING</span>
+    <span class="dim xs">MONITORING</span>
     <span class="answer-state"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
     ${a.state === "off" ? `<span class="dim xs answer-why">${esc(answerDetail(a))}</span>` : `${answerStrip(a.strip)}<span class="mono xs answer-share" title="Share of checks answered over 30 days">${answerShare(a.uptime_30d)}</span>`}
   </button>`;
@@ -54,15 +56,35 @@ function answerCardRow(w) {
 
 const answerModeOf = value => !value ? "auto" : value === "off" || value === "tcp" ? value : "http";
 
-window.wlAnswering = (ns, name) => {
+/* The Monitoring field in Deploy's and Edit's Address step. */
+function monitoringFieldHtml(prefix, value = "") {
+  const mode = answerModeOf(value);
+  const choice = (v, label) => `<option value="${v}" ${mode === v ? "selected" : ""}>${label}</option>`;
+  return `<div class="f monitoring-field"><label for="${prefix}_mon">Monitoring ${typeof tip === "function" ? tip("Homestead asks the app at its address every minute and alerts you when it is down. Changing this never restarts it.") : ""}</label>
+    <div class="row monitoring-row"><select id="${prefix}_mon" onchange="monitoringModeChanged(this)">
+      ${choice("auto", "Automatic: its main port")}${choice("http", "A web page at a path")}${choice("tcp", "A connection to its port")}${choice("off", "Not monitored")}</select>
+    <input id="${prefix}_mon_path" placeholder="/health" value="${esc(mode === "http" ? value : "")}" ${mode === "http" ? "" : "hidden"} aria-label="Path to ask"></div></div>`;
+}
+
+window.monitoringModeChanged = select => {
+  const path = select.closest(".monitoring-row")?.querySelector("input");
+  if (path) path.hidden = select.value !== "http";
+};
+
+function monitoringFieldValue(prefix) {
+  const mode = $(`#${prefix}_mon`)?.value || "auto";
+  return { mode, path: mode === "http" ? (($(`#${prefix}_mon_path`)?.value || "").trim() || "/") : "" };
+}
+
+window.wlMonitoring = window.wlAnswering = (ns, name) => {
   const w = (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) || { ns, name };
   const a = answerOf(w) || { state: "unknown", strip: [] };
   const u = STATE.data.uptime || {};
   const mode = answerModeOf(w.answer_check);
   const option = (value, label, help) => `<label class="answer-mode"><input type="radio" name="ans_mode" value="${value}" ${mode === value ? "checked" : ""}
     onchange="answerModeChanged()"><span><b>${esc(label)}</b><span class="dim small">${esc(help)}</span></span></label>`;
-  modal(`Answering · ${name}`, `<div class="ui-stack">
-    ${UI.lead(esc(`Homestead asks ${name} at its address ${(u.every || 60) === 60 ? "every minute" : `every ${Math.round(u.every / 60)} minutes`}, as a browser would. It counts as down after ${u.down_after || 3} misses in a row, which raises an alert, and as up again at its first answer.`))}
+  modal(`Monitoring · ${name}`, `<div class="ui-stack">
+    ${UI.lead(esc(`Homestead asks ${name} at its address ${(u.every || 60) === 60 ? "every minute" : `every ${Math.round(u.every / 60)} minutes`}, as a browser would. It is down after ${u.down_after || 3} misses in a row, which raises an alert, and up again at its first answer.`))}
     <div class="answer-head"><span class="answer-state big"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
       <span class="dim small">${esc(answerDetail(a))}</span></div>
     ${a.target ? `<div class="dim xs mono">${esc(a.target)}</div>` : ""}
@@ -74,7 +96,7 @@ window.wlAnswering = (ns, name) => {
       ${option("http", "A web page", "Only an HTTP answer below 500 at this path counts")}
       <div class="f answer-path"${mode === "http" ? "" : " hidden"}><label for="ans_path">Path</label><input id="ans_path" value="${esc(mode === "http" ? w.answer_check : "/")}" placeholder="/health"></div>
       ${option("tcp", "A connection", "The port accepting a TCP connection is enough")}
-      ${option("off", "Not checked", "No checks and no alerts for this app")}</div>`)}
+      ${option("off", "Not monitored", "No checks and no alerts for this app")}</div>`)}
     ${UI.actions(UI.cancel() + UI.button("Save", "answerSave()", { kind: "pri", attrs: `data-need="operator" data-ns="${esc(ns)}" data-name="${esc(name)}" id="ans_go"` }))}</div>`);
 };
 
@@ -101,4 +123,80 @@ window.answerSave = async () => {
 /* Loaded beside the containers: a failure leaves the page as it was. */
 async function loadUptime() {
   try { STATE.data.uptime = await api("/api/uptime"); } catch (e) { /* the page works without it */ }
+}
+
+
+/* ---------------- the Monitoring page ----------------
+   Every app Homestead watches, problems first: its state, the last day hour by
+   hour or the last 30 days day by day, its share of answered checks, and what
+   is asked. Apps not monitored are listed last, with why. */
+const MONITOR = { range: "day" };
+
+const monitorRank = { down: 0, slow: 1, unknown: 2, up: 3, off: 4 };
+
+function monitorRows() {
+  const apps = STATE.data.uptime?.apps || {};
+  return (STATE.data.wl || []).filter(w => !w.platform && !w.self && !w.homestead && !w.site)
+    .map(w => ({ w, a: apps[`${w.ns}/${w.name}`] || { state: "unknown", strip: [], days: [] } }))
+    .sort((x, y) => (monitorRank[x.a.state] ?? 5) - (monitorRank[y.a.state] ?? 5) || x.w.name.localeCompare(y.w.name));
+}
+
+function monitorSummary(rows) {
+  const count = state => rows.filter(r => r.a.state === state).length;
+  return { total: rows.length, up: count("up"), slow: count("slow"), down: count("down"), unknown: count("unknown"), off: count("off") };
+}
+
+async function viewMonitoring() {
+  [STATE.data.wl] = await Promise.all([STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads"), loadUptime()]);
+  renderMonitoring();
+  api("/api/workloads").then(wl => { STATE.data.wl = wl; if (STATE.view === "monitoring" && $("#modal").classList.contains("hidden")) renderMonitoring(); }).catch(() => {});
+}
+
+window.monitorRange = range => { MONITOR.range = range; renderMonitoring(); };
+
+function renderMonitoring() {
+  const rows = monitorRows(), s = monitorSummary(rows), watched = rows.filter(r => r.a.state !== "off");
+  const range = MONITOR.range, every = STATE.data.uptime?.every || 60;
+  const said = [s.down && `<span class="crit-text">${s.down} down</span>`, s.slow && `<span class="med-text">${s.slow} slow</span>`,
+    `${s.up} up`, s.off && `${s.off} not monitored`].filter(Boolean).join(" · ");
+  const head = `<tr><th>App</th><th>State</th><th class="mon-bars">${range === "day" ? "Last 24 hours" : "Last 30 days"}</th>
+    <th data-nosort>${range === "day" ? "24 h" : "30 days"}</th><th class="mon-target">Asked</th><th data-nosort></th></tr>`;
+  const row = ({ w, a }) => `<tr class="clickable" onclick="if(!event.target.closest('button,a'))wlMonitoring(${jsq(w.ns)},${jsq(w.name)})">
+      <td class="cell-name" data-sort="${esc(w.name)}"><div class="vm-name-cell">${appAvatar(w.name, w.icon)}<div class="vm-name-text"><b>${esc(w.name)}</b><div class="dim xs">${esc(w.ns)}</div></div></div></td>
+      <td data-label="State" data-sort="${monitorRank[a.state] ?? 5}"><span class="answer-state"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
+        <div class="dim xs">${esc(answerDetail(a))}</div></td>
+      <td data-label="${range === "day" ? "24 hours" : "30 days"}" class="mon-bars">${a.state === "off" ? '<span class="dim xs">—</span>' : answerStrip(range === "day" ? a.strip : a.days, "wide mon", range)}</td>
+      <td data-label="Share" class="mono small" data-sort="${(range === "day" ? a.uptime_24h : a.uptime_30d) ?? -1}">${a.state === "off" ? "—" : answerShare(range === "day" ? a.uptime_24h : a.uptime_30d)}</td>
+      <td data-label="Asked" class="mono xs dim mon-target">${esc(a.target || "")}</td>
+      <td data-actions>${actionBar([{ label: "Change", icon: "gear", run: `wlMonitoring(${jsq(w.ns)},${jsq(w.name)})`, need: "operator", ariaLabel: `Change how ${w.name} is monitored` }], { label: `Actions for ${w.name}` })}</td></tr>`;
+  paint(`${UI.pageHeader("Monitoring", `${watched.length} app${watched.length === 1 ? "" : "s"} asked every ${every === 60 ? "minute" : `${Math.round(every / 60)} minutes`} · ${said}`,
+      `<div class="seg" role="group" aria-label="Range"><button type="button" class="${range === "day" ? "on" : ""}" aria-pressed="${range === "day"}" onclick="monitorRange('day')">24 hours</button><button type="button" class="${range === "month" ? "on" : ""}" aria-pressed="${range === "month"}" onclick="monitorRange('month')">30 days</button></div>`)}
+    ${rows.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact mon-table" data-sort="monitoring"><thead>${head}</thead><tbody>${rows.map(row).join("")}</tbody></table></div></div>`
+      : '<div class="empty">No apps yet. Deploy one, and Homestead starts asking it at its address.</div>'}
+    ${UI.more("How monitoring works", `<p>Every minute the leading Homestead asks each running app at its address, as a browser would: an HTTP answer below 500 counts, and so does a port that takes the connection but does not speak HTTP. With no main port chosen, each of its ports is tried. Three misses in a row is down, which raises an alert; the first answer clears it. Over 2 seconds is slow. Stopped apps are not asked.</p><p>Choose what is asked for each app here, or in its Edit dialog under Address. Changing it never restarts the app.</p>`)}`);
+}
+window.viewMonitoring = viewMonitoring;
+
+
+/* ---------------- the Monitoring dashboard widget ----------------
+   One third: the counts and whatever is wrong. Half: every app, a dot and its
+   30 days. Two thirds and wider: every app with its last 24 hours. */
+function monitorWidget(item = {}) {
+  if (!STATE.data.uptime) return '<div class="empty small"><span class="spin2"></span> Loading…</div>';
+  const rows = monitorRows().filter(r => r.a.state !== "off"), s = monitorSummary(rows), width = item.width || 6;
+  if (!rows.length) return '<div class="empty small">No apps are monitored yet.</div>';
+  const open = r => `onclick="wlMonitoring(${jsq(r.w.ns)},${jsq(r.w.name)})"`;
+  const wrong = rows.filter(r => ["down", "slow"].includes(r.a.state));
+  const counts = `<div class="mon-counts">${[["down", s.down, "down"], ["slow", s.slow, "slow"], ["up", s.up, "up"]]
+    .map(([cls, n, word]) => `<div class="mon-count ${n && cls !== "up" ? cls : ""}"><b class="mono">${n}</b><span class="dim xs">${word}</span></div>`).join("")}</div>`;
+  if (width <= 4) {
+    return counts + (wrong.length ? `<div class="mon-list">${wrong.slice(0, 6).map(r => `<button type="button" class="mon-item" ${open(r)}>
+        <i class="answer-dot ${esc(r.a.state)}"></i><b>${esc(r.w.name)}</b><span class="dim xs">${esc(r.a.state === "down" ? (r.a.last?.error || "down") : `${r.a.last?.ms ?? ""} ms`)}</span></button>`).join("")}</div>`
+      : `<div class="dim small mon-allup">All ${s.up} up</div>`);
+  }
+  const bars = width >= 8;
+  return `${width >= 8 ? "" : counts}<div class="mon-list${bars ? " bars" : ""}">${rows.map(r => `<button type="button" class="mon-item" ${open(r)}>
+      ${appAvatar(r.w.name, r.w.icon)}<span class="mon-name"><b>${esc(r.w.name)}</b><span class="dim xs">${esc(ANSWER_WORDS[r.a.state] || r.a.state)}${r.a.state === "down" ? ` · ${esc(r.a.last?.error || "")}` : ""}</span></span>
+      ${bars ? answerStrip(r.a.strip, "mon-mini") : `<i class="answer-dot ${esc(r.a.state)}"></i>`}
+      <span class="mono xs mon-share" title="Answered over 30 days">${answerShare(r.a.uptime_30d)}</span></button>`).join("")}</div>`;
 }

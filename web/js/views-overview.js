@@ -130,6 +130,7 @@ async function viewDash() {
   // Saved history must not hold the live refresh loop's busy flag.
   historyPaint();
   Dashboard.loadPortal();
+  Dashboard.loadMonitoring();
   HealthInsights.load();
 }
 

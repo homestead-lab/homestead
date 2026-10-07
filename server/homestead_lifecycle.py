@@ -11,6 +11,7 @@ import copy
 import os
 import re
 import time
+import homestead_uptime as UPTIME
 import urllib.error
 import homestead_names as NAMES
 import homestead_env_secrets as ENVSEC
@@ -529,10 +530,26 @@ def _apply_container_hardware(spec, dep, requested):
         annotations.pop(NAMES.key("hardware"), None)
 
 
+def _pod_template(dep):
+    """A Deployment's pod template without Homestead's own edit stamp: what,
+    if it changes, makes Kubernetes replace the pods."""
+    template = copy.deepcopy((dep.get("spec") or {}).get("template") or {})
+    (template.get("metadata") or {}).get("annotations", {}).pop(NAMES.key("editedAt"), None)
+    return template
+
+
+def restarts(current, proposed):
+    """Whether saving proposed over current replaces the workload's pods."""
+    return _pod_template(current) != _pod_template(proposed)
+
+
 def prepare_edit(cfg, current=None):
     """Read-only edit construction; all validation precedes side effects."""
     ns, name = cfg["ns"], cfg["name"]
     dep = copy.deepcopy(current if current is not None else kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"))
+    # What the pods were made from: an edit that leaves it alone (a logo, a
+    # group, how it is monitored) changes the Deployment, never its pods.
+    template_before = _pod_template(dep)
     spec = dep["spec"]["template"]["spec"]
     containers = spec.get("containers", [])
     if not containers:
@@ -645,13 +662,23 @@ def prepare_edit(cfg, current=None):
             ann.pop(NAMES.key("icon"), None)
             ann.pop(NAMES.key("icon-source"), None)
 
-    dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[
-        NAMES.key("editedAt")] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
+    if "monitoring" in cfg:
+        chosen = cfg.get("monitoring") or {}
+        value = UPTIME.check_setting(chosen.get("mode") or "auto", chosen.get("path"))
+        ann = dep["metadata"].setdefault("annotations", {})
+        if value:
+            ann[NAMES.key("uptime")] = value
+        else:
+            ann.pop(NAMES.key("uptime"), None)
     if "placement" in cfg:
         dep["metadata"].setdefault("namespace", ns)
         AFFINITY.apply(dep, cfg.get("placement") or {})
     if "node" in cfg:
         PLACE.apply_node_placement(dep, cfg["node"], pin=False)
+    # Stamped only when the pods change anyway, so the stamp never causes a restart of its own.
+    if _pod_template(dep) != template_before:
+        dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[
+            NAMES.key("editedAt")] = time.strftime("%Y-%m-%dT%H:%M:%SZ")
     workload_name = dns_label(cfg.get("workload_name") or name, "workload name")
     return {"deployment": dep, "claims": pending_claims, "seeds": seeds, "name": workload_name}
 

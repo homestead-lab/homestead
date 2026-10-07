@@ -113,7 +113,7 @@ class StateTests(Base):
         self.assertEqual("down", rep["lab/sonarr"]["state"])
         self.assertEqual(1060, rep["lab/sonarr"]["since"], "down since the first miss")
         fact = UP.alert_facts(rep)[0]
-        self.assertEqual(("uptime:lab/sonarr", "critical", "sonarr is not answering"),
+        self.assertEqual(("uptime:lab/sonarr", "critical", "sonarr is down"),
                          (fact["key"], fact["severity"], fact["title"]))
         self.assertIn("connection refused", fact["body"])
         self.run_round(OK, 1240)
@@ -250,7 +250,7 @@ class PortalTests(unittest.TestCase):
                 mock.patch.object(server.PORTAL, "stored", return_value=links), \
                 mock.patch.object(server.UPTIME, "report", return_value=answers):
             status = server.portal_status()
-        self.assertEqual((False, "down", "answering", "HTTP 502"),
+        self.assertEqual((False, "down", "monitoring", "HTTP 502"),
                          (status["a"]["up"], status["a"]["state"], status["a"]["source"], status["a"]["error"]),
                          "the port takes connections, but the app answers 502")
         self.assertEqual({"up": False, "ms": None}, status["b"], "a router is not an app: its connection check stays")

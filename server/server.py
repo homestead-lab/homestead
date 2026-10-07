@@ -1824,7 +1824,7 @@ def set_vm_logos(b):
 
 
 def portal_status(force=False):
-    """Each portal link's dot. A link to an app takes the app's own Answering
+    """Each portal link's dot. A link to an app takes the app's own Monitoring
     state - asked every minute, over HTTP, down only after three misses - so
     the portal and Containers agree; any other link is a TCP connection."""
     status = dict(PORTAL.status(force=force))
@@ -1840,7 +1840,7 @@ def portal_status(force=False):
         if not a or a.get("state") not in ("up", "slow", "down"):
             continue
         last = a.get("last") or {}
-        status[link["id"]] = {"up": a["state"] != "down", "ms": last.get("ms"), "state": a["state"], "source": "answering",
+        status[link["id"]] = {"up": a["state"] != "down", "ms": last.get("ms"), "state": a["state"], "source": "monitoring",
                               "since": a.get("since"), "error": last.get("error") or "", "code": last.get("code")}
     return status
 
@@ -2495,12 +2495,16 @@ def _build_single_deployment(cfg):
         podspec.setdefault("nodeSelector", {})["kubernetes.io/hostname"] = cfg["node"]
     FAILOVER.apply(podspec, cfg.get("failover") or "move")
     lan_address = cfg.get("lan") if cfg.get("network_mode") == "lan" else None
+    # How it is monitored, if not automatically: an annotation, read by homestead_uptime.
+    monitoring = UPTIME.check_setting((cfg.get("monitoring") or {}).get("mode") or "auto",
+                                      (cfg.get("monitoring") or {}).get("path"))
     dep = {
         "apiVersion": "apps/v1", "kind": "Deployment",
         "metadata": {"name": name, "namespace": ns, "labels": {"app": name, NAMES.key("managed"): "true"},
                      "annotations": ({**({NAMES.key("icon"): cfg.get("icon", "")} if cfg.get("icon") else {}),
                                       **({NAMES.key("icon-source"): cfg.get("icon_source", cfg.get("icon", ""))} if cfg.get("icon") else {}),
-                                      **({NAMES.key("hardware"): ",".join(sorted(hardware))} if hardware else {})})},
+                                      **({NAMES.key("hardware"): ",".join(sorted(hardware))} if hardware else {}),
+                                      **({NAMES.key("uptime"): monitoring} if monitoring else {})})},
         "spec": {"replicas": int(cfg.get("replicas", 1)), "strategy": {"type": "Recreate"},
                  "selector": {"matchLabels": {"app": name}},
                  "template": {"metadata": {"labels": {"app": name, "lab-workload": "true"}}, "spec": podspec}},
@@ -8416,7 +8420,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
 SPA_ROUTES = frozenset({
     "/", "/architecture", "/nodes", "/deploy", "/containers", "/vms",
     "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection", "/portal", "/helm", "/resources",
-    "/schedules", "/import", "/vms/import", "/events", "/networking", "/system/cluster", "/settings", "/setup",
+    "/schedules", "/monitoring", "/import", "/vms/import", "/events", "/networking", "/system/cluster", "/settings", "/setup",
 })
 
 

@@ -17,6 +17,7 @@ const VIEWS = {
   images:    ["Image Cache",    "storage",   viewImages,    false],
   protect:   ["Data Protection","storage",   viewProtect,   true],
   schedules: ["Schedules",      "system",    viewSchedules, true],
+  monitoring: ["Monitoring",    "workloads", () => viewMonitoring(), true],
   imports:   ["Import",         "system",    viewImport,    true],
   events:    ["Events",         "system",    viewEvents,    true],
   resources: ["Resources",      "system",    viewResources, true],
@@ -108,9 +109,9 @@ async function applyDeepLink(v, params) {
       detail = params.workload + " logs";
       open = () => wlLogs(params.ns, pod, params.workload, true);
     }
-  } else if (v === "workloads" && params.panel === "answering" && params.ns && params.workload) {
-    detail = params.workload + " answering";
-    open = () => wlAnswering(params.ns, params.workload);
+  } else if (v === "workloads" && ["monitoring", "answering"].includes(params.panel) && params.ns && params.workload) {
+    detail = params.workload + " monitoring";
+    open = () => wlMonitoring(params.ns, params.workload);
   } else if (v === "workloads" && params.panel === "console" && params.ns && params.workload) {
     const workload = (STATE.data.wl || []).find(x => x.ns === params.ns && x.name === params.workload);
     if (workload) {

@@ -502,7 +502,7 @@ function workloadActions(w, update, off, compact = false) {
     item("Placement", `wlPlacement(${ns},${name})`, "node"),
     item("Group", `wlGroup(${ns},${name})`, "list", {need:"operator"}),
     item("Logo", `wlLogo(${ns},${name})`, "logo", {need:"operator",tip:"Pick a logo from the app store"}),
-    item("Answering", `wlAnswering(${ns},${name})`, "pulse", {tip:"Whether it answers at its address, checked every minute"}),
+    item("Monitoring", `wlMonitoring(${ns},${name})`, "pulse", {tip:"Whether it is up at its address, checked every minute"}),
     !updateOwner(update) && item("Updates", `wlUpdateMode(${ns},${name})`, "update", {need:"operator",tip:"Update it yourself, or let it update itself in the maintenance window"}),
     item("Move", `moveWorkload(${name},${ns})`, "move", {need:"operator"}),
     update?.can_rollback && item("Rollback", `imageRollback(${ns},${name})`, "rollback", {need:"operator"}),
@@ -1834,7 +1834,7 @@ async function viewDeploy(pre) {
     `},
     {key:"address", title:"Address", lead:"Choose how clients reach the workload.", html:`${addressStepHtml("d", DCFG, vips, sharedVip, {
         lanHtml: '<div id="d_lan_box" hidden></div>',
-        portsHtml: '<div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>'})}
+        portsHtml: `<div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button>${monitoringFieldHtml("d", DCFG.monitoring ? (DCFG.monitoring.mode === "http" ? DCFG.monitoring.path : DCFG.monitoring.mode === "auto" ? "" : DCFG.monitoring.mode) : "")}`})}
     `},
     {key:"containers", title:"Additional containers", lead:"Add other containers that share each pod.", html:`
       <div id="d_extra_wrap"><div class="sec">Additional containers in each pod</div>
@@ -1910,6 +1910,7 @@ function collect() {
   DCFG.target_mode = $("#d_target_mode").value; DCFG.target_workload = $("#d_target_workload").value;
   DCFG.cpu = $("#d_cpu").value.trim(); DCFG.memory = $("#d_mem").value.trim();
   DCFG.memory_limit = $("#d_mem_limit").value.trim(); DCFG.icon = $("#d_icon").value.trim();
+  if ($("#d_mon")) DCFG.monitoring = monitoringFieldValue("d");
   DCFG.hardware = selectedHardware("d_hw");
   Object.assign(DCFG, readPrivileges("d_pv") || {});
   DCFG.gpu = DCFG.hardware.includes("igpu"); DCFG.network_mode = $("#d_net").value;

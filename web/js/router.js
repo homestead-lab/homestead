@@ -30,6 +30,7 @@
     deploy:    Object.freeze({ path: "/deploy",          label: "Deploy",          section: "Apps", parent: "workloads" }),
     images:    Object.freeze({ path: "/image-cache",     label: "Image Cache",     section: "Apps", parent: "workloads" }),
     schedules: Object.freeze({ path: "/schedules",       label: "Schedules",       section: "Apps", parent: "workloads" }),
+    monitoring: Object.freeze({ path: "/monitoring",     label: "Monitoring",      section: "Apps", parent: "workloads" }),
     imports:   Object.freeze({ path: "/import",          label: "Import",          section: "Apps", parent: "workloads" }),
     vms:       Object.freeze({ path: "/vms",             label: "Virtual Machines", section: "Apps" }),
     vmimport:  Object.freeze({ path: "/vms/import",      label: "Import",          section: "Apps", parent: "vms" }),
@@ -49,7 +50,7 @@
   /* The tabs across the top of a page and the pages folded into it. */
   const TABS = Object.freeze({
     dash: [["dash", "Overview"], ["flow", "Architecture"]],
-    workloads: [["workloads", "Running"], ["images", "Images"], ["schedules", "Schedules"], ["imports", "Import"]],
+    workloads: [["workloads", "Running"], ["monitoring", "Monitoring"], ["images", "Images"], ["schedules", "Schedules"], ["imports", "Import"]],
     vms: [["vms", "Machines"], ["vmimport", "Import"]],
     store: [["store", "Apps"], ["helm", "Helm"]],
     cluster: [["cluster", "Health"], ["events", "Events"], ["resources", "Resources"]],

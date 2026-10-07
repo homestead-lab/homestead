@@ -322,13 +322,23 @@ def summary(app, now=None):
         checks = sum(r[0] for r in rows)
         return None if not checks else round(100 * (checks - sum(r[1] for r in rows)) / checks, 2)
 
+    # The last 30 days, one mark a day: down if any check that day missed
+    # enough to count (a tenth of them), slow if most were slow.
+    today = int(now // 86400 * 86400)
+    days = []
+    for i in range(29, -1, -1):
+        start = today - i * 86400
+        rows = [v for h, v in hours.items() if start <= int(h) < start + 86400]
+        checks, misses, slow = (sum(r[k] for r in rows) for k in range(3))
+        days.append(None if not checks else "down" if misses * 10 >= checks else "slow" if slow * 2 >= checks
+                    else "dip" if misses else "up")
     recent = [v for h, v in hours.items() if int(h) > this - STRIP_HOURS * 3600]
     state = app.get("state", "unknown")
     last = app.get("last") or {}
     if state == "up" and last.get("ms") and last["ms"] > SLOW_MS:
         state = "slow"
     return {"state": state, "since": app.get("since"), "why": app.get("why", ""), "target": app.get("target", ""),
-            "last": last, "strip": strip, "uptime_24h": share(recent), "uptime_30d": share(list(hours.values()))}
+            "last": last, "strip": strip, "days": days, "uptime_24h": share(recent), "uptime_30d": share(list(hours.values()))}
 
 
 def report(now=None):
@@ -346,8 +356,8 @@ def alert_facts(rep):
         ns, name = key.split("/", 1)
         error = (s.get("last") or {}).get("error") or "no answer"
         facts.append({"key": f"uptime:{key}", "category": "outage", "severity": "critical",
-                      "title": f"{name} is not answering",
+                      "title": f"{name} is down",
                       "body": f"{s.get('target') or name}: {error}. Checked every minute; it has missed {DOWN_AFTER} or more in a row.",
-                      "resolved": f"{name} is answering again",
-                      "href": f"/containers?panel=answering&ns={ns}&workload={name}", "signals": {"error": error}})
+                      "resolved": f"{name} is up again",
+                      "href": f"/containers?panel=monitoring&ns={ns}&workload={name}", "signals": {"error": error}})
     return facts
