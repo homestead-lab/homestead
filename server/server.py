@@ -8636,6 +8636,9 @@ class H(HTTP.LimitedHandler):
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "private, max-age=31536000, immutable")
+            if ctype == "image/svg+xml":
+                # Opened on its own, an SVG is a document: nothing in it may run.
+                self.send_header("Content-Security-Policy", ICONS.SVG_POLICY)
             self._security_headers()
             self.end_headers()
             self.wfile.write(body)
