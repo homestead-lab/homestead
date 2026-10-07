@@ -164,3 +164,13 @@ test("a dialog's footer is given HTML on its left, never a flag", () => {
   });
   assert.deepStrictEqual(found, [], "pass the extra buttons' HTML as UI.actions' second argument, or leave it out");
 });
+
+test("no heading, step, label or subtitle reads \"Where it…\" or \"Where the…\"", () => {
+  const fs = require("fs");
+  const found = [];
+  const pattern = /(title:\s*["'`]Where |UI\.section\(\s*["'`]Where |<label>Where |class="(?:sec|csub|ctitle)"[^>]*>Where |moduleHeader\(`[^`]*`,\s*`Where |UI\.field\(\s*["'`]Where )/;
+  for (const file of fs.readdirSync("web/js").filter(f => f.endsWith(".js"))) {
+    fs.readFileSync(`web/js/${file}`, "utf8").split("\n").forEach((line, i) => { if (pattern.test(line)) found.push(`${file}:${i + 1}`); });
+  }
+  assert.deepEqual(found, [], "name the thing (Placement, Disk location), not where it is");
+});

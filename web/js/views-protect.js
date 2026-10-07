@@ -88,7 +88,7 @@ window.objectStoreSetup = () => {
     <input id="os_size" type="number" min="5" max="16384" value="${store.size_gb || 100}" ${store.deployed ? "disabled" : ""}></div>
     <div class="f"><label>LAN address ${tip("Another cluster reads backups over this address. Left blank, the store shares Homestead's address and answers on its own port there; give it one of its own to keep its traffic apart.")}</label>
       <input id="os_ip" type="text" class="mono" value="${esc(store.reachable_off_cluster && store.endpoint ? new URL(store.endpoint).hostname : "")}" placeholder="Homestead's shared address" data-ipam></div>
-    <div class="f"><label>Port ${tip("Where the store answers. Pick another if an app on that address already uses 9000; the next port up is its console.")}</label>
+    <div class="f"><label>Port ${tip("The port the store answers on. Pick another if an app on that address already uses 9000; the next port up is its console.")}</label>
       <input id="os_port" type="number" min="1" max="65534" value="${store.port || 9000}" class="mono"></div></div>
   <div class="note"><b>Keep an independent backup.</b> This store shares the cluster’s disks. Use it for migration staging, not your only copy.</div>
   ${UI.actions(`<button class="btn pri" data-need="admin" onclick="objectStoreDeploy()">${store.deployed ? "Save storage settings" : "Set up storage"}</button>
@@ -166,7 +166,7 @@ async function viewProtect() {
     </div>
 
     <div class="card flat">
-      <div class="ctitle">Backup target</div><div class="csub">Where backups are uploaded</div>
+      <div class="ctitle">Backup target</div><div class="csub">Storage outside the cluster that receives backups</div>
       ${tgt.configured ? `
         <div class="drow"><div class="dl">URL</div><div class="dv mono small">${esc(tgt.url)}</div></div>
         <div class="drow"><div class="dl">Status</div><div class="dv">

@@ -1897,7 +1897,7 @@ window.diskAdd = (node, blockdevice = "", path = "", needsWipe = false) => {
   childModal(`Add a disk · ${node}`, `
     ${blockdevice ? `<p>Harvester formats <b class="mono">${esc(path)}</b> and gives it to Longhorn, which starts placing replicas on it.</p>`
       : `${diskMountGuide(path)}
-        <div class="f"><label>Where the disk is ${tip("For the V1 engine: the folder a formatted disk is mounted at on the host, like /mnt/disk2. For V2: the raw device, like /dev/sdb.")}</label>
+        <div class="f"><label>Disk location ${tip("For the V1 engine: the folder a formatted disk is mounted at on the host, like /mnt/disk2. For V2: the raw device, like /dev/sdb.")}</label>
         <input id="da_path" class="mono" placeholder="/mnt/disk2" value="${path ? `/mnt/${esc(path.replace("/dev/", ""))}` : ""}"></div>`}
     <div class="f"><label>Engine</label><select id="da_engine">
       <option value="v1">V1 — ${blockdevice ? "formatted and mounted" : "a mounted folder"}</option>

@@ -265,3 +265,15 @@ function monitorWidget(item = {}) {
       ${bars ? answerStrip(r.a.strip, "mon-mini") : `<i class="answer-dot ${esc(r.a.state)}"></i>`}
       <span class="mono xs mon-share" title="Answered over 30 days">${answerShare(r.a.uptime_30d)}</span></button>`).join("")}</div>`;
 }
+
+
+/* Edit's Monitoring step: what is asked, how it is going, and the choice. */
+function monitoringStepHtml(w) {
+  const a = answerOf(w);
+  return `<div class="sec" style="margin-top:0">Monitoring</div>
+    <p class="dim small">Homestead asks this app at its address every minute and alerts you when it is down. Changing how it is asked never restarts it.</p>
+    ${a ? `<div class="answer-head"><span class="answer-state"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span>
+      <span class="dim small">${esc(answerDetail(a))}</span></div>${a.target ? `<div class="dim xs mono">${esc(a.target)}</div>` : ""}
+      ${a.state === "off" || !(a.strip || []).length ? "" : `<div class="answer-day">${answerStrip(a.strip, "wide")}<div class="answer-axis dim xs"><span>24 h ago</span><span>now</span></div></div>`}` : ""}
+    ${monitoringFieldHtml("e", w.answer_check || "")}`;
+}
