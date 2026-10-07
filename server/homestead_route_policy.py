@@ -29,6 +29,8 @@ POLICY = {
     ('GET', '/api/addons'): 'viewer',
     ('GET', '/api/alerts'): 'viewer',
     ('GET', '/api/appstore'): 'viewer',
+    ('GET', '/api/logos'): 'viewer',
+    ('GET', '/api/logos/missing'): 'viewer',
     ('GET', '/api/appstore/app'): 'viewer',
     ('GET', '/api/auth/history'): 'admin',
     ('GET', '/api/auth/keys'): 'admin',
@@ -419,6 +421,7 @@ POLICY = {
     ('POST', '/api/workload/primary-port'): 'operator',
     ('POST', '/api/workloads/failover'): 'operator',
     ('POST', '/api/workloads/group'): 'operator',
+    ('POST', '/api/workloads/logo'): 'operator',
 }
 
 POLICY.update({

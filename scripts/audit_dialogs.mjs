@@ -193,6 +193,8 @@ const DIALOGS = [
   ["image-update-batch", "workloads", "imageUpdateCenter()", "text:Review selected"],
   ["workload-group", "workloads", "wlGroup('lab','frigate')"],
   ["workload-groups", "workloads", "manageWorkloadGroups()"],
+  ["workload-logo", "workloads", "wlLogo('lab','frigate')"],
+  ["workload-logo-fixup", "workloads", "logoFixup()"],
   ["workload-start-capacity", "workloads", "wlScale('lab','doublecommander',1)"],
   ["stop-homestead", "workloads", "wlStopSelf('lab','homestead')"],
   ["failover", "workloads", "wlFailover()"],

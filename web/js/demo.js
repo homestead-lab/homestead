@@ -250,6 +250,11 @@
     { id: "demo4", title: "Office AP", url: "http://192.0.2.3", section: "Network", icon: "builtin:wifi", note: "", shown: { kind: "builtin", src: "wifi" } },
     { id: "demo5", title: "NAS-01", url: "http://192.0.2.10", section: "Storage", icon: "builtin:nas", note: "Unraid", shown: { kind: "builtin", src: "nas" } },
   ];
+  // A logo the demo can show without fetching anything: the app's initial on a colour.
+  const demoLogo = (letter, hue) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="hsl(${hue} 52% 42%)"/><text x="32" y="43" font-family="sans-serif" font-size="30" font-weight="700" fill="#fff" text-anchor="middle">${letter}</text></svg>`)}`;
+  const demoLogoCatalogue = () => workloads.filter(w => !w.platform && (w.images || [])[0]).flatMap((w, i) => [
+    { name: w.name.replace(/(^|-)([a-z])/g, (_, dash, c) => (dash ? " " : "") + c.toUpperCase()), icon: demoLogo(w.name[0].toUpperCase(), (i * 47) % 360), repo: w.images[0], key: `${w.name}|${w.images[0]}` },
+    { name: `${w.name}-alt`, icon: demoLogo(w.name[0].toUpperCase(), (i * 47 + 180) % 360), repo: `example/${w.name}-alt`, key: `${w.name}-alt|example` }]);
   const workloads = [
     { name: "frigate", ns: "lab", kind: "Deployment", group: "Home", failover: "wait", desired: 1, ready: 1, uptime: 472221,
       cpu: 0.84, mem_mb: 1840, nodes: ["harvester-node2"], hardware: ["igpu", "coral_usb"],
@@ -2107,6 +2112,31 @@ ssh_pwauth: true
       { title: "frigate", ns: "lab", name: "frigate", url: "http://192.0.2.214:5000", port: 5000, port_name: "http", icon: "workload:lab/frigate", has_logo: false, group: "Home" },
       { title: "home-assistant", ns: "lab", name: "home-assistant", url: "http://192.0.2.215:8123", port: 8123, port_name: "", icon: "workload:lab/home-assistant", has_logo: false, group: "Home" },
       { title: "paperless", ns: "lab", name: "paperless", url: "http://192.0.2.216:8000", port: 8000, port_name: "", icon: "workload:lab/paperless", has_logo: false, group: "" }],
+    // Logos (logos.js): a small catalogue drawn from the demo's own apps.
+    // Most match their image; paperless matches by name only; the last has none.
+    "/api/logos": url => {
+      const w = workloads.find(x => x.ns === url.searchParams.get("ns") && x.name === url.searchParams.get("name")) || {};
+      const q = (url.searchParams.get("q") ?? w.name ?? "").toLowerCase();
+      const own = demoLogoCatalogue().filter(t => t.repo === (w.images || [])[0]).map(t => ({ ...t, match: "image" }));
+      const named = demoLogoCatalogue().filter(t => q && t.name.toLowerCase().includes(q) && !own.some(o => o.icon === t.icon)).map(t => ({ ...t, match: "name" }));
+      return { tiles: [...own, ...named], images: w.images || [] };
+    },
+    "/api/logos/missing": () => ({ apps: workloads.filter(w => !w.icon && !w.logo_skipped && !w.platform && !w.self && !w.homestead && !w.managed_smb && !w.managed_nfs)
+      .map((w, i, rows) => {
+        const t = demoLogoCatalogue().find(c => c.repo === w.images[0]);
+        const suggestion = i === rows.length - 1 ? null : w.name === "paperless" ? { ...t, name: "Paperless-ngx", match: "name" } : t ? { ...t, match: "image" } : null;
+        return { ns: w.ns, name: w.name, images: w.images, suggestion };
+      }).sort((a, b) => ({ image: 0, name: 1 }[a.suggestion?.match] ?? 2) - ({ image: 0, name: 1 }[b.suggestion?.match] ?? 2)) }),
+    "/api/workloads/logo": (url, init) => {
+      const items = JSON.parse(init?.body || "{}").items || [];
+      for (const item of items) {
+        const w = workloads.find(x => x.ns === item.ns && x.name === item.name);
+        if (!w) continue;
+        if (item.skip) w.logo_skipped = true; else w.icon = item.icon || "";
+      }
+      const saved = items.filter(i => i.icon && !i.skip).length, skipped = items.filter(i => i.skip).length;
+      return { ok: true, done: items.length, failed: [], detail: [saved && `${saved} logo${saved === 1 ? "" : "s"} saved`, skipped && `${skipped} left without one`].filter(Boolean).join(", ") || "logo removed" };
+    },
     "/api/workloads/group": (url, init) => {
       const body = JSON.parse(init?.body || "{}"), group = String(body.group || "").trim();
       return { ok: true, group, detail: `${(body.items || []).length} moved` };
