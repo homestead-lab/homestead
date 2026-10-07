@@ -162,13 +162,13 @@ window.FAILOVER_WORDS = FAILOVER_WORDS;
 window.FAILOVER_HELP = FAILOVER_HELP;
 window.failoverSelect = failoverSelect;
 
-/* Where it runs, at the three levels there are: the containers in one pod
+/* Placement, at the three levels there are: the containers in one pod
    (always together - that is what a pod is), the copies of this workload,
    and other workloads. */
 function placementSection(p, w, nodes, containers) {
   const names = (containers || []).map(c => c.name);
   return `<section class="placement card flat" id="e_placement">
-    <div class="sec" style="margin-top:0">Where it runs</div>
+    <div class="sec" style="margin-top:0">Placement</div>
     <div class="place-level"><div class="place-title">Containers in this pod</div>
       <div class="dim small" id="e_pod_containers">${names.length > 1 ? `${names.map(n => `<span class="tag">${esc(n)}</span>`).join(" ")} always run together on one node, sharing its network and any pod volumes.`
         : `<span class="tag">${esc(names[0] || w.name)}</span> is this pod's only container.`}
@@ -275,7 +275,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       <div class="dim xs" id="e_autostart_note" style="margin:-4px 0 6px">${w.autostart === false ? "Stays stopped until you switch autostart back on." : "Runs continuously and comes back after a reboot."}</div>
       <div class="between"><div class="sec">Containers in each pod</div>
         <button class="btn" type="button" onclick="containerAdd('edit')">＋ Add container</button></div>
-      ${UI.more("How containers share a pod", "<p>These containers share networking and volumes. Set pod copies under Where it runs.</p>")}
+      ${UI.more("How containers share a pod", "<p>These containers share networking and volumes. Set pod copies under Placement.</p>")}
       ${panels("basics")}
       <div id="e_removed_containers" class="dim small"></div>`;
     const running = placementSection(w.placement || {}, w, nodes, containers);
@@ -299,13 +299,12 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
         lanHtml: `<label class="switch" id="e_lan_beside"><input type="checkbox" id="e_lan_on" ${w.lan ? "checked" : ""} onchange="editAddressChanged()"> Also an address of its own on the LAN, beside its VIP</label>
           <div id="e_lan_box" ${w.lan ? "" : "hidden"} data-current="${esc(JSON.stringify(w.lan || null))}"></div>`,
         portsHtml: `<div class="note" id="e_address_note" hidden>With its own LAN address or the host's network, clients connect to it directly: its LAN ports and VIP are not used.</div>
-          ${panels("address")}<div class="note" id="e_ports_note" hidden></div>
-          ${monitoringFieldHtml("e", w.answer_check || "")}`})}
-      ${UI.more("What saving does", "<p>Saving restarts the pods only when something they run with changes: the image, ports, environment, storage, hardware or where it runs. A logo, its group or how it is monitored is saved without a restart. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either workload.</p>")}`;
+          ${panels("address")}<div class="note" id="e_ports_note" hidden></div>`})}
+      ${UI.more("What saving does", "<p>Saving restarts the pods only when something they run with changes: the image, ports, environment, storage, hardware or placement. A logo, its group or how it is monitored is saved without a restart. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either workload.</p>")}`;
     $("#mbody").innerHTML = `<div id="e_containers">${stepper("e_steps", [
       { title: "Basics", html: basics }, { title: "Hardware and access", html: access },
       { title: "Environment values", html: environment }, { title: "Storage", html: storage },
-      { title: "Where it runs", html: running }, { title: "Address", html: address }],
+      { title: "Placement", html: running }, { title: "Address", html: address }, { title: "Monitoring", html: monitoringStepHtml(w) }],
       `<button class="btn pri" id="e_save" onclick="editSave(${jsq(ns)},${jsq(name)})">Review changes</button>`, { always: true })}</div>`;
     containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
@@ -1020,8 +1019,8 @@ window.vmNew = async (selectedDisk = "", selectedNamespace = "") => {
 `;
   const vmStorage = `
     ${(opts.storage_classes || []).length ? `<div class="f" id="v_sc_row"><label>Storage class ${tip(opts.harvester
-      ? "Where a blank or downloaded disk lives. A disk from a Harvester image always lives on that image's own class."
-      : "Where the disk lives. The cluster's default class is chosen for you.")}</label>
+      ? "The storage class for a blank or downloaded disk. A disk from a Harvester image always lives on that image's own class."
+      : "The storage class for the disk. The cluster's default class is chosen for you.")}</label>
       <select id="v_sc">${opts.storage_classes.map(c => `<option value="${esc(c)}" ${c === opts.default_class ? "selected" : ""}>${esc(classLabel(c))}</option>`).join("")}</select></div>` : ""}
     ${UI.more("How the disk is made", `<p>${opts.harvester
       ? "New disks are made the way Harvester makes them: shared block volumes, so the VM can move between hosts. A URL is downloaded as a Harvester image, kept in its image list for the next VM."

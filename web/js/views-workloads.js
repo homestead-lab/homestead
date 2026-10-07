@@ -752,7 +752,7 @@ function startReview(plan, { what = "Starts", name, extra = "", ackId, onAck = "
       : `${what} <b>${esc(name)}</b>${where}.${extra}`),
     plan.blocked ? UI.callout("bad", "Can't start", list || "No host that may run it has room for it.")
       : problems.length ? UI.callout("warn", "Check first", list) : "",
-    rows ? UI.section("Where it can run", capacityHostTable(plan)) : "",
+    rows ? UI.section("Hosts with room", capacityHostTable(plan)) : "",
     UI.more("Details", `${UI.facts([
         [plan.vm ? "VM reserves" : `Each pod reserves`, `${esc(plan.pod_request_gb ?? "?")} GiB RAM${plan.vm?.request_is_lower_bound ? " at least" : ""} · ${esc(plan.pod_cpu_request_percent ?? "?")}% CPU`],
         ["Memory estimate", plan.pod_memory_gb ? `${esc(plan.pod_memory_gb)} GiB${plan.vm ? " with its launcher" : " per pod"}` : "unknown"],

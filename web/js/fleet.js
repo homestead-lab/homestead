@@ -281,7 +281,7 @@ window.fleetMigration = async id => {
           <input id="fm_ip" class="mono" placeholder="192.0.2.243" hidden data-ipam>`,
           { help: "Shared with its apps, on its own port. Choose an address of its own only to keep its traffic apart." }),
         UI.field("Port", '<input id="fm_port" type="number" min="1" max="65534" placeholder="9000" class="mono">',
-          { help: "Where the store answers. Pick another if an app there already uses 9000; the next port up is its console." }))}
+          { help: "The port the store answers on. Pick another if an app there already uses 9000; the next port up is its console." }))}
       ${UI.actions(UI.cancel() + UI.button("Enable migration", `fleetMigrationSet(${jsArg(id)}, true)`, { kind: "pri", id: "fm_go", attrs: 'data-need="admin"' }))}`;
   }
   $("#mbody").innerHTML = `<div class="ui-stack">${body}</div>`;
@@ -382,7 +382,7 @@ window.fleetSettingsPaint = async () => {
     ${legacy.length ? UI.section("Added before linking", `<p class="ui-help">Added on Import for moves, with an account kept here.
       Link each to manage it from here too; its password is then deleted, and moves already made keep working.</p>
       <ul class="fleet-list">${fleetLegacyHtml(legacy)}</ul>`) : ""}
-    ${UI.section("Where the others reach this Homestead", UI.field("Address",
+    ${UI.section("Address for other clusters", UI.field("Address",
       `<div class="fleet-address"><input id="fleetAddress" value="${esc(view?.address || view?.suggested_address || "")}" placeholder="http://192.0.2.242:8088">
       ${UI.button("Save", "fleetSaveAddress()", { attrs: 'data-need="admin"' })}</div>`,
       { help: "Its LAN address and port. Linked clusters use it to relay pages and consoles to this one." }))}

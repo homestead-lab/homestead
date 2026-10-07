@@ -184,13 +184,13 @@ async function viewSettings() {
       ${UI.settingsCard(``, {tab:`cluster`, id:`storageClassesCard`, hidden:true})}
 
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`App Store catalogue`, `Where the App Store's listings come from: any feed in the Community Applications format`, ``)}
+        ${UI.moduleHeader(`App Store catalogue`, `The feed the App Store lists apps from: any feed in the Community Applications format`, ``)}
         ${serviceRow(STATE.data.appSettings?.catalog_url ? "Your own feed" : "Community Applications", '<span class="pill neutral">in use</span>',
           esc(STATE.data.appSettings?.catalog_url || "The public feed"), can("admin") ? actionBar([{ label: "Change", run: "catalogEdit()" }]) : "")}
       `, {tab:`connections`})}
 
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`Namespaces`, `Where apps live. Harvester, Rancher and Kubernetes keep their own, which are hidden here and in every picker.`, `${can("admin") ? `<div class="row ns-new"><input id="nsName" placeholder="new-namespace" maxlength="63" autocomplete="off"
+        ${UI.moduleHeader(`Namespaces`, `The namespaces apps are deployed into. Harvester, Rancher and Kubernetes keep their own, which are hidden here and in every picker.`, `${can("admin") ? `<div class="row ns-new"><input id="nsName" placeholder="new-namespace" maxlength="63" autocomplete="off"
             onkeydown="if(event.key==='Enter')namespaceCreate()"><button class="btn sm pri" onclick="namespaceCreate()">Create</button></div>` : ""}`)}
         <div class="ns-body"><div class="empty small"><span class="spin2"></span></div></div>
       `, {tab:`namespaces`, id:`nsCard`})}
