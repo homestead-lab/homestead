@@ -252,6 +252,15 @@ def _in_transit(volume):
     return state in ("attaching", "detaching") or (volume.get("robustness") in ("unknown", "") and state not in ("detached", ""))
 
 
+# Longhorn's robustness, worst to best. Only a known state counts as better.
+_ROBUSTNESS = {"faulted": 0, "degraded": 1, "healthy": 2}
+
+
+def _improved(old, new):
+    """A volume that finished rebuilding during the drain is safer, not changed."""
+    return old in _ROBUSTNESS and new in _ROBUSTNESS and _ROBUSTNESS[new] > _ROBUSTNESS[old]
+
+
 def recheck_after_drain(original, clock=time.time, sleep=time.sleep):
     """Never send power using the pre-drain storage/quorum/VM snapshot."""
     # Eviction may remove the local replica entirely. Keep checking every
@@ -278,8 +287,10 @@ def recheck_after_drain(original, clock=time.time, sleep=time.sleep):
         expected_degradation = (old and old["healthy_elsewhere"] > 0 and old["robustness"] == "healthy" and
                                 volume["robustness"] == "degraded")
         stopped_to_wait = old and volume.get("state") == "detached"
+        improved = old and _improved(old["robustness"], volume["robustness"])
         if (not old or volume["healthy_elsewhere"] < old["healthy_elsewhere"] or
-                (volume["robustness"] != old["robustness"] and not expected_degradation and not stopped_to_wait)):
+                (volume["robustness"] != old["robustness"] and not expected_degradation and not stopped_to_wait
+                 and not improved)):
             # Say which, and how - the review is for a person to act on.
             what = ("it is new since the review" if not old else
                     f"healthy copies elsewhere went from {old['healthy_elsewhere']} to {volume['healthy_elsewhere']}"
