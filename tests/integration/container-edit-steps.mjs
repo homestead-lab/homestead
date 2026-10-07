@@ -21,7 +21,7 @@ const server = http.createServer(async (req, res) => {
 });
 await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
-const titles = ["Basics", "Hardware and access", "Environment values", "Storage", "Where it runs", "Address"];
+const titles = ["Basics", "Hardware and access", "Environment values", "Storage", "Placement", "Address", "Monitoring"];
 let browser;
 try {
   await fs.mkdir(output, { recursive: true });
