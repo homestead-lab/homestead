@@ -6,6 +6,16 @@ what Longhorn thinks of it.
 
 ![Volumes](https://github.com/homestead-lab/homestead/releases/latest/download/homestead-volumes.jpg)
 
+## When storage fills up
+
+Usage alerts say a volume is full now; the **forecast** on the Volumes page says
+it will be, while there is time to act - "frigate-media is full in about 18
+days". Homestead keeps a figure a day for each volume's filesystem, each
+Longhorn disk and the pool as a whole, for 90 days, and draws a straight line
+through the last 30. It lists what fills within 60 days, alerts at 14 days and
+calls it critical within 3. There is no estimate until it has a week of figures,
+nor when usage is flat, shrinking, or too irregular for a line to mean anything.
+
 ## Reading the table
 
 The **Usage** column separates three different measurements (GiB = 1,024³ bytes):

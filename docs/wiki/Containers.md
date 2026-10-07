@@ -69,7 +69,13 @@ logs, console, edit - and:
 - **Main port** - which of its ports the card links to first, usually its web
   page.
 - **Group** - put it in a group (below).
-- **Monitoring** - how Homestead checks that it answers (below).
+- **Logo** - pick its logo from the app store, or give an address (below).
+- **Monitoring** - how Homestead checks that it answers, and what to do when
+  it is down (below).
+- **History** - who changed it, when and what, with **Undo** (below).
+- **Search logs** - find a line in its recent logs (below).
+- **Schedule** - stop and start it at set times (below).
+- **Updates** - whether it updates itself in the maintenance window (below).
 - **Placement** - where it runs (below).
 - **Rename** - replaces the Deployment under its new Kubernetes name; Services
   and volumes keep their existing names and addresses.
@@ -316,6 +322,29 @@ their updates. **Settings → Updates** sets the policy: notify only, apply when
 approved, or apply in a maintenance window. Updates never jump a major version
 by themselves.
 
+### Automatic updates
+
+A container's **Updates** (in its menu) can let it update itself. It is off for
+every app until you turn it on. Inside the cluster's maintenance window - and
+never while the cluster policy is notify only - Homestead takes one such app at
+a time that has an update waiting, and:
+
+1. snapshots each of its Longhorn volumes;
+2. installs the update as **Update** does - pinned to the new digest, the old
+   one kept for **Roll back**;
+3. waits for the new pods, then for the app to answer its
+   [monitoring](#monitoring) check again;
+4. succeeds, or - if the rollout stalls or the app stops answering - rolls the
+   image back and says so in the job, an alert and a push.
+
+Only a newer build of the tag the app already follows is taken (a new digest of
+`:latest` or `:1.2`, never 1.2 to 2.0): a new version waits for you. An app that
+is not answering or not fully running beforehand is left alone, as there would
+be nothing to compare with. The snapshots stay after a rollback, since an update
+can change data that rolling the image back does not; the newest two
+before-update snapshots of each volume are kept after updates that worked. A
+row or card shows an **Auto** tag while it is on.
+
 While a new image is fetched - on an update or a first start - the rollout
 and the job tray show how far it has got: a percentage of the image's size,
 from containerd's own count of the layers it has fetched against the sizes
@@ -343,9 +372,12 @@ the disk keeps reading from it.
 ## Monitoring
 
 Every minute Homestead asks each running app at its address whether it answers,
-as a browser would. Three misses in a row and it is **Down**, which raises an
-alert; its first answer brings it back up. The **Monitoring** page shows each
-app's last 24 hours and 30 days, and a container's **Monitoring** (in its menu,
+as a browser would - and VMs too (see [Virtual machines](Virtual-machines#monitoring)). Three misses in a row and it is **Down**, which raises an
+alert; its first answer brings it back up. The **Monitoring** page (Apps ›
+Monitoring) shows each app's last 24 hours hour by hour or 30 days day by day,
+problems first; the Dashboard has a Monitoring widget in four widths; and the
+Portal's dots and a row's **Down** or **Slow** tag come from the same checks. A
+container's history is kept hour by hour for 30 days. and a container's **Monitoring** (in its menu,
 or the Monitoring step of Edit) chooses how it is asked:
 
 - **Automatic** - an HTTP answer below 500, or an accepted connection if the app
@@ -374,6 +406,72 @@ Monitoring says why, until another is chosen. None of this restarts the app.
   `state`, `since`, `error`, `detail`, `at`) it carries a sentence as `text`,
   `content` and `message`, which Slack, Discord and Home Assistant show as it is.
   **Send a test** sends one now.
+
+## Logos
+
+A container's **Logo** opens a picker: logos from the app store, the one that
+matches the container's own image first (marked **image match** - the same
+software, so nearly always right), then those that match its name, and a Helm
+chart's own icon for an app installed from a chart. Search for another, or paste
+an address instead. **⋯ → Logos for apps without one** lists every app with no
+logo beside its best guess, to accept the image matches in one go and choose the
+rest; an app you skip is not suggested again. Edit's logo field has the same
+**Find** button.
+
+An address can be an image (PNG, JPEG, GIF, WebP, ICO or SVG) or a web page: for
+a page, Homestead takes the site's own logo when it is good enough - an SVG, or
+a picture at least 64 pixels across. Whatever is chosen is fetched once and kept
+on Homestead's volume, so the logo stays when the original goes away. An SVG is
+rebuilt from its drawing elements only - no scripts, links or embedded files -
+before it is kept. Changing a logo never restarts the app.
+
+## Change history
+
+Every minute Homestead compares each app with what it saw last - images,
+environment, CPU and memory, ports, volumes, copies, command, host network, LAN
+attachment and placement - and records any difference: when, who (or **outside
+Homestead**, for kubectl, Helm or GitOps), and each field before and after. A
+container's **History** shows its own; **⋯ → Change history** shows every app's,
+newest first. A value that may be secret - a variable from a Secret, or one
+whose name looks like a password or token - only says that it changed.
+
+**Undo** puts back the settings from before a change, after the same review as
+any edit: the fields that will change, and whether there is room. It replaces
+the app's pods, as any such edit does. Stops and starts on a
+[schedule](#schedules) are not recorded. The history keeps 50 changes per app
+for 180 days.
+
+## Searching logs
+
+**⋯ → Search logs** finds a line in the recent logs of every app at once -
+an error, a request ID, a user - or, from a container's menu, in that app's
+alone. Choose how far back (15 minutes to 24 hours); matches come newest first,
+with what matched marked, and each opens that app's live logs. **Match case**
+and **Regular expression** are options (an expression that repeats a repeating
+group is refused, as it can take ages to run).
+
+It asks Kubernetes for each running pod's logs, so it reaches back only as far
+as each pod still holds them; lines from pods since replaced are not searched.
+It reads up to 60 containers, 2 MB from each, and shows up to 500 matches - and
+says when it reached any of those, or could not read a pod. One search runs at a
+time.
+
+## Schedules
+
+A container's **Schedule** stops it at one time and starts it at another, on the
+days you choose - overnight, say, or outside working hours. Either time can be
+left out, to only stop or only start it. The dialog shows the next few stops and
+starts and how the last one went; **⋯ → Power schedules** lists every app and
+VM on a schedule. Times are in the time zone of the browser that set them, and
+follow daylight saving.
+
+A scheduled stop and start work as **Stop** and **Start** do: the app goes back
+to the copies it had, after the usual room check. A schedule acts at its times
+and nothing else - starting the app by hand in between is fine; it stops again
+at the next stop time. A time missed while Homestead was not running (by more
+than half an hour) is skipped, not done late. A stop or start that could not be
+done raises an alert until the next one works. Homestead itself cannot be put
+on a schedule. VMs have the same, in their own menu.
 
 ## Groups
 

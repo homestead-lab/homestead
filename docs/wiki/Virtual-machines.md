@@ -23,6 +23,25 @@ plug, so unsaved work in it is lost. It opens to its disks, network cards and ad
 A VM whose disk is still downloading shows how far it has got; one whose
 download has not started after three minutes says why.
 
+## Logo, monitoring and schedule
+
+A VM shows its operating system's logo - from what its guest agent reports, or
+the image it was made from - unless one is chosen for it under **Logo** in its
+menu, where Homestead's operating-system logos come first, then the app store's.
+
+**Monitoring** in a VM's menu chooses how Homestead checks that it answers. A VM
+publishes no port, so **Automatic** tries the usual ones - SSH, RDP, HTTPS, HTTP,
+Proxmox and Home Assistant - and keeps asking the first that answers; a VM none
+of them answer on is not monitored, rather than called down. Or choose **A port**
+(a connection is enough) or **A web page** on a port. A VM monitored on a port
+you chose can also be rebooted when it is down - **When it is down**, as for
+[containers](Containers#monitoring); under Automatic it cannot, as Homestead cannot
+tell a VM that is down from one that does not answer on the usual ports.
+
+**Schedule** shuts it down cleanly at one time and starts it at another, on the
+days you choose, as for [containers](Containers#schedules); a start goes through
+the same capacity review as **Start**. None of these restart the VM.
+
 ## Console
 
 **Console** has two views:

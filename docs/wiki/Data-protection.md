@@ -147,6 +147,29 @@ backup target (or one that cannot be reached), make the cluster
 **degraded** on the Dashboard and raise an alert. Its **Review** button leads
 here.
 
+## Restore tests
+
+A backup that has never been restored is a hope. A restore test restores an
+app's newest completed backup of each of its Longhorn volumes into new volumes,
+starts a copy of the app on them and checks that it becomes ready and answers on
+its ports. Then everything it made is removed, whatever happened, and the result
+is shown beside the app: when, how long it took, and why it failed if it did. A
+failed test raises an alert.
+
+The copy cannot touch anything real. It runs beside the app under labels of its
+own, so no Service sends it traffic; a network policy lets in only Homestead's
+check and lets out only DNS; it gets no host network, LAN attachment, host ports,
+passthrough devices or service-account token; and every volume that is not a
+restored one - a share, a host folder, a volume with no backup - is replaced by
+an empty one. A copy of an app that runs privileged runs privileged too, and its
+result says so.
+
+**Data Protection › Restore tests** lists every app with Longhorn volumes, what a
+test would restore and its last result. **Test now** runs one (admin). **Test each
+app every 30 days** - off until you turn it on - tests the app longest untested,
+one at a time, outside the maintenance window, and only when Longhorn has room
+for the restored volumes.
+
 ## Restoring
 
 **Backups** lists every volume the backup target holds backups of, including

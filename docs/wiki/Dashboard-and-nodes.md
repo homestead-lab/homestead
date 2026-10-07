@@ -127,6 +127,17 @@ From a node you can:
   tray;
 - reboot or shut it down, with an administrator's reviewed confirmation.
 
+### If this host goes down
+
+**If this host goes down** in a host's actions works out, before anything
+happens, what an outage of that host would do: which apps and VMs move and to
+which hosts, which wait for it (their failover setting), which stop until it is
+back (nowhere else can run them - the hardware they use, their placement, or
+volumes with no copy elsewhere), which Longhorn volumes would be unavailable or
+run with fewer copies, and which addresses move. Each line says why. It is a
+forecast from what Homestead knows now, not a promise: Kubernetes decides at the
+time, with what is free then.
+
 ### Terminal
 
 **Terminal** on a node's page opens a root shell on that host, as SSH would
