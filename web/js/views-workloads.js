@@ -1399,7 +1399,7 @@ window.imageReviewedApply = async () => {
           states[key] = state; paint();
           if (rolloutChanged(result, state)) throw new Error("Workload changed during monitoring; review remaining updates again");
           if (state.phase === "failed") throw new Error("Rollout failed");
-          if (state.phase === "ready") break;
+          if (state.phase === "ready") { refreshAfterRollout(); break; }
           if (Date.now() > deadline) throw new Error("Monitoring timed out; check its job before continuing");
           await new Promise(resolve => setTimeout(resolve, 2000));
         }
@@ -1424,6 +1424,20 @@ window.imageReviewedApply = async () => {
   await run(0);
 };
 let IMAGE_QUEUE = null;     // the stopped queue, while Skip and continue can resume it
+
+/* After a rollout: the list and the waiting updates as they are now, so the
+   page shows the new image without a refresh. The server has re-asked about
+   this app; the page repaints when its dialog is closed, or at once if not. */
+async function refreshAfterRollout() {
+  try {
+    const [wl] = await Promise.all([api("/api/workloads"), new Promise(r => setTimeout(r, 1500)).then(() => loadImageUpdates(false, true))]);
+    STATE.data.wl = wl;
+  } catch (e) { return; }
+  if (STATE.view !== "workloads") return;
+  if ($("#modal").classList.contains("hidden")) renderWorkloads();
+  else window.__repaintAfterModal = () => { if (STATE.view === "workloads") renderWorkloads(); };
+}
+window.refreshAfterRollout = refreshAfterRollout;
 window.imageQueueSkip = () => IMAGE_QUEUE?.skip();
 // A rollout's job from the queue, opened over it: Back returns to the queue.
 window.imageQueueJob = id => { pushModal(); jobsDialog(); selectJob(id); };

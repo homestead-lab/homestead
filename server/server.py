@@ -6803,7 +6803,6 @@ def autoupdate_tick():
               {"namespace": chosen["ns"], "name": chosen["name"], "phase": "snapshot"},
               "Snapshotting its volumes before the update")
     _cache.pop("wl", None)
-    UPDATES.invalidate()
     return chosen
 
 
@@ -10163,7 +10162,7 @@ class H(HTTP.LimitedHandler):
                     {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
                     "/containers?" + urllib.parse.urlencode({"find": b["name"]}),
                     {"namespace": b["ns"], "name": b["name"]})
-                _cache.pop("wl", None); _cache.pop("ov", None); UPDATES.invalidate()
+                _cache.pop("wl", None); _cache.pop("ov", None); UPDATES.refresh_soon(b["ns"], b["name"])
                 return self._send(200, result)
             if p == "/api/image-updates/rollback":
                 guard_managed_smb(b.get("ns"), b.get("name"))
@@ -10173,7 +10172,7 @@ class H(HTTP.LimitedHandler):
                     {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
                     "/containers?" + urllib.parse.urlencode({"find": b["name"]}),
                     {"namespace": b["ns"], "name": b["name"]})
-                _cache.pop("wl", None); _cache.pop("ov", None); UPDATES.invalidate()
+                _cache.pop("wl", None); _cache.pop("ov", None); UPDATES.refresh_soon(b["ns"], b["name"])
                 return self._send(200, result)
             if p == "/api/files/write":
                 warning = FILES.check_syntax(b.get("path"), b.get("content"))

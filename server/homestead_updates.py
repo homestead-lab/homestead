@@ -637,6 +637,38 @@ def invalidate():
         _LATEST.update(report=None, number=0, finished=0.0)
 
 
+def refresh_one(ns, name):
+    """After an update or a rollback: ask again about this one app and put the
+    answer in the last report, rather than throwing the whole report away -
+    which left the page showing the update as waiting until every registry
+    had been asked again."""
+    with _SCAN_LOCK:
+        latest = _LATEST.get("report")
+    if not latest:
+        return None
+    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    pods = kget(f"/api/v1/namespaces/{ns}/pods").get("items", [])
+    item = _check_deployment(dep, pods, True, persist=False, channel=latest.get("channel"))
+    item["homestead"] = PART(ns, name)
+    with _SCAN_LOCK:
+        latest = _LATEST.get("report")
+        if not latest:
+            return None
+        rows = [w for w in latest.get("workloads") or [] if (w.get("ns"), w.get("name")) != (ns, name)] + [item]
+        _LATEST["report"] = _summary(rows, checked_at=latest.get("checked_at"), channel=latest.get("channel"))
+    return item
+
+
+def refresh_soon(ns, name):
+    """refresh_one in the background; if it cannot, the next request scans again."""
+    def run():
+        try:
+            refresh_one(ns, name)
+        except Exception:
+            invalidate()
+    threading.Thread(target=run, name=f"update-refresh-{name}", daemon=True).start()
+
+
 def homestead_report():
     """Homestead's own parts checked now, against their registries, and put
     into the last report in place of what it said of them - Settings ›

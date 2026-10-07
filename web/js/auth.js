@@ -8,13 +8,45 @@ window.can = need => RANK[ROLE] >= RANK[need];
 
 /* Every mutating call carries this header. The cookie is SameSite=Strict, so a
    cross-site form cannot ride along; the header a cross-site form cannot set. */
-const _fetch = window.fetch.bind(window);
-window.fetch = (url, opts = {}) => {
-  if (typeof url === "string" && url.startsWith("/api/") &&
-      opts.method && opts.method !== "GET") {
+const _rawFetch = window.fetch.bind(window);
+window.fetch = async (url, opts = {}) => {
+  if (typeof url !== "string" || !url.startsWith("/api/")) return _rawFetch(url, opts);
+  if (opts.method && opts.method !== "GET") {
     opts.headers = Object.assign({ "X-Homestead-Auth": "1" }, opts.headers || {});
   }
-  return _fetch(url, opts);
+  // Homestead's API never redirects. A redirect is a sign-in in front of it -
+  // Cloudflare Access sending an expired session to Google - which a fetch
+  // cannot follow: the browser blocks the other site, and every call failed
+  // with a bare network error until the page was reloaded by hand.
+  const r = await _rawFetch(url, { redirect: "manual", ...opts });
+  if (r.type === "opaqueredirect") {
+    signInLapsed();
+    throw Object.assign(new Error("Your sign-in has expired; signing you in again"), { status: 0, signIn: true });
+  }
+  return r;
+};
+const _fetch = window.fetch;
+
+/* The sign-in in front of Homestead has lapsed: reload the page, which is a
+   navigation Cloudflare Access can send through Google and back. Once a
+   minute at most, so a sign-in that keeps failing asks rather than loops. */
+window.signInLapsed = () => {
+  if (window.__signInLapsed) return;
+  window.__signInLapsed = true;
+  let last = 0;
+  try { last = +sessionStorage.getItem("homestead.signInReload") || 0; } catch (e) { /* no storage: ask */ last = Date.now(); }
+  const again = Date.now() - last > 60000;
+  const bar = document.createElement("div");
+  bar.className = "signin-lapsed";
+  bar.setAttribute("role", "alert");
+  bar.innerHTML = again ? '<span class="spin2"></span><span>Your sign-in has expired. Signing you in again…</span>'
+    : '<span>Your sign-in has expired.</span><button class="btn sm pri" type="button" onclick="signInAgain()">Sign in</button>';
+  document.body.appendChild(bar);
+  if (again) setTimeout(signInAgain, 700);
+};
+window.signInAgain = () => {
+  try { sessionStorage.setItem("homestead.signInReload", String(Date.now())); } catch (e) { /* it reloads anyway */ }
+  location.replace(location.href);
 };
 
 /* The last answer from /api/auth/state, so Settings can describe this session
@@ -29,7 +61,10 @@ async function authState() {
     if (!r.ok) return { unavailable: true, error: body.error || r.statusText, cause: body.cause || "" };
     window.AUTH_STATE = body;
     return window.AUTH_STATE;
-  } catch (e) { return { unavailable: true, error: e.message }; }
+  } catch (e) {
+    if (e.signIn) return { signIn: true };
+    return { unavailable: true, error: e.message };
+  }
 }
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
@@ -323,6 +358,7 @@ $("#whoami").onclick = () => go("settings");
 async function boot() {
   clearTimeout(window.__authRetry);
   const st = await authState();
+  if (st.signIn) return;         // signInLapsed is taking the page through sign-in
   if (st.unavailable) return clusterUnavailable(st.error, st.cause);
   if (st.data_handoff) return dataHandoffStarting(st);
   if (st.setup) return loginForm(null, true);
