@@ -1,7 +1,7 @@
 /* Containers, Deploy, App Store */
 
 async function viewWorkloads() {
-  STATE.data.wl = await api("/api/workloads");
+  [STATE.data.wl] = await Promise.all([api("/api/workloads"), loadUptime()]);
   renderWorkloads();
   loadImageUpdates(false, true).then(() => {
     if (STATE.view === "workloads" && $("#modal").classList.contains("hidden")) renderWorkloads();
@@ -502,6 +502,7 @@ function workloadActions(w, update, off, compact = false) {
     item("Placement", `wlPlacement(${ns},${name})`, "node"),
     item("Group", `wlGroup(${ns},${name})`, "list", {need:"operator"}),
     item("Logo", `wlLogo(${ns},${name})`, "logo", {need:"operator",tip:"Pick a logo from the app store"}),
+    item("Answering", `wlAnswering(${ns},${name})`, "pulse", {tip:"Whether it answers at its address, checked every minute"}),
     item("Move", `moveWorkload(${name},${ns})`, "move", {need:"operator"}),
     update?.can_rollback && item("Rollback", `imageRollback(${ns},${name})`, "rollback", {need:"operator"}),
     item("Delete", `wlDelete(${ns},${name})`, "trash", {danger:true,need:"operator"})
@@ -532,6 +533,7 @@ function workloadCard(w) {
         </div>
         <div class="dim xs mono wimg"><span class="wimage-name">${w.images.map(i => esc(imageLabel(i))).join(" · ")}</span>
           <span class="wimage-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</span></div>
+        ${answerCardRow(w)}
         ${workloadPull(w) ? pullBar(workloadPull(w)) : ""}
         ${workloadBlocked(w) ? `<div class="wblocked" title="${esc(workloadBlocked(w))}">${esc(workloadBlocked(w))}</div>` : ""}
         <div class="wfoot">
@@ -594,7 +596,7 @@ function workloadTableRows(rows) {
         <div class="wl-row-meta dim xs">${w.platform ? `${platformTag(w)} ` : ""}${w.managed_smb || w.managed_nfs ? `<span class="pill slim info">managed ${w.managed_nfs ? "NFS" : "SMB"}</span> ` : ""}${esc(w.ns)} · ${esc(off ? "stopped" : (w.nodes || []).join(", ") || "unscheduled")}</div></td>
       <td class="wl-status" data-status data-sort="${off ? -1 : w.desired ? w.ready / w.desired : 0}"><div class="row wl-state-tags">
         <span class="pill slim wl-ready ${ok ? "ok" : off ? "low" : "crit"}" title="${w.ready} of ${w.desired} ready">${off ? "Stopped" : `${w.ready}/${w.desired}`}</span>
-        ${updateOwner(update) ? updateOwnerPill(update, true) : update?.available ? '<span class="tag warn">Update</span>' : ""}${uncheckedMark(update)}
+        ${answerTag(w)}${updateOwner(update) ? updateOwnerPill(update, true) : update?.available ? '<span class="tag warn">Update</span>' : ""}${uncheckedMark(update)}
         ${updateError ? `<span class="tip warn-tip" tabindex="0" role="img" aria-label="Registry check unavailable: ${esc(updateError.error)}" data-tip="Registry check unavailable — ${esc(updateError.error)}">!</span>` : ""}
         ${pull ? `<span class="tag" title="Fetching ${esc(pull.image || "image")}">Pulling ${Math.min(100, pull.percent || 0)}%</span>` : ""}
         ${blocked ? `<span class="tag bad" data-tip="${esc(blocked)}">Blocked</span>` : ""}</div></td>

@@ -3508,3 +3508,28 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
   .logo-fix-acts{grid-column:1/-1;justify-content:flex-start}
   .logo-tiles{grid-template-columns:repeat(auto-fill,minmax(96px,1fr))}
 }
+/* Answering: whether each app answers at its address (uptime.js). */
+.answer-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--mut);flex:none}
+.answer-dot.up{background:var(--ok)}.answer-dot.slow{background:var(--med)}.answer-dot.down{background:var(--crit)}
+.answer-dot.off,.answer-dot.unknown{background:var(--surf3)}
+.answer-state{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;white-space:nowrap}
+.answer-state.big{font-size:15px}.answer-state.big .answer-dot{width:10px;height:10px}
+.answer-strip{display:inline-flex;gap:2px;align-items:stretch;height:14px;min-width:0}
+.answer-strip i{flex:1 1 0;min-width:2px;max-width:6px;border-radius:1px;background:color-mix(in srgb,var(--ok) 75%,transparent)}
+.answer-strip i.slow{background:var(--med)}.answer-strip i.down{background:var(--crit)}.answer-strip i.none{background:var(--surf3)}
+.answer-strip.wide{display:flex;height:28px;gap:3px}.answer-strip.wide i{max-width:none;border-radius:2px}
+.wanswer{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;align-items:center;gap:10px;width:100%;padding:6px 0;margin:0;
+  background:none;border:0;border-top:1px solid var(--line);color:var(--tx);font:inherit;text-align:left;cursor:pointer}
+.wanswer .dim.xs{letter-spacing:.05em;font-size:10px}
+.wanswer .answer-why{grid-column:3/-1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wanswer:hover .answer-state{text-decoration:underline}
+.tagbtn{cursor:pointer;font:inherit;border:0}
+.answer-head{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
+.answer-day{display:grid;gap:4px}.answer-axis{display:flex;justify-content:space-between}
+.answer-figures{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.answer-figures>div{display:grid;gap:2px;padding:10px 12px;border:1px solid var(--line2);border-radius:10px}
+.answer-figures b{font-size:18px}
+.answer-modes{display:grid;gap:8px}
+.answer-mode{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
+.answer-mode input{margin-top:3px;flex:none}.answer-mode>span{display:grid;gap:1px}
+.answer-path{margin-left:26px}

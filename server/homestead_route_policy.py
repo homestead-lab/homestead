@@ -30,6 +30,7 @@ POLICY = {
     ('GET', '/api/alerts'): 'viewer',
     ('GET', '/api/appstore'): 'viewer',
     ('GET', '/api/logos'): 'viewer',
+    ('GET', '/api/uptime'): 'viewer',
     ('GET', '/api/logos/missing'): 'viewer',
     ('GET', '/api/appstore/app'): 'viewer',
     ('GET', '/api/auth/history'): 'admin',
@@ -422,6 +423,7 @@ POLICY = {
     ('POST', '/api/workloads/failover'): 'operator',
     ('POST', '/api/workloads/group'): 'operator',
     ('POST', '/api/workloads/logo'): 'operator',
+    ('POST', '/api/uptime/setting'): 'operator',
 }
 
 POLICY.update({
