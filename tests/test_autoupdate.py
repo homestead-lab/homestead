@@ -236,6 +236,17 @@ class TidyTests(unittest.TestCase):
                  {"kind": AU.KIND, "status": "failed", "auto_update": {"snapshots": [{"volume": "pvc-2", "snapshot": "y"}]}}])
         self.assertEqual(["before-update-x-2", "before-update-x-1"], removed, "manual snapshots and failed updates' are left alone")
 
+    def test_each_job_is_tidied_once(self):
+        asked = []
+        AU._tidied.clear()
+        AU.bind(None, None, None, lambda: {}, None, lambda volume: asked.append(volume) or [],
+                lambda volume, name: None, NAMES)
+        jobs = [{"id": "job-1", "kind": AU.KIND, "status": "succeeded",
+                 "auto_update": {"snapshots": [{"volume": "pvc-1", "snapshot": "before-update-x-1"}]}}]
+        AU.tidy(jobs)
+        AU.tidy(jobs)
+        self.assertEqual(["pvc-1"], asked, "Longhorn is asked once, not every minute")
+
 
 if __name__ == "__main__":
     unittest.main()

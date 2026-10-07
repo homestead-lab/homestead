@@ -163,6 +163,11 @@ def copy_of(dep, item, rows):
         claim = (v.get("persistentVolumeClaim") or {}).get("claimName")
         if claim in restored:
             volumes.append({"name": v["name"], "persistentVolumeClaim": {"claimName": restored[claim]}})
+        elif v.get("projected"):
+            # Without any service-account token it projects: the copy gets none.
+            sources = [s for s in v["projected"].get("sources") or [] if "serviceAccountToken" not in s]
+            volumes.append({**v, "projected": {**v["projected"], "sources": sources}} if sources
+                           else {"name": v["name"], "emptyDir": {}})
         elif any(k in v for k in KEEP_VOLUMES):
             volumes.append(v)
         else:                                       # a share, a host path, a claim with no backup
@@ -205,6 +210,13 @@ def fence(item, ns):
 def _ports(dep):
     return sorted({int(p["containerPort"]) for c in dep["spec"]["template"]["spec"].get("containers") or []
                    for p in c.get("ports") or [] if p.get("containerPort") and (p.get("protocol") or "TCP") == "TCP"})
+
+
+def privileged(dep):
+    """Whether the app runs a privileged container - so its copy does too."""
+    spec = dep["spec"]["template"]["spec"]
+    return any((c.get("securityContext") or {}).get("privileged")
+               for c in (spec.get("containers") or []) + (spec.get("initContainers") or []))
 
 
 def _pod(ns, item):
@@ -282,7 +294,7 @@ def resolve(item, checkpoint, now=None):
         dep = _get(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
         if not dep:
             return _finish(item, to, False, f"{name} was removed during the test")
-        to("checking", copy_at=now, ports=_ports(dep))
+        to("checking", copy_at=now, ports=_ports(dep), privileged=privileged(dep))
         _send("POST", f"/apis/networking.k8s.io/v1/namespaces/{ns}/networkpolicies", fence(item, ns))
         _send("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", copy_of(dep, item, ref["rows"]))
         return "running", 70, "Copy started, cut off from the network; waiting for it to be ready"
@@ -339,6 +351,8 @@ def _finish(item, to, ok, why):
     message = (("Restore test passed: " if ok else "Restore test failed: ") + why
                + (f". Restored {said}." if said else ".")
                + (" Not tested: " + "; ".join(f"{w['claim']} ({w['why']})" for w in skipped) + "." if skipped else "")
+               + (" The copy ran privileged, as the app does, so it could reach the host's devices; it had no network"
+                  " and none of the app's shares or host folders." if ref.get("privileged") else "")
                + (" Could not remove " + ", ".join(left) + "; remove them by hand." if left else ""))
     try:
         ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
