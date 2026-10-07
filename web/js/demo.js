@@ -2171,6 +2171,26 @@ ssh_pwauth: true
         const suggestion = i === rows.length - 1 ? null : w.name === "paperless" ? { ...t, name: "Paperless-ngx", match: "name" } : t ? { ...t, match: "image" } : null;
         return { ns: w.ns, name: w.name, images: w.images, suggestion };
       }).sort((a, b) => ({ image: 0, name: 1 }[a.suggestion?.match] ?? 2) - ({ image: 0, name: 1 }[b.suggestion?.match] ?? 2)) }),
+    // Change history (changes.js): an update by the demo user, a memory change
+    // made outside Homestead, and a job of Homestead's own.
+    "/api/changes": url => {
+      const now = Date.now() / 1000, name = url.searchParams.get("name");
+      const all = [
+        { id: "c1", namespace: "lab", name: "frigate", at: now - 3600 * 2, source: "homestead", by: "demo", can_undo: true,
+          changes: [{ field: "frigate: image", before: "ghcr.io/blakeblackshear/frigate:0.14.1", after: "ghcr.io/blakeblackshear/frigate:0.15.0" }] },
+        { id: "c2", namespace: "lab", name: "paperless", at: now - 86400 * 1.2, source: "outside", by: "", can_undo: true,
+          changes: [{ field: "app: memory max", before: "1Gi", after: "2Gi" }, { field: "app: env PAPERLESS_OCR_LANGUAGE", before: "eng", after: "eng+deu" }] },
+        { id: "c3", namespace: "lab", name: "frigate", at: now - 86400 * 3, source: "homestead", by: "", can_undo: true,
+          changes: [{ field: "Copies", before: "0", after: "1" }, { field: "frigate: env FRIGATE_RTSP_PASSWORD", before: "(hidden)", after: "(hidden, changed)" }] }];
+      return { entries: name ? all.filter(e => e.name === name) : all };
+    },
+    "/api/changes/undo/preview": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      return { capacity_token: "demo-undo", capacity: { blocked: false, warnings: ["Demo: the pod stops before its replacement starts."] },
+        changes: body.id === "c1" ? [{ field: "frigate: image", before: "ghcr.io/blakeblackshear/frigate:0.15.0", after: "ghcr.io/blakeblackshear/frigate:0.14.1" }]
+          : [{ field: "app: memory max", before: "2Gi", after: "1Gi" }] };
+    },
+    "/api/changes/undo": (url, init) => ({ ok: true, detail: `${JSON.parse(init?.body || "{}").name} is back to its settings from before that change; its pods are being replaced` }),
     // The storage forecast (homestead_forecast.py): frigate's config filling in
     // eleven days, a disk in six weeks, the pool steady.
     "/api/storage/forecast": () => {
