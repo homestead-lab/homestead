@@ -197,6 +197,7 @@ const DIALOGS = [
   ["workload-logo-fixup", "workloads", "logoFixup()"],
   ["vm-logo", "vms", "vmLogo('lab','ubuntu-test')"],
   ["workload-answering", "workloads", "wlAnswering('lab','paperless')"],
+  ["workload-update-mode", "workloads", "wlUpdateMode('lab','frigate')"],
   ["workload-start-capacity", "workloads", "wlScale('lab','doublecommander',1)"],
   ["stop-homestead", "workloads", "wlStopSelf('lab','homestead')"],
   ["failover", "workloads", "wlFailover()"],

@@ -1700,6 +1700,7 @@ def get_workloads():
             # The Helm release it belongs to, whose chart may name a logo.
             "helm_release": annotations.get("meta.helm.sh/release-name", ""),
             "answer_check": NAMES.read(annotations, "uptime"),
+            "update_mode": "auto" if NAMES.read(annotations, AUTOUPDATE.MODE) == "auto" else "manual",
             "group": NAMES.read(annotations, "group") or own_group(ns, name),
             "self": is_self(ns, name),
             "managed_smb": is_managed_smb(ns, name),
@@ -6530,6 +6531,7 @@ import homestead_node_parity as NODE_PARITY
 import homestead_host_os as HOST_OS
 import homestead_ports as PORTS
 import homestead_uptime as UPTIME
+import homestead_autoupdate as AUTOUPDATE
 import homestead_uplinks as UPLINKS
 import homestead_root_guard as ROOT_GUARD
 import homestead_os_rollout as OS_ROLLOUT
@@ -6751,6 +6753,72 @@ def host_bonds_apply(body, start=False):
     return HOST_BONDS.start(node, body, OPS, busy, servers)
 UPLINKS.bind(kget, ksend)
 OPS.RESOLVERS[UPLINKS.KIND] = UPLINKS.status
+OPS.RESOLVERS[AUTOUPDATE.KIND] = lambda item: AUTOUPDATE.resolve(item, OPS.checkpoint)
+
+
+def _prune_snapshot(volume, name):
+    """Remove one old before-update snapshot, as Data Protection would."""
+    plan = SNAPSHOT_DELETE.plan(volume, name)
+    if not plan["blockers"] and not plan["deleting"] and not plan["removed"]:
+        SNAPSHOT_DELETE.start({**plan, "confirmation": name}, OPS)
+
+
+AUTOUPDATE.bind(kget, ksend, UPDATES, lambda: UPTIME.report(),
+                lambda volume, name, annotations: LH.create_snapshot(volume, name, annotations),
+                lambda volume: LH.snapshots(volume), _prune_snapshot, NAMES)
+
+
+def autoupdate_tick():
+    """On the leader: start the next automatic update if the window is open,
+    and tidy old snapshots after ones that worked. Returns the app started."""
+    status = update_policy_status()
+    operations = OPS.list_operations()
+    AUTOUPDATE.tidy(operations)
+    report = UPDATES._LATEST.get("report") or {}
+    chosen = AUTOUPDATE.pick(cached("wl", 5, get_workloads), report, UPTIME.report(), operations,
+                             status["window_open"], status["policy"])
+    if not chosen:
+        return None
+    OPS.start(AUTOUPDATE.KIND, f"Update {chosen['name']} automatically",
+              {"kind": "Deployment", "name": chosen["name"], "namespace": chosen["ns"]},
+              "/containers?" + urllib.parse.urlencode({"find": chosen["name"]}),
+              {"namespace": chosen["ns"], "name": chosen["name"], "phase": "snapshot"},
+              "Snapshotting its volumes before the update")
+    _cache.pop("wl", None)
+    UPDATES.invalidate()
+    return chosen
+
+
+def _autoupdate_loop():
+    while True:
+        if LEADER.is_leader():
+            try:
+                autoupdate_tick()
+                beat("auto-updates", 60, leader_only=True)
+            except Exception as error:
+                beat("auto-updates", 60, error, leader_only=True)
+                print(f"auto-updates: {str(error)[:160]}", flush=True)
+        time.sleep(60)
+
+
+def set_update_mode(b):
+    """Whether an app updates itself inside the maintenance window. An annotation, so nothing restarts."""
+    ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "workload name")
+    guard_managed_smb(ns, name)
+    chosen = str(b.get("mode") or "")
+    if chosen not in ("auto", "manual"):
+        raise ValueError("choose auto or manual")
+    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    if chosen == "auto" and UPDATES.managed_by(dep):
+        raise ValueError(UPDATES.managed_message(ns, name, UPDATES.managed_by(dep)))
+    if chosen == "auto" and is_self(ns, name):
+        raise ValueError("Homestead updates itself from Settings › Updates")
+    ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
+          {"metadata": {"annotations": {NAMES.key(AUTOUPDATE.MODE): "auto" if chosen == "auto" else None}}},
+          ctype="application/merge-patch+json")
+    _cache.pop("wl", None)
+    return {"ok": True, "mode": chosen,
+            "detail": f"{name} updates itself in the maintenance window" if chosen == "auto" else f"{name} waits for you to update it"}
 DISKS.setup_module = DISK_SETUP
 DISK_SETUP.longhorn_block_paths = DISKS.longhorn_block_paths
 PASSTHROUGH.longhorn_block_paths = DISKS.longhorn_block_paths
@@ -7594,7 +7662,7 @@ OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
 LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
-              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks"}
+              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates"}
 
 
 def samba_state():
@@ -10042,6 +10110,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_vm_logos(b))
             if p == "/api/uptime/setting":
                 return self._send(200, set_uptime_setting(b))
+            if p == "/api/image-updates/mode":
+                return self._send(200, set_update_mode(b))
             if p == "/api/scale":
                 try:
                     scale_workload(b["ns"], b["name"], int(b["replicas"]),
@@ -11166,6 +11236,7 @@ def start_background_tasks():
     threading.Thread(target=fit_own_strategy, daemon=True).start()
     threading.Thread(target=_hardware_loop, daemon=True).start()
     threading.Thread(target=_uptime_loop, name="uptime", daemon=True).start()
+    threading.Thread(target=_autoupdate_loop, name="auto-updates", daemon=True).start()
     threading.Thread(target=_samba_loop, daemon=True).start()
     threading.Thread(target=_vmstore_loop, daemon=True).start()
     threading.Thread(target=finish_self_data_helpers, name="data-move-cleanup", daemon=True).start()

@@ -2135,6 +2135,12 @@ ssh_pwauth: true
       });
       return { apps, every: 60, down_after: 3, slow_ms: 2000 };
     },
+    "/api/image-updates/mode": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      const w = workloads.find(x => x.ns === body.ns && x.name === body.name);
+      if (w) w.update_mode = body.mode;
+      return { ok: true, mode: body.mode, detail: body.mode === "auto" ? `${body.name} updates itself in the maintenance window` : `${body.name} waits for you to update it` };
+    },
     "/api/uptime/setting": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       return { ok: true, detail: `${body.name} is ${({ auto: "checked automatically", off: "not checked", tcp: "checked by TCP connection" })[body.mode] || `checked at ${body.path || "/"}`}` };

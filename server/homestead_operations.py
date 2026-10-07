@@ -292,6 +292,10 @@ def _public(item):
         out["cleanable"] = False
     if item.get("kind") == "k3s-cluster":
         out["tracking_only"] = True
+    if item.get("kind") == "auto-update":
+        ref = item.get("ref") or {}
+        out["auto_update"] = {"namespace": ref.get("namespace", ""), "name": ref.get("name", ""),
+                              "phase": ref.get("phase", ""), "snapshots": ref.get("snapshots") or []}
     if item.get("kind") == "node-power":
         ref = item.get("ref") or {}
         out["power"] = {"phase": ref.get("phase", ""), "action": ref.get("action", ""), "node": ref.get("node", ""),
