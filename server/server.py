@@ -945,7 +945,9 @@ def schedule_act(item, action):
 
 
 def _schedules_loop():
-    """Every minute on the leader: any scheduled stop or start that is due."""
+    """Every minute on the leader: any scheduled stop or start that is due.
+    Its writes are noted as the schedule's, so change history leaves them out."""
+    CHANGES.REQUEST.user = CHANGES.BY_SCHEDULE
     while True:
         started = time.time()
         if LEADER.is_leader():
