@@ -782,6 +782,52 @@ def change_undo_plan(body):
     return current, proposed, rows, capacity, context
 
 
+def referenced_icons():
+    """Every cached logo something still uses: apps, VMs and portal links.
+    If any of them cannot be read, None - and no logo is removed."""
+    found = set()
+    try:
+        for d in kget("/apis/apps/v1/deployments").get("items", []):
+            found.add((d["metadata"].get("annotations") or {}).get(NAMES.key("icon"), ""))
+        try:
+            vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            vms = []
+        for v in vms:
+            found.add((v["metadata"].get("annotations") or {}).get(NAMES.key("icon"), ""))
+        for link in PORTAL.stored():
+            found.add(str(link.get("icon") or ""))
+    except Exception:
+        return None
+    return {f for f in found if f.startswith("/api/icons/")}
+
+
+def housekeeping_tidy():
+    refs = referenced_icons()
+    if refs is None:
+        # Not knowing what is in use, keep every logo; the rest still runs.
+        refs = {f"/api/icons/{os.path.basename(p)}" for p in HOUSEKEEPING._files("icons/*")}
+    result = HOUSEKEEPING.tidy(refs)
+    _cache.pop("housekeeping", None)
+    return result
+
+
+def _housekeeping_loop():
+    """Once a day on the leader, ten minutes after start: keep the data volume in bounds."""
+    time.sleep(600)
+    while True:
+        if LEADER.is_leader():
+            try:
+                housekeeping_tidy()
+                beat("housekeeping", 86400, leader_only=True)
+            except Exception as error:
+                beat("housekeeping", 86400, error, leader_only=True)
+                print(f"housekeeping: {str(error)[:160]}", flush=True)
+        time.sleep(86400)
+
+
 def node_impact(node):
     """If this host goes down: what stops, moves and is at risk (homestead_impact)."""
     node = _dns_name(node, "host name")
@@ -6642,6 +6688,9 @@ import homestead_node_parity as NODE_PARITY
 import homestead_host_os as HOST_OS
 import homestead_ports as PORTS
 import homestead_uptime as UPTIME
+import homestead_housekeeping as HOUSEKEEPING
+
+
 import homestead_impact as IMPACT
 import homestead_changes as CHANGES
 import homestead_forecast as FORECAST
@@ -6764,6 +6813,7 @@ NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR, (S
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 PORTS.bind(DATA_DIR)
 UPTIME.bind(DATA_DIR)
+HOUSEKEEPING.bind(DATA_DIR)
 CHANGES.bind(DATA_DIR)
 FORECAST.bind(DATA_DIR)
 
@@ -7119,6 +7169,7 @@ def _alert_sources():
     take("hostos", HOST_OS.alert_facts)
     take("ports", lambda: PORTS.alert_facts(cached("ports", 20, ports_report)))
     take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
+    take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 600, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("rootguard", ROOT_GUARD.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
@@ -7839,7 +7890,7 @@ OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
 LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
-              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "changes": "Change history"}
+              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "changes": "Change history", "housekeeping": "Data housekeeping"}
 
 
 def samba_state():
@@ -9843,6 +9894,10 @@ class H(HTTP.LimitedHandler):
             if p == "/api/changes":
                 ns, name = (q.get("ns") or [""])[0], (q.get("name") or [""])[0]
                 return self._send(200, {"entries": CHANGES.history(ns or None, name or None)})
+            if p == "/api/homestead/data":
+                return self._send(200, cached("housekeeping", 60, HOUSEKEEPING.report))
+
+
             if p == "/api/nodes/impact":
                 return self._send(200, node_impact((q.get("node") or [""])[0]))
             if p == "/api/storage/forecast":
@@ -10319,6 +10374,11 @@ class H(HTTP.LimitedHandler):
                 UPDATES.refresh_soon(ns, name)
                 return self._send(200, {"ok": True, "changes": rows,
                                         "detail": f"{name} is back to its settings from before that change; its pods are being replaced"})
+            if p == "/api/homestead/data/tidy":
+                result = housekeeping_tidy()
+                mb = result["freed"] / 1024**2
+                return self._send(200, {"ok": True, **result, "report": HOUSEKEEPING.report(),
+                                        "detail": (f"Freed {mb:.1f} MB: " + "; ".join(result["notes"])) if result["notes"] else "Nothing to tidy"})
             if p == "/api/restore-tests/settings":
                 enabled = b.get("enabled")
                 if not isinstance(enabled, bool):
@@ -11457,6 +11517,7 @@ def start_background_tasks():
     threading.Thread(target=fit_own_strategy, daemon=True).start()
     threading.Thread(target=_hardware_loop, daemon=True).start()
     threading.Thread(target=_uptime_loop, name="uptime", daemon=True).start()
+    threading.Thread(target=_housekeeping_loop, name="housekeeping", daemon=True).start()
     threading.Thread(target=_changes_loop, name="changes", daemon=True).start()
     threading.Thread(target=_forecast_loop, name="forecast", daemon=True).start()
     threading.Thread(target=_autoupdate_loop, name="auto-updates", daemon=True).start()

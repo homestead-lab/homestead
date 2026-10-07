@@ -2171,6 +2171,23 @@ ssh_pwauth: true
         const suggestion = i === rows.length - 1 ? null : w.name === "paperless" ? { ...t, name: "Paperless-ngx", match: "name" } : t ? { ...t, match: "image" } : null;
         return { ns: w.ns, name: w.name, images: w.images, suggestion };
       }).sort((a, b) => ({ image: 0, name: 1 }[a.suggestion?.match] ?? 2) - ({ image: 0, name: 1 }[b.suggestion?.match] ?? 2)) }),
+    // Homestead's own data (views-settings.js), shaped like a real volume.
+    "/api/homestead/data": () => {
+      const KB = 1024, MB = 1024 ** 2;
+      return { pressure_pct: 80, total: 1.3 * MB, last_at: Date.now() / 1000 - 3600 * 5,
+        last: { freed: 8 * KB, notes: ["removed 1 file an interrupted write left"], pressure: false },
+        volume: { size: 1.9 * 1024 ** 3, used: 1.4 * MB, free: 1.9 * 1024 ** 3 - 1.4 * MB, pct: 0.1 },
+        stores: [
+          { label: "Logos", size: 544 * KB, files: 38, kept: "while something uses them, then 30 days" },
+          { label: "Long-term stats", size: 180 * KB, files: 2, kept: "live for an hour, five-minutely for 2 days, hourly for 90 days" },
+          { label: "Alerts", size: 108 * KB, files: 1, kept: "what is active, and recent alerts" },
+          { label: "Change history", size: 96 * KB, files: 1, kept: "50 changes per app, for 180 days" },
+          { label: "Image update history", size: 56 * KB, files: 1, kept: "365 days, at most 5000 entries" },
+          { label: "Jobs", size: 40 * KB, files: 1, kept: "the last 100 jobs" },
+          { label: "Monitoring history", size: 12 * KB, files: 1, kept: "hour by hour for 30 days" },
+          { label: "Settings and other state", size: 150 * KB, files: 24, kept: "as long as it is needed" }] };
+    },
+    "/api/homestead/data/tidy": () => ({ ok: true, freed: 0, notes: [], detail: "Nothing to tidy", report: null }),
     // If this host goes down (impact.js): one of each outcome.
     "/api/nodes/impact": url => {
       const node = url.searchParams.get("node") || "harvester-node2";
