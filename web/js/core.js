@@ -538,13 +538,36 @@ function labelStackTables(root = document) {
     // for the column, not the cell, so every card in the list is laid out
     // alike: one long value would otherwise move its row's fields around.
     const wide = new Set();
+    // Its words as they read: chips side by side are separate words, not one.
+    const words = cell => { const parts = [], walk = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT); let n;
+      while ((n = walk.nextNode())) if (n.textContent.trim()) parts.push(n.textContent.trim());
+      return parts.join(" "); };
     rows.flat().forEach(([cell, span, at]) => {
-      const text = cell.textContent.trim();
+      const text = words(cell);
       if (span === 1 && at > 0 && (text.length > 34 || (text.length > 18 && !/\s/.test(text)))) wide.add(at);
     });
     rows.flat().forEach(([cell, span, at]) => {
       if (span === 1 && !cell.hasAttribute("data-label")) cell.dataset.label = heads[at] || "";
       if (span === 1 && wide.has(at)) cell.dataset.wide = "";
+    });
+    // A card's actions - a Remove, a Snapshots, a "..." - sit beside its
+    // title on a phone rather than on a line of their own, when they fit:
+    // the title keeps their width clear (--acts), estimated from the labels.
+    rows.forEach(cells => {
+      const last = cells[cells.length - 1];
+      if (!last || cells.length < 2) return;
+      const [cell, span] = last;
+      if (span !== 1 || cell.dataset.label !== "") return;
+      const controls = [...cell.querySelectorAll("button, a.btn, .btn, details.actionmenu > summary")].filter(c => !c.closest(".actionmenu-pop"));
+      const loose = [...cell.childNodes].some(n => n.nodeType === 3 && n.textContent.trim());
+      if (!controls.length || controls.length > 3 || loose) return;
+      const width = controls.reduce((sum, c) => {
+        const text = c.textContent.trim().replace(/^[＋↻←]+\s*/, "");
+        return sum + (text ? text.length * 7.2 + 28 : 34) + (c.querySelector("svg") || /^(delete|remove|edit|logs?|console|move|restart|start|stop|update|rollback)/i.test(text) ? 18 : 0);
+      }, 0) + (controls.length - 1) * 8;
+      if (width > 200) return;
+      cell.dataset.top = "";
+      cell.parentElement.style.setProperty("--acts", `${Math.ceil(width)}px`);
     });
   });
 }

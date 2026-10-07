@@ -2241,6 +2241,10 @@ html[data-theme="light"] .ui-meter .now{background:rgba(0,0,0,.35)}html[data-the
   .tbl.stack td .row,.tbl.stack td[data-label=""] .row{justify-content:flex-start}
   .tbl.stack td[data-label=""]{display:flex;flex-wrap:wrap;gap:8px;padding-top:4px}
   .tbl.stack td .meter{min-width:0}
+  /* A card's actions beside its title, not on a line of their own; the
+     title keeps their width clear. Compact tables place their own. */
+  .tbl.stack:not(.compact) td[data-top]{grid-row:1;grid-column:1/-1;justify-self:end;align-self:start;width:auto!important;justify-content:flex-end;flex-wrap:nowrap;padding-top:0;z-index:1}
+  .tbl.stack:not(.compact) tr:has(>td[data-top])>td:first-child{grid-row:1;padding-right:calc(var(--acts, 0px) + 10px)}
   .ui-stats{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
   .ui-stats>.statwide{grid-column:1/-1}
   .about-grid,.ui-facts{grid-template-columns:repeat(2,minmax(0,1fr))}
