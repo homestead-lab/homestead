@@ -3533,3 +3533,8 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .answer-mode{display:flex;gap:10px;align-items:flex-start;cursor:pointer}
 .answer-mode input{margin-top:3px;flex:none}.answer-mode>span{display:grid;gap:1px}
 .answer-path{margin-left:26px}
+/* A VM's logo beside its name in rows. */
+.tbl td.cell-name>.vm-name-cell,.tbl.stack.compact td.cell-name>.vm-name-cell{display:flex;align-items:center;gap:10px;min-width:0}
+.vm-name-text{min-width:0}
+/* An OS logo is a tile of its own: it fills the avatar rather than sitting in a circle. */
+.av.appav.os-logo{border-radius:9px;background:none;box-shadow:none}.av.appav.os-logo img{padding:0}

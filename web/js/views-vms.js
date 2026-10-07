@@ -205,6 +205,7 @@ function vmActions(v, compact = false) {
         <button onclick="this.closest('details').open=false;vmOpen(${jsq(v.ns)},${jsq(v.name)})">${icon("list")}Details</button>
         ${main.filter(a => !shown.includes(a)).map(a => `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(a)})">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
         <button data-need="operator" onclick="this.closest('details').open=false;vmEdit(${jsq(v.ns)},${jsq(v.name)})">${icon("edit")}Edit</button>
+        <button data-need="operator" onclick="this.closest('details').open=false;vmLogo(${jsq(v.ns)},${jsq(v.name)})">${icon("logo")}Logo</button>
         ${v.actions.includes("pause") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'pause')">${icon("pause")}Pause</button>` : ""}
         ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove(${jsq(v.ns)},${jsq(v.name)})">${icon("move")}Move host</button>` : ""}
         ${FLEET.view?.linked ? `<button data-need="admin" title="Move it to another linked cluster, disks and all" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")},'move',${jsq(v.ns)})">${icon("move")}Move to cluster</button>` : ""}
@@ -215,12 +216,19 @@ function vmActions(v, compact = false) {
 }
 
 /* The same VMs as rows: everything a card says, one VM a line. */
+/* A VM's logo: one set for it, else its OS's, else its initials. */
+function vmAvatar(v, cls = "") {
+  if (v.icon) return appAvatar(v.name, v.icon, cls);
+  if (v.os_logo) return appAvatar(v.name, `/assets/os-${v.os_logo}.svg`, `os-logo ${cls}`);
+  return `<div class="av n3 ${cls}">${esc(String(v.name || "?").slice(0, 2).toUpperCase())}</div>`;
+}
+
 function vmTable(rows) {
   return `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact vm-table" data-sort="vms" data-sort-controls="vms"><thead><tr>
     <th>VM</th><th>Status</th><th>Address</th><th>CPU</th><th>RAM</th><th>Disk IO</th><th data-nosort></th></tr></thead><tbody>
     ${rows.map(v => `<tr class="clickable"${clusterAttr(v)} onclick="if(!event.target.closest('button,details,a'))vmOpen(${jsq(v.ns)},${jsq(v.name)})">
-      <td class="cell-name" data-sort="${esc(v.name)}"><b>${esc(v.name)}</b> ${clusterTag(v)}${vmClusterTag(v)}
-        <div class="dim xs vm-sub">${esc([v.ns, v.os, v.node ? `on ${v.node}` : ""].filter(Boolean).join(" · "))}</div></td>
+      <td class="cell-name" data-sort="${esc(v.name)}"><div class="vm-name-cell">${vmAvatar(v)}<div class="vm-name-text"><b>${esc(v.name)}</b> ${clusterTag(v)}${vmClusterTag(v)}
+        <div class="dim xs vm-sub">${esc([v.ns, v.os, v.node ? `on ${v.node}` : ""].filter(Boolean).join(" · "))}</div></div></div></td>
       <td data-label="Status" data-status data-sort="${esc(v.status)}"><span class="pill ${vmTone(v.status)}" data-tip="${esc([v.status, v.problem].filter(Boolean).join(": "))}">${esc(v.status)}</span>
         ${v.restart_required ? '<div class="dim xs">restart to apply changes</div>' : ""}
         ${(v.filling || []).length ? `<div class="dim xs">${esc(VM_FILL_WORDS[v.filling[0].phase] || v.filling[0].phase)}${v.filling[0].progress != null ? ` · ${v.filling[0].progress.toFixed(0)}%` : ""}</div>` : ""}</td>
@@ -253,7 +261,7 @@ function vmCard(v) {
   const sub = [v.ns, v.os, v.cluster ? `${v.cluster}${v.cluster_role ? ` ${v.cluster_role}` : ""}` : ""].filter(Boolean).join(" · ");
   return `<div class="card flat vm-card vm-${vmTone(v.status)}"${clusterAttr(v)}>
     <div class="between vm-head">
-      <a class="vm-title" onclick="vmOpen(${jsq(v.ns)},${jsq(v.name)})"><div class="av n3">${esc(v.name.slice(0, 2).toUpperCase())}</div>
+      <a class="vm-title" onclick="vmOpen(${jsq(v.ns)},${jsq(v.name)})">${vmAvatar(v)}
         <div class="vm-name"><b title="${esc(v.description || v.name)}">${esc(v.name)}</b><div class="dim xs" title="${esc(sub)}">${esc(sub)}</div></div></a>
       <span class="row nowrap" style="gap:6px">${clusterTag(v)}<span class="pill ${vmTone(v.status)}" ${v.problem ? `data-tip="${esc(v.problem)}"` : ""}>${esc(v.status)}</span></span></div>
     ${v.problem ? `<div class="note bad vm-problem">${esc(v.problem)}</div>` : ""}

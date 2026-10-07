@@ -242,6 +242,9 @@
       disks: [vmDisk("ubuntu-test-disk-0", "40Gi")], migratable: false, restart_required: true,
       problem: "0/3 nodes are available: 3 Insufficient memory.", created: "2026-09-23T10:00:00Z", actions: ["stop", "force-stop"] },
   ];
+  // Each VM's logo as the server works it out (homestead_logos.os_logo).
+  demoVms.forEach(v => { v.os_logo = /home\s*assistant/i.test(v.os) ? "homeassistant" : /windows/i.test(v.os) ? "windows" : /ubuntu/i.test(v.os) ? "ubuntu" : ""; });
+
   let portalLinks = [
     { id: "demo0", title: "Home Assistant", url: "http://192.0.2.215:8123", section: "Home", icon: "workload:lab/home-assistant", note: "", shown: { kind: "letter" } },
     { id: "demo1", title: "Frigate", url: "http://192.0.2.214:5000", section: "Home", icon: "workload:lab/frigate", note: "cameras", shown: { kind: "letter" } },
@@ -2147,6 +2150,18 @@ ssh_pwauth: true
         const suggestion = i === rows.length - 1 ? null : w.name === "paperless" ? { ...t, name: "Paperless-ngx", match: "name" } : t ? { ...t, match: "image" } : null;
         return { ns: w.ns, name: w.name, images: w.images, suggestion };
       }).sort((a, b) => ({ image: 0, name: 1 }[a.suggestion?.match] ?? 2) - ({ image: 0, name: 1 }[b.suggestion?.match] ?? 2)) }),
+    "/api/vms/logo": (url, init) => {
+      const items = JSON.parse(init?.body || "{}").items || [];
+      for (const item of items) {
+        const v = demoVms.find(x => x.ns === item.ns && x.name === item.name);
+        if (!v) continue;
+        v.icon = item.icon || "";
+        v.has_logo = !!item.icon;
+        v.logo_os_set = !!item.os;
+        if (item.os) v.os_logo = item.os;
+      }
+      return { ok: true, done: items.length, failed: [], detail: items.some(i => i.icon || i.os) ? "1 logo saved" : "back to its OS's logo" };
+    },
     "/api/workloads/logo": (url, init) => {
       const items = JSON.parse(init?.body || "{}").items || [];
       for (const item of items) {

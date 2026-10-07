@@ -1696,6 +1696,8 @@ def get_workloads():
             # A logo whose cached copy is being fetched again still counts as one.
             "has_logo": bool(NAMES.read(annotations, "icon")),
             "logo_skipped": NAMES.read(annotations, "logo-skipped") == "true",
+            # The Helm release it belongs to, whose chart may name a logo.
+            "helm_release": annotations.get("meta.helm.sh/release-name", ""),
             "answer_check": NAMES.read(annotations, "uptime"),
             "group": NAMES.read(annotations, "group") or own_group(ns, name),
             "self": is_self(ns, name),
@@ -1783,12 +1785,61 @@ def set_workload_logos(b):
             "detail": detail + (f"; {len(failed)} could not be: " + "; ".join(failed[:3]) if failed else "")}
 
 
-def logo_choices(ns, name, term):
-    """The picker's tiles for one workload: its image's match, then a search."""
-    workload = next((w for w in cached("wl", 5, get_workloads) if w.get("ns") == ns and w.get("name") == name), None)
+def set_vm_logos(b):
+    """Gives VMs a logo: an image (kept like a workload's), one of the OS
+    logos, or neither - back to the OS the VM reports. Only the VM's own
+    annotations change, so it does not restart."""
+    items = b.get("items") or []
+    if not items:
+        raise ValueError("choose at least one VM")
+    if len(items) > 200:
+        raise ValueError("at most 200 VMs at a time")
+    plans = []
+    for item in items:
+        ns, name = _dns_name(item.get("ns"), "namespace"), _dns_name(item.get("name"), "VM name")
+        source, os_key = str(item.get("icon") or "").strip(), str(item.get("os") or "").strip()
+        if source and not source.startswith(("https://", "http://")):
+            raise ValueError("a logo is a public http:// or https:// address")
+        if os_key and os_key not in LOGOS.OS_KEYS:
+            raise ValueError(f"there is no OS logo {os_key[:40]}")
+        plans.append((ns, name, source, os_key))
+    done, failed = 0, []
+    for ns, name, source, os_key in plans:
+        try:
+            cached_ref = ICONS.persist(source, DATA_DIR) if source else ""
+            ksend("PATCH", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}",
+                  {"metadata": {"annotations": {NAMES.key("icon"): cached_ref or None,
+                                                NAMES.key("icon-source"): source or None,
+                                                NAMES.key("logo-os"): os_key or None}}},
+                  ctype="application/merge-patch+json")
+            done += 1
+        except Exception as e:
+            failed.append(f"{name}: {e}")
+    _cache.pop("vms", None)
+    detail = (f"{done} logo{'s' if done != 1 else ''} saved" if any(s or o for *_, s, o in plans)
+              else "back to its OS's logo") + (f"; {len(failed)} could not be: " + "; ".join(failed[:3]) if failed else "")
+    return {"ok": not failed, "done": done, "failed": failed, "detail": detail}
+
+
+def helm_chart_logos():
+    """{(namespace, release): {name, icon}} for every Helm release whose chart names a logo."""
+    try:
+        rows = cached("helm-logos", 60, HELM.releases)
+    except Exception:
+        return {}
+    return {(r["namespace"], r["name"]): {"name": r.get("chart") or r["name"], "icon": r.get("icon", "")}
+            for r in rows if r.get("icon")}
+
+
+def logo_choices(ns, name, term, kind="workload"):
+    """The picker's tiles for one workload: its chart's logo and its image's
+    match, then a search. A VM has no image, so it is the search alone."""
+    workload = None if kind == "vm" else next(
+        (w for w in cached("wl", 5, get_workloads) if w.get("ns") == ns and w.get("name") == name), None)
     images = (workload or {}).get("images") or []
-    return {"tiles": LOGOS.suggest(fetch_appstore(), images, term if term is not None else name, search_appstore),
-            "images": images}
+    chart = helm_chart_logos().get((ns, (workload or {}).get("helm_release"))) if workload else None
+    return {"tiles": LOGOS.suggest(fetch_appstore(), images, term if term is not None else name, search_appstore,
+                                   chart=chart), "images": images}
 
 
 def protection_issues(jobs, target):
@@ -4826,6 +4877,11 @@ def vm_create_configuration(body, *, preview=False):
     if cfg.get("store_id"):
         source = VMSTORE.source_for(str(cfg["store_id"]))
         cfg["image_id"], cfg["image_url"] = source.get("image_id", ""), source.get("image_url", "")
+        # What it runs, as Harvester labels it, so it has its OS's logo before its agent says.
+        entry = VMSTORE.BY_ID.get(str(cfg["store_id"])) or {}
+        os_key = LOGOS.os_logo(entry.get("distro"), cfg["store_id"])
+        if os_key:
+            cfg["labels"] = {**(cfg.get("labels") or {}), VMS.OS_LABEL: os_key}
         cfg["disk_gb"] = max(int(cfg.get("disk_gb") or 0), source["min_gb"])
     cfg["storage_class"] = str(cfg.get("storage_class") or vm_default_class())
     return cfg
@@ -6543,7 +6599,7 @@ def ktable(path, timeout=20):
 
 
 RESOURCES.bind(kget, ksend, ktable)
-VMS.bind(kget, ksend, RESOURCES.events_for)
+VMS.bind(kget, ksend, RESOURCES.events_for, lambda annotations: display_icon(annotations))
 VMUSAGE.bind(kget)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
 LHCAP.bind(kget, ksend, v2_engine_status)
@@ -9512,7 +9568,7 @@ class H(HTTP.LimitedHandler):
             if p == "/api/logos":
                 try:
                     return self._send(200, logo_choices((q.get("ns") or [""])[0], (q.get("name") or [""])[0],
-                                                        (q.get("q") or [None])[0]))
+                                                        (q.get("q") or [None])[0], (q.get("kind") or ["workload"])[0]))
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
             if p == "/api/uptime":
@@ -9523,7 +9579,7 @@ class H(HTTP.LimitedHandler):
                     apps = fetch_appstore()
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
-                return self._send(200, {"apps": LOGOS.missing(cached("wl", 5, get_workloads), apps)})
+                return self._send(200, {"apps": LOGOS.missing(cached("wl", 5, get_workloads), apps, helm_chart_logos())})
             if p == "/api/appstore":
                 term = (q.get("q") or [""])[0].lower().strip()
                 cat = (q.get("cat") or [""])[0].lower().strip()
@@ -9959,6 +10015,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_workload_groups(b))
             if p == "/api/workloads/logo":
                 return self._send(200, set_workload_logos(b))
+            if p == "/api/vms/logo":
+                return self._send(200, set_vm_logos(b))
             if p == "/api/uptime/setting":
                 return self._send(200, set_uptime_setting(b))
             if p == "/api/scale":

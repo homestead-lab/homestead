@@ -37,6 +37,7 @@ KNOWN_PORTS = {
 
 # Keys that only mean something to Docker, listed together rather than one
 # warning each.
+ICON_LABELS = ("homestead.icon", "net.unraid.docker.icon")
 IGNORED = {
     "labels", "logging", "networks", "extra_hosts", "dns", "dns_search", "dns_opt",
     "hostname", "domainname", "sysctls", "ulimits", "security_opt", "stop_signal",
@@ -407,6 +408,16 @@ def _service(key, svc, ctx, variables):
         "network_mode": "loadbalancer", "vip_mode": ctx.vip_mode, "lb_ip": "",
         "env_bindings": {}, "compose_service": key,
     }
+    # Its logo, where the file names one: Unraid's label, or Homestead's own.
+    labels = svc.get("labels") or {}
+    if isinstance(labels, list):
+        labels = dict(str(item).split("=", 1) for item in labels if "=" in str(item))
+    if isinstance(labels, dict):
+        for label in ICON_LABELS:
+            value = str(labels.get(label) or "").strip()
+            if value.startswith(("https://", "http://")):
+                cfg["icon"] = value
+                break
 
     # What runs.
     entrypoint = _words(svc.get("entrypoint"), "entrypoint", report, at("entrypoint"))

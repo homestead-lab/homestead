@@ -12,6 +12,29 @@ import re
 LIMIT = 24
 _REF = re.compile(r"^[a-z0-9][a-z0-9._/:@+-]*$")
 
+# Each operating system Homestead has a logo for (web/assets/os-<key>.svg),
+# with what its guest agent, Harvester's label or an image name call it.
+# More particular names come before the families they belong to.
+OS_LOGOS = [
+    ("homeassistant", r"home\s*assistant|haos"), ("truenas", r"truenas|freenas"), ("unraid", r"unraid"),
+    ("proxmox", r"proxmox|\bpve\b"), ("opnsense", r"opnsense"), ("pfsense", r"pfsense"), ("talos", r"talos"),
+    ("k3s", r"\bk3s\b"), ("popos", r"pop[!_ ]?_?os"), ("linuxmint", r"\bmint\b"), ("kalilinux", r"\bkali\b"),
+    ("elementary", r"elementary"), ("zorin", r"zorin"), ("ubuntu", r"ubuntu"), ("debian", r"debian"),
+    ("rockylinux", r"\brocky"), ("almalinux", r"\balma"), ("centos", r"centos"),
+    ("redhat", r"red\s*hat|\brhel\b"), ("opensuse", r"opensuse|\bleap\b|tumbleweed"), ("suse", r"\bsuse|\bsles\b"),
+    ("archlinux", r"\barch\b|archlinux"), ("manjaro", r"manjaro"), ("alpinelinux", r"alpine"), ("nixos", r"\bnixos\b"),
+    ("gentoo", r"gentoo"), ("freebsd", r"freebsd"), ("openbsd", r"openbsd"), ("android", r"android"),
+    ("windows", r"windows|mswindows|\bwin(10|11|2k|20\d\d)\b"), ("linux", r"\blinux\b"),
+]
+OS_KEYS = [key for key, _ in OS_LOGOS]
+_OS = [(key, re.compile(pattern, re.I)) for key, pattern in OS_LOGOS]
+
+
+def os_logo(*names):
+    """The bundled logo for whatever these names say the OS is, or ""."""
+    text = " ".join(str(n or "") for n in names)
+    return next((key for key, pattern in _OS if pattern.search(text)), "")
+
 
 def image_repo(ref):
     """An image's repository without its registry, tag or digest, lower case.
@@ -51,12 +74,26 @@ def image_matches(apps, images):
     return sorted(found, key=lambda a: -int(a.get("downloads") or 0))
 
 
-def suggest(apps, images, term, search, limit=LIMIT):
-    """Tiles for the picker: image matches, then what search(apps, term) finds.
+def chart_tile(chart):
+    """The logo a Helm chart names for itself, as a tile; None without one.
+    chart: {name, icon} from the app's Helm release."""
+    icon = str((chart or {}).get("icon") or "")
+    if not icon.startswith(("https://", "http://")):
+        return None
+    return {"name": str(chart.get("name") or "chart"), "icon": icon, "repo": "", "key": f"chart|{icon}", "match": "chart"}
+
+
+def suggest(apps, images, term, search, limit=LIMIT, chart=None):
+    """Tiles for the picker: its Helm chart's logo, image matches, then what
+    search(apps, term) finds.
 
     search is the app store's own ranking, so the picker finds what the store
     would. One tile per logo: the same picture under two names is one choice."""
     tiles, seen = [], set()
+    own = chart_tile(chart)
+    if own:
+        tiles.append(own)
+        seen.add(own["icon"])
     for match, found in (("image", image_matches(apps, images)),
                          ("name", search(apps, term) if str(term or "").strip() else [])):
         for app in found:
@@ -69,11 +106,15 @@ def suggest(apps, images, term, search, limit=LIMIT):
     return tiles
 
 
-def best_guess(apps, images, name):
+def best_guess(apps, images, name, chart=None):
     """One suggestion for an app with no logo, or None.
 
-    An image match is near certain. A catalogue app with exactly the app's name
-    is a fair guess, offered but not chosen for you."""
+    The logo its own Helm chart names, or an image match, is near certain. A
+    catalogue app with exactly the app's name is a fair guess, offered but not
+    chosen for you."""
+    own = chart_tile(chart)
+    if own:
+        return own
     found = image_matches(apps, images)
     if found:
         return _tile(found[0], "image")
@@ -85,14 +126,17 @@ def best_guess(apps, images, name):
     return None
 
 
-def missing(workloads, apps):
-    """Apps that can have a logo and have none, each with its best guess."""
+def missing(workloads, apps, charts=None):
+    """Apps that can have a logo and have none, each with its best guess.
+    charts: {(namespace, release): {name, icon}} for apps Helm installed."""
+    charts = charts or {}
     out = []
     for w in workloads or []:
         if w.get("icon") or w.get("has_logo") or w.get("logo_skipped") or w.get("platform") or w.get("self") or w.get("homestead") \
                 or w.get("managed_smb") or w.get("managed_nfs") or w.get("site"):
             continue
         out.append({"ns": w.get("ns"), "name": w.get("name"), "images": list(w.get("images") or []),
-                    "suggestion": best_guess(apps, w.get("images"), w.get("name"))})
-    order = {"image": 0, "name": 1, None: 2}
+                    "suggestion": best_guess(apps, w.get("images"), w.get("name"),
+                                             charts.get((w.get("ns"), w.get("helm_release"))))})
+    order = {"chart": 0, "image": 0, "name": 1, None: 2}
     return sorted(out, key=lambda r: (order[(r["suggestion"] or {}).get("match")], r["ns"] or "", r["name"] or ""))
