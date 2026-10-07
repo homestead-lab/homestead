@@ -1891,7 +1891,7 @@ window.deployRemovePrimary = async () => {
 window.deployRemoveContainer = index => {
   $(`#d_extra_containers .edit-container[data-index="${index}"]`).remove(); syncSummary();
 };
-const deployDefaults = () => ({ name: "", workload_name: "", container_name: "", image: "", icon: "", namespace: "lab", replicas: 1,
+const deployDefaults = () => ({ name: "", workload_name: "", container_name: "", image: "", icon: "", namespace: typeof defaultNamespace === "function" ? defaultNamespace() : "lab", replicas: 1,
   cpu: "50m", memory: "128Mi", memory_limit: "", ports: [], env: {}, env_meta: [], volumes: [], hardware: [],
   template_devices: [], target_mode: "new", target_workload: "", network_mode: "loadbalancer",
   vip_mode: "shared", lb_ip: "", env_bindings: {}, app_profile: null });

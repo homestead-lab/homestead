@@ -181,6 +181,24 @@ as much of its logs, removes unused logos at once and raises an alert naming the
 largest stores. **Clean up now** does the daily tidy at once (admin). Homestead
 writes a file only when what it holds has changed.
 
+## Namespaces
+
+**Settings › Hardware and storage › Namespaces** lists the namespaces your apps
+can go in - Harvester's, Rancher's and Kubernetes' own are hidden - with what each
+holds. **Create** makes one, and Deploy offers it at once; **Delete** removes an
+empty one.
+
+One is the **default for new apps**: `lab`, unless another was chosen when
+Homestead was installed (`workloadNamespace.name` in the Helm chart, `DEFAULT_NS`
+in the manifest). Deploy starts with it selected. Homestead also keeps its own
+settings, the network shares and the node probe there, so the default is not
+changed from the page: moving those on a running cluster would leave them behind.
+To keep your apps somewhere else, create a namespace and pick it in Deploy.
+
+Three are marked **Kept** and cannot be deleted from here: the default (new apps
+go there, and so does Homestead's own state), the namespace Homestead itself runs
+in, and Kubernetes' own `default`.
+
 ## Sign-in history
 
 Every sign-in to Homestead, failed attempt, sign-out, password change and

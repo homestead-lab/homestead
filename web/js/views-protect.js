@@ -723,7 +723,8 @@ window.lhRestore = async backup => {
       api(`/api/lh/restore/plan?backup=${encodeURIComponent(backup)}&ns=&name=`),
       api("/api/namespaces"),
     ]);
-    const defaultNs = namespaces.includes("lab") ? "lab" : (namespaces[0] || "default");
+    const preferred = typeof defaultNamespace === "function" ? defaultNamespace() : "lab";
+    const defaultNs = namespaces.includes(preferred) ? preferred : (namespaces[0] || "default");
     $("#mbody").innerHTML = `
       <div class="note"><b>This creates a new PVC.</b> The backup and its source volume stay unchanged.
         Restore progress remains in the active-jobs tray if this dialog is closed or Homestead is refreshed.</div>

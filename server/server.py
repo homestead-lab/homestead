@@ -724,6 +724,23 @@ def _uptime_loop():
         time.sleep(max(5, UPTIME.CHECK_EVERY - (time.time() - started)))
 
 
+def _unifi_loop():
+    """Hourly on the leader, while UniFi is connected: its clients and names
+    as they are now, rather than as they were when someone last pressed Sync."""
+    time.sleep(120)
+    while True:
+        if LEADER.is_leader():
+            try:
+                if IPAM.sync_due():
+                    IPAM.sync_unifi()
+                beat("unifi", 600, leader_only=True)
+            except Exception as error:
+                # The failure is recorded on the card (last_error); the loop carries on.
+                beat("unifi", 600, leader_only=True)
+                print(f"unifi: {str(error)[:160]}", flush=True)
+        time.sleep(600)
+
+
 def _forecast_loop():
     """Hourly on the leader: today's usage of each volume, disk and the pool."""
     while True:
@@ -8078,7 +8095,7 @@ OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
 LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
-              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "changes": "Change history", "housekeeping": "Data housekeeping", "schedules": "Schedules"}
+              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "changes": "Change history", "housekeeping": "Data housekeeping", "schedules": "Schedules", "unifi": "UniFi sync"}
 
 
 def samba_state():
@@ -9669,6 +9686,8 @@ class H(HTTP.LimitedHandler):
                                         "session_expires": who.get("expires") if who else None,
                                         "session_started": who.get("started") if who else None,
                                         "session_max_days": AUTH.ABSOLUTE_TTL // 86400,
+                                        # Where Deploy puts a new app unless told otherwise.
+                                        "default_namespace": DEFAULT_NS if who else None,
                                         "roles": list(AUTH.ROLES)})
             if p == "/api/fleet":
                 self._who()
@@ -11727,6 +11746,7 @@ def start_background_tasks():
     threading.Thread(target=_schedules_loop, name="schedules", daemon=True).start()
     threading.Thread(target=_changes_loop, name="changes", daemon=True).start()
     threading.Thread(target=_forecast_loop, name="forecast", daemon=True).start()
+    threading.Thread(target=_unifi_loop, name="unifi", daemon=True).start()
     threading.Thread(target=_autoupdate_loop, name="auto-updates", daemon=True).start()
     threading.Thread(target=_restore_tests_loop, name="restore-tests", daemon=True).start()
     threading.Thread(target=_samba_loop, daemon=True).start()

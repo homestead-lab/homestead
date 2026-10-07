@@ -52,6 +52,8 @@ window.signInAgain = () => {
 /* The last answer from /api/auth/state, so Settings can describe this session
    without asking again. */
 window.AUTH_STATE = {};
+/* The namespace new apps go in: chosen when Homestead was installed. */
+window.defaultNamespace = () => window.AUTH_STATE?.default_namespace || "lab";
 async function authState() {
   try {
     const r = await _fetch("/api/auth/state");
