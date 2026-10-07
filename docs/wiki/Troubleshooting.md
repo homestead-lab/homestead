@@ -83,6 +83,14 @@ there:
 kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/main/deploy/rbac.yaml
 ```
 
+**"Your sign-in has expired" behind Cloudflare Access.** When an access gate in
+front of Homestead (Cloudflare Access with Google, say) lets a session lapse,
+the page's requests are sent to the sign-in page instead, which a page cannot
+follow. Homestead notices, says so, and reloads the page once - a navigation the
+gate can take through the sign-in and back. If that keeps failing, it asks you
+to sign in rather than reloading in a loop. The installed app (PWA) does the
+same.
+
 ## Containers
 
 **A VPN container logs `RTNETLINK answers: Operation not permitted`.** It needs

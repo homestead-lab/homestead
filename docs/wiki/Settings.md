@@ -169,6 +169,18 @@ working, refreshed every 15 seconds:
   installs it if needed;
 - the permissions check, backup storage and MQTT.
 
+## Homestead's data
+
+**Settings › About › Homestead's data** shows what Homestead keeps on its own
+volume - monitoring and stats history, change history, the storage forecast,
+jobs, logs, logos and so on - each store's size and how long it keeps things,
+and how full the volume is. Each store trims itself; once a day Homestead also
+trims its logs to a year (and 5,000 entries), removes logos nothing has used for
+30 days, and removes leftovers of interrupted writes. Past 80% full it keeps half
+as much of its logs, removes unused logos at once and raises an alert naming the
+largest stores. **Clean up now** does the daily tidy at once (admin). Homestead
+writes a file only when what it holds has changed.
+
 ## Sign-in history
 
 Every sign-in to Homestead, failed attempt, sign-out, password change and

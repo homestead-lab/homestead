@@ -337,7 +337,7 @@ not mean its fields are valid and must never give it a completion tick.
 
 Render each field once and hide inactive panes. Switching sections must preserve
 values, added items and staged removals. Container edit groups Basics, Hardware
-and access, Environment values, Storage, Where it runs, and Address by container.
+and access, Environment values, Storage, Placement, Address and Monitoring by container.
 The full-page container deploy form also uses `UI.sectionForm`: Basics, Hardware
 and access, Environment values, Storage, Address, Additional containers and Summary.
 Use Back/Next and one final Review deployment action; the review still checks capacity

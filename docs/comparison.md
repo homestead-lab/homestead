@@ -2,7 +2,8 @@
 
 The [README comparison](../README.md#how-homestead-compares) focuses on tasks
 people running a home server or several homelab machines commonly need. Sources
-were checked on **3 October 2026**. Recheck them before reusing the table in
+were checked on **3 October 2026**; the rows on uptime checks, automatic
+updates and schedules were added on 7 October 2026. Recheck them before reusing the table in
 directory submissions; product capabilities and terminology change.
 
 ## How to read the table
@@ -78,8 +79,7 @@ own process. This is a documentation comparison, not a usability benchmark.
 
 ## Homestead
 
-The compared baseline is 2.8.300 plus the documentation/licensing changes in this
-branch. [Features and installation](../README.md#features),
+The compared baseline is 2.8.318. [Features and installation](../README.md#features),
 [cluster setup](wiki/Installing-on-k3s.md), [updates](wiki/Settings.md),
 [network shares](wiki/Network-shares.md), [storage](wiki/Storage.md), and
 [VM management](wiki/Virtual-machines.md) support the Homestead column.
@@ -217,6 +217,29 @@ architectural choice, not evidence of better performance or reliability.
   Harvester's single-node and architecture restrictions apply; MicroCloud documents
   a 50-member limit and distinguishes test from production requirements. Current
   Proxmox requirements list Armv9-A or newer; this is not Raspberry Pi support.
+
+- **App uptime checks and alerts** means the management interface asking each
+  app whether it answers - not only whether its process or VM is running - and
+  alerting when it does not. Homestead checks every app and VM every minute
+  (HTTP or a TCP connection), keeps 30 days of history and raises alerts, with
+  optional restarts and webhooks. Elsewhere this takes a separate monitor such as
+  [Uptime Kuma](https://github.com/louislam/uptime-kuma) or a Prometheus
+  blackbox exporter; Proxmox's HA manager and Harvester's monitoring add-on watch
+  guests and nodes, not whether an app inside answers. Docker health checks
+  defined by an image are a related but different mechanism.
+- **Automatic app updates with rollback** means updating apps unattended and
+  undoing an update that breaks the app. Homestead updates an app only when its
+  owner turns it on, inside a maintenance window, to a newer build of the same
+  tag; it snapshots the app's volumes first and rolls the image back if the app
+  stops answering. Unraid's Community Applications auto-update plugin and tools
+  such as [Watchtower](https://github.com/containrrr/watchtower) or Renovate
+  update automatically without that check-and-rollback step; guest-level updates
+  in Proxmox, Harvester, MicroCloud and Talos are a different scope.
+- **Scheduled start and stop** means stopping and starting apps or VMs at set
+  times from the management interface. Homestead schedules both, with the usual
+  capacity checks on start. Elsewhere it is scripted - Unraid's User Scripts
+  plugin, cron with `qm`/`pct` on Proxmox, or Kubernetes CronJobs that scale
+  workloads.
 
 Backups and snapshots retain their existing row: they protect workload data with
 the storage/backend qualifications in the detailed table. A replica is not a
