@@ -320,6 +320,17 @@ class MaintenanceSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "volume impact changed"):
             power.recheck_after_drain(original)
 
+    def test_a_volume_that_finished_rebuilding_during_the_drain_is_no_reason_to_stop(self):
+        volume = self.objects[f"{power.LH}/volumes"]["items"][0]
+        volume["status"]["robustness"] = "degraded"
+        original = power.plan("node1", "reboot")
+        self.objects["/api/v1/pods"]["items"] = []
+        volume["status"]["robustness"] = "healthy"
+        power.recheck_after_drain(original)
+        self.assertTrue(power._improved("faulted", "degraded"))
+        self.assertFalse(power._improved("healthy", "degraded"))
+        self.assertFalse(power._improved("unknown", "healthy"), "only a known state counts as better")
+
     def test_a_volume_still_attaching_with_its_moved_app_is_given_time_to_settle(self):
         original = power.plan("node1", "reboot")
         self.objects["/api/v1/pods"]["items"] = []
