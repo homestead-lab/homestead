@@ -2110,7 +2110,11 @@ ssh_pwauth: true
     "/api/self/data/move/preview": { capacity_token: "demo-only", downtime: "Homestead will be unavailable while data is copied and checked. Both volumes are retained.",
       stages: ["Start move coordinator", "Copy and verify", "Restart Homestead"].map((label, i) => ({ label, detail: i ? "Conditional on stopping Homestead first. Capacity is checked again before acting." : "Starts alongside Homestead.", capacity: { blocked: false, warnings: [], candidates: [] } })) },
     "/api/self/data/move": { ok: true, detail: "copying homestead-data to homestead-data-shared on longhorn; Homestead restarts onto it when done" },
-    "/api/portal/status": () => Object.fromEntries(portalLinks.map((link, i) => [link.id, i === 3 ? { up: false, ms: null } : { up: true, ms: 3 + i }])),
+    // App links carry the app's Answering state, as the server's portal_status gives it.
+    "/api/portal/status": () => Object.fromEntries(portalLinks.map((link, i) => [link.id,
+      link.icon === "workload:lab/home-assistant" ? { up: true, ms: 2840, state: "slow", source: "answering", error: "", code: 200 }
+        : link.icon === "workload:lab/frigate" ? { up: true, ms: 38, state: "up", source: "answering", error: "", code: 200 }
+        : i === 3 ? { up: false, ms: null } : { up: true, ms: 3 + i }])),
     "/api/portal/candidates": [
       { title: "frigate", ns: "lab", name: "frigate", url: "http://192.0.2.214:5000", port: 5000, port_name: "http", icon: "workload:lab/frigate", has_logo: false, group: "Home" },
       { title: "home-assistant", ns: "lab", name: "home-assistant", url: "http://192.0.2.215:8123", port: 8123, port_name: "", icon: "workload:lab/home-assistant", has_logo: false, group: "Home" },

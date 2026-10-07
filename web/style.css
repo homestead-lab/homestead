@@ -1783,6 +1783,7 @@ html[data-theme="light"] .compose-editor{background:#fff}
 .portal-dot{position:absolute;top:10px;right:10px;width:8px;height:8px;border-radius:50%;background:var(--line2)}
 .portal-dot.up{background:var(--ok)}
 .portal-dot.down{background:var(--crit)}
+.portal-dot.slow{background:var(--med)}
 .portal-empty{padding:28px}
 .pe-row{display:grid;grid-template-columns:auto 1fr auto;gap:12px;align-items:start;padding:10px 12px;margin-bottom:8px}
 .pe-fields{display:grid;gap:6px;min-width:0}

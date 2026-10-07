@@ -1821,6 +1821,28 @@ def set_vm_logos(b):
     return {"ok": not failed, "done": done, "failed": failed, "detail": detail}
 
 
+def portal_status(force=False):
+    """Each portal link's dot. A link to an app takes the app's own Answering
+    state - asked every minute, over HTTP, down only after three misses - so
+    the portal and Containers agree; any other link is a TCP connection."""
+    status = dict(PORTAL.status(force=force))
+    try:
+        answers, links = UPTIME.report(), PORTAL.stored()
+    except Exception:
+        return status
+    for link in links:
+        icon = str(link.get("icon") or "")
+        if not icon.startswith("workload:"):
+            continue
+        a = answers.get(icon.split(":", 1)[1])
+        if not a or a.get("state") not in ("up", "slow", "down"):
+            continue
+        last = a.get("last") or {}
+        status[link["id"]] = {"up": a["state"] != "down", "ms": last.get("ms"), "state": a["state"], "source": "answering",
+                              "since": a.get("since"), "error": last.get("error") or "", "code": last.get("code")}
+    return status
+
+
 def helm_chart_logos():
     """{(namespace, release): {name, icon}} for every Helm release whose chart names a logo."""
     try:
@@ -9221,7 +9243,7 @@ class H(HTTP.LimitedHandler):
             if p == "/api/portal":
                 return self._send(200, {"links": PORTAL.view(), "icons": list(PORTAL.BUILTIN)})
             if p == "/api/portal/status":
-                return self._send(200, PORTAL.status(force=(q.get("force") or [""])[0] == "1"))
+                return self._send(200, portal_status(force=(q.get("force") or [""])[0] == "1"))
             if p == "/api/portal/candidates":
                 return self._send(200, PORTAL.candidates())
             if p == "/api/network":
