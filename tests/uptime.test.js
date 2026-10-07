@@ -25,7 +25,7 @@ test("down and slow are marked, with what went wrong", () => {
   const down = run(`answerTag(${JSON.stringify(app)})`);
   assert.match(down, /tag bad/);
   assert.match(down, />Down</);
-  assert.match(down, /aria-label="Not answering: /);
+  assert.match(down, /aria-label="Down: /);
   assert.match(down, /HTTP 502/);
   set({ state: "slow", last: { ok: true, ms: 2900, code: 200 }, strip: [] });
   assert.match(run(`answerTag(${JSON.stringify(app)})`), /tag warn[^]*Slow/);
@@ -56,4 +56,31 @@ test("shares round sensibly", () => {
 test("Homestead's own and platform apps get no line", () => {
   set({ state: "off", why: "not an app of yours", strip: [] });
   assert.equal(run(`answerCardRow(${JSON.stringify(app)})`), "");
+});
+
+
+test("the dashboard widget shows more as it widens", () => {
+  ctx.STATE.data.wl = [{ ns: "lab", name: "a" }, { ns: "lab", name: "b" }, { ns: "lab", name: "c" }, { ns: "lab", name: "off" }];
+  ctx.STATE.data.uptime = { apps: {
+    "lab/a": { state: "down", last: { error: "HTTP 502" }, strip: ["up", "down"], uptime_30d: 98 },
+    "lab/b": { state: "up", last: { ms: 4 }, strip: ["up", "up"], uptime_30d: 100 },
+    "lab/c": { state: "slow", last: { ms: 2500 }, strip: ["up", "slow"], uptime_30d: 99.5 },
+    "lab/off": { state: "off", why: "stopped", strip: [] } } };
+  ctx.appAvatar = name => `<span class="av">${name}</span>`;
+  const count = (html, re) => (html.match(re) || []).length;
+  const third = run("monitorWidget({ width: 4 })");
+  assert.equal(count(third, /class="mon-item"/g), 2, "one third lists only what is wrong");
+  assert.match(third, /HTTP 502/);
+  const half = run("monitorWidget({ width: 6 })");
+  assert.equal(count(half, /class="mon-item"/g), 3, "half lists every monitored app");
+  assert.equal(count(half, /answer-strip/g), 0);
+  const wide = run("monitorWidget({ width: 8 })");
+  assert.equal(count(wide, /answer-strip mon-mini/g), 3, "two thirds gives each its bars");
+  assert.ok(wide.indexOf(">a<") < wide.indexOf(">c<") && wide.indexOf(">c<") < wide.indexOf(">b<"), "down, then slow, then up");
+});
+
+test("the monitoring field reads back what it was given", () => {
+  assert.match(run('monitoringFieldHtml("e", "/health")'), /value="http" selected[^]*value="\/health"/);
+  assert.match(run('monitoringFieldHtml("e", "off")'), /value="off" selected/);
+  assert.match(run('monitoringFieldHtml("e", "")'), /value="auto" selected/);
 });

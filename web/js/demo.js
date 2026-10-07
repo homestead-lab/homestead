@@ -2112,8 +2112,8 @@ ssh_pwauth: true
     "/api/self/data/move": { ok: true, detail: "copying homestead-data to homestead-data-shared on longhorn; Homestead restarts onto it when done" },
     // App links carry the app's Answering state, as the server's portal_status gives it.
     "/api/portal/status": () => Object.fromEntries(portalLinks.map((link, i) => [link.id,
-      link.icon === "workload:lab/home-assistant" ? { up: true, ms: 2840, state: "slow", source: "answering", error: "", code: 200 }
-        : link.icon === "workload:lab/frigate" ? { up: true, ms: 38, state: "up", source: "answering", error: "", code: 200 }
+      link.icon === "workload:lab/home-assistant" ? { up: true, ms: 2840, state: "slow", source: "monitoring", error: "", code: 200 }
+        : link.icon === "workload:lab/frigate" ? { up: true, ms: 38, state: "up", source: "monitoring", error: "", code: 200 }
         : i === 3 ? { up: false, ms: null } : { up: true, ms: 3 + i }])),
     "/api/portal/candidates": [
       { title: "frigate", ns: "lab", name: "frigate", url: "http://192.0.2.214:5000", port: 5000, port_name: "http", icon: "workload:lab/frigate", has_logo: false, group: "Home" },
@@ -2133,6 +2133,8 @@ ssh_pwauth: true
           { state: "down", since: now - 960, target, last: { ok: false, ms: null, code: 502, error: "HTTP 502" }, strip: [...day([14]).slice(0, 23), "down"], uptime_24h: 96.5, uptime_30d: 99.2 },
         ][i] || { state: "off", why: "checks are off for this app", target: "", last: {}, strip: [], uptime_24h: null, uptime_30d: null };
       });
+      const month = (bad = [], dips = []) => Array.from({ length: 30 }, (_, i) => i < 4 ? null : bad.includes(i) ? "down" : dips.includes(i) ? "dip" : "up");
+      Object.values(apps).forEach((a, i) => { a.days = a.state === "off" ? [] : month(i === 2 ? [29] : [], i === 1 ? [12, 25] : i === 2 ? [18] : []); });
       return { apps, every: 60, down_after: 3, slow_ms: 2000 };
     },
     "/api/image-updates/mode": (url, init) => {

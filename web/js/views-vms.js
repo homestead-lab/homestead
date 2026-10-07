@@ -497,6 +497,9 @@ window.vmEdit = async (ns, name) => {
         <div class="f"><label>Host ${tip("Keep the VM on one host, or let Kubernetes choose. A VM on a disk only one host can reach stays there anyway.")}</label>
         <select id="ve_node">${vmOpt("", "any host", v.node_selector || "")}${(o.nodes || []).map(n => vmOpt(n, n, v.node_selector || "")).join("")}</select></div></div>
       <div class="f"><label>Description</label><input id="ve_desc" value="${esc(v.description || "")}" maxlength="300"></div>
+      <div class="f"><label>Logo</label><div class="row vm-edit-logo">${vmAvatar((STATE.data.vms || []).find(x => x.ns === ns && x.name === name) || v)}
+        <button class="btn sm" type="button" data-need="operator" onclick="vmLogo(${jsq(ns)},${jsq(name)},() => vmEdit(${jsq(ns)},${jsq(name)}))">Change…</button>
+        <span class="dim xs">Saved on its own, at once; the VM keeps running. Other changes here are not saved by it.</span></div></div>
       ${UI.more("Advanced editing", UI.button("Edit YAML", `vmYaml(${jsq(ns)},${jsq(name)})`, { attrs: 'data-need="admin"' }))}`},
     v.hardware && {key:"hardware", title:"Hardware", html:vmHardwareFields(v.hardware, o, !!v.resource_profile?.name)},
     {key:"disks", title:`Disks · ${disks.length}`, html:`

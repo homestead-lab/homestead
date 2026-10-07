@@ -3539,3 +3539,31 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .vm-name-text{min-width:0}
 /* An OS logo is a tile of its own: it fills the avatar rather than sitting in a circle. */
 .av.appav.os-logo{border-radius:9px;background:none;box-shadow:none}.av.appav.os-logo img{padding:0}
+.vm-edit-logo{gap:10px;align-items:center;flex-wrap:wrap}
+
+/* The Monitoring page (uptime.js). */
+.answer-strip i.dip{background:color-mix(in srgb,var(--crit) 55%,var(--ok))}
+.mon-table .mon-bars{min-width:240px;width:40%}
+.mon-table .answer-strip.mon{height:22px;gap:2px}
+.mon-table .mon-target{max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crit-text{color:var(--crit)}.med-text{color:var(--med)}
+@media (max-width:640px){
+  .tbl.stack.compact.mon-table td.mon-target{display:none}
+  .tbl.stack.compact.mon-table td.mon-bars{grid-column:1/-1;min-width:0;width:auto;justify-content:stretch}
+  .tbl.stack.compact.mon-table td.mon-bars .answer-strip{width:100%;height:20px}
+  .tbl.stack.compact.mon-table td.mon-bars::before{display:none}
+}
+
+/* The Monitoring dashboard widget. */
+.mon-counts{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+.mon-count{display:grid;gap:1px;padding:8px 10px;border:1px solid var(--line2);border-radius:10px}
+.mon-count b{font-size:20px}.mon-count.down b{color:var(--crit)}.mon-count.slow b{color:var(--med)}
+.mon-list{display:grid;gap:2px}
+.mon-item{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:6px 4px;border:0;border-radius:8px;
+  background:none;color:var(--tx);font:inherit;text-align:left;cursor:pointer}
+.mon-item:hover{background:var(--surf2)}
+.mon-item>b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mon-name{display:grid;min-width:0}.mon-name b,.mon-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mon-list.bars .mon-item{grid-template-columns:auto minmax(110px,1fr) minmax(0,2fr) auto}
+.answer-strip.mon-mini{height:16px;width:100%}
+.mon-allup{padding:6px 2px}

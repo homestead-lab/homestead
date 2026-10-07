@@ -61,6 +61,8 @@ const PAGES = [
   ["firewall", "network", "networkTab('firewall')"],
   ["import", "imports"],
   ["schedules", "schedules"],
+  ["monitoring", "monitoring"],
+  ["monitoring-30-days", "monitoring", "monitorRange('month')"],
   ["events", "events"],
   ["events-signins", "events", "STATE.eventsTab='signins';viewEvents()"],
   ["node-page", "nodes", "nodeDetail('harvester-node1')"],

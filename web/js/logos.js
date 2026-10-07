@@ -75,9 +75,9 @@ window.wlLogo = (ns, name, back = null) => {
 };
 
 /* One VM: its OS's logo, another OS's, or one from the app store. */
-window.vmLogo = (ns, name) => {
+window.vmLogo = (ns, name, back = null) => {
   const v = (STATE.data.vms || []).find(x => x.ns === ns && x.name === name) || {};
-  Object.assign(LOGO, { kind: "vm", ns, name, tiles: [], chosen: -1, back: null, os: v.os_logo || "" });
+  Object.assign(LOGO, { kind: "vm", ns, name, tiles: [], chosen: -1, back, os: v.os_logo || "" });
   logoDialog(name, "Pick its operating system's logo, or one from the app store. Without one of its own, a VM shows the logo of the OS it reports. Nothing restarts.",
     v.has_logo || v.logo_os_set ? UI.button("Use its OS's logo", "logoSave(true)", { attrs: 'data-need="operator"' }) : "", "");
 };
