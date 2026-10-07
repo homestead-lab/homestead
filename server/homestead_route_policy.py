@@ -425,6 +425,7 @@ POLICY = {
     ('POST', '/api/workloads/logo'): 'operator',
     ('POST', '/api/vms/logo'): 'operator',
     ('POST', '/api/uptime/setting'): 'operator',
+    ('POST', '/api/image-updates/mode'): 'operator',
 }
 
 POLICY.update({
