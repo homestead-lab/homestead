@@ -782,6 +782,16 @@ def change_undo_plan(body):
     return current, proposed, rows, capacity, context
 
 
+def logsearch_read(ns, pod, container, since, limit):
+    """One container's log lines of the last since seconds, with timestamps."""
+    query = f"sinceSeconds={int(since)}&limitBytes={int(limit)}&timestamps=true" + (
+        f"&container={urllib.parse.quote(container)}" if container else "")
+    req = urllib.request.Request(f"{API}/api/v1/namespaces/{urllib.parse.quote(ns)}/pods/{urllib.parse.quote(pod)}/log?{query}",
+                                 headers={"Authorization": f"Bearer {TOKEN}"})
+    with urllib.request.urlopen(req, context=CTX, timeout=20) as r:
+        return r.read(int(limit) + 1).decode("utf-8", "replace")
+
+
 def referenced_icons():
     """Every cached logo something still uses: apps, VMs and portal links.
     If any of them cannot be read, None - and no logo is removed."""
@@ -6693,6 +6703,7 @@ import homestead_housekeeping as HOUSEKEEPING
 
 import homestead_impact as IMPACT
 import homestead_changes as CHANGES
+import homestead_logsearch as LOGSEARCH
 import homestead_forecast as FORECAST
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
@@ -9952,6 +9963,12 @@ class H(HTTP.LimitedHandler):
                 if not app:
                     return self._send(404, {"error": "that app is no longer in the catalogue"})
                 return self._send(200, {k: v for k, v in app.items() if k != "config"})
+            if p == "/api/logs/search":
+                apps = [a for a in (q.get("apps") or [""])[0].split(",") if a]
+                return self._send(200, LOGSEARCH.search(
+                    cached("wl", 5, get_workloads), (q.get("q") or [""])[0], logsearch_read,
+                    window=(q.get("window") or ["1h"])[0], apps=apps,
+                    regex=(q.get("regex") or [""])[0] == "1", case=(q.get("case") or [""])[0] == "1"))
             if p == "/api/logs":
                 ns = q["ns"][0]
                 pod = (q.get("pod") or [""])[0]

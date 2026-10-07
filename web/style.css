@@ -3605,3 +3605,16 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .impact-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:start;padding:7px 2px;border-top:1px solid var(--line)}
 .impact-row:first-child{border-top:0}.impact-row>.impact-text:first-child{grid-column:1/3}
 .impact-text{display:grid;gap:2px;min-width:0}.impact-text b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* Search logs (logsearch.js). */
+.ls-form{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:8px;align-items:center}
+.ls-form>*{margin:0;min-height:38px}.ls-form select{width:auto;max-width:220px}
+.ls-opts{display:flex;gap:16px;flex-wrap:wrap}.ls-opts .switch{margin:0;font-size:12.5px}
+.ls-summary{margin-bottom:6px}
+.ls-list{display:grid;max-height:min(56vh,540px);overflow:auto;border:1px solid var(--line2);border-radius:10px}
+.ls-row{display:grid;gap:3px;padding:7px 10px;border-top:1px solid var(--line);min-width:0}.ls-row:first-child{border-top:0}
+.ls-meta{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;font-size:12px}.ls-when{color:var(--mut);font-size:11.5px}
+.ls-app{font-weight:600;padding:0;border:0;background:none;cursor:pointer}
+.ls-line{display:block;font-size:12px;white-space:pre-wrap;overflow-wrap:anywhere;background:none;padding:0}
+.ls-line mark{background:color-mix(in srgb,var(--med) 35%,transparent);color:inherit;border-radius:3px;padding:0 1px}
+@media (max-width:640px){.ls-form{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.ls-form input{grid-column:1/-1}.ls-form select{max-width:none;width:100%}.ls-form .btn{grid-column:1/-1;justify-content:center}}
