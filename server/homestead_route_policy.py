@@ -31,6 +31,7 @@ POLICY = {
     ('GET', '/api/appstore'): 'viewer',
     ('GET', '/api/logos'): 'viewer',
     ('GET', '/api/uptime'): 'viewer',
+    ('GET', '/api/restore-tests'): 'viewer',
     ('GET', '/api/logos/missing'): 'viewer',
     ('GET', '/api/appstore/app'): 'viewer',
     ('GET', '/api/auth/history'): 'admin',
@@ -427,6 +428,8 @@ POLICY = {
     ('POST', '/api/uptime/setting'): 'operator',
     ('POST', '/api/vms/monitoring'): 'operator',
     ('POST', '/api/image-updates/mode'): 'operator',
+    ('POST', '/api/restore-tests/settings'): 'admin',
+    ('POST', '/api/restore-tests/run'): 'admin',
 }
 
 POLICY.update({

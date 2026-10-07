@@ -253,6 +253,8 @@
     { id: "demo4", title: "Office AP", url: "http://192.0.2.3", section: "Network", icon: "builtin:wifi", note: "", shown: { kind: "builtin", src: "wifi" } },
     { id: "demo5", title: "NAS-01", url: "http://192.0.2.10", section: "Storage", icon: "builtin:nas", note: "Unraid", shown: { kind: "builtin", src: "nas" } },
   ];
+  // Switches the demo remembers while the page is open.
+  const demoState = {};
   // A logo the demo can show without fetching anything: the app's initial on a colour.
   const demoLogo = (letter, hue) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="hsl(${hue} 52% 42%)"/><text x="32" y="43" font-family="sans-serif" font-size="30" font-weight="700" fill="#fff" text-anchor="middle">${letter}</text></svg>`)}`;
   const demoLogoCatalogue = () => workloads.filter(w => !w.platform && (w.images || [])[0]).flatMap((w, i) => [
@@ -2169,6 +2171,25 @@ ssh_pwauth: true
         const suggestion = i === rows.length - 1 ? null : w.name === "paperless" ? { ...t, name: "Paperless-ngx", match: "name" } : t ? { ...t, match: "image" } : null;
         return { ns: w.ns, name: w.name, images: w.images, suggestion };
       }).sort((a, b) => ({ image: 0, name: 1 }[a.suggestion?.match] ?? 2) - ({ image: 0, name: 1 }[b.suggestion?.match] ?? 2)) }),
+    // Restore tests (views-protect.js): one passed, one failed, one never tested.
+    "/api/restore-tests": () => {
+      const now = Date.now() / 1000;
+      return { enabled: !!demoState.restoreTestsOn, every_days: 30, apps: [
+        { ns: "lab", name: "paperless", icon: "", running: false, due: false, without: [],
+          restores: [{ claim: "paperless-data", backup: "backup-7f3a91", created: "2026-10-06T02:00:00Z", size_gb: 20 }],
+          last: { at: now - 3 * 86400, ok: true, seconds: 412, message: "Restore test passed: the copy on the restored data became ready and answered on port 8000. Restored paperless-data from backup-7f3a91." } },
+        { ns: "lab", name: "frigate", icon: "", running: false, due: true, without: [{ claim: "frigate-media", why: "not a Longhorn volume" }],
+          restores: [{ claim: "frigate-config", backup: "backup-2c81d0", created: "2026-10-05T02:00:00Z", size_gb: 20 }],
+          last: { at: now - 9 * 86400, ok: false, seconds: 980, message: "Restore test failed: the copy on the restored data did not become ready (frigate: CrashLoopBackOff). Restored frigate-config from backup-2c81d0." } },
+        { ns: "lab", name: "home-assistant", icon: "", running: false, due: true, without: [], last: null,
+          restores: [{ claim: "home-assistant-config", backup: "backup-91be44", created: "2026-10-06T02:00:00Z", size_gb: 10 }] }] };
+    },
+    "/api/restore-tests/settings": (url, init) => {
+      const on = !!JSON.parse(init?.body || "{}").enabled;
+      demoState.restoreTestsOn = on;
+      return { ok: true, enabled: on, detail: on ? "Apps with backups are restore-tested monthly" : "Monthly restore tests are off" };
+    },
+    "/api/restore-tests/run": () => ({ ok: true, operation: { id: "demo-restore-test", kind: "restore-test", status: "queued" } }),
     "/api/vms/monitoring": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       const v = demoVms.find(x => x.ns === body.ns && x.name === body.name);
