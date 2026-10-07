@@ -2678,6 +2678,7 @@ ssh_pwauth: true
   responses["/api/setup/opened"] = { ok: true };
   responses["/api/auth/users"] = [{ name: "demo", role: "admin", last_login: "2026-09-28 07:40" },
     { name: "alex", role: "operator", last_login: "2026-09-28 07:06" }, { name: "kiosk", role: "viewer", last_login: "" }];
+  responses["/api/auth/role"] = { ok: true };
   responses["/api/auth/history"] = [
     { at: ago(4), event: "signin", user: "demo", ok: true, ip: "192.0.2.20", device: "Chrome on Windows", via: "", detail: "kept signed in" },
     { at: ago(38), event: "signin", user: "alex", ok: true, ip: "172.70.4.18", device: "Safari on iOS", via: "Cloudflare", detail: "" },

@@ -5,6 +5,52 @@ const ROLE_COPY = {
   operator: "Viewer access plus deploy, edit, move, start, and stop workloads and VMs.",
   admin: "Full access, including users, hosts, hardware mappings, imports, and cluster policy.",
 };
+// What each role adds, in a word or two, beside its name where it is chosen (#350).
+const ROLE_SHORT = { viewer: "looks, changes nothing", operator: "runs apps and VMs", admin: "everything, users and hosts too" };
+const ROLE_NAMES = { viewer: "Viewer", operator: "Operator", admin: "Admin" };
+// The full comparison, for the rare time it is needed.
+const ROLE_TABLE = [
+  ["See dashboards, apps, VMs, storage, events and settings", 1, 1, 1],
+  ["Deploy, edit, move, start, stop and update apps and VMs", 0, 1, 1],
+  ["Snapshots, backups, restores and schedules", 0, 1, 1],
+  ["Users, roles and API keys", 0, 0, 1],
+  ["Hosts: cordon, drain, reboot, shell, disks and hardware", 0, 0, 1],
+  ["Network shares, imports and cluster policy", 0, 0, 1],
+];
+const USERS_FILTER = { role: "" };
+
+function userRow(u, admin, count) {
+  const me = u.name === ME;
+  const role = !admin ? `<span class="${roleClass(u.role)} rolechip">${esc(ROLE_NAMES[u.role] || u.role)}</span>`
+    : me ? `<span class="${roleClass(u.role)} rolechip">${esc(ROLE_NAMES[u.role] || u.role)}</span><div class="dim xs">You can't change your own role</div>`
+    : `<select class="role-select" aria-label="Role for ${esc(u.name)}" onchange="userRoleSet(${jsq(u.name)},this)" data-was="${esc(u.role)}">
+        ${["viewer", "operator", "admin"].map(r => `<option value="${r}"${u.role === r ? " selected" : ""}>${ROLE_NAMES[r]} - ${esc(ROLE_SHORT[r])}</option>`).join("")}</select>`;
+  const actions = admin ? actionBar([
+    { label: "Sign-in history", run: `userSignins(${jsq(u.name)})` },
+    !me && count > 1 && { label: "Remove", run: `delUser(${jsq(u.name)})`, danger: true }], { shown: 0, label: `More for ${u.name}` }) : "";
+  return `<tr data-role="${esc(u.role)}"${USERS_FILTER.role && USERS_FILTER.role !== u.role ? " hidden" : ""}><td><b>${esc(u.name)}</b>${me ? ' <span class="tag ok">you</span>' : ""}</td>
+    <td data-label="Role">${role}</td><td data-label="Last sign-in" class="dim xs mono">${esc(u.last_login || "never")}</td>${admin ? `<td>${actions}</td>` : ""}</tr>`;
+}
+
+function usersFilterChips(users) {
+  const n = r => users.filter(u => !r || u.role === r).length;
+  return `<div class="pf-shows users-filter" role="group" aria-label="Show">${[["", "All"], ["admin", "Admins"], ["operator", "Operators"], ["viewer", "Viewers"]]
+    .filter(([r]) => !r || n(r)).map(([r, label]) => `<button type="button" class="pf-chip" aria-pressed="${USERS_FILTER.role === r}" onclick="usersFilter(${jsq(r)})">${label} <span class="pf-n">${n(r)}</span></button>`).join("")}</div>`;
+}
+
+window.usersFilter = role => {
+  USERS_FILTER.role = role;
+  document.querySelectorAll(".users-filter .pf-chip").forEach(b => b.setAttribute("aria-pressed", String(b.getAttribute("onclick").includes(`'${role}'`) || b.getAttribute("onclick").includes(`"${role}"`))));
+  document.querySelectorAll("#usersTable tbody tr").forEach(tr => { tr.hidden = !!role && tr.dataset.role !== role; });
+};
+
+window.rolesCompare = () => modal("Roles", `<div class="ui-stack">
+  ${UI.lead("Each role can do what the one before it can, and more.")}
+  <div class="tblwrap"><table class="tbl stack dense roles-table"><thead><tr><th></th><th>Viewer</th><th>Operator</th><th>Admin</th></tr></thead><tbody>
+  ${ROLE_TABLE.map(([what, ...yes]) => `<tr><td>${esc(what)}</td>${yes.map((y, i) => `<td class="center" data-label="${["Viewer", "Operator", "Admin"][i]}">${y ? '<span aria-label="yes">✓</span>' : '<span class="dim" aria-label="no">–</span>'}</td>`).join("")}</tr>`).join("")}
+  </tbody></table></div>
+  <div class="dim xs">An API key never manages users or keys, reaches a host's shell or changes settings, whatever its scopes.</div>
+  ${UI.actions(UI.cancel("Close"))}</div>`);
 
 function thresholdEditor(id, label, unit, help, pair) {
   const temperature = id.includes("temperature");
@@ -91,8 +137,7 @@ async function viewSettings() {
     return `<div class="settings-list-row"><div><b>${esc(f.name)}</b><div class="dim xs mono">${esc(f.host_path)} → ${esc(f.container_path || f.host_path)}</div></div>
       <div class="settings-list-meta">${hosts.length ? `<span class="tag hw">${hosts.length} host${hosts.length === 1 ? "" : "s"}</span><span class="dim xs">${esc(hosts.join(", "))}</span>` : '<span class="pill med">no host detected</span>'}</div></div>`;
   }).join("");
-  const userRows = users.map(u => `<tr><td><b>${esc(u.name)}</b>${u.name === ME ? ' <span class="tag ok">you</span>' : ""}</td>
-    <td><span class="${roleClass(u.role)} rolechip">${esc(u.role)}</span></td><td class="dim xs mono">${esc(u.last_login || "never")}</td></tr>`).join("");
+  const userRows = users.map(u => userRow(u, can("admin"), users.length)).join("");
 
   const tab = settingsTab();
   paint(`${UI.pageHeader(`Settings`, `Cluster policy, hardware, access, and installation information`, ``, {mobileSummary:"omit"})}
@@ -166,11 +211,9 @@ async function viewSettings() {
       `, {tab:`hardware`, wide:false})}
 
       ${UI.settingsCard(`
-        ${UI.moduleHeader(`Users and roles`, `Who can sign in, and what each role may do`, `${can("admin") ? '<button class="btn sm pri" onclick="manageUsers()">Manage users</button>' : ""}`)}
-        <div class="role-legend">
-          ${Object.entries(ROLE_COPY).map(([role, copy]) => `<div><span class="${roleClass(role)} rolechip">${role}</span><span class="dim xs">${esc(copy)}</span></div>`).join("")}
-        </div>
-        ${users.length ? `<div class="sec">Users</div><div class="tblwrap"><table class="tbl stack dense"><thead><tr><th>User</th><th>Role</th><th>Last sign-in</th></tr></thead><tbody>${userRows}</tbody></table></div>` : ""}
+        ${UI.moduleHeader(`Users and roles`, `Who can sign in, and what each may do`, `<button class="btn sm" onclick="rolesCompare()">Compare roles</button>${can("admin") ? '<button class="btn sm pri" onclick="userAdd()">＋ Add user</button>' : ""}`)}
+        ${users.length > 1 ? usersFilterChips(users) : ""}
+        ${users.length ? `<div class="tblwrap"><table class="tbl stack dense" id="usersTable"><thead><tr><th>User</th><th>Role</th><th>Last sign-in</th>${can("admin") ? "<th></th>" : ""}</tr></thead><tbody>${userRows}</tbody></table></div>` : ""}
       `, {tab:`access`, wide:false})}
       ${can("admin") ? UI.settingsCard('<div class="empty small"><span class="spin2"></span>reading keys</div>', {tab:"access",id:"apiKeysCard",wide:false}) : ""}
 
