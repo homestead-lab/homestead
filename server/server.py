@@ -782,6 +782,29 @@ def change_undo_plan(body):
     return current, proposed, rows, capacity, context
 
 
+def node_impact(node):
+    """If this host goes down: what stops, moves and is at risk (homestead_impact)."""
+    node = _dns_name(node, "host name")
+    nodes = cached("nodes", 5, get_nodes)
+    if not any(n["name"] == node for n in nodes):
+        raise ValueError(f"there is no host {node}")
+    deployments = [d for d in kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS]
+    try:
+        raw_vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
+    except Exception:
+        raw_vms = []
+    try:
+        addresses = (cached("network", 5, NETWORK.inventory) or {}).get("addresses") or []
+    except Exception:
+        addresses = []
+    try:
+        placement = cached("impact:" + node, 5, lambda: PLACE.impact(node))
+    except Exception:
+        placement = None
+    return IMPACT.preview(node, cached("wl", 5, get_workloads), deployments, cached("vms", 5, VMS.list_vms), raw_vms,
+                          cached("vol", 8, get_volumes), addresses, nodes, placement)
+
+
 def set_vm_monitoring(b):
     """How a VM is monitored: automatic, a port, a web page on a port, or off.
     An annotation on the VM, so it does not restart."""
@@ -6619,6 +6642,7 @@ import homestead_node_parity as NODE_PARITY
 import homestead_host_os as HOST_OS
 import homestead_ports as PORTS
 import homestead_uptime as UPTIME
+import homestead_impact as IMPACT
 import homestead_changes as CHANGES
 import homestead_forecast as FORECAST
 import homestead_autoupdate as AUTOUPDATE
@@ -9819,6 +9843,8 @@ class H(HTTP.LimitedHandler):
             if p == "/api/changes":
                 ns, name = (q.get("ns") or [""])[0], (q.get("name") or [""])[0]
                 return self._send(200, {"entries": CHANGES.history(ns or None, name or None)})
+            if p == "/api/nodes/impact":
+                return self._send(200, node_impact((q.get("node") or [""])[0]))
             if p == "/api/storage/forecast":
                 return self._send(200, {"rows": FORECAST.report(), "warn_days": FORECAST.WARN_DAYS,
                                         "show_days": FORECAST.SHOW_DAYS, "min_days": FORECAST.MIN_DAYS})

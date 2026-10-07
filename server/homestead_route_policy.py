@@ -31,6 +31,7 @@ POLICY = {
     ('GET', '/api/appstore'): 'viewer',
     ('GET', '/api/logos'): 'viewer',
     ('GET', '/api/uptime'): 'viewer',
+    ('GET', '/api/nodes/impact'): 'viewer',
     ('GET', '/api/changes'): 'viewer',
     ('GET', '/api/storage/forecast'): 'viewer',
     ('GET', '/api/restore-tests'): 'viewer',
