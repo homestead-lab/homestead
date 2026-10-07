@@ -373,6 +373,8 @@ def _row(vm, vmi, claims=None, dvs=None, instance_known=True):
             "icon": display_icon(annotations),
             "has_logo": bool(NAMES.read(annotations, "icon")),
             "logo_os_set": bool(NAMES.read(annotations, "logo-os")),
+            # How it is monitored (homestead_uptime): blank is automatic.
+            "monitoring": NAMES.read(annotations, "uptime"),
             "os_logo": (NAMES.read(annotations, "logo-os") if NAMES.read(annotations, "logo-os") in LOGOS.OS_KEYS else "")
                        or LOGOS.os_logo(guest.get("id"), guest.get("prettyName"), guest.get("name"), labels.get(OS_LABEL)),
             "description": annotations.get(DESCRIPTION, ""), "created": meta.get("creationTimestamp", ""),

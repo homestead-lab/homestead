@@ -196,6 +196,7 @@ const DIALOGS = [
   ["workload-logo", "workloads", "wlLogo('lab','frigate')"],
   ["workload-logo-fixup", "workloads", "logoFixup()"],
   ["vm-logo", "vms", "vmLogo('lab','ubuntu-test')"],
+  ["vm-monitoring", "vms", "vmMonitoring('default','home-assistant-os')"],
   ["workload-monitoring", "workloads", "wlMonitoring('lab','paperless')"],
   ["workload-update-mode", "workloads", "wlUpdateMode('lab','frigate')"],
   ["workload-start-capacity", "workloads", "wlScale('lab','doublecommander',1)"],

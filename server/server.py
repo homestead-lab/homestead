@@ -705,12 +705,26 @@ def _uptime_loop():
         started = time.time()
         if LEADER.is_leader():
             try:
-                UPTIME.observe(cached("wl", 5, get_workloads))
+                UPTIME.observe(cached("wl", 5, get_workloads), vms=cached("vms", 5, VMS.list_vms))
                 beat("uptime", UPTIME.CHECK_EVERY, leader_only=True)
             except Exception as error:
                 beat("uptime", UPTIME.CHECK_EVERY, error, leader_only=True)
                 print(f"uptime: {str(error)[:160]}", flush=True)
         time.sleep(max(5, UPTIME.CHECK_EVERY - (time.time() - started)))
+
+
+def set_vm_monitoring(b):
+    """How a VM is monitored: automatic, a port, a web page on a port, or off.
+    An annotation on the VM, so it does not restart."""
+    ns, name = _dns_name(b.get("ns"), "namespace"), _dns_name(b.get("name"), "VM name")
+    value = UPTIME.check_setting(b.get("mode"), b.get("path"), b.get("port"))
+    if value in ("tcp",) or (value and value.startswith("/")):
+        raise ValueError("choose the port to ask on this VM")
+    ksend("PATCH", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}",
+          {"metadata": {"annotations": {NAMES.key("uptime"): value or None}}}, ctype="application/merge-patch+json")
+    _cache.pop("vms", None)
+    words = {"": "checked automatically", "off": "not monitored"}
+    return {"ok": True, "detail": f"{name} is {words.get(value, f'checked at {value}')}"}
 
 
 def set_uptime_setting(b):
@@ -10114,6 +10128,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_vm_logos(b))
             if p == "/api/uptime/setting":
                 return self._send(200, set_uptime_setting(b))
+            if p == "/api/vms/monitoring":
+                return self._send(200, set_vm_monitoring(b))
             if p == "/api/image-updates/mode":
                 return self._send(200, set_update_mode(b))
             if p == "/api/scale":
