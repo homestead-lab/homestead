@@ -306,14 +306,42 @@ window.volumeRebuild = async name => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+/* When storage fills, from how it has grown (homestead_forecast.py). */
+const forecastWhen = days => days < 1 ? "within a day" : `in about ${Math.round(days)} day${Math.round(days) === 1 ? "" : "s"}`;
+const forecastDate = day => { const d = new Date(`${day}T00:00:00Z`); return isNaN(d) ? day : d.toLocaleDateString([], { day: "numeric", month: "short", timeZone: "UTC" }); };
+const forecastTone = (days, warn = 14) => days <= 3 ? "bad" : days <= warn ? "warn" : "info";
+
+function forecastFor(key) {
+  const f = typeof STATE === "undefined" ? null : STATE.data?.forecast;
+  const row = (f?.rows || []).find(r => r.key === key);
+  return row && row.days_left !== null && row.days_left <= (f.show_days || 60) ? row : null;
+}
+
+function forecastCard(f) {
+  if (!f) return "";
+  const rows = f.rows || [], soon = rows.filter(r => r.days_left !== null && r.days_left <= (f.show_days || 60));
+  const pool = rows.find(r => r.kind === "pool");
+  const collecting = !rows.some(r => r.days >= (f.min_days || 7));
+  const line = r => `<div class="forecast-row">
+      <span class="tag ${forecastTone(r.days_left, f.warn_days)}">Full ${esc(forecastWhen(r.days_left))}</span>
+      <span class="forecast-name"><b>${esc(r.kind === "pool" ? "All Longhorn storage" : r.label)}</b><span class="dim xs">${esc(r.kind === "volume" ? `${r.namespace} · volume` : r.kind === "disk" ? "disk" : "every host")} · ${esc(r.pct)}% full · +${(r.per_day / 1024 ** 3).toFixed(1)} GB a day · by ${esc(forecastDate(r.full_on))}</span></span></div>`;
+  return `<div class="card flat forecast-card"><div class="between"><div><div class="ctitle">Filling up</div>
+      <div class="csub">From how each volume, disk and the pool has grown over the last 30 days</div></div></div>
+    ${collecting ? `<div class="dim small forecast-empty">Collecting daily usage: forecasts start after ${f.min_days || 7} days of samples.</div>`
+      : soon.length ? `<div class="forecast-list">${soon.map(line).join("")}</div>`
+      : `<div class="dim small forecast-empty">Nothing is forecast to fill in the next ${f.show_days || 60} days${pool ? ` · all Longhorn storage ${pool.days_left !== null ? `fills ${esc(forecastWhen(pool.days_left))}` : `is ${esc(pool.why || "steady")}`}` : ""}.</div>`}</div>`;
+}
+
 function volumeUsageCell(x) {
   const fs = x.filesystem;
+  const soon = forecastFor(`volume:${x.name}`);
   const known = fs && Number.isFinite(fs.used_gb) && Number.isFinite(fs.capacity_gb)
     && Number.isFinite(fs.used_pct) && fs.used_pct >= 0 && fs.used_pct <= 100
     && fs.capacity_gb > 0 && fs.used_gb >= 0 && fs.used_gb <= fs.capacity_gb;
   return `<div class="volusage-body">${known
     ? `<div class="volusage-line" data-tip="Filesystem usage reported by kubelet; filesystem capacity can be slightly smaller than the provisioned block device.">${meter(fs.used_pct)}<span class="mono">${esc(fs.used_gb)} / ${esc(fs.capacity_gb)} GiB files</span></div>`
     : `<span class="dim xs" data-tip="No fresh filesystem measurement is available. Detached volumes and some shared/raw-block mounts do not report filesystem usage.">Filesystem usage unavailable</span>`}
+    ${soon ? `<span class="tag ${forecastTone(soon.days_left)} forecast-tag" data-tip="${esc(`Growing about ${(soon.per_day / 1024 ** 3).toFixed(1)} GB a day over the last weeks; full by ${forecastDate(soon.full_on)} at that rate`)}">Full ${esc(forecastWhen(soon.days_left))}</span>` : ""}
     <span class="dim xs mono volsizes"><span data-tip="Provisioned logical volume size; this is not physical storage consumed.">${esc(x.size_gb)} GiB provisioned</span> · <span data-tip="Longhorn block footprint, including snapshots and untrimmed blocks. Not filesystem usage, and not a sum across replicas; it can exceed the provisioned size.">${esc(x.actual_gb ?? "—")} GiB Longhorn footprint ${tip("Longhorn includes snapshots and allocated blocks, not just current files. Inspect snapshots before choosing any cleanup; deleting them removes recovery points.")}</span></span></div>`;
 }
 
@@ -378,9 +406,10 @@ function otherVolumesHtml(rows) {
 
 async function viewStorage() {
   if (platformLacks("longhorn", "Volumes")) return;
-  const [v, st, classes, v2, cap] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null),
+  const [v, st, classes, v2, cap, forecast] = await Promise.all([api("/api/volumes"), api("/api/storage").catch(() => null),
     api("/api/storage/classes").catch(() => []), api("/api/storage/v2").catch(() => null),
-    api("/api/longhorn/capacity").catch(() => null)]);
+    api("/api/longhorn/capacity").catch(() => null), api("/api/storage/forecast").catch(() => null)]);
+  STATE.data.forecast = forecast;
   const [allOldCopies, allOthers] = await Promise.all([api("/api/volumes/old-copies").catch(() => []), api("/api/volumes/other").catch(() => [])]);
   STATE.data.lhcap = cap || STATE.data.lhcap;
   STATE.data.storageClasses = classes;
@@ -422,6 +451,7 @@ async function viewStorage() {
       <div class="csub" style="margin-top:10px">${st.attached} attached of ${st.volumes}</div></div>
     ${lhCapacityCard(cap, st)}
   </div>`, "Per node") : ""}
+  ${forecastCard(forecast)}
   <div class="card flat pad0"><div class="tblwrap voltable"><table data-sort="volumes" class="tbl dense"><thead><tr>
    <th>Volume</th><th>Attached to</th><th>Health</th><th>Mode</th><th>Usage</th><th data-nosort>Last used</th><th></th>
    </tr></thead><tbody>${rows.map(x => `<tr data-vol="${esc(x.name)}"${clusterAttr(x)}>

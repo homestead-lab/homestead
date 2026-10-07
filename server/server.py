@@ -719,6 +719,19 @@ def _uptime_loop():
         time.sleep(max(5, UPTIME.CHECK_EVERY - (time.time() - started)))
 
 
+def _forecast_loop():
+    """Hourly on the leader: today's usage of each volume, disk and the pool."""
+    while True:
+        if LEADER.is_leader():
+            try:
+                FORECAST.observe(cached("vol", 8, get_volumes), LHCAP.status())
+                beat("forecast", 3600, leader_only=True)
+            except Exception as error:
+                beat("forecast", 3600, error, leader_only=True)
+                print(f"forecast: {str(error)[:160]}", flush=True)
+        time.sleep(3600)
+
+
 def set_vm_monitoring(b):
     """How a VM is monitored: automatic, a port, a web page on a port, or off.
     An annotation on the VM, so it does not restart."""
@@ -6556,6 +6569,7 @@ import homestead_node_parity as NODE_PARITY
 import homestead_host_os as HOST_OS
 import homestead_ports as PORTS
 import homestead_uptime as UPTIME
+import homestead_forecast as FORECAST
 import homestead_autoupdate as AUTOUPDATE
 import homestead_restore_test as RESTORE_TEST
 import homestead_uplinks as UPLINKS
@@ -6675,6 +6689,7 @@ NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR, (S
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 PORTS.bind(DATA_DIR)
 UPTIME.bind(DATA_DIR)
+FORECAST.bind(DATA_DIR)
 
 
 def port_contexts(probes):
@@ -7028,6 +7043,7 @@ def _alert_sources():
     take("hostos", HOST_OS.alert_facts)
     take("ports", lambda: PORTS.alert_facts(cached("ports", 20, ports_report)))
     take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
+    take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("rootguard", ROOT_GUARD.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
         ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
@@ -7747,7 +7763,7 @@ OPS.RESOLVERS["self-data-move"] = _data_move_status
 
 
 LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
-              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests"}
+              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast"}
 
 
 def samba_state():
@@ -9747,6 +9763,9 @@ class H(HTTP.LimitedHandler):
                                                         (q.get("q") or [None])[0], (q.get("kind") or ["workload"])[0]))
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
+            if p == "/api/storage/forecast":
+                return self._send(200, {"rows": FORECAST.report(), "warn_days": FORECAST.WARN_DAYS,
+                                        "show_days": FORECAST.SHOW_DAYS, "min_days": FORECAST.MIN_DAYS})
             if p == "/api/restore-tests":
                 return self._send(200, restore_tests_view())
             if p == "/api/uptime":
@@ -11339,6 +11358,7 @@ def start_background_tasks():
     threading.Thread(target=fit_own_strategy, daemon=True).start()
     threading.Thread(target=_hardware_loop, daemon=True).start()
     threading.Thread(target=_uptime_loop, name="uptime", daemon=True).start()
+    threading.Thread(target=_forecast_loop, name="forecast", daemon=True).start()
     threading.Thread(target=_autoupdate_loop, name="auto-updates", daemon=True).start()
     threading.Thread(target=_restore_tests_loop, name="restore-tests", daemon=True).start()
     threading.Thread(target=_samba_loop, daemon=True).start()

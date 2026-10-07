@@ -2171,6 +2171,15 @@ ssh_pwauth: true
         const suggestion = i === rows.length - 1 ? null : w.name === "paperless" ? { ...t, name: "Paperless-ngx", match: "name" } : t ? { ...t, match: "image" } : null;
         return { ns: w.ns, name: w.name, images: w.images, suggestion };
       }).sort((a, b) => ({ image: 0, name: 1 }[a.suggestion?.match] ?? 2) - ({ image: 0, name: 1 }[b.suggestion?.match] ?? 2)) }),
+    // The storage forecast (homestead_forecast.py): frigate's config filling in
+    // eleven days, a disk in six weeks, the pool steady.
+    "/api/storage/forecast": () => {
+      const GB = 1024 ** 3, day = n => new Date(Date.now() + n * 86400000).toISOString().slice(0, 10);
+      return { warn_days: 14, show_days: 60, min_days: 7, rows: [
+        { key: "volume:pvc-demo-frigate", kind: "volume", label: "frigate-config", namespace: "lab", volume: "pvc-demo-frigate", used: 15.6 * GB, capacity: 20 * GB, pct: 78, days: 30, days_left: 11.2, per_day: 0.39 * GB, why: "", full_on: day(11) },
+        { key: "disk:harvester-node2:disk-1", kind: "disk", label: "harvester-node2 · /var/lib/harvester/defaultdisk", node: "harvester-node2", used: 610 * GB, capacity: 930 * GB, pct: 65.6, days: 30, days_left: 44.8, per_day: 7.1 * GB, why: "", full_on: day(45) },
+        { key: "pool", kind: "pool", label: "Longhorn storage, all hosts", used: 1400 * GB, capacity: 2790 * GB, pct: 50.2, days: 30, days_left: null, per_day: 0.2 * GB, why: "not growing", full_on: "" }] };
+    },
     // Restore tests (views-protect.js): one passed, one failed, one never tested.
     "/api/restore-tests": () => {
       const now = Date.now() / 1000;
