@@ -3567,3 +3567,12 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .mon-list.bars .mon-item{grid-template-columns:auto minmax(110px,1fr) minmax(0,2fr) auto}
 .answer-strip.mon-mini{height:16px;width:100%}
 .mon-allup{padding:6px 2px}
+
+/* Restore tests on Data Protection. */
+.restore-tests{margin:6px 0 18px}.restore-head{align-items:center;gap:12px;flex-wrap:wrap}
+.restore-table .restore-why{max-width:420px;white-space:normal}
+@media (max-width:560px){
+  .tbl.stack.compact.restore-table tr{grid-template-columns:minmax(0,1fr)}
+  .tbl.stack.compact.restore-table td{white-space:normal;min-width:0}
+  .tbl.stack.compact.restore-table td[data-actions]{justify-self:end}
+}
