@@ -131,7 +131,7 @@ try {
 
     if(width<=560) {
       const header=page.locator('.collection-mobile-head'), toolbar=header.locator('.collection-mobile-toolbar');
-      assert.equal(await page.locator('.containers-page .pagetabs>a:visible').count(),4);
+      assert.equal(await page.locator('.containers-page .pagetabs>a:visible').count(),5);
       assert.equal(await page.locator('.containers-page>.phead>.row').isVisible(),false);
       assert.equal(await page.locator('.containers-page>.sortbar').count(),0,'sorting lives inside Options');
       const bounds=await toolbar.locator(':scope>*').evaluateAll(items=>items.map(e=>e.getBoundingClientRect()));
