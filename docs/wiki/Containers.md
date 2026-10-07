@@ -359,6 +359,22 @@ port (see **Main port** above) by default, or any one of the ports it publishes.
 If that port is later removed from the app, it stops being checked and its
 Monitoring says why, until another is chosen. None of this restarts the app.
 
+**When it is down**, in the same dialog, does nothing unless you choose it:
+
+- **Restart it** after it has been down for so many minutes, then again every
+  that many minutes while it stays down, at most so many times. Out of tries, it
+  is left alone and an alert says so; the count starts again once it has
+  answered for 30 minutes. Nothing is restarted while a job is working on it -
+  an automatic update watches the app itself and rolls the image back if it
+  stays down, and a restart then would read as the update failing. A VM is
+  rebooted cleanly, and only while it is monitored on a port you chose.
+- **Call a webhook**: an HTTP POST of JSON when it goes down, comes back, is
+  restarted or runs out of tries, and when an automatic update of it finishes or
+  is rolled back. Besides its fields (`event`, `kind`, `namespace`, `name`,
+  `state`, `since`, `error`, `detail`, `at`) it carries a sentence as `text`,
+  `content` and `message`, which Slack, Discord and Home Assistant show as it is.
+  **Send a test** sends one now.
+
 ## Groups
 
 Groups gather containers under a heading - Media, Home, Monitoring - that folds

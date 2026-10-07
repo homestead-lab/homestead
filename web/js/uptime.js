@@ -139,6 +139,7 @@ window.wlMonitoring = window.wlAnswering = (ns, name) => {
       ${option("tcp", "A connection", "The port accepting a TCP connection is enough")}
       ${option("off", "Not monitored", "No checks and no alerts for this app")}</div>
       ${portSelect ? `<div class="f answer-port"${mode === "off" ? " hidden" : ""}><label for="ans_port">Port to ask</label>${portSelect}</div>` : ""}`)}
+    ${outageSectionHtml("app", w)}
     ${UI.actions(UI.cancel() + UI.button("Save", "answerSave()", { kind: "pri", attrs: `data-need="operator" data-ns="${esc(ns)}" data-name="${esc(name)}" id="ans_go"` }))}</div>`);
 };
 
@@ -157,8 +158,9 @@ window.answerSave = async () => {
   try {
     const result = await api("/api/uptime/setting", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(result.detail, "ok");
-    const w = (STATE.data.wl || []).find(x => x.ns === body.ns && x.name === body.name);
-    if (w) w.answer_check = result.value ?? (mode === "auto" ? "" : mode === "http" ? body.path || "/" : mode);
+    const w = (STATE.data.wl || []).find(x => x.ns === body.ns && x.name === body.name) || { ns: body.ns, name: body.name };
+    w.answer_check = result.value ?? (mode === "auto" ? "" : mode === "http" ? body.path || "/" : mode);
+    await outageSave("app", w);
     closeModal();
     if (STATE.view === "workloads") renderWorkloads();
   } catch (e) { toast(e.message, "bad"); go.disabled = false; }
@@ -203,6 +205,7 @@ window.vmMonitoring = (ns, name, back = null) => {
         <div class="f"><label for="vm_mon_port">Port</label><input id="vm_mon_port" inputmode="numeric" value="${esc(c.port || a.port || "")}" placeholder="22"></div>
         <div class="f vm-mon-path"${c.mode === "http" ? "" : " hidden"}><label for="vm_mon_path">Path</label><input id="vm_mon_path" value="${esc(c.path)}" placeholder="/"></div></div>
       ${option("off", "Not monitored", "No checks and no alerts for this VM.")}</div>`)}
+    ${outageSectionHtml("vm", v)}
     ${UI.actions((back ? UI.button("Back", "vmMonitorBack()") : UI.cancel())
       + UI.button("Save", "vmMonitorSave()", { kind: "pri", id: "vm_mon_go", attrs: `data-need="operator" data-ns="${esc(ns)}" data-name="${esc(name)}"` }))}</div>`);
 };
@@ -224,11 +227,73 @@ window.vmMonitorSave = async () => {
   try {
     const result = await api("/api/vms/monitoring", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     toast(result.detail, "ok");
-    const v = (STATE.data.vms || []).find(x => x.ns === body.ns && x.name === body.name);
-    if (v) v.monitoring = mode === "auto" ? "" : mode === "off" ? "off" : `${mode}:${body.port}${mode === "http" ? body.path : ""}`;
+    const v = (STATE.data.vms || []).find(x => x.ns === body.ns && x.name === body.name) || { ns: body.ns, name: body.name };
+    v.monitoring = mode === "auto" ? "" : mode === "off" ? "off" : `${mode}:${body.port}${mode === "http" ? body.path : ""}`;
+    await outageSave("vm", v);
     vmMonitorBack();
     if (STATE.view === "vms") window.viewVMs?.(); else if (STATE.view === "monitoring") renderMonitoring();
   } catch (e) { toast(e.message, "bad"); go.disabled = false; }
+};
+
+/* ---------------- when it is down (homestead_outage.py) ----------------
+   Nothing, unless asked: restart it after so long down, a few times at most,
+   and call a webhook. Kept on the app or VM, so saving restarts nothing. */
+function outageSectionHtml(kind, row) {
+  const a = row.outage_actions || {}, r = a.restart || null;
+  const key = `${kind}:${row.ns}/${row.name}`, now = (STATE.data.uptime?.actions || {})[key] || {};
+  const lastHook = now.webhook ? (now.webhook.ok ? `Last call: ${now.webhook.event}, taken` : `Last call: ${now.webhook.event}, failed - ${now.webhook.error}`) : "";
+  const status = [now.restarts ? `Restarted ${now.restarts} time${now.restarts === 1 ? "" : "s"} in this outage${now.gave_up ? "; out of tries" : ""}` : "",
+    now.last_error ? `The last restart could not be done: ${now.last_error}` : "", lastHook].filter(Boolean);
+  return UI.section("When it is down", `<div class="ui-stack outage-actions">
+    <p class="dim small">Nothing is done unless you choose it here.</p>
+    <label class="switch"><input type="checkbox" id="oa_restart"${r ? " checked" : ""} onchange="outageToggle()"> Restart it</label>
+    <div class="outage-restart"${r ? "" : " hidden"}>${UI.fields(
+      UI.field("After it has been down for", `<div class="outage-unit"><input id="oa_after" type="number" inputmode="numeric" min="1" max="1440" value="${r?.after_min || 5}"><span class="dim small">minutes</span></div>`),
+      UI.field("At most", `<div class="outage-unit"><input id="oa_max" type="number" inputmode="numeric" min="1" max="10" value="${r?.max || 3}"><span class="dim small">times</span></div>`,
+        { help: "Then it is left alone and an alert says so. The count starts again once it has answered for 30 minutes." }))}
+      <p class="dim xs">${kind === "vm" ? "A clean reboot, and only while it is monitored on a port you chose: automatically, Homestead cannot tell it is down. "
+        : ""}Never while a job is working on it: an automatic update watches it itself and rolls the image back if it stays down.</p></div>
+    <label class="switch"><input type="checkbox" id="oa_hook"${a.webhook ? " checked" : ""} onchange="outageToggle()"> Call a webhook</label>
+    <div class="outage-hook"${a.webhook ? "" : " hidden"}>
+      <div class="outage-url"><input id="oa_url" type="url" inputmode="url" placeholder="https://hooks.example.com/…" value="${esc(a.webhook || "")}" aria-label="Webhook address">
+        ${UI.button("Send a test", `outageTest(${jsArg(kind)},${jsArg(row.ns)},${jsArg(row.name)})`, { attrs: 'data-need="operator"' })}</div>
+      <p class="dim xs">A POST of JSON when it goes down, comes back, is restarted or runs out of tries, and when an automatic update of it finishes or is rolled back. Its text, content and message fields carry a sentence, for chat services and Home Assistant.</p></div>
+    ${status.length ? `<div class="dim small">${status.map(esc).join("<br>")}</div>` : ""}</div>`);
+}
+
+window.outageToggle = () => {
+  const restart = $("#mbody .outage-restart"), hook = $("#mbody .outage-hook");
+  if (restart) restart.hidden = !$("#oa_restart")?.checked;
+  if (hook) hook.hidden = !$("#oa_hook")?.checked;
+};
+
+function outageFromForm() {
+  const out = {};
+  if ($("#oa_restart")?.checked) out.restart = { after_min: +($("#oa_after")?.value || 0), max: +($("#oa_max")?.value || 0) };
+  if ($("#oa_hook")?.checked && ($("#oa_url")?.value || "").trim()) out.webhook = $("#oa_url").value.trim();
+  return Object.keys(out).length ? out : null;
+}
+
+const outageSame = (a, b) => JSON.stringify(a || null) === JSON.stringify(b || null);
+
+/* After the check is saved: the actions, when they changed. */
+async function outageSave(kind, row) {
+  const actions = outageFromForm();
+  if (outageSame(actions, row.outage_actions)) return;
+  const result = await api("/api/monitoring/actions", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind, ns: row.ns, name: row.name, actions }) });
+  row.outage_actions = result.actions || null;
+  toast(result.detail, "ok");
+}
+
+window.outageTest = async (kind, ns, name) => {
+  const webhook = ($("#oa_url")?.value || "").trim();
+  if (!webhook) return toast("Type the webhook address first", "bad");
+  try {
+    const r = await api("/api/monitoring/actions/test", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind, ns, name, webhook }) });
+    toast(r.detail, r.ok ? "ok" : "bad");
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 /* ---------------- the Monitoring page ----------------

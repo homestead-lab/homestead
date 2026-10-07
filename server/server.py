@@ -713,6 +713,10 @@ def _uptime_loop():
         if LEADER.is_leader():
             try:
                 UPTIME.observe(cached("wl", 5, get_workloads), vms=cached("vms", 5, VMS.list_vms))
+                try:
+                    outage_tick()
+                except Exception as error:
+                    print(f"outage actions: {str(error)[:160]}", flush=True)
                 beat("uptime", UPTIME.CHECK_EVERY, leader_only=True)
             except Exception as error:
                 beat("uptime", UPTIME.CHECK_EVERY, error, leader_only=True)
@@ -901,6 +905,75 @@ def set_schedule(b):
     _cache.pop("wl" if kind == "app" else "vms", None)
     return {"ok": True, "schedule": schedule,
             "detail": f"{name}: {SCHEDULES.describe(schedule).lower()}" if schedule else f"{name} is no longer on a schedule"}
+
+
+def _outage_target(b):
+    """(kind, ns, name, path) of the app or VM outage actions are for."""
+    kind = b.get("kind")
+    ns = _dns_name(b.get("ns"), "namespace")
+    if kind == "app":
+        name = _dns_name(b.get("name"), "workload name")
+        guard_managed_smb(ns, name)
+        return kind, ns, name, f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"
+    if kind == "vm":
+        name = _dns_name(b.get("name"), "VM name")
+        return kind, ns, name, f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}"
+    raise ValueError("outage actions are for an app or a VM")
+
+
+def set_outage_actions(b):
+    """What to do when an app or VM is down - nothing unless asked. An annotation, so nothing restarts."""
+    kind, ns, name, path = _outage_target(b)
+    on_port = True
+    if kind == "vm":
+        current = kget(path)
+        chosen = UPTIME.setting(NAMES.read((current.get("metadata") or {}).get("annotations") or {}, "uptime"))
+        on_port = chosen["mode"] in ("tcp", "http") and bool(chosen.get("port"))
+    actions = OUTAGE.clean(b.get("actions"), kind, on_port)
+    ksend("PATCH", path, {"metadata": {"annotations": {
+        NAMES.key(OUTAGE.KEY): json.dumps(actions, separators=(",", ":")) if actions else None}}},
+        ctype="application/merge-patch+json")
+    _cache.pop("wl" if kind == "app" else "vms", None)
+    said = []
+    if actions and actions.get("restart"):
+        r = actions["restart"]
+        said.append(f"restarted after {r['after_min']} min down, at most {r['max']} time{'s' if r['max'] != 1 else ''}")
+    if actions and actions.get("webhook"):
+        said.append("its webhook called")
+    return {"ok": True, "actions": actions,
+            "detail": f"When {name} is down: " + (" and ".join(said) if said else "nothing is done")}
+
+
+def test_outage_webhook(b):
+    kind, ns, name, _ = _outage_target(b)
+    url = OUTAGE.webhook_url(b.get("webhook"))
+    if not url:
+        raise ValueError("type the webhook address to test")
+    item = {"kind": kind, "ns": ns, "name": name}
+    try:
+        OUTAGE.post(url, OUTAGE.payload(item, "test"))
+    except Exception as error:
+        return {"ok": False, "detail": f"The webhook did not take it: {str(error)[:200]}"}
+    return {"ok": True, "detail": "The webhook took the test"}
+
+
+def outage_tick():
+    """After a monitoring round, on the leader: any outage action that is due."""
+    found = OUTAGE.items(cached("wl", 5, get_workloads), cached("vms", 5, VMS.list_vms))
+    if not found:
+        return []
+    operations = OPS.list_operations()
+    working = {((o.get("resource") or {}).get("namespace"), (o.get("resource") or {}).get("name"))
+               for o in operations if o.get("status") in ("queued", "running")}
+
+    def restart(item):
+        if item["kind"] == "app":
+            restart_workload(item["ns"], item["name"])
+        else:
+            api_vm_power(item["ns"], item["name"], "restart")
+        _cache.pop("wl" if item["kind"] == "app" else "vms", None)
+
+    return OUTAGE.tick(found, UPTIME.report(), restart, lambda item: (item["ns"], item["name"]) in working, operations)
 
 
 def scheduled_items():
@@ -1959,6 +2032,7 @@ def get_workloads():
             "helm_release": annotations.get("meta.helm.sh/release-name", ""),
             "answer_check": NAMES.read(annotations, "uptime"),
             "schedule": SCHEDULES.read(annotations, NAMES),
+            "outage_actions": OUTAGE.read(annotations, NAMES),
             "update_mode": "auto" if NAMES.read(annotations, AUTOUPDATE.MODE) == "auto" else "manual",
             "restore_tested": RESTORE_TEST.last_result(annotations),
             "group": NAMES.read(annotations, "group") or own_group(ns, name),
@@ -6797,6 +6871,7 @@ import homestead_ports as PORTS
 import homestead_uptime as UPTIME
 import homestead_housekeeping as HOUSEKEEPING
 import homestead_schedules as SCHEDULES
+import homestead_outage as OUTAGE
 
 
 import homestead_impact as IMPACT
@@ -6924,6 +6999,7 @@ PORTS.bind(DATA_DIR)
 UPTIME.bind(DATA_DIR)
 HOUSEKEEPING.bind(DATA_DIR)
 SCHEDULES.bind(DATA_DIR)
+OUTAGE.bind(DATA_DIR)
 CHANGES.bind(DATA_DIR)
 FORECAST.bind(DATA_DIR)
 
@@ -7280,6 +7356,7 @@ def _alert_sources():
     take("ports", lambda: PORTS.alert_facts(cached("ports", 20, ports_report)))
     take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
     take("schedules", lambda: SCHEDULES.alert_facts())
+    take("outage", lambda: OUTAGE.alert_facts())
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 600, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("rootguard", ROOT_GUARD.alert_facts)
@@ -10023,7 +10100,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, restore_tests_view())
             if p == "/api/uptime":
                 return self._send(200, {"apps": UPTIME.report(), "every": UPTIME.CHECK_EVERY,
-                                        "down_after": UPTIME.DOWN_AFTER, "slow_ms": UPTIME.SLOW_MS})
+                                        "down_after": UPTIME.DOWN_AFTER, "slow_ms": UPTIME.SLOW_MS,
+                                        "actions": OUTAGE.report()})
             if p == "/api/logos/missing":
                 try:
                     apps = fetch_appstore()
@@ -10479,6 +10557,10 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_uptime_setting(b))
             if p == "/api/vms/monitoring":
                 return self._send(200, set_vm_monitoring(b))
+            if p == "/api/monitoring/actions":
+                return self._send(200, set_outage_actions(b))
+            if p == "/api/monitoring/actions/test":
+                return self._send(200, test_outage_webhook(b))
             if p == "/api/power-schedules/set":
                 return self._send(200, set_schedule(b))
             if p == "/api/image-updates/mode":

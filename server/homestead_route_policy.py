@@ -433,6 +433,8 @@ POLICY = {
     ('POST', '/api/vms/logo'): 'operator',
     ('POST', '/api/uptime/setting'): 'operator',
     ('POST', '/api/power-schedules/set'): 'operator',
+    ('POST', '/api/monitoring/actions'): 'operator',
+    ('POST', '/api/monitoring/actions/test'): 'operator',
     ('POST', '/api/vms/monitoring'): 'operator',
     ('POST', '/api/image-updates/mode'): 'operator',
     ('POST', '/api/homestead/data/tidy'): 'admin',

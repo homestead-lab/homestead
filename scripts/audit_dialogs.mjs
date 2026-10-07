@@ -196,6 +196,8 @@ const DIALOGS = [
   ["workload-groups-filtered", "workloads", "manageWorkloadGroups();document.querySelector('#wg_q').value='f';wgFilter();wgTickShown(true)"],
   ["workload-groups-rename", "workloads", "manageWorkloadGroups();wgRename(0)"],
   ["workload-monitoring-port", "workloads", "wlMonitoring('lab','frigate')"],
+  ["workload-outage-actions", "workloads", "wlMonitoring('lab','frigate');document.querySelector('#oa_restart').click();document.querySelector('#oa_hook').click()"],
+  ["vm-outage-actions", "vms", "vmMonitoring('default','home-assistant-os');document.querySelector('#oa_restart').click();document.querySelector('#oa_hook').click()"],
   ["workload-logo", "workloads", "wlLogo('lab','frigate')"],
   ["workload-logo-fixup", "workloads", "logoFixup()"],
   ["vm-logo", "vms", "vmLogo('lab','ubuntu-test')"],
