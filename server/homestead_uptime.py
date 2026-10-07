@@ -19,6 +19,13 @@ address instead: a host cannot reach a macvtap address on its own NIC, so
 asking the LAN address from Homestead's pod on the same host would fail
 while the app is fine.
 
+VMs are asked too, at the first address their guest agent reports (kept as
+vm:<namespace>/<name>). A VM publishes no port, so unless one is chosen for it
+Homestead tries the ports most VMs answer on - SSH, RDP, HTTPS, HTTP, Proxmox,
+Home Assistant - quickly, once, and keeps asking the first that answers. A VM
+none of them answer on is not monitored until a port is chosen: a firewall is
+not an outage. A chosen port is asked as a connection, or as a web page.
+
 An app is down after DOWN_AFTER misses in a row and up again on its first
 answer, so one dropped packet raises nothing. An answer slower than SLOW_MS is
 marked slow but is not an outage. Stopped apps (no replicas wanted) are not
@@ -52,6 +59,8 @@ SAVE_EVERY = 300
 FORGET_AFTER = 7 * 86400     # an app gone this long is dropped from the history
 HTTPS_PORTS = (443, 8443, 9443, 5001)
 MAX_PORTS = 4
+VM_PORTS = (22, 3389, 443, 80, 8006, 8123, 9443)
+DISCOVER_TIMEOUT = 1.2
 PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,199}$")
 USER_AGENT = "Homestead-uptime/1"
 _lock = threading.Lock()
@@ -97,29 +106,83 @@ def _save(now):
     _state["saved_at"], _state["mtime"] = now, _mtime()
 
 
+_PORTED = re.compile(r"^(tcp|http):([0-9]{1,5})(/.*)?$")
+
+
 def setting(value):
-    """An app's own uptime setting, from its annotation: auto, off, tcp or an HTTP path."""
+    """An app's or VM's own setting, from its annotation: auto, off, tcp, an
+    HTTP path, or - for a VM - tcp:PORT or http:PORT/path."""
     value = str(value or "").strip()
     if value in ("", "auto"):
         return {"mode": "auto"}
     if value in ("off", "tcp"):
         return {"mode": value}
+    ported = _PORTED.match(value)
+    if ported and 1 <= int(ported.group(2)) <= 65535:
+        mode, port, path = ported.group(1), int(ported.group(2)), ported.group(3) or "/"
+        if mode == "tcp" and ported.group(3):
+            return {"mode": "auto"}
+        if mode == "http" and not PATH.match(path):
+            return {"mode": "auto"}
+        return {"mode": mode, "port": port, **({"path": path} if mode == "http" else {})}
     if PATH.match(value):
         return {"mode": "http", "path": value}
     return {"mode": "auto"}
 
 
-def check_setting(mode, path=""):
-    """What an operator asks for, as the annotation value; ValueError if it is not one."""
+def check_setting(mode, path="", port=None):
+    """What an operator asks for, as the annotation value; ValueError if it is not one.
+    port is for a VM, which publishes none of its own."""
     mode = str(mode or "auto")
-    if mode in ("auto", "off", "tcp"):
+    if port not in (None, ""):
+        try:
+            port = int(port)
+        except (TypeError, ValueError):
+            raise ValueError("a port is a number from 1 to 65535") from None
+        if not 1 <= port <= 65535:
+            raise ValueError("a port is a number from 1 to 65535")
+    else:
+        port = None
+    if mode in ("auto", "off"):
         return "" if mode == "auto" else mode
+    if mode == "tcp":
+        return f"tcp:{port}" if port else "tcp"
     if mode == "http":
         path = str(path or "/").strip() or "/"
         if not PATH.match(path):
             raise ValueError("the path starts with / and has no spaces, up to 200 characters")
-        return path
+        return f"http:{port}{path}" if port else path
     raise ValueError("choose auto, http, tcp or off")
+
+
+def vm_key(vm):
+    return f"vm:{vm.get('ns')}/{vm.get('name')}"
+
+
+def vm_target(vm, learned=None):
+    """Where and how to ask one VM, or None with the reason it is not asked."""
+    if vm.get("site"):
+        return None, "on another cluster"
+    chosen = setting(vm.get("monitoring"))
+    if chosen["mode"] == "off":
+        return None, "checks are off for this VM"
+    if not vm.get("running"):
+        return None, "stopped"
+    host = next((ip for ip in vm.get("ips") or [] if ip and ":" not in ip), "") or vm.get("ip") or ""
+    if not host:
+        return None, "no address yet: its guest agent reports one"
+    port = chosen.get("port")
+    if port:
+        scheme = "https" if port in HTTPS_PORTS else "http"
+        kind = "http" if chosen["mode"] == "http" else "tcp"
+        return {"kind": kind, "host": host, "port": port, "scheme": scheme, "path": chosen.get("path", "/"),
+                "strict": kind == "http", "chosen": True, "asks": [{"host": host, "port": port, "scheme": scheme}]}, ""
+    if learned:
+        return {"kind": "tcp", "host": host, "port": int(learned), "scheme": "http", "path": "/", "strict": False,
+                "asks": [{"host": host, "port": int(learned), "scheme": "http"}]}, ""
+    asks = [{"host": host, "port": p, "scheme": "http"} for p in VM_PORTS]
+    return {"kind": "tcp", "host": host, "port": VM_PORTS[0], "scheme": "http", "path": "/", "strict": False,
+            "asks": asks, "discover": True, "timeout": DISCOVER_TIMEOUT}, ""
 
 
 def target(w):
@@ -188,6 +251,7 @@ def _why(error):
 
 def probe(t, timeout=TIMEOUT):
     """Ask once. {ok, ms, code, error}."""
+    timeout = t.get("timeout") or timeout
     if t["kind"] == "tcp":
         return _tcp(t["host"], t["port"], timeout)
     started = time.monotonic()
@@ -258,13 +322,19 @@ def _record(app, result, now):
     return False
 
 
-def observe(workloads, now=None, ask=probe):
-    """One round: ask every app that can be asked. The leader calls it each minute."""
+def observe(workloads, now=None, ask=probe, vms=None):
+    """One round: ask every app and VM that can be asked. The leader calls it each minute."""
     now = now or time.time()
     rows = []
     for w in workloads or []:
         t, why = target(w)
         rows.append((f"{w.get('ns')}/{w.get('name')}", t, why))
+    with _lock:
+        learned = {key: app.get("port") for key, app in _load().items() if key.startswith("vm:")}
+    for vm in vms or []:
+        key = vm_key(vm)
+        t, why = vm_target(vm, learned.get(key) if setting(vm.get("monitoring"))["mode"] == "auto" else None)
+        rows.append((key, t, why))
     results = {}
 
     def run(key, t):
@@ -290,8 +360,19 @@ def observe(workloads, now=None, ask=probe):
                     changed = changed or app.get("state") in ("down",)
                     app.update({"state": "off", "why": why, "misses": 0, "since": round(now)})
                 continue
-            app.pop("why", None)
             result = results.get(key) or {"ok": False, "ms": None, "code": None, "error": "the check did not finish"}
+            if t.get("discover"):
+                if not result["ok"]:
+                    # None of the usual ports answered: a firewall, not an outage.
+                    why = ("none of the usual ports answered (" + ", ".join(str(p) for p in VM_PORTS)
+                           + "): choose the port to ask")
+                    if app.get("state") != "off" or app.get("why") != why:
+                        app.update({"state": "off", "why": why, "misses": 0, "since": round(now), "target": ""})
+                    continue
+                app["port"] = result.get("port")
+            elif t.get("chosen"):
+                app.pop("port", None)          # a chosen port replaces any learned one
+            app.pop("why", None)
             app["target"] = _describe(t, result)
             if len(t.get("asks") or []) > 1 and not result["ok"]:
                 app["target"] = f"{len(t['asks'])} ports at {t['host']}"
@@ -338,6 +419,7 @@ def summary(app, now=None):
     if state == "up" and last.get("ms") and last["ms"] > SLOW_MS:
         state = "slow"
     return {"state": state, "since": app.get("since"), "why": app.get("why", ""), "target": app.get("target", ""),
+            "port": app.get("port"),
             "last": last, "strip": strip, "days": days, "uptime_24h": share(recent), "uptime_30d": share(list(hours.values()))}
 
 
@@ -353,11 +435,13 @@ def alert_facts(rep):
     for key, s in (rep or {}).items():
         if s.get("state") != "down":
             continue
-        ns, name = key.split("/", 1)
+        vm = key.startswith("vm:")
+        ns, name = key[3:].split("/", 1) if vm else key.split("/", 1)
         error = (s.get("last") or {}).get("error") or "no answer"
         facts.append({"key": f"uptime:{key}", "category": "outage", "severity": "critical",
-                      "title": f"{name} is down",
+                      "title": f"{'VM ' if vm else ''}{name} is down",
                       "body": f"{s.get('target') or name}: {error}. Checked every minute; it has missed {DOWN_AFTER} or more in a row.",
-                      "resolved": f"{name} is up again",
-                      "href": f"/containers?panel=monitoring&ns={ns}&workload={name}", "signals": {"error": error}})
+                      "resolved": f"{'VM ' if vm else ''}{name} is up again",
+                      "href": (f"/vms?panel=monitoring&ns={ns}&vm={name}" if vm
+                               else f"/containers?panel=monitoring&ns={ns}&workload={name}"), "signals": {"error": error}})
     return facts

@@ -2134,6 +2134,13 @@ ssh_pwauth: true
         ][i] || { state: "off", why: "checks are off for this app", target: "", last: {}, strip: [], uptime_24h: null, uptime_30d: null };
       });
       const month = (bad = [], dips = []) => Array.from({ length: 30 }, (_, i) => i < 4 ? null : bad.includes(i) ? "down" : dips.includes(i) ? "dip" : "up");
+      // VMs: Home Assistant OS learned on 8123, the k3s nodes on SSH, stopped ones not asked.
+      demoVms.forEach((v, i) => {
+        const ip = (v.ips || [])[0] || v.ip || "";
+        apps[`vm:${v.ns}/${v.name}`] = v.status !== "Running" ? { state: "off", why: "stopped", target: "", last: {}, strip: [], days: [], uptime_24h: null, uptime_30d: null }
+          : { state: "up", since: now - 86400 * 3, port: /home-assistant/.test(v.name) ? 8123 : 22, target: `tcp ${ip}:${/home-assistant/.test(v.name) ? 8123 : 22}`,
+              last: { ok: true, ms: 2 + i, code: null, error: "" }, strip: day(i === 1 ? [16] : []), uptime_24h: i === 1 ? 99.3 : 100, uptime_30d: i === 1 ? 99.86 : 100 };
+      });
       Object.values(apps).forEach((a, i) => { a.days = a.state === "off" ? [] : month(i === 2 ? [29] : [], i === 1 ? [12, 25] : i === 2 ? [18] : []); });
       return { apps, every: 60, down_after: 3, slow_ms: 2000 };
     },
@@ -2162,6 +2169,13 @@ ssh_pwauth: true
         const suggestion = i === rows.length - 1 ? null : w.name === "paperless" ? { ...t, name: "Paperless-ngx", match: "name" } : t ? { ...t, match: "image" } : null;
         return { ns: w.ns, name: w.name, images: w.images, suggestion };
       }).sort((a, b) => ({ image: 0, name: 1 }[a.suggestion?.match] ?? 2) - ({ image: 0, name: 1 }[b.suggestion?.match] ?? 2)) }),
+    "/api/vms/monitoring": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      const v = demoVms.find(x => x.ns === body.ns && x.name === body.name);
+      const value = body.mode === "auto" ? "" : body.mode === "off" ? "off" : `${body.mode}:${body.port}${body.mode === "http" ? body.path || "/" : ""}`;
+      if (v) v.monitoring = value;
+      return { ok: true, detail: `${body.name} is ${value === "" ? "checked automatically" : value === "off" ? "not monitored" : `checked at ${value}`}` };
+    },
     "/api/vms/logo": (url, init) => {
       const items = JSON.parse(init?.body || "{}").items || [];
       for (const item of items) {

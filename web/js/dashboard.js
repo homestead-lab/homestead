@@ -138,7 +138,8 @@ const Dashboard = (() => {
   }
   async function loadMonitoring() {
     if (!(draft || read()).some(item=>item.id==="monitoring")) return;
-    try { [STATE.data.wl] = await Promise.all([STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads"), loadUptime()]); } catch (e) { /* the widget says it is loading */ }
+    try { [STATE.data.wl, STATE.data.vms] = await Promise.all([STATE.data.wl ? Promise.resolve(STATE.data.wl) : api("/api/workloads"),
+      STATE.data.vms ? Promise.resolve(STATE.data.vms) : api("/api/vms").catch(() => []), loadUptime()]); } catch (e) { /* the widget says it is loading */ }
     const host=document.getElementById("dashboardMonitoring");if(host)host.innerHTML=monitorWidget(settings("monitoring"));
   }
   async function loadPortal(force=false) {

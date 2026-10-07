@@ -26,7 +26,7 @@ const vmFilling = v => (v.filling || []).map(f => `<div class="vm-filling ${f.st
 
 async function viewVMs() {
   if (platformLacks("kubevirt", "Virtual machines")) return;
-  const vms = await api("/api/vms");
+  const [vms] = await Promise.all([api("/api/vms"), loadUptime()]);
   STATE.data.vms = vms;
   const q = STATE.q.toLowerCase();
   const rows = vms.filter(v => !q || [v.name, v.ns, v.os, v.ip, v.node, v.description].join(" ").toLowerCase().includes(q));
@@ -206,6 +206,7 @@ function vmActions(v, compact = false) {
         ${main.filter(a => !shown.includes(a)).map(a => `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},${jsq(a)})">${icon(VM_ACTIONS[a][1])}${VM_ACTIONS[a][0]}</button>`).join("")}
         <button data-need="operator" onclick="this.closest('details').open=false;vmEdit(${jsq(v.ns)},${jsq(v.name)})">${icon("edit")}Edit</button>
         <button data-need="operator" onclick="this.closest('details').open=false;vmLogo(${jsq(v.ns)},${jsq(v.name)})">${icon("logo")}Logo</button>
+        <button onclick="this.closest('details').open=false;vmMonitoring(${jsq(v.ns)},${jsq(v.name)})">${icon("pulse")}Monitoring</button>
         ${v.actions.includes("pause") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmPower(${jsq(v.ns)},${jsq(v.name)},'pause')">${icon("pause")}Pause</button>` : ""}
         ${v.actions.includes("migrate") ? `<button data-need="operator" onclick="this.closest('details').open=false;vmMove(${jsq(v.ns)},${jsq(v.name)})">${icon("move")}Move host</button>` : ""}
         ${FLEET.view?.linked ? `<button data-need="admin" title="Move it to another linked cluster, disks and all" onclick="this.closest('details').open=false;moveToCluster('vm',${jsq(v.name)},${jsq(v.site?.handle || "")},'move',${jsq(v.ns)})">${icon("move")}Move to cluster</button>` : ""}
@@ -229,7 +230,7 @@ function vmTable(rows) {
     ${rows.map(v => `<tr class="clickable"${clusterAttr(v)} onclick="if(!event.target.closest('button,details,a'))vmOpen(${jsq(v.ns)},${jsq(v.name)})">
       <td class="cell-name" data-sort="${esc(v.name)}"><div class="vm-name-cell">${vmAvatar(v)}<div class="vm-name-text"><b>${esc(v.name)}</b> ${clusterTag(v)}${vmClusterTag(v)}
         <div class="dim xs vm-sub">${esc([v.ns, v.os, v.node ? `on ${v.node}` : ""].filter(Boolean).join(" · "))}</div></div></div></td>
-      <td data-label="Status" data-status data-sort="${esc(v.status)}"><span class="pill ${vmTone(v.status)}" data-tip="${esc([v.status, v.problem].filter(Boolean).join(": "))}">${esc(v.status)}</span>
+      <td data-label="Status" data-status data-sort="${esc(v.status)}"><span class="pill ${vmTone(v.status)}" data-tip="${esc([v.status, v.problem].filter(Boolean).join(": "))}">${esc(v.status)}</span>${answerTag(v, true)}
         ${v.restart_required ? '<div class="dim xs">restart to apply changes</div>' : ""}
         ${(v.filling || []).length ? `<div class="dim xs">${esc(VM_FILL_WORDS[v.filling[0].phase] || v.filling[0].phase)}${v.filling[0].progress != null ? ` · ${v.filling[0].progress.toFixed(0)}%` : ""}</div>` : ""}</td>
       <td data-label="Address" class="nowrap" data-sort="${esc((v.ips || [])[0] || "")}"><div class="vm-addr">${vmAddress(v, false)}</div>
@@ -267,6 +268,7 @@ function vmCard(v) {
     ${v.problem ? `<div class="note bad vm-problem">${esc(v.problem)}</div>` : ""}
     ${vmFilling(v)}
     ${v.restart_required ? '<div class="dim xs vm-restart">Changes are waiting for a restart</div>' : ""}
+    ${answerCardRow(v, true)}
     <div class="wmeta vm-meta">
       <div><div class="dim xs">ADDRESS</div><div class="mono small">${ips[0] ? `${esc(ips[0])}<button class="iconbtn vm-copy" type="button" title="Copy ${esc(ips[0])}" onclick="event.stopPropagation();ipamCopy(${jsq(ips[0])})">${icon("copy")}</button>${ips.length > 1 ? `<span class="dim" data-tip="${esc(ips.slice(1).join(", "))}">+${ips.length - 1}</span>` : ""}` : '<span class="dim">—</span>'}</div></div>
       <div><div class="dim xs">CPU</div><div class="mono small">${u?.cpu_pct != null ? `${u.cpu_pct}%` : "—"}</div></div>
@@ -500,6 +502,8 @@ window.vmEdit = async (ns, name) => {
       <div class="f"><label>Logo</label><div class="row vm-edit-logo">${vmAvatar((STATE.data.vms || []).find(x => x.ns === ns && x.name === name) || v)}
         <button class="btn sm" type="button" data-need="operator" onclick="vmLogo(${jsq(ns)},${jsq(name)},() => vmEdit(${jsq(ns)},${jsq(name)}))">Change…</button>
         <span class="dim xs">Saved on its own, at once; the VM keeps running. Other changes here are not saved by it.</span></div></div>
+      <div class="f"><label>Monitoring</label><div class="row vm-edit-logo">${(() => { const a = answerOf({ ns, name }, true); return a ? `<span class="answer-state"><i class="answer-dot ${esc(a.state)}"></i>${esc(ANSWER_WORDS[a.state] || a.state)}</span><span class="dim xs">${esc(answerDetail(a))}</span>` : '<span class="dim xs">Not checked yet</span>'; })()}
+        <button class="btn sm" type="button" data-need="operator" onclick="vmMonitoring(${jsq(ns)},${jsq(name)},() => vmEdit(${jsq(ns)},${jsq(name)}))">Change…</button></div></div>
       ${UI.more("Advanced editing", UI.button("Edit YAML", `vmYaml(${jsq(ns)},${jsq(name)})`, { attrs: 'data-need="admin"' }))}`},
     v.hardware && {key:"hardware", title:"Hardware", html:vmHardwareFields(v.hardware, o, !!v.resource_profile?.name)},
     {key:"disks", title:`Disks · ${disks.length}`, html:`

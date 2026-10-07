@@ -84,3 +84,19 @@ test("the monitoring field reads back what it was given", () => {
   assert.match(run('monitoringFieldHtml("e", "off")'), /value="off" selected/);
   assert.match(run('monitoringFieldHtml("e", "")'), /value="auto" selected/);
 });
+
+
+test("a VM's state is its own, kept apart from an app of the same name", () => {
+  ctx.STATE.data.uptime = { apps: { "lab/ha": { state: "up", strip: [] }, "vm:lab/ha": { state: "down", since: 1000, last: { error: "connection refused" }, strip: [] } } };
+  const tag = run('answerTag({ ns: "lab", name: "ha" }, true)');
+  assert.match(tag, /vmMonitoring\(/);
+  assert.match(tag, />Down</);
+  assert.equal(run('answerTag({ ns: "lab", name: "ha" })'), "", "the app is up");
+});
+
+test("a VM's chosen port reads back", () => {
+  assert.deepEqual({ ...run('vmMonitorChoice("http:8123/api/")') }, { mode: "http", port: "8123", path: "/api/" });
+  assert.deepEqual({ ...run('vmMonitorChoice("tcp:22")') }, { mode: "tcp", port: "22", path: "/" });
+  assert.equal(run('vmMonitorChoice("")').mode, "auto");
+  assert.equal(run('vmMonitorChoice("off")').mode, "off");
+});

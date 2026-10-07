@@ -109,6 +109,9 @@ async function applyDeepLink(v, params) {
       detail = params.workload + " logs";
       open = () => wlLogs(params.ns, pod, params.workload, true);
     }
+  } else if (v === "vms" && params.panel === "monitoring" && params.ns && params.vm) {
+    detail = params.vm + " monitoring";
+    open = () => vmMonitoring(params.ns, params.vm);
   } else if (v === "workloads" && ["monitoring", "answering"].includes(params.panel) && params.ns && params.workload) {
     detail = params.workload + " monitoring";
     open = () => wlMonitoring(params.ns, params.workload);

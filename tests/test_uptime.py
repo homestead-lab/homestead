@@ -98,6 +98,90 @@ class PortChoiceTests(Base):
         self.assertEqual("192.0.2.50", UP.target(no_pod)[0]["host"], "with no pod address it still tries the LAN one")
 
 
+def vm(name="ha", running=True, ips=("192.0.2.60",), monitoring="", **extra):
+    row = {"ns": "lab", "name": name, "running": running, "ips": list(ips), "monitoring": monitoring}
+    row.update(extra)
+    return row
+
+
+class VmTests(Base):
+    def test_what_a_vm_is_not_asked_and_why(self):
+        for v, why in ((vm(running=False), "stopped"), (vm(ips=()), "guest agent"), (vm(monitoring="off"), "off"),
+                       (vm(site={"id": "b"}), "another cluster")):
+            with self.subTest(why=why):
+                t, reason = UP.vm_target(v)
+                self.assertIsNone(t)
+                self.assertIn(why, reason)
+
+    def test_a_chosen_port_or_page(self):
+        t, _ = UP.vm_target(vm(monitoring="tcp:22"))
+        self.assertEqual(("tcp", 22, True), (t["kind"], t["port"], t["chosen"]))
+        t, _ = UP.vm_target(vm(monitoring="http:8123/api/"))
+        self.assertEqual(("http", 8123, "/api/", True), (t["kind"], t["port"], t["path"], t["strict"]))
+
+    def test_settings_with_a_port(self):
+        self.assertEqual("tcp:22", UP.check_setting("tcp", "", 22))
+        self.assertEqual("http:8123/", UP.check_setting("http", "/", "8123"))
+        for bad in (0, 70000, "ssh"):
+            with self.subTest(port=bad), self.assertRaises(ValueError):
+                UP.check_setting("tcp", "", bad)
+        self.assertEqual({"mode": "auto"}, UP.setting("tcp:99999"))
+        self.assertEqual({"mode": "auto"}, UP.setting("tcp:22/x"))
+
+    def test_the_first_usual_port_that_answers_is_learned_and_kept(self):
+        asked = []
+
+        def ask(t):
+            asked.append(t["port"])
+            return OK if t["port"] == 8123 else MISS
+        UP.observe([], now=1000, ask=ask, vms=[vm()])
+        self.assertEqual([22, 3389, 443, 80, 8006, 8123], asked, "the usual ports, quickly, until one answers")
+        rep = UP.report(1000)["vm:lab/ha"]
+        self.assertEqual(("up", 8123, "tcp 192.0.2.60:8123"), (rep["state"], rep["port"], rep["target"]))
+        asked.clear()
+        UP.observe([], now=1060, ask=ask, vms=[vm()])
+        self.assertEqual([8123], asked, "after that only the port it answered on")
+
+    def test_no_usual_port_answering_is_not_an_outage(self):
+        for now in (1000, 1060, 1120, 1180):
+            UP.observe([], now=now, ask=lambda t: MISS, vms=[vm()])
+        rep = UP.report(1180)["vm:lab/ha"]
+        self.assertEqual("off", rep["state"])
+        self.assertIn("choose the port", rep["why"])
+        self.assertEqual([], UP.alert_facts(UP.report(1180)))
+
+    def test_a_learned_port_that_stops_answering_is_down_with_a_vm_alert(self):
+        UP.observe([], now=1000, ask=lambda t: OK if t["port"] == 22 else MISS, vms=[vm()])
+        for now in (1060, 1120, 1180):
+            UP.observe([], now=now, ask=lambda t: MISS, vms=[vm()])
+        fact = UP.alert_facts(UP.report(1180))[0]
+        self.assertEqual(("uptime:vm:lab/ha", "VM ha is down"), (fact["key"], fact["title"]))
+        self.assertIn("/vms?panel=monitoring&ns=lab&vm=ha", fact["href"])
+
+    def test_a_chosen_port_replaces_a_learned_one(self):
+        UP.observe([], now=1000, ask=lambda t: OK if t["port"] == 22 else MISS, vms=[vm()])
+        UP.observe([], now=1060, ask=lambda t: OK, vms=[vm(monitoring="tcp:2222")])
+        self.assertIsNone(UP.report(1060)["vm:lab/ha"]["port"])
+
+
+class VmSettingRouteTests(unittest.TestCase):
+    def test_only_the_vms_annotation_changes_and_a_port_is_needed(self):
+        import server
+        sent = []
+        with mock.patch.object(server, "ksend", side_effect=lambda *a, **k: sent.append(a)):
+            server.set_vm_monitoring({"ns": "lab", "name": "ha", "mode": "http", "port": 8123, "path": "/api/"})
+            server.set_vm_monitoring({"ns": "lab", "name": "ha", "mode": "auto"})
+            for bad in ({"mode": "tcp"}, {"mode": "http", "path": "/x"}, {"mode": "tcp", "port": 99999}, {"name": "../x", "mode": "off"}):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    server.set_vm_monitoring({"ns": "lab", "name": "ha", **bad})
+        (method, path, body) = sent[0]
+        self.assertEqual(("PATCH", "/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/ha"), (method, path))
+        self.assertEqual({"metadata": {"annotations": {"homestead.io/uptime": "http:8123/api/"}}}, body,
+                         "the VM's spec is untouched, so it does not restart")
+        self.assertIsNone(sent[1][2]["metadata"]["annotations"]["homestead.io/uptime"])
+        self.assertEqual(2, len(sent))
+
+
 class StateTests(Base):
     def run_round(self, result, now, apps=None):
         return UP.observe(apps or [app()], now=now, ask=lambda t: result)
