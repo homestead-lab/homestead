@@ -50,7 +50,8 @@ window.wlLogo = (ns, name, back = null) => {
     <div class="f"><label for="lg_q">Search the app store</label><input id="lg_q" type="search" value="${esc(name)}" autocomplete="off"
       oninput="logoSearchSoon()"></div>
     <div id="lg_tiles"></div>
-    ${UI.more("Use an image URL instead", `<div class="f"><label for="lg_url">Image URL</label><input id="lg_url" type="url" placeholder="https://…/logo.png" oninput="logoSyncSave()"></div>`)}
+    ${UI.more("Use an address instead", `<div class="f"><label for="lg_url">Image or site address</label><input id="lg_url" type="url" placeholder="https://…/logo.png or https://example.com" oninput="logoSyncSave()">
+      <div class="ui-help">A site's own logo is used if it is an SVG or at least 64 px.</div></div>`)}
     ${UI.actions((back ? UI.button("Back", "logoBack()") : UI.cancel())
       + (w.icon ? UI.button("Remove logo", "logoSave(true)", { attrs: 'data-need="operator"' }) : "")
       + UI.button("Use this logo", "logoSave()", { kind: "pri", id: "lg_go", disabled: true, attrs: 'data-need="operator"' }))}</div>`);

@@ -526,7 +526,7 @@ def icon_bytes(name, reference, limit=256 * 1024):
     a move does not bring; the bytes come across so the name works here too.
     Icons are served without signing in, as they are to browsers.
     """
-    if not re.fullmatch(r"/api/icons/[0-9a-f]{64}\.(png|jpg|gif|webp|ico)", str(reference or "")):
+    if not re.fullmatch(r"/api/icons/[0-9a-f]{64}\.(png|jpg|gif|webp|ico|svg)", str(reference or "")):
         raise ValueError("not a cached icon reference")
     request = urllib.request.Request(_cluster(name)["url"] + reference)
     request.add_header("Accept", "image/*")

@@ -39,7 +39,7 @@ class IconCacheTests(unittest.TestCase):
 
     def test_non_image_and_oversized_content_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "supported"):
-            icons._sniff_mime(b"<svg><script>alert(1)</script></svg>")
+            icons._sniff_mime(b"<html><script>alert(1)</script></html>")
         with tempfile.TemporaryDirectory() as data_dir, mock.patch.object(
                 icons, "_download", side_effect=ValueError("logo is too large (maximum 256 KiB)")):
             with self.assertRaisesRegex(ValueError, "too large"):

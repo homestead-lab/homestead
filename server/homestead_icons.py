@@ -2,11 +2,20 @@
 
 Remote icon URLs are operator input, so fetching them is an SSRF boundary. We
 only resolve public HTTP(S) hosts, re-check redirects, cap the response size,
-and accept a small set of raster formats. Files are content-addressed beneath
+and accept a small set of raster formats and SVG.
+
+An SVG is a document that can carry script, so it is rebuilt before it is
+kept: only drawing elements and their presentation attributes survive, with
+no script, event handler, foreignObject, animation, embedded image, or link
+or url() that leaves the file; a DOCTYPE or entity declaration is refused. It
+is served with a sandboxing Content-Security-Policy as well, and pages show
+logos through <img>, where an SVG's script never runs anyway. Files are content-addressed beneath
 Homestead's Longhorn-backed DATA_DIR so rollouts do not depend on the source URL.
 """
 import hashlib
+import html.parser
 import ipaddress
+import json
 import base64
 import os
 import re
@@ -17,6 +26,7 @@ import time
 import tempfile
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 import homestead_shared as SHARED
 
 
@@ -28,7 +38,41 @@ MIME_EXTENSIONS = {
     "image/webp": "webp",
     "image/x-icon": "ico",
     "image/vnd.microsoft.icon": "ico",
+    "image/svg+xml": "svg",
 }
+
+ICON_NAME = re.compile(r"[0-9a-f]{64}\.(png|jpg|gif|webp|ico|svg)")
+SVG_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+
+SVG_NS, XLINK_NS = "http://www.w3.org/2000/svg", "http://www.w3.org/1999/xlink"
+SVG_ELEMENTS = {
+    "svg", "g", "defs", "title", "desc", "symbol", "use", "style",
+    "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
+    "text", "tspan", "textPath",
+    "linearGradient", "radialGradient", "stop", "clipPath", "mask", "pattern", "marker",
+    "filter", "feBlend", "feColorMatrix", "feComponentTransfer", "feComposite", "feFlood",
+    "feGaussianBlur", "feMerge", "feMergeNode", "feMorphology", "feOffset", "feFuncA", "feFuncR",
+    "feFuncG", "feFuncB", "feDropShadow",
+}
+TEXT_ELEMENTS = {"text", "tspan", "textPath", "title", "desc"}
+SVG_ATTRIBUTES = {
+    "id", "class", "style", "viewBox", "preserveAspectRatio", "width", "height", "x", "y", "x1", "x2", "y1", "y2",
+    "cx", "cy", "r", "rx", "ry", "fx", "fy", "d", "points", "transform", "pathLength", "version",
+    "fill", "fill-opacity", "fill-rule", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin",
+    "stroke-miterlimit", "stroke-dasharray", "stroke-dashoffset", "stroke-opacity", "opacity", "color",
+    "clip-path", "clip-rule", "mask", "filter", "display", "visibility", "overflow", "vector-effect",
+    "offset", "stop-color", "stop-opacity", "gradientUnits", "gradientTransform", "spreadMethod",
+    "patternUnits", "patternContentUnits", "patternTransform", "clipPathUnits", "maskUnits", "maskContentUnits",
+    "markerWidth", "markerHeight", "markerUnits", "refX", "refY", "orient",
+    "font-family", "font-size", "font-weight", "font-style", "text-anchor", "dominant-baseline",
+    "letter-spacing", "dx", "dy", "rotate", "textLength", "lengthAdjust", "startOffset",
+    "filterUnits", "primitiveUnits", "in", "in2", "result", "stdDeviation", "mode", "operator",
+    "k1", "k2", "k3", "k4", "values", "type", "tableValues", "slope", "intercept", "amplitude", "exponent",
+    "flood-color", "flood-opacity", "radius", "isolation", "mix-blend-mode", "shape-rendering",
+    "color-interpolation-filters", "href",
+}
+_CSS_URL = re.compile(r"url\(\s*(['\"]?)(.*?)\1\s*\)", re.I | re.S)
+_CSS_BAD = re.compile(r"@import|expression\s*\(|javascript:|behavior\s*:|-moz-binding", re.I)
 
 
 def _public_target(url):
@@ -105,17 +149,106 @@ def _sniff_mime(data):
         return "image/webp"
     if data.startswith(b"\x00\x00\x01\x00"):
         return "image/x-icon"
-    raise ValueError("logo response is not a supported PNG, JPEG, GIF, WebP, or ICO image")
+    if _looks_like_svg(data):
+        return "image/svg+xml"
+    raise ValueError("logo response is not a supported PNG, JPEG, GIF, WebP, ICO or SVG image")
 
 
-def _download(url):
-    deadline = time.monotonic() + 15
+def _looks_like_svg(data):
+    head = data[:2048].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    return head.startswith((b"<?xml", b"<svg", b"<!--")) and b"<svg" in head
+
+
+def _local(tag):
+    return tag.rsplit("}", 1)[-1] if tag.startswith("{") else tag
+
+
+def _safe_css(text):
+    """Style text with no way out of the file: url() only to #fragments."""
+    if _CSS_BAD.search(text or ""):
+        return ""
+    return _CSS_URL.sub(lambda m: m.group(0) if m.group(2).strip().startswith("#") else "none", text or "")
+
+
+def clean_svg(data):
+    """An SVG rebuilt from what is safe to draw. ValueError if it is not one.
+
+    Cleaning a cleaned SVG gives the same bytes, so its content-addressed name
+    is the same on every Homestead that keeps it."""
+    if len(data) > MAX_ICON_BYTES:
+        raise ValueError("logo is too large (maximum 256 KiB)")
+    lowered = data.lower()
+    if b"<!doctype" in lowered or b"<!entity" in lowered:
+        raise ValueError("an SVG logo with a DOCTYPE or entities is not accepted")
+    try:
+        root = ET.fromstring(data)
+    except ET.ParseError as exc:
+        raise ValueError("the SVG logo could not be read") from exc
+    if root.tag not in (f"{{{SVG_NS}}}svg", "svg"):
+        raise ValueError("the logo is not an SVG image")
+
+    def rebuild(node):
+        if not isinstance(node.tag, str):
+            return None                      # a comment or processing instruction
+        tag = _local(node.tag)
+        if (node.tag.startswith("{") and not node.tag.startswith(f"{{{SVG_NS}}}")) or tag not in SVG_ELEMENTS:
+            return None
+        out = ET.Element(f"{{{SVG_NS}}}{tag}")
+        for name, value in sorted(node.attrib.items()):
+            local = _local(name)
+            if name.startswith("{") and not name.startswith(f"{{{XLINK_NS}}}"):
+                continue
+            if local not in SVG_ATTRIBUTES or local.lower().startswith("on"):
+                continue
+            value = str(value)
+            if local == "href":
+                if value.startswith("#"):
+                    out.set("href", value)
+                continue
+            if "javascript:" in value.lower().replace(" ", ""):
+                continue
+            if local == "style" or "url(" in value.lower():
+                value = _safe_css(value)
+                if not value:
+                    continue
+            out.set(local, value)
+        if tag == "style":
+            out.text = _safe_css("".join(node.itertext()))
+            return out
+        out.text = node.text if tag in TEXT_ELEMENTS else None
+        for child in node:
+            kept = rebuild(child)
+            if kept is not None:
+                kept.tail = child.tail if tag in TEXT_ELEMENTS else None
+                out.append(kept)
+        return out
+
+    ET.register_namespace("", SVG_NS)
+    return ET.tostring(rebuild(root), encoding="utf-8", xml_declaration=False, short_empty_elements=True)
+
+
+IMAGE_ACCEPT = "image/png,image/jpeg,image/gif,image/webp,image/x-icon,image/svg+xml"
+MIN_PIXELS = 64            # a site's icon smaller than this looks blurred on a card
+MAX_PAGE_BYTES = 512 * 1024
+MAX_CANDIDATES = 6
+
+
+class _Page(Exception):
+    """The URL is a web page, not an image: its icons may still be."""
+    def __init__(self, html, url):
+        super().__init__("a web page")
+        self.html, self.url = html, url
+
+
+def _fetch(url, accept, limit=MAX_ICON_BYTES, deadline=None):
+    """GET a public URL, following checked redirects: (bytes, declared type, final URL)."""
+    deadline = deadline or time.monotonic() + 15
     for redirect in range(6):
         parsed, addresses = _public_target(url)
         connection = _PinnedConnection(parsed, addresses, max(0.01, deadline - time.monotonic()))
         try:
             connection.request("GET", urllib.parse.urlunsplit(("", "", parsed.path or "/", parsed.query, "")), headers={
-                "User-Agent": "Homestead icon cache", "Accept": "image/png,image/jpeg,image/gif,image/webp,image/x-icon"})
+                "User-Agent": "Homestead icon cache", "Accept": accept})
             transport = connection.sock
             response = connection.getresponse()
             if response.status in (301, 302, 303, 307, 308):
@@ -128,29 +261,154 @@ def _download(url):
                 raise ValueError("logo server did not return a successful response")
             declared = (response.headers.get_content_type() or "").lower()
             chunks = bytearray()
-            while len(chunks) <= MAX_ICON_BYTES:
+            while len(chunks) <= limit:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError("logo download timed out")
                 transport.settimeout(remaining)
-                part = response.read1(min(16384, MAX_ICON_BYTES + 1 - len(chunks)))
+                part = response.read1(min(16384, limit + 1 - len(chunks)))
                 if not part:
                     break
                 chunks.extend(part)
-            data = bytes(chunks)
-            break
+            return bytes(chunks), declared, url
         finally:
             connection.close()
+    raise ValueError("logo has too many or invalid redirects")
+
+
+def _looks_like_html(data, declared):
+    head = data[:1024].lstrip(b"\xef\xbb\xbf \t\r\n").lower()
+    return declared in ("text/html", "application/xhtml+xml") or head.startswith((b"<!doctype html", b"<html"))
+
+
+def _download(url):
+    """An image's bytes and type; _Page when the URL is a site rather than an image."""
+    data, declared, final = _fetch(url, IMAGE_ACCEPT + ",text/html;q=0.8", MAX_PAGE_BYTES)
+    if _looks_like_html(data, declared):
+        raise _Page(data, final)
     if len(data) > MAX_ICON_BYTES:
         raise ValueError("logo is too large (maximum 256 KiB)")
     mime = _sniff_mime(data)
-    if declared and declared not in MIME_EXTENSIONS and declared != "application/octet-stream":
+    if declared and declared not in MIME_EXTENSIONS and declared not in (
+            "application/octet-stream", "text/xml", "application/xml", "text/plain"):
         raise ValueError("logo server did not return an image")
     return data, mime
 
 
+class _IconLinks(html.parser.HTMLParser):
+    """<link rel="icon"> and friends, and the manifest, from a page's head."""
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.icons, self.manifest, self.base = [], "", ""
+
+    def handle_starttag(self, tag, attrs):
+        a = {k.lower(): (v or "") for k, v in attrs}
+        if tag == "base" and a.get("href") and not self.base:
+            self.base = a["href"]
+        if tag != "link" or not a.get("href"):
+            return
+        rel = set(a.get("rel", "").lower().split())
+        if "manifest" in rel:
+            self.manifest = self.manifest or a["href"]
+        elif rel & {"icon", "apple-touch-icon", "apple-touch-icon-precomposed"} and "mask-icon" not in rel:
+            self.icons.append({"href": a["href"], "sizes": a.get("sizes", ""), "type": a.get("type", "").lower(),
+                               "apple": bool(rel & {"apple-touch-icon", "apple-touch-icon-precomposed"})})
+
+
+def _declared_pixels(sizes, kind="", apple=False):
+    """The largest size a page says an icon has; SVG and "any" count as large."""
+    if "svg" in kind or "any" in sizes.lower().split():
+        return 4096
+    best = 0
+    for part in sizes.lower().split():
+        w, _, h = part.partition("x")
+        if w.isdigit() and h.isdigit():
+            best = max(best, min(int(w), int(h)))
+    return best or (180 if apple else 0)
+
+
+def _pixels(data, mime):
+    """The image's own size, where it is cheap to read; None when unknown."""
+    if mime == "image/svg+xml":
+        return 4096
+    if mime == "image/png" and len(data) >= 24:
+        return min(int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big"))
+    if mime == "image/gif" and len(data) >= 10:
+        return min(int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little"))
+    if mime == "image/x-icon" and len(data) >= 6:
+        count, best = int.from_bytes(data[4:6], "little"), 0
+        for i in range(min(count, 64)):
+            entry = data[6 + i * 16: 22 + i * 16]
+            if len(entry) < 16:
+                break
+            best = max(best, min(entry[0] or 256, entry[1] or 256))
+        return best
+    return None
+
+
+def _candidates(page, url):
+    """A page's icons, best first: SVG, then the largest it declares, then /favicon.ico."""
+    links = _IconLinks()
+    try:
+        links.feed(page[:MAX_PAGE_BYTES].decode("utf-8", "replace"))
+    except Exception:
+        pass
+    base = urllib.parse.urljoin(url, links.base) if links.base else url
+    found = [{"url": urllib.parse.urljoin(base, i["href"]), "pixels": _declared_pixels(i["sizes"], i["type"], i["apple"])}
+             for i in links.icons]
+    if links.manifest:
+        found.append({"manifest": urllib.parse.urljoin(base, links.manifest)})
+    found.append({"url": urllib.parse.urljoin(url, "/favicon.ico"), "pixels": 0})
+    return found
+
+
+def _from_page(page, url):
+    """The best icon a site offers, if it is good enough for a card."""
+    deadline = time.monotonic() + 30
+    found = _candidates(page, url)
+    for row in [r for r in found if "manifest" in r]:
+        try:
+            raw, _, final = _fetch(row["manifest"], "application/manifest+json,application/json", 64 * 1024, deadline)
+            for icon in (json.loads(raw.decode("utf-8", "replace")).get("icons") or [])[:20]:
+                if isinstance(icon, dict) and icon.get("src") and "monochrome" not in str(icon.get("purpose", "")):
+                    found.append({"url": urllib.parse.urljoin(final, str(icon["src"])),
+                                  "pixels": _declared_pixels(str(icon.get("sizes", "")), str(icon.get("type", "")))})
+        except (OSError, ValueError, AttributeError):
+            pass
+    seen, ranked = set(), []
+    for row in sorted((r for r in found if "url" in r), key=lambda r: -r["pixels"]):
+        if row["url"] not in seen and row["url"].startswith(("https://", "http://")):
+            seen.add(row["url"])
+            ranked.append(row)
+    best, smallest = None, 0
+    for row in ranked[:MAX_CANDIDATES]:
+        if time.monotonic() > deadline:
+            break
+        try:
+            data, declared, _ = _fetch(row["url"], IMAGE_ACCEPT, MAX_ICON_BYTES, deadline)
+            if len(data) > MAX_ICON_BYTES or _looks_like_html(data, declared):
+                continue
+            mime = _sniff_mime(data)
+        except (OSError, ValueError):
+            continue
+        size = _pixels(data, mime) or row["pixels"]
+        if size >= MIN_PIXELS and (best is None or size > best[2]):
+            best = (data, mime, size)
+            if size >= 180:
+                break                     # an SVG or a touch icon: nothing larger is worth asking for
+        smallest = max(smallest, size or 0)
+    if not best:
+        raise ValueError(f"that site has no logo of at least {MIN_PIXELS} px"
+                         + (f" (its largest is {smallest} px)" if smallest else "")
+                         + "; paste the address of an image, or use Find to pick one from the app store")
+    return best[0], best[1]
+
+
 def persist(source, data_dir):
-    """Cache source and return its stable same-origin URL."""
+    """Cache source and return its stable same-origin URL.
+
+    source is an image, or a site whose own logo is taken when it is good
+    enough: an SVG, or a picture of at least MIN_PIXELS."""
     source = str(source or "").strip()
     if not source:
         return ""
@@ -159,7 +417,10 @@ def persist(source, data_dir):
         return source
     if len(source) > 2048:
         raise ValueError("logo URL is too long")
-    data, mime = _download(source)
+    try:
+        data, mime = _download(source)
+    except _Page as page:
+        data, mime = _from_page(page.html, page.url)
     return store(data, data_dir, mime)
 
 
@@ -172,6 +433,8 @@ def store(data, data_dir, mime=""):
     if len(data) > MAX_ICON_BYTES:
         raise ValueError("logo is too large (maximum 256 KiB)")
     mime = mime or _sniff_mime(data)
+    if mime == "image/svg+xml":
+        data = clean_svg(data)
     digest = hashlib.sha256(data).hexdigest()
     ext = MIME_EXTENSIONS[mime]
     icon_dir = os.path.join(data_dir, "icons")
@@ -204,7 +467,7 @@ def exists(reference, data_dir):
 def resolve(path, data_dir):
     """Return (absolute path, MIME) for an exact cached icon route."""
     name = (path or "").rsplit("/", 1)[-1]
-    if not re.fullmatch(r"[0-9a-f]{64}\.(png|jpg|gif|webp|ico)", name):
+    if not ICON_NAME.fullmatch(name):
         raise FileNotFoundError("invalid icon")
     ext = name.rsplit(".", 1)[1]
     mime = next(k for k, value in MIME_EXTENSIONS.items() if value == ext)
