@@ -3083,7 +3083,7 @@ html[data-theme="light"] .collection-mobile-summary .pillbtn.crit{color:#a1242a}
   .wl-inline-detail .about-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
   .wl-inline-detail .wl-detail-image,.wl-inline-detail .wl-detail-access{grid-column:1/-1}
   .tbl.stack.compact.wltable .wl-name .wl-row-meta{display:none}
-  .phead .seg.iconseg{display:none}
+  .phead .seg.iconseg:not(.phone-keep){display:none}
   .wl-detail-actions{display:block;margin-top:12px}
   .wl-detail-actions .actionbar{justify-content:flex-end}
 }

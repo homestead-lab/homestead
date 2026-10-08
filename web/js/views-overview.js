@@ -912,9 +912,8 @@ async function viewNodes() {
   STATE.data.nodes = n;
   STATE.data.uptime = up || STATE.data.uptime;
   const layout = viewLayout("nodes");
-  paint(`${UI.pageHeader(`Nodes`, `${n.length} node${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}`, `${layoutSwitch("nodes", "viewNodes")}
+  paint(`${UI.pageHeader(`Nodes`, `${n.length} node${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}`, `${layoutSwitch("nodes", "viewNodes", { phone: true })}
       ${moreMenu([
-        {label:layout === "cards" ? "Compare nodes" : "Show as cards",run:`setViewLayout('nodes','viewNodes',${jsq(layout === "cards" ? "rows" : "cards")})`},
         STATE.platform && !STATE.platform.harvester && {label:"OS updates",run:"osUpdates()"},
         {label:"Hardware features",run:"hardwareFeatureSettings()",need:"admin"}
       ])}

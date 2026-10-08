@@ -350,12 +350,15 @@ function viewLayout(page) {
     return chosen === "rows" || chosen === "cards" ? chosen : fallback;
   } catch (e) { return fallback; }
 }
-function layoutSwitch(page, redraw) {
+/* The one control for a page's layout (#360): no menu entry repeats it.
+   On phones it folds away where the page's list options carry a Layout
+   choice instead; phone: true keeps it where nothing else does. */
+function layoutSwitch(page, redraw, { phone = false } = {}) {
   const layout = viewLayout(page);
   const option = (value, label, iconName) => `<button class="${layout === value ? "on" : ""}" title="${label}"
     aria-label="Show as ${label.toLowerCase()}" aria-pressed="${layout === value}"
     onclick="setViewLayout(${jsq(page)},${jsq(redraw)},${jsq(value)})">${icon(iconName)}</button>`;
-  return `<div class="seg iconseg" role="group" aria-label="Layout">${option("cards", "Cards", "dash")}${option("rows", page === "nodes" ? "Comparison" : "Rows", "list")}</div>`;
+  return `<div class="seg iconseg${phone ? " phone-keep" : ""}" role="group" aria-label="Layout">${option("cards", "Cards", "dash")}${option("rows", page === "nodes" ? "Comparison" : "Rows", "list")}</div>`;
 }
 window.setViewLayout = (page, redraw, layout, {preservePaint = false} = {}) => {
   try { localStorage.setItem(`homestead.layout.${page}`, layout); } catch (e) { /* this visit only */ }
