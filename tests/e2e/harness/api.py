@@ -57,8 +57,18 @@ class Homestead:
                     continue
                 if status == 401 and path not in ("/api/auth/login", "/api/auth/setup", "/api/auth/state"):
                     # A session belongs to the address it was made on: sign in there.
-                    self.sign_in(base)
+                    try:
+                        self.sign_in(base)
+                    except (OSError, urllib.error.URLError, HomesteadError) as error:
+                        last = error
                     status, answer = self._once(base, method, path, body, timeout)
+                    if status == 401:
+                        # Signing in there did not take: that address had only
+                        # just come back (a host restarting, Homestead starting
+                        # on another), so it is away, not refusing - ask again
+                        # until `wait` runs out.
+                        last = HomesteadError(status, answer, path)
+                        continue
                 # Away, or asking to come back shortly ("storage is initializing").
                 # Right after a data move the move's progress server can still
                 # hold the address for a moment, refusing anything but its own

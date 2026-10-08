@@ -22,6 +22,21 @@ class ProgressServerTests(unittest.TestCase):
         with mock.patch.object(client, "_once", side_effect=lambda *a: next(answers)), mock.patch("time.sleep"):
             self.assertEqual({"ok": True}, client.post("/api/auth/login", {"username": "admin"}))
 
+    def test_a_session_refused_where_homestead_just_came_back_is_asked_again(self):
+        # node-1 restarting: the next address has no session, and signing in
+        # there fails while Homestead starts up. That is away, not refused.
+        client = API.Homestead(["http://192.0.2.10"])
+        answers = iter([(401, {"error": "not signed in"}), (401, {"error": "not signed in"}),
+                        (200, [{"id": "job"}])])
+        with mock.patch.object(client, "_once", side_effect=lambda *a: next(answers)),                 mock.patch.object(client, "sign_in", side_effect=HomesteadError(503, {"error": "starting"}, "/api/auth/login")),                 mock.patch("time.sleep"):
+            self.assertEqual([{"id": "job"}], client.get("/api/operations"))
+
+    def test_a_session_that_never_takes_still_ends_in_time(self):
+        client = API.Homestead(["http://192.0.2.10"])
+        with mock.patch.object(client, "_once", return_value=(401, {"error": "not signed in"})),                 mock.patch.object(client, "sign_in"), mock.patch("time.sleep"),                 mock.patch("time.time", side_effect=[0, 0, 10, 10_000]):
+            with self.assertRaises(TimeoutError):
+                client.get("/api/operations", wait=60)
+
     def test_any_other_refused_method_still_fails(self):
         client = API.Homestead(["http://192.0.2.10"])
         with mock.patch.object(client, "_once", return_value=(405, {"error": "Method not allowed"})):
