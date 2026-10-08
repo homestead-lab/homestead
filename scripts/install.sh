@@ -430,11 +430,16 @@ cached() { # key command... -> the command's output, retrieved once per run
   cat "$f" 2>/dev/null
 }
 channels() { # k3s|rke2 -> "channel version" lines, releases only
-  found=$(fetch "https://update.$1.io/v1-release/channels" | tr -d '\n' \
-    | grep -o '"name":"[^"]*","latest":"[^"]*"' \
-    | sed 's/"name":"\([^"]*\)","latest":"\([^"]*\)"/\1 \2/' \
-    | grep -v '^testing ' | grep -Ev ' v[0-9.]+-')
-  if [ -n "$found" ]; then printf '%s\n' "$found"; return; fi
+  # Asked a few times first: its outages are brief, and the fallback below
+  # can name a different "stable" than a host joining later would get.
+  for try in 1 2 3 4; do
+    found=$(fetch "https://update.$1.io/v1-release/channels" | tr -d '\n' \
+      | grep -o '"name":"[^"]*","latest":"[^"]*"' \
+      | sed 's/"name":"\([^"]*\)","latest":"\([^"]*\)"/\1 \2/' \
+      | grep -v '^testing ' | grep -Ev ' v[0-9.]+-')
+    if [ -n "$found" ]; then printf '%s\n' "$found"; return; fi
+    [ "$try" = 4 ] || sleep 10
+  done
   # The update server is down (update.rke2.io has answered 404): the project's
   # own releases stand in - the newest as stable, and the newest of each minor.
   repo=k3s-io/k3s; [ "$1" = rke2 ] && repo=rancher/rke2
