@@ -16,6 +16,7 @@
   <a href="https://homestead-lab.github.io/homestead/"><img src="https://img.shields.io/badge/live_demo-try_it-2453ff" alt="Live demo"></a>
   <img src="https://img.shields.io/badge/status-beta-f59e0b" alt="Status: beta">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache_2.0_%2B_Commons_Clause-30ba78" alt="Apache 2.0 with Commons Clause licence"></a>
+  <a href="https://homelabaddiction.com"><img src="https://img.shields.io/badge/featured_on-HomeLab_Addiction-22d3ee" alt="Featured on HomeLab Addiction"></a>
 </p>
 
 <p align="center">
@@ -331,6 +332,22 @@ checks what the cluster has, and each page works with that.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how the project is put together,
 running it locally against demo data, the tests, and how releases are made.
+
+## Supporters and featured on
+
+<p align="center">
+  <a href="https://homelabaddiction.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/images/supporters/homelabaddiction-dark.png">
+      <img src="docs/images/supporters/homelabaddiction.png" height="36" alt="HomeLab Addiction">
+    </picture>
+  </a>
+</p>
+
+<p align="center">
+  Homestead is listed in the <a href="https://homelabaddiction.com">HomeLab Addiction</a>
+  self-hosted directory. Thanks for supporting the project.
+</p>
 
 ## Licence
 
