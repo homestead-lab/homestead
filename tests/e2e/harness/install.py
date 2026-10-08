@@ -121,10 +121,21 @@ def build(lab, distro, version, directory, agents=0, extra=None):
     run_installer(first, distro, version, "new", extra)
     token = first.ssh(f"sudo cat /var/lib/rancher/{distro}/server/node-token", quiet=True).strip()
     joins, failed = [], []
+    # Every host on the first one's exact version, as Homestead's own join
+    # commands pin it. Left to choose, a joining RKE2 server reads the release
+    # channel again, and while update.rke2.io was briefly down the first took
+    # the newest release (1.37) and the rest the real stable (1.36): an older
+    # server never leaves etcd's learner list, and the cluster never forms.
+    pinned = dict(extra or {})
+    if not os.environ.get("HS_K8S_VERSION"):
+        found = first.ssh(f"{distro} --version 2>/dev/null | head -n 1", check=False, quiet=True).split()
+        if len(found) >= 3 and found[2].startswith("v"):
+            pinned["HS_K8S_VERSION"] = found[2]
+            log.info(f"Joining hosts install {distro} {found[2]}, as {first.name} has")
 
     def join(node):
         try:
-            run_installer(node, distro, version, node.role, dict(extra or {}, HS_SERVER=first.ip, HS_TOKEN=token))
+            run_installer(node, distro, version, node.role, dict(pinned, HS_SERVER=first.ip, HS_TOKEN=token))
         except Exception as error:
             failed.append(f"{node.name}: {error}")
 
