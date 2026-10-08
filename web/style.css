@@ -20,13 +20,33 @@ html[data-theme="light"] .modalbox[data-context="longhorn-v2"] .ui-steps .curren
 html[data-theme="light"]{
   --bg:#ececed; --surf:#ffffff; --surf2:#f6f6f7; --surf3:#ebebee;
   --line:rgba(0,0,0,.09); --line2:rgba(0,0,0,.16);
-  --tx:#16161a; --mut:#5c5c66; --dim:#8a8a95;
+  --tx:#16161a; --mut:#5c5c66; --dim:#74747f;
+  /* Status colours deep enough to read as text on white (4.5:1 or near):
+     the dark theme's are made for a black ground and vanish on this one. */
+  --crit:#c8232c; --high:#b8460b; --med:#9a5b00; --low:#1a64c2; --ok:#0b7a48; --vio:#6a4bd1;
 }
+/* Pills that are a tint, not a fill, take the deeper colours too. */
+html[data-theme="light"] .pill.neutral,html[data-theme="light"] .pill.low{background:rgba(0,0,0,.05);color:var(--mut)}
+html[data-theme="light"] .tag{background:rgba(0,0,0,.04);color:var(--mut)}html[data-theme="light"] .tag:hover{background:rgba(0,0,0,.07)}
 html[data-theme="light"] .card,html[data-theme="light"] .abox,html[data-theme="light"] .flowwrap,
 html[data-theme="light"] .side,html[data-theme="light"] .top,html[data-theme="light"] .fnode{
   background:linear-gradient(158deg,rgba(255,255,255,.82),rgba(255,255,255,.55));
   box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 8px 28px rgba(0,0,0,.09)}
 html[data-theme="light"] .mark{background:linear-gradient(145deg,#1b1b20,#3a3a42);color:#fff}
+/* Pop-up menus - the bell, every ⋯ menu, the cluster switcher, an address's
+   card - and the unsaved-changes bar were drawn on a fixed near-black panel,
+   which under the light theme left their theme-dark text unreadable. */
+html[data-theme="light"] .actionmenu-pop,html[data-theme="light"] .fleet-menu,html[data-theme="light"] .ipam-pop{
+  background:rgba(255,255,255,.98);color:var(--tx);box-shadow:0 16px 45px rgba(0,0,0,.16)}
+html[data-theme="light"] .savebar{background:rgba(255,255,255,.94);box-shadow:0 12px 40px rgba(0,0,0,.12)}
+html[data-theme="light"] .actionmenu-pop button:hover,html[data-theme="light"] .actionmenu-pop .bell-job:hover,
+html[data-theme="light"] .fleet-menu button:hover,html[data-theme="light"] .fleet-menu button.on,
+html[data-theme="light"] .ipam-btn:hover,html[data-theme="light"] .ipam-btn:focus-visible{background:rgba(0,0,0,.06)}
+html[data-theme="light"] .actionmenu-pop button.danger{color:#c4282c}
+html[data-theme="light"] .fleet-sep{background:var(--line)}
+html[data-theme="light"] .ipam-pop-list button{border-color:var(--line);background:rgba(0,0,0,.02)}
+html[data-theme="light"] .bell-job-msg{color:var(--mut)}
+html[data-theme="light"] .actionmenu-pop .bell-all{color:#1a64c2}
 html[data-theme="light"] #nav a.on,html[data-theme="light"] .btn.pri,html[data-theme="light"] .seg button.on,html[data-theme="light"] .seg>a.on{
   background:#16161a;color:#fff;border-color:#16161a}
 html[data-theme="light"] .spark .ln{stroke:#16161a;filter:none}
@@ -38,6 +58,8 @@ html[data-theme="light"] .podgrid i{background:rgba(0,0,0,.16)}
 html[data-theme="light"] .podgrid i.wl{background:#16161a;box-shadow:none}
 html[data-theme="light"] pre{background:rgba(0,0,0,.05);color:#2a2a30}
 html[data-theme="light"] .av{color:#fff}
+/* The neutral avatars (.n1-.n3, a grey disc) keep the theme's text colour. */
+html[data-theme="light"] .av.n1,html[data-theme="light"] .av.n2,html[data-theme="light"] .av.n3{color:var(--tx)}
 
 /* background variants */
 html[data-bg="soft"] .bgfx{background:
