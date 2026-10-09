@@ -63,6 +63,23 @@ class HardwarePlacementTests(unittest.TestCase):
         self.assertTrue(result["safe"])
         self.assertEqual(["node2"], result["movable"][0]["eligible"])
 
+    def test_node_impact_does_not_count_a_host_whose_taint_the_app_does_not_tolerate(self):
+        self.nodes[1]["hardware"]["coral_usb"] = True
+        self.nodes[1]["taints"] = [{"key": "node-role/tiebreaker", "value": "true", "effect": "NoSchedule"}]
+        result = place.impact("node1")
+        self.assertFalse(result["safe"])
+        frigate = result["stranded"][0]
+        self.assertEqual([], frigate["eligible"])
+        self.assertEqual([{"name": "node2", "why": ["untolerated node-role/tiebreaker taint"]}], frigate["blocked"])
+
+    def test_node_impact_counts_a_tainted_host_the_app_tolerates(self):
+        self.nodes[1]["hardware"]["coral_usb"] = True
+        self.nodes[1]["taints"] = [{"key": "node-role/tiebreaker", "value": "true", "effect": "NoSchedule"}]
+        self.dep["spec"]["template"]["spec"]["tolerations"] = [
+            {"key": "node-role/tiebreaker", "operator": "Equal", "value": "true", "effect": "NoSchedule"}]
+        result = place.impact("node1")
+        self.assertEqual(["node2"], result["movable"][0]["eligible"])
+
 
 if __name__ == "__main__":
     unittest.main()

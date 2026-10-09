@@ -291,13 +291,9 @@ def _tolerates(taint, tolerations):
     return False
 
 
-def _start_scheduler_check(spec, node):
-    """Hard scheduling constraints relevant to a proposed pod start."""
-    reasons, cautions = [], []
-    if spec.get("nodeName") and spec["nodeName"] != node.get("name"):
-        reasons.append(f"assigned to {spec['nodeName']}")
-    if not _required_affinity_matches(spec, node):
-        reasons.append("required node affinity does not match")
+def _taint_reasons(spec, node):
+    """The node's taints that keep this pod spec off it."""
+    reasons = []
     for taint in node.get("taints") or []:
         # .spec.nodeName bypasses the scheduler's NoSchedule check, but not
         # NoExecute eviction. It is rare in a Deployment, yet can be present.
@@ -305,6 +301,17 @@ def _start_scheduler_check(spec, node):
             continue
         if taint.get("effect") in ("NoSchedule", "NoExecute") and not _tolerates(taint, spec.get("tolerations") or []):
             reasons.append(f"untolerated {taint.get('key', 'unknown')} taint")
+    return reasons
+
+
+def _start_scheduler_check(spec, node):
+    """Hard scheduling constraints relevant to a proposed pod start."""
+    reasons, cautions = [], []
+    if spec.get("nodeName") and spec["nodeName"] != node.get("name"):
+        reasons.append(f"assigned to {spec['nodeName']}")
+    if not _required_affinity_matches(spec, node):
+        reasons.append("required node affinity does not match")
+    reasons.extend(_taint_reasons(spec, node))
     allocatable = node.get("allocatable") or {}
     for resource, label in (("memory", "memory"), ("cpu", "CPU")):
         request = _pod_request(spec, resource)
@@ -545,8 +552,13 @@ def impact(node):
             raise
         reqs = requirements(dep)
         eligible, blocked = [], []
+        pod_spec = dep["spec"]["template"]["spec"]
         for candidate in others:
             ok, why = satisfies(candidate, reqs)
+            # A host the app's pods cannot tolerate is no destination, however
+            # well its hardware and labels match: a votes-only server, say.
+            why.extend(_taint_reasons(pod_spec, candidate))
+            ok = ok and not why
             if ok:
                 eligible.append(candidate["name"])
             else:
