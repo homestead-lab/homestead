@@ -871,7 +871,9 @@ def node_impact(node):
     except Exception:
         raw_vms = []
     try:
-        addresses = (cached("network", 5, NETWORK.inventory) or {}).get("addresses") or []
+        # The inventory's "addresses" is the whole address map; the list is inside it.
+        places = (cached("network", 5, NETWORK.inventory) or {}).get("addresses") or {}
+        addresses = places.get("addresses") or []
     except Exception:
         addresses = []
     try:

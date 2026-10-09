@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_impact as IMPACT
@@ -134,6 +135,28 @@ class StorageAndAddressTests(AppTests):
         res = self.run_preview([app("moves"), app("stops", hardware=["coral_usb"]), app("waits", failover="wait")])
         self.assertEqual(["stops", "waits", "moves"], [r["name"] for r in res["apps"]])
         self.assertEqual({"stops": 1, "waits": 1, "moves": 1}, {k: res["counts"][k] for k in ("stops", "waits", "moves")})
+
+
+class NodeImpactTests(unittest.TestCase):
+    """node_impact() as the API calls it, with the network inventory's real
+    shape: its "addresses" is the address map, nodes and addresses together."""
+
+    def test_the_preview_reads_the_address_list_inside_the_network_inventory(self):
+        import server
+        inventory = {"addresses": {"nodes": [{"name": "node2", "ips": ["192.0.2.12"], "ready": True}],
+                                   "addresses": [{"ip": "192.0.2.240", "kind": "vip", "node": "node2", "services": ["lab/web"]},
+                                                 {"ip": "192.0.2.12", "kind": "node", "node": "node2"},
+                                                 {"ip": "192.0.2.241", "kind": "vip", "node": "node1"}]}}
+        with mock.patch.dict(server._cache, clear=True), \
+                mock.patch.object(server, "get_nodes", lambda: NODES), \
+                mock.patch.object(server, "kget", lambda path: {"items": []}), \
+                mock.patch.object(server.NETWORK, "inventory", lambda: inventory), \
+                mock.patch.object(server.PLACE, "impact", lambda node: {"workloads": []}), \
+                mock.patch.object(server, "get_workloads", lambda: []), \
+                mock.patch.object(server.VMS, "list_vms", lambda: []), \
+                mock.patch.object(server, "get_volumes", lambda: []):
+            res = server.node_impact("node2")
+        self.assertEqual(["192.0.2.240"], [a["ip"] for a in res["addresses"]])
 
 
 if __name__ == "__main__":
