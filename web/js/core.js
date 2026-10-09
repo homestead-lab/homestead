@@ -263,6 +263,13 @@ if (window.ResizeObserver && $("#jobTray")) {
   new ResizeObserver(liftToasts).observe($("#jobTray"));
   new MutationObserver(liftToasts).observe($("#jobTray"), { attributes: true, attributeFilter: ["class"] });
 }
+/* The dialog's header sticks to the top of the box that scrolls, so a section
+   rail sticks below it - however tall a long title or the Back link make it. */
+function measureModalHead() {
+  const head = $(".modalhead");
+  if (head) $(".modalbox").style.setProperty("--modalhead-h", `${Math.ceil(head.getBoundingClientRect().height)}px`);
+}
+if (window.ResizeObserver && $(".modalhead")) new ResizeObserver(measureModalHead).observe($(".modalhead"));
 function modal(t, h, wide, contextClass = "") {
   if (contextClass !== "volume-files" && window.filesDismiss) window.filesDismiss();
   window.resetDialogDisclosures?.();

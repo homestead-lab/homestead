@@ -87,6 +87,17 @@ try {
     else await page.locator('#test .dialog-section-picker select').selectOption('0');
     assert.equal(await page.locator('#first').inputValue(),'unchanged');
     assert.equal(await page.locator('#first').isVisible(),true);
+    // The rail stays below the dialog's sticky header, however far a long section scrolls (#374).
+    if(width>640){
+      await page.evaluate(()=>modal('Long section',stepper('longrail',[
+        {title:'Apps',html:'<div style="height:3000px"></div>'},{title:'Quorum',html:'<p>Quorum</p>'}
+      ],'',{always:true})));
+      await page.locator('.modalbox').evaluate(box=>box.scrollTo({top:box.scrollHeight,behavior:'instant'}));
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      const gap=await page.evaluate(()=>document.querySelector('#longrail>.stepper-head').getBoundingClientRect().top
+        -document.querySelector('.modalhead').getBoundingClientRect().bottom);
+      assert.ok(gap>=0,`the section rail slid ${-gap}px under the dialog header`);
+    }
     // A migrated footer must retain its visibility gate and original Cancel action.
     await page.evaluate(async()=>{closeModal();await viewResources();await resOpen('lab','sample');});
     assert.equal(await page.locator('#res_save_row').isVisible(),false);
