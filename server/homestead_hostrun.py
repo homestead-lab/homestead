@@ -23,6 +23,10 @@ IMAGE = "alpine:3.24"
 MEMORY_LIMIT = "1Gi"
 TASK = "host-run"
 HOST = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--", "sh", "-c"]
+# A refused exec (an error with retry set) is tried this many times, this far
+# apart: about half a minute for the API server to reach a host just back.
+EXEC_TRIES = 6
+EXEC_PAUSE = 5
 
 
 def bind(_kget, _ksend, _exec_in, namespace):
@@ -89,7 +93,16 @@ def run(node, script, timeout=120, wait=60, sleep=time.sleep):
             sleep(0.5)
         else:
             raise ValueError(f"the host helper on {node} did not start within {wait} seconds")
-        out, err = exec_in(NS, pod_name(node), HOST + [script], timeout=timeout, container="host")
-        return out.decode("utf-8", "replace"), err
+        # A host just back can show its helper Running before the API server
+        # reaches its kubelet: the exec is refused and nothing has run, so it
+        # is tried again for a while (seen on RKE2 after a host failed).
+        for attempt in range(EXEC_TRIES):
+            try:
+                out, err = exec_in(NS, pod_name(node), HOST + [script], timeout=timeout, container="host")
+                return out.decode("utf-8", "replace"), err
+            except ConnectionError as error:
+                if not getattr(error, "retry", False) or attempt == EXEC_TRIES - 1:
+                    raise
+                sleep(EXEC_PAUSE)
     finally:
         _delete(path)

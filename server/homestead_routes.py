@@ -13,8 +13,10 @@ they call:
         ("POST", "/api/firewall/save"): ("admin", lambda request: save(request.body)),
     }
 
-The handler takes a Request and returns what is sent back as JSON, with 200;
-an exception it raises is answered as one from server.py's own branches is.
+The handler takes a Request and returns what is sent back as JSON, with 200,
+or a Raw(body, ctype) for anything that is not JSON - an image, say - or a
+Stream for a download too large to hold; an
+exception it raises is answered as one from server.py's own branches is.
 server.py looks a request up here after its guard has checked who may make
 it, before its own branches. homestead_route_policy.role() reads the same
 table, so a route and its role are written once.
@@ -35,12 +37,14 @@ MODULES = (
     "homestead_api_keys",
     "homestead_auth",
     "homestead_baseline",
+    "homestead_changes",
     "homestead_cluster",
     "homestead_config_backup",
     "homestead_container_rebalance",
     "homestead_diagnostics",
     "homestead_disk_v2",
     "homestead_disks",
+    "homestead_files",
     "homestead_firewall",
     "homestead_fleet",
     "homestead_forecast",
@@ -51,6 +55,7 @@ MODULES = (
     "homestead_host_console",
     "homestead_host_os",
     "homestead_housekeeping",
+    "homestead_icons",
     "homestead_imports",
     "homestead_ipam",
     "homestead_isos",
@@ -92,6 +97,10 @@ ROLES = ("viewer", "operator", "admin")
 
 Request = collections.namedtuple("Request", "method path query body user role")
 Route = collections.namedtuple("Route", "method path role handler module")
+Raw = collections.namedtuple("Raw", "body ctype")
+# A download sent as it is read: chunks (an iterator of bytes), its type, the
+# name it saves as, and its size when known.
+Stream = collections.namedtuple("Stream", "chunks ctype filename size")
 
 _table = {}
 _cached = [lambda key, seconds, fn: fn()]

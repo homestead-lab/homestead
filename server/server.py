@@ -6593,6 +6593,7 @@ import homestead_console as CONSOLE
 import homestead_files as FILES
 import homestead_snapshot_files as SNAPSHOT_FILES
 import homestead_icons as ICONS
+ICONS.bind(DATA_DIR)
 import homestead_logos as LOGOS
 import homestead_volumes as VOLUMES
 import homestead_smart as SMART
@@ -7579,7 +7580,7 @@ def _files_loop():
                 beat("volume-files", 30, leader_only=True)
             except Exception as error:
                 beat("volume-files", 30, error, leader_only=True)
-        time.sleep(30)
+        time.sleep(15)
 
 
 def _host_console_loop():
@@ -8998,7 +8999,6 @@ ADMIN_ROUTES = {
     "/api/operations/vm-recovery/preview", "/api/operations/vm-recovery/resolve",
     "/api/operations/storage-recovery/preview", "/api/operations/storage-recovery/act",
     "/api/network/vips/add", "/api/network/vips/remove", "/api/network/vips/label", "/api/network/vips/default", "/api/network/vm-networks",
-    "/api/files/list", "/api/files/read", "/api/files/write", "/api/files/close",
     "/api/snapshot-files/plan", "/api/snapshot-files/status", "/api/snapshot-files/list",
     "/api/snapshot-files/download", "/api/snapshot-files/start", "/api/snapshot-files/close",
     "/api/node/smart/test",
@@ -9189,29 +9189,6 @@ class H(HTTP.LimitedHandler):
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         if self._over_tls():
             self.send_header("Strict-Transport-Security", "max-age=31536000")
-
-    def _snapshot_file_download(self, namespace, session, path):
-        info = SNAPSHOT_FILES.read(namespace, session, "stat", path)
-        self.send_response(200)
-        self.send_header("Content-Type", "application/octet-stream")
-        self.send_header("Content-Length", str(info["size"]))
-        self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + urllib.parse.quote(path.rsplit("/", 1)[-1], safe=""))
-        self.send_header("Cache-Control", "no-store")
-        self._security_headers()
-        self.end_headers()
-        try:
-            offset = 0
-            while offset < info["size"]:
-                chunk = SNAPSHOT_FILES.read(namespace, session, "chunk", path, offset)
-                data = chunk["data"]
-                if chunk["size"] != info["size"] or not data or offset + len(data) > info["size"]:
-                    raise ValueError("Snapshot file changed during download")
-                self.wfile.write(data)
-                offset += len(data)
-        except Exception:
-            # Headers were sent: close the partial response, never append JSON
-            # to a file or claim a complete download after losing the helper.
-            self.close_connection = True
 
     def _via_cloudflare(self):
         """Whether this request came in through Cloudflare, which always says so."""
@@ -9496,9 +9473,36 @@ class H(HTTP.LimitedHandler):
         route = MODULE_ROUTES.find(method, path)
         if route is None:
             return False
-        self._send(200, route.handler(MODULE_ROUTES.Request(method, path, query, body,
-                                                            getattr(self, "user", None), getattr(self, "role", None))))
+        answer = route.handler(MODULE_ROUTES.Request(method, path, query, body,
+                                                     getattr(self, "user", None), getattr(self, "role", None)))
+        if isinstance(answer, MODULE_ROUTES.Stream):
+            return self._send_stream(answer) or True
+        if isinstance(answer, MODULE_ROUTES.Raw):
+            self._extra_headers += [("X-Content-Type-Options", "nosniff"), ("Cache-Control", "no-store")]
+            self._send(200, answer.body, answer.ctype)
+        else:
+            self._send(200, answer)
         return True
+
+    def _send_stream(self, stream):
+        """A download as it is read. Without a size the connection ends it; a
+        failure part-way closes it, so a cut-off file is never taken as whole."""
+        self.send_response(200)
+        self.send_header("Content-Type", stream.ctype)
+        self.send_header("Content-Disposition", "attachment; filename*=UTF-8''" + urllib.parse.quote(stream.filename, safe=""))
+        self.send_header("Cache-Control", "no-store")
+        if stream.size is not None:
+            self.send_header("Content-Length", str(stream.size))
+        else:
+            self.close_connection = True
+            self.send_header("Connection", "close")
+        self._security_headers()
+        self.end_headers()
+        try:
+            for chunk in stream.chunks:
+                self.wfile.write(chunk)
+        except Exception:
+            self.close_connection = True
 
     def _begin(self):
         """Per request: a connection can carry several, and the handler stays."""
@@ -9875,10 +9879,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, samba_state())
             if p == "/api/shares/nfs/server":
                 return self._send(200, nfs_state())
-            if p == "/api/files/list":
-                return self._send(200, FILES.list_files(
-                    (q.get("namespace") or [DEFAULT_NS])[0], (q.get("pvc") or [""])[0],
-                    (q.get("path") or [""])[0]))
             if p == "/api/snapshot-files/plan":
                 return self._send(200, SNAPSHOT_FILES.review((q.get("volume") or [""])[0], (q.get("snapshot") or [""])[0]))
             if p in ("/api/snapshot-files/status", "/api/snapshot-files/list", "/api/snapshot-files/download"):
@@ -9887,12 +9887,8 @@ class H(HTTP.LimitedHandler):
                     return self._send(200, SNAPSHOT_FILES.status(ns, session))
                 path = (q.get("path") or [""])[0]
                 if p.endswith("/download"):
-                    return self._snapshot_file_download(ns, session, path)
+                    return self._send_stream(SNAPSHOT_FILES.download(ns, session, path))
                 return self._send(200, SNAPSHOT_FILES.read(ns, session, "list", path))
-            if p == "/api/files/read":
-                return self._send(200, FILES.read_file(
-                    (q.get("namespace") or [DEFAULT_NS])[0], (q.get("pvc") or [""])[0],
-                    (q.get("path") or [""])[0]))
             if p == "/api/volumes/ownership":
                 return self._send(200, IMP.ownership_hint(
                     (q.get("namespace") or [DEFAULT_NS])[0], (q.get("name") or [""])[0]))
@@ -9915,20 +9911,11 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, workload_start_plan(
                     (q.get("ns") or [""])[0], (q.get("name") or [""])[0],
                     int((q.get("replicas") or [1])[0])))
-            if p == "/api/quorum":
-                r = LC.quorum_report(); r["power_enabled"] = LC.NODE_POWER_ENABLED
-                return self._send(200, r)
             if p == "/api/vm/create-options":
                 return self._send(200, vm_create_options())
             if p == "/api/vm-disks/import-plan":
                 return self._send(200, IMP.vm_disk_import_plan(
                     (q.get("ns") or [DEFAULT_NS])[0], (q.get("name") or [""])[0]))
-            if p == "/api/lh/snapshots":
-                vol = (q.get("volume") or [None])[0]
-                return self._send(200, LH.snapshots(vol))
-            if p == "/api/lh/backups":
-                vol = (q.get("volume") or [None])[0]
-                return self._send(200, LH.backups(vol))
             if p == "/api/lh/restore/plan":
                 return self._send(200, LH.restore_plan(
                     (q.get("backup") or [""])[0],
@@ -9970,9 +9957,6 @@ class H(HTTP.LimitedHandler):
                                                         (q.get("q") or [None])[0], (q.get("kind") or ["workload"])[0]))
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
-            if p == "/api/changes":
-                ns, name = (q.get("ns") or [""])[0], (q.get("name") or [""])[0]
-                return self._send(200, {"entries": CHANGES.history(ns or None, name or None)})
             if p == "/api/power-schedules":
                 return self._send(200, {"items": SCHEDULES.report(scheduled_items()), "grace": SCHEDULES.GRACE})
 
@@ -10482,19 +10466,10 @@ class H(HTTP.LimitedHandler):
                     {"namespace": b["ns"], "name": b["name"]})
                 _cache.pop("wl", None); _cache.pop("ov", None); UPDATES.refresh_soon(b["ns"], b["name"])
                 return self._send(200, result)
-            if p == "/api/files/write":
-                warning = FILES.check_syntax(b.get("path"), b.get("content"))
-                if warning and not b.get("ignore_syntax"):
-                    return self._send(400, {"error": warning, "syntax": True})
-                return self._send(200, FILES.write_file(
-                    b.get("namespace") or DEFAULT_NS, b.get("pvc"), b.get("path"), b.get("content"), b.get("revision")))
             if p == "/api/snapshot-files/start":
                 return self._send(200, storage_volume_action(b.get("volume"), lambda: SNAPSHOT_FILES.start(b)))
             if p == "/api/snapshot-files/close":
                 return self._send(200, SNAPSHOT_FILES.close(b.get("namespace"), b.get("session")))
-            if p == "/api/files/close":
-                return self._send(200, FILES.close_session(
-                    b.get("namespace") or DEFAULT_NS, b.get("pvc")))
             if p == "/api/volumes/chown":
                 return self._send(200, IMP.chown_claim(
                     b.get("namespace") or DEFAULT_NS, b.get("name"), b.get("uid"), b.get("gid")))

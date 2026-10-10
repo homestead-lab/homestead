@@ -993,4 +993,5 @@ def vm_migrate(ns, name, target=None):
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("POST", "/api/node/cordon"): ("admin", lambda request: set_cordon(request.body["node"], request.body.get("cordon", True))),
+    ("GET", "/api/quorum"): ("viewer", lambda request: {**quorum_report(), "power_enabled": NODE_POWER_ENABLED}),
 }

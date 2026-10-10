@@ -166,7 +166,7 @@ const DIALOGS = [
   ["volume-class-review", "storage", "volumeReclass({name:'frigate-config',pvc_name:'frigate-config',namespace:'lab',storage_class:'longhorn-r2'})"],
   ["volume-delete", "storage", "click:volumeDelete"],
   ["storage-class-new", "storage", "storageClassCreate()"],
-  ["volume-files", "storage", "click:volumeFiles"],
+  ["volume-files", "storage", "click:fileManager"],
   ["volume-ownership", "storage", "volumeChown('lab','frigate-config')"],
   ["share-new", "shares", "newShare()"],
   ["share-new-user", "shares", "newShare()", "document.querySelector('#sh_identity').value='';shareAccountHint()"],

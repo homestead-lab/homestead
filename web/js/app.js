@@ -340,7 +340,12 @@ document.addEventListener("keydown", e => {
     dismissModal(); closeNav();
     document.body.classList.remove("searching");
   }
-  if (e.key === "/" && document.activeElement.tagName !== "INPUT") { e.preventDefault(); $("#globalSearch").focus(); }
+  // "/" finds, except where it is typed: any field, editor or terminal - a
+  // console's paths were losing every slash to the search box.
+  if (e.key === "/" && !e.ctrlKey && !e.metaKey && !e.altKey
+      && !e.target?.closest?.("input, textarea, select, [contenteditable], .xterm, .monaco-editor")) {
+    e.preventDefault(); $("#globalSearch").focus();
+  }
 });
 
 /* ---------------- appearance ----------------

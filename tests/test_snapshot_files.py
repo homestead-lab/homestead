@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.parse
 from types import SimpleNamespace
@@ -242,9 +243,9 @@ class BrowserTests(unittest.TestCase):
 
 class DownloadTests(unittest.TestCase):
     def run_download(self, chunks):
-        source = Path(__file__).resolve().parents[1] / 'server/server.py'
-        handler = next(n for n in ast.parse(source.read_text(encoding='utf-8')).body if isinstance(n, ast.ClassDef) and n.name == 'H')
-        method = next(n for n in handler.body if isinstance(n, ast.FunctionDef) and n.name == '_snapshot_file_download')
+        # The module reads the copy a piece at a time (download); server.py
+        # sends what it yields (_send_stream).
+        import server
         reads = []
         def read(*args):
             reads.append(args)
@@ -252,12 +253,12 @@ class DownloadTests(unittest.TestCase):
             if isinstance(value, Exception):
                 raise value
             return value
-        scope = {'SNAPSHOT_FILES': SimpleNamespace(read=read), 'urllib': urllib}
-        exec(compile(ast.Module(body=[method], type_ignores=[]), str(source), 'exec'), scope)
         headers = {}
         h = SimpleNamespace(wfile=io.BytesIO(), close_connection=False, send_response=lambda _:None,
                             send_header=lambda k,v:headers.update({k:v}), _security_headers=lambda:None, end_headers=lambda:None)
-        scope['_snapshot_file_download'](h, 'lab', 'session', 'a\r\nX-Evil: yes.txt')
+        with mock.patch.object(server.SNAPSHOT_FILES, 'read', side_effect=read):
+            stream = server.SNAPSHOT_FILES.download('lab', 'session', 'a\r\nX-Evil: yes.txt')
+            server.H._send_stream(h, stream)
         return h, headers, reads
 
     def test_streams_each_chunk_and_escapes_the_attachment_filename(self):
