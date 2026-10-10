@@ -27,6 +27,7 @@ import re
 import threading
 import time
 
+import homestead_operations as OPS
 import homestead_shared as SHARED
 
 kget = hostrun = platform = None
@@ -517,8 +518,29 @@ def alert_facts(state=None):
     return facts
 
 
+def _host(body):
+    node = str(body.get("node") or "")
+    if not node:
+        raise ValueError("which host?")
+    return node
+
+
+def check_now(body):
+    """One host's OS read again now, for its card."""
+    facts = read(_host(body), refresh=True)
+    return {"ok": True, "facts": {**facts, "summary": summary(facts)}}
+
+
+def upgrade_now(body):
+    node = _host(body)
+    return {"ok": True, "operation": upgrade_start(node, OPS),
+            "detail": f"Installing updates on {node}; follow it in the job tray"}
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
+    ("POST", "/api/node/os/check"): ("admin", lambda request: check_now(request.body)),
+    ("POST", "/api/node/os/upgrade"): ("admin", lambda request: upgrade_now(request.body)),
     ("GET", "/api/node/os"): ("viewer", lambda request: report((request.query.get("name") or [""])[0] or None)),
     # Every Ready host read again now (#371); the card follows it.
     ("POST", "/api/os-updates/check"): ("admin", lambda request: {"ok": True, "checking": check_all()}),

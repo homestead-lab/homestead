@@ -18,6 +18,7 @@ import homestead_names as NAMES
 
 kget = ksend = None
 NS = "lab"
+VERSION = ""
 SCRIPTS = os.environ.get("NODEPROBE_SCRIPTS",
                          os.path.join(os.path.dirname(os.path.abspath(__file__)), "probe"))
 NAME = "homestead-nodeprobe"
@@ -27,10 +28,12 @@ LAST = {"state": "pending", "detail": "the node probe has not been checked yet"}
 _helper_key = None
 
 
-def bind(_kget, _ksend, namespace, helper_key=None):
-    global kget, ksend, NS, _helper_key
+def bind(_kget, _ksend, namespace, helper_key=None, version=""):
+    global kget, ksend, NS, _helper_key, VERSION
     kget, ksend, NS = _kget, _ksend, namespace
     _helper_key = helper_key
+    # The release the probe is installed at, for the install route.
+    VERSION = version
     NAMES.bind(_kget)
 
 
@@ -256,4 +259,5 @@ def ensure_helper_key():
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("POST", "/api/node/probe/remove"): ("admin", lambda request: remove()),
+    ("POST", "/api/node/probe/install"): ("admin", lambda request: install(VERSION)),
 }

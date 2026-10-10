@@ -46,6 +46,7 @@ import ssl
 import threading
 import time
 
+import homestead_outage as OUTAGE
 import homestead_shared as SHARED
 
 DATA_DIR = "/data"
@@ -67,9 +68,16 @@ _lock = threading.Lock()
 _state = {"loaded": False, "apps": {}, "saved_at": 0.0, "observed_at": 0.0, "mtime": None}
 
 
-def bind(data_dir="/data"):
-    global DATA_DIR
+# How an app's own check is saved - an annotation on its Deployment, which
+# server.py writes beside the workloads it reads.
+save_setting = None
+
+
+def bind(data_dir="/data", setting=None):
+    global DATA_DIR, save_setting
     DATA_DIR = data_dir
+    if setting is not None:
+        save_setting = setting
     with _lock:
         _state.update(loaded=False, apps={}, saved_at=0.0, observed_at=0.0, mtime=None)
 
@@ -465,3 +473,16 @@ def alert_facts(rep):
                       "href": (f"/vms?panel=monitoring&ns={ns}&vm={name}" if vm
                                else f"/containers?panel=monitoring&ns={ns}&workload={name}"), "signals": {"error": error}})
     return facts
+
+
+def overview():
+    """Every app's record, the rules it is judged by, and what is done when one is down."""
+    return {"apps": report(), "every": CHECK_EVERY, "down_after": DOWN_AFTER, "slow_ms": SLOW_MS,
+            "actions": OUTAGE.report()}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/uptime"): ("viewer", lambda request: overview()),
+    ("POST", "/api/uptime/setting"): ("operator", lambda request: save_setting(request.body)),
+}

@@ -28,7 +28,10 @@ Nothing is done to a host whose network Homestead cannot describe.
 import re
 import time
 
+import homestead_operations as OPS
+
 hostrun = kget = ksend = None
+_cache = {}
 BRIDGE = "br0"
 ROLLBACK_SECONDS = 240
 BACKUP_ROOT = "/var/lib/homestead"
@@ -80,9 +83,12 @@ grep -qs '^flannel-iface:' /etc/rancher/k3s/config.yaml /etc/rancher/rke2/config
 echo END""".replace("__BR__", BRIDGE)
 
 
-def bind(_hostrun, _kget, _ksend):
-    global hostrun, kget, ksend
+def bind(_hostrun, _kget, _ksend, cache=None):
+    """The host runner and cluster, and server.py's cache, which a change outdates."""
+    global hostrun, kget, ksend, _cache
     hostrun, kget, ksend = _hostrun, _kget, _ksend
+    if cache is not None:
+        _cache = cache
 
 
 def parse(out):
@@ -292,7 +298,18 @@ def status(item, now=None):
     return "succeeded", 100, f"{node} is on {BRIDGE}"
 
 
+def convert(body):
+    """The conversion, confirmed by the host's name, as a job."""
+    node = str(body.get("node") or "")
+    if not node or str(body.get("confirm") or "").strip() != node:
+        raise ValueError(f"type the host's name, {node}, to confirm")
+    op = start(node, OPS)
+    _cache.pop("network", None)
+    return {"ok": True, "operation": op, "detail": f"{node} is moving to {BRIDGE}; follow it in the job tray"}
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("POST", "/api/node/bridge/inspect"): ("admin", lambda request: inspect(str(request.body.get("node") or ""))),
+    ("POST", "/api/node/bridge"): ("admin", lambda request: convert(request.body)),
 }

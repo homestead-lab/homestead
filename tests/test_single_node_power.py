@@ -127,12 +127,12 @@ class SingleNodePowerTests(unittest.TestCase):
         handler._send = mock.Mock()
         for ack, code in [(None,409), (False,409), ("true",409), (True,202)]:
             handler._body = lambda: {**body, "allow_cluster_outage": ack}
-            with mock.patch.object(server, "send_reviewed_power", return_value={"ok":True}) as send,                     mock.patch.object(server, "active_power_job", return_value=None):
+            with mock.patch.object(server.POWER_JOBS, "send_reviewed_power", return_value={"ok":True}) as send,                     mock.patch.object(server.POWER_JOBS, "active_power_job", return_value=None):
                 handler.do_POST()
             self.assertEqual(code, handler._send.call_args.args[0])
             self.assertEqual(code == 202, send.called)
         handler._body = lambda: {**body, "allow_cluster_outage": True, "review_token": "stale"}
-        with mock.patch.object(server, "send_reviewed_power") as send,                 mock.patch.object(server, "active_power_job", return_value=None):
+        with mock.patch.object(server.POWER_JOBS, "send_reviewed_power") as send,                 mock.patch.object(server.POWER_JOBS, "active_power_job", return_value=None):
             handler.do_POST()
         self.assertEqual(409, handler._send.call_args.args[0])
         send.assert_not_called()
@@ -142,7 +142,7 @@ class SingleNodePowerTests(unittest.TestCase):
         # drain again; the browser now follows the running job instead.
         running = {"id": "job-1", "kind": "node-power", "status": "running", "resource": {"name": "node1"}}
         with mock.patch.object(server.OPS, "list_operations", return_value=[running]):
-            plan = server.power_plan_with_job(power.plan("node1", "poweroff"))
+            plan = server.POWER_JOBS.power_plan_with_job(power.plan("node1", "poweroff"))
             self.assertFalse(plan["ready"])
             self.assertEqual("job-1", plan["operation"]["id"])
             handler = object.__new__(server.H)
@@ -151,14 +151,14 @@ class SingleNodePowerTests(unittest.TestCase):
             handler._client_ip = lambda: "127.0.0.1"
             handler._send = mock.Mock()
             handler._body = lambda: {"node": "node1", "action": "poweroff", "confirm": "node1"}
-            with mock.patch.object(server, "send_reviewed_power") as send:
+            with mock.patch.object(server.POWER_JOBS, "send_reviewed_power") as send:
                 handler.do_POST()
         self.assertEqual(409, handler._send.call_args.args[0])
         self.assertEqual("job-1", handler._send.call_args.args[1]["operation"]["id"])
         send.assert_not_called()
         finished = {**running, "status": "succeeded"}
         with mock.patch.object(server.OPS, "list_operations", return_value=[finished]):
-            self.assertIsNone(server.active_power_job("node1"))
+            self.assertIsNone(server.POWER_JOBS.active_power_job("node1"))
 
     def test_the_send_returns_its_job_at_once_and_runs_in_the_background(self):
         plan = power.plan("node1", "poweroff")
@@ -167,13 +167,13 @@ class SingleNodePowerTests(unittest.TestCase):
             started.set(); release.wait(5)
             return {"ok": True}
         with mock.patch.object(server.OPS, "start", return_value={"id": "job-2"}),                 mock.patch.object(server.OPS, "record_phase") as phase,                 mock.patch.object(lifecycle, "node_power", side_effect=slow_power):
-            result = server.send_reviewed_power(plan, background=True)
+            result = server.POWER_JOBS.send_reviewed_power(plan, background=True)
             self.assertEqual({"id": "job-2"}, result["operation"])
             self.assertTrue(result["background"])
             self.assertTrue(started.wait(5), "the work runs after the reply")
             release.set()
         with mock.patch.object(server.OPS, "start", return_value={"id": "job-3"}),                 mock.patch.object(server.OPS, "record_phase") as phase,                 mock.patch.object(lifecycle, "node_power", side_effect=RuntimeError("drain stuck")):
-            server.send_reviewed_power(plan, background=True)
+            server.POWER_JOBS.send_reviewed_power(plan, background=True)
             for _ in range(50):
                 if phase.called: break
                 server.time.sleep(0.05)
@@ -195,7 +195,7 @@ class SingleNodePowerTests(unittest.TestCase):
                 mock.patch.object(power, "recheck_planned_outage", return_value=None) as recheck, \
                 mock.patch.object(lifecycle, "node_power", side_effect=lambda *args, **kwargs:
                     kwargs["before_send"]() or {"ok":True}) as send:
-            result = server.send_reviewed_power(plan)
+            result = server.POWER_JOBS.send_reviewed_power(plan)
         self.assertTrue(start.call_args.args[4]["planned_outage"])
         self.assertEqual(job, result["operation"])
         self.assertTrue(send.call_args.kwargs["planned_outage"])
@@ -203,9 +203,9 @@ class SingleNodePowerTests(unittest.TestCase):
         recheck.assert_called_once_with(plan)
 
     def test_automatic_os_rollout_cannot_approve_a_whole_cluster_outage(self):
-        with mock.patch.object(server, "send_reviewed_power") as send:
+        with mock.patch.object(server.POWER_JOBS, "send_reviewed_power") as send:
             with self.assertRaisesRegex(ValueError, "manual review"):
-                server.rollout_reboot("node1", allow_single_copy=True)
+                server.POWER_JOBS.rollout_reboot("node1", allow_single_copy=True)
         send.assert_not_called()
 
     def test_reboot_observation_does_not_claim_the_host_was_cordoned(self):

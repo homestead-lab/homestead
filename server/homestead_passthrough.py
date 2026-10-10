@@ -930,6 +930,19 @@ def write_configmap(effect, send):
         send("POST", path.rsplit("/", 1)[0], body)
 
 
+def pci(body):
+    """A PCI device given to VMs, or taken back for the host."""
+    node, address = str(body.get("node") or ""), str(body.get("address") or "")
+    return give(node, address) if body.get("give", True) else take_back(node, address)
+
+
+def usb(body):
+    """A USB device VMs may use, by Harvester's name for it on one host or by its IDs."""
+    if body.get("harvester_name"):
+        return harvester_usb(str(body.get("node") or ""), str(body["harvester_name"]), body.get("allow", True) is not False)
+    return allow_usb(body.get("vendor"), body.get("product"), body.get("allow", True) is not False)
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/passthrough/inventory"): ("viewer", lambda request: inventory((request.query.get("node") or [""])[0])),
@@ -937,4 +950,6 @@ ROUTES = {
     ("POST", "/api/passthrough/vbios/capture"): ("admin", lambda request: capture_vbios(str(request.body.get("node") or ""), str(request.body.get("address") or ""))),
     ("POST", "/api/passthrough/iommu"): ("admin", lambda request: enable_iommu(str(request.body.get("node") or ""))),
     ("GET", "/api/passthrough/resources"): ("viewer", lambda request: resources(with_usage=True)),
+    ("POST", "/api/passthrough/pci"): ("admin", lambda request: pci(request.body)),
+    ("POST", "/api/passthrough/usb"): ("admin", lambda request: usb(request.body)),
 }

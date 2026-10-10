@@ -88,13 +88,13 @@ class SmartTests(unittest.TestCase):
     def test_drive_findings_use_configured_thresholds(self):
         report = {"available": True, "health": "passed", "temperature_c": 58,
                   "reallocated": 2, "pending": 0, "uncorrectable": 0}
-        issues = server.smart_disk_issues(report, {
+        issues = server.NODES.smart_disk_issues(report, {
             "temperature": {"warning": 55, "critical": 65},
             "reallocated_warning": 1, "pending_critical": 1,
             "uncorrectable_critical": 1})
         self.assertEqual(2, len(issues))
         self.assertTrue(all(row["severity"] == "degraded" for row in issues))
-        critical = server.smart_disk_issues({**report, "health": "failed", "pending": 1}, {
+        critical = server.NODES.smart_disk_issues({**report, "health": "failed", "pending": 1}, {
             "temperature": {"warning": 55, "critical": 65},
             "reallocated_warning": 5, "pending_critical": 1,
             "uncorrectable_critical": 1})
@@ -125,7 +125,7 @@ class DiskHealthVerdictTests(unittest.TestCase):
     def verdict(self, **report):
         base = {"available": True, "health": "passed", "temperature_c": 36,
                 "reallocated": 0, "pending": 0, "uncorrectable": 0, "media_errors": 0}
-        return server.smart_disk_health({**base, **report}, self.CFG)
+        return server.NODES.smart_disk_health({**base, **report}, self.CFG)
 
     def test_a_clean_drive_is_healthy(self):
         result = self.verdict()
@@ -197,7 +197,7 @@ class DiskHealthVerdictTests(unittest.TestCase):
     def test_an_old_probe_is_told_apart_from_a_silent_drive(self):
         """A probe that never reported wear is a probe to update, not a drive
         with nothing to say - and the two looked identical."""
-        old_probe = server.smart_disk_health(
+        old_probe = server.NODES.smart_disk_health(
             {"available": True, "health": "passed", "temperature_c": 40}, self.CFG)
         current = self.verdict(wear={"life_pct": None, "basis": ""})
 
@@ -206,14 +206,14 @@ class DiskHealthVerdictTests(unittest.TestCase):
         self.assertIsNone(old_probe["life_pct"])
 
     def test_a_drive_without_smart_says_so_rather_than_healthy(self):
-        result = server.smart_disk_health(
+        result = server.NODES.smart_disk_health(
             {"available": False, "unavailable_reason": "USB bridge hides SMART"}, self.CFG)
 
         self.assertEqual("unavailable", result["state"])
         self.assertEqual("USB bridge hides SMART", result["summary"])
 
     def test_no_report_at_all_is_not_a_pass(self):
-        self.assertEqual("unavailable", server.smart_disk_health(None, self.CFG)["state"])
+        self.assertEqual("unavailable", server.NODES.smart_disk_health(None, self.CFG)["state"])
 
 
 if __name__ == "__main__":

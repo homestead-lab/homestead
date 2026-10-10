@@ -36,7 +36,11 @@ import json
 import re
 import time
 
+import homestead_operations as OPS
+
 hostrun = kget = ksend = None
+platform = lambda force=False: {}
+_cache = {}
 BOND = "bond0"
 ROLLBACK_SECONDS = 240
 LACP_WAIT = 60
@@ -132,9 +136,15 @@ PY
 echo END""".replace("__BOND__", BOND)
 
 
-def bind(_hostrun, _kget, _ksend):
-    global hostrun, kget, ksend
+def bind(_hostrun, _kget, _ksend, _platform=None, cache=None):
+    """The host runner and cluster; for the routes, the platform (Harvester
+    makes its bonds itself) and server.py's cache, which a change outdates."""
+    global hostrun, kget, ksend, platform, _cache
     hostrun, kget, ksend = _hostrun, _kget, _ksend
+    if _platform is not None:
+        platform = _platform
+    if cache is not None:
+        _cache = cache
 
 
 def parse(out):
@@ -581,3 +591,54 @@ def status(item, now=None):
             return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
         return "running", 92, f"Waiting for {node} to be Ready again"
     return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
+
+
+def network_guard(node):
+    """What a host network change waits for: another host's change still
+    being checked, and the other servers' readiness (ready, total)."""
+    busy = next((op.get("title", "") for op in OPS.list_operations()
+                 if op.get("kind") in (KIND, "host-bridge") and op.get("status") not in OPS.TERMINAL), "")
+    servers = [n for n in kget("/api/v1/nodes").get("items", [])
+               if n["metadata"]["name"] != node and any(k in (n["metadata"].get("labels") or {}) for k in
+                   ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master"))]
+    ready = sum(1 for n in servers if any(c.get("type") == "Ready" and c.get("status") == "True"
+                                          for c in (n.get("status") or {}).get("conditions") or []))
+    return busy, (ready, len(servers))
+
+
+def _host(body):
+    if (platform() or {}).get("harvester"):
+        raise ValueError("on Harvester, bonds are cluster network uplinks: Networking > Ports and uplinks")
+    node = str(body.get("node") or "")
+    if not node:
+        raise ValueError("which host?")
+    return node
+
+
+def review(body):
+    """What a bond change would write, and what refuses it, before anything is sent."""
+    node = _host(body)
+    busy, servers = network_guard(node)
+    found = plan(node, body, inspect(node), busy, servers)
+    found.pop("spec", None)
+    return found
+
+
+def change(body):
+    """The bond change, confirmed by the host's name, as a job."""
+    node = _host(body)
+    busy, servers = network_guard(node)
+    if str(body.get("confirm") or "").strip() != node:
+        raise ValueError(f"type the host's name, {node}, to confirm")
+    op = start(node, body, OPS, busy, servers)
+    _cache.pop("ports", None)
+    _cache.pop("network", None)
+    return {"ok": True, "operation": op, "detail": f"{body.get('node')}'s network is changing; follow it in the job tray"}
+
+
+ROUTES = {
+    ("POST", "/api/node/bond/inspect"): ("admin", lambda request: summary(str(request.body.get("node") or ""),
+                                                                          inspect(str(request.body.get("node") or "")))),
+    ("POST", "/api/node/bond/preview"): ("admin", lambda request: review(request.body)),
+    ("POST", "/api/node/bond"): ("admin", lambda request: change(request.body)),
+}

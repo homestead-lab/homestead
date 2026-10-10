@@ -16,7 +16,7 @@ import server
 
 def disk(count=24, pending=0):
     report={"available":True,"reallocated":count,"pending":pending}
-    issues=server.smart_disk_issues(report)
+    issues=server.NODES.smart_disk_issues(report)
     return A.health_facts({"health_issues":[dict(i,kind="Disk",name="node/sda") for i in issues]})
 
 class AcknowledgementTests(unittest.TestCase):
@@ -100,7 +100,7 @@ class AcknowledgementTests(unittest.TestCase):
         self.tick(disk(25));self.assertEqual("worsened",self.tick(disk(25),60)[0]["phase"])
     def test_replacement_disk_does_not_inherit_acknowledgement(self):
         def device(serial):
-            nodes=[{"name":"node","status":"Ready","disk_issues":[dict(i,disk="sda",device_identity=serial) for i in server.smart_disk_issues({"available":True,"reallocated":24})]}]
+            nodes=[{"name":"node","status":"Ready","disk_issues":[dict(i,disk="sda",device_identity=serial) for i in server.NODES.smart_disk_issues({"available":True,"reallocated":24})]}]
             report=server.classify_cluster_health(nodes,[],[])
             return A.health_facts({"health_issues":report["health_issues"]})
         self.tick(device("drive-a"));self.tick(device("drive-a"),60);self.ack()

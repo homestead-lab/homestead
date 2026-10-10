@@ -176,7 +176,7 @@ class LonghornV2Tests(unittest.TestCase):
         probes = {"n1": {"v2": {"arch": "x86_64", "sse4_2": True,
                                 "modules": {"vfio_pci": True, "uio_pci_generic": False, "nvme_tcp": True}}},
                   "n2": {"v2": {"arch": "aarch64", "sse4_2": None, "modules": {}}}}
-        with mock.patch.object(server, "node_temps", return_value=probes):
+        with mock.patch.object(server.NODES, "node_temps", return_value=probes):
             status = server.v2_engine_status()
         n1, n2 = (next(n for n in status["nodes"] if n["name"] == name) for name in ("n1", "n2"))
         self.assertEqual({"cpu": True, "modules": False, "hugepages": True, "disk": True}, n1["checks"])

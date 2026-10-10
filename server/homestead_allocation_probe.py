@@ -16,12 +16,17 @@ MANAGED = "homestead.io/allocation-probe"
 read = write = None
 capacity_check = None
 NS = "lab"
+VERSION = ""
+hosts = evidence = None
 
 
-def bind(kget, ksend, namespace, capacity=None):
-    global read, write, NS, capacity_check
+def bind(kget, ksend, namespace, capacity=None, version="", current_hosts=None, inspect=None):
+    """The cluster and the capacity review; for the routes, the release the
+    helper should run, the current hosts and how one is checked."""
+    global read, write, NS, capacity_check, VERSION, hosts, evidence
     read, write, NS = kget, ksend, namespace
     capacity_check = capacity
+    VERSION, hosts, evidence = version, current_hosts, inspect
 
 
 def socket_directory(value):
@@ -201,3 +206,34 @@ def reconcile(version):
         {"op": "replace", "path": f"/spec/template/spec/containers/{index}/image", "value": desired}],
         ctype="application/json-patch+json")
     return {"state": "updated", "detail": "VM placement helper image updated; probe pods are restarting"}
+
+
+def overview():
+    """The helper as it is, and what enabling it would cost, for Settings."""
+    current = status()
+    if current["enabled"] and current.get("image") != NAMES.IMAGE + ":" + VERSION:
+        current["detail"] = "Helper update pending. Review capacity and save settings to use this release."
+    if current["installed"]:
+        try:
+            current["capacity"] = configure({**current, "enabled": True,
+                "directory": current.get("directory") or "/var/lib/kubelet/pod-resources"}, VERSION, preview=True)
+        except Exception:
+            current["capacity"] = {"blocked": True, "blockers": ["Capacity could not be checked. Refresh before enabling."], "warnings": []}
+    return current
+
+
+def check(node):
+    """Whether one host's allocation evidence can be trusted."""
+    host = next((row for row in hosts() if row["name"] == node), None)
+    if host is None:
+        raise ValueError("Choose a current host")
+    found = evidence(host, read)
+    return {"name": node, "verified": found["verified"], "detail": found["reason"]}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/node/probe/allocation"): ("admin", lambda request: overview()),
+    ("POST", "/api/node/probe/allocation"): ("admin", lambda request: configure(request.body, VERSION)),
+    ("GET", "/api/node/probe/allocation/check"): ("admin", lambda request: check((request.query.get("node") or [""])[0])),
+}

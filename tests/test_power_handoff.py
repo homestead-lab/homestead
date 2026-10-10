@@ -111,11 +111,11 @@ class SendTests(unittest.TestCase):
         def ksend(method, path, body=None, ctype=None):
             calls.append((method, path, body))
             return {"metadata": {"uid": "helper-uid", "name": body["metadata"]["name"]}} if method == "POST" else {}
-        with mock.patch.object(server, "_self_data_helper_image", return_value=(own, "img@sha256:" + "a" * 64)), \
-             mock.patch.object(server, "homestead_running_on", return_value=("homestead-data", True)), \
-             mock.patch.object(server, "kget", return_value={"spec": {"replicas": 1}}), \
-             mock.patch.object(server, "ksend", side_effect=ksend):
-            server.send_handoff("job-1", {"node": "k3s-test", "action": "reboot", "boot_id": "old"}, [], {},
+        with mock.patch.object(server.POWER_JOBS, "_self_data_helper_image", return_value=(own, "img@sha256:" + "a" * 64)), \
+             mock.patch.object(server.POWER_JOBS, "homestead_running_on", return_value=("homestead-data", True)), \
+             mock.patch.object(server.POWER_JOBS, "kget", return_value={"spec": {"replicas": 1}}), \
+             mock.patch.object(server.POWER_JOBS, "ksend", side_effect=ksend):
+            server.POWER_JOBS.send_handoff("job-1", {"node": "k3s-test", "action": "reboot", "boot_id": "old"}, [], {},
                                 lambda phase, pct, msg, **kw: recorded.append((phase, kw)))
         (post, pod_path, pod), (patch, dep_path, scale) = calls
         self.assertEqual(("POST", "PATCH"), (post, patch))

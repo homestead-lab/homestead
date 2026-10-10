@@ -194,8 +194,8 @@ class HistoryTests(unittest.TestCase):
 class PolicyTests(unittest.TestCase):
     def test_routes_apart_from_scheduled_jobs(self):
         import homestead_route_policy as POLICY
-        self.assertEqual("viewer", POLICY.POLICY[("GET", "/api/power-schedules")])
-        self.assertEqual("operator", POLICY.POLICY[("POST", "/api/power-schedules/set")])
+        self.assertEqual("viewer", POLICY.role("/api/power-schedules", "GET"))
+        self.assertEqual("operator", POLICY.role("/api/power-schedules/set", "POST"))
         self.assertEqual("operator", POLICY.POLICY[("POST", "/api/schedules")], "scheduled jobs keep theirs")
 
 if __name__ == "__main__":

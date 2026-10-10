@@ -131,18 +131,6 @@ PLATFORM_NS = {"kubevirt": "KubeVirt", "cdi": "CDI", "system-upgrade": "system-u
 _cache = {}
 _lock = threading.Lock()
 
-_RATE = {}   # key -> (counter, timestamp) for per-node byte counters
-
-
-def rate(key, value, now=None):
-    now = now or time.time()
-    prev = _RATE.get(key)
-    _RATE[key] = (value, now)
-    if not prev or now <= prev[1] or value < prev[0]:
-        return 0.0
-    return (value - prev[0]) / (now - prev[1])
-
-
 # Each background task says when it last did its work, and what went wrong
 # if it did not, so Settings › About can say whether Homestead is healthy
 # rather than only whether it answers.
@@ -615,91 +603,13 @@ def app_settings_payload():
 
 
 # ---------------------------------------------------------------- collectors
-_TEMP_CACHE = {"at": 0, "data": {}}
-
-
-def node_temps():
-    """Temperatures from the optional homestead-nodeprobe DaemonSet.
-
-    Absent probe is not an error — it just means no thermal data, which the UI
-    reports rather than showing a blank gauge.
-    """
-    if time.time() - _TEMP_CACHE["at"] < 20:
-        return _TEMP_CACHE["data"]
-    out = {}
-    pods = NAMES.nodeprobe_pods(DEFAULT_NS)
-    for p in pods:
-        ip = p.get("status", {}).get("podIP")
-        node = p.get("spec", {}).get("nodeName")
-        if not ip or not node or p.get("status", {}).get("phase") != "Running":
-            continue
-        payload = {"node": node, "thermal": [], "hwmon": [], "devices": {},
-                   "disks": [], "sensors": 0, "smart_helper": {"available": False}}
-        try:
-            with urllib.request.urlopen(f"http://{ip}:9099/", timeout=4) as r:
-                raw = r.read(4 * 1024**2 + 1)
-                if len(raw) > 4 * 1024**2:
-                    raise ValueError("node telemetry exceeds the size limit")
-                payload.update(json.loads(raw.decode()))
-            # Provenance is assigned by this backend, never accepted from the
-            # probe response. Consumers still verify Pod/DaemonSet ownership,
-            # current host boot and sample age before trusting NUMA data.
-            payload["numa_source"] = {"pod": {key: p.get("metadata", {}).get(key) for key in ("namespace", "name", "uid")},
-                                      "received_at": time.time()}
-        except Exception:
-            payload.pop("numa_source", None)
-            pass
-        try:
-            with urllib.request.urlopen(f"http://{ip}:9100/", timeout=20) as r:
-                smart = json.loads(r.read().decode())
-            rows = {row.get("name"): row for row in smart.get("disks", [])}
-            for disk in payload.get("disks", []):
-                disk["smart"] = rows.get(disk.get("name"))
-            payload["smart_helper"] = {"available": True, "disks": len(rows)}
-        except Exception:
-            payload["smart_helper"] = {"available": False,
-                "reason": "SMART helper unavailable; install or update deploy/nodeprobe.yaml"}
-        out[node] = payload
-    _TEMP_CACHE.update(at=time.time(), data=out)
-    return out
-
-
-def reconcile_hardware(fresh=False):
-    """Every node's hardware labels, from what its probe sees now.
-
-    The scheduler places a workload that needs a Coral by these labels, so
-    they have to follow a device plugged in later - not wait until someone
-    opens the Nodes page."""
-    if fresh:
-        _TEMP_CACHE["at"] = 0
-    temps = node_temps()
-    found = {}
-    for n in kget("/api/v1/nodes").get("items", []):
-        name = n["metadata"]["name"]
-        nfs_facts = (temps.get(name) or {}).get("nfs") or {}
-        if isinstance(nfs_facts.get("server"), bool):
-            wanted = "true" if nfs_facts["server"] else None
-            if (n["metadata"].get("labels") or {}).get(NFS.HOST_LABEL) != wanted:
-                ksend("PATCH", f"/api/v1/nodes/{name}", {"metadata": {"labels": {NFS.HOST_LABEL: wanted}}},
-                      ctype="application/merge-patch+json")
-        devices = (temps.get(name) or {}).get("devices")
-        if devices is None:
-            continue                 # no probe here: nothing to say either way
-        labels, auto = HW.reconcile_node(name, n["metadata"].get("labels", {}) or {},
-                                         n["metadata"].get("annotations", {}) or {}, devices)
-        found[name] = sorted(x["id"] for x in HW.inventory(labels, devices, auto) if x["detected"])
-    if fresh:
-        _cache.pop("nodes", None); _cache.pop("ov", None)
-    return found
-
-
 def _hardware_loop():
     while True:
         if LEADER.is_leader():
             try:
                 with self_data_activity():
-                    reconcile_hardware()
-                    PORTS.observe(node_temps())
+                    NODES.reconcile_hardware()
+                    PORTS.observe(NODES.node_temps())
                 beat("hardware", 30, leader_only=True)
             except Exception as error:
                 beat("hardware", 30, error, leader_only=True)
@@ -858,31 +768,6 @@ def _housekeeping_loop():
                 beat("housekeeping", 86400, error, leader_only=True)
                 print(f"housekeeping: {str(error)[:160]}", flush=True)
         time.sleep(86400)
-
-
-def node_impact(node):
-    """If this host goes down: what stops, moves and is at risk (homestead_impact)."""
-    node = _dns_name(node, "host name")
-    nodes = cached("nodes", 5, get_nodes)
-    if not any(n["name"] == node for n in nodes):
-        raise ValueError(f"there is no host {node}")
-    deployments = [d for d in kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS]
-    try:
-        raw_vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
-    except Exception:
-        raw_vms = []
-    try:
-        # inventory()["addresses"] is VIPS.address_map(): {"nodes": [...], "addresses": [...]} (#372).
-        places = (cached("network", 5, NETWORK.inventory) or {}).get("addresses") or {}
-        addresses = (places.get("addresses") or []) if isinstance(places, dict) else list(places)
-    except Exception:
-        addresses = []
-    try:
-        placement = cached("impact:" + node, 5, lambda: PLACE.impact(node))
-    except Exception:
-        placement = None
-    return IMPACT.preview(node, cached("wl", 5, get_workloads), deployments, cached("vms", 5, VMS.list_vms), raw_vms,
-                          cached("vol", 8, get_volumes), addresses, nodes, placement)
 
 
 def set_vm_monitoring(b):
@@ -1073,271 +958,6 @@ def set_uptime_setting(b):
           {"metadata": {"annotations": {NAMES.key("uptime"): value or None}}}, ctype="application/merge-patch+json")
     _cache.pop("wl", None)
     return {"ok": True, "value": value, "detail": f"{name} is {UPTIME.describe_setting(value)}"}
-
-
-def node_stats(name):
-    """Per-node network + filesystem counters from the kubelet summary API."""
-    try:
-        s = kget(f"/api/v1/nodes/{name}/proxy/stats/summary", timeout=8)
-    except Exception:
-        return {}
-    nd = s.get("node", {}) or {}
-    net = nd.get("network", {}) or {}
-    ifaces = net.get("interfaces") or []
-    pick = next((i for i in ifaces if i.get("name") == "mgmt-br"), None) or            next((i for i in ifaces if (i.get("rxBytes") or 0) > 0), None) or {}
-    rx, tx = pick.get("rxBytes") or 0, pick.get("txBytes") or 0
-    now = time.time()
-    fs = nd.get("fs", {}) or {}
-    runtime = (s.get("node", {}).get("runtime", {}) or {}).get("imageFs", {}) or {}
-    return {
-        "net_iface": pick.get("name", ""),
-        "rx_mbps": round(rate(f"{name}:rx", rx, now) * 8 / 1e6, 2),
-        "tx_mbps": round(rate(f"{name}:tx", tx, now) * 8 / 1e6, 2),
-        "rx_total_gb": round(rx / 1024**3, 1),
-        "tx_total_gb": round(tx / 1024**3, 1),
-        "fs_used_gb": round((fs.get("usedBytes") or 0) / 1024**3, 1),
-        "fs_cap_gb": round((fs.get("capacityBytes") or 0) / 1024**3, 1),
-        "fs_pct": round((fs.get("usedBytes") or 0) / (fs.get("capacityBytes") or 1) * 100, 1),
-        "img_used_gb": round((runtime.get("usedBytes") or 0) / 1024**3, 1),
-    }
-
-
-def smart_disk_issues(report, settings=None):
-    """Classify actionable SMART findings using cluster-wide thresholds."""
-    if not report or not report.get("available"):
-        return []
-    cfg = settings or DEFAULT_APP_SETTINGS["smart"]
-    issues = []
-    if str(report.get("health") or "").lower() == "failed":
-        issues.append({"severity": "critical", "reason": "SMART overall-health check failed", "metric": "smart_failed", "value": 1})
-    temperature = report.get("temperature_c")
-    if temperature is not None:
-        severity = ("critical" if float(temperature) >= cfg["temperature"]["critical"] else
-                    "degraded" if float(temperature) >= cfg["temperature"]["warning"] else "")
-        if severity:
-            issues.append({"severity": severity,
-                           "reason": f"Drive temperature is {temperature}°C", "metric": "temperature", "value": int(float(temperature) // 5)})
-    reallocated = int(report.get("reallocated") or 0)
-    pending = int(report.get("pending") or 0)
-    uncorrectable = int(report.get("uncorrectable") or 0)
-    media = int(report.get("media_errors") or 0)
-    if reallocated >= cfg["reallocated_warning"]:
-        issues.append({"severity": "degraded", "reason": f"{reallocated} reallocated sector{'s' if reallocated != 1 else ''}", "metric": "reallocated", "value": reallocated})
-    if pending >= cfg["pending_critical"]:
-        issues.append({"severity": "critical", "reason": f"{pending} pending sector{'s' if pending != 1 else ''}", "metric": "pending", "value": pending})
-    if uncorrectable >= cfg["uncorrectable_critical"]:
-        issues.append({"severity": "critical",
-                       "reason": f"{uncorrectable} uncorrectable sector{'s' if uncorrectable != 1 else ''}", "metric": "uncorrectable", "value": uncorrectable})
-    if media:
-        issues.append({"severity": "critical", "reason": f"{media} NVMe media error{'s' if media != 1 else ''}", "metric": "media", "value": media})
-    return issues
-
-
-def smart_disk_health(report, settings=None):
-    """What the findings add up to, in one word plus why.
-
-    smartctl's own overall-health bit says PASSED until a drive is at death's
-    door: a disk with hundreds of reallocated sectors still passes it. The
-    counters are where the warning lives, so the verdict is drawn from those
-    against the configured thresholds, and says which ones it was.
-    """
-    if not report:
-        return {"state": "unavailable", "issues": [], "life_pct": None,
-                "life_basis": "", "spare_pct": None, "stale_probe": False,
-                "summary": "no SMART data for this drive"}
-    if not report.get("available"):
-        return {"state": "unavailable", "issues": [], "life_pct": None,
-                "life_basis": "", "spare_pct": None, "stale_probe": False,
-                "summary": report.get("unavailable_reason")
-                or "this drive or its USB bridge does not expose SMART data"}
-    issues = smart_disk_issues(report, settings)
-    # A probe from before wear reporting sends no "wear" key at all, which is
-    # not the same as a drive that has nothing to report. Saying "unsupported"
-    # for both sends people to look at the drive instead of the probe.
-    stale_probe = "wear" not in report
-    wear = report.get("wear") or {}
-    life = wear.get("life_pct")
-    spare, floor = wear.get("spare_pct"), wear.get("spare_floor_pct")
-    # A drive that has spent its endurance is worn out whatever else it says.
-    if life is not None and int(life) <= 10:
-        issues.append({"severity": "critical",
-                       "reason": f"Only {int(life)}% of rated life remains", "metric": "wear", "value": 100 - int(life)})
-    elif life is not None and int(life) <= 25:
-        issues.append({"severity": "degraded",
-                       "reason": f"{int(life)}% of rated life remains", "metric": "wear", "value": 100 - int(life)})
-    if spare is not None and floor is not None and int(spare) <= int(floor):
-        issues.append({"severity": "critical",
-                       "reason": f"spare blocks are down to {int(spare)}%, "
-                                 f"at the drive's floor of {int(floor)}%", "metric": "spare_used", "value": 100 - int(spare)})
-    state = ("critical" if any(x["severity"] == "critical" for x in issues)
-             else "attention" if issues else "healthy")
-    if not issues:
-        summary = "no reported defects"
-        if str(report.get("health") or "").lower() == "passed":
-            summary = "passed, with no reported defects"
-    else:
-        summary = "; ".join(x["reason"] for x in issues)
-    return {"state": state, "issues": issues, "summary": summary,
-            "life_pct": None if life is None else int(life),
-            "life_basis": wear.get("basis", ""),
-            "stale_probe": stale_probe,
-            "spare_pct": None if spare is None else int(spare)}
-
-
-def node_duties(pods):
-    """What falls to one node rather than another: the load-balancer addresses
-    it announces, and the shared volumes it serves.
-
-    kube-vip elects one node to answer for load-balanced addresses - on
-    Harvester, the management VIP hosts join through among them - and records
-    the winner in a Lease: plndr-svcs-lock for every Service at once,
-    kubevip-<service> where each is elected on its own, plndr-cp-lock for the
-    control-plane address. Longhorn serves each shared (RWX) volume through a
-    share-manager pod on one node; that node going down pauses the volume
-    until the pod starts elsewhere.
-    """
-    duties = {}
-
-    def note(node, key, value):
-        if node and value not in duties.setdefault(node, {"vips": [], "rwx": [], "control_plane_vip": False})[key]:
-            duties[node][key].append(value)
-    try:
-        leases = kget("/apis/coordination.k8s.io/v1/namespaces/kube-system/leases").get("items", [])
-    except Exception:
-        leases = []
-    try:
-        network = cached("network", 5, NETWORK.inventory)
-    except Exception:
-        network = {}
-    platform = network.get("platform_addresses") or {}
-    for lease in leases:
-        holder = str((lease.get("spec") or {}).get("holderIdentity") or "")
-        if holder and lease["metadata"]["name"] == "plndr-cp-lock":
-            duties.setdefault(holder, {"vips": [], "rwx": [], "control_plane_vip": False})["control_plane_vip"] = True
-    # The addresses each node answers for, from the leases kube-vip keeps
-    # beside each Service as well as its cluster-wide one (homestead_vips.py).
-    for row in (network.get("addresses") or {}).get("addresses") or []:
-        if row.get("kind") == "vip" and row.get("node") and row.get("announced"):
-            note(row["node"], "vips", row["ip"])
-    for node in duties.values():
-        node["management_vip"] = [ip for ip in node["vips"] if ip in platform]
-    try:
-        claims = {row["name"]: row.get("pvc_name") or row["name"] for row in cached("volmap", 30, get_volumes)}
-    except Exception:
-        claims = {}
-    for pod in pods.get("items", []) if isinstance(pods, dict) else pods:
-        meta = pod.get("metadata") or {}
-        if meta.get("namespace") == "longhorn-system" and meta.get("name", "").startswith("share-manager-")                 and (pod.get("status") or {}).get("phase") == "Running":
-            volume = meta["name"][len("share-manager-"):]
-            note((pod.get("spec") or {}).get("nodeName", ""), "rwx", claims.get(volume, volume))
-    return duties
-
-
-def get_nodes():
-    nodes = kget("/api/v1/nodes")
-    try:
-        metrics = {m["metadata"]["name"]: m for m in kget("/apis/metrics.k8s.io/v1beta1/nodes").get("items", [])}
-    except Exception:
-        metrics = {}
-    pods = kget("/api/v1/pods")
-    try:
-        vmis = kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", [])
-    except Exception:
-        vmis = []
-
-    try:
-        duties = node_duties(pods)
-    except Exception:
-        duties = {}
-    temps = node_temps()
-    try:
-        disk_lines = DISKS.summary()
-    except Exception:
-        disk_lines = {}
-    smart_cfg = get_app_settings().get("smart") or DEFAULT_APP_SETTINGS["smart"]
-    try:
-        # Each host's OS, as the leader last read it (homestead_host_os.py).
-        host_os = HOST_OS.report()["hosts"]
-    except Exception:
-        host_os = {}
-    out = []
-    for n in nodes.get("items", []):
-        name = n["metadata"]["name"]
-        labels = n["metadata"].get("labels", {})
-        cap = n["status"]["capacity"]
-        conds = {c["type"]: c["status"] for c in n["status"].get("conditions", [])}
-        roles = sorted([k.split("/", 1)[1] for k in labels if k.startswith("node-role.kubernetes.io/")])
-        m = metrics.get(name, {})
-        ucpu = parse_cpu(m.get("usage", {}).get("cpu"))
-        umem = parse_mem(m.get("usage", {}).get("memory"))
-        ccpu = float(cap.get("cpu", 1))
-        cmem = parse_mem(cap.get("memory"))
-        npods = [p for p in pods.get("items", []) if p.get("spec", {}).get("nodeName") == name]
-        wl = sorted({p["metadata"].get("labels", {}).get("app") or p["metadata"]["name"].rsplit("-", 2)[0]
-                     for p in npods if p["metadata"]["namespace"] not in SYS_NS
-                     and not NAMES.label_of(p["metadata"], "task")
-                     and (p["metadata"].get("labels", {}).get("app") or "") not in
-                         (NAMES.NODEPROBE, "image-prepull")})
-        probed = (temps.get(name) or {}).get("devices") or {}
-        annotations = n["metadata"].get("annotations", {}) or {}
-        try:
-            labels, auto_hardware = HW.reconcile_node(name, labels, annotations, probed)
-        except Exception:
-            auto_hardware = {x for x in NAMES.read(annotations, "auto-hardware").split(",") if x}
-        hardware_inventory = HW.inventory(labels, probed, auto_hardware)
-        hardware = {x["id"]: x["available"] for x in hardware_inventory}
-        temp_payload = temps.get(name)
-        disk_issues = []
-        for disk in (temp_payload or {}).get("disks", []):
-            disk["health"] = smart_disk_health(disk.get("smart"), smart_cfg)
-            for issue in disk["health"]["issues"]:
-                disk_issues.append({**issue, "disk": disk.get("name", "unknown"),
-                                    "device_identity": (disk.get("smart") or {}).get("serial") or disk.get("serial") or ""})
-        out.append({
-            "name": name,
-            "uid": n["metadata"].get("uid"),
-            "status": "Ready" if conds.get("Ready") == "True" else "NotReady",
-            "roles": roles or ["worker"],
-            "cpu_pct": round(ucpu / ccpu * 100, 1) if ccpu else 0,
-            "cpu_used": round(ucpu, 2), "cpu_cap": ccpu,
-            "mem_pct": round(umem / cmem * 100, 1) if cmem else 0,
-            "mem_used_gb": round(umem / 1024**3, 1), "mem_cap_gb": round(cmem / 1024**3, 1),
-            "mem_metrics_available": bool((m.get("usage") or {}).get("memory")),
-            "pods": len(npods),
-            "pods_sys": len([p for p in npods if p["metadata"]["namespace"] in SYS_NS]),
-            "pods_wl": len([p for p in npods if p["metadata"]["namespace"] not in SYS_NS]),
-            "vms": len([v for v in vmis if v.get("status", {}).get("nodeName") == name]),
-            "igpu": hardware["igpu"],
-            "disks": disk_lines.get(name, []),
-            "hardware": hardware,
-            "hardware_inventory": hardware_inventory,
-            "workloads": wl,
-            "kernel": n["status"].get("nodeInfo", {}).get("kernelVersion", ""),
-            "os": n["status"].get("nodeInfo", {}).get("osImage", ""),
-            "schedulable": not n.get("spec", {}).get("unschedulable", False),
-            "addresses": {a["type"]: a["address"] for a in n["status"].get("addresses", [])},
-            "allocatable": n["status"].get("allocatable", {}),
-            "taints": n.get("spec", {}).get("taints", []),
-            "labels": labels,
-            "info": n["status"].get("nodeInfo", {}),
-            "conditions": [{"type": c["type"], "status": c["status"], "reason": c.get("reason", "")}
-                           for c in n["status"].get("conditions", [])],
-            "created": n["metadata"].get("creationTimestamp", ""),
-            # A new boot ID is a reboot; Ready's last change is how long it
-            # has been up as far as Kubernetes is concerned; the probe knows
-            # how long the host itself has been running.
-            "boot_id": n["status"].get("nodeInfo", {}).get("bootID", ""),
-            "ready_since": next((c.get("lastTransitionTime", "") for c in n["status"].get("conditions", [])
-                                 if c.get("type") == "Ready" and c.get("status") == "True"), ""),
-            "uptime_s": (temp_payload or {}).get("uptime_s"),
-            **node_stats(name),
-            "temps": temp_payload,
-            "disk_issues": disk_issues,
-            "smart_notify": smart_cfg.get("notify_failures", True),
-            "duties": duties.get(name) or {"vips": [], "rwx": [], "control_plane_vip": False, "management_vip": []},
-            "host_os": (host_os.get(name) or {}).get("summary"),
-        })
-    return out
 
 
 def _moving_copy(volume, whole=None):
@@ -2318,7 +1938,7 @@ def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protec
 
 
 def get_overview():
-    nodes = get_nodes()
+    nodes = NODES.get_nodes()
     wl = get_workloads()
     vols = get_volumes()
     pods = kget("/api/v1/pods").get("items", [])
@@ -4322,7 +3942,7 @@ def v2_engine_status():
     except Exception:
         longhorn_nodes = []
     try:
-        probes = node_temps()
+        probes = NODES.node_temps()
     except Exception:
         probes = {}
     for node in longhorn_nodes:
@@ -4468,7 +4088,7 @@ def vm_create_options():
             "store": VMSTORE.choices() if (platform.get("harvester") or platform.get("cdi")) else [],
             "networks": vm_networks(),
             "network_details": vm_network_details(),
-            "vm_network_options": NETWORK.vm_network_options(node_temps()),
+            "vm_network_options": NETWORK.vm_network_options(NODES.node_temps()),
             "subnets": vm_subnets(),
             "nodes": sorted(n["metadata"]["name"] for n in nodes),
             # The Hardware tab: CPU models every node offers, and KubeVirt's features.
@@ -4600,32 +4220,6 @@ def create_vm_with_address(cfg):
     return result
 
 
-class PowerNotSent(Exception):
-    """A reviewed power request that stopped; the job it made says how far it got."""
-
-    def __init__(self, message, operation):
-        super().__init__(message)
-        self.operation = operation
-
-
-def active_power_job(node):
-    """A reboot or shutdown job for this host that has not finished."""
-    return next((item for item in OPS.list_operations()
-                 if item.get("kind") == "node-power" and item.get("resource", {}).get("name") == node
-                 and item.get("status") not in ("succeeded", "failed", "cancelled")), None)
-
-
-def power_plan_with_job(power_plan):
-    """A host whose power job is still going cannot be reviewed again: a
-    second review during its drain is how the same drain started twice."""
-    running = active_power_job(power_plan.get("node"))
-    if running:
-        power_plan = {**power_plan, "ready": False, "operation": running,
-                      "blockers": ["A power job for this host is still running. Follow it in its progress view."]
-                                  + list(power_plan.get("blockers") or [])}
-    return power_plan
-
-
 def homestead_running_on():
     """The claim Homestead's own Deployment mounts for its data, and whether
     it is ready on it now - read live, never from a cache."""
@@ -4643,271 +4237,8 @@ def homestead_running_on():
 
 # The Homestead replica a host power job is running in. A drain can evict
 # that very replica; the job then says which pod to look for, and the leader
-# carries it on from another replica (resume_power_job).
+# carries it on from another replica (homestead_power_jobs).
 POD_NAME = os.environ.get("HOSTNAME", "")
-_POWER_RESUMING = set()
-_POWER_RESUME_LOCK = threading.Lock()
-
-
-def run_power_job(operation_id, power_plan, force=False, resumed=False):
-    """Cordon, drain, recheck and send a reviewed reboot or shutdown, recording
-    each phase on the job. Cordon and drain may be repeated safely; the send is
-    guarded by the job's own receipts."""
-    node, action = power_plan["node"], power_plan["action"]
-    planned_outage = bool(power_plan.get("planned_outage")) and not force
-    phase_state = {"phase": "reviewed"}
-
-    def power_progress(phase, percent, message, **details):
-        updated = OPS.record_phase(operation_id, phase, percent, message, owner=POD_NAME or None, **details)
-        phase_state["phase"] = phase
-        return updated
-
-    def hold():
-        return hold_for_power(operation_id, power_plan, power_progress)
-
-    def handoff(node, action, steps, rep, report):
-        return send_handoff(operation_id, power_plan, steps, rep, report)
-    try:
-        result = LC.node_power(node, action, True,
-                               before_send=(lambda: POWER.recheck_planned_outage(power_plan)) if planned_outage else
-                               (lambda: POWER.recheck_forced(power_plan)) if force
-                               else (lambda: POWER.recheck_after_drain(power_plan)),
-                               reviewed_pods=power_plan["drain_pods"], progress=power_progress, force=force, planned_outage=planned_outage,
-                               resumed=resumed, hold=None if force else hold,
-                               send=handoff if planned_outage else None)
-        result["operation"] = {"id": operation_id}
-        return result
-    except OPS.Superseded:
-        raise  # another replica owns the job; nothing to record or send here
-    except Exception as e:
-        uncertain = phase_state["phase"] in ("sending", "observing")
-        message = ("Power submission outcome is uncertain; inspect the existing job/helper before retrying" if uncertain else
-                   "Power was not sent. Inspect the host's cordon state: " + str(e))
-        if uncertain:
-            power_progress("observing", 20, message)
-        else:
-            # Power was not sent: what was stopped to wait for the host starts
-            # again now. The host stays cordoned, so an app tied to it waits
-            # for scheduling to be allowed.
-            restored = {}
-            held = next((((i.get("ref") or {}).get("held") or []) for i in OPS._read() if i.get("id") == operation_id), [])
-            if held:
-                try:
-                    started, left = HOLD.restore(held, operation_id)
-                    restored = {"restored": {"started": started, "left": left, "at": time.time()}}
-                    message += (". Started again: " + ", ".join(started)) if started else ""
-                    message += (". Left as they are: " + ", ".join(left)) if left else ""
-                except Exception as error:
-                    message += f". What was stopped could not be started again ({str(error)[:120]}); start it by hand"
-            power_progress("failed", 10, message, failed_phase=phase_state["phase"], **restored)
-        raise PowerNotSent(message, {"id": operation_id}) from e
-
-
-def send_handoff(operation_id, power_plan, steps, rep, report):
-    """The last step on a cluster's only host. Homestead's data volume is on
-    that host: going down with Homestead still writing to it left the volume
-    faulted. So a helper on the host takes over - Homestead's own image and
-    account - and Homestead stops itself; the helper waits for its volume to
-    detach, then asks systemd for the reboot or power-off, and starts
-    Homestead again on the new boot (homestead_power_handoff)."""
-    node, action = power_plan["node"], power_plan["action"]
-    path = f"/apis/apps/v1/namespaces/{SELF.NS}/deployments/{NAMES.BRAND}"
-    try:
-        own, image = _self_data_helper_image(kget, SELF.NS)
-        claim, _ = homestead_running_on()
-        replicas = int((kget(path).get("spec") or {}).get("replicas", 1) or 1)
-    except Exception as error:
-        report("verifying", 15, f"Homestead cannot hand the last step to the host ({str(error)[:160]}); sending the {action} directly")
-        return LC._send_power(node, action, steps, rep, report)
-    spec = own.get("spec") or {}
-    pod_name = f"homestead-handoff-{action}-{int(time.time()) % 100000}"
-    body = {"apiVersion": "v1", "kind": "Pod",
-            "metadata": {"name": pod_name, "namespace": SELF.NS, "labels": NAMES.labels("node-power")},
-            "spec": {"nodeName": node, "hostPID": True, "restartPolicy": "OnFailure",
-                     "serviceAccountName": spec.get("serviceAccountName") or "default",
-                     "imagePullSecrets": spec.get("imagePullSecrets") or [],
-                     "tolerations": [{"operator": "Exists"}],
-                     "terminationGracePeriodSeconds": 1,
-                     "containers": [{"name": "handoff", "image": image,
-                                     "command": ["python3", "/srv/homestead_power_handoff.py", SELF.NS, NAMES.BRAND,
-                                                 operation_id, action, power_plan["boot_id"], claim],
-                                     "securityContext": {"privileged": True, "runAsUser": 0, "runAsGroup": 0},
-                                     "resources": {"requests": {"cpu": "10m", "memory": "32Mi"}, "limits": {"memory": "128Mi"}}}]}}
-    # The helper's identity is on the job before it exists, as for any power helper.
-    report("sending", 20, "Handing the last step to a helper on the host; power has not been sent",
-           helper_pod=pod_name, helper_namespace=SELF.NS, handoff=True, started_epoch=time.time())
-    receipt = ksend("POST", f"/api/v1/namespaces/{SELF.NS}/pods", body)
-    meta = (receipt or {}).get("metadata") or {}
-    if not meta.get("uid") or meta.get("name") != pod_name:
-        raise ValueError("The host helper was not confirmed; inspect it before retrying")
-    report("observing", 20, f"Homestead is stopping so its data volume detaches; the helper on the host then sends the {action}. "
-           "This page is offline until the host is back", helper_uid=meta["uid"])
-    # Homestead stops last, marked like anything else held for the host, so
-    # the helper starts it again - and only while that mark is the job's.
-    ksend("PATCH", path, {"metadata": {"annotations": {HOLD.HELD_BY: operation_id, HOLD.HELD_AS: str(replicas)}},
-                          "spec": {"replicas": 0}}, ctype="application/merge-patch+json")
-    steps.append(f"handed the {action} to {pod_name}; Homestead stopped so its data volume detaches")
-    return {"ok": True, "node": node, "action": action, "steps": steps, "helper_pod": pod_name, "quorum": rep}
-
-
-def hold_for_power(operation_id, power_plan, progress):
-    """Stop what waits for the host and live-migrate the VMs that move, then
-    wait for them to leave it. Safe to repeat: a resumed job finds its own
-    marks. Returns whether there was anything to do."""
-    node, picks = power_plan["node"], power_plan.get("choices") or {}
-    items = power_plan.get("hold") or []
-    waiting = [i for i in items if picks.get(i["id"]) == "wait"]
-    moving = [i for i in items if i["kind"] == "VirtualMachine" and picks.get(i["id"]) == "move"]
-    if not waiting and not moving:
-        return False
-    progress("holding", 8, f"Stopping {len(waiting)} app(s) and VM(s) to wait for the host"
-             + (f", moving {len(moving)} VM(s)" if moving else "") + "; power has not been sent")
-    held = [HOLD.stop(item, operation_id) for item in waiting]
-    progress("holding", 8, "Waiting for them to stop; power has not been sent", held=held)
-    if moving:
-        # A resumed job finds some already moved: only what is still here moves.
-        here = {((v.get("metadata") or {}).get("namespace"), (v.get("metadata") or {}).get("name"))
-                for v in kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", [])
-                if (v.get("status") or {}).get("nodeName") == node}
-        for vm in moving:
-            if (vm["ns"], vm["name"]) in here:
-                HOLD.migrate(vm)
-    deadline = time.monotonic() + 600
-    while True:
-        pods = [p for p in kget("/api/v1/pods").get("items", []) if (p.get("spec") or {}).get("nodeName") == node]
-        vmis = [v for v in (kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", []) if items and any(
-            i["kind"] == "VirtualMachine" for i in items) else []) if (v.get("status") or {}).get("nodeName") == node]
-        pending = [f"{i['ns']}/{i['name']}" for i in waiting + moving if not HOLD.gone(i, node, pods, vmis)]
-        if not pending:
-            return True
-        if time.monotonic() >= deadline:
-            raise ValueError("These did not stop or move within 10 minutes: " + ", ".join(pending[:6])
-                             + ". What was stopped stays stopped until this job is released or the host is back")
-        progress("holding", 8, "Waiting to stop or move: " + ", ".join(pending[:6]) + "; power has not been sent")
-        time.sleep(3)
-
-
-def restore_held(item, uncordon=True):
-    """Start again what a power job stopped to wait for its host. Leader only,
-    once; the job's resolver calls it and records what happened."""
-    ref = item.get("ref") or {}
-    if not LEADER.is_leader() or ref.get("restored") is not None:
-        return ref.get("restored") is not None
-    if uncordon and not ref.get("planned_outage") and not ref.get("cordoned_before"):
-        # What waited is for this host; it cannot start here while cordoned.
-        node = kget(f"/api/v1/nodes/{urllib.parse.quote(ref['node'], safe='')}")
-        if ref.get("node_uid") and (node.get("metadata") or {}).get("uid") == ref["node_uid"]:
-            LC.set_cordon(ref["node"], False)
-            ref["uncordoned"] = True
-    started, left = HOLD.restore(ref.get("held") or [], item["id"])
-    ref["restored"] = {"started": started, "left": left, "at": time.time()}
-    return True
-
-
-def allow_scheduling(item):
-    """Uncordon a host its power job cordoned, now it is back. Leader only,
-    once; only the host the job was for, by identity."""
-    ref = item.get("ref") or {}
-    if not LEADER.is_leader():
-        return False
-    if ref.get("uncordoned"):
-        return True
-    node = kget(f"/api/v1/nodes/{urllib.parse.quote(ref['node'], safe='')}")
-    if ref.get("node_uid") and (node.get("metadata") or {}).get("uid") != ref["node_uid"]:
-        return False
-    if (node.get("spec") or {}).get("unschedulable"):
-        LC.set_cordon(ref["node"], False)
-    ref["uncordoned"] = True
-    return True
-
-
-def release_held_power(operation_id):
-    """Start what waits for a host on other hosts now, without waiting for it."""
-    with OPS._lock:
-        items = OPS._read()
-        item = next((i for i in items if i.get("id") == operation_id), None)
-        if not item or item.get("kind") != "node-power":
-            raise ValueError("host power job not found")
-        ref = item.get("ref") or {}
-        if not ref.get("held") or ref.get("restored") is not None:
-            raise ValueError("nothing is waiting for this host")
-        if ref.get("phase") not in ("observing",):
-            raise ValueError("wait until the power command has been sent")
-        restore_held(item, uncordon=False)
-        OPS._write(items)
-    return {"ok": True, "detail": "Started again: " + (", ".join(ref["restored"]["started"]) or "nothing")}
-
-
-def _power_in_background(operation_id, power_plan, force, resumed=False):
-    def run():
-        try:
-            run_power_job(operation_id, power_plan, force, resumed)
-        except (PowerNotSent, OPS.Superseded):
-            pass  # recorded on the job, or carried on by another replica
-        except Exception as error:  # never leave the job looking busy
-            try:
-                OPS.record_phase(operation_id, "failed", 10, f"Host power job stopped: {error}"[:400])
-            except Exception:
-                pass
-        finally:
-            with _POWER_RESUME_LOCK:
-                _POWER_RESUMING.discard(operation_id)
-    threading.Thread(target=run, name=f"node-power-{power_plan['node']}", daemon=True).start()
-
-
-def send_reviewed_power(power_plan, force=False, background=False):
-    """Cordon, drain and send a reviewed reboot or shutdown, as a job - what
-    Host actions does once its review is accepted, and what an OS update of
-    every host does for each host that needs a restart. background returns
-    the job at once and leaves the work, and its outcome, to the job."""
-    node, action = power_plan["node"], power_plan["action"]
-    planned_outage = bool(power_plan.get("planned_outage")) and not force
-    operation = OPS.start(
-        "node-power", f"{action} {node}", {"kind": "Node", "name": node},
-        "/nodes?node=" + urllib.parse.quote(node),
-        {"node": node, "node_uid": power_plan["node_uid"], "action": action, "boot_id": power_plan["boot_id"],
-         "choices": power_plan.get("choices") or {},
-         # A host cordoned before the review stays so after it; one this job
-         # cordoned is allowed scheduling again when it is back.
-         "cordoned_before": bool(power_plan.get("cordoned")),
-         "volumes": [v["name"] for v in power_plan["volumes"]],
-         "planned_outage": planned_outage, "forced": bool(force),
-         # What a resumed job needs: the reviewed plan, and which replica runs it.
-         "plan": power_plan, "worker": POD_NAME,
-         "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
-        "Planned whole-cluster outage; sending without cordon or drain" if planned_outage else
-        "Forced by an admin; sending without cordon or drain" if force else "Host impact reviewed; preparing cordon and drain")
-    if not background:
-        result = run_power_job(operation["id"], power_plan, force)
-        result["operation"] = operation
-        return result
-    with _POWER_RESUME_LOCK:
-        _POWER_RESUMING.add(operation["id"])
-    _power_in_background(operation["id"], power_plan, force)
-    return {"operation": operation, "steps": [], "background": True}
-
-
-def power_worker_gone(pod):
-    """Whether the replica a power job named has gone - evicted by the drain."""
-    try:
-        found = kget(f"/api/v1/namespaces/{SELF.NS}/pods/{urllib.parse.quote(pod, safe='')}")
-    except urllib.error.HTTPError as error:
-        return error.code == 404
-    except Exception:
-        return False  # unknown is not gone
-    if (found.get("metadata") or {}).get("deletionTimestamp") or \
-            (found.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
-        return True
-    # A host shut down or lost leaves its pods listed for minutes; one whose
-    # node is not Ready is not running anything.
-    node = (found.get("spec") or {}).get("nodeName")
-    if not node:
-        return False
-    try:
-        conditions = (kget(f"/api/v1/nodes/{urllib.parse.quote(node, safe='')}").get("status") or {}).get("conditions") or []
-    except Exception:
-        return False
-    return not any(c.get("type") == "Ready" and c.get("status") == "True" for c in conditions)
 
 
 def _power_jobs_loop():
@@ -4937,109 +4268,6 @@ def _detached_copies_loop():
                 _cache.pop("lhrebuild", None)
         except Exception as error:
             print(f"detached volume copies not checked: {str(error)[:160]}", flush=True)
-
-
-def resume_power_job(item):
-    """Carry on a host power job whose replica was evicted before it sent the
-    command. Only the leader does, once; called from the job's resolver, so it
-    writes nothing here - the thread claims the job, then cordons and drains
-    again (both safe to repeat), rechecks and sends."""
-    ref = item.get("ref") or {}
-    if not LEADER.is_leader() or not isinstance(ref.get("plan"), dict):
-        return False
-    with _POWER_RESUME_LOCK:
-        if item["id"] in _POWER_RESUMING:
-            return True
-        _POWER_RESUMING.add(item["id"])
-
-    def claim_then_run():
-        try:
-            OPS.record_phase(item["id"], ref.get("phase", "draining"), item.get("progress", 10),
-                             "Homestead moved while preparing this host; carrying on from another replica", worker=POD_NAME)
-        except Exception:
-            with _POWER_RESUME_LOCK:
-                _POWER_RESUMING.discard(item["id"])
-            return
-        _power_in_background(item["id"], ref["plan"], bool(ref.get("forced")), resumed=True)
-    threading.Thread(target=claim_then_run, name=f"node-power-resume-{ref.get('node', '')}", daemon=True).start()
-    return True
-
-
-SYSTEM_HOST_PATHS = ("/var/lib/kubelet", "/run", "/var/run", "/dev", "/sys", "/proc", "/lib/modules",
-                     "/etc/localtime", "/var/log", "/var/lib/rancher", "/etc/rancher")
-
-
-SYSTEM_POD_NAMESPACES = ("kube-system", "longhorn-system", "kubevirt", "cdi", "cattle-system", "system-upgrade",
-                         "cattle-fleet-system", "harvester-system")
-
-
-def _system_host_path(row):
-    """A host path that is the host's own plumbing - kubelet's plugin and pod
-    directories, sockets, devices, logs - not data a pod keeps there. Nor
-    is anything Kubernetes or Longhorn itself mounts: an instance manager
-    mounts / and /var/lib/longhorn, and the volumes it serves are judged by
-    their copies, not by its mounts."""
-    if not str(row.get("kind", "")).startswith("host-local path"):
-        return False
-    if str(row.get("pod") or "").split("/", 1)[0] in SYSTEM_POD_NAMESPACES:
-        return True
-    path = "/" + str(row.get("source") or "").strip("/")
-    return any(path == p or path.startswith(p + "/") for p in SYSTEM_HOST_PATHS)
-
-
-def rollout_reboot(node, allow_single_copy=False):
-    """A restart for an OS update: the same review Host actions shows, with
-    nobody to accept its warnings - so what a person would have to accept
-    stops it, except a volume's only copy when the settings accept that."""
-    power_plan = POWER.plan(node, "reboot")
-    if power_plan.get("planned_outage"):
-        raise ValueError("A single-host cluster outage needs a manual review and acknowledgement in Host actions")
-    if not power_plan["ready"]:
-        raise ValueError("; ".join(power_plan["blockers"]))
-    if power_plan["stranded"]:
-        raise ValueError("some workloads have no other host to run on")
-    hold = power_plan.get("hold") or []
-    if any(i["kind"] == "VirtualMachine" for i in hold):
-        raise ValueError("Running VMs are on this host; migrate or stop them and review again")
-    waits = [f"{i['ns']}/{i['name']}" for i in hold if i["default"] != "move"]
-    if waits:
-        raise ValueError("These would have to stop and wait for the host: " + ", ".join(waits[:6]))
-    power_plan["choices"] = HOLD.choose(hold, None)
-    if power_plan["requires_data_ack"] and not allow_single_copy:
-        # What a person would have to accept, said as it is. A pod's emptyDir
-        # is scratch space every drain deletes - on a k3s host metrics-server
-        # and Traefik have one - and is no reason to leave a host unrestarted.
-        reasons = []
-        single = [v["claim"] for v in power_plan.get("volumes") or [] if v.get("risk") in ("unavailable", "single-copy")]
-        if single:
-            reasons.append("a volume has its only healthy copy on this host: " + ", ".join(single[:4]))
-        # Nor are the host's own sockets and devices data: Longhorn's CSI
-        # attacher mounts /var/lib/kubelet/plugins/driver.longhorn.io.
-        kept = [f"{row['pod']} ({row['source']})" for row in (power_plan.get("maintenance") or {}).get("local_storage") or []
-                if not str(row.get("kind", "")).startswith("emptyDir") and not _system_host_path(row)]
-        if kept:
-            reasons.append("pods keep data on this host itself: " + ", ".join(kept[:4]))
-        if power_plan.get("storage_unknown"):
-            reasons.append("Longhorn's volumes could not be read")
-        if reasons:
-            raise ValueError("; ".join(reasons) + " (the settings do not accept that)")
-    try:
-        return send_reviewed_power(power_plan)["operation"]["id"]
-    except PowerNotSent as e:
-        raise ValueError(str(e)) from e
-
-
-def rollout_power_job(node, since):
-    """A restart of this host started since the rollout began and not failed:
-    the one a drained leader left running."""
-    # The stored records: the public list leaves each job's ref out.
-    for item in OPS._read():
-        ref = item.get("ref") or {}
-        if (item.get("kind") == "node-power" and ref.get("node") == node and ref.get("action") == "reboot"
-                and float(ref.get("started_epoch") or 0) >= float(since or 0)
-                and item.get("status") not in ("failed", "cancelled")):
-            return item["id"]
-    return ""
 
 
 def operation_item(operation_id):
@@ -5103,14 +4331,14 @@ def setup_state(user, role):
         def quorum():
             q = LC.quorum_report()
             nodes = [{"name": n["name"], "ready": n.get("status") == "Ready", "roles": n.get("roles") or []}
-                     for n in cached("nodes", 5, get_nodes)]
+                     for n in cached("nodes", 5, NODES.get_nodes)]
             servers = q["total"] or sum(1 for n in nodes if any(r in ("control-plane", "master", "etcd") for r in n["roles"])) or 1
             return {"done": servers != 2, "applies": True, "servers": servers, "members": q["members"],
                     "ready": q["ready"], "can_lose": q["can_lose"], "nodes": nodes}
         step("quorum", quorum)
 
         def clocks():
-            known = {n["name"]: (HOST_OS.stored(n["name"]) or {}).get("ntp") for n in cached("nodes", 5, get_nodes)}
+            known = {n["name"]: (HOST_OS.stored(n["name"]) or {}).get("ntp") for n in cached("nodes", 5, NODES.get_nodes)}
             told = {k: v for k, v in known.items() if v is not None}
             return {"done": bool(told) and all(told.values()), "applies": kube and bool(told),
                     "unsynced": sorted(k for k, v in told.items() if v is False)}
@@ -5146,7 +4374,7 @@ def setup_state(user, role):
         def storage():
             classes = storage_classes()
             default = next((c for c in classes if c.get("default")), None)
-            ready = sum(1 for n in cached("nodes", 5, get_nodes) if n.get("status") == "Ready")
+            ready = sum(1 for n in cached("nodes", 5, NODES.get_nodes) if n.get("status") == "Ready")
             target = max(1, min(3, ready))
             copies = int(default["replicas"]) if default and str(default.get("replicas") or "").isdigit() else None
             fits = bool(default) and default.get("provisioner") == "driver.longhorn.io" and copies is not None and copies == target
@@ -5968,27 +5196,6 @@ def edit_volume(cfg):
     return {"ok": True, "name": name, "detail": (f"{name}: " + ", ".join(done)) if done else f"{name} is unchanged"}
 
 
-def set_node_hardware(cfg):
-    name = cfg["node"]
-    selected = set(cfg.get("features") or [])
-    # Backward-compatible body accepted from pre-v1.3 clients.
-    if cfg.get("igpu"): selected.add("igpu")
-    if cfg.get("coral_pcie"): selected.add("coral_pcie")
-    if cfg.get("coral_usb"): selected.add("coral_usb")
-    known = {f["id"] for f in HW.features()}
-    if selected - known:
-        raise ValueError("unknown hardware feature(s): " + ", ".join(sorted(selected - known)))
-    labels = {f["label"]: "true" if f["id"] in selected else "false" for f in HW.features()}
-    # These are deliberate overrides, so remove them from the auto-managed set.
-    ksend("PATCH", f"/api/v1/nodes/{name}", {"metadata": {"labels": labels,
-          "annotations": {HW.AUTO_ANNOTATION: None}}},
-          ctype="application/merge-patch+json")
-    for k in list(_cache):
-        if k.startswith(("nodes", "ov")):
-            _cache.pop(k, None)
-    return {"ok": True, "node": name}
-
-
 # ---------------------------------------------------------------- app store
 CA_FEED = os.environ.get(
     "COMMUNITY_CATALOG_URL",
@@ -6585,6 +5792,8 @@ import homestead_auth as AUTH
 import homestead_longhorn as LH
 import homestead_place as PLACE
 import homestead_hardware as HW
+import homestead_nodes as NODES
+import homestead_power_jobs as POWER_JOBS
 import homestead_updates as UPDATES
 import homestead_vmusage as VMUSAGE
 import homestead_cancel as CANCEL
@@ -6656,7 +5865,7 @@ import homestead_disks as DISKS
 import homestead_power as POWER
 import homestead_privileges as PRIV
 NAMES.bind(kget)
-PROBE.bind(kget, ksend, DEFAULT_NS, AUTH.smart_signing_key)
+PROBE.bind(kget, ksend, DEFAULT_NS, AUTH.smart_signing_key, version=HOMESTEAD_VERSION)
 def allocation_probe_capacity(obj, template):
     listing = kget("/api/v1/pods")
     if not isinstance(listing.get("items"), list) or (listing.get("metadata") or {}).get("continue"):
@@ -6665,7 +5874,8 @@ def allocation_probe_capacity(obj, template):
                                     get_app_settings()["thresholds"]["memory"]["critical"])
 
 
-ALLOCATION_PROBE.bind(kget, ksend, DEFAULT_NS, allocation_probe_capacity)
+ALLOCATION_PROBE.bind(kget, ksend, DEFAULT_NS, allocation_probe_capacity, version=HOMESTEAD_VERSION,
+                      current_hosts=lambda: PLACE.get_nodes(), inspect=ALLOCATION_EVIDENCE.inspect)
 OBJECTS.bind(kget, ksend, create_pvc, DEFAULT_NS)
 MOVE.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION)
 # Linked clusters: each knows the others by the address they reach it at,
@@ -6685,6 +5895,8 @@ FLEET.bind(kget, ksend, DEFAULT_NS, HOMESTEAD_VERSION,
            address=fleet_address, earlier=lambda: (f"http://{LB_IP}:8088",) if LB_IP else ())
 MOVE.FLEET = FLEET
 HW.bind(kget, ksend, DEFAULT_NS, _cache)
+NODES.bind(kget, ksend, _cache, DEFAULT_NS, SYS_NS, get_app_settings, DEFAULT_APP_SETTINGS,
+           get_workloads, get_volumes, parse_cpu, parse_mem, _dns_name)
 def _resolve_storage_class():
     """An empty STORAGE_CLASS means the cluster's default. It cannot stay
     empty: a claim asking for class "" asks for no class at all, and never
@@ -6704,9 +5916,11 @@ IMP.SCAN_DIR = DATA_DIR       # each node's full image list, kept for every repl
 AUTH.bind(kget, _auth_ksend, DEFAULT_NS)
 CAPACITY_REVIEW.bind(AUTH.review_signing_key)
 LH.bind(kget, ksend, _cache, STORAGE_CLASS)
-PLACE.bind(kget, ksend, lambda: cached("nodes", 5, get_nodes), _cache, HW.features)
+PLACE.bind(kget, ksend, lambda: cached("nodes", 5, NODES.get_nodes), _cache, HW.features)
 POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
 HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
+# The helper image is read from Homestead's own pod, defined further down.
+POWER_JOBS.bind(kget, ksend, lambda read, ns: _self_data_helper_image(read, ns), homestead_running_on, POD_NAME)
 REBALANCE.bind(kget, ksend, lambda: LEADER.is_leader())
 
 
@@ -6724,7 +5938,8 @@ def rebalance_move(ns, name, node):
 
 CREBALANCE.bind(kget, PLACE.requirements, PLACE.satisfies, rebalance_move, (SELF.NS, NAMES.BRAND), lambda: LEADER.is_leader(),
                 PLACE.get_nodes)
-POWER.WORKER_GONE, POWER.RESUME, POWER.RESTORE, POWER.UNCORDON = power_worker_gone, resume_power_job, restore_held, allow_scheduling
+POWER.WORKER_GONE, POWER.RESUME = POWER_JOBS.power_worker_gone, POWER_JOBS.resume_power_job
+POWER.RESTORE, POWER.UNCORDON = POWER_JOBS.restore_held, POWER_JOBS.allow_scheduling
 UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
              channel=lambda: cached("settings", 15, get_app_settings)["updates"]["channel"])
 UPDATES.PART = homestead_part
@@ -6905,7 +6120,6 @@ import homestead_schedules as SCHEDULES
 import homestead_outage as OUTAGE
 
 
-import homestead_impact as IMPACT
 import homestead_changes as CHANGES
 import homestead_logsearch as LOGSEARCH
 import homestead_forecast as FORECAST
@@ -6966,7 +6180,7 @@ HELM.bind(kget, ksend)
 MQTT.bind(kget, ksend, DEFAULT_NS, lambda: mqtt_snapshot(), LEADER.is_leader)
 HISTORY.bind(DATA_DIR)
 PLATFORM.bind(kget)
-ADDONS.bind(kget, ksend, PLATFORM.detect, node_temps)
+ADDONS.bind(kget, ksend, PLATFORM.detect, NODES.node_temps)
 MACVTAP.bind(kget, ksend, ADDONS, PLATFORM.detect)
 BASELINE.bind(kget, ADDONS, PLATFORM.detect, DEFAULT_NS, DATA_DIR, MACVTAP, PROBE, HOMESTEAD_VERSION)
 COMPONENTS.bind(kget, ksend, PLATFORM.detect, lambda cfg: HELM.upgrade(cfg), ADDONS, _ktext=lambda path: raw_get(path))
@@ -7024,50 +6238,17 @@ UNRAID_VMS.bind(IMP, kget, ksend, OPS, lambda: PLATFORM.detect())
 OPS.RESOLVERS[UNRAID_VMS.KIND] = UNRAID_VMS.status
 MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
-NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR, (SELF.NS, NAMES.BRAND))
+NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, NODES.node_temps, DATA_DIR, (SELF.NS, NAMES.BRAND))
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 PORTS.bind(DATA_DIR)
-UPTIME.bind(DATA_DIR)
+UPTIME.bind(DATA_DIR, set_uptime_setting)
 HOUSEKEEPING.bind(DATA_DIR)
-SCHEDULES.bind(DATA_DIR)
+SCHEDULES.bind(DATA_DIR, scheduled_items, set_schedule)
 OUTAGE.bind(DATA_DIR)
 CHANGES.bind(DATA_DIR)
 FORECAST.bind(DATA_DIR)
-
-
-def port_contexts(probes):
-    """What each host's ports carry beyond its own uplink: the LAN networks
-    on its interfaces, read from their NetworkAttachmentDefinitions."""
-    networks = {}
-    try:
-        nads = kget("/apis/k8s.cni.cncf.io/v1/network-attachment-definitions").get("items", [])
-    except Exception:
-        nads = []
-    for nad in nads:
-        meta = nad.get("metadata") or {}
-        try:
-            config = json.loads((nad.get("spec") or {}).get("config") or "{}")
-        except ValueError:
-            config = {}
-        iface = config.get("master") or config.get("bridge") or ""
-        resource = (meta.get("annotations") or {}).get("k8s.v1.cni.cncf.io/resourceName", "")
-        if not iface and resource.startswith("macvtap.network.kubevirt.io/"):
-            iface = resource.split("/", 1)[1]
-        if iface:
-            networks.setdefault(iface, []).append(f"{meta.get('namespace', '')}/{meta.get('name', '')}")
-    return {node: {"uplink": (probe or {}).get("default_interface") or "", "networks": networks}
-            for node, probe in (probes or {}).items()}
-
-
-def ports_report():
-    # Every host, so one whose probe is not answering is said to be unknown,
-    # not quietly well.
-    probes = dict(node_temps())
-    for n in kget("/api/v1/nodes").get("items", []):
-        probes.setdefault(n["metadata"]["name"], None)
-    return PORTS.report(probes, port_contexts(probes))
 OPS.RESOLVERS["host-os"] = HOST_OS.status
-ROOT_GUARD.bind(kget, ksend, PLATFORM.detect, node_temps, DATA_DIR)
+ROOT_GUARD.bind(kget, ksend, PLATFORM.detect, NODES.node_temps, DATA_DIR)
 PASSTHROUGH.bind(kget, ksend, HOSTRUN, PLATFORM.detect, DATA_DIR)
 SELF_ADDRESS.bind(kget, NETWORK, OBJECTS, SELF.NS, os.environ.get("PORT", "8080"), SMB_NAMESPACE, SMB_NAME)
 
@@ -7094,47 +6275,18 @@ def _follow_fleet_address():
 
 
 BASELINE.vip_setup = installer_vip
-OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, rollout_reboot, operation_item, LC.set_cordon, own_node, DATA_DIR,
+OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, POWER_JOBS.rollout_reboot, operation_item, LC.set_cordon, own_node, DATA_DIR,
                 lambda rollout: OPS.start("os-rollout", f"Update every host's OS ({len(rollout['nodes'])} hosts)",
                                           {"kind": "Node", "name": ", ".join(rollout["nodes"])[:200]}, "/nodes",
                                           {"rollout": rollout["id"]},
                                           "In the weekly window" if rollout["reason"] == "schedule" else "Starting"),
-                lambda node, since: rollout_power_job(node, since))
+                lambda node, since: POWER_JOBS.rollout_power_job(node, since))
 OPS.RESOLVERS["os-rollout"] = OS_ROLLOUT.status
 DISK_SETUP.bind(HOSTRUN)
-HOST_BRIDGE.bind(HOSTRUN, kget, ksend)
+HOST_BRIDGE.bind(HOSTRUN, kget, ksend, cache=_cache)
 OPS.RESOLVERS["host-bridge"] = HOST_BRIDGE.status
-HOST_BONDS.bind(HOSTRUN, kget, ksend)
+HOST_BONDS.bind(HOSTRUN, kget, ksend, PLATFORM.detect, _cache)
 OPS.RESOLVERS[HOST_BONDS.KIND] = HOST_BONDS.status
-
-
-def host_network_guard(node):
-    """What a host network change waits for: another host's change still
-    being checked, and the other servers' readiness (ready, total)."""
-    busy = next((op.get("title", "") for op in OPS.list_operations()
-                 if op.get("kind") in (HOST_BONDS.KIND, "host-bridge") and op.get("status") not in OPS.TERMINAL), "")
-    servers = [n for n in kget("/api/v1/nodes").get("items", [])
-               if n["metadata"]["name"] != node and any(k in (n["metadata"].get("labels") or {}) for k in
-                   ("node-role.kubernetes.io/control-plane", "node-role.kubernetes.io/master"))]
-    ready = sum(1 for n in servers if any(c.get("type") == "Ready" and c.get("status") == "True"
-                                          for c in (n.get("status") or {}).get("conditions") or []))
-    return busy, (ready, len(servers))
-
-
-def host_bonds_apply(body, start=False):
-    if (PLATFORM.detect() or {}).get("harvester"):
-        raise ValueError("on Harvester, bonds are cluster network uplinks: Networking > Ports and uplinks")
-    node = str(body.get("node") or "")
-    if not node:
-        raise ValueError("which host?")
-    busy, servers = host_network_guard(node)
-    if not start:
-        plan = HOST_BONDS.plan(node, body, HOST_BONDS.inspect(node), busy, servers)
-        plan.pop("spec", None)
-        return plan
-    if str(body.get("confirm") or "").strip() != node:
-        raise ValueError(f"type the host's name, {node}, to confirm")
-    return HOST_BONDS.start(node, body, OPS, busy, servers)
 UPLINKS.bind(kget, ksend)
 OPS.RESOLVERS[UPLINKS.KIND] = UPLINKS.status
 OPS.RESOLVERS[AUTOUPDATE.KIND] = lambda item: AUTOUPDATE.resolve(item, OPS.checkpoint)
@@ -7303,7 +6455,7 @@ OPS.RESUMABLE["snapshot-delete"] = SNAPSHOT_DELETE.resumable
 OPS.RESOLVERS["share-remove"] = SHARES.removal_progress
 OPS.CANCELLERS["snapshot-revert"] = (REVERT.cancel_plan,
     lambda item, options: storage_volume_action(item["ref"]["volume"], lambda: REVERT.cancel_run(item, options)))
-DISKS.bind(kget, ksend, node_temps)
+DISKS.bind(kget, ksend, NODES.node_temps, _cache, _lock)
 DISK_V2.bind(kget, ksend, PLATFORM.detect, OPS, DEFAULT_NS, _diagnostic_read)
 DISK_V2.protect_mutations(DISKS)
 OPS.RESOLVERS[DISK_V2.KIND] = DISK_V2.progress
@@ -7384,7 +6536,7 @@ def _alert_sources():
     take("detached-copies", lambda: LHREBUILD.alert_facts(cached("lhrebuild", 30, LHREBUILD.status)))
     take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
     take("hostos", HOST_OS.alert_facts)
-    take("ports", lambda: PORTS.alert_facts(cached("ports", 20, ports_report)))
+    take("ports", lambda: PORTS.alert_facts(cached("ports", 20, NODES.ports_report)))
     take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
     take("schedules", lambda: SCHEDULES.alert_facts())
     take("outage", lambda: OUTAGE.alert_facts())
@@ -8467,7 +7619,7 @@ def self_health():
     except Exception:
         probe.update(installed=False, desired=0, ready=0)
     try:
-        temps = node_temps()
+        temps = NODES.node_temps()
         probe["reporting"] = len(temps)
         probe["smart"] = sum(1 for t in temps.values() if (t.get("smart_helper") or {}).get("available"))
     except Exception:
@@ -8582,7 +7734,7 @@ import homestead_api_v1 as API_V1
 import homestead_setup as SETUP
 API_KEYS.bind(DATA_DIR)
 SETUP.bind(DATA_DIR)
-API_V1.bind(nodes=lambda: cached("nodes", 5, get_nodes), workloads=lambda: cached("wl", 5, get_workloads),
+API_V1.bind(nodes=lambda: cached("nodes", 5, NODES.get_nodes), workloads=lambda: cached("wl", 5, get_workloads),
             vms=lambda: cached("vms", 5, VMS.list_vms),
             alerts=lambda: [a for a in ALERTS.active() if a.get("announced", 0) > 0],
             jobs=OPS.snapshot, scale=api_scale, restart=restart_workload, vm_power=api_vm_power,
@@ -8616,7 +7768,7 @@ CONFIG.bind(kget, ksend, HOMESTEAD_VERSION, [
      "objects": [("configmaps", DEFAULT_NS, VMSTORE.CONFIGMAP)]},
 ], site=lambda: (cached("settings", 15, get_app_settings) or {}).get("site_name", ""),
     after_restore=_config_restored)
-CLUSTER.bind(kget, SYS_NS, lambda: cached("nodes", 5, get_nodes))
+CLUSTER.bind(kget, SYS_NS, lambda: cached("nodes", 5, NODES.get_nodes))
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
 VM_CONSOLE = VMCONSOLE.VmConsole(CONSOLE_PROXY, SYS_NS, kget)
 FILES.bind(kget, ksend, urllib.parse.urlparse(API), TOKEN, CTX, SYS_NS)
@@ -9079,7 +8231,7 @@ def persist_icon_config(cfg):
 FLEET_LISTS = {
     "workloads": lambda: cached("wl", 5, get_workloads),
     "vms": lambda: cached("vms", 5, VMS.list_vms),
-    "nodes": lambda: cached("nodes", 5, get_nodes),
+    "nodes": lambda: cached("nodes", 5, NODES.get_nodes),
     "volumes": lambda: cached("vol", 8, get_volumes),
     "flow": lambda: cached("flow2", 8, get_flow2),
 }
@@ -9753,17 +8905,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, app_settings_payload())
             if p == "/api/overview":
                 return self._send(200, cached("ov", 5, get_overview))
-            if p == "/api/nodes":
-                return self._send(200, cached("nodes", 5, get_nodes))
             if p == "/api/network/uplinks":
-                return self._send(200, UPLINKS.inventory(node_temps()))
-            if p == "/api/nodes/ports":
-                report = cached("ports", 20, ports_report)
-                node = (q.get("node") or [""])[0]
-                if node:
-                    return self._send(200, report["hosts"].get(node) or {"node": node, "available": False, "ports": [],
-                                      "conditions": [], "reason": "No node probe answers on this host."})
-                return self._send(200, report)
+                return self._send(200, UPLINKS.inventory(NODES.node_temps()))
             if p == "/api/workloads":
                 return self._send(200, cached("wl", 5, get_workloads))
             if p == "/api/portal/status":
@@ -9840,41 +8983,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("ev", 10, get_events))
             if p == "/api/storage":
                 return self._send(200, cached("stor", 10, get_storage))
-            if p == "/api/node":
-                return self._send(200, cached("node:" + (q.get("name") or [""])[0], 5,
-                                  lambda: next((n for n in get_nodes()
-                                                if n["name"] == (q.get("name") or [""])[0]), {})))
             if p == "/api/welcome":
                 return self._send(200, welcome_state(self.role))
-            if p == "/api/node/smart":
-                node = (q.get("node") or [""])[0]
-                disk = (q.get("disk") or [""])[0]
-                if not disk:
-                    return self._send(200, SMART.inventory(node))
-                report = SMART.disk(node, disk)
-                # The same verdict the node card shows, so one drive cannot be
-                # healthy in the list and something else in its own detail.
-                report["health_assessment"] = smart_disk_health(
-                    report, get_app_settings().get("smart"))
-                return self._send(200, report)
-            if p == "/api/node/probe/allocation":
-                current = ALLOCATION_PROBE.status()
-                if current["enabled"] and current.get("image") != NAMES.IMAGE + ":" + HOMESTEAD_VERSION:
-                    current["detail"] = "Helper update pending. Review capacity and save settings to use this release."
-                if current["installed"]:
-                    try:
-                        current["capacity"] = ALLOCATION_PROBE.configure({**current, "enabled": True,
-                            "directory": current.get("directory") or "/var/lib/kubelet/pod-resources"}, HOMESTEAD_VERSION, preview=True)
-                    except Exception:
-                        current["capacity"] = {"blocked": True, "blockers": ["Capacity could not be checked. Refresh before enabling."], "warnings": []}
-                return self._send(200, current)
-            if p == "/api/node/probe/allocation/check":
-                node = (q.get("node") or [""])[0]
-                host = next((row for row in PLACE.get_nodes() if row["name"] == node), None)
-                if host is None:
-                    raise ValueError("Choose a current host")
-                check = ALLOCATION_EVIDENCE.inspect(host, kget)
-                return self._send(200, {"name": node, "verified": check["verified"], "detail": check["reason"]})
             if p == "/api/flow":
                 return self._send(200, cached("flow2", 8, get_flow2))
             if p == "/api/shares/server":
@@ -9896,15 +9006,6 @@ class H(HTTP.LimitedHandler):
                     (q.get("namespace") or [DEFAULT_NS])[0], (q.get("name") or [""])[0]))
             if p == "/api/shares/options":
                 return self._send(200, share_storage_options())
-            if p == "/api/node/impact":
-                node = (q.get("node") or [""])[0]
-                if not node:
-                    return self._send(400, {"error": "node is required"})
-                return self._send(200, cached("impact:" + node, 5, lambda: PLACE.impact(node)))
-            if p == "/api/node/power/plan":
-                return self._send(200, power_plan_with_job(POWER.plan((q.get("node") or [""])[0],
-                                                                      (q.get("action") or [""])[0],
-                                                                      force=(q.get("force") or [""])[0] == "1")))
             if p == "/api/cluster/shutdown/plan":
                 return self._send(200, cluster_shutdown(review=True).review())
             if p == "/api/cluster/shutdown":
@@ -9959,18 +9060,8 @@ class H(HTTP.LimitedHandler):
                                                         (q.get("q") or [None])[0], (q.get("kind") or ["workload"])[0]))
                 except Exception as e:
                     return self._send(502, {"error": f"app feed unavailable: {e}"})
-            if p == "/api/power-schedules":
-                return self._send(200, {"items": SCHEDULES.report(scheduled_items()), "grace": SCHEDULES.GRACE})
-
-
-            if p == "/api/nodes/impact":
-                return self._send(200, node_impact((q.get("node") or [""])[0]))
             if p == "/api/restore-tests":
                 return self._send(200, restore_tests_view())
-            if p == "/api/uptime":
-                return self._send(200, {"apps": UPTIME.report(), "every": UPTIME.CHECK_EVERY,
-                                        "down_after": UPTIME.DOWN_AFTER, "slow_ms": UPTIME.SLOW_MS,
-                                        "actions": OUTAGE.report()})
             if p == "/api/logos/missing":
                 try:
                     apps = fetch_appstore()
@@ -10379,16 +9470,12 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_workload_logos(b))
             if p == "/api/vms/logo":
                 return self._send(200, set_vm_logos(b))
-            if p == "/api/uptime/setting":
-                return self._send(200, set_uptime_setting(b))
             if p == "/api/vms/monitoring":
                 return self._send(200, set_vm_monitoring(b))
             if p == "/api/monitoring/actions":
                 return self._send(200, set_outage_actions(b))
             if p == "/api/monitoring/actions/test":
                 return self._send(200, test_outage_webhook(b))
-            if p == "/api/power-schedules/set":
-                return self._send(200, set_schedule(b))
             if p == "/api/image-updates/mode":
                 return self._send(200, set_update_mode(b))
             if p == "/api/changes/undo/preview":
@@ -10658,8 +9745,6 @@ class H(HTTP.LimitedHandler):
                     {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
                     "/containers", {"namespace": b["ns"], "name": b["name"], "undo": "rollout"})
                 return self._send(200, result)
-            if p == "/api/node/hardware":
-                return self._send(200, set_node_hardware(b))
             if p == "/api/move/clusters/check":
                 return self._move(lambda: MOVE.check_cluster(b.get("name")))
             if p == "/api/move/clusters/readiness":
@@ -10717,61 +9802,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, OBJECTS.request_target(replace=bool(b.get("replace", True))))
             if p == "/api/move/clusters/target":
                 return self._move(lambda: MOVE.remote(b.get("name"), "/api/objectstore/longhorn", {"replace": True}))
-            if p == "/api/node/probe/install":
-                return self._send(200, PROBE.install(HOMESTEAD_VERSION))
-            if p == "/api/node/probe/allocation":
-                return self._send(200, ALLOCATION_PROBE.configure(b, HOMESTEAD_VERSION))
-            if p == "/api/node/smart/test":
-                result = SMART.start_test(b.get("node"), b.get("disk"), b.get("test"))
-                result["operation"] = OPS.start(
-                    "smart-test", f"SMART {result['test']} test · {result['disk']}",
-                    {"kind": "Disk", "name": result["disk"], "namespace": result["node"]},
-                    "/nodes?node=" + urllib.parse.quote(result["node"]),
-                    {"node": result["node"], "disk": result["disk"],
-                     "test": result["test"], "expected_seconds": result["expected_seconds"],
-                     "baseline": result["baseline"], "started_epoch": result["started_epoch"]},
-                    result["message"])
-                _TEMP_CACHE["at"] = 0
-                _cache.pop("node:" + result["node"], None)
-                return self._send(200, result)
-            if p == "/api/hardware/rescan":
-                return self._send(200, {"ok": True, "nodes": reconcile_hardware(fresh=True)})
-            if p == "/api/node/drain":
-                impact = PLACE.impact(b["node"])
-                if impact["stranded"] and not b.get("allow_stranded"):
-                    return self._send(409, {"error": "some workloads have no eligible failover host",
-                                            "impact": impact})
-                return self._send(200, LC.drain(b["node"], b.get("grace", 30), b.get("system", False)))
-            if p == "/api/node/power":
-                if b.get("confirm") != b.get("node"):
-                    return self._send(400, {"error": "confirmation must repeat the node name"})
-                force = b.get("force") is True
-                running = active_power_job(b.get("node"))
-                if running:
-                    return self._send(409, {"error": "A power job for this host is still running; follow it instead of sending another",
-                                            "operation": running})
-                power_plan = POWER.plan(b["node"], b["action"], force=force)
-                if not power_plan["ready"]:
-                    return self._send(409, {"error": "; ".join(power_plan["blockers"]), "plan": power_plan})
-                if b.get("review_token") != power_plan["review_token"]:
-                    return self._send(409, {"error": "host impact changed; review the plan again", "plan": power_plan})
-                if power_plan.get("planned_outage") and b.get("allow_cluster_outage") is not True:
-                    return self._send(409, {"error": "acknowledge the whole-cluster outage before host power control",
-                                            "plan": power_plan})
-                power_plan["choices"] = HOLD.choose(power_plan.get("hold") or [], b.get("choices") or {})
-                stranded = {(w["ns"], w["name"]) for w in power_plan["stranded"]}
-                if any((i["ns"], i["name"]) in stranded and power_plan["choices"].get(i["id"]) == "move"
-                       for i in power_plan.get("hold") or []) and not b.get("allow_stranded"):
-                    return self._send(409, {"error": "some workloads have no eligible failover host",
-                                            "plan": power_plan})
-                if power_plan["requires_data_ack"] and not b.get("allow_data_risk"):
-                    return self._send(409, {"error": "acknowledge the volume risk before host power control",
-                                            "plan": power_plan})
-                # Cordon and drain can take many minutes: the request returns
-                # the job at once and the browser follows its phases.
-                return self._send(202, send_reviewed_power(power_plan, force, background=True))
-            if p == "/api/node/power/release":
-                return self._send(200, release_held_power(str(b.get("id") or "")))
             if p == "/api/cluster/shutdown":
                 return self._send(202, cluster_shutdown(review=True).start(b, OPS))
             if p == "/api/cluster/shutdown/cancel":
@@ -10802,98 +9832,17 @@ class H(HTTP.LimitedHandler):
             if p == "/api/vm/delete":
                 _cache.pop("vms", None)
                 return self._send(200, VMS.delete(b.get("ns", DEFAULT_NS), b.get("name", ""), bool(b.get("disks"))))
-            if p == "/api/disks/retire":
-                op = DISKS.retire_start(b, OPS)
-                for key in ("disks", "lhcap", "nodes", "ov"):
-                    _cache.pop(key, None)
-                return self._send(200, {"ok": True, "operation": op})
-            if p == "/api/passthrough/pci":
-                node, address = str(b.get("node") or ""), str(b.get("address") or "")
-                return self._send(200, PASSTHROUGH.give(node, address) if b.get("give", True)
-                                  else PASSTHROUGH.take_back(node, address))
-            if p == "/api/passthrough/usb":
-                if b.get("harvester_name"):
-                    return self._send(200, PASSTHROUGH.harvester_usb(str(b.get("node") or ""), str(b["harvester_name"]),
-                                                                     b.get("allow", True) is not False))
-                return self._send(200, PASSTHROUGH.allow_usb(b.get("vendor"), b.get("product"), b.get("allow", True) is not False))
             if p == "/api/os-updates/start":
                 rollout = OS_ROLLOUT.start("asked")
                 return self._send(200, {"ok": True, "rollout": rollout, "operation": rollout.get("operation"),
                                         "detail": f"Updating {len(rollout['nodes'])} hosts one at a time; follow it in the job tray"})
-            if p == "/api/node/os/check":
-                node = str(b.get("node") or "")
-                if not node:
-                    raise ValueError("which host?")
-                facts = HOST_OS.read(node, refresh=True)
-                return self._send(200, {"ok": True, "facts": {**facts, "summary": HOST_OS.summary(facts)}})
-            if p == "/api/host-console":
-                # The add-on on or off for every host; or one host looked at again.
-                if "enabled" in b:
-                    return self._send(200, HOST_CONSOLE.set_cluster(bool(b.get("enabled")), self.user or ""))
-                return self._send(200, {"ok": True, "operation": HOST_CONSOLE.start(
-                    str(b.get("node") or ""), str(b.get("action") or "inspect"))})
-            if p == "/api/node/os/upgrade":
-                node = str(b.get("node") or "")
-                if not node:
-                    raise ValueError("which host?")
-                return self._send(200, {"ok": True, "operation": HOST_OS.upgrade_start(node, OPS),
-                                        "detail": f"Installing updates on {node}; follow it in the job tray"})
             if p == "/api/network/uplinks/preview":
-                return self._send(200, UPLINKS.preview(b, node_temps()))
+                return self._send(200, UPLINKS.preview(b, NODES.node_temps()))
             if p == "/api/network/uplinks/apply":
-                op = UPLINKS.apply(b, OPS, node_temps())
+                op = UPLINKS.apply(b, OPS, NODES.node_temps())
                 _cache.pop("ports", None); _cache.pop("network", None)
                 return self._send(200, {"ok": True, "operation": op,
                                         "detail": "Sent to Harvester; follow each host in the job tray"})
-            if p == "/api/node/bond/inspect":
-                node = str(b.get("node") or "")
-                return self._send(200, HOST_BONDS.summary(node, HOST_BONDS.inspect(node)))
-            if p == "/api/node/bond/preview":
-                return self._send(200, host_bonds_apply(b))
-            if p == "/api/node/bond":
-                op = host_bonds_apply(b, start=True)
-                _cache.pop("ports", None); _cache.pop("network", None)
-                return self._send(200, {"ok": True, "operation": op,
-                                        "detail": f"{b.get('node')}'s network is changing; follow it in the job tray"})
-            if p == "/api/node/bridge":
-                node = str(b.get("node") or "")
-                if not node or str(b.get("confirm") or "").strip() != node:
-                    raise ValueError(f"type the host's name, {node}, to confirm")
-                op = HOST_BRIDGE.start(node, OPS)
-                _cache.pop("network", None)
-                return self._send(200, {"ok": True, "operation": op,
-                                        "detail": f"{node} is moving to {HOST_BRIDGE.BRIDGE}; follow it in the job tray"})
-            if p == "/api/disks/os-space/use":
-                result = DISKS.use_os_space(b)
-                with _lock:
-                    for key in [k for k in _cache if k.startswith(("disk", "stor", "lhcap"))]:
-                        _cache.pop(key, None)
-                return self._send(200, result)
-            if p == "/api/disks/setup":
-                result = DISKS.set_up(b)
-                with _lock:
-                    for key in [k for k in _cache if k.startswith(("disk", "stor", "lhcap"))]:
-                        _cache.pop(key, None)
-                return self._send(200, result)
-            if p in ("/api/disks/add", "/api/disks/scheduling", "/api/disks/evict", "/api/disks/remove"):
-                action = p.rsplit("/", 1)[1]
-                result = (DISKS.add(b) if action == "add"
-                          else DISKS.set_scheduling(b.get("node", ""), b.get("disk", ""), b.get("allow", True)) if action == "scheduling"
-                          else DISKS.evict(b.get("node", ""), b.get("disk", ""), b.get("on", True)) if action == "evict"
-                          else DISKS.remove(b.get("node", ""), b.get("disk", "")))
-                for key in ("disks", "lhcap", "nodes", "ov"):
-                    _cache.pop(key, None)
-                return self._send(200, result)
-            if p == "/api/disks/name":
-                result = DISKS.set_disk_name(b.get("node", ""), b.get("device", ""), b.get("name", ""))
-                _cache.pop("disks", None)
-                return self._send(200, result)
-            if p in ("/api/disks/tags", "/api/disks/node-tags"):
-                result = (DISKS.set_disk_tags(b.get("node", ""), b.get("disk", ""), b.get("tags") or [])
-                          if p.endswith("/tags") and not p.endswith("node-tags")
-                          else DISKS.set_node_tags(b.get("node", ""), b.get("tags") or []))
-                _cache.pop("disks", None)
-                return self._send(200, result)
             if p == "/api/longhorn/settings":
                 _cache.pop("lhcap", None)
                 with OPS._lock:
@@ -10978,11 +9927,6 @@ class H(HTTP.LimitedHandler):
             if p == "/api/vm/create":
                 _cache.pop("vms", None)
                 return self._send(200, reviewed_vm_create(b))
-            if p == "/api/node/shell/prepare":
-                # Starts the node's helper and says plainly if it cannot,
-                # before the terminal connects - a refused WebSocket says nothing.
-                target = NODESHELL.open_shell(str(b.get("node") or ""))
-                return self._send(200, {"ok": True, "node": target["node"]})
             if p == "/api/vm/store/keep":
                 _cache.pop("vmimages", None)
                 return self._send(200, VMSTORE.keep(str(b.get("id") or ""), b.get("auto", True) is not False))
@@ -11086,7 +10030,7 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, NETWORK.set_vip_label(b.get("ip", ""), b.get("label", "")))
             if p == "/api/network/vm-networks":
                 _cache.pop("network", None)
-                return self._send(200, NETWORK.create_vm_network(dict(b, _probes=node_temps())))
+                return self._send(200, NETWORK.create_vm_network(dict(b, _probes=NODES.node_temps())))
             if p == "/api/storage/classes/cleanup":
                 removed = cleanup_restore_classes()
                 return self._send(200, {"ok": True, "removed": removed,

@@ -117,3 +117,17 @@ def session_ended(node):
                   {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0})
         except urllib.error.HTTPError:
             pass
+
+
+def prepare(node):
+    """Start the node's helper and say plainly if it cannot, before the
+    terminal connects - a refused WebSocket says nothing."""
+    target = open_shell(node)
+    return {"ok": True, "node": target["node"]}
+
+
+# Its routes and who may use them (homestead_routes.py). The shell itself is
+# a WebSocket, which server.py answers.
+ROUTES = {
+    ("POST", "/api/node/shell/prepare"): ("admin", lambda request: prepare(str(request.body.get("node") or ""))),
+}

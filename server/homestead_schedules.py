@@ -37,9 +37,16 @@ DATA_DIR = "/data"
 _lock = threading.Lock()
 
 
-def bind(data_dir="/data"):
-    global DATA_DIR
+# The apps and VMs with a schedule, and how one is set: server.py reads and
+# writes them beside the rest of each workload.
+scheduled = save = None
+
+
+def bind(data_dir="/data", items=None, setter=None):
+    global DATA_DIR, scheduled, save
     DATA_DIR = data_dir
+    if items is not None:
+        scheduled, save = items, setter
 
 
 def _path():
@@ -249,3 +256,10 @@ def alert_facts(last=None):
                                                                      else f"/containers?panel=schedule&ns={ns}&workload={name}"),
                       "signals": {"action": result.get("action")}})
     return facts
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/power-schedules"): ("viewer", lambda request: {"items": report(scheduled()), "grace": GRACE}),
+    ("POST", "/api/power-schedules/set"): ("operator", lambda request: save(request.body)),
+}

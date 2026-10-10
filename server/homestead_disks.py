@@ -17,13 +17,16 @@ scheduling stops, replicas are moved off, then the disk is removed.
 import json
 import posixpath
 import re
+import threading
 import urllib.error
 
 import homestead_names as NAMES
+import homestead_operations as OPS
 import homestead_routes
 
 kget = ksend = None
 temps = lambda: {}
+_cache, _lock = {}, threading.Lock()
 mutation_scope = None
 v2_tasks = lambda: []
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
@@ -33,9 +36,13 @@ GiB = 1024 ** 3
 SYSTEM_MOUNTS = ("/", "/usr/local", "/var/lib/rancher", "/var/lib/kubelet", "/oem", "/run/initramfs/cos-state")
 
 
-def bind(_kget, _ksend, _temps):
-    global kget, ksend, temps, mutation_scope, v2_tasks
+def bind(_kget, _ksend, _temps, cache=None, lock=None):
+    """The cluster and the node probe's readings; for the routes, server.py's
+    cache and its lock, which a disk change outdates."""
+    global kget, ksend, temps, mutation_scope, v2_tasks, _cache, _lock
     kget, ksend, temps = _kget, _ksend, _temps
+    if cache is not None:
+        _cache, _lock = cache, lock or _lock
     # A fresh reader binding has its own workflow context. The server installs
     # its shared disk guards after binding; standalone clients supply no store.
     mutation_scope, v2_tasks = None, lambda: []
@@ -940,8 +947,55 @@ def auto_tag():
     return tagged
 
 
+def _forget(*keys):
+    for key in keys:
+        _cache.pop(key, None)
+
+
+def _forget_storage(result):
+    # Disks, the storage picture and Longhorn's capacity all change together.
+    with _lock:
+        for key in [k for k in _cache if k.startswith(("disk", "stor", "lhcap"))]:
+            _cache.pop(key, None)
+    return result
+
+
+def _retire(body):
+    op = retire_start(body, OPS)
+    _forget("disks", "lhcap", "nodes", "ov")
+    return {"ok": True, "operation": op}
+
+
+def _longhorn_disk(action, body):
+    """Add a disk to Longhorn, or allow, evict or remove one it has."""
+    result = (add(body) if action == "add"
+              else set_scheduling(body.get("node", ""), body.get("disk", ""), body.get("allow", True)) if action == "scheduling"
+              else evict(body.get("node", ""), body.get("disk", ""), body.get("on", True)) if action == "evict"
+              else remove(body.get("node", ""), body.get("disk", "")))
+    _forget("disks", "lhcap", "nodes", "ov")
+    return result
+
+
+def _renamed(result):
+    _forget("disks")
+    return result
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
+    ("POST", "/api/disks/retire"): ("admin", lambda request: _retire(request.body)),
+    ("POST", "/api/disks/os-space/use"): ("admin", lambda request: _forget_storage(use_os_space(request.body))),
+    ("POST", "/api/disks/setup"): ("admin", lambda request: _forget_storage(set_up(request.body))),
+    ("POST", "/api/disks/add"): ("admin", lambda request: _longhorn_disk("add", request.body)),
+    ("POST", "/api/disks/scheduling"): ("admin", lambda request: _longhorn_disk("scheduling", request.body)),
+    ("POST", "/api/disks/evict"): ("admin", lambda request: _longhorn_disk("evict", request.body)),
+    ("POST", "/api/disks/remove"): ("admin", lambda request: _longhorn_disk("remove", request.body)),
+    ("POST", "/api/disks/name"): ("admin", lambda request: _renamed(set_disk_name(
+        request.body.get("node", ""), request.body.get("device", ""), request.body.get("name", "")))),
+    ("POST", "/api/disks/tags"): ("admin", lambda request: _renamed(set_disk_tags(
+        request.body.get("node", ""), request.body.get("disk", ""), request.body.get("tags") or []))),
+    ("POST", "/api/disks/node-tags"): ("admin", lambda request: _renamed(set_node_tags(
+        request.body.get("node", ""), request.body.get("tags") or []))),
     ("POST", "/api/disks/retire/plan"): ("admin", lambda request: retire_plan(request.body.get("node", ""), request.body.get("disk", ""))),
     ("POST", "/api/disks/os-space"): ("admin", lambda request: os_space(str(request.body.get("node") or ""))),
     ("POST", "/api/disks/inspect"): ("admin", lambda request: inspect_disk(str(request.body.get("node") or ""), str(request.body.get("device") or ""))),
