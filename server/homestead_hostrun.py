@@ -24,8 +24,10 @@ MEMORY_LIMIT = "1Gi"
 TASK = "host-run"
 HOST = ["nsenter", "-t", "1", "-m", "-u", "-i", "-n", "-p", "--", "sh", "-c"]
 # A refused exec (an error with retry set) is tried this many times, this far
-# apart: about half a minute for the API server to reach a host just back.
-EXEC_TRIES = 6
+# apart: a minute and a half for the API server to reach a host just back. On
+# RKE2 it reaches a kubelet through the host's agent tunnel, which reconnects
+# well after the host reports Ready; half a minute was not enough (e2e, bonds).
+EXEC_TRIES = 18
 EXEC_PAUSE = 5
 
 

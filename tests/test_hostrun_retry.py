@@ -65,6 +65,23 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(1, cluster.calls)
         self.assertEqual([], paused)
 
+    def test_the_refusal_says_what_the_api_server_said(self):
+        class Sock:
+            closed = False
+            def settimeout(self, _): pass
+            def recv(self, _):
+                return b'3f\r\n{"kind":"Status","message":"error dialing backend: no tunnel for node-2"}\r\n0\r\n\r\n'
+            def close(self): self.closed = True
+        sock = Sock()
+        error = FILES._refused(sock, "homestead-host-node-2", "HTTP/1.1 500 Internal Server Error")
+        self.assertIsInstance(error, FILES.ExecRefused)
+        self.assertIn("HTTP/1.1 500", str(error))
+        self.assertIn("error dialing backend: no tunnel for node-2", str(error))
+        self.assertTrue(sock.closed)
+
+    def test_retries_cover_a_tunnel_reconnecting(self):
+        self.assertGreaterEqual(HOSTRUN.EXEC_TRIES * HOSTRUN.EXEC_PAUSE, 90)
+
     def test_a_refusal_is_still_a_connection_error_for_other_callers(self):
         self.assertTrue(issubclass(FILES.ExecRefused, ConnectionError))
 
