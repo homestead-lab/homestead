@@ -8,8 +8,10 @@ acts, and leave a person able to see what happened.
 
 - **Server:** Python 3.12, standard library only. No `pip install`, no
   frameworks - `server/server.py` routes requests and each feature lives in its
-  own `server/homestead_*.py` module. A new dependency needs a very good reason;
-  the image is small and has nothing to patch.
+  own `server/homestead_*.py` module. A new route goes in its module's `ROUTES`
+  table with its role (`server/homestead_routes.py`), not a new branch in
+  `server.py`; a test keeps `server.py` from growing. A new dependency needs a
+  very good reason; the image is small and has nothing to patch.
 - **Browser:** plain JavaScript and one stylesheet, no build step. Files in
   `web/js/` are loaded in order by `web/index.html` and share globals such as
   `api()`, `paint()`, `modal()` and `toast()`. The one vendored library is the
@@ -18,6 +20,23 @@ acts, and leave a person able to see what happened.
   installs and the permissions it holds. Homestead carries it in its image and
   updates its own ClusterRole to match on start, so a new permission reaches
   existing installs by an ordinary upgrade.
+
+### Project layout
+
+| Path | Holds |
+|---|---|
+| `server/` | `server.py` and one `homestead_*.py` module per feature |
+| `web/` | `index.html`, the stylesheet, `web/js/` and the service worker `sw.js` |
+| `web/js/demo.js` | the sample cluster the demo answers from |
+| `deploy/` | the manifests Homestead installs, some generated (see below) |
+| `charts/` | the Helm chart, rendered by `scripts/render_chart.py` |
+| `tests/` | `test_*.py` for the server, `*.test.js` for browser code |
+| `tests/integration/` | longer browser flows and real-cluster rehearsals CI runs |
+| `scripts/` | renderers, release helpers and the browser audits |
+| `docs/` | user and design documentation; `docs/wiki/` feeds the wiki |
+
+Keep to it: a feature's server code goes in its own module rather than a
+larger neighbour, and its browser code in the `web/js/` file for that area.
 
 ## Running it locally
 
@@ -44,7 +63,41 @@ node --test tests/*.test.js
 
 Tests talk to small fakes of the Kubernetes API rather than a cluster. A change
 in behaviour comes with a test that says, in its name, what should happen -
-`test_a_ready_node_is_not_removed_from_here` rather than `test_remove_2`.
+`test_a_ready_node_is_not_removed_from_here` rather than `test_remove_2`. A
+bug fix starts with a test that fails without it.
+
+- **Server code** is tested in `tests/test_<module>.py`, next to the module's
+  existing tests. Call the module directly; go through `server.py` only to test
+  routing or roles.
+- **Browser code** is tested in `tests/<area>.test.js`. These load the real
+  file into a `vm` context, so a function needs no export to be tested.
+  `tests/helpers/load-ui.js` loads the shared components for view tests.
+- **New API calls** get an answer in `web/js/demo.js`, so the page works in
+  the demo and the browser checks can open it.
+
+Some tests guard the project's structure rather than a feature: routes are
+declared once and `server.py` does not grow (`test_module_routes.py`), pages
+and dialogs follow `docs/design.md` (`design-rules.test.js`), values in inline
+handlers are escaped once (`handler-escaping.test.js`), and nothing uses the
+browser's own `alert` or `confirm` (`no-native-dialogs.test.js`). When one of
+these fails, change the code to fit the rule. If the rule itself is wrong,
+change it in its own pull request, saying why.
+
+### Browser checks
+
+CI also opens every page and dialog in Chromium, at a desktop and a phone
+width, against the demo. They need Playwright:
+
+```bash
+npm install --no-save --no-package-lock playwright@1.55.0
+npx playwright install chromium
+PORT=4173 WEBROOT=web DATA_DIR=/tmp/homestead-demo-data python server/server.py &
+sh scripts/ci_ui_checks.sh pages
+```
+
+`scripts/ci_ui_checks.sh` lists the groups (`dialogs-0` to `dialogs-2`,
+`dialog-flows`, `pages` and the rest); run the ones your change touches.
+Screenshots land in `release-assets/`, which is ignored by Git.
 
 With the local demo running and Playwright installed, the installed-phone
 checks run with `node scripts/check_mobile_pwa.mjs`. Set `HOMESTEAD_URL` to
@@ -86,12 +139,31 @@ Tests fail when the two disagree.
   with a comment saying what uses it; limit it by `resourceNames` where Kubernetes
   allows.
 
+## Code quality
+
+- **Small, finished changes.** A pull request does one thing completely:
+  the code, its tests, its demo data and any docs it changes. Leave unrelated
+  clean-ups for a pull request of their own.
+- **Check before acting.** Code that changes a cluster reads the current state
+  first and refuses, with a reason, when it would harm a running workload or
+  lose data. Say in the test which case it refuses.
+- **Errors reach a person.** A failure shows what went wrong and what to do
+  next, rather than a stack trace or a silent retry.
+- **No dead code.** Remove what a change makes unused, including its tests,
+  demo data and CSS.
+- **No secrets, addresses or names** from your own cluster in code, tests,
+  screenshots or commits. Use `192.0.2.x` addresses and `example.com`.
+
 ## Commits and pull requests
 
-- One topic per pull request, with the tests passing.
+- Pull requests target `dev`. `main` only receives releases.
+- One topic per pull request, with the tests passing and each commit signed
+  off (see [Sign-off](#sign-off)).
 - A commit message's first line says what changed for a person using Homestead;
   the body says why, and anything a reviewer should look at closely.
-- Screenshots help for anything visual, at desktop and phone width.
+- Link the issue it fixes with `Fixes #123` in the description.
+- Screenshots help for anything visual, at desktop and phone width, in the
+  light and dark themes.
 
 ## Releases
 
