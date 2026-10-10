@@ -22,6 +22,7 @@ import re
 import time
 
 import homestead_shared as SHARED
+import homestead_routes
 
 DATA_DIR = "/data"
 LOG_DAYS = 365
@@ -204,3 +205,9 @@ def alert_facts(rep):
                      "make its data volume larger under Volumes.",
              "resolved": "Homestead's data volume has room again", "href": "/settings#homestead-data",
              "signals": {"pct": round(pct)}}]
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/homestead/data"): ("admin", lambda request: homestead_routes.cached("housekeeping", 60, report)),
+}

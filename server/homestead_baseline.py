@@ -26,6 +26,7 @@ import threading
 import time
 
 import homestead_shared as SHARED
+import homestead_routes
 
 kget = None
 addons = None            # homestead_addons
@@ -254,3 +255,9 @@ def tick():
                                                        "error": ""})
     _save(state)
     return results
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/platform/baseline"): ("viewer", lambda request: homestead_routes.cached("baseline", 10, report)),
+}

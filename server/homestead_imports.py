@@ -32,6 +32,7 @@ import homestead_source_ssh as SOURCE_SSH
 import homestead_capacity_review as SOURCE_REVIEW
 import homestead_passthrough as PASSTHROUGH
 import homestead_vm_network as VMNETWORK
+import homestead_routes
 
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
@@ -2760,4 +2761,8 @@ ROUTES = {
     ("POST", "/api/sources/scan"): ("admin", lambda request: scan_source(request.body.get("name"), request.user)),
     ("POST", "/api/sources/trust"): ("admin", lambda request: trust_source(request.body, request.user)),
     ("POST", "/api/sources/inspect"): ("admin", lambda request: inspect_source_container(request.body["name"], request.body["container"])),
+    ("GET", "/api/images/vm"): ("viewer", lambda request: homestead_routes.cached("vmimages", 15, vm_image_cache)),
+    ("GET", "/api/vmimages"): ("viewer", lambda request: homestead_routes.cached("vmimg", 30, list_vm_images)),
+    ("GET", "/api/images"): ("viewer", lambda request: homestead_routes.cached("imgcache", 30, image_cache)),
+    ("GET", "/api/schedules"): ("viewer", lambda request: homestead_routes.cached("cron", 8, list_jobs)),
 }

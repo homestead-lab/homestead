@@ -14,8 +14,8 @@ import homestead_routes as ROUTES
 SERVER = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 11653
-MAX_PATH_BRANCHES = 333
+MAX_LINES = 11620
+MAX_PATH_BRANCHES = 316
 
 
 def handler_body(method):
@@ -99,6 +99,21 @@ class ThroughTheServer(unittest.TestCase):
         code, body = handler._send.call_args.args
         self.assertEqual(400, code)
         self.assertIn("no longer exists", body["error"])
+
+
+class SharedCache(unittest.TestCase):
+    def test_a_module_route_answers_from_server_py_s_cache_under_the_same_key(self):
+        # server.py drops "network" after a VIP repair; the route must see that.
+        import server
+        server._cache.pop("network", None)
+        with mock.patch.object(server.NETWORK, "inventory", side_effect=[{"n": 1}, {"n": 2}]) as inventory:
+            route = ROUTES.find("GET", "/api/network")
+            first = route.handler(ROUTES.Request("GET", "/api/network", {}, None, "ada", "viewer"))
+            again = route.handler(ROUTES.Request("GET", "/api/network", {}, None, "ada", "viewer"))
+            self.assertEqual(({"n": 1}, {"n": 1}), (first, again))
+            server._cache.pop("network", None)
+            self.assertEqual({"n": 2}, route.handler(ROUTES.Request("GET", "/api/network", {}, None, "ada", "viewer")))
+        self.assertEqual(2, inventory.call_count)
 
 
 class ServerStaysRouting(unittest.TestCase):

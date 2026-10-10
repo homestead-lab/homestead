@@ -6601,6 +6601,7 @@ import homestead_nfs as NFS
 import homestead_networking as NETWORK
 import homestead_firewall as FIREWALL
 import homestead_routes as MODULE_ROUTES
+MODULE_ROUTES.bind(lambda key, seconds, fn: cached(key, seconds, fn))
 import homestead_cluster as CLUSTER
 import homestead_probe as PROBE
 import homestead_objectstore as OBJECTS
@@ -9770,18 +9771,12 @@ class H(HTTP.LimitedHandler):
                     return self._send(200, report["hosts"].get(node) or {"node": node, "available": False, "ports": [],
                                       "conditions": [], "reason": "No node probe answers on this host."})
                 return self._send(200, report)
-            if p == "/api/nodes/uptime":
-                return self._send(200, cached("uptime", 60, HISTORY.uptime))
             if p == "/api/workloads":
                 return self._send(200, cached("wl", 5, get_workloads))
             if p == "/api/portal":
                 return self._send(200, {"links": PORTAL.view(), "icons": list(PORTAL.BUILTIN)})
             if p == "/api/portal/status":
                 return self._send(200, portal_status(force=(q.get("force") or [""])[0] == "1"))
-            if p == "/api/network":
-                return self._send(200, cached("network", 5, NETWORK.inventory))
-            if p == "/api/cluster":
-                return self._send(200, cached("cluster", 15, CLUSTER.inventory))
             if p == "/api/self/replicas":
                 return self._send(200, homestead_replicas())
             if p == "/api/self/data/prepare":
@@ -9798,8 +9793,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(503 if status["status"] == "unknown" else 200, status)
             if p == "/api/vm/store":
                 return self._send(200, VMSTORE.view(check=(q.get("check") or [""])[0] == "1"))
-            if p == "/api/images/vm":
-                return self._send(200, cached("vmimages", 15, IMP.vm_image_cache))
             if p in ("/api/resources/list", "/api/resources/object", "/api/resources/reveal"):
                 arg = lambda key: (q.get(key) or [""])[0]
                 if p == "/api/resources/list":
@@ -9813,16 +9806,12 @@ class H(HTTP.LimitedHandler):
                                                             (q.get("uid") or [""])[0]))
             if p == "/api/platform":
                 return self._send(200, PLATFORM.detect(force=(q.get("force") or [""])[0] == "1"))
-            if p == "/api/platform/baseline":
-                return self._send(200, cached("baseline", 10, BASELINE.report))
             if p == "/api/mqtt":
                 return self._send(200, {**MQTT.public(),
                                         "sensors": {"cluster": len(MQTT.CLUSTER_SENSORS), "node": len(MQTT.NODE_SENSORS)}})
             if p == "/api/mqtt/preview":
                 snap = mqtt_snapshot()
                 return self._send(200, {"states": [{"topic": t, "payload": v} for t, v in MQTT.states(MQTT.load(), snap)]})
-            if p == "/api/helm":
-                return self._send(200, cached("helm", 10, HELM.releases))
             if p == "/api/helm/release":
                 return self._send(200, HELM.release((q.get("ns") or [""])[0], (q.get("name") or [""])[0], include_sensitive=self.role == "admin"))
             if p == "/api/cluster/components":
@@ -9971,33 +9960,19 @@ class H(HTTP.LimitedHandler):
             if p == "/api/quorum":
                 r = LC.quorum_report(); r["power_enabled"] = LC.NODE_POWER_ENABLED
                 return self._send(200, r)
-            if p == "/api/vms":
-                return self._send(200, cached("vms", 5, VMS.list_vms))
             if p == "/api/vm":
                 return self._send(200, VMS.detail((q.get("ns") or [""])[0], (q.get("name") or [""])[0], include_sensitive=self.role == "admin"))
             if p == "/api/vm/create-options":
                 return self._send(200, vm_create_options())
-            if p == "/api/vmimages":
-                return self._send(200, cached("vmimg", 30, IMP.list_vm_images))
             if p == "/api/vm-disks/import-plan":
                 return self._send(200, IMP.vm_disk_import_plan(
                     (q.get("ns") or [DEFAULT_NS])[0], (q.get("name") or [""])[0]))
-            if p == "/api/images":
-                return self._send(200, cached("imgcache", 30, IMP.image_cache))
-            if p == "/api/hardware/features":
-                return self._send(200, cached("hardware:features", 15, HW.features))
-            if p == "/api/schedules":
-                return self._send(200, cached("cron", 8, IMP.list_jobs))
-            if p == "/api/lh/overview":
-                return self._send(200, cached("lhov", 8, LH.overview))
             if p == "/api/lh/snapshots":
                 vol = (q.get("volume") or [None])[0]
                 return self._send(200, LH.snapshots(vol))
             if p == "/api/lh/backups":
                 vol = (q.get("volume") or [None])[0]
                 return self._send(200, LH.backups(vol))
-            if p == "/api/lh/backupvolumes":
-                return self._send(200, cached("lhbackupvols", 15, LH.backup_volumes))
             if p == "/api/lh/restore/plan":
                 return self._send(200, LH.restore_plan(
                     (q.get("backup") or [""])[0],
@@ -10024,12 +9999,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, self_health())
             if p == "/api/storage/v2":
                 return self._send(200, v2_engine_status())
-            if p == "/api/disks":
-                return self._send(200, cached("disks", 10, DISKS.inventory))
-            if p == "/api/longhorn/capacity":
-                return self._send(200, cached("lhcap", 15, LHCAP.status))
-            if p == "/api/longhorn/offline-rebuilding":
-                return self._send(200, cached("lhrebuild", 30, LHREBUILD.status))
             if p == "/api/workloads/rebalance/plan":
                 return self._send(200, CREBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a]))
             if p == "/api/longhorn/rebalance/plan":
@@ -10056,8 +10025,6 @@ class H(HTTP.LimitedHandler):
             if p == "/api/changes":
                 ns, name = (q.get("ns") or [""])[0], (q.get("name") or [""])[0]
                 return self._send(200, {"entries": CHANGES.history(ns or None, name or None)})
-            if p == "/api/homestead/data":
-                return self._send(200, cached("housekeeping", 60, HOUSEKEEPING.report))
             if p == "/api/power-schedules":
                 return self._send(200, {"items": SCHEDULES.report(scheduled_items()), "grace": SCHEDULES.GRACE})
 

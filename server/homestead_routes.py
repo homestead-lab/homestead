@@ -19,6 +19,11 @@ server.py looks a request up here after its guard has checked who may make
 it, before its own branches. homestead_route_policy.role() reads the same
 table, so a route and its role are written once.
 
+A route whose answer server.py keeps for a few seconds asks for it through
+`cached(key, seconds, fn)` here, which is server.py's own cache once bound:
+the same keys, so what server.py drops from it when something changes (the
+network picture after a VIP repair, say) is dropped for the route too.
+
 A module is listed in MODULES to be read. A route stays in server.py while it
 needs the handler itself - headers, streaming, a redirect.
 """
@@ -28,6 +33,8 @@ import importlib
 MODULES = (
     "homestead_addons",
     "homestead_auth",
+    "homestead_baseline",
+    "homestead_cluster",
     "homestead_config_backup",
     "homestead_diagnostics",
     "homestead_disk_v2",
@@ -40,9 +47,12 @@ MODULES = (
     "homestead_host_bridge",
     "homestead_host_console",
     "homestead_host_os",
+    "homestead_housekeeping",
     "homestead_imports",
     "homestead_ipam",
     "homestead_isos",
+    "homestead_lhcapacity",
+    "homestead_lhrebuild",
     "homestead_lhv2_setup",
     "homestead_lhv2_upgrade",
     "homestead_lifecycle",
@@ -68,6 +78,7 @@ MODULES = (
     "homestead_snapshot_delete",
     "homestead_unraid_vms",
     "homestead_updates",
+    "homestead_vms",
     "homestead_vmstore",
 )
 ROLES = ("viewer", "operator", "admin")
@@ -76,6 +87,17 @@ Request = collections.namedtuple("Request", "method path query body user role")
 Route = collections.namedtuple("Route", "method path role handler module")
 
 _table = {}
+_cached = [lambda key, seconds, fn: fn()]
+
+
+def bind(cached):
+    """server.py's cache, for routes whose answer it keeps a few seconds."""
+    _cached[0] = cached
+
+
+def cached(key, seconds, fn):
+    """fn(), or what it returned less than seconds ago under key."""
+    return _cached[0](key, seconds, fn)
 
 
 def table():

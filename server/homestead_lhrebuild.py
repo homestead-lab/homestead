@@ -11,6 +11,7 @@ and steps aside the moment anything else wants the volume.
 """
 import time
 import urllib.error
+import homestead_routes
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 SETTING = "offline-replica-rebuilding"
@@ -223,3 +224,9 @@ def alert_facts(state):
                       "resolved": f"{row['claim']} has its copies again",
                       "body": body, "href": "/volumes"})
     return facts
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/longhorn/offline-rebuilding"): ("viewer", lambda request: homestead_routes.cached("lhrebuild", 30, status)),
+}

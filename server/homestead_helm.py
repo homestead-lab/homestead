@@ -26,6 +26,7 @@ import urllib.parse
 import urllib.request
 
 import homestead_names as NAMES
+import homestead_routes
 
 kget = ksend = None
 CONTROLLER_NS = "kube-system"
@@ -373,4 +374,5 @@ def job_status(item):
 ROUTES = {
     ("GET", "/api/helm/search"): ("viewer", lambda request: search((request.query.get("q") or [""])[0])),
     ("GET", "/api/helm/chart"): ("viewer", lambda request: chart((request.query.get("repo") or [""])[0], (request.query.get("name") or [""])[0])),
+    ("GET", "/api/helm"): ("viewer", lambda request: homestead_routes.cached("helm", 10, releases)),
 }
