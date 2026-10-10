@@ -579,7 +579,9 @@ async function nodePage(name) {
   if (asked && sections.some(([id]) => id === asked) && !STATE.busy) { STATE.nodeSection = asked; STATE.nodeSectionOpen = true; }
   const current = sections.some(([id]) => id === STATE.nodeSection) ? STATE.nodeSection : "overview";
   paint(`${UI.pageHeader(`${esc(n.name)}`, `${esc(n.roles.join(" · ") || "worker")} · <span class="mono">${esc((n.addresses || {}).InternalIP || "")}</span>`, `<button class="btn" data-need="admin" onclick="nodeShell(${jsq(n.name)})" title="A root shell on the host itself, as SSH would give">${icon("console")}Terminal</button>
-        <button class="btn pri" onclick="nodeActions(${jsq(n.name)})">Host actions</button>`)}
+        <button class="btn pri" onclick="nodeActions(${jsq(n.name)})">Host actions</button>`,
+      // One tap up, as each section has (#382): the menu was the only way back on a phone.
+      { extraHtml: `<button type="button" class="page-back" onclick="go('nodes')">‹ Nodes</button>` })}
     <div id="nodePage" data-node="${esc(n.name)}">
       <div class="sumline" id="nodeSummary">${summary}</div>
       ${UI.workspace(UI.workspaceNav(sections.map(([key,label,descriptionHtml]) => ({key,label,descriptionHtml})),
