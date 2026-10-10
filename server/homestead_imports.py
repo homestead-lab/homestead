@@ -2746,3 +2746,18 @@ def commit_vm(prepared, before_save=None, send=None):
 
 def create_vm(cfg, platform=None, default_class=""):
     return commit_vm(prepare_vm(cfg, platform, default_class))
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/vm-disks"): ("viewer", lambda request: list_vm_disks()),
+    ("GET", "/api/sources"): ("admin", lambda request: list_sources()),
+    ("GET", "/api/imports"): ("viewer", lambda request: import_status()),
+    ("POST", "/api/imports/cleanup-plan"): ("admin", lambda request: import_cleanup_plan(request.body.get("name"), request.body.get("namespace"))),
+    ("POST", "/api/images/prepull/stop"): ("operator", lambda request: stop_prepull(request.body.get("name"))),
+    ("POST", "/api/images/scan"): ("admin", lambda request: start_image_scan()),
+    ("POST", "/api/schedules/delete"): ("operator", lambda request: del_job(request.body["name"])),
+    ("POST", "/api/sources/scan"): ("admin", lambda request: scan_source(request.body.get("name"), request.user)),
+    ("POST", "/api/sources/trust"): ("admin", lambda request: trust_source(request.body, request.user)),
+    ("POST", "/api/sources/inspect"): ("admin", lambda request: inspect_source_container(request.body["name"], request.body["container"])),
+}

@@ -229,3 +229,9 @@ def cancel_plan(item):
 
 def cancel_run(item, _options):
     return _put_back(item["ref"], "Cancelled")[2]
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/lh/snapshot/revert/plan"): ("viewer", lambda request: plan((request.query.get("volume") or [""])[0], (request.query.get("snapshot") or [""])[0])),
+}

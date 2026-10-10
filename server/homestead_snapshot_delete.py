@@ -162,3 +162,10 @@ def resume_resolve(item):
     if item.get("message") == "Carrying on from where it stopped":
         item["ref"]["since"] = time.time()
     return resolve(item)
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/lh/snapshot/delete-plan"): ("viewer", lambda request: plan((request.query.get("volume") or [""])[0], (request.query.get("name") or [""])[0])),
+    ("GET", "/api/lh/snapshot-progress"): ("viewer", lambda request: progress((request.query.get("volume") or [""])[0])),
+}

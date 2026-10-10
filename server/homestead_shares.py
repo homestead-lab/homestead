@@ -944,3 +944,10 @@ def removal_progress(item):
         return "running", 75, "Removed mounts released; waiting for the remaining SMB shares to be ready"
     _clear_cache()
     return "succeeded", 100, "SMB mappings removed and old pods released them; PVCs and data kept" if claims else "Share removed; its PVC remains mounted for other configured shares"
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/shares"): ("admin", lambda request: list_shares()),
+    ("GET", "/api/shares/users"): ("admin", lambda request: list_users()),
+}

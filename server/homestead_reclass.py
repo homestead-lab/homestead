@@ -1004,3 +1004,9 @@ def _remove_old_copy(pv):
     ksend("PATCH", f"/api/v1/persistentvolumes/{pv}", {"metadata": JOURNAL.identity(obj), "spec": {"persistentVolumeReclaimPolicy": "Delete"}},
           ctype="application/merge-patch+json")
     return {"ok": True, "detail": f"removing the old copy {pv}"}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/volumes/old-copies"): ("viewer", lambda request: old_copies()),
+}

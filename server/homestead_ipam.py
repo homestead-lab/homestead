@@ -797,3 +797,17 @@ def import_csv(text):
         return {"ok": True, "created": created, "updated": updated,
                 "detail": f"{created} address{'es' if created != 1 else ''} added, {updated} updated"}
     return update(change)
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/ipam"): ("viewer", lambda request: view()),
+    ("GET", "/api/ipam/free"): ("viewer", lambda request: free_addresses()),
+    ("POST", "/api/ipam/subnets"): ("operator", lambda request: save_subnets(request.body.get("subnets"))),
+    ("POST", "/api/ipam/record"): ("operator", lambda request: save_record(request.body)),
+    ("POST", "/api/ipam/import"): ("operator", lambda request: import_csv(request.body.get("csv", ""))),
+    ("POST", "/api/ipam/bulk"): ("operator", lambda request: bulk(request.body.get("ips"), request.body.get("changes"))),
+    ("POST", "/api/ipam/scan"): ("operator", lambda request: scan(request.body.get("subnet"))),
+    ("POST", "/api/ipam/unifi"): ("admin", lambda request: save_unifi(request.body)),
+    ("POST", "/api/ipam/unifi/sync"): ("operator", lambda request: sync_unifi()),
+}

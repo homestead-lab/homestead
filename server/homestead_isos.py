@@ -428,3 +428,13 @@ def tidy(ns=None, now=None):
             except ValueError:
                 pass            # taken into a drive since it was read
     return deleted
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/vm/isos"): ("viewer", lambda request: library()),
+    ("GET", "/api/vm/isos/browse"): ("admin", lambda request: browse((request.query.get("share") or [""])[0], (request.query.get("path") or [""])[0])),
+    ("POST", "/api/vm/isos/folders"): ("admin", lambda request: set_folders(request.body.get("folders") or [])),
+    ("POST", "/api/vm/isos/keep"): ("admin", lambda request: set_keep_days(request.body.get("days"))),
+    ("POST", "/api/vm/isos/delete"): ("admin", lambda request: delete(str(request.body.get("name") or ""))),
+}

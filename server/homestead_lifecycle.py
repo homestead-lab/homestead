@@ -988,3 +988,9 @@ def vm_migrate(ns, name, target=None):
     out = ksend("POST", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachineinstancemigrations", body)
     _bust("flow", "ov")
     return {"ok": True, "migration": out.get("metadata", {}).get("name", ""), "vm": name}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("POST", "/api/node/cordon"): ("admin", lambda request: set_cordon(request.body["node"], request.body.get("cordon", True))),
+}

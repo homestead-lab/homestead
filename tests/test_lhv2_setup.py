@@ -235,9 +235,9 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(operations._plan_for({'kind': V.KIND, 'status': 'running'})['can'])
 
     def test_admin_routes_are_explicit(self):
-        from homestead_route_policy import POLICY
+        from homestead_route_policy import role
         for method, suffix in [('GET', 'plan'), ('POST', 'prepare'), ('POST', 'enable')]:
-            self.assertEqual('admin', POLICY[(method, '/api/longhorn/v2/' + suffix)])
+            self.assertEqual('admin', role('/api/longhorn/v2/' + suffix, method))
 
 class HostScriptTests(unittest.TestCase):
     def setUp(self):

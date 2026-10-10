@@ -378,3 +378,9 @@ def ensure_idle():
         obs = observation()
         if obs["active"] or obs["pending"]:
             raise ValueError("Wait for the V2 live upgrade to finish and its volumes to recover before expanding or live-migrating disks")
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/longhorn/v2/upgrade"): ("viewer", lambda request: plan(request.query.get("to", [""])[0])),
+}

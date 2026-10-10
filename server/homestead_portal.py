@@ -202,3 +202,10 @@ def status(force=False):
     with _status_lock:
         _status["value"], _status["at"] = result, time.monotonic()
     return result
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/portal/candidates"): ("viewer", lambda request: candidates()),
+    ("POST", "/api/portal"): ("admin", lambda request: save(request.body.get("links"))),
+}

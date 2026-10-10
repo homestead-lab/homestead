@@ -389,3 +389,10 @@ def enable(body):
         ksend('PUT', LH + '/settings/data-engine-cpu-mask', setting)
     CAP.save({'v2': True}, allow_v2_enable=True)
     return plan()
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/longhorn/v2/plan"): ("admin", lambda request: plan()),
+    ("POST", "/api/longhorn/v2/prepare"): ("admin", lambda request: prepare(request.body)),
+}

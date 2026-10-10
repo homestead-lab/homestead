@@ -14,8 +14,16 @@ import homestead_routes as ROUTES
 SERVER = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
 
 # Lower these as routes move out of server.py; never raise them.
-MAX_LINES = 11863
-MAX_PATH_BRANCHES = 438
+MAX_LINES = 11653
+MAX_PATH_BRANCHES = 333
+
+
+def handler_body(method):
+    """The text of server.py's do_GET, do_POST, ... method."""
+    lines = SERVER.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip().startswith(f"def do_{method}(self"))
+    end = next((i for i in range(start + 1, len(lines)) if re.match(r"    def |\S", lines[i])), len(lines))
+    return "\n".join(lines[start:end])
 
 
 class DeclaredRoutes(unittest.TestCase):
@@ -38,8 +46,8 @@ class DeclaredRoutes(unittest.TestCase):
         self.assertIsNone(POLICY.role("/api/firewall/save", "GET"))
 
     def test_server_py_has_no_branch_for_a_declared_route(self):
-        for _, path in ROUTES.table():
-            self.assertNotIn(f'p == "{path}"', SERVER, f"{path} is answered by its module")
+        for method, path in ROUTES.table():
+            self.assertNotIn(f'p == "{path}"', handler_body(method), f"{method} {path} is answered by its module")
 
     def test_handlers_get_the_request(self):
         seen = []

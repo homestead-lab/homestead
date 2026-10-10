@@ -221,3 +221,10 @@ def restore(doc, passphrase, part_ids):
     return {"ok": True, "restored": done, "skipped": skipped,
             "detail": (f"restored {', '.join(_part(i)['label'] for i in done)}" if done else "nothing to restore")
             + (f"; the backup held nothing for {', '.join(skipped)}" if skipped else "")}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/config/parts"): ("admin", lambda request: parts()),
+    ("POST", "/api/config/inspect"): ("admin", lambda request: inspect(request.body.get("file"), str(request.body.get("passphrase") or ""))),
+}

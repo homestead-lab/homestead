@@ -1144,3 +1144,15 @@ def delete_backup(name):
     ksend("DELETE", f"{API}/namespaces/{LHNS}/backups/{name}")
     _bust("lhbackups", "lhbackupvols", "lhov")
     return {"ok": True, "backup": name}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("POST", "/api/lh/job"): ("operator", lambda request: save_job(request.body)),
+    ("POST", "/api/lh/job/delete"): ("admin", lambda request: delete_job(request.body["name"])),
+    ("POST", "/api/lh/snapshot"): ("operator", lambda request: create_snapshot(request.body["volume"], request.body.get("name"))),
+    ("POST", "/api/lh/trim"): ("operator", lambda request: trim_volume(request.body.get("volume"))),
+    ("POST", "/api/lh/group"): ("operator", lambda request: save_group(request.body)),
+    ("POST", "/api/lh/group/delete"): ("admin", lambda request: delete_group(request.body.get("name", ""))),
+    ("POST", "/api/lh/backup/delete"): ("admin", lambda request: delete_backup(request.body.get("name", ""))),
+}

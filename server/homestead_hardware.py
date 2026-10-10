@@ -228,3 +228,9 @@ def mount_spec(feature):
         "host_path": feature["host_path"], "container_path": feature["container_path"],
         "path_type": feature["path_type"],
     }
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("POST", "/api/hardware/features"): ("admin", lambda request: save_features(request.body.get("features"))),
+}

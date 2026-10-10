@@ -755,3 +755,12 @@ def remove(keep_data=True):
                 raise
     return {"ok": True, "removed": removed,
             "detail": "object storage removed" + ("" if keep_data else ", including its volume")}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/objectstore"): ("viewer", lambda request: status()),
+    ("GET", "/api/objectstore/transfers"): ("admin", lambda request: transfers()),
+    ("POST", "/api/objectstore/deploy"): ("admin", lambda request: deploy(request.body)),
+    ("POST", "/api/objectstore/remove"): ("admin", lambda request: remove(bool(request.body.get("keep_data", True)))),
+}

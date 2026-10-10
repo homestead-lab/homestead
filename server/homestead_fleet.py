@@ -824,3 +824,9 @@ def unreachable_page(name, error):
 main{{max-width:440px;padding:24px}}h1{{font-size:20px;margin:0 0 8px}}p{{color:#aaa}}a{{display:inline-block;margin-top:14px;padding:9px 16px;border-radius:10px;background:#fff;color:#000;text-decoration:none;font-weight:600}}</style></head>
 <body><main><h1>{escape(name)} is not answering</h1><p>This Homestead could not reach it: {escape(str(error))}</p>
 <a href="/api/fleet/home">Back to this cluster</a></main></body></html>"""
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/fleet/hello"): ("viewer", lambda request: hello()),
+}
