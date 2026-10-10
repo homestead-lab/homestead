@@ -11072,6 +11072,9 @@ class H(HTTP.LimitedHandler):
             if p == "/api/os-updates/stop":
                 return self._send(200, {"ok": True, "rollout": OS_ROLLOUT.stop(),
                                         "detail": "Stopping once the host being updated is done"})
+            if p == "/api/os-updates/check":
+                # Every Ready host read again now (#371); the card follows it.
+                return self._send(200, {"ok": True, "checking": HOST_OS.check_all()})
             if p == "/api/node/os/check":
                 node = str(b.get("node") or "")
                 if not node:

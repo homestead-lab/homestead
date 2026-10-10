@@ -166,9 +166,18 @@ window.nodePartitionsPaint = async node => {
    review, drain and wait as Host actions when an update asks for one. */
 const OSU_DAYS = [["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"], ["sun", "Sun"]];
 
+/* When a host is next read by itself (#371): the leader reads each every
+   every_s, so a reading's age says how soon it moves on. */
+function hostOsNext(at, every) {
+  if (!at || !every) return "";
+  const left = at + every - Date.now() / 1000;
+  return left <= 60 ? " · next check due now" : ` · next check in ~${fmtUp(left)}`;
+}
 function osUpdatesHostsHtml(r) {
+  const check = r.checking || {}, busy = check.running ? check.hosts.filter(h => !check.done.includes(h)) : [];
   const rows = Object.entries(r.hosts || {}).sort(([a], [b]) => a.localeCompare(b)).map(([name, f]) => [
-    `<b>${esc(name)}</b><div class="dim xs">${esc(f.os || "")}${f.at ? ` · read ${esc(hostOsAge(f.at))}` : ""}</div>`,
+    `<b>${esc(name)}</b><div class="dim xs">${esc(f.os || "")}${busy.includes(name) ? " · checking now…"
+      : f.at ? ` · read ${esc(hostOsAge(f.at))}${esc(hostOsNext(f.at, r.every_s))}` : ""}${check.failed?.[name] ? ` · <span class="bad">${esc(check.failed[name])}</span>` : ""}</div>`,
     (f.updates || []).length ? `${f.updates.length}${f.security ? ` ${UI.chip(`${f.security} security`, "warn")}` : ""}` : "up to date",
     f.reboot ? UI.chip("needed", "warn") : "—",
     hostOsAuto(f.auto),
@@ -194,12 +203,19 @@ window.osUpdatesCardPaint = async () => {
     const last = run ? null : r.rollout || r.last;
     const days = OSU_DAYS.filter(([id]) => (schedule.days || []).includes(id)).map(([, label]) => label).join(", ");
     const windowText = schedule.enabled ? `${days} at ${String(schedule.hour ?? 0).padStart(2, "0")}:00 ${schedule.tz || ""}` : "Weekly window off";
-    card.innerHTML = header(`${UI.button("Refresh status", "osUpdatesCardPaint()")}${can("admin")
+    const check = r.checking || {};
+    clearTimeout(window._osuCheckTimer);
+    if (check.running) window._osuCheckTimer = setTimeout(() => osUpdatesCardPaint(), 4000);
+    card.innerHTML = header(`${can("admin")
+      ? UI.button(check.running ? "Checking hosts…" : "Check every host now", "osUpdatesCheckAll()", { id: "osuCheckAll", attrs: `data-need="admin"${check.running ? " disabled" : ""}` })
+      : UI.button("Reload", "osUpdatesCardPaint()")}${can("admin")
       ? UI.button("Manage host updates", "osUpdates()", { attrs: 'data-need="admin"' }) : UI.chip("admin managed")}`) +
       `<div class="ui-stack">
         ${run ? UI.progress(Math.round((run.index || 0) * 100 / Math.max(1, (run.nodes || []).length)),
           {label: "Updating hosts one at a time", detail: run.message || ""}) : ""}
         ${last ? UI.callout(last.status === "failed" ? "bad" : "info", `Last run ${last.status || "finished"}`, esc(last.message || "")) : ""}
+        ${check.running ? UI.progress(Math.round(check.done.length * 100 / Math.max(1, check.hosts.length)),
+          { label: "Reading every host again", detail: `${check.done.length} of ${check.hosts.length} · each refreshes its package lists first` }) : ""}
         ${osUpdatesHostsHtml(r)}
         <p class="dim small">${s.manage === "homestead" ? "Managed by Homestead, one host at a time" : "Managed by each host's automatic updates"}
           · ${esc(windowText)} · ${s.reboot === "never" ? "Rollout restarts: manual" : "Rollout restarts: when needed, drained first"}.
@@ -210,6 +226,18 @@ window.osUpdatesCardPaint = async () => {
     if ($("#settingsHostUpdates") !== card) return;
     card.innerHTML = header(UI.button("Try again", "osUpdatesCardPaint()")) + UI.callout("bad", "Host update status could not be read.", esc(e.message));
   }
+};
+
+// Every Ready host read again, package lists first (#371); the card
+// repaints as each one finishes.
+window.osUpdatesCheckAll = async () => {
+  const button = $("#osuCheckAll");
+  if (button) { button.disabled = true; button.textContent = "Checking hosts…"; }
+  try {
+    const r = await api("/api/os-updates/check", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+    toast(r.checking?.hosts?.length ? `Reading ${r.checking.hosts.length} host${r.checking.hosts.length === 1 ? "" : "s"} again` : "No host is ready to read", r.checking?.hosts?.length ? "ok" : "warn");
+  } catch (e) { toast(e.message, "bad"); }
+  osUpdatesCardPaint();
 };
 
 window.osUpdates = async (child = false) => {
