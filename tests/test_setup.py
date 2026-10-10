@@ -139,7 +139,7 @@ class UniFiSetupStateTests(unittest.TestCase):
             with self.subTest(saved=saved), mock.patch.object(ipam, "kget", return_value={"metadata": {"resourceVersion": "7"},
                     "data": {ipam.DATA_KEY: json.dumps(saved)}}) as read, \
                     mock.patch.object(ipam, "ksend") as write, mock.patch.object(ipam, "_unifi_get") as probe:
-                self.assertEqual({"done": expected, "applies": True}, self.server.setup_state("admin", "admin")["steps"]["unifi"])
+                self.assertEqual({"done": expected, "applies": True}, SETUP.state("admin", "admin")["steps"]["unifi"])
                 read.assert_called_once_with(f"/api/v1/namespaces/{ipam.NAMESPACE}/configmaps/{ipam._map()}")
                 write.assert_not_called(); probe.assert_not_called()
 
@@ -156,19 +156,19 @@ class UniFiSetupStateTests(unittest.TestCase):
         for saved, done in cases:
             with self.subTest(saved=saved), mock.patch.object(ipam, "kget", return_value={"metadata": {"resourceVersion": "7"},
                     "data": {ipam.DATA_KEY: json.dumps(saved)}}):
-                step = self.server.setup_state("admin", "admin")["steps"]["ipam"]
+                step = SETUP.state("admin", "admin")["steps"]["ipam"]
                 self.assertEqual(done, step["done"], step)
                 self.assertEqual(len(saved.get("subnets") or []), len(step["subnets"]))
 
     def test_missing_ipam_configuration_is_an_unfinished_step_without_an_error(self):
         with mock.patch.object(self.server.IPAM, "kget", side_effect=urllib.error.HTTPError("/configmap", 404, "Not found", None, None)):
-            self.assertEqual({"done": False, "applies": True}, self.server.setup_state("admin", "admin")["steps"]["unifi"])
+            self.assertEqual({"done": False, "applies": True}, SETUP.state("admin", "admin")["steps"]["unifi"])
 
     def test_unreadable_ipam_configuration_keeps_a_real_error_and_cannot_complete_the_step(self):
         for code in (403, 503):
             with self.subTest(code=code), mock.patch.object(self.server.IPAM, "kget",
                     side_effect=urllib.error.HTTPError("/configmap", code, "Unavailable", None, None)):
-                step = self.server.setup_state("admin", "admin")["steps"]["unifi"]
+                step = SETUP.state("admin", "admin")["steps"]["unifi"]
                 self.assertFalse(step["done"])
                 self.assertTrue(step["applies"])
                 self.assertIn(str(code), step["error"])
@@ -203,7 +203,7 @@ class NetworkSetupStateTests(unittest.TestCase):
         self.write = patch.start(); self.addCleanup(patch.stop)
 
     def state(self, role="admin"):
-        state = self.server.setup_state("person", role)
+        state = SETUP.state("person", role)
         self.write.assert_not_called()
         return state["steps"]
 

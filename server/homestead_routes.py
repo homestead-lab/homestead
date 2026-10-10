@@ -24,7 +24,9 @@ table, so a route and its role are written once.
 A route whose answer server.py keeps for a few seconds asks for it through
 `cached(key, seconds, fn)` here, which is server.py's own cache once bound:
 the same keys, so what server.py drops from it when something changes (the
-network picture after a VIP repair, say) is dropped for the route too.
+network picture after a VIP repair, say) is dropped for the route too. A
+route that changes something drops what it made stale with `forget(*keys)`,
+or every key that starts with a prefix with `forget_prefix(prefix)`.
 
 A module is listed in MODULES to be read. A route stays in server.py while it
 needs the handler itself - headers, streaming, a redirect.
@@ -35,6 +37,7 @@ import importlib
 MODULES = (
     "homestead_addons",
     "homestead_api_keys",
+    "homestead_app_settings",
     "homestead_auth",
     "homestead_baseline",
     "homestead_changes",
@@ -85,6 +88,7 @@ MODULES = (
     "homestead_revert",
     "homestead_self",
     "homestead_self_address",
+    "homestead_setup",
     "homestead_shares",
     "homestead_signins",
     "homestead_snapshot_delete",
@@ -104,11 +108,27 @@ Stream = collections.namedtuple("Stream", "chunks ctype filename size")
 
 _table = {}
 _cached = [lambda key, seconds, fn: fn()]
+_store = [{}]
 
 
-def bind(cached):
-    """server.py's cache, for routes whose answer it keeps a few seconds."""
+def bind(cached, store=None):
+    """server.py's cache, for routes whose answer it keeps a few seconds,
+    and the dict it keeps them in, for routes that make one stale."""
     _cached[0] = cached
+    if store is not None:
+        _store[0] = store
+
+
+def forget(*keys):
+    """Drop these keys from server.py's cache."""
+    for key in keys:
+        _store[0].pop(key, None)
+
+
+def forget_prefix(prefix):
+    """Drop every key from server.py's cache that starts with prefix."""
+    for key in [k for k in _store[0] if k.startswith(prefix)]:
+        _store[0].pop(key, None)
 
 
 def cached(key, seconds, fn):

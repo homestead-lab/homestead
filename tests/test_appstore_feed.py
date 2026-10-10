@@ -83,13 +83,13 @@ class FeedTests(unittest.TestCase):
 
 class SourceTests(unittest.TestCase):
     def test_the_catalogue_can_come_from_another_feed(self):
-        settings = server.validate_app_settings({"catalog_url": "https://mirror.example.com/feed.json"})
+        settings = server.APP_SETTINGS.validate({"catalog_url": "https://mirror.example.com/feed.json"})
         self.assertEqual("https://mirror.example.com/feed.json", settings["catalog_url"])
-        self.assertEqual("", server.validate_app_settings({})["catalog_url"], "blank means the public feed")
+        self.assertEqual("", server.APP_SETTINGS.validate({})["catalog_url"], "blank means the public feed")
         for bad in ("ftp://example.com/feed", "file:///etc/passwd", "https://user:pw@example.com/feed", "not a url"):
             with self.subTest(bad):
                 with self.assertRaises(ValueError):
-                    server.validate_app_settings({"catalog_url": bad})
+                    server.APP_SETTINGS.validate({"catalog_url": bad})
 
     def test_the_feed_in_use_is_the_one_set_else_the_default(self):
         with mock.patch.object(server, "get_app_settings", return_value={"catalog_url": ""}):
