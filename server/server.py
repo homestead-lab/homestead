@@ -8680,53 +8680,6 @@ FLEET_LISTS = {
 }
 
 
-def fleet_all(what, user, role):
-    """Gather tagged resource lists or Architecture graphs from linked clusters.
-
-    Each cluster is asked as the person asking, so it shows them what their
-    role lets them see there. A cluster that does not answer is left out and
-    named, rather than holding up the rest.
-    """
-    local = FLEET_LISTS[what]
-    view = FLEET.summary()
-    tags = {m["id"]: {"id": m["id"], "name": m["name"], "handle": m["handle"], "self": m["self"]}
-            for m in view["members"]}
-    results, missing = {}, []
-
-    def ask(m):
-        try:
-            result = FLEET.call(m, "GET", f"/api/{what}", timeout=12,
-                                user=str(user or "").split("@", 1)[0], role=role)
-            if what == "flow" and (not isinstance(result, dict) or
-                    any(not isinstance(result.get(key), list) for key in ("workloads", "volumes", "nodes", "vips"))):
-                raise ValueError("Architecture data is unavailable")
-            results[m["id"]] = result
-        except Exception as error:
-            missing.append({"id": m["id"], "name": m["name"], "error": str(error)[:200]})
-    threads = [threading.Thread(target=ask, args=(m,), daemon=True)
-               for m in view["members"] if not m["self"] and m["reachable"]]
-    missing += [{"id": m["id"], "name": m["name"], "error": m.get("error") or "not answering"}
-                for m in view["members"] if not m["self"] and not m["reachable"]]
-    for thread in threads:
-        thread.start()
-    try:
-        results[view["self"]] = local()
-    except Exception as error:
-        if what != "flow":
-            raise
-        missing.append({"id": view["self"], "name": tags[view["self"]]["name"], "error": str(error)[:200]})
-    for thread in threads:
-        thread.join(15)
-    rows = []
-    for m in view["members"]:
-        result = results.get(m["id"])
-        entries = [result] if what == "flow" and result is not None else result or []
-        for row in entries:
-            if isinstance(row, dict):
-                rows.append({**row, "site": tags[m["id"]]})
-    return ({"clusters": rows, "missing": missing} if what == "flow" else rows), missing
-
-
 # ---------------------------------------------------------------- HTTP
 _key_refusals = {}      # address -> when a refused API key was last written down
 
@@ -9328,7 +9281,8 @@ class H(HTTP.LimitedHandler):
                                         ("Location", "/")]
                 return self._send(302, {"ok": True})
             if p.startswith("/api/fleet/all/") and p.rsplit("/", 1)[-1] in FLEET_LISTS:
-                rows, missing = fleet_all(p.rsplit("/", 1)[-1], self.user, self.role)
+                what = p.rsplit("/", 1)[-1]
+                rows, missing = FLEET.gather(what, FLEET_LISTS[what], self.user, self.role)
                 if missing:
                     self._extra_headers.append(("X-Homestead-Fleet-Missing",
                                                 urllib.parse.quote(json.dumps(missing))))

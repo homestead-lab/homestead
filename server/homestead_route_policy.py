@@ -476,7 +476,7 @@ def role(path, method):
     if method == "GET" and __import__("re").fullmatch(r"/api/self/data/handoff/[a-f0-9]{24}(?:/view)?", path):
         return "viewer"
     # The combined lists and Architecture across linked clusters
-    # (FLEET_LISTS in server.py); each member applies its own roles.
+    # (FLEET_LISTS in server.py, gathered by homestead_fleet.gather); each member applies its own roles.
     if method == "GET" and path in ("/api/fleet/all/workloads", "/api/fleet/all/vms", "/api/fleet/all/nodes",
                                     "/api/fleet/all/volumes", "/api/fleet/all/flow"):
         return "viewer"
