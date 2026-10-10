@@ -12,7 +12,7 @@ import server
 
 class AppSettingsTests(unittest.TestCase):
     def test_defaults_are_complete(self):
-        settings = server.validate_app_settings({})
+        settings = server.APP_SETTINGS.validate({})
         self.assertEqual({"cpu", "memory", "disk", "temperature"}, set(settings["thresholds"]))
         self.assertLess(settings["thresholds"]["memory"]["warning"],
                         settings["thresholds"]["memory"]["critical"])
@@ -20,7 +20,7 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(1, settings["smart"]["pending_critical"])
 
     def test_partial_update_uses_defaults_for_other_metrics(self):
-        settings = server.validate_app_settings({
+        settings = server.APP_SETTINGS.validate({
             "thresholds": {"memory": {"warning": 76, "critical": 91}},
         })
         self.assertEqual({"warning": 76, "critical": 91}, settings["thresholds"]["memory"])
@@ -28,43 +28,43 @@ class AppSettingsTests(unittest.TestCase):
 
     def test_warning_must_be_below_critical(self):
         with self.assertRaisesRegex(ValueError, "memory thresholds"):
-            server.validate_app_settings({
+            server.APP_SETTINGS.validate({
                 "thresholds": {"memory": {"warning": 90, "critical": 90}},
             })
 
     def test_percentage_and_temperature_limits_differ(self):
-        settings = server.validate_app_settings({
+        settings = server.APP_SETTINGS.validate({
             "thresholds": {"temperature": {"warning": 92, "critical": 110}},
         })
         self.assertEqual(110, settings["thresholds"]["temperature"]["critical"])
         with self.assertRaisesRegex(ValueError, "disk thresholds"):
-            server.validate_app_settings({
+            server.APP_SETTINGS.validate({
                 "thresholds": {"disk": {"warning": 90, "critical": 110}},
             })
 
     def test_update_policy_validation(self):
-        settings = server.validate_app_settings({"updates": {
+        settings = server.APP_SETTINGS.validate({"updates": {
             "policy": "maintenance_window", "notify_available": False,
             "notify_failures": True,
             "maintenance": {"days": [0, 2, 4], "start": "23:30", "duration_minutes": 90},
         }})
         self.assertEqual([0, 2, 4], settings["updates"]["maintenance"]["days"])
         with self.assertRaisesRegex(ValueError, "update policy"):
-            server.validate_app_settings({"updates": {"policy": "automatic"}})
+            server.APP_SETTINGS.validate({"updates": {"policy": "automatic"}})
         with self.assertRaisesRegex(ValueError, "HH:MM"):
-            server.validate_app_settings({"updates": {
+            server.APP_SETTINGS.validate({"updates": {
                 "maintenance": {"start": "2am"}}})
 
     def test_release_channel_defaults_to_prod_and_only_admins_can_change_it(self):
-        self.assertEqual("prod", server.validate_app_settings({})["updates"]["channel"])
-        self.assertEqual("dev", server.validate_app_settings({"updates": {"channel": "dev"}})["updates"]["channel"])
+        self.assertEqual("prod", server.APP_SETTINGS.validate({})["updates"]["channel"])
+        self.assertEqual("dev", server.APP_SETTINGS.validate({"updates": {"channel": "dev"}})["updates"]["channel"])
         self.assertEqual("admin", server.needed_role("/api/image-updates/channel", "POST"))
         for channel in ("edge", "", None):
             with self.assertRaisesRegex(ValueError, "update channel"):
-                server.validate_app_settings({"updates": {"channel": channel}})
+                server.APP_SETTINGS.validate({"updates": {"channel": channel}})
 
     def test_maintenance_window_handles_midnight_and_approval(self):
-        settings = server.validate_app_settings({"updates": {
+        settings = server.APP_SETTINGS.validate({"updates": {
             "policy": "maintenance_window",
             "maintenance": {"days": [0], "start": "23:30", "duration_minutes": 90},
         }})
@@ -79,7 +79,7 @@ class AppSettingsTests(unittest.TestCase):
         self.assertTrue(server.enforce_update_policy({"approved": True}, settings, monday)["allows_install"])
 
     def test_notify_only_is_enforced_server_side(self):
-        settings = server.validate_app_settings({"updates": {"policy": "notify_only"}})
+        settings = server.APP_SETTINGS.validate({"updates": {"policy": "notify_only"}})
         with self.assertRaisesRegex(PermissionError, "notify only"):
             server.enforce_update_policy({"approved": True}, settings)
 
@@ -87,7 +87,7 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual("admin", server.needed_role("/api/images/cleanup", "POST"))
 
     def test_smart_policy_and_test_authorization(self):
-        settings = server.validate_app_settings({"smart": {
+        settings = server.APP_SETTINGS.validate({"smart": {
             "temperature": {"warning": 60, "critical": 72},
             "reallocated_warning": 4, "pending_critical": 2,
             "uncorrectable_critical": 3, "notify_failures": False,
@@ -95,7 +95,7 @@ class AppSettingsTests(unittest.TestCase):
         self.assertEqual(72, settings["smart"]["temperature"]["critical"])
         self.assertFalse(settings["smart"]["notify_failures"])
         with self.assertRaisesRegex(ValueError, "drive temperature"):
-            server.validate_app_settings({"smart": {
+            server.APP_SETTINGS.validate({"smart": {
                 "temperature": {"warning": 80, "critical": 70}}})
         self.assertEqual("viewer", server.needed_role("/api/node/smart", "GET"))
         self.assertEqual("admin", server.needed_role("/api/node/smart/test", "POST"))
@@ -109,18 +109,18 @@ class SiteNameTests(unittest.TestCase):
     """What to call this installation, shown where HOMELAB used to be."""
 
     def test_it_is_empty_until_someone_names_it(self):
-        self.assertEqual("", server.validate_app_settings({})["site_name"])
+        self.assertEqual("", server.APP_SETTINGS.validate({})["site_name"])
 
     def test_a_name_is_kept_and_trimmed(self):
         self.assertEqual("Loft rack",
-                         server.validate_app_settings({"site_name": "  Loft rack  "})["site_name"])
+                         server.APP_SETTINGS.validate({"site_name": "  Loft rack  "})["site_name"])
 
     def test_a_name_too_long_for_the_sidebar_is_refused(self):
         with self.assertRaisesRegex(ValueError, "40 characters"):
-            server.validate_app_settings({"site_name": "x" * 41})
+            server.APP_SETTINGS.validate({"site_name": "x" * 41})
 
     def test_it_can_be_cleared_again(self):
-        self.assertEqual("", server.validate_app_settings({"site_name": "   "})["site_name"])
+        self.assertEqual("", server.APP_SETTINGS.validate({"site_name": "   "})["site_name"])
 
 
 if __name__ == "__main__":

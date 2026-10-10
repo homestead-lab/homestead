@@ -240,10 +240,10 @@ class JobTests(Base):
 class SettingTests(unittest.TestCase):
     def test_off_by_default_and_only_true_or_false(self):
         import server
-        self.assertEqual({"enabled": False}, server.validate_app_settings({})["restore_tests"])
-        self.assertEqual({"enabled": True}, server.validate_app_settings({"restore_tests": {"enabled": True}})["restore_tests"])
+        self.assertEqual({"enabled": False}, server.APP_SETTINGS.validate({})["restore_tests"])
+        self.assertEqual({"enabled": True}, server.APP_SETTINGS.validate({"restore_tests": {"enabled": True}})["restore_tests"])
         with self.assertRaises(ValueError):
-            server.validate_app_settings({"restore_tests": {"enabled": "yes"}})
+            server.APP_SETTINGS.validate({"restore_tests": {"enabled": "yes"}})
 
 
 if __name__ == "__main__":

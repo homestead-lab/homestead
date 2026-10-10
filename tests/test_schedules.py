@@ -196,7 +196,7 @@ class PolicyTests(unittest.TestCase):
         import homestead_route_policy as POLICY
         self.assertEqual("viewer", POLICY.POLICY[("GET", "/api/power-schedules")])
         self.assertEqual("operator", POLICY.POLICY[("POST", "/api/power-schedules/set")])
-        self.assertEqual("operator", POLICY.POLICY[("POST", "/api/schedules")], "scheduled jobs keep theirs")
+        self.assertEqual("operator", POLICY.role("/api/schedules", "POST"), "scheduled jobs keep theirs")
 
 if __name__ == "__main__":
     unittest.main()

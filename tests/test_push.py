@@ -236,29 +236,29 @@ class DeliveryTests(unittest.TestCase):
         push.subscribe("me", {"endpoint": "https://fcm.googleapis.com/tablet"}, ["outage"])
         alerts.observe({"jobs": alerts.job_facts([{"id": "j", "status": "failed", "title": "Backup"}])}, 2)
 
-        phone = server.alerts_pending("me", "https://fcm.googleapis.com/phone")
+        phone = push.pending("me", "https://fcm.googleapis.com/phone")
         self.assertEqual(["Job failed: Backup"], [a["title"] for a in phone["alerts"]])
-        self.assertEqual([], server.alerts_pending("me", "https://fcm.googleapis.com/phone")["alerts"])
-        self.assertEqual([], server.alerts_pending("me", "https://fcm.googleapis.com/tablet")["alerts"])
+        self.assertEqual([], push.pending("me", "https://fcm.googleapis.com/phone")["alerts"])
+        self.assertEqual([], push.pending("me", "https://fcm.googleapis.com/tablet")["alerts"])
 
     def test_a_device_does_not_answer_for_another_user(self):
         push.subscribe("alice", {"endpoint": "https://fcm.googleapis.com/a"}, ["jobs"])
-        self.assertFalse(server.alerts_pending("bob", "https://fcm.googleapis.com/a")["known"])
+        self.assertFalse(push.pending("bob", "https://fcm.googleapis.com/a")["known"])
 
     def test_a_new_device_starts_from_now(self):
         alerts.observe({"jobs": []}, 1)
         alerts.observe({"jobs": alerts.job_facts([{"id": "j", "status": "failed", "title": "Old"}])}, 2)
         push.subscribe("me", {"endpoint": "https://fcm.googleapis.com/new"}, ["jobs"],
                        cursor=alerts.log(limit=0)["latest"])
-        self.assertEqual([], server.alerts_pending("me", "https://fcm.googleapis.com/new")["alerts"])
+        self.assertEqual([], push.pending("me", "https://fcm.googleapis.com/new")["alerts"])
 
     def test_a_test_reaches_only_the_device_that_asked(self):
         for name in ("one", "two"):
             push.subscribe("me", {"endpoint": f"https://fcm.googleapis.com/{name}"}, ["outage"])
         alerts.note({"key": "test:1", "category": "test", "title": "Test", "to": push.tag("https://fcm.googleapis.com/one")})
 
-        self.assertEqual(["Test"], [a["title"] for a in server.alerts_pending("me", "https://fcm.googleapis.com/one")["alerts"]])
-        self.assertEqual([], server.alerts_pending("me", "https://fcm.googleapis.com/two")["alerts"])
+        self.assertEqual(["Test"], [a["title"] for a in push.pending("me", "https://fcm.googleapis.com/one")["alerts"]])
+        self.assertEqual([], push.pending("me", "https://fcm.googleapis.com/two")["alerts"])
 
     def test_pushes_skip_devices_of_users_who_are_gone(self):
         push.subscribe("gone", {"endpoint": "https://fcm.googleapis.com/g"}, ["outage"])

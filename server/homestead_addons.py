@@ -24,6 +24,7 @@ import urllib.request
 import urllib.error
 
 import homestead_names as NAMES
+import homestead_routes
 import homestead_multus as MULTUS
 import homestead_pod_resources as RESOURCES
 
@@ -609,7 +610,36 @@ def set_kubevirt_emulation(on):
                        if enabled else "KVM is now required; VMs can run only on hardware-virtualisation nodes")}
 
 
+def _install(what, repair=False):
+    """Install an add-on (or repair Multus) and follow it in the job tray."""
+    def route(request):
+        import homestead_operations as OPS
+        result = {"longhorn": install_longhorn, "kubevirt": install_kubevirt,
+                  "multus": repair_multus if repair else install_multus,
+                  "kube-vip": install_kube_vip}[what](request.body)
+        homestead_routes.forget("helm", "platform")
+        title = {"longhorn": "Longhorn", "kubevirt": "KubeVirt", "kube-vip": "kube-vip"}.get(what, "Multus")
+        result["operation"] = OPS.start("multus" if what == "multus" else "helm", f"{'Repair' if repair else 'Install'} {title}",
+                                        {"kind": "HelmChart", "name": result["name"], "namespace": CONTROLLER_NS},
+                                        "/settings", {"namespace": CONTROLLER_NS, "name": result["job"],
+                                                      "action": "install"},
+                                        "Waiting for the Helm controller")
+        return result
+    return route
+
+
+def _emulation(request):
+    homestead_routes.forget("platform")
+    return set_kubevirt_emulation(bool(request.body.get("enabled")))
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
+    ("POST", "/api/addons/longhorn"): ("admin", _install("longhorn")),
+    ("POST", "/api/addons/kubevirt"): ("admin", _install("kubevirt")),
+    ("POST", "/api/addons/multus"): ("admin", _install("multus")),
+    ("POST", "/api/addons/multus/repair"): ("admin", _install("multus", repair=True)),
+    ("POST", "/api/addons/kube-vip"): ("admin", _install("kube-vip")),
+    ("POST", "/api/addons/kubevirt/emulation"): ("admin", _emulation),
     ("GET", "/api/addons"): ("viewer", lambda request: status()),
 }

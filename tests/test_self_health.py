@@ -51,21 +51,21 @@ class HeartbeatTests(unittest.TestCase):
         server.HEART["history"] = {"every": 30, "leader_only": True, "last_ok": time.time() - 3600, "error": "", "error_at": 0}
         with mock.patch.object(server, "kget", lambda path, **k: {}), \
                 mock.patch.object(server.LEADER, "is_leader", lambda: True), \
-                mock.patch.object(server, "homestead_replicas", lambda: {"desired": 1, "pods": []}), \
+                mock.patch.object(server.SELF_HEALTH, "replicas_now", lambda: {"desired": 1, "pods": []}), \
                 mock.patch.object(server, "node_temps", lambda: {}), \
                 mock.patch.object(server, "samba_state", lambda: {"installed": False}), \
                 mock.patch.object(server.OBJECTS, "status", lambda: {}):
-            health = server.self_health()
+            health = server.SELF_HEALTH.report()
         states = {row["name"]: row["state"] for row in health["loops"]}
         self.assertEqual({"sampler": "ok", "alerts": "ok", "hardware": "failing", "history": "late", "moves": "starting", "samba": "starting", "vips": "starting", "baseline": "starting", "host-fixes": "starting", "host-console": "starting", "storage-pending": "starting", "os-updates": "starting", "uptime": "starting", "auto-updates": "starting", "restore-tests": "starting", "forecast": "starting", "changes": "starting", "housekeeping": "starting", "schedules": "starting", "unifi": "starting"}, states)
         self.assertEqual("probe timed out", next(r for r in health["loops"] if r["name"] == "hardware")["error"])
         with mock.patch.object(server, "kget", lambda path, **k: {}), \
                 mock.patch.object(server.LEADER, "is_leader", lambda: False), \
-                mock.patch.object(server, "homestead_replicas", lambda: {}), \
+                mock.patch.object(server.SELF_HEALTH, "replicas_now", lambda: {}), \
                 mock.patch.object(server, "node_temps", lambda: {}), \
                 mock.patch.object(server, "samba_state", lambda: {}), \
                 mock.patch.object(server.OBJECTS, "status", lambda: {}):
-            standby = {r["name"]: r["state"] for r in server.self_health()["loops"]}
+            standby = {r["name"]: r["state"] for r in server.SELF_HEALTH.report()["loops"]}
         self.assertEqual("standby", standby["alerts"], "the leader's work is not this copy's to do")
 
 

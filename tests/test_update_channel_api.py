@@ -11,7 +11,7 @@ import server
 
 class ChannelAPITests(unittest.TestCase):
     def call(self, channel):
-        settings = server.validate_app_settings({"site_name": "Shed", "catalog_url": "https://example.com/feed",
+        settings = server.APP_SETTINGS.validate({"site_name": "Shed", "catalog_url": "https://example.com/feed",
             "updates": {"policy": "notify_only", "notify_failures": False}})
         current = {"metadata": {"resourceVersion": "7"}, "data": {"settings.json": json.dumps(settings)}}
         handler = object.__new__(server.H)

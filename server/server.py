@@ -14,6 +14,7 @@ from functools import wraps
 
 # Imported ahead of the feature modules because settings are read during start.
 import homestead_names as NAMES
+import homestead_app_settings as APP_SETTINGS
 import homestead_memory as MEMORY
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_vm_capacity as VM_CAPACITY
@@ -78,40 +79,7 @@ _self_data_barrier = None
 _self_data_boot_pending = False
 _self_data_boot_failed = False
 
-DEFAULT_APP_SETTINGS = {
-    "thresholds": {
-        "cpu": {"warning": 70, "critical": 88},
-        "memory": {"warning": 70, "critical": 88},
-        "disk": {"warning": 75, "critical": 90},
-        "temperature": {"warning": 70, "critical": 85},
-    },
-    "updates": {
-        "channel": "prod",
-        "policy": "approval_required",
-        "notify_available": True,
-        "notify_failures": True,
-        "maintenance": {"days": [0, 1, 2, 3, 4, 5, 6],
-                        "start": "02:00", "duration_minutes": 120},
-    },
-    "smart": {
-        "temperature": {"warning": 55, "critical": 65},
-        "reallocated_warning": 1,
-        "pending_critical": 1,
-        "uncorrectable_critical": 1,
-        "notify_failures": True,
-    },
-    # What to call this installation, shown under the Homestead wordmark. Blank
-    # means nothing is shown: better than a word that describes nobody's setup.
-    "site_name": "",
-    # Where the App Store reads its catalogue: any feed in the Community
-    # Applications format. Blank means the public Community Applications feed.
-    "catalog_url": "",
-    # Rebuild missing copies of detached volumes. Longhorn's own setting where
-    # it has one; this drives Homestead's stand-in where it has not.
-    "longhorn": {"offline_rebuilding": True},
-    # Monthly restore tests of every app with backups (homestead_restore_test).
-    "restore_tests": {"enabled": False},
-}
+DEFAULT_APP_SETTINGS = APP_SETTINGS.DEFAULTS
 
 SYS_NS = {
     "kube-system", "kube-public", "kube-node-lease", "harvester-system", "harvester-public",
@@ -148,6 +116,12 @@ def rate(key, value, now=None):
 # rather than only whether it answers.
 HEART = {}
 _heart_lock = threading.Lock()
+
+
+def _heartbeats():
+    """Each background task's last beat, copied under the lock."""
+    with _heart_lock:
+        return {k: dict(v) for k, v in HEART.items()}
 
 
 def beat(name, every, error=None, leader_only=False):
@@ -432,87 +406,6 @@ def parse_mem(s):
     except: return 0
 
 
-def validate_app_settings(value):
-    """Validate and normalize cluster-wide UI and workload-update policy."""
-    incoming = (value or {}).get("thresholds") or {}
-    out = json.loads(json.dumps(DEFAULT_APP_SETTINGS))
-    for metric, defaults in out["thresholds"].items():
-        supplied = incoming.get(metric) or {}
-        warning = int(supplied.get("warning", defaults["warning"]))
-        critical = int(supplied.get("critical", defaults["critical"]))
-        upper = 120 if metric == "temperature" else 100
-        if warning < 1 or critical > upper or warning >= critical:
-            unit = "°C" if metric == "temperature" else "%"
-            raise ValueError(f"{metric} thresholds must be ordered between 1 and {upper}{unit}")
-        out["thresholds"][metric] = {"warning": warning, "critical": critical}
-    smart_in = (value or {}).get("smart") or {}
-    smart_temp = smart_in.get("temperature") or out["smart"]["temperature"]
-    temp_warning = int(smart_temp.get("warning", out["smart"]["temperature"]["warning"]))
-    temp_critical = int(smart_temp.get("critical", out["smart"]["temperature"]["critical"]))
-    if temp_warning < 1 or temp_critical > 120 or temp_warning >= temp_critical:
-        raise ValueError("drive temperature thresholds must be ordered between 1 and 120°C")
-    out["smart"]["temperature"] = {"warning": temp_warning, "critical": temp_critical}
-    for key in ("reallocated_warning", "pending_critical", "uncorrectable_critical"):
-        count = int(smart_in.get(key, out["smart"][key]))
-        if count < 1 or count > 1_000_000:
-            raise ValueError(f"{key} must be between 1 and 1000000")
-        out["smart"][key] = count
-    notify = smart_in.get("notify_failures", out["smart"]["notify_failures"])
-    if not isinstance(notify, bool):
-        raise ValueError("SMART notify_failures must be true or false")
-    out["smart"]["notify_failures"] = notify
-    update_in = (value or {}).get("updates") or {}
-    channel = update_in.get("channel", out["updates"]["channel"])
-    if channel not in ("prod", "dev"):
-        raise ValueError("update channel must be prod or dev")
-    out["updates"]["channel"] = channel
-    policy = str(update_in.get("policy", out["updates"]["policy"]))
-    if policy not in ("notify_only", "approval_required", "maintenance_window"):
-        raise ValueError("update policy must be notify_only, approval_required, or maintenance_window")
-    out["updates"]["policy"] = policy
-    for key in ("notify_available", "notify_failures"):
-        supplied = update_in.get(key, out["updates"][key])
-        if not isinstance(supplied, bool):
-            raise ValueError(f"{key} must be true or false")
-        out["updates"][key] = supplied
-    maintenance = update_in.get("maintenance") or {}
-    start = str(maintenance.get("start", out["updates"]["maintenance"]["start"]))
-    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", start):
-        raise ValueError("maintenance start must use 24-hour HH:MM UTC")
-    try:
-        duration = int(maintenance.get("duration_minutes",
-                                       out["updates"]["maintenance"]["duration_minutes"]))
-        days = sorted(set(int(day) for day in maintenance.get(
-            "days", out["updates"]["maintenance"]["days"])))
-    except (TypeError, ValueError):
-        raise ValueError("maintenance days and duration are invalid")
-    if not days or any(day < 0 or day > 6 for day in days):
-        raise ValueError("maintenance days must contain values from 0 (Monday) to 6 (Sunday)")
-    if duration < 15 or duration > 1440:
-        raise ValueError("maintenance duration must be between 15 and 1440 minutes")
-    out["updates"]["maintenance"] = {
-        "days": days, "start": start, "duration_minutes": duration}
-    rebuild = ((value or {}).get("longhorn") or {}).get("offline_rebuilding", True)
-    if not isinstance(rebuild, bool):
-        raise ValueError("offline rebuilding must be true or false")
-    out["longhorn"] = {"offline_rebuilding": rebuild}
-    tests = ((value or {}).get("restore_tests") or {}).get("enabled", False)
-    if not isinstance(tests, bool):
-        raise ValueError("restore tests must be on or off")
-    out["restore_tests"] = {"enabled": tests}
-    site = str((value or {}).get("site_name", out["site_name"]) or "").strip()
-    if len(site) > 40:
-        raise ValueError("site name must be 40 characters or fewer")
-    out["site_name"] = site
-    url = str((value or {}).get("catalog_url", out["catalog_url"]) or "").strip()
-    if url:
-        parsed = urllib.parse.urlparse(url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or len(url) > 500:
-            raise ValueError("the catalogue address must be a plain http:// or https:// URL")
-    out["catalog_url"] = url
-    return out
-
-
 def update_policy_status(settings=None, now=None):
     """Return whether a manual managed update may start at the current UTC time."""
     update = (settings or get_app_settings()).get("updates") or DEFAULT_APP_SETTINGS["updates"]
@@ -560,17 +453,17 @@ def get_app_settings():
     try:
         cm = kget(f"/api/v1/namespaces/{DEFAULT_NS}/configmaps/{_settings_map()}")
         raw = json.loads((cm.get("data") or {}).get("settings.json", "{}"))
-        return validate_app_settings(raw)
+        return APP_SETTINGS.validate(raw)
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            return validate_app_settings({})
+            return APP_SETTINGS.validate({})
         raise
     except (ValueError, TypeError, json.JSONDecodeError):
-        return validate_app_settings({})
+        return APP_SETTINGS.validate({})
 
 
 def save_app_settings(value):
-    settings = validate_app_settings(value)
+    settings = APP_SETTINGS.validate(value)
     name = _settings_map()
     body = {"apiVersion": "v1", "kind": "ConfigMap",
             "metadata": {"name": name, "namespace": DEFAULT_NS,
@@ -612,6 +505,10 @@ def app_settings_payload():
                         "kubernetes": kube, "node_probe": PROBE.status(),
                         "permissions": SELF.status()}
     return settings
+
+
+# Looked up when asked, so a test that patches either is the one the route calls.
+APP_SETTINGS.bind(lambda: app_settings_payload(), lambda value: save_app_settings(value))
 
 
 # ---------------------------------------------------------------- collectors
@@ -5047,159 +4944,6 @@ def operation_item(operation_id):
     return next((item for item in OPS.list_operations() if item.get("id") == operation_id), None) if operation_id else None
 
 
-def welcome_state(role="admin"):
-    """The first-run checklist: the few settings a new cluster wants, each
-    with whether it is done. Shown to an admin until one says it is done."""
-    try:
-        with open(os.path.join(DATA_DIR, "welcome.json"), encoding="utf-8") as handle:
-            done = bool(json.load(handle).get("done"))
-    except (OSError, ValueError):
-        done = False
-    p = PLATFORM.detect() or {}
-    steps = {}
-    try:
-        address = SELF_ADDRESS.report(cached("network", 5, NETWORK.inventory))
-        steps["address"] = {"done": address["on_vip"], "url": address["url"], "shared_vip": address["shared_vip"],
-                            "vips": len(NETWORK.registered())}
-    except Exception as error:
-        steps["address"] = {"done": False, "error": str(error)[:160]}
-    steps["probe"] = {"done": bool(PROBE.installed())}
-    try:
-        steps["backups"] = {"done": bool(LH.backup_target().get("configured"))}
-    except Exception:
-        steps["backups"] = {"done": False}
-    steps["updates"] = {"applies": not p.get("harvester") and p.get("distribution") in ("k3s", "rke2"),
-                        "done": bool((OS_ROLLOUT.settings().get("schedule") or {}).get("enabled"))}
-    return {"show": role == "admin" and not done, "done": done, "harvester": bool(p.get("harvester")),
-            "load_balancer": p.get("load_balancer", ""), "steps": steps}
-
-
-TUNNEL_IMAGES = ("cloudflare/cloudflared", "tailscale/tailscale")
-
-
-def setup_state(user, role):
-    """The setup guide: each step and whether the cluster shows it done.
-    Looked at fresh each time; only skips are remembered. A person who is not
-    an admin gets their own steps alone."""
-    p = PLATFORM.detect() or {}
-    kube = not p.get("harvester") and p.get("distribution") in ("k3s", "rke2")
-    store = SETUP.load()
-    steps = {}
-
-    def step(name, compute):
-        try:
-            steps[name] = compute()
-        except Exception as error:
-            steps[name] = {"done": False, "applies": True, "error": str(error)[:160]}
-
-    if role == "admin":
-        def health():
-            ov = cached("ov", 5, get_overview)
-            issues = ov.get("health_issues") or []
-            return {"done": not issues, "applies": True, "summary": ov.get("health_summary", ""),
-                    "issues": [{k: x.get(k, "") for k in ("severity", "kind", "name", "reason")} for x in issues[:6]]}
-        step("health", health)
-
-        def quorum():
-            q = LC.quorum_report()
-            nodes = [{"name": n["name"], "ready": n.get("status") == "Ready", "roles": n.get("roles") or []}
-                     for n in cached("nodes", 5, get_nodes)]
-            servers = q["total"] or sum(1 for n in nodes if any(r in ("control-plane", "master", "etcd") for r in n["roles"])) or 1
-            return {"done": servers != 2, "applies": True, "servers": servers, "members": q["members"],
-                    "ready": q["ready"], "can_lose": q["can_lose"], "nodes": nodes}
-        step("quorum", quorum)
-
-        def clocks():
-            known = {n["name"]: (HOST_OS.stored(n["name"]) or {}).get("ntp") for n in cached("nodes", 5, get_nodes)}
-            told = {k: v for k, v in known.items() if v is not None}
-            return {"done": bool(told) and all(told.values()), "applies": kube and bool(told),
-                    "unsynced": sorted(k for k, v in told.items() if v is False)}
-        step("clocks", clocks)
-
-        def address():
-            report = SELF_ADDRESS.report(cached("network", 5, NETWORK.inventory))
-            return {"done": bool(report["on_vip"]), "applies": True, "url": report["url"], "service_url": report.get("service_url", ""),
-                    "shared_vip": report.get("shared_vip"), "vips": len(NETWORK.registered()),
-                    "load_balancer": p.get("load_balancer", ""), "harvester": bool(p.get("harvester"))}
-        step("address", address)
-
-        def lan():
-            networks = [row for row in vm_network_details(strict=True) if row["lan"]]
-            return {**SETUP.lan_state(networks),
-                    "networks": [{key: row[key] for key in ("name", "type", "vms", "containers")} for row in networks]}
-        step("lan", lan)
-
-        def https():
-            tunnels = sorted({w["name"] for w in cached("wl", 5, get_workloads)
-                              if any(t in image for image in w.get("images") or [] for t in TUNNEL_IMAGES)})
-            return {"done": bool(store.get("https_url")), "applies": True, "url": store.get("https_url", ""), "tunnels": tunnels}
-        step("https", https)
-        step("hostname", lambda: {"done": False, "applies": True})       # the browser can tell; see the page
-
-        def disks():
-            unused = [{"node": node, "device": r["device"], "size_gb": r.get("size_gb"), "kind": r.get("kind", "")}
-                      for node, rows in DISKS.inventory()["nodes"].items() for r in rows
-                      if r.get("role") == "unused" and not r.get("system")]
-            return {"done": not unused, "applies": bool(p.get("longhorn", True)) and not p.get("harvester"), "unused": unused[:12]}
-        step("disks", disks)
-
-        def storage():
-            classes = storage_classes()
-            default = next((c for c in classes if c.get("default")), None)
-            ready = sum(1 for n in cached("nodes", 5, get_nodes) if n.get("status") == "Ready")
-            target = max(1, min(3, ready))
-            copies = int(default["replicas"]) if default and str(default.get("replicas") or "").isdigit() else None
-            fits = bool(default) and default.get("provisioner") == "driver.longhorn.io" and copies is not None and copies == target
-            return {"done": fits, "applies": True, "default": (default or {}).get("name", ""), "copies": copies,
-                    "provisioner": (default or {}).get("provisioner", ""), "nodes": ready, "target": target,
-                    "candidates": [c["name"] for c in classes if c.get("provisioner") == "driver.longhorn.io"
-                                   and str(c.get("replicas")) == str(target) and not c.get("made_for") and not c.get("internal")]}
-        step("storage", storage)
-
-        def smb():
-            report = samba_state()
-            return {"done": bool(report.get("installed") and report.get("enabled") and not report.get("error")),
-                    "applies": True, "installed": bool(report.get("installed")), "enabled": bool(report.get("enabled")),
-                    "address": report.get("address", ""), "shares": report.get("shares", 0),
-                    **({"error": report["error"]} if report.get("error") else {})}
-        step("smb", smb)
-        step("backups", lambda: {"done": bool(LH.backup_target().get("configured")), "applies": True})
-        step("config", lambda: {"done": bool(store.get("config_backup_at")), "applies": True, "at": store.get("config_backup_at")})
-        step("osupdates", lambda: {"done": bool((OS_ROLLOUT.settings().get("schedule") or {}).get("enabled")), "applies": kube})
-        step("people", lambda: {"done": sum(1 for u in AUTH.list_users() if u["role"] == "admin") >= 2, "applies": True,
-                                "users": len(AUTH.list_users())})
-        ipam_read = {}
-
-        def ipam_data():
-            # One read of the IP-address record for both its steps.
-            if "data" not in ipam_read:
-                ipam_read["data"] = IPAM.load()[0]
-            return ipam_read["data"]
-        step("unifi", lambda: {"done": bool((ipam_data().get("unifi") or {}).get("url")), "applies": True})
-
-        def ipam():
-            # IP addresses: subnets known, each scanned, and - with UniFi
-            # connected - its devices and reservations brought in.
-            data = ipam_data()
-            unifi = data.get("unifi") or {}
-            subnets = [{"id": s.get("id"), "cidr": s.get("cidr"), "name": s.get("name", ""),
-                        "scanned": int((data.get("scans", {}).get(s.get("cidr")) or {}).get("at") or 0)}
-                       for s in data.get("subnets") or []]
-            connected = bool(unifi.get("url") and unifi.get("has_key"))
-            synced = int(unifi.get("last_sync") or 0)
-            return {"done": bool(subnets) and all(s["scanned"] for s in subnets) and (bool(synced) or not connected),
-                    "applies": True, "subnets": subnets, "unifi": connected, "synced": synced}
-        step("ipam", ipam)
-        step("unraid", lambda: {"done": bool(IMP.list_sources()), "applies": True})
-        step("homeassistant", lambda: {"done": any(not k["expired"] for k in API_KEYS.list_keys()), "applies": True})
-        step("linked", lambda: {"done": bool(FLEET.summary().get("linked")), "applies": True})
-        step("starter", lambda: {"done": any(not w.get("homestead") for w in cached("wl", 5, get_workloads)), "applies": True})
-        step("console", lambda: {"done": bool(HOST_CONSOLE.inventory().get("enabled")), "applies": kube})
-    step("notifications", lambda: {"done": bool(PUSH.devices(user)), "applies": True})
-    return {"steps": steps, "skips": SETUP.skips(user), "hidden": SETUP.hidden(user), "completed": SETUP.completed(user),
-            "opened": SETUP.opened(), "admin": role == "admin", "personal": list(SETUP.PERSONAL)}
-
-
 def own_node():
     """The node this Homestead pod runs on."""
     try:
@@ -6602,7 +6346,7 @@ import homestead_nfs as NFS
 import homestead_networking as NETWORK
 import homestead_firewall as FIREWALL
 import homestead_routes as MODULE_ROUTES
-MODULE_ROUTES.bind(lambda key, seconds, fn: cached(key, seconds, fn))
+MODULE_ROUTES.bind(lambda key, seconds, fn: cached(key, seconds, fn), _cache)
 import homestead_cluster as CLUSTER
 import homestead_probe as PROBE
 import homestead_objectstore as OBJECTS
@@ -6847,6 +6591,13 @@ def storage_helper_admission(item, manifest):
     return copy_admission(manifest)
 
 
+def _bind_recovery():
+    """The job tray's recovery reviews read through server.py's reader, so a
+    test that patches it is the one they use."""
+    OPS.bind_recovery(lambda *a, **k: kget(*a, **k), lambda *a: storage_helper_admission(*a),
+                      lambda *a: storage_restart_admission(*a), lambda: storage_runtime_check())
+
+
 def storage_runtime_check():
     try:
         return STORAGE_RUNTIME.require(OPS, kget, SELF.NS, SELF.POD, NAMES.BRAND, HOMESTEAD_VERSION, DATA_DIR)
@@ -6854,6 +6605,9 @@ def storage_runtime_check():
         raise
     except Exception:
         raise STORAGE_WORKFLOW.JOURNAL.Held("Homestead replica compatibility could not be verified; restore cluster and shared-data access before moving storage") from None
+
+
+_bind_recovery()
 
 
 def _storage_runtime_loop():
@@ -6916,6 +6670,7 @@ import homestead_root_guard as ROOT_GUARD
 import homestead_os_rollout as OS_ROLLOUT
 import homestead_passthrough as PASSTHROUGH
 import homestead_self_address as SELF_ADDRESS
+import homestead_self_health as SELF_HEALTH
 import homestead_host_bridge as HOST_BRIDGE
 import homestead_host_bonds as HOST_BONDS
 import homestead_manifests as MANIFESTS
@@ -7028,10 +6783,10 @@ NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR, (S
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 PORTS.bind(DATA_DIR)
 UPTIME.bind(DATA_DIR)
-HOUSEKEEPING.bind(DATA_DIR)
+HOUSEKEEPING.bind(DATA_DIR, tidy=lambda: housekeeping_tidy())
 SCHEDULES.bind(DATA_DIR)
-OUTAGE.bind(DATA_DIR)
-CHANGES.bind(DATA_DIR)
+OUTAGE.bind(DATA_DIR, set_actions=lambda b: set_outage_actions(b), test_webhook=lambda b: test_outage_webhook(b))
+CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k: ksend(*a, **k))
 FORECAST.bind(DATA_DIR)
 
 
@@ -7069,7 +6824,8 @@ def ports_report():
 OPS.RESOLVERS["host-os"] = HOST_OS.status
 ROOT_GUARD.bind(kget, ksend, PLATFORM.detect, node_temps, DATA_DIR)
 PASSTHROUGH.bind(kget, ksend, HOSTRUN, PLATFORM.detect, DATA_DIR)
-SELF_ADDRESS.bind(kget, NETWORK, OBJECTS, SELF.NS, os.environ.get("PORT", "8080"), SMB_NAMESPACE, SMB_NAME)
+SELF_ADDRESS.bind(kget, NETWORK, OBJECTS, SELF.NS, os.environ.get("PORT", "8080"), SMB_NAMESPACE, SMB_NAME,
+                  follow_fleet=lambda: _follow_fleet_address())
 
 
 def installer_vip(vip):
@@ -7418,26 +7174,6 @@ def push_alerts(fresh):
                      urgency="high" if urgent else "normal")
 
 
-def alerts_pending(user, endpoint, confirm_delivery=False):
-    """What a device has not been shown yet, for its service worker after a push."""
-    row = PUSH.mine(user, endpoint) if endpoint else None
-    wanted = set(row["categories"]) if row else set()
-    active = len([a for a in ALERTS.active(user=user) if a.get("announced", 0) > 0 and not a["acknowledged"]])
-    if not row:
-        return {"alerts": [], "active": active, "known": False}
-    got = ALERTS.log(after=row.get("cursor", 0), categories=wanted | {"test"}, limit=300)
-    mine = PUSH.tag(endpoint)
-    alerts = [a for a in got["alerts"] if a["category"] != "test" or a.get("to") == mine]
-    # Replace old raises with their latest outcome before displaying a backlog.
-    latest = {a["key"]: a for a in alerts}
-    current = {a["key"]: a for a in ALERTS.active()}
-    alerts = ALERTS.for_user([a for a in latest.values() if a.get("event") or a["category"] == "test"
-                             or a["phase"] == "resolved" or a["id"] == current.get(a["key"], {}).get("announced")], user)
-    if not confirm_delivery:  # Compatibility with already installed workers.
-        PUSH.advance(user, endpoint, got["latest"])
-    return {"alerts": alerts, "active": active, "known": True, "latest": got["latest"]}
-
-
 def _alerts_loop():
     while True:
         # One replica raises alerts, or every notification arrives twice.
@@ -7777,9 +7513,6 @@ def mqtt_snapshot():
             "nodes": nodes}
 
 
-MAX_REPLICAS = 3
-
-
 def homestead_data_volume(dep=None):
     """Homestead's data claim, and whether pods on several nodes can mount it.
 
@@ -7828,17 +7561,6 @@ def homestead_data_volume(dep=None):
             "shareable": not reason, "reason": reason, "candidates": shared, "classes": classes, "kept": kept}
 
 
-ROLLING = {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": 1, "maxUnavailable": 0}}
-
-
-def own_strategy(shareable):
-    """How Homestead replaces itself. Rolling - the new copy up before the old
-    one goes - only when every node can mount the data volume; otherwise the
-    two overlap on one volume, and on a migratable class Longhorn takes that
-    for a VM migration and refuses the mount ("invalid controller count")."""
-    return dict(ROLLING) if shareable else {"type": "Recreate"}
-
-
 def fit_own_strategy():
     """An update from this page changes only the image, so a Deployment that
     was once set to roll keeps rolling. Put right at start-up what the data
@@ -7847,7 +7569,7 @@ def fit_own_strategy():
     try:
         ns, name = SELF.NS, NAMES.BRAND
         dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-        want = own_strategy(homestead_data_volume(dep)["shareable"])
+        want = SELF_HEALTH.own_strategy(homestead_data_volume(dep)["shareable"])
         if (dep["spec"].get("strategy") or {}).get("type") != want["type"]:
             ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
                   {"spec": {"strategy": {"type": want["type"], "rollingUpdate": want.get("rollingUpdate")}}},
@@ -8117,10 +7839,6 @@ def _data_move_status(item):
 
 
 OPS.RESOLVERS["self-data-move"] = _data_move_status
-
-
-LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
-              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "changes": "Change history", "housekeeping": "Data housekeeping", "schedules": "Schedules", "unifi": "UniFi sync"}
 
 
 def samba_state():
@@ -8425,136 +8143,10 @@ def set_nfs_export(name, clients, read_only=True):
                 "detail": f"NFS export for {name} {'set' if clients else 'removed'}; its PVC was kept"}
 
 
-def self_health():
-    """Homestead's own health: the API it depends on, its copies and leader,
-    each background task, the node probe, Samba and its permissions."""
-    started = time.time()
-    try:
-        kget("/version")
-        api = {"ok": True, "ms": int((time.time() - started) * 1000)}
-    except Exception as error:
-        api = {"ok": False, "ms": int((time.time() - started) * 1000), "error": str(error)[:160]}
-    leading = LEADER.is_leader()
-    now = time.time()
-    loops = []
-    with _heart_lock:
-        rows = {k: dict(v) for k, v in HEART.items()}
-    for name, word in LOOP_WORDS.items():
-        row = rows.get(name)
-        if not row:
-            state = "standby" if name != "sampler" and not leading else "starting"
-        elif row["leader_only"] and not leading:
-            state = "standby"
-        elif row["error"] and row["error_at"] >= row["last_ok"]:
-            state = "failing"
-        elif now - row["last_ok"] > max(3 * row["every"], 120):
-            state = "late"
-        else:
-            state = "ok"
-        loops.append({"name": name, "label": word, "state": state,
-                      "last_ok": int(row["last_ok"]) if row and row["last_ok"] else 0,
-                      "error": (row or {}).get("error", ""), "every": (row or {}).get("every", 0)})
-    try:
-        replicas = homestead_replicas()
-    except Exception as error:
-        replicas = {"error": str(error)[:160]}
-    probe = dict(PROBE.status())
-    try:
-        ds = kget(f"/apis/apps/v1/namespaces/{DEFAULT_NS}/daemonsets/{NAMES.NODEPROBE}")
-        st = ds.get("status") or {}
-        probe.update(installed=True, desired=int(st.get("desiredNumberScheduled", 0) or 0),
-                     ready=int(st.get("numberReady", 0) or 0))
-    except Exception:
-        probe.update(installed=False, desired=0, ready=0)
-    try:
-        temps = node_temps()
-        probe["reporting"] = len(temps)
-        probe["smart"] = sum(1 for t in temps.values() if (t.get("smart_helper") or {}).get("available"))
-    except Exception:
-        probe["reporting"] = probe["smart"] = 0
-    try:
-        samba = samba_state()
-    except Exception as error:
-        samba = {"error": str(error)[:160]}
-    try:
-        backups = OBJECTS.status()
-    except Exception:
-        backups = {}
-    mqtt = {}
-    try:
-        mqtt = dict(MQTT.STATUS)
-    except Exception:
-        pass
-    # Homestead's shared address, and any app, on the cluster's own address:
-    # host joining (RKE2's 9345) and the dashboard answer there.
-    try:
-        network = cached("network", 5, NETWORK.inventory)
-        addresses = {"lb_ip": LB_IP, "problem": (network.get("shared_vip") or {}).get("problem", ""),
-                     "clashes": network.get("platform_clashes") or [],
-                     "platform": sorted(network.get("platform_addresses") or {})}
-    except Exception as error:
-        addresses = {"lb_ip": LB_IP, "error": str(error)[:160]}
-    return {"version": HOMESTEAD_VERSION, "addresses": addresses, "api": api, "leader": leading, "identity": LEADER.IDENTITY,
-            "replicas": replicas, "loops": loops, "probe": probe, "samba": samba,
-            "permissions": dict(SELF.LAST), "backups": {k: backups.get(k) for k in ("deployed", "ready", "endpoint")},
-            "mqtt": {k: mqtt.get(k) for k in ("state", "detail", "error", "last_publish")}}
-
-
-def homestead_replicas():
-    """How many Homesteads run, where, and which one leads."""
-    ns, name = SELF.NS, NAMES.BRAND
-    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    selector = ",".join(f"{k}={v}" for k, v in sorted(((dep["spec"].get("selector") or {}).get("matchLabels") or {}).items()))
-    pods = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector={urllib.parse.quote(selector, safe='')}").get("items", [])
-    try:
-        holder = (kget(f"/apis/coordination.k8s.io/v1/namespaces/{ns}/leases/{LEADER.NAME}").get("spec") or {}).get("holderIdentity", "")
-    except Exception:
-        holder = ""
-    rows = []
-    for pod in pods:
-        conditions = {c.get("type"): c.get("status") for c in (pod.get("status") or {}).get("conditions") or []}
-        rows.append({"name": pod["metadata"]["name"], "node": (pod.get("spec") or {}).get("nodeName", ""),
-                     "ready": conditions.get("Ready") == "True", "leader": pod["metadata"]["name"] == holder,
-                     "this": pod["metadata"]["name"] == LEADER.IDENTITY,
-                     "terminating": bool(pod["metadata"].get("deletionTimestamp"))})
-    nodes = len({row["node"] for row in rows if row["node"] and row["ready"]})
-    try:
-        data = homestead_data_volume(dep)
-    except Exception as error:
-        data = {"pvc": "", "shareable": False, "reason": f"could not read the data claim: {str(error)[:120]}", "candidates": []}
-    return {"desired": int(dep["spec"].get("replicas", 1) or 0), "pods": sorted(rows, key=lambda row: row["name"]),
-            "leader": holder, "spread_nodes": nodes, "max": MAX_REPLICAS, "data": data}
-
-
-def set_homestead_replicas(count):
-    """Runs this many Homesteads, spread over different nodes where it can.
-
-    More than one means a node failure leaves another already serving: the
-    Service drops the dead one and the leader lease moves within seconds.
-    Rolling updates replace one at a time, so an update never takes it down."""
-    count = int(count)
-    if not 1 <= count <= MAX_REPLICAS:
-        raise ValueError(f"run between 1 and {MAX_REPLICAS} copies of Homestead")
-    if count > 1:
-        data = homestead_data_volume()
-        if not data["shareable"]:
-            raise ValueError(f"{data['reason']}. Move Homestead's data to a shareable volume first (Settings, Redundancy).")
-    ns, name = SELF.NS, NAMES.BRAND
-    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    dep["spec"]["replicas"] = count
-    dep["spec"]["strategy"] = own_strategy(homestead_data_volume(dep)["shareable"])
-    labels = (dep["spec"].get("selector") or {}).get("matchLabels") or {"app": name}
-    spec = dep["spec"]["template"]["spec"]
-    affinity = spec.setdefault("affinity", {})
-    spread = {"weight": 100, "podAffinityTerm": {"labelSelector": {"matchLabels": dict(labels)},
-                                                 "topologyKey": "kubernetes.io/hostname"}}
-    anti = affinity.setdefault("podAntiAffinity", {})
-    preferred = [term for term in anti.get("preferredDuringSchedulingIgnoredDuringExecution") or [] if term != spread]
-    anti["preferredDuringSchedulingIgnoredDuringExecution"] = preferred + [spread]
-    ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
-    return {"ok": True, "desired": count,
-            "detail": f"Homestead runs as {count} cop{'ies' if count != 1 else 'y'}" +
-                      (", spread over different nodes" if count > 1 else "")}
+# Looked up when asked, so a test that patches one is the one used.
+SELF_HEALTH.bind(lambda *a, **k: kget(*a, **k), lambda *a, **k: ksend(*a, **k),
+                 lambda dep=None: homestead_data_volume(dep), _heartbeats,
+                 lambda: node_temps(), lambda: samba_state(), DEFAULT_NS, LB_IP, HOMESTEAD_VERSION)
 # Join plans are gone; a job one left in Activity says so rather than erroring.
 OPS.RESOLVERS["onboard"] = lambda item: ("cancelled", item.get("progress", 0),
                                          "Join plans were replaced by the install guide")
@@ -8581,7 +8173,10 @@ import homestead_api_keys as API_KEYS
 import homestead_api_v1 as API_V1
 import homestead_setup as SETUP
 API_KEYS.bind(DATA_DIR)
-SETUP.bind(DATA_DIR)
+# Looked up when asked, so a test that patches one is the one the guide reads.
+SETUP.bind(DATA_DIR, overview=lambda: get_overview(), nodes=lambda: get_nodes(), workloads=lambda: get_workloads(),
+           vm_networks=lambda: vm_network_details(strict=True), storage_classes=lambda: storage_classes(),
+           samba=lambda: samba_state())
 API_V1.bind(nodes=lambda: cached("nodes", 5, get_nodes), workloads=lambda: cached("wl", 5, get_workloads),
             vms=lambda: cached("vms", 5, VMS.list_vms),
             alerts=lambda: [a for a in ALERTS.active() if a.get("announced", 0) > 0],
@@ -9083,53 +8678,6 @@ FLEET_LISTS = {
     "volumes": lambda: cached("vol", 8, get_volumes),
     "flow": lambda: cached("flow2", 8, get_flow2),
 }
-
-
-def fleet_all(what, user, role):
-    """Gather tagged resource lists or Architecture graphs from linked clusters.
-
-    Each cluster is asked as the person asking, so it shows them what their
-    role lets them see there. A cluster that does not answer is left out and
-    named, rather than holding up the rest.
-    """
-    local = FLEET_LISTS[what]
-    view = FLEET.summary()
-    tags = {m["id"]: {"id": m["id"], "name": m["name"], "handle": m["handle"], "self": m["self"]}
-            for m in view["members"]}
-    results, missing = {}, []
-
-    def ask(m):
-        try:
-            result = FLEET.call(m, "GET", f"/api/{what}", timeout=12,
-                                user=str(user or "").split("@", 1)[0], role=role)
-            if what == "flow" and (not isinstance(result, dict) or
-                    any(not isinstance(result.get(key), list) for key in ("workloads", "volumes", "nodes", "vips"))):
-                raise ValueError("Architecture data is unavailable")
-            results[m["id"]] = result
-        except Exception as error:
-            missing.append({"id": m["id"], "name": m["name"], "error": str(error)[:200]})
-    threads = [threading.Thread(target=ask, args=(m,), daemon=True)
-               for m in view["members"] if not m["self"] and m["reachable"]]
-    missing += [{"id": m["id"], "name": m["name"], "error": m.get("error") or "not answering"}
-                for m in view["members"] if not m["self"] and not m["reachable"]]
-    for thread in threads:
-        thread.start()
-    try:
-        results[view["self"]] = local()
-    except Exception as error:
-        if what != "flow":
-            raise
-        missing.append({"id": view["self"], "name": tags[view["self"]]["name"], "error": str(error)[:200]})
-    for thread in threads:
-        thread.join(15)
-    rows = []
-    for m in view["members"]:
-        result = results.get(m["id"])
-        entries = [result] if what == "flow" and result is not None else result or []
-        for row in entries:
-            if isinstance(row, dict):
-                rows.append({**row, "site": tags[m["id"]]})
-    return ({"clusters": rows, "missing": missing} if what == "flow" else rows), missing
 
 
 # ---------------------------------------------------------------- HTTP
@@ -9703,10 +9251,6 @@ class H(HTTP.LimitedHandler):
             if is_icon_png(p):
                 return self._file(f"{WEBROOT}/icons/{os.path.basename(p)}", "image/png",
                                   cache="public, max-age=86400")
-            if p == "/api/alerts":
-                return self._send(200, {"active": [a for a in ALERTS.active(user=self.user) if a.get("announced", 0) > 0],
-                                        "log": [a for a in ALERTS.log(limit=30)["alerts"] if a["category"] != "test"],
-                                        "devices": PUSH.devices(self.user)})
             if p == "/style.css":
                 return self._file(f"{WEBROOT}/style.css", "text/css")
             if p == "/healthz":
@@ -9737,18 +9281,14 @@ class H(HTTP.LimitedHandler):
                                         ("Location", "/")]
                 return self._send(302, {"ok": True})
             if p.startswith("/api/fleet/all/") and p.rsplit("/", 1)[-1] in FLEET_LISTS:
-                rows, missing = fleet_all(p.rsplit("/", 1)[-1], self.user, self.role)
+                what = p.rsplit("/", 1)[-1]
+                rows, missing = FLEET.gather(what, FLEET_LISTS[what], self.user, self.role)
                 if missing:
                     self._extra_headers.append(("X-Homestead-Fleet-Missing",
                                                 urllib.parse.quote(json.dumps(missing))))
                 return self._send(200, rows)
             if p == "/api/auth/preferences/dashboard":
                 return self._send(200, AUTH.dashboard_preferences(self.user))
-            if p == "/api/setup":
-                # Many checks: kept for each person half a minute.
-                return self._send(200, cached(f"setup:{self.role}:{self.user}", 30, lambda: setup_state(self.user, self.role)))
-            if p == "/api/settings":
-                return self._send(200, app_settings_payload())
             if p == "/api/overview":
                 return self._send(200, cached("ov", 5, get_overview))
             if p == "/api/nodes":
@@ -9766,8 +9306,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("wl", 5, get_workloads))
             if p == "/api/portal/status":
                 return self._send(200, portal_status(force=(q.get("force") or [""])[0] == "1"))
-            if p == "/api/self/replicas":
-                return self._send(200, homestead_replicas())
             if p == "/api/self/data/prepare":
                 try:
                     return self._send(200, self_data_preparation_state())
@@ -9842,8 +9380,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("node:" + (q.get("name") or [""])[0], 5,
                                   lambda: next((n for n in get_nodes()
                                                 if n["name"] == (q.get("name") or [""])[0]), {})))
-            if p == "/api/welcome":
-                return self._send(200, welcome_state(self.role))
             if p == "/api/node/smart":
                 node = (q.get("node") or [""])[0]
                 disk = (q.get("disk") or [""])[0]
@@ -9934,8 +9470,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, selectable_storage_classes(classes))
             if p == "/api/storage/classes":
                 return self._send(200, storage_class_inventory())
-            if p == "/api/self/health":
-                return self._send(200, self_health())
             if p == "/api/storage/v2":
                 return self._send(200, v2_engine_status())
             if p == "/api/pvcs":
@@ -10095,19 +9629,6 @@ class H(HTTP.LimitedHandler):
                 made = API_KEYS.create(b.get("name"), b.get("scopes"), b.get("ttl_seconds"), b.get("networks"), self.user)
                 self._signin("key-added", self.user, detail=f"{made['key']['name']}: {', '.join(made['key']['scopes'])}")
                 return self._send(200, {"ok": True, **made})
-            if p.startswith("/api/setup/"):
-                for key in [k for k in _cache if k.startswith("setup:")]:
-                    _cache.pop(key, None)
-            if p == "/api/setup/skip":
-                return self._send(200, SETUP.skip(str(b.get("step") or ""), bool(b.get("skip", True)), self.user, self.role == "admin"))
-            if p == "/api/setup/hide":
-                return self._send(200, SETUP.hide(self.user, b.get("hidden", True)))
-            if p == "/api/setup/complete":
-                return self._send(200, SETUP.complete(self.user, b.get("completed", True)))
-            if p == "/api/setup/opened":
-                return self._send(200, SETUP.mark_opened())
-            if p == "/api/setup/https-check":
-                return self._send(200, SETUP.https_check(b.get("url")))
             if p == "/api/auth/keys/revoke":
                 if self._fleet_from:
                     return self._send(403, {"error": "revoke API keys in this Homestead's own app"})
@@ -10157,23 +9678,10 @@ class H(HTTP.LimitedHandler):
                 self._signin("signout", self.user)
                 self._set_cookie("", clear=True)
                 return self._send(200, {"ok": True})
-            if p == "/api/push/subscribe":
-                try:
-                    return self._send(200, PUSH.subscribe(
-                        self.user, b.get("subscription"), b.get("categories"), b.get("device", ""),
-                        b.get("replaces", ""), cursor=ALERTS.log(limit=0)["latest"]))
-                except ValueError as error:
-                    return self._send(400, {"error": str(error)})
             if p == "/api/namespaces/create":
                 return self._move(lambda: NSMOD.create(b.get("name")))
             if p == "/api/namespaces/delete":
                 return self._move(lambda: NSMOD.delete(b.get("name"), str(b.get("confirm") or "")))
-            if p == "/api/push/status":
-                row = PUSH.mine(self.user, str(b.get("endpoint") or ""))
-                return self._send(200, {"known": bool(row), "tag": PUSH.tag(row["endpoint"]) if row else "",
-                                        "categories": (row or {}).get("categories", []),
-                                        "last_ok": (row or {}).get("last_ok", 0),
-                                        "failures": (row or {}).get("failures", 0)})
             if p == "/api/push/test":
                 endpoint = str(b.get("endpoint") or "")
                 if not PUSH.mine(self.user, endpoint):
@@ -10188,8 +9696,6 @@ class H(HTTP.LimitedHandler):
                     return self._send(502, {"error": f"the push service refused the push (HTTP {status})"
                                             if status else "the push service could not be reached"})
                 return self._send(200, {"ok": True})
-            if p == "/api/alerts/pending":
-                return self._send(200, alerts_pending(self.user, str(b.get("endpoint") or ""), b.get("confirm_delivery") is True))
             if p == "/api/alerts/acknowledge":
                 try:
                     return self._send(200, ALERTS.acknowledge(self.user, b.get("key"), b.get("version"), b.get("undo") is True))
@@ -10237,8 +9743,6 @@ class H(HTTP.LimitedHandler):
                 self._signin("signout-everywhere", self.user)
                 self._set_cookie("", clear=True)
                 return self._send(200, {"ok": True})
-            if p == "/api/settings":
-                return self._send(200, {"ok": True, **save_app_settings(b)})
             if p == "/api/deploy":
                 return self._send(200, reviewed_deploy(b))
             if p == "/api/compose/parse":
@@ -10247,8 +9751,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, compose_preview(b))
             if p == "/api/compose/apply":
                 return self._send(200, compose_apply(b))
-            if p == "/api/self/replicas":
-                return self._send(200, set_homestead_replicas(b.get("replicas")))
             if p == "/api/self/data/abandon":
                 try:
                     return self._send(200, abandon_self_data_preparation(b))
@@ -10309,19 +9811,6 @@ class H(HTTP.LimitedHandler):
                                       "Harvester checks the cluster, then prepares each node")
                 return self._send(200, {"ok": True, "upgrade": name, "operation": operation,
                                         "detail": f"Harvester is upgrading to {version}"})
-            if p in ("/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/multus", "/api/addons/multus/repair", "/api/addons/kube-vip"):
-                what = "multus" if p.endswith("/repair") else p.rsplit("/", 1)[1]
-                result = {"longhorn": ADDONS.install_longhorn, "kubevirt": ADDONS.install_kubevirt,
-                          "multus": ADDONS.repair_multus if p.endswith("/repair") else ADDONS.install_multus,
-                          "kube-vip": ADDONS.install_kube_vip}[what](b)
-                for key in ("helm", "platform"):
-                    _cache.pop(key, None)
-                result["operation"] = OPS.start("multus" if what == "multus" else "helm", f"{'Repair' if p.endswith('/repair') else 'Install'} {({'longhorn': 'Longhorn', 'kubevirt': 'KubeVirt', 'kube-vip': 'kube-vip'}).get(what, 'Multus')}",
-                                                {"kind": "HelmChart", "name": result["name"], "namespace": ADDONS.CONTROLLER_NS},
-                                                "/settings", {"namespace": ADDONS.CONTROLLER_NS, "name": result["job"],
-                                                              "action": "install"},
-                                                "Waiting for the Helm controller")
-                return self._send(200, result)
             if p == "/api/vm/isos/prepare":
                 result = ISOS.prepare(str(b.get("share") or ""), str(b.get("path") or ""))
                 _cache.pop("vms", None)
@@ -10339,9 +9828,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, {"ok": not failed, "results": results,
                                         "detail": (f"Installing {' and '.join(done)}" if done else "All required components are installed")
                                                   + (f". Failed: {'; '.join(failed)}" if failed else "")})
-            if p == "/api/addons/kubevirt/emulation":
-                _cache.pop("platform", None)
-                return self._send(200, ADDONS.set_kubevirt_emulation(bool(b.get("enabled"))))
             if p in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall"):
                 action = p.rsplit("/", 1)[1]
                 result = (HELM.install(b) if action == "install" else HELM.upgrade(b) if action == "upgrade"
@@ -10381,34 +9867,10 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_uptime_setting(b))
             if p == "/api/vms/monitoring":
                 return self._send(200, set_vm_monitoring(b))
-            if p == "/api/monitoring/actions":
-                return self._send(200, set_outage_actions(b))
-            if p == "/api/monitoring/actions/test":
-                return self._send(200, test_outage_webhook(b))
             if p == "/api/power-schedules/set":
                 return self._send(200, set_schedule(b))
             if p == "/api/image-updates/mode":
                 return self._send(200, set_update_mode(b))
-            if p == "/api/changes/undo/preview":
-                current, proposed, rows, capacity, context = change_undo_plan(b)
-                return self._send(200, {"changes": rows, "capacity": capacity,
-                                        "capacity_token": CAPACITY_REVIEW.issue(b, context)})
-            if p == "/api/changes/undo":
-                current, proposed, rows, capacity, context = change_undo_plan(b)
-                CAPACITY_REVIEW.enforce(b, capacity, context)
-                ns, name = proposed["metadata"]["namespace"], proposed["metadata"]["name"]
-                proposed["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[NAMES.key("editedAt")] = \
-                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", proposed)
-                _cache.pop("wl", None)
-                UPDATES.refresh_soon(ns, name)
-                return self._send(200, {"ok": True, "changes": rows,
-                                        "detail": f"{name} is back to its settings from before that change; its pods are being replaced"})
-            if p == "/api/homestead/data/tidy":
-                result = housekeeping_tidy()
-                mb = result["freed"] / 1024**2
-                return self._send(200, {"ok": True, **result, "report": HOUSEKEEPING.report(),
-                                        "detail": (f"Freed {mb:.1f} MB: " + "; ".join(result["notes"])) if result["notes"] else "Nothing to tidy"})
             if p == "/api/restore-tests/settings":
                 enabled = b.get("enabled")
                 if not isinstance(enabled, bool):
@@ -10814,10 +10276,6 @@ class H(HTTP.LimitedHandler):
                     return self._send(200, PASSTHROUGH.harvester_usb(str(b.get("node") or ""), str(b["harvester_name"]),
                                                                      b.get("allow", True) is not False))
                 return self._send(200, PASSTHROUGH.allow_usb(b.get("vendor"), b.get("product"), b.get("allow", True) is not False))
-            if p == "/api/os-updates/start":
-                rollout = OS_ROLLOUT.start("asked")
-                return self._send(200, {"ok": True, "rollout": rollout, "operation": rollout.get("operation"),
-                                        "detail": f"Updating {len(rollout['nodes'])} hosts one at a time; follow it in the job tray"})
             if p == "/api/node/os/check":
                 node = str(b.get("node") or "")
                 if not node:
@@ -11062,23 +10520,6 @@ class H(HTTP.LimitedHandler):
                     except Exception:
                         pass
                 return self._send(200, result)
-            if p == "/api/self/address":
-                vip = str(b.get("vip") or "").strip()
-                result = SELF_ADDRESS.move(vip)
-                if b.get("default"):
-                    try:
-                        NETWORK.set_default_vip(vip)
-                        result["default"] = True
-                    except ValueError as error:
-                        result["default_error"] = str(error)
-                for key in ("network", "ov"):
-                    _cache.pop(key, None)
-                result["fleet_address"] = _follow_fleet_address()
-                return self._send(200, result)
-            if p == "/api/welcome/done":
-                SHARED.write_json(os.path.join(DATA_DIR, "welcome.json"),
-                                  {"done": True, "by": str(self.user or ""), "at": int(time.time())})
-                return self._send(200, {"ok": True})
             if p == "/api/network/vips/label":
                 _cache.pop("network", None)
                 return self._send(200, NETWORK.set_vip_label(b.get("ip", ""), b.get("label", "")))
@@ -11171,29 +10612,11 @@ class H(HTTP.LimitedHandler):
                          "backup": result["backup"], "restore_config": b,
                          "restore_started": result["created"]}, result["message"])
                 return self._send(200, result)
-            if p == "/api/schedules":
-                IMP.save_job(b); return self._send(200, {"ok": True})
-            if p == "/api/schedules/run":
-                IMP.run_job_now(b["name"]); return self._send(200, {"ok": True})
             if p == "/api/import/preview":
                 return self._send(200, preview_import(b))
             if p == "/api/import":
                 result = reviewed_import(b)
                 return self._send(200, result)
-            if p == "/api/operations/power-recovery/preview":
-                return self._send(200, VM_POWER_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user))
-            if p == "/api/operations/power-recovery/resolve":
-                return self._send(200, VM_POWER_RECOVERY.resolve(b, OPS, kget, self.user))
-            if p == "/api/operations/vm-recovery/preview":
-                return self._send(200, VM_MUTATION_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user))
-            if p == "/api/operations/vm-recovery/resolve":
-                return self._send(200, VM_MUTATION_RECOVERY.resolve(b, OPS, kget, self.user))
-            if p == "/api/operations/storage-recovery/preview":
-                return self._send(200, STORAGE_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user,
-                    storage_helper_admission, storage_restart_admission, runtime_check=storage_runtime_check))
-            if p == "/api/operations/storage-recovery/act":
-                return self._send(200, STORAGE_RECOVERY.act(b, OPS, kget, self.user,
-                    storage_helper_admission, storage_restart_admission, runtime_check=storage_runtime_check))
             if p == "/api/operations/cancel":
                 # The route lets any operator in; what the job's own cancel
                 # does - delete VMs, stop a volume move - may need more.
@@ -11205,10 +10628,6 @@ class H(HTTP.LimitedHandler):
                 for key in ("wl", "ov", "network", "vms", "vol", "helm", "disks", "lhcap", "flow2"):
                     _cache.pop(key, None)
                 return self._send(200, result)
-            if p == "/api/operations/dismiss":
-                if b.get("all"):
-                    return self._send(200, OPS.dismiss_finished())
-                return self._send(200, OPS.dismiss(b["id"]))
             if p == "/api/network/services":
                 guard_managed_smb(b.get("namespace") or DEFAULT_NS, b.get("name"))
                 result = NETWORK.create_service(b)

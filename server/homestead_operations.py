@@ -15,6 +15,7 @@ import json
 import copy
 import os
 import secrets
+import sys
 import threading
 import time
 import urllib.error
@@ -1071,8 +1072,41 @@ def log(operation_id):
     return {**_public(item), "history": item.get("history") or [], "sources": sources}
 
 
+# The recovery reviews of a stopped job, asked from the job tray: server.py's
+# reader, and the storage admissions it holds (bind_recovery).
+_recovery = {"read": None, "helper": None, "restart": None, "runtime": None}
+
+
+def bind_recovery(read, helper_admission, restart_admission, runtime_check):
+    _recovery.update(read=read, helper=helper_admission, restart=restart_admission, runtime=runtime_check)
+
+
+def _recover(kind, step):
+    """A recovery route: preview takes the job's id, the rest the whole body."""
+    def route(request):
+        import homestead_storage_recovery as STORAGE_RECOVERY
+        import homestead_vm_mutation_recovery as VM_MUTATION_RECOVERY
+        import homestead_vm_power_recovery as VM_POWER_RECOVERY
+        ops = sys.modules[__name__]
+        what = request.body.get("id", "") if step == "preview" else request.body
+        if kind == "storage":
+            return getattr(STORAGE_RECOVERY, step)(what, ops, _recovery["read"], request.user, _recovery["helper"],
+                                                   _recovery["restart"], runtime_check=_recovery["runtime"])
+        module = VM_POWER_RECOVERY if kind == "power" else VM_MUTATION_RECOVERY
+        return getattr(module, step)(what, ops, _recovery["read"], request.user)
+    return route
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
+    ("POST", "/api/operations/dismiss"): ("operator", lambda request: dismiss_finished() if request.body.get("all")
+                                          else dismiss(request.body["id"])),
+    ("POST", "/api/operations/power-recovery/preview"): ("admin", _recover("power", "preview")),
+    ("POST", "/api/operations/power-recovery/resolve"): ("admin", _recover("power", "resolve")),
+    ("POST", "/api/operations/vm-recovery/preview"): ("admin", _recover("vm", "preview")),
+    ("POST", "/api/operations/vm-recovery/resolve"): ("admin", _recover("vm", "resolve")),
+    ("POST", "/api/operations/storage-recovery/preview"): ("admin", _recover("storage", "preview")),
+    ("POST", "/api/operations/storage-recovery/act"): ("admin", _recover("storage", "act")),
     ("GET", "/api/operations"): ("viewer", lambda request: list_operations()),
     ("GET", "/api/operations/log"): ("viewer", lambda request: log((request.query.get("id") or [""])[0])),
     ("POST", "/api/operations/resume"): ("admin", lambda request: resume(request.body.get("id", ""))),
