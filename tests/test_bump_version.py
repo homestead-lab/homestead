@@ -15,9 +15,9 @@ class VersionBumpTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "server").mkdir()
-            (root / "server/server.py").write_text(f'os.environ.get("HOMESTEAD_VERSION", "{old}")', encoding="utf-8")
+            (root / "server/homestead_version.py").write_text(f'VERSION = "{old}"\n', encoding="utf-8")
             (root / "fixture.txt").write_text(text, encoding="utf-8")
-            with patch.object(bump_version, "ROOT", root), patch.object(bump_version, "FILES", ("server/server.py", "fixture.txt")), \
+            with patch.object(bump_version, "ROOT", root), patch.object(bump_version, "FILES", ("server/homestead_version.py", "fixture.txt")), \
                     patch.object(bump_version, "GENERATED", ()), contextlib.redirect_stdout(io.StringIO()):
                 bump_version.main(new)
                 self.assertEqual(bump_version.current(), new)

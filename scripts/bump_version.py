@@ -2,7 +2,7 @@
 
     python scripts/bump_version.py 2.8.80
 
-The release is named in the server's default, the manifests, the page's cache
+The release is named in server/homestead_version.py, the manifests, the page's cache
 busters, the service worker and a test; this changes all of them, then
 regenerates the files made from the manifest.
 """
@@ -12,14 +12,14 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ("README.md", "docs/reference.md", "deploy/deploy.yaml", "server/server.py", "scripts/install.sh", "tests/test_deploy.py", "web/index.html",
+FILES = ("README.md", "docs/reference.md", "deploy/deploy.yaml", "server/homestead_version.py", "scripts/install.sh", "tests/test_deploy.py", "web/index.html",
          "web/js/auth.js", "web/js/core.js", "web/js/demo.js", "web/sw.js")
 GENERATED = ("scripts/render_nodeprobe.py", "scripts/render_rbac.py", "scripts/render_chart.py")
 
 
 def current():
-    source = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
-    return re.search(r'os\.environ\.get\("HOMESTEAD_VERSION", "(\d+\.\d+\.\d+(?:-dev\.\d+)?)"\)', source).group(1)
+    source = (ROOT / "server" / "homestead_version.py").read_text(encoding="utf-8")
+    return re.search(r'^VERSION = "(\d+\.\d+\.\d+(?:-dev\.\d+)?)"', source, re.M).group(1)
 
 
 def main(new):

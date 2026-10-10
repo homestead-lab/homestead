@@ -343,3 +343,12 @@ def remove(cfg):
     ksend("DELETE", _path(meta["namespace"], meta["name"]), {"apiVersion": "v1", "kind": "DeleteOptions",
           "preconditions": {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}})
     return {"ok": True, "message": "Policy removed; remaining policies still apply."}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/firewall"): ("viewer", lambda request: inventory()),
+    ("POST", "/api/firewall/preview"): ("admin", lambda request: preview(request.body)),
+    ("POST", "/api/firewall/save"): ("admin", lambda request: save(request.body)),
+    ("POST", "/api/firewall/delete"): ("admin", lambda request: remove(request.body)),
+}
