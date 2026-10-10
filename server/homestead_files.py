@@ -257,7 +257,9 @@ def cleanup(now=None):
 
 # --------------------------------------------------------------------- exec
 class ExecRefused(ConnectionError):
-    """Kubernetes would not open the exec: nothing ran in the pod."""
+    """Kubernetes would not open the exec: nothing ran in the pod. Right after
+    a host comes back the API server can answer for a Running pod while it
+    cannot reach that host's kubelet yet, so this one is worth trying again."""
     retry = True
 
 
@@ -284,9 +286,10 @@ def _exec(namespace, pod, argv, stdin=b"", timeout=30, container="files"):
         if not chunk:
             break
         header.extend(chunk)
-    if b" 101 " not in header.split(b"\r\n", 1)[0]:
+    status = header.split(b"\r\n", 1)[0].decode("latin-1", "replace").strip()
+    if " 101 " not in f"{status} ":
         sock.close()
-        raise ConnectionError("the file browser connection was refused by Kubernetes")
+        raise ExecRefused(f"Kubernetes refused to run a command in {pod} ({status or 'no answer'})")
     out, err = bytearray(), bytearray()
     try:
         if stdin:
