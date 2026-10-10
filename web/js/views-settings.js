@@ -27,7 +27,7 @@ function userRow(u, admin, count) {
         ${["viewer", "operator", "admin"].map(r => `<option value="${r}"${u.role === r ? " selected" : ""}>${ROLE_NAMES[r]} - ${esc(ROLE_SHORT[r])}</option>`).join("")}</select>`;
   const actions = admin ? actionBar([
     { label: "Sign-in history", run: `userSignins(${jsq(u.name)})` },
-    !me && count > 1 && { label: "Remove", run: `delUser(${jsq(u.name)})`, danger: true }], { shown: 0, label: `More for ${u.name}` }) : "";
+    !me && count > 1 && { label: "Remove", run: `userRemove(${jsq(u.name)},'card')`, danger: true }], { shown: 0, label: `More for ${u.name}` }) : "";
   return `<tr data-role="${esc(u.role)}"${USERS_FILTER.role && USERS_FILTER.role !== u.role ? " hidden" : ""}><td><b>${esc(u.name)}</b>${me ? ' <span class="tag ok">you</span>' : ""}</td>
     <td data-label="Role">${role}</td><td data-label="Last sign-in" class="dim xs mono">${esc(u.last_login || "never")}</td>${admin ? `<td>${actions}</td>` : ""}</tr>`;
 }

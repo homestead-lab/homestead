@@ -31,7 +31,7 @@ class RefreshOneTests(unittest.TestCase):
         self.assertTrue(rows["radarr"]["available"], "nothing else is asked again or lost")
         self.assertEqual(1, report["updates"])
         self.assertEqual("2026-10-07T02:00:00Z", report["checked_at"])
-        self.assertIs(False, check.call_args.kwargs["persist"])
+        self.assertIs(True, check.call_args.kwargs["persist"], "what now runs is recorded, as a scan does (#380)")
 
     def test_every_replica_notices_an_update_another_installed(self):
         UPDATES._LATEST.update(report=UPDATES._summary([

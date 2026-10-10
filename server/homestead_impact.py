@@ -58,11 +58,24 @@ def _storage_stops(volumes, ns, claims, node, others):
     return "", notes
 
 
-def _hardware_hosts(features, nodes, node):
-    """Other ready hosts with every hardware feature listed."""
+def _tolerated(node, spec):
+    """Whether a pod spec tolerates every NoSchedule and NoExecute taint on node."""
+    tolerations = (spec or {}).get("tolerations") or []
+    for taint in node.get("taints") or []:
+        if taint.get("effect") not in ("NoSchedule", "NoExecute"):
+            continue
+        if not any((t.get("operator") == "Exists" and (not t.get("key") or t.get("key") == taint.get("key"))
+                    or (t.get("key") == taint.get("key") and (t.get("value") or "") == (taint.get("value") or "")))
+                   and (not t.get("effect") or t.get("effect") == taint.get("effect")) for t in tolerations):
+            return False
+    return True
+
+
+def _hardware_hosts(features, nodes, node, spec=None):
+    """Other ready hosts with every hardware feature listed, whose taints the app tolerates (#373)."""
     return [n["name"] for n in nodes
             if n["name"] != node and n.get("status") == "Ready" and n.get("schedulable", True)
-            and all((n.get("hardware") or {}).get(f) for f in features or [])]
+            and all((n.get("hardware") or {}).get(f) for f in features or []) and _tolerated(n, spec)]
 
 
 def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, nodes, placement=None):
@@ -85,7 +98,7 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
             hosts = list(place.get("eligible") or [])
             allowed = None
         else:
-            hosts = _hardware_hosts(w.get("hardware"), nodes, node)
+            hosts = _hardware_hosts(w.get("hardware"), nodes, node, spec)
             allowed = required_hosts(spec)
             if allowed is not None:
                 hosts = [h for h in hosts if h in allowed]

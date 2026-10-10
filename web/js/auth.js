@@ -98,7 +98,7 @@ async function authState() {
 
 /* Homestead is up but its cluster is not answering: say so, and keep trying. */
 function clusterUnavailable(error, cause = "") {
-  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.320" alt="">
+  gate(`<img class="mark" src="/assets/homestead-mark.svg?v=2.8.321-dev.1" alt="">
     <h2>Homestead</h2><p class="sub">Waiting for the cluster</p>
     <div class="gateerr">${esc(error || "The Kubernetes API did not answer.")}</div>
     ${cause ? `<p class="dim xs gatecause"><b>Cause:</b> ${esc(cause)}</p>` : ""}
@@ -191,7 +191,7 @@ function stopAuthenticatedWork() {
 
 function loginForm(err, setup) {
   gate(`
-    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.320" alt="">
+    <img class="mark" src="/assets/homestead-mark.svg?v=2.8.321-dev.1" alt="">
     <h2>${setup ? "Set up Homestead" : "Homestead"}</h2>
     <p class="sub">${setup ? "Create the first administrator account" : "Sign in to continue"}</p>
     ${err ? `<div class="gateerr">${esc(err)}</div>` : ""}
@@ -336,14 +336,25 @@ window.addUser = async () => {
     toast("user added", "ok"); manageUsers();
   } catch (e) { toast(e.message, "bad"); }
 };
-window.delUser = async name => {
-  if (!(await ask(`Remove user "${name}"?`))) return;
+/* Remove a user, from the Settings card or the Users dialog: whichever it
+   came from is redrawn from the server afterwards, success or not, so a row
+   never outlives its user (#368). A user someone else already removed is
+   what was wanted: it says so and the row goes (#369). */
+async function userRemove(name, from) {
+  if (!(await ask(`Remove ${name}? They are signed out, and their API keys stop working.`, { title: "Remove user", ok: "Remove", danger: true }))) return;
   try {
     await api("/api/auth/users/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: name }) });
-    toast("removed", "ok"); manageUsers();
-  } catch (e) { toast(e.message, "bad"); }
-};
+    toast(`${name} removed`, "ok");
+  } catch (e) {
+    if (/no such user|does not exist/i.test(e.message)) toast(`${name} had already been removed`, "ok");
+    else toast(e.message, "bad");
+  }
+  if (from === "dialog") manageUsers();
+  else if (typeof STATE !== "undefined" && STATE.view === "settings") { resetPaint(); viewSettings(); }
+}
+window.userRemove = userRemove;
+window.delUser = name => userRemove(name, "dialog");
 
 /* any 401 anywhere drops straight back to the sign-in gate */
 const _api = window.api;
@@ -434,6 +445,7 @@ window.userRoleSet = async (name, select) => {
     toast(`${name} is now ${role}`, "ok");
   } catch (e) { select.value = was; toast(e.message, "bad"); }
   finally { select.disabled = false; }
+  if (typeof STATE !== "undefined" && STATE.view === "settings") { resetPaint(); viewSettings(); }
 };
 
 window.userAdd = () => modal("Add a user", `<div class="ui-stack">

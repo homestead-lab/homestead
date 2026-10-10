@@ -979,7 +979,9 @@ function balanceContainersHtml(b) {
     balanceSwitch("containers", b, "Balance containers"),
     UI.lead(!b.on ? "Containers are left where they are."
       : moves.length ? `Moves ${moves.length} container${moves.length === 1 ? "" : "s"} so hosts carry similar CPU and memory. Each one restarts once, on its new host.`
-      : "No move brings the busiest host down enough to be worth a restart."),
+      : plan.quiet === "even" ? "The hosts already carry similar CPU and memory; nothing is worth a restart."
+      : plan.quiet === "nothing-movable" ? "Nothing here can move: each container is pinned, left out, or has no other host it may run on. See Not moved below."
+      : "No single move evens the hosts out by enough to be worth a restart: the containers that could move are too small to shift CPU or memory much."),
     plan.metrics === false ? UI.callout("warn", "Usage is partly unknown", "A host reports no live CPU and memory, so the plan may be off. Check metrics-server.") : "",
     UI.section("Hosts", hosts),
     b.on && rows.length ? UI.section(`Containers · ${rows.length}`, '<p class="ui-help">Untick a container to leave it where it is; the moves are worked out again without it.</p>'

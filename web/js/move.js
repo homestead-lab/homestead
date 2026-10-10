@@ -168,6 +168,49 @@ function impactRows(impact) {
     <div style="text-align:right">${w.stranded ? '<span class="pill crit">will stay down</span>' : `<span class="pill ok">${w.eligible.length} destination${w.eligible.length === 1 ? "" : "s"}</span>`}
       <div class="dim xs">${w.stranded ? (w.blocked || []).map(x => `${esc(x.name.replace("harvester-", ""))}: ${esc((x.why || []).join(", "))}`).join(" · ") : esc(w.eligible.map(x => x.replace("harvester-", "")).join(", "))}</div></div></div>`).join("");
 }
+/* Host actions → Apps (#375): what breaks first, then where the rest land
+   and whether those hosts have room. Kubernetes decides where each app goes;
+   the landing is homestead_place's estimate (the eligible host with the most
+   memory free, largest app first). */
+const shortHostName = name => String(name || "").replace(/^harvester-/, "");
+const cores = m => (m / 1000).toFixed(m >= 10000 ? 0 : 1);
+const gib = b => (b / 1024 ** 3).toFixed(b >= 10 * 1024 ** 3 ? 0 : 1);
+
+function hostAppsHtml(impact) {
+  const workloads = impact.workloads || [], stranded = workloads.filter(w => w.stranded);
+  const hosts = impact.hosts || [], moving = workloads.length - stranded.length;
+  if (!workloads.length) return '<div class="ui-empty">No apps run on this host.</div>';
+  const strip = `<div class="hostapps-strip">
+    ${stranded.length ? UI.chip(`${stranded.length} stay down`, "bad") : ""}
+    ${moving ? UI.chip(`${moving} move`, "ok") : ""}</div>`;
+  const down = stranded.length ? UI.section("Stays down until this host is back", `<div class="hostapps-down">${stranded.map(w => `
+      <div class="hostapps-app"><b>${esc(w.name)}</b> <span class="dim xs">${esc(w.ns)}</span>
+        <div class="dim xs">${(w.blocked || []).map(x => `${esc(shortHostName(x.name))}: ${esc((x.why || []).join(", ") || "not suitable")}`).join(" · ") || "no other host is ready"}</div></div>`).join("")}</div>`) : "";
+  const landing = hosts.filter(h => (h.apps || []).length);
+  const pct = (part, whole) => whole ? Math.round(part / whole * 100) : 0;
+  const dest = h => {
+    const unknown = !h.cpu_m || !h.memory;
+    const line = (label, now, after, total, fmt, unit) => total
+      ? `<div class="hostapps-meter"><span class="dim xs">${label}</span>${UI.meter({ now: pct(now, total), after: pct(after, total), label: `${label} on ${h.name}` })}
+          <span class="mono xs">${fmt(now)} → ${fmt(after)} of ${fmt(total)} ${unit}</span></div>` : "";
+    return `<div class="hostapps-host">
+      <div class="hostapps-head"><b>${esc(shortHostName(h.name))}</b><span class="dim small">${h.apps.length} app${h.apps.length === 1 ? "" : "s"} land here</span>
+        ${(h.over || []).length ? UI.chip(`over its ${h.over.join(" and ")}`, "bad") : ""}</div>
+      ${line("CPU requested", h.cpu_now, h.cpu_after, h.cpu_m, cores, "cores")}
+      ${line("Memory requested", h.memory_now, h.memory_after, h.memory, gib, "GiB")}
+      ${unknown ? '<div class="dim xs">Its allocatable CPU or memory is not known, so whether it has room is not either.</div>' : ""}
+      ${h.unrequested ? `<div class="dim xs">${h.unrequested} of these ask for no CPU or memory, so the real total may be higher.</div>` : ""}
+      ${UI.more(`Show the ${h.apps.length} app${h.apps.length === 1 ? "" : "s"}`, `<div class="hostapps-names">${h.apps.map(a => `<span class="tag">${esc(a.split("/")[1])}</span>`).join("")}</div>`)}</div>`;
+  };
+  const none = hosts.filter(h => !(h.apps || []).length && (h.why || []).length);
+  return `<div class="ui-stack">${strip}${down}
+    ${landing.length ? UI.section("Destinations", `<div class="hostapps-hosts">${landing.map(dest).join("")}</div>
+      <div class="dim xs">Kubernetes picks the host when it happens. This is the likely spread: each app on the host it may run on with the most memory free.</div>`) : ""}
+    ${none.length ? UI.section("Not a destination", none.map(h => `<div class="hostapps-app"><b>${esc(shortHostName(h.name))}</b> <span class="dim xs">${esc(h.why.join(", "))}</span></div>`).join("")) : ""}
+    ${UI.more(`Every app (${workloads.length})`, `<div class="dependency-list">${impactRows(impact)}</div>`)}</div>`;
+}
+window.hostAppsHtml = hostAppsHtml;
+
 window.evacuateNode = async node => {
   modal("Evacuate · " + node, '<div class="empty"><span class="spin2"></span>checking workload dependencies…</div>', true);
   let impact;

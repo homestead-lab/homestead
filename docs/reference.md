@@ -656,7 +656,7 @@ a plain-HTTP LAN address; Settings says so there instead.
 | Degraded | a volume rebuilding a replica, a workload not ready after its start-up grace |
 | Failed jobs | anything in the activity tray that ends in failure |
 | Hosts joining | a new host registering with the cluster, and becoming Ready |
-| Image updates | a newer image for a workload (off by default; checked every six hours) |
+| Image updates | a newer image for a workload (off by default; checked twice a day) |
 
 A problem is announced once it has lasted a minute, so restarts and rollouts do
 not buzz a phone, and announced again when it is over; the second notification
@@ -1041,7 +1041,7 @@ have yet. Grant it once, wherever you use `kubectl` (a Rancher
 **Kubectl Shell** will do):
 
 ```bash
-kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/v2.8.320/deploy/rbac.yaml
+kubectl apply -f https://raw.githubusercontent.com/homestead-lab/homestead/v2.8.321-dev.1/deploy/rbac.yaml
 ```
 
 `deploy/rbac.yaml` holds only the permissions - the ServiceAccount, roles and
@@ -1052,7 +1052,7 @@ it cannot update its role.
 Command-line deployment is also available:
 
 ```bash
-TAG=2.8.320 HOST=rancher@your-harvester-node ./scripts/deploy.sh
+TAG=2.8.321-dev.1 HOST=rancher@your-harvester-node ./scripts/deploy.sh
 ```
 
 ## Image update behaviour
@@ -1966,10 +1966,10 @@ docs/wiki/                    the wiki's pages, published by .github/workflows/w
 
 Every `vMAJOR.MINOR.PATCH` tag runs the full test suite and publishes an
 `amd64`/`arm64` image to GitHub Container Registry with SBOM and provenance.
-For a release such as `v2.8.320`, the workflow publishes:
+For a release such as `v2.8.321-dev.1`, the workflow publishes:
 
 ```text
-ghcr.io/homestead-lab/homestead:2.8.320
+ghcr.io/homestead-lab/homestead:2.8.321-dev.1
 ghcr.io/homestead-lab/homestead:2.8
 ghcr.io/homestead-lab/homestead:2
 ghcr.io/homestead-lab/homestead:latest
@@ -1980,8 +1980,8 @@ The workflow authenticates with its short-lived `GITHUB_TOKEN`; no registry
 password is stored in the repository. Create and publish a release with:
 
 ```bash
-git tag v2.8.320
-git push origin v2.8.320
+git tag v2.8.321-dev.1
+git push origin v2.8.321-dev.1
 ```
 
 The official Homestead package is public and can be pulled without registry credentials.

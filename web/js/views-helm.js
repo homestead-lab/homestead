@@ -1,5 +1,6 @@
-/* Helm: every release in the cluster, and charts installed through RKE2's
-   Helm controller. Releases made some other way are shown, not changed. */
+/* Helm: every release in the cluster, and charts installed through the
+   cluster's Helm controller (k3s's or RKE2's). Releases made some other way
+   are shown, not changed. */
 
 const HELM_MANAGED = { homestead: ["installed here", "ok", "Installed from Homestead as a HelmChart: it can be upgraded and uninstalled here"],
   helmchart: ["HelmChart", "info", "Managed by a HelmChart object, which Homestead can change"] };
@@ -14,15 +15,38 @@ async function viewHelm() {
   renderHelm();
 }
 window.viewHelm = viewHelm;
-window.helmToggleSystem = () => { STATE.helmSystem = !STATE.helmSystem; renderHelm(); };
+/* What the list shows (#383): yours, the platform's or all, and by status -
+   chips with their counts, in view, as the Apps tab has, and a search box. */
+const HELM_VIEW = { show: "mine", status: "", q: "" };
+const HELM_STATUS = [["", "Any status"], ["deployed", "Deployed"], ["pending", "Pending"], ["failed", "Failed"]];
+const helmStatusOf = r => r.status === "deployed" ? "deployed" : /pending/.test(r.status || "") ? "pending" : r.status === "superseded" ? "deployed" : "failed";
+window.helmShow = (key, value) => { HELM_VIEW[key] = value; renderHelm(); };
+window.helmSearch = input => {
+  HELM_VIEW.q = input.value;
+  const at = input.selectionStart;
+  renderHelm();
+  const again = $("#helm_q");
+  if (again) { again.focus(); again.setSelectionRange(at, at); }
+};
+window.helmToggleSystem = () => helmShow("show", HELM_VIEW.show === "mine" ? "all" : "mine");
 
 function renderHelm() {
-  const all = STATE.data.helm || [], q = STATE.q.toLowerCase();
-  const rows = all.filter(r => (STATE.helmSystem || !r.system) &&
-    (!q || [r.name, r.namespace, r.chart, r.chart_version, r.app_version].join(" ").toLowerCase().includes(q)));
-  const hidden = all.filter(r => r.system).length;
-  paint(`${UI.pageHeader(`Helm`, `${rows.length} release${rows.length === 1 ? "" : "s"}${!STATE.helmSystem && hidden ? ` · ${hidden} of the platform's hidden` : ""} · charts from here install through RKE2's Helm controller`, `${moreMenu([{ label: `${STATE.helmSystem ? "Hide" : "Show"} the platform's releases`, icon: "layers", run: "helmToggleSystem()" }])}
+  const all = STATE.data.helm || [], q = `${STATE.q} ${HELM_VIEW.q}`.trim().toLowerCase();
+  const owned = r => HELM_VIEW.show === "all" || (HELM_VIEW.show === "platform" ? r.system : !r.system);
+  const found = r => !q || q.split(/\s+/).every(word => [r.name, r.namespace, r.chart, r.chart_version, r.app_version].join(" ").toLowerCase().includes(word));
+  const statused = r => !HELM_VIEW.status || helmStatusOf(r) === HELM_VIEW.status;
+  const rows = all.filter(r => owned(r) && statused(r) && found(r));
+  const chip = (key, value, label, count) => `<button type="button" class="${HELM_VIEW[key] === value ? "on" : ""}" aria-pressed="${HELM_VIEW[key] === value}"
+    onclick="helmShow(${jsq(key)},${jsq(value)})">${esc(label)} <span class="dim">${count}</span></button>`;
+  const inShow = all.filter(owned);
+  const statuses = HELM_STATUS.filter(([v]) => !v || inShow.some(r => helmStatusOf(r) === v));
+  const controls = `<div class="helm-controls">
+      <div class="seg wgroup-chips" role="group" aria-label="Whose releases">${chip("show", "mine", "Yours", all.filter(r => !r.system).length)}${chip("show", "platform", "Platform", all.filter(r => r.system).length)}${chip("show", "all", "All", all.length)}</div>
+      ${statuses.length > 2 ? `<div class="seg wgroup-chips" role="group" aria-label="Status">${statuses.map(([v, label]) => chip("status", v, label, inShow.filter(r => !v || helmStatusOf(r) === v).length)).join("")}</div>` : ""}
+      <input id="helm_q" type="search" placeholder="Find a release or chart" aria-label="Find a release or chart" value="${esc(HELM_VIEW.q)}" oninput="helmSearch(this)"></div>`;
+  paint(`${UI.pageHeader(`Helm`, `${rows.length} release${rows.length === 1 ? "" : "s"} · charts from here install through ${esc(typeof platformName === "function" && STATE.platform?.distribution !== "harvester" ? platformName(STATE.platform) : "RKE2")}'s Helm controller`, `
       <button class="btn pri" data-need="admin" onclick="helmInstall()">＋ Install chart</button>`)}
+    ${controls}
     ${rows.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl dense stack" data-sort="helm"><thead><tr>
       <th>Release</th><th>Chart</th><th>App</th><th>Status</th><th>Revision</th><th data-nosort>Updated</th></tr></thead><tbody>
       ${rows.map(r => `<tr class="clickable" onclick="helmRelease(${jsq(r.namespace)},${jsq(r.name)})">

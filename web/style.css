@@ -126,8 +126,14 @@ a{color:inherit;text-decoration:none}
 .small{font-size:12px} .xs{font-size:11px}
 .hidden{display:none!important}
 ::-webkit-scrollbar{width:9px;height:9px}
-::-webkit-scrollbar-thumb{background:var(--surf3);border-radius:9px}
-::-webkit-scrollbar-thumb:hover{background:#2a2a2e}
+/* A thumb that can be seen on the dialogs' and pages' own grounds (#374):
+   it was --surf3 on --surf, about 1.1:1. scrollbar-color is the standard
+   form (Firefox, newer Chromium); strips that hide theirs set
+   scrollbar-width:none, which it leaves alone. */
+:root{--scroll-thumb:color-mix(in srgb,var(--tx) 26%,transparent);--scroll-thumb-hover:color-mix(in srgb,var(--tx) 42%,transparent)}
+html{scrollbar-color:var(--scroll-thumb) transparent}
+::-webkit-scrollbar-thumb{background:var(--scroll-thumb);border-radius:9px}
+::-webkit-scrollbar-thumb:hover{background:var(--scroll-thumb-hover)}
 ::-webkit-scrollbar-track{background:transparent}
 #app{display:flex;min-height:100vh}
 /* An installed phone app owns one viewport. Content scrolls inside its
@@ -2805,6 +2811,7 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 .diagram svg{display:block;width:100%;height:auto;max-height:340px}
 .diagram figcaption{color:var(--dim);font-size:11.5px;margin-top:4px}
 .dg-t{fill:var(--tx);font:500 12px "Inter Tight",sans-serif}
+.dg-more{cursor:pointer}.dg-more .dg-link{fill:var(--low);text-decoration:underline}.dg-more:hover .dg-link,.dg-more:focus-visible .dg-link{fill:var(--tx)}
 .dg-s{font-size:11px}.dg-xs{font-size:10px}.dg-xxs{font-size:9px}.dg-b{font-weight:700}
 .dg-mono{font-family:"JetBrains Mono",monospace}
 .dg-dim{fill:var(--dim)}.dg-blue{fill:var(--low)}.dg-on-amber{fill:#1a1300;font-weight:800}
@@ -3127,7 +3134,7 @@ html[data-motion="off"] .meter>span,html[data-motion="off"] .ui-bar i{transition
 /* Dialog standard: opaque shared shell, one action footer, Section rail. */
 .modalbox{background:var(--surf);color:var(--tx)}
 .dialog-rail{display:grid;grid-template-columns:170px minmax(0,1fr);column-gap:22px;align-items:start;min-width:0}
-.dialog-rail>.stepper-head{grid-column:1;grid-row:1 / span 30;display:flex;flex-direction:column;align-items:stretch;gap:4px;position:sticky;top:0;margin:0;padding:0 12px 16px 0;border-right:1px solid var(--line);min-width:0}
+.dialog-rail>.stepper-head{grid-column:1;grid-row:1 / span 30;display:flex;flex-direction:column;align-items:stretch;gap:4px;position:sticky;top:calc(var(--modalhead-h, 0px) + 14px);margin:0;padding:0 12px 16px 0;border-right:1px solid var(--line);min-width:0}
 .dialog-rail .stepper-chip{display:block;white-space:normal;text-align:left;padding:11px 12px;border:0;border-radius:8px;min-height:40px;width:100%;color:var(--mut);font-size:12.5px}
 .dialog-rail .stepper-chip.on{background:var(--surf3);color:var(--tx)}
 .dialog-rail>.stepper-pane,.dialog-rail>.dialog-rail-content{grid-column:2;grid-row:1;min-width:0;min-height:300px}
@@ -3476,7 +3483,7 @@ html[data-theme="light"] .notification-center>button.danger{color:#a1242a}
 .backtop svg{width:18px;height:18px;transform:rotate(180deg);stroke:currentColor;fill:none;stroke-width:1.9}
 .backtop:hover{background:var(--surf3)}
 .backtop:focus-visible{outline:2px solid var(--low);outline-offset:2px}
-html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.drawer.open) .backtop,html:has(body.navopen) .backtop{display:none}
+html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .backtop,html:has(.drawer.open) .backtop,html:has(body.navopen) .backtop{display:none}
 @media(max-width:900px){.backtop{right:16px;bottom:calc(84px + env(safe-area-inset-bottom,0px) + var(--tray-lift, 4px) - 4px)}}
 @media(prefers-reduced-motion:reduce){.backtop,.backtop.on{transition:none}}
 
@@ -3695,3 +3702,29 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .users-filter{margin-bottom:10px}
 .role-select{width:auto;max-width:100%;padding:5px 9px;font-size:12.5px}
 .roles-table td.center,.roles-table th:not(:first-child){text-align:center}
+
+/* Back to top inside a long dialog (ui.js, #374): pinned to the box's
+   bottom-right corner as it scrolls, taking no room of its own. */
+.dialog-backtop{position:sticky;bottom:16px;left:auto;right:auto;margin:-40px 16px 0 auto;display:grid;z-index:3}
+
+/* A page one level down says how to go up (#382); the sidebar does on a desktop. */
+.phead .page-back{display:none}
+@media (max-width:900px){.phead .page-back{display:inline-flex;align-items:center;margin-top:6px;padding:8px 4px 8px 0;min-height:40px;border:0;background:transparent;color:var(--tx);font:600 14px "Inter Tight",sans-serif;cursor:pointer}}
+
+/* Helm's filters, in view (views-helm.js, #383). */
+.helm-controls{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;margin-bottom:12px}
+.helm-controls input{flex:1 1 220px;max-width:340px;min-width:0}
+@media (max-width:560px){.helm-controls input{max-width:none;flex-basis:100%}}
+
+/* A card's housekeeping action, quieter than its real one (#370). */
+.btn.quiet{background:transparent;border-color:var(--line);color:var(--mut)}.btn.quiet:hover{color:var(--tx);border-color:var(--line2)}
+
+/* Host actions → Apps (move.js, #375). */
+.hostapps-strip{display:flex;gap:6px;flex-wrap:wrap}
+.hostapps-down,.hostapps-hosts{display:grid;gap:8px}
+.hostapps-app{padding:6px 0;border-top:1px solid var(--line)}.hostapps-app:first-child{border-top:0}
+.hostapps-host{display:grid;gap:6px;padding:10px 12px;border:1px solid var(--line2);border-radius:10px}
+.hostapps-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.hostapps-meter{display:grid;grid-template-columns:130px minmax(0,1fr) auto;gap:10px;align-items:center}
+.hostapps-names{display:flex;flex-wrap:wrap;gap:4px}
+@media (max-width:560px){.hostapps-meter{grid-template-columns:minmax(0,1fr)}}

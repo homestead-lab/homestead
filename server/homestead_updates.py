@@ -412,9 +412,11 @@ def channel_behind(current, tags, channel):
 
 
 def _pod_digest(pods, container):
+    """The digest a container is running on: only from a container that is
+    running - a Pending pod has no image yet (#380)."""
     for pod in pods:
         for status in pod.get("status", {}).get("containerStatuses", []) or []:
-            if status.get("name") != container:
+            if status.get("name") != container or "running" not in (status.get("state") or {}):
                 continue
             image_id = status.get("imageID", "")
             match = re.search(r"(sha256:[0-9a-f]{64})", image_id)
@@ -449,10 +451,11 @@ def _check_deployment(dep, pods, force=False, persist=True, channel=None):
     ran = _annotation_json(dep, RAN)
     ran_now = dict(ran)
     auths = _secret_credentials(ns, dep)
-    mine = _matching_pods(dep, pods)
+    mine = [p for p in _matching_pods(dep, pods) if (p.get("status") or {}).get("phase") == "Running"]
     # A stopped workload has no running digest to compare, which is expected
     # rather than a failed check: imports land scaled to zero on purpose.
-    running = bool(mine) and int(dep["spec"].get("replicas", 1) or 0) > 0
+    wanted = int(dep["spec"].get("replicas", 1) or 0) > 0
+    running = bool(mine) and wanted
     own = PART(ns, name) == "self"
     channel = channel or (CHANNEL() if own else "prod")
     images = []
@@ -467,8 +470,12 @@ def _check_deployment(dep, pods, force=False, persist=True, channel=None):
             running_digest = _pod_digest(mine, container["name"]) if running else ""
             if running_digest:
                 ran_now[container["name"]] = running_digest
+            # What last ran stands in only for a workload that is stopped. One
+            # that should be running but is not yet - its host down, its pod
+            # Pending - is checked once it runs: the record of what last ran
+            # can be behind, and read as a "new build" that is not (#380).
             current = (parse_image(deployed).get("digest") or running_digest
-                       or ran.get(container["name"], ""))
+                       or ("" if wanted else ran.get(container["name"], "")))
             candidate_tag = None
             if own:
                 # What is installed: the newer of the tag recorded for this
@@ -499,7 +506,7 @@ def _check_deployment(dep, pods, force=False, persist=True, channel=None):
                          # the version you are on reads as a broken checker.
                          "available": bool(remote) and not matches_remote
                                       and bool(current or (candidate_tag and candidate != source))})
-            if not current and running:
+            if not current and wanted:
                 # Pulling or starting: nothing has run yet to compare with the
                 # registry. That is a check still to come, not a failed one.
                 item["unchecked"] = True
@@ -648,7 +655,9 @@ def refresh_one(ns, name):
         return None
     dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     pods = kget(f"/api/v1/namespaces/{ns}/pods").get("items", [])
-    item = _check_deployment(dep, pods, True, persist=False, channel=latest.get("channel"))
+    # It records what now runs, as a full scan does, so the record never
+    # lags a rollout this replica saw (#380).
+    item = _check_deployment(dep, pods, True, persist=True, channel=latest.get("channel"))
     item["homestead"] = PART(ns, name)
     with _SCAN_LOCK:
         latest = _LATEST.get("report")
@@ -681,6 +690,10 @@ def reconcile(now=None):
         _RECONCILED[0] = now
     deps = {(d["metadata"]["namespace"], d["metadata"]["name"]): d
             for d in kget("/apis/apps/v1/deployments").get("items", [])}
+    try:
+        pods = kget("/api/v1/pods").get("items", [])
+    except Exception:
+        pods = None
     stale, gone = [], []
     for w in latest.get("workloads") or []:
         dep = deps.get((w.get("ns"), w.get("name")))
@@ -691,6 +704,17 @@ def reconcile(now=None):
         seen = {i.get("container"): i.get("deployed") for i in w.get("images") or [] if i.get("container")}
         if seen and seen != now_images:
             stale.append((w["ns"], w["name"]))
+            continue
+        # Or what runs is not what the line compared: a pod that started
+        # since, a restart onto a newer build, or one that was not running
+        # then and is now (#380).
+        if pods is not None:
+            running = [p for p in _matching_pods(dep, pods) if (p.get("status") or {}).get("phase") == "Running"]
+            for i in w.get("images") or []:
+                digest = _pod_digest(running, i.get("container")) if i.get("container") else ""
+                if digest and (digest != i.get("current_digest") or i.get("starting")):
+                    stale.append((w["ns"], w["name"]))
+                    break
     if gone:
         with _SCAN_LOCK:
             latest = _LATEST.get("report")

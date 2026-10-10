@@ -42,7 +42,7 @@ async function copyText(text) {
 async function readClipboard() {
   try { return navigator.clipboard?.readText ? await navigator.clipboard.readText() : null; } catch (_) { return null; }
 }
-const HOMESTEAD_VERSION = "2.8.320";
+const HOMESTEAD_VERSION = "2.8.321-dev.1";
 const ICON_BLOBS = new Map();
 const HEALTH_DEFAULTS = { thresholds: {
   cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 },
@@ -277,7 +277,16 @@ function modal(t, h, wide, contextClass = "") {
   $("#modal").classList.toggle("node-detail-view", contextClass === "node-detail-modal");
   $("#modal").classList.remove("hidden");
   paintModalBack();
+  modalHeadHeight();
 }
+
+/* A dialog's section rail sticks below its header, not under it (#374): the
+   header's height, which a long title can change, is kept as --modalhead-h. */
+function modalHeadHeight() {
+  const box = $(".modalbox"), head = box?.querySelector(".modalhead");
+  if (box && head) box.style.setProperty("--modalhead-h", `${head.offsetHeight}px`);
+}
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") window.addEventListener("resize", () => modalHeadHeight());
 
 /* Dialogs opened from dialogs - a drive from its host, a feature from the
    hardware list - sit on top of the one they came from. Closing one goes back

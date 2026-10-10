@@ -71,7 +71,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.320")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.321-dev.1")
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -871,7 +871,9 @@ def node_impact(node):
     except Exception:
         raw_vms = []
     try:
-        addresses = (cached("network", 5, NETWORK.inventory) or {}).get("addresses") or []
+        # inventory()["addresses"] is VIPS.address_map(): {"nodes": [...], "addresses": [...]} (#372).
+        places = (cached("network", 5, NETWORK.inventory) or {}).get("addresses") or {}
+        addresses = (places.get("addresses") or []) if isinstance(places, dict) else list(places)
     except Exception:
         addresses = []
     try:
@@ -1533,17 +1535,25 @@ def volume_copies():
     except Exception:
         pass
     out = {}
+    # A volume with no running copy is detached. Its copies are stopped, not
+    # lost: Longhorn counts one that was healthy and has not failed as whole,
+    # and so does the reboot review (homestead_power) - so here too (#379).
+    attached = {(r.get("spec") or {}).get("volumeName") for r in replicas
+                if (r.get("status") or {}).get("currentState") == "running"}
     for r in replicas:
         spec, status = r.get("spec") or {}, r.get("status") or {}
         if not spec.get("volumeName"):
             continue
+        detached = spec["volumeName"] not in attached
         path = (spec.get("diskPath") or "").rstrip("/")
         disk_tags = tags.get(spec.get("diskID"), [])
         os_disk = "os" in disk_tags or path in ("/var/lib/longhorn", "/var/lib/harvester/defaultdisk")
         label = ("OS disk" if os_disk else path.rsplit("/", 1)[-1] if path.startswith("/mnt/") else path) or "?"
         out.setdefault(spec["volumeName"], []).append({
             "node": spec.get("nodeID", ""), "path": path, "disk": label, "os": os_disk,
-            "healthy": status.get("currentState") == "running" and not spec.get("failedAt"),
+            "healthy": not spec.get("failedAt") and (status.get("currentState") == "running"
+                                                     or detached and bool(spec.get("healthyAt"))),
+            "detached": detached,
             "whole": LHREBUILD.whole(r),
             "state": status.get("currentState", "") or ("failed" if spec.get("failedAt") else "stopped")})
     for rows in out.values():
@@ -7438,22 +7448,33 @@ def _alerts_loop():
         time.sleep(20)
 
 
+VIP_QUICK = 5          # a look for a missing address
+VIP_FULL = 30          # a full pass regardless
+
+
 def _vip_loop():
-    """kube-vip can answer for an address and leave it off the Services that
-    ask for it, and then every port there is refused. The leader records it
-    for kube-vip, as it would have (homestead_vips.py)."""
+    """kube-vip can answer for an address and the Service lose it from its
+    status - k3s's ServiceLB empties it when the pods change - and then every
+    port there is refused. The leader records it again, as kube-vip would
+    have (homestead_vips.py): within seconds of it going missing (#365), and
+    in a full pass every VIP_FULL seconds."""
+    last_full = 0.0
     while True:
         if LEADER.is_leader():
             try:
-                if VIPS.keep(PLATFORM.detect()):
-                    with _lock:
-                        _cache.pop("network", None)
-                        _cache.pop("flow2", None)
-                beat("vips", 30, leader_only=True)
+                platform = PLATFORM.detect()
+                now = time.time()
+                if now - last_full >= VIP_FULL or VIPS.missing(platform):
+                    last_full = now
+                    if VIPS.keep(platform):
+                        with _lock:
+                            _cache.pop("network", None)
+                            _cache.pop("flow2", None)
+                beat("vips", VIP_FULL, leader_only=True)
             except Exception as error:
-                beat("vips", 30, error, leader_only=True)
+                beat("vips", VIP_FULL, error, leader_only=True)
                 print(f"VIPs: {str(error)[:160]}", flush=True)
-        time.sleep(30)
+        time.sleep(VIP_QUICK)
 
 
 def baseline_operation(row, verb):
@@ -11072,6 +11093,9 @@ class H(HTTP.LimitedHandler):
             if p == "/api/os-updates/stop":
                 return self._send(200, {"ok": True, "rollout": OS_ROLLOUT.stop(),
                                         "detail": "Stopping once the host being updated is done"})
+            if p == "/api/os-updates/check":
+                # Every Ready host read again now (#371); the card follows it.
+                return self._send(200, {"ok": True, "checking": HOST_OS.check_all()})
             if p == "/api/node/os/check":
                 node = str(b.get("node") or "")
                 if not node:

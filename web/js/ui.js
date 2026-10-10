@@ -817,7 +817,32 @@ if (typeof document !== "undefined" && typeof document.addEventListener === "fun
     }
     button?.classList.toggle("on", show);
   };
-  const soon = () => { if (!pending) { pending = true; setTimeout(update, 60); } };
+  // A long dialog has its own (#374): the box scrolls, so the button sits
+  // in it, pinned to its bottom corner.
+  let dialogButton = null;
+  const updateDialog = () => {
+    const box = document.querySelector("#modal:not(.hidden) .modalbox");
+    const show = !!box && box.scrollTop > box.clientHeight * 1.2;
+    if (show && (!dialogButton || dialogButton.parentElement !== box)) {
+      dialogButton?.remove();
+      dialogButton = document.createElement("button");
+      dialogButton.type = "button";
+      dialogButton.className = "backtop dialog-backtop";
+      dialogButton.setAttribute("aria-label", "Back to the top of this dialog");
+      dialogButton.title = "Back to top";
+      dialogButton.innerHTML = '<svg aria-hidden="true"><use href="#i-chevron-down"/></svg>';
+      dialogButton.addEventListener("click", () => {
+        const still = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+        const box = dialogButton.parentElement;
+        box?.scrollTo({ top: 0, behavior: still ? "auto" : "smooth" });
+        // Where a smooth scroll does not run (a hidden tab, some engines), go at once.
+        setTimeout(() => { if (box && box.scrollTop > 0) box.scrollTop = 0; }, 700);
+      });
+      box.appendChild(dialogButton);
+    }
+    dialogButton?.classList.toggle("on", show);
+  };
+  const soon = () => { if (!pending) { pending = true; setTimeout(() => { update(); updateDialog(); }, 60); } };
   window.addEventListener("scroll", soon, { passive: true, capture: true });
   window.addEventListener("resize", soon);
 }
