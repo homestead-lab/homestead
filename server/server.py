@@ -871,7 +871,9 @@ def node_impact(node):
     except Exception:
         raw_vms = []
     try:
-        addresses = (cached("network", 5, NETWORK.inventory) or {}).get("addresses") or []
+        # inventory()["addresses"] is VIPS.address_map(): {"nodes": [...], "addresses": [...]} (#372).
+        places = (cached("network", 5, NETWORK.inventory) or {}).get("addresses") or {}
+        addresses = (places.get("addresses") or []) if isinstance(places, dict) else list(places)
     except Exception:
         addresses = []
     try:
@@ -1533,17 +1535,25 @@ def volume_copies():
     except Exception:
         pass
     out = {}
+    # A volume with no running copy is detached. Its copies are stopped, not
+    # lost: Longhorn counts one that was healthy and has not failed as whole,
+    # and so does the reboot review (homestead_power) - so here too (#379).
+    attached = {(r.get("spec") or {}).get("volumeName") for r in replicas
+                if (r.get("status") or {}).get("currentState") == "running"}
     for r in replicas:
         spec, status = r.get("spec") or {}, r.get("status") or {}
         if not spec.get("volumeName"):
             continue
+        detached = spec["volumeName"] not in attached
         path = (spec.get("diskPath") or "").rstrip("/")
         disk_tags = tags.get(spec.get("diskID"), [])
         os_disk = "os" in disk_tags or path in ("/var/lib/longhorn", "/var/lib/harvester/defaultdisk")
         label = ("OS disk" if os_disk else path.rsplit("/", 1)[-1] if path.startswith("/mnt/") else path) or "?"
         out.setdefault(spec["volumeName"], []).append({
             "node": spec.get("nodeID", ""), "path": path, "disk": label, "os": os_disk,
-            "healthy": status.get("currentState") == "running" and not spec.get("failedAt"),
+            "healthy": not spec.get("failedAt") and (status.get("currentState") == "running"
+                                                     or detached and bool(spec.get("healthyAt"))),
+            "detached": detached,
             "whole": LHREBUILD.whole(r),
             "state": status.get("currentState", "") or ("failed" if spec.get("failedAt") else "stopped")})
     for rows in out.values():

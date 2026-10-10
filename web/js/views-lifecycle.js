@@ -585,7 +585,7 @@ window.nodeActions = async name => {
     ${action("Remove from cluster", "Take this host out for good, after checking quorum and volume copies.",
       UI.button("Remove…", `nodeRemoval(${jsArg(name)})`, { kind: "danger", attrs: 'data-need="admin"' }), "bad")}
   </div>`;
-  const apps = workloads.length
+  const apps = typeof hostAppsHtml === "function" ? hostAppsHtml(impact) : workloads.length
     ? (stranded.length ? UI.callout("warn", `${stranded.length} can only run here`, `${stranded.map(w => `<span class="mono">${esc(w.name)}</span>`).join(", ")} ${stranded.length === 1 ? "has" : "have"} no other ready host with what ${stranded.length === 1 ? "it needs" : "they need"}.`) : "")
       + `<div class="dependency-list">${impactRows(impact)}</div>`
     : '<div class="ui-empty">No apps run on this host.</div>';

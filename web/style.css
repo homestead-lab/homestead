@@ -2805,6 +2805,7 @@ html[data-theme="light"] .savebar{background:rgba(255,255,255,.95)}
 .diagram svg{display:block;width:100%;height:auto;max-height:340px}
 .diagram figcaption{color:var(--dim);font-size:11.5px;margin-top:4px}
 .dg-t{fill:var(--tx);font:500 12px "Inter Tight",sans-serif}
+.dg-more{cursor:pointer}.dg-more .dg-link{fill:var(--low);text-decoration:underline}.dg-more:hover .dg-link,.dg-more:focus-visible .dg-link{fill:var(--tx)}
 .dg-s{font-size:11px}.dg-xs{font-size:10px}.dg-xxs{font-size:9px}.dg-b{font-weight:700}
 .dg-mono{font-family:"JetBrains Mono",monospace}
 .dg-dim{fill:var(--dim)}.dg-blue{fill:var(--low)}.dg-on-amber{fill:#1a1300;font-weight:800}
@@ -3695,3 +3696,13 @@ html:has(#modal:not(.hidden)) .backtop,html:has(.askdlg) .backtop,html:has(.draw
 .users-filter{margin-bottom:10px}
 .role-select{width:auto;max-width:100%;padding:5px 9px;font-size:12.5px}
 .roles-table td.center,.roles-table th:not(:first-child){text-align:center}
+
+/* Host actions → Apps (move.js, #375). */
+.hostapps-strip{display:flex;gap:6px;flex-wrap:wrap}
+.hostapps-down,.hostapps-hosts{display:grid;gap:8px}
+.hostapps-app{padding:6px 0;border-top:1px solid var(--line)}.hostapps-app:first-child{border-top:0}
+.hostapps-host{display:grid;gap:6px;padding:10px 12px;border:1px solid var(--line2);border-radius:10px}
+.hostapps-head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.hostapps-meter{display:grid;grid-template-columns:130px minmax(0,1fr) auto;gap:10px;align-items:center}
+.hostapps-names{display:flex;flex-wrap:wrap;gap:4px}
+@media (max-width:560px){.hostapps-meter{grid-template-columns:minmax(0,1fr)}}

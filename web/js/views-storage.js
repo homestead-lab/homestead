@@ -237,7 +237,7 @@ function volumeCopiesLine(x) {
 }
 function volumeCopiesTip(x) {
   const copies = x.copies || [], want = +x.replicas || 0;
-  const where = copies.map(c => `${c.node} · ${c.disk}${c.healthy ? "" : ` (${c.state || "not running"})`}`).join(", ");
+  const where = copies.map(c => `${c.node} · ${c.disk}${c.healthy ? (c.detached ? " (stopped while the volume is detached)" : "") : ` (${c.state || "not running"})`}`).join(", ");
   if (!copies.length) return want === 1 ? "One copy: if its host or disk fails, this volume is gone until they come back" : `${want} copies`;
   const hosts = new Set(copies.map(c => c.node)).size;
   if (copies.length < want) return `${want} copies wanted, ${copies.length} placed (${where}). The rest wait for a host or disk Longhorn may use - its health says why. By default each copy needs a host of its own; a class with "Copies go on: Different disks" lets them share one.`;
