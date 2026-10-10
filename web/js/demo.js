@@ -1611,8 +1611,12 @@ ssh_pwauth: true
     "/api/node/impact": url => ({ node: url.searchParams.get("node"),
       workloads: [{ ns: "lab", name: "frigate", hardware: ["coral"], eligible: [], stranded: true, blocked: [{ name: "harvester-node2", why: ["no coral"] }] },
         { ns: "lab", name: "home-assistant", hardware: [], eligible: ["harvester-node2", "harvester-node3"], stranded: false },
-        { ns: "lab", name: "paperless", hardware: [], eligible: ["harvester-node2"], stranded: false }],
-      stranded: [{ ns: "lab", name: "frigate" }] }),
+        { ns: "lab", name: "paperless", hardware: [], eligible: ["harvester-node2"], stranded: false, blocked: [{ name: "harvester-node3", why: ["untolerated node-role/tiebreaker taint"] }] }],
+      stranded: [{ ns: "lab", name: "frigate" }],
+      hosts: [{ name: "harvester-node2", cpu_m: 8000, memory: 32 * 1024 ** 3, cpu_now: 3100, memory_now: 18 * 1024 ** 3,
+          cpu_after: 3900, memory_after: 22.5 * 1024 ** 3, apps: ["lab/home-assistant", "lab/paperless"], unrequested: 1, why: [], over: [] },
+        { name: "harvester-node3", cpu_m: 4000, memory: 8 * 1024 ** 3, cpu_now: 900, memory_now: 2 * 1024 ** 3,
+          cpu_after: 900, memory_after: 2 * 1024 ** 3, apps: [], unrequested: 0, why: ["node-role/tiebreaker taint"], over: [] }] }),
     "/api/node/power/plan": url => {
       const plannedOutage = !!window.__demoSingleHostOutage && url.searchParams.get("force") !== "1";
       const plan = { node: url.searchParams.get("node"), action: url.searchParams.get("action"), review_token: "demo-power",

@@ -544,22 +544,80 @@ def impact(node):
                 continue
             raise
         reqs = requirements(dep)
+        spec = ((dep.get("spec") or {}).get("template") or {}).get("spec") or {}
         eligible, blocked = [], []
         for candidate in others:
             ok, why = satisfies(candidate, reqs)
-            if ok:
+            # What the scheduler itself would refuse - an untolerated taint
+            # above all, a host kept for votes only, say (#373).
+            reasons = _start_scheduler_check(spec, candidate)[0] if ok else []
+            if ok and not reasons:
                 eligible.append(candidate["name"])
             else:
-                blocked.append({"name": candidate["name"], "why": why})
+                blocked.append({"name": candidate["name"], "why": list(why or []) + reasons})
+        here = sum(1 for p in pods if p.get("spec", {}).get("nodeName") == node
+                   and p.get("metadata", {}).get("namespace") == ns
+                   and (p.get("metadata", {}).get("labels") or {}).get("app") == name
+                   and (p.get("status") or {}).get("phase") not in ("Succeeded", "Failed"))
+        here = max(here, 1)
+        cpu, memory = _pod_request(spec, "cpu"), _pod_request(spec, "memory")
         workloads.append({
             "ns": ns, "name": name, "hardware": reqs.get("features", []),
             "devices": reqs.get("devices", []), "eligible": eligible,
             "blocked": blocked, "stranded": not eligible,
+            # What it asks of a host, for every copy of it here.
+            "cpu_m": (cpu or 0) * here, "memory": (memory or 0) * here, "unrequested": not cpu and not memory,
         })
+    hosts = _destinations(others, pods, workloads)
     stranded = [w for w in workloads if w["stranded"]]
-    return {"node": node, "workloads": workloads,
+    return {"node": node, "workloads": workloads, "hosts": hosts,
             "movable": [w for w in workloads if not w["stranded"]],
             "stranded": stranded, "safe": not stranded}
+
+
+def _destinations(others, pods, workloads):
+    """Each other host: whether it can take anything, and if so what it holds
+    now and after what moves there arrives (#375). Kubernetes decides where
+    each app lands; here each goes, largest first, to the eligible host with
+    the most memory free - a fair guess at the scheduler's spread."""
+    requested = {}
+    for p in pods:
+        host = (p.get("spec") or {}).get("nodeName")
+        if not host or (p.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
+            continue
+        cpu_m, memory = requested.get(host, (0, 0))
+        requested[host] = (cpu_m + (_pod_request(p.get("spec") or {}, "cpu") or 0),
+                           memory + (_pod_request(p.get("spec") or {}, "memory") or 0))
+    rows = {}
+    for n in others:
+        allocatable = n.get("allocatable") or {}
+        cpu_now, mem_now = requested.get(n["name"], (0, 0))
+        why = []
+        if n.get("status") != "Ready":
+            why.append("not ready")
+        if n.get("schedulable") is False:
+            why.append("cordoned")
+        for taint in n.get("taints") or []:
+            if taint.get("effect") in ("NoSchedule", "NoExecute"):
+                why.append(f"{taint.get('key', 'a')} taint")
+        rows[n["name"]] = {"name": n["name"], "cpu_m": _cpu_millicores(allocatable.get("cpu")) or 0,
+                           "memory": _memory_bytes(allocatable.get("memory")) or 0,
+                           "cpu_now": cpu_now, "memory_now": mem_now, "cpu_after": cpu_now, "memory_after": mem_now,
+                           "apps": [], "unrequested": 0, "why": why}
+    for w in sorted(workloads, key=lambda w: -(w["memory"] or 0)):
+        choices = [rows[h] for h in w["eligible"] if h in rows]
+        if not choices:
+            continue
+        best = max(choices, key=lambda r: (r["memory"] - r["memory_after"], r["cpu_m"] - r["cpu_after"]))
+        best["apps"].append(f"{w['ns']}/{w['name']}")
+        best["cpu_after"] += w["cpu_m"]
+        best["memory_after"] += w["memory"]
+        best["unrequested"] += 1 if w["unrequested"] else 0
+        w["lands"] = best["name"]
+    for r in rows.values():
+        r["over"] = [label for label, after, total in (("CPU", r["cpu_after"], r["cpu_m"]), ("memory", r["memory_after"], r["memory"]))
+                     if total and after > total and r["apps"]]
+    return sorted(rows.values(), key=lambda r: (bool(r["why"]) and not r["apps"], r["name"]))
 
 
 # ------------------------------------------------------------------ move
