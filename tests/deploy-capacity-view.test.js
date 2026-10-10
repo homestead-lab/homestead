@@ -11,6 +11,8 @@ function setup(capacity) {
   const sent = [], notices = [];
   const fields = { "#deployGo": {}, "#deployCapacityConfirm": { checked: false }, "#deployConfirm": { checked: false } };
   const context = { window: {}, console, URLSearchParams, Map, document: { addEventListener() {} },
+    // The logo is made ready first (core.js); none is set here.
+    logoReady: async () => {},
     $: selector => fields[selector], esc: s => String(s).replaceAll("<", "&lt;").replaceAll(">", "&gt;"),
     api: async (path, options) => {
       if (path === "/api/preview") return { capacity, capacity_token: "signed-token", impact: {}, deployment: {}, service: null };

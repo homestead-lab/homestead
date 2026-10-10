@@ -268,3 +268,9 @@ def undo_plan(current, entry):
     if not rows:
         raise ValueError("the app already has these settings")
     return proposed, rows
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/changes"): ("viewer", lambda request: {"entries": history((request.query.get("ns") or [""])[0] or None, (request.query.get("name") or [""])[0] or None)}),
+}

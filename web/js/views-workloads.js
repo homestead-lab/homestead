@@ -1761,10 +1761,8 @@ window.wlConsole = (ns, name, fromRoute = false) => {
       <button class="btn pri" id="consoleConnect" onclick="consoleConnect()">Connect</button>
     </div>
     ${pods.length ? `<div class="console-security">Operator-only · session start and stop are audited; commands and output are not recorded.</div>
-      <div class="consolestate" id="consoleState">not connected</div>
-      <pre class="consoleview" id="consoleView" tabindex="0" aria-label="Container terminal output">Choose a pod and container, then connect.</pre>
-      <div class="consoleinput"><textarea id="consoleInput" rows="1" spellcheck="false" autocomplete="off" placeholder="Type a command · Enter sends · Shift+Enter adds a line"></textarea>
-        <button class="btn" onclick="consoleSend()">Send</button></div>`
+      <div class="consolestate" id="consoleState">not connected · choose a pod and container, then connect</div>
+      <div class="nodeterm" id="consoleTerm" aria-label="Container terminal"></div>`
       : `<div class="empty"><b>No running pod with an application container</b><br><span class="dim">Start the workload and wait until its pod is running.</span></div>`}`, true);
   if (pods.length) consolePodChanged();
 };
@@ -1796,7 +1794,10 @@ function consoleSize() {
   return { cols: Math.max(20, Math.floor(view.clientWidth / 8.2)), rows: Math.max(5, Math.floor(view.clientHeight / 18)) };
 }
 
-window.consoleConnect = (attempt = 0) => {
+/* A container's shell in a real terminal, as a host's (nodeShell): what the
+   shell sends to drive the screen - colours, bracketed paste, a prompt
+   redrawn - is drawn, not printed, and keys go straight to it. */
+window.consoleConnect = async (attempt = 0) => {
   if (window.__consoleSocket) window.__consoleSocket.close();
   const pod = $("#consolePod")?.value, container = $("#consoleContainer")?.value;
   if (!pod || !container) return toast("Choose a running pod and container", "bad");
@@ -1804,35 +1805,62 @@ window.consoleConnect = (attempt = 0) => {
   const selected = $("#consoleShell").value;
   const shell = selected === "auto" ? shells[Math.min(attempt, shells.length - 1)] : selected;
   const ns = window.__consoleWorkload.ns;
+  const state = text => { const el = $("#consoleState"); if (el) el.textContent = text; };
+  state(`connecting · ${shell}`);
+  $("#consoleConnect").textContent = "Reconnect";
+  try { await loadXterm(); } catch (e) { return state(e.message); }
+  const host = $("#consoleTerm");
+  if (!host) return;
+  let term = window.__consoleTerm;
+  if (!term || !host.contains(term.element)) {
+    if (term) { try { term.dispose(); } catch (_) { /* gone with its dialog */ } }
+    const css = getComputedStyle(document.documentElement);
+    term = new Terminal({ cursorBlink: true, fontSize: 13, scrollback: 5000, convertEol: false,
+      fontFamily: css.getPropertyValue("--mono").trim() || "ui-monospace, Menlo, Consolas, monospace",
+      theme: { background: "#0b0b0d", foreground: "#e8e8ea" } });
+    term.__fit = new FitAddon.FitAddon();
+    term.loadAddon(term.__fit);
+    term.open(host);
+    // Ctrl+C with text selected copies it, as in a terminal; only without a
+    // selection does it reach the shell as an interrupt.
+    term.attachCustomKeyEventHandler(event => {
+      if (event.type === "keydown" && event.ctrlKey && !event.shiftKey && event.key.toLowerCase() === "c" && term.hasSelection()) {
+        navigator.clipboard?.writeText(term.getSelection()).catch(() => {});
+        return false;
+      }
+      return true;
+    });
+    term.onData(data => {
+      const socket = window.__consoleSocket;
+      if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "input", data }));
+    });
+    window.__consoleTerm = term;
+  }
   const protocol = location.protocol === "https:" ? "wss:" : "ws:";
   const query = new URLSearchParams({ ns, pod, container, shell });
   const socket = new WebSocket(fleetSocketUrl(`${protocol}//${location.host}/api/console?${query}`));
   window.__consoleSocket = socket;
   window.__consoleAttempt = attempt;
-  $("#consoleState").textContent = `connecting · ${shell}`;
-  $("#consoleConnect").textContent = "Reconnect";
-  socket.onopen = () => {
-    $("#consoleState").textContent = `connected · ${shell}`;
-    socket.send(JSON.stringify({ type: "resize", ...consoleSize() }));
-    $("#consoleInput").focus();
+  const resize = () => {
+    try { term.__fit.fit(); } catch (_) { /* not laid out yet */ }
+    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
   };
+  socket.onopen = () => { state(`connected · ${shell}`); resize(); term.focus(); };
   socket.onmessage = event => {
     let message;
     try { message = JSON.parse(event.data); } catch (_) { return; }
-    if (message.type === "output") consoleWrite(message.data, message.stream);
+    if (message.type === "output") term.write(message.data);
     else if (message.type === "error") {
       const canFallback = selected === "auto" && attempt < shells.length - 1 && /not found|executable|no such file/i.test(message.data || "");
-      if (canFallback) { consoleWrite(`\r\n${shell} unavailable; trying ${shells[attempt + 1]}…\r\n`, "stderr"); return consoleConnect(attempt + 1); }
-      consoleWrite(`\r\n${message.data || "Console error"}\r\n`, "stderr");
-    } else if (message.type === "disconnected") $("#consoleState").textContent = `disconnected · ${message.reason || "session ended"}`;
+      if (canFallback) { term.write(`\r\n\x1b[33m${shell} unavailable; trying ${shells[attempt + 1]}…\x1b[0m\r\n`); return consoleConnect(attempt + 1); }
+      term.write(`\r\n\x1b[31m${message.data || "Console error"}\x1b[0m\r\n`);
+    } else if (message.type === "disconnected") state(`disconnected · ${message.reason || "session ended"}`);
   };
-  socket.onclose = () => { if (window.__consoleSocket === socket) $("#consoleState").textContent = "disconnected · use Reconnect to try again"; };
-  socket.onerror = () => { if (window.__consoleSocket === socket) $("#consoleState").textContent = "connection unavailable · check role and pod state"; };
+  socket.onclose = () => { if (window.__consoleSocket === socket) state("disconnected · use Reconnect to try again"); };
+  socket.onerror = () => { if (window.__consoleSocket === socket) state("connection unavailable · check role and pod state"); };
   if (window.__consoleResize) window.__consoleResize.disconnect();
-  window.__consoleResize = new ResizeObserver(() => {
-    if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "resize", ...consoleSize() }));
-  });
-  window.__consoleResize.observe($("#consoleView"));
+  window.__consoleResize = new ResizeObserver(resize);
+  window.__consoleResize.observe(host);
 };
 
 /* Text selected in the console's input or its output, if any. */
@@ -2239,6 +2267,8 @@ window.doDeploy = async () => {
   if (DEPLOY_SUBMITTING) return;
   const sequence = ++DEPLOY_REVIEW_SEQUENCE;
   DEPLOY_REVIEW = null;
+  try { await logoReady("#d_icon"); } catch (e) { return deployInvalid(e.message, "#d_icon"); }
+  if (sequence !== DEPLOY_REVIEW_SEQUENCE) return;
   const c = collect();
   if (c.app_profile?.blocked) return toast(c.app_profile.label || "this template is not directly compatible", "bad");
   if (!c.container_name || !c.image) return deployInvalid("Container name and image are required.", !c.container_name?"#d_container_name":"#d_image");

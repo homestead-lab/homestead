@@ -17,6 +17,7 @@ import html.parser
 import ipaddress
 import json
 import base64
+import binascii
 import os
 import re
 import socket
@@ -28,6 +29,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import homestead_shared as SHARED
+import homestead_routes as ROUTER
 
 
 MAX_ICON_BYTES = 256 * 1024
@@ -499,3 +501,66 @@ def data_url(reference, data_dir):
     _DATA_URL_CACHE.clear()
     _DATA_URL_CACHE[key] = value
     return value
+
+
+# ---------------------------------------------------------------- too large
+# An App Store logo can be a large picture: past MAX_ICON_BYTES it was refused,
+# and the deploy with it. The browser draws it smaller instead - Python's
+# standard library cannot - and the smaller copy is kept (logo-fit.js).
+MAX_SOURCE_BYTES = 8 * 1024 * 1024
+RASTER = ("image/png", "image/jpeg", "image/gif", "image/webp", "image/x-icon")
+SMALLER = ("image/png", "image/webp", "image/jpeg")
+DATA = None
+
+
+def bind(data_dir):
+    global DATA
+    DATA = data_dir
+
+
+def keep(url, data_dir):
+    """The logo kept as it is ({"icon": reference}), or {"too_large": True}
+    when it is a picture past the limit that the browser can draw smaller."""
+    try:
+        return {"icon": persist(url, data_dir)}
+    except ValueError as error:
+        if "too large" not in str(error) or str(url or "").startswith("/api/icons/"):
+            raise
+        return {"too_large": True}
+
+
+def large_source(url):
+    """A picture too large to keep, whole, for the browser to draw smaller:
+    (bytes, type). Fetched as any logo is, from public addresses only."""
+    url = str(url or "").strip()
+    if not url.startswith(("http://", "https://")) or len(url) > 2048:
+        raise ValueError("give the logo's http(s) address")
+    data, _, _ = _fetch(url, IMAGE_ACCEPT, MAX_SOURCE_BYTES)
+    if len(data) > MAX_SOURCE_BYTES:
+        raise ValueError("logo is larger than 8 MiB, too large to make smaller")
+    mime = _sniff_mime(data)
+    if mime not in RASTER:
+        raise ValueError("only a picture (PNG, JPEG, GIF, WebP or ICO) is made smaller")
+    return data, mime
+
+
+def keep_smaller(encoded, data_dir):
+    """The browser's smaller copy, kept: its same-origin reference."""
+    try:
+        data = base64.b64decode(str(encoded or ""), validate=True)
+    except (binascii.Error, ValueError):
+        raise ValueError("the smaller logo did not arrive whole") from None
+    if not data or _sniff_mime(data) not in SMALLER:
+        raise ValueError("the smaller logo must be a PNG, WebP or JPEG")
+    return store(data, data_dir)
+
+
+# Its routes and who may use them (homestead_routes.py). Not under
+# /api/icons/, which is served without signing in.
+ROUTES = {
+    ("POST", "/api/logo-fit/keep"): ("operator", lambda request: keep(request.body.get("url"), DATA)),
+    ("GET", "/api/logo-fit/source"): ("operator", lambda request: ROUTER.Raw(
+        *large_source((request.query.get("url") or [""])[0]))),
+    ("POST", "/api/logo-fit/resized"): ("operator", lambda request: {
+        "icon": keep_smaller(request.body.get("data"), DATA)}),
+}

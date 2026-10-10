@@ -707,6 +707,8 @@
           results: [{ node: "harvester-node2", ok: true, note: "updates installed", updates: 4, security: 2, restarted: false }] },
         last: null };
     },
+    // A logo is kept as it is in the demo; nothing is fetched (core.js logoReady).
+    "/api/logo-fit/keep": (url, init) => ({ icon: JSON.parse(init?.body || "{}").url || "" }),
     "/api/os-updates/check": () => ({ ok: true, checking: { running: false, hosts: ["harvester-node1", "harvester-node2", "harvester-node3"], done: [], failed: {} } }),
     "/api/node/os": url => {
       const name = url.searchParams.get("name") || "harvester-node1", at = Math.floor(Date.now() / 1000) - 5400, gb = 1024 ** 3;
@@ -1255,7 +1257,25 @@ ssh_pwauth: true
       content: "detectors:\n  coral:\n    type: edgetpu\n\nmqtt:\n  host: mqtt\n" }),
     "/api/files/write": { ok: true, path: "config/config.yml", bytes: 96,
       message: "Saved config/config.yml (96 bytes); previous contents kept as config.yml.homestead-bak" },
-    "/api/files/close": { ok: true },
+    "/api/files/close": { ok: true, stopped: true },
+    // The file manager (filemanager.js): a volume's folders with owners and
+    // permissions; every change answers as done, nothing is kept.
+    "/api/files/entries": url => {
+      const path = url.searchParams.get("path") || "", pvc = url.searchParams.get("pvc") || "frigate-config";
+      const at = 1791600000, entry = (name, kind, size, mode, user = "app", extra = {}) =>
+        ({ name, kind, size, mode, uid: user === "root" ? 0 : 1000, gid: user === "root" ? 0 : 1000, user, group: user, modified: at - size % 86400, editable: kind === "file" && size <= 1048576, ...extra });
+      const rows = path === "config"
+        ? [entry("config.yml", "file", 4210, "644"), entry("secrets.yaml", "file", 180, "600"), entry("model_cache", "dir", 4096, "755")]
+        : path ? [entry("readme.txt", "file", 96, "644")]
+        : [entry("config", "dir", 4096, "755"), entry("clips", "dir", 4096, "775"), entry("recordings", "dir", 4096, "775", "root"),
+          entry("frigate.db", "file", 5242880, "644"), entry("notes.txt", "file", 96, "644"), entry("latest.mp4", "link", 24, "777", "root")];
+      return { path, entries: rows, truncated: false, volume: pvc, namespace: url.searchParams.get("namespace") || "lab" };
+    },
+    "/api/files/keepalive": { ok: true, running: true, idle_seconds: 60 },
+    "/api/files/folder": { ok: true }, "/api/files/rename": { ok: true }, "/api/files/delete": { ok: true },
+    "/api/files/mode": { ok: true }, "/api/files/owner": { ok: true },
+    "/api/files/upload": (url, init) => { const b = JSON.parse(init?.body || "{}"); return { ok: true, token: "0123456789abcdef", received: (b.offset || 0) + Math.floor((b.data || "").length * 3 / 4), done: !!b.final }; },
+    "/api/files/transfer": { ok: true, done: true },
     "/api/volumes/ownership": { uid: 1000, gid: 1000, known: true, workload: "frigate",
       image: "ghcr.io/blakeblackshear/frigate:stable", source: "PUID/PGID on frigate" },
     "/api/volumes/chown": { ok: true, job: "homestead-chown-frigate-config", uid: 1883, gid: 1883,

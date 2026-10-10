@@ -446,3 +446,21 @@ def read(namespace, name, action, path="", offset=0):
     if action == "chunk":
         value["data"] = base64.b64decode(value["data"], validate=True)
     return value
+
+
+def download(namespace, name, path):
+    """A file from the snapshot copy, read a piece at a time as it is sent
+    (homestead_routes.Stream); one that changes part-way stops the download."""
+    import homestead_routes as ROUTER
+    info = read(namespace, name, "stat", path)
+
+    def chunks():
+        offset = 0
+        while offset < info["size"]:
+            chunk = read(namespace, name, "chunk", path, offset)
+            data = chunk["data"]
+            if chunk["size"] != info["size"] or not data or offset + len(data) > info["size"]:
+                raise ValueError("Snapshot file changed during download")
+            yield data
+            offset += len(data)
+    return ROUTER.Stream(chunks(), "application/octet-stream", path.rsplit("/", 1)[-1], info["size"])

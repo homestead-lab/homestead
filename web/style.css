@@ -1298,8 +1298,10 @@ body[data-role="viewer"] .btn.danger{opacity:.4;pointer-events:none}
   .searchwrap{position:absolute;left:10px;right:10px;top:50%;transform:translateY(-50%);
     z-index:6;display:none}
   body.searching .searchwrap{display:flex}
-  body.searching .topleft,body.searching #searchbtn,
-  body.searching #refresh,body.searching #opensettings,body.searching .whoami{display:none}
+  /* The box takes the whole bar: what sits under it goes, refresh and the
+     setup guide too. !important against .only-sm's own. */
+  body.searching .topleft,body.searching #searchbtn,body.searching #setupbtn,
+  body.searching #refresh,body.searching #opensettings,body.searching .whoami{display:none!important}
   .searchwrap .search{width:100%}
   .searchwrap .search:focus{width:100%}
 }
@@ -3728,3 +3730,52 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .hostapps-meter{display:grid;grid-template-columns:130px minmax(0,1fr) auto;gap:10px;align-items:center}
 .hostapps-names{display:flex;flex-wrap:wrap;gap:4px}
 @media (max-width:560px){.hostapps-meter{grid-template-columns:minmax(0,1fr)}}
+
+/* Files: a two-pane manager (filemanager.js). Side by side where there is
+   room; on a phone, two tabs with one pane at a time. */
+.modalbox.wide[data-context="volume-files"]{width:min(1280px,100%)}
+.fm{display:grid;gap:10px;min-width:0}
+.fm-tabs{display:none}
+.fm-panes{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;min-width:0}
+.fm-pane{display:grid;gap:6px;align-content:start;min-width:0;padding:10px;border:1px solid var(--line);border-radius:12px;background:var(--surf)}
+.fm-pane.active{border-color:color-mix(in srgb,var(--low) 55%,var(--line))}
+.fm-panehead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.fm-panehead select{flex:1 1 160px;min-width:0;max-width:100%}
+.fm-tools{display:flex;gap:4px;margin-left:auto}
+.fm-tools label.iconbtn{cursor:pointer}
+.fm-state{font-size:12px;color:var(--mut)}
+.fm-state.stopped{color:var(--med)}
+.fm-list{display:grid;max-height:min(52vh,520px);overflow:auto;border:1px solid var(--line);border-radius:10px}
+.fm-row{display:grid;grid-template-columns:28px minmax(0,1fr) 72px 90px minmax(70px,110px) 110px;gap:8px;align-items:center;padding:6px 8px;border-top:1px solid var(--line);cursor:default;user-select:none}
+.fm-row:first-child{border-top:0}
+.fm-row:hover{background:color-mix(in srgb,var(--tx) 4%,transparent)}
+.fm-row.on{background:color-mix(in srgb,var(--low) 14%,transparent)}
+.fm-headrow{position:sticky;top:0;z-index:1;background:var(--surf2);font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+.fm-headrow:hover{background:var(--surf2)}
+.fm-up{cursor:pointer}
+.fm-name{display:flex;align-items:center;gap:6px;min-width:0}
+.fm-name>span:last-child,.fm-name .linkish{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+.fm-icon{width:14px;color:var(--mut);flex:none}
+.fm-check{display:grid;place-items:center}
+.fm-own{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fm-size,.fm-when{white-space:nowrap}
+.fm-empty{padding:18px;text-align:center}
+.fm-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:36px}
+.fm-count{font-weight:600;margin-right:4px}
+.fm-panel{padding:12px;border:1px solid var(--line2);border-radius:12px;background:var(--surf2)}
+.fm-perms{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+.fm-bit{display:inline-flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
+.fm-permrow{display:grid;grid-template-columns:70px repeat(3,auto);gap:10px;align-items:center;margin:4px 0}
+.fm-foot{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+@media (max-width:1100px){.fm-row{grid-template-columns:28px minmax(0,1fr) 64px 84px}.fm-own,.fm-when{display:none}}
+@media (max-width:760px){
+  .fm-tabs{display:flex;gap:6px}
+  .fm-tabs button{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--surf);color:var(--mut);font:inherit}
+  .fm-tabs button.on{color:var(--tx);border-color:color-mix(in srgb,var(--low) 55%,var(--line))}
+  .fm-panes{grid-template-columns:minmax(0,1fr)}
+  .fm-pane{display:none}.fm-pane.active{display:grid}
+  .fm-row{grid-template-columns:28px minmax(0,1fr) 64px}.fm-perm{display:none}
+  .fm-headrow .fm-perm{display:none}
+  .fm-perms{grid-template-columns:minmax(0,1fr)}
+  .fm-actions{position:sticky;bottom:0;background:var(--surf);padding:8px 0;z-index:2}
+}

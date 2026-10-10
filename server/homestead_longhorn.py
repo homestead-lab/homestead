@@ -1160,4 +1160,6 @@ ROUTES = {
     ("GET", "/api/lh/backupvolumes"): ("viewer", lambda request: homestead_routes.cached("lhbackupvols", 15, backup_volumes)),
     ("POST", "/api/lh/assign"): ("operator", lambda request: bulk_assign(request.body["volumes"], request.body["name"], request.body.get("kind", "group"), request.body.get("enabled", True))),
     ("POST", "/api/lh/target"): ("admin", lambda request: set_backup_target(request.body["url"], request.body.get("secret", ""), request.body.get("poll", "5m"), request.body.get("keys"))),
+    ("GET", "/api/lh/snapshots"): ("viewer", lambda request: snapshots((request.query.get("volume") or [None])[0])),
+    ("GET", "/api/lh/backups"): ("viewer", lambda request: backups((request.query.get("volume") or [None])[0])),
 }

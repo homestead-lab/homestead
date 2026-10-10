@@ -432,6 +432,7 @@ window.editSave = async (ns, name) => {
   if (new Set(containers.map(container => container.name)).size !== containers.length) return toast("Container names must be unique in this pod", "bad");
   const storageIssue = containers.map(container => volumeListIssue(container.volumes)).find(Boolean);
   if (storageIssue) return toast(storageIssue, "bad");
+  try { await logoReady("#e_icon"); } catch (e) { return toast(e.message, "bad"); }
   const seed_configs = $$("#mbody .e_seed").map(el => ({
     init_container: el.dataset.init, config_map: el.dataset.configMap,
     key: el.dataset.key, value: el.value,
@@ -2606,6 +2607,7 @@ window.doImport = async source => {
   const keepsNothing = !mappings.some(row => !row.medium && (row.remote_path || row.copy === false));
   if (!first && !keepsNothing) return toast("add at least one volume", "bad");
   const existing = !!first && !first.create;
+  try { await logoReady("#im_icon"); } catch (e) { return toast(e.message, "bad"); }
   const body = { source, name: $("#im_name").value.trim(), namespace: $("#im_ns")?.value || "lab", remote_path: $("#im_path").value.trim(),
     source_consistency: $("#im_consistency")?.value || "", source_container_id: cfg.source_container_id || "",
     image: $("#im_image").value.trim(), icon: $("#im_icon").value.trim(),
