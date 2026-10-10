@@ -362,3 +362,9 @@ def cancel_run(work, chosen):
     if i < len(moves) and ref.get("stage") in ("building", "settling") and ref.get("original"):
         _replicas(moves[i]["volume"], ref["original"])
     return f"Stopped after moving {ref.get('moved', 0)} cop{'y' if ref.get('moved', 0) == 1 else 'ies'}"
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/longhorn/rebalance/plan"): ("viewer", lambda request: plan([a for a in (request.query.get("exclude") or [""])[0].split(",") if a])),
+}

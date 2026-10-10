@@ -950,4 +950,5 @@ def removal_progress(item):
 ROUTES = {
     ("GET", "/api/shares"): ("admin", lambda request: list_shares()),
     ("GET", "/api/shares/users"): ("admin", lambda request: list_users()),
+    ("POST", "/api/shares/users/delete"): ("admin", lambda request: {"ok": True, **delete_user(request.body.get("user"))}),
 }

@@ -396,4 +396,5 @@ def run():
 ROUTES = {
     ("POST", "/api/mqtt"): ("admin", lambda request: save(request.body)),
     ("POST", "/api/mqtt/test"): ("admin", lambda request: test(request.body)),
+    ("GET", "/api/mqtt"): ("viewer", lambda request: {**public(), "sensors": {"cluster": len(CLUSTER_SENSORS), "node": len(NODE_SENSORS)}}),
 }

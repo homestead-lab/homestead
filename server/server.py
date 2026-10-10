@@ -9651,9 +9651,6 @@ class H(HTTP.LimitedHandler):
                 return self._api_v1("GET", p, q, None)
             if self._module_route("GET", p, q, None):
                 return
-            if p == "/api/diagnostics/report":
-                return self._send(200, DIAGNOSTICS.snapshot((q.get("id") or [""])[0], self.user,
-                                                           (q.get("format") or ["anonymised"])[0]))
             if p == "/api/diagnostics/download":
                 filename, ctype, body = DIAGNOSTICS.export((q.get("id") or [""])[0], self.user,
                     (q.get("format") or ["anonymised"])[0], (q.get("package") or [""])[0] == "1")
@@ -9702,9 +9699,6 @@ class H(HTTP.LimitedHandler):
             if is_icon_png(p):
                 return self._file(f"{WEBROOT}/icons/{os.path.basename(p)}", "image/png",
                                   cache="public, max-age=86400")
-            if p == "/api/push/key":
-                return self._send(200, {"key": PUSH.public_key(), "categories": PUSH.CATEGORIES,
-                                        "defaults": PUSH.DEFAULT_CATEGORIES})
             if p == "/api/alerts":
                 return self._send(200, {"active": [a for a in ALERTS.active(user=self.user) if a.get("announced", 0) > 0],
                                         "log": [a for a in ALERTS.log(limit=30)["alerts"] if a["category"] != "test"],
@@ -9749,13 +9743,6 @@ class H(HTTP.LimitedHandler):
             if p == "/api/setup":
                 # Many checks: kept for each person half a minute.
                 return self._send(200, cached(f"setup:{self.role}:{self.user}", 30, lambda: setup_state(self.user, self.role)))
-            if p == "/api/auth/keys":
-                return self._send(200, {"keys": API_KEYS.list_keys(),
-                                        "scopes": {s: text for s, (_, text) in API_KEYS.SCOPES.items()},
-                                        "min_ttl": API_KEYS.MIN_TTL, "max_ttl": API_KEYS.MAX_TTL})
-            if p == "/api/auth/history":
-                return self._send(200, SIGNINS.history((q.get("user") or [""])[0],
-                                                       (q.get("failures") or [""])[0] == "1"))
             if p == "/api/settings":
                 return self._send(200, app_settings_payload())
             if p == "/api/overview":
@@ -9773,8 +9760,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, report)
             if p == "/api/workloads":
                 return self._send(200, cached("wl", 5, get_workloads))
-            if p == "/api/portal":
-                return self._send(200, {"links": PORTAL.view(), "icons": list(PORTAL.BUILTIN)})
             if p == "/api/portal/status":
                 return self._send(200, portal_status(force=(q.get("force") or [""])[0] == "1"))
             if p == "/api/self/replicas":
@@ -9791,29 +9776,15 @@ class H(HTTP.LimitedHandler):
                 if status is None:
                     return self._send(404, {"error": "No recorded data move with this identity"})
                 return self._send(503 if status["status"] == "unknown" else 200, status)
-            if p == "/api/vm/store":
-                return self._send(200, VMSTORE.view(check=(q.get("check") or [""])[0] == "1"))
             if p in ("/api/resources/list", "/api/resources/object", "/api/resources/reveal"):
                 arg = lambda key: (q.get(key) or [""])[0]
                 if p == "/api/resources/list":
                     return self._send(200, RESOURCES.list_objects(arg("group"), arg("version"), arg("resource"), arg("ns")))
                 return self._send(200, RESOURCES.get_object(arg("group"), arg("version"), arg("resource"), arg("ns"),
                                                             arg("name"), reveal=p.endswith("reveal")))
-            if p == "/api/resources/kinds":
-                return self._send(200, RESOURCES.discover(force=(q.get("force") or [""])[0] == "1"))
-            if p == "/api/resources/events":
-                return self._send(200, RESOURCES.events_for((q.get("ns") or [""])[0], (q.get("name") or [""])[0],
-                                                            (q.get("uid") or [""])[0]))
-            if p == "/api/platform":
-                return self._send(200, PLATFORM.detect(force=(q.get("force") or [""])[0] == "1"))
-            if p == "/api/mqtt":
-                return self._send(200, {**MQTT.public(),
-                                        "sensors": {"cluster": len(MQTT.CLUSTER_SENSORS), "node": len(MQTT.NODE_SENSORS)}})
             if p == "/api/mqtt/preview":
                 snap = mqtt_snapshot()
                 return self._send(200, {"states": [{"topic": t, "payload": v} for t, v in MQTT.states(MQTT.load(), snap)]})
-            if p == "/api/helm/release":
-                return self._send(200, HELM.release((q.get("ns") or [""])[0], (q.get("name") or [""])[0], include_sensitive=self.role == "admin"))
             if p == "/api/cluster/components":
                 if (q.get("force") or [""])[0] == "1":
                     _cache.pop("components", None)
@@ -9841,10 +9812,6 @@ class H(HTTP.LimitedHandler):
                     (q.get("kind") or [""])[0], (q.get("name") or [""])[0]))
             if p == "/api/move/target":
                 return self._move(MOVE_SOURCE.target)
-            if p == "/api/image-updates/scan-progress":
-                # Read while a scan is in flight, so it needs no session cache
-                # and must not be served from one.
-                return self._send(200, UPDATES.scan_progress())
             if p == "/api/image-updates":
                 force = (q.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
                 # Settings › Homestead checks Homestead's own parts, not every app.
@@ -9871,8 +9838,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("node:" + (q.get("name") or [""])[0], 5,
                                   lambda: next((n for n in get_nodes()
                                                 if n["name"] == (q.get("name") or [""])[0]), {})))
-            if p == "/api/passthrough/resources":
-                return self._send(200, PASSTHROUGH.resources(with_usage=True))
             if p == "/api/welcome":
                 return self._send(200, welcome_state(self.role))
             if p == "/api/node/smart":
@@ -9904,9 +9869,6 @@ class H(HTTP.LimitedHandler):
                     raise ValueError("Choose a current host")
                 check = ALLOCATION_EVIDENCE.inspect(host, kget)
                 return self._send(200, {"name": node, "verified": check["verified"], "detail": check["reason"]})
-            if p == "/api/history":
-                # Never hold the global cache mutex while writing to a client.
-                return self._send(200, HISTORY.live_series())
             if p == "/api/flow":
                 return self._send(200, cached("flow2", 8, get_flow2))
             if p == "/api/shares/server":
@@ -9936,10 +9898,6 @@ class H(HTTP.LimitedHandler):
                     (q.get("namespace") or [DEFAULT_NS])[0], (q.get("name") or [""])[0]))
             if p == "/api/shares/options":
                 return self._send(200, share_storage_options())
-            if p == "/api/move/plan":
-                return self._send(200, PLACE.plan(
-                    q["ns"][0], q["name"][0],
-                    float((q.get("cpu") or [0])[0]), float((q.get("mem") or [0])[0])))
             if p == "/api/node/impact":
                 node = (q.get("node") or [""])[0]
                 if not node:
@@ -9960,8 +9918,6 @@ class H(HTTP.LimitedHandler):
             if p == "/api/quorum":
                 r = LC.quorum_report(); r["power_enabled"] = LC.NODE_POWER_ENABLED
                 return self._send(200, r)
-            if p == "/api/vm":
-                return self._send(200, VMS.detail((q.get("ns") or [""])[0], (q.get("name") or [""])[0], include_sensitive=self.role == "admin"))
             if p == "/api/vm/create-options":
                 return self._send(200, vm_create_options())
             if p == "/api/vm-disks/import-plan":
@@ -9982,10 +9938,6 @@ class H(HTTP.LimitedHandler):
                 ns, nm = q["ns"][0], q["name"][0]
                 d = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{nm}")
                 return self._send(200, workload_edit_payload(ns, nm, d))
-            if p == "/api/namespaces":
-                # Places to put an app: Harvester's, Rancher's and Kubernetes'
-                # own namespaces are left out unless all are asked for.
-                return self._send(200, NSMOD.names((q.get("all") or [""])[0] == "1"))
             if p == "/api/storageclasses":
                 classes = storage_classes()
                 if (q.get("facts") or [""])[0] == "1":
@@ -9999,10 +9951,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, self_health())
             if p == "/api/storage/v2":
                 return self._send(200, v2_engine_status())
-            if p == "/api/workloads/rebalance/plan":
-                return self._send(200, CREBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a]))
-            if p == "/api/longhorn/rebalance/plan":
-                return self._send(200, REBALANCE.plan([a for a in (q.get("exclude") or [""])[0].split(",") if a]))
             if p == "/api/pvcs":
                 ns = (q.get("ns") or [DEFAULT_NS])[0]
                 items = kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims")["items"]
@@ -10031,9 +9979,6 @@ class H(HTTP.LimitedHandler):
 
             if p == "/api/nodes/impact":
                 return self._send(200, node_impact((q.get("node") or [""])[0]))
-            if p == "/api/storage/forecast":
-                return self._send(200, {"rows": FORECAST.report(), "warn_days": FORECAST.WARN_DAYS,
-                                        "show_days": FORECAST.SHOW_DAYS, "min_days": FORECAST.MIN_DAYS})
             if p == "/api/restore-tests":
                 return self._send(200, restore_tests_view())
             if p == "/api/uptime":
@@ -10151,9 +10096,6 @@ class H(HTTP.LimitedHandler):
             b = self._body()
             if not isinstance(b, dict):
                 return self._send(400, {"error": "a JSON object is required"})
-            if p == "/api/diagnostics/prepare":
-                return self._send(200, DIAGNOSTICS.prepare(b.get("id"), self.user, b.get("title", "Bug report"),
-                    b.get("comment", ""), b.get("sources", []), b.get("seconds", 900)))
             if p in ("/api/move", "/api/move/preview", "/api/image-updates/apply", "/api/image-updates/rollback", "/api/image-updates/preview"):
                 require_workload_target(b.get("ns") or DEFAULT_NS, b.get("name") or "")
             addr = self._client_ip()
@@ -10556,9 +10498,6 @@ class H(HTTP.LimitedHandler):
             if p == "/api/volumes/chown":
                 return self._send(200, IMP.chown_claim(
                     b.get("namespace") or DEFAULT_NS, b.get("name"), b.get("uid"), b.get("gid")))
-            if p == "/api/sources/measure":
-                return self._send(200, IMP.measure_source_paths(
-                    b.get("name"), b.get("paths") or [], b.get("seconds", 25)))
             if p == "/api/imports/delete":
                 plan = IMP.import_cleanup_plan(b.get("name"), b.get("namespace"))
                 if plan.get("journalled") and any(b.get(key) for key in ("remove_workload", "remove_volume", "remove_volumes")):
@@ -10657,8 +10596,6 @@ class H(HTTP.LimitedHandler):
                         "/shares", {"namespace": SMB_NAMESPACE, "name": SMB_NAME, "undo": "keep"},
                         "Restarting Samba with updated credentials")
                 return self._send(200, {"ok": True, **result})
-            if p == "/api/shares/users/delete":
-                return self._send(200, {"ok": True, **SHARES.delete_user(b.get("user"))})
             if p == "/api/shares/edit":
                 result = SHARES.edit_share(
                     b["name"], b.get("size_gb"), b.get("user", "lab"),
@@ -10746,9 +10683,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, result)
             if p == "/api/node/hardware":
                 return self._send(200, set_node_hardware(b))
-            if p == "/api/move/clusters/add":
-                return self._send(200, MOVE.add_cluster(
-                    b.get("name"), b.get("url"), b.get("user"), b.get("password")))
             if p == "/api/move/clusters/check":
                 return self._move(lambda: MOVE.check_cluster(b.get("name")))
             if p == "/api/move/clusters/readiness":
@@ -10905,18 +10839,10 @@ class H(HTTP.LimitedHandler):
                     return self._send(200, PASSTHROUGH.harvester_usb(str(b.get("node") or ""), str(b["harvester_name"]),
                                                                      b.get("allow", True) is not False))
                 return self._send(200, PASSTHROUGH.allow_usb(b.get("vendor"), b.get("product"), b.get("allow", True) is not False))
-            if p == "/api/os-updates/settings":
-                return self._send(200, {"ok": True, "settings": OS_ROLLOUT.save_settings(b)})
             if p == "/api/os-updates/start":
                 rollout = OS_ROLLOUT.start("asked")
                 return self._send(200, {"ok": True, "rollout": rollout, "operation": rollout.get("operation"),
                                         "detail": f"Updating {len(rollout['nodes'])} hosts one at a time; follow it in the job tray"})
-            if p == "/api/os-updates/stop":
-                return self._send(200, {"ok": True, "rollout": OS_ROLLOUT.stop(),
-                                        "detail": "Stopping once the host being updated is done"})
-            if p == "/api/os-updates/check":
-                # Every Ready host read again now (#371); the card follows it.
-                return self._send(200, {"ok": True, "checking": HOST_OS.check_all()})
             if p == "/api/node/os/check":
                 node = str(b.get("node") or "")
                 if not node:
@@ -11060,8 +10986,6 @@ class H(HTTP.LimitedHandler):
                 _cache.pop("lhrebuild", None)
                 _cache.pop("volumes", None)
                 return self._send(200, LHREBUILD.rebuild_now(str(b.get("volume") or "")))
-            if p == "/api/longhorn/v2/upgrade/review":
-                return self._send(200, LHV2_UPGRADE.settings_review(b.get("enabled"), b.get("timeout"))[0])
             if p == "/api/longhorn/v2/upgrade/settings":
                 return self._send(200, LHV2_UPGRADE.configure(b, OPS))
             if p == "/api/longhorn/v2/enable":
@@ -11237,9 +11161,6 @@ class H(HTTP.LimitedHandler):
                                                             "namespace": result["namespace"]},
                     "/data-protection", {"namespace": result["namespace"], "name": result["job"]}, "Starting")
                 return self._send(200, result)
-            if p == "/api/lh/assign":
-                return self._send(200, LH.bulk_assign(
-                    b["volumes"], b["name"], b.get("kind", "group"), b.get("enabled", True)))
             if p == "/api/lh/snapshot/delete":
                 return self._send(200, {"ok": True, "operation": storage_volume_action(
                     b.get("volume"), lambda: SNAPSHOT_DELETE.start(b, OPS))})
@@ -11275,25 +11196,10 @@ class H(HTTP.LimitedHandler):
                          "backup": result["backup"], "restore_config": b,
                          "restore_started": result["created"]}, result["message"])
                 return self._send(200, result)
-            if p == "/api/lh/target":
-                return self._send(200, LH.set_backup_target(
-                    b["url"], b.get("secret", ""), b.get("poll", "5m"), b.get("keys")))
             if p == "/api/schedules":
                 IMP.save_job(b); return self._send(200, {"ok": True})
             if p == "/api/schedules/run":
                 IMP.run_job_now(b["name"]); return self._send(200, {"ok": True})
-            if p == "/api/sources":
-                return self._send(200, {"ok": True, "sources": IMP.add_source(
-                    b["name"], b["host"], b["user"], b.get("password"),
-                    b.get("kind", "unraid"), b.get("base_path", "/mnt/user/appdata"), b.get("port", 22))})
-            if p == "/api/sources/delete":
-                return self._send(200, {"ok": True, "sources": IMP.del_source(b["name"])})
-            if p == "/api/sources/browse":
-                return self._send(200, {"entries": IMP.browse_source(b["name"], b.get("path"))})
-            if p == "/api/sources/containers":
-                return self._send(200, {"containers": IMP.source_containers(b["name"])})
-            if p == "/api/vms/import-unraid":
-                return self._send(200, {"ok": True, "operation": UNRAID_VMS.start(b, self.user or "")})
             if p == "/api/import/preview":
                 return self._send(200, preview_import(b))
             if p == "/api/import":

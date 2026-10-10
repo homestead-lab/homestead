@@ -421,3 +421,9 @@ def cancel_plan(item):
 def cancel_run(work, chosen):
     moved = (work.get("ref") or {}).get("moved", 0)
     return f"Stopped after moving {moved} container{'' if moved == 1 else 's'}"
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/workloads/rebalance/plan"): ("viewer", lambda request: plan([a for a in (request.query.get("exclude") or [""])[0].split(",") if a])),
+}

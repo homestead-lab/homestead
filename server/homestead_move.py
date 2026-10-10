@@ -755,4 +755,5 @@ ROUTES = {
     ("GET", "/api/move/hello"): ("viewer", lambda request: hello()),
     ("POST", "/api/move/clusters/remove"): ("admin", lambda request: remove_cluster(request.body.get("name"))),
     ("POST", "/api/move/remote"): ("admin", lambda request: remote_inventory(request.body.get("name"))),
+    ("POST", "/api/move/clusters/add"): ("admin", lambda request: add_cluster(request.body.get("name"), request.body.get("url"), request.body.get("user"), request.body.get("password"))),
 }

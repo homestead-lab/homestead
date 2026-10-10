@@ -231,4 +231,5 @@ def send(wants, urgency="normal", poster=None):
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("POST", "/api/push/unsubscribe"): ("viewer", lambda request: unsubscribe(request.user, str(request.body.get("endpoint") or ""))),
+    ("GET", "/api/push/key"): ("viewer", lambda request: {"key": public_key(), "categories": CATEGORIES, "defaults": DEFAULT_CATEGORIES}),
 }

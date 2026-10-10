@@ -232,3 +232,9 @@ def verify(token, addr, now=None, force=False):
 def scopes_for_role(role):
     """A person signed in to the web app reaches /api/v1 with their role's scopes."""
     return [s for s, (need, _) in SCOPES.items() if AUTH.allows(role, need)]
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/auth/keys"): ("admin", lambda request: {"keys": list_keys(), "scopes": {s: text for s, (_, text) in SCOPES.items()}, "min_ttl": MIN_TTL, "max_ttl": MAX_TTL}),
+}

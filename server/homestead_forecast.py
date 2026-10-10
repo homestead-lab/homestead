@@ -184,3 +184,9 @@ def alert_facts(rows):
                       "resolved": f"{what} is no longer forecast to fill within {WARN_DAYS} days",
                       "href": "/storage" if r["kind"] == "volume" else "/nodes", "signals": {"days_left": round(left)}})
     return facts
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/storage/forecast"): ("viewer", lambda request: {"rows": report(), "warn_days": WARN_DAYS, "show_days": SHOW_DAYS, "min_days": MIN_DAYS}),
+}

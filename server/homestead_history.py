@@ -274,4 +274,6 @@ def uptime(now=None):
 ROUTES = {
     ("GET", "/api/history/long"): ("viewer", lambda request: series((request.query.get("range") or ["24h"])[0])),
     ("GET", "/api/nodes/uptime"): ("viewer", lambda request: homestead_routes.cached("uptime", 60, uptime)),
+    # Never hold the global cache mutex while writing to a client.
+    ("GET", "/api/history"): ("viewer", lambda request: live_series()),
 }

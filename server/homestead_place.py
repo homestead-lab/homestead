@@ -679,3 +679,9 @@ def move(ns, name, node, pin=False):
     ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
     _bust("wl", "ov", "flow", "nodes", "impact:")
     return {"ok": True, "moved": name, "to": node or "any node", "mode": mode}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/move/plan"): ("admin", lambda request: plan(request.query["ns"][0], request.query["name"][0], float((request.query.get("cpu") or [0])[0]), float((request.query.get("mem") or [0])[0]))),
+}

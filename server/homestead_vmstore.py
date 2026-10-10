@@ -501,4 +501,5 @@ def source_for(image_id):
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("POST", "/api/vm/store/auto"): ("admin", lambda request: set_auto(str(request.body.get("id") or ""), bool(request.body.get("auto")))),
+    ("GET", "/api/vm/store"): ("viewer", lambda request: view(check=(request.query.get("check") or [""])[0] == "1")),
 }

@@ -233,4 +233,5 @@ def metallb_pools():
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/platform/join"): ("viewer", lambda request: join_guide()),
+    ("GET", "/api/platform"): ("viewer", lambda request: detect(force=(request.query.get("force") or [""])[0] == "1")),
 }
