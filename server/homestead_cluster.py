@@ -3,6 +3,7 @@ import math
 import re
 import time
 from datetime import datetime, timezone
+import homestead_routes
 
 
 kget = None
@@ -258,3 +259,9 @@ def inventory():
         summaries = []
     return build_report(version.get("gitVersion", ""), raw_nodes, summaries, pods, events,
                         csrs, harvester, unavailable=unavailable)
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/cluster"): ("viewer", lambda request: homestead_routes.cached("cluster", 15, inventory)),
+}

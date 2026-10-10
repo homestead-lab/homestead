@@ -10,6 +10,7 @@ import homestead_names as NAMES
 import hashlib
 import re
 import urllib.error
+import homestead_routes
 
 kget = ksend = None
 NS = "lab"
@@ -233,4 +234,5 @@ def mount_spec(feature):
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("POST", "/api/hardware/features"): ("admin", lambda request: save_features(request.body.get("features"))),
+    ("GET", "/api/hardware/features"): ("viewer", lambda request: homestead_routes.cached("hardware:features", 15, features)),
 }

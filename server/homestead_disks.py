@@ -20,6 +20,7 @@ import re
 import urllib.error
 
 import homestead_names as NAMES
+import homestead_routes
 
 kget = ksend = None
 temps = lambda: {}
@@ -944,4 +945,5 @@ ROUTES = {
     ("POST", "/api/disks/retire/plan"): ("admin", lambda request: retire_plan(request.body.get("node", ""), request.body.get("disk", ""))),
     ("POST", "/api/disks/os-space"): ("admin", lambda request: os_space(str(request.body.get("node") or ""))),
     ("POST", "/api/disks/inspect"): ("admin", lambda request: inspect_disk(str(request.body.get("node") or ""), str(request.body.get("device") or ""))),
+    ("GET", "/api/disks"): ("viewer", lambda request: homestead_routes.cached("disks", 10, inventory)),
 }

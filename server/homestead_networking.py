@@ -23,6 +23,7 @@ DNS_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 VIP_ANNOTATION = "kube-vip.io/loadbalancerIPs"
 import homestead_platform as PLATFORM
 import homestead_vips as VIPS
+import homestead_routes
 
 
 def bind(_kget, _ksend, system_namespaces, default_namespace, shared_vip):
@@ -1327,4 +1328,5 @@ def create_vm_network(cfg):
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("POST", "/api/network/plan"): ("operator", lambda request: service_plan(request.body)),
+    ("GET", "/api/network"): ("viewer", lambda request: homestead_routes.cached("network", 5, inventory)),
 }

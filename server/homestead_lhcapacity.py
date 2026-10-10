@@ -16,6 +16,7 @@ setting drives Longhorn's and prepares the hosts, so that is what changes.
 """
 import json
 import urllib.error
+import homestead_routes
 
 kget = ksend = None
 v2_status = lambda: {}
@@ -214,3 +215,9 @@ def alert_facts(cap):
                                f"a new replica there can be at most {node['room_gb']} GB"),
                       "href": "/volumes"})
     return facts
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/longhorn/capacity"): ("viewer", lambda request: homestead_routes.cached("lhcap", 15, status)),
+}

@@ -25,6 +25,7 @@ import secrets
 import time
 import urllib.error
 import urllib.request
+import homestead_routes
 
 kget = ksend = None
 LHNS = "longhorn-system"
@@ -1155,4 +1156,6 @@ ROUTES = {
     ("POST", "/api/lh/group"): ("operator", lambda request: save_group(request.body)),
     ("POST", "/api/lh/group/delete"): ("admin", lambda request: delete_group(request.body.get("name", ""))),
     ("POST", "/api/lh/backup/delete"): ("admin", lambda request: delete_backup(request.body.get("name", ""))),
+    ("GET", "/api/lh/overview"): ("viewer", lambda request: homestead_routes.cached("lhov", 8, overview)),
+    ("GET", "/api/lh/backupvolumes"): ("viewer", lambda request: homestead_routes.cached("lhbackupvols", 15, backup_volumes)),
 }

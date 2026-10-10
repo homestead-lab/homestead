@@ -35,6 +35,7 @@ import homestead_vmusage as VMUSAGE
 import homestead_vm_network as VMNETWORK
 import homestead_vm_profiles as PROFILES
 import homestead_storage_resize as RESIZE
+import homestead_routes
 
 kget = ksend = None
 events_for = lambda ns, name, uid="": []
@@ -1321,3 +1322,9 @@ def delete(ns, name, with_disks=False):
         if kept:
             detail += f"; {', '.join(kept)} kept"
     return {"ok": True, "detail": detail}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/vms"): ("viewer", lambda request: homestead_routes.cached("vms", 5, list_vms)),
+}
