@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import homestead_http as HTTP
 import homestead_api_errors as API_ERRORS
 import homestead_route_policy as ROUTE_POLICY
+import homestead_version as RELEASE
 from contextlib import nullcontext
 from functools import wraps
 
@@ -71,7 +72,7 @@ DEFAULT_NS = os.environ.get("DEFAULT_NS", "lab")
 STORAGE_CLASS = os.environ.get("STORAGE_CLASS", "longhorn-r2")
 LB_IP = os.environ.get("LB_IP", "")
 DATA_DIR = os.environ.get("DATA_DIR", "/data")
-HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", "2.8.321-dev.1")
+HOMESTEAD_VERSION = os.environ.get("HOMESTEAD_VERSION", RELEASE.VERSION)
 _self_data_fence = None
 _self_data_barrier = None
 _self_data_boot_pending = False
@@ -6599,6 +6600,7 @@ import homestead_shares as SHARES
 import homestead_nfs as NFS
 import homestead_networking as NETWORK
 import homestead_firewall as FIREWALL
+import homestead_routes as MODULE_ROUTES
 import homestead_cluster as CLUSTER
 import homestead_probe as PROBE
 import homestead_objectstore as OBJECTS
@@ -8961,7 +8963,6 @@ def is_app_identity(path):
 # Enforced here, server-side. The UI hides what you cannot do as a courtesy,
 # but a viewer who hand-crafts the request still gets a 403.
 ADMIN_ROUTES = {
-    "/api/firewall/preview", "/api/firewall/save", "/api/firewall/delete",
     "/api/disks/v2/plan", "/api/disks/v2/start", "/api/disks/v2/status",
     "/api/disks/v2/prepare-review", "/api/disks/v2/prepare",
     "/api/longhorn/v2/plan", "/api/longhorn/v2/prepare", "/api/longhorn/v2/enable",
@@ -9040,6 +9041,8 @@ ADMIN_ROUTES = {
     # Homestead's own permissions, and the namespaces apps live in.
     "/api/self/permissions", "/api/namespaces/create", "/api/namespaces/delete",
 }
+# Declared beside their handlers (homestead_routes.py) and admin-only.
+ADMIN_ROUTES |= {route.path for route in MODULE_ROUTES.table().values() if route.role == "admin"}
 # things a signed-in user may always do to their own account
 SELF_ROUTES = {"/api/auth/preferences/dashboard", "/api/auth/logout", "/api/auth/password", "/api/auth/signout-everywhere",
                # Which linked cluster this browser is looking at.
@@ -9485,6 +9488,17 @@ class H(HTTP.LimitedHandler):
         code, answer = API_V1.handle(method, path, query, body, auth)
         return self._send(code, answer)
 
+    def _module_route(self, method, path, query, body):
+        """A route a feature module declares (homestead_routes.py), answered;
+        False when server.py answers it itself. The guard has already
+        checked the role the module declared for it."""
+        route = MODULE_ROUTES.find(method, path)
+        if route is None:
+            return False
+        self._send(200, route.handler(MODULE_ROUTES.Request(method, path, query, body,
+                                                            getattr(self, "user", None), getattr(self, "role", None))))
+        return True
+
     def _begin(self):
         """Per request: a connection can carry several, and the handler stays."""
         CHANGES.REQUEST.user = None
@@ -9634,6 +9648,8 @@ class H(HTTP.LimitedHandler):
                 return
             if p.startswith("/api/v1/"):
                 return self._api_v1("GET", p, q, None)
+            if self._module_route("GET", p, q, None):
+                return
             if p == "/api/diagnostics":
                 return self._send(200, DIAGNOSTICS.listing(self.user))
             if p == "/api/diagnostics/report":
@@ -9780,8 +9796,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, PORTAL.candidates())
             if p == "/api/network":
                 return self._send(200, cached("network", 5, NETWORK.inventory))
-            if p == "/api/firewall":
-                return self._send(200, FIREWALL.inventory())
             if p == "/api/cluster":
                 return self._send(200, cached("cluster", 15, CLUSTER.inventory))
             if p == "/api/self/replicas":
@@ -10274,6 +10288,8 @@ class H(HTTP.LimitedHandler):
             addr = self._client_ip()
             if p.startswith("/api/v1/"):
                 return self._api_v1("POST", p, urllib.parse.parse_qs(u.query), b)
+            if self._module_route("POST", p, Query(urllib.parse.parse_qs(u.query)), b):
+                return
             if p == "/api/auth/keys":
                 # Made in this Homestead's own app, by someone signed in to it:
                 # never relayed from a linked cluster.
@@ -11555,12 +11571,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, OPS.dismiss(b["id"]))
             if p == "/api/network/plan":
                 return self._send(200, NETWORK.service_plan(b))
-            if p == "/api/firewall/preview":
-                return self._send(200, FIREWALL.preview(b))
-            if p == "/api/firewall/save":
-                return self._send(200, FIREWALL.save(b))
-            if p == "/api/firewall/delete":
-                return self._send(200, FIREWALL.remove(b))
             if p == "/api/network/services":
                 guard_managed_smb(b.get("namespace") or DEFAULT_NS, b.get("name"))
                 result = NETWORK.create_service(b)

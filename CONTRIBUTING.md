@@ -8,7 +8,9 @@ acts, and leave a person able to see what happened.
 
 - **Server:** Python 3.12, standard library only. No `pip install`, no
   frameworks - `server/server.py` routes requests and each feature lives in its
-  own `server/homestead_*.py` module. A new dependency needs a very good reason;
+  own `server/homestead_*.py` module. A new route goes in its module's `ROUTES`
+  table with its role (`server/homestead_routes.py`), not a new branch in
+  `server.py`; a test keeps `server.py` from growing. A new dependency needs a very good reason;
   the image is small and has nothing to patch.
 - **Browser:** plain JavaScript and one stylesheet, no build step. Files in
   `web/js/` are loaded in order by `web/index.html` and share globals such as

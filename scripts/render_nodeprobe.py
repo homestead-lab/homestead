@@ -83,8 +83,8 @@ def render(version):
 
 
 def current_version():
-    text = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
-    match = re.search(r'HOMESTEAD_VERSION = .*?"(\d+\.\d+\.\d+(?:-dev\.\d+)?)"\)', text)
+    text = (ROOT / "server" / "homestead_version.py").read_text(encoding="utf-8")
+    match = re.search(r'^VERSION = "(\d+\.\d+\.\d+(?:-dev\.\d+)?)"', text, re.M)
     return match.group(1) if match else "dev"
 
 

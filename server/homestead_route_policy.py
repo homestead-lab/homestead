@@ -1,9 +1,8 @@
-"""Explicit HTTP authorization declarations. New routes must declare a policy."""
+"""Explicit HTTP authorization declarations. New routes must declare a policy:
+here, or beside their handler in a feature module's ROUTES (homestead_routes.py)."""
+import homestead_routes as MODULE_ROUTES
+
 POLICY = {
-    ('GET', '/api/firewall'): 'viewer',
-    ('POST', '/api/firewall/preview'): 'admin',
-    ('POST', '/api/firewall/save'): 'admin',
-    ('POST', '/api/firewall/delete'): 'admin',
     ('GET', '/api/auth/preferences/dashboard'): 'viewer',
     ('POST', '/api/auth/preferences/dashboard'): 'viewer',
     ('GET', '/api/disks/v2/status'): 'admin',
@@ -750,7 +749,8 @@ def role(path, method):
     if method == "GET" and path in ("/api/fleet/all/workloads", "/api/fleet/all/vms", "/api/fleet/all/nodes",
                                     "/api/fleet/all/volumes", "/api/fleet/all/flow"):
         return "viewer"
-    return POLICY.get((method, path))
+    declared = POLICY.get((method, path))
+    return declared if declared is not None else MODULE_ROUTES.role(path, method)
 
 
 POLICY.update({

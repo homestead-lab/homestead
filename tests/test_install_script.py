@@ -14,7 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "install.sh"
-DEFAULT_VERSION = re.search(r'os\.environ\.get\("HOMESTEAD_VERSION", "([^"]+)"\)', (ROOT / "server" / "server.py").read_text(encoding="utf-8")).group(1)
+DEFAULT_VERSION = re.search(r'^VERSION = "([^"]+)"', (ROOT / "server" / "homestead_version.py").read_text(encoding="utf-8"), re.M).group(1)
 SH = shutil.which("dash") or shutil.which("sh")
 
 
