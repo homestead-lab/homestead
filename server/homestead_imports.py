@@ -2750,7 +2750,19 @@ def create_vm(cfg, platform=None, default_class=""):
 
 
 # Its routes and who may use them (homestead_routes.py).
+def _schedule_saved(request):
+    save_job(request.body)
+    return {"ok": True}
+
+
+def _schedule_run(request):
+    run_job_now(request.body["name"])
+    return {"ok": True}
+
+
 ROUTES = {
+    ("POST", "/api/schedules"): ("operator", _schedule_saved),
+    ("POST", "/api/schedules/run"): ("operator", _schedule_run),
     ("GET", "/api/vm-disks"): ("viewer", lambda request: list_vm_disks()),
     ("GET", "/api/sources"): ("admin", lambda request: list_sources()),
     ("GET", "/api/imports"): ("viewer", lambda request: import_status()),

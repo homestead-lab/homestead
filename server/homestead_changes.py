@@ -27,6 +27,7 @@ import re
 import threading
 import time
 
+import homestead_routes
 import homestead_shared as SHARED
 
 DATA_DIR = "/data"
@@ -41,9 +42,15 @@ REQUEST = threading.local() # who the request on this thread is for
 BY_SCHEDULE = "schedule"    # a power schedule's stop or start: not a change to record
 
 
-def bind(data_dir="/data"):
+# server.py's review of an undo, and its writer (bind).
+_bound = {"plan": None, "ksend": None}
+
+
+def bind(data_dir="/data", plan=None, ksend=None):
     global DATA_DIR
     DATA_DIR = data_dir
+    if plan:
+        _bound.update(plan=plan, ksend=ksend)
 
 
 def _path():
@@ -270,7 +277,33 @@ def undo_plan(current, entry):
     return proposed, rows
 
 
+def undo_preview(body):
+    """What undoing a change would put back, and the capacity it needs."""
+    import homestead_capacity_review as CAPACITY_REVIEW
+    current, proposed, rows, capacity, context = _bound["plan"](body)
+    return {"changes": rows, "capacity": capacity, "capacity_token": CAPACITY_REVIEW.issue(body, context)}
+
+
+def undo(body):
+    """Put an app's settings back as they were before a change, reviewed like any rollout."""
+    import homestead_capacity_review as CAPACITY_REVIEW
+    import homestead_names as NAMES
+    import homestead_updates as UPDATES
+    current, proposed, rows, capacity, context = _bound["plan"](body)
+    CAPACITY_REVIEW.enforce(body, capacity, context)
+    ns, name = proposed["metadata"]["namespace"], proposed["metadata"]["name"]
+    proposed["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[NAMES.key("editedAt")] = \
+        time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    _bound["ksend"]("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", proposed)
+    homestead_routes.forget("wl")
+    UPDATES.refresh_soon(ns, name)
+    return {"ok": True, "changes": rows,
+            "detail": f"{name} is back to its settings from before that change; its pods are being replaced"}
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
+    ("POST", "/api/changes/undo/preview"): ("operator", lambda request: undo_preview(request.body)),
+    ("POST", "/api/changes/undo"): ("operator", lambda request: undo(request.body)),
     ("GET", "/api/changes"): ("viewer", lambda request: {"entries": history((request.query.get("ns") or [""])[0] or None, (request.query.get("name") or [""])[0] or None)}),
 }

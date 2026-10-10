@@ -76,6 +76,7 @@ MODULES = (
     "homestead_objectstore",
     "homestead_operations",
     "homestead_os_rollout",
+    "homestead_outage",
     "homestead_passthrough",
     "homestead_place",
     "homestead_platform",

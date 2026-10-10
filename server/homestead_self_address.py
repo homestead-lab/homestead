@@ -15,7 +15,10 @@ should outlive any one node. NFS is not here: it always has a VIP of its own
 already, as it must see the client's own address.
 """
 
+import homestead_routes
+
 kget = network = objects = None
+_follow_fleet = lambda: ""
 WEB_NS = "lab"
 WEB = "homestead"
 WEB_PORT = 8088
@@ -24,10 +27,11 @@ SMB_NS = "lab"
 SMB = "homestead-smb"
 
 
-def bind(_kget, _network, _objects, web_ns, web_target, smb_ns, smb_name):
-    global kget, network, objects, WEB_NS, WEB_TARGET, SMB_NS, SMB
+def bind(_kget, _network, _objects, web_ns, web_target, smb_ns, smb_name, follow_fleet=None):
+    global kget, network, objects, WEB_NS, WEB_TARGET, SMB_NS, SMB, _follow_fleet
     kget, network, objects = _kget, _network, _objects
     WEB_NS, WEB_TARGET, SMB_NS, SMB = web_ns, int(web_target), smb_ns, smb_name
+    _follow_fleet = follow_fleet or (lambda: "")
 
 
 def _components():
@@ -136,8 +140,25 @@ def move(vip):
     return done
 
 
+def move_asked(body):
+    """Move Homestead to a VIP, make it the default if asked, and tell the
+    linked clusters where it now answers."""
+    vip = str(body.get("vip") or "").strip()
+    result = move(vip)
+    if body.get("default"):
+        try:
+            network.set_default_vip(vip)
+            result["default"] = True
+        except ValueError as error:
+            result["default_error"] = str(error)
+    homestead_routes.forget("network", "ov")
+    result["fleet_address"] = _follow_fleet()
+    return result
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
+    ("POST", "/api/self/address"): ("admin", lambda request: move_asked(request.body)),
     ("GET", "/api/self/address"): ("admin", lambda request: report()),
     ("POST", "/api/self/address/plan"): ("admin", lambda request: plan(str(request.body.get("vip") or "").strip())),
 }

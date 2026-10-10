@@ -37,9 +37,15 @@ DATA_DIR = "/data"
 _lock = threading.Lock()
 
 
-def bind(data_dir="/data"):
+# server.py's, which read and write the app or VM (bind).
+_bound = {"set_actions": None, "test_webhook": None}
+
+
+def bind(data_dir="/data", set_actions=None, test_webhook=None):
     global DATA_DIR
     DATA_DIR = data_dir
+    if set_actions:
+        _bound.update(set_actions=set_actions, test_webhook=test_webhook)
 
 
 def _path():
@@ -275,3 +281,10 @@ def alert_facts(scheduled_report=None):
                           "body": s["last_error"], "resolved": f"{what}{name} could be restarted", "href": href,
                           "signals": {"error": s["last_error"]}})
     return facts
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("POST", "/api/monitoring/actions"): ("operator", lambda request: _bound["set_actions"](request.body)),
+    ("POST", "/api/monitoring/actions/test"): ("operator", lambda request: _bound["test_webhook"](request.body)),
+}

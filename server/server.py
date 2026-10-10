@@ -6591,6 +6591,13 @@ def storage_helper_admission(item, manifest):
     return copy_admission(manifest)
 
 
+def _bind_recovery():
+    """The job tray's recovery reviews read through server.py's reader, so a
+    test that patches it is the one they use."""
+    OPS.bind_recovery(lambda *a, **k: kget(*a, **k), lambda *a: storage_helper_admission(*a),
+                      lambda *a: storage_restart_admission(*a), lambda: storage_runtime_check())
+
+
 def storage_runtime_check():
     try:
         return STORAGE_RUNTIME.require(OPS, kget, SELF.NS, SELF.POD, NAMES.BRAND, HOMESTEAD_VERSION, DATA_DIR)
@@ -6598,6 +6605,9 @@ def storage_runtime_check():
         raise
     except Exception:
         raise STORAGE_WORKFLOW.JOURNAL.Held("Homestead replica compatibility could not be verified; restore cluster and shared-data access before moving storage") from None
+
+
+_bind_recovery()
 
 
 def _storage_runtime_loop():
@@ -6773,10 +6783,10 @@ NODE_PARITY.bind(kget, ksend, HOSTRUN, PLATFORM.detect, node_temps, DATA_DIR, (S
 HOST_OS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 PORTS.bind(DATA_DIR)
 UPTIME.bind(DATA_DIR)
-HOUSEKEEPING.bind(DATA_DIR)
+HOUSEKEEPING.bind(DATA_DIR, tidy=lambda: housekeeping_tidy())
 SCHEDULES.bind(DATA_DIR)
-OUTAGE.bind(DATA_DIR)
-CHANGES.bind(DATA_DIR)
+OUTAGE.bind(DATA_DIR, set_actions=lambda b: set_outage_actions(b), test_webhook=lambda b: test_outage_webhook(b))
+CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k: ksend(*a, **k))
 FORECAST.bind(DATA_DIR)
 
 
@@ -6814,7 +6824,8 @@ def ports_report():
 OPS.RESOLVERS["host-os"] = HOST_OS.status
 ROOT_GUARD.bind(kget, ksend, PLATFORM.detect, node_temps, DATA_DIR)
 PASSTHROUGH.bind(kget, ksend, HOSTRUN, PLATFORM.detect, DATA_DIR)
-SELF_ADDRESS.bind(kget, NETWORK, OBJECTS, SELF.NS, os.environ.get("PORT", "8080"), SMB_NAMESPACE, SMB_NAME)
+SELF_ADDRESS.bind(kget, NETWORK, OBJECTS, SELF.NS, os.environ.get("PORT", "8080"), SMB_NAMESPACE, SMB_NAME,
+                  follow_fleet=lambda: _follow_fleet_address())
 
 
 def installer_vip(vip):
@@ -9846,19 +9857,6 @@ class H(HTTP.LimitedHandler):
                                       "Harvester checks the cluster, then prepares each node")
                 return self._send(200, {"ok": True, "upgrade": name, "operation": operation,
                                         "detail": f"Harvester is upgrading to {version}"})
-            if p in ("/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/multus", "/api/addons/multus/repair", "/api/addons/kube-vip"):
-                what = "multus" if p.endswith("/repair") else p.rsplit("/", 1)[1]
-                result = {"longhorn": ADDONS.install_longhorn, "kubevirt": ADDONS.install_kubevirt,
-                          "multus": ADDONS.repair_multus if p.endswith("/repair") else ADDONS.install_multus,
-                          "kube-vip": ADDONS.install_kube_vip}[what](b)
-                for key in ("helm", "platform"):
-                    _cache.pop(key, None)
-                result["operation"] = OPS.start("multus" if what == "multus" else "helm", f"{'Repair' if p.endswith('/repair') else 'Install'} {({'longhorn': 'Longhorn', 'kubevirt': 'KubeVirt', 'kube-vip': 'kube-vip'}).get(what, 'Multus')}",
-                                                {"kind": "HelmChart", "name": result["name"], "namespace": ADDONS.CONTROLLER_NS},
-                                                "/settings", {"namespace": ADDONS.CONTROLLER_NS, "name": result["job"],
-                                                              "action": "install"},
-                                                "Waiting for the Helm controller")
-                return self._send(200, result)
             if p == "/api/vm/isos/prepare":
                 result = ISOS.prepare(str(b.get("share") or ""), str(b.get("path") or ""))
                 _cache.pop("vms", None)
@@ -9876,9 +9874,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, {"ok": not failed, "results": results,
                                         "detail": (f"Installing {' and '.join(done)}" if done else "All required components are installed")
                                                   + (f". Failed: {'; '.join(failed)}" if failed else "")})
-            if p == "/api/addons/kubevirt/emulation":
-                _cache.pop("platform", None)
-                return self._send(200, ADDONS.set_kubevirt_emulation(bool(b.get("enabled"))))
             if p in ("/api/helm/install", "/api/helm/upgrade", "/api/helm/uninstall"):
                 action = p.rsplit("/", 1)[1]
                 result = (HELM.install(b) if action == "install" else HELM.upgrade(b) if action == "upgrade"
@@ -9918,34 +9913,10 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_uptime_setting(b))
             if p == "/api/vms/monitoring":
                 return self._send(200, set_vm_monitoring(b))
-            if p == "/api/monitoring/actions":
-                return self._send(200, set_outage_actions(b))
-            if p == "/api/monitoring/actions/test":
-                return self._send(200, test_outage_webhook(b))
             if p == "/api/power-schedules/set":
                 return self._send(200, set_schedule(b))
             if p == "/api/image-updates/mode":
                 return self._send(200, set_update_mode(b))
-            if p == "/api/changes/undo/preview":
-                current, proposed, rows, capacity, context = change_undo_plan(b)
-                return self._send(200, {"changes": rows, "capacity": capacity,
-                                        "capacity_token": CAPACITY_REVIEW.issue(b, context)})
-            if p == "/api/changes/undo":
-                current, proposed, rows, capacity, context = change_undo_plan(b)
-                CAPACITY_REVIEW.enforce(b, capacity, context)
-                ns, name = proposed["metadata"]["namespace"], proposed["metadata"]["name"]
-                proposed["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[NAMES.key("editedAt")] = \
-                    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", proposed)
-                _cache.pop("wl", None)
-                UPDATES.refresh_soon(ns, name)
-                return self._send(200, {"ok": True, "changes": rows,
-                                        "detail": f"{name} is back to its settings from before that change; its pods are being replaced"})
-            if p == "/api/homestead/data/tidy":
-                result = housekeeping_tidy()
-                mb = result["freed"] / 1024**2
-                return self._send(200, {"ok": True, **result, "report": HOUSEKEEPING.report(),
-                                        "detail": (f"Freed {mb:.1f} MB: " + "; ".join(result["notes"])) if result["notes"] else "Nothing to tidy"})
             if p == "/api/restore-tests/settings":
                 enabled = b.get("enabled")
                 if not isinstance(enabled, bool):
@@ -10351,10 +10322,6 @@ class H(HTTP.LimitedHandler):
                     return self._send(200, PASSTHROUGH.harvester_usb(str(b.get("node") or ""), str(b["harvester_name"]),
                                                                      b.get("allow", True) is not False))
                 return self._send(200, PASSTHROUGH.allow_usb(b.get("vendor"), b.get("product"), b.get("allow", True) is not False))
-            if p == "/api/os-updates/start":
-                rollout = OS_ROLLOUT.start("asked")
-                return self._send(200, {"ok": True, "rollout": rollout, "operation": rollout.get("operation"),
-                                        "detail": f"Updating {len(rollout['nodes'])} hosts one at a time; follow it in the job tray"})
             if p == "/api/node/os/check":
                 node = str(b.get("node") or "")
                 if not node:
@@ -10599,19 +10566,6 @@ class H(HTTP.LimitedHandler):
                     except Exception:
                         pass
                 return self._send(200, result)
-            if p == "/api/self/address":
-                vip = str(b.get("vip") or "").strip()
-                result = SELF_ADDRESS.move(vip)
-                if b.get("default"):
-                    try:
-                        NETWORK.set_default_vip(vip)
-                        result["default"] = True
-                    except ValueError as error:
-                        result["default_error"] = str(error)
-                for key in ("network", "ov"):
-                    _cache.pop(key, None)
-                result["fleet_address"] = _follow_fleet_address()
-                return self._send(200, result)
             if p == "/api/network/vips/label":
                 _cache.pop("network", None)
                 return self._send(200, NETWORK.set_vip_label(b.get("ip", ""), b.get("label", "")))
@@ -10704,29 +10658,11 @@ class H(HTTP.LimitedHandler):
                          "backup": result["backup"], "restore_config": b,
                          "restore_started": result["created"]}, result["message"])
                 return self._send(200, result)
-            if p == "/api/schedules":
-                IMP.save_job(b); return self._send(200, {"ok": True})
-            if p == "/api/schedules/run":
-                IMP.run_job_now(b["name"]); return self._send(200, {"ok": True})
             if p == "/api/import/preview":
                 return self._send(200, preview_import(b))
             if p == "/api/import":
                 result = reviewed_import(b)
                 return self._send(200, result)
-            if p == "/api/operations/power-recovery/preview":
-                return self._send(200, VM_POWER_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user))
-            if p == "/api/operations/power-recovery/resolve":
-                return self._send(200, VM_POWER_RECOVERY.resolve(b, OPS, kget, self.user))
-            if p == "/api/operations/vm-recovery/preview":
-                return self._send(200, VM_MUTATION_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user))
-            if p == "/api/operations/vm-recovery/resolve":
-                return self._send(200, VM_MUTATION_RECOVERY.resolve(b, OPS, kget, self.user))
-            if p == "/api/operations/storage-recovery/preview":
-                return self._send(200, STORAGE_RECOVERY.preview(b.get("id", ""), OPS, kget, self.user,
-                    storage_helper_admission, storage_restart_admission, runtime_check=storage_runtime_check))
-            if p == "/api/operations/storage-recovery/act":
-                return self._send(200, STORAGE_RECOVERY.act(b, OPS, kget, self.user,
-                    storage_helper_admission, storage_restart_admission, runtime_check=storage_runtime_check))
             if p == "/api/operations/cancel":
                 # The route lets any operator in; what the job's own cancel
                 # does - delete VMs, stop a volume move - may need more.
@@ -10738,10 +10674,6 @@ class H(HTTP.LimitedHandler):
                 for key in ("wl", "ov", "network", "vms", "vol", "helm", "disks", "lhcap", "flow2"):
                     _cache.pop(key, None)
                 return self._send(200, result)
-            if p == "/api/operations/dismiss":
-                if b.get("all"):
-                    return self._send(200, OPS.dismiss_finished())
-                return self._send(200, OPS.dismiss(b["id"]))
             if p == "/api/network/services":
                 guard_managed_smb(b.get("namespace") or DEFAULT_NS, b.get("name"))
                 result = NETWORK.create_service(b)

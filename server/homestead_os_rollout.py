@@ -430,8 +430,15 @@ def report():
             **{k: v for k, v in host_os.report().items() if k in ("hosts", "every_s", "checking")}}
 
 
+def start_asked():
+    rollout = start("asked")
+    return {"ok": True, "rollout": rollout, "operation": rollout.get("operation"),
+            "detail": f"Updating {len(rollout['nodes'])} hosts one at a time; follow it in the job tray"}
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
+    ("POST", "/api/os-updates/start"): ("admin", lambda request: start_asked()),
     ("GET", "/api/os-updates"): ("viewer", lambda request: report()),
     ("POST", "/api/os-updates/settings"): ("admin", lambda request: {"ok": True, "settings": save_settings(request.body)}),
     ("POST", "/api/os-updates/stop"): ("admin", lambda request: {"ok": True, "rollout": stop(), "detail": "Stopping once the host being updated is done"}),

@@ -57,9 +57,23 @@ LOGS = ("image-update-history.jsonl", "console-audit.jsonl")
 _TEMP = re.compile(r"(\.tmp$|^\.icon-|\.housekeeping$)")
 
 
-def bind(data_dir="/data"):
+# server.py's tidy, which knows which logos are still used (bind).
+_bound = {"tidy": None}
+
+
+def bind(data_dir="/data", tidy=None):
     global DATA_DIR
     DATA_DIR = data_dir
+    if tidy:
+        _bound["tidy"] = tidy
+
+
+def tidy_now():
+    """Tidy when asked, and say what was freed."""
+    result = _bound["tidy"]()
+    mb = result["freed"] / 1024**2
+    return {"ok": True, **result, "report": report(),
+            "detail": (f"Freed {mb:.1f} MB: " + "; ".join(result["notes"])) if result["notes"] else "Nothing to tidy"}
 
 
 def _all_files():
@@ -210,4 +224,5 @@ def alert_facts(rep):
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/homestead/data"): ("admin", lambda request: homestead_routes.cached("housekeeping", 60, report)),
+    ("POST", "/api/homestead/data/tidy"): ("admin", lambda request: tidy_now()),
 }
