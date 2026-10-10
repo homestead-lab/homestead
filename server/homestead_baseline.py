@@ -25,6 +25,7 @@ import os
 import threading
 import time
 
+import homestead_operations as OPS
 import homestead_shared as SHARED
 import homestead_routes
 
@@ -257,7 +258,32 @@ def tick():
     return results
 
 
+def operation(row, verb):
+    """The job-tray entry for installing kube-vip, Multus or macvtap, as Add-ons makes one."""
+    name = NAMES[row["id"]]
+    chart = macvtap.CHART if row["id"] == "macvtap" else addons.CHARTS[row["id"]]
+    return OPS.start("multus" if row["id"] == "multus" else "helm", f"{verb} {name}",
+                     {"kind": "HelmChart", "name": chart, "namespace": addons.CONTROLLER_NS},
+                     "/settings", {"namespace": addons.CONTROLLER_NS, "name": row["job"], "action": "install"},
+                     "Waiting for the Helm controller")
+
+
+def _install_route(request):
+    which = [str(x) for x in (request.body.get("parts") or []) if str(x) in PARTS] or None
+    results = install(which)
+    homestead_routes.forget("helm", "platform", "baseline", "components")
+    for row in results:
+        if row["ok"] and row.get("job"):
+            row["operation"] = operation(row, "Install")
+    done = [NAMES[row["id"]] for row in results if row["ok"]]
+    failed = [f"{NAMES[row['id']]}: {row['detail']}" for row in results if not row["ok"]]
+    return {"ok": not failed, "results": results,
+            "detail": (f"Installing {' and '.join(done)}" if done else "All required components are installed")
+                      + (f". Failed: {'; '.join(failed)}" if failed else "")}
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/platform/baseline"): ("viewer", lambda request: homestead_routes.cached("baseline", 10, report)),
+    ("POST", "/api/platform/baseline/install"): ("admin", _install_route),
 }

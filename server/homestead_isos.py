@@ -25,6 +25,7 @@ import re
 import urllib.error
 
 import homestead_names as NAMES
+import homestead_routes
 
 kget = ksend = None
 shares = None            # () -> the Network Shares rows (name, pvc, sub_path, ...)
@@ -430,11 +431,18 @@ def tidy(ns=None, now=None):
     return deleted
 
 
+def _prepare_route(request):
+    result = prepare(str(request.body.get("share") or ""), str(request.body.get("path") or ""))
+    homestead_routes.forget("vms")
+    return result
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
-    ("GET", "/api/vm/isos"): ("viewer", lambda request: library()),
+    ("GET", "/api/vm/isos"):("viewer", lambda request: library()),
     ("GET", "/api/vm/isos/browse"): ("admin", lambda request: browse((request.query.get("share") or [""])[0], (request.query.get("path") or [""])[0])),
     ("POST", "/api/vm/isos/folders"): ("admin", lambda request: set_folders(request.body.get("folders") or [])),
     ("POST", "/api/vm/isos/keep"): ("admin", lambda request: set_keep_days(request.body.get("days"))),
     ("POST", "/api/vm/isos/delete"): ("admin", lambda request: delete(str(request.body.get("name") or ""))),
+    ("POST", "/api/vm/isos/prepare"): ("operator", _prepare_route),
 }

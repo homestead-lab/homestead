@@ -27,6 +27,7 @@ import urllib.parse
 import time
 import urllib.error
 import urllib.request
+import homestead_routes
 
 kget = ksend = None
 NS = "lab"
@@ -498,8 +499,18 @@ def source_for(image_id):
     return {"image_url": url, "min_gb": entry["min_gb"], "user": entry["user"]}
 
 
+def _fresh(call):
+    """Harvester's image list dropped from server.py's cache, then call()."""
+    homestead_routes.forget("vmimages")
+    return call()
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("POST", "/api/vm/store/auto"): ("admin", lambda request: set_auto(str(request.body.get("id") or ""), bool(request.body.get("auto")))),
     ("GET", "/api/vm/store"): ("viewer", lambda request: view(check=(request.query.get("check") or [""])[0] == "1")),
+    ("POST", "/api/vm/store/keep"): ("admin", lambda request: _fresh(
+        lambda: keep(str(request.body.get("id") or ""), request.body.get("auto", True) is not False))),
+    ("POST", "/api/vm/store/forget"): ("admin", lambda request: _fresh(lambda: forget(str(request.body.get("id") or "")))),
+    ("POST", "/api/vm/store/refresh"): ("admin", lambda request: _fresh(lambda: refresh(force=True))),
 }

@@ -36,6 +36,8 @@ import homestead_vm_network as VMNETWORK
 import homestead_vm_profiles as PROFILES
 import homestead_storage_resize as RESIZE
 import homestead_routes
+import homestead_lifecycle as LC
+import homestead_operations as OPS
 
 kget = ksend = None
 events_for = lambda ns, name, uid="": []
@@ -57,13 +59,19 @@ images = lambda: []
 
 
 display_icon = lambda annotations: ""
+# Bound by the server: the namespace a VM is in when none is named, and its
+# logo and monitoring settings, which it keeps beside a container's.
+DEFAULT_NS = "lab"
+set_logos = set_monitoring = None
 
 
-def bind(_kget, _ksend, _events_for, _display_icon=None):
-    global kget, ksend, events_for, display_icon
+def bind(_kget, _ksend, _events_for, _display_icon=None, default_ns=None, _set_logos=None, _set_monitoring=None):
+    global kget, ksend, events_for, display_icon, DEFAULT_NS, set_logos, set_monitoring
     kget, ksend, events_for = _kget, _ksend, _events_for
     if _display_icon:
         display_icon = _display_icon
+    DEFAULT_NS = default_ns or DEFAULT_NS
+    set_logos, set_monitoring = _set_logos or set_logos, _set_monitoring or set_monitoring
 
 
 def _strategy(vm):
@@ -1324,8 +1332,30 @@ def delete(ns, name, with_disks=False):
     return {"ok": True, "detail": detail}
 
 
+def _delete_route(request):
+    homestead_routes.forget("vms")
+    b = request.body
+    return delete(b.get("ns", DEFAULT_NS), b.get("name", ""), bool(b.get("disks")))
+
+
+def _migrate_route(request):
+    b = request.body
+    ns = b.get("ns", DEFAULT_NS)
+    result = LC.vm_migrate(ns, b["name"], b.get("target"))
+    if result.get("migration"):
+        result["operation"] = OPS.start(
+            "vm-migration", f"Migrate {b['name']}",
+            {"kind": "VirtualMachine", "name": b["name"], "namespace": ns},
+            "/vms", {"namespace": ns, "name": result["migration"]})
+    return result
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
+    ("POST", "/api/vm/delete"): ("admin", _delete_route),
+    ("POST", "/api/vm/migrate"): ("operator", _migrate_route),
+    ("POST", "/api/vms/logo"): ("operator", lambda request: set_logos(request.body)),
+    ("POST", "/api/vms/monitoring"): ("operator", lambda request: set_monitoring(request.body)),
     ("GET", "/api/vms"): ("viewer", lambda request: homestead_routes.cached("vms", 5, list_vms)),
     ("GET", "/api/vm"): ("viewer", lambda request: detail((request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], include_sensitive=request.role == "admin")),
 }

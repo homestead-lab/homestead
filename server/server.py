@@ -6604,7 +6604,8 @@ def ktable(path, timeout=20):
 
 
 RESOURCES.bind(kget, ksend, ktable)
-VMS.bind(kget, ksend, RESOURCES.events_for, lambda annotations: display_icon(annotations))
+VMS.bind(kget, ksend, RESOURCES.events_for, lambda annotations: display_icon(annotations), DEFAULT_NS,
+         lambda b: set_vm_logos(b), lambda b: set_vm_monitoring(b))
 VMUSAGE.bind(kget)
 VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
 LHCAP.bind(kget, ksend, v2_engine_status)
@@ -7082,16 +7083,6 @@ def _vip_loop():
         time.sleep(VIP_QUICK)
 
 
-def baseline_operation(row, verb):
-    """The job-tray entry for installing kube-vip, Multus or macvtap, as Add-ons makes one."""
-    name = BASELINE.NAMES[row["id"]]
-    chart = MACVTAP.CHART if row["id"] == "macvtap" else ADDONS.CHARTS[row["id"]]
-    return OPS.start("multus" if row["id"] == "multus" else "helm", f"{verb} {name}",
-                     {"kind": "HelmChart", "name": chart, "namespace": ADDONS.CONTROLLER_NS},
-                     "/settings", {"namespace": ADDONS.CONTROLLER_NS, "name": row["job"], "action": "install"},
-                     "Waiting for the Helm controller")
-
-
 def _baseline_loop():
     """What the installer asked Homestead to put under it - kube-vip and
     Multus on k3s and RKE2 - installed by the leader once the cluster can
@@ -7104,7 +7095,7 @@ def _baseline_loop():
                 with self_data_activity():
                     for row in BASELINE.tick():
                         if row["ok"] and row.get("job"):
-                            baseline_operation(row, "Install")
+                            BASELINE.operation(row, "Install")
                         with _lock:
                             for key in ("helm", "platform", "baseline", "components"):
                                 _cache.pop(key, None)
@@ -9883,23 +9874,6 @@ class H(HTTP.LimitedHandler):
                                                               "action": "install"},
                                                 "Waiting for the Helm controller")
                 return self._send(200, result)
-            if p == "/api/vm/isos/prepare":
-                result = ISOS.prepare(str(b.get("share") or ""), str(b.get("path") or ""))
-                _cache.pop("vms", None)
-                return self._send(200, result)
-            if p == "/api/platform/baseline/install":
-                which = [str(x) for x in (b.get("parts") or []) if str(x) in BASELINE.PARTS] or None
-                results = BASELINE.install(which)
-                for key in ("helm", "platform", "baseline", "components"):
-                    _cache.pop(key, None)
-                for row in results:
-                    if row["ok"] and row.get("job"):
-                        row["operation"] = baseline_operation(row, "Install")
-                done = [BASELINE.NAMES[row["id"]] for row in results if row["ok"]]
-                failed = [f"{BASELINE.NAMES[row['id']]}: {row['detail']}" for row in results if not row["ok"]]
-                return self._send(200, {"ok": not failed, "results": results,
-                                        "detail": (f"Installing {' and '.join(done)}" if done else "All required components are installed")
-                                                  + (f". Failed: {'; '.join(failed)}" if failed else "")})
             if p == "/api/addons/kubevirt/emulation":
                 _cache.pop("platform", None)
                 return self._send(200, ADDONS.set_kubevirt_emulation(bool(b.get("enabled"))))
@@ -9936,12 +9910,8 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, set_workload_groups(b))
             if p == "/api/workloads/logo":
                 return self._send(200, set_workload_logos(b))
-            if p == "/api/vms/logo":
-                return self._send(200, set_vm_logos(b))
             if p == "/api/uptime/setting":
                 return self._send(200, set_uptime_setting(b))
-            if p == "/api/vms/monitoring":
-                return self._send(200, set_vm_monitoring(b))
             if p == "/api/monitoring/actions":
                 return self._send(200, set_outage_actions(b))
             if p == "/api/monitoring/actions/test":
@@ -10328,15 +10298,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, release_held_power(str(b.get("id") or "")))
             if p == "/api/cluster/shutdown":
                 return self._send(202, cluster_shutdown(review=True).start(b, OPS))
-            if p == "/api/vm/migrate":
-                ns = b.get("ns", DEFAULT_NS)
-                result = LC.vm_migrate(ns, b["name"], b.get("target"))
-                if result.get("migration"):
-                    result["operation"] = OPS.start(
-                        "vm-migration", f"Migrate {b['name']}",
-                        {"kind": "VirtualMachine", "name": b["name"], "namespace": ns},
-                        "/vms", {"namespace": ns, "name": result["migration"]})
-                return self._send(200, result)
             if p == "/api/vm/power/preview":
                 if b.get("action") in ("start", "restart"):
                     ISOS.unlock(b.get("ns") or DEFAULT_NS)      # before it is reviewed, so the review sees it
@@ -10349,9 +10310,6 @@ class H(HTTP.LimitedHandler):
             if p == "/api/vm/edit":
                 _cache.pop("vms", None)
                 return self._send(200, reviewed_vm_edit(b))
-            if p == "/api/vm/delete":
-                _cache.pop("vms", None)
-                return self._send(200, VMS.delete(b.get("ns", DEFAULT_NS), b.get("name", ""), bool(b.get("disks"))))
             if p == "/api/disks/retire":
                 op = DISKS.retire_start(b, OPS)
                 for key in ("disks", "lhcap", "nodes", "ov"):
@@ -10526,15 +10484,6 @@ class H(HTTP.LimitedHandler):
                 # before the terminal connects - a refused WebSocket says nothing.
                 target = NODESHELL.open_shell(str(b.get("node") or ""))
                 return self._send(200, {"ok": True, "node": target["node"]})
-            if p == "/api/vm/store/keep":
-                _cache.pop("vmimages", None)
-                return self._send(200, VMSTORE.keep(str(b.get("id") or ""), b.get("auto", True) is not False))
-            if p == "/api/vm/store/forget":
-                _cache.pop("vmimages", None)
-                return self._send(200, VMSTORE.forget(str(b.get("id") or "")))
-            if p == "/api/vm/store/refresh":
-                _cache.pop("vmimages", None)
-                return self._send(200, VMSTORE.refresh(force=True))
             if p == "/api/vm-disks/import":
                 result = IMP.import_vm_disk(b, ops=OPS)
                 return self._send(200, result)
