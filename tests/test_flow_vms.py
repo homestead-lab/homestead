@@ -60,12 +60,12 @@ API = {
 
 class FlowVmTests(unittest.TestCase):
     def setUp(self):
-        patches = [mock.patch.object(server, "kget", side_effect=lambda path: API[path]),
+        patches = [mock.patch.object(server.FLOW, "kget", side_effect=lambda path: API[path]),
                    mock.patch.object(server.HW, "workload_features", return_value=[])]
         for patcher in patches:
             patcher.start()
             self.addCleanup(patcher.stop)
-        self.flow = server.get_flow2()
+        self.flow = server.FLOW.get_flow2()
         self.by = {w["id"]: w for w in self.flow["workloads"]}
 
     def test_launcher_pods_are_not_containers(self):

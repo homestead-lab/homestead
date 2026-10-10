@@ -2374,321 +2374,6 @@ def get_events():
     } for e in items[:120]]
 
 
-def get_flow2():
-    """Architecture view: node(replica copies) -> volume -> workload(+ports) -> VIP."""
-    pods = [p for p in kget("/api/v1/pods").get("items", [])
-            if p["metadata"]["namespace"] not in SYS_NS
-            # File browsers, import/copy jobs and the other short-lived pods
-            # Homestead creates are implementation details, not architecture.
-            # The task label is shared by all of those helpers and survives a
-            # rename, unlike matching one current name such as
-            # homestead-files-*.
-            and not NAMES.label_of(p.get("metadata") or {}, "task")]
-    svcs = [s for s in kget("/api/v1/services").get("items", [])
-            if s["metadata"]["namespace"] not in SYS_NS]
-    try:
-        lhvols = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
-    except Exception:
-        lhvols = []
-    try:
-        lhreps = kget("/apis/longhorn.io/v1beta2/replicas").get("items", [])
-    except Exception:
-        lhreps = []
-    try:
-        vmis = kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", [])
-    except Exception:
-        vmis = []
-    try:
-        vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
-    except Exception:
-        vms = []
-    try:
-        dep_meta = {(d["metadata"]["namespace"], d["metadata"]["name"]):
-                    d["metadata"].get("annotations", {}) or {}
-                    for d in kget("/apis/apps/v1/deployments").get("items", [])}
-    except Exception:
-        dep_meta = {}
-
-    # --- volumes, keyed by their PVC name where possible
-    vols, vol_by_pvc = [], {}
-    for v in lhvols:
-        st = v.get("status", {}) or {}
-        ks = st.get("kubernetesStatus", {}) or {}
-        pvc = ks.get("pvcName") or ""
-        vid = v["metadata"]["name"]
-        entry = {
-            "id": "v:" + vid, "name": pvc or vid[:18], "raw": vid, "pvc": pvc,
-            "replicas": _moving_copy(v) or v.get("spec", {}).get("numberOfReplicas", 0),
-            "robustness": "healthy" if _moving_copy(v) else st.get("robustness", "unknown"),
-            "state": st.get("state", ""),
-            "size_gb": round(int(v.get("spec", {}).get("size", 0) or 0) / 1024**3, 1),
-            "attached": st.get("currentNodeID", ""),
-        }
-        vols.append(entry)
-        if pvc:
-            vol_by_pvc[pvc] = entry
-
-    # --- replica copies grouped by node
-    nodes = {}
-    for r in lhreps:
-        sp = r.get("spec", {}) or {}
-        nid, vn = sp.get("nodeID"), sp.get("volumeName")
-        if not nid or not vn:
-            continue
-        v = next((x for x in vols if x["raw"] == vn), None)
-        nodes.setdefault(nid, []).append({
-            "vol": v["name"] if v else vn[:16], "vid": "v:" + vn,
-            "running": (r.get("status", {}) or {}).get("currentState") == "running",
-        })
-    if not nodes:  # fallback when replica CRs are unreadable
-        for v in vols:
-            if v["attached"]:
-                nodes.setdefault(v["attached"], []).append(
-                    {"vol": v["name"], "vid": v["id"], "running": True})
-
-    # --- ports & VIPs per app. The address a Service asks for, not only the
-    # one it carries: a VIP kube-vip answers for but never recorded is where
-    # the app is meant to be, and the page says why it is not reachable there.
-    try:
-        network = cached("network", 5, NETWORK.inventory)
-    except Exception:
-        network = {}
-    places = network.get("addresses") or {"nodes": [], "addresses": []}
-    wanted = {(row["namespace"], row["name"]): (row.get("requested_ips") or row.get("assigned_ips") or [None])[0]
-              for row in network.get("services") or [] if row.get("type") == "LoadBalancer"}
-
-    def address_of(s):
-        ing = s.get("status", {}).get("loadBalancer", {}).get("ingress", []) or []
-        return wanted.get((s["metadata"]["namespace"], s["metadata"]["name"])) or (ing[0].get("ip") if ing else None)
-
-    ports_by_app, vips = {}, {}
-    for s in svcs:
-        app = (s["spec"].get("selector") or {}).get("app")
-        if not app:
-            continue
-        vip = address_of(s)
-        for prt in s["spec"].get("ports", []) or []:
-            rec = {"port": prt.get("port"), "name": prt.get("name") or "tcp", "vip": vip}
-            ports_by_app.setdefault(app, []).append(rec)
-            if vip:
-                vips.setdefault(vip, []).append({"port": prt.get("port"), "app": app})
-
-    def vm_ports(ns, name, labels):
-        """A VM's ports: those of each Service in its namespace that selects
-        it - by the labels on its pods, such as Harvester's vmName - and not
-        by app, which is how a container's are found."""
-        out = []
-        for s in svcs:
-            selector = s["spec"].get("selector") or {}
-            if (s["metadata"]["namespace"] != ns or not selector or "app" in selector
-                    or any(labels.get(k) != v for k, v in selector.items())):
-                continue
-            vip = address_of(s)
-            for prt in s["spec"].get("ports", []) or []:
-                out.append({"port": prt.get("port"), "name": prt.get("name") or "tcp", "vip": vip})
-                if vip:
-                    vips.setdefault(vip, []).append({"port": prt.get("port"), "app": name})
-        return out
-
-    # --- per-pod live metrics for the architecture cards
-    try:
-        pmet = {}
-        for m in kget("/apis/metrics.k8s.io/v1beta1/pods").get("items", []):
-            c = sum(parse_cpu(x.get("usage", {}).get("cpu")) for x in m.get("containers", []))
-            mm = sum(parse_mem(x.get("usage", {}).get("memory")) for x in m.get("containers", []))
-            pmet[(m["metadata"]["namespace"], m["metadata"]["name"])] = (c, mm)
-    except Exception:
-        pmet = {}
-
-    # --- workloads
-    seen, wls, launchers = set(), [], {}
-    for p in pods:
-        labels = p["metadata"].get("labels", {}) or {}
-        # A VM runs in a virt-launcher pod; it is shown as the VM, below, not
-        # as a container - and every VM's launcher is not one app.
-        if labels.get("kubevirt.io") or labels.get("vm.kubevirt.io/name"):
-            if labels.get("kubevirt.io") == "virt-launcher" and p["status"].get("phase") == "Running":
-                launchers[(p["metadata"]["namespace"], labels.get("vm.kubevirt.io/name")
-                           or labels.get("kubevirt.io/domain", ""))] = p
-            continue
-        app = labels.get("app") or p["metadata"]["name"].rsplit("-", 2)[0]
-        if app in seen:
-            continue
-        seen.add(app)
-        claims = []
-        for vol in p["spec"].get("volumes", []) or []:
-            cn = (vol.get("persistentVolumeClaim") or {}).get("claimName")
-            if cn:
-                claims.append({"pvc": cn, "vid": vol_by_pvc[cn]["id"] if cn in vol_by_pvc else ""})
-        cu, mu = pmet.get((p["metadata"]["namespace"], p["metadata"]["name"]), (0, 0))
-        wls.append({
-            "id": "w:" + app, "name": app, "kind": "container",
-            "node": p["spec"].get("nodeName", ""),
-            "phase": p["status"].get("phase", ""),
-            "uptime": age_secs(p["status"].get("startTime")),
-            "cpu": round(cu, 3), "mem_mb": round(mu / 1048576, 1),
-            "ns": p["metadata"]["namespace"],
-            "image": (p["spec"].get("containers") or [{}])[0].get("image", ""),
-            "icon": display_icon(dep_meta.get((p["metadata"]["namespace"], app), {})),
-            "hardware": HW.workload_features(p["spec"], dep_meta.get((p["metadata"]["namespace"], app), {})),
-            "gpu": any("dri" in (m.get("mountPath") or "")
-                       for c in p["spec"].get("containers", []) for m in (c.get("volumeMounts") or [])),
-            "claims": claims, "ports": ports_by_app.get(app, []),
-        })
-    # --- virtual machines, running or not: a stopped VM's disks are still here
-    vmi_by = {(v["metadata"]["namespace"], v["metadata"]["name"]): v for v in vmis}
-    known = [(v, vmi_by.get((v["metadata"]["namespace"], v["metadata"]["name"]), {})) for v in vms]
-    named = {(v["metadata"]["namespace"], v["metadata"]["name"]) for v in vms}
-    # An instance made without a VirtualMachine is shown by itself.
-    known += [({"metadata": v["metadata"], "spec": {"template": {"metadata": {"labels": (v["metadata"].get("labels") or {})},
-                                                                "spec": v.get("spec") or {}}}}, v)
-              for key, v in vmi_by.items() if key not in named]
-    for vm, vmi in known:
-        ns, nm = vm["metadata"]["namespace"], vm["metadata"]["name"]
-        if ns in SYS_NS:
-            continue
-        # Its disks as it runs now (hot-plugged ones too), else as defined.
-        volumes = ((vmi.get("spec") or {}).get("volumes")
-                   or (((vm.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or [])
-        addresses = [a for i in (vmi.get("status") or {}).get("interfaces") or []
-                     for a in (i.get("ipAddresses") or [i.get("ipAddress")]) if a and ":" not in a]
-        row = {"disks": [{"claim": VMS._volume_claim(v)} for v in volumes], "ip": addresses[0] if addresses else "",
-               "status": VMS._status(vm, vmi), "node": (vmi.get("status") or {}).get("nodeName", ""),
-               "running": (vmi.get("status") or {}).get("phase") == "Running"}
-        launcher = launchers.get((ns, nm))
-        cu, mu = pmet.get((ns, launcher["metadata"]["name"]), (0, 0)) if launcher else (0, 0)
-        pod_labels = dict((launcher or {}).get("metadata", {}).get("labels") or {})
-        pod_labels.update(((vm.get("spec") or {}).get("template") or {}).get("metadata", {}).get("labels") or {})
-        wls.append({
-            "id": "w:vm-" + nm, "name": nm, "kind": "vm", "ns": ns,
-            "node": row.get("node") or (vmi.get("status") or {}).get("nodeName", ""),
-            "phase": (vmi.get("status") or {}).get("phase", "") or "Stopped",
-            "state": str(row.get("status") or ""),
-            "running": bool(row.get("running")), "ip": row.get("ip", ""),
-            "uptime": age_secs((launcher or {}).get("status", {}).get("startTime")) if launcher else 0,
-            "cpu": round(cu, 3), "mem_mb": round(mu / 1048576, 1),
-            "image": "", "icon": "", "gpu": False, "hardware": [],
-            "claims": [{"pvc": d["claim"], "vid": vol_by_pvc[d["claim"]]["id"] if d["claim"] in vol_by_pvc else ""}
-                       for d in row.get("disks") or [] if d.get("claim")],
-            "ports": vm_ports(ns, nm, pod_labels),
-        })
-
-    # Every node, with its own addresses and the VIPs it answers for - a node
-    # holding no replica still holds addresses.
-    place = {row["ip"]: row for row in places["addresses"]}
-    hosts = {row["name"]: row for row in places["nodes"]}
-    names = sorted(set(nodes) | set(hosts))
-    return {
-        "nodes": [{"id": "n:" + k, "name": k, "copies": sorted(nodes.get(k, []), key=lambda x: x["vol"]),
-                   "ips": (hosts.get(k) or {}).get("ips", []), "vips": (hosts.get(k) or {}).get("vips", [])}
-                  for k in names],
-        "volumes": sorted(vols, key=lambda x: x["name"]),
-        "workloads": sorted(wls, key=lambda x: x["name"]),
-        "vips": [{"id": "i:" + ip, "ip": ip, "ports": sorted(p, key=lambda x: x["port"]),
-                  "kind": (place.get(ip) or {}).get("kind", "vip"), "node": (place.get(ip) or {}).get("node", ""),
-                  "state": (place.get(ip) or {}).get("state", "ok"), "reason": (place.get(ip) or {}).get("reason", "")}
-                 for ip, p in sorted(vips.items(), key=lambda item: (
-                     (place.get(item[0]) or {}).get("kind") != "node",
-                     tuple(int(x) if x.isdigit() else 999 for x in item[0].split("."))))],
-    }
-
-
-def get_flow():
-    """The real data path: replicas -> volume -> PVC -> workload -> port -> VIP."""
-    pods = [p for p in kget("/api/v1/pods").get("items", [])
-            if p["metadata"]["namespace"] not in SYS_NS]
-    svcs = [s for s in kget("/api/v1/services").get("items", [])
-            if s["metadata"]["namespace"] not in SYS_NS]
-    try:
-        lhvols = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
-    except Exception:
-        lhvols = []
-    try:
-        vmis = kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", [])
-    except Exception:
-        vmis = []
-
-    nodecol, volcol, pvccol, wlcol, portcol, vipcol = {}, {}, {}, {}, {}, {}
-    links = {}
-    meta = {}
-
-    def link(a, b, v=1):
-        links[(a, b)] = links.get((a, b), 0) + v
-
-    # longhorn volume -> pvc, and replica placement -> volume
-    pvc_of_vol = {}
-    for v in lhvols:
-        name = v["metadata"]["name"]
-        st = v.get("status", {})
-        ks = st.get("kubernetesStatus", {}) or {}
-        pvc = ks.get("pvcName")
-        reps = v.get("spec", {}).get("numberOfReplicas", 0)
-        rob = st.get("robustness", "?")
-        short = (pvc or name)[:22]
-        volcol[short] = reps
-        meta["v:" + short] = {"robustness": rob, "replicas": reps,
-                              "size_gb": round(int(v.get("spec", {}).get("size", 0) or 0) / 1024**3, 1),
-                              "node": st.get("currentNodeID", "")}
-        for nid in {r.get("nodeID") for r in (st.get("replicaStatus") or []) if r.get("nodeID")} or \
-                   ({st.get("currentNodeID")} if st.get("currentNodeID") else set()):
-            nodecol[nid] = nodecol.get(nid, 0) + 1
-            link("n:" + nid, "v:" + short)
-        if pvc:
-            pvc_of_vol[pvc] = short
-            pvccol[pvc] = pvccol.get(pvc, 0) + 1
-            link("v:" + short, "c:" + pvc)
-
-    # workloads (pods + VMs) and what they mount
-    for p in pods:
-        app = p["metadata"].get("labels", {}).get("app") or p["metadata"]["name"].rsplit("-", 2)[0]
-        wlcol[app] = wlcol.get(app, 0) + 1
-        meta["w:" + app] = {"kind": "container", "node": p["spec"].get("nodeName", ""),
-                            "phase": p["status"].get("phase", "")}
-        for vol in p["spec"].get("volumes", []) or []:
-            claim = (vol.get("persistentVolumeClaim") or {}).get("claimName")
-            if claim:
-                pvccol.setdefault(claim, 1)
-                link("c:" + claim, "w:" + app)
-    for v in vmis:
-        nm = v["metadata"]["name"]
-        wlcol["VM " + nm] = 1
-        meta["w:VM " + nm] = {"kind": "vm", "node": v.get("status", {}).get("nodeName", "")}
-
-    # workload -> port -> vip
-    for s in svcs:
-        sel = s["spec"].get("selector") or {}
-        app = sel.get("app")
-        if not app:
-            continue
-        ing = s.get("status", {}).get("loadBalancer", {}).get("ingress", []) or []
-        vip = ing[0].get("ip") if ing else None
-        for prt in s["spec"].get("ports", []) or []:
-            label = f"{prt.get('name') or 'tcp'}:{prt.get('port')}"
-            portcol[label] = prt.get("port")
-            link("w:" + app, "t:" + label)
-            if vip:
-                vipcol[vip] = vipcol.get(vip, 0) + 1
-                link("t:" + label, "i:" + vip)
-                meta["i:" + vip] = {"type": s["spec"].get("type", "")}
-
-    def col(d, pfx):
-        return [{"id": pfx + k, "label": k, "value": v, "meta": meta.get(pfx + k, {})}
-                for k, v in sorted(d.items(), key=lambda x: (-(x[1] if isinstance(x[1], int) else 0), x[0]))]
-
-    return {
-        "columns": [
-            {"title": "Nodes (replicas)", "items": col(nodecol, "n:")},
-            {"title": "Longhorn volumes", "items": col(volcol, "v:")},
-            {"title": "Claims (PVC)", "items": col(pvccol, "c:")},
-            {"title": "Workloads", "items": col(wlcol, "w:")},
-            {"title": "Ports", "items": col(portcol, "t:")},
-            {"title": "VIP", "items": col(vipcol, "i:")},
-        ],
-        "links": [{"from": a, "to": b, "value": v} for (a, b), v in links.items()],
-        "total": len(pods) + len(vmis),
-    }
-
-
 def get_storage():
     """Cluster storage rollup for the dashboard: capacity, usage, replica health."""
     vols = get_volumes()
@@ -6600,9 +6285,10 @@ import homestead_smart as SMART
 import homestead_shares as SHARES
 import homestead_nfs as NFS
 import homestead_networking as NETWORK
+import homestead_flow as FLOW
 import homestead_firewall as FIREWALL
 import homestead_routes as MODULE_ROUTES
-MODULE_ROUTES.bind(lambda key, seconds, fn: cached(key, seconds, fn))
+MODULE_ROUTES.bind(lambda key, seconds, fn: cached(key, seconds, fn), lambda *keys: [_cache.pop(key, None) for key in keys])
 import homestead_cluster as CLUSTER
 import homestead_probe as PROBE
 import homestead_objectstore as OBJECTS
@@ -7135,7 +6821,7 @@ def host_bonds_apply(body, start=False):
     if str(body.get("confirm") or "").strip() != node:
         raise ValueError(f"type the host's name, {node}, to confirm")
     return HOST_BONDS.start(node, body, OPS, busy, servers)
-UPLINKS.bind(kget, ksend)
+UPLINKS.bind(kget, ksend, lambda: node_temps())
 OPS.RESOLVERS[UPLINKS.KIND] = UPLINKS.status
 OPS.RESOLVERS[AUTOUPDATE.KIND] = lambda item: AUTOUPDATE.resolve(item, OPS.checkpoint)
 OPS.RESOLVERS[RESTORE_TEST.KIND] = lambda item: RESTORE_TEST.resolve(item, OPS.checkpoint)
@@ -8563,7 +8249,9 @@ OPS.RESOLVERS["cluster-cleanup"] = lambda item: ("succeeded", 100, item.get("mes
 VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 SHARES.install = install_samba
-NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP)
+NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP, lambda ns, name: guard_managed_smb(ns, name), lambda: node_temps())
+FLOW.bind(lambda path: kget(path), SYS_NS, lambda annotations: display_icon(annotations), _moving_copy,
+          parse_cpu, parse_mem, age_secs)
 FIREWALL.bind(kget, ksend, PLATFORM.detect, _own_namespace())
 VIPS.bind(kget, ksend)
 
@@ -9081,7 +8769,7 @@ FLEET_LISTS = {
     "vms": lambda: cached("vms", 5, VMS.list_vms),
     "nodes": lambda: cached("nodes", 5, get_nodes),
     "volumes": lambda: cached("vol", 8, get_volumes),
-    "flow": lambda: cached("flow2", 8, get_flow2),
+    "flow": lambda: FLOW.view(),
 }
 
 
@@ -9753,8 +9441,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("ov", 5, get_overview))
             if p == "/api/nodes":
                 return self._send(200, cached("nodes", 5, get_nodes))
-            if p == "/api/network/uplinks":
-                return self._send(200, UPLINKS.inventory(node_temps()))
             if p == "/api/nodes/ports":
                 report = cached("ports", 20, ports_report)
                 node = (q.get("node") or [""])[0]
@@ -9873,8 +9559,6 @@ class H(HTTP.LimitedHandler):
                     raise ValueError("Choose a current host")
                 check = ALLOCATION_EVIDENCE.inspect(host, kget)
                 return self._send(200, {"name": node, "verified": check["verified"], "detail": check["reason"]})
-            if p == "/api/flow":
-                return self._send(200, cached("flow2", 8, get_flow2))
             if p == "/api/shares/server":
                 return self._send(200, samba_state())
             if p == "/api/shares/nfs/server":
@@ -10532,11 +10216,6 @@ class H(HTTP.LimitedHandler):
                                           + " will finish deleting once released")
                 result["removed"] = removed
                 return self._send(200, result)
-            if p == "/api/network/service/delete":
-                guard_managed_smb(b.get("namespace"), b.get("name"))
-                result = NETWORK.delete_service(b.get("namespace"), b.get("name"), b.get("force"))
-                _cache.pop("network", None)
-                return self._send(200, result)
             if p == "/api/storage/classes":
                 return self._send(200, create_storage_class(b))
             if p == "/api/storage/classes/default":
@@ -10836,13 +10515,6 @@ class H(HTTP.LimitedHandler):
                     raise ValueError("which host?")
                 return self._send(200, {"ok": True, "operation": HOST_OS.upgrade_start(node, OPS),
                                         "detail": f"Installing updates on {node}; follow it in the job tray"})
-            if p == "/api/network/uplinks/preview":
-                return self._send(200, UPLINKS.preview(b, node_temps()))
-            if p == "/api/network/uplinks/apply":
-                op = UPLINKS.apply(b, OPS, node_temps())
-                _cache.pop("ports", None); _cache.pop("network", None)
-                return self._send(200, {"ok": True, "operation": op,
-                                        "detail": "Sent to Harvester; follow each host in the job tray"})
             if p == "/api/node/bond/inspect":
                 node = str(b.get("node") or "")
                 return self._send(200, HOST_BONDS.summary(node, HOST_BONDS.inspect(node)))
@@ -11032,36 +10704,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, remove_nfs())
             if p == "/api/shares/repair":
                 return self._send(200, repair_samba(str(b.get("address") or "").strip()))
-            if p == "/api/network/vips/add":
-                _cache.pop("network", None)
-                return self._send(200, NETWORK.add_vips(b, IPAM.load()[0].get("records") or {}))
-            if p == "/api/network/vips/default":
-                result = NETWORK.set_default_vip(b.get("ip", ""))
-                for key in ("network", "ov"):
-                    _cache.pop(key, None)
-                return self._send(200, result)
-            if p == "/api/network/vips/remove":
-                _cache.pop("network", None)
-                return self._send(200, NETWORK.remove_vip(b.get("ip", "")))
-            if p == "/api/network/vips/change":
-                result = NETWORK.change_vip(b.get("old", ""), b.get("new", ""), apply=b.get("apply") is True)
-                if b.get("apply") is True:
-                    for key in ("network", "ov"):
-                        _cache.pop(key, None)
-                    # Backups follow the store to its new address.
-                    if any(s["name"].startswith(OBJECTS.NAME) and s["namespace"] == OBJECTS.NS for s in result["services"]):
-                        try:
-                            pointed = OBJECTS.request_target()
-                            result["detail"] += "; " + pointed["detail"]
-                        except Exception as error:
-                            result["detail"] += f"; Longhorn's backup target was not changed: {str(error)[:120]}"
-                    # Linked clusters reach this one at its new VIP, where it was on the old.
-                    try:
-                        if FLEET.follow_address((f"http://{str(b.get('old') or '').strip()}:{SELF_ADDRESS.WEB_PORT}",)):
-                            result["detail"] += "; linked clusters were told the new address"
-                    except Exception:
-                        pass
-                return self._send(200, result)
             if p == "/api/self/address":
                 vip = str(b.get("vip") or "").strip()
                 result = SELF_ADDRESS.move(vip)
@@ -11079,12 +10721,6 @@ class H(HTTP.LimitedHandler):
                 SHARED.write_json(os.path.join(DATA_DIR, "welcome.json"),
                                   {"done": True, "by": str(self.user or ""), "at": int(time.time())})
                 return self._send(200, {"ok": True})
-            if p == "/api/network/vips/label":
-                _cache.pop("network", None)
-                return self._send(200, NETWORK.set_vip_label(b.get("ip", ""), b.get("label", "")))
-            if p == "/api/network/vm-networks":
-                _cache.pop("network", None)
-                return self._send(200, NETWORK.create_vm_network(dict(b, _probes=node_temps())))
             if p == "/api/storage/classes/cleanup":
                 removed = cleanup_restore_classes()
                 return self._send(200, {"ok": True, "removed": removed,
@@ -11209,16 +10845,6 @@ class H(HTTP.LimitedHandler):
                 if b.get("all"):
                     return self._send(200, OPS.dismiss_finished())
                 return self._send(200, OPS.dismiss(b["id"]))
-            if p == "/api/network/services":
-                guard_managed_smb(b.get("namespace") or DEFAULT_NS, b.get("name"))
-                result = NETWORK.create_service(b)
-                _cache.pop("network", None); _cache.pop("flow2", None)
-                result["operation"] = OPS.start(
-                    "network-service", f"Expose {result['name']}",
-                    {"kind": "Service", "name": result["name"], "namespace": result["namespace"]},
-                    "/networking", {"namespace": result["namespace"], "name": result["name"]},
-                    "Waiting for the Service address and endpoints")
-                return self._send(200, result)
             if p == "/api/preview":
                 b = analyze_deploy_intent(b)
                 current = None

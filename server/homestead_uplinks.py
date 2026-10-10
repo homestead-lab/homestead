@@ -25,6 +25,8 @@ import re
 import time
 import urllib.error
 import urllib.parse
+import homestead_operations as OPS
+import homestead_routes
 
 kget = ksend = None
 API = "/apis/network.harvesterhci.io/v1beta1"
@@ -36,11 +38,14 @@ NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,10}[a-z0-9])?$")   # <name>-br fits Li
 NIC = re.compile(r"^[A-Za-z0-9_.:-]{1,15}$")                    # a Linux interface name
 WAIT = 300                    # how long a host has to report its uplink ready
 KIND = "harvester-uplink"
+# What the node probes report (server.py's node_temps): each host's NICs.
+node_probes = lambda: {}
 
 
-def bind(_kget, _ksend):
-    global kget, ksend
+def bind(_kget, _ksend, _node_probes=None):
+    global kget, ksend, node_probes
     kget, ksend = _kget, _ksend
+    node_probes = _node_probes or node_probes
 
 
 def _items(path):
@@ -364,3 +369,17 @@ def status(item, now=None):
                 ". Harvester keeps trying; check the NICs and the VlanStatus in Harvester's dashboard")
     progress = 10 + int(80 * len(ready) / max(1, len(nodes)))
     return "running", progress, f"Waiting for {', '.join(waiting)}" + (f": {said}" if said else "")
+
+
+def _apply_route(request):
+    op = apply(request.body, OPS, node_probes())
+    homestead_routes.forget("ports", "network")
+    return {"ok": True, "operation": op, "detail": "Sent to Harvester; follow each host in the job tray"}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/network/uplinks"): ("viewer", lambda request: inventory(node_probes())),
+    ("POST", "/api/network/uplinks/preview"): ("admin", lambda request: preview(request.body, node_probes())),
+    ("POST", "/api/network/uplinks/apply"): ("admin", _apply_route),
+}

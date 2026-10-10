@@ -24,7 +24,8 @@ table, so a route and its role are written once.
 A route whose answer server.py keeps for a few seconds asks for it through
 `cached(key, seconds, fn)` here, which is server.py's own cache once bound:
 the same keys, so what server.py drops from it when something changes (the
-network picture after a VIP repair, say) is dropped for the route too.
+network picture after a VIP repair, say) is dropped for the route too. A
+route that changes something drops what it changed with `forget(*keys)`.
 
 A module is listed in MODULES to be read. A route stays in server.py while it
 needs the handler itself - headers, streaming, a redirect.
@@ -47,6 +48,7 @@ MODULES = (
     "homestead_files",
     "homestead_firewall",
     "homestead_fleet",
+    "homestead_flow",
     "homestead_forecast",
     "homestead_hardware",
     "homestead_helm",
@@ -90,6 +92,7 @@ MODULES = (
     "homestead_snapshot_delete",
     "homestead_unraid_vms",
     "homestead_updates",
+    "homestead_uplinks",
     "homestead_vms",
     "homestead_vmstore",
 )
@@ -103,17 +106,25 @@ Raw = collections.namedtuple("Raw", "body ctype")
 Stream = collections.namedtuple("Stream", "chunks ctype filename size")
 
 _table = {}
-_cached = [lambda key, seconds, fn: fn()]
+_cached = [lambda key, seconds, fn: fn(), lambda *keys: None]
 
 
-def bind(cached):
-    """server.py's cache, for routes whose answer it keeps a few seconds."""
+def bind(cached, forget=None):
+    """server.py's cache, for routes whose answer it keeps a few seconds,
+    and how to drop from it what a route has just changed."""
     _cached[0] = cached
+    if forget:
+        _cached[1] = forget
 
 
 def cached(key, seconds, fn):
     """fn(), or what it returned less than seconds ago under key."""
     return _cached[0](key, seconds, fn)
+
+
+def forget(*keys):
+    """Drop keys from server.py's cache, so the next read is fresh."""
+    _cached[1](*keys)
 
 
 def table():
