@@ -336,6 +336,7 @@ POLICY = {
     ('POST', '/api/operations/storage-recovery/preview'): 'admin',
     ('POST', '/api/operations/vm-recovery/preview'): 'admin',
     ('POST', '/api/operations/vm-recovery/resolve'): 'admin',
+    ('POST', '/api/os-updates/check'): 'admin',
     ('POST', '/api/os-updates/settings'): 'admin',
     ('POST', '/api/os-updates/start'): 'admin',
     ('POST', '/api/os-updates/stop'): 'admin',

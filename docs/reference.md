@@ -656,7 +656,7 @@ a plain-HTTP LAN address; Settings says so there instead.
 | Degraded | a volume rebuilding a replica, a workload not ready after its start-up grace |
 | Failed jobs | anything in the activity tray that ends in failure |
 | Hosts joining | a new host registering with the cluster, and becoming Ready |
-| Image updates | a newer image for a workload (off by default; checked every six hours) |
+| Image updates | a newer image for a workload (off by default; checked twice a day) |
 
 A problem is announced once it has lasted a minute, so restarts and rollouts do
 not buzz a phone, and announced again when it is over; the second notification

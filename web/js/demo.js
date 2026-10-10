@@ -699,13 +699,15 @@
       const host = name => ({ os: "Ubuntu 24.04.3 LTS", updates: name === "harvester-node3" ? [{ name: "openssl", security: true }] : [],
         security: name === "harvester-node3" ? 1 : 0, reboot: false,
         auto: { tool: "unattended-upgrades", on: name !== "harvester-node1", reboots: name === "harvester-node3", held: name === "harvester-node1" } });
-      return { applies: true, hosts: Object.fromEntries(["harvester-node1", "harvester-node2", "harvester-node3"].map(n => [n, host(n)])),
+      return { applies: true, every_s: 21600, checking: { running: false, hosts: [], done: [], failed: {} },
+        hosts: Object.fromEntries(["harvester-node1", "harvester-node2", "harvester-node3"].map(n => [n, { ...host(n), at: Math.floor(Date.now() / 1000) - 15660 }])),
         settings: { schedule: { enabled: true, days: ["sun"], hour: 3, tz: "Europe/London", offset_min: 60 }, reboot: "when-needed", single_copy: false, manage: "ubuntu" },
         rollout: { id: "os-1", status: "running", nodes: ["harvester-node2", "harvester-node3", "harvester-node1"], index: 1,
           message: "harvester-node3: draining and restarting",
           results: [{ node: "harvester-node2", ok: true, note: "updates installed", updates: 4, security: 2, restarted: false }] },
         last: null };
     },
+    "/api/os-updates/check": () => ({ ok: true, checking: { running: false, hosts: ["harvester-node1", "harvester-node2", "harvester-node3"], done: [], failed: {} } }),
     "/api/node/os": url => {
       const name = url.searchParams.get("name") || "harvester-node1", at = Math.floor(Date.now() / 1000) - 5400, gb = 1024 ** 3;
       const updates = [["libc6", true], ["openssl", true], ["linux-image-6.8.0-86-generic", true], ["tzdata", false], ["curl", false], ["python3.12", false]]

@@ -427,4 +427,4 @@ def report():
     p = platform(True) or {}
     return {"applies": not p.get("harvester") and p.get("distribution") in ("k3s", "rke2"),
             "settings": settings(state), "rollout": state.get("rollout"), "last": state.get("last_rollout"),
-            "hosts": host_os.report().get("hosts", {})}
+            **{k: v for k, v in host_os.report().items() if k in ("hosts", "every_s", "checking")}}

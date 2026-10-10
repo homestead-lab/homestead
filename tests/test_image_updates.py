@@ -124,7 +124,8 @@ class ImageUpdateTests(unittest.TestCase):
         self.dep["spec"]["template"]["spec"]["containers"] = [{"name": "demo", "image": "n8nio/n8n:latest"}]
         pods = [] if running_digest is None else [{
             "metadata": {"namespace": "lab", "labels": {"app": "demo"}},
-            "status": {"containerStatuses": [{"name": "demo", "imageID": "docker.io/n8nio/n8n@" + running_digest}]}}]
+            "status": {"phase": "Running", "containerStatuses": [{"name": "demo", "state": {"running": {}},
+                                                                  "imageID": "docker.io/n8nio/n8n@" + running_digest}]}}]
         originals = updates.registry_tags, updates.manifest_info, updates._secret_credentials
         try:
             updates.registry_tags = lambda *a, **k: ["latest"]
@@ -147,6 +148,26 @@ class ImageUpdateTests(unittest.TestCase):
 
         self.assertTrue(report["available"], "latest moved on while it was stopped")
         self.assertFalse(report["unchecked"])
+
+    def test_a_pending_pod_does_not_read_an_old_record_as_a_new_build(self):
+        # #380: the host was down, the pod Pending; what last ran is behind.
+        old, new = "sha256:" + "1" * 64, "sha256:" + "2" * 64
+        self.dep["metadata"].setdefault("annotations", {})["homestead.io/ran-digests"] = json.dumps({"demo": old})
+        self.dep["spec"]["replicas"] = 1
+        self.dep["spec"]["template"]["spec"]["containers"] = [{"name": "demo", "image": "n8nio/n8n:latest"}]
+        pods = [{"metadata": {"namespace": "lab", "labels": {"app": "demo"}},
+                 "status": {"phase": "Pending", "containerStatuses": [{"name": "demo", "state": {"waiting": {}},
+                                                                       "imageID": "docker.io/n8nio/n8n@" + old}]}}]
+        originals = updates.registry_tags, updates.manifest_info, updates._secret_credentials
+        try:
+            updates.registry_tags = lambda *a, **k: ["latest"]
+            updates.manifest_info = lambda *a, **k: {"digest": new, "children": []}
+            updates._secret_credentials = lambda *args: {}
+            report = updates._check_deployment(self.dep, pods)
+        finally:
+            updates.registry_tags, updates.manifest_info, updates._secret_credentials = originals
+        self.assertFalse(report["available"], "a pod not yet running is checked once it runs")
+        self.assertTrue(report["unchecked"])
 
     def test_a_workload_that_never_ran_here_says_it_was_not_checked(self):
         report = self._latest("sha256:" + "2" * 64, replicas=0)

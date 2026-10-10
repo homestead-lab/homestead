@@ -24,6 +24,7 @@ needs a restart, which Host actions does with its drain review.
 import json
 import os
 import re
+import threading
 import time
 
 import homestead_shared as SHARED
@@ -315,7 +316,61 @@ def report(node=None):
         if node is None or name == node:
             facts = current(facts, boots.get(name, ""))
             rows[name] = {**facts, "summary": summary(facts)}
-    return {"applies": applies(p), "hosts": rows, "every_s": EVERY}
+    return {"applies": applies(p), "hosts": rows, "every_s": EVERY, "checking": checking()}
+
+
+# Every Ready host read again now, one at a time, refreshing its package
+# lists first (#371): what a host has had installed by hand shows without
+# waiting up to EVERY for the next round. This replica's own, in a thread -
+# each read can take minutes.
+_CHECK = {"running": False, "hosts": [], "done": [], "failed": {}, "at": 0}
+_check_lock = threading.Lock()
+
+
+def checking():
+    with _check_lock:
+        return checking_locked()
+
+
+def _ready_hosts():
+    return [item["metadata"]["name"] for item in (kget("/api/v1/nodes") or {}).get("items", [])
+            if any(c.get("type") == "Ready" and c.get("status") == "True"
+                   for c in (item.get("status") or {}).get("conditions") or [])]
+
+
+def check_all(reader=None, wait=False):
+    """Start reading every Ready host again; returns what is being checked.
+    One check at a time: a second request joins the one under way."""
+    reader = reader or (lambda name: read(name, refresh=True))
+    with _check_lock:
+        if _CHECK["running"]:
+            return checking_locked()
+        hosts = sorted(_ready_hosts())
+        _CHECK.update(running=bool(hosts), hosts=hosts, done=[], failed={}, at=time.time())
+        started = checking_locked()
+
+    def run():
+        for name in hosts:
+            try:
+                reader(name)
+            except Exception as error:
+                with _check_lock:
+                    _CHECK["failed"][name] = str(error)[:160]
+            with _check_lock:
+                _CHECK["done"].append(name)
+        with _check_lock:
+            _CHECK["running"] = False
+
+    if hosts:
+        thread = threading.Thread(target=run, name="host-os-check", daemon=True)
+        thread.start()
+        if wait:
+            thread.join()
+    return started
+
+
+def checking_locked():
+    return {**_CHECK, "hosts": list(_CHECK["hosts"]), "done": list(_CHECK["done"]), "failed": dict(_CHECK["failed"])}
 
 
 def tick(now=None):

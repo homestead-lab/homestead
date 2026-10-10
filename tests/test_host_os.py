@@ -111,6 +111,21 @@ class StateTests(unittest.TestCase):
         self.assertEqual("2 security updates, restart needed, 1 failed service, root 92% full",
                          HOST_OS.report("node-1")["hosts"]["node-1"]["summary"]["text"])
 
+    def test_check_every_host_now_reads_each_ready_host_with_fresh_lists(self):
+        # #371: what Refresh promised - each host read again, not the card.
+        host = Host(UBUNTU)
+        self.nodes["items"].append({"metadata": {"name": "node-2"}, "status": {"conditions": [{"type": "Ready", "status": "False"}]}})
+        self.bind(host)
+        started = HOST_OS.check_all(wait=True)
+        self.assertEqual(["node-1"], started["hosts"], "a host that is not Ready is left")
+        self.assertEqual(1, len(host.scripts))
+        self.assertIn("REFRESH=1", host.scripts[0])
+        done = HOST_OS.report()
+        self.assertFalse(done["checking"]["running"])
+        self.assertEqual(["node-1"], done["checking"]["done"])
+        self.assertIn("node-1", done["hosts"])
+        self.assertEqual(HOST_OS.EVERY, done["every_s"])
+
     def test_a_read_cut_short_says_how_far_it_got_not_the_raw_lines(self):
         # apt-get killed by the helper's memory limit: output stops after PKG.
         self.bind(Host("OS Ubuntu 26.04.1 LTS\nOSID ubuntu 26.04\nKERNEL 7.0.0-34-generic\nUP 1654\nPKG apt\n"))
