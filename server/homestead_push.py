@@ -22,6 +22,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import homestead_alerts as ALERTS
 import homestead_ecdsa as EC
 
 DATA_DIR = "/data"
@@ -228,8 +229,49 @@ def send(wants, urgency="normal", poster=None):
     return {"sent": sent, "removed": gone, "statuses": statuses}
 
 
-# Its routes and who may use them (homestead_routes.py).
+def pending(user, endpoint, confirm_delivery=False):
+    """What a device has not been shown yet, for its service worker after a push."""
+    row = mine(user, endpoint) if endpoint else None
+    wanted = set(row["categories"]) if row else set()
+    active = len([a for a in ALERTS.active(user=user) if a.get("announced", 0) > 0 and not a["acknowledged"]])
+    if not row:
+        return {"alerts": [], "active": active, "known": False}
+    got = ALERTS.log(after=row.get("cursor", 0), categories=wanted | {"test"}, limit=300)
+    own = tag(endpoint)
+    alerts = [a for a in got["alerts"] if a["category"] != "test" or a.get("to") == own]
+    # Replace old raises with their latest outcome before displaying a backlog.
+    latest = {a["key"]: a for a in alerts}
+    current = {a["key"]: a for a in ALERTS.active()}
+    alerts = ALERTS.for_user([a for a in latest.values() if a.get("event") or a["category"] == "test"
+                             or a["phase"] == "resolved" or a["id"] == current.get(a["key"], {}).get("announced")], user)
+    if not confirm_delivery:  # Compatibility with already installed workers.
+        advance(user, endpoint, got["latest"])
+    return {"alerts": alerts, "active": active, "known": True, "latest": got["latest"]}
+
+
+def status(user, endpoint):
+    """Whether this device is set up here, and how its pushes have gone."""
+    row = mine(user, endpoint)
+    return {"known": bool(row), "tag": tag(row["endpoint"]) if row else "",
+            "categories": (row or {}).get("categories", []),
+            "last_ok": (row or {}).get("last_ok", 0),
+            "failures": (row or {}).get("failures", 0)}
+
+
+# Its routes and who may use them (homestead_routes.py). The alerts a person
+# is shown come with their devices, so the bell's routes are here too.
 ROUTES = {
+    ("GET", "/api/alerts"): ("viewer", lambda request: {
+        "active": [a for a in ALERTS.active(user=request.user) if a.get("announced", 0) > 0],
+        "log": [a for a in ALERTS.log(limit=30)["alerts"] if a["category"] != "test"],
+        "devices": devices(request.user)}),
+    ("POST", "/api/alerts/pending"): ("viewer", lambda request: pending(
+        request.user, str(request.body.get("endpoint") or ""), request.body.get("confirm_delivery") is True)),
+    # A new device starts from the latest alert: it is not sent the backlog.
+    ("POST", "/api/push/subscribe"): ("viewer", lambda request: subscribe(
+        request.user, request.body.get("subscription"), request.body.get("categories"), request.body.get("device", ""),
+        request.body.get("replaces", ""), cursor=ALERTS.log(limit=0)["latest"])),
+    ("POST", "/api/push/status"): ("viewer", lambda request: status(request.user, str(request.body.get("endpoint") or ""))),
     ("POST", "/api/push/unsubscribe"): ("viewer", lambda request: unsubscribe(request.user, str(request.body.get("endpoint") or ""))),
     ("GET", "/api/push/key"): ("viewer", lambda request: {"key": public_key(), "categories": CATEGORIES, "defaults": DEFAULT_CATEGORIES}),
 }

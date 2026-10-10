@@ -7156,26 +7156,6 @@ def push_alerts(fresh):
                      urgency="high" if urgent else "normal")
 
 
-def alerts_pending(user, endpoint, confirm_delivery=False):
-    """What a device has not been shown yet, for its service worker after a push."""
-    row = PUSH.mine(user, endpoint) if endpoint else None
-    wanted = set(row["categories"]) if row else set()
-    active = len([a for a in ALERTS.active(user=user) if a.get("announced", 0) > 0 and not a["acknowledged"]])
-    if not row:
-        return {"alerts": [], "active": active, "known": False}
-    got = ALERTS.log(after=row.get("cursor", 0), categories=wanted | {"test"}, limit=300)
-    mine = PUSH.tag(endpoint)
-    alerts = [a for a in got["alerts"] if a["category"] != "test" or a.get("to") == mine]
-    # Replace old raises with their latest outcome before displaying a backlog.
-    latest = {a["key"]: a for a in alerts}
-    current = {a["key"]: a for a in ALERTS.active()}
-    alerts = ALERTS.for_user([a for a in latest.values() if a.get("event") or a["category"] == "test"
-                             or a["phase"] == "resolved" or a["id"] == current.get(a["key"], {}).get("announced")], user)
-    if not confirm_delivery:  # Compatibility with already installed workers.
-        PUSH.advance(user, endpoint, got["latest"])
-    return {"alerts": alerts, "active": active, "known": True, "latest": got["latest"]}
-
-
 def _alerts_loop():
     while True:
         # One replica raises alerts, or every notification arrives twice.
@@ -9444,10 +9424,6 @@ class H(HTTP.LimitedHandler):
             if is_icon_png(p):
                 return self._file(f"{WEBROOT}/icons/{os.path.basename(p)}", "image/png",
                                   cache="public, max-age=86400")
-            if p == "/api/alerts":
-                return self._send(200, {"active": [a for a in ALERTS.active(user=self.user) if a.get("announced", 0) > 0],
-                                        "log": [a for a in ALERTS.log(limit=30)["alerts"] if a["category"] != "test"],
-                                        "devices": PUSH.devices(self.user)})
             if p == "/style.css":
                 return self._file(f"{WEBROOT}/style.css", "text/css")
             if p == "/healthz":
@@ -9878,23 +9854,10 @@ class H(HTTP.LimitedHandler):
                 self._signin("signout", self.user)
                 self._set_cookie("", clear=True)
                 return self._send(200, {"ok": True})
-            if p == "/api/push/subscribe":
-                try:
-                    return self._send(200, PUSH.subscribe(
-                        self.user, b.get("subscription"), b.get("categories"), b.get("device", ""),
-                        b.get("replaces", ""), cursor=ALERTS.log(limit=0)["latest"]))
-                except ValueError as error:
-                    return self._send(400, {"error": str(error)})
             if p == "/api/namespaces/create":
                 return self._move(lambda: NSMOD.create(b.get("name")))
             if p == "/api/namespaces/delete":
                 return self._move(lambda: NSMOD.delete(b.get("name"), str(b.get("confirm") or "")))
-            if p == "/api/push/status":
-                row = PUSH.mine(self.user, str(b.get("endpoint") or ""))
-                return self._send(200, {"known": bool(row), "tag": PUSH.tag(row["endpoint"]) if row else "",
-                                        "categories": (row or {}).get("categories", []),
-                                        "last_ok": (row or {}).get("last_ok", 0),
-                                        "failures": (row or {}).get("failures", 0)})
             if p == "/api/push/test":
                 endpoint = str(b.get("endpoint") or "")
                 if not PUSH.mine(self.user, endpoint):
@@ -9909,8 +9872,6 @@ class H(HTTP.LimitedHandler):
                     return self._send(502, {"error": f"the push service refused the push (HTTP {status})"
                                             if status else "the push service could not be reached"})
                 return self._send(200, {"ok": True})
-            if p == "/api/alerts/pending":
-                return self._send(200, alerts_pending(self.user, str(b.get("endpoint") or ""), b.get("confirm_delivery") is True))
             if p == "/api/alerts/acknowledge":
                 try:
                     return self._send(200, ALERTS.acknowledge(self.user, b.get("key"), b.get("version"), b.get("undo") is True))
