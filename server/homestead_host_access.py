@@ -6,10 +6,12 @@ runs on - and from a node, the cluster. Only an admin may give a workload
 any of them. An operator deploys and edits ordinary workloads otherwise.
 Hardware features that require privileged execution also require an admin.
 
-Checked on the request thread, against the role of the person asking. Work
+Checked on the request thread, against the role of the person asking, or for
+a job as the person who started it (require_target_as). Work
 Homestead does itself - its own pods, reconciling in the background - has no
 person behind it and is not checked here.
 """
+import contextlib
 import threading
 import homestead_names as NAMES
 
@@ -52,6 +54,27 @@ class Refused(ValueError):
 
 def set_role(role):
     _request.role = role
+
+
+@contextlib.contextmanager
+def acting_as(as_role):
+    """A job's write made as the person who started it, so the fence on
+    Kubernetes writes checks it as it would their own request."""
+    before = role()
+    set_role(as_role)
+    try:
+        yield
+    finally:
+        set_role(before)
+
+
+def require_target_as(obj, namespace, as_role):
+    """require_target for a job with no request behind it, made as the
+    person who started it: as_role, or no check for an admin or Homestead."""
+    if as_role in (None, "admin"):
+        return
+    with acting_as(as_role):
+        require_target(obj, namespace)
 
 
 def role():

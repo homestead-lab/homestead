@@ -61,5 +61,17 @@ class HostAccessTests(unittest.TestCase):
             host.require_edit(had, edited)
 
 
+    def test_a_job_is_checked_as_the_operator_who_started_it(self):
+        own_account = deployment(serviceAccountName="backup-sa")
+        own_account["metadata"] = {"name": "backup", "namespace": "lab"}
+        with self.assertRaises(PermissionError):
+            host.require_target_as(own_account, "lab", "operator")
+        host.require_target_as(own_account, "lab", "admin")
+        host.require_target_as(own_account, "lab", None)
+        host.require_target_as(deployment(), "lab", "operator")
+        # The job's thread is left as it was found.
+        self.assertIsNone(host.role())
+
+
 if __name__ == "__main__":
     unittest.main()

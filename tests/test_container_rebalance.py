@@ -5,6 +5,7 @@ import sys
 import time
 import unittest
 import urllib.error
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -296,6 +297,125 @@ class JobTests(unittest.TestCase):
         C.bind(self.c.get, lambda dep: {}, lambda n, r: (True, []), self.c.apply, ("lab", "homestead"), lambda: False)
         C.status(self.item)
         self.assertEqual([], self.c.moved)
+
+
+class RoleTests(unittest.TestCase):
+    """An operator may not move an app only an admin may change; the job,
+    which runs with no request behind it, asks again for whoever started it."""
+
+    def setUp(self):
+        self.c = Cluster()
+        self.asked = []
+
+        def guard(dep, ns, role):
+            self.asked.append((dep["metadata"]["name"], role))
+            if role == "operator" and dep["metadata"]["name"] == "frigate":
+                raise PermissionError("only an admin can operate management workloads")
+        C.bind(self.c.get, lambda dep: {}, lambda n, r: (True, []), self.c.apply, ("lab", "homestead"), lambda: True,
+               None, guard)
+        self.item = {"id": "job", "ref": {"moves": [{"ns": "lab", "name": "frigate", "id": "lab/frigate", "from": "k2", "to": "k1"}],
+                                          "index": 0, "moved": 0, "stage": "move"}}
+
+    def tearDown(self):
+        bind(Cluster())
+
+    def test_an_operators_plan_leaves_out_what_only_an_admin_may_change(self):
+        found = C.plan(role="operator")
+        self.assertNotIn("lab/frigate", [m["id"] for m in found["moves"]])
+        self.assertIn({"id": "lab/frigate", "why": C.ADMIN_ONLY}, found["skipped"])
+        self.assertIn("lab/frigate", [m["id"] for m in C.plan(role="admin")["moves"]])
+
+    def test_a_plan_with_no_role_asks_no_one(self):
+        C.plan()
+        self.assertEqual([], self.asked)
+
+    def test_a_move_an_operator_was_never_offered_is_refused(self):
+        moves = [{"ns": "lab", "name": "frigate", "id": "lab/frigate", "from": "k2", "to": "k1"}]
+        with self.assertRaisesRegex(PermissionError, "only an admin"):
+            C.reviewed(moves, [], C.review_token(moves, []), role="operator")
+        self.assertEqual("lab/frigate", C.reviewed(moves, [], C.review_token(moves, []), role="admin")[0]["id"])
+
+    def test_the_job_asks_again_for_whoever_started_it(self):
+        self.item["ref"]["role"] = "operator"
+        C.status(self.item)
+        self.assertEqual([], self.c.moved)
+        self.assertIn(f"lab/frigate: {C.ADMIN_ONLY}", self.item["ref"]["skipped"])
+
+    def test_the_review_route_plans_for_whoever_asks(self):
+        import homestead_routes as ROUTES
+        _, handler = C.ROUTES[("GET", "/api/workloads/rebalance/plan")]
+        found = handler(ROUTES.Request("GET", "/api/workloads/rebalance/plan", {}, None, "op", "operator"))
+        self.assertIn({"id": "lab/frigate", "why": C.ADMIN_ONLY}, found["skipped"])
+
+    def test_a_job_with_no_role_moves_as_before(self):
+        C.status(self.item)
+        self.assertEqual([("frigate", "k1")], self.c.moved)
+
+    def test_an_admin_run_reads_nothing_more_before_each_move(self):
+        reads = []
+        C.kget = lambda path: reads.append(path) or self.c.get(path)
+        self.item["ref"]["role"] = "admin"
+        C.status(self.item)
+        self.assertEqual([("frigate", "k1")], self.c.moved)
+        # Once, to see where it runs - not again for a check an admin skips.
+        self.assertEqual(1, reads.count("/apis/apps/v1/namespaces/lab/deployments/frigate"))
+
+    def test_each_move_is_written_as_whoever_started_the_job(self):
+        import homestead_host_access as HOSTACCESS
+        seen = []
+        C.apply = lambda ns, name, to: seen.append(HOSTACCESS.role())
+        self.item["ref"]["moves"][0].update(name="ha", id="lab/ha")
+        self.item["ref"]["role"] = "operator"
+        C.status(self.item)
+        self.assertEqual(["operator"], seen)
+        self.assertIsNone(HOSTACCESS.role())
+
+    def test_a_write_the_fence_refuses_is_skipped_and_the_job_goes_on(self):
+        def refuse(ns, name, to):
+            raise PermissionError("only an admin can operate management workloads")
+        C.apply = refuse
+        self.item["ref"]["moves"][0].update(name="ha", id="lab/ha")
+        self.item["ref"]["role"] = "operator"
+        state, _, message = C.status(self.item)
+        self.assertEqual(("running", f"Skipped lab/ha: {C.ADMIN_ONLY}"), (state, message))
+        self.assertEqual(1, self.item["ref"]["index"])
+
+    def test_an_operators_forged_move_list_is_refused_with_403(self):
+        import homestead_routes as ROUTES
+        moves = [{"ns": "lab", "name": "frigate", "id": "lab/frigate", "from": "k2", "to": "k1"}]
+        body = {"moves": moves, "exclude": [], "review_token": C.review_token(moves, []), "restart": True}
+        with mock.patch.object(C.OPS, "list_operations", return_value=[]), \
+                mock.patch.object(C.OPS, "start") as start:
+            reply = C.start_run(ROUTES.Request("POST", "/api/workloads/rebalance", {}, body, "op", "operator"))
+        self.assertEqual(403, reply.code)
+        self.assertIn(C.ADMIN_ONLY, reply.body["error"])
+        start.assert_not_called()
+
+
+class RealGuardTests(unittest.TestCase):
+    """The rebalance through homestead_host_access itself, not a stand-in:
+    an app with its own service account is an admin's to move."""
+
+    def setUp(self):
+        import homestead_host_access as HOSTACCESS
+        self.c = Cluster()
+        self.c.deps["frigate"]["spec"]["template"]["spec"]["serviceAccountName"] = "frigate-sa"
+        C.bind(self.c.get, lambda dep: {}, lambda n, r: (True, []), self.c.apply, ("lab", "homestead"), lambda: True,
+               None, HOSTACCESS.require_target_as)
+
+    def tearDown(self):
+        bind(Cluster())
+
+    def test_an_operator_is_not_offered_an_app_with_its_own_service_account(self):
+        self.assertIn({"id": "lab/frigate", "why": C.ADMIN_ONLY}, C.plan(role="operator")["skipped"])
+        self.assertIn("lab/frigate", [m["id"] for m in C.plan(role="admin")["moves"]])
+
+    def test_an_app_given_a_service_account_since_the_review_is_skipped(self):
+        item = {"id": "job", "ref": {"moves": [{"ns": "lab", "name": "frigate", "id": "lab/frigate", "from": "k2", "to": "k1"}],
+                                     "index": 0, "moved": 0, "stage": "move", "role": "operator"}}
+        C.status(item)
+        self.assertEqual([], self.c.moved)
+        self.assertIn(f"lab/frigate: {C.ADMIN_ONLY}", item["ref"]["skipped"])
 
 
 if __name__ == "__main__":

@@ -980,7 +980,7 @@ function balanceContainersHtml(b) {
     UI.lead(!b.on ? "Containers are left where they are."
       : moves.length ? `Moves ${moves.length} container${moves.length === 1 ? "" : "s"} so hosts carry similar CPU and memory. Each one restarts once, on its new host.`
       : plan.quiet === "even" ? "The hosts already carry similar CPU and memory; nothing is worth a restart."
-      : plan.quiet === "nothing-movable" ? "Nothing here can move: each container is pinned, left out, or has no other host it may run on. See Not moved below."
+      : plan.quiet === "nothing-movable" ? "Nothing here can move: each container is pinned, left out, only an admin can move it, or it has no other host it may run on. See Not moved below."
       : "No single move evens the hosts out by enough to be worth a restart: the containers that could move are too small to shift CPU or memory much."),
     plan.metrics === false ? UI.callout("warn", "Usage is partly unknown", "A host reports no live CPU and memory, so the plan may be off. Check metrics-server.") : "",
     UI.section("Hosts", hosts),
@@ -1029,7 +1029,7 @@ function balanceReview() {
         ? `${containers.length} move${containers.length === 1 ? "" : "s"} · each restarts once` : "nothing worth moving"],
       ["Volume copies", !BALANCE.volumes.on ? "left where they are" : volumes.length
         ? `${volumes.length} cop${volumes.length === 1 ? "y" : "ies"} · nothing restarts` : "nothing to move"]]),
-    containers.length ? '<p class="ui-help">Containers move one at a time, each with the same capacity check as a manual move; if one does not start on its new host, the rest wait for you. Volume copies are built one at a time; stopping drops the copy being built.</p>' : "",
+    containers.length ? '<p class="ui-help">Containers move one at a time, each with the same capacity check as a manual move; if one does not start on its new host within 10 minutes, the job stops there and the rest are not moved; once that container runs, review again to move the rest. Volume copies are built one at a time; stopping drops the copy being built.</p>' : "",
     containers.length ? UI.ack("balanceRestart", containers.length === 1 ? "Restart it now" : "Restart them now") : "",
   ].join("");
   const go = $("#balanceGo");

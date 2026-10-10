@@ -29,6 +29,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_host_access as HOSTACCESS
 import homestead_operations as OPS
 import homestead_routes as ROUTER
 
@@ -44,13 +45,14 @@ own = ("", "")                  # Homestead's namespace and Deployment
 requirements = satisfies = None # homestead_place: what a workload needs, whether a host has it
 summaries = None                # homestead_place.get_nodes: the host summaries satisfies() reads
 apply = None                    # (ns, name, node) -> moves it, after the manual move's capacity check
+guard = None                    # (deployment, ns, role) -> raises PermissionError if that role may not change it
 is_leader = lambda: True
 
 
-def bind(_kget, _requirements, _satisfies, _apply, _own=("", ""), _is_leader=None, _summaries=None):
-    global kget, requirements, satisfies, apply, own, is_leader, summaries
+def bind(_kget, _requirements, _satisfies, _apply, _own=("", ""), _is_leader=None, _summaries=None, _guard=None):
+    global kget, requirements, satisfies, apply, own, is_leader, summaries, guard
     kget, requirements, satisfies, apply, own = _kget, _requirements, _satisfies, _apply, tuple(_own)
-    summaries = _summaries
+    summaries, guard = _summaries, _guard
     if _is_leader:
         is_leader = _is_leader
 
@@ -113,7 +115,24 @@ def _ready(node):
     return any(c.get("type") == "Ready" and c.get("status") == "True" for c in (node.get("status") or {}).get("conditions") or [])
 
 
-def inventory():
+ADMIN_ONLY = "only an admin can move it"
+
+
+def _allowed(dep, ns, role):
+    """Whether role may change dep, as a manual move would ask; no guard or
+    no role (an admin, or Homestead itself) may change anything here."""
+    if guard is None or role is None:
+        return True
+    try:
+        guard(dep, ns, role)
+        return True
+    except PermissionError:
+        return False
+
+
+def inventory(role=None):
+    """Hosts and apps; role, when given, is who the moves are for - an app
+    they may not change is listed with why, as one that cannot move is."""
     nodes = _items("/api/v1/nodes")
     usage = {(m.get("metadata") or {}).get("name"): m.get("usage") or {} for m in _items("/apis/metrics.k8s.io/v1beta1/nodes")}
     hosts = {}
@@ -168,6 +187,8 @@ def inventory():
         modes = {locality.get(v) for v in volumes if v}
         if not why and "strict-local" in modes:
             why = "its volume keeps its only copy on its host (strict-local), so it runs there"
+        if not why and not _allowed(dep, ns, role):
+            why = ADMIN_ONLY
         apps.append({"ns": ns, "name": name, "id": f"{ns}/{name}", "host": where[0], "dep": dep,
                      "cpu": sum(u[0] for u in use), "mem": sum(u[1] for u in use), "why": why,
                      "near": set.intersection(*[copies.get(v, set()) for v in volumes]) if volumes and all(volumes) else None,
@@ -261,8 +282,8 @@ def _over(hosts, load, n):
     return max(100 * load[n][0] / hosts[n]["cpu_total"] - cpu, 100 * load[n][1] / hosts[n]["mem_total"] - mem)
 
 
-def plan(exclude=()):
-    hosts, apps = inventory()
+def plan(exclude=(), role=None):
+    hosts, apps = inventory(role)
     exclude = set(exclude or ())
     load = {n: [h["cpu"], h["mem"]] for n, h in hosts.items()}
     spread_before = _spread(hosts, load) if hosts else 0
@@ -329,7 +350,7 @@ def review_token(moves, exclude):
                                      sort_keys=True).encode()).hexdigest()[:20]
 
 
-def reviewed(moves, exclude, token):
+def reviewed(moves, exclude, token, role=None):
     """The moves a person reviewed, checked against the cluster now: each
     container still on the host it was to leave, still movable, and its new
     host still able to take it. Load that changed since does not matter -
@@ -341,12 +362,14 @@ def reviewed(moves, exclude, token):
         raise ValueError("Review the containers to move again")
     if review_token(moves, exclude) != token:
         raise ValueError("The moves differ from the review; review again")
-    hosts, apps = inventory()
+    hosts, apps = inventory(role)
     by_id = {a["id"]: a for a in apps}
     summary = {n.get("name"): n for n in (summaries() if summaries else [])}
     out = []
     for m in moves:
         app, host = by_id.get(m["id"]), hosts.get(m["to"])
+        if app and app["why"] == ADMIN_ONLY:
+            raise PermissionError(f"{m['id']}: {ADMIN_ONLY}")
         if not app or app["why"] or app["host"] != m["from"] or m["id"] in set(exclude or ()):
             raise ValueError(f"{m['id']} changed since the review; review again")
         if not host or not host["takes"] or not satisfies(summary.get(m["to"], host["node"]), requirements(app["dep"]))[0]:
@@ -393,8 +416,21 @@ def status(item):
             ref.setdefault("skipped", []).append(f"{move['id']}: it moved or changed since the review")
             ref.update(index=i + 1)
             return "running", progress, f"Skipped {move['id']}: it moved or changed since the review"
+        # The job runs with no request behind it: asked again for whoever
+        # started it, since the app may have changed since the review, and
+        # the move written as them, so the fence on Kubernetes writes checks
+        # the very object it changes, as it does for a manual move.
+        role = ref.get("role")
         try:
-            apply(move["ns"], move["name"], move["to"])
+            if role not in (None, "admin") and not _allowed(
+                    kget(f"/apis/apps/v1/namespaces/{move['ns']}/deployments/{move['name']}"), move["ns"], role):
+                raise ValueError(ADMIN_ONLY)
+            with HOSTACCESS.acting_as(role):
+                apply(move["ns"], move["name"], move["to"])
+        except PermissionError:
+            ref.setdefault("skipped", []).append(f"{move['id']}: {ADMIN_ONLY}")
+            ref.update(index=i + 1)
+            return "running", progress, f"Skipped {move['id']}: {ADMIN_ONLY}"
         except ValueError as error:
             ref.setdefault("skipped", []).append(f"{move['id']}: {str(error)[:160]}")
             ref.update(index=i + 1)
@@ -436,16 +472,19 @@ def start_run(request):
         return ROUTER.Reply(409, {"error": "A container rebalance is already running; follow it in Jobs", "operation": running})
     if b.get("restart") is not True:
         return ROUTER.Reply(409, {"error": "Moving a container restarts it; confirm the restarts"})
+    role = request.role
     if b.get("moves") is not None:
         # The moves reviewed, checked against the cluster now -
         # not a plan made again from load that moves by the second.
         try:
-            moves = reviewed(b["moves"], b.get("exclude") or [], b.get("review_token"))
+            moves = reviewed(b["moves"], b.get("exclude") or [], b.get("review_token"), role=role)
+        except PermissionError as error:
+            return ROUTER.Reply(403, {"error": str(error)})
         except ValueError as error:
-            return ROUTER.Reply(409, {"error": str(error), "plan": plan(b.get("exclude") or [])})
+            return ROUTER.Reply(409, {"error": str(error), "plan": plan(b.get("exclude") or [], role=role)})
         chosen = {"moves": moves, "excluded": sorted(b.get("exclude") or [])}
     else:
-        chosen = plan(b.get("exclude") or [])
+        chosen = plan(b.get("exclude") or [], role=role)
         if chosen["review_token"] != b.get("review_token"):
             return ROUTER.Reply(409, {"error": "Container load changed since the review; review again", "plan": chosen})
     if not chosen["moves"]:
@@ -453,13 +492,16 @@ def start_run(request):
     count = len(chosen["moves"])
     operation = OPS.start(KIND, f"Rebalance {count} container{'' if count == 1 else 's'}",
                           {"kind": "Deployment", "name": "rebalance"}, "/containers",
-                          {"moves": chosen["moves"], "index": 0, "moved": 0, "stage": "move", "excluded": chosen["excluded"]},
+                          # Who started it: each move is checked for them again as it is made.
+                          {"moves": chosen["moves"], "index": 0, "moved": 0, "stage": "move", "excluded": chosen["excluded"],
+                           "role": role},
                           "Starting with the first container")
     return ROUTER.Reply(202, {"operation": operation})
 
 
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
-    ("GET", "/api/workloads/rebalance/plan"): ("viewer", lambda request: plan([a for a in (request.query.get("exclude") or [""])[0].split(",") if a])),
+    ("GET", "/api/workloads/rebalance/plan"): ("viewer", lambda request: plan([a for a in (request.query.get("exclude") or [""])[0].split(",") if a],
+                                                                            role=request.role)),
     ("POST", "/api/workloads/rebalance"): ("operator", start_run),
 }
