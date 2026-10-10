@@ -8,13 +8,16 @@ carry it in status.loadBalancer.ingress, because that is what kube-proxy
 builds its forwarding rules from: a packet for an address no Service lists
 reaches the node and is refused.
 
-kube-vip does both for a Service of its own, but not always the second: with
-several Services sharing one address and one lease (2.8.175 onwards on
-kube-vip 1.2.3), it announced the address and never recorded it, and it said
-nothing in its log. Ping answered and every port was refused. So Homestead
-checks, and where kube-vip is plainly answering for an address that a Service
-asks for but does not carry, records it - what kube-vip would have written
-(`keep`).
+kube-vip does both for a Service of its own, but the second does not always
+last. On k3s, ServiceLB rebuilds status.loadBalancer from its own svclb pods
+on every EndpointSlice change, without looking at loadBalancerClass: a
+kube-vip Service has none, so each restart of its pods empties the status,
+and kube-vip does not write it again (#365; k3s pkg/cloudprovider/
+servicelb.go). Ping answers and every port is refused. So Homestead checks,
+and where kube-vip is plainly answering for an address that a Service asks
+for but does not carry, records it - what kube-vip would have written
+(`keep`). A quick look every few seconds (`missing`) runs it as soon as an
+address goes missing, not on the next full pass.
 
 `address_map` is the picture every page draws from: each node with its own
 addresses and the VIPs it answers for, every address with the ports on it,
@@ -371,6 +374,16 @@ def revive(services, leases, slices, platform, now=None):
     return due
 
 
+def missing(platform):
+    """Whether any kube-vip Service asks for an address it does not carry -
+    one Services list, cheap enough to ask every few seconds."""
+    if (platform or {}).get("load_balancer") != "kube-vip":
+        return False
+    return any((s.get("spec") or {}).get("type") == "LoadBalancer" and controller_of(s, platform) == "kube-vip"
+               and _requested(s) and not set(_requested(s)) <= set(_assigned(s))
+               for s in _items("/api/v1/services"))
+
+
 def keep(platform):
     """Record what kube-vip announced and left off its Services, and restart
     kube-vip where it stopped electing for a shared lease. Returns what was
@@ -393,8 +406,9 @@ def keep(platform):
             print(f"VIPs: could not record {', '.join(fix['ips'])} on {fix['namespace']}/{fix['name']}: "
                   f"{str(error)[:160]}", flush=True)
             continue
-        print(f"VIPs: {fix['node']} answers for {', '.join(fix['ips'])} and kube-vip left it off "
-              f"{fix['namespace']}/{fix['name']}; recorded it", flush=True)
+        print(f"VIPs: {fix['namespace']}/{fix['name']} had lost {', '.join(fix['ips'])} from its status "
+              f"(ServiceLB clears it when the pods change) while {fix['node']} answers for it; recorded it again",
+              flush=True)
         record = {"at": int(time.time()), "namespace": fix["namespace"], "name": fix["name"],
                   "ips": fix["ips"], "node": fix["node"]}
         with _kept_lock:

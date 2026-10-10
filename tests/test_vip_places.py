@@ -169,6 +169,21 @@ class Keeping(unittest.TestCase):
         self.assertEqual(body["status"]["loadBalancer"]["ingress"][0]["ip"], "192.0.2.108")
         self.assertTrue(any(k["name"] == "plex" for k in VIPS.kept()))
 
+    def test_a_cleared_status_is_seen_in_one_services_list(self):
+        # #365: ServiceLB empties a kube-vip Service's status when its pods
+        # change; the quick look sees it without leases or slices.
+        reads = []
+        def get(path, services):
+            reads.append(path)
+            return {"items": services}
+        VIPS.bind(lambda path: get(path, [service("plex", [32400], "192.0.2.108", SHARED)]), None)
+        self.assertTrue(VIPS.missing(K3S))
+        self.assertEqual(["/api/v1/services"], reads)
+        VIPS.bind(lambda path: get(path, [service("plex", [32400], "192.0.2.108", SHARED, status=["192.0.2.108"]),
+                                          service("homestead", [8088], cls=None)]), None)
+        self.assertFalse(VIPS.missing(K3S))
+        self.assertFalse(VIPS.missing({"load_balancer": "servicelb"}))
+
     def test_keep_does_nothing_without_kube_vip(self):
         VIPS.bind(lambda path: (_ for _ in ()).throw(AssertionError("read")), None)
         self.assertEqual(VIPS.keep({"load_balancer": "servicelb"}), [])

@@ -7448,22 +7448,33 @@ def _alerts_loop():
         time.sleep(20)
 
 
+VIP_QUICK = 5          # a look for a missing address
+VIP_FULL = 30          # a full pass regardless
+
+
 def _vip_loop():
-    """kube-vip can answer for an address and leave it off the Services that
-    ask for it, and then every port there is refused. The leader records it
-    for kube-vip, as it would have (homestead_vips.py)."""
+    """kube-vip can answer for an address and the Service lose it from its
+    status - k3s's ServiceLB empties it when the pods change - and then every
+    port there is refused. The leader records it again, as kube-vip would
+    have (homestead_vips.py): within seconds of it going missing (#365), and
+    in a full pass every VIP_FULL seconds."""
+    last_full = 0.0
     while True:
         if LEADER.is_leader():
             try:
-                if VIPS.keep(PLATFORM.detect()):
-                    with _lock:
-                        _cache.pop("network", None)
-                        _cache.pop("flow2", None)
-                beat("vips", 30, leader_only=True)
+                platform = PLATFORM.detect()
+                now = time.time()
+                if now - last_full >= VIP_FULL or VIPS.missing(platform):
+                    last_full = now
+                    if VIPS.keep(platform):
+                        with _lock:
+                            _cache.pop("network", None)
+                            _cache.pop("flow2", None)
+                beat("vips", VIP_FULL, leader_only=True)
             except Exception as error:
-                beat("vips", 30, error, leader_only=True)
+                beat("vips", VIP_FULL, error, leader_only=True)
                 print(f"VIPs: {str(error)[:160]}", flush=True)
-        time.sleep(30)
+        time.sleep(VIP_QUICK)
 
 
 def baseline_operation(row, verb):
