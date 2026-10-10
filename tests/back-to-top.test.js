@@ -25,6 +25,8 @@ test("it shows past a screen and a half and honours reduced motion", () => {
 
 test("it keeps clear of overlays, the job tray and the phone's bottom bar", () => {
   assert.match(css, /\.backtop\{position:fixed;right:22px;bottom:calc\(18px \+ var\(--tray-lift, 4px\)\)/);
-  assert.match(css, /html:has\(#modal:not\(\.hidden\)\) \.backtop,[^{]*\{display:none\}/);
+  // The page's button hides behind a dialog; the dialog's own (#374) does not.
+  assert.match(css, /html:has\(#modal:not\(\.hidden\)\) \.backtop:not\(\.dialog-backtop\),[^{]*\{display:none\}/);
+  assert.match(css, /\.dialog-backtop\{position:sticky;bottom:16px/);
   assert.match(css, /@media\(max-width:900px\)\{\.backtop\{[^}]*bottom:calc\(84px \+ env\(safe-area-inset-bottom,0px\)/);
 });
