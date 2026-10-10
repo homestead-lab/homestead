@@ -65,16 +65,16 @@ class DataMoveTests(unittest.TestCase):
         self.assertIn("migratable", info["reason"])
         self.assertEqual(["longhorn"], info["candidates"])
         with self.assertRaisesRegex(ValueError, "Move Homestead's data"):
-            server.set_homestead_replicas(2)
+            server.SELF_HEALTH.set_replicas(2)
         self.assertEqual([], self.c.sent)
-        server.set_homestead_replicas(1)
+        server.SELF_HEALTH.set_replicas(1)
 
     def test_a_readwriteonce_volume_blocks_it_too_and_a_shared_one_allows_it(self):
         self.use(Cluster("longhorn", ("ReadWriteOnce",)))
         self.assertIn("ReadWriteOnce", server.homestead_data_volume()["reason"])
         self.use(Cluster("longhorn"))
         self.assertTrue(server.homestead_data_volume()["shareable"])
-        server.set_homestead_replicas(2)
+        server.SELF_HEALTH.set_replicas(2)
         self.assertEqual(2, self.c.sent[-1][2]["spec"]["replicas"])
 
     def test_legacy_live_copy_is_disabled_without_cluster_writes(self):

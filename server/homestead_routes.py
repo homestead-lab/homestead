@@ -88,6 +88,7 @@ MODULES = (
     "homestead_revert",
     "homestead_self",
     "homestead_self_address",
+    "homestead_self_health",
     "homestead_setup",
     "homestead_shares",
     "homestead_signins",

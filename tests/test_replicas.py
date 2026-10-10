@@ -129,7 +129,7 @@ class ReplicaSettingTests(unittest.TestCase):
         sent = []
         with mock.patch.object(server, "kget", lambda path: copy.deepcopy(dep)),                 mock.patch.object(server, "homestead_data_volume", lambda *a: {"shareable": False}),                 mock.patch.object(server, "ksend", lambda *a, **k: sent.append(a)):
             server.fit_own_strategy()
-            server.set_homestead_replicas(1)
+            server.SELF_HEALTH.set_replicas(1)
         self.assertEqual({"spec": {"strategy": {"type": "Recreate", "rollingUpdate": None}}}, sent[0][2])
         self.assertEqual({"type": "Recreate"}, sent[1][2]["spec"]["strategy"])
         deploy = (Path(__file__).resolve().parents[1] / "deploy" / "deploy.yaml").read_text()
@@ -144,9 +144,9 @@ class ReplicaSettingTests(unittest.TestCase):
         with mock.patch.object(server, "kget", lambda path: copy.deepcopy(dep)), \
                 mock.patch.object(server, "homestead_data_volume", lambda *a: {"shareable": True}), \
                 mock.patch.object(server, "ksend", lambda *a, **k: sent.append(a)):
-            server.set_homestead_replicas(2)
+            server.SELF_HEALTH.set_replicas(2)
             with self.assertRaises(ValueError):
-                server.set_homestead_replicas(9)
+                server.SELF_HEALTH.set_replicas(9)
         body = sent[0][2]
         self.assertEqual(2, body["spec"]["replicas"])
         self.assertEqual("RollingUpdate", body["spec"]["strategy"]["type"])

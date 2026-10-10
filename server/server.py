@@ -118,6 +118,12 @@ HEART = {}
 _heart_lock = threading.Lock()
 
 
+def _heartbeats():
+    """Each background task's last beat, copied under the lock."""
+    with _heart_lock:
+        return {k: dict(v) for k, v in HEART.items()}
+
+
 def beat(name, every, error=None, leader_only=False):
     now = time.time()
     with _heart_lock:
@@ -6654,6 +6660,7 @@ import homestead_root_guard as ROOT_GUARD
 import homestead_os_rollout as OS_ROLLOUT
 import homestead_passthrough as PASSTHROUGH
 import homestead_self_address as SELF_ADDRESS
+import homestead_self_health as SELF_HEALTH
 import homestead_host_bridge as HOST_BRIDGE
 import homestead_host_bonds as HOST_BONDS
 import homestead_manifests as MANIFESTS
@@ -7495,9 +7502,6 @@ def mqtt_snapshot():
             "nodes": nodes}
 
 
-MAX_REPLICAS = 3
-
-
 def homestead_data_volume(dep=None):
     """Homestead's data claim, and whether pods on several nodes can mount it.
 
@@ -7546,17 +7550,6 @@ def homestead_data_volume(dep=None):
             "shareable": not reason, "reason": reason, "candidates": shared, "classes": classes, "kept": kept}
 
 
-ROLLING = {"type": "RollingUpdate", "rollingUpdate": {"maxSurge": 1, "maxUnavailable": 0}}
-
-
-def own_strategy(shareable):
-    """How Homestead replaces itself. Rolling - the new copy up before the old
-    one goes - only when every node can mount the data volume; otherwise the
-    two overlap on one volume, and on a migratable class Longhorn takes that
-    for a VM migration and refuses the mount ("invalid controller count")."""
-    return dict(ROLLING) if shareable else {"type": "Recreate"}
-
-
 def fit_own_strategy():
     """An update from this page changes only the image, so a Deployment that
     was once set to roll keeps rolling. Put right at start-up what the data
@@ -7565,7 +7558,7 @@ def fit_own_strategy():
     try:
         ns, name = SELF.NS, NAMES.BRAND
         dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-        want = own_strategy(homestead_data_volume(dep)["shareable"])
+        want = SELF_HEALTH.own_strategy(homestead_data_volume(dep)["shareable"])
         if (dep["spec"].get("strategy") or {}).get("type") != want["type"]:
             ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
                   {"spec": {"strategy": {"type": want["type"], "rollingUpdate": want.get("rollingUpdate")}}},
@@ -7835,10 +7828,6 @@ def _data_move_status(item):
 
 
 OPS.RESOLVERS["self-data-move"] = _data_move_status
-
-
-LOOP_WORDS = {"sampler": "Live charts", "alerts": "Alerts and notifications", "history": "Long-term stats", "host-fixes": "Host fixes", "host-console": "Host console add-on", "storage-pending": "New nodes held until their storage is ready", "os-updates": "OS updates", "baseline": "Platform installs", "vips": "VIP keeper",
-              "hardware": "Hardware detection", "moves": "Cluster moves", "samba": "Network shares", "uptime": "Uptime checks", "auto-updates": "Automatic updates", "restore-tests": "Restore tests", "forecast": "Storage forecast", "changes": "Change history", "housekeeping": "Data housekeeping", "schedules": "Schedules", "unifi": "UniFi sync"}
 
 
 def samba_state():
@@ -8143,136 +8132,10 @@ def set_nfs_export(name, clients, read_only=True):
                 "detail": f"NFS export for {name} {'set' if clients else 'removed'}; its PVC was kept"}
 
 
-def self_health():
-    """Homestead's own health: the API it depends on, its copies and leader,
-    each background task, the node probe, Samba and its permissions."""
-    started = time.time()
-    try:
-        kget("/version")
-        api = {"ok": True, "ms": int((time.time() - started) * 1000)}
-    except Exception as error:
-        api = {"ok": False, "ms": int((time.time() - started) * 1000), "error": str(error)[:160]}
-    leading = LEADER.is_leader()
-    now = time.time()
-    loops = []
-    with _heart_lock:
-        rows = {k: dict(v) for k, v in HEART.items()}
-    for name, word in LOOP_WORDS.items():
-        row = rows.get(name)
-        if not row:
-            state = "standby" if name != "sampler" and not leading else "starting"
-        elif row["leader_only"] and not leading:
-            state = "standby"
-        elif row["error"] and row["error_at"] >= row["last_ok"]:
-            state = "failing"
-        elif now - row["last_ok"] > max(3 * row["every"], 120):
-            state = "late"
-        else:
-            state = "ok"
-        loops.append({"name": name, "label": word, "state": state,
-                      "last_ok": int(row["last_ok"]) if row and row["last_ok"] else 0,
-                      "error": (row or {}).get("error", ""), "every": (row or {}).get("every", 0)})
-    try:
-        replicas = homestead_replicas()
-    except Exception as error:
-        replicas = {"error": str(error)[:160]}
-    probe = dict(PROBE.status())
-    try:
-        ds = kget(f"/apis/apps/v1/namespaces/{DEFAULT_NS}/daemonsets/{NAMES.NODEPROBE}")
-        st = ds.get("status") or {}
-        probe.update(installed=True, desired=int(st.get("desiredNumberScheduled", 0) or 0),
-                     ready=int(st.get("numberReady", 0) or 0))
-    except Exception:
-        probe.update(installed=False, desired=0, ready=0)
-    try:
-        temps = node_temps()
-        probe["reporting"] = len(temps)
-        probe["smart"] = sum(1 for t in temps.values() if (t.get("smart_helper") or {}).get("available"))
-    except Exception:
-        probe["reporting"] = probe["smart"] = 0
-    try:
-        samba = samba_state()
-    except Exception as error:
-        samba = {"error": str(error)[:160]}
-    try:
-        backups = OBJECTS.status()
-    except Exception:
-        backups = {}
-    mqtt = {}
-    try:
-        mqtt = dict(MQTT.STATUS)
-    except Exception:
-        pass
-    # Homestead's shared address, and any app, on the cluster's own address:
-    # host joining (RKE2's 9345) and the dashboard answer there.
-    try:
-        network = cached("network", 5, NETWORK.inventory)
-        addresses = {"lb_ip": LB_IP, "problem": (network.get("shared_vip") or {}).get("problem", ""),
-                     "clashes": network.get("platform_clashes") or [],
-                     "platform": sorted(network.get("platform_addresses") or {})}
-    except Exception as error:
-        addresses = {"lb_ip": LB_IP, "error": str(error)[:160]}
-    return {"version": HOMESTEAD_VERSION, "addresses": addresses, "api": api, "leader": leading, "identity": LEADER.IDENTITY,
-            "replicas": replicas, "loops": loops, "probe": probe, "samba": samba,
-            "permissions": dict(SELF.LAST), "backups": {k: backups.get(k) for k in ("deployed", "ready", "endpoint")},
-            "mqtt": {k: mqtt.get(k) for k in ("state", "detail", "error", "last_publish")}}
-
-
-def homestead_replicas():
-    """How many Homesteads run, where, and which one leads."""
-    ns, name = SELF.NS, NAMES.BRAND
-    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    selector = ",".join(f"{k}={v}" for k, v in sorted(((dep["spec"].get("selector") or {}).get("matchLabels") or {}).items()))
-    pods = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector={urllib.parse.quote(selector, safe='')}").get("items", [])
-    try:
-        holder = (kget(f"/apis/coordination.k8s.io/v1/namespaces/{ns}/leases/{LEADER.NAME}").get("spec") or {}).get("holderIdentity", "")
-    except Exception:
-        holder = ""
-    rows = []
-    for pod in pods:
-        conditions = {c.get("type"): c.get("status") for c in (pod.get("status") or {}).get("conditions") or []}
-        rows.append({"name": pod["metadata"]["name"], "node": (pod.get("spec") or {}).get("nodeName", ""),
-                     "ready": conditions.get("Ready") == "True", "leader": pod["metadata"]["name"] == holder,
-                     "this": pod["metadata"]["name"] == LEADER.IDENTITY,
-                     "terminating": bool(pod["metadata"].get("deletionTimestamp"))})
-    nodes = len({row["node"] for row in rows if row["node"] and row["ready"]})
-    try:
-        data = homestead_data_volume(dep)
-    except Exception as error:
-        data = {"pvc": "", "shareable": False, "reason": f"could not read the data claim: {str(error)[:120]}", "candidates": []}
-    return {"desired": int(dep["spec"].get("replicas", 1) or 0), "pods": sorted(rows, key=lambda row: row["name"]),
-            "leader": holder, "spread_nodes": nodes, "max": MAX_REPLICAS, "data": data}
-
-
-def set_homestead_replicas(count):
-    """Runs this many Homesteads, spread over different nodes where it can.
-
-    More than one means a node failure leaves another already serving: the
-    Service drops the dead one and the leader lease moves within seconds.
-    Rolling updates replace one at a time, so an update never takes it down."""
-    count = int(count)
-    if not 1 <= count <= MAX_REPLICAS:
-        raise ValueError(f"run between 1 and {MAX_REPLICAS} copies of Homestead")
-    if count > 1:
-        data = homestead_data_volume()
-        if not data["shareable"]:
-            raise ValueError(f"{data['reason']}. Move Homestead's data to a shareable volume first (Settings, Redundancy).")
-    ns, name = SELF.NS, NAMES.BRAND
-    dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    dep["spec"]["replicas"] = count
-    dep["spec"]["strategy"] = own_strategy(homestead_data_volume(dep)["shareable"])
-    labels = (dep["spec"].get("selector") or {}).get("matchLabels") or {"app": name}
-    spec = dep["spec"]["template"]["spec"]
-    affinity = spec.setdefault("affinity", {})
-    spread = {"weight": 100, "podAffinityTerm": {"labelSelector": {"matchLabels": dict(labels)},
-                                                 "topologyKey": "kubernetes.io/hostname"}}
-    anti = affinity.setdefault("podAntiAffinity", {})
-    preferred = [term for term in anti.get("preferredDuringSchedulingIgnoredDuringExecution") or [] if term != spread]
-    anti["preferredDuringSchedulingIgnoredDuringExecution"] = preferred + [spread]
-    ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
-    return {"ok": True, "desired": count,
-            "detail": f"Homestead runs as {count} cop{'ies' if count != 1 else 'y'}" +
-                      (", spread over different nodes" if count > 1 else "")}
+# Looked up when asked, so a test that patches one is the one used.
+SELF_HEALTH.bind(lambda *a, **k: kget(*a, **k), lambda *a, **k: ksend(*a, **k),
+                 lambda dep=None: homestead_data_volume(dep), _heartbeats,
+                 lambda: node_temps(), lambda: samba_state(), DEFAULT_NS, LB_IP, HOMESTEAD_VERSION)
 # Join plans are gone; a job one left in Activity says so rather than erroring.
 OPS.RESOLVERS["onboard"] = lambda item: ("cancelled", item.get("progress", 0),
                                          "Join plans were replaced by the install guide")
@@ -9478,8 +9341,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached("wl", 5, get_workloads))
             if p == "/api/portal/status":
                 return self._send(200, portal_status(force=(q.get("force") or [""])[0] == "1"))
-            if p == "/api/self/replicas":
-                return self._send(200, homestead_replicas())
             if p == "/api/self/data/prepare":
                 try:
                     return self._send(200, self_data_preparation_state())
@@ -9644,8 +9505,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, selectable_storage_classes(classes))
             if p == "/api/storage/classes":
                 return self._send(200, storage_class_inventory())
-            if p == "/api/self/health":
-                return self._send(200, self_health())
             if p == "/api/storage/v2":
                 return self._send(200, v2_engine_status())
             if p == "/api/pvcs":
@@ -9927,8 +9786,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, compose_preview(b))
             if p == "/api/compose/apply":
                 return self._send(200, compose_apply(b))
-            if p == "/api/self/replicas":
-                return self._send(200, set_homestead_replicas(b.get("replicas")))
             if p == "/api/self/data/abandon":
                 try:
                     return self._send(200, abandon_self_data_preparation(b))
