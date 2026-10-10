@@ -89,6 +89,40 @@ class PlanTests(unittest.TestCase):
         k2 = next(h for h in plan["hosts"] if h["name"] == "k2")
         self.assertLess(max(k2["cpu_after"], k2["mem_after"]), max(k2["cpu_before"], k2["mem_before"]))
 
+    def test_a_memory_gap_moves_though_another_host_leads_on_cpu(self):
+        # #381: k1 (8 cores) 19% CPU 36% memory, k2 (4 cores) 37% CPU 15%,
+        # k3 (8 cores) 4% CPU 34%. Only each host's higher share was compared,
+        # 37/36/34, so no move could pass; the memory gap should close.
+        c = Cluster()
+        c.objects["/api/v1/nodes"]["items"] = [node("k1"), node("k2"), node("k3")]
+        for n, cores in (("k1", "8"), ("k2", "4"), ("k3", "8")):
+            next(x for x in c.objects["/api/v1/nodes"]["items"] if x["metadata"]["name"] == n)["status"]["allocatable"] = {"cpu": cores, "memory": "30Gi"}
+        c.objects["/apis/metrics.k8s.io/v1beta1/nodes"]["items"] = [
+            {"metadata": {"name": "k1"}, "usage": {"cpu": "1520m", "memory": "10800Mi"}},
+            {"metadata": {"name": "k2"}, "usage": {"cpu": "1480m", "memory": "4500Mi"}},
+            {"metadata": {"name": "k3"}, "usage": {"cpu": "320m", "memory": "10200Mi"}}]
+        apps = {"paperless": ("k1", "50m", "3Gi"), "web": ("k2", "1200m", "300Mi")}
+        c.deps = {n: deployment(n) for n in apps}
+        c.pods = [pod(n, host) for n, (host, _, _) in apps.items()]
+        c.objects["/apis/metrics.k8s.io/v1beta1/pods"]["items"] = [
+            {"metadata": {"namespace": "lab", "name": f"{n}-abc-0"}, "containers": [{"usage": {"cpu": cpu, "memory": mem}}]}
+            for n, (_, cpu, mem) in apps.items()]
+        c.objects["/apis/apps/v1/replicasets"]["items"] = [replicaset(n) for n in apps]
+        bind(c)
+        plan = C.plan()
+        moved = {m["id"]: (m["from"], m["to"]) for m in plan["moves"]}
+        self.assertEqual(("k1", "k2"), moved.get("lab/paperless"), plan)
+        self.assertLess(plan["spread_after"], plan["spread_before"])
+
+    def test_hosts_already_even_say_so(self):
+        c = Cluster()
+        for item in c.objects["/apis/metrics.k8s.io/v1beta1/nodes"]["items"]:
+            item["usage"] = {"cpu": "1000m", "memory": "4Gi"}
+        bind(c)
+        plan = C.plan()
+        self.assertEqual([], plan["moves"])
+        self.assertEqual("even", plan["quiet"])
+
     def test_a_pinned_app_stays_and_says_why(self):
         c = Cluster(); bind(c)
         plan = C.plan()

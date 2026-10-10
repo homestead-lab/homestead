@@ -31,7 +31,7 @@ import urllib.parse
 
 KIND = "container-rebalance"
 MAX_MOVES = 10
-GAIN = 3.0          # a move must bring its host's load down by this many points
+GAIN = 3.0          # a move must even the hosts out by this many points (spread, below)
 SYSTEM = ("kube-", "cattle-", "harvester-", "longhorn-", "fleet-")
 SYSTEM_NS = {"kube-system", "longhorn-system", "kubevirt", "cdi", "system-upgrade", "local"}
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
@@ -235,15 +235,34 @@ def _keeps_local(app):
     return near is not None and (app["host"] in near or app.get("follows"))
 
 
-def _score(host, cpu_m, mem_b):
-    return max(100 * cpu_m / host["cpu_total"], 100 * mem_b / host["mem_total"])
+def _averages(hosts, load):
+    """The cluster's CPU and memory in use, as a share of all it has."""
+    return (100 * sum(l[0] for l in load.values()) / max(1, sum(h["cpu_total"] for h in hosts.values())),
+            100 * sum(l[1] for l in load.values()) / max(1, sum(h["mem_total"] for h in hosts.values())))
+
+
+def _spread(hosts, load):
+    """How uneven the hosts are, in points: how far each is from the
+    cluster's average, CPU and memory each counted on their own (#381).
+    Comparing only each host's higher share hid a memory gap behind a CPU
+    share on another host, and no move could pass."""
+    cpu, mem = _averages(hosts, load)
+    return sum((100 * l[0] / hosts[n]["cpu_total"] - cpu) ** 2 + (100 * l[1] / hosts[n]["mem_total"] - mem) ** 2
+               for n, l in load.items()) ** 0.5
+
+
+def _over(hosts, load, n):
+    """How far a host is above the cluster's average, on whichever of CPU
+    and memory it is furthest - the order hosts are balanced in."""
+    cpu, mem = _averages(hosts, load)
+    return max(100 * load[n][0] / hosts[n]["cpu_total"] - cpu, 100 * load[n][1] / hosts[n]["mem_total"] - mem)
 
 
 def plan(exclude=()):
     hosts, apps = inventory()
     exclude = set(exclude or ())
     load = {n: [h["cpu"], h["mem"]] for n, h in hosts.items()}
-    score = lambda n: _score(hosts[n], *load[n])
+    spread_before = _spread(hosts, load) if hosts else 0
     # satisfies() reads Homestead's own host summary (status, labels,
     # devices), not the Kubernetes Node.
     summary = {n.get("name"): n for n in (summaries() if summaries else [])}
@@ -261,15 +280,15 @@ def plan(exclude=()):
     while len(moves) < MAX_MOVES:
         best = None
         # The busiest host first; when nothing of its can move, the next one.
-        for busiest in sorted(load, key=score, reverse=True):
+        now = _spread(hosts, load)
+        for busiest in sorted(load, key=lambda n: _over(hosts, load, n), reverse=True):
             for app in apps:
                 if app["host"] != busiest or app["why"] or app["id"] in exclude or app["id"] in moved:
                     continue
                 for target in eligible.get(app["id"], ()):
-                    after_from = _score(hosts[busiest], load[busiest][0] - app["cpu"], load[busiest][1] - app["mem"])
-                    after_to = _score(hosts[target], load[target][0] + app["cpu"], load[target][1] + app["mem"])
-                    peak = max(after_from, after_to)
-                    gain = score(busiest) - peak
+                    after = {**load, busiest: [load[busiest][0] - app["cpu"], load[busiest][1] - app["mem"]],
+                             target: [load[target][0] + app["cpu"], load[target][1] + app["mem"]]}
+                    gain = now - _spread(hosts, after)
                     near = bool(app["near"] and target in app["near"])
                     key = (gain - (0 if near else 2), near)      # a host with its volumes is worth two points
                     if gain >= GAIN and (best is None or key > best[0]):
@@ -285,13 +304,17 @@ def plan(exclude=()):
                       "cpu_m": round(app["cpu"]), "mem_gb": round(app["mem"] / 1024 ** 3, 2), "near": near})
         moved.add(app["id"])
     shown = {m["id"] for m in moves} | (exclude & {a["id"] for a in apps})
+    movable = [a for a in apps if not a["why"] and a["id"] not in exclude and eligible.get(a["id"])]
+    # Why nothing moves, when nothing does (#381).
+    quiet = ("" if moves else "even" if spread_before < GAIN * 2 else "nothing-movable" if not movable else "small")
     token = review_token(moves, exclude)
     return {"hosts": [{"name": n, "takes": hosts[n]["takes"], "metrics": hosts[n]["metrics"],
                        "cpu_before": round(100 * hosts[n]["cpu"] / hosts[n]["cpu_total"]),
                        "cpu_after": round(100 * load[n][0] / hosts[n]["cpu_total"]),
                        "mem_before": round(100 * hosts[n]["mem"] / hosts[n]["mem_total"]),
                        "mem_after": round(100 * load[n][1] / hosts[n]["mem_total"])} for n in sorted(hosts)],
-            "moves": moves, "apps": sorted(shown), "excluded": sorted(exclude),
+            "moves": moves, "apps": sorted(shown), "excluded": sorted(exclude), "quiet": quiet,
+            "spread_before": round(spread_before, 1), "spread_after": round(_spread(hosts, load), 1) if hosts else 0,
             "skipped": [{"id": a["id"], "why": a["why"]} for a in apps if a["why"]],
             "metrics": all(h["metrics"] for h in hosts.values()), "review_token": token}
 
