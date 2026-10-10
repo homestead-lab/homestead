@@ -9477,6 +9477,8 @@ class H(HTTP.LimitedHandler):
                                                      getattr(self, "user", None), getattr(self, "role", None)))
         if isinstance(answer, MODULE_ROUTES.Stream):
             return self._send_stream(answer) or True
+        if isinstance(answer, MODULE_ROUTES.Reply):
+            return self._send(answer.code, answer.body) or True
         if isinstance(answer, MODULE_ROUTES.Raw):
             self._extra_headers += [("X-Content-Type-Options", "nosniff"), ("Cache-Control", "no-store")]
             self._send(200, answer.body, answer.ctype)

@@ -15,8 +15,9 @@ they call:
 
 The handler takes a Request and returns what is sent back as JSON, with 200,
 or a Raw(body, ctype) for anything that is not JSON - an image, say - or a
-Stream for a download too large to hold; an
-exception it raises is answered as one from server.py's own branches is.
+Stream for a download too large to hold, or a Reply(code, body) for JSON
+with another status; an exception it raises is answered as one from
+server.py's own branches is.
 server.py looks a request up here after its guard has checked who may make
 it, before its own branches. homestead_route_policy.role() reads the same
 table, so a route and its role are written once.
@@ -101,6 +102,9 @@ Raw = collections.namedtuple("Raw", "body ctype")
 # A download sent as it is read: chunks (an iterator of bytes), its type, the
 # name it saves as, and its size when known.
 Stream = collections.namedtuple("Stream", "chunks ctype filename size")
+# JSON sent with a status other than 200: a 202 for work that carries on as a
+# job, a 409 that hands back what to review again.
+Reply = collections.namedtuple("Reply", "code body")
 
 _table = {}
 _cached = [lambda key, seconds, fn: fn()]
