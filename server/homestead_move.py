@@ -745,3 +745,14 @@ def setup_storage(name, size_gb=100, lb_ip="", vip_mode="", port=0):
     return {"ok": True, "endpoint": where,
             "detail": f"backup storage is starting on {name}" + (f" at {where}" if where else "")
                       + "; its first start can take a minute while the image downloads"}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/fleet/legacy"): ("viewer", lambda request: legacy_clusters()),
+    ("GET", "/api/move/inventory"): ("viewer", lambda request: inventory()),
+    ("GET", "/api/move/clusters"): ("viewer", lambda request: list_clusters()),
+    ("GET", "/api/move/hello"): ("viewer", lambda request: hello()),
+    ("POST", "/api/move/clusters/remove"): ("admin", lambda request: remove_cluster(request.body.get("name"))),
+    ("POST", "/api/move/remote"): ("admin", lambda request: remote_inventory(request.body.get("name"))),
+}

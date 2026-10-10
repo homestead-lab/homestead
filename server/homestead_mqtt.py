@@ -390,3 +390,10 @@ def run():
                 client = None
             time.sleep(backoff)
             backoff = min(backoff * 2, 300)
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("POST", "/api/mqtt"): ("admin", lambda request: save(request.body)),
+    ("POST", "/api/mqtt/test"): ("admin", lambda request: test(request.body)),
+}

@@ -928,3 +928,12 @@ def write_configmap(effect, send):
         send("PUT", path, body)
     else:
         send("POST", path.rsplit("/", 1)[0], body)
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/passthrough/inventory"): ("viewer", lambda request: inventory((request.query.get("node") or [""])[0])),
+    ("POST", "/api/passthrough/inspect"): ("admin", lambda request: inspect(str(request.body.get("node") or ""))),
+    ("POST", "/api/passthrough/vbios/capture"): ("admin", lambda request: capture_vbios(str(request.body.get("node") or ""), str(request.body.get("address") or ""))),
+    ("POST", "/api/passthrough/iommu"): ("admin", lambda request: enable_iommu(str(request.body.get("node") or ""))),
+}

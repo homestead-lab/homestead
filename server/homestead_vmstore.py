@@ -496,3 +496,9 @@ def source_for(image_id):
     if not url:
         raise ValueError(f"{entry['name']} has no {arch()} image")
     return {"image_url": url, "min_gb": entry["min_gb"], "user": entry["user"]}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("POST", "/api/vm/store/auto"): ("admin", lambda request: set_auto(str(request.body.get("id") or ""), bool(request.body.get("auto")))),
+}

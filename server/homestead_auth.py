@@ -594,3 +594,9 @@ def logout_everywhere(username):
         _save(data)
         SESSIONS.revoke(username)
     return {"ok": True}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/auth/users"): ("admin", lambda request: list_users()),
+}

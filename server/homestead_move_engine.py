@@ -1513,3 +1513,10 @@ def finish(move_id, volumes=False):
                         f"on {move['cluster']}")
     _store(move)
     return _public(move)
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/move/moves"): ("viewer", lambda request: moves()),
+    ("POST", "/api/move/moves/dismiss"): ("admin", lambda request: dismiss(request.body.get("id") or None)),
+}

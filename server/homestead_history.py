@@ -267,3 +267,9 @@ def uptime(now=None):
                                  if e.get("node") == name and e.get("kind") == "reboot"][-50:],
                      "since": rows[0][0] if rows else None}
     return {"nodes": out, "step": STEP}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/history/long"): ("viewer", lambda request: series((request.query.get("range") or ["24h"])[0])),
+}

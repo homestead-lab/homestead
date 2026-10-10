@@ -134,3 +134,10 @@ def move(vip):
     for step in done["steps"]:
         step.pop("config", None)
     return done
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/self/address"): ("admin", lambda request: report()),
+    ("POST", "/api/self/address/plan"): ("admin", lambda request: plan(str(request.body.get("vip") or "").strip())),
+}

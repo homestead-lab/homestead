@@ -289,3 +289,9 @@ def adopt_old_keys():
         except OSError:
             pass
     return {"done": not failed, "changed": changed, "failed": failed}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("POST", "/api/self/permissions"): ("admin", lambda request: reconcile()),
+}

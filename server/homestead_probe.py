@@ -251,3 +251,9 @@ def ensure_helper_key():
         meta["resourceVersion"] = current["metadata"]["resourceVersion"]
     body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "metadata": meta, "data": data}
     ksend("PUT" if current else "POST", path if current else path.rsplit("/", 1)[0], body)
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("POST", "/api/node/probe/remove"): ("admin", lambda request: remove()),
+}

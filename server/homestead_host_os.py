@@ -515,3 +515,9 @@ def alert_facts(state=None):
                           "resolved": f"Root filesystem usage is below 90% on {node}", "href": "/nodes",
                           "signals": {"used_percent_band": int(host["root_used_pct"] // 5)}})
     return facts
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/node/os"): ("viewer", lambda request: report((request.query.get("name") or [""])[0] or None)),
+}

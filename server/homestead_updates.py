@@ -1246,3 +1246,9 @@ def progress(ns, name, dep=None):
             "rollout_at": ((spec.get("template", {}).get("metadata") or {}).get("annotations") or {}).get(ROLLOUT_AT, ""),
             "can_rollback": bool(_annotation_json(dep, PREVIOUS)),
             "last_action": _annotation(dep, LAST_ACTION)}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/image-updates/progress"): ("viewer", lambda request: progress(request.query["ns"][0], request.query["name"][0])),
+}

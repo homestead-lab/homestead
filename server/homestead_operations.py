@@ -1069,3 +1069,12 @@ def log(operation_id):
         except Exception as error:
             sources = [{"title": "Output", "text": "", "note": f"could not be read: {error}"[:300]}]
     return {**_public(item), "history": item.get("history") or [], "sources": sources}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/operations"): ("viewer", lambda request: list_operations()),
+    ("GET", "/api/operations/log"): ("viewer", lambda request: log((request.query.get("id") or [""])[0])),
+    ("POST", "/api/operations/resume"): ("admin", lambda request: resume(request.body.get("id", ""))),
+    ("POST", "/api/operations/cancel-plan"): ("operator", lambda request: cancel_plan(request.body.get("id", ""))),
+}

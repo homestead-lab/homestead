@@ -401,3 +401,15 @@ def issue(report_id, owner):
         body = body[:-20]
     return {"title": title, "body": body, "url": prefix + urllib.parse.urlencode({"title": title, "body": body}),
             "comment_shortened": len(record["comment"]) > 180 or body != original_body}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/diagnostics"): ("admin", lambda request: listing(request.user)),
+    ("GET", "/api/diagnostics/issue"): ("admin", lambda request: issue((request.query.get("id") or [""])[0], request.user)),
+    ("POST", "/api/diagnostics/start"): ("admin", lambda request: create(request.user, request.body.get("package") is True)),
+    ("POST", "/api/diagnostics/events"): ("admin", lambda request: append(request.body.get("id"), request.user, request.body.get("batch"), request.body.get("events"))),
+    ("POST", "/api/diagnostics/stop"): ("admin", lambda request: stop(request.body.get("id"), request.user)),
+    ("POST", "/api/diagnostics/draft"): ("admin", lambda request: draft(request.body.get("id"), request.user, request.body.get("title", ""), request.body.get("comment", ""))),
+    ("POST", "/api/diagnostics/delete"): ("admin", lambda request: delete(request.body.get("id"), request.user)),
+}

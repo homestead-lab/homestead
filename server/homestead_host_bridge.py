@@ -290,3 +290,9 @@ def status(item, now=None):
             return "succeeded", 100, f"{node} is on {BRIDGE}: make a LAN network on {BRIDGE} for VMs and containers"
         return "running", 90, f"Waiting for {node} to be Ready again"
     return "succeeded", 100, f"{node} is on {BRIDGE}"
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("POST", "/api/node/bridge/inspect"): ("admin", lambda request: inspect(str(request.body.get("node") or ""))),
+}

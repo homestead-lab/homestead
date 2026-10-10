@@ -123,3 +123,9 @@ def delete(name, confirm=""):
         raise ValueError(f"type {name} to confirm")
     ksend("DELETE", f"/api/v1/namespaces/{name}")
     return {"ok": True, "name": name, "at": int(time.time())}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/namespaces/manage"): ("viewer", lambda request: inventory()),
+}

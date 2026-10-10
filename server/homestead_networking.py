@@ -1322,3 +1322,9 @@ def create_vm_network(cfg):
                          "spec": {"config": json.dumps(config)}})
     return {"ok": True, "name": f"{namespace}/{name}",
             "detail": f"LAN network {namespace}/{name} made, on {where}; {joins} can join it now"}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("POST", "/api/network/plan"): ("operator", lambda request: service_plan(request.body)),
+}

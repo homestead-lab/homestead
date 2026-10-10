@@ -226,3 +226,9 @@ def send(wants, urgency="normal", poster=None):
                 gone += 1
             _write(rows)
     return {"sent": sent, "removed": gone, "statuses": statuses}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("POST", "/api/push/unsubscribe"): ("viewer", lambda request: unsubscribe(request.user, str(request.body.get("endpoint") or ""))),
+}

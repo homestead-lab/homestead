@@ -267,3 +267,9 @@ def tick(now=None):
             saved = _read()
             want = wanted(saved)
     return done
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/host-console"): ("admin", lambda request: inventory()),
+}

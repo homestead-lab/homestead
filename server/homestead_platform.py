@@ -228,3 +228,9 @@ def metallb_pools():
                       "spec": {"description": "MetalLB address pool", "ranges": ranges},
                       "status": {"conditions": [{"type": "Ready", "status": "True"}]}})
     return pools
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/platform/join"): ("viewer", lambda request: join_guide()),
+}

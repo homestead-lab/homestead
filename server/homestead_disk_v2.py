@@ -828,3 +828,13 @@ def protect_mutations(disks):
     for name in ('add', 'set_up', 'use_os_space', 'retire_start'):
         setattr(disks, name, protect(getattr(disks, name), 'config'))
     disks.v2_tasks = tasks
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/disks/v2/status"): ("admin", lambda request: status(request.query.get("id", [""])[0])),
+    ("POST", "/api/disks/v2/plan"): ("admin", lambda request: review(request.body)),
+    ("POST", "/api/disks/v2/start"): ("admin", lambda request: start(request.body)),
+    ("POST", "/api/disks/v2/prepare-review"): ("admin", lambda request: prepare_review(request.body.get("id", ""))),
+    ("POST", "/api/disks/v2/prepare"): ("admin", lambda request: prepare(request.body)),
+}

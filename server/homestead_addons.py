@@ -607,3 +607,9 @@ def set_kubevirt_emulation(on):
     return {"ok": True, "emulation": enabled,
             "detail": ("Software virtualisation fallback is enabled; VMs can run on nodes without /dev/kvm"
                        if enabled else "KVM is now required; VMs can run only on hardware-virtualisation nodes")}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/addons"): ("viewer", lambda request: status()),
+}
