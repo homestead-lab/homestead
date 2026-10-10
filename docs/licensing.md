@@ -19,9 +19,24 @@ For permission outside these terms, contact the maintainer through the
 [repository](https://github.com/homestead-lab/homestead). Adding a small feature or
 changing the name does not automatically avoid the restriction.
 
-The project is **source-available**, not OSI-approved open source. Community
-contributions remain welcome under the same terms; see [CONTRIBUTING.md](../CONTRIBUTING.md).
-The [Commons Clause FAQ](https://commonsclause.com/) explains the distinction.
+The project is **source-available**, not OSI-approved open source. The
+[Commons Clause FAQ](https://commonsclause.com/) explains the distinction.
+
+## Contributions
+
+Community contributions are welcome. Everyone receives them under the project's
+licence. Contributors license them to the maintainer under the plain Apache
+License 2.0 and sign off each commit, so the maintainer may later relicense the
+project or offer it under separate terms without tracing every contributor.
+[CONTRIBUTING.md](../CONTRIBUTING.md#licence) has the exact terms.
+
+## Name and logo
+
+The licence covers code, documentation and assets as copyright works. It
+grants no right to use the Homestead name, logo or icons to identify another
+product or service, as Apache License 2.0 section 6 also states. A fork or
+modified build may say it is based on Homestead, but must not present itself
+as Homestead or as endorsed by the project.
 
 ## Transition
 

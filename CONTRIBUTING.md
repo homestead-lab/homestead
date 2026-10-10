@@ -147,10 +147,39 @@ rather than in an issue.
 ## Licence
 
 Homestead's original code is source-available under [Apache License 2.0 with
-Commons Clause 1.0](LICENSE). Contributions are welcome under those same terms;
-by intentionally submitting a contribution for inclusion, you agree to license
-it under them. You retain your copyright. Do not submit work you lack the
-right to license, including work subject to incompatible employer terms.
+Commons Clause 1.0](LICENSE), and that is how everyone receives it, your
+contributions included.
+
+By intentionally submitting a contribution for inclusion, you license it to
+the maintainer, and the maintainer's successors and assigns, under the plain
+[Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0), without the
+Commons Clause. You also agree that the maintainer may distribute your
+contribution as part of Homestead under the project's licence, or under other
+terms, including a different licence or a separate commercial licence. The
+wider grant lets the project change its licence later without tracing every
+contributor; it does not take anything away from you. You retain your
+copyright, and you may use your own contribution however you like.
+
+Contributions are voluntary and unpaid. Any sponsorship, donation or licence
+fee the project receives goes to the maintainer and creates no obligation or
+payment to contributors.
+
+Do not submit work you lack the right to license this way, including work
+subject to incompatible employer terms.
+
+### Sign-off
+
+Each commit carries a `Signed-off-by:` line to confirm the
+[Developer Certificate of Origin](https://developercertificate.org/) and the
+terms above. `git commit -s` adds it from your Git name and email:
+
+```text
+Signed-off-by: Your Name <you@example.com>
+```
+
+A pull request whose commits are not signed off is not merged. To sign off
+commits you have already made, run `git rebase --signoff origin/dev` and force
+push the branch.
 
 Third-party code retains its own licence. Keep its notices and source-access
 requirements intact and list it in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
