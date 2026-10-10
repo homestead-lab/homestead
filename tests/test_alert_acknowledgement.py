@@ -101,7 +101,7 @@ class AcknowledgementTests(unittest.TestCase):
     def test_replacement_disk_does_not_inherit_acknowledgement(self):
         def device(serial):
             nodes=[{"name":"node","status":"Ready","disk_issues":[dict(i,disk="sda",device_identity=serial) for i in server.smart_disk_issues({"available":True,"reallocated":24})]}]
-            report=server.classify_cluster_health(nodes,[],[])
+            report=server.CLUSTER.classify_cluster_health(nodes,[],[])
             return A.health_facts({"health_issues":report["health_issues"]})
         self.tick(device("drive-a"));self.tick(device("drive-a"),60);self.ack()
         self.tick(device("drive-b"));fresh=self.tick(device("drive-b"),60)

@@ -113,7 +113,7 @@ class ProtectionHealthTests(unittest.TestCase):
         self.assertEqual(["daily-backup", "backup target"], [i["name"] for i in issues])
         self.assertIn("connection refused", issues[1]["reason"])
         self.assertIn("no backup target", server.protection_issues(jobs[:1], {"configured": False})[1]["reason"])
-        result = server.classify_cluster_health([], [], [], protection=issues)
+        result = server.CLUSTER.classify_cluster_health([], [], [], protection=issues)
         self.assertEqual("degraded", result["health"])
 
 

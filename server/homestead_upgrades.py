@@ -16,6 +16,10 @@ import json
 import re
 import time
 import urllib.request
+import homestead_cluster as CLUSTER
+import homestead_components as COMPONENTS
+import homestead_operations as OPS
+import homestead_routes
 
 kget = None
 HNS = "harvester-system"
@@ -159,3 +163,26 @@ def report(current, force=False):
             "recent": rows[:12], "error": error, "active": active,
             "last": active or (history[0] if history else None),
             "history": history[:5]}
+
+
+def _report_route(request):
+    current = ((homestead_routes.cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", "")
+    return report(current, force=(request.query.get("force") or [""])[0] == "1")
+
+
+def _start_route(request):
+    version = str(request.body.get("version") or "")
+    name = COMPONENTS.start_harvester(version, offered())
+    homestead_routes.forget("cluster")
+    operation = OPS.start("harvester-upgrade", f"Upgrade Harvester to {version}",
+                          {"kind": "Upgrade", "name": name, "namespace": "harvester-system"},
+                          "/system/cluster", {"upgrade": name, "version": version},
+                          "Harvester checks the cluster, then prepares each node")
+    return {"ok": True, "upgrade": name, "operation": operation, "detail": f"Harvester is upgrading to {version}"}
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/cluster/upgrades"): ("viewer", _report_route),
+    ("POST", "/api/cluster/upgrades/start"): ("admin", _start_route),
+}

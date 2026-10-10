@@ -826,5 +826,25 @@ def main():
         raise ValueError("Unknown shutdown helper mode")
 
 
+# server.py's: a Shutdown wired to its cluster client and jobs; review=True
+# also finds the image the helpers run.
+shutdown = None
+
+
+def bind(_shutdown):
+    global shutdown
+    shutdown = _shutdown
+
+
+# Its routes and who may use them (homestead_routes.py). Starting a shutdown
+# stays in server.py: it answers 202.
+ROUTES = {
+    ("GET", "/api/cluster/shutdown/plan"): ("admin", lambda request: shutdown(review=True).review()),
+    ("GET", "/api/cluster/shutdown"): ("admin", lambda request: {"state": shutdown().public_state()}),
+    ("POST", "/api/cluster/shutdown/cancel"): ("admin", lambda request: shutdown().cancel()),
+    ("POST", "/api/cluster/shutdown/recover"): ("admin", lambda request: shutdown().recover(request.body.get("run"))),
+}
+
+
 if __name__ == "__main__":
     main()

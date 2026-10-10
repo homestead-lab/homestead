@@ -2251,72 +2251,6 @@ def protection_issues(jobs, target):
     return issues
 
 
-def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protection=None):
-    """Separate real availability faults from normal workload transitions."""
-    issues, activities = list(protection or []), []
-    for node in nodes:
-        if node.get("status") != "Ready":
-            issues.append({"severity": "critical", "kind": "Node",
-                           "name": node.get("name", "unknown"),
-                           "reason": f"Kubernetes reports {node.get('status') or 'not ready'}. Review this host."})
-        for disk in (node.get("disk_issues") or []) if node.get("smart_notify", True) else []:
-            issues.append({"severity": disk.get("severity", "degraded"), "kind": "Disk",
-                           "name": f"{node.get('name', 'unknown')}/{disk.get('disk', 'unknown')}",
-                           "reason": disk.get("reason", "SMART warning"),
-                           "device_identity": disk.get("device_identity", ""),
-                           **({"metric": disk["metric"], "value": disk["value"]} if "metric" in disk else {})})
-    for volume in volumes:
-        robustness = str(volume.get("robustness", "") or "").lower()
-        label = volume.get("pvc_name") or volume.get("name") or "unknown"
-        if robustness == "faulted":
-            issues.append({"severity": "critical", "kind": "Volume", "name": label,
-                           "reason": "Longhorn reports the volume faulted"})
-        elif robustness == "degraded":
-            issues.append({"severity": "degraded", "kind": "Volume", "name": label,
-                           "reason": "Longhorn is rebuilding or missing a replica"})
-    for workload in workloads:
-        desired = int(workload.get("desired", 0) or 0)
-        ready = int(workload.get("ready", 0) or 0)
-        generation = int(workload.get("generation", 0) or 0)
-        observed = int(workload.get("observed_generation", 0) or 0)
-        updated = int(workload.get("updated", 0) or 0)
-        transitioning = (ready < desired or updated < desired or observed < generation or
-                          int(workload.get("unavailable", 0) or 0) > 0)
-        if desired == 0 or not transitioning:
-            continue
-        name = workload.get("name", "unknown")
-        namespace = workload.get("ns", "")
-        resource = f"{namespace}/{name}" if namespace else name
-        problems = workload.get("problems") or []
-        if problems:
-            issues.append({"severity": "degraded", "kind": "Workload", "name": resource,
-                           "reason": str(problems[0])[:260]})
-            continue
-        age = int(workload.get("transition_age", startup_grace + 1) or 0)
-        if age <= startup_grace:
-            updating = int(workload.get("available", 0) or 0) > 0 and (
-                updated < desired or observed < generation)
-            activities.append({"state": "updating" if updating else "starting",
-                               "kind": "Workload", "name": resource,
-                               "reason": f"{ready}/{desired} replicas ready"})
-        else:
-            issues.append({"severity": "degraded", "kind": "Workload", "name": resource,
-                           "reason": f"only {ready}/{desired} replicas ready after {age // 60}m"})
-    health = "critical" if any(x["severity"] == "critical" for x in issues) else (
-        "degraded" if issues else "healthy")
-    activity = "updating" if any(x["state"] == "updating" for x in activities) else (
-        "starting" if activities else "idle")
-    state = health if health != "healthy" else (activity if activity != "idle" else "healthy")
-    if issues:
-        summary = "; ".join(f"{x['kind']} {x['name']}: {x['reason']}" for x in issues[:4])
-    elif activities:
-        summary = "; ".join(f"{x['kind']} {x['name']}: {x['reason']}" for x in activities[:4])
-    else:
-        summary = "All nodes, workloads, and attached volumes are healthy"
-    return {"health": health, "health_state": state, "health_summary": summary,
-            "health_issues": issues, "activities": activities}
-
-
 def get_overview():
     nodes = get_nodes()
     wl = get_workloads()
@@ -2331,7 +2265,7 @@ def get_overview():
                                        cached("lhtarget-health", 60, LH.backup_target))
     except Exception:
         protection = []
-    health = classify_cluster_health(nodes, wl, vols, protection=protection)
+    health = CLUSTER.classify_cluster_health(nodes, wl, vols, protection=protection)
     tcap = sum(n["cpu_cap"] for n in nodes) or 1
     tuse = sum(n["cpu_used"] for n in nodes)
     mcap = sum(n["mem_cap_gb"] for n in nodes) or 1
@@ -2353,25 +2287,6 @@ def get_overview():
         "top_mem": sorted(wl, key=lambda x: -x["mem_mb"])[:6],
         "lb_ip": NETWORK.shared_vip(),
     }
-
-
-def get_events():
-    try:
-        ev = kget("/api/v1/events?limit=160")
-    except Exception:
-        return []
-    items = ev.get("items", [])
-    items.sort(key=lambda e: e.get("lastTimestamp") or e.get("eventTime") or "", reverse=True)
-    return [{
-        "ns": e["metadata"]["namespace"],
-        "obj": e.get("involvedObject", {}).get("name", ""),
-        "kind": e.get("involvedObject", {}).get("kind", ""),
-        "reason": e.get("reason", ""),
-        "msg": (e.get("message") or "")[:160],
-        "type": e.get("type", "Normal"),
-        "time": e.get("lastTimestamp") or e.get("eventTime") or "",
-        "count": e.get("count", 1),
-    } for e in items[:120]]
 
 
 def get_storage():
@@ -7620,6 +7535,9 @@ def cluster_shutdown(review=False):
                                       enabled=LC.NODE_POWER_ENABLED, busy=busy)
 
 
+CLUSTER_SHUTDOWN.bind(cluster_shutdown)
+
+
 def _self_data_helper_image(read, ns):
     pod_name = _dns_name(SELF.POD, "Homestead pod")
     pod = read(f"/api/v1/namespaces/{ns}/pods/{pod_name}")
@@ -8304,7 +8222,7 @@ CONFIG.bind(kget, ksend, HOMESTEAD_VERSION, [
      "objects": [("configmaps", DEFAULT_NS, VMSTORE.CONFIGMAP)]},
 ], site=lambda: (cached("settings", 15, get_app_settings) or {}).get("site_name", ""),
     after_restore=_config_restored)
-CLUSTER.bind(kget, SYS_NS, lambda: cached("nodes", 5, get_nodes))
+CLUSTER.bind(kget, SYS_NS, lambda: cached("nodes", 5, get_nodes), lambda: get_overview())
 CONSOLE_PROXY = CONSOLE.ConsoleProxy(API, TOKEN, CTX, DATA_DIR, SYS_NS, {DEFAULT_NS}, kget)
 VM_CONSOLE = VMCONSOLE.VmConsole(CONSOLE_PROXY, SYS_NS, kget)
 FILES.bind(kget, ksend, urllib.parse.urlparse(API), TOKEN, CTX, SYS_NS)
@@ -9437,8 +9355,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, cached(f"setup:{self.role}:{self.user}", 30, lambda: setup_state(self.user, self.role)))
             if p == "/api/settings":
                 return self._send(200, app_settings_payload())
-            if p == "/api/overview":
-                return self._send(200, cached("ov", 5, get_overview))
             if p == "/api/nodes":
                 return self._send(200, cached("nodes", 5, get_nodes))
             if p == "/api/nodes/ports":
@@ -9475,14 +9391,6 @@ class H(HTTP.LimitedHandler):
             if p == "/api/mqtt/preview":
                 snap = mqtt_snapshot()
                 return self._send(200, {"states": [{"topic": t, "payload": v} for t, v in MQTT.states(MQTT.load(), snap)]})
-            if p == "/api/cluster/components":
-                if (q.get("force") or [""])[0] == "1":
-                    _cache.pop("components", None)
-                    return self._send(200, COMPONENTS.report(force=True))
-                return self._send(200, cached("components", 60, COMPONENTS.report))
-            if p == "/api/cluster/upgrades":
-                current = ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", "")
-                return self._send(200, UPGRADES.report(current, force=(q.get("force") or [""])[0] == "1"))
             # What this cluster offers another one. Read-only, and the half
             # of a move the far cluster calls.
             if p == "/api/onboard/guide":
@@ -9520,8 +9428,6 @@ class H(HTTP.LimitedHandler):
                 plan = VOLUMES.deletion_plan((q.get("ns") or [DEFAULT_NS])[0],
                     (q.get("name") or [""])[0], (q.get("volume") or [""])[0])
                 return self._send(200, STORAGE_GUARD.review(plan, OPS, kget))
-            if p == "/api/events":
-                return self._send(200, cached("ev", 10, get_events))
             if p == "/api/storage":
                 return self._send(200, cached("stor", 10, get_storage))
             if p == "/api/node":
@@ -9587,10 +9493,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, power_plan_with_job(POWER.plan((q.get("node") or [""])[0],
                                                                       (q.get("action") or [""])[0],
                                                                       force=(q.get("force") or [""])[0] == "1")))
-            if p == "/api/cluster/shutdown/plan":
-                return self._send(200, cluster_shutdown(review=True).review())
-            if p == "/api/cluster/shutdown":
-                return self._send(200, {"state": cluster_shutdown().public_state()})
             if p == "/api/workloads/start-plan":
                 return self._send(200, workload_start_plan(
                     (q.get("ns") or [""])[0], (q.get("name") or [""])[0],
@@ -9968,31 +9870,6 @@ class H(HTTP.LimitedHandler):
                     return self._send(200, self_data_preparation(b, self.user, start=p == "/api/self/data/prepare"))
                 except SELF_DATA_FENCE.Held as error:
                     return self._send(409, {"error": str(error), "review_required": True})
-            if p == "/api/cluster/components/upgrade":
-                result = COMPONENTS.upgrade(str(b.get("component") or ""), str(b.get("to") or ""), b)
-                for key in ("components", "helm", "platform"):
-                    _cache.pop(key, None)
-                result["operation"] = OPS.start(
-                    "platform-upgrade", f"Upgrade {result['name']} to {result['to']}",
-                    {"kind": "Cluster" if result["component"] == "cluster" else "HelmChart", "name": result["name"],
-                     "namespace": ""}, "/system/cluster",
-                    {"component": result["component"], "name": result["name"], "from": result["from"],
-                     "to": result["to"], "started": time.time(),
-                     "phase": "controller" if result["component"] == "cluster" else "",
-                     **({"held": result["held"]} if "held" in result else {}),
-                     **({"v2_mode": result["v2_mode"]} if result.get("v2_mode") else {})},
-                    result["detail"])
-                return self._send(200, result)
-            if p == "/api/cluster/upgrades/start":
-                version = str(b.get("version") or "")
-                name = COMPONENTS.start_harvester(version, UPGRADES.offered())
-                _cache.pop("cluster", None)
-                operation = OPS.start("harvester-upgrade", f"Upgrade Harvester to {version}",
-                                      {"kind": "Upgrade", "name": name, "namespace": "harvester-system"},
-                                      "/system/cluster", {"upgrade": name, "version": version},
-                                      "Harvester checks the cluster, then prepares each node")
-                return self._send(200, {"ok": True, "upgrade": name, "operation": operation,
-                                        "detail": f"Harvester is upgrading to {version}"})
             if p in ("/api/addons/longhorn", "/api/addons/kubevirt", "/api/addons/multus", "/api/addons/multus/repair", "/api/addons/kube-vip"):
                 what = "multus" if p.endswith("/repair") else p.rsplit("/", 1)[1]
                 result = {"longhorn": ADDONS.install_longhorn, "kubevirt": ADDONS.install_kubevirt,
@@ -10451,10 +10328,6 @@ class H(HTTP.LimitedHandler):
                 return self._send(200, release_held_power(str(b.get("id") or "")))
             if p == "/api/cluster/shutdown":
                 return self._send(202, cluster_shutdown(review=True).start(b, OPS))
-            if p == "/api/cluster/shutdown/cancel":
-                return self._send(200, cluster_shutdown().cancel())
-            if p == "/api/cluster/shutdown/recover":
-                return self._send(200, cluster_shutdown().recover(b.get("run")))
             if p == "/api/vm/migrate":
                 ns = b.get("ns", DEFAULT_NS)
                 result = LC.vm_migrate(ns, b["name"], b.get("target"))

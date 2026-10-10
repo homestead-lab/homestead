@@ -32,6 +32,8 @@ import urllib.parse
 import urllib.request
 
 import homestead_helm as HELM
+import homestead_operations as OPS
+import homestead_routes
 
 kget = ksend = None
 ktext = None            # path -> plain text: a pod's log
@@ -750,3 +752,34 @@ def start_harvester(version, offered):
             "spec": {"version": version}}
     made = ksend("POST", "/apis/harvesterhci.io/v1beta1/namespaces/harvester-system/upgrades", body) or {}
     return (made.get("metadata") or {}).get("name", "")
+
+
+def _report_route(request):
+    if (request.query.get("force") or [""])[0] == "1":
+        homestead_routes.forget("components")
+        return report(force=True)
+    return homestead_routes.cached("components", 60, report)
+
+
+def _upgrade_route(request):
+    b = request.body
+    result = upgrade(str(b.get("component") or ""), str(b.get("to") or ""), b)
+    homestead_routes.forget("components", "helm", "platform")
+    result["operation"] = OPS.start(
+        "platform-upgrade", f"Upgrade {result['name']} to {result['to']}",
+        {"kind": "Cluster" if result["component"] == "cluster" else "HelmChart", "name": result["name"],
+         "namespace": ""}, "/system/cluster",
+        {"component": result["component"], "name": result["name"], "from": result["from"],
+         "to": result["to"], "started": time.time(),
+         "phase": "controller" if result["component"] == "cluster" else "",
+         **({"held": result["held"]} if "held" in result else {}),
+         **({"v2_mode": result["v2_mode"]} if result.get("v2_mode") else {})},
+        result["detail"])
+    return result
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/cluster/components"): ("viewer", _report_route),
+    ("POST", "/api/cluster/components/upgrade"): ("admin", _upgrade_route),
+}

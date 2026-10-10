@@ -9,6 +9,8 @@ import homestead_routes
 kget = None
 SYS_NS = set()
 nodes_provider = lambda: []
+# server.py's dashboard summary (get_overview): it gathers from every part of Homestead.
+overview = lambda: {}
 
 
 SERVICE_DEFS = (
@@ -26,9 +28,10 @@ SERVICE_DEFS = (
 )
 
 
-def bind(_kget, _sys_ns, _nodes_provider):
-    global kget, SYS_NS, nodes_provider
+def bind(_kget, _sys_ns, _nodes_provider, _overview=None):
+    global kget, SYS_NS, nodes_provider, overview
     kget, SYS_NS, nodes_provider = _kget, set(_sys_ns), _nodes_provider
+    overview = _overview or overview
 
 
 def _iso_age(value, now=None):
@@ -261,7 +264,94 @@ def inventory():
                         csrs, harvester, unavailable=unavailable)
 
 
+def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protection=None):
+    """Separate real availability faults from normal workload transitions."""
+    issues, activities = list(protection or []), []
+    for node in nodes:
+        if node.get("status") != "Ready":
+            issues.append({"severity": "critical", "kind": "Node",
+                           "name": node.get("name", "unknown"),
+                           "reason": f"Kubernetes reports {node.get('status') or 'not ready'}. Review this host."})
+        for disk in (node.get("disk_issues") or []) if node.get("smart_notify", True) else []:
+            issues.append({"severity": disk.get("severity", "degraded"), "kind": "Disk",
+                           "name": f"{node.get('name', 'unknown')}/{disk.get('disk', 'unknown')}",
+                           "reason": disk.get("reason", "SMART warning"),
+                           "device_identity": disk.get("device_identity", ""),
+                           **({"metric": disk["metric"], "value": disk["value"]} if "metric" in disk else {})})
+    for volume in volumes:
+        robustness = str(volume.get("robustness", "") or "").lower()
+        label = volume.get("pvc_name") or volume.get("name") or "unknown"
+        if robustness == "faulted":
+            issues.append({"severity": "critical", "kind": "Volume", "name": label,
+                           "reason": "Longhorn reports the volume faulted"})
+        elif robustness == "degraded":
+            issues.append({"severity": "degraded", "kind": "Volume", "name": label,
+                           "reason": "Longhorn is rebuilding or missing a replica"})
+    for workload in workloads:
+        desired = int(workload.get("desired", 0) or 0)
+        ready = int(workload.get("ready", 0) or 0)
+        generation = int(workload.get("generation", 0) or 0)
+        observed = int(workload.get("observed_generation", 0) or 0)
+        updated = int(workload.get("updated", 0) or 0)
+        transitioning = (ready < desired or updated < desired or observed < generation or
+                          int(workload.get("unavailable", 0) or 0) > 0)
+        if desired == 0 or not transitioning:
+            continue
+        name = workload.get("name", "unknown")
+        namespace = workload.get("ns", "")
+        resource = f"{namespace}/{name}" if namespace else name
+        problems = workload.get("problems") or []
+        if problems:
+            issues.append({"severity": "degraded", "kind": "Workload", "name": resource,
+                           "reason": str(problems[0])[:260]})
+            continue
+        age = int(workload.get("transition_age", startup_grace + 1) or 0)
+        if age <= startup_grace:
+            updating = int(workload.get("available", 0) or 0) > 0 and (
+                updated < desired or observed < generation)
+            activities.append({"state": "updating" if updating else "starting",
+                               "kind": "Workload", "name": resource,
+                               "reason": f"{ready}/{desired} replicas ready"})
+        else:
+            issues.append({"severity": "degraded", "kind": "Workload", "name": resource,
+                           "reason": f"only {ready}/{desired} replicas ready after {age // 60}m"})
+    health = "critical" if any(x["severity"] == "critical" for x in issues) else (
+        "degraded" if issues else "healthy")
+    activity = "updating" if any(x["state"] == "updating" for x in activities) else (
+        "starting" if activities else "idle")
+    state = health if health != "healthy" else (activity if activity != "idle" else "healthy")
+    if issues:
+        summary = "; ".join(f"{x['kind']} {x['name']}: {x['reason']}" for x in issues[:4])
+    elif activities:
+        summary = "; ".join(f"{x['kind']} {x['name']}: {x['reason']}" for x in activities[:4])
+    else:
+        summary = "All nodes, workloads, and attached volumes are healthy"
+    return {"health": health, "health_state": state, "health_summary": summary,
+            "health_issues": issues, "activities": activities}
+
+
+def events():
+    try:
+        ev = kget("/api/v1/events?limit=160")
+    except Exception:
+        return []
+    items = ev.get("items", [])
+    items.sort(key=lambda e: e.get("lastTimestamp") or e.get("eventTime") or "", reverse=True)
+    return [{
+        "ns": e["metadata"]["namespace"],
+        "obj": e.get("involvedObject", {}).get("name", ""),
+        "kind": e.get("involvedObject", {}).get("kind", ""),
+        "reason": e.get("reason", ""),
+        "msg": (e.get("message") or "")[:160],
+        "type": e.get("type", "Normal"),
+        "time": e.get("lastTimestamp") or e.get("eventTime") or "",
+        "count": e.get("count", 1),
+    } for e in items[:120]]
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/cluster"): ("viewer", lambda request: homestead_routes.cached("cluster", 15, inventory)),
+    ("GET", "/api/overview"): ("viewer", lambda request: homestead_routes.cached("ov", 5, overview)),
+    ("GET", "/api/events"): ("viewer", lambda request: homestead_routes.cached("ev", 10, events)),
 }
