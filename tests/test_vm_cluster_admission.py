@@ -240,8 +240,8 @@ class VMClusterAdmissionTests(unittest.TestCase):
         self.assertEqual(200, result[0], result)
 
     def test_created_numa_controller_without_launcher_still_needs_allocation_evidence(self):
-        cfg = server.vm_cluster_configuration(self.body, preview=True)
-        _, prepared, _, _ = server.prepare_vm_cluster(cfg)
+        cfg = server.VM_REVIEW.vm_cluster_configuration(self.body, preview=True)
+        _, prepared, _, _ = server.VM_REVIEW.prepare_vm_cluster(cfg)
         item = prepared[0]
         domain = item["vm"]["spec"]["template"]["spec"]["domain"]
         domain["cpu"].update(numa={"guestMappingPassthrough": {}}, dedicatedCpuPlacement=True)

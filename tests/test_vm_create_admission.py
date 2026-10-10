@@ -150,9 +150,9 @@ class VMCreateAdmissionTests(unittest.TestCase):
         writes.assert_not_called()
 
     def test_create_context_is_snapshot_not_mutable_manifest_alias(self):
-        cfg = server.vm_create_configuration(self.body, preview=True)
+        cfg = server.VM_REVIEW.vm_create_configuration(self.body, preview=True)
         prepared = server.IMP.prepare_vm(cfg, self.platform, "storage")
-        _, _, context = server.vm_creation_capacity(prepared)
+        _, _, context = server.VM_REVIEW.vm_creation_capacity(prepared)
         prepared["claims"][0]["spec"]["volumeMode"] = "Block"
         self.assertEqual("Filesystem", context["prepared"]["claims"][0]["spec"]["volumeMode"])
 
@@ -160,7 +160,7 @@ class VMCreateAdmissionTests(unittest.TestCase):
         body = self.reviewed()
         with mock.patch.object(server.VM_MUTATION_JOB, "dispatch", return_value={"ok": True, "address": "192.0.2.4", "warning": "Login Secret ownership needs inspection."}), \
                 mock.patch.object(server.IPAM, "save_record", side_effect=OSError("unavailable")):
-            result = server.reviewed_vm_create(body)
+            result = server.VM_REVIEW.reviewed_vm_create(body)
         self.assertIn("Secret ownership", result["warning"])
         self.assertIn("IP-address record", result["warning"])
 

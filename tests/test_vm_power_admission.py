@@ -123,7 +123,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
         def attempt(body):
             gate.wait(timeout=5)
             try:
-                return server.reviewed_vm_power(body)
+                return server.VM_REVIEW.reviewed_vm_power(body)
             except review.Rejected as error:
                 return str(error)
         with mock.patch.object(server.VMS, "ksend", return_value={}) as writes, ThreadPoolExecutor(2) as executor:
@@ -378,7 +378,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
 
     def test_stop_force_stop_pause_do_not_depend_on_capacity(self):
         for action in ("stop", "force-stop", "pause"):
-            with mock.patch.object(server, "vm_power_capacity_plan", side_effect=AssertionError("must not check capacity")):
+            with mock.patch.object(server.VM_REVIEW, "vm_power_capacity_plan", side_effect=AssertionError("must not check capacity")):
                 result, writes = self.call("/api/vm/power", {**self.body, "action": action})
             self.assertEqual(200, result[0], result)
             writes.assert_called_once()
@@ -386,7 +386,7 @@ class VMPowerAdmissionTests(unittest.TestCase):
     def test_stop_crash_retries_uses_same_power_route_without_capacity_admission(self):
         self.vm["spec"]["runStrategy"] = "RerunOnFailure"
         self.vm["status"] = {"printableStatus": "CrashLoopBackOff"}
-        with mock.patch.object(server, "vm_power_capacity_plan", side_effect=AssertionError("must not check capacity")):
+        with mock.patch.object(server.VM_REVIEW, "vm_power_capacity_plan", side_effect=AssertionError("must not check capacity")):
             result, writes = self.call("/api/vm/power", {**self.body, "action": "stop"})
         self.assertEqual(200, result[0], result)
         self.assertIn("Boot retries stopped", result[1]["detail"])

@@ -96,6 +96,7 @@ MODULES = (
     "homestead_updates",
     "homestead_upgrades",
     "homestead_uplinks",
+    "homestead_vm_review",
     "homestead_vms",
     "homestead_vmstore",
 )

@@ -216,11 +216,11 @@ class VMEditAdmissionTests(unittest.TestCase):
         self.assertTrue(server.OPS._read()[0]["ref"]["state_initialization_acknowledged"])
 
     def test_outer_label_change_cannot_skip_admission_as_metadata_only(self):
-        prepared = server.prepare_vm_edit({"ns": "lab", "name": "guest", "description": "edited"})
-        plan, _, _ = server.vm_edit_capacity(prepared)
+        prepared = server.VM_REVIEW.prepare_vm_edit({"ns": "lab", "name": "guest", "description": "edited"})
+        plan, _, _ = server.VM_REVIEW.vm_edit_capacity(prepared)
         self.assertFalse(plan["vm"]["admission_needed"])
         prepared["vm"]["metadata"]["labels"] = {"backup": "yes"}
-        plan, _, _ = server.vm_edit_capacity(prepared)
+        plan, _, _ = server.VM_REVIEW.vm_edit_capacity(prepared)
         self.assertTrue(plan["vm"]["admission_needed"])
 
     def disk_setup(self, platform):
@@ -276,8 +276,8 @@ class VMEditAdmissionTests(unittest.TestCase):
 
     def test_edit_context_keeps_reviewed_manifest_snapshot(self):
         self.disk_setup({"harvester": False, "cdi": True})
-        prepared = server.prepare_vm_edit(self.body)
-        _, _, context = server.vm_edit_capacity(prepared)
+        prepared = server.VM_REVIEW.prepare_vm_edit(self.body)
+        _, _, context = server.VM_REVIEW.vm_edit_capacity(prepared)
         prepared["vm"]["spec"]["dataVolumeTemplates"][0]["spec"]["storage"]["volumeMode"] = "Filesystem"
         self.assertEqual("Block", context["prepared"]["vm"]["spec"]["dataVolumeTemplates"][0]["spec"]["storage"]["volumeMode"])
 
