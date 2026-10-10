@@ -336,14 +336,25 @@ window.addUser = async () => {
     toast("user added", "ok"); manageUsers();
   } catch (e) { toast(e.message, "bad"); }
 };
-window.delUser = async name => {
-  if (!(await ask(`Remove user "${name}"?`))) return;
+/* Remove a user, from the Settings card or the Users dialog: whichever it
+   came from is redrawn from the server afterwards, success or not, so a row
+   never outlives its user (#368). A user someone else already removed is
+   what was wanted: it says so and the row goes (#369). */
+async function userRemove(name, from) {
+  if (!(await ask(`Remove ${name}? They are signed out, and their API keys stop working.`, { title: "Remove user", ok: "Remove", danger: true }))) return;
   try {
     await api("/api/auth/users/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username: name }) });
-    toast("removed", "ok"); manageUsers();
-  } catch (e) { toast(e.message, "bad"); }
-};
+    toast(`${name} removed`, "ok");
+  } catch (e) {
+    if (/no such user|does not exist/i.test(e.message)) toast(`${name} had already been removed`, "ok");
+    else toast(e.message, "bad");
+  }
+  if (from === "dialog") manageUsers();
+  else if (typeof STATE !== "undefined" && STATE.view === "settings") { resetPaint(); viewSettings(); }
+}
+window.userRemove = userRemove;
+window.delUser = name => userRemove(name, "dialog");
 
 /* any 401 anywhere drops straight back to the sign-in gate */
 const _api = window.api;
@@ -434,6 +445,7 @@ window.userRoleSet = async (name, select) => {
     toast(`${name} is now ${role}`, "ok");
   } catch (e) { select.value = was; toast(e.message, "bad"); }
   finally { select.disabled = false; }
+  if (typeof STATE !== "undefined" && STATE.view === "settings") { resetPaint(); viewSettings(); }
 };
 
 window.userAdd = () => modal("Add a user", `<div class="ui-stack">
