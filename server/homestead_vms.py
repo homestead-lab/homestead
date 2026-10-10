@@ -1327,4 +1327,5 @@ def delete(ns, name, with_disks=False):
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/vms"): ("viewer", lambda request: homestead_routes.cached("vms", 5, list_vms)),
+    ("GET", "/api/vm"): ("viewer", lambda request: detail((request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], include_sensitive=request.role == "admin")),
 }

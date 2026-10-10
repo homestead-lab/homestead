@@ -224,3 +224,10 @@ def _refusal(error):
         return body.get("message") or f"the API server refused ({error.code})"
     except Exception:
         return f"the API server refused ({error.code})"
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/resources/kinds"): ("viewer", lambda request: discover(force=(request.query.get("force") or [""])[0] == "1")),
+    ("GET", "/api/resources/events"): ("viewer", lambda request: events_for((request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], (request.query.get("uid") or [""])[0])),
+}

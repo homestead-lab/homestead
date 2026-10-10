@@ -936,4 +936,5 @@ ROUTES = {
     ("POST", "/api/passthrough/inspect"): ("admin", lambda request: inspect(str(request.body.get("node") or ""))),
     ("POST", "/api/passthrough/vbios/capture"): ("admin", lambda request: capture_vbios(str(request.body.get("node") or ""), str(request.body.get("address") or ""))),
     ("POST", "/api/passthrough/iommu"): ("admin", lambda request: enable_iommu(str(request.body.get("node") or ""))),
+    ("GET", "/api/passthrough/resources"): ("viewer", lambda request: resources(with_usage=True)),
 }

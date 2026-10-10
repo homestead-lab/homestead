@@ -1251,4 +1251,7 @@ def progress(ns, name, dep=None):
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/image-updates/progress"): ("viewer", lambda request: progress(request.query["ns"][0], request.query["name"][0])),
+    # Read while a scan is in flight, so it needs no session cache
+    # and must not be served from one.
+    ("GET", "/api/image-updates/scan-progress"): ("viewer", lambda request: scan_progress()),
 }

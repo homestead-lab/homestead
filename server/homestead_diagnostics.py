@@ -412,4 +412,6 @@ ROUTES = {
     ("POST", "/api/diagnostics/stop"): ("admin", lambda request: stop(request.body.get("id"), request.user)),
     ("POST", "/api/diagnostics/draft"): ("admin", lambda request: draft(request.body.get("id"), request.user, request.body.get("title", ""), request.body.get("comment", ""))),
     ("POST", "/api/diagnostics/delete"): ("admin", lambda request: delete(request.body.get("id"), request.user)),
+    ("GET", "/api/diagnostics/report"): ("admin", lambda request: snapshot((request.query.get("id") or [""])[0], request.user, (request.query.get("format") or ["anonymised"])[0])),
+    ("POST", "/api/diagnostics/prepare"): ("admin", lambda request: prepare(request.body.get("id"), request.user, request.body.get("title", "Bug report"), request.body.get("comment", ""), request.body.get("sources", []), request.body.get("seconds", 900))),
 }

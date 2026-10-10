@@ -2765,4 +2765,9 @@ ROUTES = {
     ("GET", "/api/vmimages"): ("viewer", lambda request: homestead_routes.cached("vmimg", 30, list_vm_images)),
     ("GET", "/api/images"): ("viewer", lambda request: homestead_routes.cached("imgcache", 30, image_cache)),
     ("GET", "/api/schedules"): ("viewer", lambda request: homestead_routes.cached("cron", 8, list_jobs)),
+    ("POST", "/api/sources/measure"): ("admin", lambda request: measure_source_paths(request.body.get("name"), request.body.get("paths") or [], request.body.get("seconds", 25))),
+    ("POST", "/api/sources"): ("admin", lambda request: {"ok": True, "sources": add_source(request.body["name"], request.body["host"], request.body["user"], request.body.get("password"), request.body.get("kind", "unraid"), request.body.get("base_path", "/mnt/user/appdata"), request.body.get("port", 22))}),
+    ("POST", "/api/sources/delete"): ("admin", lambda request: {"ok": True, "sources": del_source(request.body["name"])}),
+    ("POST", "/api/sources/browse"): ("admin", lambda request: {"entries": browse_source(request.body["name"], request.body.get("path"))}),
+    ("POST", "/api/sources/containers"): ("admin", lambda request: {"containers": source_containers(request.body["name"])}),
 }

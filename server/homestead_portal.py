@@ -208,4 +208,5 @@ def status(force=False):
 ROUTES = {
     ("GET", "/api/portal/candidates"): ("viewer", lambda request: candidates()),
     ("POST", "/api/portal"): ("admin", lambda request: save(request.body.get("links"))),
+    ("GET", "/api/portal"): ("viewer", lambda request: {"links": view(), "icons": list(BUILTIN)}),
 }

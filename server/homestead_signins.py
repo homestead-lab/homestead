@@ -103,3 +103,9 @@ def history(user="", failures=False, limit=500):
         if len(out) >= limit:
             break
     return out
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/auth/history"): ("admin", lambda request: history((request.query.get("user") or [""])[0], (request.query.get("failures") or [""])[0] == "1")),
+}

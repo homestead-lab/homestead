@@ -520,4 +520,6 @@ def alert_facts(state=None):
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/node/os"): ("viewer", lambda request: report((request.query.get("name") or [""])[0] or None)),
+    # Every Ready host read again now (#371); the card follows it.
+    ("POST", "/api/os-updates/check"): ("admin", lambda request: {"ok": True, "checking": check_all()}),
 }

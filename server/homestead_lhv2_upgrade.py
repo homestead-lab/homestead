@@ -383,4 +383,5 @@ def ensure_idle():
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/longhorn/v2/upgrade"): ("viewer", lambda request: plan(request.query.get("to", [""])[0])),
+    ("POST", "/api/longhorn/v2/upgrade/review"): ("admin", lambda request: settings_review(request.body.get("enabled"), request.body.get("timeout"))[0]),
 }

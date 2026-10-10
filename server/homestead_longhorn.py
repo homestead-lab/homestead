@@ -1158,4 +1158,6 @@ ROUTES = {
     ("POST", "/api/lh/backup/delete"): ("admin", lambda request: delete_backup(request.body.get("name", ""))),
     ("GET", "/api/lh/overview"): ("viewer", lambda request: homestead_routes.cached("lhov", 8, overview)),
     ("GET", "/api/lh/backupvolumes"): ("viewer", lambda request: homestead_routes.cached("lhbackupvols", 15, backup_volumes)),
+    ("POST", "/api/lh/assign"): ("operator", lambda request: bulk_assign(request.body["volumes"], request.body["name"], request.body.get("kind", "group"), request.body.get("enabled", True))),
+    ("POST", "/api/lh/target"): ("admin", lambda request: set_backup_target(request.body["url"], request.body.get("secret", ""), request.body.get("poll", "5m"), request.body.get("keys"))),
 }
