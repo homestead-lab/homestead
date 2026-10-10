@@ -263,6 +263,29 @@ class ExecRefused(ConnectionError):
     retry = True
 
 
+def _refused(sock, pod, status):
+    """The API server's answer to an exec it would not open, for the error:
+    its status line and, from the body, its own message - "error dialing
+    backend", say, while a host just back has no tunnel to it yet."""
+    detail = ""
+    try:
+        sock.settimeout(2)
+        body = sock.recv(2048).decode("utf-8", "replace")
+        start = body.find("{")
+        if start >= 0:
+            try:
+                detail = json.loads(body[start:body.rfind("}") + 1]).get("message", "")
+            except ValueError:
+                detail = ""
+        detail = detail or body.strip().splitlines()[-1] if body.strip() else detail
+    except OSError:
+        pass
+    finally:
+        sock.close()
+    said = f"{status or 'no answer'}" + (f": {detail[:200]}" if detail else "")
+    return ExecRefused(f"Kubernetes refused to run a command in {pod} ({said})")
+
+
 def _exec(namespace, pod, argv, stdin=b"", timeout=30, container="files"):
     """Run one command in the helper pod and read all of its output."""
     query = [("container", container), ("stdout", "true"), ("stderr", "true")]
@@ -288,8 +311,7 @@ def _exec(namespace, pod, argv, stdin=b"", timeout=30, container="files"):
         header.extend(chunk)
     status = header.split(b"\r\n", 1)[0].decode("latin-1", "replace").strip()
     if " 101 " not in f"{status} ":
-        sock.close()
-        raise ExecRefused(f"Kubernetes refused to run a command in {pod} ({status or 'no answer'})")
+        raise _refused(sock, pod, status)
     out, err = bytearray(), bytearray()
     try:
         if stdin:
@@ -614,8 +636,7 @@ def _open_exec(namespace, pod, argv, stdin=False, container="files"):
         header.extend(chunk)
     status = header.split(b"\r\n", 1)[0].decode("latin-1", "replace").strip()
     if " 101 " not in f"{status} ":
-        sock.close()
-        raise ExecRefused(f"Kubernetes refused to run a command in {pod} ({status or 'no answer'})")
+        raise _refused(sock, pod, status)
     sock.settimeout(300)
     return sock
 
