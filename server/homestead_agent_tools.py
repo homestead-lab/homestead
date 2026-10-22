@@ -817,7 +817,8 @@ TOOLS = [
          "It needs an admin, so it waits for one to approve it.",
          {"settings": SETTINGS}, ["settings"], run=_settings_post("/api/monitoring/actions/test")),
     # ---- #424: schedules
-    Tool("list_schedules", "Scheduled jobs", "read", READ, "Scheduled jobs (CronJobs) and when they last ran.",
+    Tool("list_schedules", "Scheduled jobs", "read", READ, "Scheduled jobs (CronJobs) in every namespace: when each last ran, how that run ended "
+         "(ok, failed, running, never, unknown), a run that did not happen, and the next run.",
          run=_get("/api/schedules")),
     Tool("save_schedule", "Save a scheduled job", "containers:manage", CHANGE,
          "Creates or changes a scheduled job: name, image, command, schedule (cron, UTC) and suspend.",

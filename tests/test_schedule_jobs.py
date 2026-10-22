@@ -1,13 +1,17 @@
 import copy
+import json
 import sys
+import time
 import unittest
 import urllib.error
 from pathlib import Path
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import homestead_imports as imports
+import homestead_routes
 
 
 JOB = {"name": "nightly", "schedule": "0 3 * * *", "image": "alpine:3.24", "command": "echo hi"}
@@ -18,7 +22,14 @@ class ScheduleJobTests(unittest.TestCase):
         self.existing = {}
         self.sent = []
 
+        self.paths, self.jobs = [], None
+
         def get(path):
+            self.paths.append(path)
+            if path == "/apis/batch/v1/jobs" and self.jobs is not None:
+                return {"items": self.jobs}
+            if path == "/apis/batch/v1/cronjobs" and self.cronjobs_fail:
+                raise urllib.error.URLError("connection refused")
             if "/cronjobs" in path:
                 if path.endswith("/cronjobs"):
                     return {"items": list(self.existing.values())}
@@ -31,6 +42,9 @@ class ScheduleJobTests(unittest.TestCase):
             self.sent.append((method, path, copy.deepcopy(body)))
             return body or {}
 
+        self.cronjobs_fail = False
+        # The alerts source reads through the routes' cache; here, fresh each time.
+        self.enterContext(mock.patch.object(homestead_routes, "_cached", [lambda key, seconds, fn: fn()]))
         self.cache = {"cron": (0, [])}
         imports.bind(get, send, None, None, "lab", self.cache)
 
@@ -40,7 +54,10 @@ class ScheduleJobTests(unittest.TestCase):
         if time_zone:
             spec["timeZone"] = time_zone
         labels = {"homestead.io/managed": "true"} if labels is None else labels
-        return {"metadata": {"name": name, "resourceVersion": "7", "generation": 3, "labels": labels},
+        # Made just now: not yet due, so not missed.
+        made = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        return {"metadata": {"name": name, "namespace": "lab", "uid": f"uid-{name}", "resourceVersion": "7",
+                             "generation": 3, "labels": labels, "creationTimestamp": made},
                 "spec": spec, "status": {}}
 
     def backup_job(self, labels=None):
@@ -200,6 +217,117 @@ class ScheduleJobTests(unittest.TestCase):
         method, path, body = self.sent[-1]
         self.assertEqual(("POST", "/apis/batch/v1/namespaces/lab/jobs"), (method, path))
         self.assertEqual("backup", body["spec"]["template"]["spec"]["serviceAccountName"])
+
+    def test_the_list_holds_cronjobs_from_every_namespace(self):
+        self.existing["nightly"] = self.cronjob("nightly")
+        backup = self.backup_job(labels={"kustomize.toolkit.fluxcd.io/name": "apps"})
+        backup["metadata"].update(name="backup-photos", namespace="media", uid="uid-photos")
+        self.existing["backup-photos"] = backup
+        jobs = imports.list_jobs()
+        self.assertIn("/apis/batch/v1/cronjobs", self.paths, "read across the cluster")
+        self.assertEqual([("lab", "nightly"), ("media", "backup-photos")], [(j["ns"], j["name"]) for j in jobs],
+                         "Homestead's own namespace first")
+        rows = {j["name"]: j for j in jobs}
+        self.assertEqual((True, True), (rows["nightly"]["editable"], rows["nightly"]["runnable"]))
+        self.assertEqual((False, False, "flux"), (rows["backup-photos"]["editable"], rows["backup-photos"]["runnable"],
+                                                  rows["backup-photos"]["owner"]))
+        self.assertNotIn("claims", rows["backup-photos"], "health only, even when its runs could not be read")
+
+    def test_each_row_says_how_its_last_run_ended(self):
+        self.existing["nightly"] = self.cronjob("nightly")
+        self.jobs = [{"metadata": {"name": "nightly-1", "namespace": "lab", "creationTimestamp": "2026-10-22T03:00:00Z",
+                                   "ownerReferences": [{"kind": "CronJob", "name": "nightly", "uid": "uid-nightly", "controller": True}]},
+                      "status": {"startTime": "2026-10-22T03:00:00Z", "conditions": [
+                          {"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]}}]
+        row = imports.list_jobs()[0]
+        self.assertEqual(("failed", "BackoffLimitExceeded"), (row["result"], row["result_reason"]))
+
+    def test_runs_that_could_not_be_read_are_unknown(self):
+        self.existing["nightly"] = self.cronjob("nightly")
+        row = imports.list_jobs()[0]
+        self.assertEqual("unknown", row["result"])
+        self.assertIn("could not be read", row["result_reason"])
+
+    def test_a_list_that_could_not_be_read_is_an_error_not_empty(self):
+        self.cronjobs_fail = True
+        with self.assertRaises(Exception):
+            imports.list_jobs()
+
+    def test_alert_facts_come_from_the_list(self):
+        self.existing["nightly"] = self.cronjob("nightly")
+        self.assertIn({"unknown_key": "cronjob:lab/nightly:failed"}, imports.cronjob_alert_facts())
+        self.cronjobs_fail = True
+        self.cache.clear()
+        with self.assertRaises(Exception, msg="a source that could not look is None, never all clear"):
+            imports.cronjob_alert_facts()
+
+    # Security review: viewers never saw other namespaces' CronJob specs. A
+    # command or its env often carries a token; other namespaces get health only.
+    SECRET = "Bearer s3cr3t-token"
+
+    def foreign(self):
+        job = self.backup_job(labels={})
+        job["metadata"].update(name="backup-photos", namespace="media", uid="uid-photos")
+        pod = job["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+        pod["containers"][0]["command"] = ["sh", "-c", f"curl -H 'Authorization: {self.SECRET}' https://example.com"]
+        pod["containers"][0]["args"] = [self.SECRET]
+        job["status"] = {"lastScheduleTime": "2026-10-22T03:00:00Z"}
+        self.existing["backup-photos"] = job
+        self.jobs = [{"metadata": {"name": "backup-photos-1", "namespace": "media", "creationTimestamp": "2026-10-22T03:00:00Z",
+                                   "ownerReferences": [{"kind": "CronJob", "name": "backup-photos", "uid": "uid-photos", "controller": True}]},
+                      "status": {"startTime": "2026-10-22T03:00:00Z", "conditions": [
+                          {"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded",
+                           "message": f"pod said {self.SECRET}"}]}}]
+
+    def test_other_namespaces_cronjobs_are_health_only(self):
+        self.foreign()
+        row = imports.list_jobs()[0]
+        self.assertNotIn(self.SECRET, json.dumps(row))
+        for field in ("command", "image", "claims", "generation"):
+            self.assertNotIn(field, row)
+        self.assertEqual(("media", "backup-photos", "failed", "BackoffLimitExceeded"),
+                         (row["ns"], row["name"], row["result"], row["result_reason"]))
+
+    def test_alerts_for_other_namespaces_carry_no_command_or_message(self):
+        self.foreign()
+        facts = [f for f in imports.cronjob_alert_facts() if f.get("key", "").endswith(":failed")]
+        self.assertEqual(1, len(facts))
+        self.assertNotIn(self.SECRET, json.dumps(facts))
+
+    def test_the_agent_tool_answers_the_same_health_only_rows(self):
+        import homestead_agent_tools as TOOLS
+        self.foreign()
+        tool = next(t for t in TOOLS.TOOLS if t.name == "list_schedules")
+        with mock.patch.object(TOOLS, "call", lambda method, path, *a, **k: imports.list_jobs()):
+            answer = tool.run({}, {"user": "ada", "role": "viewer"})
+        self.assertNotIn(self.SECRET, json.dumps(answer))
+
+    def test_only_so_many_cronjobs_are_judged_per_pass_and_the_rest_are_unknown(self):
+        import homestead_cronjob_health as SJ
+        for i in range(3):
+            self.existing[f"n{i}"] = self.cronjob(f"n{i}", "Etc/UTC")
+        with mock.patch.object(SJ, "MAX_JUDGED", 2):
+            rows = imports.list_jobs()
+        self.assertEqual([False, False, None], [r["missed"] for r in rows])
+        self.assertEqual("", rows[2]["next_run"])
+
+    def test_homesteads_own_namespace_is_judged_first(self):
+        import homestead_cronjob_health as SJ
+        for i in range(2):
+            other = self.cronjob(f"a{i}", "Etc/UTC")
+            other["metadata"]["namespace"] = "aaa"
+            self.existing[f"a{i}"] = other
+        self.existing["nightly"] = self.cronjob("nightly", "Etc/UTC")
+        with mock.patch.object(SJ, "MAX_JUDGED", 1):
+            rows = {r["name"]: r for r in imports.list_jobs()}
+        self.assertIsNot(None, rows["nightly"]["missed"])
+        self.assertEqual([None, None], [rows["a0"]["missed"], rows["a1"]["missed"]])
+
+    def test_homesteads_own_namespace_rows_are_as_before(self):
+        self.existing["backup"] = self.backup_job(labels={})
+        row = imports.list_jobs()[0]
+        self.assertEqual(("lab", "alpine:3.24", "echo hi", ["app-data"], 3),
+                         (row["ns"], row["image"], row["command"], row["claims"], row["generation"]))
 
 
 if __name__ == "__main__":

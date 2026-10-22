@@ -174,7 +174,7 @@ Tools come in three classes:
 
 | Tool | What it does | Scope | Class |
 |---|---|---|---|
-| `list_schedules` | Scheduled jobs (CronJobs) and when they last ran | `read` | read |
+| `list_schedules` | Scheduled jobs (CronJobs) in every namespace: when they last ran, how that run ended, a run that did not happen, and the next run | `read` | read |
 | `save_schedule` | Creates or changes a scheduled job: name, image, command, schedule (cron, UTC) and suspend | `containers:manage` | change |
 | `run_schedule` | Runs a scheduled job once, now | `containers:manage` | change |
 | `delete_schedule` | Asks to delete a scheduled job | `containers:manage` | destructive |

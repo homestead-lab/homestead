@@ -434,7 +434,7 @@ from homestead_vm_create import (  # noqa: E402,F401
     prepare_vm, _recheck_vm_creation, commit_vm, create_vm,
 )
 from homestead_scheduled_jobs import (  # noqa: E402,F401
-    CRONJOB_NAME, _job_managed, _job_managed_by, list_jobs, _managed_job, save_job, del_job,
+    CRONJOB_NAME, _job_managed, _job_managed_by, list_jobs, cronjob_alert_facts, _managed_job, save_job, del_job,
     run_job_now,
 )
 from homestead_image_cache import (  # noqa: E402,F401

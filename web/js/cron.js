@@ -129,7 +129,10 @@ const UTC_ZONES = ["UTC", "Etc/UTC"];
 /* When a time on the cluster's clock is, for the person reading. */
 const localTime = date => fmtAt(date, { weekday: true });
 function nextRun(cron) {
-  const at = CRON.next(cron, new Date(), 1)[0];
+  return nextRunAt(CRON.next(cron, new Date(), 1)[0]);
+}
+/* A next run worked out elsewhere (the server reads schedules in any zone). */
+function nextRunAt(at) {
   if (!at) return '<span class="dim">never</span>';
   const minutes = Math.max(1, Math.round((at - Date.now()) / 60000));
   const soon = minutes < 60 ? `in ${minutes} min` : minutes < 48 * 60 ? `in ${Math.round(minutes / 60)} h` : `in ${Math.round(minutes / 1440)} days`;

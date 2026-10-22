@@ -10,7 +10,7 @@ const core = fs.readFileSync("web/js/core.js", "utf8");
 function setup(jobs = []) {
   const out = { calls: [] }, fields = {};
   const field = id => fields[id] ??= { value: "", hidden: false, innerHTML: "", checked: false };
-  const ctx = { console, Date, Map, Set, Promise, JSON, document: { addEventListener() {} }, STATE: { data: {} },
+  const ctx = { console, Date, Map, Set, Promise, JSON, URLSearchParams, document: { addEventListener() {} }, STATE: { data: {} },
     esc: x => String(x ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll('"', "&quot;"),
     paint: html => { out.html = html; }, modal: (title, body) => { out.title = title; out.modal = body; },
     toast: () => {}, closeModal: () => {}, resetPaint: () => {}, ask: async () => true,
@@ -120,4 +120,59 @@ test("saving sends the generation the page read, and an empty one for a new sche
   Object.assign(fields("#j_name"), { value: "fresh" });
   await ctx.jobSave();
   assert.equal(out.calls[1].body.generation, "");
+});
+
+// #739: CronJobs from every namespace, and how their last run went.
+test("a CronJob in another namespace says where it is and who applied it, and is only listed", async () => {
+  const { ctx, out } = setup([job({ name: "backup-photos", ns: "media", owner: "flux", managed: false,
+    runnable: false, editable: false })]);
+  await ctx.viewSchedules();
+  assert.match(out.html, /media/);
+  assert.match(out.html, /Applied by Flux/);
+  assert.doesNotMatch(out.html, /jobRun\(/, "Run now only in Homestead's own namespace");
+  assert.doesNotMatch(out.html, /jobEdit\(\{|jobDel\(/);
+});
+
+test("a Longhorn recurring job is named as one", async () => {
+  const { ctx, out } = setup([job({ ns: "longhorn-system", owner: "longhorn", managed: false, runnable: false })]);
+  await ctx.viewSchedules();
+  assert.match(out.html, /Longhorn recurring job/);
+});
+
+test("a failed last run is shown with its reason and the last success", async () => {
+  const { ctx, out } = setup([job({ result: "failed", result_reason: "BackoffLimitExceeded: Job has reached the specified backoff limit",
+    result_at: "2026-09-22T03:04:00Z", last_success: "2026-09-21T03:00:40Z" })]);
+  await ctx.viewSchedules();
+  assert.match(out.html, /class="ui-chip bad[^"]*"[^>]*>failed</);
+  assert.match(out.html, /backoff limit/);
+  assert.match(out.html, /last succeeded/);
+});
+
+test("a run that did not happen says so", async () => {
+  const { ctx, out } = setup([job({ result: "ok", missed: true })]);
+  await ctx.viewSchedules();
+  assert.match(out.html, /class="ui-chip warn[^"]*"[^>]*>did not run</);
+});
+
+test("results that could not be read are unknown, never fine", async () => {
+  const { ctx, out } = setup([job({ result: "unknown", result_reason: "Its runs could not be read: forbidden", managed: false })]);
+  await ctx.viewSchedules();
+  assert.match(out.html, /class="ui-chip warn[^"]*"[^>]*>unknown</);
+  assert.match(out.html, /<div class="note[^"]*"[^>]*>[^<]*could not be read: forbidden/, "said once above the table");
+  assert.doesNotMatch(out.html, /class="ui-chip ok[^"]*"[^>]*>succeeded</);
+});
+
+test("the server's next run is shown for a schedule in another zone", async () => {
+  const soon = new Date(Date.now() + 3 * 3600e3).toISOString().replace(/\.\d+Z$/, "Z");
+  const { ctx, out } = setup([job({ time_zone: "Europe/London", next_run: soon })]);
+  await ctx.viewSchedules();
+  assert.match(out.html, /in 3 h/);
+});
+
+test("an alert's link finds its CronJob on the page", async () => {
+  const { ctx, out } = setup([job({ name: "backup-photos", ns: "media", runnable: false }), job({ name: "other", ns: "lab" })]);
+  ctx.location = { search: "?find=media/backup-photos" };
+  await ctx.viewSchedules();
+  assert.match(out.html, /<tr class="flash-find" data-find="media\/backup-photos">/);
+  assert.doesNotMatch(out.html, /<tr class="flash-find" data-find="lab\/other">/);
 });

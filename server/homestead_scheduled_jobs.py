@@ -12,6 +12,8 @@ import homestead_self as SELF
 import urllib.error
 import urllib.parse
 import homestead_names as NAMES
+import homestead_cronjob_health as HEALTH
+import homestead_routes
 
 
 # --------------------------------------------------------------- schedules
@@ -36,16 +38,25 @@ def _job_managed_by(cj):
 
 
 def list_jobs():
+    """Every CronJob in the cluster (#739), Homestead's own namespace first,
+    with how its last run ended and whether a run is overdue. A list that
+    could not be read raises - an empty one would say there are none - and
+    runs that could not be read make each row's result "unknown"."""
+    cjs = I.kget("/apis/batch/v1/cronjobs").get("items", [])
+    # Homestead's own namespace first, so it is never past MAX_JUDGED.
+    cjs.sort(key=lambda c: (c.get("metadata") or {}).get("namespace") != I.NS)
     try:
-        cjs = I.kget(f"/apis/batch/v1/namespaces/{I.NS}/cronjobs").get("items", [])
-    except Exception:
-        return []
+        jobs, error = I.kget("/apis/batch/v1/jobs").get("items", []), ""
+    except Exception as e:
+        jobs, error = None, str(e)[:160]
+    now = time.time()
     out = []
     for c in cjs:
-        sp, st = c["spec"], c.get("status", {})
-        cont = sp["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
+        sp, st = c.get("spec") or {}, c.get("status") or {}
+        containers = (((sp.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec", {}).get("containers") or [{}]
+        cont = containers[0]
         managed = _job_managed(c)
-        out.append({
+        row = {
             "name": c["metadata"]["name"],
             "schedule": sp.get("schedule", ""),
             "time_zone": sp.get("timeZone") or "",
@@ -53,12 +64,29 @@ def list_jobs():
             "image": cont.get("image", ""),
             "command": " ".join(cont.get("command", [])[-1:]) if cont.get("command") else "",
             "last": st.get("lastScheduleTime", ""),
+            "created": c["metadata"].get("creationTimestamp", ""),
             "active": len(st.get("active", []) or []),
             "managed": managed,
             "managed_by": "" if managed else _job_managed_by(c),
             "generation": c["metadata"].get("generation"),
-        })
-    return sorted(out, key=lambda x: x["name"])
+        }
+        own = c["metadata"].get("namespace") == I.NS
+        row.update(HEALTH.health(c, jobs, now, error, detail=own, judge=len(out) < HEALTH.MAX_JUDGED))
+        # Saved, deleted and run from here only in Homestead's own namespace.
+        row["runnable"], row["editable"] = own, managed and own
+        if not own:
+            # Health only: viewers never saw other namespaces' CronJob specs,
+            # and a command or image often names a token or a private host.
+            for field in ("image", "command", "generation"):
+                row.pop(field)
+        out.append(row)
+    return sorted(out, key=lambda x: (x["ns"] != I.NS, x["ns"], x["name"]))
+
+
+def cronjob_alert_facts():
+    """The alerts loop's source: raises when the CronJobs could not be read,
+    so the alerts already raised are kept, not cleared."""
+    return HEALTH.alert_facts(homestead_routes.cached("cron", 8, list_jobs), time.time())
 
 
 def _managed_job(name):
