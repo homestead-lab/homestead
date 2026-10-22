@@ -14,6 +14,9 @@ from . import log
 from .vms import NET, VIP
 
 RAW = "https://raw.githubusercontent.com/homestead-lab/homestead"
+# First-admin setup asks for a one-time code (#737); the harness presets it
+# as the installer allows, and releases from before it ignore both.
+SETUP_CODE = "E2E0-TEST-00"
 
 
 def installer_env(distro, version, node, role, extra=None):
@@ -23,6 +26,8 @@ def installer_env(distro, version, node, role, extra=None):
            "HS_LONGHORN": "yes", "HS_KUBEVIRT": os.environ.get("E2E_KUBEVIRT", "no"),
            "HS_KUBEVIP": "yes", "HS_VIP": VIP, "HS_MULTUS": "no",
            "HS_CONSOLE": "no", "HS_LONGHORN_VOLUME": "0", "HS_NODEPROBE": "yes"}
+    if role == "new":
+        env["HS_SETUP_CODE"] = SETUP_CODE
     for key in ("HS_K8S_VERSION", "HS_LONGHORN_VERSION"):
         if os.environ.get(key):
             env[key] = os.environ[key]

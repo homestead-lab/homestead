@@ -109,6 +109,8 @@ class Homestead:
         creds = {"username": self.username, "password": self.password, "remember": True}
         if isinstance(state, dict) and state.get("setup"):
             path = "/api/auth/setup"
+            from harness.install import SETUP_CODE
+            creds = {**creds, "setup_code": SETUP_CODE}
             log.info("Homestead: first administrator created")
         else:
             path = "/api/auth/login"
