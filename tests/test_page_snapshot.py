@@ -13,6 +13,15 @@ sys.path.insert(0, str(ROOT / "server"))
 import homestead_cache as CACHE
 import homestead_kube as K
 from fakes.kube import Kube
+import homestead_restarts as RESTARTS
+
+
+def setUpModule():
+    # The restart record's own thread would write restarts.json beside these
+    # tests; the two tests about it patch it themselves.
+    patch = mock.patch.object(RESTARTS, "observe_later", lambda pods: True)
+    patch.start()
+    unittest.addModuleCleanup(patch.stop)
 
 GiB = 1024 ** 3
 LH = "longhorn.io/v1beta2"
@@ -190,6 +199,22 @@ class LeaderCycleTests(unittest.TestCase):
             builders["vol"]({"pods": pods})
             builders["vol"]({})
         self.assertEqual([mock.call(pods=pods), mock.call(pods=None)], volumes.call_args_list)
+    def test_the_cycle_hands_its_pod_list_to_the_restart_record(self):
+        import homestead_storage as STORAGE
+        seen = []
+        with mock.patch.object(self.OV.RESTARTS, "observe_later", lambda pods: seen.append(pods)), \
+                mock.patch.object(STORAGE.VOLUME_USAGE, "collect", lambda get, claims: {}):
+            self.cycle()
+        self.assertEqual(1, len(seen), "#740: the leader's one pod read, no second one")
+        self.assertEqual(1, len(self.cluster.gets("/api/v1/pods")))
+        self.assertIn("items", seen[0])
+
+    def test_a_restart_record_that_fails_does_not_fail_the_pages(self):
+        def broken(pods):
+            raise RuntimeError("data volume full")
+        with mock.patch.object(self.OV.RESTARTS, "observe_later", broken):
+            done = self.cycle()
+        self.assertEqual(dict.fromkeys(ROUTES, True), done)
 
     def test_after_a_cycle_the_six_routes_ask_the_cluster_nothing(self):
         self.cycle()

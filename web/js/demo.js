@@ -2589,7 +2589,19 @@ ssh_pwauth: true
       pod: "example-server-abc-123", container: "server", pods: [{ name: "example-server-abc-123", uid: "demo-pod", node: "node-1", phase: "Running",
         containers: [{ name: "server", kind: "app", ready: false, restarts: 7, image: "example/server:1",
           state: { waiting: { reason: "CrashLoopBackOff" } }, last_state: { terminated: { reason: "Error", exitCode: 1 } } }] }],
-      logs: { previous: { text: "Server exited: configuration could not be loaded." }, current: { text: "Preparing server…" } } }),
+      logs: { previous: { text: "Server exited: configuration could not be loaded." }, current: { text: "Preparing server…" } },
+      // #740: what the leader kept - OOM-killed twice overnight, after an image update.
+      restart_history: (() => {
+        const at = h => new Date(Date.now() - h * 3600e3).toISOString().replace(/\.\d+Z$/, "Z");
+        return { since: Math.round(Date.now() / 1000) - 12 * 86400, records: [
+          { at: at(2), kind: "restart", reason: "Ran out of memory", detail: "limit 512 MiB", pod: "example-server-abc-123",
+            container: "server", count: 1, total: 7, exit_code: 137, finished_at: at(2),
+            log_tail: "Loading index…\nIndex loaded: 1.9 GB\nWarming cache…" },
+          { at: at(7), kind: "restart", reason: "Ran out of memory", detail: "limit 512 MiB", pod: "example-server-abc-123",
+            container: "server", count: 1, total: 6, exit_code: 137, finished_at: at(7),
+            log_tail: "Loading index…\nIndex loaded: 1.8 GB" },
+          { at: at(30), kind: "rollout", reason: "Updated to example/server:1", detail: "", pod: "example-server-abc-123" }] };
+      })() }),
     "/api/container/command/preview": (url, init) => ({ settings: JSON.parse(init.body), review_token: "demo-command",
       summary: { limit: "Requires timeout in the image. Sends TERM, then KILL after 2 seconds; detached children may survive." } }),
     "/api/container/command": { exit_code: 0, stdout: "Linux example-server 6.12.0 x86_64\n", stderr: "", truncated: false, timed_out: false },

@@ -47,6 +47,7 @@ import homestead_ports as PORTS
 import homestead_push as PUSH
 import homestead_recovery as RECOVERY
 import homestead_resources as RESOURCES
+import homestead_restarts as RESTARTS
 import homestead_restore_swap as RESTORE_SWAP
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_root_guard as ROOT_GUARD
@@ -693,7 +694,19 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
 def page_inputs():
     """What one snapshot cycle reads once and shares: the pod list (the
     Volumes page's bare pods read it too)."""
-    return {"pods": lambda: kget("/api/v1/pods")}
+    return {"pods": _pods_seen}
+
+
+def _pods_seen():
+    """The cycle's pod list, which the leader also notes restarts from
+    (#740), on a thread of its own: the pages never wait for it, and a
+    failed note never costs them their pods."""
+    pods = kget("/api/v1/pods")
+    try:
+        RESTARTS.observe_later(pods)
+    except Exception as error:
+        print(f"restart record: {str(error)[:160]}", flush=True)
+    return pods
 
 
 def page_builders():
