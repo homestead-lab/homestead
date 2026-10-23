@@ -441,10 +441,20 @@
       progress: 63.4, capacity: "16Gi", storage_class: "longhorn-r2",
       access_modes: ["ReadWriteOnce"], message: "", in_use: false, used_by: [] },
   ];
+  // The demo's deliberate schedule clash: weekly-trim starts with nightly-backup
+  // at the next Saturday 02:00 UTC, on both of the default group's volumes.
+  const demoSaturday = (() => {
+    const now = Date.now(), today = Math.floor(now / 86400000) * 86400000;
+    for (let day = 0; day < 8; day++) {
+      const at = today + day * 86400000 + 2 * 3600000;
+      if (new Date(at).getUTCDay() === 6 && at > now) return at / 1000;
+    }
+    return 0;
+  })();
   const lhOverview = {
     total: 3, protected: 2, backed_up: 2, unprotected: ["homeassistant-config"], groups: ["critical", "default", "media"],
     group_rows: [{ name: "critical", volumes: ["pvc-demo-frigate"], jobs: ["hourly-snapshot"] },
-      { name: "default", volumes: ["pvc-demo-frigate", "pvc-demo-scratch"], jobs: ["nightly-backup"] },
+      { name: "default", volumes: ["pvc-demo-frigate", "pvc-demo-scratch"], jobs: ["nightly-backup", "weekly-trim"] },
       { name: "media", volumes: ["pvc-demo-hass"], jobs: ["media-weekly-trim"] }],
     target: { configured: true, available: true, name: "default",
       url: "s3://homestead-backups@us-east-1/", reason: "", interval: "5m",
@@ -462,7 +472,12 @@
       desc: "Snapshot — point-in-time, stored on the volume", last_run: "", last_success: "", running: 0, last_failed: false },
       { name: "media-weekly-trim", task: "filesystem-trim", cron: "0 4 * * 6", retain: 0,
       concurrency: 1, groups: ["media"], covers: 1, volumes: ["pvc-demo-hass"],
+      desc: "Trim — reclaim space the guest has freed", last_run: "", last_success: "", running: 0, last_failed: false },
+      { name: "weekly-trim", task: "filesystem-trim", cron: "0 2 * * 6", retain: 0,
+      concurrency: 1, groups: ["default"], covers: 2, volumes: ["pvc-demo-frigate", "pvc-demo-scratch"],
       desc: "Trim — reclaim space the guest has freed", last_run: "", last_success: "", running: 0, last_failed: false }],
+    clashes: [{ severity: "clash", jobs: [{ name: "nightly-backup", task: "backup" }, { name: "weekly-trim", task: "filesystem-trim" }],
+      volumes: ["pvc-demo-frigate", "pvc-demo-scratch"], times: [[demoSaturday, demoSaturday]], count: 1, gap_min: 0 }],
     volumes: [
       { name: "pvc-demo-frigate", pvc: "frigate-config", namespace: "lab", size_gb: 20,
         robustness: "healthy", state: "attached", labels: {}, jobs: [], groups: ["critical", "default"],
@@ -651,7 +666,7 @@
     "/api/node/probe/allocation": {installed: true, enabled: false, managed: false, directory: "",
       uid: "demo-probe", resource_version: "1", detail: "Placement checks are disabled (demo; no host changes)",
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
-    "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site", mcp: { enabled: true }, metrics: { enabled: false }, restore_swap: { keep_days: 7 },
+    "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true, maintenance: { days: [0, 1, 2, 3, 4, 5, 6], start: "02:00", duration_minutes: 120 } }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site", mcp: { enabled: true }, metrics: { enabled: false }, restore_swap: { keep_days: 7 },
       audit: { file: true },
       info: { version: "2.8.332-dev.5", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",

@@ -179,3 +179,10 @@ test("each day is headed by its name and date, today and tomorrow said as such, 
   assert.match(out.html, /class="week-time mono">\d\d:\d\d/);
   assert.match(vm.runInContext(`fmtWeekday(new Date("2026-10-24T12:00:00Z"))`, ctx), /Saturday/);
 });
+
+test("the demo has a deliberate clash and a maintenance window to show", () => {
+  const demo = fs.readFileSync("web/js/demo.js", "utf8");
+  assert.match(demo, /name: "weekly-trim", task: "filesystem-trim", cron: "0 2 \* \* 6"[^}]*groups: \["default"\]/);
+  assert.match(demo, /clashes: \[\{ severity: "clash", jobs: \[\{ name: "nightly-backup", task: "backup" \}, \{ name: "weekly-trim", task: "filesystem-trim" \}\]/);
+  assert.match(demo, /maintenance: \{ days: \[0, 1, 2, 3, 4, 5, 6\], start: "02:00", duration_minutes: 120 \}/);
+});

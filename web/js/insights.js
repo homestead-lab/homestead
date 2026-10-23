@@ -35,6 +35,10 @@ const HealthInsights = (() => {
       if (failed.length) rows.push(item("backup-failed","critical",`${failed.length} backup job${failed.length===1?"":"s"} failed`,"Check the job logs and confirm a successful backup after recovery.","protect"));
       const never=(p.volumes || []).filter(v=>v.backed_up && !v.last_backup_at);
       if (never.length) rows.push(item("backup-never","medium",`${never.length} scheduled volume${never.length===1?" has":"s have"} no recorded backup`,"Run a backup and check that it completes.","protect"));
+      // The server's clashes (homestead_schedule_clashes): a trim or backup starting with a backup on a shared volume.
+      const clashes=(p.clashes || []).filter(c=>c.severity==="clash");
+      if (clashes.length) { const [first]=clashes, vols=first.volumes?.length || 0;
+        rows.push(item("schedule-clash","medium",`${clashes.length} schedule clash${clashes.length===1?"":"es"} this week`,`${first.jobs?.[0]?.name} and ${first.jobs?.[1]?.name} start in the same minute on ${vols} volume${vols===1?"":"s"}${clashes.length>1?`, and ${clashes.length-1} more`:""}. Move one of them so they run apart.`,"schedule-week")); }
     }
     const temp=data.settings?.thresholds?.temperature, diskLimit=data.settings?.thresholds?.disk;
     for (const n of data.nodes || []) {
