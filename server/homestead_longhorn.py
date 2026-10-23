@@ -39,6 +39,7 @@ import homestead_longhorn_volumes as VOLUMES
 import homestead_longhorn_target as BACKUP_TARGET
 import homestead_longhorn_backups as BACKUPS
 import homestead_longhorn_restore as RESTORE
+import homestead_schedule_clashes as CLASHES
 
 kget = ksend = None
 LHNS = "longhorn-system"
@@ -144,6 +145,8 @@ def overview():
         "backed_up": sum(1 for v in vols if v["backed_up"]),
         "unprotected": [v["pvc"] or v["name"] for v in vols if not v["protected_by"]],
         "total": len(vols),
+        # A trim or backup starting with a backup on a shared volume this week.
+        "clashes": CLASHES.clashes(jobs),
     }
 
 
