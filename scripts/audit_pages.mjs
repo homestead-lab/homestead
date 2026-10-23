@@ -66,6 +66,7 @@ const PAGES = [
   ["network-ports", "network", "networkTab('ports')"],
   ["ip-addresses", "network", "networkTab('ip')"],
   ["firewall", "network", "networkTab('firewall')"],
+  ["certificates-and-keys", "network", "networkTab('expiry')"],
   ["import", "imports"],
   ["schedules", "schedules"],
   ["monitoring", "monitoring"],

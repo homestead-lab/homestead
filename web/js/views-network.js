@@ -145,6 +145,7 @@ const NETWORK_SECTIONS = [
   ["lan", "LAN networks", "Network", "network", "Networks that put a VM or container on your LAN like any other machine"],
   ["ports", "Ports and uplinks", "Network", "port", "Each host's network ports, bonds and uplinks: link, speed and errors"],
   ["firewall", "Firewall", "Protection", "shield", "Policies for workloads' pod-network traffic"],
+  ["expiry", "Certificates and keys", "Protection", "clock", "Certificates and keys that expire: what, and when"],
 ];
 const networkSectionRow = key => NETWORK_SECTIONS.find(row => row[0] === key) || NETWORK_SECTIONS[0];
 const networkSectionLabel = key => networkSectionRow(key)[1];
@@ -163,6 +164,7 @@ function networkSectionLine(key) {
     lan: () => window.__vmCreateOptions ? plural((window.__vmCreateOptions.network_details || []).length, "network") : "VLANs and bridges",
     ports: () => ports && `${plural(ports.counts?.ports || 0, "port")} on ${plural(ports.counts?.hosts || 0, "host")}`,
     firewall: () => STATE.data.firewall ? plural(STATE.data.firewall.policies.length, "policy", "policies") : "Workload policies",
+    expiry: () => STATE.data.expiry ? expiryLine(STATE.data.expiry) : "What expires, and when",
   }[key]?.() || "";
   const attention = due ? `<span class="net-nav-due">${due} need${due === 1 ? "s" : ""} attention</span>` : "";
   return [esc(said), attention].filter(Boolean).join(" · ");
@@ -207,6 +209,7 @@ async function viewNetworking() {
   const key = networkTab();
   if (key === "ip") return viewIpam();
   if (key === "firewall") return viewFirewall();
+  if (key === "expiry") return viewExpiry();
   const [data, baseline] = await Promise.all([api("/api/network"),
     key === "overview" ? api("/api/platform/baseline").catch(e => ({ unread: e.message })) : null,
     key === "overview" || key === "ports" || !window.PORTS_VIEW?.report ? window.portsAcrossHostsPaint?.(true) : null]);
