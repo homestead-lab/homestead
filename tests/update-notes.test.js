@@ -47,8 +47,8 @@ test("env is shown by name only", () => {
   const {ctx} = setup();
   const html = render(ctx, [image({changes: {...none, none: false,
     env: {added: ["AUTH"], removed: ["LEGACY"], changed: ["DB", "TZ"], set_by_app: ["TZ"]}}})]);
-  assert.match(html, /New setting.*<code>AUTH<\/code>/s);
-  assert.match(html, /Setting removed.*<code>LEGACY<\/code>/s);
+  assert.match(html, /New default setting.*<code>AUTH<\/code>/s);
+  assert.match(html, /Default setting removed.*<code>LEGACY<\/code>/s);
   assert.match(html, /Default changed.*<code>DB<\/code> <code>TZ<\/code>.*value changed/s);
   assert.match(html, /Your app sets <code>TZ<\/code> itself, so its own values still apply/);
   assert.doesNotMatch(html, /<code>[A-Z]+=/);

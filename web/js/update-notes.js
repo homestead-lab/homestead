@@ -16,8 +16,8 @@
     if (c.ports.removed.length) out.push(line("del", "Port no longer exposed", codes(c.ports.removed)));
     if (c.volumes.added.length) out.push(line("add", "New volume", `${codes(c.volumes.added)} <span class="dim">not kept unless you add storage for it</span>`));
     if (c.volumes.removed.length) out.push(line("del", "Volume no longer declared", codes(c.volumes.removed)));
-    if (env.added?.length) out.push(line("add", "New setting", codes(env.added)));
-    if (env.removed?.length) out.push(line("del", "Setting removed", codes(env.removed)));
+    if (env.added?.length) out.push(line("add", "New default setting", codes(env.added)));
+    if (env.removed?.length) out.push(line("del", "Default setting removed", codes(env.removed)));
     if (env.changed?.length) out.push(line("chg", "Default changed", `${codes(env.changed)} <span class="dim">value changed</span>`));
     if (c.user) out.push(line("chg", "Runs as", `<code>${esc(c.user.was)}</code> → <code>${esc(c.user.now)}</code> <span class="dim">${c.user.overridden_by != null
       ? `your app runs it as <code>${esc(c.user.overridden_by)}</code>, so this does not apply`
