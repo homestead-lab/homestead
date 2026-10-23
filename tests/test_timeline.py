@@ -248,6 +248,91 @@ class FeedTests(DataDir):
         self.assertEqual([T0 - 3600], [e["at"] for e in host])
 
 
+class AuditTests(DataDir):
+    def setUp(self):
+        super().setUp()
+        self.src = Sources(self)
+        self.src.changes = self.src.restarts = self.src.cron = self.src.alerts = self.src.hosts = []
+
+    def line(self, at, **kw):
+        entry = {"v": 1, "at": iso(at).replace("Z", ".000Z"), "replica": "homestead-abc", "via": "browser",
+                 "user": "alice", "role": "admin", "addr": "192.0.2.15", "access": "alice@example.com",
+                 "method": "POST", "path": "/api/restart", "target": {"ns": "apps", "name": "game"}, "status": 200, "ms": 12}
+        entry.update(kw)
+        return json.dumps(entry)
+
+    def write(self, lines, name=None):
+        import homestead_audit as AUDIT
+        with open(os.path.join(self.tmp.name, name or AUDIT.FILE), "a", encoding="utf-8") as handle:
+            handle.write("".join(l + "\n" for l in lines))
+
+    def audit(self, role="admin", since=T0 - 86400):
+        out = T.timeline("alice", role, since=since, now=T0)
+        return [e for e in out["entries"] if e["kind"] == "action"], [u for u in out["unread"] if u["source"] == "audit"]
+
+    def test_audit_for_admins_only(self):
+        self.write([self.line(T0 - 60)])
+        for role in ("viewer", "operator"):
+            entries, unread = self.audit(role)
+            self.assertEqual([], entries)
+            self.assertEqual([{"source": "audit", "label": "Audit log", "reason": "shown to admins only"}], unread)
+        entries, unread = self.audit()
+        self.assertEqual(([("alice POST /api/restart", "apps/game", "info", T0 - 60)], []),
+                         ([(e["text"], e["app"], e["tone"], e["at"]) for e in entries], unread))
+
+    def test_audit_line_without_address_email_or_key(self):
+        self.write([self.line(T0 - 60, via="key", key="k-0123456789", owner="alice"),
+                    self.line(T0 - 30, via="mcp", tool="container_restart", status=500)])
+        entries, _ = self.audit()
+        text = json.dumps(entries)
+        for secret in ("192.0.2.15", "example.com", "k-0123456789", "homestead-abc"):
+            self.assertNotIn(secret, text)
+        self.assertEqual(["alice's AI agent: container_restart failed (500)", "alice POST /api/restart (API key)"],
+                         [e["text"] for e in entries])
+        self.assertEqual("bad", entries[0]["tone"])
+
+    def test_refused_requests_are_one_entry(self):
+        self.write([self.line(T0 - 300, status=403), self.line(T0 - 200, status=401, user=""),
+                    self.line(T0 - 100, status=200, outcome="refused", via="mcp", tool="container_restart")])
+        entries, _ = self.audit()
+        self.assertEqual([("3 requests were refused", "warn", T0 - 100)], [(e["text"], e["tone"], e["at"]) for e in entries])
+
+    def test_older_file_is_read_after_the_newer_one(self):
+        import homestead_audit as AUDIT
+        self.write([self.line(T0 - 500, path="/api/old")], AUDIT.FILE + ".1")
+        self.write([self.line(T0 - 50, path="/api/new")])
+        entries, _ = self.audit()
+        self.assertEqual(["alice POST /api/new", "alice POST /api/old"], [e["text"] for e in entries])
+        entries, _ = self.audit(since=T0 - 100)
+        self.assertEqual(["alice POST /api/new"], [e["text"] for e in entries])
+
+    def test_audit_read_is_bounded_and_says_so(self):
+        with mock.patch.object(T, "AUDIT_READ", 4096):
+            self.write([self.line(T0 - 10000 + i) for i in range(200)])
+            entries, unread = self.audit()
+        self.assertLess(len(entries), 200)
+        self.assertTrue(entries)
+        self.assertEqual(["the newest 4 KiB of the audit log were read; older lines are not shown"],
+                         [u["reason"] for u in unread])
+
+    def test_cut_or_garbled_lines_are_skipped(self):
+        self.write(["not json", '{"at": 5}', self.line(T0 - 60), self.line(T0 - 30)[:40]])
+        entries, unread = self.audit()
+        self.assertEqual(["alice POST /api/restart"], [e["text"] for e in entries])
+        self.assertEqual([], unread)
+
+    def test_no_audit_file_means_nothing_yet_not_unread(self):
+        entries, unread = self.audit()
+        self.assertEqual(([], []), (entries, unread))
+
+    def test_an_unreadable_audit_file_is_named(self):
+        import homestead_audit as AUDIT
+        os.mkdir(os.path.join(self.tmp.name, AUDIT.FILE))      # a folder where the file should be
+        entries, unread = self.audit()
+        self.assertEqual(1, len(unread))
+        self.assertIn("could not read", unread[0]["reason"])
+
+
 class HostMaintenanceSinceTests(unittest.TestCase):
     def test_started_or_ended_after_since_and_bad_rows_left_out(self):
         import homestead_history as HISTORY

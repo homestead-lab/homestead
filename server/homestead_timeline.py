@@ -21,7 +21,10 @@ import calendar
 import os
 import time
 
+import json
+
 import homestead_alerts as ALERTS
+import homestead_audit as AUDIT
 import homestead_changes as CHANGES
 import homestead_history as HISTORY
 import homestead_restarts as RESTARTS
@@ -36,6 +39,7 @@ SEEN_USERS = 500
 SEEN_KEEP = 90 * 86400
 SEEN_QUIET = 60              # a mark this soon after the last is not written
 MAX_ENTRIES = 300
+AUDIT_READ = 2 * 1024 * 1024     # bytes of the audit files read, from their end
 _seen_lock = SHARED.SharedLock("timeline-seen")
 
 
@@ -201,8 +205,80 @@ def _hosts(since, now, role, unread):
     return out
 
 
+def _audit_lines(since):
+    """The audit lines after since, newest first, from audit.jsonl and then
+    audit.jsonl.1, reading at most AUDIT_READ bytes from their ends; and
+    whether that limit stopped the read before since. A missing file is no
+    lines yet (the file is off, or nothing changed); one that cannot be read
+    raises."""
+    out, budget = [], AUDIT_READ
+    for name in (AUDIT.FILE, AUDIT.FILE + ".1"):
+        try:
+            handle = open(os.path.join(SHARED.DIR, name), "rb")
+        except FileNotFoundError:
+            continue
+        with handle:
+            size = os.fstat(handle.fileno()).st_size
+            start = max(0, size - budget)
+            handle.seek(start)
+            data = handle.read(size - start)
+        budget -= len(data)
+        lines = data.split(b"\n")[1 if start else 0:]          # a line cut at the start is not read
+        for raw in reversed(lines):
+            try:
+                entry = json.loads(raw)
+            except ValueError:
+                continue                                       # a half-written or garbled line
+            at = AUDIT._at(raw) if isinstance(entry, dict) else None
+            if at is None or not isinstance(entry.get("method"), str) or not isinstance(entry.get("path"), str):
+                continue                                       # not a request's line (a note of lost lines)
+            if at <= since:
+                return out, False
+            out.append((at, entry))
+        if start:
+            return out, True
+    return out, False
+
+
+def _who(entry):
+    user = entry.get("user") if isinstance(entry.get("user"), str) and entry.get("user") else "someone not signed in"
+    if entry.get("via") == "mcp":
+        return f"{user}'s AI agent"
+    return user
+
+
 def _audit(since, now, role, unread):
-    return []
+    if role != "admin":
+        # The lines name people and what they tried: an admin's to read.
+        unread.append({"source": "audit", "label": "Audit log", "reason": "shown to admins only"})
+        return []
+    lines, cut = _audit_lines(since)
+    out, refused = [], []
+    for at, e in lines:
+        if AUDIT._refusal({"status": e.get("status"), "outcome": e.get("outcome"), "user": e.get("user") or ""}):
+            refused.append(at)
+            continue
+        status = e.get("status") if isinstance(e.get("status"), int) else 0
+        # Never the address, e-mail, key, its owner or the replica: who, how and what only.
+        what = e["tool"] if e.get("via") == "mcp" and isinstance(e.get("tool"), str) else f"{e['method']} {e['path']}"
+        text = f"{_who(e)}{': ' if e.get('via') == 'mcp' else ' '}{what}"
+        text += " (API key)" if e.get("via") == "key" else f" (from {e['from']})" if isinstance(e.get("from"), str) else ""
+        text += f" failed ({status})" if status >= 400 else ""
+        target = e.get("target") if isinstance(e.get("target"), dict) else {}
+        app = f"{target['ns']}/{target['name']}" if target.get("ns") and target.get("name") else ""
+        out.append(_entry(at, "action", "bad" if status >= 400 else "info", text,
+                          _app_href(target["name"]) if app else "", app=app))
+    if refused:
+        out.append(_entry(max(refused), "action", "warn",
+                          f"{len(refused)} request{'s were' if len(refused) != 1 else ' was'} refused"))
+    if cut:
+        unread.append({"source": "audit", "label": "Audit log",
+                       "reason": f"the newest {_size(AUDIT_READ)} of the audit log were read; older lines are not shown"})
+    return out
+
+
+def _size(n):
+    return f"{n // (1024 * 1024)} MiB" if n >= 1024 * 1024 else f"{n // 1024} KiB"
 
 
 SOURCES = (("changes", "App changes", _changes), ("restarts", "App restarts", _restarts),
