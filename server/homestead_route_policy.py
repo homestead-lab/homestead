@@ -6,7 +6,7 @@ import homestead_routes as MODULE_ROUTES
 # act on before the route runs - for a request, and for an AI agent's tool
 # calling the route (homestead_agent_tools).
 TARGET_CHECKED = ("/api/move", "/api/move/preview", "/api/image-updates/apply", "/api/image-updates/rollback",
-                  "/api/image-updates/preview")
+                  "/api/image-updates/preview", "/api/image-updates/notes")
 
 POLICY = {
     ('GET', '/api/console'): 'operator',

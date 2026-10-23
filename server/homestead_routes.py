@@ -165,6 +165,7 @@ MODULES = (
     "homestead_storage_classes",
     "homestead_storage_server",
     "homestead_unraid_vms",
+    "homestead_update_notes",
     "homestead_updates",
     "homestead_upgrades",
     "homestead_uplinks",

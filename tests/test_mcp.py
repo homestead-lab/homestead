@@ -533,6 +533,7 @@ class CatalogueTests(unittest.TestCase):
         "/api/setup/skip": "the setup guide is a person's", "/api/compose/parse": "preview_compose reads the file",
         "/api/logo-fit/keep": "the browser resizes logos", "/api/logo-fit/resized": "the browser resizes logos",
         "/api/hardware/rescan": "hosts are read-only to agents",
+        "/api/image-updates/notes": "the review dialog's own read; the update tool runs the agent's own review",
         "/api/restart": "container_restart restarts", "/api/node/power/release": "host power is not an agent's",
         "/api/push/test": "a browser's push subscription", "/api/alerts/acknowledge": "the app's own bell",
         "/api/alerts/delivered": "the app's own bell",

@@ -247,5 +247,106 @@ class ChangeTests(unittest.TestCase):
         self.assertEqual({"added": [], "removed": []}, out["ports"])
 
 
+class RouteTests(unittest.TestCase):
+    """POST /api/image-updates/notes: the last scan's images for one app."""
+    def setUp(self):
+        NOTES._CONFIGS.clear()
+        self.registry = Registry()
+        self.old = self.registry.image("example/app", {
+            "User": "0", "Env": ["TZ=UTC", "DB=postgres://app:hunter2@db.example.com/app"], "ExposedPorts": {"80/tcp": {}},
+            "Labels": {VER: "1.1.0", SRC: "https://github.com/example/app", REV: "4be1d2c09a7e"}})
+        self.new = self.registry.image("example/app", {
+            "User": "1000", "Env": ["TZ=Etc/UTC", "DB=postgres://app:n3wpass@db.example.com/app"],
+            "ExposedPorts": {"80/tcp": {}, "8971/tcp": {}},
+            "Labels": {VER: "1.2.0", SRC: "https://github.com/example/app", REV: "9c0f31aa52d8"}}, tag="1.2.0")
+        self.item = {"container": "app", "source": "registry.example.com/example/app:1.1.0", "available": True,
+                     "current_digest": self.old["top"], "remote_digest": self.new["top"],
+                     "candidate": "registry.example.com/example/app:1.2.0", "candidate_tag": "1.2.0"}
+        self.report = {"workloads": [{"ns": "lab", "name": "app", "images": [
+            self.item, {"container": "sidecar", "source": "registry.example.com/example/side:1", "available": False}]}]}
+        self.dep = {"spec": {"template": {"spec": {"securityContext": {"runAsUser": 568}, "containers": [
+            {"name": "app", "env": [{"name": "TZ", "value": "Europe/Stockholm"}]}]}}}}
+        self.read = []
+        patches = [mock.patch.object(UPDATES, "_registry_json", self.registry),
+                   mock.patch.object(UPDATES, "_LATEST", {"report": self.report}),
+                   mock.patch.object(UPDATES, "kget", lambda path: self.read.append(path) or self.dep, create=True),
+                   mock.patch.object(UPDATES, "_secret_credentials", lambda ns, dep: {"registry.example.com": ("u", "p")})]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_operators_may_ask_and_the_server_checks_the_app_is_theirs(self):
+        import homestead_route_policy as POLICY
+        import homestead_routes as ROUTES
+        self.assertIn("homestead_update_notes", ROUTES.MODULES)
+        self.assertEqual("operator", NOTES.ROUTES[("POST", "/api/image-updates/notes")][0])
+        self.assertIn("/api/image-updates/notes", POLICY.TARGET_CHECKED)
+
+    def test_the_running_and_the_new_image_are_compared(self):
+        out = NOTES.notes_for("lab", "app")
+        self.assertEqual(["/apis/apps/v1/namespaces/lab/deployments/app"], self.read)
+        (image,) = out["images"]
+        self.assertEqual(("app", "1.1.0", "1.2.0"), (image["container"], image["from_version"], image["to_version"]))
+        self.assertEqual("https://github.com/example/app/compare/4be1d2c09a7e...9c0f31aa52d8", image["links"]["compare"])
+        changes = image["changes"]
+        self.assertEqual(["8971/tcp"], changes["ports"]["added"])
+        self.assertEqual(["DB", "TZ"], changes["env"]["changed"])
+        self.assertEqual(["TZ"], changes["env"]["set_by_app"])
+        self.assertEqual({"was": "root", "now": "1000", "overridden_by": "568"}, changes["user"])
+        for value in ("hunter2", "n3wpass", "Stockholm", "UTC"):
+            self.assertNotIn(value, json.dumps(out))
+        self.assertTrue(all(a == {"registry.example.com": ("u", "p")} for _, _, a in self.registry.calls))
+        # Both images by digest: the new one as the scan found it, not by its tag.
+        self.assertNotIn("manifests/1.2.0", [p for _, p, _ in self.registry.calls])
+
+    def test_the_containers_own_user_wins_over_the_pods(self):
+        self.dep["spec"]["template"]["spec"]["containers"][0]["securityContext"] = {"runAsUser": 0}
+        self.assertEqual("0", NOTES.notes_for("lab", "app")["images"][0]["changes"]["user"]["overridden_by"])
+
+    def test_without_a_digest_from_the_scan_the_new_image_is_read_by_its_tag(self):
+        self.item["remote_digest"] = ""
+        image = NOTES.notes_for("lab", "app")["images"][0]
+        self.assertIn("manifests/1.2.0", [p for _, p, _ in self.registry.calls])
+        self.assertEqual("1.2.0", image["to_version"])
+
+    def test_an_app_that_is_not_running_says_so_and_asks_no_registry(self):
+        self.item["current_digest"] = ""
+        image = NOTES.notes_for("lab", "app")["images"][0]
+        self.assertEqual("the running image is not known yet", image["error"])
+        self.assertEqual([], self.registry.calls)
+
+    def test_an_app_the_last_check_did_not_cover(self):
+        out = NOTES.notes_for("lab", "other")
+        self.assertEqual(([], "not in the last update check"), (out["images"], out["error"]))
+        self.assertEqual([], self.read)
+
+    def test_registry_errors_are_sentences_and_never_their_text(self):
+        def failing(code):
+            def answer(*_):
+                raise UPDATES.urllib.error.HTTPError("https://registry.example.com/v2/secret-path", code, "x", {}, None)
+            return answer
+        for code, words in ((429, "slow down"), (401, "authentication"), (403, "authentication"), (404, "HTTP 404")):
+            NOTES._CONFIGS.clear()
+            with mock.patch.object(UPDATES, "_registry_json", failing(code)):
+                error = NOTES.notes_for("lab", "app")["images"][0]["error"]
+            self.assertIn(words, error)
+            self.assertNotIn("secret-path", error)
+        def boom(*_):
+            raise RuntimeError("token=abc at https://registry.example.com")
+        with mock.patch.object(UPDATES, "_registry_json", boom):
+            error = NOTES.notes_for("lab", "app")["images"][0]["error"]
+        self.assertNotIn("token", error)
+        self.assertIn("RuntimeError", error)
+
+    def test_a_digest_mismatch_is_named(self):
+        self.registry.paths[("example/app", "blobs/" + self.new["config"])] = b"{}"
+        self.assertIn("does not match its digest", NOTES.notes_for("lab", "app")["images"][0]["error"])
+
+    def test_names_must_be_dns_names(self):
+        for ns, name in (("", "app"), ("lab", "../x"), ("lab", None), ("Lab x", "app")):
+            with self.assertRaises(ValueError):
+                NOTES.notes_for(ns, name)
+
+
 if __name__ == "__main__":
     unittest.main()

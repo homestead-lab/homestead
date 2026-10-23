@@ -206,3 +206,81 @@ def config_changes(old, new, overrides=None):
     changes["none"] = not (any(changes["ports"].values()) or any(changes["volumes"].values())
                            or env["added"] or env["removed"] or env["changed"] or user)
     return changes
+
+
+def _overrides(dep, container):
+    """What the app sets itself and so wins over the image: the user it runs
+    as (the container's, else the pod's) and its env names."""
+    spec = ((dep.get("spec") or {}).get("template") or {}).get("spec") or {}
+    own = next((c for c in spec.get("containers") or [] if c.get("name") == container), {})
+    user = next((ctx["runAsUser"] for ctx in ((own.get("securityContext") or {}), (spec.get("securityContext") or {}))
+                 if ctx.get("runAsUser") is not None), None)
+    return {"user": user, "env": {e.get("name") for e in own.get("env") or [] if e.get("name")}}
+
+
+def _error(error):
+    """A sentence for the page. Never the error's own text: it can carry a
+    registry URL or what an auth server answered."""
+    code = getattr(error, "code", 0)
+    if code == 429:
+        return "the registry asked Homestead to slow down; try again in a minute"
+    if code in (401, 403):
+        return "registry authentication required"
+    if code:
+        return f"the registry answered HTTP {code}"
+    if isinstance(error, json.JSONDecodeError):
+        return "the registry's answer could not be read"
+    if isinstance(error, ValueError):
+        return str(error)  # this module's and parse_image's own fixed words
+    return f"could not read the images ({type(error).__name__})"
+
+
+def _image(ref_base, digest, fallback):
+    return f"{ref_base}@{digest}" if SHA256.fullmatch(digest or "") else fallback
+
+
+def _dns(value, label):
+    if not isinstance(value, str) or not re.fullmatch(r"[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?", value):
+        raise ValueError(f"{label} must use lowercase letters, numbers and dashes")
+    return value
+
+
+def notes_for(ns, name):
+    """Each container the last scan found an update for: links and changes.
+    Which images are read is the server's own record, never the request's."""
+    ns, name = _dns(ns, "namespace"), _dns(name, "workload name")
+    with U._SCAN_LOCK:
+        report = U._LATEST.get("report") or {}
+    workload = next((w for w in report.get("workloads") or [] if (w.get("ns"), w.get("name")) == (ns, name)), None)
+    if not workload:
+        return {"ns": ns, "name": name, "images": [], "error": "not in the last update check"}
+    dep = U.kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+    auths = U._secret_credentials(ns, dep)
+    images = []
+    for item in workload.get("images") or []:
+        if not item.get("available"):
+            continue
+        out = {"container": item.get("container", "")}
+        try:
+            parsed = U.parse_image(item.get("source") or "")
+            out.update(from_tag=parsed["tag"], to_tag=item.get("candidate_tag") or "")
+            if not SHA256.fullmatch(item.get("current_digest") or ""):
+                raise ValueError("the running image is not known yet")
+            old = image_config(_image(parsed["base"], item["current_digest"], ""), auths)
+            # The new image as the scan found it, by digest when it has one.
+            candidate = U.parse_image(item.get("candidate") or item["source"])
+            new = image_config(_image(candidate["base"], item.get("remote_digest"), candidate["original"]), auths)
+            out.update(release_links(old.get("Labels"), new.get("Labels"), out["from_tag"], out["to_tag"]))
+            out["changes"] = config_changes(old, new, _overrides(dep, out["container"]))
+        except Exception as error:  # the update itself never waits on this
+            out["error"] = _error(error)
+        images.append(out)
+    return {"ns": ns, "name": name, "images": images}
+
+
+# Operator-level like preview and apply, and in ROUTE_POLICY.TARGET_CHECKED:
+# server.py checks the operator may act on this app before it gets here.
+ROUTES = {
+    ("POST", "/api/image-updates/notes"): (
+        "operator", lambda request: notes_for((request.body or {}).get("ns"), (request.body or {}).get("name"))),
+}
