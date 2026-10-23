@@ -82,3 +82,127 @@ def image_config(ref, auths, arch="amd64"):
             _CONFIGS.pop(next(iter(_CONFIGS)))
         _CONFIGS[key(top)] = dict(config)
     return config
+
+
+SOURCE_LABELS = ("org.opencontainers.image.source", "org.label-schema.vcs-url")
+URL_LABELS = ("org.opencontainers.image.url", "org.label-schema.url")
+VERSION_LABELS = ("org.opencontainers.image.version", "org.label-schema.version")
+REVISION_LABELS = ("org.opencontainers.image.revision", "org.label-schema.vcs-ref")
+LINK_MAX, VERSION_MAX = 2048, 64
+
+
+def _label(labels, keys):
+    labels = labels if isinstance(labels, dict) else {}
+    return next((str(labels[k]).strip() for k in keys if str(labels.get(k) or "").strip()), "")
+
+
+def _link(text):
+    """A label value as a link the page may show: http(s) to a named host,
+    with no credentials, no spaces or control characters, and not too long.
+    Anything else - javascript:, data:, git+https:, a user:password@ - is ""."""
+    text = (text or "").strip()
+    if not text or len(text) > LINK_MAX or re.search(r"[\s\x00-\x1f\x7f\\]", text):
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(text)
+        if parsed.scheme not in ("http", "https") or not parsed.hostname or "@" in parsed.netloc:
+            return ""
+        parsed.port  # a port that is not a number raises
+    except ValueError:
+        return ""
+    return text
+
+
+def _repo(source):
+    """scheme://host/owner/repo of a source label, or ""."""
+    if not _link(source):
+        return ""
+    parsed = urllib.parse.urlsplit(source.strip())
+    path = re.sub(r"\.git$", "", parsed.path.rstrip("/"))
+    return f"{parsed.scheme}://{parsed.netloc}{path}" if path.count("/") >= 2 else ""
+
+
+def release_links(old_labels, new_labels, old_tag, new_tag):
+    """Where to read about the new version: its release notes, the code
+    changes between the two revisions where the host shows them, and the
+    project site - each built from the images' labels, never fetched."""
+    repo = _repo(_label(new_labels, SOURCE_LABELS))
+    host = (urllib.parse.urlsplit(repo).hostname or "") if repo else ""
+    new_version = (_label(new_labels, VERSION_LABELS) or new_tag or "")[:VERSION_MAX]
+    old_version = (_label(old_labels, VERSION_LABELS) or old_tag or "")[:VERSION_MAX]
+    links = {}
+    if host == "github.com":
+        # The version label is not always the git tag (1.2.0 against v1.2.0),
+        # so the link searches the releases rather than guessing a tag page.
+        links["release"] = (f"{repo}/releases?q={urllib.parse.quote(new_version, safe='')}&expanded=true"
+                            if new_version else f"{repo}/releases")
+        old_rev, new_rev = _label(old_labels, REVISION_LABELS), _label(new_labels, REVISION_LABELS)
+        if all(re.fullmatch(r"[0-9a-f]{7,40}", r) for r in (old_rev, new_rev)) and old_rev != new_rev:
+            links["compare"] = f"{repo}/compare/{old_rev[:12]}...{new_rev[:12]}"
+    elif host == "gitlab.com" or host.startswith("gitlab."):
+        links["release"] = f"{repo}/-/releases"
+    elif repo:
+        links["release"] = repo
+    project = _link(_label(new_labels, URL_LABELS))
+    if project and project != links.get("release"):
+        links["project"] = project
+    return {"links": links, "from_version": old_version, "to_version": new_version, "source": repo}
+
+
+# Env an image's build leaves behind (REDIS_VERSION, REDIS_DOWNLOAD_SHA,
+# PYTHON_SHA256, GPG_KEYS): it changes with every release and is not one of
+# the app's settings, so it is counted, not listed.
+BUILD_ENV = re.compile(r"(_VERSION|_SHA|_SHA1|_SHA256|_SHA512|_CHECKSUM|_DOWNLOAD_URL|_DOWNLOAD_SHA\w*"
+                       r"|_GET_PIP_URL|_GET_PIP_SHA256|GPG_KEYS?|_COMMIT)$", re.I)
+
+
+def _env(config):
+    env = config.get("Env")
+    out = {}
+    for item in env if isinstance(env, list) else []:
+        if isinstance(item, str):
+            name, _, value = item.partition("=")
+            if name:
+                out[name] = value
+    return out
+
+
+def _keys(config, field):
+    value = config.get(field)
+    return set(value) if isinstance(value, dict) else set()
+
+
+def _user(config):
+    user = config.get("User")
+    user = user.strip() if isinstance(user, str) else ""
+    return "root" if user.split(":")[0] in ("", "0", "root") else user
+
+
+def config_changes(old, new, overrides=None):
+    """What the update changes that the app's settings may rely on: exposed
+    ports, declared volumes, env (names only: values never leave the
+    server) and the user it runs as. `overrides` is what the app sets
+    itself ({"user": runAsUser or None, "env": names}), which wins over the
+    image's defaults."""
+    overrides = overrides or {}
+    old, new = (old if isinstance(old, dict) else {}), (new if isinstance(new, dict) else {})
+    def diff(field):
+        a, b = _keys(old, field), _keys(new, field)
+        return {"added": sorted(b - a), "removed": sorted(a - b)}
+    old_env, new_env = _env(old), _env(new)
+    differs = {k for k in set(old_env) | set(new_env) if old_env.get(k) != new_env.get(k)}
+    build = {k for k in differs if BUILD_ENV.search(k)}
+    env = {"added": sorted(set(new_env) - set(old_env) - build),
+           "removed": sorted(set(old_env) - set(new_env) - build),
+           "changed": sorted((set(old_env) & set(new_env) & differs) - build)}
+    env["set_by_app"] = sorted((differs - build) & set(overrides.get("env") or ()))
+    user = None
+    if _user(old) != _user(new):
+        user = {"was": _user(old), "now": _user(new)}
+        if overrides.get("user") is not None:
+            user["overridden_by"] = str(overrides["user"])
+    changes = {"ports": diff("ExposedPorts"), "volumes": diff("Volumes"), "env": env, "user": user,
+               "build_env_changed": len(build)}
+    changes["none"] = not (any(changes["ports"].values()) or any(changes["volumes"].values())
+                           or env["added"] or env["removed"] or env["changed"] or user)
+    return changes

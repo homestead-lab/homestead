@@ -143,5 +143,109 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(2, len(NOTES._CONFIGS))
 
 
+SRC = "org.opencontainers.image.source"
+VER = "org.opencontainers.image.version"
+REV = "org.opencontainers.image.revision"
+URL = "org.opencontainers.image.url"
+
+
+class LinkTests(unittest.TestCase):
+    def test_a_github_source_links_its_releases_and_the_code_between_two_revisions(self):
+        out = NOTES.release_links({REV: "4be1d2c09a7e11"}, {SRC: "https://github.com/example/app.git", VER: "1.2.0",
+                                                           REV: "9c0f31aa52d8ff"}, "1.1.0", "1.2.0")
+        self.assertEqual({"release": "https://github.com/example/app/releases?q=1.2.0&expanded=true",
+                          "compare": "https://github.com/example/app/compare/4be1d2c09a7e...9c0f31aa52d8"},
+                         out["links"])
+        self.assertEqual(("1.1.0", "1.2.0"), (out["from_version"], out["to_version"]))
+
+    def test_no_code_link_without_two_different_revisions(self):
+        for old in ({}, {REV: "9c0f31aa52d8"}, {REV: "not-a-sha"}):
+            out = NOTES.release_links(old, {SRC: "https://github.com/example/app", REV: "9c0f31aa52d8"}, "a", "b")
+            self.assertNotIn("compare", out["links"])
+
+    def test_gitlab_and_other_hosts(self):
+        self.assertEqual("https://gitlab.example.com/group/app/-/releases",
+                         NOTES.release_links({}, {SRC: "https://gitlab.example.com/group/app"}, "", "")["links"]["release"])
+        self.assertEqual("https://code.example.com/group/app",
+                         NOTES.release_links({}, {SRC: "https://code.example.com/group/app/"}, "", "")["links"]["release"])
+
+    def test_plain_http_is_a_link_too(self):
+        out = NOTES.release_links({}, {SRC: "http://code.example.com/group/app", URL: "http://app.example.com/"}, "", "")
+        self.assertEqual({"release": "http://code.example.com/group/app", "project": "http://app.example.com/"}, out["links"])
+
+    def test_only_http_and_https_without_credentials_become_links(self):
+        for bad in ("javascript:alert(1)", "JaVaScRiPt://github.com/a/b", "data:text/html,x", "ftp://example.com/a/b",
+                    "git+https://github.com/example/app", "https://user:pw@github.com/example/app",
+                    "https://token@example.com/a/b", "//github.com/example/app", "https://", "https://exa mple.com/a/b",
+                    "https://example.com/a/b\nx", "https://example.com/" + "a" * 3000):
+            out = NOTES.release_links({}, {SRC: bad, URL: bad}, "", "")
+            self.assertEqual({}, out["links"], bad)
+            self.assertEqual("", out["source"], bad)
+
+    def test_the_project_site_is_not_repeated_when_it_is_the_release_link(self):
+        out = NOTES.release_links({}, {SRC: "https://code.example.com/a/b", URL: "https://code.example.com/a/b"}, "", "")
+        self.assertEqual({"release": "https://code.example.com/a/b"}, out["links"])
+
+    def test_no_labels_no_links_and_the_tags_stand_in_for_versions(self):
+        out = NOTES.release_links({}, {}, "1.0", "1.1")
+        self.assertEqual(({}, "1.0", "1.1"), (out["links"], out["from_version"], out["to_version"]))
+
+    def test_a_version_is_quoted_into_the_link_and_kept_short(self):
+        out = NOTES.release_links({}, {SRC: "https://github.com/example/app", VER: "1.0&x=<b>" + "9" * 100}, "", "")
+        self.assertEqual(64, len(out["to_version"]))
+        self.assertIn("q=1.0%26x%3D%3Cb%3E", out["links"]["release"])
+
+
+class ChangeTests(unittest.TestCase):
+    def test_ports_and_volumes_added_and_removed(self):
+        out = NOTES.config_changes({"ExposedPorts": {"80/tcp": {}, "81/tcp": {}}, "Volumes": {"/data": {}}},
+                                   {"ExposedPorts": {"80/tcp": {}, "8971/tcp": {}}, "Volumes": {"/data": {}, "/media": {}}})
+        self.assertEqual({"added": ["8971/tcp"], "removed": ["81/tcp"]}, out["ports"])
+        self.assertEqual({"added": ["/media"], "removed": []}, out["volumes"])
+        self.assertFalse(out["none"])
+
+    def test_env_is_reported_by_name_only(self):
+        old = {"Env": ["TZ=UTC", "LEGACY=1", "DATABASE_URL=postgres://app:hunter2@db.example.com/app", "SAME=x"]}
+        new = {"Env": ["TZ=Etc/UTC", "AUTH=on-with-s3cret", "DATABASE_URL=postgres://app:n3wpass@db.example.com/app",
+                       "SAME=x", "EMPTY="]}
+        out = NOTES.config_changes(old, new)
+        self.assertEqual({"added": ["AUTH", "EMPTY"], "removed": ["LEGACY"], "changed": ["DATABASE_URL", "TZ"],
+                          "set_by_app": []}, out["env"])
+        text = json.dumps(out)
+        for value in ("UTC", "hunter2", "n3wpass", "s3cret", "postgres", "db.example.com", '"1"', '"x"'):
+            self.assertNotIn(value, text)
+
+    def test_build_details_are_counted_not_listed(self):
+        out = NOTES.config_changes({"Env": ["REDIS_VERSION=7.2", "REDIS_DOWNLOAD_SHA=aa", "PYTHON_GET_PIP_URL=a", "GPG_KEYS=1"]},
+                                   {"Env": ["REDIS_VERSION=7.4", "REDIS_DOWNLOAD_SHA=bb", "PYTHON_GET_PIP_URL=a", "NODE_SHA256=c"]})
+        self.assertEqual({"added": [], "removed": [], "changed": [], "set_by_app": []}, out["env"])
+        self.assertEqual(4, out["build_env_changed"])
+        self.assertTrue(out["none"])
+
+    def test_a_change_of_user(self):
+        self.assertEqual({"was": "root", "now": "1000"}, NOTES.config_changes({}, {"User": "1000"})["user"])
+        self.assertIsNone(NOTES.config_changes({"User": ""}, {"User": "root"})["user"])
+        self.assertIsNone(NOTES.config_changes({"User": "app"}, {"User": "app"})["user"])
+
+    def test_the_apps_own_user_and_env_win_over_the_images(self):
+        out = NOTES.config_changes({"User": "0", "Env": ["TZ=UTC", "A=1"]}, {"User": "1000", "Env": ["TZ=Etc/UTC", "A=2"]},
+                                   {"user": "568", "env": {"TZ"}})
+        self.assertEqual({"was": "root", "now": "1000", "overridden_by": "568"}, out["user"])
+        self.assertEqual(["TZ"], out["env"]["set_by_app"])
+        self.assertEqual(["A", "TZ"], out["env"]["changed"])
+
+    def test_the_same_image_config_changes_nothing(self):
+        same = {"ExposedPorts": {"80/tcp": {}}, "Env": ["A=1"], "User": "1000", "Volumes": {"/data": {}}}
+        out = NOTES.config_changes(same, dict(same))
+        self.assertTrue(out["none"])
+        self.assertIsNone(out["user"])
+
+    def test_garbled_fields_are_read_as_empty(self):
+        out = NOTES.config_changes({"Env": "A=1", "ExposedPorts": ["80"], "Volumes": None, "User": 7},
+                                   {"Env": [None, 5, "B"]})
+        self.assertEqual(["B"], out["env"]["added"])
+        self.assertEqual({"added": [], "removed": []}, out["ports"])
+
+
 if __name__ == "__main__":
     unittest.main()
