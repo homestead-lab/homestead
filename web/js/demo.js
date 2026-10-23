@@ -2639,6 +2639,36 @@ ssh_pwauth: true
         changes: body.id === "c1" ? [{ field: "frigate: image", before: "ghcr.io/blakeblackshear/frigate:0.15.0", after: "ghcr.io/blakeblackshear/frigate:0.14.1" }]
           : [{ field: "app: memory max", before: "2Gi", after: "1Gi" }] };
     },
+    // "Since you were last here" (#748): a weekend away - two updates, a host
+    // rebooted for its OS update, a backup that failed and then ran, and an
+    // app that restarted four times. "Incidents" also shows a source unread.
+    "/api/timeline": url => {
+      const now = Math.floor(Date.now() / 1000), asked = Number(url.searchParams.get("since")) || 0;
+      const since = Math.max(asked || now - 2.6 * 86400, now - 30 * 86400);
+      const e = (ago, kind, tone, text, extra = {}) => ({ at: Math.round(now - ago), kind, tone, app: "", host: "", text, href: "", ...extra });
+      const app = name => ({ app: `lab/${name}`, href: `/containers?q=${name}` });
+      const all = [
+        e(3600 * 2, "change", "info", "frigate changed: frigate: image, by demo", app("frigate")),
+        e(3600 * 2 - 40, "restart", "info", "frigate rolled out: Image update", app("frigate")),
+        e(3600 * 9, "alert", "ok", "Scheduled job nightly-db-dump ran successfully", { href: "/schedules?find=lab/nightly-db-dump" }),
+        e(3600 * 9 + 60, "schedule", "ok", "nightly-db-dump ran", { app: "lab/nightly-db-dump", href: "/schedules?find=lab/nightly-db-dump" }),
+        e(3600 * 33, "schedule", "bad", "nightly-db-dump failed", { app: "lab/nightly-db-dump", href: "/schedules?find=lab/nightly-db-dump" }),
+        e(3600 * 33 - 900, "alert", "warn", "Scheduled job nightly-db-dump failed", { href: "/schedules?find=lab/nightly-db-dump" }),
+        ...[14, 15.5, 17, 20].map(h => e(3600 * h, "restart", "warn", "paperless restarted: Ran out of memory (limit 1 GiB)", app("paperless"))),
+        e(3600 * 26, "change", "info", "paperless changed: app: memory max, outside Homestead", app("paperless")),
+        e(3600 * 40, "host", "info", "harvester-node2 went into maintenance (OS update), back after 6 min", { host: "harvester-node2", href: "/nodes?node=harvester-node2" }),
+        e(3600 * 40 - 120, "alert", "warn", "harvester-node2 is not ready", { host: "harvester-node2", href: "/nodes?node=harvester-node2" }),
+        e(3600 * 40 - 480, "alert", "ok", "harvester-node2 is ready again", { host: "harvester-node2", href: "/nodes?node=harvester-node2" }),
+        e(3600 * 50, "change", "info", "home-assistant changed: home-assistant: image, by demo", app("home-assistant")),
+        e(3600 * 50 - 30, "action", "info", "demo POST /api/workload/update", app("home-assistant")),
+      ].filter(x => x.at > since).sort((a, b) => b.at - a.at);
+      const counts = all.reduce((c, x) => ({ ...c, [x.kind]: (c[x.kind] || 0) + 1 }), {});
+      const unread = scenario === "incidents" ? [{ source: "restarts", label: "App restarts",
+        reason: "Homestead could not read restarts.json on its data volume (Permission denied), so it changed nothing; the saved data is kept" }] : [];
+      return { since: Math.round(since), now, last_here: Math.round(now - 2.6 * 86400), clamped: asked > 0 && asked < now - 30 * 86400,
+        entries: all, counts, more: 0, unread };
+    },
+    "/api/timeline/seen": () => ({ ok: true, since: Math.round(Date.now() / 1000 - 2.6 * 86400) }),
     "/api/changes/undo": (url, init) => ({ ok: true, detail: `${JSON.parse(init?.body || "{}").name} is back to its settings from before that change; its pods are being replaced` }),
     // The storage forecast (homestead_forecast.py): frigate's config filling in
     // eleven days, a disk in six weeks, the pool steady.

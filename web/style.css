@@ -3733,6 +3733,16 @@ html:has(#modal:not(.hidden)) .backtop:not(.dialog-backtop),html:has(.askdlg) .b
 .mon-list.bars .mon-item{grid-template-columns:auto minmax(110px,1fr) minmax(0,2fr) auto}
 .answer-strip.mon-mini{height:16px;width:100%}
 .mon-allup{padding:6px 2px}
+/* "Since you were last here" (#748): the dashboard card and the Timeline page. */
+.tl-counts{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.tl-list{display:grid;gap:2px}
+.tl-item{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:6px 4px;border:0;border-radius:8px;
+  background:none;color:var(--tx);font:inherit;text-align:left;cursor:pointer}
+.tl-item:hover{background:var(--surf2)}.tl-item[disabled]{cursor:default}
+.tl-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.tl-filters{display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin:10px 0}
+.tl-pick{display:grid;gap:2px}.tl-pick select{max-width:240px}
+@media (max-width:560px){.tl-item{grid-template-columns:auto minmax(0,1fr)}.tl-item>.dim{grid-column:2}.tl-pick,.tl-pick select{max-width:100%;width:100%}}
 /* Restore tests on Data Protection. */
 .housekeeping{margin:6px 0 18px}.wt-line{margin-top:6px}.wt-foot{margin-top:12px;align-items:center;gap:12px;flex-wrap:wrap}.restore-tests{margin:6px 0 18px}.restore-head{align-items:center;gap:12px;flex-wrap:wrap}
 .restore-table .restore-why{max-width:420px;white-space:normal}

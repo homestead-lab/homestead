@@ -23,6 +23,10 @@ class DashboardPreferencesTests(unittest.TestCase):
                   for key in ("health", "workloads", "containers", "vms", "backups", "updates", "jobs")]}
         self.assertEqual(AUTH._dashboard_layout(layout), layout)
 
+    def test_the_timeline_card_is_a_valid_account_preference(self):
+        layout = {"version": 1, "items": [{"id": "timeline", "width": width, "height": 0} for width in (6,)]}
+        self.assertEqual(AUTH._dashboard_layout(layout), layout)
+
     def test_node_width_and_display_settings_persist_with_the_account(self):
         for width in (4,6,8,12):
             layout={"version":1,"items":[{"id":"nodes","width":width,"height":360,"display":"detailed"}]}

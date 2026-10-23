@@ -26,7 +26,7 @@ def bind_routes(helpers, **values):
 # Browser routes serve the same authenticated application shell. Keep this an
 # explicit allowlist: an unknown path must not accidentally shadow an API 404.
 SPA_ROUTES = frozenset({
-    "/", "/architecture", "/nodes", "/deploy", "/containers", "/vms",
+    "/", "/timeline", "/architecture", "/nodes", "/deploy", "/containers", "/vms",
     "/app-store", "/shares", "/volumes", "/image-cache", "/data-protection", "/portal", "/helm", "/resources",
     "/schedules", "/monitoring", "/import", "/vms/import", "/events", "/networking", "/system/cluster", "/settings", "/setup", "/agents",
 })

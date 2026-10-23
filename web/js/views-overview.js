@@ -178,6 +178,7 @@ async function viewDash() {
   historyPaint();
   Dashboard.loadPortal();
   Dashboard.loadMonitoring();
+  Dashboard.loadTimeline();
   HealthInsights.load();
 }
 
