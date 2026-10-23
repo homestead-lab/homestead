@@ -112,7 +112,7 @@ test("the maintenance window shows only when something uses it: an app set to up
   assert.match(balance[0].what, /Balance hosts/);
   assert.doesNotMatch(balance[0].what, /app/);
   const unread = W.collect({ settings: settings("approval_required", "off"), workloads: { failed: "x" } }, FROM);
-  same(unread.unread, ["apps' update settings"]);
+  same(unread.unread, ["the apps list"]);
   assert.equal(W.collect({ settings: settings("notify_only", "off"), workloads: { failed: "x" } }, FROM).unread.length, 0,
     "under notify only no app updates itself, so the apps need not be read");
 });
@@ -232,4 +232,66 @@ test("a wall time the clock change repeats is its first occurrence, as Python's 
   assert.equal(new Date(W.wallToMs(2026, 9, 25, 1, 30, "Europe/London")).toISOString().slice(0, 16), "2026-10-25T00:30");
   assert.equal(new Date(W.wallToMs(2026, 9, 26, 1, 30, "Europe/London")).toISOString().slice(0, 16), "2026-10-26T01:30");
   assert.equal(new Date(W.wallToMs(2026, 9, 24, 1, 30, "Europe/London")).toISOString().slice(0, 16), "2026-10-24T00:30");
+});
+
+// Andreas, 2026-10-23: a host OS update window or a power stop that overlaps a backup is "close".
+const backupJob = (cron, extra = {}) => ({ name: "weekly-backup", task: "backup", cron, volumes: ["pvc-a"], ...extra });
+const twentyMinutes = { last_run: "2026-10-18T03:00:00Z", last_success: "2026-10-18T03:20:00Z" };
+const osWindow = (extra = {}) => ({ applies: true, settings: { reboot: "when-needed", schedule: { enabled: true, days: ["sun"], hour: 3, tz: "UTC", ...extra } } });
+
+test("a host OS update window during a backup's run is close, naming the hosts that hold its volume", () => {
+  const { W } = setup();
+  const week = W.collect({ lh: { jobs: [backupJob("50 2 * * 0", twentyMinutes)], clashes: [], volumes: [{ name: "pvc-a", pvc: "data-a", namespace: "lab" }] },
+    os: osWindow(), copies: [{ name: "pvc-a", copies: [{ node: "node-1" }, { node: "node-2" }] }] }, FROM);
+  same(week.overlaps.map(o => [o.severity, o.reason, iso(o.at)]),
+    [["close", "hosts node-1 and node-2 may restart during backup weekly-backup", "2026-10-25T03:00"]]);
+  assert.equal(week.items.find(i => i.kind === "OS updates").clash, "close");
+  assert.equal(week.items.find(i => i.name === "weekly-backup").clash, "close");
+});
+
+test("without the volumes' copies any backup in the window counts; a window that never restarts hosts does not", () => {
+  const { W } = setup();
+  const lh = { jobs: [backupJob("50 2 * * 0", twentyMinutes)], clashes: [] };
+  same(W.collect({ lh, os: osWindow() }, FROM).overlaps.map(o => o.reason), ["a host may restart during backup weekly-backup"]);
+  same(W.collect({ lh, os: osWindow(), copies: { failed: "x" } }, FROM).unread, ["volume copies"]);
+  const never = osWindow(); never.settings.reboot = "never";
+  same(W.collect({ lh, os: never }, FROM).overlaps, []);
+  same(W.collect({ lh: { jobs: [backupJob("0 1 * * 0", twentyMinutes)], clashes: [] }, os: osWindow() }, FROM).overlaps, [], "done by 01:20, before 03:00");
+  same(W.collect({ lh: { jobs: [{ ...backupJob("50 2 * * 0", twentyMinutes), task: "snapshot" }], clashes: [] }, os: osWindow() }, FROM).overlaps, [],
+    "only backups");
+});
+
+test("an app's power stop during a backup of its volume is close; a backup's run is its last one, else half an hour", () => {
+  const { W } = setup();
+  const lh = { jobs: [{ name: "nightly", task: "backup", cron: "0 2 * * *", volumes: ["pvc-db"] }], clashes: [],
+    volumes: [{ name: "pvc-db", pvc: "db-data", namespace: "lab" }] };
+  const workloads = [{ name: "db", ns: "lab", claims: ["db-data"] }, { name: "web", ns: "lab", claims: [] }];
+  const power = stop => ({ items: [{ kind: "app", ns: "lab", name: "db", schedule: { stop, start: "07:00", days: [0, 1, 2, 3, 4, 5, 6], tz: "UTC" } },
+    { kind: "app", ns: "lab", name: "web", schedule: { stop: "02:10", days: [0, 1, 2, 3, 4, 5, 6], tz: "UTC" } }] });
+  const week = W.collect({ lh, workloads, power: power("02:10") }, FROM);
+  assert.equal(week.overlaps.length, 7);
+  same([week.overlaps[0].reason, iso(week.overlaps[0].at)], ["app db stops during its backup nightly", "2026-10-24T02:10"]);
+  assert.equal(week.items.find(i => i.name === "db" && i.what === "stops").clash, "close");
+  assert.equal(week.items.find(i => i.name === "db" && i.what === "starts").clash, "");
+  same(W.collect({ lh, workloads, power: power("02:40") }, FROM).overlaps, [], "the backup's half hour is over");
+  const timed = { ...lh, jobs: [{ ...lh.jobs[0], last_run: "2026-10-22T02:00:00Z", last_success: "2026-10-22T02:50:00Z" }] };
+  assert.equal(W.collect({ lh: timed, workloads, power: power("02:40") }, FROM).overlaps.length, 7, "its last run took 50 minutes");
+  same(W.collect({ lh, workloads: { failed: "x" }, power: power("02:10") }, FROM).unread, ["the apps list"]);
+});
+
+test("the page lists these with the close ones, and the Dashboard still counts only clashes", async () => {
+  const { ctx, out } = setup({ "/api/lh/overview": { jobs: [backupJob("50 2 * * 0", twentyMinutes)], clashes: [], volumes: [] },
+    "/api/schedules": [], "/api/power-schedules": { items: [] }, "/api/os-updates": osWindow(), "/api/volumes": [],
+    "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });
+  await ctx.viewScheduleWeek();
+  assert.match(out.html, /No clashes this week/);
+  assert.match(out.html, /a host may restart during backup weekly-backup/);
+  assert.match(out.html, /<span class="ui-chip warn slim">close<\/span> a host may restart/, "close is amber (Andreas, 2026-10-23)");
+  const H = require("../web/js/insights.js");
+  assert.equal(H.advice({ protection: { volumes: [], clashes: [] } }).some(r => r.id === "schedule-clash"), false);
+});
+
+test("the demo has an app that stops during its backup", () => {
+  const demo = fs.readFileSync("web/js/demo.js", "utf8");
+  assert.match(demo, /kind: "app", ns: "lab", name: "frigate"[^}]*schedule: \{ stop: "02:01", days: \[6\], tz: "UTC" \}/);
 });

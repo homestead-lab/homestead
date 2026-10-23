@@ -1242,7 +1242,11 @@ how often it happens. Snapshots and cleanups never clash. The Dashboard's
 health suggestions turn a clash into a finding, and **Schedules › This week**
 (`/schedules/week`) lists every run in the next seven days by day: these jobs,
 CronJobs, power schedules, the host OS update window and the maintenance
-window, naming each source it could not read.
+window, naming each source it could not read. The page itself marks as close
+a host OS update window (from the hour it opens, when it may restart hosts;
+naming the hosts with a copy of the volume, from `/api/volumes`) or an app's
+power stop that falls within a backup of its volumes; a backup runs as long as
+its last run took, or 30 minutes. These never reach the Dashboard.
 
 **Plans** set up a policy in one go - snapshots (hourly kept for a day, daily
 kept for a week), snapshots and backups (adding daily and weekly backups to

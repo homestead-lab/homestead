@@ -170,7 +170,11 @@ trim while a volume is backed up, slow each other down and can fail. So
 Homestead looks at the coming week: a trim or a backup that starts in the
 same minute as a backup on a volume they share is a **clash**, and one that
 starts within half an hour of it is **close**. A snapshot during a backup is
-fine, and is not reported.
+fine, and is not reported. A host OS update window that may restart hosts, or
+an app's scheduled stop, while a backup of its volumes runs is also **close**
+("host node-2 may restart during backup nightly", "app db stops during its
+backup nightly"): a backup runs as long as its last run took, or half an hour.
+Only clashes reach the Dashboard.
 
 A clash shows on the Dashboard's health suggestions ("1 schedule clash this
 week"), and its **Review** opens **Containers › Schedules › This week**: every

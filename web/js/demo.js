@@ -2494,6 +2494,9 @@ ssh_pwauth: true
       const t = Date.now() / 1000, day = 86400;
       const words = "Stops 19:00, starts 08:00, weekdays";
       return { grace: 1800, items: [
+        // Stops during its own volume's nightly backup on Sundays: Schedules › This week calls it close.
+        { kind: "app", ns: "lab", name: "frigate", running: true, words: "Stops 02:01, Sunday",
+          schedule: { stop: "02:01", days: [6], tz: "UTC" }, next: [], last: null },
         { kind: "app", ns: "lab", name: "paperless", running: true, words: "Stops 01:00, starts 07:00, weekdays",
           schedule: { stop: "01:00", start: "07:00", days: [0, 1, 2, 3, 4], tz: "UTC" },
           next: [{ at: t + 5 * 3600, action: "stop" }, { at: t + 11 * 3600, action: "start" }],
