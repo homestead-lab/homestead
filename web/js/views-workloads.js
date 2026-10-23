@@ -1891,12 +1891,15 @@ async function reviewImageActions(items, action = "update") {
       ${blocked ? UI.callout("bad", "Update blocked", list)
         : concerns.length ? UI.callout("warn", "Check first", list) : ""}
       <ul class="upd-apps">${apps}</ul>
+      ${rollback ? "" : '<div id="updNotes"></div>'}
       ${UI.more("Details", `${details}
         ${notes.length ? `<ul class="ui-list">${notes.map(n => `<li>${esc(n)}</li>`).join("")}</ul>` : ""}
         <p class="ui-help">Exact images and capacity are checked again before each change. A failure, lost contact or an expired review stops the rest of the queue; closing this dialog stops updates not yet started.</p>`)}
       ${blocked ? "" : UI.ack("imageCapacityApprove", concerns.length ? "Update despite the warnings" : many ? "Restart them now" : "Restart it now", { onchange: "imageReviewReady()" })}
       ${UI.actions(UI.button(rollback ? "Start rollback" : many ? `Update ${rows.length}` : "Update", "imageReviewedApply()", { kind: "pri", id: "imageCapacityApply", disabled: true }), UI.cancel())}
     </div>`;
+    // What is in the update: read beside the review, never waited for.
+    if (!rollback && window.updateNotesInto) updateNotesInto($("#updNotes"), rows.map(r => r.config));
   } catch (error) {
     IMAGE_REVIEW = null;
     if (sequence === IMAGE_REVIEW_SEQUENCE && $("#imageReviewLoading")) $("#mbody").innerHTML = UI.callout("bad", "Review could not finish.", `${esc(error.message)}. Nothing was changed. Close this dialog and review again.`) + UI.actions(UI.cancel("Close"));

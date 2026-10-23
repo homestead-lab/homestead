@@ -2499,6 +2499,29 @@ textarea{min-height:0}
 .upd-change code{font:500 12px "JetBrains Mono",monospace;color:var(--tx)}
 .upd-flag{display:inline-grid;place-items:center;width:17px;height:17px;border-radius:50%;font:700 11px "Inter Tight",sans-serif;color:#1a1200;background:var(--med)}
 .upd-flag.bad{background:var(--crit);color:#fff}
+/* What's in this update (update-notes.js) */
+.un-notes{border:1px solid var(--line);border-radius:12px;padding:12px 14px;display:grid;gap:10px}
+.un-title{margin:0;font:600 13px "Inter Tight",sans-serif;color:var(--tx)}
+.un-app{font-weight:600;font-size:13px;margin-top:4px}
+.un-container{font:500 12px "JetBrains Mono",monospace;color:var(--mut)}
+.un-image{display:grid;gap:8px}
+.un-links{display:flex;flex-wrap:wrap;gap:6px 16px}
+.un-link{display:inline-flex;align-items:center;gap:5px;font-size:13px;font-weight:500;color:var(--tone-link)}
+.un-link .btnicon{width:12px;height:12px}
+.un-lines{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.un-line{display:grid;grid-template-columns:18px minmax(0,11em) minmax(0,1fr);gap:8px;align-items:baseline;font-size:12.5px}
+.un-mark{display:inline-grid;place-items:center;width:18px;height:18px;border-radius:5px;font:700 12px "JetBrains Mono",monospace}
+.un-mark.add{background:var(--tone-ok-bg);color:var(--tone-ok)}
+.un-mark.del{background:var(--tone-bad-bg);color:var(--tone-bad)}
+.un-mark.chg{background:var(--tone-warn-bg);color:var(--tone-warn)}
+.un-what{color:var(--mut)}
+.un-detail{min-width:0;overflow-wrap:anywhere}
+.un-detail code,.un-quiet code{font:500 12px "JetBrains Mono",monospace;color:var(--tx)}
+.un-same{display:flex;align-items:center;gap:6px;margin:0;font-size:12.5px;color:var(--mut)}
+.un-same .btnicon{width:14px;height:14px;color:var(--tone-ok)}
+.un-quiet{margin:0;font-size:12px;color:var(--mut)}
+.un-loading{margin:0;font-size:12.5px}
+@media (max-width:560px){.un-line{grid-template-columns:18px minmax(0,1fr)}.un-line .un-detail{grid-column:2}}
 .upd-ok{display:inline-flex;align-items:center;gap:8px;margin:0;font-size:12.5px;font-weight:500;color:var(--tx);cursor:pointer}
 .upd-ok input{width:16px;height:16px;margin:0;accent-color:#fff}
 @media(max-width:640px){
