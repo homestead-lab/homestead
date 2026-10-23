@@ -15,11 +15,16 @@ import hashlib
 import json
 import re
 import threading
+import urllib.error
 import urllib.parse
 
 import homestead_updates as U
 
 SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+class NotesError(ValueError):
+    """This module's own words for why an image could not be read: shown as they are."""
 CONFIG_MAX_BYTES = 1 << 20
 MANIFEST_MAX_BYTES = 4 << 20   # the distribution spec's own limit for a manifest
 
@@ -33,7 +38,7 @@ _CONFIGS, _CONFIGS_LOCK, _CONFIGS_MAX = {}, threading.Lock(), 256
 
 def _verified(body, digest, what):
     if not SHA256.fullmatch(digest or "") or "sha256:" + hashlib.sha256(body).hexdigest() != digest:
-        raise ValueError(f"the registry's {what} does not match its digest")
+        raise NotesError(f"the registry's {what} does not match its digest")
     return json.loads(body.decode())
 
 
@@ -43,7 +48,7 @@ def image_config(ref, auths, arch="amd64"):
     the config blob - at most three registry requests, none when cached."""
     parsed = U.parse_image(U.with_tag(ref))
     if parsed["digest"] and not SHA256.fullmatch(parsed["digest"]):
-        raise ValueError("only sha256 image digests are read")
+        raise NotesError("only sha256 image digests are read")
     def manifest(reference):
         return U._registry_json(parsed, "manifests/" + urllib.parse.quote(reference, safe=":"), auths,
                                 U.MANIFEST_ACCEPT, limit=MANIFEST_MAX_BYTES)[0]
@@ -54,35 +59,41 @@ def image_config(ref, auths, arch="amd64"):
         return dict(hit) if hit is not None else None
     if parsed["digest"]:
         top = parsed["digest"]
-        if cached(top) is not None:
-            return cached(top)
+        hit = cached(top)
+        if hit is not None:
+            return hit
         current = _verified(manifest(top), top, "manifest")
     else:
         # A tag can move: its manifest is read each time, and what it names
         # is kept only by that manifest's digest.
         body = manifest(parsed["tag"])
         top = "sha256:" + hashlib.sha256(body).hexdigest()
-        if cached(top) is not None:
-            return cached(top)
+        hit = cached(top)
+        if hit is not None:
+            return hit
         current = json.loads(body.decode())
     if current.get("manifests"):
-        child = next((m for m in current["manifests"]
-                      if (m.get("platform") or {}).get("os", "linux") == "linux"
-                      and (m.get("platform") or {}).get("architecture") == arch), None) or current["manifests"][0]
+        # This architecture's own build, never a guess: an index also lists
+        # attestations (platform unknown/unknown), whose "config" is not one.
+        child = next((m for m in current["manifests"] if isinstance(m, dict)
+                      and (m.get("platform") or {}).get("os") == "linux"
+                      and (m.get("platform") or {}).get("architecture") == arch), None)
+        if not child:
+            raise NotesError(f"the image has no build for {arch}")
         current = _verified(manifest(child.get("digest") or ""), child.get("digest") or "", "manifest")
     descriptor = current.get("config") or {}
     config_digest = descriptor.get("digest") or ""
     if not SHA256.fullmatch(config_digest):
-        raise ValueError("the image's manifest names no sha256 config")
+        raise NotesError("the image's manifest names no sha256 config")
     size = descriptor.get("size")
     if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
-        raise ValueError("the image's manifest gives no size for its config")
+        raise NotesError("the image's manifest gives no size for its config")
     if size > CONFIG_MAX_BYTES:
-        raise ValueError("the image's config is too large to read")
+        raise NotesError("the image's config is too large to read")
     # Read no more than the manifest says, and only that many bytes count.
     body = U._registry_json(parsed, "blobs/" + config_digest, auths, limit=size)[0]
     if len(body) != size:
-        raise ValueError("the image's config is not the size its manifest gives")
+        raise NotesError("the image's config is not the size its manifest gives")
     config = _verified(body, config_digest, "config").get("config") or {}
     with _CONFIGS_LOCK:
         while len(_CONFIGS) >= _CONFIGS_MAX:
@@ -235,10 +246,10 @@ def _error(error):
         return "registry authentication required"
     if code:
         return f"the registry answered HTTP {code}"
+    if isinstance(error, NotesError):
+        return str(error)  # this module's own fixed words
     if isinstance(error, json.JSONDecodeError):
         return "the registry's answer could not be read"
-    if isinstance(error, ValueError):
-        return str(error)  # this module's and parse_image's own fixed words
     return f"could not read the images ({type(error).__name__})"
 
 
@@ -252,6 +263,42 @@ def _dns(value, label):
     return value
 
 
+def _arch(ns, dep):
+    """The architecture the app's images are pulled for: the cluster's, or on
+    a mixed cluster that of the host its pod runs on. amd64 when unknown."""
+    try:
+        nodes = {(n.get("metadata") or {}).get("name"): ((n.get("status") or {}).get("nodeInfo") or {}).get("architecture")
+                 for n in U.kget("/api/v1/nodes").get("items") or []}
+        arches = {a for a in nodes.values() if a}
+        if len(arches) == 1:
+            return arches.pop()
+        labels = ((dep.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
+        if labels:
+            selector = urllib.parse.quote(",".join(f"{k}={v}" for k, v in sorted(labels.items())), safe="")
+            pods = U.kget(f"/api/v1/namespaces/{ns}/pods?labelSelector={selector}").get("items") or []
+            host = next(((p.get("spec") or {}).get("nodeName") for p in pods
+                         if (p.get("status") or {}).get("phase") == "Running"), None)
+            if nodes.get(host):
+                return nodes[host]
+    except Exception:
+        pass
+    return "amd64"
+
+
+def _new_image(item, auths):
+    """The new image as the scan found it: by the digest it recorded, else by
+    the digest its tag names in the scan's own short cache, else its tag.
+    Each manifest read counts as a pull on Docker Hub, so none is repeated."""
+    candidate = U.parse_image(item.get("candidate") or item["source"])
+    digest = item.get("remote_digest") or ""
+    if not SHA256.fullmatch(digest):
+        try:
+            digest = U.manifest_info(candidate["original"], auths).get("digest") or ""
+        except Exception:
+            digest = ""
+    return _image(candidate["base"], digest, candidate["original"])
+
+
 def notes_for(ns, name):
     """Each container the last scan found an update for: links and changes.
     Which images are read is the server's own record, never the request's."""
@@ -261,8 +308,12 @@ def notes_for(ns, name):
     workload = next((w for w in report.get("workloads") or [] if (w.get("ns"), w.get("name")) == (ns, name)), None)
     if not workload:
         return {"ns": ns, "name": name, "images": [], "error": "not in the last update check"}
-    dep = U.kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    auths = U._secret_credentials(ns, dep)
+    try:
+        dep = U.kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+        auths = U._secret_credentials(ns, dep)
+    except Exception as error:  # its words can name the API server
+        return {"ns": ns, "name": name, "images": [], "error": f"the app could not be read ({type(error).__name__})"}
+    arch = _arch(ns, dep)
     images = []
     for item in workload.get("images") or []:
         if not item.get("available"):
@@ -272,11 +323,15 @@ def notes_for(ns, name):
             parsed = U.parse_image(item.get("source") or "")
             out.update(from_tag=parsed["tag"], to_tag=item.get("candidate_tag") or "")
             if not SHA256.fullmatch(item.get("current_digest") or ""):
-                raise ValueError("the running image is not known yet")
-            old = image_config(_image(parsed["base"], item["current_digest"], ""), auths)
-            # The new image as the scan found it, by digest when it has one.
-            candidate = U.parse_image(item.get("candidate") or item["source"])
-            new = image_config(_image(candidate["base"], item.get("remote_digest"), candidate["original"]), auths)
+                raise NotesError("the running image is not known yet")
+            try:
+                old = image_config(_image(parsed["base"], item["current_digest"], ""), auths, arch)
+            except urllib.error.HTTPError as error:
+                if error.code != 404:
+                    raise
+                # k3s records an imported or locally built image by its own ID.
+                raise NotesError("the running image is not in its registry (imported or built on the host?)") from None
+            new = image_config(_new_image(item, auths), auths, arch)
             out.update(release_links(old.get("Labels"), new.get("Labels"), out["from_tag"], out["to_tag"]))
             out["changes"] = config_changes(old, new, _overrides(dep, out["container"]))
         except Exception as error:  # the update itself never waits on this

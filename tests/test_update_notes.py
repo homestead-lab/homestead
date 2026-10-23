@@ -282,11 +282,71 @@ class RouteTests(unittest.TestCase):
         self.read = []
         patches = [mock.patch.object(UPDATES, "_registry_json", self.registry),
                    mock.patch.object(UPDATES, "_LATEST", {"report": self.report}),
-                   mock.patch.object(UPDATES, "kget", lambda path: self.read.append(path) or self.dep, create=True),
+                   mock.patch.object(UPDATES, "kget", self.kget, create=True),
                    mock.patch.object(UPDATES, "_secret_credentials", lambda ns, dep: {"registry.example.com": ("u", "p")})]
         for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
+        self.dep["spec"]["selector"] = {"matchLabels": {"app": "app"}}
+        self.nodes = {"items": [{"metadata": {"name": "n1"}, "status": {"nodeInfo": {"architecture": "amd64"}}}]}
+        self.pods = {"items": []}
+
+    def kget(self, path):
+        self.read.append(path)
+        if path.startswith("/api/v1/nodes"):
+            return self.nodes
+        if "/pods" in path:
+            return self.pods
+        if isinstance(self.dep, Exception):
+            raise self.dep
+        return self.dep
+
+    def arches(self):
+        seen = []
+        def spy(ref, auths, arch="amd64"):
+            seen.append(arch)
+            return {}
+        with mock.patch.object(NOTES, "image_config", spy):
+            out = NOTES.notes_for("lab", "app")
+        return seen, out
+
+    def test_the_images_are_read_for_the_clusters_architecture(self):
+        self.nodes["items"] = [{"metadata": {"name": n}, "status": {"nodeInfo": {"architecture": "arm64"}}} for n in ("n1", "n2")]
+        self.assertEqual(["arm64", "arm64"], self.arches()[0])
+
+    def test_on_a_mixed_cluster_the_apps_own_host_decides(self):
+        self.nodes["items"] = [{"metadata": {"name": "n1"}, "status": {"nodeInfo": {"architecture": "amd64"}}},
+                               {"metadata": {"name": "n2"}, "status": {"nodeInfo": {"architecture": "arm64"}}}]
+        self.pods["items"] = [{"spec": {"nodeName": "n2"}, "status": {"phase": "Running"}}]
+        self.assertEqual(["arm64", "arm64"], self.arches()[0])
+        self.assertIn("/api/v1/namespaces/lab/pods?labelSelector=app%3Dapp", self.read)
+
+    def test_an_image_with_no_build_for_this_architecture_is_not_guessed(self):
+        arm_body, arm_digest = blob({"config": {"digest": "sha256:" + "a" * 64, "size": 2}})
+        index, index_digest = blob({"manifests": [
+            {"digest": "sha256:" + "b" * 64, "platform": {"os": "unknown", "architecture": "unknown"}},
+            {"digest": arm_digest, "platform": {"os": "linux", "architecture": "arm64"}}]})
+        self.registry.paths[("example/app", "manifests/" + index_digest)] = index
+        with self.assertRaisesRegex(ValueError, "no build for amd64"):
+            NOTES.image_config("registry.example.com/example/app@" + index_digest, {}, "amd64")
+        self.assertEqual(["manifests/" + index_digest], [p for _, p, _ in self.registry.calls])
+
+    def test_a_running_image_the_registry_does_not_have_is_named(self):
+        self.item["current_digest"] = "sha256:" + "c" * 64
+        self.assertEqual("the running image is not in its registry (imported or built on the host?)",
+                         NOTES.notes_for("lab", "app")["images"][0]["error"])
+
+    def test_an_app_that_cannot_be_read_says_so_without_the_apis_words(self):
+        self.dep = RuntimeError("https://192.0.2.10:6443 said no")
+        out = NOTES.notes_for("lab", "app")
+        self.assertEqual(([], "the app could not be read (RuntimeError)"), (out["images"], out["error"]))
+
+    def test_other_value_errors_show_their_kind_only(self):
+        def garbled(*_, **__):
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+        with mock.patch.object(UPDATES, "_registry_json", garbled):
+            error = NOTES.notes_for("lab", "app")["images"][0]["error"]
+        self.assertEqual("could not read the images (UnicodeDecodeError)", error)
 
     def test_operators_may_ask_and_the_server_checks_the_app_is_theirs(self):
         import homestead_route_policy as POLICY
@@ -297,7 +357,7 @@ class RouteTests(unittest.TestCase):
 
     def test_the_running_and_the_new_image_are_compared(self):
         out = NOTES.notes_for("lab", "app")
-        self.assertEqual(["/apis/apps/v1/namespaces/lab/deployments/app"], self.read)
+        self.assertEqual("/apis/apps/v1/namespaces/lab/deployments/app", self.read[0])
         (image,) = out["images"]
         self.assertEqual(("app", "1.1.0", "1.2.0"), (image["container"], image["from_version"], image["to_version"]))
         self.assertEqual("https://github.com/example/app/compare/4be1d2c09a7e...9c0f31aa52d8", image["links"]["compare"])
@@ -316,10 +376,16 @@ class RouteTests(unittest.TestCase):
         self.dep["spec"]["template"]["spec"]["containers"][0]["securityContext"] = {"runAsUser": 0}
         self.assertEqual("0", NOTES.notes_for("lab", "app")["images"][0]["changes"]["user"]["overridden_by"])
 
-    def test_without_a_digest_from_the_scan_the_new_image_is_read_by_its_tag(self):
+    def test_without_a_digest_from_the_scan_the_tag_is_resolved_through_the_scans_cache(self):
         self.item["remote_digest"] = ""
-        image = NOTES.notes_for("lab", "app")["images"][0]
-        self.assertIn("manifests/1.2.0", [p for _, p, _ in self.registry.calls])
+        asked = []
+        def info(ref, auths=None, force=False):
+            asked.append((ref, force))
+            return {"digest": self.new["top"], "children": []}
+        with mock.patch.object(UPDATES, "manifest_info", info):
+            image = NOTES.notes_for("lab", "app")["images"][0]
+        self.assertEqual([("registry.example.com/example/app:1.2.0", False)], asked)
+        self.assertNotIn("manifests/1.2.0", [p for _, p, _ in self.registry.calls])
         self.assertEqual("1.2.0", image["to_version"])
 
     def test_an_app_that_is_not_running_says_so_and_asks_no_registry(self):
@@ -338,7 +404,7 @@ class RouteTests(unittest.TestCase):
             def answer(*_, **__):
                 raise UPDATES.urllib.error.HTTPError("https://registry.example.com/v2/secret-path", code, "x", {}, None)
             return answer
-        for code, words in ((429, "slow down"), (401, "authentication"), (403, "authentication"), (404, "HTTP 404")):
+        for code, words in ((429, "slow down"), (401, "authentication"), (403, "authentication"), (500, "HTTP 500")):
             NOTES._CONFIGS.clear()
             with mock.patch.object(UPDATES, "_registry_json", failing(code)):
                 error = NOTES.notes_for("lab", "app")["images"][0]["error"]
