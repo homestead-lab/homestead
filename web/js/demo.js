@@ -2661,7 +2661,7 @@ ssh_pwauth: true
         e(3600 * 40 - 480, "alert", "ok", "harvester-node2 is ready again", { host: "harvester-node2", href: "/nodes?node=harvester-node2" }),
         e(3600 * 50, "change", "info", "home-assistant changed: home-assistant: image, by demo", app("home-assistant")),
         e(3600 * 50 - 30, "action", "info", "demo POST /api/workload/update", app("home-assistant")),
-      ].filter(x => x.at > since).sort((a, b) => b.at - a.at);
+      ].filter(x => x.at > since && !(scenario === "incidents" && x.kind === "restart")).sort((a, b) => b.at - a.at);
       const counts = all.reduce((c, x) => ({ ...c, [x.kind]: (c[x.kind] || 0) + 1 }), {});
       const unread = scenario === "incidents" ? [{ source: "restarts", label: "App restarts",
         reason: "Homestead could not read restarts.json on its data volume (Permission denied), so it changed nothing; the saved data is kept" }] : [];
