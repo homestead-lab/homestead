@@ -314,3 +314,30 @@ def timeline(user, role, since=None, now=None):
         counts[e["kind"]] = counts.get(e["kind"], 0) + 1
     return {"since": since, "now": now, "last_here": last, "clamped": clamped, "entries": entries[:MAX_ENTRIES],
             "counts": counts, "more": max(0, len(entries) - MAX_ENTRIES), "unread": unread}
+
+
+def _since(request):
+    """?since=<epoch seconds>, or None for "since I was last here"."""
+    text = (request.query.get("since") or [None])[0]
+    if text is None:
+        return None
+    if not str(text).isdigit() or len(str(text)) > 12:
+        raise ValueError("since is a time in seconds since 1970")
+    return int(text)
+
+
+def _seen(request):
+    if not request.user:
+        return {"ok": False, "reason": "Only a signed-in account has a last visit to remember."}
+    try:
+        return {"ok": True, "since": mark_seen(request.user, time.time())}
+    except (SHARED.Unreadable, OSError, ValueError) as error:
+        # Held by a data move, or the file unreadable: the timeline still
+        # answers, from the last visit Homestead could keep.
+        return {"ok": False, "reason": str(error)[:300]}
+
+
+ROUTES = {
+    ("GET", "/api/timeline"): ("viewer", lambda request: timeline(request.user, request.role, _since(request))),
+    ("POST", "/api/timeline/seen"): ("viewer", _seen),
+}

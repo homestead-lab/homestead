@@ -333,6 +333,55 @@ class AuditTests(DataDir):
         self.assertIn("could not read", unread[0]["reason"])
 
 
+def request(user="alice", role="viewer", **query):
+    import types
+    return types.SimpleNamespace(user=user, role=role, query={k: [v] for k, v in query.items()}, body={},
+                                 method="GET", path="/api/timeline")
+
+
+class RouteTests(DataDir):
+    def setUp(self):
+        super().setUp()
+        self.src = Sources(self)
+        patcher = mock.patch.object(T.time, "time", lambda: T0)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_routes_declared_viewer(self):
+        import homestead_routes as ROUTES
+        self.assertIn("homestead_timeline", ROUTES.MODULES)
+        self.assertEqual("viewer", T.ROUTES[("GET", "/api/timeline")][0])
+        self.assertEqual("viewer", T.ROUTES[("POST", "/api/timeline/seen")][0])
+
+    def test_since_query_is_validated(self):
+        get = T.ROUTES[("GET", "/api/timeline")][1]
+        self.assertEqual(T0 - 3600, get(request(since=str(T0 - 3600)))["since"])
+        for bad in ("yesterday", "", "1e99", "-5", "nan"):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                get(request(since=bad))
+
+    def test_get_does_not_move_the_marker(self):
+        get = T.ROUTES[("GET", "/api/timeline")][1]
+        get(request())
+        self.assertFalse(os.path.exists(self.seen_file()))
+
+    def test_seen_marks_only_the_caller(self):
+        seen = T.ROUTES[("POST", "/api/timeline/seen")][1]
+        self.assertEqual({"ok": True, "since": T0 - T.FIRST_LOOK}, seen(request("bob")))
+        self.assertEqual(["bob"], list(self.seen()["users"]))
+        self.assertEqual({"ok": False, "reason": "Only a signed-in account has a last visit to remember."},
+                         seen(request("")))
+
+    def test_seen_reports_a_write_it_could_not_make(self):
+        seen = T.ROUTES[("POST", "/api/timeline/seen")][1]
+        with mock.patch.object(SHARED, "WRITE_GUARD", mock.Mock(side_effect=ValueError("Homestead's data is being moved"))):
+            self.assertEqual({"ok": False, "reason": "Homestead's data is being moved"}, seen(request()))
+
+    def test_the_marker_is_not_an_audited_change_nor_an_agent_tool(self):
+        import homestead_audit as AUDIT
+        self.assertIn(("POST", "/api/timeline/seen"), AUDIT.NOT_AUDITED)
+
+
 class HostMaintenanceSinceTests(unittest.TestCase):
     def test_started_or_ended_after_since_and_bad_rows_left_out(self):
         import homestead_history as HISTORY

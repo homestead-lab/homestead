@@ -541,6 +541,7 @@ class CatalogueTests(unittest.TestCase):
             "setup", "login", "logout", "password", "signout-everywhere", "preferences/dashboard")},
         "/api/fleet/switch": "a browser's choice of cluster",
         "/api/v1/*": "the public API is its own door",
+        "/api/timeline/seen": "a person's own 'last here' marker",
     }
 
     def test_every_operator_action_is_a_tool_or_kept_from_agents_on_purpose(self):
