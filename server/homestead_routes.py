@@ -88,6 +88,7 @@ MODULES = (
     "homestead_disk_v2",
     "homestead_disk_allocation",
     "homestead_disks",
+    "homestead_expiry",
     "homestead_files",
     "homestead_firewall",
     "homestead_fleet",

@@ -328,5 +328,175 @@ class ScanTests(unittest.TestCase):
         self.assertIsNone(EXPIRY.load())
 
 
+def saved(rows, errors=None, checked_at=1_800_000_000, partial=False):
+    return {"checked_at": checked_at, "items": rows, "errors": errors or {}, "partial": partial,
+            "counts": {}, "warn_days": 21, "critical_days": 7}
+
+
+def cert_row(kind, ns, name, not_after, renews=False):
+    return {"kind": kind, "namespace": ns, "name": name, "not_after": not_after, "days_left": 0,
+            "state": "ok", "note": "", "renews": renews, "overdue": False}
+
+
+def api_key(name, owner, created, expires):
+    return {"id": name, "name": name, "owner": owner, "created": created, "expires": expires,
+            "expired": False, "scopes": [], "networks": []}
+
+
+class ScheduleTests(unittest.TestCase):
+    NOW = 1_800_000_000
+
+    def setUp(self):
+        EXPIRY._scan.update(running=False, tried=0)
+        self.addCleanup(EXPIRY._scan.update, running=False, tried=0)
+
+    def due(self, rep, now, leader=True):
+        with mock.patch.object(EXPIRY, "load", return_value=rep), mock.patch.object(EXPIRY, "scan") as scan, \
+                mock.patch.object(EXPIRY.HEARTBEATS, "beat") as beat, \
+                mock.patch.object(EXPIRY.LEADER, "is_leader", return_value=leader):
+            started = EXPIRY.start_scan_if_due(now, wait=True)
+        return started, scan, beat
+
+    def test_only_the_leader_scans(self):
+        started, scan, _ = self.due(None, self.NOW, leader=False)
+        self.assertFalse(started)
+        scan.assert_not_called()
+
+    def test_no_scan_yet_starts_one_and_beats(self):
+        started, scan, beat = self.due(None, self.NOW)
+        self.assertTrue(started)
+        scan.assert_called_once()
+        self.assertEqual(beat.call_args.args[:2], ("expiry", EXPIRY.SCAN_EVERY))
+        self.assertTrue(beat.call_args.kwargs["leader_only"])
+
+    def test_a_fresh_scan_waits_and_an_hour_old_one_runs(self):
+        self.assertFalse(self.due(saved([], checked_at=self.NOW - 600), self.NOW)[0])
+        self.assertTrue(self.due(saved([], checked_at=self.NOW - EXPIRY.SCAN_EVERY), self.NOW)[0])
+
+    def test_a_scan_that_could_not_read_is_tried_again_sooner(self):
+        rep = saved([], errors={"tls-secrets": "403"}, checked_at=self.NOW - EXPIRY.RETRY_EVERY)
+        self.assertTrue(self.due(rep, self.NOW)[0])
+
+    def test_one_scan_at_a_time_and_not_again_at_once_after_a_failure(self):
+        EXPIRY._scan["running"] = True
+        self.assertFalse(self.due(None, self.NOW)[0])
+        EXPIRY._scan.update(running=False, tried=self.NOW - 10)
+        self.assertFalse(self.due(None, self.NOW)[0])
+
+    def test_a_failed_scan_beats_its_error(self):
+        with mock.patch.object(EXPIRY, "load", return_value=None), \
+                mock.patch.object(EXPIRY, "scan", side_effect=OSError("data volume is read-only")), \
+                mock.patch.object(EXPIRY.LEADER, "is_leader", return_value=True), \
+                mock.patch.object(EXPIRY.HEARTBEATS, "beat") as beat:
+            EXPIRY.start_scan_if_due(self.NOW, wait=True)
+        self.assertIn("read-only", str(beat.call_args.args[2]))
+        self.assertFalse(EXPIRY._scan["running"])
+
+
+class AlertTests(unittest.TestCase):
+    NOW = 1_800_000_000
+
+    def facts(self, rep, keys=()):
+        with mock.patch.object(EXPIRY, "start_scan_if_due") as start, mock.patch.object(EXPIRY, "load", return_value=rep), \
+                mock.patch.object(EXPIRY.KEYS, "list_keys", return_value=list(keys)):
+            out = EXPIRY.alert_facts(self.NOW)
+        start.assert_called_once_with(self.NOW)
+        return out
+
+    def test_certificates_inside_the_window_alert(self):
+        rows = [cert_row("tls-secret", "lab", "web-tls", self.NOW + 10 * DAY),
+                cert_row("certificate", "apps", "wiki", self.NOW + 3 * DAY),
+                cert_row("webhook-ca", "", "virt-api", self.NOW + DAY, renews=True),
+                cert_row("api-server", "", "Kubernetes API server", self.NOW + 300 * DAY)]
+        facts = {f["key"]: f for f in self.facts(saved(rows))}
+        self.assertEqual(set(facts), {"expiry:tls-secret:lab/web-tls", "expiry:certificate:apps/wiki"})
+        web, wiki = facts["expiry:tls-secret:lab/web-tls"], facts["expiry:certificate:apps/wiki"]
+        self.assertEqual((web["severity"], web["category"]), ("degraded", "degraded"))
+        self.assertEqual((wiki["severity"], wiki["category"]), ("critical", "outage"))
+        self.assertEqual(web["title"], "TLS Secret lab/web-tls expires in 10 days")
+        self.assertEqual(web["href"], "/networking?tab=expiry")
+        self.assertGreater(wiki["signals"]["nearness"], web["signals"]["nearness"])
+
+    def test_an_expired_self_rotating_ca_alerts(self):
+        facts = self.facts(saved([cert_row("webhook-ca", "", "virt-api", self.NOW - DAY, renews=True)]))
+        self.assertEqual(facts[0]["title"], "Webhook CA virt-api has expired")
+        self.assertEqual(facts[0]["severity"], "critical")
+
+    def test_a_source_that_could_not_be_read_keeps_its_alerts(self):
+        facts = self.facts(saved([], errors={"tls-secrets": "403"}))
+        self.assertIn({"unknown_prefix": "expiry:tls-secret:"}, facts)
+        facts = self.facts(saved([], partial=True))
+        self.assertIn({"unknown_prefix": "expiry:tls-secret:"}, facts)
+
+    def test_no_scan_yet_keeps_every_certificate_alert(self):
+        facts = self.facts(None)
+        self.assertEqual({f["unknown_prefix"] for f in facts},
+                         {f"expiry:{k}:" for k in EXPIRY.SOURCE_KINDS.values()})
+
+    def test_api_keys_alert_once_without_names_or_owners(self):
+        keys = [api_key("backup-script", "alice", self.NOW - 80 * DAY, self.NOW + 10 * DAY),
+                api_key("grafana", "bob", self.NOW - 100 * DAY, self.NOW + 5 * DAY),
+                api_key("far-off", "carol", self.NOW - 10 * DAY, self.NOW + 200 * DAY),
+                api_key("made-short", "dave", self.NOW - DAY, self.NOW + 6 * DAY)]
+        facts = [f for f in self.facts(saved([]), keys) if "key" in f]
+        self.assertEqual(len(facts), 1)
+        fact = facts[0]
+        self.assertEqual(fact["key"], "expiry:api-keys")
+        self.assertEqual(fact["severity"], "critical")
+        self.assertEqual(fact["title"], "2 Homestead API keys expire within 21 days")
+        text = json.dumps(fact)
+        for private in ("backup-script", "grafana", "alice", "bob", "dave", "made-short"):
+            self.assertNotIn(private, text)
+
+
+class WiringTests(unittest.TestCase):
+    def test_the_alert_loop_reads_the_expiry_watch(self):
+        import homestead_overview_server as OV
+        with mock.patch.object(OV.EXPIRY, "alert_facts", return_value=["expiry-facts"]), \
+                mock.patch.object(OV, "_last_update_scan", [time.time()]):
+            self.assertEqual(OV._alert_sources()["expiry"], ["expiry-facts"])
+
+    def test_settings_names_the_scan(self):
+        import homestead_self_health as SELF_HEALTH
+        self.assertEqual(SELF_HEALTH.LOOP_WORDS["expiry"], "Certificate expiry check")
+
+
+class RouteTests(unittest.TestCase):
+    NOW = 1_800_000_000
+
+    def test_certificates_are_for_viewers_and_keys_for_admins(self):
+        import homestead_route_policy as POLICY
+        self.assertEqual(POLICY.role("/api/expiry", "GET"), "viewer")
+        self.assertEqual(POLICY.role("/api/expiry/keys", "GET"), "admin")
+
+    def test_the_viewer_answer_has_no_keys_and_no_names_from_inside_a_certificate(self):
+        rows = [cert_row("tls-secret", "lab", "web-tls", self.NOW + 10 * DAY)]
+        with mock.patch.object(EXPIRY, "load", return_value=saved(rows)):
+            answer = EXPIRY.ROUTES[("GET", "/api/expiry")][1](mock.Mock())
+        self.assertEqual([r["kind"] for r in answer["items"]], ["tls-secret"])
+        self.assertEqual(set(answer["items"][0]), set(EXPIRY.ROW_FIELDS))
+
+    def test_before_the_first_scan_the_answer_says_so(self):
+        with mock.patch.object(EXPIRY, "load", return_value=None):
+            answer = EXPIRY.ROUTES[("GET", "/api/expiry")][1](mock.Mock())
+        self.assertIsNone(answer["checked_at"])
+        self.assertEqual(answer["items"], [])
+
+    def test_keys_list_api_keys_and_the_linked_cluster_key(self):
+        keys = [api_key("backup-script", "alice", self.NOW - 80 * DAY, self.NOW + 10 * DAY),
+                api_key("old", "bob", self.NOW - 400 * DAY, self.NOW - 40 * DAY)]
+        with mock.patch.object(EXPIRY.KEYS, "list_keys", return_value=keys), \
+                mock.patch.object(EXPIRY.FLEET, "linked", return_value=True):
+            answer = EXPIRY.keys(self.NOW)
+        rows = {r["name"]: r for r in answer["items"]}
+        self.assertEqual(set(rows), {"backup-script", "Linked-cluster key"})
+        self.assertEqual(rows["backup-script"]["state"], "warn")
+        self.assertEqual(rows["backup-script"]["owner"], "alice")
+        self.assertEqual(rows["Linked-cluster key"]["state"], "no-expiry")
+        with mock.patch.object(EXPIRY.KEYS, "list_keys", return_value=[]), \
+                mock.patch.object(EXPIRY.FLEET, "linked", return_value=False):
+            self.assertEqual(EXPIRY.keys(self.NOW)["items"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

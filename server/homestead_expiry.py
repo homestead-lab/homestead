@@ -38,8 +38,11 @@ import threading
 import time
 import urllib.parse
 
+import homestead_api_keys as KEYS
+import homestead_fleet as FLEET
 import homestead_heartbeats as HEARTBEATS
 import homestead_kube as KUBE
+import homestead_leader as LEADER
 import homestead_shared as SHARED
 
 DAY = 86400
@@ -375,3 +378,148 @@ def refresh(rep, now=None):
                        state=state_for(row["not_after"], now, row["renews"], row["overdue"]))
         rows.append(row)
     return {**rep, "items": rows, "counts": _summarise(rows, now), "warn_days": WARN_DAYS, "critical_days": CRITICAL_DAYS}
+
+
+_scan = {"running": False, "tried": 0}
+_scan_lock = threading.Lock()
+
+
+def start_scan_if_due(now=None, wait=False):
+    """Start a scan in its own thread when the last is SCAN_EVERY old
+    (RETRY_EVERY when a source could not be read), unless one is running or
+    one was tried RETRY_EVERY ago. The alert loop calls it; only the leader
+    scans. True when one started."""
+    if not LEADER.is_leader():
+        return False
+    now = time.time() if now is None else now
+    try:
+        last = load()
+    except SHARED.Unreadable:
+        last = None
+    every = RETRY_EVERY if last and (last.get("errors") or last.get("partial")) else SCAN_EVERY
+    with _scan_lock:
+        if (_scan["running"] or now - _scan["tried"] < RETRY_EVERY
+                or (last and now - last["checked_at"] < every)):
+            return False
+        _scan.update(running=True, tried=now)
+
+    def work():
+        try:
+            scan()
+            HEARTBEATS.beat("expiry", SCAN_EVERY, leader_only=True)
+        except Exception as error:
+            HEARTBEATS.beat("expiry", SCAN_EVERY, _say(error), leader_only=True)
+        finally:
+            with _scan_lock:
+                _scan["running"] = False
+
+    thread = threading.Thread(target=work, name="expiry-scan", daemon=True)
+    thread.start()
+    if wait:
+        thread.join()
+    return True
+
+
+# --------------------------------------------------------------- alerts
+KIND_WORDS = {"certificate": "Certificate", "tls-secret": "TLS Secret", "webhook-ca": "Webhook CA",
+              "api-server": "Kubernetes API server certificate"}
+
+
+def nearness(days):
+    """Grows as it gets worse, so an acknowledged alert comes back when it
+    does: 0 inside the warning window, 1 inside a week, 2 inside a day, 3 expired."""
+    return 3 if days < 0 else 2 if days < 1 else 1 if days <= CRITICAL_DAYS else 0
+
+
+def _what(row):
+    if row["kind"] == "api-server":
+        return "The Kubernetes API server's certificate"
+    where = f"{row['namespace']}/{row['name']}" if row["namespace"] else row["name"]
+    return f"{KIND_WORDS.get(row['kind'], row['kind'])} {where}"
+
+
+def _in_days(days):
+    days = max(0, int(days))
+    return "today" if days == 0 else f"in {days} day{'s' if days != 1 else ''}"
+
+
+def _key_facts(now):
+    """API keys made to last over SHORT_LIVED that expire within WARN_DAYS: one
+    alert, with no key's name or owner, since every account sees alerts and
+    the key list is for admins."""
+    soon = [k for k in KEYS.list_keys()
+            if now < k["expires"] <= now + WARN_DAYS * DAY and k["expires"] - k["created"] > SHORT_LIVED]
+    if not soon:
+        return []
+    days = (min(k["expires"] for k in soon) - now) / DAY
+    count = len(soon)
+    words = "API key expires" if count == 1 else "API keys expire"
+    critical = days <= CRITICAL_DAYS
+    return [{"key": "expiry:api-keys", "category": "outage" if critical else "degraded",
+             "severity": "critical" if critical else "degraded",
+             "title": f"{count} Homestead {words} within {WARN_DAYS} days",
+             "body": f"The first stops working {_in_days(days)}. An admin sees which under Settings, Access.",
+             "resolved": f"No Homestead API key expires within {WARN_DAYS} days",
+             "href": "/settings?tab=access", "signals": {"keys": count, "nearness": nearness(days)}}]
+
+
+def alert_facts(now=None):
+    """Alerts for what expires within WARN_DAYS (critical within
+    CRITICAL_DAYS), and for what renews itself only once it has expired.
+    A source that could not be read keeps its alerts (unknown_prefix)."""
+    now = time.time() if now is None else now
+    start_scan_if_due(now)
+    rep = load()
+    facts = []
+    if rep is None:
+        facts += [{"unknown_prefix": f"expiry:{kind}:"} for kind in SOURCE_KINDS.values()]
+    else:
+        rep = refresh(rep, now)
+        failed = set(rep.get("errors") or {}) | ({"tls-secrets"} if rep.get("partial") else set())
+        facts += [{"unknown_prefix": f"expiry:{SOURCE_KINDS[s]}:"} for s in sorted(failed) if s in SOURCE_KINDS]
+        for r in rep["items"]:
+            if r["state"] not in ("expired", "critical", "warn"):
+                continue
+            days = (r["not_after"] - now) / DAY
+            critical = r["state"] != "warn"
+            what = _what(r)
+            facts.append({"key": f"expiry:{r['kind']}:{r['namespace']}/{r['name']}",
+                          "category": "outage" if critical else "degraded",
+                          "severity": "critical" if critical else "degraded",
+                          "title": f"{what} has expired" if r["state"] == "expired" else f"{what} expires {_in_days(days)}",
+                          "body": r["note"] or "Nothing renews it: replace it before it expires.",
+                          "resolved": f"{what} no longer expires within {WARN_DAYS} days",
+                          "href": "/networking?tab=expiry", "signals": {"nearness": nearness(days)}})
+    return facts + _key_facts(now)
+
+
+# --------------------------------------------------------------- routes
+def report(now=None):
+    """The last scan for the page, its days counted for now; checked_at is
+    None before the first."""
+    rep = load()
+    if rep is None:
+        return {"checked_at": None, "items": [], "counts": {s: 0 for s in STATES}, "errors": {}, "partial": False,
+                "warn_days": WARN_DAYS, "critical_days": CRITICAL_DAYS}
+    return refresh(rep, now)
+
+
+def keys(now=None):
+    """Homestead's API keys (and the linked-cluster key): admin only, as the
+    key list is."""
+    now = time.time() if now is None else now
+    rows = []
+    for k in KEYS.list_keys():
+        if k["expires"] < now - SHORT_LIVED:
+            continue            # long gone: the key list still has it
+        rows.append({**_row("api-key", "", k["name"], k["expires"], now), "owner": k["owner"]})
+    if FLEET.linked():
+        rows.append({**_row("fleet-key", "", "Linked-cluster key", None, now,
+                            note="It has no expiry; it changes when a cluster is unlinked"), "state": "no-expiry"})
+    return {"items": rows, "warn_days": WARN_DAYS, "critical_days": CRITICAL_DAYS}
+
+
+ROUTES = {
+    ("GET", "/api/expiry"): ("viewer", lambda request: report()),
+    ("GET", "/api/expiry/keys"): ("admin", lambda request: keys()),
+}
