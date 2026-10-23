@@ -78,5 +78,194 @@ class Marks(unittest.TestCase):
                                                self.marked('{"at":5,"by":"' + "0" * 32 + '"}')))
 
 
+import homestead_fs_freeze as F
+
+LH = F.LH
+SETTING_PATH = f"{LH}/settings/{F.SETTING}"
+
+
+def lh_volume(name, mode="ignored", engine="v1", access="rwo", frontend="blockdev", pv=None, claim="data"):
+    spec = {"freezeFilesystemForSnapshot": mode, "dataEngine": engine, "accessMode": access, "frontend": frontend}
+    if mode is None:
+        spec.pop("freezeFilesystemForSnapshot")
+    return {"metadata": {"name": name, "namespace": "longhorn-system"}, "spec": spec,
+            "status": {"kubernetesStatus": {"namespace": "lab", "pvcName": claim, "pvName": pv or name}}}
+
+
+def pv(name, mode="Filesystem"):
+    return {"metadata": {"name": name}, "spec": {"volumeMode": mode, "csi": {"driver": "driver.longhorn.io"}}}
+
+
+def node(name, kernel):
+    return {"metadata": {"name": name}, "status": {"nodeInfo": {"kernelVersion": kernel}}}
+
+
+class Cluster:
+    """What Homestead reads, by path; a missing path is a 404, a path set to an
+    int is that HTTP error."""
+
+    def __init__(self, value='{"v1":"false"}', annotations=None, version="v1.13.0"):
+        self.objects = {
+            f"{LH}/volumes": {"items": []},
+            f"{LH}/nodes": {"items": [{"metadata": {"name": "node-1"}}, {"metadata": {"name": "node-2"}}]},
+            "/api/v1/nodes": {"items": [node("node-1", "6.8.0-45-generic"), node("node-2", "6.8.0-45-generic")]},
+            "/api/v1/persistentvolumes": {"items": []},
+            f"{LH}/settings/current-longhorn-version": {"value": version},
+        }
+        if value is not None:
+            self.objects[SETTING_PATH] = {"metadata": {"name": F.SETTING, "annotations": annotations or {}}, "value": value}
+        self.sent = []
+
+    def volumes(self, *rows):
+        self.objects[f"{LH}/volumes"] = {"items": list(rows)}
+        return self
+
+    def pvs(self, *rows):
+        self.objects["/api/v1/persistentvolumes"] = {"items": list(rows)}
+        return self
+
+    def get(self, path, **options):
+        found = self.objects.get(path)
+        if found is None or isinstance(found, int):
+            raise urllib.error.HTTPError(path, found or 404, "error", {}, None)
+        return json.loads(json.dumps(found))
+
+    def send(self, method, path, body=None, ctype=None, **options):
+        self.sent.append((method, path, body, ctype))
+        return {}
+
+
+class WithCluster(unittest.TestCase):
+    def use(self, cluster):
+        for name, value in (("kget", cluster.get), ("ksend", cluster.send)):
+            patcher = mock.patch.object(F, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        return cluster
+
+
+class Values(unittest.TestCase):
+    def test_plain_and_per_engine_values(self):
+        self.assertEqual(F.parse_value("true"), (True, "plain"))
+        self.assertEqual(F.parse_value("False"), (False, "plain"))
+        self.assertEqual(F.parse_value('{"v1":"false"}'), (False, "json"))
+        self.assertEqual(F.parse_value('{"v1": "true"}'), (True, "json"))
+
+    def test_odd_values_are_unknown(self):
+        for raw in ("", "maybe", None, '{"v2":"true"}', "{broken", '["true"]', '{"v1":true}'):
+            self.assertIsNone(F.parse_value(raw)[0], raw)
+
+    def test_a_write_keeps_the_format_it_found(self):
+        self.assertEqual(F.encode_value(True, "false"), "true")
+        self.assertEqual(F.encode_value(False, "true"), "false")
+        self.assertEqual(json.loads(F.encode_value(True, '{"v1":"false"}')), {"v1": "true"})
+        self.assertEqual(json.loads(F.encode_value(True, '{"v1":"false","v2":"x"}')), {"v1": "true", "v2": "x"})
+        self.assertEqual(json.loads(F.encode_value(True, "{broken")), {"v1": "true"})
+        self.assertEqual(F.encode_value(True, ""), "true")
+
+    def test_kernels_at_or_below_5_17_are_old(self):
+        for kernel, old in (("5.15.0-91-generic", True), ("5.17.0", True), ("5.18.1", False),
+                            ("6.1.0+rpt-rpi-v8", False), ("7.0.0-1020-raspi", False), ("4.19.0", True),
+                            ("", None), ("unknown", None), (None, None)):
+            self.assertEqual(F.kernel_old(kernel), old, kernel)
+
+
+class Status(WithCluster):
+    def test_longhorn_without_the_setting_says_why(self):
+        self.use(Cluster(value=None, version="v1.6.2"))
+        d = F.status()
+        self.assertFalse(d["supported"])
+        self.assertIn("v1.6.2", d["why"])
+        self.assertIn("1.7", d["why"])
+        self.assertEqual(d["volumes"], [])
+
+    def test_a_setting_that_cannot_be_read_is_an_error_not_unsupported(self):
+        cluster = Cluster()
+        cluster.objects[SETTING_PATH] = 403
+        self.use(cluster)
+        with self.assertRaises(urllib.error.HTTPError):
+            F.status()
+
+    def test_off_on_this_cluster(self):
+        self.use(Cluster().volumes(lh_volume("pvc-a"), lh_volume("pvc-b")).pvs(pv("pvc-a"), pv("pvc-b")))
+        d = F.status()
+        self.assertTrue(d["supported"])
+        self.assertFalse(d["enabled"])
+        self.assertEqual(d["version"], "v1.13.0")
+        self.assertEqual([v["freezes"] for v in d["volumes"]], ["no", "no"])
+        self.assertEqual(d["counts"], {"total": 2, "freezing": 0})
+
+    def test_each_volume_follows_the_cluster_unless_it_says_otherwise(self):
+        self.use(Cluster(value="true").volumes(
+            lh_volume("pvc-a"), lh_volume("pvc-b", mode="disabled"), lh_volume("pvc-c", mode=None),
+            lh_volume("pvc-d", mode="enabled")).pvs(pv("pvc-a"), pv("pvc-b"), pv("pvc-c"), pv("pvc-d")))
+        d = F.status()
+        self.assertTrue(d["enabled"])
+        rows = {v["name"]: v for v in d["volumes"]}
+        self.assertEqual(rows["pvc-a"]["freezes"], "yes")
+        self.assertEqual(rows["pvc-b"]["freezes"], "no")
+        self.assertEqual(rows["pvc-c"]["mode"], "ignored")
+        self.assertEqual(rows["pvc-c"]["freezes"], "yes")
+        self.assertEqual(rows["pvc-a"]["claim"], "lab/data")
+        self.assertEqual(d["counts"], {"total": 4, "freezing": 3})
+
+    def test_an_override_freezes_with_the_cluster_off(self):
+        self.use(Cluster().volumes(lh_volume("pvc-a", mode="enabled")).pvs(pv("pvc-a")))
+        self.assertEqual(F.status()["volumes"][0]["freezes"], "yes")
+
+    def test_volumes_longhorn_cannot_freeze(self):
+        self.use(Cluster(value='{"v1":"true"}').volumes(
+            lh_volume("pvc-v2", engine="v2"), lh_volume("pvc-vm"), lh_volume("pvc-rwx", access="rwx"),
+            lh_volume("pvc-iscsi", frontend="iscsi")).pvs(pv("pvc-v2"), pv("pvc-vm", "Block"), pv("pvc-rwx"), pv("pvc-iscsi")))
+        rows = {v["name"]: v for v in F.status()["volumes"]}
+        self.assertEqual(rows["pvc-v2"]["freezes"], "no")
+        self.assertIn("V2", rows["pvc-v2"]["why"])
+        self.assertEqual(rows["pvc-vm"]["freezes"], "sync")
+        self.assertIn("block", rows["pvc-vm"]["why"].lower())
+        self.assertEqual(rows["pvc-rwx"]["freezes"], "sync")
+        self.assertIn("shared", rows["pvc-rwx"]["why"].lower())
+        self.assertEqual(rows["pvc-iscsi"]["freezes"], "sync")
+
+    def test_a_volume_without_a_pv_or_kubernetes_status_is_still_listed(self):
+        bare = {"metadata": {"name": "pvc-bare"}, "spec": {"freezeFilesystemForSnapshot": "ignored"}}
+        self.use(Cluster(value="true").volumes(bare, lh_volume("pvc-x", pv="pv-gone")))
+        rows = {v["name"]: v for v in F.status()["volumes"]}
+        self.assertEqual(rows["pvc-bare"]["claim"], "")
+        self.assertEqual(rows["pvc-bare"]["volume_mode"], "unknown")
+        self.assertEqual(rows["pvc-bare"]["freezes"], "yes")
+        self.assertEqual(rows["pvc-x"]["volume_mode"], "unknown")
+
+    def test_an_unknown_value_is_said_and_counts_as_off(self):
+        self.use(Cluster(value="maybe").volumes(lh_volume("pvc-a")).pvs(pv("pvc-a")))
+        d = F.status()
+        self.assertTrue(d["unknown_value"])
+        self.assertFalse(d["enabled"])
+        self.assertEqual(d["value"], "maybe")
+
+    def test_old_kernels_on_longhorn_hosts_are_named(self):
+        cluster = Cluster()
+        cluster.objects["/api/v1/nodes"]["items"] = [node("node-1", "5.15.0-91-generic"), node("node-2", "6.8.0"),
+                                                      node("not-storage", "5.4.0")]
+        self.use(cluster)
+        self.assertEqual(F.status()["old_kernels"], [{"host": "node-1", "kernel": "5.15.0-91-generic"}])
+
+    def test_a_value_the_longhorn_chart_sets_is_said(self):
+        cluster = Cluster()
+        self.use(cluster)
+        self.assertFalse(F.status()["from_chart"])
+        cluster.objects["/api/v1/namespaces/longhorn-system/configmaps/longhorn-default-setting"] = {
+            "data": {"default-setting.yaml": 'default-replica-count: "2"\nfreeze-filesystem-for-snapshot: "true"\n'}}
+        self.assertTrue(F.status()["from_chart"])
+        cluster.objects["/api/v1/namespaces/longhorn-system/configmaps/longhorn-default-setting"] = {
+            "data": {"default-setting.yaml": 'default-replica-count: "2"\n'}}
+        self.assertFalse(F.status()["from_chart"])
+
+    def test_who_changed_it_when_the_mark_checks_out(self):
+        with mock.patch.object(F.CHANGES, "object_author", return_value={"who": "alice", "at": 5}) as author:
+            self.use(Cluster(value="true"))
+            self.assertEqual(F.status()["changed"], {"who": "alice", "at": 5})
+        self.assertEqual(author.call_args[0][:3], ("Setting", "longhorn-system", F.SETTING))
+
+
 if __name__ == "__main__":
     unittest.main()
