@@ -22,15 +22,23 @@ const EXPIRY_SOURCE = { "certificates": "cert-manager Certificates", "tls-secret
   "webhook-cas": "Webhook CAs", "api-server": "the Kubernetes API server's certificate", "keys": "Homestead's keys" };
 const EXPIRY_SOON = ["expired", "critical", "warn"];
 
+/* Why "nothing expires" cannot be said: a source not read, a Secret list cut
+   short, or a check that has not run for hours. "" when all was read. */
+function expiryGap(d, failed) {
+  if (!d?.checked_at) return "not checked yet";
+  if (d.stale) return "the check has not run for hours";
+  if (failed) return `could not read ${plural(failed, "source")}`;
+  if (d.partial) return `only the first ${d.max_secrets || 2000} TLS Secrets were checked`;
+  return "";
+}
+
 /* The section's line in the Networking list. It never says nothing is
-   expiring when a source could not be read, or before the first check. */
+   expiring when something could not be checked. */
 function expiryLine(d) {
-  if (!d?.checked_at) return "Not checked yet";
-  const failed = Object.keys(d.errors || {}).length;
-  const soon = EXPIRY_SOON.reduce((n, s) => n + (d.counts?.[s] || 0), 0);
-  if (soon) return `${plural(soon, "item")} expiring within ${d.warn_days} days`;
-  if (failed) return `Could not read ${plural(failed, "source")}`;
-  return `${d.items.length} watched, none expiring soon`;
+  const soon = EXPIRY_SOON.reduce((n, s) => n + (d?.counts?.[s] || 0), 0);
+  if (soon && d.checked_at) return `${plural(soon, "item")} expiring within ${d.warn_days} days`;
+  const gap = expiryGap(d, Object.keys(d?.errors || {}).length);
+  return gap ? gap[0].toUpperCase() + gap.slice(1) : `${d.items.length} watched, none expiring soon`;
 }
 
 function expiryWhen(r) {
@@ -66,15 +74,17 @@ async function viewExpiry() {
     .filter(Boolean).map(([key, label]) => `<button type="button" class="pf-chip" aria-pressed="${EXPIRY_FILTER === key}"
       onclick="expiryFilter(${esc(jsArg(key))})">${esc(label)} <span class="pf-n">${items.filter(groups[key]).length}</span></button>`).join("");
   const checked = d.checked_at ? `checked ${esc(agoText(d.checked_at))}` : "not checked yet";
+  const gap = d.checked_at ? expiryGap(d, errors.length) : "";
   const verdict = soon ? `<span class="needs-attention">${plural(soon, "item")} expiring within ${d.warn_days} days</span>`
-    : !d.checked_at ? "" : errors.length ? `<span class="needs-attention">could not read ${plural(errors.length, "source")}</span>`
-    : `nothing expires within ${d.warn_days} days`;
+    : !d.checked_at ? "" : gap ? `<span class="needs-attention">${esc(gap)}</span>` : `nothing expires within ${d.warn_days} days`;
   networkPage("expiry", `
     ${summaryLine("expiry", [`<b>${items.length}</b> watched`, verdict, checked].filter(Boolean))}
     ${!d.checked_at ? UI.callout("info", "Not checked yet",
       "Homestead checks certificates about once an hour. The first check starts shortly after Homestead does.") : ""}
     ${errors.length ? UI.callout("warn", "Could not read everything: what is missing here is not known to be fine",
       errors.map(([k, v]) => `<div><b>Could not read ${esc(EXPIRY_SOURCE[k] || k)}</b>: <span class="dim small">${esc(v)}</span></div>`).join("")) : ""}
+    ${d.stale ? UI.callout("warn", `The check has not run since ${agoText(d.checked_at)}`,
+      "These are the dates from that check. Settings, Homestead's health, says whether the certificate expiry check is running.") : ""}
     ${d.partial ? UI.callout("warn", `Only the first ${d.max_secrets || 2000} TLS Secrets were checked`,
       "The cluster has more. The rest are not known to be fine.") : ""}
     ${UI.stats([

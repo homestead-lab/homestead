@@ -3039,7 +3039,7 @@ ssh_pwauth: true
     const order = ["expired", "critical", "warn", "unknown", "ok", "renews"];
     items.sort((a, b) => (order.indexOf(a.state) - order.indexOf(b.state)) || ((a.not_after ?? 1e12) - (b.not_after ?? 1e12)));
     return { checked_at: Math.round(expiryNow() - 1260), items, counts: Object.fromEntries(order.map(s => [s, items.filter(r => r.state === s).length])),
-      errors: {}, partial: false, max_secrets: 2000, warn_days: 21, critical_days: 7 };
+      errors: {}, partial: false, stale: false, max_secrets: 2000, warn_days: 21, critical_days: 7 };
   };
   responses["/api/expiry/keys"] = () => ({ warn_days: 21, critical_days: 7, items: [
     ...demoKeys.keys.map(k => ({ ...expiryRow("api-key", "", k.name, (k.expires - expiryNow()) / 86400), owner: k.owner })),

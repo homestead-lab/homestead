@@ -55,6 +55,7 @@ SHORT_LIVED = 30 * DAY        # nobody issues a certificate this short by hand: 
 RENEWAL_GRACE = DAY           # cert-manager's renewalTime this far past is overdue
 SCAN_EVERY = 3600
 RETRY_EVERY = 300             # after a scan where a source could not be read
+STALE_AFTER = 3 * SCAN_EVERY   # a scan older than this is not judged again for alerts
 PAGE = 250
 MAX_SECRETS = 2000
 HANDSHAKE_TIMEOUT = 5
@@ -217,12 +218,17 @@ def certificates(now):
         if not status.get("notAfter"):
             rows.append(_row("certificate", ns, name, None, now, note="Not issued yet"))
             continue
-        renewal = _when(status["renewalTime"]) if status.get("renewalTime") else None
+        try:
+            renewal = _when(status["renewalTime"]) if status.get("renewalTime") else None
+            not_after = _when(status["notAfter"])
+        except (TypeError, ValueError):
+            rows.append(_row("certificate", ns, name, None, now, note="Homestead could not read its dates"))
+            continue
         overdue = renewal is not None and renewal < now - RENEWAL_GRACE
         is_ready = ready.get("status") == "True"
         note = ("Renewal is overdue: cert-manager has not renewed it" if overdue
                 else "" if is_ready else f"Not ready: {str(ready.get('reason') or 'no reason given')[:80]}")
-        rows.append(_row("certificate", ns, name, _when(status["notAfter"]), now,
+        rows.append(_row("certificate", ns, name, not_after, now,
                          renews=is_ready and renewal is not None and not overdue, overdue=overdue,
                          note=note or "cert-manager renews it"))
     return rows, owned
@@ -261,7 +267,7 @@ def tls_secrets(now, owned):
             crt = (s.get("data") or {}).get("tls.crt") or ""
             try:
                 v = validity(pem_certs(base64.b64decode(crt).decode("ascii"))[0])
-            except (ValueError, UnicodeDecodeError):
+            except (TypeError, ValueError):     # binascii.Error and UnicodeDecodeError are ValueErrors
                 rows.append(_row("tls-secret", ns, name, None, now,
                                  note="Homestead could not read the certificate in tls.crt"))
                 continue
@@ -285,16 +291,20 @@ def webhook_cas(now):
                 bundle = (hook.get("clientConfig") or {}).get("caBundle") if isinstance(hook, dict) else None
                 if not bundle:
                     continue
+                name = meta.get("name", "")
                 try:
                     latest = max((validity(der) for der in pem_certs(base64.b64decode(bundle).decode("ascii"))),
                                  key=lambda v: v["not_after"])
-                except (ValueError, UnicodeDecodeError):
+                except (TypeError, ValueError):
+                    found.setdefault(name, (meta, None))
                     continue
-                name = meta.get("name", "")
-                if name not in found or latest["not_after"] < found[name][1]["not_after"]:
+                if name not in found or found[name][1] is None or latest["not_after"] < found[name][1]["not_after"]:
                     found[name] = (meta, latest)
     rows = []
     for name, (meta, v) in sorted(found.items()):
+        if v is None:
+            rows.append(_row("webhook-ca", "", name, None, now, note="Homestead could not read its CA bundle"))
+            continue
         lifetime = v["not_after"] - v["not_before"]
         renews = self_rotating(meta, lifetime)
         rows.append(_row("webhook-ca", "", name, v["not_after"], now, renews=renews,
@@ -355,7 +365,12 @@ def scan(now=None):
             rows += read(now)
         except Exception as error:
             errors[source] = _say(error)
+    try:
+        before = (load() or {}).get("failed_scans") or 0
+    except SHARED.Unreadable:
+        before = 0
     report = {"checked_at": int(now), "items": rows, "counts": _summarise(rows, now), "errors": errors,
+              "failed_scans": before + 1 if errors else 0,
               "partial": partial, "max_secrets": MAX_SECRETS, "warn_days": WARN_DAYS, "critical_days": CRITICAL_DAYS}
     SHARED.write_json(_path(), report)
     return report
@@ -384,11 +399,33 @@ _scan = {"running": False, "tried": 0}
 _scan_lock = threading.Lock()
 
 
+SOURCE_WORDS = {"certificates": "cert-manager Certificates", "tls-secrets": "TLS Secrets",
+                "webhook-cas": "webhook CAs", "api-server": "the API server's certificate"}
+
+
+def _beat(rep):
+    """Settings' line for the scan: failing while a source could not be read."""
+    failed = sorted((rep or {}).get("errors") or {})
+    if failed:
+        HEARTBEATS.beat("expiry", SCAN_EVERY, "Could not read " + ", ".join(SOURCE_WORDS.get(s, s) for s in failed),
+                        leader_only=True)
+    else:
+        HEARTBEATS.beat("expiry", SCAN_EVERY, leader_only=True)
+
+
+def _every(rep):
+    """How long a scan holds: SCAN_EVERY, or after one where a source could
+    not be read RETRY_EVERY, doubling with each such scan in a row up to
+    SCAN_EVERY. A partial Secret list is not retried sooner: over the cap
+    every scan is partial."""
+    failed = rep.get("failed_scans") or (1 if rep.get("errors") else 0)
+    return min(SCAN_EVERY, RETRY_EVERY * 2 ** (failed - 1)) if failed else SCAN_EVERY
+
+
 def start_scan_if_due(now=None, wait=False):
-    """Start a scan in its own thread when the last is SCAN_EVERY old
-    (RETRY_EVERY when a source could not be read), unless one is running or
-    one was tried RETRY_EVERY ago. The alert loop calls it; only the leader
-    scans. True when one started."""
+    """Start a scan in its own thread when the last has held its time
+    (_every), unless one is running or one was tried RETRY_EVERY ago. The
+    alert loop calls it; only the leader scans. True when one started."""
     if not LEADER.is_leader():
         return False
     now = time.time() if now is None else now
@@ -396,17 +433,21 @@ def start_scan_if_due(now=None, wait=False):
         last = load()
     except SHARED.Unreadable:
         last = None
-    every = RETRY_EVERY if last and (last.get("errors") or last.get("partial")) else SCAN_EVERY
     with _scan_lock:
         if (_scan["running"] or now - _scan["tried"] < RETRY_EVERY
-                or (last and now - last["checked_at"] < every)):
-            return False
-        _scan.update(running=True, tried=now)
+                or (last and now - last["checked_at"] < _every(last))):
+            fresh = not _scan["running"] and last is not None and last["checked_at"] >= int(_scan["tried"])
+        else:
+            fresh = None
+            _scan.update(running=True, tried=now)
+    if fresh is not None:
+        if fresh:
+            _beat(last)         # the leader's last scan still holds: say how it went
+        return False
 
     def work():
         try:
-            scan()
-            HEARTBEATS.beat("expiry", SCAN_EVERY, leader_only=True)
+            _beat(scan())
         except Exception as error:
             HEARTBEATS.beat("expiry", SCAN_EVERY, _say(error), leader_only=True)
         finally:
@@ -466,30 +507,36 @@ def _key_facts(now):
 def alert_facts(now=None):
     """Alerts for what expires within WARN_DAYS (critical within
     CRITICAL_DAYS), and for what renews itself only once it has expired.
-    A source that could not be read keeps its alerts (unknown_prefix)."""
+    A source that could not be read keeps its alerts (unknown_prefix), and
+    so does everything when there is no scan yet or the last is stale: old
+    dates are not judged again (a 2-day CA would cross its old notAfter).
+    A partial Secret list holds nothing: over the cap every scan is partial,
+    and holding would keep a renewed Secret's alert for ever."""
     now = time.time() if now is None else now
     start_scan_if_due(now)
     rep = load()
-    facts = []
-    if rep is None:
-        facts += [{"unknown_prefix": f"expiry:{kind}:"} for kind in SOURCE_KINDS.values()]
-    else:
-        rep = refresh(rep, now)
-        failed = set(rep.get("errors") or {}) | ({"tls-secrets"} if rep.get("partial") else set())
-        facts += [{"unknown_prefix": f"expiry:{SOURCE_KINDS[s]}:"} for s in sorted(failed) if s in SOURCE_KINDS]
-        for r in rep["items"]:
-            if r["state"] not in ("expired", "critical", "warn"):
-                continue
-            days = (r["not_after"] - now) / DAY
-            critical = r["state"] != "warn"
-            what = _what(r)
-            facts.append({"key": f"expiry:{r['kind']}:{r['namespace']}/{r['name']}",
-                          "category": "outage" if critical else "degraded",
-                          "severity": "critical" if critical else "degraded",
-                          "title": f"{what} has expired" if r["state"] == "expired" else f"{what} expires {_in_days(days)}",
-                          "body": r["note"] or "Nothing renews it: replace it before it expires.",
-                          "resolved": f"{what} no longer expires within {WARN_DAYS} days",
-                          "href": "/networking?tab=expiry", "signals": {"nearness": nearness(days)}})
+    if rep is None or now - rep["checked_at"] > STALE_AFTER:
+        return [{"unknown_prefix": f"expiry:{kind}:"} for kind in SOURCE_KINDS.values()] + _key_facts(now)
+    rep = refresh(rep, now)
+    facts = [{"unknown_prefix": f"expiry:{SOURCE_KINDS[s]}:"} for s in sorted(rep.get("errors") or {}) if s in SOURCE_KINDS]
+    for r in rep["items"]:
+        if r["state"] not in ("expired", "critical", "warn"):
+            continue
+        days = (r["not_after"] - now) / DAY
+        critical = r["state"] != "warn"
+        what = _what(r)
+        if r["state"] == "expired":
+            title = f"{what} has expired"
+        elif r["overdue"] and days > WARN_DAYS:
+            title = f"{what} has not been renewed"
+        else:
+            title = f"{what} expires {_in_days(days)}"
+        facts.append({"key": f"expiry:{r['kind']}:{r['namespace']}/{r['name']}",
+                      "category": "outage" if critical else "degraded",
+                      "severity": "critical" if critical else "degraded", "title": title,
+                      "body": r["note"] or "Nothing renews it: replace it before it expires.",
+                      "resolved": f"{what} is renewed, or no longer expires soon",
+                      "href": "/networking?tab=expiry", "signals": {"nearness": nearness(days)}})
     return facts + _key_facts(now)
 
 
@@ -499,9 +546,10 @@ def report(now=None):
     None before the first."""
     rep = load()
     if rep is None:
-        return {"checked_at": None, "items": [], "counts": {s: 0 for s in STATES}, "errors": {}, "partial": False,
+        return {"checked_at": None, "items": [], "counts": {s: 0 for s in STATES}, "errors": {}, "partial": False, "stale": False,
                 "warn_days": WARN_DAYS, "critical_days": CRITICAL_DAYS}
-    return refresh(rep, now)
+    now = time.time() if now is None else now
+    return {**refresh(rep, now), "stale": now - rep["checked_at"] > STALE_AFTER}
 
 
 def keys(now=None):

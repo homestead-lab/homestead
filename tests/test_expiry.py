@@ -221,6 +221,12 @@ class TlsSecretTests(unittest.TestCase):
         self.assertEqual(len(rows), EXPIRY.MAX_SECRETS)
         self.assertEqual(endless.call_count, EXPIRY.MAX_SECRETS // EXPIRY.PAGE)
 
+    def test_a_tls_crt_that_is_not_text_is_unknown_not_a_failed_source(self):
+        odd = {"metadata": {"namespace": "lab", "name": "odd"}, "data": {"tls.crt": 12}}
+        with mock.patch.object(EXPIRY.KUBE, "get", pages([odd, secret("lab", "b", LONG)])):
+            rows, _ = EXPIRY.tls_secrets(LONG_AFTER - 100 * DAY, set())
+        self.assertEqual([r["state"] for r in rows], ["unknown", "ok"])
+
     def test_a_list_without_items_is_an_error(self):
         with mock.patch.object(EXPIRY.KUBE, "get", mock.Mock(return_value={"kind": "Status"})):
             with self.assertRaises(ValueError):
@@ -241,6 +247,11 @@ class WebhookTests(unittest.TestCase):
             rows = EXPIRY.webhook_cas(SHORT_AFTER - DAY)
         self.assertEqual(rows[0]["state"], "renews")
         self.assertEqual(rows[0]["kind"], "webhook-ca")
+
+    def test_an_unreadable_bundle_is_unknown(self):
+        with mock.patch.object(EXPIRY.KUBE, "items", side_effect=[[webhook("odd-hook", "not a certificate")], []]):
+            rows = EXPIRY.webhook_cas(0)
+        self.assertEqual([(r["name"], r["state"]) for r in rows], [("odd-hook", "unknown")])
 
     def test_a_webhook_with_no_bundle_is_skipped(self):
         with mock.patch.object(EXPIRY.KUBE, "items", side_effect=[[{"metadata": {"name": "x"}, "webhooks": [{}]}], []]):
@@ -271,6 +282,12 @@ class CertManagerTests(unittest.TestCase):
                                         ready=False, reason="Failed"))
         self.assertEqual(rows[0]["state"], "critical")
         self.assertIn("Failed", rows[0]["note"])
+
+    def test_one_odd_certificate_does_not_hide_the_others(self):
+        odd = certificate("apps", "odd", self.NOW + 10 * DAY)
+        odd["status"]["renewalTime"] = "not a time"
+        rows, _ = self.read(odd, certificate("apps", "wiki", self.NOW + 90 * DAY, renewal=self.NOW + 30 * DAY))
+        self.assertEqual([(r["name"], r["state"]) for r in rows], [("odd", "unknown"), ("wiki", "renews")])
 
     def test_not_issued_yet_is_unknown(self):
         rows, _ = self.read(certificate("apps", "new", None, ready=False))
@@ -317,6 +334,13 @@ class ScanTests(unittest.TestCase):
             raise OSError("timed out")
         rep = self.run_scan(LONG_AFTER - 100 * DAY, peer=away)
         self.assertIn("api-server", rep["errors"])
+
+    def test_failed_scans_in_a_row_are_counted(self):
+        def refuse(path):
+            raise OSError("HTTP Error 403: Forbidden")
+        self.assertEqual(self.run_scan(LONG_AFTER - 100 * DAY, get=refuse)["failed_scans"], 1)
+        self.assertEqual(self.run_scan(LONG_AFTER - 100 * DAY, get=refuse)["failed_scans"], 2)
+        self.assertEqual(self.run_scan(LONG_AFTER - 100 * DAY)["failed_scans"], 0)
 
     def test_load_and_refresh_recount_the_days(self):
         self.run_scan(LONG_AFTER - 30 * DAY)
@@ -375,7 +399,24 @@ class ScheduleTests(unittest.TestCase):
 
     def test_a_scan_that_could_not_read_is_tried_again_sooner(self):
         rep = saved([], errors={"tls-secrets": "403"}, checked_at=self.NOW - EXPIRY.RETRY_EVERY)
-        self.assertTrue(self.due(rep, self.NOW)[0])
+        self.assertTrue(self.due({**rep, "failed_scans": 1}, self.NOW)[0])
+
+    def test_a_source_that_keeps_failing_backs_off_to_hourly(self):
+        rep = {**saved([], errors={"api-server": "timed out"}), "failed_scans": 3}     # 5, 10, then 20 min
+        self.assertFalse(self.due({**rep, "checked_at": self.NOW - 15 * 60}, self.NOW)[0])
+        self.assertTrue(self.due({**rep, "checked_at": self.NOW - 20 * 60}, self.NOW)[0])
+        rep["failed_scans"] = 10
+        self.assertFalse(self.due({**rep, "checked_at": self.NOW - 50 * 60}, self.NOW)[0])
+
+    def test_a_partial_list_alone_is_not_scanned_again_sooner(self):
+        rep = saved([], partial=True, checked_at=self.NOW - EXPIRY.RETRY_EVERY)
+        self.assertFalse(self.due(rep, self.NOW)[0])
+
+    def test_settings_hears_of_a_source_that_could_not_be_read(self):
+        _, _, beat = self.due(saved([], errors={"tls-secrets": "403"}, checked_at=self.NOW - 60), self.NOW)
+        self.assertIn("TLS Secrets", str(beat.call_args.args[2]))
+        _, _, beat = self.due(saved([], checked_at=self.NOW - 60), self.NOW)
+        self.assertEqual(len(beat.call_args.args), 2)          # all well: no error
 
     def test_one_scan_at_a_time_and_not_again_at_once_after_a_failure(self):
         EXPIRY._scan["running"] = True
@@ -425,8 +466,27 @@ class AlertTests(unittest.TestCase):
     def test_a_source_that_could_not_be_read_keeps_its_alerts(self):
         facts = self.facts(saved([], errors={"tls-secrets": "403"}))
         self.assertIn({"unknown_prefix": "expiry:tls-secret:"}, facts)
-        facts = self.facts(saved([], partial=True))
-        self.assertIn({"unknown_prefix": "expiry:tls-secret:"}, facts)
+
+    def test_a_partial_secret_list_does_not_hold_every_secret_alert(self):
+        # Over the cap, every scan is partial: holding all tls-secret alerts
+        # would keep a renewed Secret's alert for ever.
+        facts = self.facts(saved([cert_row("tls-secret", "lab", "a", self.NOW + 90 * DAY)], partial=True))
+        self.assertEqual(facts, [])
+
+    def test_a_stale_scan_holds_alerts_instead_of_judging_old_dates(self):
+        # A 2-day CDI CA saved 4 hours ago and not checked since would cross
+        # its old notAfter and alert falsely: hold everything instead.
+        old = self.NOW - 3 * EXPIRY.SCAN_EVERY - 1
+        facts = self.facts(saved([cert_row("webhook-ca", "", "cdi-api", self.NOW - 60, renews=True)], checked_at=old))
+        self.assertEqual({f.get("unknown_prefix") for f in facts}, {f"expiry:{k}:" for k in EXPIRY.SOURCE_KINDS.values()})
+
+    def test_an_overdue_renewal_far_from_expiry_says_so(self):
+        row = {**cert_row("certificate", "apps", "wiki", self.NOW + 48 * DAY), "overdue": True,
+               "note": "Renewal is overdue: cert-manager has not renewed it"}
+        fact = self.facts(saved([row]))[0]
+        self.assertEqual(fact["title"], "Certificate apps/wiki has not been renewed")
+        self.assertEqual(fact["severity"], "degraded")
+        self.assertEqual(fact["resolved"], "Certificate apps/wiki is renewed, or no longer expires soon")
 
     def test_no_scan_yet_keeps_every_certificate_alert(self):
         facts = self.facts(None)
@@ -475,6 +535,12 @@ class RouteTests(unittest.TestCase):
             answer = EXPIRY.ROUTES[("GET", "/api/expiry")][1](mock.Mock())
         self.assertEqual([r["kind"] for r in answer["items"]], ["tls-secret"])
         self.assertEqual(set(answer["items"][0]), set(EXPIRY.ROW_FIELDS))
+
+    def test_the_answer_says_when_the_last_check_is_stale(self):
+        with mock.patch.object(EXPIRY, "load", return_value=saved([], checked_at=self.NOW - 4 * 3600)):
+            self.assertTrue(EXPIRY.report(self.NOW)["stale"])
+        with mock.patch.object(EXPIRY, "load", return_value=saved([], checked_at=self.NOW - 600)):
+            self.assertFalse(EXPIRY.report(self.NOW)["stale"])
 
     def test_before_the_first_scan_the_answer_says_so(self):
         with mock.patch.object(EXPIRY, "load", return_value=None):

@@ -86,4 +86,15 @@ test("before the first check, and with more Secrets than are read, the page says
   ({ ctx, out } = view({ "/api/expiry": report([row("tls-secret", "lab", "a", 90, "ok")], { partial: true }) }));
   await vm.runInContext("viewExpiry()", ctx);
   assert.match(text(out.html), /only the first 2000/i);
+  assert.doesNotMatch(text(out.html), /nothing expires/i);
+  const line = vm.runInContext("expiryLine", ctx);
+  assert.doesNotMatch(line(report([row("tls-secret", "lab", "a", 90, "ok")], { partial: true })), /none|nothing/i);
+});
+
+test("a check that has not run for hours says so instead of all well", async () => {
+  const { ctx, out } = view({ "/api/expiry": report([row("tls-secret", "lab", "a", 90, "ok")], { stale: true }) });
+  await vm.runInContext("viewExpiry()", ctx);
+  assert.match(text(out.html), /has not run since/i);
+  assert.doesNotMatch(text(out.html), /nothing expires/i);
+  assert.doesNotMatch(vm.runInContext("expiryLine", ctx)(report([], { stale: true })), /none|nothing/i);
 });
