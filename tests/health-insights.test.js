@@ -98,10 +98,10 @@ test("#731/#620: Homestead's data copies that could not be read are said, with t
 });
 test("a schedule clash this week is a medium finding that opens the week; close ones are not",()=>{
  const clash=(severity,a,b)=>({severity,jobs:[{name:a,task:"backup"},{name:b,task:"filesystem-trim"}],volumes:["pvc-a","pvc-b"],times:[[1793066400,1793066400]],count:1,gap_min:severity==="clash"?0:20});
- const s=base();s.protection.clashes=[clash("clash","nightly-backup","weekly-trim"),clash("close","offsite","weekly-trim")];
+ const s=base();s.protection.volumes=[{name:"pvc-a",pvc:"data-a",backed_up:true,last_backup_at:"2026-10-22T02:00:00Z"}];s.protection.clashes=[clash("clash","nightly-backup","weekly-trim"),clash("close","offsite","weekly-trim")];
  const row=H.advice(s).find(r=>r.id==="schedule-clash");
  assert.deepEqual([row.severity,row.route,row.title],["medium","schedule-week","1 schedule clash this week"]);
- assert.match(row.detail,/nightly-backup and weekly-trim start in the same minute on 2 volumes/);
+ assert.match(row.detail,/nightly-backup and weekly-trim start in the same minute on data-a and pvc-b\./);
  s.protection.clashes.push(clash("clash","a","b"));assert.equal(H.advice(s).find(r=>r.id==="schedule-clash").title,"2 schedule clashes this week");
  s.protection.clashes=[clash("close","offsite","weekly-trim")];assert.equal(H.advice(s).some(r=>r.id==="schedule-clash"),false);
 });
