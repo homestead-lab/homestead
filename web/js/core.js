@@ -150,6 +150,8 @@ const thisYear = at => at.getFullYear() === new Date().getFullYear() ? {} : { ye
 const fmtAt = (v, { weekday = false } = {}) => { const at = asDate(v);
   return at ? at.toLocaleString(undefined, { ...(weekday ? { weekday: "short" } : {}), day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", ...thisYear(at) }) : ""; };
 const fmtDay = v => { const at = asDate(v); return at ? at.toLocaleDateString(undefined, { day: "numeric", month: "short", ...thisYear(at) }) : ""; };
+/* A day as a heading: "Saturday 24 October". */
+const fmtWeekday = v => { const at = asDate(v); return at ? at.toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long", ...thisYear(at) }) : ""; };
 const fmtClock = v => { const at = asDate(v); return at ? at.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : ""; };
 const utcTip = at => at.toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
 /* A past time and how long ago: "22 Sep, 05:00 · 6h 2m ago". */
