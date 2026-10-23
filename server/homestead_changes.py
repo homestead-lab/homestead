@@ -529,3 +529,40 @@ def run(sleep=time.sleep):
                 print(f"changes: {str(error)[:160]}", flush=True)
         last = started
         sleep(max(5, 60 - (time.time() - started)))
+
+
+# The same mark on other kinds of object Homestead changes for someone (a
+# Longhorn Setting or Volume): signed over the kind too, so a mark copied from
+# an app, or from another object, never checks out.
+def _signed_object(key, kind, ns, name, at, who):
+    text = "\n".join(("object", kind, ns, name, str(int(at)), _label(who)))
+    return hmac.new(key, text.encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def object_mark(kind, ns, name, now=None):
+    """The changedBy value for a write to this object, for whoever this request
+    is for; None before setup, when there is no key to sign with."""
+    now = int(now if now is not None else time.time())
+    try:
+        tag = _signed_object(_author_key(), kind, ns, name, now, getattr(REQUEST, "user", None) or "")
+    except Exception:
+        return None
+    return json.dumps({"at": now, "by": tag}, separators=(",", ":"))
+
+
+def object_author(kind, ns, name, obj):
+    """{"who", "at"} when the object's mark checks out for it ("" is a job of
+    Homestead's own), else None."""
+    raw = (((obj or {}).get("metadata") or {}).get("annotations") or {}).get(AUTHOR)
+    if not isinstance(raw, str) or len(raw) > MARK_MAX:
+        return None
+    try:
+        mark = json.loads(raw)
+        at, tag = int(mark["at"]), str(mark["by"])
+        key, known = _author_key(), _authors()
+    except Exception:
+        return None
+    candidates = ["", *(f"api-key:{n}" for n in known["api_keys"]),
+                  *(u for u in known["users"] if _label(u) == "user:" + u)]
+    who = next((w for w in candidates if hmac.compare_digest(_signed_object(key, kind, ns, name, at, w), tag)), None)
+    return None if who is None else {"who": who, "at": at}
