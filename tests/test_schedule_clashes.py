@@ -1,6 +1,7 @@
 """Schedule clashes (homestead_schedule_clashes): a trim or a backup that
 starts with a backup on a shared volume, in the coming week."""
 import calendar
+import time
 import sys
 import unittest
 from pathlib import Path
@@ -91,6 +92,25 @@ class ClashTests(unittest.TestCase):
         self.assertEqual("clash", found[0]["severity"])
         self.assertEqual(7 * 24 * 12, found[0]["count"])
         self.assertEqual(CLASHES.KEEP_TIMES, len(found[0]["times"]))
+
+    def test_every_minute_backups_do_not_stall_the_overview(self):
+        jobs = [job(f"b{i}", "backup", "* * * * *", ["pvc-a"]) for i in range(3)]
+        started = time.perf_counter()
+        found = CLASHES.clashes(jobs, NOW)
+        self.assertLess(time.perf_counter() - started, 1.0)
+        self.assertEqual({"clash"}, {row["severity"] for row in found})
+        self.assertEqual(3, len(found), "one row per pair; close runs of jobs that already clash say nothing more")
+
+    def test_a_pair_whose_order_flips_is_one_row(self):
+        # 02:00 then 02:20 on weekdays; 02:20 then 02:30 at weekends.
+        found = CLASHES.clashes([job("a", "backup", "0 2 * * 1-5", ["pvc-a"]), job("a2", "backup", "30 2 * * 0,6", ["pvc-a"]),
+                                 job("b", "backup", "20 2 * * *", ["pvc-a"])], NOW)
+        self.assertEqual(2, len(found))
+        self.assertEqual({("a", "b"), ("b", "a2")}, {tuple(j["name"] for j in row["jobs"]) for row in found})
+        flip = CLASHES.clashes([job("a", "backup", "0 2 * * 1-5", ["pvc-a"]), job("a", "backup", "40 2 * * 0,6", ["pvc-a"]),
+                                job("b", "backup", "20 2 * * *", ["pvc-a"])], NOW)
+        self.assertEqual(1, len(flip), "a and b, in whichever order they start, are one pair")
+        self.assertEqual(7, flip[0]["count"])
 
     def test_clashes_come_before_close_ones(self):
         found = CLASHES.clashes([job("a", "backup", "0 1 * * *", ["pvc-a"]),
