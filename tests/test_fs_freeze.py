@@ -226,6 +226,16 @@ class Status(WithCluster):
         self.assertIn("shared", rows["pvc-rwx"]["why"].lower())
         self.assertEqual(rows["pvc-iscsi"]["freezes"], "sync")
 
+    def test_each_row_says_what_freezing_it_would_do(self):
+        """The review dialog counts what a change would do from when_on."""
+        self.use(Cluster().volumes(
+            lh_volume("pvc-fs"), lh_volume("pvc-v2", engine="v2"), lh_volume("pvc-vm"), lh_volume("pvc-rwx", access="rwx"),
+            lh_volume("pvc-off", mode="disabled")).pvs(pv("pvc-fs"), pv("pvc-v2"), pv("pvc-vm", "Block"), pv("pvc-rwx"), pv("pvc-off")))
+        rows = {v["name"]: v for v in F.status()["volumes"]}
+        self.assertEqual({name: row["when_on"] for name, row in rows.items()},
+                         {"pvc-fs": "yes", "pvc-v2": "no", "pvc-vm": "sync", "pvc-rwx": "sync", "pvc-off": "yes"})
+        self.assertEqual(rows["pvc-fs"]["freezes"], "no")
+
     def test_a_volume_without_a_pv_or_kubernetes_status_is_still_listed(self):
         bare = {"metadata": {"name": "pvc-bare"}, "spec": {"freezeFilesystemForSnapshot": "ignored"}}
         self.use(Cluster(value="true").volumes(bare, lh_volume("pvc-x", pv="pv-gone")))

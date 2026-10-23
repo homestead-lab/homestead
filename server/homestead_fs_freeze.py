@@ -115,20 +115,24 @@ def _row(volume, enabled, modes):
     access = spec.get("accessMode") or "rwo"
     volume_mode = modes.get(k8s.get("pvName") or name, "unknown")
     on = mode == "enabled" or (mode not in ("enabled", "disabled") and bool(enabled))
+    # What a snapshot of it does once it is set to freeze, whatever it is set to now.
     if engine == "v2":
-        freezes, why = "no", "A V2 volume: Longhorn never freezes these"
-    elif not on:
-        freezes, why = "no", ("Set to never freeze" if mode == "disabled" else "Follows the cluster, which is off")
+        when_on, why_on = "no", "A V2 volume: Longhorn never freezes these"
     elif volume_mode == "Block":
-        freezes, why = "sync", "A block volume, such as a VM disk: there is no filesystem to freeze, so Longhorn syncs it instead"
+        when_on, why_on = "sync", "A block volume, such as a VM disk: there is no filesystem to freeze, so Longhorn syncs it instead"
     elif access == "rwx":
-        freezes, why = "sync", "A shared (RWX) volume: Longhorn's share manager holds its filesystem, so Longhorn syncs it instead"
+        when_on, why_on = "sync", "A shared (RWX) volume: Longhorn's share manager holds its filesystem, so Longhorn syncs it instead"
     elif spec.get("frontend") not in (None, "", "blockdev"):
-        freezes, why = "sync", "No Longhorn device on the host to freeze, so Longhorn syncs it instead"
+        when_on, why_on = "sync", "No Longhorn device on the host to freeze, so Longhorn syncs it instead"
     else:
-        freezes, why = "yes", ""
+        when_on, why_on = "yes", ""
+    if on or engine == "v2":
+        freezes, why = when_on, why_on
+    else:
+        freezes, why = "no", ("Set to never freeze" if mode == "disabled" else "Follows the cluster, which is off")
     return {"name": name, "claim": "/".join(x for x in (k8s.get("namespace"), k8s.get("pvcName")) if x),
-            "mode": mode, "freezes": freezes, "why": why, "engine": engine, "access": access, "volume_mode": volume_mode}
+            "mode": mode, "freezes": freezes, "why": why, "when_on": when_on, "engine": engine, "access": access,
+            "volume_mode": volume_mode}
 
 
 def status():

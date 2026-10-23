@@ -2188,6 +2188,46 @@ ssh_pwauth: true
     "/api/longhorn/v2/enable": () => {window.__demoV2State='enabled';return {ok:true};},
     "/api/longhorn/settings": { ok: true, detail: "Saved: over-provisioning 150%" },
     "/api/longhorn/offline-rebuilding": { supported: true, enabled: false, short: [{ name: "pvc-demo-nextcloud", claim: "lab/nextcloud-data", whole: 1, wanted: 2, hosts: ["node-2"], offline: "ignored" }] },
+    // Consistent snapshots (fs-freeze.js): off, with a VM disk, a shared volume
+    // and a V2 volume Longhorn cannot freeze. window.__demoFsFreezeOldKernel
+    // adds a host on kernel 5.15; window.__demoFsFreezeUnsupported is Longhorn 1.6.
+    "/api/longhorn/fs-freeze": (url, init) => {
+      if (init?.method === "POST") {
+        demoState.fsFreezeOn = !!JSON.parse(init.body || "{}").enabled;
+        demoState.fsFreezeChanged = Math.floor(Date.now() / 1000);
+        return { ok: true, enabled: demoState.fsFreezeOn, detail: demoState.fsFreezeOn
+          ? "Longhorn now freezes each volume's filesystem for its snapshots and backups"
+          : "Longhorn no longer freezes filesystems for snapshots, except on volumes set to always" };
+      }
+      if (window.__demoFsFreezeUnsupported) return { supported: false, version: "v1.6.2", volumes: [],
+        why: "Longhorn v1.6.2 cannot freeze filesystems for snapshots: Longhorn 1.7 added it." };
+      const on = !!demoState.fsFreezeOn, modes = demoState.fsFreezeModes || (demoState.fsFreezeModes = { "pvc-demo-scratch": "disabled" });
+      const syncWhy = { Block: "A block volume, such as a VM disk: there is no filesystem to freeze, so Longhorn syncs it instead",
+        rwx: "A shared (RWX) volume: Longhorn's share manager holds its filesystem, so Longhorn syncs it instead" };
+      const volumes = [
+        ["pvc-demo-paperless", "lab/paperless-data", "v1", "rwo", "Filesystem"], ["pvc-demo-nextcloud", "lab/nextcloud-data", "v1", "rwo", "Filesystem"],
+        ["pvc-demo-hass", "lab/homeassistant-config", "v1", "rwo", "Filesystem"], ["pvc-demo-frigate", "lab/frigate-config", "v1", "rwo", "Filesystem"],
+        ["pvc-demo-media", "lab/jellyfin-media", "v1", "rwx", "Filesystem"], ["pvc-demo-vm-disk", "lab/windows-disk-0", "v1", "rwo", "Block"],
+        ["pvc-demo-fast", "lab/arr-dashboard-data", "v2", "rwo", "Filesystem"], ["pvc-demo-scratch", "lab/scratch", "v1", "rwo", "Filesystem"],
+      ].map(([name, claim, engine, access, volumeMode]) => {
+        const mode = modes[name] || "ignored", effective = mode === "enabled" || (mode === "ignored" && on);
+        const whenOn = engine === "v2" ? "no" : volumeMode === "Block" || access === "rwx" ? "sync" : "yes";
+        const whyOn = engine === "v2" ? "A V2 volume: Longhorn never freezes these" : syncWhy[volumeMode] || syncWhy[access] || "";
+        const shown = effective || engine === "v2";
+        return { name, claim, mode, engine, access, volume_mode: volumeMode, when_on: whenOn, freezes: shown ? whenOn : "no",
+          why: shown ? whyOn : mode === "disabled" ? "Set to never freeze" : "Follows the cluster, which is off" };
+      });
+      return { supported: true, version: "v1.13.0", enabled: on, value: JSON.stringify({ v1: String(on) }), unknown_value: false,
+        from_chart: false, changed: demoState.fsFreezeChanged ? { who: "admin", at: demoState.fsFreezeChanged } : null,
+        old_kernels: window.__demoFsFreezeOldKernel ? [{ host: "harvester-node3", kernel: "5.15.0-91-generic" }] : [],
+        volumes, counts: { total: volumes.length, freezing: volumes.filter(v => v.freezes === "yes").length } };
+    },
+    "/api/longhorn/fs-freeze/volume": (url, init) => {
+      const { volume, mode } = JSON.parse(init?.body || "{}");
+      (demoState.fsFreezeModes = demoState.fsFreezeModes || { "pvc-demo-scratch": "disabled" })[volume] = mode;
+      const said = { ignored: "follows the cluster setting", enabled: "is always frozen for snapshots", disabled: "is never frozen for snapshots" }[mode];
+      return { ok: true, volume, mode, detail: `${volume} ${said}` };
+    },
     "/api/workloads/rebalance/review": (url, init) => {
       const picks = JSON.parse(init?.body || "{}").picks || [];
       const rows = picks.map((p, i) => ({ id: p.id, from: "harvester-node1", to: p.to, cpu_m: 250, mem_mb: 512, reserves: true,
