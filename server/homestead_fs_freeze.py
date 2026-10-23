@@ -147,3 +147,68 @@ def status():
             "changed": CHANGES.object_author("Setting", LHNS, SETTING, item),
             "old_kernels": _old_kernels(), "volumes": rows,
             "counts": {"total": len(rows), "freezing": sum(r["freezes"] == "yes" for r in rows)}}
+
+
+def _marked(kind, name, body):
+    mark = CHANGES.object_mark(kind, LHNS, name)
+    if mark:
+        body["metadata"] = {"annotations": {CHANGES.AUTHOR: mark}}
+    return body
+
+
+def _setting_or_refuse():
+    item = _optional(f"{LH}/settings/{SETTING}")
+    if item is None:
+        raise ValueError(f"Longhorn {_version() or 'on this cluster'} cannot freeze filesystems for snapshots: Longhorn 1.7 added it")
+    return item
+
+
+def save(enabled):
+    """Turn the freeze on or off for every volume that follows the cluster."""
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled must be true or false")
+    item = _setting_or_refuse()
+    ksend("PATCH", f"{LH}/settings/{SETTING}", _marked("Setting", SETTING, {"value": encode_value(enabled, item.get("value"))}),
+          ctype=MERGE)
+    detail = ("Longhorn now freezes each volume's filesystem for its snapshots and backups" if enabled
+              else "Longhorn no longer freezes filesystems for snapshots, except on volumes set to always")
+    if _from_chart():
+        detail += ". Longhorn's chart sets this too: applying its chart again puts the chart's value back"
+    return {"ok": True, "enabled": enabled, "detail": detail}
+
+
+def save_volume(volume, mode):
+    """One volume: follow the cluster (ignored), always freeze, or never."""
+    if mode not in MODES:
+        raise ValueError("mode must be ignored, enabled or disabled")
+    if not isinstance(volume, str) or not volume:
+        raise ValueError("Name the Longhorn volume")
+    _setting_or_refuse()
+    found = next((v for v in _items(f"{LH}/volumes") if (v.get("metadata") or {}).get("name") == volume), None)
+    if found is None:
+        raise ValueError(f"There is no Longhorn volume {volume}; refresh")
+    if mode == "enabled" and ((found.get("spec") or {}).get("dataEngine") or "v1") == "v2":
+        raise ValueError(f"{volume} is a V2 volume: Longhorn never freezes these")
+    ksend("PATCH", f"{LH}/volumes/{volume}", _marked("Volume", volume, {"spec": {"freezeFilesystemForSnapshot": mode}}), ctype=MERGE)
+    claim = _row(found, False, {})["claim"] or volume
+    said = {"ignored": "follows the cluster setting", "enabled": "is always frozen for snapshots",
+            "disabled": "is never frozen for snapshots"}[mode]
+    return {"ok": True, "volume": volume, "mode": mode, "detail": f"{claim} {said}"}
+
+
+def _save(request):
+    homestead_routes.forget("fsfreeze")
+    return save(request.body.get("enabled"))
+
+
+def _save_volume(request):
+    homestead_routes.forget("fsfreeze")
+    return save_volume(request.body.get("volume"), request.body.get("mode"))
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("GET", "/api/longhorn/fs-freeze"): ("viewer", lambda request: homestead_routes.cached("fsfreeze", 30, status)),
+    ("POST", "/api/longhorn/fs-freeze"): ("admin", _save),
+    ("POST", "/api/longhorn/fs-freeze/volume"): ("admin", _save_volume),
+}

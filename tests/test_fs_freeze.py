@@ -267,5 +267,113 @@ class Status(WithCluster):
         self.assertEqual(author.call_args[0][:3], ("Setting", "longhorn-system", F.SETTING))
 
 
+class Writes(WithCluster):
+    def setUp(self):
+        patcher = mock.patch.object(F.CHANGES, "object_mark", side_effect=lambda kind, ns, name: f"mark:{kind}:{name}")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_turning_it_on_keeps_the_per_engine_format_and_marks_who(self):
+        cluster = self.use(Cluster(value='{"v1":"false"}'))
+        result = F.save(True)
+        self.assertEqual(cluster.sent, [("PATCH", SETTING_PATH, {
+            "metadata": {"annotations": {AUTHOR: f"mark:Setting:{F.SETTING}"}}, "value": '{"v1":"true"}'}, F.MERGE)])
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["enabled"])
+
+    def test_turning_it_off_on_a_plain_setting(self):
+        cluster = self.use(Cluster(value="true"))
+        self.assertFalse(F.save(False)["enabled"])
+        self.assertEqual(cluster.sent[0][2]["value"], "false")
+
+    def test_the_change_is_said_to_last_only_until_the_chart_when_the_chart_sets_it(self):
+        cluster = Cluster(value="false")
+        cluster.objects[F.CHART_SETTINGS] = {"data": {"default-setting.yaml": "freeze-filesystem-for-snapshot: false\n"}}
+        self.use(cluster)
+        self.assertIn("chart", F.save(True)["detail"])
+
+    def test_without_a_signing_key_the_write_still_goes_unmarked(self):
+        cluster = self.use(Cluster(value="false"))
+        with mock.patch.object(F.CHANGES, "object_mark", return_value=None):
+            F.save(True)
+        self.assertEqual(cluster.sent[0][2], {"value": "true"})
+
+    def test_refusals_write_nothing(self):
+        cluster = self.use(Cluster(value="false").volumes(lh_volume("pvc-a"), lh_volume("pvc-v2", engine="v2")))
+        for bad in ("true", "false", 1, None):
+            with self.assertRaises(ValueError):
+                F.save(bad)
+        for volume, mode in (("pvc-a", "on"), ("pvc-a", ""), ("pvc-a", None), ("pvc-gone", "enabled"),
+                             ("pvc-v2", "enabled"), ("", "enabled"), (None, "enabled")):
+            with self.assertRaises(ValueError, msg=(volume, mode)):
+                F.save_volume(volume, mode)
+        self.assertEqual(cluster.sent, [])
+
+    def test_longhorn_without_the_setting_refuses_a_change(self):
+        cluster = self.use(Cluster(value=None))
+        with self.assertRaises(ValueError) as said:
+            F.save(True)
+        self.assertIn("1.7", str(said.exception))
+        with self.assertRaises(ValueError):
+            F.save_volume("pvc-a", "enabled")
+        self.assertEqual(cluster.sent, [])
+
+    def test_a_volume_override_is_marked_too(self):
+        cluster = self.use(Cluster().volumes(lh_volume("pvc-a", claim="db")))
+        result = F.save_volume("pvc-a", "enabled")
+        self.assertEqual(cluster.sent, [("PATCH", f"{LH}/volumes/pvc-a", {
+            "metadata": {"annotations": {AUTHOR: "mark:Volume:pvc-a"}},
+            "spec": {"freezeFilesystemForSnapshot": "enabled"}}, F.MERGE)])
+        self.assertEqual((result["volume"], result["mode"]), ("pvc-a", "enabled"))
+        self.assertIn("lab/db", result["detail"])
+
+    def test_a_v2_volume_may_go_back_to_following_the_cluster(self):
+        cluster = self.use(Cluster().volumes(lh_volume("pvc-v2", engine="v2", mode="disabled")))
+        F.save_volume("pvc-v2", "ignored")
+        self.assertEqual(cluster.sent[0][2]["spec"], {"freezeFilesystemForSnapshot": "ignored"})
+
+
+class Routes(unittest.TestCase):
+    def test_who_may_read_and_change_it(self):
+        self.assertEqual({key: role for key, (role, _) in F.ROUTES.items()}, {
+            ("GET", "/api/longhorn/fs-freeze"): "viewer",
+            ("POST", "/api/longhorn/fs-freeze"): "admin",
+            ("POST", "/api/longhorn/fs-freeze/volume"): "admin"})
+
+    def test_the_module_is_read_for_its_routes(self):
+        import homestead_routes
+        self.assertIn("homestead_fs_freeze", homestead_routes.MODULES)
+
+    def test_a_change_forgets_the_cached_answer(self):
+        request = mock.Mock(body={"enabled": True})
+        with mock.patch.object(F, "save", return_value={"ok": True}) as save, \
+                mock.patch.object(F.homestead_routes, "forget") as forget:
+            F.ROUTES[("POST", "/api/longhorn/fs-freeze")][1](request)
+        save.assert_called_once_with(True)
+        forget.assert_called_with("fsfreeze")
+        request = mock.Mock(body={"volume": "pvc-a", "mode": "enabled"})
+        with mock.patch.object(F, "save_volume", return_value={"ok": True}) as save, \
+                mock.patch.object(F.homestead_routes, "forget") as forget:
+            F.ROUTES[("POST", "/api/longhorn/fs-freeze/volume")][1](request)
+        save.assert_called_once_with("pvc-a", "enabled")
+        forget.assert_called_with("fsfreeze")
+
+
+class OnlyHereIsItChanged(unittest.TestCase):
+    """Every snapshot Homestead takes, by any path, asks Longhorn, which reads
+    the volume's field and then the setting. So nothing else may set them:
+    a path that turned the freeze off for its own snapshot would quietly
+    make them crash-consistent again."""
+
+    def test_no_other_module_writes_the_setting_or_the_field(self):
+        server = Path(__file__).resolve().parents[1] / "server"
+        found = [p.name for p in server.glob("*.py") if p.name != "homestead_fs_freeze.py"
+                 and ("freezeFilesystemForSnapshot" in p.read_text() or SETTINGS_NAME in p.read_text())]
+        self.assertEqual(found, [])
+
+
+SETTINGS_NAME = "freeze-filesystem-for-snapshot"
+
+
 if __name__ == "__main__":
     unittest.main()

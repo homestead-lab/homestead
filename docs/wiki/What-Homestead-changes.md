@@ -135,6 +135,7 @@ writes starts with `homestead.io/`. Among them:
 | Annotation | On | When |
 |---|---|---|
 | `homestead.io/changedBy` | `Deployment` | each write Homestead makes to an app, automatic ones too: who (a person, a job or a schedule) and when. Every write carries it when it can, scaling and JSON patches included. It is left off, and the write goes as it came, before setup (no signing key yet) and on a JSON patch that sets the app's metadata wholesale, that comes while the app or the key cannot be read, or whose app has no annotations and no test of the `resourceVersion` just read. A cluster shutdown's own helpers (running Homestead as one copy, and the automatic recovery that gives its copies back) write without it too; recovering from the dialog carries it |
+| `homestead.io/changedBy` | Longhorn `Setting` `freeze-filesystem-for-snapshot`, Longhorn `Volume` | an admin changes the filesystem freeze for snapshots on **Data protection**: who and when, as on apps. **Data protection** shows who it checks out as |
 | `homestead.io/update-action`, `update-previous`, `update-sources`, `update-rollout-at`, `updates-managed` | `Deployment` | an update or a rollback, automatic ones too |
 | `homestead.io/update-mode` | `Deployment` | you set the app's updates to automatic |
 | `homestead.io/ran-digests` | `Deployment` | update checks, about twice a day |
@@ -206,8 +207,10 @@ Homestead also changes and deletes existing objects when you ask:
 - a `PersistentVolume`'s reclaim policy and claim while a volume moves to
   another class, and a stuck storage `VolumeAttachment`'s finalizers when a
   dead host is removed;
-- Longhorn's own objects: a `Volume`, a `Replica`, a Longhorn `Node`'s disks,
-  a `Setting`;
+- Longhorn's own objects: a `Volume` (its copies, or whether its filesystem is
+  frozen for snapshots), a `Replica`, a Longhorn `Node`'s disks,
+  a `Setting` (offline rebuilding on **Volumes**, the
+  filesystem freeze for snapshots on **Data protection**);
 - any object you edit or delete on the **Resources** page.
 
 And it deletes what you delete.
