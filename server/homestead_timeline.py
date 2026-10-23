@@ -17,9 +17,15 @@ in the answer ("unread"), never left out as if nothing had happened (#620).
 Entries carry names, times and Homestead's own words only: never a setting's
 value, a run's message, a log line, an address or a key.
 """
+import calendar
 import os
 import time
 
+import homestead_alerts as ALERTS
+import homestead_changes as CHANGES
+import homestead_history as HISTORY
+import homestead_restarts as RESTARTS
+import homestead_routes
 import homestead_shared as SHARED
 
 SEEN_FILE = "timeline-seen.json"
@@ -29,6 +35,7 @@ MAX_WINDOW = 30 * 86400      # the furthest back the timeline reaches
 SEEN_USERS = 500
 SEEN_KEEP = 90 * 86400
 SEEN_QUIET = 60              # a mark this soon after the last is not written
+MAX_ENTRIES = 300
 _seen_lock = SHARED.SharedLock("timeline-seen")
 
 
@@ -90,3 +97,144 @@ class _Unchanged(Exception):
     def __init__(self, since):
         super().__init__("unchanged")
         self.since = since
+
+
+# ---------------------------------------------------------------- the feed
+def _at(text):
+    try:
+        return calendar.timegm(time.strptime(str(text), "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _entry(at, kind, tone, text, href="", app="", host=""):
+    return {"at": int(at), "kind": kind, "tone": tone, "app": app, "host": host, "text": text, "href": href}
+
+
+def _app_href(name):
+    return f"/containers?q={name}"
+
+
+def _changes(since, now, role, unread):
+    out = []
+    for e in CHANGES.history(limit=None):
+        if not isinstance(e.get("at"), (int, float)) or e["at"] <= since:
+            continue
+        # Field names only: a before or after value can be a setting someone keeps private.
+        fields = ", ".join(str(r.get("field", "")) for r in e.get("changes") or [] if r.get("field"))
+        who = (", outside Homestead" if e.get("source") == "outside"
+               else ", by its power schedule" if e.get("by") == CHANGES.BY_SCHEDULE
+               else f", by {e['by']}" if e.get("by") else "")
+        out.append(_entry(e["at"], "change", "info", f"{e['name']} changed: {fields}{who}", _app_href(e["name"]),
+                          app=f"{e['namespace']}/{e['name']}"))
+    return out
+
+
+RESTART_WORDS = {"restart": (" restarted", "warn"), "replaced": ("'s pod was replaced", "warn"),
+                 "rollout": (" rolled out", "info")}
+
+
+def _restarts(since, now, role, unread):
+    out = []
+    for r in RESTARTS.recent(since):
+        at = _at(r.get("at"))
+        words, tone = RESTART_WORDS.get(r.get("kind"), (" restarted", "warn"))
+        if at is None:
+            continue
+        # The reason is Homestead's own words; never the detail (an event's
+        # message) or the log tail, which are the app's.
+        name = r.get("name", "")
+        out.append(_entry(at, "restart", tone, f"{name}{words}: {r.get('reason') or 'reason not known'}", _app_href(name),
+                          app=f"{r.get('ns', '')}/{name}"))
+    return out
+
+
+def _cron_rows():
+    import homestead_scheduled_jobs as SCHEDULED
+    return homestead_routes.cached("cron", 8, SCHEDULED.list_jobs)
+
+
+def _schedules(since, now, role, unread):
+    out, unknown = [], 0
+    for row in _cron_rows():
+        ns, name = row.get("ns", ""), row.get("name", "")
+        href, app = f"/schedules?find={ns}/{name}", f"{ns}/{name}"
+        at = _at(row.get("result_at"))
+        if row.get("result") in ("ok", "failed") and at is not None and at > since:
+            # Never the run's message: it can carry what the job was given.
+            out.append(_entry(at, "schedule", "ok" if row["result"] == "ok" else "bad",
+                              f"{name} ran" if row["result"] == "ok" else f"{name} failed", href, app=app))
+        elif row.get("result") == "unknown":
+            unknown += 1
+        if row.get("missed"):
+            out.append(_entry(now, "schedule", "warn", f"{name} did not run when it was due", href, app=app))
+    if unknown:
+        unread.append({"source": "schedules", "label": "Scheduled jobs",
+                       "reason": f"how {unknown} scheduled job{'s' if unknown != 1 else ''} last ran could not be read"})
+    return out
+
+
+ALERT_TONES = {"critical": "bad", "degraded": "warn", "info": "info"}
+
+
+def _alerts(since, now, role, unread):
+    out = []
+    for a in ALERTS.log(limit=ALERTS.LOG_SIZE)["alerts"]:
+        if a.get("category") == "test" or not isinstance(a.get("at"), (int, float)) or a["at"] <= since:
+            continue
+        tone = "ok" if a.get("phase") == "resolved" else ALERT_TONES.get(a.get("severity"), "info")
+        out.append(_entry(a["at"], "alert", tone, str(a.get("title", "")), str(a.get("href") or "")))
+    return out
+
+
+def _hosts(since, now, role, unread):
+    out = []
+    for e in HISTORY.maintenance_since(since):
+        node, start, end = e["node"], e["start"], e.get("end")
+        text, tone = f"{node} went into maintenance ({e['reason']})", "info"
+        if end is not None and e.get("outcome") == "returned":
+            text += f", back after {max(1, round((end - start) / 60))} min"
+        elif end is not None and e.get("outcome") == "limit":
+            text, tone = text + ", and was not back when its job's time ran out", "warn"
+        out.append(_entry(start if start > since or end is None else end, "host", tone, text, f"/nodes?node={node}",
+                          host=node))
+    return out
+
+
+def _audit(since, now, role, unread):
+    return []
+
+
+SOURCES = (("changes", "App changes", _changes), ("restarts", "App restarts", _restarts),
+           ("schedules", "Scheduled jobs", _schedules), ("audit", "Audit log", _audit),
+           ("alerts", "Alerts", _alerts), ("hosts", "Host maintenance", _hosts))
+
+
+def timeline(user, role, since=None, now=None):
+    """Everything recorded since `since` (default: when the person was last
+    here), newest first, at most MAX_ENTRIES; what could not be read is named."""
+    now = int(time.time() if now is None else now)
+    unread, last = [], None
+    try:
+        last = last_here(user, now)
+    except SHARED.Unreadable as error:
+        unread.append({"source": "last-here", "label": "When you were last here", "reason": str(error)[:300]})
+    if since is None:
+        since = last if last is not None else now - FIRST_LOOK
+    since = min(int(since), now)
+    clamped = since < now - MAX_WINDOW
+    since = max(since, now - MAX_WINDOW)
+    entries = []
+    for key, label, read in SOURCES:
+        try:
+            entries += read(since, now, role, unread)
+        except Exception as error:      # one source never takes the others down (#620)
+            reason = (str(error) if isinstance(error, SHARED.Unreadable)
+                      else f"Homestead could not read it ({type(error).__name__}: {error})")
+            unread.append({"source": key, "label": label, "reason": reason[:300]})
+    entries.sort(key=lambda e: e["at"], reverse=True)
+    counts = {}
+    for e in entries:
+        counts[e["kind"]] = counts.get(e["kind"], 0) + 1
+    return {"since": since, "now": now, "last_here": last, "clamped": clamped, "entries": entries[:MAX_ENTRIES],
+            "counts": counts, "more": max(0, len(entries) - MAX_ENTRIES), "unread": unread}
