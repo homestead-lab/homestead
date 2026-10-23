@@ -14,7 +14,8 @@ const Timeline = (() => {
   const KIND_TONE = { alert: "warn", schedule: "info", restart: "warn", change: "info", host: "hw", action: "neutral" };
   const RANGES = { last: ["Since you were last here", 0], day: ["24 hours", 86400], week: ["7 days", 7 * 86400], month: ["30 days", 30 * 86400] };
   const MARK_EVERY = 5 * 60 * 1000;
-  const state = { data: null, error: "", range: "last", filter: { kind: "", app: "", host: "" }, marked: 0 };
+  // The card always shows since you were last here; the page whatever range is picked.
+  const state = { data: null, error: "", card: null, cardError: "", range: "last", filter: { kind: "", app: "", host: "" }, marked: 0 };
 
   const counts = entries => entries.reduce((all, e) => ({ ...all, [e.kind]: (all[e.kind] || 0) + 1 }), {});
   const top = (entries, n = 5) => [...entries]
@@ -24,16 +25,18 @@ const Timeline = (() => {
   const kindWords = (kind, n) => (KINDS[kind] || [kind, kind])[n === 1 ? 0 : 1];
   const many = (n, one, more) => `${n} ${n === 1 ? one : more}`;
 
-  async function load(range = "last") {
+  /* range "last" (the card's, and the page's first) or a page range. */
+  async function load(range = "last", { page = false } = {}) {
     const seconds = RANGES[range]?.[1] || 0;
     const query = seconds ? `?since=${Math.floor(Date.now() / 1000) - seconds}` : "";
+    const [data, error] = page ? ["data", "error"] : ["card", "cardError"];
     try {
-      state.data = await api(`/api/timeline${query}`);
-      state.error = "";
+      state[data] = await api(`/api/timeline${query}`);
+      state[error] = "";
     } catch (e) {
-      state.error = e?.message || String(e);
+      state[error] = e?.message || String(e);
     }
-    return state.data;
+    return state[data];
   }
 
   /* Homestead open in a visible tab is "here"; the server works out visits. */
@@ -48,7 +51,7 @@ const Timeline = (() => {
     }
   }
 
-  const unreadLines = data => (data.unread || []).map(u => u.reason === "shown to admins only"
+  const unreadLines = data => (data.unread || []).map(u => u.admin_only
     ? `<div class="dim xs">${esc(u.label)}: ${esc(u.reason)}</div>`
     : `<div class="xs med-text">Could not read ${esc(u.label)}: ${esc(u.reason)}</div>`).join("");
   const sinceWords = data => `Since ${fmtAt(data.since)}${data.clamped ? " (as far back as the timeline reaches)" : ""}`;
@@ -57,11 +60,11 @@ const Timeline = (() => {
   const open = href => href ? ` onclick="openOperation(${jsq(href)})"` : " disabled";
 
   function widget() {
-    if (state.error && !state.data) return UI.callout("warn", "Could not read the timeline", esc(state.error));
-    const data = state.data;
+    if (state.cardError && !state.card) return UI.callout("warn", "Could not read the timeline", esc(state.cardError));
+    const data = state.card;
     if (!data) return '<div class="empty small"><span class="spin2"></span> Loading…</div>';
     const entries = data.entries || [];
-    return `<div class="dim xs">${esc(sinceWords(data))}</div>${state.error ? `<div class="xs med-text">Could not read the timeline just now · this is the last read</div>` : ""}
+    return `<div class="dim xs">${esc(sinceWords(data))}</div>${state.cardError ? `<div class="xs med-text">Could not read the timeline just now · this is the last read</div>` : ""}
       ${unreadLines(data)}
       ${entries.length ? chips(data) + `<div class="tl-list">${top(entries).map(e => `<button type="button" class="tl-item"${open(e.href)}>
         ${UI.chip(e.tone === "ok" ? "OK" : e.tone === "bad" ? "Failed" : e.tone === "warn" ? "Check" : "Info", e.tone, { size: "slim" })}
@@ -91,8 +94,8 @@ const Timeline = (() => {
       <td data-actions>${e.href ? `<button type="button" class="btn sm"${open(e.href)}>Open</button>` : ""}</td></tr>`;
     paint(`${UI.pageHeader("Timeline", `${esc(sinceWords(data))} · ${many(entries.length + (data.more || 0), "event", "events")}`, rangeSeg)}
       ${state.error ? UI.callout("warn", "Could not read the timeline just now", `${esc(state.error)} · this is the last read.`) : ""}
-      ${(data.unread || []).filter(u => u.reason !== "shown to admins only").map(u => UI.callout("warn", `Could not read ${esc(u.label)}`, esc(u.reason))).join("")}
-      ${(data.unread || []).filter(u => u.reason === "shown to admins only").map(u => `<div class="dim small">${esc(u.label)}: ${esc(u.reason)}.</div>`).join("")}
+      ${(data.unread || []).filter(u => !u.admin_only).map(u => UI.callout("warn", `Could not read ${u.label}`, esc(u.reason))).join("")}
+      ${(data.unread || []).filter(u => u.admin_only).map(u => `<div class="dim small">${esc(u.label)}: ${esc(u.reason)}.</div>`).join("")}
       <div class="tl-filters">${kinds}${pick("app", "App", "All apps")}${pick("host", "Host", "All hosts")}</div>
       ${shown.length ? `<div class="card flat pad0"><div class="tblwrap"><table class="tbl stack compact" data-sort="timeline"><thead><tr><th>When</th><th>Kind</th><th>What</th><th data-nosort></th></tr></thead>
         <tbody>${shown.map(row).join("")}</tbody></table></div></div>` : UI.empty(entries.length ? "Nothing of this kind in the window." : `Nothing happened since ${fmtAt(data.since)}.`)}
@@ -102,23 +105,27 @@ const Timeline = (() => {
   async function view() {
     state.filter = { kind: "", app: "", host: "" };
     page();
-    await load(state.range);
+    await load(state.range, { page: true });
     page();
   }
 
-  return { KINDS, counts, top, filter, load, markSeen, widget, view, page, state, RANGES };
+  /* "Last here" is when you last had Homestead open: noted once it starts,
+     then every minute while a tab shows it (markSeen itself waits five). */
+  function start({ setTimeout, setInterval, document }) {
+    const tick = () => markSeen();
+    setTimeout(tick, 3000);
+    setInterval(tick, 60 * 1000)?.unref?.();
+    document.addEventListener("visibilitychange", tick);
+  }
+
+  return { KINDS, counts, top, filter, load, markSeen, widget, view, page, state, RANGES, start };
 })();
 
 async function viewTimeline() { await Timeline.view(); }
 window.timelineFilter = (key, value) => { Timeline.state.filter[key] = value; Timeline.page(); };
-window.timelineRange = async range => { if (!Timeline.RANGES[range]) return; Timeline.state.range = range; await Timeline.load(range); Timeline.page(); };
+window.timelineRange = async range => { if (!Timeline.RANGES[range]) return; Timeline.state.range = range; await Timeline.load(range, { page: true }); Timeline.page(); };
 window.Timeline = Timeline;
 
-// "Last here" is when you last had Homestead open: noted every five minutes
-// while a tab shows it (Timeline.markSeen does nothing more often).
 if (typeof setInterval === "function" && typeof document !== "undefined" && document.addEventListener) {
-  const tick = () => { Timeline.markSeen(); };
-  const timer = setInterval(tick, 60 * 1000);
-  timer?.unref?.();
-  document.addEventListener("visibilitychange", tick);
+  Timeline.start({ setTimeout, setInterval, document });
 }

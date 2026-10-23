@@ -2646,7 +2646,7 @@ ssh_pwauth: true
       const now = Math.floor(Date.now() / 1000), asked = Number(url.searchParams.get("since")) || 0;
       const since = Math.max(asked || now - 2.6 * 86400, now - 30 * 86400);
       const e = (ago, kind, tone, text, extra = {}) => ({ at: Math.round(now - ago), kind, tone, app: "", host: "", text, href: "", ...extra });
-      const app = name => ({ app: `lab/${name}`, href: `/containers?q=${name}` });
+      const app = name => ({ app: `lab/${name}`, href: `/containers?find=${name}` });
       const all = [
         e(3600 * 2, "change", "info", "frigate changed: frigate: image, by demo", app("frigate")),
         e(3600 * 2 - 40, "restart", "info", "frigate rolled out: Image update", app("frigate")),

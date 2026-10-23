@@ -22,6 +22,7 @@ import os
 import time
 
 import json
+import urllib.parse
 
 import homestead_alerts as ALERTS
 import homestead_audit as AUDIT
@@ -116,7 +117,7 @@ def _entry(at, kind, tone, text, href="", app="", host=""):
 
 
 def _app_href(name):
-    return f"/containers?q={name}"
+    return "/containers?find=" + urllib.parse.quote(name, safe="")
 
 
 def _changes(since, now, role, unread):
@@ -171,10 +172,12 @@ def _schedules(since, now, role, unread):
         elif row.get("result") == "unknown":
             unknown += 1
         if row.get("missed"):
-            out.append(_entry(now, "schedule", "warn", f"{name} did not run when it was due", href, app=app))
+            # When it was due is not kept: stamped at its last run, or the
+            # window's start, so it does not move to the top on each look.
+            out.append(_entry(max(_at(row.get("last")) or since, since), "schedule", "warn", f"{name} did not run when it was due", href, app=app))
     if unknown:
         unread.append({"source": "schedules", "label": "Scheduled jobs",
-                       "reason": f"how {unknown} scheduled job{'s' if unknown != 1 else ''} last ran could not be read"})
+                       "reason": f"how {unknown} scheduled job{'s' if unknown != 1 else ''} last ran is not known"})
     return out
 
 
@@ -182,6 +185,9 @@ ALERT_TONES = {"critical": "bad", "degraded": "warn", "info": "info"}
 
 
 def _alerts(since, now, role, unread):
+    # homestead_alerts reads its file leniently (a bad file is a fresh start);
+    # here a file that is there but unreadable is said, not shown as no alerts.
+    SHARED.read_json(os.path.join(ALERTS.DATA_DIR, "alerts.json"), {})
     out = []
     for a in ALERTS.log(limit=ALERTS.LOG_SIZE)["alerts"]:
         if a.get("category") == "test" or not isinstance(a.get("at"), (int, float)) or a["at"] <= since:
@@ -192,6 +198,7 @@ def _alerts(since, now, role, unread):
 
 
 def _hosts(since, now, role, unread):
+    SHARED.read_json(os.path.join(HISTORY.DATA_DIR, HISTORY.FILE), {})     # as _alerts: unreadable is said
     out = []
     for e in HISTORY.maintenance_since(since):
         node, start, end = e["node"], e["start"], e.get("end")
@@ -211,17 +218,30 @@ def _audit_lines(since):
     whether that limit stopped the read before since. A missing file is no
     lines yet (the file is off, or nothing changed); one that cannot be read
     raises."""
-    out, budget = [], AUDIT_READ
-    for name in (AUDIT.FILE, AUDIT.FILE + ".1"):
-        try:
-            handle = open(os.path.join(SHARED.DIR, name), "rb")
-        except FileNotFoundError:
-            continue
-        with handle:
-            size = os.fstat(handle.fileno()).st_size
-            start = max(0, size - budget)
-            handle.seek(start)
-            data = handle.read(size - start)
+    handles = []
+    try:
+        # Both opened before either is read: a rotation in between would
+        # otherwise hand the same file over twice, as both names.
+        for name in (AUDIT.FILE, AUDIT.FILE + ".1"):
+            try:
+                handles.append(open(os.path.join(SHARED.DIR, name), "rb"))
+            except FileNotFoundError:
+                continue
+        if len(handles) == 2 and os.path.sameopenfile(handles[0].fileno(), handles[1].fileno()):
+            handles.pop().close()
+        return _read_lines(handles, since, AUDIT_READ)
+    finally:
+        for handle in handles:
+            handle.close()
+
+
+def _read_lines(handles, since, budget):
+    out = []
+    for handle in handles:
+        size = os.fstat(handle.fileno()).st_size
+        start = max(0, size - budget)
+        handle.seek(start)
+        data = handle.read(size - start)
         budget -= len(data)
         lines = data.split(b"\n")[1 if start else 0:]          # a line cut at the start is not read
         for raw in reversed(lines):
@@ -230,11 +250,12 @@ def _audit_lines(since):
             except ValueError:
                 continue                                       # a half-written or garbled line
             at = AUDIT._at(raw) if isinstance(entry, dict) else None
-            if at is None or not isinstance(entry.get("method"), str) or not isinstance(entry.get("path"), str):
-                continue                                       # not a request's line (a note of lost lines)
-            if at <= since:
+            if at is not None and at <= since:
                 return out, False
-            out.append((at, entry))
+            if at is not None and entry.get("event") == "audit-suppressed" and isinstance(entry.get("suppressed"), int):
+                out.append((at, {"suppressed": entry["suppressed"]}))     # refusals held back from the file
+            elif at is not None and isinstance(entry.get("method"), str) and isinstance(entry.get("path"), str):
+                out.append((at, entry))                        # anything else is a note, not a request
         if start:
             return out, True
     return out, False
@@ -250,11 +271,14 @@ def _who(entry):
 def _audit(since, now, role, unread):
     if role != "admin":
         # The lines name people and what they tried: an admin's to read.
-        unread.append({"source": "audit", "label": "Audit log", "reason": "shown to admins only"})
+        unread.append({"source": "audit", "label": "Audit log", "reason": "shown to admins only", "admin_only": True})
         return []
     lines, cut = _audit_lines(since)
     out, refused = [], []
     for at, e in lines:
+        if "suppressed" in e:
+            refused += [at] * e["suppressed"]
+            continue
         if AUDIT._refusal({"status": e.get("status"), "outcome": e.get("outcome"), "user": e.get("user") or ""}):
             refused.append(at)
             continue
@@ -305,8 +329,12 @@ def timeline(user, role, since=None, now=None):
         try:
             entries += read(since, now, role, unread)
         except Exception as error:      # one source never takes the others down (#620)
+            # Any other error's words can name the API server's address: the
+            # kind only here, the whole of it in the pod log.
+            if not isinstance(error, SHARED.Unreadable):
+                print(f"timeline: {key} not read: {str(error)[:300]}", flush=True)
             reason = (str(error) if isinstance(error, SHARED.Unreadable)
-                      else f"Homestead could not read it ({type(error).__name__}: {error})")
+                      else f"Homestead could not read it ({type(error).__name__})")
             unread.append({"source": key, "label": label, "reason": reason[:300]})
     entries.sort(key=lambda e: e["at"], reverse=True)
     counts = {}

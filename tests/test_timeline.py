@@ -166,7 +166,7 @@ class FeedTests(DataDir):
         self.assertEqual({"change", "restart", "schedule", "alert", "host"}, set(texts))
         game = next(e for e in texts["change"] if e["app"] == "apps/game")
         self.assertEqual("game changed: Image, Environment, by alice", game["text"])
-        self.assertEqual("/containers?q=game", game["href"])
+        self.assertEqual("/containers?find=game", game["href"])
         wiki = next(e for e in texts["change"] if e["app"] == "apps/wiki")
         self.assertEqual("wiki changed: Copies, outside Homestead", wiki["text"])
         self.assertNotIn("apps/old", [e["app"] for e in texts["change"]])
@@ -178,7 +178,8 @@ class FeedTests(DataDir):
         self.assertEqual(("backup failed", "bad", "/schedules?find=apps/backup"), (failed["text"], failed["tone"], failed["href"]))
         self.assertEqual(("nightly ran", "ok"), next((e["text"], e["tone"]) for e in texts["schedule"] if e["app"] == "apps/nightly"))
         missed = next(e for e in texts["schedule"] if e["app"] == "apps/weekly")
-        self.assertEqual(("weekly did not run when it was due", "warn", T0), (missed["text"], missed["tone"], missed["at"]))
+        # Stamped where the window starts (its last run is older), so it does not jump to the top on each refresh.
+        self.assertEqual(("weekly did not run when it was due", "warn", T0 - 86400), (missed["text"], missed["tone"], missed["at"]))
         self.assertEqual(["Scheduled job backup failed", "Scheduled job backup ran successfully"],
                          sorted(e["text"] for e in texts["alert"]))
         self.assertEqual("ok", next(e["tone"] for e in texts["alert"] if "successfully" in e["text"]))
@@ -191,7 +192,7 @@ class FeedTests(DataDir):
     def test_unknown_cronjob_runs_are_said_not_skipped(self):
         out = self.feed()
         self.assertIn({"source": "schedules", "label": "Scheduled jobs",
-                       "reason": "how 1 scheduled job last ran could not be read"}, out["unread"])
+                       "reason": "how 1 scheduled job last ran is not known"}, out["unread"])
 
     def test_a_source_that_fails_is_named_not_skipped(self):
         for name, label in (("changes", "App changes"), ("restarts", "App restarts"), ("schedules", "Scheduled jobs"),
@@ -232,7 +233,7 @@ class FeedTests(DataDir):
         out = self.feed()
         self.assertEqual(T.MAX_ENTRIES, len(out["entries"]))
         self.assertEqual(399 + 3 + 3 + 2 + 1 - T.MAX_ENTRIES, out["more"])
-        self.assertEqual(T0, out["entries"][0]["at"])      # weekly's missed run is "now"
+        self.assertEqual(T0 - 1, out["entries"][0]["at"])
         self.assertEqual(399, out["counts"]["change"])       # counts are of the whole window
 
     def test_no_values_from_change_rows_or_messages(self):
@@ -246,6 +247,25 @@ class FeedTests(DataDir):
                            "job": "j1", "outcome": "returned"}]
         host = [e for e in self.feed()["entries"] if e["kind"] == "host"]
         self.assertEqual([T0 - 3600], [e["at"] for e in host])
+
+    def test_an_unreadable_alerts_or_history_file_is_named_not_empty(self):
+        import homestead_alerts as ALERTS
+        import homestead_history as HISTORY
+        for module, name, source in ((ALERTS, "alerts.json", "alerts"), (HISTORY, HISTORY.FILE, "hosts")):
+            with self.subTest(source), tempfile.TemporaryDirectory() as folder, mock.patch.object(module, "DATA_DIR", folder):
+                with open(os.path.join(folder, name), "w", encoding="utf-8") as handle:
+                    handle.write("not json")
+                out = self.feed()
+                self.assertEqual([source], [u["source"] for u in out["unread"] if u["source"] in ("alerts", "hosts")])
+
+    def test_another_failure_names_its_kind_not_its_words(self):
+        def broken():
+            raise RuntimeError("GET https://192.0.2.10:6443/apis/batch/v1/cronjobs refused")
+        with mock.patch.object(T, "_cron_rows", broken):
+            out = self.feed()
+        gone = [u for u in out["unread"] if u["source"] == "schedules"]
+        self.assertEqual("Homestead could not read it (RuntimeError)", gone[0]["reason"])
+        self.assertNotIn("192.0.2.10", json.dumps(out))
 
 
 class AuditTests(DataDir):
@@ -275,7 +295,8 @@ class AuditTests(DataDir):
         for role in ("viewer", "operator"):
             entries, unread = self.audit(role)
             self.assertEqual([], entries)
-            self.assertEqual([{"source": "audit", "label": "Audit log", "reason": "shown to admins only"}], unread)
+            self.assertEqual([{"source": "audit", "label": "Audit log", "reason": "shown to admins only", "admin_only": True}],
+                             unread)
         entries, unread = self.audit()
         self.assertEqual(([("alice POST /api/restart", "apps/game", "info", T0 - 60)], []),
                          ([(e["text"], e["app"], e["tone"], e["at"]) for e in entries], unread))
@@ -337,6 +358,22 @@ def request(user="alice", role="viewer", **query):
     import types
     return types.SimpleNamespace(user=user, role=role, query={k: [v] for k, v in query.items()}, body={},
                                  method="GET", path="/api/timeline")
+
+    def test_a_rotation_between_the_two_opens_is_not_read_twice(self):
+        import homestead_audit as AUDIT
+        self.write([self.line(T0 - 50, path="/api/new")])
+        os.link(os.path.join(self.tmp.name, AUDIT.FILE), os.path.join(self.tmp.name, AUDIT.FILE + ".1"))
+        entries, _ = self.audit()
+        self.assertEqual(["alice POST /api/new"], [e["text"] for e in entries])
+
+    def test_held_back_refusals_are_counted(self):
+        import homestead_audit as AUDIT
+        self.write([json.dumps({"v": 1, "at": iso(T0 - 40).replace("Z", ".000Z"), "event": "audit-suppressed",
+                                "suppressed": 12, "addr": "192.0.2.15", "detail": "12 more refused requests from 192.0.2.15"}),
+                    self.line(T0 - 30, status=403)])
+        entries, _ = self.audit()
+        self.assertEqual(["13 requests were refused"], [e["text"] for e in entries])
+        self.assertNotIn("192.0.2.15", json.dumps(entries))
 
 
 class RouteTests(DataDir):

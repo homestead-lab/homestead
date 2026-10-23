@@ -18,7 +18,7 @@ const DATA = {
             entry(5000, "restart", "warn", "game restarted: Crashed", { app: "apps/game" }),
             entry(6000, "change", "info", "wiki changed: Copies, outside Homestead", { app: "apps/wiki" })],
   counts: { alert: 1, schedule: 1, restart: 2, change: 2, host: 1 },
-  unread: [{ source: "audit", label: "Audit log", reason: "shown to admins only" },
+  unread: [{ source: "audit", label: "Audit log", reason: "shown to admins only", admin_only: true },
            { source: "restarts", label: "App restarts", reason: "Homestead could not read restarts.json <b>" }],
 };
 
@@ -32,6 +32,8 @@ function setup(data = DATA, { fail = "" } = {}) {
       if (opts) { out.posts.push(path); return { ok: true }; }
       out.calls.push(path);
       if (fail) throw new Error(fail);
+      // A chosen range answers differently, so the card and the page can be told apart.
+      if (path.includes("since=")) return { ...JSON.parse(JSON.stringify(data)), entries: [], counts: {} };
       return JSON.parse(JSON.stringify(data));
     } };
   ctx.window = ctx;
@@ -114,4 +116,40 @@ test("being here is noted at most once every five minutes", async () => {
   ctx.ME = null;
   await T.markSeen(1_000_000 + 20 * 60_000);
   assert.equal(out.posts.length, 2, "signed out: nothing to note");
+});
+
+test("the admins-only note comes from the server's flag, not its words", async () => {
+  const { ctx } = setup({ ...DATA, unread: [{ source: "audit", label: "Audit log", reason: "nur für Admins", admin_only: true }] });
+  const T = vm.runInContext("Timeline", ctx);
+  await T.load();
+  assert.doesNotMatch(T.widget({}), /Could not read Audit log/);
+});
+
+test("labels are escaped once", async () => {
+  const { ctx, out } = setup({ ...DATA, unread: [{ source: "x", label: "Apps & VMs", reason: "r" }] });
+  await ctx.viewTimeline();
+  assert.match(out.html, /Could not read Apps &amp; VMs/);
+  assert.doesNotMatch(out.html, /&amp;amp;/);
+});
+
+test("the page's range does not change what the card shows", async () => {
+  const { ctx } = setup();
+  const T = vm.runInContext("Timeline", ctx);
+  await T.load();
+  const card = T.widget({});
+  await ctx.viewTimeline();
+  await ctx.timelineRange("month");
+  assert.equal(T.widget({}), card);
+});
+
+test("being here is noted as soon as Homestead starts, then on a timer", async () => {
+  const { ctx, out } = setup();
+  const T = vm.runInContext("Timeline", ctx);
+  const timers = [];
+  T.start({ setTimeout: (fn, ms) => timers.push(["once", ms, fn]), setInterval: (fn, ms) => timers.push(["every", ms, fn]),
+    document: { addEventListener: () => {} } });
+  assert.deepEqual(timers.map(([kind]) => kind), ["once", "every"]);
+  assert.ok(timers[0][1] <= 5000);
+  await timers[0][2]();
+  assert.deepEqual(out.posts, ["/api/timeline/seen"]);
 });
