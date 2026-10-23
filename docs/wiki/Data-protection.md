@@ -163,6 +163,24 @@ weekly trim on under Housekeeping. If you had deleted it, Homestead's weekly
 trim starts off; turn it on there. After the update, Homestead's first run is
 the next Saturday's.
 
+### Clashes, and the week ahead
+
+Longhorn does not stagger its jobs. Two backups of a volume at once, or a
+trim while a volume is backed up, slow each other down and can fail. So
+Homestead looks at the coming week: a trim or a backup that starts in the
+same minute as a backup on a volume they share is a **clash**, and one that
+starts within half an hour of it is **close**. A snapshot during a backup is
+fine, and is not reported.
+
+A clash shows on the Dashboard's health suggestions ("1 schedule clash this
+week"), and its **Review** opens **Containers › Schedules › This week**: every
+run in the next seven days, by day and in your own time - Longhorn's jobs,
+CronJobs, power schedules, the host OS update window and the maintenance
+window - with the clashes first. A job that runs more than six times a day is
+one "runs all day" line. Anything Homestead could not read is named at the top,
+so a quiet week is never one it did not see. To fix a clash, move one of the
+two jobs here.
+
 A snapshot or backup job whose last run failed, or backup jobs with no
 backup target (or one that cannot be reached), make the cluster
 **degraded** on the Dashboard and raise an alert. Its **Review** button leads
