@@ -153,3 +153,10 @@ test("being here is noted as soon as Homestead starts, then on a timer", async (
   await timers[0][2]();
   assert.deepEqual(out.posts, ["/api/timeline/seen"]);
 });
+
+test("on a phone the app or host stays apart from the sentence, and the range fits", async () => {
+  const { ctx, out } = setup();
+  await ctx.viewTimeline();
+  assert.match(out.html, /game restarted: Crashed<span class="dim xs"> · apps\/game<\/span>/);
+  assert.match(out.html, />Since last visit</);
+});

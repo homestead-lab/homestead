@@ -12,7 +12,7 @@ const Timeline = (() => {
   };
   const TONE_RANK = { bad: 0, warn: 1, info: 2, ok: 3 };
   const KIND_TONE = { alert: "warn", schedule: "info", restart: "warn", change: "info", host: "hw", action: "neutral" };
-  const RANGES = { last: ["Since you were last here", 0], day: ["24 hours", 86400], week: ["7 days", 7 * 86400], month: ["30 days", 30 * 86400] };
+  const RANGES = { last: ["Since last visit", 0], day: ["24 hours", 86400], week: ["7 days", 7 * 86400], month: ["30 days", 30 * 86400] };
   const MARK_EVERY = 5 * 60 * 1000;
   // The card always shows since you were last here; the page whatever range is picked.
   const state = { data: null, error: "", card: null, cardError: "", range: "last", filter: { kind: "", app: "", host: "" }, marked: 0 };
@@ -90,7 +90,7 @@ const Timeline = (() => {
     const row = e => `<tr class="tl-row">
       <td data-label="When" class="nowrap" data-sort="${e.at}">${fmtWhen(e.at)}</td>
       <td data-label="Kind">${UI.chip(KINDS[e.kind]?.[2] || e.kind, e.tone, { size: "slim" })}</td>
-      <td data-label="What">${esc(e.text)}${e.app || e.host ? `<div class="dim xs">${esc(e.app || e.host)}</div>` : ""}</td>
+      <td data-label="What">${esc(e.text)}${e.app || e.host ? `<span class="dim xs"> · ${esc(e.app || e.host)}</span>` : ""}</td>
       <td data-actions>${e.href ? `<button type="button" class="btn sm"${open(e.href)}>Open</button>` : ""}</td></tr>`;
     paint(`${UI.pageHeader("Timeline", `${esc(sinceWords(data))} · ${many(entries.length + (data.more || 0), "event", "events")}`, rangeSeg)}
       ${state.error ? UI.callout("warn", "Could not read the timeline just now", `${esc(state.error)} · this is the last read.`) : ""}
