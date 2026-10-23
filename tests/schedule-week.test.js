@@ -295,3 +295,17 @@ test("the demo has an app that stops during its backup", () => {
   const demo = fs.readFileSync("web/js/demo.js", "utf8");
   assert.match(demo, /kind: "app", ns: "lab", name: "frigate"[^}]*schedule: \{ stop: "02:01", days: \[6\], tz: "UTC" \}/);
 });
+
+test("review: a stop at the backup's own start minute is close, and so is one known only from the server's next runs", () => {
+  const { W } = setup();
+  const lh = { jobs: [{ name: "nightly", task: "backup", cron: "0 2 * * *", volumes: ["pvc-db"] }], clashes: [],
+    volumes: [{ name: "pvc-db", pvc: "db-data", namespace: "lab" }] };
+  const workloads = [{ name: "db", ns: "lab", claims: ["db-data"] }, { name: "db", ns: "other", claims: [] }];
+  const atStart = W.collect({ lh, workloads, power: { items: [{ kind: "app", ns: "lab", name: "db", schedule: { stop: "02:00", days: [5], tz: "UTC" } }] } }, FROM);
+  same(atStart.overlaps.map(o => iso(o.at)), ["2026-10-24T02:00"]);
+  const next = W.collect({ lh, workloads, power: { items: [
+    { kind: "app", ns: "lab", name: "db", next: [{ at: SAT_0200 + 300.4, action: "stop" }] },
+    { kind: "app", ns: "other", name: "db", next: [{ at: SAT_0200 + 300.4, action: "stop" }] }] } }, FROM);
+  same(next.overlaps.map(o => o.reason), ["app db stops during its backup nightly"]);
+  same(next.items.filter(i => i.kind === "Power").map(i => i.clash), ["close", ""], "only the app in lab, not its namesake in other");
+});

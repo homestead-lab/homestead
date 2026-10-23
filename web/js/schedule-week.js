@@ -140,7 +140,7 @@
     read("crons", Array.isArray, crons => crons.filter(c => !c.suspend)
       .forEach(c => addCron({ kind: "CronJob", name: c.name, what: c.namespace ? `job in ${c.namespace}` : "job" }, c.schedule, c.time_zone || "")));
     read("power", v => answered(v) && Array.isArray(v.items), power => power.items.forEach(p => {
-      const base = { kind: "Power", name: p.name };
+      const base = { kind: "Power", name: p.name, ns: p.ns || "" };
       const s = p.schedule;
       let stopped = [];
       if (s && Array.isArray(s.days)) {
@@ -182,11 +182,11 @@
     const overlaps = overlapsOf(backups, stops, restarts ? windows : [], apps, copies, volumeOf);
     // The two runs of each pair the server found, marked; a clash outranks close.
     const marks = new Map(), mark = (key, severity) => { if (marks.get(key) !== "clash") marks.set(key, severity); };
-        // Keys: kind and name at the second; a power start is never marked.
-    const key = (kind, name, at) => `${kind}:${name}@${at}`;
+    // Keys: kind, namespace and name at the second; a power start is never marked.
+    const key = (kind, name, at, ns = "") => `${kind}:${ns}/${name}@${at}`;
     for (const c of clashes) for (const pair of c.times || []) pair.forEach((t, i) => mark(key("Longhorn", c.jobs?.[i]?.name, t), c.severity));
-    for (const o of overlaps) { mark(key("Longhorn", o.backup, o.started.getTime() / 1000), "close"); mark(key(o.kind, o.other, o.at.getTime() / 1000), "close"); }
-    for (const item of items) if (item.kind !== "Power" || item.what === "stops") item.clash = marks.get(key(item.kind, item.name, item.at.getTime() / 1000)) || "";
+    for (const o of overlaps) { mark(key("Longhorn", o.backup, o.started.getTime() / 1000), "close"); mark(key(o.kind, o.other, o.at.getTime() / 1000, o.ns), "close"); }
+    for (const item of items) if (item.kind !== "Power" || item.what === "stops") item.clash = marks.get(key(item.kind, item.name, item.at.getTime() / 1000, item.ns)) || "";
     // A collapsed job has no single run to mark: it carries its worst pair.
     for (const f of frequent) if (f.kind === "Longhorn") {
       const named = clashes.filter(c => (c.jobs || []).some(j => j.name === f.name));
@@ -202,10 +202,12 @@
      time), and only when it may restart hosts; it names the hosts that hold a
      copy of the backup's volumes when /api/volumes says, else any backup in
      that hour counts. A power stop counts for an app whose claims the backup
-     covers (VMs are not matched). */
+     covers (VMs are not matched). A backup that began before the week did is
+     not seen. */
   function overlapsOf(backups, stops, windows, apps, copies, volumeOf) {
     const out = [], HOUR = 3600000;
-    const during = (b, at, span = 0) => b.times.find(t => t.getTime() < at.getTime() + span && at.getTime() < t.getTime() + b.length);
+    // Running at a moment: started at or before it (or within the window's span) and not yet done.
+    const during = (b, at, span = 0) => b.times.find(t => (span ? t.getTime() < at.getTime() + span : t.getTime() <= at.getTime()) && at.getTime() < t.getTime() + b.length);
     for (const at of windows) for (const b of backups) {
       const started = during(b, at, HOUR);
       if (!started) continue;
@@ -222,7 +224,7 @@
           if (![...b.volumes].some(v => volumes.has(v))) continue;
           for (const at of s.times) {
             const started = during(b, at);
-            if (started) out.push({ severity: "close", at, started, backup: b.name, kind: "Power", other: s.name, reason: `app ${s.name} stops during its backup ${b.name}` });
+            if (started) out.push({ severity: "close", at, started, backup: b.name, kind: "Power", other: s.name, ns: s.ns || "", reason: `app ${s.name} stops during its backup ${b.name}` });
           }
         }
       }
