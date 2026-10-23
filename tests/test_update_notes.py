@@ -24,7 +24,7 @@ def blob(obj):
 class Registry:
     """A registry by path: manifests/<ref> and blobs/<digest>, per repo."""
     def __init__(self):
-        self.paths, self.calls = {}, []
+        self.paths, self.calls, self.limits = {}, [], []
 
     def image(self, repo, config, tag=None, index=True, size=None):
         cfg_body, cfg_digest = blob({"architecture": "amd64", "config": config})
@@ -42,8 +42,9 @@ class Registry:
             self.paths[(repo, "manifests/" + tag)] = top
         return {"top": top_digest, "manifest": man_digest, "config": cfg_digest}
 
-    def __call__(self, parsed, path, auths, accept="application/json"):
+    def __call__(self, parsed, path, auths, accept="application/json", limit=None):
         self.calls.append((parsed["repo"], path, dict(auths)))
+        self.limits.append(limit)
         body = self.paths.get((parsed["repo"], path))
         if body is None:
             raise UPDATES.urllib.error.HTTPError("https://registry.example.com", 404, "not found", {}, None)
@@ -95,7 +96,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_a_config_blob_that_does_not_match_its_digest_is_refused_and_not_kept(self):
         d = self.registry.image("example/app", {"User": "1000"})
-        self.registry.paths[("example/app", "blobs/" + d["config"])] = b'{"config": {"User": "0"}}'
+        self.registry.paths[("example/app", "blobs/" + d["config"])] = self.registry.paths[("example/app", "blobs/" + d["config"])].replace(b"1000", b"0000")
         with self.assertRaisesRegex(ValueError, "digest"):
             NOTES.image_config("registry.example.com/example/app@" + d["top"], {})
         self.assertEqual({}, NOTES._CONFIGS)
@@ -128,6 +129,18 @@ class ConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "large"):
             NOTES.image_config("registry.example.com/example/app@" + d["top"], {})
         self.assertNotIn("blobs/" + d["config"], [path for _, path, _ in self.registry.calls])
+
+    def test_every_read_is_capped_and_the_config_at_its_declared_size(self):
+        d = self.registry.image("example/app", {"User": "1000"})
+        NOTES.image_config("registry.example.com/example/app@" + d["top"], {})
+        size = len(self.registry.paths[("example/app", "blobs/" + d["config"])])
+        self.assertEqual([NOTES.MANIFEST_MAX_BYTES, NOTES.MANIFEST_MAX_BYTES, size], self.registry.limits)
+
+    def test_a_config_of_another_size_than_declared_is_refused(self):
+        d = self.registry.image("example/app", {"User": "1000"}, size=5)
+        with self.assertRaisesRegex(ValueError, "size"):
+            NOTES.image_config("registry.example.com/example/app@" + d["top"], {})
+        self.assertEqual({}, NOTES._CONFIGS)
 
     def test_the_workloads_pull_credentials_go_with_every_request(self):
         d = self.registry.image("example/app", {})
@@ -322,7 +335,7 @@ class RouteTests(unittest.TestCase):
 
     def test_registry_errors_are_sentences_and_never_their_text(self):
         def failing(code):
-            def answer(*_):
+            def answer(*_, **__):
                 raise UPDATES.urllib.error.HTTPError("https://registry.example.com/v2/secret-path", code, "x", {}, None)
             return answer
         for code, words in ((429, "slow down"), (401, "authentication"), (403, "authentication"), (404, "HTTP 404")):
@@ -331,7 +344,7 @@ class RouteTests(unittest.TestCase):
                 error = NOTES.notes_for("lab", "app")["images"][0]["error"]
             self.assertIn(words, error)
             self.assertNotIn("secret-path", error)
-        def boom(*_):
+        def boom(*_, **__):
             raise RuntimeError("token=abc at https://registry.example.com")
         with mock.patch.object(UPDATES, "_registry_json", boom):
             error = NOTES.notes_for("lab", "app")["images"][0]["error"]
@@ -339,13 +352,57 @@ class RouteTests(unittest.TestCase):
         self.assertIn("RuntimeError", error)
 
     def test_a_digest_mismatch_is_named(self):
-        self.registry.paths[("example/app", "blobs/" + self.new["config"])] = b"{}"
+        self.registry.paths[("example/app", "blobs/" + self.new["config"])] = self.registry.paths[("example/app", "blobs/" + self.new["config"])].replace(b"1000", b"0000")
         self.assertIn("does not match its digest", NOTES.notes_for("lab", "app")["images"][0]["error"])
 
     def test_names_must_be_dns_names(self):
         for ns, name in (("", "app"), ("lab", "../x"), ("lab", None), ("Lab x", "app")):
             with self.assertRaises(ValueError):
                 NOTES.notes_for(ns, name)
+
+
+class RegistryLimitTests(unittest.TestCase):
+    """_registry_json(limit=n) never reads more than n bytes of an answer."""
+    class Answer:
+        def __init__(self, body, length=None):
+            self.body, self.read_sizes = body, []
+            self.headers = {"Content-Length": str(length)} if length is not None else {}
+        def read(self, size=-1):
+            self.read_sizes.append(size)
+            return self.body if size < 0 else self.body[:size]
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            return False
+
+    def fetch(self, answer, limit):
+        parsed = UPDATES.parse_image("registry.example.com/example/app:1")
+        with mock.patch.object(UPDATES, "_open", lambda req, credential=None, timeout=12: answer):
+            return UPDATES._registry_json(parsed, "blobs/sha256:a", {}, limit=limit)
+
+    def test_an_answer_within_the_limit_is_read(self):
+        answer = self.Answer(b"x" * 10, length=10)
+        self.assertEqual(b"x" * 10, self.fetch(answer, 10)[0])
+        self.assertEqual([11], answer.read_sizes)
+
+    def test_a_declared_length_over_the_limit_is_not_read(self):
+        answer = self.Answer(b"x" * 10, length=11)
+        with self.assertRaisesRegex(ValueError, "larger"):
+            self.fetch(answer, 10)
+        self.assertEqual([], answer.read_sizes)
+
+    def test_more_bytes_than_the_limit_are_refused_whatever_the_length_says(self):
+        for length in (None, 5, "garbled"):
+            answer = self.Answer(b"x" * 11)
+            answer.headers = {} if length is None else {"Content-Length": str(length)}
+            with self.assertRaisesRegex(ValueError, "larger"):
+                self.fetch(answer, 10)
+            self.assertEqual([11], answer.read_sizes)
+
+    def test_without_a_limit_nothing_changes(self):
+        answer = self.Answer(b"x" * 100, length=100)
+        self.assertEqual(b"x" * 100, self.fetch(answer, None)[0])
+        self.assertEqual([-1], answer.read_sizes)
 
 
 if __name__ == "__main__":

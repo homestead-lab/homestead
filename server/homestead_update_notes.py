@@ -21,6 +21,7 @@ import homestead_updates as U
 
 SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 CONFIG_MAX_BYTES = 1 << 20
+MANIFEST_MAX_BYTES = 4 << 20   # the distribution spec's own limit for a manifest
 
 # A config is named by a digest, so it never changes. Kept, up to a bound,
 # under the registry, repository and manifest digest it was read for - every
@@ -45,7 +46,7 @@ def image_config(ref, auths, arch="amd64"):
         raise ValueError("only sha256 image digests are read")
     def manifest(reference):
         return U._registry_json(parsed, "manifests/" + urllib.parse.quote(reference, safe=":"), auths,
-                                U.MANIFEST_ACCEPT)[0]
+                                U.MANIFEST_ACCEPT, limit=MANIFEST_MAX_BYTES)[0]
     key = lambda top: (parsed["registry"], parsed["repo"], top, arch)
     def cached(top):
         with _CONFIGS_LOCK:
@@ -73,10 +74,16 @@ def image_config(ref, auths, arch="amd64"):
     config_digest = descriptor.get("digest") or ""
     if not SHA256.fullmatch(config_digest):
         raise ValueError("the image's manifest names no sha256 config")
-    if int(descriptor.get("size") or 0) > CONFIG_MAX_BYTES:
+    size = descriptor.get("size")
+    if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+        raise ValueError("the image's manifest gives no size for its config")
+    if size > CONFIG_MAX_BYTES:
         raise ValueError("the image's config is too large to read")
-    config = _verified(U._registry_json(parsed, "blobs/" + config_digest, auths)[0], config_digest,
-                       "config").get("config") or {}
+    # Read no more than the manifest says, and only that many bytes count.
+    body = U._registry_json(parsed, "blobs/" + config_digest, auths, limit=size)[0]
+    if len(body) != size:
+        raise ValueError("the image's config is not the size its manifest gives")
+    config = _verified(body, config_digest, "config").get("config") or {}
     with _CONFIGS_LOCK:
         while len(_CONFIGS) >= _CONFIGS_MAX:
             _CONFIGS.pop(next(iter(_CONFIGS)))
