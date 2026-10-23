@@ -79,6 +79,11 @@ linked cluster, which applies its own rules to them.
   never leave the server; a Secret's values are shown to admins only.
   Helm values/notes and VM cloud-init are also admin-only. Operators editing
   other VM hardware preserve cloud-init without receiving its contents.
+- **Certificate expiry**: to date TLS Secrets, the leader lists them (the API
+  cannot leave out `tls.key`), decodes only `tls.crt` to its two dates and
+  drops each page at once. It keeps and shows kind, namespace, name, expiry and
+  state only; never a key, and nothing from inside the certificate. API keys
+  and their owners are listed there for admins only.
 - **Linked clusters**: every request between them is HMAC-signed with a shared
   key over its sender, time, a single-use nonce, method, path, person, role
   and body. See `docs/multi-cluster.md`.
