@@ -130,9 +130,11 @@ def _row(volume, enabled, modes):
         freezes, why = when_on, why_on
     else:
         freezes, why = "no", ("Set to never freeze" if mode == "disabled" else "Follows the cluster, which is off")
+    # Who set an override, when the mark checks out for it; set elsewhere when it does not.
+    changed = CHANGES.object_author("Volume", LHNS, name, volume, mode) if mode != "ignored" else None
     return {"name": name, "claim": "/".join(x for x in (k8s.get("namespace"), k8s.get("pvcName")) if x),
             "mode": mode, "freezes": freezes, "why": why, "when_on": when_on, "engine": engine, "access": access,
-            "volume_mode": volume_mode}
+            "volume_mode": volume_mode, "changed": changed or ({"outside": True} if mode != "ignored" else None)}
 
 
 def status():
@@ -146,18 +148,20 @@ def status():
     modes = {(p.get("metadata") or {}).get("name"): (p.get("spec") or {}).get("volumeMode") or "Filesystem"
              for p in _items("/api/v1/persistentvolumes")}
     rows = sorted((_row(v, enabled, modes) for v in _items(f"{LH}/volumes")), key=lambda r: (r["claim"] or "~", r["name"]))
+    # Who made it what it is now, when the mark checks out for this value; when
+    # it is not Longhorn's default and no mark does, it was changed elsewhere.
+    changed = CHANGES.object_author("Setting", LHNS, SETTING, item, _word(enabled)) if enabled is not None else None
     return {"supported": True, "version": version, "enabled": bool(enabled), "value": raw if isinstance(raw, str) else "",
             "unknown_value": enabled is None, "from_chart": _from_chart(),
-            "changed": CHANGES.object_author("Setting", LHNS, SETTING, item),
+            "changed": changed or (None if enabled is False else {"outside": True}),
             "old_kernels": _old_kernels(), "volumes": rows,
             "counts": {"total": len(rows), "freezing": sum(r["freezes"] == "yes" for r in rows)}}
 
 
-def _marked(kind, name, body):
-    mark = CHANGES.object_mark(kind, LHNS, name)
-    if mark:
-        body["metadata"] = {"annotations": {CHANGES.AUTHOR: mark}}
-    return body
+def _word(enabled):
+    """What the changedBy mark on the setting is signed over: on or off, so
+    Longhorn writing the same value in another format still matches."""
+    return "on" if enabled else "off"
 
 
 def _setting_or_refuse():
@@ -172,8 +176,8 @@ def save(enabled):
     if not isinstance(enabled, bool):
         raise ValueError("enabled must be true or false")
     item = _setting_or_refuse()
-    ksend("PATCH", f"{LH}/settings/{SETTING}", _marked("Setting", SETTING, {"value": encode_value(enabled, item.get("value"))}),
-          ctype=MERGE)
+    with CHANGES.marking(_word(enabled)):
+        ksend("PATCH", f"{LH}/settings/{SETTING}", {"value": encode_value(enabled, item.get("value"))}, ctype=MERGE)
     detail = ("Longhorn now freezes each volume's filesystem for its snapshots and backups" if enabled
               else "Longhorn no longer freezes filesystems for snapshots, except on volumes set to always")
     if _from_chart():
@@ -193,7 +197,8 @@ def save_volume(volume, mode):
         raise ValueError(f"There is no Longhorn volume {volume}; refresh")
     if mode == "enabled" and ((found.get("spec") or {}).get("dataEngine") or "v1") == "v2":
         raise ValueError(f"{volume} is a V2 volume: Longhorn never freezes these")
-    ksend("PATCH", f"{LH}/volumes/{volume}", _marked("Volume", volume, {"spec": {"freezeFilesystemForSnapshot": mode}}), ctype=MERGE)
+    with CHANGES.marking(mode):
+        ksend("PATCH", f"{LH}/volumes/{volume}", {"spec": {"freezeFilesystemForSnapshot": mode}}, ctype=MERGE)
     claim = _row(found, False, {})["claim"] or volume
     said = {"ignored": "follows the cluster setting", "enabled": "is always frozen for snapshots",
             "disabled": "is never frozen for snapshots"}[mode]
@@ -202,12 +207,18 @@ def save_volume(volume, mode):
 
 def _save(request):
     homestead_routes.forget("fsfreeze")
-    return save(request.body.get("enabled"))
+    try:
+        return save(request.body.get("enabled"))
+    finally:
+        homestead_routes.forget("fsfreeze")    # again: a read that ran during the write
 
 
 def _save_volume(request):
     homestead_routes.forget("fsfreeze")
-    return save_volume(request.body.get("volume"), request.body.get("mode"))
+    try:
+        return save_volume(request.body.get("volume"), request.body.get("mode"))
+    finally:
+        homestead_routes.forget("fsfreeze")
 
 
 # Its routes and who may use them (homestead_routes.py).

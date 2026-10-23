@@ -206,13 +206,15 @@ The trade-offs:
 - Longhorn ships it off because on kernel 5.17 or older, a volume that fails
   in the middle of a freeze can leave its filesystem stuck until the host
   restarts. The section names any Longhorn host on such a kernel, and turning
-  it on then needs an extra tick. Longhorn recommends ext4 or XFS.
+  it on then needs an extra tick; setting one volume to always freeze asks
+  first. Longhorn recommends ext4 or XFS.
 - If Longhorn's chart sets the value too, applying the chart again puts the
   chart's value back. The section says so when that's the case.
 
 Each change carries the `homestead.io/changedBy` mark
 ([What Homestead changes](What-Homestead-changes)), and the section says who
-made the last one. On Longhorn older than 1.7 the section says the freeze
+made the setting and each override what it is, or that it was changed
+outside Homestead. On Longhorn older than 1.7 the section says the freeze
 isn't available.
 
 A database still does best with its own dump or checkpoint. A frozen

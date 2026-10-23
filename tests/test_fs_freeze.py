@@ -20,7 +20,9 @@ AUTHOR = CH.AUTHOR
 
 class Marks(unittest.TestCase):
     """The changedBy mark on objects other than Deployments: a Longhorn
-    Setting or Volume, signed over its kind, namespace and name."""
+    Setting or Volume, signed over its kind, namespace, name and the value
+    written, so a mark left behind by a later change made elsewhere no longer
+    checks out."""
 
     def setUp(self):
         for name, value in (("_author_key", lambda: b"test-key"),
@@ -35,47 +37,97 @@ class Marks(unittest.TestCase):
 
     def test_a_mark_reads_back_as_who_made_it(self):
         CH.REQUEST.user = "alice"
-        raw = CH.object_mark("Setting", "longhorn-system", "freeze-filesystem-for-snapshot", now=1000)
+        raw = CH.object_mark("Setting", "longhorn-system", "freeze-filesystem-for-snapshot", "on", now=1000)
         self.assertEqual(json.loads(raw)["at"], 1000)
-        self.assertEqual(CH.object_author("Setting", "longhorn-system", "freeze-filesystem-for-snapshot", self.marked(raw)),
+        self.assertEqual(CH.object_author("Setting", "longhorn-system", "freeze-filesystem-for-snapshot", self.marked(raw), "on"),
                          {"who": "alice", "at": 1000})
+
+    def test_a_mark_for_another_value_does_not_check_out(self):
+        """alice turned it on; the chart or kubectl set it back off since."""
+        CH.REQUEST.user = "alice"
+        raw = CH.object_mark("Setting", "longhorn-system", "freeze-filesystem-for-snapshot", "on", now=1000)
+        self.assertIsNone(CH.object_author("Setting", "longhorn-system", "freeze-filesystem-for-snapshot", self.marked(raw), "off"))
 
     def test_an_api_key_and_a_job_read_back_too(self):
         CH.REQUEST.user = "api-key:ci"
-        raw = CH.object_mark("Volume", "longhorn-system", "pvc-1", now=5)
-        self.assertEqual(CH.object_author("Volume", "longhorn-system", "pvc-1", self.marked(raw))["who"], "api-key:ci")
+        raw = CH.object_mark("Volume", "longhorn-system", "pvc-1", "enabled", now=5)
+        self.assertEqual(CH.object_author("Volume", "longhorn-system", "pvc-1", self.marked(raw), "enabled")["who"], "api-key:ci")
         CH.REQUEST.user = None
-        raw = CH.object_mark("Volume", "longhorn-system", "pvc-1", now=5)
-        self.assertEqual(CH.object_author("Volume", "longhorn-system", "pvc-1", self.marked(raw))["who"], "")
+        raw = CH.object_mark("Volume", "longhorn-system", "pvc-1", "enabled", now=5)
+        self.assertEqual(CH.object_author("Volume", "longhorn-system", "pvc-1", self.marked(raw), "enabled")["who"], "")
 
     def test_a_mark_copied_to_another_object_or_kind_does_not_check_out(self):
         CH.REQUEST.user = "alice"
-        raw = CH.object_mark("Volume", "longhorn-system", "pvc-1", now=5)
-        self.assertIsNone(CH.object_author("Volume", "longhorn-system", "pvc-2", self.marked(raw)))
-        self.assertIsNone(CH.object_author("Setting", "longhorn-system", "pvc-1", self.marked(raw)))
-        self.assertIsNone(CH.object_author("Deployment", "longhorn-system", "pvc-1", self.marked(raw)))
+        raw = CH.object_mark("Volume", "longhorn-system", "pvc-1", "enabled", now=5)
+        self.assertIsNone(CH.object_author("Volume", "longhorn-system", "pvc-2", self.marked(raw), "enabled"))
+        self.assertIsNone(CH.object_author("Setting", "longhorn-system", "pvc-1", self.marked(raw), "enabled"))
+        self.assertIsNone(CH.object_author("Deployment", "longhorn-system", "pvc-1", self.marked(raw), "enabled"))
 
     def test_an_altered_or_odd_mark_reads_as_nobody(self):
         CH.REQUEST.user = "alice"
-        mark = json.loads(CH.object_mark("Volume", "longhorn-system", "pvc-1", now=5))
+        mark = json.loads(CH.object_mark("Volume", "longhorn-system", "pvc-1", "enabled", now=5))
         for raw in (json.dumps({**mark, "at": 6}), json.dumps({**mark, "by": "0" * 32}), "x" * 300, "not json", None, 7):
-            self.assertIsNone(CH.object_author("Volume", "longhorn-system", "pvc-1", self.marked(raw)), raw)
-        self.assertIsNone(CH.object_author("Volume", "longhorn-system", "pvc-1", {}))
-        self.assertIsNone(CH.object_author("Volume", "longhorn-system", "pvc-1", None))
+            self.assertIsNone(CH.object_author("Volume", "longhorn-system", "pvc-1", self.marked(raw), "enabled"), raw)
+        self.assertIsNone(CH.object_author("Volume", "longhorn-system", "pvc-1", {}, "enabled"))
+        self.assertIsNone(CH.object_author("Volume", "longhorn-system", "pvc-1", None, "enabled"))
 
     def test_a_deployment_mark_is_not_an_object_mark(self):
-        """The Deployment digest stays exactly as it was, and the two never match."""
-        self.assertEqual(CH._signed(b"test-key", "lab", "app", 5, "alice"),
-                         CH._signed(b"test-key", "lab", "app", 5, "alice"))
         CH.REQUEST.user = "alice"
-        raw = CH.object_mark("Volume", "lab", "app", now=5)
+        raw = CH.object_mark("Volume", "lab", "app", "enabled", now=5)
         self.assertNotEqual(json.loads(raw)["by"], CH._signed(b"test-key", "lab", "app", 5, "alice"))
 
     def test_no_signing_key_means_no_mark(self):
         with mock.patch.object(CH, "_author_key", mock.Mock(side_effect=LookupError("no key yet"))):
-            self.assertIsNone(CH.object_mark("Volume", "longhorn-system", "pvc-1"))
+            self.assertIsNone(CH.object_mark("Volume", "longhorn-system", "pvc-1", "enabled"))
             self.assertIsNone(CH.object_author("Volume", "longhorn-system", "pvc-1",
-                                               self.marked('{"at":5,"by":"' + "0" * 32 + '"}')))
+                                               self.marked('{"at":5,"by":"' + "0" * 32 + '"}'), "enabled"))
+
+
+class MarkGuard(unittest.TestCase):
+    """Every write to a Longhorn Setting or Volume passes the write guard,
+    which drops any mark the request brought (the Resources page, an agent)
+    and puts one on only for a write made inside CHANGES.marking(value)."""
+    SETTING = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/settings/freeze-filesystem-for-snapshot"
+    VOLUME = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/volumes/pvc-1"
+
+    def setUp(self):
+        for name, value in (("_author_key", lambda: b"test-key"),
+                            ("_authors", lambda: {"users": ["alice", "bob"], "api_keys": []})):
+            patcher = mock.patch.object(CH, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.addCleanup(setattr, CH.REQUEST, "user", None)
+
+    def test_a_mark_brought_by_the_request_is_dropped(self):
+        CH.REQUEST.user = "alice"
+        stolen = CH.object_mark("Setting", "longhorn-system", "freeze-filesystem-for-snapshot", "on")
+        CH.REQUEST.user = "bob"
+        for method, path in (("PATCH", self.SETTING), ("PUT", self.SETTING), ("PATCH", self.VOLUME)):
+            body = {"metadata": {"annotations": {AUTHOR: stolen, "keep": "1"}}, "value": "true"}
+            CH.note_write(method, path, body)
+            self.assertEqual(body["metadata"]["annotations"], {"keep": "1"}, (method, path))
+        patch = [{"op": "add", "path": "/metadata/annotations/" + AUTHOR.replace("/", "~1"), "value": stolen}]
+        CH.note_write("PATCH", self.VOLUME, patch)
+        self.assertEqual(patch, [])
+
+    def test_a_write_inside_marking_is_marked_for_its_value(self):
+        CH.REQUEST.user = "alice"
+        body = {"value": '{"v1":"true"}'}
+        with CH.marking("on"):
+            CH.note_write("PATCH", self.SETTING, body)
+        found = CH.object_author("Setting", "longhorn-system", "freeze-filesystem-for-snapshot", body, "on")
+        self.assertEqual(found["who"], "alice")
+        body = {"spec": {"freezeFilesystemForSnapshot": "enabled"}}
+        with CH.marking("enabled"):
+            CH.note_write("PATCH", self.VOLUME, body)
+        self.assertEqual(CH.object_author("Volume", "longhorn-system", "pvc-1", body, "enabled")["who"], "alice")
+        self.assertIsNone(getattr(CH.REQUEST, "object_value", None))
+
+    def test_other_longhorn_objects_and_reads_are_left_alone(self):
+        body = {"metadata": {"annotations": {AUTHOR: "x"}}}
+        CH.note_write("PATCH", "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes/node-1", body)
+        CH.note_write("GET", self.SETTING, body)
+        self.assertEqual(body["metadata"]["annotations"], {AUTHOR: "x"})
 
 
 import homestead_fs_freeze as F
@@ -114,7 +166,7 @@ class Cluster:
         }
         if value is not None:
             self.objects[SETTING_PATH] = {"metadata": {"name": F.SETTING, "annotations": annotations or {}}, "value": value}
-        self.sent = []
+        self.sent, self.marking = [], []
 
     def volumes(self, *rows):
         self.objects[f"{LH}/volumes"] = {"items": list(rows)}
@@ -132,7 +184,9 @@ class Cluster:
 
     def send(self, method, path, body=None, ctype=None, **options):
         self.sent.append((method, path, body, ctype))
+        self.marking.append(getattr(CH.REQUEST, "object_value", None))
         return {}
+
 
 
 class WithCluster(unittest.TestCase):
@@ -270,24 +324,39 @@ class Status(WithCluster):
             "data": {"default-setting.yaml": 'default-replica-count: "2"\n'}}
         self.assertFalse(F.status()["from_chart"])
 
-    def test_who_changed_it_when_the_mark_checks_out(self):
+    def test_who_changed_it_when_the_mark_checks_out_for_the_value_it_holds(self):
         with mock.patch.object(F.CHANGES, "object_author", return_value={"who": "alice", "at": 5}) as author:
-            self.use(Cluster(value="true"))
+            self.use(Cluster(value='{"v1":"true"}'))
             self.assertEqual(F.status()["changed"], {"who": "alice", "at": 5})
         self.assertEqual(author.call_args[0][:3], ("Setting", "longhorn-system", F.SETTING))
+        self.assertEqual(author.call_args[0][4], "on")
+
+    def test_on_with_no_mark_that_checks_out_was_changed_outside_homestead(self):
+        with mock.patch.object(F.CHANGES, "object_author", return_value=None):
+            self.use(Cluster(value="true"))
+            self.assertEqual(F.status()["changed"], {"outside": True})
+            self.use(Cluster(value="false"))
+            self.assertIsNone(F.status()["changed"])
+
+    def test_each_override_says_who_set_it_or_that_it_was_set_elsewhere(self):
+        def author(kind, ns, name, obj, value):
+            return {"who": "bob", "at": 7} if name == "pvc-a" else None
+        with mock.patch.object(F.CHANGES, "object_author", side_effect=author):
+            self.use(Cluster().volumes(lh_volume("pvc-a", mode="enabled"), lh_volume("pvc-b", mode="disabled"),
+                                       lh_volume("pvc-c")))
+            rows = {v["name"]: v for v in F.status()["volumes"]}
+        self.assertEqual(rows["pvc-a"]["changed"], {"who": "bob", "at": 7})
+        self.assertEqual(rows["pvc-b"]["changed"], {"outside": True})
+        self.assertIsNone(rows["pvc-c"]["changed"])
 
 
 class Writes(WithCluster):
-    def setUp(self):
-        patcher = mock.patch.object(F.CHANGES, "object_mark", side_effect=lambda kind, ns, name: f"mark:{kind}:{name}")
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-    def test_turning_it_on_keeps_the_per_engine_format_and_marks_who(self):
+    def test_turning_it_on_keeps_the_per_engine_format_and_is_marked_for_on(self):
         cluster = self.use(Cluster(value='{"v1":"false"}'))
         result = F.save(True)
-        self.assertEqual(cluster.sent, [("PATCH", SETTING_PATH, {
-            "metadata": {"annotations": {AUTHOR: f"mark:Setting:{F.SETTING}"}}, "value": '{"v1":"true"}'}, F.MERGE)])
+        self.assertEqual(cluster.sent, [("PATCH", SETTING_PATH, {"value": '{"v1":"true"}'}, F.MERGE)])
+        self.assertEqual(cluster.marking, ["on"])
+        self.assertIsNone(getattr(CH.REQUEST, "object_value", None))
         self.assertTrue(result["ok"])
         self.assertTrue(result["enabled"])
 
@@ -295,18 +364,13 @@ class Writes(WithCluster):
         cluster = self.use(Cluster(value="true"))
         self.assertFalse(F.save(False)["enabled"])
         self.assertEqual(cluster.sent[0][2]["value"], "false")
+        self.assertEqual(cluster.marking, ["off"])
 
     def test_the_change_is_said_to_last_only_until_the_chart_when_the_chart_sets_it(self):
         cluster = Cluster(value="false")
         cluster.objects[F.CHART_SETTINGS] = {"data": {"default-setting.yaml": "freeze-filesystem-for-snapshot: false\n"}}
         self.use(cluster)
         self.assertIn("chart", F.save(True)["detail"])
-
-    def test_without_a_signing_key_the_write_still_goes_unmarked(self):
-        cluster = self.use(Cluster(value="false"))
-        with mock.patch.object(F.CHANGES, "object_mark", return_value=None):
-            F.save(True)
-        self.assertEqual(cluster.sent[0][2], {"value": "true"})
 
     def test_refusals_write_nothing(self):
         cluster = self.use(Cluster(value="false").volumes(lh_volume("pvc-a"), lh_volume("pvc-v2", engine="v2")))
@@ -332,8 +396,8 @@ class Writes(WithCluster):
         cluster = self.use(Cluster().volumes(lh_volume("pvc-a", claim="db")))
         result = F.save_volume("pvc-a", "enabled")
         self.assertEqual(cluster.sent, [("PATCH", f"{LH}/volumes/pvc-a", {
-            "metadata": {"annotations": {AUTHOR: "mark:Volume:pvc-a"}},
             "spec": {"freezeFilesystemForSnapshot": "enabled"}}, F.MERGE)])
+        self.assertEqual(cluster.marking, ["enabled"])
         self.assertEqual((result["volume"], result["mode"]), ("pvc-a", "enabled"))
         self.assertIn("lab/db", result["detail"])
 
@@ -354,19 +418,21 @@ class Routes(unittest.TestCase):
         import homestead_routes
         self.assertIn("homestead_fs_freeze", homestead_routes.MODULES)
 
-    def test_a_change_forgets_the_cached_answer(self):
+
+    def test_a_change_forgets_the_cached_answer_before_and_after_the_write(self):
         request = mock.Mock(body={"enabled": True})
         with mock.patch.object(F, "save", return_value={"ok": True}) as save, \
                 mock.patch.object(F.homestead_routes, "forget") as forget:
             F.ROUTES[("POST", "/api/longhorn/fs-freeze")][1](request)
         save.assert_called_once_with(True)
-        forget.assert_called_with("fsfreeze")
+        self.assertEqual(forget.call_args_list, [mock.call("fsfreeze")] * 2)
         request = mock.Mock(body={"volume": "pvc-a", "mode": "enabled"})
         with mock.patch.object(F, "save_volume", return_value={"ok": True}) as save, \
                 mock.patch.object(F.homestead_routes, "forget") as forget:
             F.ROUTES[("POST", "/api/longhorn/fs-freeze/volume")][1](request)
         save.assert_called_once_with("pvc-a", "enabled")
-        forget.assert_called_with("fsfreeze")
+        self.assertEqual(forget.call_args_list, [mock.call("fsfreeze")] * 2)
+
 
 
 class OnlyHereIsItChanged(unittest.TestCase):

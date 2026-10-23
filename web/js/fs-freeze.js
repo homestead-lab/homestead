@@ -15,19 +15,30 @@ function fsFreezeWould(v, on) {
 
 function fsFreezeSummary(d) {
   const c = d.counts || { total: 0, freezing: 0 };
-  const said = d.enabled
-    ? `<b>On</b> · ${c.freezing} of ${c.total} volume${c.total === 1 ? "" : "s"} are frozen for each snapshot`
-    : `<b>Off</b> · snapshots are crash-consistent: Longhorn syncs each volume first, but a write can land in between${c.freezing ? ` (${c.freezing} volume${c.freezing === 1 ? " is" : "s are"} set to always freeze)` : ""}`;
-  const who = d.changed ? ` · ${d.enabled ? "Turned on" : "Turned off"} by ${esc(d.changed.who ? UI.who(d.changed.who) : "Homestead")}, ${esc(fsFreezeWhen(d.changed.at))}` : "";
+  const always = c.freezing ? ` (${c.freezing} volume${c.freezing === 1 ? " is" : "s are"} set to always freeze)` : "";
+  const said = d.unknown_value
+    ? `<b>Unknown</b> · Longhorn's setting is neither on nor off${always}`
+    : d.enabled
+      ? `<b>On</b> · ${c.freezing} of ${c.total} volume${c.total === 1 ? " is" : "s are"} frozen for each snapshot`
+      : `<b>Off</b> · snapshots are crash-consistent: Longhorn syncs each volume first, but a write can land in between${always}`;
+  const turned = d.unknown_value ? "Changed" : d.enabled ? "Turned on" : "Turned off";
+  const who = !d.changed ? "" : d.changed.outside ? ` · ${turned} outside Homestead`
+    : ` · ${turned} by ${esc(d.changed.who ? UI.who(d.changed.who) : "Homestead")}, ${esc(fsFreezeWhen(d.changed.at))}`;
   return `<div class="small">${said}${who}</div>`;
 }
+
+/* Who set a volume's own choice: a person, Homestead, or a change made elsewhere. */
+const fsFreezeSetBy = changed => !changed ? "" : `<div class="dim xs">${changed.outside ? "Set outside Homestead"
+  : `Set by ${esc(changed.who ? UI.who(changed.who) : "Homestead")}, ${esc(fsFreezeWhen(changed.at))}`}</div>`;
 
 function fsFreezeRow(v) {
   const [label, tone] = FS_FREEZE_SHOWN[v.freezes] || ["unknown", "warn"];
   const options = FS_FREEZE_MODES.map(([mode, text]) => `<option value="${mode}"${v.mode === mode ? " selected" : ""}${
     mode === "enabled" && v.engine === "v2" ? " disabled" : ""}>${text}</option>`).join("");
+  // A viewer sees the choice, greyed out, rather than an empty column.
+  const locked = typeof can === "function" && !can("admin") ? " disabled" : "";
   return [`<b>${esc(v.claim || v.name)}</b><div class="dim xs mono">${esc(v.name)}</div>`,
-    `<select data-need="admin" aria-label="${esc(`Freeze ${v.claim || v.name} for snapshots`)}" onchange="fsFreezeVolume(${jsq(v.name)},this.value)">${options}</select>`,
+    `<select aria-label="${esc(`Freeze ${v.claim || v.name} for snapshots`)}" onchange="fsFreezeVolume(${jsq(v.name)},this.value)"${locked}>${options}</select>${fsFreezeSetBy(v.changed)}`,
     `${UI.chip(label, tone)}${v.why ? `<div class="dim xs">${esc(v.why)}</div>` : ""}`];
 }
 
@@ -65,6 +76,7 @@ window.fsFreezeReview = on => {
     : "Snapshots go back to crash-consistent: Longhorn syncs each volume first, but a write can land between the sync and the snapshot.")}
     ${UI.facts([["Frozen for each snapshot", String(count("yes"))], ["Synced instead", String(count("sync"))], ["Not frozen", String(count("no"))]])}
     ${UI.notices([
+      d.unknown_value ? ["warn", `Longhorn's setting holds "${d.value}", which this replaces.`] : null,
       old ? ["warn", `Kernel 5.17 or older on ${d.old_kernels.map(k => k.host).join(", ")}: if a volume fails mid-freeze, its filesystem can stay stuck until that host restarts.`] : null,
       on ? ["info", "If a freeze fails, Longhorn fails that snapshot rather than take it unfrozen; the job says so."] : null,
       !on && stay.length ? ["info", `Still frozen, set to always: ${stay.join(", ")}.`] : null,
@@ -86,6 +98,14 @@ window.fsFreezeSave = async on => {
 };
 
 window.fsFreezeVolume = async (volume, mode) => {
+  // The kernel warning the cluster switch reviews applies to one volume too.
+  const d = STATE.data.fsFreeze || {}, old = d.old_kernels || [];
+  if (mode === "enabled" && old.length) {
+    const v = (d.volumes || []).find(x => x.name === volume) || {};
+    const go = await ask(`Kernel 5.17 or older on ${old.map(k => k.host).join(", ")}: if ${v.claim || volume} fails mid-freeze, its filesystem can stay stuck until that host restarts.`,
+      { title: `Always freeze ${v.claim || volume}`, ok: "Always freeze", danger: true });
+    if (!go) return loadFsFreeze();
+  }
   try {
     const r = await api("/api/longhorn/fs-freeze/volume", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ volume, mode }) });
     toast(r.detail, "ok");

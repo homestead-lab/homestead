@@ -2215,6 +2215,7 @@ ssh_pwauth: true
         const whyOn = engine === "v2" ? "A V2 volume: Longhorn never freezes these" : syncWhy[volumeMode] || syncWhy[access] || "";
         const shown = effective || engine === "v2";
         return { name, claim, mode, engine, access, volume_mode: volumeMode, when_on: whenOn, freezes: shown ? whenOn : "no",
+          changed: mode === "ignored" ? null : { who: "admin", at: Math.floor(Date.now() / 1000) - 3 * 86400 },
           why: shown ? whyOn : mode === "disabled" ? "Set to never freeze" : "Follows the cluster, which is off" };
       });
       return { supported: true, version: "v1.13.0", enabled: on, value: JSON.stringify({ v1: String(on) }), unknown_value: false,
