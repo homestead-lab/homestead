@@ -94,20 +94,59 @@ test("host OS updates: the weekly window in its zone, or its saved offset when t
   same([none.items, none.unread], [[], []], "a cluster where OS updates do not apply is not an error");
 });
 
-test("the maintenance window shows when something uses it", () => {
+test("the maintenance window shows only when something uses it: an app set to update itself, or Balance hosts", () => {
   const { W } = setup();
   const settings = (policy, rebalance) => ({ updates: { policy, maintenance: { days: [0, 1, 2, 3, 4, 5, 6], start: "02:00", duration_minutes: 120 } },
     placement: { rebalance } });
-  const used = W.collect({ settings: settings("maintenance_window", "off") }, FROM).items;
+  const auto = [{ name: "a", update_mode: "auto" }, { name: "b", update_mode: "manual" }];
+  const used = W.collect({ settings: settings("approval_required", "off"), workloads: auto }, FROM).items;
   assert.equal(used.length, 7);
   assert.equal(iso(used[0].at), "2026-10-24T02:00");
   assert.match(used[0].what, /02:00–04:00 UTC/);
-  assert.match(used[0].what, /apps that update themselves/);
-  assert.equal(W.collect({ settings: settings("notify_only", "off") }, FROM).items.length, 0);
-  const balance = W.collect({ settings: settings("notify_only", "window") }, FROM).items;
+  assert.match(used[0].what, /1 app set to update itself/);
+  assert.equal(W.collect({ settings: settings("approval_required", "off"), workloads: [{ name: "b", update_mode: "manual" }] }, FROM).items.length, 0,
+    "a default install, with no app updating itself, has nothing in the window");
+  assert.equal(W.collect({ settings: settings("notify_only", "off"), workloads: auto }, FROM).items.length, 0);
+  const balance = W.collect({ settings: settings("notify_only", "window"), workloads: auto }, FROM).items;
   assert.equal(balance.length, 7);
   assert.match(balance[0].what, /Balance hosts/);
-  assert.doesNotMatch(balance[0].what, /apps/);
+  assert.doesNotMatch(balance[0].what, /app/);
+  const unread = W.collect({ settings: settings("approval_required", "off"), workloads: { failed: "x" } }, FROM);
+  same(unread.unread, ["apps' update settings"]);
+  assert.equal(W.collect({ settings: settings("notify_only", "off"), workloads: { failed: "x" } }, FROM).unread.length, 0,
+    "under notify only no app updates itself, so the apps need not be read");
+});
+
+test("macros, day and month names are read as Kubernetes and Longhorn read them", () => {
+  const { W } = setup();
+  const week = W.collect({ lh: { jobs: [{ name: "daily", task: "snapshot", cron: "@daily", volumes: [] },
+      { name: "saturdays", task: "backup", cron: "0 0 * * sat", volumes: [] }], clashes: [] },
+    crons: [{ name: "weekdays", schedule: "0 4 ? * mon-fri" }, { name: "in-june", schedule: "0 4 1 jun *" }, { name: "hourly", schedule: "@hourly" }] }, FROM);
+  assert.equal(week.items.filter(i => i.name === "daily").length, 7);
+  same(week.items.filter(i => i.name === "saturdays").map(i => iso(i.at)), ["2026-10-24T00:00"]);
+  assert.equal(week.items.filter(i => i.name === "weekdays").length, 5);
+  assert.equal(week.items.filter(i => i.name === "in-june").length, 0);
+  same(week.frequent.map(f => [f.name, f.perDay]), [["hourly", 24]]);
+  same(week.unreadable, []);
+});
+
+test("a schedule this page cannot read is named, not dropped", async () => {
+  const { W, ctx, out } = setup({ "/api/lh/overview": { jobs: [{ name: "odd", task: "backup", cron: "@every 1h", volumes: [] }], clashes: [] },
+    "/api/schedules": [{ name: "garbled", schedule: "garbage" }], "/api/power-schedules": { items: [] },
+    "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });
+  same(W.collect({ lh: { jobs: [{ name: "odd", cron: "@every 1h" }] }, crons: [{ name: "garbled", schedule: "garbage" }] }, FROM).unreadable,
+    ["odd", "garbled"]);
+  await ctx.viewScheduleWeek();
+  assert.match(out.html, /Could not read the schedule of odd, garbled/);
+});
+
+test("a job collapsed into 'runs all day' keeps its clash mark", () => {
+  const { W } = setup();
+  const week = W.collect({ lh: { jobs: [{ name: "often", task: "backup", cron: "*/10 * * * *", volumes: ["v"] },
+      { name: "nightly", task: "backup", cron: "0 2 * * *", volumes: ["v"] }],
+    clashes: [{ severity: "clash", jobs: [{ name: "nightly", task: "backup" }, { name: "often", task: "backup" }], volumes: ["v"],
+      times: [[SAT_0200, SAT_0200]], count: 7, gap_min: 0 }] } }, FROM);
+  same(week.frequent.map(f => [f.name, f.clash]), [["often", "clash"]]);
 });
 
 test("each source that could not be read is named; one that does not apply is not", () => {
@@ -131,7 +170,7 @@ test("the list is grouped by local day, from today to the day the week ends on",
 
 test("the page names what it could not read, leads with the clash and collapses the hourly job", async () => {
   const { ctx, out } = setup({ "/api/lh/overview": LH, "/api/schedules": new Error("forbidden"), "/api/power-schedules": { items: [] },
-    "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} } });
+    "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });
   await ctx.viewScheduleWeek();
   assert.match(out.html, /Could not read CronJobs/);
   assert.match(out.html, /1 clash this week/);
@@ -144,7 +183,7 @@ test("the page names what it could not read, leads with the clash and collapses 
 
 test("with every source read and nothing clashing, the page says so", async () => {
   const { ctx, out } = setup({ "/api/lh/overview": { jobs: [], clashes: [] }, "/api/schedules": [], "/api/power-schedules": { items: [] },
-    "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} } });
+    "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });
   await ctx.viewScheduleWeek();
   assert.match(out.html, /No clashes this week/);
   assert.doesNotMatch(out.html, /Could not read/);
@@ -152,7 +191,7 @@ test("with every source read and nothing clashing, the page says so", async () =
 
 test("without Longhorn, clashes are not checked and nothing is said to be unread", async () => {
   const { ctx, out } = setup({ "/api/schedules": [], "/api/power-schedules": { items: [] },
-    "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} } });
+    "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });
   ctx.STATE.platform.longhorn = false;
   await ctx.viewScheduleWeek();
   assert.doesNotMatch(out.html, /Could not read/);
@@ -172,7 +211,7 @@ test("the page is reachable: its address, its view, its script, the Schedules bu
 
 test("each day is headed by its name and date, today and tomorrow said as such, times in core.js's words", async () => {
   const { ctx, out } = setup({ "/api/lh/overview": LH, "/api/schedules": [], "/api/power-schedules": { items: [] },
-    "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} } });
+    "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });
   await ctx.viewScheduleWeek();
   assert.match(out.html, /<h4>Today, [^<]*day[^<]*\d[^<]*<\/h4>/);
   assert.match(out.html, /<h4>Tomorrow, [^<]*day[^<]*\d[^<]*<\/h4>/);
@@ -185,4 +224,12 @@ test("the demo has a deliberate clash and a maintenance window to show", () => {
   assert.match(demo, /name: "weekly-trim", task: "filesystem-trim", cron: "0 2 \* \* 6"[^}]*groups: \["default"\]/);
   assert.match(demo, /clashes: \[\{ severity: "clash", jobs: \[\{ name: "nightly-backup", task: "backup" \}, \{ name: "weekly-trim", task: "filesystem-trim" \}\]/);
   assert.match(demo, /maintenance: \{ days: \[0, 1, 2, 3, 4, 5, 6\], start: "02:00", duration_minutes: 120 \}/);
+  assert.match(demo, /name: "home-assistant", ns: "lab", kind: "Deployment", update_mode: "auto"/, "an app that updates itself, so the window shows");
+});
+
+test("a wall time the clock change repeats is its first occurrence, as Python's zoneinfo reads it (power schedules)", () => {
+  const { W } = setup();
+  assert.equal(new Date(W.wallToMs(2026, 9, 25, 1, 30, "Europe/London")).toISOString().slice(0, 16), "2026-10-25T00:30");
+  assert.equal(new Date(W.wallToMs(2026, 9, 26, 1, 30, "Europe/London")).toISOString().slice(0, 16), "2026-10-26T01:30");
+  assert.equal(new Date(W.wallToMs(2026, 9, 24, 1, 30, "Europe/London")).toISOString().slice(0, 16), "2026-10-24T00:30");
 });

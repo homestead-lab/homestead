@@ -175,11 +175,11 @@ fine, and is not reported.
 A clash shows on the Dashboard's health suggestions ("1 schedule clash this
 week"), and its **Review** opens **Containers › Schedules › This week**: every
 run in the next seven days, by day and in your own time - Longhorn's jobs,
-CronJobs, power schedules, the host OS update window and the maintenance
-window - with the clashes first. A job that runs more than six times a day is
-one "runs all day" line. Anything Homestead could not read is named at the top,
-so a quiet week is never one it did not see. To fix a clash, move one of the
-two jobs here.
+CronJobs, power schedules, the host OS update window, and the maintenance
+window when an app updates itself in it - with the clashes first. A job that
+runs more than six times a day is one "runs all day" line. Anything Homestead
+could not read, a schedule included, is named at the top, so a quiet week is
+never one it did not see. To fix a clash, move one of the two jobs here.
 
 A snapshot or backup job whose last run failed, or backup jobs with no
 backup target (or one that cannot be reached), make the cluster
