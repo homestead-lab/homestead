@@ -235,6 +235,8 @@ Tools come in three classes:
 | `rebuild_volume` | Rebuilds missing copies of a detached volume now | `storage:manage` | change |
 | `preview_storage_rebalance` | Which volume copies would move to even out the disks; exclude: volumes to leave alone | `read` | read |
 | `rebalance_storage` | Moves volume copies as preview_storage_rebalance planned: settings {moves, review_token, exclude} | `storage:manage` | change |
+| `preview_volume_copy_move` | Where a Longhorn volume's copies are, and which would move to disks with these tags (comma-separated), e.g. nvme | `read` | read |
+| `move_volume_copies` | Moves the copies as preview_volume_copy_move planned, while the volume stays in use: settings {volume, disk_tags, node_tags, review_token} | `storage:manage` | change |
 | `remove_old_volume_copy` | Asks to delete the data a storage-class move left behind | `storage:manage` | destructive |
 | `list_cached_images` | Container images pre-pulled onto the hosts | `read` | read |
 | `prepull_image` | Pulls an image onto hosts ahead of time, so an app starts fast; nodes to limit which | `storage:manage` | change |

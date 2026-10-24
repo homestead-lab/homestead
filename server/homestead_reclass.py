@@ -220,6 +220,31 @@ def _longhorn_used(ns, claim):
 
 # ---- the review ------------------------------------------------------------------
 
+LIVE_SAME = {"dataEngine": "v1", "fsType": "ext4", "migratable": "false", "encrypted": "false", "numberOfReplicas": "3",
+             "dataLocality": "disabled", "backingImage": "", "accessMode": ""}
+
+
+def live_move(source, target):
+    """The disk and host tags to move to when two Longhorn classes differ only
+    in which disks and hosts hold the copies: then the copies can move while
+    the volume is in use (homestead_copy_move.py), instead of being copied
+    with its apps stopped. The claim keeps its class; None otherwise."""
+    if not source or not target or {source.get("provisioner"), target.get("provisioner")} != {"driver.longhorn.io"}:
+        return None
+    def rest(row):
+        # What the volume is, with Longhorn's defaults; timeouts, backup
+        # targets and the like are how a class runs, not what it makes.
+        parameters = row.get("parameters") or {}
+        return {k: str(parameters.get(k) or default).lower() for k, default in LIVE_SAME.items()}
+    def tags(row, key):
+        return sorted({t.strip() for t in str((row.get("parameters") or {}).get(key) or "").split(",") if t.strip()})
+    disk_tags, node_tags = tags(target, "diskSelector"), tags(target, "nodeSelector")
+    if rest(source) != rest(target) or not (disk_tags or node_tags) or \
+            (disk_tags, node_tags) == (tags(source, "diskSelector"), tags(source, "nodeSelector")):
+        return None
+    return {"disk_tags": disk_tags, "node_tags": node_tags}
+
+
 def plan(ns, claim, target, *, capture=False):
     """Everything that would stop the move or surprise someone, and the room it takes."""
     pvc = KUBE.get_optional(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}", read=kget)
@@ -332,7 +357,7 @@ def plan(ns, claim, target, *, capture=False):
     moving = space["used_gb"] if space["used_gb"] is not None else space["size_gb"]
     return {**({"_fences": fences, "_source_binding": source_binding} if capture else {}), "ok": not blockers, "blockers": blockers, "warnings": warnings, "namespace": ns, "claim": claim,
             "from_class": current, "to_class": target, "volume_mode": mode, "access_modes": modes,
-            "consumers": used, "space": space,
+            "consumers": used, "space": space, "live": live_move(classes.get(current), row),
             # Roughly: a LAN-speed disk copy, and as long again to check it.
             "minutes": max(1, round(moving * 1024 / 100 / 60 * 2)),
             "downtime": any(c.get("running") for c in used)}

@@ -80,6 +80,7 @@ MODULES = (
     "homestead_config_backup",
     "homestead_container_diagnostics",
     "homestead_container_rebalance",
+    "homestead_copy_move",
     "homestead_data_copies",
     "homestead_deploy",
     "homestead_deploy_server",

@@ -2254,6 +2254,22 @@ ssh_pwauth: true
         skipped: [{ claim: "lab/nas-backup", why: "its copies are being rebuilt or changed" }] };
     },
     "/api/longhorn/rebalance": { operation: { id: "demo-rebalance", kind: "volume-rebalance", title: "Rebalance 3 volume copies", status: "running", progress: 0, message: "Starting with the first copy", cancellable: true } },
+    // A volume's copies onto disks by tag: one copy on node2's HDD, and
+    // NVMe disks on node1 and node3 to move it to.
+    "/api/longhorn/copies/plan": url => {
+      const tags = (url.searchParams.get("disk_tags") || "").split(",").filter(Boolean);
+      const copies = [{ replica: "r-1", host: "harvester-node2", disk: "disk-hdd", path: "/mnt/hdd", tags: ["hdd"], whole: true, moves: !!tags.length && !tags.every(t => t === "hdd") },
+        { replica: "r-2", host: "harvester-node1", disk: "default-disk", path: "/var/lib/harvester/defaultdisk", tags: ["nvme", "ssd"], whole: true, moves: !!tags.length && !tags.every(t => ["nvme", "ssd"].includes(t)) }];
+      const targets = tags.length ? [{ host: "harvester-node1", disk: "default-disk", path: "/var/lib/harvester/defaultdisk", tags: ["nvme", "ssd"], fits: true, room_gb: 612 },
+        { host: "harvester-node3", disk: "nvme-2", path: "/mnt/nvme1", tags: ["nvme"], fits: true, room_gb: 880 }].filter(t => tags.every(x => t.tags.includes(x))) : [];
+      const moves = copies.filter(c => c.moves).length;
+      const blockers = !tags.length ? ["Choose the disk tags (or host tags) its copies should be on"]
+        : !targets.length ? [`No disk Longhorn may use carries disk tags ${tags.join(", ")}`] : !moves ? ["Every copy is on a disk with those tags already"] : [];
+      return { volume: url.searchParams.get("volume"), claim: "lab/frigate-recordings", size_gb: 120, used_gb: 86, state: "attached", attached_to: "harvester-node1",
+        copies, wanted: 2, disk_tags: tags, node_tags: [], current: { disk_tags: [], node_tags: [] }, choices: { disk_tags: ["hdd", "nvme", "ssd"], node_tags: ["rack-a"] },
+        targets, moves, blockers, warnings: [], ok: !blockers.length, review_token: "demo-copies-" + tags.join(".") };
+    },
+    "/api/longhorn/copies/move": { operation: { id: "demo-copy-move", kind: "volume-copy-move", title: "Move lab/frigate-recordings to disks tagged nvme", status: "running", progress: 0, message: "Moving 1 copy, one at a time", cancellable: true } },
     "/api/longhorn/rebuild": { ok: true, detail: "Longhorn is rebuilding lab/nextcloud-data while it is detached" },
     "/api/disks": { harvester: true, nodes: demoDisks, disk_tags: ["hdd", "nvme", "ssd"], all_node_tags: ["rack-a"],
       node_tags: { "harvester-node1": ["rack-a"], "harvester-node2": [], "harvester-node3": ["rack-a"] } },

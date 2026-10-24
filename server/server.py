@@ -518,7 +518,7 @@ import homestead_isos as ISOS
 import homestead_lhcapacity as LHCAP
 import homestead_lhrebuild as LHREBUILD
 import homestead_power_hold as HOLD
-import homestead_rebalance as REBALANCE
+import homestead_rebalance as REBALANCE, homestead_copy_move as COPY_MOVE
 import homestead_container_rebalance as CREBALANCE
 import homestead_disks as DISKS
 import homestead_power as POWER
@@ -723,7 +723,7 @@ HOST_CONSOLE.platform = lambda: PLATFORM.detect()
 import homestead_unraid_vms as UNRAID_VMS
 UNRAID_VMS.bind(IMP, kget, ksend, OPS, lambda: PLATFORM.detect(), (storage_classes, LHCAP.capacity, vm_default_class))
 # Each module registers its own kinds of job (#622).
-for _module in (REBALANCE, CREBALANCE, VM_MUTATION_JOB, COMPONENTS, LH, MOVE_ENGINE, LHV2_SETUP, SHARES, UNRAID_VMS):
+for _module in (REBALANCE, COPY_MOVE, CREBALANCE, VM_MUTATION_JOB, COMPONENTS, LH, MOVE_ENGINE, LHV2_SETUP, SHARES, UNRAID_VMS):
     _module.register(OPS)
 MANIFESTS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)
 HOST_LIMITS.bind(kget, HOSTRUN, PLATFORM.detect, DATA_DIR)

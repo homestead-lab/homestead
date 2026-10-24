@@ -23,6 +23,7 @@ import homestead_longhorn_jobs as JOBS
 import homestead_move_engine as MOVE_ENGINE
 import homestead_move_plan as PLAN
 import homestead_rebalance as REBALANCE
+import homestead_copy_move as COPY_MOVE
 import homestead_shares as SHARES
 import homestead_unraid_vms as UNRAID_VMS
 import homestead_vm_mutation_job as VM_MUTATION_JOB
@@ -53,6 +54,7 @@ HOSTS = [
 # Storage and app jobs (step 3, part 2)
 STORAGE_APPS = [
     (REBALANCE, {REBALANCE.KIND: REBALANCE.status}, {REBALANCE.KIND}),
+    (COPY_MOVE, {COPY_MOVE.KIND: COPY_MOVE.status}, {COPY_MOVE.KIND}),
     (CREBALANCE, {CREBALANCE.KIND: CREBALANCE.status}, {CREBALANCE.KIND}),
     (COMPONENTS, {"platform-upgrade": COMPONENTS.status}, {"platform-upgrade"}),
     (VM_MUTATION_JOB, {"vm-create": VM_MUTATION_JOB.status, "vm-edit": VM_MUTATION_JOB.status}, {"vm-create", "vm-edit"}),
@@ -83,7 +85,7 @@ REST_ALIASES = {VM_POWER_JOB: "VM_POWER_JOB", RENAME: "RENAME", IMPORT_JOB: "IMP
 same = lambda functions: [(f.__module__, f.__qualname__) for f in functions]
 ALIASES = {"homestead_host_os": "HOST_OS", "homestead_os_rollout": "OS_ROLLOUT", "homestead_host_bridge": "HOST_BRIDGE",
            "homestead_host_bonds": "HOST_BONDS", "homestead_uplinks": "UPLINKS", "homestead_host_console": "HOST_CONSOLE",
-           "homestead_k3scluster": "K3SC", "homestead_power": "POWER", "homestead_rebalance": "REBALANCE",
+           "homestead_k3scluster": "K3SC", "homestead_power": "POWER", "homestead_rebalance": "REBALANCE", "homestead_copy_move": "COPY_MOVE",
            "homestead_container_rebalance": "CREBALANCE", "homestead_components": "COMPONENTS",
            "homestead_vm_mutation_job": "VM_MUTATION_JOB", "homestead_longhorn": "LH", "homestead_move_engine": "MOVE_ENGINE",
            "homestead_lhv2_setup": "LHV2_SETUP", "homestead_shares": "SHARES", "homestead_unraid_vms": "UNRAID_VMS"}
