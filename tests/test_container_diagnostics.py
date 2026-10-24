@@ -55,6 +55,25 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertEqual("missing shared library", answer["logs"]["previous"]["text"])
         self.assertTrue(logs.call_args.args[3])
 
+    def test_the_restart_record_comes_with_the_diagnostics(self):
+        kept = {"since": 1790000000, "records": [{"at": "2026-10-22T09:00:00Z", "kind": "restart", "reason": "Ran out of memory"}]}
+        with mock.patch.object(D, "log", return_value={"text": ""}), \
+                mock.patch.object(D.RESTARTS, "for_app", lambda ns, name, kind, uid: kept if (ns, name, kind, uid) == ("apps", "game", "Deployment", "app-uid") else None):
+            self.assertEqual(kept, D.report(self.cfg)["restart_history"])
+
+    def test_a_restart_record_that_cannot_be_read_says_so_never_none(self):
+        def unreadable(ns, name, kind, uid):
+            raise D.SHARED.Unreadable("Homestead could not read restarts.json on its data volume")
+        with mock.patch.object(D, "log", return_value={"text": ""}), mock.patch.object(D.RESTARTS, "for_app", unreadable):
+            history = D.report(self.cfg)["restart_history"]
+        self.assertNotIn("records", history)
+        self.assertIn("could not read restarts.json", history["error"])
+
+    def test_with_no_pod_the_restart_record_is_still_there(self):
+        self.pods = []
+        with mock.patch.object(D.RESTARTS, "for_app", lambda ns, name, kind, uid: {"since": 1, "records": [{"reason": "Evicted"}]}):
+            self.assertEqual("Evicted", D.report(self.cfg)["restart_history"]["records"][0]["reason"])
+
     def test_same_labels_do_not_allow_unowned_pods_or_explicit_foreign_selection(self):
         foreign = copy.deepcopy(self.pod)
         foreign["metadata"].update(name="other-123", ownerReferences=[{"uid": "unrelated", "controller": True}])
