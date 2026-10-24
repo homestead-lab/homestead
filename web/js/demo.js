@@ -1648,6 +1648,7 @@ ssh_pwauth: true
           { name: "alerts", label: "Alerts and notifications", state: "ok", last_ok: now - 8, error: "", every: 20 },
           { name: "history", label: "Long-term stats", state: "ok", last_ok: now - 140, error: "", every: 300 },
           { name: "hardware", label: "Hardware detection", state: "ok", last_ok: now - 20, error: "", every: 30 },
+          { name: "expiry", label: "Certificate expiry check", state: "ok", last_ok: now - 1260, error: "", every: 3600 },
           { name: "moves", label: "Cluster moves", state: "failing", last_ok: now - 900, error: "could not reach branch: timed out", every: 10 }],
         probe: { installed: true, desired: 3, ready: 3, reporting: 3, smart: 2, state: "current", detail: "homestead-nodeprobe is running this release's scripts" },
         samba: { installed: true, enabled: true, desired: 1, ready: 1, name: "homestead-smb",
@@ -3012,6 +3013,38 @@ ssh_pwauth: true
     namespaces:["lab","default","kube-system"],policies:[{namespace:firewallConfig.namespace,name:firewallConfig.name,
       uid:"demo-firewall",resource_version:"1",managed:true,config:firewallConfig,spec:firewallSpec(firewallConfig)}]};
   responses["/api/firewall"] = () => firewall;
+  // Certificates and keys that expire (homestead_expiry). Dates are relative to now.
+  const expiryNow = () => Date.now() / 1000;
+  const expiryState = (days, renews, overdue) => days <= 0 ? "expired" : renews ? "renews" : days <= 7 ? "critical"
+    : days <= 21 || overdue ? "warn" : "ok";
+  const expiryRow = (kind, namespace, name, days, { renews = false, overdue = false, note = "" } = {}) => ({ kind, namespace, name,
+    not_after: Math.round(expiryNow() + days * 86400), days_left: Math.trunc(days), state: expiryState(days, renews, overdue),
+    note, renews, overdue });
+  responses["/api/expiry"] = () => {
+    const items = [
+      expiryRow("tls-secret", "media", "photos-tls", 5.4),
+      expiryRow("certificate", "apps", "wiki-example-com", 48.2, { overdue: true, note: "Renewal is overdue: cert-manager has not renewed it" }),
+      expiryRow("tls-secret", "lab", "mqtt-broker-tls", -3.1),
+      expiryRow("tls-secret", "lab", "printer-tls", 16.6),
+      expiryRow("certificate", "lab", "homestead-example-com", 61.3, { renews: true, note: "cert-manager renews it" }),
+      expiryRow("certificate", "monitoring", "grafana-internal", 290, { renews: true, note: "cert-manager renews it" }),
+      expiryRow("api-server", "", "Kubernetes API server", 350.2, { note: "k3s and RKE2 renew it when the server restarts close to its expiry" }),
+      expiryRow("webhook-ca", "", "virt-api-validator", 4.7, { renews: true, note: "Its operator rotates it (it lives 7 days)" }),
+      expiryRow("webhook-ca", "", "cdi-api-validate", 1.3, { renews: true, note: "Its operator rotates it (it lives 2 days)" }),
+      expiryRow("webhook-ca", "", "longhorn-webhook-validator", 3632),
+      expiryRow("tls-secret", "data", "postgres-server-tls", 3412),
+      { ...expiryRow("tls-secret", "lab", "old-import", 0), not_after: null, days_left: null, state: "unknown",
+        note: "Homestead could not read the certificate in tls.crt" },
+    ];
+    const order = ["expired", "critical", "warn", "unknown", "ok", "renews"];
+    items.sort((a, b) => (order.indexOf(a.state) - order.indexOf(b.state)) || ((a.not_after ?? 1e12) - (b.not_after ?? 1e12)));
+    return { checked_at: Math.round(expiryNow() - 1260), items, counts: Object.fromEntries(order.map(s => [s, items.filter(r => r.state === s).length])),
+      errors: {}, partial: false, stale: false, max_secrets: 2000, warn_days: 21, critical_days: 7 };
+  };
+  responses["/api/expiry/keys"] = () => ({ warn_days: 21, critical_days: 7, items: [
+    ...demoKeys.keys.map(k => ({ ...expiryRow("api-key", "", k.name, (k.expires - expiryNow()) / 86400), owner: k.owner })),
+    { ...expiryRow("fleet-key", "", "Linked-cluster key", 0), not_after: null, days_left: null, state: "no-expiry",
+      note: "It has no expiry; it changes when a cluster is unlinked" }] });
   responses["/api/firewall/preview"] = (url, init) => {
     const cfg = JSON.parse(init?.body || "{}");
     return {review:"demo-reviewed-policy",pods:[`${cfg.target.name}-demo`],overlapping:[],update:!!cfg.uid,

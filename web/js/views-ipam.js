@@ -16,7 +16,7 @@ const ipamCategoryIcon = category => IPAM_CATEGORIES[category]
 const ipamCategoryOptions = (selected, blank = "not set") => `<option value="">${esc(blank)}</option>` +
   Object.entries(IPAM_CATEGORIES).map(([k, [label]]) => `<option value="${k}" ${selected === k ? "selected" : ""}>${esc(label)}</option>`).join("");
 
-const NETWORK_TABS = ["overview", "services", "vips", "addresses", "ip", "lan", "ports", "firewall"];
+const NETWORK_TABS = ["overview", "services", "vips", "addresses", "ip", "lan", "ports", "firewall", "expiry"];
 /* The Networking page's section: in the address (/networking?tab=ip), so
    Back, Forward, a reload and a shared link all show the section that was
    open. Without one the Overview shows (beside the list; on a phone, the list

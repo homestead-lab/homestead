@@ -22,6 +22,7 @@ import homestead_changes as CHANGES
 import homestead_cluster as CLUSTER
 import homestead_diagnostics as DIAGNOSTICS
 import homestead_disks as DISKS
+import homestead_expiry as EXPIRY
 import homestead_forecast as FORECAST
 import homestead_gitops as GITOPS
 import homestead_history as HISTORY
@@ -289,6 +290,7 @@ def _alert_sources():
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 60, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("gitops", GITOPS.alert_facts)
+    take("expiry", EXPIRY.alert_facts)
     take("recovery", RECOVERY.alert_facts)
     # Log alerts read on their own thread; this only takes their last count.
     take("logs", LOGALERTS.alert_facts)

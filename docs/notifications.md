@@ -55,6 +55,8 @@ readings retain the last warning. Unchanged conditions do not repeat on a timer.
 | Image update | A new eligible image candidate is discovered | Once per candidate identity |
 | Harvester upgrade | New stable release or upgrade start/completion/failure | Once per release or upgrade stage |
 | Audit log | `audit.jsonl` on the data volume filled 10 MiB in under an hour (read from the files, so any copy's writes count); clears once a fill is slow again, or a day after the fast one | Recurrence after confirmed recovery |
+| Certificate expiry | A TLS Secret, webhook CA, cert-manager Certificate or the API server's certificate expires within 21 days (warning) or 7 days (critical), or has expired; a cert-manager renewal more than a day overdue. One that renews itself (cert-manager, or an operator's short-lived CA such as KubeVirt's and CDI's) alerts only once it has expired. Checked about hourly on the leader; a source that could not be read keeps its alerts | Inside 7 days, inside a day, expired |
+| API key expiry | Homestead API keys made to last over 30 days expire within 21 days: one alert for all of them, with no key names or owners | Inside 7 days, inside a day |
 
 SMART findings for the same drive are combined, retaining every reason and the
 highest severity. Drive identity uses its reported serial when available; without
