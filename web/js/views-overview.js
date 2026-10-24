@@ -275,11 +275,13 @@ function uptimeDuration(s) {
 }
 const uptimeWhen = t => fmtAt(t);
 /* Hosts' uptime as last read. A read that failed is kept as such, so a host
-   says it could not be read rather than "no samples yet" (#620). */
+   says it could not be read rather than "no samples yet" (#620). Its own key:
+   Monitoring's checks (STATE.data.uptime) are another answer, and neither read
+   replaces the other's. */
 function noteNodeUptime(read) {
   if (read?.unread) { STATE.data.nodeUptimeUnread = read.unread; return; }
   STATE.data.nodeUptimeUnread = "";
-  STATE.data.uptime = read || STATE.data.uptime;
+  STATE.data.nodeUptime = read || STATE.data.nodeUptime;
 }
 
 /* The node page's uptime card: how it is now, the windows, ninety days as a
@@ -546,7 +548,7 @@ function nodeUptimeStrip(n) {
   const remote = remoteRow(n);
   // A failed read keeps the last good strip and says so, where a phone shows it too.
   const unread = !remote && STATE.data.nodeUptimeUnread;
-  const u = remote ? null : STATE.data.uptime?.nodes?.[n.name];
+  const u = remote ? null : STATE.data.nodeUptime?.nodes?.[n.name];
   const days = (u?.days || []).slice(-30);
   // The share outside maintenance Homestead caused (#535), saying when there
   // was some, so a 100% never hides it; the share Ready in the tip.

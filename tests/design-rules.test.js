@@ -135,10 +135,16 @@ const LEGACY = [
   [/<label class="check"><input type="checkbox"/g, 7, "UI.ack for a risk acknowledgement"],
   // design.md, Reading the cluster (#620): a read that failed is not an empty
   // answer. The page says it could not read, and offers nothing that acts on a guess.
-  [/\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{\}|null|0|false|""|''|\(\{[^)]*\}\))\s*\)/g, 25,
+  // What is left: the browser's own calls (pwa.js: app badge, install prompt,
+  // the push subscription read and its unsubscribe; vm-console.js fullscreen;
+  // views-workloads.js clipboard) and writes in the background (troubleshooting.js:
+  // the bug report's two event posts; pwa.js: the sign-out's /api/push/unsubscribe;
+  // filemanager.js: the Files helpers' keepalive, which the next use repeats).
+  // At its floor: none of these reads Homestead's data.
+  [/\.catch\(\s*\(\s*\)\s*=>\s*(?:\[\]|\{\}|null|0|false|""|''|\(\{[^)]*\}\))\s*\)/g, 10,
     'catch(e => …) that marks what could not be read, or let the view show the error'],
   // The last answer kept without a word reads as current: say the read failed.
-  [/\.catch\(\s*\(\s*\)\s*=>\s*(?:STATE|window)\./g, 3, "catch(e => …) that marks what could not be read; never the last answer as if current"],
+  [/\.catch\(\s*\(\s*\)\s*=>\s*(?:STATE|window)\./g, 0, "catch(e => …) that marks what could not be read; never the last answer as if current"],
   // An invented list is worse than an empty one: a namespace or class that may not exist.
   [/\.catch\(\s*\(\s*\)\s*=>\s*\[[^\]]/g, 0, "catch(e => …) that marks what could not be read; never a made-up namespace or class"],
   // The same with the error named but dropped: catch(e => ({ error: e.message })) keeps it.
@@ -210,7 +216,7 @@ test("a dialog's footer is given HTML on its left, never a flag", () => {
       if ("([{".includes(c)) depth++;
       else if (")]}".includes(c)) { if (--depth === 0) break; }
       else if (c === "`") { i++; let t = 0; while (i < file.text.length && !(file.text[i] === "`" && !t)) { if (file.text[i] === "$" && file.text[i + 1] === "{") { t++; i++; } else if (file.text[i] === "}" && t) t--; i++; } }
-      else if (c === '"' || c === "'") { const q = c; i++; while (file.text[i] !== q) { if (file.text[i] === "\\") i++; i++; } }
+      else if (c === '"' || c === "'") { const q = c; i++; while (i < file.text.length && file.text[i] !== q) { if (file.text[i] === "\\") i++; i++; } }
       else if (c === "," && depth === 1) { if (++args === 2) { second.push(file.text.slice(start, i)); break; } start = i + 1; }
     }
     if (args === 1) second.push(file.text.slice(start, i));       // the second argument ran to the closing bracket

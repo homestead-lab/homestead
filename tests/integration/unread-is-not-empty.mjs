@@ -391,7 +391,7 @@ try {
 
     // Hosts: unread uptime is not "no samples yet", on the list and on a host's page.
     await page.evaluate(failing, "/api/nodes/uptime");
-    await page.evaluate(() => { STATE.data.uptime = null; return viewNodes(); });
+    await page.evaluate(() => { STATE.data.nodeUptime = null; return viewNodes(); });
     await page.waitForFunction(() => document.querySelector(".phead")?.innerText.includes("Hosts"));
     const tips = await page.evaluate(() => [...document.querySelectorAll(".node-upstrip")].map(x => x.dataset.tip));
     assert.ok(tips.length, "the host list shows uptime strips");
@@ -922,6 +922,310 @@ try {
       await page.locator('.askdlg [data-a="no"]').click();
     }
     await page.evaluate(() => { window.api = window.__realApi; });
+
+    // Part 12 (#620): Settings, linked clusters, search, the Dashboard and the last silent reads.
+    const real = () => page.evaluate(() => { window.api = window.__realApi || window.api; });
+    const settingsCardText = title => page.evaluate(t => [...document.querySelectorAll("#views section.card")]
+      .find(s => s.textContent.includes(t))?.textContent || "", title);
+    const settingsWith = async path => {
+      await real();
+      await page.evaluate(failing, path);
+      // Started, then waited for: awaiting viewSettings() inside evaluate now and then
+      // reports "Execution context was destroyed" with no navigation (on dev too).
+      await page.evaluate(() => { window.__view = STATE.view; STATE.view = "settings"; window.__settingsPainted = false;
+        viewSettings().finally(() => { window.__settingsPainted = true; }); });
+      await page.waitForFunction(() => window.__settingsPainted && document.querySelector(".phead")?.innerText.includes("Settings"));
+      // The page stays painted for the checks; the view goes back to what it was.
+      await page.evaluate(() => { STATE.view = window.__view; });
+    };
+
+    // Settings › Hardware features and About: unread hosts are not "no host detected", nor an older read as current.
+    await page.evaluate(() => { window.__ov = STATE.data.ov; STATE.data.ov = null; STATE.data.nodes = null; });
+    await settingsWith("/api/overview");
+    const hardwareCard = await settingsCardText("Hardware features");
+    assert.match(hardwareCard, /Could not read the hosts[\s\S]*timed out/);
+    assert.doesNotMatch(hardwareCard, /no host detected/);
+    assert.match(await settingsCardText("Hosts ready"), /Hosts ready\s*not read/);
+    await page.evaluate(() => { STATE.data.ov = { nodes: [{ name: "host-old", hardware: Object.fromEntries((STATE.data.hardwareFeatures || []).map(f => [f.id, true])) }] }; });
+    await settingsWith("/api/overview");
+    assert.match(await settingsCardText("Hardware features"), /Could not read the hosts just now[\s\S]*timed out[\s\S]*from the last read/);
+    await page.evaluate(() => { STATE.data.ov = window.__ov; });
+
+    // Settings › Users and roles: unread users are said, not an empty table.
+    await settingsWith("/api/auth/users");
+    assert.match(await settingsCardText("Users and roles"), /Could not read the users[\s\S]*timed out/);
+
+    // Settings › How hosts share the work: unread hosts are said, not "No hosts reported" or "Every app reserves something".
+    await settingsWith("/api/placement");
+    assert.match(await page.evaluate(() => document.querySelector("#set_standby_row").textContent), /Could not read the hosts[\s\S]*timed out/);
+    const spread = await page.evaluate(() => placeModeText("spread", STATE.data.placement));
+    assert.match(spread, /Could not read what the apps reserve[\s\S]*timed out/);
+    assert.doesNotMatch(spread, /Every app reserves something/);
+
+    // Settings › UniFi: unread is not "not connected" with Connect offered; an older read is marked.
+    await page.evaluate(() => { window.__ipam = STATE.data.ipam; STATE.data.ipam = undefined; });
+    await settingsWith("/api/ipam");
+    // Its section reads it when shown (#757); read it here whichever section is open.
+    await page.evaluate(() => unifiCardLoad());
+    await page.waitForFunction(() => /Could not read/.test(document.querySelector("#unifiCard")?.textContent || ""));
+    const unifi = await page.evaluate(() => document.querySelector("#unifiCard").textContent);
+    assert.match(unifi, /Could not read the UniFi connection[\s\S]*timed out/);
+    assert.doesNotMatch(unifi, /not connected|Connect UniFi/);
+    await page.evaluate(() => { STATE.data.ipam = { unifi: { configured: true, url: "https://192.0.2.1", last_sync: Date.now() / 1000 } }; return unifiCardLoad(); });
+    assert.match(await page.evaluate(() => document.querySelector("#unifiCard").textContent), /Could not read the UniFi connection just now[\s\S]*timed out[\s\S]*last read/);
+
+    // The UniFi dialog: nothing is saved over a connection that was not read.
+    await page.evaluate(() => { STATE.data.ipam = undefined; return ipamUnifi(); });
+    await settled(page);
+    const unifiDialog = await page.locator("#mbody").innerText();
+    assert.match(unifiDialog, /Could not read the UniFi connection[\s\S]*timed out/);
+    assert.equal(await page.locator("#mbody").getByRole("button", {name: /^Save/}).count(), 0, "no Save over an unread connection");
+    await page.evaluate(() => { closeModal(); STATE.data.ipam = window.__ipam; });
+
+    // Settings › Redundancy: unread copies are said, not an older answer.
+    await real();
+    await page.evaluate(failing, "/api/self/replicas");
+    const copies = await page.evaluate(async () => {
+      document.querySelectorAll("#replicaCard").forEach(el => el.remove());
+      document.body.insertAdjacentHTML("beforeend", '<div id="replicaCard"></div>');
+      STATE.data.replicaHtml = "old copies";
+      await replicasPaint();
+      const text = document.querySelector("#replicaCard").textContent;
+      document.querySelector("#replicaCard").remove();
+      return text;
+    });
+    assert.match(copies, /Could not read how many copies of Homestead run[\s\S]*timed out/);
+    assert.doesNotMatch(copies, /old copies/);
+
+    // Settings › AI agents: unread requests are not "none waiting".
+    await real();
+    await page.evaluate(failing, "/api/agents/requests");
+    const agents = await page.evaluate(async () => {
+      document.querySelectorAll("#mcpCard").forEach(el => el.remove());
+      document.body.insertAdjacentHTML("beforeend", '<div id="mcpCard"></div>');
+      await mcpCardPaint();
+      const text = document.querySelector("#mcpCard").textContent;
+      document.querySelector("#mcpCard").remove();
+      return text;
+    });
+    assert.match(agents, /Could not read how many are waiting[\s\S]*timed out/);
+
+    // Linked clusters: unread is said, with its error, and the address is not offered for saving over.
+    const fleetCard = async path => {
+      await real();
+      await page.evaluate(failing, path);
+      return page.evaluate(async () => {
+        document.querySelectorAll("#fleetCard, #fleetMovesCard").forEach(el => el.remove());
+        document.body.insertAdjacentHTML("beforeend", '<div id="fleetMovesCard"></div><div id="fleetCard"></div>');
+        await fleetSettingsPaint();
+        await new Promise(r => setTimeout(r, 300));
+        const text = { card: document.querySelector("#fleetCard").textContent, address: !!document.querySelector("#fleetAddress"),
+          moves: document.querySelector("#fleetMovesCard").textContent, movesHidden: document.querySelector("#fleetMovesCard").hidden };
+        document.querySelectorAll("#fleetCard, #fleetMovesCard").forEach(el => el.remove());
+        return text;
+      });
+    };
+    const fleet = await fleetCard("/api/fleet");
+    assert.match(fleet.card, /Could not read the linked clusters[\s\S]*timed out/);
+    assert.equal(fleet.address, false, "no address to save over one not read");
+    assert.match((await fleetCard("/api/fleet/legacy")).card, /Could not read the clusters added before linking[\s\S]*timed out/);
+    const sources = await fleetCard("/api/move/clusters");
+    assert.match(sources.moves, /Could not read which clusters apps can move from[\s\S]*timed out/);
+    assert.equal(sources.movesHidden, false);
+
+    // The cluster switcher with nothing read yet: "reading…" while the read is on its way, "not read" once it fails.
+    await real();
+    const first = await page.evaluate(async () => {
+      window.__fleetView = FLEET.view; FLEET.view = null;
+      const read = window.api; let fail;
+      window.api = (asked, ...rest) => String(asked).split("?")[0] === "/api/fleet"
+        ? new Promise((_, no) => { fail = no; }) : read(asked, ...rest);
+      const button = document.createElement("button"); document.body.append(button);
+      fleetMenu(button);
+      const waiting = document.querySelector(".fleet-menu")?.textContent || "";
+      fail(new Error("timed out"));
+      await new Promise(r => setTimeout(r, 100));
+      const failed = document.querySelector(".fleet-menu")?.textContent || "";
+      fleetMenuClose(); button.remove(); window.api = read; FLEET.view = window.__fleetView;
+      return {waiting, failed};
+    });
+    assert.match(first.waiting, /All clusters\s*reading…/);
+    assert.doesNotMatch(first.waiting, /not read/);
+    assert.match(first.failed, /Could not read the clusters: timed out[\s\S]*All clusters\s*not read/);
+
+    // The cluster switcher: an older list is marked when the refresh fails.
+    await real();
+    await page.evaluate(failing, "/api/fleet");
+    const menu = await page.evaluate(async () => {
+      window.__fleetView = FLEET.view;
+      FLEET.view = { members: [{ id: "x1", name: "old-one", self: true, version: "1", reachable: true }] };
+      const button = document.createElement("button"); document.body.append(button);
+      fleetMenu(button);
+      await new Promise(r => setTimeout(r, 300));
+      const text = document.querySelector(".fleet-menu")?.textContent || "";
+      fleetMenuClose(); button.remove(); FLEET.view = window.__fleetView;
+      return text;
+    });
+    assert.match(menu, /Could not read the clusters just now[\s\S]*timed out/);
+
+    // Migration from a linked cluster: an unread reach check is said, not left out.
+    await real();
+    await page.evaluate(failing, "/api/move/clusters/readiness");
+    await page.evaluate(async () => {
+      window.__fleetView = FLEET.view; window.__transferCall = window.fleetTransferCall;
+      FLEET.view = { members: [{ id: "x2", handle: "branch", name: "Branch", self: false, version: "1", reachable: true }] };
+      window.fleetTransferCall = async () => ({ allowed: true, ready: true, reachable_off_cluster: true, endpoint: "http://192.0.2.9:9000", longhorn: {} });
+      await fleetMigration("x2");
+    });
+    const migration = await page.locator("#mbody").innerText();
+    assert.match(migration, /Could not check whether this cluster can reach it[\s\S]*timed out/);
+    assert.match(migration, /Reachable from here\s*not checked/);
+    await page.evaluate(() => { closeModal(); FLEET.view = window.__fleetView; window.fleetTransferCall = window.__transferCall; });
+
+    // Search: a part that could not be searched is said, and is not kept as none.
+    await real();
+    await page.evaluate(failing, "/api/vms");
+    const search = await page.evaluate(async () => {
+      STATE.data.vms = null; STATE.q = "a";
+      await globalSearch("a");
+      const text = document.querySelector("#searchResults").textContent;
+      searchClose?.(); STATE.q = "";
+      return { text, kept: STATE.data.vms };
+    });
+    assert.match(search.text, /Could not search the VMs[\s\S]*timed out/);
+    assert.equal(search.kept, null, "unread VMs are not stored as none");
+
+    // Dashboard › Portal: links not checked are not shown with an old answer.
+    await real();
+    await page.evaluate(failing, "/api/portal/status");
+    // The widget is in the demo's layout only when chosen, so it is run where it is, and its read checked by its source.
+    const dots = await page.evaluate(async () => {
+      STATE.data.portalStatus = { any: { up: true, ms: 1 } }; STATE.data.portalUnread = "";
+      const shown = Dashboard.render().includes('id="dashboardPortal"');
+      if (shown) await Dashboard.loadPortal(true);
+      return { shown, status: STATE.data.portalStatus, unread: STATE.data.portalUnread, source: Dashboard.loadPortal.toString() };
+    });
+    assert.match(dots.source, /\/api\/portal\/status[^;]*\.catch\(e\s*=>[^;]*portalUnread\s*=\s*e\.message/, "the status read keeps its error for the dots");
+    if (dots.shown) assert.deepEqual([dots.status, dots.unread], [null, "timed out"]);
+
+    // Volumes › New storage class: an unread V2 status is said, not an older one as current.
+    await real();
+    await page.evaluate(() => { STATE.data.v2 = { enabled: true, ready_nodes: 3, total_nodes: 3, nodes: [] }; return storageClassCreate(); });
+    await settled(page);
+    await page.evaluate(failing, "/api/storage/v2");
+    const engine = await page.evaluate(async () => {
+      document.querySelector("#sc_engine").value = "v2";
+      await storageClassEngine();
+      return document.querySelector("#sc_engine_note").textContent;
+    });
+    assert.match(engine, /Could not read Longhorn's V2 status[\s\S]*timed out/);
+    assert.doesNotMatch(engine, /3 of 3/);
+    await page.evaluate(() => closeModal());
+
+    // Longhorn V2 (for one who is not an admin): unread hosts are not an empty table; an older reading is marked.
+    await page.evaluate(failing, "/api/storage/v2");
+    const v2 = await page.evaluate(async () => {
+      const can = window.can; window.can = role => role === "admin" ? false : can(role);
+      STATE.data.v2 = null;
+      await v2Details(true);
+      const none = document.querySelector("#mbody").textContent;
+      STATE.data.v2 = { enabled: true, ready_nodes: 1, total_nodes: 1, nodes: [{ name: "host-old", checks: { hugepages: true } }] };
+      await v2Details(true);
+      const old = document.querySelector("#mbody").textContent;
+      window.can = can; closeModal();
+      return { none, old };
+    });
+    assert.match(v2.none, /Could not read Longhorn's V2 engine[\s\S]*timed out/);
+    assert.match(v2.old, /Could not read it just now[\s\S]*timed out[\s\S]*last reading/);
+
+    // Signing in while a data move is paused: an answer that could not be read says so, with its status.
+    const signIn = await page.evaluate(async () => {
+      const fetcher = window.fetch;
+      window.fetch = async () => ({ ok: false, status: 502, json: () => Promise.reject(new Error("not JSON")) });
+      document.body.insertAdjacentHTML("beforeend", '<div id="rgTest"><input id="rg_user" value="admin"><input id="rg_pass" value="x"><p id="rg_err" hidden></p></div>');
+      await recoverySignIn();
+      const text = document.querySelector("#rg_err").textContent;
+      document.querySelector("#rgTest").remove(); window.fetch = fetcher;
+      return text;
+    });
+    assert.match(signIn, /could not be read[\s\S]*502/);
+
+    // Files: a helper that could not be asked to stop is said, not counted as stopping.
+    await real();
+    await page.evaluate(failing, "/api/files/close");
+    const closing = await page.evaluate(async () => {
+      Object.assign(FM, { open: true, panes: [{ namespace: "lab", pvc: "old-volume" }], headers: {} });
+      await fmRelease();
+      return [...document.querySelectorAll("#toast .tst")].map(t => t.textContent).join(" | ");
+    });
+    assert.match(closing, /could not be asked to stop[\s\S]*timed out/);
+
+    // Files opened again within one slow volumes read: the earlier opening's answer does not land in the new one.
+    await real();
+    const reopen = await page.evaluate(async () => {
+      const read = window.api, waits = [];
+      window.api = (asked, ...rest) => String(asked).split("?")[0] === "/api/volumes"
+        ? new Promise((resolve, reject) => waits.push({ resolve, reject })) : read(asked, ...rest);
+      modal("Files", '<div id="fmTestHost"></div>', true, "volume-files");
+      const loads = window.fmLoad; window.fmLoad = async () => {};
+      fmStart([fmPane("lab", "a"), fmPane("lab", "b")]);
+      fmStart([fmPane("lab", "a"), fmPane("lab", "b")]);
+      waits[1].resolve([{ namespace: "lab", pvc_name: "fresh" }]);
+      await new Promise(r => setTimeout(r, 50));
+      waits[0].reject(new Error("timed out"));
+      await new Promise(r => setTimeout(r, 50));
+      const out = { volumes: FM.volumes.map(v => v.pvc), unread: FM.volumesUnread };
+      window.fmLoad = loads; window.api = read; FM.open = false; closeModal();
+      return out;
+    });
+    assert.deepEqual(reopen, { volumes: ["fresh"], unread: "" });
+
+    // A host's "if it goes down": unread room on the other hosts is said, not left out.
+    await real();
+    await page.evaluate(failing, "/api/capacity/forecast");
+    const room = await page.evaluate(async () => {
+      document.body.insertAdjacentHTML("beforeend", '<div id="ifDownRoom" data-node="harvester-node1"></div>');
+      await ifDownRoom("harvester-node1");
+      const text = document.querySelector("#ifDownRoom").textContent;
+      document.querySelector("#ifDownRoom").remove();
+      return text;
+    });
+    assert.match(room, /Could not work out the room on the other hosts[\s\S]*timed out/);
+
+    // Helm › Install a chart: unread namespaces are said, so the one filled in is not taken for one that exists.
+    await real();
+    await page.evaluate(failing, "/api/namespaces");
+    await page.evaluate(() => helmInstall());
+    await page.waitForSelector("#hi_ns", {state: "attached"});
+    assert.match(await page.evaluate(() => document.querySelector("#mbody").textContent), /Could not read the namespaces[\s\S]*timed out/);
+    assert.equal(await page.evaluate(() => document.querySelector("#hi_ns").value), "", "no namespace is filled in on a guess");
+    await page.evaluate(() => closeModal());
+
+    // Hosts' uptime and Monitoring's checks are kept apart: one read does not drop the other's.
+    const uptimeKeys = await page.evaluate(() => {
+      const kept = STATE.data.uptime;
+      STATE.data.uptime = { apps: { "lab/web": { state: "up" } }, every: 60, unread: "timed out" };
+      noteNodeUptime({ nodes: { "host-a": { windows: {} } }, step: 60 });
+      const out = { apps: !!STATE.data.uptime?.apps, unread: STATE.data.uptime?.unread, nodes: !!STATE.data.nodeUptime?.nodes?.["host-a"] };
+      STATE.data.uptime = kept;
+      return out;
+    });
+    assert.deepEqual(uptimeKeys, { apps: true, unread: "timed out", nodes: true });
+
+    // The bell: alerts that could not be refreshed are said, not their last count as current.
+    await real();
+    await page.evaluate(failing, "/api/alerts");
+    const bell = await page.evaluate(async () => {
+      PWA_ALERTS.report = { active: [{ key: "k", title: "Old alert", severity: "warn", acknowledged: false }] };
+      PWA_ALERTS.request = null;
+      await refreshPwaAlerts(true);
+      paintBell();
+      return { pop: document.querySelector("#bellPop").textContent, label: document.querySelector("#bell summary, .bell summary")?.getAttribute("aria-label") || "" };
+    });
+    assert.match(bell.pop, /Could not read the alerts just now[\s\S]*timed out/);
+    assert.match(bell.label, /alerts not read/);
+    await real();
+    await page.evaluate(() => refreshPwaAlerts(true));
 
     assert.deepEqual(errors, []);
     console.log(`Unread reads say so passed ${width}px`);

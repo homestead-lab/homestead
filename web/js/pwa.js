@@ -260,7 +260,7 @@ async function refreshPwaAlerts(force=false) {
       const report=await api("/api/alerts",{keep:true});if(user!==ME || epoch!==PWA_ALERTS.epoch)return;
       PWA_ALERTS.report=report;PWA_ALERTS.at=Date.now();PWA_ALERTS.unread="";
       paintPwaAlerts(report);
-    }catch(error){if(user!==ME || epoch!==PWA_ALERTS.epoch)return;PWA_ALERTS.unread=error.message;pwaAlertsLine(PWA_ALERTS.report);
+    }catch(error){if(user!==ME || epoch!==PWA_ALERTS.epoch)return;PWA_ALERTS.unread=error.message;pwaAlertsLine(PWA_ALERTS.report);window.paintBell?.();
       if($("#pwaAlertsDialog"))$("#pwaAlertsDialog").innerHTML=UI.callout("warn","Alerts could not be refreshed",esc(error.message))+UI.button("Retry","refreshPwaAlerts(true)");}
     finally{if(epoch===PWA_ALERTS.epoch)PWA_ALERTS.request=null;}
   })();return PWA_ALERTS.request;

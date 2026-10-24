@@ -126,14 +126,19 @@ window.settingsBack = () => {
 };
 
 async function viewSettings() {
-  const [settings, features, overview, users, placement] = await Promise.all([
+  const [settings, features, overview, users, placementRead] = await Promise.all([
     loadHealthSettings(true), loadHardwareFeatures(),
-    api("/api/overview").catch(() => STATE.data.ov || null),
-    can("admin") ? api("/api/auth/users").catch(() => []) : Promise.resolve([]),
-    api("/api/placement").catch(() => null),
+    // A read that failed is said where its answer is shown, never an older
+    // answer as if current, nor none (#620).
+    api("/api/overview").catch(e => ({ unread: e.message })),
+    can("admin") ? api("/api/auth/users").catch(e => ({ unread: e.message })) : Promise.resolve([]),
+    api("/api/placement").catch(e => ({ unread: e.message })),
   ]);
-  STATE.data.ov = overview || STATE.data.ov;
-  STATE.data.placement = placement;
+  const hostsUnread = overview.unread || "", kept = hostsUnread ? STATE.data.ov : null;
+  if (!hostsUnread) STATE.data.ov = overview;
+  const usersUnread = users.unread || "";
+  STATE.data.placementUnread = placementRead.unread || "";
+  const placement = STATE.data.placement = placementRead.unread ? null : placementRead;
   const thresholds = settings.thresholds || HEALTH_DEFAULTS.thresholds;
   const updates = settings.updates || { policy: "approval_required", notify_available: true,
     notify_failures: true, maintenance: { days: [0, 1, 2, 3, 4, 5, 6], start: "02:00", duration_minutes: 120 } };
@@ -144,13 +149,17 @@ async function viewSettings() {
   const smart = settings.smart || { temperature: { warning: 55, critical: 65 },
     reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true };
   const info = settings.info || {};
-  const nodes = overview?.nodes || STATE.data.nodes || [];
+  // Hosts read before stay only when said to be from the last read.
+  const nodes = (hostsUnread ? kept?.nodes : overview.nodes) || STATE.data.nodes || null;
+  const hostsNote = !hostsUnread ? "" : nodes ? UI.callout("warn", "Could not read the hosts just now", `${esc(hostsUnread)} · what each host has is from the last read.`)
+    : UI.callout("bad", "Could not read the hosts", `${esc(hostsUnread)} · which hosts have each feature is not known.`);
   const hardwareRows = features.map(f => {
-    const hosts = nodes.filter(n => n.hardware?.[f.id]).map(n => n.name.replace("harvester-", ""));
+    const hosts = (nodes || []).filter(n => n.hardware?.[f.id]).map(n => n.name.replace("harvester-", ""));
     return `<div class="settings-list-row"><div><b>${esc(f.name)}</b><div class="dim xs mono">${esc(f.host_path)} → ${esc(f.container_path || f.host_path)}</div></div>
-      <div class="settings-list-meta">${hosts.length ? `${UI.chip(`${hosts.length} host${hosts.length === 1 ? "" : "s"}`, "hw")}<span class="dim xs">${esc(hosts.join(", "))}</span>` : UI.chip("no host detected", "warn")}</div></div>`;
+      <div class="settings-list-meta">${hosts.length ? `${UI.chip(`${hosts.length} host${hosts.length === 1 ? "" : "s"}`, "hw")}<span class="dim xs">${esc(hosts.join(", "))}</span>` : nodes ? UI.chip("no host detected", "warn") : UI.chip("hosts not read", "neutral")}</div></div>`;
   }).join("");
-  const userRows = users.map(u => userRow(u, can("admin"), users.length)).join("");
+  const userList = usersUnread ? [] : users;
+  const userRows = userList.map(u => userRow(u, can("admin"), userList.length)).join("");
 
   const tab = settingsTab();
   paint(`${UI.pageHeader(`Settings`, `Cluster policy, hardware, access, and installation information`, ``, {mobileSummary:"omit"})}
@@ -226,7 +235,7 @@ async function viewSettings() {
             </select>`)}
           <div id="set_standby_row" ${placeMode === "standby" ? "" : "hidden"}>
             ${settingRow(`Standby hosts ${tip("Take apps only when the others cannot. A host is never made standby when no other host takes work.")}`,
-              (placement?.notes || []).map(esc).join("; "),
+              STATE.data.placementUnread ? `<span class="badtext">Could not read the hosts: ${esc(STATE.data.placementUnread)}</span>` : (placement?.notes || []).map(esc).join("; "),
               // A standby host no longer in the cluster stays listed, ticked,
               // so saving another section does not quietly drop it.
               `<div class="standby-hosts">${[...(placement?.hosts || []),
@@ -234,7 +243,7 @@ async function viewSettings() {
                 .map(h => `<label class="switch"><input type="checkbox" class="set_standby" value="${esc(h.name)}"
                 ${standbyHosts.has(h.name) ? "checked" : ""} ${can("admin") ? "" : "disabled"}> <span class="mono">${esc(h.name)}</span>${h.gone
                   ? ` <span class="dim xs">${placement ? "not in this cluster" : "hosts could not be read"}</span>` : h.takes_work ? "" : ' <span class="dim xs">not taking work now</span>'}</label>`).join("")
-                || '<span class="dim xs">No hosts reported.</span>'}</div>`)}
+                || (STATE.data.placementUnread ? "" : '<span class="dim xs">No hosts reported.</span>')}</div>`)}
           </div>
         </div>
       `, {tab:`placement`, save:`app`})}
@@ -262,13 +271,14 @@ async function viewSettings() {
         ${UI.moduleHeader(`Hardware features`, `Reusable passthrough paths and automatic host detection`, `${can("operator") ? '<button class="btn sm" onclick="hardwareRescan(this)" title="Look for devices plugged in since the last check">Rescan hosts</button>' : ""}
           ${can("admin") ? '<button class="btn sm" onclick="hardwareFeatureSettings()">Manage</button>' : ""}`)}
         <div class="dim xs" style="margin:-4px 0 8px">Hosts are checked every 30 seconds, so a device plugged in later is found without a restart.</div>
-        <div class="settings-list">${hardwareRows || '<div class="empty small">No hardware features configured.</div>'}</div>
+        ${hostsNote}<div class="settings-list">${hardwareRows || '<div class="empty small">No hardware features configured.</div>'}</div>
       `, {tab:`hardware`, wide:false})}
 
       ${UI.settingsCard(`
         ${UI.moduleHeader(`Users and roles`, `Who can sign in, and what each may do`, `<button class="btn sm" onclick="rolesCompare()">Compare roles</button>${can("admin") ? '<button class="btn sm pri" onclick="userAdd()">＋ Add user</button>' : ""}`)}
-        ${users.length > 1 ? usersFilterChips(users) : ""}
-        ${users.length ? `<div class="tblwrap"><table class="tbl stack dense" id="usersTable"><thead><tr><th>User</th><th>Role</th><th>Last sign-in</th>${can("admin") ? "<th></th>" : ""}</tr></thead><tbody>${userRows}</tbody></table></div>` : ""}
+        ${usersUnread ? UI.callout("bad", "Could not read the users", esc(usersUnread)) : ""}
+        ${userList.length > 1 ? usersFilterChips(userList) : ""}
+        ${userList.length ? `<div class="tblwrap"><table class="tbl stack dense" id="usersTable"><thead><tr><th>User</th><th>Role</th><th>Last sign-in</th>${can("admin") ? "<th></th>" : ""}</tr></thead><tbody>${userRows}</tbody></table></div>` : ""}
       `, {tab:`access`, wide:false})}
       ${can("admin") ? UI.settingsCard('<div class="empty small"><span class="spin2"></span>reading keys</div>', {tab:"access",id:"apiKeysCard",wide:false}) : ""}
       ${can("admin") ? UI.settingsCard('<div class="empty small"><span class="spin2"></span>reading agent settings</div>', {tab:"access",id:"mcpCard",wide:false}) : ""}
@@ -305,8 +315,8 @@ async function viewSettings() {
           <div><span>Kubernetes</span><b>${esc(info.kubernetes || "—")}</b></div>
           <div><span>Default namespace</span><b class="mono">${esc(info.namespace || "lab")}</b></div>
           <div><span>Storage class</span><b class="mono">${esc(info.storage_class || "—")}</b></div>
-          <div><span>Cluster VIP</span><b class="mono">${esc(overview?.lb_ip || info.vip || "—")}</b></div>
-          <div><span>Hosts ready</span><b>${overview ? `${overview.nodes_ready}/${overview.nodes_total}` : "—"}</b></div>
+          <div><span>Cluster VIP</span><b class="mono">${esc((hostsUnread ? "" : overview.lb_ip) || info.vip || "—")}</b></div>
+          <div><span>Hosts ready</span><b>${hostsUnread ? `<span class="dim" title="${esc(hostsUnread)}">not read</span>` : `${overview.nodes_ready}/${overview.nodes_total}`}</b></div>
           <div><span>Node probe ${tip("Homestead keeps the probe's scripts in step with its own release, so an upgrade needs no kubectl. Installation and removal live under Cluster → Add-ons because the SMART sidecar is privileged.")}</span>
             <b>${esc(probeWord(info.node_probe?.state))}</b><small>${esc(info.node_probe?.detail || "")}</small></div>
           ${permissionsCell(info.permissions)}
@@ -352,7 +362,7 @@ const SETTINGS_LOADERS = {
   fleet: [() => window.fleetSettingsPaint?.()],
   connections: [() => mqttPaint(),
     // The UniFi card needs the IPAM record, which Settings does not otherwise load.
-    () => api("/api/ipam").then(data => { STATE.data.ipam = data; const host = $("#unifiCard"); if (host) host.outerHTML = ipamUnifiCard(); }).catch(() => {})],
+    () => unifiCardLoad()],
   access: [() => window.apiKeysPaint?.(), () => window.mcpCardPaint?.()],
   troubleshooting: [() => window.troubleshootingPaint?.()],
   you: [() => pwaPaint()],
@@ -436,7 +446,15 @@ window.replicasKeepTwo = async () => {
 
 async function replicasPaint() {
   let r;
-  try { r = await api("/api/self/replicas"); } catch (e) { return; }
+  try { r = await api("/api/self/replicas"); }
+  catch (e) {
+    // Said, not the last answer kept as if current (#620).
+    STATE.data.replicaHtml = "";
+    const card = $("#replicaCard");
+    if (card) card.innerHTML = UI.moduleHeader("Redundancy") + UI.callout("bad", "Could not read how many copies of Homestead run", esc(e.message))
+      + UI.button("Try again", "replicasPaint()");
+    return;
+  }
   const ready = r.pods.filter(p => p.ready && !p.terminating).length;
   const note = r.desired > 1 && r.spread_nodes < Math.min(r.desired, ready)
     ? `<div class="note">${ready} copies are ready but only on ${r.spread_nodes} host${r.spread_nodes === 1 ? "" : "s"}: spreading is a preference, so the scheduler doubled up where it had to. They move apart as hosts free up.</div>`
@@ -905,6 +923,7 @@ function placeModeText(mode, placement) {
       ? ` <span class="badtext">${esc(pending.map(h => h.name).join(", "))} ${pending.length === 1 ? "is" : "are"} not marked standby yet${pending.some(h => h.error) ? `: ${esc(pending.find(h => h.error).error)}` : ""}; Homestead tries again every minute.</span>` : ""}`;
   }
   if (mode === "spread") {
+    if (!placement && STATE.data.placementUnread) return `Kubernetes places each app on the host with most room left, by what apps reserve. <span class="badtext">Could not read what the apps reserve: ${esc(STATE.data.placementUnread)}</span>`;
     const n = placement?.unreserved || 0;
     return `Kubernetes places each app on the host with most room left, by what apps reserve.${n
       ? ` ${n} app${n === 1 ? " reserves" : "s reserve"} nothing and ${n === 1 ? "is" : "are"} placed as if ${n === 1 ? "it uses" : "they use"} nothing.${can("operator")
@@ -1079,7 +1098,7 @@ window.hardwareRescan = async button => {
     const found = Object.entries(r.nodes || {}).filter(([, ids]) => ids.length)
       .map(([node, ids]) => `${node.replace("harvester-", "")}: ${ids.map(id => names[id] || id).join(", ")}`);
     toast(found.length ? found.join(" · ") : "no hardware features detected on any host", found.length ? "ok" : "warn");
-    STATE.data.ov = await api("/api/overview").catch(() => STATE.data.ov);
+    // Settings reads the hosts again itself, and says so if it cannot.
     if (STATE.view === "settings") viewSettings();
   } catch (e) { toast(e.message, "bad"); }
   finally { if (button) { button.disabled = false; button.textContent = "Rescan hosts"; } }

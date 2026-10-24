@@ -132,7 +132,13 @@ def _uptime_loop():
         started = time.time()
         if LEADER.is_leader():
             try:
-                UPTIME.observe(cached("wl", 5, WORKLOADS.get_workloads), vms=cached("vms", 5, VMS.list_vms))
+                try:
+                    vms = cached("vms", 5, VMS.list_vms)
+                except Exception as error:
+                    # Unread VMs sit this round out; their records are left as they were, not checked as gone.
+                    vms = None
+                    print(f"uptime: VMs not read: {str(error)[:160]}", flush=True)
+                UPTIME.observe(cached("wl", 5, WORKLOADS.get_workloads), vms=vms)
                 try:
                     outage_tick()
                 except Exception as error:

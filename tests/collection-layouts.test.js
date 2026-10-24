@@ -66,7 +66,7 @@ test("sorting keeps detail rows next to their parents, including empty values an
 
 test("a remote node never borrows local uptime history under the same name",()=>{
   const c=context();
-  vm.runInContext('STATE.data.uptime={nodes:{"example-host":{windows:{"30d":100},days:[{day:1,up:100}]}}}',c);
+  vm.runInContext('STATE.data.nodeUptime={nodes:{"example-host":{windows:{"30d":100},days:[{day:1,up:100}]}}}',c);
   assert.match(c.nodeUptimeStrip({name:"example-host"}),/uptime-ok/);
   const remote=c.nodeUptimeStrip({name:"example-host",site:{id:"secondary-example"}});
   assert.doesNotMatch(remote,/uptime-ok/);assert.match(remote,/its cluster’s uptime history/);

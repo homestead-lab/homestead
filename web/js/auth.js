@@ -135,7 +135,8 @@ window.recoverySignIn = async () => {
     const r = await fetch("/api/auth/login", { method: "POST", credentials: "same-origin",
       headers: { "Content-Type": "application/json", "X-Homestead-Auth": "1" },
       body: JSON.stringify({ username: document.getElementById("rg_user").value.trim(), password: document.getElementById("rg_pass").value }) });
-    const out = await r.json().catch(() => ({}));
+    // An answer that is not JSON is said, with its status: never a bare "Sign-in failed".
+    const out = await r.json().catch(e => ({ error: `Sign-in failed: the answer could not be read (HTTP ${r.status}, ${e.message})` }));
     if (!r.ok) throw new Error(out.error || "Sign-in failed");
     location.assign(window.__recoveryReview);
   } catch (e) { err.textContent = e.message; err.hidden = false; }

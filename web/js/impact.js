@@ -88,7 +88,11 @@ async function ifDownRoom(node) {
     // Another host's preview may have opened while this one loaded.
     const now = $("#ifDownRoom");
     if (f && now && now.dataset.node === node) now.innerHTML = UI.section(`Room on the other hosts · ${capacityVerdict(f.verdict)[1]}`, capacityRoomHtml(f));
-  } catch (e) { /* the rest of the preview stands without it */ }
+  } catch (e) {
+    // The rest of the preview stands, and this part says it could not be worked out (#620).
+    const now = $("#ifDownRoom");
+    if (now && now.dataset.node === node) now.innerHTML = UI.section("Room on the other hosts", UI.callout("warn", "Could not work out the room on the other hosts", esc(e.message)));
+  }
 }
 window.capacityRoomHtml = capacityRoomHtml;
 window.capacityVerdict = capacityVerdict;

@@ -63,7 +63,7 @@ async function viewIpam() {
   // Someone part-way through a bulk change - typing a tag, choosing a
   // category - keeps the page as it is; the next refresh catches up.
   if (document.activeElement?.closest?.("#ipamBulk")) return;
-  STATE.data.ipam = data;
+  STATE.data.ipam = data; STATE.data.ipamUnread = "";
   const known = new Set(data.subnets.flatMap(s => s.rows.map(r => r.ip)));
   [...ipamPicks()].forEach(ip => { if (!known.has(ip)) ipamPicks().delete(ip); });
   // What was chosen in the bar survives the redraw with the ticks.
@@ -367,8 +367,31 @@ window.ipamSubnetsSave = async () => {
 };
 
 /* ---------------- UniFi ---------------- */
+/* The IPAM record, for UniFi: read, or why it could not be (#620). A failed
+   read keeps what was read before and says so; it never makes up an empty one. */
+async function ipamUnifiRead() {
+  try { STATE.data.ipam = await api("/api/ipam"); STATE.data.ipamUnread = ""; }
+  catch (e) { STATE.data.ipamUnread = e.message; }
+}
+/* Settings › Connections: read the UniFi card's record, then paint the card. */
+async function unifiCardLoad() {
+  await ipamUnifiRead();
+  const host = $("#unifiCard");
+  if (host) host.outerHTML = ipamUnifiCard();
+}
+window.unifiCardLoad = unifiCardLoad;
 window.ipamUnifi = async () => {
-  if (!STATE.data.ipam) { try { STATE.data.ipam = await api("/api/ipam"); } catch (e) { STATE.data.ipam = { subnets: [], unifi: {} }; } }
+  // Saving sends every field, so the dialog starts only from a connection that was read.
+  if (!STATE.data.ipam || STATE.data.ipamUnread) {
+    modal("UniFi", '<div class="empty"><span class="spin2"></span> Reading the UniFi connection…</div>');
+    await ipamUnifiRead();
+    if (!$("#mbody .spin2")) return;            // closed while it was read
+    if (STATE.data.ipamUnread) {
+      if ($("#mbody")) $("#mbody").innerHTML = UI.callout("bad", "Could not read the UniFi connection", `${esc(STATE.data.ipamUnread)} · nothing can be saved over it until it is read.`)
+        + UI.actions(UI.cancel("Close") + UI.button("Try again", "ipamUnifi()", { kind: "pri" }));
+      return;
+    }
+  }
   const u = (STATE.data.ipam || {}).unifi || {};
   modal("UniFi", `<p class="muted small">Import UniFi devices, clients and DHCP reservations without changing the controller. Create an API key under <b>Settings → Control Plane → Integrations</b>.</p>
     <div class="f"><label>Console address</label><input id="uf_url" value="${esc(u.url || "")}" placeholder="https://192.0.2.1"></div>
@@ -380,7 +403,7 @@ window.ipamUnifi = async () => {
     ${UI.actions(`<button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn" data-need="admin" onclick="ipamUnifiSave(false)">Save</button>
       <button class="btn pri" data-need="admin" onclick="ipamUnifiSave(true)">Save and sync</button>`,
-      // Disconnecting is not this dialog's result: it sits on the left, away from Save.
+      // Disconnecting is not the result of this dialog: it sits on the left, away from Save.
       u.configured ? '<button class="btn danger" data-need="admin" onclick="ipamUnifiForget()">Disconnect</button>' : "")}`);
 };
 window.ipamUnifiSave = async sync => {
@@ -398,7 +421,7 @@ window.ipamUnifiForget = async () => {
 };
 /* Whichever page the dialog was opened from shows the change. */
 async function ipamAfterUnifi() {
-  try { STATE.data.ipam = await api("/api/ipam"); } catch (e) { /* the page's next refresh will */ }
+  await ipamUnifiRead();
   if (STATE.view === "settings") { const host = $("#unifiCard"); if (host) host.outerHTML = ipamUnifiCard(); }
   else if (STATE.view === "network") renderIpam();
 }
@@ -408,6 +431,11 @@ async function ipamAfterUnifi() {
    connected, so a sync more than a day old means something is wrong (#351). */
 const UNIFI_STALE = 24 * 3600;
 function ipamUnifiCard(now = Date.now() / 1000) {
+  // Not read yet, or not read at all: never "not connected" on a guess (#620).
+  const unread = STATE.data.ipamUnread;
+  if (!STATE.data.ipam) return UI.settingsCard(`${UI.moduleHeader(`UniFi Network`, `Its clients, devices, reserved addresses and networks, and the names it knows, on the IP addresses page`, ``)}
+    ${unread ? UI.callout("bad", "Could not read the UniFi connection", esc(unread)) + UI.button("Try again", "unifiCardLoad()")
+      : '<div class="empty small"><span class="spin2"></span> Reading the UniFi connection…</div>'}`, {tab:`connections`, id:`unifiCard`});
   const u = ((STATE.data.ipam || {}).unifi) || {};
   const age = u.last_sync ? now - u.last_sync : null;
   const stale = u.configured && (age === null || age > UNIFI_STALE);
@@ -425,6 +453,7 @@ function ipamUnifiCard(now = Date.now() / 1000) {
       actionBar([u.configured ? { label: "Sync now", run: "ipamSync()", need: "operator", pri: true } : null,
         { label: u.configured ? "Edit" : "Connect UniFi", run: "ipamUnifi()", need: "admin", pri: !u.configured }]))}
     ${facts}
+    ${unread ? UI.callout("warn", "Could not read the UniFi connection just now", `${esc(unread)} · this is the connection as last read.`) : ""}
     ${u.configured && u.last_error ? UI.callout("bad", "The last sync failed", esc(u.last_error)) : ""}
     ${u.configured && !u.last_error && stale ? UI.callout("warn", u.last_sync ? `Last synced ${fmtAgo(age)}` : "Not synced yet",
       "Addresses and names may have changed since. Sync to refresh.") : ""}`, {tab:`connections`, id:`unifiCard`})}`;

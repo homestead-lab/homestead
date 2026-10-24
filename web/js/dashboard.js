@@ -154,7 +154,8 @@ const Dashboard = (() => {
       try {
         const data=await api("/api/portal");if(requestedSession!==session)return;STATE.data.portal=data;STATE.data.dashboardPortalError=false;
         const host=document.getElementById("dashboardPortal");if(host)host.innerHTML=portalBody();
-        const status=await api(`/api/portal/status${force?"?force=1":""}`).catch(()=>({}));
+        // Links not checked say so on their dots (portalDots), never an older answer (#620).
+        const status=await api(`/api/portal/status${force?"?force=1":""}`).catch(e=>{STATE.data.portalUnread=e.message;return null;});
         if(requestedSession!==session)return;STATE.data.portalStatus=status;
         portalDots();refreshOptions();
       } catch {if(requestedSession!==session)return;STATE.data.dashboardPortalError=true;const host=document.getElementById("dashboardPortal");if(host)host.innerHTML=portalBody();}

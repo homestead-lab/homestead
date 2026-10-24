@@ -349,24 +349,30 @@ async function globalSearch(q) {
   out.innerHTML = '<div class="searchloading" role="presentation"><span class="spin2"></span> searching…</div>';
   try {
     const cached = (key, path) => STATE.data[key] ? Promise.resolve(STATE.data[key]) : api(path);
+    // Optional parts: one that could not be read is said under the results, and
+    // the rest is still searched; it is not kept as none for the pages (#620).
+    const unread = [];
+    const part = (read, what) => read.catch(e => { unread.push(`${what}: ${e.message}`); return null; });
     const [wls, nodes, vols, vms, shares, store] = await Promise.all([
       cached("wl", "/api/workloads"), cached("nodes", "/api/nodes"), cached("vols", "/api/volumes"),
-      // Optional parts: a cluster without KubeVirt, Samba or the App Store still searches the rest.
-      cached("vms", "/api/vms").catch(() => []), cached("shares", "/api/shares").catch(() => []),
-      api("/api/appstore?q=" + encodeURIComponent(q)).catch(() => ({ apps: [] })),
+      part(cached("vms", "/api/vms"), "the VMs"),
+      // Shares are an admin's to see: for anyone else they are not a read that failed.
+      can("admin") ? part(cached("shares", "/api/shares"), "the shares") : Promise.resolve(null),
+      part(api("/api/appstore?q=" + encodeURIComponent(q)), "the App Store"),
     ]);
-    Object.assign(STATE.data, { wl: wls, nodes, vols, vms, shares });
+    Object.assign(STATE.data, { wl: wls, nodes, vols }, vms ? { vms } : {}, shares ? { shares } : {});
     if (q !== STATE.q) return; // a newer search has started
     const pages = Object.entries(HomesteadRouter.ROUTES).filter(([view]) => VIEWS[view])
       .map(([view, route]) => ({ view, label: route.label, section: route.section }))
       .concat(typeof NETWORK_SECTIONS !== "undefined" ? NETWORK_SECTIONS.filter(([tab]) => tab !== "overview")
         .map(([tab, label]) => ({ view: "network", tab, label, section: "Networking" })) : []);
-    searchHits = HomesteadSearch.hits(q, { workloads: wls, nodes, volumes: vols, vms, shares, apps: (store.apps || []).slice(0, 5),
+    searchHits = HomesteadSearch.hits(q, { workloads: wls, nodes, volumes: vols, vms: vms || [], shares: shares || [], apps: (store?.apps || []).slice(0, 5),
       pages, settings: typeof SETTINGS_SECTIONS !== "undefined" ? SETTINGS_SECTIONS : [] });
     out.innerHTML = searchHits.length ? searchHits.map((x, i) => `<div class="sresult" role="option" id="searchResult${i}" aria-selected="false" data-index="${i}">
       ${x.icon ? `<img src="${esc(x.icon)}" alt="" onerror="this.remove()">` : `<span class="smark">${icon(SEARCH_ICONS[x.kind] || "search")}</span>`}
       <span><b>${esc(x.name)}</b><small>${esc(x.kind)} · ${esc(x.sub)}</small></span></div>`).join("")
       : `<div class="searchloading" role="presentation">Nothing matches “${esc(q)}”.</div>`;
+    if (unread.length) out.insertAdjacentHTML("beforeend", `<div class="searchloading" role="presentation">Could not search ${esc(unread.join("; "))}</div>`);
     searchActive = -1;
     $$(".sresult", out).forEach(option => {
       option.addEventListener("mousedown", e => e.preventDefault()); // keep focus in the search box

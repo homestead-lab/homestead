@@ -121,8 +121,8 @@ window.helmUninstall = async (namespace, name) => {
 
 /* ---------------- install ---------------- */
 window.helmInstall = async () => {
-  let namespaces = [];
-  try { namespaces = await api("/api/namespaces"); } catch (e) { /* type one */ }
+  let namespaces = [], unread = "";
+  try { namespaces = await api("/api/namespaces"); } catch (e) { unread = e.message; }
   modal("Install a chart", `<div class="f"><label>Find a chart ${tip("Searches Artifact Hub, the public index of Helm charts.")}</label>
       <input id="hi_q" placeholder="e.g. grafana, cert-manager, immich" oninput="helmSearchSoon()"></div>
     <div id="hi_results" class="helm-results"></div>
@@ -131,8 +131,9 @@ window.helmInstall = async () => {
         <div class="f"><label>Chart</label><input id="hi_chart" class="mono"></div></div>
       <div class="f2"><div class="f"><label>Version</label><select id="hi_version"></select></div>
         <div class="f"><label>Release name</label><input id="hi_name" class="mono"></div></div>
-      <div class="f"><label>Namespace</label><input id="hi_ns" class="mono" list="hi_ns_list" value="${esc(namespaces.includes("lab") ? "lab" : namespaces[0] || "default")}">
-        <datalist id="hi_ns_list">${namespaces.map(n => `<option value="${esc(n)}">`).join("")}</datalist></div>
+      <div class="f"><label>Namespace</label><input id="hi_ns" class="mono" list="hi_ns_list" value="${esc(unread ? "" : namespaces.includes("lab") ? "lab" : namespaces[0] || "default")}"${unread ? ' placeholder="e.g. lab"' : ""}>
+        <datalist id="hi_ns_list">${namespaces.map(n => `<option value="${esc(n)}">`).join("")}</datalist>
+        ${unread ? `<div class="ui-help badtext">Could not read the namespaces (${esc(unread)}): type the one to install into.</div>` : ""}</div>
       <div class="f"><label>Values ${tip("Only what you change from the chart's defaults. The defaults are shown on the right to copy from.")}</label>
         <div class="helm-values-pair"><textarea id="hi_values" class="mono helm-values" rows="14" spellcheck="false" placeholder="# e.g.\n# persistence:\n#   enabled: true"></textarea>
         <pre id="hi_defaults" class="mono helm-values dim" title="The chart's defaults"></pre></div></div>

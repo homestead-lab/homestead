@@ -83,7 +83,10 @@ function paintBell() {
   const alerts=(window.PWA_ALERTS?.report?.active || []).filter(a=>!a.acknowledged && a.category !== "agents"), alertCount=alerts.length;
   // A waiting request needs a person but is not an error; alerts are red
   // only while one of them is critical.
+  // Alerts that could not be refreshed are said: the counts are the last read, not now (#620).
+  const alertsUnread = window.PWA_ALERTS?.unread || "";
   const rows = [
+    alertsUnread ? row("pwaAlertsDialog()", "alert", `${window.PWA_ALERTS?.report ? "Could not read the alerts just now · these counts are from the last read" : "Could not read the alerts"}: ${alertsUnread}`, "warn") : "",
     waitingAgents ? row("go('agents')", "chip", `${plural(waitingAgents, "AI agent request")} waiting for you`, "warn") : "",
     alertCount ? row("pwaAlertsDialog()", "alert", plural(alertCount, "active alert"), alerts.some(a => a.severity === "critical") ? "danger" : "warn") : "",
     waiting.length ? row("homesteadUpdateDialog()", "update", release ? `Homestead ${release} is available` : plural(waiting.length, "Homestead helper update")) : "",
@@ -93,12 +96,12 @@ function paintBell() {
   ].filter(Boolean);
   const count = waitingAgents + alertCount + images + (waiting.length ? 1 : 0) + failedJobs.length;
   const words = [waitingAgents ? plural(waitingAgents, "AI agent request") : "", alertCount ? plural(alertCount,"active alert") : "", active.length ? `${plural(active.length, "job")} running` : "", waiting.length ? (release ? `Homestead ${release}` : "Homestead helpers") : "", images ? plural(images, "container update") : "",
-    errors ? `${plural(errors, "failed check")}` : "", failedJobs.length ? plural(failedJobs.length, "failed job") : ""].filter(Boolean).join(", ") || "Nothing needs you";
+    errors ? `${plural(errors, "failed check")}` : "", failedJobs.length ? plural(failedJobs.length, "failed job") : "", alertsUnread ? "alerts not read" : ""].filter(Boolean).join(", ") || "Nothing needs you";
   const badge = $("#bellCount"), dot = $("#bellErrors"), summary = bell.querySelector("summary");
   if (badge) { badge.textContent = count; badge.classList.toggle("hidden", !count); }
   if (dot) { dot.textContent = errors; dot.classList.toggle("hidden", !errors); }
   if (summary) { summary.title = words; summary.setAttribute("aria-label", `Notifications: ${words}`); }
-  bell.classList.toggle("has-news", count > 0 || errors > 0);
+  bell.classList.toggle("has-news", count > 0 || errors > 0 || !!alertsUnread);
   bell.classList.toggle("running", active.length > 0);
   const html = (active.length ? `<div class="bell-head">Running now</div>${active.slice(0, 4).map(jobRow).join("")}` : "")
     + (rows.length ? `<div class="bell-head">Needs attention</div>${rows.join("")}` : active.length ? "" : '<div class="bell-empty">Nothing needs you</div>')

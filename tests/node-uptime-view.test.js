@@ -3,7 +3,7 @@
 const test = require("node:test"), assert = require("node:assert/strict"), fs = require("node:fs"), vm = require("node:vm");
 function setup(uptime) {
   let html = "";
-  const c = { console, Set, Map, Promise, document: { addEventListener() {} }, STATE: { data: { uptime: { nodes: { node1: uptime } } } },
+  const c = { console, Set, Map, Promise, document: { addEventListener() {} }, STATE: { data: { nodeUptime: { nodes: { node1: uptime } } } },
     $: () => ({ set innerHTML(v) { html = v; }, get innerHTML() { return html; } }), $$: () => [],
     esc: v => String(v ?? "").replaceAll("<", "&lt;").replaceAll('"', "&quot;"), toast() {},
     remoteRow: () => null, fmtDay: t => `day${t}`, fmtAt: t => `at${t}`, fmtUp: s => `${s}s`, fmtAgo: s => `${s}s ago`,

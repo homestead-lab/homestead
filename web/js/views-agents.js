@@ -236,7 +236,7 @@ window.mcpCardPaint = async () => {
   const card = document.getElementById("mcpCard");
   if (!card || !can("admin")) return;
   const [requests, audit] = await Promise.all([
-    api("/api/agents/requests").catch(() => ({ pending: 0 })),
+    api("/api/agents/requests").catch(e => ({ unread: e.message })),
     api("/api/agents/audit?limit=20").catch(e => ({ calls: [], error: e.message }))]);
   const on = !!STATE.data.appSettings?.mcp?.enabled;
   const url = location.origin + "/mcp";
@@ -259,7 +259,7 @@ window.mcpCardPaint = async () => {
     ${UI.more("Connect Claude Code", `<pre class="mono small agent-raw">${esc(window.__mcpText.code)}</pre><div class="row">${copy("code")}</div>`, false, "mcp-claude-code")}
     ${UI.more("Connect Claude Desktop", `<p class="small">Add this to claude_desktop_config.json, with the key in place of hsk_...</p><pre class="mono small agent-raw">${esc(window.__mcpText.desktop)}</pre><div class="row">${copy("desktop")}</div>`, false, "mcp-claude-desktop")}
     <p class="small">Reading and routine changes run at once. Anything that deletes or restores data waits for a person to approve it on
-      <a href="${esc(HomesteadRouter.urlFor("agents"))}" onclick="event.preventDefault();go('agents')">AI agent requests</a>${waiting ? ` ${UI.chip(waiting + " waiting", "warn")}` : ""}.</p>
+      <a href="${esc(HomesteadRouter.urlFor("agents"))}" onclick="event.preventDefault();go('agents')">AI agent requests</a>${waiting ? ` ${UI.chip(waiting + " waiting", "warn")}` : ""}${requests.unread ? ` <span class="badtext">Could not read how many are waiting: ${esc(requests.unread)}</span>` : ""}.</p>
     ${UI.section("Recent calls", audit.error ? `<div class="dim small">${esc(audit.error)}</div>` : UI.table(
       [{ label: "When" }, { label: "Key" }, { label: "Tool or action" }, { label: "Outcome" }],
       (audit.calls || []).map(c => [esc(agentWhen(c.at)), esc(c.name || c.key), `<span class="mono xs">${esc(c.action)}</span>${c.via === "api" ? ' <span class="dim xs">API</span>' : c.via === "mqtt" ? ' <span class="dim xs">MQTT</span>' : ""}`,

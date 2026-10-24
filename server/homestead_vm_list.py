@@ -246,10 +246,10 @@ def _row(vm, vmi, claims=None, dvs=None, instance_known=True):
 
 
 def list_vms():
-    try:
-        vms = V.kget(f"{V.API}/virtualmachines").get("items", [])
-    except Exception:
-        return []
+    # A list that could not be read raises (#620): taken as "no VMs", it let the
+    # power schedules forget what they had done and the pages say there were none.
+    # Only a cluster without KubeVirt has none.
+    vms = V.KUBE.items(f"{V.API}/virtualmachines", optional_group="kubevirt.io", read=V.kget)
     instance_known = False
     try:
         inventory = V.kget(f"{V.API}/virtualmachineinstances")

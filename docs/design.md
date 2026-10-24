@@ -629,7 +629,12 @@ file and line, when it finds:
   (`.catch(() => [])` and the like) or an invented one (a made-up namespace
   or storage class). A read that failed is not "nothing there": say it could
   not be read, and offer nothing that acts on a guess. That count only
-  shrinks too.
+  shrinks too. What is left is the browser's own calls (app badge, install
+  prompt, push subscription, fullscreen, clipboard) and writes in the
+  background: the bug report's event posts, the sign-out's request that
+  Homestead stop this device's notifications, and the Files helpers'
+  keepalive, which the next use repeats. A read of Homestead's data never
+  joins them.
 
 It also checks this file still states those rules. Change a rule in both
 places at once; never quiet the test for one screen.

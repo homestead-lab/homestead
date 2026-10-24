@@ -453,17 +453,19 @@ def states(cfg, snap):
     return out
 
 
-def publish_once(cfg, client, snap, announced, items=None):
+def publish_once(cfg, client, snap, announced, items=None, unread=None):
     """Discovery for nodes not yet announced, then availability and state;
     with power control, the same for the items it covers, after retiring the
-    ones it no longer does."""
+    ones it no longer does. A kind in `unread` could not be read this round:
+    its items are left as last published, neither stated nor announced again."""
     names = tuple(sorted(n["name"] for n in snap.get("nodes") or []))
     if announced.get("nodes") != names:
         for topic, payload in discovery(cfg, snap):
             client.publish(topic, json.dumps(payload, separators=(",", ":")))
         announced["nodes"] = names
     items = items or []
-    ids = tuple(sorted(item["id"] for item in items))
+    kept = [i for i in announced.get("control") or () if i.split(":")[0] in (unread or {})]
+    ids = tuple(sorted([item["id"] for item in items] + kept))
     if "retired" not in announced:
         for topic in retire_topics(cfg, [i for i in cfg.get("retire") or [] if i not in ids]):
             client.publish(topic, "")
@@ -485,6 +487,7 @@ def publish_once(cfg, client, snap, announced, items=None):
 
 # ------------------------------------------------------------------ power control
 KINDS = {"app": "Container", "vm": "Virtual machine"}
+PLURAL = {"app": "containers", "vm": "virtual machines"}
 # What each kind answers to: a Power switch, then its buttons.
 ACTIONS = {"app": ("power", "restart"), "vm": ("power", "restart", "force_off", "reset")}
 BUTTONS = {"restart": ("Restart", "mdi:restart"), "force_off": ("Force off", "mdi:power-plug-off"),
@@ -497,23 +500,44 @@ COMMANDS_PER_MINUTE = 20    # for them all
 AUDIT_KEY = {"id": "mqtt", "name": "Home Assistant (MQTT)", "owner": ""}
 
 
+class Unread(Exception):
+    """A list power control covers could not be read (#620): `unread` says
+    which kind and why, `items` holds what the other lists gave."""
+    def __init__(self, unread, items):
+        super().__init__("; ".join(f"could not read the {PLURAL[kind]}: {why}" for kind, why in unread.items()))
+        self.unread, self.items = unread, items
+
+
 def control_items():
     """What power control may be given, each with whether it is on, from the
     lists the API reads (homestead_api_v1); Homestead's own containers, and
-    anything in the platform's namespaces, never."""
+    anything in the platform's namespaces, never. A list that cannot be read
+    raises Unread, never stands for none."""
     import homestead_api_v1 as API_V1
     import homestead_workloads as WORKLOADS
-    out = []
-    for w in API_V1.ctx["workloads"]():
-        refused = ("it is part of Homestead" if w.get("self") or w.get("homestead")
-                   else "it runs in a system namespace" if w["ns"] in WORKLOADS.SYS_NS else "")
-        out.append({"id": f"app:{w['ns']}/{w['name']}", "kind": "app", "ns": w["ns"], "name": w["name"],
-                    "on": int(w.get("desired") or 0) > 0, "refused": refused})
-    for v in API_V1.ctx["vms"]():
-        out.append({"id": f"vm:{v['ns']}/{v['name']}", "kind": "vm", "ns": v["ns"], "name": v["name"],
-                    "on": bool(v.get("running")),
-                    "refused": "it runs in a system namespace" if v["ns"] in WORKLOADS.SYS_NS else ""})
+    out, unread = [], {}
+    try:
+        for w in API_V1.ctx["workloads"]():
+            refused = ("it is part of Homestead" if w.get("self") or w.get("homestead")
+                       else "it runs in a system namespace" if w["ns"] in WORKLOADS.SYS_NS else "")
+            out.append({"id": f"app:{w['ns']}/{w['name']}", "kind": "app", "ns": w["ns"], "name": w["name"],
+                        "on": int(w.get("desired") or 0) > 0, "refused": refused})
+    except Exception as error:
+        unread["app"] = _why(error)
+    try:
+        for v in API_V1.ctx["vms"]():
+            out.append({"id": f"vm:{v['ns']}/{v['name']}", "kind": "vm", "ns": v["ns"], "name": v["name"],
+                        "on": bool(v.get("running")),
+                        "refused": "it runs in a system namespace" if v["ns"] in WORKLOADS.SYS_NS else ""})
+    except Exception as error:
+        unread["vm"] = _why(error)
+    if unread:
+        raise Unread(unread, [item for item in out if item["kind"] not in unread])
     return out
+
+
+def _why(error):
+    return (getattr(error, "message", "") or str(error) or type(error).__name__)[:200]
 
 
 def control_act(kind, ns, name, action):
@@ -554,12 +578,30 @@ def _uid(cfg, kind, ns, name):
     return f"hs_{scope}{kind}_{slug(ns)}_{slug(name)}"
 
 
-def controlled(cfg):
-    """The items power control covers now: picked, still there, and allowed."""
+def controlled(cfg, unread=None):
+    """The items power control covers now: picked, still there, and allowed.
+    Given a dict `unread`, a list that cannot be read is put in it and left
+    out; without one, that raises Unread."""
     if not cfg.get("control"):
         return []
     picked = set(cfg.get("controlled") or [])
-    return [item for item in control_items() if item["id"] in picked and not item.get("refused")]
+    try:
+        items = control_items()
+    except Unread as error:
+        if unread is None:
+            raise
+        unread.update(error.unread)
+        items = error.items
+    return [item for item in items if item["id"] in picked and not item.get("refused")]
+
+
+def publish_round(cfg, client, snap, announced):
+    """One publish: the sensors and what power control covers. A list power
+    control cannot read leaves its items as last published, and the rest still
+    goes out (#620): an error here would drop the connection, and the broker's
+    last will would make every entity unavailable. Returns (count, unread)."""
+    unread = {}
+    return publish_once(cfg, client, snap, announced, controlled(cfg, unread), unread), unread
 
 
 def control_discovery(cfg, items):
@@ -692,7 +734,14 @@ def handle(cfg, topic, payload, now=None):
     args = {"namespace": ns, "name": name}
     if not cfg.get("control") or item_id not in (cfg.get("controlled") or []):
         return _audit(label, args, "refused", "power control from Home Assistant is not on for it")
-    found = next((item for item in control_items() if item["id"] == item_id), None)
+    try:
+        items = control_items()
+    except Unread as error:
+        # Never acted on what was not read (#620): the command is refused, and said.
+        if kind in error.unread:
+            return _audit(label, args, "refused", f"could not read the {PLURAL[kind]} just now: {error.unread[kind]}")
+        items = error.items
+    found = next((item for item in items if item["id"] == item_id), None)
     if not found:
         return _audit(label, args, "refused", f"there is no {KINDS[kind].lower()} {ns}/{name}")
     if found.get("refused"):
@@ -727,7 +776,7 @@ def _publish_control_states():
     if not client or not cfg:
         return
     try:
-        for topic, word in control_states(cfg, controlled(cfg)):
+        for topic, word in control_states(cfg, controlled(cfg, {})):
             client.publish(topic, word)
     except Exception:
         pass
@@ -801,11 +850,12 @@ def run():
                 _live.update(client=client, cfg=cfg)
             snap = snapshot()
             if snap:
-                count = publish_once(cfg, client, snap, announced, controlled(cfg))
+                count, unread = publish_round(cfg, client, snap, announced)
+                note = "".join(f"; could not read the {PLURAL[kind]}, so theirs are as last published" for kind in unread)
                 with _lock:
                     STATUS.update(state="publishing", error="", last_publish=int(time.time()),
                                   published=STATUS["published"] + count,
-                                  detail=f"publishing to {cfg['host']}:{cfg['port']} every {cfg['interval']}s")
+                                  detail=f"publishing to {cfg['host']}:{cfg['port']} every {cfg['interval']}s{note}")
                 _share()
             backoff = 5
             # Between publishes the broker hears a ping at least every minute,

@@ -72,14 +72,18 @@ const fmPane = (namespace, pvc, extra = {}) => ({ namespace, pvc, path: "", list
 async function fmStart(panes) {
   // Closing goes to the cluster this opened on, even if the selection changes.
   // The volumes offered are this opening's, read below; none from an earlier one.
-  Object.assign(FM, { open: true, active: 0, editing: null, busy: "", lastSeen: Date.now(), headers: fmHeaders(), panes, volumes: [], volumesUnread: "" });
+  // Each opening reads its own: an earlier one's slow answer is dropped.
+  const opening = (FM.opening || 0) + 1;
+  Object.assign(FM, { open: true, opening, active: 0, editing: null, busy: "", lastSeen: Date.now(), headers: fmHeaders(), panes, volumes: [], volumesUnread: "" });
   $("#mbody").innerHTML = `<div class="fm" id="fm">${fmShellHtml()}</div>`;
   fmBindActivity();
   api("/api/volumes", { keep: true }).then(rows => {
+    if (FM.opening !== opening) return;
     FM.volumes = (rows || []).filter(v => v.pvc_name || v.name).map(v => ({ namespace: v.namespace || "lab", pvc: v.pvc_name || v.name, attached: v.state === "attached" }));
     FM.volumesUnread = "";
     fmPaint();
   }).catch(e => {
+    if (FM.opening !== opening) return;
     // Unread volumes are said in the picker, not an older list (#620).
     FM.volumes = []; FM.volumesUnread = e.message;
     fmPaint();
@@ -578,12 +582,15 @@ async function fmRelease(keepalive = false) {
     api("/api/snapshot-files/close", { method: "POST", headers: FM.headers || fmHeaders(), keepalive,
       body: JSON.stringify({ namespace: pane.snapshot.namespace, session: pane.snapshot.session }) })
       .catch(e => { if (!keepalive) toast(`The snapshot copy is removed when it expires. ${e.message}`, "warn"); }));
+  const unasked = [];
   const results = await Promise.all([...seen.values()].map(pane =>
     api("/api/files/close", { method: "POST", headers: FM.headers || fmHeaders(), keepalive, body: JSON.stringify({ namespace: pane.namespace, pvc: pane.pvc }) })
-      .then(answer => answer.stopped).catch(() => false)));
+      .then(answer => answer.stopped).catch(e => { unasked.push(e.message); return false; })));
   if (!keepalive) {
-    const left = results.filter(stopped => !stopped).length;
-    toast(left ? `Files closed; ${left === 1 ? "a helper is" : `${left} helpers are`} still stopping and will be gone within a minute` : "Files closed; the volume is free for its app or VM", left ? "warn" : "ok");
+    const left = results.filter(stopped => !stopped).length - unasked.length;
+    // One that could not be asked is said as such: it stops on its own a minute after its last use.
+    toast(unasked.length ? `Files closed; ${unasked.length === 1 ? "a helper" : `${unasked.length} helpers`} could not be asked to stop (${unasked[0]}) and will stop on ${unasked.length === 1 ? "its" : "their"} own within a minute`
+      : left ? `Files closed; ${left === 1 ? "a helper is" : `${left} helpers are`} still stopping and will be gone within a minute` : "Files closed; the volume is free for its app or VM", left || unasked.length ? "warn" : "ok");
   }
 }
 window.fmClose = async () => {

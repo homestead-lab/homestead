@@ -143,14 +143,16 @@ window.fleetCrumb = () => {
 
 function fleetMenuHtml() {
   const view = FLEET.view || { members: [] };
+  // A refresh that failed is said; the clusters shown are the ones last read (#620).
+  const unread = FLEET.menuUnread ? `<div class="fleet-via badtext">${FLEET.view ? "Could not read the clusters just now" : "Could not read the clusters"}: ${esc(FLEET.menuUnread)}${FLEET.view ? " · these are as last read" : ""}</div>` : "";
   const all = fleetAll();
   const item = (checked, onclick, iconName, title, sub, extra = "") => `<button type="button" role="menuitemradio"
     aria-checked="${checked}" class="${checked ? "on" : ""}" onclick="${onclick}">${iconName}
     <span class="fleet-item"><b>${esc(title)}</b><span>${sub}</span></span>${extra}</button>`;
   const dot = m => `<span class="fleet-dot ${m.reachable ? (m.compatible === false ? "warn" : "ok") : "bad"}" aria-hidden="true"></span>`;
-  return `${view.via ? `<div class="fleet-via">Through ${esc(view.via)}</div>` : ""}
+  return `${unread}${view.via ? `<div class="fleet-via">Through ${esc(view.via)}</div>` : ""}
     ${item(all, "fleetShowAll()", `<span class="fleet-dot all" aria-hidden="true"></span>`, "All clusters",
-      `${view.members.length} together`)}
+      FLEET.view ? `${view.members.length} together` : FLEET.menuUnread ? "not read" : "reading…")}
     <div class="fleet-sep"></div>
     ${view.members.map(m => item(!all && m.self, `fleetSwitch(${jsq(m.id)})`, dot(m), m.name,
       esc(m.self ? `this one · v${m.version}` : m.reachable ? `v${m.version}` : "not answering"))).join("")}
@@ -175,6 +177,7 @@ window.fleetMenu = button => {
   menu.className = "fleet-menu";
   menu.setAttribute("role", "menu");
   document.body.appendChild(menu);
+  FLEET.menuUnread = "";   // an earlier failure is not said while this read is on its way
   const paint = () => {
     menu.innerHTML = fleetMenuHtml();
     const box = button.getBoundingClientRect();
@@ -183,7 +186,8 @@ window.fleetMenu = button => {
   };
   paint();
   // What each cluster says now, painted in when it arrives.
-  api("/api/fleet", { keep: true }).then(view => { FLEET.view = view; if (menu.isConnected) paint(); }).catch(() => {});
+  api("/api/fleet", { keep: true }).then(view => { FLEET.view = view; FLEET.menuUnread = ""; if (menu.isConnected) paint(); })
+    .catch(e => { FLEET.menuUnread = e.message; if (menu.isConnected) paint(); });
   setTimeout(() => {
     document.addEventListener("click", fleetMenuOutside, true);
     document.addEventListener("keydown", fleetMenuKey, true);
@@ -246,11 +250,12 @@ function fleetTransferCall(m, body = null) {
     body: JSON.stringify({ name: m.handle, ...(body || {}) }) });
 }
 
-function fleetMigrationButton(m, state) {
+function fleetMigrationButton(m, state, unread = "") {
   const on = !!state?.allowed;
   const label = !state ? "Migration" : on ? "Migration on" : "Migration off";
+  // Unread is neither on nor off: the button says so rather than "cannot move yet" (#620).
   return `<button type="button" class="btn sm fleet-mig${on ? " on" : ""}" onclick="fleetMigration(${jsq(m.id)})"
-    title="${esc(on ? `Apps can move from ${m.name} to another cluster` : `Apps cannot move from ${m.name} yet`)}">
+    title="${esc(unread ? `Could not read whether apps can move from ${m.name}: ${unread}` : on ? `Apps can move from ${m.name} to another cluster` : `Apps cannot move from ${m.name} yet`)}">
     <span class="fleet-dot ${on ? "ok" : ""}" aria-hidden="true"></span>${esc(label)}</button>`;
 }
 
@@ -259,11 +264,11 @@ window.fleetTransfersPaint = () => {
     const host = document.getElementById(`fout_${m.id}`);
     if (!host) return;
     if (!m.self && !m.reachable) { host.innerHTML = ""; return; }
-    let state = null;
-    try { state = await fleetTransferCall(m); } catch (e) { state = null; }
+    let state = null, unread = "";
+    try { state = await fleetTransferCall(m); } catch (e) { state = null; unread = e.message; }
     FLEET.transfers[m.id] = state;
     const now = document.getElementById(`fout_${m.id}`);
-    if (now) now.innerHTML = fleetMigrationButton(m, state);
+    if (now) now.innerHTML = fleetMigrationButton(m, state, unread);
     if (window.applyRole) applyRole();
   });
 };
@@ -280,11 +285,14 @@ window.fleetMigration = async id => {
     $("#mbody").innerHTML = UI.callout("bad", `Could not ask ${m.name}.`, esc(e.message)) + UI.actions(UI.cancel("Close"));
     return;
   }
+  let readyUnread = "";
   if (!m.self) {
     ready = await api("/api/move/clusters/readiness", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: m.handle }) }).catch(() => null);
+      body: JSON.stringify({ name: m.handle }) }).catch(e => { readyUnread = e.message; return null; });
     if (ready) (window.__clusterReady ||= {})[m.handle] = ready;
   }
+  // An unread check is said, not left out as if there were nothing to check (#620).
+  const readyNote = readyUnread ? UI.callout("warn", "Could not check whether this cluster can reach it", esc(readyUnread)) : "";
   if (!$("#mbody")) return;
   const lead = UI.lead(`Move apps from ${esc(m.name)} to linked clusters by backing up their volumes to its S3 store and restoring them at the destination.`);
   const target = ready?.target || {};
@@ -314,7 +322,8 @@ window.fleetMigration = async id => {
       retryTarget]);
     body = `${lead}
       ${UI.facts([["Migration", "On"], ["Backup storage", `<span class="mono">${esc((state.endpoint || "—").replace(/^https?:\/\//, ""))}</span>`],
-        ...(m.self ? [] : [["Reachable from here", ready ? (target.answers ? "Yes" : "No") : "—"]]), ["Size", state.size_gb ? `${state.size_gb} GiB` : "—"]])}
+        ...(m.self ? [] : [["Reachable from here", ready ? (target.answers ? "Yes" : "No") : readyUnread ? "not checked" : "—"]]), ["Size", state.size_gb ? `${state.size_gb} GiB` : "—"]])}
+      ${readyNote}
       ${problems.map(([tone, title, detail, fix]) => UI.callout(tone, title, `${detail ? `<p>${esc(detail)}</p>` : ""}${fix}`)).join("")}
       ${state.backups_here ? UI.callout("info", `${m.name}'s Longhorn backs up here too.`, "Disabling migration pauses those backups until it is enabled again.") : ""}
       ${UI.actions(UI.cancel("Close") + UI.button("Disable migration", `fleetMigrationSet(${jsArg(id)}, false)`, { id: "fm_go", attrs: 'data-need="admin"' }))}`;
@@ -325,10 +334,11 @@ window.fleetMigration = async id => {
   } else {
     const shared = ready?.shared_vip;
     body = `${lead}
+      ${readyNote}
       ${UI.fields(
         UI.field("Size (GiB)", '<input id="fm_size" type="number" min="5" value="100">', { help: "Holds the backups moves make; they are incremental." }),
         UI.field("Address", `<select id="fm_pick" onchange="$('#fm_ip').hidden = this.value !== '__typed'">
-            <option value="__shared">${shared ? `Its shared address · ${esc(shared)}` : "Its shared address"}</option>
+            <option value="__shared">${shared ? `Its shared address · ${esc(shared)}` : readyUnread ? "Its shared address (not read)" : "Its shared address"}</option>
             <option value="__typed">An address of its own…</option></select>
           <input id="fm_ip" class="mono" placeholder="192.0.2.243" hidden data-ipam>`,
           { help: "Shared with its apps, on its own port. Choose an address of its own only to keep its traffic apart." }),
@@ -419,7 +429,10 @@ window.fleetSettingsPaint = async () => {
   const host = $("#fleetCard");
   if (!host) return;
   fleetMovesPaint();
-  const [view, legacy] = await Promise.all([api("/api/fleet").catch(() => null), api("/api/fleet/legacy").catch(() => [])]);
+  // Each read that failed is said with its error; nothing is offered for saving over what was not read (#620).
+  const [read, legacyRead] = await Promise.all([api("/api/fleet").catch(e => ({ unread: e.message })),
+    api("/api/fleet/legacy").catch(e => ({ unread: e.message }))]);
+  const view = read.unread ? null : read, legacy = legacyRead.unread ? [] : legacyRead;
   FLEET.legacy = legacy;
   if (!$("#fleetCard")) return;
   if (view) FLEET.view = view;
@@ -427,16 +440,18 @@ window.fleetSettingsPaint = async () => {
   const mode = (value, label) => `<button type="button" class="${(value === "all") === all ? "on" : ""}" aria-pressed="${(value === "all") === all}"
     onclick="fleetSetMode(${jsq(value)})">${label}</button>`;
   host.innerHTML = `${UI.moduleHeader(`Linked clusters`, `Other Homesteads managed from this one - even when only this one is reachable from outside.`, `${UI.button("Link a cluster", "fleetLink()", { kind: "pri", attrs: 'data-need="admin"' })}`)}
-    ${view ? `<ul class="fleet-list">${fleetMembersHtml(view)}</ul>` : UI.callout("bad", "Could not read the linked clusters.")}
+    ${view ? `<ul class="fleet-list">${fleetMembersHtml(view)}</ul>` : UI.callout("bad", "Could not read the linked clusters", esc(read.unread))
+      + UI.button("Try again", "fleetSettingsPaint()")}
     ${view?.linked ? UI.section("How they show", `<div class="seg fleet-mode" role="group" aria-label="How linked clusters show">
         ${mode("one", "One cluster at a time")}${mode("all", "All clusters together")}</div>
       <p class="ui-help">${all
         ? "Containers, Virtual Machines, Hosts and Volumes list every cluster, each row tagged with its own. The switch at the start of the top bar still opens one cluster on its own."
         : "The switch at the start of the top bar opens any cluster here, with your sign-in and role. Its All clusters shows them together."}</p>`) : ""}
+    ${legacyRead.unread ? UI.section("Added before linking", UI.callout("bad", "Could not read the clusters added before linking", esc(legacyRead.unread))) : ""}
     ${legacy.length ? UI.section("Added before linking", `<p class="ui-help">Added on Import for moves, with an account kept here.
       Link each to manage it from here too; its password is then deleted, and moves already made keep working.</p>
       <ul class="fleet-list">${fleetLegacyHtml(legacy)}</ul>`) : ""}
-    ${UI.section("Address for other clusters", UI.field("Address",
+    ${!view ? "" : UI.section("Address for other clusters", UI.field("Address",
       `<div class="fleet-address"><input id="fleetAddress" value="${esc(view?.address || view?.suggested_address || "")}" placeholder="http://192.0.2.242:8088">
       ${UI.button("Save", "fleetSaveAddress()", { attrs: 'data-need="admin"' })}</div>`,
       { help: "Its LAN address and port. Linked clusters use it to relay pages and consoles to this one." }))}
@@ -453,13 +468,14 @@ window.fleetSettingsPaint = async () => {
 window.fleetMovesPaint = async () => {
   const host = $("#fleetMovesCard");
   if (!host) return;
-  let unread = "";
+  let unread = "", clustersUnread = "";
   const [moves, clusters] = await Promise.all([api("/api/move/moves").catch(e => { unread = e.message; return []; }),
-    api("/api/move/clusters").catch(() => [])]);
+    api("/api/move/clusters").catch(e => { clustersUnread = e.message; return []; })]);
   if (!$("#fleetMovesCard")) return;
-  host.hidden = !unread && !moves.length && !clusters.length;
+  host.hidden = !unread && !clustersUnread && !moves.length && !clusters.length;
   host.innerHTML = `${UI.moduleHeader(`Moving apps and VMs`, `Bring containers and VMs here from another cluster. A cluster's <b>Migration</b> button above lets apps move from it.`, `${moves.some(m => ["succeeded", "cancelled"].includes(m.status)) ? UI.button("Clear finished", "moveDismiss()", { attrs: 'data-need="admin"' }) : ""}`)}
     <div id="movesList">${unread ? movesUnreadHtml(unread) : moves.length ? movesHtml(moves) : ""}</div>
+    ${clustersUnread ? UI.callout("bad", "Could not read which clusters apps can move from", esc(clustersUnread)) + UI.button("Try again", "fleetMovesPaint()") : ""}
     ${clusters.length ? `<ul class="fleet-list move-sources">${clusters.map(moveSourceRow).join("")}</ul>` : ""}`;
   if (window.applyRole) applyRole();
   // Each check waits on the other Homestead answering, so after the card is up.

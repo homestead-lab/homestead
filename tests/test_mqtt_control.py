@@ -221,6 +221,71 @@ class ApiBindingTests(unittest.TestCase):
         self.assertEqual(["operator", "operator"], roles)
 
 
+class VmReadFailsTests(unittest.TestCase):
+    """#620: with power control on, a VM list that cannot be read is not "no
+    VMs". The sensors and containers go on publishing, the VMs' entities stay
+    as last published, and a VM command is refused, not acted on."""
+    SNAP = {"cluster": {"health": "ok"},
+            "nodes": [{"name": "node1", "cpu_pct": 5, "mem_pct": 9, "mem_gb": 3.2, "rx_mbps": 1, "tx_mbps": 2,
+                       "pods": 20, "vms": 1, "wl": "frigate", "status": "Ready"}]}
+
+    def setUp(self):
+        import homestead_api_v1 as API_V1
+        self.store = Store(self, {"enabled": True, "host": "192.0.2.177", "control": True,
+                                  "controlled": ["vm:vms/win11", "app:lab/frigate"]})
+        saved = dict(API_V1.ctx)
+        self.addCleanup(lambda: (API_V1.ctx.clear(), API_V1.ctx.update(saved)))
+        self.calls, self.vms_fail = [], False
+
+        def vms():
+            if self.vms_fail:
+                raise RuntimeError("the VM list timed out")
+            return [{"ns": "vms", "name": "win11", "running": True}]
+        API_V1.ctx.update(workloads=lambda: [{"ns": "lab", "name": "frigate", "desired": 0}], vms=vms,
+                          vm_power=lambda *a: self.calls.append(("vm",) + a) or {"warnings": []},
+                          scale=lambda *a: self.calls.append(("scale",) + a) or {"warnings": []})
+        MQTT.bind_control(DEFAULT_ITEMS, DEFAULT_ACT)
+        MQTT._recent.clear()
+        MQTT._minute.clear()
+        audit_dir = self.enterContext(tempfile.TemporaryDirectory())
+        AUDIT.bind(audit_dir)
+
+    def test_sensors_and_containers_publish_while_the_vms_cannot_be_read(self):
+        cfg, client, announced = MQTT.load(), FakeClient(), {}
+        MQTT.publish_round(cfg, client, self.SNAP, announced)
+        client.sent.clear()
+        self.vms_fail = True
+        count, unread = MQTT.publish_round(cfg, client, self.SNAP, announced)   # does not raise
+        sent = dict(client.sent)
+        self.assertEqual("online", sent["harvester/cluster/availability"])
+        self.assertIn("harvester/cluster/state", sent)
+        self.assertIn("harvester/node/node1/state", sent)
+        self.assertEqual("OFF", sent["harvester/control/app/lab/frigate/state"])
+        # The VM's switch and buttons are left as they were: not stated off, not retired.
+        self.assertEqual([], [t for t, _ in client.sent if "vm" in t.split("/")[2:4] or "hs_vm_" in t])
+        self.assertIn("timed out", unread["vm"])
+        self.assertEqual(3, count)   # the cluster, node and container states
+        # Read again: its state comes back, with no new announcement.
+        client.sent.clear()
+        self.vms_fail = False
+        MQTT.publish_round(cfg, client, self.SNAP, announced)
+        sent = dict(client.sent)
+        self.assertEqual("ON", sent["harvester/control/vm/vms/win11/state"])
+        self.assertNotIn("homeassistant/switch/hs_vm_vms_win11/config", sent)
+
+    def test_a_vm_command_while_the_vms_cannot_be_read_is_refused_and_written_down(self):
+        self.vms_fail = True
+        cfg = MQTT.load()
+        self.assertEqual("refused", MQTT.handle(cfg, "harvester/control/vm/vms/win11/power", b"OFF", now=1000))
+        self.assertEqual([], self.calls)
+        entry = AUDIT._read()[-1]
+        self.assertEqual(("mqtt_vm_stop", "refused"), (entry["action"], entry["outcome"]))
+        self.assertRegex(entry["detail"], "could not read the virtual machines.*timed out")
+        # A container's command does not need the VM list.
+        self.assertEqual("ok", MQTT.handle(cfg, "harvester/control/app/lab/frigate/power", b"ON", now=1000))
+        self.assertEqual([("scale", "lab", "frigate", 1)], self.calls)
+
+
 class ProtocolTests(unittest.TestCase):
     def test_packets_read_back(self):
         packet = MQTT.publish_packet("harvester/control/vm/vms/win11/power", "ON", retain=False)

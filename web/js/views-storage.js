@@ -770,8 +770,15 @@ function v2Item(ok, label, how, detail = "") {
 }
 window.v2Details = async (fresh = false) => {
   if (can("admin")) return lhV2Setup();
-  let v2 = STATE.data.v2;
-  if (fresh || !v2?.nodes?.[0]?.checks) v2 = STATE.data.v2 = await api("/api/storage/v2").catch(() => v2 || { nodes: [] });
+  let v2 = STATE.data.v2, unread = "";
+  if (fresh || !v2?.nodes?.[0]?.checks) {
+    // An unread answer is said; a reading kept from before is shown only as that (#620).
+    const read = await api("/api/storage/v2").catch(e => ({ unread: e.message }));
+    if (!read.unread) v2 = STATE.data.v2 = read;
+    else if (v2?.nodes?.[0]?.checks) unread = read.unread;
+    else return modal("Longhorn V2 data engine", UI.callout("bad", "Could not read Longhorn's V2 engine", esc(read.unread))
+      + UI.actions(UI.cancel("Close") + UI.button("Try again", "v2Details(true)", { kind: "pri" })), true);
+  }
   const h = v2.harvester_setting !== null && v2.harvester_setting !== undefined, d = v2.distribution;
   const nodes = v2.nodes || [];
   const count = key => nodes.filter(n => n.checks?.[key] === true).length;
@@ -779,6 +786,7 @@ window.v2Details = async (fresh = false) => {
   const cell = (n, key, label, extra = "") => `<td data-label="${esc(label)}">${v2Mark(n.checks?.[key])}${extra ? ` <span class="dim xs">${esc(extra)}</span>` : ""}</td>`;
   modal("Longhorn V2 data engine", `<p class="muted small" style="margin-top:0">V2 is Longhorn's SPDK engine: lower latency and less CPU per I/O than V1.
       A V2 volume schedules only on hosts where everything below is ticked. Hover the <b>?</b> beside any line for how to do it${h ? " on Harvester" : ` on ${d === "rke2" ? "RKE2" : d === "k3s" ? "k3s" : "this cluster"}`}.</p>
+    ${unread ? UI.callout("warn", "Could not read it just now", `${esc(unread)} · what is shown is the last reading.`) : ""}
     <div class="sec">The cluster</div>
     <div class="v2list">
       ${v2Item(v2.longhorn_ok ?? null, "Longhorn 1.8 or newer", V2_HOW.longhorn(h), v2.longhorn_version ? `runs ${v2.longhorn_version}` : "version not reported")}
@@ -958,8 +966,10 @@ window.storageClassEngine = async () => {
   if ($("#sc_engine").value !== "v2") { note.hidden = true; return; }
   note.hidden = false;
   note.textContent = "Checking the hosts…";
-  const v2 = STATE.data.v2 = await api("/api/storage/v2").catch(() => STATE.data.v2);
-  if (!v2) { note.textContent = "Could not read Longhorn's V2 status."; return; }
+  // Unread is said, never the last answer as if current (#620); a good answer is kept.
+  const v2 = await api("/api/storage/v2").catch(e => ({ unread: e.message }));
+  if (v2.unread) { note.textContent = `Could not read Longhorn's V2 status: ${v2.unread}`; note.classList.add("bad"); return; }
+  STATE.data.v2 = v2;
   note.classList.toggle("bad", !v2.enabled || !v2.ready_nodes);
   note.innerHTML = !v2.enabled
     ? "<b>V2 is switched off in Longhorn.</b> A class can be made now, but its volumes will not schedule until it is on. <a onclick=\"v2Details()\" style=\"cursor:pointer;text-decoration:underline\">How to turn it on</a>"

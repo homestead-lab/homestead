@@ -321,5 +321,43 @@ class VmTests(unittest.TestCase):
         self.assertEqual(["PATCH", "PATCH", "DELETE"], [m for m, p, b in c.sent])
 
 
+
+class UnreadVmListTests(unittest.TestCase):
+    """#620: a VM list that could not be read is an error, never "no VMs" -
+    the power schedules, outage actions and pages built on it would act on none."""
+
+    def bind(self, fail, groups=("kubevirt.io",)):
+        def get(path):
+            if path == "/apis":
+                return {"groups": [{"name": g} for g in groups]}
+            if path.endswith("/virtualmachines"):
+                raise fail
+            return {"items": []}
+        VMS.bind(get, lambda *a, **k: {}, lambda *a, **k: [])
+
+    def test_a_failed_read_raises(self):
+        self.bind(urllib.error.URLError("timed out"))
+        with self.assertRaises(Exception):
+            VMS.list_vms()
+
+    def test_a_404_with_kubevirt_installed_raises(self):
+        self.bind(urllib.error.HTTPError("/apis/kubevirt.io/v1/virtualmachines", 404, "not found", None, io.BytesIO(b"")))
+        with self.assertRaises(urllib.error.HTTPError):
+            VMS.list_vms()
+
+    def test_no_kubevirt_is_no_vms(self):
+        self.bind(urllib.error.HTTPError("/apis/kubevirt.io/v1/virtualmachines", 404, "not found", None, io.BytesIO(b"")), groups=("apps",))
+        self.assertEqual([], VMS.list_vms())
+
+    def test_an_incomplete_list_raises(self):
+        def get(path):
+            if path.endswith("/virtualmachines"):
+                return {"items": [], "metadata": {"continue": "more"}}
+            return {"items": []}
+        VMS.bind(get, lambda *a, **k: {}, lambda *a, **k: [])
+        with self.assertRaises(ValueError):
+            VMS.list_vms()
+
+
 if __name__ == "__main__":
     unittest.main()
