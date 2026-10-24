@@ -224,7 +224,12 @@ test("the demo has a deliberate clash and a maintenance window to show", () => {
   assert.match(demo, /name: "weekly-trim", task: "filesystem-trim", cron: "0 2 \* \* 6"[^}]*groups: \["default"\]/);
   assert.match(demo, /clashes: \[\{ severity: "clash", jobs: \[\{ name: "nightly-backup", task: "backup" \}, \{ name: "weekly-trim", task: "filesystem-trim" \}\]/);
   assert.match(demo, /maintenance: \{ days: \[0, 1, 2, 3, 4, 5, 6\], start: "02:00", duration_minutes: 120 \}/);
-  assert.match(demo, /name: "home-assistant", ns: "lab", kind: "Deployment", update_mode: "auto"/, "an app that updates itself, so the window shows");
+  // frigate: the demo's monitoring has it up, so its row has no Answering
+  // tag. home-assistant shows "Slow" and paperless "Down"; with the "Auto"
+  // chip beside either, the status cell wraps the row past the 64 px phone
+  // limit (scripts/check_collection_layouts.mjs).
+  assert.deepEqual([...demo.matchAll(/name: "([^"]+)", ns: "lab", kind: "Deployment", [^\n]*update_mode: "auto"/g)].map(m => m[1]), ["frigate"],
+    "one app that updates itself, so the window shows, and it is the one with no Answering tag");
 });
 
 test("a wall time the clock change repeats is its first occurrence, as Python's zoneinfo reads it (power schedules)", () => {
