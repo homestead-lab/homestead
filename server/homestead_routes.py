@@ -94,6 +94,7 @@ MODULES = (
     "homestead_fleet_routes",
     "homestead_flow",
     "homestead_forecast",
+    "homestead_fs_freeze",
     "homestead_gitops",
     "homestead_group_tiers",
     "homestead_hardware",

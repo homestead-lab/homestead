@@ -200,6 +200,7 @@ async function viewProtect() {
 
   <div id="restore-tests" class="restore-tests">${restoreTestsSection()}</div>
   <div id="previous-volumes" class="restore-tests"></div>
+  <div id="fs-freeze" class="restore-tests"></div>
 
   <div class="sec">Recurring jobs</div>
   ${d.jobs.length ? `<div class="cardlist">${d.jobs.map(j => `<div class="card flat wcard">
@@ -257,6 +258,7 @@ async function viewProtect() {
   protectVolumesPaint();
   loadRestoreTests();
   loadPreviousVolumes();
+  window.loadFsFreeze?.();
 }
 
 /* ---------------- the Volumes list, filtered (#345) ----------------

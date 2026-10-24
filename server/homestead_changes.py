@@ -268,11 +268,13 @@ def _marked_by(dep, ns, name, since, now):
 
 
 def note_write(method, path, body=None, now=None):
-    """Homestead is about to write a Deployment: remember who for, and say so on the write."""
+    """Homestead is about to write a Deployment: remember who for, and say so on the write.
+    A write to a Longhorn Setting or Volume goes to _note_object instead."""
     if method not in ("POST", "PUT", "PATCH"):
         return
     m = _DEPLOYMENT.match(path or "")
     if not m:
+        _note_object(path, body)
         return
     _strip(body)            # before anything else: a refused patch is not noted
     name = m.group(2) or ((body or {}).get("metadata") or {}).get("name") or ""
@@ -529,3 +531,85 @@ def run(sleep=time.sleep):
                 print(f"changes: {str(error)[:160]}", flush=True)
         last = started
         sleep(max(5, 60 - (time.time() - started)))
+
+
+# The same mark on other kinds of object Homestead changes for someone: a
+# Longhorn Setting or Volume. It is signed over the kind, the object and the
+# value written, so a mark copied from an app or another object, or left
+# behind by a later change made elsewhere (kubectl, Longhorn's chart), never
+# checks out. Only the write guard puts it on, for a write made inside
+# marking(value); a mark a request brings is dropped, as on apps.
+_LONGHORN_OBJECT = re.compile(
+    r"^/apis/longhorn\.io/v1beta2/namespaces/([a-z0-9-]+)/(settings|volumes)(?:/([a-z0-9.-]+))?(?:\?.*)?$")
+_OBJECT_KIND = {"settings": "Setting", "volumes": "Volume"}
+
+
+def _signed_object(key, kind, ns, name, value, at, who):
+    text = "\n".join(("object", kind, ns, name, str(value), str(int(at)), _label(who)))
+    return hmac.new(key, text.encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def object_mark(kind, ns, name, value, now=None):
+    """The changedBy value for writing value to this object, for whoever this
+    request is for; None before setup, when there is no key to sign with."""
+    now = int(now if now is not None else time.time())
+    try:
+        tag = _signed_object(_author_key(), kind, ns, name, value, now, getattr(REQUEST, "user", None) or "")
+    except Exception:
+        return None
+    return json.dumps({"at": now, "by": tag}, separators=(",", ":"))
+
+
+def object_author(kind, ns, name, obj, value):
+    """{"who", "at"} when the object's mark checks out for it holding value
+    ("" is a job of Homestead's own), else None."""
+    raw = (((obj or {}).get("metadata") or {}).get("annotations") or {}).get(AUTHOR)
+    if not isinstance(raw, str) or len(raw) > MARK_MAX:
+        return None
+    try:
+        mark = json.loads(raw)
+        at, tag = int(mark["at"]), str(mark["by"])
+        key, known = _author_key(), _authors()
+    except Exception:
+        return None
+    candidates = ["", *(f"api-key:{n}" for n in known["api_keys"]),
+                  *(u for u in known["users"] if _label(u) == "user:" + u)]
+    who = next((w for w in candidates
+                if hmac.compare_digest(_signed_object(key, kind, ns, name, value, at, w), tag)), None)
+    return None if who is None else {"who": who, "at": at}
+
+
+class marking:
+    """Writes to a Longhorn Setting or Volume on this thread, inside it, are
+    marked as writing value."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def __enter__(self):
+        REQUEST.object_value = self.value
+        return self
+
+    def __exit__(self, *exc):
+        REQUEST.object_value = None
+        return False
+
+
+def _note_object(path, body):
+    """A write to a Longhorn Setting or Volume: drop any mark it brought, and
+    mark it when it is written inside marking()."""
+    m = _LONGHORN_OBJECT.match(path or "")
+    if not m:
+        return False
+    _strip(body)
+    value = getattr(REQUEST, "object_value", None)
+    name = m.group(3) or (((body or {}).get("metadata") or {}).get("name") if isinstance(body, dict) else "") or ""
+    if value is not None and isinstance(body, dict) and name:
+        mark = object_mark(_OBJECT_KIND[m.group(2)], m.group(1), name, value)
+        if mark:
+            meta = body.setdefault("metadata", {})
+            if isinstance(meta, dict):
+                meta.setdefault("annotations", {})
+                if isinstance(meta["annotations"], dict):
+                    meta["annotations"][AUTHOR] = mark
+    return True

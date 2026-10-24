@@ -168,6 +168,59 @@ backup target (or one that cannot be reached), make the cluster
 **degraded** on the Dashboard and raise an alert. Its **Review** button leads
 here.
 
+## Consistent snapshots
+
+A snapshot taken while an app writes is **crash-consistent**: it holds the
+volume as a sudden power cut would have left it. Longhorn syncs the volume
+first, but a write can still land between the sync and the snapshot. Apps
+recover from that, as they do from a power cut, but a half-written file can
+end up in the copy.
+
+Longhorn 1.7 and later can do better. For the moment of each snapshot it
+**freezes the volume's filesystem**, takes the snapshot and thaws it. Writes
+wait, usually for under a second, and the snapshot holds the files as they
+were at one instant. Every backup is made from a snapshot, so backups are
+consistent too. It covers Longhorn's own scheduled jobs as well as
+Homestead's snapshots, backups and the snapshots taken before an automatic
+update.
+
+**Consistent snapshots** on **Data protection** shows whether it is on, and
+what each volume does:
+
+- **Freeze filesystems for snapshots** turns it on or off for the cluster
+  (Longhorn's `freeze-filesystem-for-snapshot` setting). An admin reviews the
+  change first. It stays off until you turn it on: Homestead doesn't turn it
+  on by itself, on new clusters or on existing ones.
+- **Per volume**, a volume can follow the cluster, always freeze or never
+  freeze (its `freezeFilesystemForSnapshot`).
+- Some volumes are never frozen. Block volumes, such as VM disks, and shared
+  (RWX) volumes have no filesystem on the host to freeze, so Longhorn syncs
+  them instead. V2 volumes are never frozen.
+
+The trade-offs:
+
+- Writes pause while the filesystem is frozen. Under very heavy writing, the
+  freeze itself can take longer.
+- If a freeze fails, Longhorn fails that snapshot rather than take it
+  unfrozen. The job or the snapshot says so.
+- Longhorn ships it off because on kernel 5.17 or older, a volume that fails
+  in the middle of a freeze can leave its filesystem stuck until the host
+  restarts. The section names any Longhorn host on such a kernel, and turning
+  it on then needs an extra tick; setting one volume to always freeze asks
+  first. Longhorn recommends ext4 or XFS.
+- If Longhorn's chart sets the value too, applying the chart again puts the
+  chart's value back. The section says so when that's the case.
+
+Each change carries the `homestead.io/changedBy` mark
+([What Homestead changes](What-Homestead-changes)), and the section says who
+made the setting and each override what it is, or that it was changed
+outside Homestead. On Longhorn older than 1.7 the section says the freeze
+isn't available.
+
+A database still does best with its own dump or checkpoint. A frozen
+filesystem has no half-written files, but a database may still hold work in
+memory; it recovers from that as it would from a power cut.
+
 ## Restore tests
 
 A backup that has never been restored is a hope. A restore test restores an

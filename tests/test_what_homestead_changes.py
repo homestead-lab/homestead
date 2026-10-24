@@ -45,8 +45,8 @@ HAND_LISTED = {
     "VolumeAttachment": "patched only (finalizers): homestead_onboard; Longhorn's: homestead_lhrebuild",
     "Machine": "deleted only (Cluster API): homestead_onboard",
     "Replica": "deleted only (Longhorn): homestead_disks",
-    "Volume": "patched and deleted only (Longhorn): homestead_volumes, homestead_node_parity",
-    "Setting": "patched only (Longhorn): homestead_lhrebuild, homestead_node_parity",
+    "Volume": "patched and deleted only (Longhorn): homestead_volumes, homestead_node_parity, homestead_fs_freeze",
+    "Setting": "patched only (Longhorn): homestead_lhrebuild, homestead_node_parity, homestead_fs_freeze",
     "Node": "patched and deleted only: taints, labels, cordon; Longhorn nodes' disks",
     "StatefulSet": "scaled only: homestead_power_hold",
 }
