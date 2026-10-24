@@ -153,3 +153,15 @@ test("the demo's uptime agrees with itself: a planned reboot is inside maintenan
   }
   assert.ok(Object.values(uptime.nodes).some(u => u.maintenance.length), "the demo shows a maintenance");
 });
+
+test("the demo timeline is a weekend away; a source it cannot read lists none of its entries (#748)", async () => {
+  const healthy = await (await fixture(""))("/api/timeline");
+  assert.deepEqual(healthy.unread, []);
+  assert.equal(healthy.entries.filter(e => e.kind === "restart" && e.tone === "warn").length, 4);
+  assert.ok(["change", "restart", "schedule", "alert", "host"].every(kind => healthy.counts[kind] > 0));
+  assert.ok(healthy.entries.every((e, i, all) => !i || all[i - 1].at >= e.at));
+  const incidents = await (await fixture("incidents"))("/api/timeline");
+  assert.deepEqual(incidents.unread.map(u => u.source), ["restarts"]);
+  assert.equal(incidents.entries.filter(e => e.kind === "restart").length, 0);
+  assert.equal(incidents.counts.restart, undefined);
+});

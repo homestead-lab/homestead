@@ -127,7 +127,7 @@ Tools come in three classes:
 | `get_container_settings` | A container's settings as Edit shows them; priority may be group, for an app that follows its group's tier | `read` | read |
 | `list_events` | Kubernetes' recent events for a container or VM, newest first | `read` | read |
 | `get_container_logs` | A container's last lines of output (at most 500) | `logs:read` | read |
-| `get_container_diagnostics` | Owned pods, restarts, current and last exit details, and current/previous logs, including crash loops | `logs:read` | read |
+| `get_container_diagnostics` | Owned pods, restarts, current and last exit details, and current/previous logs, including crash loops, with the restarts Homestead kept and why each happened | `logs:read` | read |
 | `run_container_command` | Ask an administrator to approve an exact argument array in one app container; bounded output and execution time | `containers:manage` | destructive |
 | `deploy_options` | What a new container can use: storage classes, networks, hosts, hardware, addresses | `read` | read |
 | `search_app_store` | Apps the App Store offers, by name or category | `read` | read |
@@ -174,7 +174,7 @@ Tools come in three classes:
 
 | Tool | What it does | Scope | Class |
 |---|---|---|---|
-| `list_schedules` | Scheduled jobs (CronJobs) and when they last ran | `read` | read |
+| `list_schedules` | Scheduled jobs (CronJobs) in every namespace: when they last ran, how that run ended, a run that did not happen, and the next run | `read` | read |
 | `save_schedule` | Creates or changes a scheduled job: name, image, command, schedule (cron, UTC) and suspend | `containers:manage` | change |
 | `run_schedule` | Runs a scheduled job once, now | `containers:manage` | change |
 | `delete_schedule` | Asks to delete a scheduled job | `containers:manage` | destructive |

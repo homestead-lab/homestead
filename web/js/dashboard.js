@@ -21,6 +21,7 @@ const Dashboard = (() => {
     ...Object.fromEntries(["custom","custom2","custom3","custom4"].map(id=>[id,{title:"Custom text / HTML",description:"Notes and static HTML · up to 4 cards",width:6,widths:[4,6,8,12],custom:true,optional:true}])),
     portal: {title:"Portal links", description:"Your apps and devices", width:6, widths:[4,6,8,12]},
     monitoring: {title:"Monitoring", description:"Apps up, slow and down · more history as it widens", width:6, widths:[4,6,8,12], optional:true, own:true},
+    timeline: {title:"Since you were last here", description:"Changes, restarts, jobs and alerts while you were away", width:6, widths:[4,6,8,12], optional:true, own:true},
   });
   const widths = {4:"One third",6:"Half",8:"Two thirds",12:"Full width"};
   const defaults = () => Object.entries(widgets).filter(([id,w])=>id!=="portal" && !w.optional).map(([id,w])=>({id,width:w.width,height:0}));
@@ -128,6 +129,8 @@ const Dashboard = (() => {
     if (id === "nodes") return dashboardNodes(STATE.data.ov?.nodes || [], item.display || "compact");
     if (id === "monitoring") return `<div class="card flat dashboard-resource-widget" style="--resource-list-height:${item.height || 360}px">${UI.moduleHeader("Monitoring", "", '<button class="btn sm" onclick="go(\'monitoring\')">Open</button>')}
       <div id="dashboardMonitoring" class="dashboard-resource-scroll" data-width="${item.width || 6}">${monitorWidget(item)}</div></div>`;
+    if (id === "timeline") return `<div class="card flat dashboard-resource-widget" style="--resource-list-height:${item.height || 360}px">${UI.moduleHeader("Since you were last here", "", '<button class="btn sm" onclick="go(\'timeline\')">Open</button>')}
+      <div id="dashboardTimeline" class="dashboard-resource-scroll">${Timeline.widget(item)}</div></div>`;
     if (widgets[id]?.optional) return HealthInsights.widget(id,item);
     if (id === "portal") return `<div class="card flat dashboard-portal dashboard-resource-widget" style="--resource-list-height:${item.height || 360}px">${UI.moduleHeader("Portal links", "", '<button class="btn sm" onclick="go(\'portal\')">Open Portal</button>')}
       <div id="dashboardPortal" class="dashboard-resource-scroll">${portalBody(item)}</div></div>`;
@@ -145,6 +148,11 @@ const Dashboard = (() => {
     if (!(draft || read()).some(item=>item.id==="monitoring")) return;
     try { await loadMonitorLists(); } catch (e) { /* the widget says it is loading */ }
     const host=document.getElementById("dashboardMonitoring");if(host)host.innerHTML=monitorWidget(settings("monitoring"));
+  }
+  async function loadTimeline() {
+    if (!(draft || read()).some(item=>item.id==="timeline")) return;
+    await Timeline.load();
+    const host=document.getElementById("dashboardTimeline");if(host)host.innerHTML=Timeline.widget(settings("timeline"));
   }
   async function loadPortal(force=false) {
     if (!(draft || read()).some(item=>item.id==="portal")) return;
@@ -279,7 +287,7 @@ const Dashboard = (() => {
     if(draft!==null || matchMedia("(max-width:900px)").matches)return;
     baseline=revision;
     draft=read();initial=JSON.stringify(draft);undo=[];redo=[];phone=false;panelOpen=false;selected=draft[0]?.id || "";
-    resetPaint();editor();loadPortal();loadMonitoring();HealthInsights.load();document.querySelector('[onclick="Dashboard.save()"]')?.focus();
+    resetPaint();editor();loadPortal();loadMonitoring();loadTimeline();HealthInsights.load();document.querySelector('[onclick="Dashboard.save()"]')?.focus();
   }
   async function save() {
     if(draft===null || saving)return;
@@ -294,9 +302,9 @@ const Dashboard = (() => {
     saving=false;clearGesture();draft=null;resetPaint();await viewDash();toast("Dashboard layout saved to your account","ok");
     document.querySelector('[onclick="Dashboard.start()"]')?.focus();
   }
-  const apiObject={widgets, defaults, normalize, positions, settings, refreshOptions, content:{}, render, loadPortal, loadMonitoring, load, notice:()=>loadError?{title:"Dashboard layout unavailable",text:"Your saved layout could not be refreshed. Editing is unavailable until it reconnects."}:null, editing:()=>draft!==null, dirty, start, save, cancel, leave, select, move,
+  const apiObject={widgets, defaults, normalize, positions, settings, refreshOptions, content:{}, render, loadPortal, loadMonitoring, loadTimeline, load, notice:()=>loadError?{title:"Dashboard layout unavailable",text:"Your saved layout could not be refreshed. Editing is unavailable until it reconnects."}:null, editing:()=>draft!==null, dirty, start, save, cancel, leave, select, move,
     invalidate(){window.HealthInsights?.reset();session++;layout=null;revision=null;loadedUser=null;loadError="";layoutRequest=null;saving=false;clearGesture();draft=null;undo=[];redo=[];portalRequest=null;apiObject.content={};},
-    add(id){if(!Object.hasOwn(widgets,id)||draft===null||draft.some(item=>item.id===id))return;selected=id;change(()=>draft.push({id,width:widgets[id].width,height:0}),`${widgets[id].title} added.`);if(id==="portal")loadPortal();if(id==="monitoring")loadMonitoring();if(widgets[id]?.optional && !widgets[id].custom && !widgets[id].own)HealthInsights.load();},
+    add(id){if(!Object.hasOwn(widgets,id)||draft===null||draft.some(item=>item.id===id))return;selected=id;change(()=>draft.push({id,width:widgets[id].width,height:0}),`${widgets[id].title} added.`);if(id==="portal")loadPortal();if(id==="monitoring")loadMonitoring();if(id==="timeline")loadTimeline();if(widgets[id]?.optional && !widgets[id].custom && !widgets[id].own)HealthInsights.load();},
     remove(id){if(!Object.hasOwn(widgets,id))return;change(()=>{draft=draft.filter(item=>item.id!==id);if(selected===id)selected=draft[0]?.id || "";},`${widgets[id].title} removed. Use Undo to restore it.`);},
     size(field,value){if(!["width","height"].includes(field))return;change(()=>{const item=draft.find(item=>item.id===selected);if(item){item[field]=value;if(field==="width" && item.column>13-value)item.column=13-value;}},"Widget size updated.");},
     custom(key,value){if(!["title","format","content"].includes(key))return;change(()=>{const item=settings(selected);if(widgets[item.id]?.custom)item[key]=value;},"Custom widget updated.");},

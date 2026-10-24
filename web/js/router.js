@@ -23,6 +23,7 @@
      page, and the sidebar marks the parent while it is open. */
   const ROUTES = Object.freeze({
     dash:      Object.freeze({ path: "/",                label: "Dashboard",       section: "Overview" }),
+    timeline:  Object.freeze({ path: "/timeline",        label: "Timeline",        section: "Overview", parent: "dash" }),
     flow:      Object.freeze({ path: "/architecture",    label: "Architecture",    section: "Overview", parent: "dash" }),
     nodes:     Object.freeze({ path: "/nodes",           label: "Hosts",           section: "Overview" }),
     portal:    Object.freeze({ path: "/portal",          label: "Portal",          section: "Overview" }),
@@ -50,7 +51,7 @@
 
   /* The tabs across the top of a page and the pages folded into it. */
   const TABS = Object.freeze({
-    dash: [["dash", "Overview"], ["flow", "Architecture"]],
+    dash: [["dash", "Overview"], ["timeline", "Timeline"], ["flow", "Architecture"]],
     workloads: [["workloads", "Running"], ["monitoring", "Monitoring"], ["images", "Image Cache"], ["schedules", "Schedules"], ["imports", "Import"]],
     vms: [["vms", "Machines"], ["vmimport", "Import"]],
     store: [["store", "Apps"], ["helm", "Helm"]],

@@ -47,11 +47,13 @@ import homestead_ports as PORTS
 import homestead_push as PUSH
 import homestead_recovery as RECOVERY
 import homestead_resources as RESOURCES
+import homestead_restarts as RESTARTS
 import homestead_restore_swap as RESTORE_SWAP
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_root_guard as ROOT_GUARD
 import homestead_routes as MODULE_ROUTES
 import homestead_schedules as SCHEDULES
+import homestead_scheduled_jobs as CRONJOBS
 import homestead_self as SELF
 import homestead_storage as STORAGE
 import homestead_updates as UPDATES
@@ -284,6 +286,7 @@ def _alert_sources():
     take("ports", lambda: PORTS.alert_facts(cached("ports", 20, NODES.ports_report)))
     take("uptime", lambda: UPTIME.alert_facts(UPTIME.report()))
     take("schedules", lambda: SCHEDULES.alert_facts())
+    take("cronjobs", CRONJOBS.cronjob_alert_facts)
     take("outage", lambda: OUTAGE.alert_facts())
     take("outage-lan", OUTAGE_CARRY.alert_facts)
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 60, HOUSEKEEPING.report)))
@@ -691,7 +694,19 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
 def page_inputs():
     """What one snapshot cycle reads once and shares: the pod list (the
     Volumes page's bare pods read it too)."""
-    return {"pods": lambda: kget("/api/v1/pods")}
+    return {"pods": _pods_seen}
+
+
+def _pods_seen():
+    """The cycle's pod list, which the leader also notes restarts from
+    (#740), on a thread of its own: the pages never wait for it, and a
+    failed note never costs them their pods."""
+    pods = kget("/api/v1/pods")
+    try:
+        RESTARTS.observe_later(pods)
+    except Exception as error:
+        print(f"restart record: {str(error)[:160]}", flush=True)
+    return pods
 
 
 def page_builders():

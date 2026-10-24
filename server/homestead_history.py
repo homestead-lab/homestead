@@ -298,6 +298,12 @@ def maintenance_view(now=None):
     return open_nodes, overran
 
 
+def maintenance_since(since):
+    """Host maintenance that started or ended after since (#748's timeline)."""
+    return sorted((e for e in _read()["maintenance"] if e["start"] > since or (e["end"] or 0) > since),
+                  key=lambda e: e["start"])
+
+
 def maintenance_events(node):
     return sorted((e for e in _read()["maintenance"] if e["node"] == node), key=lambda e: e["start"])
 

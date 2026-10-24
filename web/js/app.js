@@ -4,6 +4,7 @@
    itself. Its title is ROUTES.label in router.js, the one source (#508). */
 const VIEWS = {
   dash:      ["overview",  viewDash,      true],
+  timeline:  ["overview",  () => viewTimeline(), true],
   flow:      ["overview",  viewFlow,      true],
   nodes:     ["overview",  viewNodes,     true],
   network:   ["system",    viewNetworking,true],

@@ -12,6 +12,24 @@ function diagnosticLog(label, value) {
   return UI.more(label, `<pre class="mono small agent-raw">${esc(value?.error || value?.text || "No output")}</pre>${value?.truncated ? '<p class="small dim">Output was truncated.</p>' : ""}`, false);
 }
 
+/* Why the app restarted before (#740): Kubernetes keeps only the latest exit,
+   so the leader writes each one down. An error says the record is unknown. */
+function diagnosticRestarts(history) {
+  if (!history) return "";
+  const box = html => UI.field("Restarts kept", html);
+  if (history.error) return box(`<p class="small">Restart history could not be read: ${esc(history.error)}</p>`);
+  const records = history.records || [];
+  if (!records.length) return box(`<p class="small dim">${history.since
+    ? `No restarts kept since ${fmtWhen(new Date(history.since * 1000))}.`
+    : "Homestead has not looked yet; restarts are kept from its first look."}</p>`);
+  const day = records.filter(r => Date.now() - Date.parse(r.at) < 86400e3).reduce((n, r) => n + (r.count || 1), 0);
+  const words = `${records[0].reason}${records[0].detail ? ` (${records[0].detail})` : ""}`;
+  return box(`<p class="small">Restarted ${day} time${day === 1 ? "" : "s"} in 24 h · last: ${esc(words.charAt(0).toLowerCase() + words.slice(1))}</p>
+    <ul class="small">${records.map(r => `<li><span class="dim">${fmtWhen(r.at)}</span> · ${esc(r.reason)}${
+      r.detail ? ` (${esc(r.detail)})` : ""}${r.container ? ` · ${esc(r.container)}` : ""}${r.count > 1 ? ` · ${esc(r.count)} restarts` : ""}${
+      r.log_tail ? diagnosticLog("Its last lines", { text: r.log_tail }) : r.log_error ? `<div class="dim">Its log was not kept: ${esc(r.log_error)}</div>` : ""}</li>`).join("")}</ul>`);
+}
+
 function diagnosticMarkup(data) {
   const pods = data.pods || [];
   const pod = pods.find(p => p.name === data.pod) || pods[0];
@@ -22,6 +40,7 @@ function diagnosticMarkup(data) {
     + (containers.length ? UI.field("Container", `<select id="diagnosticContainer" onchange="diagnosticSelect(true)">${containers.map(c => `<option value="${esc(c.name)}"${c.name === data.container ? " selected" : ""}>${esc(c.name)}${c.kind === "init" ? " (initialization)" : ""}</option>`).join("")}</select>`) : "")
     + (selected ? UI.facts([["Now", esc(diagnosticExit(selected.state))], ["Last exit", esc(diagnosticExit(selected.last_state))],
       ["Restarts", esc(selected.restarts)], ["Host", esc(pod.node || "Not assigned")]]) : "")
+    + diagnosticRestarts(data.restart_history)
     + (data.logs ? diagnosticLog("Previous run", data.logs.previous) + diagnosticLog("Current run", data.logs.current) : "")
     + (pods.length ? UI.more("Container details", `<pre class="mono small agent-raw">${esc(JSON.stringify(pods, null, 2))}</pre>`, false) : "")
     + (can("admin") && selected?.kind === "app" ? UI.more("Run a command", UI.field("Shell command", '<textarea id="diagnosticCommand" class="mono" rows="4" placeholder="uname -a"></textarea>',

@@ -16,6 +16,18 @@ shows Update instead and Diagnostics is in the **⋯** menu.
 Refresh to collect new evidence; a stopped app needs to be started before
 Kubernetes can provide pod diagnostics.
 
+Kubernetes keeps only the latest exit, so **Restarts kept** in Diagnostics holds
+why the app restarted before: "Restarted 3 times in 24 h · last: ran out of
+memory (limit 512 MiB)", then each restart with its time and reason - ran out of
+memory, failed its liveness check, crashed, its host restarted or went away,
+evicted, updated to a new image, restarted from Homestead or by its outage
+action - and the last 50 lines it printed before a restart. Homestead notes them
+as it looks at the cluster, about every 20 seconds, so several restarts between
+two looks are one entry that says how many; it keeps the newest 20 per app, for
+30 days, on its data volume. The record is the app's own: an app deployed again
+under the same name starts with an empty one. Apps only: pods in the system namespaces
+are not recorded.
+
 Administrators can expand **Run a command** to inspect a running container.
 Review the exact command and target before running it. Commands use the
 container's permissions, can change its data, and may return secrets. They
@@ -623,6 +635,34 @@ at the next stop time. A time missed while Homestead was not running (by more
 than half an hour) is skipped, not done late. A stop or start that could not be
 done raises an alert until the next one works. Homestead itself cannot be put
 on a schedule. VMs have the same, in their own menu.
+
+## Scheduled jobs
+
+**Schedules** lists the CronJobs in every namespace, Homestead's own first: an
+app's nightly backup applied by Flux or Helm sits beside the ones made here.
+Each row says when it last ran and how that run ended - succeeded, failed (with
+Kubernetes' reason), running, never run - and when it last succeeded, from the
+Jobs it started. **did not run** means a run it was due to start has not started
+15 minutes after its time. When the Jobs cannot be read the result is
+**unknown**, and the page says why; it is never shown as fine.
+
+Only the CronJobs Homestead made in its own namespace can be edited or deleted
+here, and Run now works in its own namespace only. The rest are read-only and say
+where they came from: **Applied by Flux**, **Longhorn recurring job**, or who
+manages them. For CronJobs in other namespaces Schedules shows their health only
+- name, schedule, last run, result and its reason code - never their image,
+command or volumes, which can carry a password; alerts name the job and the time.
+
+A failed run raises an alert until a run succeeds - a run in progress, or the
+failed run's Job removed by Kubernetes, keeps it - and a run that did not
+happen, until one starts (a long run still going is late, not missed); see
+[Notifications](Settings#notifications). A job that runs more
+than once an hour alerts only after 30 minutes without a success. Paused
+CronJobs are not watched, nor Longhorn's recurring jobs: their backups and
+snapshots alert in Data protection. A CronJob with no time zone runs on the clock
+of the cluster's controller, which Homestead cannot see; it is counted late only
+when it is late on every clock its last run fits, and not judged before its
+first run.
 
 ## Groups
 

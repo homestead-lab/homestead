@@ -16,6 +16,7 @@ import urllib.request
 import homestead_capacity_review as REVIEW
 import homestead_console as CONSOLE
 import homestead_host_access as HOSTACCESS
+import homestead_restarts as RESTARTS
 import homestead_routes as ROUTER
 import homestead_shared as SHARED
 import homestead_workloads as WORKLOADS
@@ -89,6 +90,15 @@ def log(ns, pod, container, previous, lines):
                                else str(error), 600)}
 
 
+def restart_history(ns, name, uid):
+    """Why the app restarted before, as the leader kept it (#740); an error,
+    never an empty record, when the store could not be read."""
+    try:
+        return RESTARTS.for_app(ns, name, "Deployment", uid)
+    except SHARED.Unreadable as error:
+        return {"error": str(error)}
+
+
 def report(cfg):
     dep, pods = target(cfg)
     rows = []
@@ -105,7 +115,8 @@ def report(cfg):
                      "node": pod.get("spec", {}).get("nodeName", ""), "phase": statuses.get("phase", ""),
                      "deleting": bool(pod["metadata"].get("deletionTimestamp")), "containers": containers})
     answer = {"ns": cfg["ns"], "name": cfg["name"], "desired": dep.get("spec", {}).get("replicas", 1),
-              "pods": rows, "pods_truncated": len(pods) > 10, "note": NOTE}
+              "pods": rows, "pods_truncated": len(pods) > 10, "note": NOTE,
+              "restart_history": restart_history(cfg["ns"], cfg["name"], dep["metadata"]["uid"])}
     if not pods:
         answer["message"] = "No pod exists. Start the app to collect new evidence; Kubernetes has no retained pod to inspect."
         return answer

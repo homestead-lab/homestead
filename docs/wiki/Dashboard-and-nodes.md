@@ -20,6 +20,27 @@ most.
 Warning levels (temperatures, disk errors, CPU and memory) are set in
 **Settings → Monitoring**.
 
+### Since you were last here
+
+**Dashboard → Timeline** answers "what happened while I was away?" in one list:
+apps changed (and by whom, or outside Homestead), apps that restarted and why,
+scheduled jobs that ran, failed or did not run, alerts raised and cleared, and
+hosts that went into maintenance. Admins also see who did what, from the audit
+log. Each line links to where the detail lives; filter by kind, app or host, or
+pick 24 hours, 7 days or 30 days instead of your last visit.
+
+Add the **Since you were last here** card to the Dashboard (**Edit**) for the
+counts and the five lines that matter most.
+
+- "Last here" is when you last had Homestead open, kept on the server for your
+  account, so it is the same on your phone and laptop. Thirty minutes without
+  Homestead open ends a visit; a refresh keeps the same list.
+- The timeline reads what Homestead already records and adds nothing new. A
+  record it could not read is named ("Could not read App restarts"), never left
+  out as if nothing had happened.
+- It shows names, times and Homestead's own words: never a setting's value, a
+  job's output, a log line, an address or a key.
+
 ## Nodes
 
 **Nodes** has a card per host: its role, CPU, memory, pods, temperature and

@@ -69,6 +69,8 @@ const PAGES = [
   ["import", "imports"],
   ["schedules", "schedules"],
   ["monitoring", "monitoring"],
+  ["timeline", "timeline"],
+  ["timeline-30-days", "timeline", "timelineRange('month')"],
   ["monitoring-30-days", "monitoring", "monitorRange('month')"],
   ["events", "events"],
   ["events-signins", "events", "STATE.eventsTab='signins';viewEvents()"],

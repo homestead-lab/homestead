@@ -90,3 +90,10 @@ test("query parsing retains filters and repeated values", () => {
     q: "media files", state: ["attached", "faulted"],
   });
 });
+
+test("the timeline is a tab of the dashboard (#748)", () => {
+  assert.equal(router.resolve("/timeline").view, "timeline");
+  assert.equal(router.urlFor("timeline"), "/timeline");
+  assert.deepEqual(router.tabsFor("timeline").map(([id]) => id), ["dash", "timeline", "flow"]);
+  assert.equal(router.navView("timeline"), "dash");
+});
