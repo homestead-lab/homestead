@@ -156,13 +156,26 @@ def _retry_after(error, default):
         return max(0.0, min(5.0, float((error.headers or {}).get("Retry-After", default))))
     except (TypeError, ValueError):
         return default
-def _registry_json(parsed, path, auths, accept="application/json"):
+def _read_capped(response, limit):
+    """The answer's body; with a limit, never more than that many bytes,
+    whatever its Content-Length says."""
+    if limit is None:
+        return response.read()
+    try:
+        declared = int((response.headers or {}).get("Content-Length") or 0)
+    except (TypeError, ValueError):
+        declared = 0
+    body = b"" if declared > limit else response.read(limit + 1)
+    if declared > limit or len(body) > limit:
+        raise ValueError("the registry's answer is larger than expected")
+    return body
+def _registry_json(parsed, path, auths, accept="application/json", limit=None):
     url = f"https://{parsed['endpoint']}/v2/{parsed['repo']}/{path}"
     for attempt in range(len(RATE_LIMIT_WAITS) + 1):
         req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "Homestead/2.0"})
         try:
             with U._open(req, _credential(auths, parsed)) as response:
-                body = response.read()
+                body = _read_capped(response, limit)
                 return body, response.headers
         except urllib.error.HTTPError as error:
             if error.code != 429 or attempt == len(RATE_LIMIT_WAITS):

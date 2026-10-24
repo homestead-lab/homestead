@@ -200,7 +200,7 @@ ROUTES = {
 # server.py and tests that use or replace these names here keep working.
 from homestead_update_registry import (  # noqa: E402,F401
     MANIFEST_ACCEPT, _CACHE, _CACHE_LOCK, parse_image, with_tag, _secret_credentials, _credential,
-    _NoAuthRedirect, _auth_realm, _open, RATE_LIMIT_WAITS, _retry_after, _registry_json, manifest_info,
+    _NoAuthRedirect, _auth_realm, _open, RATE_LIMIT_WAITS, _retry_after, _read_capped, _registry_json, manifest_info,
     image_layers, manifest_digest, registry_tags, semver, newer_semver, RELEASE, release_key, channel_newest,
     channel_release, channel_behind,
 )

@@ -184,3 +184,14 @@ test("download percentages represent known bytes; old ready pods cannot claim co
  const done=ctx.rolloutProgress({...s,phase:"ready",updated:1});assert.match(done,/aria-valuenow="100"/);
  const failed=ctx.rolloutProgress({...s,phase:"failed"});assert.match(failed,/Update needs attention/);assert.doesNotMatch(failed,/role="progressbar"/);
 });
+
+test("the review shows what is in the update beside it, and a rollback does not", async () => {
+  const t = setup(), asked = [];
+  t.ctx.updateNotesInto = (el, configs) => asked.push(configs.map(c => `${c.ns}/${c.name}`).join(" "));
+  await t.ctx.reviewImageActions([{ns: "lab", name: "app"}, {ns: "lab", name: "db"}]);
+  assert.deepEqual(asked, ["lab/app lab/db"]);
+  assert.match(t.fields["#mbody"].innerHTML, /<div id="updNotes"><\/div>/);
+  await t.ctx.imageRollback("lab", "app");
+  assert.equal(asked.length, 1);
+  assert.doesNotMatch(t.fields["#mbody"].innerHTML, /updNotes/);
+});

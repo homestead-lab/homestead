@@ -2832,6 +2832,30 @@ ssh_pwauth: true
       }
       return review;
     },
+    // What's in an update, from the two images' labels and configs. Env by name only.
+    "/api/image-updates/notes": (url, init) => {
+      const {ns, name} = JSON.parse(init?.body || "{}");
+      const none = {ports: {added: [], removed: []}, volumes: {added: [], removed: []},
+        env: {added: [], removed: [], changed: [], set_by_app: []}, user: null, build_env_changed: 0, none: true};
+      const images = {
+        // A new build behind the same "stable" tag: a port, a volume, settings and the user changed with it.
+        frigate: [{container: "frigate", from_tag: "stable", to_tag: "stable", from_version: "0.16.1", to_version: "0.16.2",
+          source: "https://github.com/example/frigate",
+          links: {release: "https://github.com/example/frigate/releases?q=0.16.2&expanded=true",
+            compare: "https://github.com/example/frigate/compare/4be1d2c09a7e...9c0f31aa52d8", project: "https://frigate.example.com/"},
+          changes: {ports: {added: ["8971/tcp"], removed: []}, volumes: {added: ["/media/frigate/exports"], removed: []},
+            env: {added: ["FRIGATE_AUTH"], removed: ["FRIGATE_LEGACY_UI"], changed: ["LIBVA_DRIVER_NAME", "TZ"], set_by_app: ["TZ"]},
+            user: {was: "root", now: "1000"}, build_env_changed: 3, none: false}}],
+        // Homestead's own: same settings, only build details moved.
+        homestead: [{container: "homestead", from_tag: "2.8.331", to_tag: "2.8.332", from_version: "2.8.331", to_version: "2.8.332",
+          source: "https://github.com/example/homestead",
+          links: {release: "https://github.com/example/homestead/releases?q=2.8.332&expanded=true"},
+          changes: {...none, build_env_changed: 1}}],
+      }[name];
+      // Others: an image that carries no labels.
+      return {ns, name, images: images || [{container: name, from_tag: "1.0.0", to_tag: "1.1.0", from_version: "1.0.0",
+        to_version: "1.1.0", source: "", links: {}, changes: none}]};
+    },
     "/api/image-updates/apply": {uid: "demo-rollout", generation: 4, phase: "progressing", desired: 1, ready: 0},
     "/api/image-updates/rollback": {uid: "demo-rollout", generation: 4, phase: "progressing", desired: 1, ready: 0},
     // An administrator marking an app as updated elsewhere, or clearing it.
