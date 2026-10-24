@@ -50,6 +50,7 @@ readings retain the last warning. Unchanged conditions do not repeat on a timer.
 | Service address | Address has no route | Recurrence after confirmed recovery |
 | Failed job | A background operation fails | Once per operation |
 | Previous volume | A volume an app was moved off by Restore into app will be deleted within a day (info, under Warnings); a note when it is deleted, or kept because something mounts it again | Clears when it is kept, mounted again or deleted |
+| Scheduled job | A CronJob in any namespace: its last run failed (one that runs more than once an hour: no success for 30 minutes), or a run it was due to start has not started 15 minutes after its time (or its own starting deadline, if longer). Paused CronJobs and Longhorn's recurring jobs are not watched here. Runs that could not be read neither raise nor clear it | Recurrence after confirmed recovery |
 | Joining host | New Kubernetes registration; subsequently Ready | Once per host identity and stage |
 | Host back | A host takes work again and moving containers back would even the hosts out (Settings → Placement → When a host comes back: Suggest or In the update window) | Clears once nothing is worth moving, or a week after the host came back |
 | Image update | A new eligible image candidate is discovered | Once per candidate identity |
@@ -79,7 +80,7 @@ Notifications name the resource, state the observed problem, and point to a
 relevant review screen: hosts/drives → Nodes, volumes/capacity → Volumes,
 backup protection → Data protection, service addresses → Networking, image and
 host updates → Settings / Updates, Harvester upgrade → Cluster, the audit log
-filling fast → Settings / About. Failed jobs keep
+filling fast → Settings / About, scheduled jobs → Schedules. Failed jobs keep
 their operation destination. They never claim that replicas guarantee availability
 or that disappearance of a warning proves a repair was performed.
 

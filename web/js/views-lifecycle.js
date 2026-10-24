@@ -1583,6 +1583,7 @@ function jobWhen(j) {
 }
 function jobNext(j) {
   if (j.suspend) return '<span class="dim">—</span>';
+  if (j.next_run) return nextRunAt(new Date(j.next_run));
   if (jobUtc(j)) return nextRun(j.schedule);
   return !j.time_zone
     ? `<span class="dim" data-tip="It runs on the host's clock, which the page cannot know. Saving it here pins it to UTC.">—</span>`
@@ -1590,31 +1591,54 @@ function jobNext(j) {
 }
 // A CronJob Homestead did not make (Helm, kubectl) is listed but not edited
 // here: a save would drop the volumes, env and account this page never shows.
+// Schedules lists CronJobs from every namespace (#739); only those in
+// Homestead's own can be run, and only those it made there edited.
 function jobOwner(j) {
-  if (j.managed !== false) return "";
-  return `<div class="dim xs" data-tip="Change it where it was made; Run now still works.">not made here · ${
+  const where = j.ns ? `<div class="dim xs">${esc(j.ns)}</div>` : "";
+  if (j.owner === "longhorn") return `${where}<div class="dim xs" data-tip="Change it in Data protection or Longhorn.">Longhorn recurring job · read-only</div>`;
+  if (j.owner === "flux") return `${where}<div class="dim xs" data-tip="Change it in the git repository Flux applies.">Applied by Flux · read-only</div>`;
+  if (j.managed !== false) return where;
+  return `${where}<div class="dim xs" data-tip="Change it where it was made${j.runnable === false ? "" : "; Run now still works"}.">not made here · ${
     j.managed_by ? `managed by ${esc(j.managed_by)}` : "read-only"}</div>`;
+}
+/* How the last run ended, from the Jobs it started; "unknown" when they could
+   not be read, never a guess that it went fine. */
+const JOB_RESULT = { ok: ["ok", "succeeded"], failed: ["bad", "failed"], running: ["info", "running"],
+  never: ["neutral", "never run"], unknown: ["warn", "unknown"] };
+function jobResult(j) {
+  const last = `<div>${fmtWhen(j.last)}</div>`;
+  if (!j.result) return last;
+  const [tone, word] = JOB_RESULT[j.result] || JOB_RESULT.unknown;
+  return `${last}<div>${UI.chip(word, tone, { size: "slim", tip: j.result_reason || "" })}${j.missed
+    ? " " + UI.chip("did not run", "warn", { size: "slim", tip: "It was due to start a run that has not started" }) : ""}</div>${
+    j.result === "failed" && j.result_reason ? `<div class="dim xs">${esc(j.result_reason)}</div>` : ""}${
+    j.result !== "ok" && j.last_success ? `<div class="dim xs">last succeeded ${fmtWhen(j.last_success)}</div>` : ""}`;
 }
 // The generation of the job the editor opened ("" for a new one): the
 // server refuses the save if its spec changed, or it appeared, since.
 let jobEditing = "";
+// An alert's link (/schedules?find=ns/name) finds its CronJob's row.
+const jobFind = j => { try { return new URLSearchParams(location.search).get("find") === `${j.ns || ""}/${j.name}`; } catch { return false; } };
 async function viewSchedules() {
   const js = await api("/api/schedules");
-  paint(`${UI.pageHeader(`Schedules`, `${js.length} scheduled job${js.length === 1 ? "" : "s"} · schedules in UTC, next runs in your time zone (${esc(yourZone())})`, `<button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button>`)}
+  const unread = js.find(j => j.result === "unknown" && /could not be read/.test(j.result_reason || ""));
+  paint(`${UI.pageHeader(`Schedules`, `${js.length} scheduled job${js.length === 1 ? "" : "s"} in every namespace · next runs in your time zone (${esc(yourZone())})`, `<button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button>`)}
+    ${unread ? `<div class="note" style="margin-bottom:14px">How each last run ended is unknown. ${esc(unread.result_reason)}</div>` : ""}
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="schedules" class="tbl stack"><thead><tr>
       <th>Name</th><th>Schedule</th><th data-nosort>Next run</th><th>Image</th><th data-nosort>Last run</th><th>State</th><th></th></tr></thead><tbody>
-      ${js.map(j => `<tr>
+      ${js.map(j => `<tr${jobFind(j) ? ' class="flash-find"' : ""} data-find="${esc(`${j.ns || ""}/${j.name}`)}">
         <td><b>${esc(j.name)}</b>${jobOwner(j)}</td>
         <td class="small">${jobWhen(j)}</td>
         <td class="small">${jobNext(j)}</td>
         <td class="mono small dim">${esc(j.image)}</td>
-        <td class="small dim">${fmtWhen(j.last)}</td>
+        <td class="small dim">${jobResult(j)}</td>
         <td>${j.suspend ? UI.chip("paused", "neutral")
             : j.active ? UI.chip("running", "neutral") : UI.chip("active", "ok")}</td>
-        <td data-actions>${actionBar([{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` },
-          ...(j.managed === false ? [] : [{ label: "Edit", icon: "edit", run: `jobEdit(${esc(JSON.stringify(j))})` },
+        <td data-actions>${actionBar([...(j.runnable === false ? [] : [{ label: "Run now", icon: "play", run: `jobRun(${jsq(j.name)})` }]),
+          ...(j.managed === false || j.editable === false ? [] : [{ label: "Edit", icon: "edit", run: `jobEdit(${esc(JSON.stringify(j))})` },
           { label: "Delete", icon: "trash", run: `jobDel(${jsq(j.name)})`, danger: true }])], { label: `More actions for ${j.name}` })}</td></tr>`).join("") || `<tr><td colspan=7 class="empty">no schedules yet</td></tr>`}
     </tbody></table></div></div>`);
+  try { document.querySelector("tr.flash-find")?.scrollIntoView?.({ block: "center" }); } catch { /* no page to scroll */ }
 }
 window.jobEdit = (j) => {
   j = j || { name: "", schedule: "0 3 * * *", image: "alpine:3.20", command: "" };

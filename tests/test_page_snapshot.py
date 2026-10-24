@@ -394,6 +394,7 @@ class LoopTests(unittest.TestCase):
         sources = OV._alert_sources()
         self.assertIsNotNone(sources["health"])
         self.assertIsNotNone(sources["capacity"])
+        self.assertIn("cronjobs", sources, "scheduled jobs that failed or did not run alert (#739)")
         recorded = []
 
         class Stop(Exception):
