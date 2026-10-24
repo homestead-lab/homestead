@@ -52,6 +52,7 @@ import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_root_guard as ROOT_GUARD
 import homestead_routes as MODULE_ROUTES
 import homestead_schedules as SCHEDULES
+import homestead_start_order as START_ORDER
 import homestead_self as SELF
 import homestead_storage as STORAGE
 import homestead_updates as UPDATES
@@ -199,7 +200,7 @@ def _schedules_loop():
         started = time.time()
         if LEADER.is_leader():
             try:
-                if SCHEDULES.tick(scheduled_items(), schedule_act):
+                if SCHEDULES.tick(scheduled_items(), schedule_act, arrange=START_ORDER.arrange):
                     _cache.pop("wl", None)
                     _cache.pop("vms", None)
                 beat("schedules", 60, leader_only=True)
@@ -286,6 +287,7 @@ def _alert_sources():
     take("schedules", lambda: SCHEDULES.alert_facts())
     take("outage", lambda: OUTAGE.alert_facts())
     take("outage-lan", OUTAGE_CARRY.alert_facts)
+    take("starts-after", lambda: START_ORDER.alert_facts(cached("wl", 5, WORKLOADS.get_workloads)))
     take("housekeeping", lambda: HOUSEKEEPING.alert_facts(cached("housekeeping", 60, HOUSEKEEPING.report)))
     take("forecast", lambda: FORECAST.alert_facts(FORECAST.report()))
     take("gitops", GITOPS.alert_facts)
@@ -582,7 +584,16 @@ def guard_managed_smb(ns, name):
 def workload_start_plan(ns, name, replicas=1):
     ns, name = _dns_name(ns, "namespace"), _dns_name(name, "workload name")
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
-    return PLACE.start_plan(ns, name, replicas, threshold)
+    plan = PLACE.start_plan(ns, name, replicas, threshold)
+    # The apps it starts after that are stopped: it would wait for them (#746).
+    try:
+        plan["waits_for"] = START_ORDER.waits_for(ns, name, kget)
+    except Exception as error:
+        plan["waits_for"] = []
+        # #620: Start says it could not check, rather than that nothing waits.
+        plan["waits_for_error"] = f"could not check which apps it starts after: {str(error)[:160]}"
+        print(f"start plan: starts-after not read for {ns}/{name}: {str(error)[:160]}", flush=True)
+    return plan
 
 
 def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):

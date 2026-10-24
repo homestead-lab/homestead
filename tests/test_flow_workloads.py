@@ -140,6 +140,24 @@ class FlowWorkloadTests(unittest.TestCase):
     def test_system_namespace_jobs_are_not_listed(self):
         self.assertNotIn("j:kube-system/k3s-housekeeping", self.jobs)
 
+    def test_flow_draws_starts_after(self):
+        import json
+        import homestead_start_order as START
+        web = {"metadata": {"name": "web", "namespace": "lab", "annotations": {
+                   START.KEY: json.dumps({"after": [{"ns": "lab", "app": "shared-postgres", "service": "db", "port": 5432}],
+                                          "timeout": 300, "on_timeout": "start"})}},
+               "spec": {"template": {"spec": {"containers": [{"name": "c"}]}}}}
+        api = dict(API, **{"/apis/apps/v1/deployments": {"items": [web]}})
+        with mock.patch.object(server.FLOW, "kget", side_effect=lambda path: api[path]):
+            by = {w["id"]: w for w in server.FLOW.get_flow2()["workloads"]}
+        self.assertEqual([{"id": "w:lab/shared-postgres", "committed": False}], by["w:lab/web"]["after"],
+                         "set, but its gate is not in the template")
+        START.apply_to(web, START.read(web))
+        with mock.patch.object(server.FLOW, "kget", side_effect=lambda path: api[path]):
+            by = {w["id"]: w for w in server.FLOW.get_flow2()["workloads"]}
+        self.assertEqual([{"id": "w:lab/shared-postgres", "committed": True}], by["w:lab/web"]["after"])
+        self.assertEqual([], by["w:staging/web"]["after"])
+
     def test_unreadable_cronjobs_leave_the_page_without_a_jobs_lane(self):
         def kget(path):
             if path == "/apis/batch/v1/cronjobs":

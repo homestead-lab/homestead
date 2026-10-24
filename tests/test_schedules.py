@@ -93,6 +93,34 @@ class TickTests(unittest.TestCase):
         self.assertEqual([], S.tick(items, act, now=WED_0100 + 90), "not twice")
         self.assertTrue(S.results()["app:lab/frigate"]["ok"])
 
+    def test_two_due_starts_act_in_dependency_order(self):
+        morning = {**NIGHTS, "stop": ""}
+        items = [{"kind": "app", "ns": "lab", "name": n, "schedule": morning, "running": False} for n in ("app-1", "db")]
+        items.append({"kind": "app", "ns": "lab", "name": "web", "schedule": {**NIGHTS, "start": ""}, "running": True})
+        seven = at(2026, 10, 7, 7, 0) + 30
+        dependencies_first = lambda starts: sorted(starts, key=lambda i: i["name"] != "db")
+        for arrange, expected in ((dependencies_first, ["db", "app-1"]), (None, ["app-1", "db"])):
+            with self.subTest(arrange=bool(arrange)):
+                S.bind(tempfile.mkdtemp(dir=self.dir.name))
+                calls = []
+                did = S.tick(items, lambda item, action: calls.append(item["name"]) or "started", now=seven,
+                             **({"arrange": arrange} if arrange else {}))
+                self.assertEqual(expected, calls)
+                self.assertEqual([f"app:lab/{n}" for n in expected], [d["key"] for d in did])
+        S.bind(tempfile.mkdtemp(dir=self.dir.name))
+        stops = []
+        S.tick(items, lambda item, action: stops.append((item["name"], action)), now=WED_0100 + 30,
+               arrange=lambda starts: self.fail("no starts were due"))
+        self.assertEqual([("web", "stop")], stops)
+
+    def test_a_failing_arrange_still_starts_everything(self):
+        morning = {**NIGHTS, "stop": ""}
+        items = [{"kind": "app", "ns": "lab", "name": n, "schedule": morning, "running": False} for n in ("app-1", "db")]
+        calls = []
+        S.tick(items, lambda item, action: calls.append(item["name"]), now=at(2026, 10, 7, 7, 0) + 30,
+               arrange=lambda starts: (_ for _ in ()).throw(RuntimeError("API down")))
+        self.assertEqual(["app-1", "db"], calls)
+
     def test_a_failure_alerts_until_one_succeeds(self):
         items = [{"kind": "vm", "ns": "default", "name": "win11", "schedule": NIGHTS, "running": False}]
 

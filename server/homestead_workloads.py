@@ -39,6 +39,7 @@ import homestead_restructure as RESTRUCTURE
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
 import homestead_routes as ROUTER
 import homestead_schedules as SCHEDULES
+import homestead_start_order as START_ORDER
 import homestead_updates as UPDATES
 import homestead_usage as USAGE
 
@@ -207,6 +208,19 @@ def edit(request):
             if PRIORITY.tier_of(((dep_now.get("spec") or {}).get("template") or {}).get("spec") or {})[0] != b["priority"]:
                 raise ValueError(f"{b['name']}'s tier is set where {owner['by']} applies it; set priorityClassName there")
             b.pop("priority", None)
+    # The same for its start order (#746): Homestead shows the lines to commit.
+    first_gate = None
+    if "starts_after" in b:
+        dep_now = kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}")
+        owner = UPDATES.managed_by(dep_now)
+        if START_ORDER.unchanged(dep_now, b["starts_after"]):
+            b.pop("starts_after")     # the form sent back as it was shown: no change, nothing checked
+        elif owner:
+            if START_ORDER.changes(dep_now, b["starts_after"], kget):
+                raise ValueError(START_ORDER.managed_message(b["name"], owner))
+            b.pop("starts_after")
+        elif isinstance(b["starts_after"], dict) and b["starts_after"].get("after"):
+            first_gate = START_ORDER.lists(kget)[0]   # as they are before this save
     prepared, context, plan = edit_capacity_plan(b)
     CAPACITY_REVIEW.enforce(b, plan, context)
     # The class is made only when an app first moves into its tier:
@@ -242,6 +256,10 @@ def edit(request):
         return COPY_JOB.start(b, context, prepared, moves, kget, OPS,
                               lambda: apply_reviewed_edit(b, prepared, hold=True))
     result = apply_reviewed_edit(b, prepared)
+    if first_gate is not None and isinstance(result, dict):
+        note = START_ORDER.ensure_image(first_gate, kget)
+        if note:
+            notes.append(note)
     if notes and isinstance(result, dict):
         result["detail"] = " ".join(filter(None, [str(result.get("detail") or ""), "; ".join(notes) + "."]))
     return result
@@ -437,8 +455,21 @@ def get_workloads(pods=None):
             "homestead": homestead_part(ns, name),
             "failover": FAILOVER.mode_of(pspec),
             "lan": (LAN.read(d) or {}).get("address", ""),
+            # Starts after (#746): its setting, its gate, and whether a pod waits.
+            **_start_fields(d, mine, deps),
         })
     return sorted(out, key=lambda x: (x["ns"], x["name"]))
+
+
+def _start_fields(dep, pods, deps):
+    """Starts after's row fields; a setting that breaks them marks that app
+    and never the whole list."""
+    try:
+        return START_ORDER.row_fields(dep, pods, deps)
+    except Exception as error:
+        print(f"workloads: starts-after of {dep['metadata'].get('namespace')}/{dep['metadata'].get('name')} "
+              f"not read: {str(error)[:160]}", flush=True)
+        return START_ORDER.row_unread()
 
 
 def set_workload_logos(b):
@@ -785,6 +816,8 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         **({} if is_self(ns, name) else GROUPS.edit_fields(deployment, PRIORITY.tier_of(pspec)[0], kget)),
         "lan": LAN.read(deployment),
         "network_mode": "host" if pspec.get("hostNetwork") else "",
+        # Starts after (#746): the setting, and whether its gate is in the template.
+        "starts_after": START_ORDER.read(deployment), "start_gate": START_ORDER.gate_state(deployment),
         "has_service": bool(listeners),
         "seed_configs": LC.seed_configs(ns, deployment),
         "container_name": first["name"], "image": first["image"], "cpu": first["cpu"], "memory": first["memory"],

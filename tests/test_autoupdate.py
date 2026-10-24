@@ -114,9 +114,14 @@ class JobTests(unittest.TestCase):
         self.snapshots, self.answer, self.checkpoints = [], {}, 0
         self.updates = FakeUpdates(self)
 
+        self.pods = None
+
         def kget(path):
             if path.endswith("/deployments/sonarr"):
                 return copy.deepcopy(self.dep)
+            if self.pods is not None and path.startswith("/api/v1/namespaces/lab/pods?labelSelector="):
+                self.assertEqual("/api/v1/namespaces/lab/pods?labelSelector=app%3Dsonarr", path)
+                return {"items": copy.deepcopy(self.pods)}
             if path.endswith("/persistentvolumeclaims/sonarr-config"):
                 return {"spec": {"volumeName": "pvc-1"}}
             if path.endswith("/persistentvolumeclaims/media-nfs"):
@@ -180,6 +185,29 @@ class JobTests(unittest.TestCase):
         status, _, message = self.step(1010 + AU.ROLLOUT_WAIT + 1)
         self.assertEqual(("failed", 1), (status, self.updates.rolled_back))
         self.assertIn("not ready after 10 minutes", message)
+
+    def test_new_pods_waiting_in_their_start_gate_are_not_rolled_back(self):
+        """Starts after (#746): a new pod waiting for an app it needs is not a
+        broken update, and the old image would wait for it just the same."""
+        import json
+        self.dep["metadata"]["annotations"]["homestead.io/starts-after"] = json.dumps(
+            {"after": [{"ns": "data", "app": "db", "service": "db", "port": 5432}], "timeout": 900, "on_timeout": "wait"})
+        self.dep["spec"]["selector"] = {"matchLabels": {"app": "sonarr"}}
+        self.pods = [{"metadata": {"name": "sonarr-new"}, "status": {"initContainerStatuses": [
+            {"name": "homestead-start-gate", "state": {"running": {"startedAt": "2026-10-22T00:00:00Z"}}}]}}]
+        for now in (1000, 1010):
+            self.step(now)
+        self.dep["status"]["observedGeneration"] = 4
+        status, _, message = self.step(1010 + AU.ROLLOUT_WAIT + 1)
+        self.assertEqual(("running", 0), (status, self.updates.rolled_back))
+        self.assertIn("waiting for db (Starts after)", message)
+        status, _, message = self.step(1010 + AU.ROLLOUT_WAIT + 900 + 1)
+        self.assertEqual(("failed", 0), (status, self.updates.rolled_back))
+        self.assertIn("Not rolled back: its new pods are still waiting for db (Starts after)", message)
+        self.pods[0]["status"]["initContainerStatuses"] = []
+        self.item["ref"]["phase"] = "watch"
+        status, _, message = self.step(1010 + AU.ROLLOUT_WAIT + 1)
+        self.assertEqual(("failed", 1), (status, self.updates.rolled_back), "not waiting in the gate: rolled back as before")
 
     def test_silence_after_starting_is_rolled_back(self):
         for now in (1000, 1010):
