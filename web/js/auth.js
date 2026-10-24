@@ -35,7 +35,9 @@ window.fetch = async (url, opts = {}) => {
     throw Object.assign(new Error("Your sign-in has expired; signing you in again"), { status: 0, signIn: true });
   }
   const served = r.headers?.get?.("X-Homestead-Version");
-  if (served && typeof HOMESTEAD_VERSION === "string" && served !== HOMESTEAD_VERSION) homesteadUpdated(served);
+  const target = opts.headers?.["X-Homestead-Cluster"];
+  const remote = target && target !== window.FLEET?.view?.self;
+  if (!remote && served && typeof HOMESTEAD_VERSION === "string" && served !== HOMESTEAD_VERSION) homesteadUpdated(served);
   return r;
 };
 
@@ -46,6 +48,12 @@ window.fetch = async (url, opts = {}) => {
    says so and offers to. During a rolling update the old copy may still
    answer in between, so it only ever moves forward to the new one. */
 window.homesteadUpdated = served => {
+  // A redundant Homestead serves the new version as soon as its first new
+  // pod answers. The queue still has to wait for the rest of that rollout.
+  if (window.homesteadUpdateQueueActive?.()) {
+    window.__homesteadQueuedVersion = served;
+    return;
+  }
   if (window.__homesteadUpdated === served) return;
   window.__homesteadUpdated = served;
   let mine = false;

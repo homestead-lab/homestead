@@ -30,8 +30,15 @@
 
   function orderApply(workloads, controlPlaneNames = ["homestead"]) {
     const names = new Set(controlPlaneNames);
-    return [...(workloads || [])].sort((left, right) =>
-      Number(names.has(left?.name)) - Number(names.has(right?.name)));
+    const items = [...(workloads || [])];
+    const clusters = new Map();
+    for (const item of items) if (item?.cluster && !clusters.has(item.cluster)) clusters.set(item.cluster, clusters.size);
+    const clusterOrder = item => item?.cluster ? clusters.get(item.cluster) : clusters.size;
+    const homestead = item => item?.part === "self" || item?.homestead === "self" || names.has(item?.name);
+    // Keep each linked cluster together, helpers before its Homestead. The
+    // cluster serving this page goes last so its restart cannot cut the relay.
+    return items.sort((left, right) => clusterOrder(left) - clusterOrder(right)
+      || Number(homestead(left)) - Number(homestead(right)));
   }
 
   return { isStale, availableWorkloads, homesteadWorkloads, orderApply };

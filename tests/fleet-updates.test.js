@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const updateState = require("../web/js/update-state.js");
+const between = require("./helpers/between");
 
 /* The rollout queue, driven for items on this cluster and on a linked one. */
 function setup({ restarts = 0 } = {}) {
@@ -55,11 +56,93 @@ test("a linked cluster's rollout is reviewed, applied and followed there, and th
   await t.ctx.imageReviewedApply();
   const applies = t.sent.filter(s => s.path.endsWith("/apply"));
   assert.deepEqual(applies.map(s => [s.cluster, s.body.name]),
-    [["", "homestead-nfs"], ["b2c0de", "homestead"], ["", "homestead"]]);
-  assert.equal(applies[1].body.capacity_token, "signed-b2c0de-homestead", "the token that cluster issued");
+    [["b2c0de", "homestead"], ["", "homestead-nfs"], ["", "homestead"]]);
+  assert.equal(applies[0].body.capacity_token, "signed-b2c0de-homestead", "the token that cluster issued");
   for (const s of applies) assert.equal(s.body.cluster, undefined, "the cluster is a header, not part of the body");
   assert.ok(t.sent.some(s => s.path.endsWith("/progress") && s.cluster === "b2c0de"));
   assert.match(t.fields["#imageQueue"].innerHTML, /3 apps · 3 updated/, "the two homestead rollouts are kept apart");
+});
+
+function versionHandling(t) {
+  const {ctx}=t, storage={}, notices=[], reloads=[];
+  ctx.sessionStorage={getItem:key=>storage[key]??null,setItem:(key,value)=>{storage[key]=value;},removeItem:key=>{delete storage[key];}};
+  ctx.location={reload:()=>reloads.push(t.sent.filter(s=>s.path.endsWith('/apply')).length)};
+  ctx.document.querySelector=()=>null;
+  ctx.document.createElement=()=>({setAttribute(){}});
+  ctx.document.body={appendChild:el=>notices.push(el)};
+  ctx.fetch=async()=>({}); ctx.HOMESTEAD_VERSION='2.8.317';
+  vm.runInContext(between(fs.readFileSync('web/js/auth.js','utf8'),'const _rawFetch','/* The last answer from /api/auth/state'),ctx);
+  return {storage,notices,reloads};
+}
+
+test("both replicas finish before this page reloads, after the linked cluster has updated", async () => {
+  const t=setup(), v=versionHandling(t), api=t.ctx.api;
+  let localPolls=0;
+  // A stale marker from another update cannot arm a reload during the remote work.
+  v.storage['homestead.selfUpdate']=String(Date.now());
+  t.ctx.api=async(path,options)=>{
+    if(path.endsWith('/apply') && options?.headers?.['X-Homestead-Cluster']) {
+      assert.equal(v.storage['homestead.selfUpdate'],undefined);
+    }
+    const result=await api(path,options);
+    if(path.includes('/progress') && new URLSearchParams(path.split('?')[1]).get('name')==='homestead' && !options?.headers?.['X-Homestead-Cluster']) {
+      localPolls++;
+      // The first new pod can already answer every browser API request.
+      t.ctx.homesteadUpdated('2.8.318');
+      assert.equal(v.reloads.length,0,'the new version header cannot interrupt the rollout');
+      return {...result,desired:2,ready:localPolls===1?1:2,phase:localPolls===1?'progressing':'ready'};
+    }
+    return result;
+  };
+  await t.ctx.reviewImageActions(ITEMS); t.fields['#imageCapacityApprove'].checked=true;
+  await t.ctx.imageReviewedApply();
+  assert.equal(localPolls,2);
+  assert.deepEqual(v.reloads,[3],'reload follows every selected rollout, including the HA pair');
+  assert.match(t.fields['#imageQueue'].innerHTML,/3 apps · 3 updated/);
+  assert.equal(t.ctx.homesteadUpdateQueueActive,undefined);
+});
+
+test("a failed second HA replica keeps its failure visible instead of reloading", async () => {
+  const t=setup(), v=versionHandling(t), api=t.ctx.api;
+  t.ctx.api=async(path,options)=>{
+    const result=await api(path,options);
+    if(path.includes('/progress')) {
+      t.ctx.homesteadUpdated('2.8.318');
+      return {...result,desired:2,ready:1,phase:'failed'};
+    }
+    return result;
+  };
+  await t.ctx.reviewImageActions([ITEMS[2]]); t.fields['#imageCapacityApprove'].checked=true;
+  await t.ctx.imageReviewedApply();
+  assert.deepEqual(v.reloads,[]);
+  assert.match(t.fields['#imageQueue'].innerHTML,/1 failed/);
+  assert.match(v.notices[0].innerHTML,/Reload/);
+  assert.equal(v.storage['homestead.selfUpdate'],undefined);
+});
+
+test("closing an HA rollout ends the reload hold without starting another update", async () => {
+  const t=setup(), v=versionHandling(t), api=t.ctx.api;
+  t.ctx.api=async(path,options)=>{
+    const result=await api(path,options);
+    if(path.includes('/progress')) {
+      t.ctx.homesteadUpdated('2.8.318');
+      t.fields['#modal'].classList.contains=()=>true;
+      return {...result,desired:2,ready:1,phase:'progressing'};
+    }
+    return result;
+  };
+  await t.ctx.reviewImageActions([ITEMS[2]]); t.fields['#imageCapacityApprove'].checked=true;
+  await t.ctx.imageReviewedApply();
+  assert.deepEqual(v.reloads,[]); assert.equal(t.ctx.homesteadUpdateQueueActive,undefined);
+  assert.match(v.notices[0].innerHTML,/Reload/);
+});
+
+test("local update requests remain local when a linked-cluster dialog target is set", async () => {
+  const t=setup(); t.ctx.FLEET={view:{self:'here'},target:'branch'};
+  await t.ctx.reviewImageActions([ITEMS[2]]); t.fields['#imageCapacityApprove'].checked=true;
+  await t.ctx.imageReviewedApply();
+  const calls=t.sent.filter(s=>s.path.endsWith('/preview')||s.path.endsWith('/apply')||s.path.endsWith('/progress'));
+  assert.equal(calls.length,3); assert.ok(calls.every(s=>s.cluster==='here'));
 });
 
 test("a Homestead restarting mid-rollout is waited for, not counted as a failure", async () => {

@@ -14,6 +14,7 @@ case "${1:-}" in
     ;;
   dialog-flows)
     node tests/integration/audit-ready.mjs
+    node tests/integration/ha-update-reload.mjs
     DIALOG_STANDARD_SCREENSHOTS=release-assets/dialogs/section-rail node tests/integration/dialog-section-rail.mjs
     EDIT_SCREENSHOTS=release-assets/dialogs/container-edit node tests/integration/container-edit-steps.mjs
     CONTAINER_SET_SCREENSHOTS=release-assets/dialogs/container-set node tests/integration/container-set.mjs

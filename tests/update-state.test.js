@@ -36,6 +36,23 @@ test("control-plane updates are applied last without disturbing the selected ord
   assert.deepEqual(selected.map(item => item.name), ["homestead", "plex", "frigate"]);
 });
 
+test("linked clusters finish helpers and Homestead before updating this cluster", () => {
+  const selected = [
+    { name: "homestead", part: "self" },
+    { name: "custom-dashboard", part: "self", cluster: "branch" },
+    { name: "homestead-smb", part: "smb" },
+    { name: "homestead-nfs", part: "nfs", cluster: "annex" },
+    { name: "homestead-nfs", part: "nfs", cluster: "branch" },
+    { name: "homestead", part: "self", cluster: "annex" },
+  ];
+  assert.deepEqual(state.orderApply(selected).map(item => [item.cluster || "here",item.name]), [
+    ["branch","homestead-nfs"], ["branch","custom-dashboard"],
+    ["annex","homestead-nfs"], ["annex","homestead"],
+    ["here","homestead-smb"], ["here","homestead"],
+  ]);
+  assert.equal(selected[0].cluster,undefined,"the selected list is unchanged");
+});
+
 test("Homestead and its helpers are updated apart from apps, Homestead first", () => {
   const report = { workloads: [
     { ns: "lab", name: "homestead-nfs", homestead: "nfs", available: true },

@@ -1823,7 +1823,10 @@ let IMAGE_REVIEW = null, IMAGE_REVIEW_SEQUENCE = 0;
 /* An update can be for a linked cluster (the Homestead updates dialog
    updates them too): its requests carry that cluster, and its rollout is
    keyed by it, since the same app can run on two clusters. */
-const clusterHeaders = item => item?.cluster ? { "X-Homestead-Cluster": item.cluster } : {};
+const clusterHeaders = item => {
+  const cluster = item?.cluster || window.FLEET?.view?.self;
+  return cluster ? { "X-Homestead-Cluster": cluster } : {};
+};
 const rolloutKey = item => `${item?.cluster ? `${item.cluster}|` : ""}${updateKey(item.ns, item.name)}`;
 const rolloutBody = config => { const { cluster, clusterName, part, ...rest } = config; return rest; };
 // Homestead replacing itself: its API is away for a minute, which is not a failure.
@@ -1909,72 +1912,92 @@ window.imageUpdateApply = () => imageReviewedApply();
 window.imageReviewedApply = async () => {
   if (!imageReviewReady()) return toast("Review and acknowledge the image and capacity changes first", "bad");
   const rows = IMAGE_REVIEW; IMAGE_REVIEW = null;
-  // Updating Homestead itself from this page: when the new one answers, the
-  // page reloads into it rather than going on as the old one (auth.js).
-  if (rows.some(r => restartsHomestead(r.config) && !r.config.cluster && r.config.action !== "rollback")) {
-    try { sessionStorage.setItem("homestead.selfUpdate", String(Date.now())); } catch (e) { /* the bar offers Reload */ }
-  }
+  // Arm the reload only when this Homestead's own rollout starts, and hold
+  // version notices until the whole queue has finished, including both pods
+  // of a redundant Homestead. An unrelated early response cannot end it.
+  try { sessionStorage.removeItem("homestead.selfUpdate"); } catch (e) { /* no session storage */ }
   const sequence = ++IMAGE_REVIEW_SEQUENCE;
   const items = rows.map(r => r.config);
   const states = Object.fromEntries(items.map(item => [rolloutKey(item), {phase: "queued", ready: 0, desired: 1}]));
   const failures = [];
   modal("Reviewed image rollouts", '<div id="imageQueue"></div>', true);
   const active = () => sequence === IMAGE_REVIEW_SEQUENCE && $("#imageQueue") && !$("#modal").classList.contains("hidden");
+  window.homesteadUpdateQueueActive = active;
+  delete window.__homesteadQueuedVersion;
   const paint = () => {if (active()) paintRollout($("#imageQueue"), batchUpdateMarkup(items, states, failures, false, true));};
   // Runs the queue from `start`; a failure stops it there, and Skip and
   // continue (#295) picks it up again after the failed app.
   const run = async start => {
     IMAGE_QUEUE = null;
-    for (let index = start; index < rows.length; index++) {
-      const {config, preview} = rows[index], key = rolloutKey(config);
-      if (!active()) return;
-      let job = "";
-      try {
-        const result = await api(config.action === "rollback" ? "/api/image-updates/rollback" : "/api/image-updates/apply",
-          {method: "POST", headers: {"Content-Type": "application/json", ...clusterHeaders(config)},
-           body: JSON.stringify({...rolloutBody(config), capacity_token: preview.capacity_token, confirm_capacity: true})});
-        job = result.operation?.id || "";
-        states[key] = result; paint();
-        // Never start the next workload until this exact accepted generation is ready.
-        if (!result.uid || !Number.isInteger(result.generation)) throw new Error("Rollout identity unavailable; check its job before continuing");
-        const deadline = Date.now() + 15 * 60 * 1000;
-        while (true) {
-          if (!active()) return;
-          let state;
-          try {
-            state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(config.ns)}&name=${encodeURIComponent(config.name)}`,
-              {timeout: 10000, ...(config.cluster ? {headers: clusterHeaders(config)} : {})});
-          } catch (error) {
-            // Homestead is replacing itself - here, or on a linked cluster the
-            // relay cannot reach for that minute: wait for it to answer again.
-            if (!restartsHomestead(config) || Date.now() > deadline) throw error;
-            states[key] = {...(states[key] || {}), phase: "restarting"}; paint();
-            await new Promise(resolve => setTimeout(resolve, 3000));
+    let complete = false;
+    try {
+      for (let index = start; index < rows.length; index++) {
+        const {config, preview} = rows[index], key = rolloutKey(config);
+        if (!active()) return;
+        let job = "";
+        try {
+          if (restartsHomestead(config) && !config.cluster && config.action !== "rollback") {
+            try { sessionStorage.setItem("homestead.selfUpdate", String(Date.now())); } catch (e) { /* the bar offers Reload */ }
+          }
+          const result = await api(config.action === "rollback" ? "/api/image-updates/rollback" : "/api/image-updates/apply",
+            {method: "POST", headers: {"Content-Type": "application/json", ...clusterHeaders(config)},
+             body: JSON.stringify({...rolloutBody(config), capacity_token: preview.capacity_token, confirm_capacity: true})});
+          job = result.operation?.id || "";
+          states[key] = result; paint();
+          // Never start the next workload until this exact accepted generation is ready.
+          if (!result.uid || !Number.isInteger(result.generation)) throw new Error("Rollout identity unavailable; check its job before continuing");
+          const deadline = Date.now() + 15 * 60 * 1000;
+          while (true) {
+            if (!active()) return;
+            let state;
+            try {
+              state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(config.ns)}&name=${encodeURIComponent(config.name)}`,
+                {timeout: 10000, headers: clusterHeaders(config)});
+            } catch (error) {
+              // Homestead is replacing itself - here, or on a linked cluster the
+              // relay cannot reach for that minute: wait for it to answer again.
+              if (!restartsHomestead(config) || Date.now() > deadline) throw error;
+              states[key] = {...(states[key] || {}), phase: "restarting"}; paint();
+              await new Promise(resolve => setTimeout(resolve, 3000));
+              continue;
+            }
+            states[key] = state; paint();
+            if (rolloutChanged(result, state)) throw new Error("App changed during monitoring; review remaining updates again");
+            if (state.phase === "failed") throw new Error("Rollout failed");
+            if (state.phase === "ready") { refreshAfterRollout(); break; }
+            if (Date.now() > deadline) throw new Error("Monitoring timed out; check its job before continuing");
+            await new Promise(resolve => setTimeout(resolve, 2000));
+          }
+        } catch (error) {
+          // Already on the newest image - updated elsewhere since the review,
+          // by GitOps for one: nothing to do, and no reason to stop the rest.
+          if (!job && /no image update is currently available/i.test(error.message || "")) {
+            states[key] = {phase: "up to date", ready: 0, desired: 0}; paint();
             continue;
           }
-          states[key] = state; paint();
-          if (rolloutChanged(result, state)) throw new Error("App changed during monitoring; review remaining updates again");
-          if (state.phase === "failed") throw new Error("Rollout failed");
-          if (state.phase === "ready") { refreshAfterRollout(); break; }
-          if (Date.now() > deadline) throw new Error("Monitoring timed out; check its job before continuing");
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          failures.push({...config, job, error: `${asSentence(error.message)} No automatic retry: ${job ? "check its job" : "review it again"} before trying it again.`});
+          const rest = rows.slice(index + 1);
+          for (const remaining of rest) states[rolloutKey(remaining.config)] = {phase: "not started", ready: 0, desired: 1};
+          IMAGE_QUEUE = rest.length ? {skip: () => run(index + 1)} : null;
+          paint();
+          return;
         }
-      } catch (error) {
-        // Already on the newest image - updated elsewhere since the review,
-        // by GitOps for one: nothing to do, and no reason to stop the rest.
-        if (!job && /no image update is currently available/i.test(error.message || "")) {
-          states[key] = {phase: "up to date", ready: 0, desired: 0}; paint();
-          continue;
-        }
-        failures.push({...config, job, error: `${asSentence(error.message)} No automatic retry: ${job ? "check its job" : "review it again"} before trying it again.`});
-        const rest = rows.slice(index + 1);
-        for (const remaining of rest) states[rolloutKey(remaining.config)] = {phase: "not started", ready: 0, desired: 1};
-        IMAGE_QUEUE = rest.length ? {skip: () => run(index + 1)} : null;
-        paint();
-        return;
+      }
+      paint();
+      complete = true;
+    } finally {
+      if (!complete && window.homesteadUpdateQueueActive === active) {
+        try { sessionStorage.removeItem("homestead.selfUpdate"); } catch (e) { /* no session storage */ }
+      }
+      // Keep the hold while Skip and continue is offered. Closing the dialog
+      // makes active() false, so an abandoned queue never blocks later notices.
+      if (window.homesteadUpdateQueueActive === active && (complete || !IMAGE_QUEUE || !active())) {
+        delete window.homesteadUpdateQueueActive;
+        const served = window.__homesteadQueuedVersion;
+        delete window.__homesteadQueuedVersion;
+        if (served && window.homesteadUpdated) window.homesteadUpdated(served);
       }
     }
-    paint();
   };
   paint();
   await run(0);

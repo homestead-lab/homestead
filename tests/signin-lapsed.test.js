@@ -10,7 +10,7 @@ function load(storageAt = 0) {
   const ctx = {
     console, Date, String, Object, Error, JSON, Promise,
     setTimeout: (fn, ms) => { timers.push(fn); return 1; }, clearTimeout: () => {},
-    sessionStorage: { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = v; } },
+    sessionStorage: { getItem: k => store[k] ?? null, setItem: (k, v) => { store[k] = v; }, removeItem: k => {delete store[k];} },
     location: { href: "https://homestead.example.com/containers", replace: url => replaced.push(url) },
     document: { body: { appendChild: el => appended.push(el) }, createElement: () => ({ setAttribute() {}, innerHTML: "", className: "" }),
                 getElementById: () => null },
@@ -85,4 +85,28 @@ test("a page older than the Homestead answering it offers to reload, or reloads 
   assert.match(mine.appended[0].innerHTML, /Loading it/);
   mine.timers.forEach(fn => fn());
   assert.equal(own.length, 1, "right after updating it from this page, it reloads by itself");
+});
+
+test("the first updated HA replica cannot reload a queue still waiting for the other replica", async () => {
+  const t=load(); t.ctx.HOMESTEAD_VERSION="2.8.317"; t.ctx.document.querySelector=()=>null;
+  const reloads=[]; t.ctx.location.reload=()=>reloads.push(1);
+  t.store["homestead.selfUpdate"]=String(Date.now());
+  let running=true; t.ctx.homesteadUpdateQueueActive=()=>running;
+  t.answers.next=()=>({type:"basic",status:200,headers:{get:()=>"2.8.318"}});
+  await t.ctx.fetch("/api/image-updates/progress");
+  assert.equal(t.appended.length,0); assert.equal(t.timers.length,0);
+  assert.equal(t.ctx.__homesteadQueuedVersion,"2.8.318");
+  running=false; t.ctx.homesteadUpdated(t.ctx.__homesteadQueuedVersion);
+  t.timers.forEach(fn=>fn()); assert.equal(reloads.length,1);
+});
+
+test("a linked cluster's version does not reload this page, but an explicitly local response does", async () => {
+  const t=load(); t.ctx.HOMESTEAD_VERSION="2.8.317"; t.ctx.document.querySelector=()=>null;
+  t.ctx.FLEET={view:{self:"here"}};
+  t.store["homestead.selfUpdate"]=String(Date.now());
+  t.answers.next=()=>({type:"basic",status:200,headers:{get:()=>"2.8.318"}});
+  await t.ctx.fetch("/api/image-updates/progress",{headers:{"X-Homestead-Cluster":"branch"}});
+  assert.equal(t.appended.length,0); assert.equal(t.timers.length,0);
+  await t.ctx.fetch("/api/image-updates/progress",{headers:{"X-Homestead-Cluster":"here"}});
+  assert.equal(t.appended.length,1); assert.equal(t.timers.length,1);
 });

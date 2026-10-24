@@ -618,6 +618,17 @@ class ImageUpdateTests(unittest.TestCase):
         template["metadata"]["annotations"].pop(updates.ROLLOUT_AT)
         self.assertEqual("", updates.progress("lab", "demo", self.dep)["rollout_at"])
 
+    def test_ha_progress_waits_for_both_updated_copies_and_the_old_pod_to_leave(self):
+        self.dep["spec"]["replicas"] = 2
+        self.dep["status"].update(replicas=2, updatedReplicas=1, readyReplicas=2, availableReplicas=2)
+        self.assertEqual("progressing", updates.progress("lab", "demo", self.dep)["phase"],
+                         "one old healthy pod and one new healthy pod are not a completed HA update")
+        self.dep["status"].update(replicas=3, updatedReplicas=2, readyReplicas=2, availableReplicas=2)
+        self.assertEqual("progressing", updates.progress("lab", "demo", self.dep)["phase"])
+        self.dep["status"].update(replicas=2)
+        result = updates.progress("lab", "demo", self.dep)
+        self.assertEqual(("ready", 2, 2), (result["phase"], result["updated"], result["ready"]))
+
 if __name__ == "__main__":
     unittest.main()
 
