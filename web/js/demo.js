@@ -640,6 +640,32 @@
         "Choose existing storage for retained recordings or create a suitably sized Longhorn claim.",
       ], dependencies: [] },
     } };
+  // Starts after (#746): home-assistant and paperless start after postgres,
+  // which these fixtures have stopped, so paperless's new pod waits for it.
+  // The healthy scenario starts postgres and paperless (below). Added after
+  // the network fixtures, which give every other app an address of its own.
+  const demoStartsAfter = { "lab/home-assistant": ["postgres"], "lab/paperless": ["postgres"], "lab/doublecommander": ["postgres"] };
+  // Flux applies doublecommander: Edit shows the lines to commit, and they aren't committed yet.
+  const demoManaged = { "lab/doublecommander": "Flux" };
+  const demoGitLines = after => `metadata:\n  annotations:\n    homestead.io/starts-after: ${JSON.stringify(JSON.stringify({ after, on_timeout: "start", timeout: 300 }))}\n`
+    + "spec:\n  template:\n    spec:\n      initContainers:   # first, before any others\n        - name: homestead-start-gate\n"
+    + "          image: \"docker.io/library/alpine:3.24@sha256:…\"\n"
+    + `          env: [{"name": "HS_AFTER", "value": "${after.map(a => `${a.service}.${a.ns}.svc:${a.port}`).join(" ")}"}, …]\n`;
+  workloads.push({ name: "postgres", ns: "lab", kind: "Deployment", failover: "move", desired: 0, ready: 0, uptime: 0,
+    cpu: 0, mem_mb: 0, nodes: [], hardware: [], images: ["docker.io/library/postgres:17"], ports: [], claims: ["postgres-data"],
+    pod_count: 0, container_count: 1, pods: [] });
+  for (const w of workloads) {
+    const after = demoStartsAfter[`${w.ns}/${w.name}`] || [];
+    const managed = !!demoManaged[`${w.ns}/${w.name}`];
+    Object.assign(w, { starts_after: after, start_unreadable: false, start_gate: !after.length ? "none" : managed ? "missing" : "rendered", start_wait: null,
+      start_setting: after.length ? { after: after.map(app => ({ ns: "lab", app, gone: false })), timeout: 300, on_timeout: "start", managed } : null });
+  }
+  Object.assign(workloads.find(w => w.name === "paperless"), { ready: 0, uptime: 0, cpu: 0, mem_mb: 0,
+    start_wait: { waiting_for: ["postgres"], since: Math.floor(Date.now() / 1000) - 140 },
+    pods: [{ name: "paperless-5d9c7b6f4-x2k8q", node: "harvester-node3", phase: "Pending", ready: false, restarts: 0, container_count: 1,
+      containers: [{ name: "paperless", image: "ghcr.io/paperless-ngx/paperless-ngx:latest", kind: "app", state: "PodInitializing", ready: false, restarts: 0 }] }] });
+  // The stopped apps a start of ns/name would wait for, as the server's start plan says.
+  const demoWaitsFor = (ns, name) => (demoStartsAfter[`${ns}/${name}`] || []).filter(app => !workloads.find(w => w.ns === "lab" && w.name === app)?.desired);
   const responses = {
     "/api/auth/state": { setup: false, user: "demo", role: "admin", remember: true,
       session_started: Math.floor(Date.now() / 1000) - 86400 * 3,
@@ -1804,6 +1830,7 @@ ssh_pwauth: true
       current: 0, requested: 1, additional: 1, pod_memory_gb: 1.5, pod_request_gb: 0.5, pod_cpu_request_percent: 25,
       reservations_known: true, resource_slots: 3, topology_status: "not-needed", unbounded: [], warning_percent: 88,
       warnings: ["projected RAM reaches 91% (warning at 88%)"], requires_confirmation: true, blocked: false,
+      waits_for: demoWaitsFor(url.searchParams.get("ns"), url.searchParams.get("name")),
       candidates: [
         { name: "harvester-node1", eligible: true, reasons: [], used_gb: 12.6, capacity_gb: 15.6, projected_gb: 14.2, projected_percent: 91,
           metrics_available: true, warnings: ["projected RAM reaches 91% (warning at 88%)"], reservations_known: true,
@@ -2745,6 +2772,10 @@ ssh_pwauth: true
     },
     "/api/edit/preview": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
+      // Starts after (#746): a loop is refused, as the server refuses it.
+      const back = (body.starts_after?.after || []).find(a => (demoStartsAfter[`${a.ns}/${a.app}`] || []).includes(body.name));
+      if (back) return new Response(JSON.stringify({ error: `a cycle: ${body.name} → ${back.app} → ${body.name}` }),
+        { status: 400, headers: { "Content-Type": "application/json" } });
       const rename = body.workload_name && body.workload_name !== body.name;
       return { capacity_token: "demo-review", managed: demoGitops(body), yaml: (body.containers || []).length ? demoEditYaml(body) : "", capacity: {
       blocked: false, requires_confirmation: true, additional: 1,
@@ -2766,6 +2797,21 @@ ssh_pwauth: true
       warnings: [rename ? "Old pods stop before the replacement starts. A failed or uncertain step keeps resources for inspection, without automatic rollback." : "Editing restarts all containers in the pod. This is a demo capacity snapshot."],
       rollout: { strategy: "Recreate", replicas: 1, ownership_known: true, owned_pods: [], release_request_gb: 0.5, max_surge: 0, max_unavailable: 1 }
     } }; },
+    // Starts after (#746): Edit's block, and its own save.
+    "/api/workloads/starts-after": (url, init) => {
+      const ports = { postgres: [5432], frigate: [5000, 8554] };
+      if (init?.method === "POST") {
+        const body = JSON.parse(init.body || "{}");
+        const picked = (body.after || []).map(a => ({ ns: a.ns || "lab", app: a.app, service: a.service || a.app, port: a.port || ports[a.app]?.[0] || 80 }));
+        return body.lines ? { git: demoGitLines(picked) } : { ok: true, restarts: true };
+      }
+      const ns = url.searchParams.get("ns"), name = url.searchParams.get("name"), by = demoManaged[`${ns}/${name}`] || null;
+      const after = (demoStartsAfter[`${ns}/${name}`] || []).map(app => ({ ns: "lab", app, service: app, port: ports[app]?.[0] || 80 }));
+      return { after, timeout: 300, on_timeout: "start", unreadable: false, managed_by: by,
+        gate: !after.length ? "none" : by ? "not-committed" : "rendered", git: by && after.length ? demoGitLines(after) : "",
+        candidates: workloads.filter(w => !(w.ns === ns && w.name === name) && (w.self || !w.homestead)).map(w => ({ ns: w.ns, app: w.name,
+          services: [{ name: w.name, ports: ports[w.name] || (w.ports || []).map(p => p.port) }] })) };
+    },
     "/api/edit": (url, init) => {
       const body = JSON.parse(init?.body || "{}");
       return { ok: true, name: body.workload_name || body.name, renamed: body.workload_name && body.workload_name !== body.name,
@@ -2862,8 +2908,12 @@ ssh_pwauth: true
         { id: "v:router", name: "router-disk", replicas: 1, size_gb: 16, robustness: "unknown", attached: "" },
         { id: "v:orphan", name: "paperless-old-copy", replicas: 1, size_gb: 100, robustness: "unknown", attached: "" }],
       workloads: [{ id: "w:lab/frigate", name: "frigate", ns: "lab", kind: "container", node: "harvester-node2", hardware: ["igpu", "coral_usb"], uptime: 472221, cpu: .84, mem_mb: 1840, claims: [{ pvc: "frigate-config", vid: "v:frigate" }], ports: [{ name: "web", port: 5000, vip: "192.0.2.214" }] },
-        { id: "w:lab/home-assistant", name: "home-assistant", ns: "lab", kind: "container", node: "harvester-node1", hardware: [], uptime: 912400, cpu: .31, mem_mb: 738, claims: [{ pvc: "home-assistant", vid: "v:home" }], ports: [{ name: "web", port: 8123, vip: "192.0.2.215" }] },
-        { id: "w:lab/paperless", name: "paperless", ns: "lab", kind: "container", node: "harvester-node3", hardware: [], uptime: 220190, cpu: .18, mem_mb: 512, claims: [{ pvc: "paperless-data", vid: "v:paperless" }], ports: [{ name: "web", port: 8000, vip: "192.0.2.216" }] },
+        { id: "w:lab/home-assistant", name: "home-assistant", ns: "lab", kind: "container", node: "harvester-node1", hardware: [], uptime: 912400, cpu: .31, mem_mb: 738, claims: [{ pvc: "home-assistant", vid: "v:home" }], ports: [{ name: "web", port: 8123, vip: "192.0.2.215" }],
+          after: [{ id: "w:lab/postgres", committed: true }] },
+        { id: "w:lab/paperless", name: "paperless", ns: "lab", kind: "container", node: "harvester-node3", hardware: [], uptime: 220190, cpu: .18, mem_mb: 512, claims: [{ pvc: "paperless-data", vid: "v:paperless" }], ports: [{ name: "web", port: 8000, vip: "192.0.2.216" }],
+          after: [{ id: "w:lab/postgres", committed: true }] },
+        // Stopped in these fixtures, as the Apps list has it; the healthy scenario starts it.
+        { id: "w:lab/postgres", name: "postgres", ns: "lab", kind: "container", node: "", hardware: [], uptime: 0, cpu: 0, mem_mb: 0, claims: [], ports: [] },
         { id: "w:vm-ubuntu", name: "ubuntu", ns: "lab", kind: "vm", node: "harvester-node3", running: true, state: "Running", ip: "192.0.2.61", hardware: [], uptime: 86400, cpu: .22, mem_mb: 1540, claims: [{ pvc: "ubuntu-2404", vid: "v:ubuntu" }], ports: [{ name: "ssh", port: 22, vip: "192.0.2.217" }] },
         { id: "w:vm-router", name: "router", ns: "lab", kind: "vm", node: "", running: false, state: "Stopped", ip: "", hardware: [], uptime: 0, cpu: 0, mem_mb: 0, claims: [{ pvc: "router-disk", vid: "v:router" }], ports: [] }],
       // A nightly backup per app, as a cluster with ReadWriteOnce volumes has:
@@ -3170,6 +3220,11 @@ ssh_pwauth: true
         uncorrectable: nvme ? null : 0, media_errors: nvme ? 0 : null });
       withHealth(disk);
     }
+    // Starts after (#746): postgres runs, so nothing waits for it.
+    Object.assign(workloads.find(row => row.name === "postgres"), { desired: 1, cpu: 0.05, mem_mb: 96, nodes: ["harvester-node1"] });
+    for (const workload of workloads) workload.start_wait = null;
+    Object.assign(workloads.find(row => row.name === "paperless"), { cpu: 0.18, mem_mb: 512 });
+    Object.assign(responses["/api/flow"].workloads.find(row => row.id === "w:lab/postgres"), { node: "harvester-node1", uptime: 3600, cpu: .05, mem_mb: 96 });
     for (const workload of workloads.filter(row => row.desired > 0 && row.ready < row.desired)) {
       workload.ready = workload.desired;
       workload.uptime = 3600;
@@ -3368,6 +3423,8 @@ ssh_pwauth: true
     }
     const configured = responses[key];
     let value = typeof configured === "function" ? configured(url, init) : configured;
+    // An answer that is not 200 (a refusal), as the server would send it.
+    if (value instanceof Response) return value;
     // The live demo: a change the demo has no answer for is taken, and kept nowhere.
     if (value === undefined && live && (init?.method || "GET") !== "GET") value = { ok: true, detail: "Demo: nothing is saved" };
     if (value === undefined) return new Response(JSON.stringify({ error: `Demo endpoint not available: ${url.pathname}` }), { status: 404, headers: { "Content-Type": "application/json" } });

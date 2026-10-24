@@ -836,13 +836,60 @@ function workloadActions(w, update, off, compact = false) {
   ]);
 }
 
+/* Starts after (#746): names in words, and a time in seconds or minutes. */
+const startsWords = names => { const list = [...names]; return list.length < 2 ? list.join("") : `${list.slice(0, -1).join(", ")} and ${list.at(-1)}`; };
+const startsSpan = seconds => seconds < 60 ? `${Math.max(0, Math.round(seconds))} s` : `${Math.round(seconds / 6) / 10} min`;
+/* What a row says about the apps it starts after: {chip, tone, line} while
+   it waits, when it started without an app, or when
+   its gate or setting is not as saved; null when there is nothing to say. */
+function startWaitText(w, now = Date.now() / 1000) {
+  const setting = w.start_setting || {}, wait = w.start_wait || {}, timeout = setting.timeout;
+  const said = line => ({ chip: "", tone: "", line });
+  // #620: a setting the server could not work out is "could not read", never none.
+  if (w.start_note) return said("Could not read its Starts after setting");
+  if (w.start_unreadable) return said("Its Starts after setting can't be read: set it again in Edit");
+  if (wait.waiting_for?.length) {
+    const so = timeout ? `${startsSpan(now - wait.since)} of ${startsSpan(timeout)}` : `${startsSpan(now - wait.since)} so far`;
+    return { chip: "Waiting", tone: "warn", line: `Waiting for ${startsWords(wait.waiting_for)} (${so})` };
+  }
+  if (wait.started_without?.length) {
+    const names = startsWords(wait.started_without);
+    return said(`Started without ${names} at ${fmtClock(wait.at)}: ${names} ${wait.started_without.length > 1 ? "were" : "was"} not ready${timeout ? ` after ${startsSpan(timeout)}` : ""}`);
+  }
+  if (w.start_gate === "missing" && setting.managed) return said("Its start gate isn't committed yet: commit the lines Edit shows");
+  if (w.start_gate === "differs" || w.start_gate === "missing") return said("Its start gate doesn't match its setting: put it back in Edit → Placement");
+  return null;
+}
+/* The apps it starts after, the ones that no longer exist marked. */
+function startsAfterNames(w) {
+  const after = w.start_setting?.after;
+  return after ? after.map(a => `${a.app}${a.gone ? " (gone)" : ""}`).join(", ") : (w.starts_after || []).join(", ");
+}
+/* Start's lead: the stopped apps a start of this one would wait for, or
+   that it could not check (#620). */
+function startWaitsLine(name, waits, timeout, onTimeout = "start", error = "") {
+  if (error) return ` ${error[0].toUpperCase()}${error.slice(1)}.`;
+  if (!waits?.length) return "";
+  const many = waits.length > 1;
+  const until = onTimeout === "wait" ? `until ${many ? "they are" : "it is"} up` : timeout ? `up to ${startsSpan(timeout)}` : "before it starts";
+  return ` ${startsWords(waits)} ${many ? "are" : "is"} stopped: ${name} will wait for ${many ? "them" : "it"} ${until}.`;
+}
+/* The app's details: Starts after, and what its start is waiting on. */
+function startsAfterFact(w) {
+  const names = startsAfterNames(w), said = startWaitText(w);
+  if (!names && !said) return "";
+  return `<div class="wl-detail-starts"><span>Starts after</span><b>${esc(names || "—")}</b>${said ? `<div class="dim xs">${esc(said.line)}</div>` : ""}</div>`;
+}
+const startWaitChip = w => { const said = startWaitText(w); return said?.chip ? UI.chip(said.chip, said.tone, { size: "slim", tip: said.line }) : ""; };
+window.startWaitText = startWaitText;
+
 /* A workload's state tags, the same in a row and a card so the two can't
    drift: its schedule, how it updates, who updates it, and an update waiting.
    A row whose own Update button is shown says the update there, not twice. */
 function workloadStateTags(w, update, { row = false } = {}) {
   const owner = updateOwner(update);
   const button = row && update?.available && !owner && (typeof can !== "function" || can("operator"));
-  return `${scheduleTag(w)}${autoUpdateTag(w)}${owner ? updateOwnerPill(update, row)
+  return `${startWaitChip(w)}${scheduleTag(w)}${autoUpdateTag(w)}${owner ? updateOwnerPill(update, row)
     : update?.available && !button ? UI.chip("update available", "warn") : ""}${uncheckedMark(update)}`;
 }
 
@@ -956,6 +1003,7 @@ function workloadTableRows(rows) {
           ${(w.claims || []).length && !remoteRow(w) ? `<div class="wl-detail-volumes"><span>Volumes</span><b class="row">${w.claims.map(claim =>
             `<button type="button" class="tag info linkish" title="Open ${esc(claim)} in Volumes" onclick="openWorkloadVolume(${jsq(claim)})">${esc(claim)}</button>`).join("")}</b></div>` : ""}
           ${gitopsDetail(w)}
+          ${startsAfterFact(w)}
         </div>
         ${workloadHierarchy(w)}
         <div class="wl-detail-actions">${workloadActions(w, update, off)}</div>
@@ -1113,11 +1161,15 @@ window.wlScale = async (ns, name, n) => {
   if (n > 0) {
     try {
       const plan = await api(`/api/workloads/start-plan?${new URLSearchParams({ ns, name, replicas: n })}`);
-      if (plan.requires_confirmation || plan.blocked) {
+      // Starts after (#746): the apps it starts after that are stopped, which it would wait for.
+      const waits = plan.waits_for || [];
+      if (plan.requires_confirmation || plan.blocked || waits.length || plan.waits_for_error) {
         const pods = plan.additional > 1 ? `${plan.additional} pods of` : "";
-        modal(`Start ${name}`, startReview(plan, { what: `Starts ${pods}`.trim(), name, ackId: "wl_capacity_ok" })
+        const row = waits.length ? (STATE.data.wl || []).find(x => x.ns === ns && x.name === name) : null, setting = row?.start_setting;
+        modal(`Start ${name}`, startReview(plan, { what: `Starts ${pods}`.trim(), name, ackId: "wl_capacity_ok",
+          extra: esc(startWaitsLine(name, waits, setting?.timeout, setting?.on_timeout, plan.waits_for_error)) })
           + UI.actions(plan.blocked ? UI.cancel("Close")
-            : UI.cancel() + UI.button("Start", `wlScaleGo(${jsArg(ns)},${jsArg(name)},${n},true)`, { kind: "pri" })));
+            : UI.cancel() + UI.button("Start", `wlScaleGo(${jsArg(ns)},${jsArg(name)},${n},${!!plan.requires_confirmation},true)`, { kind: "pri" })));
         return;
       }
     } catch (e) { return toast(`Could not check host memory: ${e.message}`, "bad"); }
@@ -1126,12 +1178,12 @@ window.wlScale = async (ns, name, n) => {
   if (!n && !(await ask(`Stop ${name}? Its pods stop and what it serves goes away until you start it again. Its data and settings are kept.`, { title: "Stop", ok: "Stop" }))) return;
   return wlScaleGo(ns, name, n, false);
 };
-window.wlScaleGo = async (ns, name, n, confirmed = false) => {
+window.wlScaleGo = async (ns, name, n, confirmed = false, reviewed = false) => {
   if (confirmed && $("#wl_capacity_ok") && !$("#wl_capacity_ok").checked) return toast("Tick Start it anyway to accept the warning", "bad");
   try {
     await api("/api/scale", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ ns, name, replicas: n, confirm_capacity: confirmed }) });
-    if (confirmed) closeModal();
+    if (confirmed || reviewed) closeModal();
     toast(`${name} ${n ? "started" : "stopped"}`, "ok"); setTimeout(() => refresh(true), 900);
   } catch (e) { toast(e.message, "bad"); }
 };

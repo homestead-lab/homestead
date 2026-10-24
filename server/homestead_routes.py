@@ -160,6 +160,7 @@ MODULES = (
     "homestead_shares",
     "homestead_signins",
     "homestead_snapshot_delete",
+    "homestead_start_order",
     "homestead_storage",
     "homestead_storage_classes",
     "homestead_storage_server",

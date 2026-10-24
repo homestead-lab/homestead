@@ -1906,6 +1906,63 @@ instances spread across nodes that share a single-node volume. The rules are
 recorded in `homestead.io/placement`, so an edit replaces only the terms
 Homestead wrote and leaves any added by hand or by a chart.
 
+## Start order
+
+An app can **start after** other apps: a database before the app that uses
+it, say. The setting is the `homestead.io/starts-after` annotation on its
+Deployment. From it Homestead renders a start gate, a small init container
+(`homestead-start-gate`) that is always first in the pod. It waits until each
+app it names answers on its Service's TCP port, then exits, and only then do
+the app's own containers start. A Service routes only to pods that are ready,
+so an app that answers is an app that is ready. The gate reads no Kubernetes
+API and needs no extra permission, so it works with Homestead down.
+
+Because the gate is part of the pod, the order holds for every new pod of the
+app: a cold boot after a power cut, a host reboot or drain, a rollout, a Flux
+reconcile once the lines are committed, and a scale-up, as well as the starts
+Homestead makes. It does not cover a container restarting inside a pod that is
+already running, or an app it needs going away later.
+
+Homestead itself orders only **scheduled** starts: when several apps' power
+schedules start them in the same minute, the ones others start after go first.
+Every other start (outage actions, apps given back after maintenance, starting
+several apps by hand) is left to the gate, which does the waiting.
+
+- **Waiting:** up to a timeout between 30 s and 60 min (5 min by default).
+  After it the app either starts anyway (the default; an alert says it started
+  without that app) or keeps waiting (an alert says so). A rollout waiting that
+  long can pass Kubernetes' progress deadline (600 s by default) and show as
+  not progressing; it carries on once the gate opens.
+- **Refused when saved:** a loop between apps (in any namespace), more than 10
+  apps, Homestead itself, its helpers and system apps as the one that waits
+  (they can be waited for), an app with no Service and TCP port that can show
+  it is ready (ExternalName, no selector or `publishNotReadyAddresses`), a port
+  not on that Service, and a pod without cluster DNS: `dnsPolicy` `Default` or
+  `None`, or host networking without `ClusterFirstWithHostNet`.
+- **What changes:** saving, changing or clearing it restarts the app once;
+  saving the same setting again restarts nothing. An unrelated edit keeps it as
+  it is, even when an app it waits for has since been removed (an alert names
+  that app). The first gate saved pre-pulls its pinned `alpine` image to every
+  host, so a cold boot without internet can still start a rescheduled app.
+- **Flux and Argo CD:** an app they apply is never written. Edit shows the
+  annotation and the gate as lines to commit (for a HelmRelease, as chart
+  values, or a post-renderer patch when the chart takes no extra init
+  containers).
+- **Automatic updates:** new pods that are waiting in their gate are not
+  rolled back. They get the gate's timeout on top of the usual 10 minutes;
+  after that the job fails, and says so, without rolling back.
+- **API:** `GET /api/workloads/starts-after?ns=&name=` (viewer) gives the
+  setting, the gate's state, who applies the app and the apps to choose from.
+  `POST /api/workloads/starts-after` (operator) saves `{ns, name, after:
+  [{ns, app, service, port}], timeout, on_timeout}`, with Edit's checks;
+  with `"lines": true` it saves nothing and answers `{git}`, the lines to
+  commit for that setting. Edit's save (`POST /api/edit`) takes the same
+  object as `starts_after`. Both take `"restore_gate": true` to render a gate
+  changed outside Homestead from the setting again: the same setting saved
+  again without it is no change. The Apps list's rows carry
+  `starts_after`, `start_gate` and `start_wait`; a start plan carries
+  `waits_for`, and `waits_for_error` when that could not be read.
+
 ## Workload logos
 
 Container create, edit, import, and App Store flows accept an optional public

@@ -6,6 +6,7 @@ import homestead_longhorn as LH
 import homestead_names as NAMES
 import homestead_networking as NETWORK
 import homestead_routes
+import homestead_start_order as START_ORDER
 import homestead_vms as VMS
 
 # server.py's: the Kubernetes read, the namespaces that are the platform's
@@ -108,11 +109,11 @@ def get_flow2():
     except Exception:
         vms = []
     try:
-        dep_meta = {(d["metadata"]["namespace"], d["metadata"]["name"]):
-                    d["metadata"].get("annotations", {}) or {}
-                    for d in kget("/apis/apps/v1/deployments").get("items", [])}
+        deps = {(d["metadata"]["namespace"], d["metadata"]["name"]): d
+                for d in kget("/apis/apps/v1/deployments").get("items", [])}
     except Exception:
-        dep_meta = {}
+        deps = {}
+    dep_meta = {key: d["metadata"].get("annotations", {}) or {} for key, d in deps.items()}
 
     # --- volumes, keyed by their PVC name where possible
     vols, vol_by_pvc = [], {}
@@ -255,6 +256,8 @@ def get_flow2():
             "gpu": any("dri" in (m.get("mountPath") or "")
                        for c in p["spec"].get("containers", []) for m in (c.get("volumeMounts") or [])),
             "claims": claims, "ports": app_ports(ns, labels),
+            # Starts after (#746): the apps it starts after, drawn as arrows.
+            "after": START_ORDER.flow_after(deps.get((ns, name))),
         })
     # --- virtual machines, running or not: a stopped VM's disks are still here
     vmi_by = {(v["metadata"]["namespace"], v["metadata"]["name"]): v for v in vmis}

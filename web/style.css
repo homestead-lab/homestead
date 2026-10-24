@@ -941,6 +941,12 @@ svg use,#nav a svg,.iconbtn svg,.sicon svg{stroke:currentColor;fill:none;stroke-
 .a2link.faded{opacity:.05}.a2link.lit{opacity:.85;stroke-width:1.6}
 .a2flow{fill:none;stroke-width:1.8;stroke-dasharray:4 10;animation:dash 1.4s linear infinite}
 .a2flow.access{stroke:var(--arch-access)}.a2flow.mount{stroke:var(--arch-mount)}.a2flow.copy{stroke:var(--arch-copy)}
+/* Starts after (#746): app to app, dashed while its gate is not committed. */
+:root{--arch-after:var(--tx)}
+.a2link.starts-after{stroke:var(--arch-after)}.a2link.starts-after.pending{stroke-dasharray:5 4}
+.a2flow.starts-after{stroke:var(--arch-after)}
+.a2arrowhead{fill:var(--arch-after);opacity:.6}
+.a2after{flex:0 1 auto;min-width:0;max-width:45%;color:var(--dim);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 html[data-theme="light"] .a2item{background:#fff}
 html[data-theme="light"] .a2act{background:rgba(0,0,0,.07)}
 /* Too narrow for four columns: they pair up, and the lines, which would cross

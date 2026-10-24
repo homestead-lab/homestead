@@ -727,6 +727,47 @@ their data are retained. Init containers and managed references stay as they are
 Each is a preference (steer, but start anyway) or a requirement (wait rather
 than break it). The editor warns when a rule cannot be met.
 
+### Starts after
+
+**Starts after** (in Edit → Placement) names the apps this one needs, a
+database say. Each time a pod of the app starts, it first waits until those
+apps answer on their Service, then starts. Choose each app and, where it
+listens on more than one port, the port to wait for. **Wait up to** sets how
+long (30 seconds to 60 minutes, 5 by default), and **If it never comes up**
+whether it then starts anyway or keeps waiting.
+
+- **What counts as a start:** every new pod of the app, whatever made it: a
+  cold boot after a power cut, a host restart or drain, an update, a move, a
+  scale-up, a Flux reconcile once the lines are committed, and the starts
+  Homestead makes. When several apps' power schedules start them in the same
+  minute, the ones others need go first.
+- **What it doesn't cover:** a container restarting inside a pod that is
+  already running, and an app it needs going away later. It does not stop the
+  app then.
+- **Saving it restarts the app once**, because the wait is a small first step
+  in its pod (an init container). Saving the same setting again restarts
+  nothing. Edit's review says so before anything is saved.
+- **Refused when saved:** a loop between apps (Edit names it, "a cycle: app-1
+  → app-2 → app-1"), an app with no Service and TCP port that can show it is
+  ready, and a pod that can't use cluster DNS. Homestead itself, its helpers and
+  system apps can't wait for other apps; other apps can start after Homestead.
+- **Apps Flux or Argo CD applies** are never changed. Edit shows the lines to
+  commit where they are applied; **Show the lines to commit** gives them for the
+  apps you chose. Until they are committed, Architecture draws the link dashed.
+- **While it waits,** the app's row says **Waiting** and its details say for
+  what and for how long ("Waiting for app-2 (3 min of 5 min)"). If it started
+  anyway, its details say when and without what, and an alert says so until it
+  next starts with everything it needs. **Start** on an app says which of the
+  apps it needs are stopped, and how long it will wait for them.
+- A wait longer than 10 minutes can show an update as "not progressing" in
+  Kubernetes; it carries on once the app it waits for is up.
+- **A start gate changed outside Homestead** (kubectl, say) is named on the
+  app's details and in an alert; **Put the start gate back** in Placement
+  renders it from the setting again, restarting the app once.
+
+The setting, the routes and the gate are described in the
+[reference](https://github.com/homestead-lab/homestead/blob/main/docs/reference.md#start-order).
+
 ### Moving between hosts
 
 The host picker is a preliminary hardware/usage comparison. **Review move**
@@ -1058,6 +1099,11 @@ node answering for it, and an address no connection reaches is outlined in
 red with the reason (see [Address map](Networking#address-map)).
 Each node lists its own address and the VIPs it answers for; hovering a node
 highlights its addresses, and hovering an address highlights its node.
+
+An app that [starts after](#starts-after) others has an arrow to each of them,
+pointing to the app it waits for, dashed while its start gate is not committed
+yet, and says "after app-2" on its
+card (on a phone, where the lines are not drawn, that is all there is).
 
 A volume no container, VM or scheduled job references is **disconnected**. Those
 retained and old volumes are hidden by default; **Show disconnected** reveals a

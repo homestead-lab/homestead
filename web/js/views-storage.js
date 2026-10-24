@@ -28,7 +28,8 @@ function architectureData(data) {
   const graph={workloads:[],volumes:[],nodes:[],vips:[],jobs:[],missing:data.missing || []};
   for(const cluster of data.clusters){
     const site=cluster.site, key=id=>id?archId(id,site):id;
-    graph.workloads.push(...cluster.workloads.map(w=>({...w,site,id:key(w.id),claims:w.claims.map(c=>({...c,vid:key(c.vid)}))})));
+    graph.workloads.push(...cluster.workloads.map(w=>({...w,site,id:key(w.id),claims:w.claims.map(c=>({...c,vid:key(c.vid)})),
+      after:(w.after||[]).map(a=>({...a,id:key(a.id)}))})));
     graph.volumes.push(...cluster.volumes.map(v=>({...v,site,id:key(v.id)})));
     graph.nodes.push(...cluster.nodes.map(n=>({...n,site,id:key(n.id),copies:n.copies.map(c=>({...c,vid:key(c.vid)}))})));
     graph.vips.push(...cluster.vips.map(v=>({...v,site,id:key(v.id)})));
@@ -48,6 +49,7 @@ async function viewFlow() {
   f.workloads.forEach(w => w.ports.forEach(p => { if (p.vip) links.push([portId(p.vip, p.port, w.site), w.id, "access"]); }));
   f.workloads.forEach(w => w.claims.forEach(c => { if (c.vid) links.push([w.id, c.vid, "mount"]); }));
   f.nodes.forEach(n => n.copies.forEach(c => links.push([c.vid, `${n.id}|${c.vid}`, "copy"])));
+  links.push(...archStartLinks(f.workloads));
   STATE.data.alinks = links;
   const used = new Set(links.flat());
   const mountedVolumes = mountedVolumeIds(links, f.jobs);
@@ -59,6 +61,7 @@ async function viewFlow() {
           title="${esc(w.name)} · ${esc(kind(w))}${w.ip ? ` · ${esc(w.ip)}` : ""}${w.kind !== "vm" || w.running ? ` · ${workloadCpuPercent(w.cpu)} CPU · ${w.mem_mb || 0} MiB` : ""}">
           ${appAvatar(w.name, w.icon)}<span class="a2name">${esc(w.name)}</span>
           <span class="a2meta">${esc(kind(w))}</span>
+          ${(w.after || []).length ? `<span class="a2after">after ${esc(w.after.map(a => f.workloads.find(x => x.id === a.id)?.name || a.id.split("/").pop()).join(", "))}</span>` : ""}
           ${w.kind === "vm" && !w.running ? "" : `<button class="a2act" data-need="operator" title="${w.kind === "vm" ? "Migrate" : "Move to another host"}"
             onclick="event.stopPropagation();${w.kind === "vm" ? `vmMove(${jsq(w.ns || "lab")},${jsq(w.name)})` : `moveWorkload(${jsq(w.name)},${jsq(w.ns || "lab")})`}">⇄</button>`}
         </div>`;
@@ -118,6 +121,7 @@ async function viewFlow() {
           <span><i style="background:var(--arch-access)"></i>port</span>
           <span><i style="background:var(--arch-mount)"></i>mount</span>
           <span><i style="background:repeating-linear-gradient(90deg,var(--arch-copy) 0 3px,transparent 3px 7px)"></i>replica</span>
+          ${f.workloads.some(w => (w.after || []).length) ? `<span><i style="background:var(--arch-after)"></i>starts after (→ the app it waits for)</span>` : ""}
         </div>
       `, {actionsClass:`arch-head-actions`})}
     ${archMissingCallout(f.missing)}
@@ -127,6 +131,13 @@ async function viewFlow() {
   else drawArch();
   archWatch();
 }
+
+/* Starts after (#746): an app to each app it starts after, as [from, to,
+   type]; "pending" while its gate isn't in the template (Flux, not committed). */
+function archStartLinks(workloads) {
+  return (workloads || []).flatMap(w => (w.after || []).map(a => [w.id, a.id, a.committed ? "starts-after" : "starts-after pending"]));
+}
+const archStartsAfter = type => String(type).startsWith("starts-after");
 
 /* The volumes something is defined to mount: an app's or a VM's, and one
    only a scheduled job mounts - a backup target - which is in use too. */
@@ -219,21 +230,27 @@ function archRelated(id) {
   const beside = id.startsWith("i:") ? places.filter(v => v.id === id).map(v => archId("n:" + v.node,v.site))
     : id.startsWith("n:") ? places.filter(v => archId("n:" + v.node,v.site) === id).map(v => v.id) : [];
   const keep = new Set(start);
+  // Starts after joins two apps, not a path to their data: only the apps
+  // either side of the one traced light up, and the trace does not go on.
   const walk = (from, forward) => {
-    links.forEach(([a, b]) => {
+    links.forEach(([a, b, type]) => {
+      if (archStartsAfter(type)) return;
       const next = forward ? (a === from ? b : null) : (b === from ? a : null);
       if (next && !keep.has(next)) { keep.add(next); walk(next, forward); }
     });
   };
   start.forEach(item => { walk(item, true); walk(item, false); });
+  links.forEach(([a, b, type]) => { if (archStartsAfter(type) && (a === id || b === id)) { keep.add(a); keep.add(b); } });
   beside.forEach(item => keep.add(item));
   return keep;
 }
 
 function drawArch(keep = STATE.data.archKeep) {
-  $$(".arch2wrap").forEach(wrap=>{
+  $$(".arch2wrap").forEach((wrap,index)=>{
   const svg=wrap.querySelector(".archsvg");
   if(!svg)return;
+  const arrow=`a2arrow-${index}`;
+  let arrows=false;
   const localKeep=keep && [...wrap.querySelectorAll("[data-id]")].some(el=>el.dataset.id===STATE.data.archHover)?keep:null;
   const R = wrap.getBoundingClientRect();
   svg.setAttribute("viewBox", `0 0 ${R.width} ${R.height}`);
@@ -251,11 +268,16 @@ function drawArch(keep = STATE.data.archKeep) {
     const A = box(a), B = box(b);
     if (!A || !B) return "";
     const lit = localKeep && localKeep.has(a) && localKeep.has(b);
-    const bend = Math.max(24, (B.l - A.r) / 2);
-    const d = `M ${A.r} ${A.y} C ${A.r + bend} ${A.y} ${B.l - bend} ${B.y} ${B.l} ${B.y}`;
+    const after = archStartsAfter(type);
+    arrows ||= after;
+    const bend = after ? 18 + Math.min(42, Math.abs(B.y - A.y) / 5) : Math.max(24, (B.l - A.r) / 2);
+    // Both apps are in one column: starts after loops out on its right, to an arrowhead.
+    const d = after ? `M ${A.r} ${A.y} C ${A.r + bend} ${A.y} ${B.r + bend} ${B.y} ${B.r + 2} ${B.y}`
+      : `M ${A.r} ${A.y} C ${A.r + bend} ${A.y} ${B.l - bend} ${B.y} ${B.l} ${B.y}`;
     const cls = `a2link ${type}${localKeep ? (lit ? " lit" : " faded") : ""}`;
-    return `<path class="${cls}" d="${d}"/>` + (lit && motion ? `<path class="a2flow ${type}" d="${d}"/>` : "");
+    return `<path class="${cls}" d="${d}"${after ? ` marker-end="url(#${arrow})"` : ""}/>` + (lit && motion ? `<path class="a2flow ${type}" d="${d}"/>` : "");
   }).join("");
+  if (arrows) svg.insertAdjacentHTML("afterbegin", `<defs><marker id="${arrow}" viewBox="0 0 6 6" refX="5" refY="3" markerWidth="6" markerHeight="6" orient="auto"><path class="a2arrowhead" d="M0,0L6,3L0,6z"/></marker></defs>`);
   });
 }
 

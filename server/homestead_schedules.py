@@ -188,14 +188,17 @@ def items(workloads, vms):
     return out
 
 
-def tick(scheduled, act, now=None):
+def tick(scheduled, act, now=None, arrange=None):
     """Do whatever fell due. act(item, action) does it and returns a sentence;
-    raising says why it could not. Returns what was done."""
+    raising says why it could not. Returns what was done. Stops go first, in
+    list order; then starts, in the order arrange(items) gives - the apps
+    others start after first (#746) - or in list order without it."""
     now = now or time.time()
     with _lock:
         state = _load()
         done_by_key, results, did = state.setdefault("done", {}), state.setdefault("results", {}), []
         keys = set()
+        stops, starts = [], []
         for item in scheduled:
             key = f"{item['kind']}:{item['ns']}/{item['name']}"
             keys.add(key)
@@ -204,6 +207,15 @@ def tick(scheduled, act, now=None):
                 continue
             at, action = event
             done_by_key[key] = f"{action}@{int(at)}"
+            (starts if action == "start" else stops).append((item, action, key))
+        if arrange and len(starts) > 1:
+            try:
+                place = {id(item): n for n, (item, _, _) in enumerate(starts)}
+                starts = [starts[place[id(item)]] for item in arrange([item for item, _, _ in starts])]
+            except Exception as error:
+                # The order is a nicety: every due start still happens.
+                print(f"schedules: start order not read: {str(error)[:160]}", flush=True)
+        for item, action, key in stops + starts:
             try:
                 detail = act(item, action)
                 result = {"at": round(now), "action": action, "ok": True, "detail": detail}

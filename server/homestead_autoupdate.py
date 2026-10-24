@@ -26,6 +26,8 @@ it on rather than repeating it.
 import re
 import time
 
+import homestead_start_order as START_ORDER
+
 KIND = "auto-update"
 MODE = "update-mode"            # annotation suffix, homestead.io/update-mode
 ROLLOUT_WAIT = 600              # the new pods have this long to become ready
@@ -189,6 +191,18 @@ def resolve(item, checkpoint, now=None):
                 to("watch", rolled_at=now)
                 return "running", 70, "New pods are ready; waiting for it to answer"
             if now - ref.get("updated_at", now) > ROLLOUT_WAIT:
+                # Starts after (#746): new pods waiting in their start gate are
+                # waiting for an app they need, not broken by the update; the
+                # old image would wait just the same. They get the gate's own
+                # timeout on top, then the job fails without rolling back.
+                gate = START_ORDER.waiting_in_gate(dep, kget)
+                if gate:
+                    apps = ", ".join(gate[0])
+                    if now - ref.get("updated_at", now) <= ROLLOUT_WAIT + gate[1]:
+                        return "running", 55, f"The new pods are waiting for {apps} (Starts after)"
+                    return ("failed", 100, f"Not rolled back: its new pods are still waiting for {apps} (Starts after), "
+                            f"which the previous image would wait for too. They start once {apps} is ready. "
+                            f"{_snapshots_said(ref)}")
                 return _roll_back(item, to, f"its new pods were not ready after {ROLLOUT_WAIT // 60} minutes")
             return "running", 55, "Waiting for the new pods to be ready"
         if not _rolled_out(dep):

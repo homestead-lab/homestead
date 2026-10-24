@@ -21,6 +21,7 @@ import homestead_memory as MEMORY
 import homestead_place as PLACE
 import homestead_priority as PRIORITY
 import homestead_group_tiers as GROUPS
+import homestead_start_order as START_ORDER
 
 
 def seed_configs(ns, dep):
@@ -564,6 +565,9 @@ def prepare_edit(cfg, current=None):
 
     if "priority" in cfg:
         _apply_tier(dep, cfg["priority"])
+    if "starts_after" in cfg:
+        # The start gate (#746): first in initContainers, rendered from the setting.
+        START_ORDER.apply(dep, cfg["starts_after"], *START_ORDER.lists(L.kget))
     removed = cfg.get("remove_containers") or []
     if not isinstance(removed, list) or any(not isinstance(item, str) for item in removed):
         raise ValueError("removed containers must be a list of names")
