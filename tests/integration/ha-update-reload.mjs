@@ -49,6 +49,14 @@ try {
     await page.route("**/api/image-updates/**",async route=>{
       const req=route.request(),url=new URL(req.url()),cluster=req.headers()["x-homestead-cluster"];
       const body=req.postDataJSON();
+      // The review also reads "What's in this update" for each copy. Not a
+      // rollout request: answer it as unavailable, from a server that has not
+      // changed version, so it neither blocks nor announces anything.
+      if(url.pathname.endsWith("/notes")) {
+        await route.fulfill({status:200,contentType:"application/json",
+          body:JSON.stringify({ns:body.ns,name:body.name,images:[],error:"not read in this test"})});
+        return;
+      }
       const identity={uid:cluster,generation:2,desired:pair===(cluster===here?"local":"linked")?2:1};
       let data;
       if(url.pathname.endsWith("/preview")) {
