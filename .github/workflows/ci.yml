@@ -68,7 +68,7 @@ jobs:
           }
           either() { [ "$1" = true ] || [ "$2" = true ] && echo true || echo false; }
           # The checks themselves count too: a PR that changes only one runs it.
-          ui=$(either "$(touches web scripts/audit_dialogs.mjs scripts/audit_pages.mjs scripts/ci_ui_checks.sh 'scripts/check_*.mjs' 'tests/integration/*.mjs')" "$(job_changed dialogs)")
+          ui=$(either "$(touches web scripts/audit_dialogs.mjs scripts/audit_pages.mjs scripts/audit_ready.mjs scripts/ci_ui_checks.sh 'scripts/check_*.mjs' 'tests/integration/*.mjs')" "$(job_changed dialogs)")
           installer=$(either "$(touches scripts/install.sh scripts/install-console.sh scripts/host-console.py scripts/capture_tui.sh scripts/render_tui.mjs)" "$(job_changed installer-screens)")
           echo "ui=$ui installer=$installer"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"; echo "installer=$installer" >> "$GITHUB_OUTPUT"

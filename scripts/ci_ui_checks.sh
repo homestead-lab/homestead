@@ -13,6 +13,7 @@ case "${1:-}" in
     AUDIT_SHARD=${1#dialogs-} AUDIT_SHARDS=3 node scripts/audit_dialogs.mjs
     ;;
   dialog-flows)
+    node tests/integration/audit-ready.mjs
     DIALOG_STANDARD_SCREENSHOTS=release-assets/dialogs/section-rail node tests/integration/dialog-section-rail.mjs
     EDIT_SCREENSHOTS=release-assets/dialogs/container-edit node tests/integration/container-edit-steps.mjs
     CONTAINER_SET_SCREENSHOTS=release-assets/dialogs/container-set node tests/integration/container-set.mjs

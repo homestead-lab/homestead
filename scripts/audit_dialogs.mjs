@@ -10,6 +10,7 @@
 // dialog that could not be opened. CI runs it, so a dialog cannot regress.
 import { chromium } from "playwright";
 import { mkdir, writeFile } from "node:fs/promises";
+import { openAuditPage } from "./audit_ready.mjs";
 
 const output = process.env.DIALOG_OUTPUT || "release-assets/dialogs";
 await mkdir(output, { recursive: true });
@@ -25,6 +26,9 @@ const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
 // "click:<fn>" (the first control whose onclick calls fn), or "text:<label>"
 // (the first button in the dialog with that label).
 const DIALOGS = [
+  ["volume-copy-move", "storage", "volumeCopyMove({name:'pvc-demo',pvc_name:'example-data'})"],
+  ["volume-copy-move-review", "storage", "volumeCopyMove({name:'pvc-demo',pvc_name:'example-data'},{disk_tags:['nvme']})"],
+  ["volume-copy-move-blocked", "storage", "volumeCopyMove({name:'pvc-demo',pvc_name:'example-data'},{disk_tags:['missing']})"],
   ["container-diagnostics", "workloads", "wlDiagnostics('lab','example-server')"],
   ["container-command-review", "workloads", "wlDiagnostics('lab','example-server')", "document.querySelector('#diagnosticCommand').value='uname -a';diagnosticReview({disabled:false})"],
   ["firewall-create", "network", "firewallEdit()"],
@@ -296,9 +300,7 @@ async function audit([label, width, height, mobile], items) {
   await page.addInitScript(theme => {
     localStorage.setItem("homestead.settings", JSON.stringify({ theme, bg: "soft", blur: 26, motion: "off", refresh: 60 }));
   }, theme);
-  await page.goto(base, { waitUntil: "networkidle" });
-  await page.locator("#views .phead").waitFor({state:"attached"});
-  await page.evaluate(() => document.fonts.ready);
+  await openAuditPage(page, base);
   await page.addStyleTag({ content: "#jobTray{display:none!important}" });
 
   for (const [name, view, ...steps] of items) {

@@ -10,6 +10,7 @@
 // 10px, or the page does not open. CI runs it, so a page cannot regress.
 import { chromium } from "playwright";
 import { mkdir, writeFile } from "node:fs/promises";
+import { openAuditPage } from "./audit_ready.mjs";
 
 const output = process.env.PAGE_OUTPUT || "release-assets/pages";
 const theme = process.env.HOMESTEAD_AUDIT_THEME === "light" ? "light" : "dark";
@@ -103,10 +104,7 @@ async function audit([label, width, height, mobile], items) {
   await page.addInitScript(theme => {
     localStorage.setItem("homestead.settings", JSON.stringify({ theme, bg: "soft", blur: 26, motion: "off", refresh: 60 }));
   }, theme);
-  await page.goto(base, { waitUntil: "networkidle" });
-  await page.locator("#views .phead").waitFor({state:"attached"});
-  await page.locator("#views").waitFor({state:"visible"});
-  await page.evaluate(() => document.fonts.ready);
+  await openAuditPage(page, base);
   // Running jobs and passing notices belong to a moment, not the page.
   await page.addStyleTag({ content: "#jobTray,#toast{display:none!important}" });
 
