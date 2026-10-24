@@ -309,7 +309,7 @@
       ...(c.image ? [`        image: ${c.image}`] : []),
       ...(c.memory ? ["        resources:", "          requests:", `            memory: ${c.memory}`] : [])])].join("\n");
   const workloads = [
-    { name: "frigate", ns: "lab", kind: "Deployment", group: "Home", group_tier: "critical", failover: "wait", desired: 1, ready: 1, uptime: 472221,
+    { name: "frigate", ns: "lab", kind: "Deployment", update_mode: "auto", group: "Home", group_tier: "critical", failover: "wait", desired: 1, ready: 1, uptime: 472221,
       cpu: 0.84, mem_mb: 1840, nodes: ["harvester-node2"], hardware: ["igpu", "coral_usb"],
       images: ["ghcr.io/blakeblackshear/frigate:stable"], ports: [{ port: 5000, ip: "192.0.2.214", name: "web", primary: true }, { port: 8554, ip: "192.0.2.214", name: "rtsp" }], claims: ["frigate-config"],
       pod_count: 1, container_count: 1, pods: [pod("frigate", "harvester-node2", "ghcr.io/blakeblackshear/frigate:stable")] },
@@ -441,10 +441,20 @@
       progress: 63.4, capacity: "16Gi", storage_class: "longhorn-r2",
       access_modes: ["ReadWriteOnce"], message: "", in_use: false, used_by: [] },
   ];
+  // The demo's deliberate schedule clash: weekly-trim starts with nightly-backup
+  // at the next Saturday 02:00 UTC, on both of the default group's volumes.
+  const demoSaturday = (() => {
+    const now = Date.now(), today = Math.floor(now / 86400000) * 86400000;
+    for (let day = 0; day < 8; day++) {
+      const at = today + day * 86400000 + 2 * 3600000;
+      if (new Date(at).getUTCDay() === 6 && at > now) return at / 1000;
+    }
+    return 0;
+  })();
   const lhOverview = {
     total: 3, protected: 2, backed_up: 2, unprotected: ["homeassistant-config"], groups: ["critical", "default", "media"],
     group_rows: [{ name: "critical", volumes: ["pvc-demo-frigate"], jobs: ["hourly-snapshot"] },
-      { name: "default", volumes: ["pvc-demo-frigate", "pvc-demo-scratch"], jobs: ["nightly-backup"] },
+      { name: "default", volumes: ["pvc-demo-frigate", "pvc-demo-scratch"], jobs: ["nightly-backup", "weekly-trim"] },
       { name: "media", volumes: ["pvc-demo-hass"], jobs: ["media-weekly-trim"] }],
     target: { configured: true, available: true, name: "default",
       url: "s3://homestead-backups@us-east-1/", reason: "", interval: "5m",
@@ -462,7 +472,12 @@
       desc: "Snapshot — point-in-time, stored on the volume", last_run: "", last_success: "", running: 0, last_failed: false },
       { name: "media-weekly-trim", task: "filesystem-trim", cron: "0 4 * * 6", retain: 0,
       concurrency: 1, groups: ["media"], covers: 1, volumes: ["pvc-demo-hass"],
+      desc: "Trim — reclaim space the guest has freed", last_run: "", last_success: "", running: 0, last_failed: false },
+      { name: "weekly-trim", task: "filesystem-trim", cron: "0 2 * * 6", retain: 0,
+      concurrency: 1, groups: ["default"], covers: 2, volumes: ["pvc-demo-frigate", "pvc-demo-scratch"],
       desc: "Trim — reclaim space the guest has freed", last_run: "", last_success: "", running: 0, last_failed: false }],
+    clashes: [{ severity: "clash", jobs: [{ name: "nightly-backup", task: "backup" }, { name: "weekly-trim", task: "filesystem-trim" }],
+      volumes: ["pvc-demo-frigate", "pvc-demo-scratch"], times: [[demoSaturday, demoSaturday]], count: 1, gap_min: 0 }],
     volumes: [
       { name: "pvc-demo-frigate", pvc: "frigate-config", namespace: "lab", size_gb: 20,
         robustness: "healthy", state: "attached", labels: {}, jobs: [], groups: ["critical", "default"],
@@ -651,7 +666,7 @@
     "/api/node/probe/allocation": {installed: true, enabled: false, managed: false, directory: "",
       uid: "demo-probe", resource_version: "1", detail: "Placement checks are disabled (demo; no host changes)",
       capacity: {blocked:false, blockers:[], warnings:[], nodes:[], fingerprint:"demo"}},
-    "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site", mcp: { enabled: true }, metrics: { enabled: false }, restore_swap: { keep_days: 7 },
+    "/api/settings": { thresholds: { cpu: { warning: 70, critical: 88 }, memory: { warning: 70, critical: 88 }, disk: { warning: 75, critical: 90 }, temperature: { warning: 70, critical: 85 } }, smart: { temperature: { warning: 55, critical: 65 }, reallocated_warning: 1, pending_critical: 1, uncorrectable_critical: 1, notify_failures: true }, updates: { policy: "approval_required", notify_available: true, notify_failures: true, maintenance: { days: [0, 1, 2, 3, 4, 5, 6], start: "02:00", duration_minutes: 120 } }, placement: { rebalance: "suggest", mode: "standby", standby_nodes: ["harvester-node3"] }, site_name: "Main site", mcp: { enabled: true }, metrics: { enabled: false }, restore_swap: { keep_days: 7 },
       audit: { file: true },
       info: { version: "2.8.332-dev.5", namespace: "lab", storage_class: "longhorn-r2", vip: "192.0.2.242",
         kubernetes: "v1.32.4+rke2r1",
@@ -2479,6 +2494,9 @@ ssh_pwauth: true
       const t = Date.now() / 1000, day = 86400;
       const words = "Stops 19:00, starts 08:00, weekdays";
       return { grace: 1800, items: [
+        // Stops during its own volume's nightly backup on Sundays: Schedules › This week calls it close.
+        { kind: "app", ns: "lab", name: "frigate", running: true, words: "Stops 02:01, Sunday",
+          schedule: { stop: "02:01", days: [6], tz: "UTC" }, next: [], last: null },
         { kind: "app", ns: "lab", name: "paperless", running: true, words: "Stops 01:00, starts 07:00, weekdays",
           schedule: { stop: "01:00", start: "07:00", days: [0, 1, 2, 3, 4], tz: "UTC" },
           next: [{ at: t + 5 * 3600, action: "stop" }, { at: t + 11 * 3600, action: "start" }],

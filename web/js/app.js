@@ -19,6 +19,7 @@ const VIEWS = {
   images:    ["storage",   viewImages,    false],
   protect:   ["storage",   viewProtect,   true],
   schedules: ["system",    viewSchedules, true],
+  "schedule-week": ["system", () => viewScheduleWeek(), true],
   monitoring: ["workloads", () => viewMonitoring(), true],
   imports:   ["system",    viewImport,    true],
   events:    ["system",    viewEvents,    true],

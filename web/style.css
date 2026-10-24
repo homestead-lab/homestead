@@ -3984,3 +3984,16 @@ button.a2port{font-family:inherit;line-height:inherit}
 .allocation-bar .pmap-seg.sys{background:var(--dim)}
 .allocation-bar .allocation-selected{background:repeating-linear-gradient(135deg,var(--mut) 0 3px,var(--surf2) 3px 6px)}
 .allocation-identity{overflow-wrap:anywhere;word-break:break-word}
+
+/* Schedules › This week (schedule-week.js): one row per run - time, name and
+   what it does, chips - in a list by day that reads the same on a phone. */
+.week-days,.week-frequent{display:grid;gap:14px}
+.week-row{display:grid;grid-template-columns:5.6em minmax(0,1fr) auto;gap:10px;align-items:baseline;padding:6px 0;border-top:1px solid var(--line)}
+.week-row:first-of-type{border-top:0}
+.week-time{white-space:nowrap}
+.week-name{min-width:0;overflow-wrap:anywhere}
+.week-chips{display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end}
+.week-clashes{margin:6px 0}
+.week-clashes li{overflow-wrap:anywhere}
+.week-summary .ui-help{margin-top:4px}
+@media (max-width:560px){.week-row{grid-template-columns:5.6em minmax(0,1fr)}.week-chips{grid-column:2;justify-content:flex-start}}

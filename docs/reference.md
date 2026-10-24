@@ -1234,6 +1234,20 @@ shows the next three runs in your own time. Each job shows when it runs next,
 when it last ran and whether that run failed, and **Run now** starts it at once
 from the schedule Longhorn made, tracked in the job tray.
 
+`/api/lh/overview` also carries `clashes` for the coming week
+(`homestead_schedule_clashes`): pairs of jobs where a trim or a backup starts
+with a backup on a shared volume - `clash` in the same minute, `close` within
+30 minutes - with the volumes, the times of each pair (UTC epoch seconds) and
+how often it happens. Snapshots and cleanups never clash. The Dashboard's
+health suggestions turn a clash into a finding, and **Schedules › This week**
+(`/schedules/week`) lists every run in the next seven days by day: these jobs,
+CronJobs, power schedules, the host OS update window and the maintenance
+window, naming each source it could not read. The page itself marks as close
+a host OS update window (from the hour it opens, when it may restart hosts;
+naming the hosts with a copy of the volume, from `/api/volumes`) or an app's
+power stop that falls within a backup of its volumes; a backup runs as long as
+its last run took, or 30 minutes. These never reach the Dashboard.
+
 **Plans** set up a policy in one go - snapshots (hourly kept for a day, daily
 kept for a week), snapshots and backups (adding daily and weekly backups to
 the backup target), or housekeeping (weekly trim and snapshot cleanup) - for

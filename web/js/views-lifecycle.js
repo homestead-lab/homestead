@@ -1626,7 +1626,7 @@ function jobOwner(j) {
 let jobEditing = "";
 async function viewSchedules() {
   const js = await api("/api/schedules");
-  paint(`${UI.pageHeader(`Schedules`, `${js.length} scheduled job${js.length === 1 ? "" : "s"} · schedules in UTC, next runs in your time zone (${esc(yourZone())})`, `<button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button>`)}
+  paint(`${UI.pageHeader(`Schedules`, `${js.length} scheduled job${js.length === 1 ? "" : "s"} · schedules in UTC, next runs in your time zone (${esc(yourZone())})`, `${UI.button("This week", "go('schedule-week')")} <button class="btn pri" data-need="operator" onclick="jobEdit()">＋ New schedule</button>`)}
     <div class="card flat pad0"><div class="tblwrap"><table data-sort="schedules" class="tbl stack"><thead><tr>
       <th>Name</th><th>Schedule</th><th data-nosort>Next run</th><th>Image</th><th data-nosort>Last run</th><th>State</th><th></th></tr></thead><tbody>
       ${js.map(j => `<tr>

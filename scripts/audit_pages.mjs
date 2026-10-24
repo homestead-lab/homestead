@@ -68,6 +68,7 @@ const PAGES = [
   ["firewall", "network", "networkTab('firewall')"],
   ["import", "imports"],
   ["schedules", "schedules"],
+  ["schedules-week", "schedule-week"],
   ["monitoring", "monitoring"],
   ["monitoring-30-days", "monitoring", "monitorRange('month')"],
   ["events", "events"],

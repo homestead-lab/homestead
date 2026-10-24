@@ -30,6 +30,7 @@
     deploy:    Object.freeze({ path: "/deploy",          label: "Deploy",          section: "Apps", parent: "workloads" }),
     images:    Object.freeze({ path: "/image-cache",     label: "Image Cache",     section: "Apps", parent: "workloads" }),
     schedules: Object.freeze({ path: "/schedules",       label: "Schedules",       section: "Apps", parent: "workloads" }),
+    "schedule-week": Object.freeze({ path: "/schedules/week", label: "This week", section: "Apps", parent: "workloads" }),
     monitoring: Object.freeze({ path: "/monitoring",     label: "Monitoring",      section: "Apps", parent: "workloads" }),
     imports:   Object.freeze({ path: "/import",          label: "Import",          section: "Apps", parent: "workloads" }),
     vms:       Object.freeze({ path: "/vms",             label: "Virtual Machines", section: "Apps" }),
