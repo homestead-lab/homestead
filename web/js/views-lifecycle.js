@@ -140,25 +140,11 @@ window.editUseSuggested = (index, cpu, memory) => {
   });
 };
 
-/* ---------------- placement rules ----------------
-   Keep this workload's instances on different nodes, or run it with or apart
-   from other workloads. Each rule is a preference or a requirement. */
-let EDIT_PLACEMENT = { others: [], nodes: 0 };
+/* Placement's rules, rows and notes are app-form.js's, shared with Deploy (#844). */
 let EDIT_CONTAINER_NEXT = 0, EDIT_REMOVED_CONTAINERS = [];
 let EDIT_REMOVED_PANELS = new Map();
 let EDIT_SAVE_UNCERTAIN = false;
 const nodes0 = list => (list || []).filter(n => n.schedulable !== false);
-const PLACEMENT_MODES = [["prefer", "prefer"], ["require", "require"]];
-function placementRow(kind, row = {}) {
-  const others = EDIT_PLACEMENT.others || [];
-  const key = row.name ? `${row.ns || EDIT_PLACEMENT.ns}/${row.name}` : "";
-  const known = !key || others.some(w => `${w.ns}/${w.name}` === key);
-  return `<div class="aff-row" data-kind="${kind}">
-    <select class="aff-target"><option value="">choose an app…</option>${known ? "" : `<option value="${esc(key)}" selected>${esc(key)} (gone)</option>`}
-      ${others.map(w => `<option value="${esc(w.ns)}/${esc(w.name)}" ${`${w.ns}/${w.name}` === key ? "selected" : ""}>${esc(w.name)}${w.ns !== EDIT_PLACEMENT.ns ? ` · ${esc(w.ns)}` : ""}</option>`).join("")}</select>
-    <select class="aff-mode">${PLACEMENT_MODES.map(([value, label]) => `<option value="${value}" ${row.mode === value ? "selected" : ""}>${label}</option>`).join("")}</select>
-    <button class="iconbtn row-remove" type="button" title="Remove this rule" onclick="this.closest('.aff-row').remove();placementChanged()">×</button></div>`;
-}
 /* How the workload is reached now, in the Address step's terms. */
 function editAddressNow(w, network, vips) {
   const own = (network?.services || []).find(s => s.namespace === w.ns && s.name === w.name && !s.system);
@@ -356,7 +342,7 @@ function startsAfterNote() {
   const note = $("#e_starts_note"), form = EDIT_STARTS.form;
   if (!note || !form || form.error) return;
   const rows = startsAfterRows(), name = EDIT_STARTS.ctx.name, seconds = Math.round((+$("#e_starts_min")?.value || 0) * 60), lines = [];
-  const stopped = startsAfterStopped(rows, EDIT_PLACEMENT.others);
+  const stopped = startsAfterStopped(rows, APP_FORM_PLACEMENT.e.others);
   if (stopped.length) lines.push(`${startsWords(stopped)} ${stopped.length > 1 ? "are" : "is"} stopped: ${name}'s pods will wait for ${stopped.length > 1 ? "them" : "it"} ${$("#e_starts_on")?.value === "wait" ? `until ${stopped.length > 1 ? "they are" : "it is"} up` : `up to ${startsSpan(seconds)}`} each time they start.`);
   if (new Set(rows.map(startsKey)).size !== rows.length) lines.push("An app is named twice; it is waited for once.");
   if (rows.length && seconds > 600) lines.push("A wait over 10 min can show an update as not progressing in Kubernetes; it carries on once the app is up.");
@@ -410,47 +396,6 @@ window.startsAfterLines = async () => {
 document.addEventListener("input", event => { if (event.target.closest?.("#e_starts")) startsAfterChanged(); });
 document.addEventListener("change", event => { if (event.target.closest?.("#e_starts")) startsAfterChanged(); });
 
-function placementSection(p, w, nodes, containers, startsHtml = "") {
-  const names = (containers || []).map(c => c.name);
-  return `<section class="placement card flat" id="e_placement">
-    <div class="sec" style="margin-top:0">Placement</div>
-    <div class="place-level"><div class="place-title">Containers in this pod</div>
-      <div class="dim small" id="e_pod_containers">${names.length > 1 ? `${names.map(n => UI.chip(n, "neutral")).join(" ")} always run together on one node, sharing its network and any pod volumes.`
-        : `${UI.chip(names[0] || w.name, "neutral")} is this pod's only container.`}
-        Containers in one pod cannot be spread apart; to run one on its own host, make it an app of its own and use the rules below.</div></div>
-    <div class="place-level"><div class="place-title">Copies of this app</div>
-      <div class="place-grid">
-        <div class="f"><label>Copies ${tip("How many copies of this app run at once - Kubernetes calls them replicas. Most homelab apps want one; Longhorn volume replicas are a separate, storage-level idea.")}</label><input type="number" id="e_rep" value="${w.start_replicas ?? w.replicas ?? 1}" min="1" max="5" ${w.autostart === false ? "disabled" : ""}></div>
-        <div class="f"><label>Spread copies ${tip("Puts this app's copies on different hosts, so losing one host does not take every copy. Only matters with more than one copy.")}</label>
-          <select id="e_spread" onchange="placementChanged()"><option value="">no preference</option>
-            <option value="prefer" ${p.spread === "prefer" ? "selected" : ""}>prefer different hosts</option>
-            <option value="require" ${p.spread === "require" ? "selected" : ""}>require different hosts</option></select></div>
-        <div class="f"><label>Preferred host ${tip("A preference guides placement but still allows failover. Use Move for hardware-aware choices and optional hard pinning.")}</label><select id="e_node" data-current="${esc(w.node || "")}">
-          <option value="">any host</option>
-          ${(nodes || []).map(n => `<option value="${esc(n.name)}" ${n.name === w.node ? "selected" : ""}>${esc(n.name)}${n.schedulable === false ? " (not schedulable)" : ""}</option>`).join("")}
-          ${w.node && !(nodes || []).some(n => n.name === w.node) ? `<option value="${esc(w.node)}" selected>${esc(w.node)} (gone)</option>` : ""}
-        </select></div></div></div>
-    <div class="place-level"><div class="place-title">Other apps</div>
-      <div class="place-grid two">
-        <div class="f"><label>Run on the same host as ${tip("For apps that talk constantly or share a device. Required: this does not start until that app is running, and only on its host.")}</label>
-          <div id="e_with">${(p.with || []).map(row => placementRow("with", row)).join("")}</div>
-          <button class="btn sm" type="button" onclick="placementAdd('with')">＋ Add</button></div>
-        <div class="f"><label>Keep off the host of ${tip("For pairs that should never share a host: two DNS servers, or two apps that would compete for one disk.")}</label>
-          <div id="e_apart">${(p.apart || []).map(row => placementRow("apart", row)).join("")}</div>
-          <button class="btn sm" type="button" onclick="placementAdd('apart')">＋ Add</button></div></div></div>
-    ${startsHtml}
-    <div class="place-level"><div class="place-title">If its host fails</div>
-      <div class="place-grid failover"><div class="f">${failoverSelect("e_failover", w.failover || "default",
-          `onchange="$('#e_failover_help').textContent = FAILOVER_HELP[this.value] || ''"`)}</div>
-        <div class="dim small" id="e_failover_help">${esc(FAILOVER_HELP[w.failover || "default"])}</div></div></div>
-    <div class="place-level"><div class="place-title">When the cluster is short of room</div>
-      <div class="place-grid failover"><div class="f">${priorityFixed(w)
-          ? `<span class="mono">${esc(w.priority_class || "no class")}</span>`
-          : prioritySelect("e_priority", w.priority || "normal", `aria-label="Tier when the cluster is short of room" aria-describedby="e_priority_help" data-group="${esc(w.priority_group ? priorityGroupHelp(w.priority_group) : "")}" onchange="$('#e_priority_help').textContent = PRIORITY_HELP[this.value] || this.dataset.group || ''"`,
-              w.priority_group ? `<option value="group" ${w.priority === "group" ? "selected" : ""}>${esc(priorityGroupLabel(w.priority_group, w.priority_group_tier))}</option>` : "")}</div>
-        <div class="dim small" id="e_priority_help" aria-live="polite">${esc(priorityFixed(w) || (w.priority === "group" ? priorityGroupHelp(w.priority_group) : PRIORITY_HELP[w.priority || "normal"]))}</div></div></div>
-    <div class="note" id="e_place_note" hidden></div></section>`;
-}
 /* From a container's menu: the editor, opened at its placement. */
 window.wlPlacement = async (ns, name) => {
   await wlEdit(ns, name);
@@ -460,31 +405,6 @@ window.wlPlacement = async (ns, name) => {
     if (box && section) box.scrollTo({ top: section.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - 72, behavior: "smooth" });
   }, 80);
 };
-window.placementAdd = kind => { $("#e_" + kind).insertAdjacentHTML("beforeend", placementRow(kind)); placementChanged(); };
-function readPlacement() {
-  const rows = kind => $$(`#e_${kind} .aff-row`).map(row => {
-    const [ns, name] = ($(".aff-target", row).value || "/").split("/");
-    return { ns, name, mode: $(".aff-mode", row).value };
-  }).filter(row => row.name);
-  return { spread: $("#e_spread")?.value || "", with: rows("with"), apart: rows("apart") };
-}
-window.placementChanged = () => {
-  const note = $("#e_place_note");
-  if (!note) return;
-  const p = readPlacement(), replicas = +$("#e_rep")?.value || 1, warnings = [];
-  if (p.spread === "require" && replicas > EDIT_PLACEMENT.nodes)
-    warnings.push(`${replicas} instances but ${EDIT_PLACEMENT.nodes} schedulable host${EDIT_PLACEMENT.nodes === 1 ? "" : "s"}: the extra instances stay pending.`);
-  const singleNode = readVolumeRows($("#e_containers")).some(v => v.kind === "new-rwo" || (v.kind === "existing" &&
-    ((EDIT_STORAGE.pvcs || []).find(c => c.name === v.source)?.access_modes || []).includes("ReadWriteOnce")));
-  if (p.spread && replicas > 1 && singleNode)
-    warnings.push("A single-node (RWO) volume attaches to one node at a time, so instances spread across hosts cannot all mount it.");
-  const names = [...p.with, ...p.apart].map(row => `${row.ns}/${row.name}`);
-  if (names.length !== new Set(names).size) warnings.push("An app is named twice; each can be kept either with this one or apart from it.");
-  if (p.with.some(row => row.mode === "require")) warnings.push("Required: this app waits for the one it runs with, and stops being schedulable if that one stops.");
-  note.hidden = !warnings.length;
-  note.innerHTML = warnings.map(esc).join("<br>");
-};
-document.addEventListener("change", event => { if (event.target.closest(".placement") || event.target.id === "e_rep") placementChanged(); });
 
 window.wlEdit = async (ns, name, fromRoute = false) => {
   if (!fromRoute && window.setModalRoute) setModalRoute({ panel: "edit", ns, workload: name }, name);
@@ -509,8 +429,8 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     // What it uses now, beside what it reserves: with one container, all of it is that container's.
     const listed = (others || []).find(x => x.ns === ns && x.name === name);
     if (listed?.mem_mb && (w.containers || []).length <= 1 && w.containers?.[0]) w.containers[0].usage_mb = listed.mem_mb;
-    EDIT_PLACEMENT = { ns, name, others: (others || []).filter(x => !(x.ns === ns && x.name === name)),
-      nodes: nodes0(liveNodes).length };
+    appFormPlacementContext("e", { ns, name, others: (others || []).filter(x => !(x.ns === ns && x.name === name)),
+      nodes: nodes0(liveNodes).length, volumes: () => readVolumeRows($("#e_containers")), pvcs: () => EDIT_STORAGE.pvcs || [] });
     if (liveNodes.length) STATE.data.nodes = liveNodes;
     // Its own host stays on the list when cordoned, so Save does not unpin it.
     const nodes = (liveNodes.length ? liveNodes : (STATE.data.ov ? STATE.data.ov.nodes : [])).filter(n => n.schedulable !== false || n.name === w.node);
@@ -539,7 +459,7 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
       ${appFormContainerBlock("e", "edit", containers.map((container, index) => editContainerPanel(container, index, "basics")).join(""))}`;
     EDIT_STARTS = { form: starts, dirty: false,
       ctx: { ns, name, fixed: w.priority === "self" || !!(listed?.self || listed?.homestead || listed?.managed_smb || listed?.managed_nfs) } };
-    const running = placementSection(w.placement || {}, w, nodes, containers, startsAfterBlock(starts, EDIT_STARTS.ctx));
+    const running = appFormPlacement("e", w.placement || {}, w, nodes, containers, { startsHtml: startsAfterBlock(starts, EDIT_STARTS.ctx) });
     const access = `
       ${panels("hardware")}`;
     const environment = `
@@ -636,10 +556,7 @@ function readEditedContainer(panel) {
     volumes: readVolumeRows($("#e_vols_" + index)) };
 }
 function editContainerListChanged() {
-  const host = $("#e_pod_containers");
-  if (!host) return;
-  const names = $$("#e_basics_containers .edit-container").map(panel => $("#e_container_name_" + panel.dataset.index).value);
-  host.innerHTML = `${names.map(name => UI.chip(name || "unnamed", "neutral")).join(" ")} run together in every pod, sharing its network and volumes.`;
+  appFormPodContainers("e", $$("#e_basics_containers .edit-container").map(panel => $("#e_container_name_" + panel.dataset.index).value));
 }
 function containerRemovedPaint() {
   $("#e_removed_containers").innerHTML = [...EDIT_REMOVED_PANELS].map(([index, entry]) =>

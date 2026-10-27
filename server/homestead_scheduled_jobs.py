@@ -2,8 +2,8 @@
 Schedules: the CronJobs Homestead lists, saves, runs and deletes.
 
 Split by feature from homestead_imports (#623), moved unchanged. Names that
-homestead_imports owns, that server.py binds there, or that tests replace there,
-are read through it (I.name); homestead_imports re-exports everything here.
+homestead_imports owns or that server.py binds there are read through it (I.name),
+so a replacement there still applies; read and replace the names defined here, here.
 """
 import copy
 import re
@@ -91,7 +91,7 @@ def cronjob_alert_facts():
 
 def _managed_job(name):
     """The CronJob Homestead made under this name, or None when there is none."""
-    current = I._get_or_none(f"/apis/batch/v1/namespaces/{I.NS}/cronjobs/{name}")
+    current = VM_CREATE._get_or_none(f"/apis/batch/v1/namespaces/{I.NS}/cronjobs/{name}")
     if current is not None and not _job_managed(current):
         by = _job_managed_by(current)
         raise ValueError(f"Homestead did not make the CronJob {name}"
@@ -101,7 +101,7 @@ def _managed_job(name):
 
 
 def save_job(cfg):
-    name = I._required_name(cfg.get("name"))
+    name = VM_CREATE._required_name(cfg.get("name"))
     current = _managed_job(name)
     # The page sends the generation it read ("" for a new schedule), so a
     # save never lands on a job whose spec changed, or that appeared, since
@@ -156,7 +156,7 @@ def save_job(cfg):
 
 
 def del_job(name):
-    name = I._required_name(name)
+    name = VM_CREATE._required_name(name)
     _managed_job(name)
     I._bust("cron")
     I.ksend("DELETE", f"/apis/batch/v1/namespaces/{I.NS}/cronjobs/{name}?propagationPolicy=Background")
@@ -177,4 +177,5 @@ def run_job_now(name):
     return I.ksend("POST", f"/apis/batch/v1/namespaces/{I.NS}/jobs", body)
 
 
-import homestead_imports as I  # noqa: E402  (imports at the bottom: homestead_imports re-exports this module)
+import homestead_imports as I  # noqa: E402  (imports at the bottom: homestead_imports imports this module)
+import homestead_vm_create as VM_CREATE  # noqa: E402

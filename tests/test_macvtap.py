@@ -13,6 +13,7 @@ import homestead_baseline as BASELINE
 import homestead_macvtap as MACVTAP
 import homestead_network_vms as VMNET
 import homestead_vms as VMS
+import homestead_vm_edit as VM_EDIT
 import test_vm_network_create as network_fixture
 
 KV = "/apis/kubevirt.io/v1/namespaces/kubevirt/kubevirts/kubevirt"
@@ -167,7 +168,7 @@ class VmJoinTests(unittest.TestCase):
         nad = {"spec": {"config": json.dumps(config)}}
         with mock.patch.object(VMS.KUBE, "get_optional", lambda path, read=None: nad):
             iface, net = {"name": "nic-0", "masquerade": {}}, {"name": "nic-0", "pod": {}}
-            VMS._set_network(iface, net, "default/lan")
+            VM_EDIT._set_network(iface, net, "default/lan")
         return iface, net
 
     def test_a_vm_joins_macvtap_through_its_binding_and_a_bridge_directly(self):

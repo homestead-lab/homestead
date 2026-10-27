@@ -48,7 +48,8 @@ class MqttTests(unittest.TestCase):
         cpu = topics["homeassistant/sensor/hv_harvester_node1_cpu/config"]
         self.assertEqual(("hv_harvester_node1_cpu", "harvester/node/harvester_node1/state", "{{ value_json.cpu_pct }}"),
                          (cpu["unique_id"], cpu["state_topic"], cpu["value_template"]))
-        self.assertEqual(15 + 9, len(topics))
+        # hv-exporter's 15 cluster sensors, plus Volumes Short of Hosts (#841).
+        self.assertEqual(16 + 9, len(topics))
 
     def test_discovery_is_sent_again_only_when_nodes_change(self):
         cfg = MQTT.clean({"host": "broker"})

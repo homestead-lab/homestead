@@ -8,14 +8,16 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import server
+import homestead_deploy_manifests as MANIFESTS
+import homestead_deploy_appstore as APPSTORE
 
 
 class AppStoreTemplateTests(unittest.TestCase):
     def test_category_shapes_are_normalized(self):
-        self.assertEqual(["MediaServer", "Tools"], server.DEPLOY.category_values("MediaServer Tools"))
-        self.assertEqual(["Network", "Security"], server.DEPLOY.category_values(["Network", "Security"]))
-        self.assertEqual(["HomeAutomation"], server.DEPLOY.category_values([{"name": "HomeAutomation"}]))
-        self.assertEqual(["Backup/Sync"], server.DEPLOY.category_values({"Category": "Backup/Sync"}))
+        self.assertEqual(["MediaServer", "Tools"], APPSTORE.category_values("MediaServer Tools"))
+        self.assertEqual(["Network", "Security"], APPSTORE.category_values(["Network", "Security"]))
+        self.assertEqual(["HomeAutomation"], APPSTORE.category_values([{"name": "HomeAutomation"}]))
+        self.assertEqual(["Backup/Sync"], APPSTORE.category_values({"Category": "Backup/Sync"}))
 
     def test_search_prioritizes_name_matches_over_description_matches(self):
         apps = [
@@ -26,7 +28,7 @@ class AppStoreTemplateTests(unittest.TestCase):
             {"name": "MyFrigateBridge", "desc": "Bridge"},
             {"name": "Amcrest PTZ", "desc": "Controls cameras for Frigate"},
         ]
-        result = server.DEPLOY.search_appstore(apps, "frigate")
+        result = APPSTORE.search_appstore(apps, "frigate")
         self.assertEqual([
             "Frigate",
             "Frigate Plate Recognizer",
@@ -41,7 +43,7 @@ class AppStoreTemplateTests(unittest.TestCase):
             {"name": "First", "desc": "Frigate integration"},
             {"name": "Second", "desc": "Frigate helper"},
         ]
-        self.assertEqual(apps, server.DEPLOY.search_appstore(apps, "frigate"))
+        self.assertEqual(apps, APPSTORE.search_appstore(apps, "frigate"))
 
     def test_catalogue_popular_ranking_uses_feed_performance_and_deduplicates_templates(self):
         apps = [
@@ -49,7 +51,7 @@ class AppStoreTemplateTests(unittest.TestCase):
             {"name": "Large", "repo": "demo/large:latest", "downloads": 500, "top_performing": 2.1},
             {"name": "Large", "repo": "demo/large:latest", "downloads": 500, "top_performing": 2.1},
         ]
-        ranked = server.DEPLOY.rank_appstore(apps, "popular")
+        ranked = APPSTORE.rank_appstore(apps, "popular")
         self.assertEqual(["Small", "Large"], [app["name"] for app in ranked])
 
     def test_catalogue_recent_and_trending_use_native_feed_metrics(self):
@@ -62,20 +64,20 @@ class AppStoreTemplateTests(unittest.TestCase):
              "top_performing": 4.0, "top_trending": 4.0, "trending": 4.0, "downloads": 100},
         ]
         self.assertEqual(["Newest", "Middle", "Older fast"],
-                         [app["name"] for app in server.DEPLOY.rank_appstore(apps, "recent")])
+                         [app["name"] for app in APPSTORE.rank_appstore(apps, "recent")])
         self.assertEqual(["Newest", "Middle", "Older fast"],
-                         [app["name"] for app in server.DEPLOY.rank_appstore(apps, "trending")])
-        self.assertEqual("Older fast", server.DEPLOY.appstore_spotlight(apps)["name"])
+                         [app["name"] for app in APPSTORE.rank_appstore(apps, "trending")])
+        self.assertEqual("Older fast", APPSTORE.appstore_spotlight(apps)["name"])
 
     def test_catalogue_metric_coercion_tolerates_missing_and_malformed_values(self):
-        self.assertEqual(0, server.DEPLOY.appstore_number(None))
-        self.assertEqual(0, server.DEPLOY.appstore_number("not-a-number"))
-        self.assertEqual(12.5, server.DEPLOY.appstore_number("12.5"))
+        self.assertEqual(0, APPSTORE.appstore_number(None))
+        self.assertEqual(0, APPSTORE.appstore_number("not-a-number"))
+        self.assertEqual(12.5, APPSTORE.appstore_number("12.5"))
 
     def test_catalogue_markup_is_rendered_as_plain_readable_text(self):
         self.assertEqual(
             "Container Variable: PLEX_CLAIM_TOKEN · Example: claim-abc",
-            server.DEPLOY.catalog_text(
+            APPSTORE.catalog_text(
                 "Container Variable: PLEX_CLAIM_TOKEN&lt;br&gt;<b>Example:</b>&nbsp;claim-abc"),
         )
 
@@ -90,20 +92,20 @@ class AppStoreTemplateTests(unittest.TestCase):
                 "Description": "Container Variable: PLEX_CLAIM_TOKEN<br/>Example: claim-abc",
             }, "value": ""}],
         }
-        meta = server.DEPLOY.template_to_cfg(app)["env_meta"][0]
+        meta = APPSTORE.template_to_cfg(app)["env_meta"][0]
         self.assertEqual("Claim token · optional", meta["label"])
         self.assertEqual("Container Variable: PLEX_CLAIM_TOKEN · Example: claim-abc", meta["description"])
 
     def test_openspeedtest_repository_named_latest_is_not_rewritten(self):
         """`latest` is this publisher's repository name as well as its default tag."""
-        cfg = server.DEPLOY.template_to_cfg({
+        cfg = APPSTORE.template_to_cfg({
             "name": "SpeedTest-By-OpenSpeedTest",
             "repo": "openspeedtest/latest",
             "config": [],
         })
         self.assertEqual("openspeedtest/latest", cfg["image"])
         with mock.patch.object(server.HW, "features", return_value=[]):
-            deployment, _ = server.DEPLOY.build_deployment(cfg)
+            deployment, _ = MANIFESTS.build_deployment(cfg)
         self.assertEqual(
             "openspeedtest/latest:latest",
             deployment["spec"]["template"]["spec"]["containers"][0]["image"],
@@ -124,7 +126,7 @@ class AppStoreTemplateTests(unittest.TestCase):
                  "value": "/dev/bus/usb"},
             ],
         }
-        cfg = server.DEPLOY.template_to_cfg(app)
+        cfg = APPSTORE.template_to_cfg(app)
         self.assertEqual([{"container": 8080, "host": 18080, "expose": True, "name": "p8080-udp",
                            "protocol": "UDP", "label": "Web", "description": "", "required": True}],
                          cfg["ports"])
@@ -139,7 +141,7 @@ class AppStoreTemplateTests(unittest.TestCase):
     def test_an_apps_paths_share_one_volume_in_folders_of_their_own(self):
         path = lambda target, name="": {"@attributes": {"Name": name or target, "Target": target, "Type": "Path"},
                                        "value": f"/mnt/user/appdata/demo{target}"}
-        cfg = server.DEPLOY.template_to_cfg({"name": "Demo", "repo": "demo", "config": [
+        cfg = APPSTORE.template_to_cfg({"name": "Demo", "repo": "demo", "config": [
             path("/config"), {"@attributes": {"Target": "/data", "Type": "Path"}, "value": "/mnt/user/demo"},
             path("/app/config"), path("/transcode"),
             {"@attributes": {"Name": "Movies", "Target": "/movies", "Type": "Path"}, "value": "/mnt/user/movies"},
@@ -176,7 +178,7 @@ class AppStoreTemplateTests(unittest.TestCase):
                            "storage_class": "longhorn-r3", "access_mode": "ReadWriteMany"}],
                          server.new_claims(volumes))
         with mock.patch.object(server.HW, "features", return_value=[]):
-            deployment, _ = server.DEPLOY.build_deployment({"name": "demo", "image": "demo:1",
+            deployment, _ = MANIFESTS.build_deployment({"name": "demo", "image": "demo:1",
                                                     "namespace": "lab", "volumes": volumes})
         pod = deployment["spec"]["template"]["spec"]
         self.assertEqual([{"name": "vol0", "persistentVolumeClaim": {"claimName": "demo-appdata"}}],
@@ -186,7 +188,7 @@ class AppStoreTemplateTests(unittest.TestCase):
                          pod["containers"][0]["volumeMounts"])
 
     def test_system_localtime_is_imported_as_read_only_host_path(self):
-        cfg = server.DEPLOY.template_to_cfg({"name": "Demo", "repo": "demo", "config": [{
+        cfg = APPSTORE.template_to_cfg({"name": "Demo", "repo": "demo", "config": [{
             "@attributes": {"Target": "/etc/localtime", "Type": "Path", "Mode": "ro"},
             "value": "/etc/localtime",
         }]})
@@ -195,7 +197,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertTrue(cfg["volumes"][0]["read_only"])
 
     def test_dns_ports_drive_dedicated_vip_and_safe_password(self):
-        cfg = server.DEPLOY.template_to_cfg({
+        cfg = APPSTORE.template_to_cfg({
             "name": "Any DNS appliance", "repo": "example/dns:latest", "network": "Bridge",
             "config": [
                 {"@attributes": {"Target": "53", "Type": "Port", "Mode": "tcp"}, "value": "53"},
@@ -217,7 +219,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertEqual("192.0.2.243", server.DEPLOY_ROUTES.apply_deploy_bindings(cfg)["env"]["ServerIP"])
 
     def test_paths_classify_config_media_cache_and_infer_web_port(self):
-        cfg = server.DEPLOY.template_to_cfg({
+        cfg = APPSTORE.template_to_cfg({
             "name": "Any media server", "repo": "example/media", "network": "host",
             "webui": "http://[IP]:[PORT:32400]/web",
             "config": [
@@ -239,7 +241,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertFalse(cfg["ports"][0]["expose"])
 
     def test_options_and_dependency_shaped_variables_are_structured(self):
-        options = server.DEPLOY.template_to_cfg({
+        options = APPSTORE.template_to_cfg({
             "name": "VPN", "repo": "example/vpn", "config": [{
                 "@attributes": {"Target": "VPN_ENABLED", "Type": "Variable"},
                 "value": "false|true",
@@ -248,7 +250,7 @@ class AppStoreTemplateTests(unittest.TestCase):
         self.assertEqual("false", options["env"]["VPN_ENABLED"])
         self.assertEqual(["false", "true"], options["env_meta"][0]["options"])
 
-        stateful = server.DEPLOY.template_to_cfg({
+        stateful = APPSTORE.template_to_cfg({
             "name": "Stateful app", "repo": "example/stateful", "config": [
                 {"@attributes": {"Target": "DB_HOST", "Type": "Variable", "Required": "true"},
                  "value": "database"},
@@ -280,13 +282,13 @@ class AppStoreTemplateTests(unittest.TestCase):
     def test_profiles_do_not_depend_on_app_name_or_image(self):
         common = [{"@attributes": {"Name": "Movies", "Target": "/library", "Type": "Path"},
                    "value": "/mnt/user/media/movies"}]
-        first = server.DEPLOY.template_to_cfg({"name": "Alpha", "repo": "vendor/one", "config": common})
-        second = server.DEPLOY.template_to_cfg({"name": "Beta", "repo": "another/two", "config": common})
+        first = APPSTORE.template_to_cfg({"name": "Alpha", "repo": "vendor/one", "config": common})
+        second = APPSTORE.template_to_cfg({"name": "Beta", "repo": "another/two", "config": common})
         self.assertEqual(first["app_profile"], second["app_profile"])
         self.assertEqual("media", first["volumes"][0]["role"])
 
     def test_runtime_socket_is_blocked_for_any_image(self):
-        cfg = server.DEPLOY.template_to_cfg({
+        cfg = APPSTORE.template_to_cfg({
             "name": "Generic controller", "repo": "example/controller:latest", "config": [{
                 "@attributes": {"Target": "/var/run/docker.sock", "Type": "Path"},
                 "value": "/var/run/docker.sock",
@@ -324,7 +326,7 @@ class SidecarDeploymentTests(unittest.TestCase):
             "volumes": [{"path": "/data", "source": "shared", "type": "pod", "read_only": True}],
             "env": {"MODE": "sidecar"}, "hardware": [],
         }
-        updated, service = server.DEPLOY.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
+        updated, service = MANIFESTS.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
         self.assertEqual("7", updated["metadata"]["resourceVersion"])
         helper = updated["spec"]["template"]["spec"]["containers"][1]
         self.assertEqual("helper", helper["name"])
@@ -335,7 +337,7 @@ class SidecarDeploymentTests(unittest.TestCase):
     def test_sidecar_uses_explicit_container_name(self):
         cfg = {"name": "legacy", "container_name": "metrics-helper", "image": "example/helper",
                "target_workload": "media", "ports": [], "volumes": [], "hardware": []}
-        updated, _ = server.DEPLOY.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
+        updated, _ = MANIFESTS.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
         self.assertEqual("metrics-helper", updated["spec"]["template"]["spec"]["containers"][1]["name"])
 
     def test_sidecar_new_claim_gets_a_collision_safe_pod_volume(self):
@@ -344,7 +346,7 @@ class SidecarDeploymentTests(unittest.TestCase):
             "volumes": [{"path": "/cache", "source": "helper-cache", "type": "pvc"}],
             "ports": [], "hardware": [],
         }
-        updated, _ = server.DEPLOY.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
+        updated, _ = MANIFESTS.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
         volumes = updated["spec"]["template"]["spec"]["volumes"]
         self.assertEqual("helper-cache", volumes[-1]["persistentVolumeClaim"]["claimName"])
         self.assertEqual(volumes[-1]["name"], updated["spec"]["template"]["spec"]["containers"][1]["volumeMounts"][0]["name"])
@@ -355,23 +357,23 @@ class SidecarDeploymentTests(unittest.TestCase):
             "volumes": [{"path": "/cache", "source": "", "type": "emptyDir"}],
             "ports": [], "hardware": [],
         }
-        updated, _ = server.DEPLOY.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
+        updated, _ = MANIFESTS.build_sidecar_deployment(cfg, copy.deepcopy(self.current))
         volume = updated["spec"]["template"]["spec"]["volumes"][-1]
         self.assertEqual({}, volume["emptyDir"])
         self.assertEqual(volume["name"], updated["spec"]["template"]["spec"]["containers"][1]["volumeMounts"][0]["name"])
 
     def test_duplicate_container_and_missing_pod_volume_are_rejected(self):
         with self.assertRaisesRegex(ValueError, "already exists"):
-            server.DEPLOY.build_sidecar_deployment({"name": "main", "image": "x", "target_workload": "media"},
+            MANIFESTS.build_sidecar_deployment({"name": "main", "image": "x", "target_workload": "media"},
                                                copy.deepcopy(self.current))
         with self.assertRaisesRegex(ValueError, "does not exist"):
-            server.DEPLOY.build_sidecar_deployment({"name": "helper", "image": "x", "target_workload": "media",
+            MANIFESTS.build_sidecar_deployment({"name": "helper", "image": "x", "target_workload": "media",
                                                "volumes": [{"path": "/x", "source": "missing", "type": "pod"}]},
                                                copy.deepcopy(self.current))
 
     def test_host_network_cannot_be_forced_on_shared_pod(self):
         with self.assertRaisesRegex(ValueError, "host networking"):
-            server.DEPLOY.build_sidecar_deployment({"name": "helper", "image": "x", "target_workload": "media",
+            MANIFESTS.build_sidecar_deployment({"name": "helper", "image": "x", "target_workload": "media",
                                                "network_mode": "host"}, copy.deepcopy(self.current))
 
 
@@ -407,7 +409,7 @@ class NewWorkloadNamingTests(unittest.TestCase):
                "image": "example/frigate", "namespace": "lab", "ports": [{"container": 5000,
                "host": 5000, "protocol": "TCP", "expose": True}], "volumes": [], "hardware": []}
         with mock.patch.object(server.HW, "features", return_value=[]):
-            deployment, service = server.DEPLOY.build_deployment(cfg)
+            deployment, service = MANIFESTS.build_deployment(cfg)
         self.assertEqual("camera-stack", deployment["metadata"]["name"])
         self.assertEqual("frigate", deployment["spec"]["template"]["spec"]["containers"][0]["name"])
         self.assertEqual("camera-stack", service["metadata"]["name"])
@@ -419,7 +421,7 @@ class NewWorkloadNamingTests(unittest.TestCase):
                "hardware": [], "command": ["/bin/sh", "-c"], "args": ["run"], "working_dir": "/app",
                "run_as_user": 1000, "run_as_group": 1000, "cap_add": ["NET_ADMIN"]}
         with mock.patch.object(server.HW, "features", return_value=[]):
-            deployment, _ = server.DEPLOY.build_deployment(cfg)
+            deployment, _ = MANIFESTS.build_deployment(cfg)
         container = deployment["spec"]["template"]["spec"]["containers"][0]
         self.assertEqual((["/bin/sh", "-c"], ["run"], "/app"),
                          (container["command"], container["args"], container["workingDir"]))
@@ -429,7 +431,7 @@ class NewWorkloadNamingTests(unittest.TestCase):
     def test_a_plain_workload_gets_no_empty_security_context(self):
         cfg = {"name": "app", "image": "app:1", "namespace": "lab", "ports": [], "volumes": [], "hardware": []}
         with mock.patch.object(server.HW, "features", return_value=[]):
-            deployment, _ = server.DEPLOY.build_deployment(cfg)
+            deployment, _ = MANIFESTS.build_deployment(cfg)
         self.assertNotIn("securityContext", deployment["spec"]["template"]["spec"]["containers"][0])
 
     def test_a_command_must_be_words(self):
@@ -437,7 +439,7 @@ class NewWorkloadNamingTests(unittest.TestCase):
                "hardware": [], "command": "rm -rf /"}
         with mock.patch.object(server.HW, "features", return_value=[]):
             with self.assertRaisesRegex(ValueError, "list of words"):
-                server.DEPLOY.build_deployment(cfg)
+                MANIFESTS.build_deployment(cfg)
 
 
 class HomesteadManifestTests(unittest.TestCase):
@@ -493,7 +495,7 @@ class DeployTierTests(unittest.TestCase):
         return {"name": "app", "image": "app:1", "namespace": "lab", "ports": [], "volumes": [], "hardware": [], **extra}
 
     def pod_spec(self, cfg):
-        deployment, _ = server.DEPLOY.build_deployment(cfg)
+        deployment, _ = MANIFESTS.build_deployment(cfg)
         return deployment["spec"]["template"]["spec"]
 
     def test_critical_and_low_write_the_ladders_class(self):
@@ -507,7 +509,7 @@ class DeployTierTests(unittest.TestCase):
     def test_an_invalid_tier_is_refused(self):
         for bad in ("group", "high", "Critical", 5):
             with self.assertRaisesRegex(ValueError, "the tier must be critical, normal or low"):
-                server.DEPLOY.build_deployment(self.cfg(priority=bad))
+                MANIFESTS.build_deployment(self.cfg(priority=bad))
 
     def test_the_class_reaches_a_deploy_with_more_containers(self):
         cfg = self.cfg(priority="critical", additional_containers=[
@@ -529,9 +531,10 @@ class DeployTierTests(unittest.TestCase):
     def run_patched(self, cfg, ensure=None):
         """run_deploy with the cluster stubbed; every send, claim and ensure lands in `sent`, in order."""
         sent = []
-        patches = [mock.patch.object(server.DEPLOY, name, side_effect=lambda b, *a, **k: b) for name in (
-                       "analyze_deploy_intent", "ensure_profile_compatible", "prepare_deploy_network",
-                       "apply_deploy_bindings", "apply_generated_secrets", "prepare_lan")]
+        patches = [mock.patch.object(module, name, side_effect=lambda b, *a, **k: b) for module, name in (
+                       (MANIFESTS, "analyze_deploy_intent"), (server.DEPLOY, "ensure_profile_compatible"),
+                       (server.DEPLOY, "prepare_deploy_network"), (server.DEPLOY, "apply_deploy_bindings"),
+                       (server.DEPLOY, "apply_generated_secrets"), (server.DEPLOY, "prepare_lan"))]
         claim = {"name": "app-data", "size_gb": 1, "storage_class": "", "access_mode": "ReadWriteOnce"}
         patches += [mock.patch.object(server.DEPLOY, "guard_managed_smb"), mock.patch.object(server.DEPLOY, "persist_icon_config"),
                     mock.patch.object(server.DEPLOY.VOLOWNER, "prepare", side_effect=lambda b: b),
@@ -582,7 +585,7 @@ class DeployTierTests(unittest.TestCase):
             cfg = {"name": "helper", "image": "example/helper", "namespace": "lab", "target_workload": "media",
                    "target_mode": "existing", "network_mode": "internal", "ports": [], "volumes": [], "hardware": [],
                    "priority": tier}
-            updated, _ = server.DEPLOY.build_sidecar_deployment(cfg, copy.deepcopy(current))
+            updated, _ = MANIFESTS.build_sidecar_deployment(cfg, copy.deepcopy(current))
             pod = updated["spec"]["template"]["spec"]
             self.assertNotIn("priorityClassName", pod, tier)
             self.assertEqual(["main", "helper"], [c["name"] for c in pod["containers"]], tier)

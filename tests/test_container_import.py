@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import homestead_imports as imports
+import homestead_container_import as CONTAINER_IMPORT
 from fixtures_source import source
 
 
@@ -54,7 +55,7 @@ class ContainerImportStorageTests(unittest.TestCase):
                 "image": "example/app:latest", "create_workload": False, **extra}
 
     def test_new_import_uses_selected_longhorn_settings(self):
-        result = imports.import_container(self.config(
+        result = CONTAINER_IMPORT.import_container(self.config(
             pvc_name="example-config", size_gb=25, storage_class="longhorn-rwx",
             access_mode="ReadWriteMany"))
         self.assertEqual([("lab", "example-config", 25, "longhorn-rwx", "ReadWriteMany")], self.created)
@@ -65,7 +66,7 @@ class ContainerImportStorageTests(unittest.TestCase):
         self.assertEqual("example-config", claim)
 
     def test_the_job_records_every_volume_so_cleanup_can_offer_them(self):
-        imports.import_container(self.config(volumes=[
+        CONTAINER_IMPORT.import_container(self.config(volumes=[
             {"name": "example-config", "create": True, "size_gb": 10},
             {"name": "example-clips", "create": True, "size_gb": 500},
             {"name": "shared-appdata", "create": False}]))
@@ -79,7 +80,7 @@ class ContainerImportStorageTests(unittest.TestCase):
                          "a borrowed claim is never this import's to delete")
 
     def test_existing_import_reuses_selected_claim_without_creating_one(self):
-        result = imports.import_container(self.config(
+        result = CONTAINER_IMPORT.import_container(self.config(
             pvc_name="shared-appdata", reuse_existing=True, size_gb=1))
         self.assertEqual([], self.created)
         self.assertEqual("longhorn-rwx", result["storage_class"])
@@ -119,7 +120,7 @@ class ImportJobRemovalTests(unittest.TestCase):
                      lambda *a, **k: {}, lambda cfg: ({}, None), "lab", {})
 
     def test_a_failed_import_job_can_be_removed(self):
-        result = imports.delete_import("homestead-import-obsidian")
+        result = CONTAINER_IMPORT.delete_import("homestead-import-obsidian")
 
         deleted = [path for method, path in self.sent if method == "DELETE"]
         self.assertIn("/apis/batch/v1/namespaces/lab/jobs/homestead-import-obsidian"
@@ -144,7 +145,7 @@ class ImportJobRemovalTests(unittest.TestCase):
 
         imports.bind(get, send, lambda *a, **k: {}, lambda cfg: ({}, None), "lab", {})
 
-        result = imports.delete_import("homestead-import-obsidian")
+        result = CONTAINER_IMPORT.delete_import("homestead-import-obsidian")
 
         self.assertEqual(["homestead-import-obsidian-x9f2"], result["pods_removed"])
         pod_delete = next(path for method, path in self.sent if "/pods/" in path)
@@ -160,7 +161,7 @@ class ImportJobRemovalTests(unittest.TestCase):
                                                  "homestead.io/import-volume-created": "true"}}}
         self.deployments = {"obsidian"}
 
-        plan = imports.import_cleanup_plan("homestead-import-obsidian")
+        plan = CONTAINER_IMPORT.import_cleanup_plan("homestead-import-obsidian")
 
         self.assertEqual(("obsidian", "obsidian-appdata", True, True),
                          (plan["workload"], plan["volume"], plan["volume_created"], plan["known"]))
@@ -172,7 +173,7 @@ class ImportJobRemovalTests(unittest.TestCase):
                                                  "homestead.io/import-volume-created": "false"}}}
         self.deployments = {"plex"}
 
-        self.assertFalse(imports.import_cleanup_plan("homestead-import-plex")["volume_created"])
+        self.assertFalse(CONTAINER_IMPORT.import_cleanup_plan("homestead-import-plex")["volume_created"])
 
     def test_every_volume_an_import_created_is_offered(self):
         """An import that filled appdata and recordings has to clean up both."""
@@ -186,7 +187,7 @@ class ImportJobRemovalTests(unittest.TestCase):
                                          "frigate-appdata,frigate-recordings"}}}
         self.deployments = {"frigate"}
 
-        plan = imports.import_cleanup_plan("homestead-import-frigate")
+        plan = CONTAINER_IMPORT.import_cleanup_plan("homestead-import-frigate")
 
         self.assertEqual([{"name": "frigate-appdata", "created": True},
                           {"name": "frigate-recordings", "created": True}], plan["volumes"])
@@ -201,7 +202,7 @@ class ImportJobRemovalTests(unittest.TestCase):
                                      "homestead.io/import-volumes-created": "frigate-appdata"}}}
         self.deployments = {"frigate"}
 
-        plan = imports.import_cleanup_plan("homestead-import-frigate")
+        plan = CONTAINER_IMPORT.import_cleanup_plan("homestead-import-frigate")
 
         self.assertEqual([True, False], [row["created"] for row in plan["volumes"]])
 
@@ -212,7 +213,7 @@ class ImportJobRemovalTests(unittest.TestCase):
                                                  "homestead.io/import-volume-created": "true"}}}
         self.deployments = {"obsidian"}
 
-        plan = imports.import_cleanup_plan("homestead-import-obsidian")
+        plan = CONTAINER_IMPORT.import_cleanup_plan("homestead-import-obsidian")
 
         self.assertEqual([{"name": "obsidian-appdata", "created": True}], plan["volumes"])
 
@@ -223,14 +224,14 @@ class ImportJobRemovalTests(unittest.TestCase):
                                                  "homestead.io/import-volume-created": "true"}}}
         self.deployments = set()
 
-        self.assertEqual("", imports.import_cleanup_plan("homestead-import-obsidian")["workload"])
+        self.assertEqual("", CONTAINER_IMPORT.import_cleanup_plan("homestead-import-obsidian")["workload"])
 
     def test_an_import_from_before_the_record_says_it_does_not_know(self):
         self.job = {"metadata": {"name": "homestead-import-old", "namespace": "lab",
                                  "labels": {"homestead.io/app": "old"}}}
         self.deployments = {"old"}
 
-        plan = imports.import_cleanup_plan("homestead-import-old")
+        plan = CONTAINER_IMPORT.import_cleanup_plan("homestead-import-old")
 
         self.assertFalse(plan["known"])
         self.assertFalse(plan["volume_created"], "an unknown volume is never deletable")
@@ -239,7 +240,7 @@ class ImportJobRemovalTests(unittest.TestCase):
         for name in ("", "kube-system-thing", "homestead-pull-frigate", "../../etc"):
             with self.subTest(name=name):
                 with self.assertRaisesRegex(ValueError, "unknown import job"):
-                    imports.delete_import(name)
+                    CONTAINER_IMPORT.delete_import(name)
         self.assertEqual([], self.sent)
 
 
@@ -267,9 +268,9 @@ class ImportStatusNamespaceTests(unittest.TestCase):
              mock.patch.object(imports.NAMES, "kget", side_effect=get), \
              mock.patch.object(imports, "ksend", side_effect=lambda *a, **k: sent.append(a[:2])), \
              mock.patch.object(imports, "NS", "lab"):
-            rows = imports.import_status()
+            rows = CONTAINER_IMPORT.import_status()
             self.assertEqual([], sent, "listing the imports removes nothing (#622)")
-            imports._drop_finished_copies()
+            CONTAINER_IMPORT._drop_finished_copies()
         self.assertEqual({("lab", "homestead-import-a"), ("media", "homestead-import-b"), ("media", "homestead-import-c")},
                          {(r["namespace"], r["name"]) for r in rows})
         self.assertEqual([("DELETE", "/api/v1/namespaces/media/secrets/homestead-import-b-source")], sent,
