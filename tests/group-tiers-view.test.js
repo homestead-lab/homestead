@@ -7,7 +7,7 @@ function load() {
     $: () => null, esc: s => String(s ?? "").replaceAll("<", "&lt;"), STATE: { data: {} }, tip: t => t };
   vm.createContext(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
-  for (const f of ["web/js/ui.js", "web/js/views-workloads.js", "web/js/views-lifecycle.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
+  for (const f of ["web/js/ui.js", "web/js/app-form.js", "web/js/views-workloads.js", "web/js/views-lifecycle.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
   return c;
 }
 
@@ -69,7 +69,7 @@ test("a row whose group tier is unknown has its select disabled, says why, and i
   assert.doesNotMatch(html, /was normal/);
 });
 
-const field = (c, w) => c.placementSection({ apart: [], together: [] }, { failover: "default", ...w }, [], []);
+const field = (c, w) => c.appFormPlacement("e", { apart: [], together: [] }, { failover: "default", ...w }, [], []);
 
 test("Edit offers its group's tier first, for an app in a group", () => {
   const html = field(load(), { priority: "group", priority_group: "Home", priority_group_tier: "critical" });

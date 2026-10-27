@@ -3,8 +3,8 @@ The image cache: the images each node holds, which of them something still
 needs, the scans that list every image on a node, pre-pulling and clean-up.
 
 Split by feature from homestead_imports (#623), moved unchanged. Names that
-homestead_imports owns, that server.py binds there, or that tests replace there,
-are read through it (I.name); homestead_imports re-exports everything here.
+homestead_imports owns or that server.py binds there are read through it (I.name),
+so a replacement there still applies; read and replace the names defined here, here.
 """
 import json
 import hashlib
@@ -577,7 +577,7 @@ def _load_scans():
     for node, entry in (stored.get("nodes") or {}).items():
         if isinstance(entry, dict) and float(entry.get("at") or 0) > float((_SCANS.get(node) or {}).get("at") or 0):
             _SCANS[node] = {"at": float(entry["at"]), "images": entry.get("images") or []}
-    I._SCAN_STARTED[0] = max(I._SCAN_STARTED[0], float(stored.get("started") or 0))
+    _SCAN_STARTED[0] = max(_SCAN_STARTED[0], float(stored.get("started") or 0))
 
 
 def _save_scans():
@@ -587,7 +587,7 @@ def _save_scans():
     with _scan_lock:
         try:
             _load_scans()
-            SHARED.write_json(path, {"started": I._SCAN_STARTED[0], "nodes": _SCANS}, separators=(",", ":"))
+            SHARED.write_json(path, {"started": _SCAN_STARTED[0], "nodes": _SCANS}, separators=(",", ":"))
         except OSError:
             pass
 
@@ -610,7 +610,7 @@ def tick():
     if not _collect_scans(tidy=True):
         _rescan_if_stale(I.kget("/api/v1/nodes").get("items", []))
     prepull_status(sweep=True)
-    I._drop_finished_copies()
+    CONTAINER_IMPORT._drop_finished_copies()
     I._bust("imgcache")
     # Hourly: what is unused, and automatic clean-up when it is on.
     try:
@@ -636,7 +636,7 @@ def _rescan_if_stale(nodes):
     ready = [n["metadata"]["name"] for n in nodes if _scannable(n)]
     stale = [name for name in ready
              if now - max(float((_SCANS.get(name) or {}).get("at") or 0), _SCAN_FAILED.get(name, 0)) > SCAN_FRESH]
-    if not stale or now - I._SCAN_STARTED[0] < SCAN_RETRY:
+    if not stale or now - _SCAN_STARTED[0] < SCAN_RETRY:
         return []
     try:
         return start_image_scan()["nodes"]
@@ -650,7 +650,7 @@ def start_image_scan():
     attempt = format(int(time.time()), "x")[-6:]
     # Counted as started even if a pod cannot be made part way, so the next
     # tick does not start the ones that were made again.
-    I._SCAN_STARTED[0] = time.time()
+    _SCAN_STARTED[0] = time.time()
     try:
         for node in I.kget("/api/v1/nodes").get("items", []):
             if not _scannable(node):
@@ -664,7 +664,7 @@ def start_image_scan():
             I.ksend("POST", f"/api/v1/namespaces/{I.NS}/pods", body)
             started.append(name)
     finally:
-        I._save_scans()
+        _save_scans()
         I._bust("imgcache")
     return {"ok": True, "nodes": started,
             "detail": f"asking containerd on {len(started)} node{'s' if len(started) != 1 else ''} for every image"}
@@ -686,7 +686,7 @@ def _collect_scans(tidy=False):
                     {key: image.get(key) for key in ("repoTags", "repoDigests", "size")}
                     for image in listed.get("images") or []]}
                 if tidy:
-                    I._save_scans()
+                    _save_scans()
             except Exception:
                 pass
         if phase in ("Succeeded", "Failed"):
@@ -897,10 +897,11 @@ def cleanup_image(digest, nodes=None, report=None):
         if scan:
             scan["images"] = [i for i in scan["images"]
                               if digest not in {_image_digest(ref) for ref in i.get("repoDigests") or []}]
-    I._save_scans()
+    _save_scans()
     I._bust("imgcache")
     return {"ok": True, "digest": digest, "image": image_ref,
             "nodes": selected, "pods": pods}
 
 
-import homestead_imports as I  # noqa: E402  (imports at the bottom: homestead_imports re-exports this module)
+import homestead_imports as I  # noqa: E402  (imports at the bottom: homestead_imports imports this module)
+import homestead_container_import as CONTAINER_IMPORT  # noqa: E402

@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_names as NAMES
 import homestead_nodeshell as SHELL
 import homestead_imports as imports
+import homestead_container_import as CONTAINER_IMPORT
 import homestead_disks as DISKS
 
 LONG_A = "data-postgres-cluster-production-database-instance-0"
@@ -54,7 +55,7 @@ class ChownTests(unittest.TestCase):
 
     def run_chown(self, pvc):
         with mock.patch.object(imports.time, "sleep"):
-            return imports.chown_claim("lab", pvc, "1000", "")
+            return CONTAINER_IMPORT.chown_claim("lab", pvc, "1000", "")
 
     def test_two_volumes_that_start_the_same_get_jobs_of_their_own(self):
         self.run_chown(LONG_A)

@@ -10,6 +10,8 @@ import re
 import time
 import urllib.error
 
+import homestead_kube as KUBE
+
 
 kget = ksend = None
 SYSTEM_NAMESPACES = set()
@@ -26,9 +28,10 @@ def _items(path, strict=False):
     address and port are free, and none seen is not none in use (#615)."""
     for attempt in range(2):
         try:
-            return kget(path).get("items", [])
+            listing = kget(path) if strict else KUBE.get_optional(path, read=kget, missing=KUBE.GONE)
+            return [] if listing is KUBE.GONE else listing.get("items", [])
         except urllib.error.HTTPError as error:
-            if error.code in (403, 404) and not strict:
+            if error.code == 403 and not strict:
                 return []
             if error.code == 429 and attempt == 0:
                 try:

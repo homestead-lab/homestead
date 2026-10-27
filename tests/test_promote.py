@@ -130,7 +130,7 @@ from unittest import mock
 import urllib.error
 
 import homestead_capacity as CAPACITY
-import homestead_lifecycle as LIFECYCLE
+import homestead_node_actions as NODE_ACTIONS
 import homestead_maintenance as MAINTENANCE
 import homestead_hostrun as HOSTRUN
 import homestead_operations as OPS
@@ -194,7 +194,7 @@ class PlanBase(unittest.TestCase):
         self.patches = [
             mock.patch.object(PLATFORM, "detect", lambda force=False: {"distribution": "k3s", "harvester": False,
                                                                         "control_plane": ["192.0.2.5"], "version": "1.37.1+k3s1"}),
-            mock.patch.object(LIFECYCLE, "quorum_report", lambda: {"members": ["server-1", "server-2"], "ready": ["server-1", "server-2"],
+            mock.patch.object(NODE_ACTIONS, "quorum_report", lambda: {"members": ["server-1", "server-2"], "ready": ["server-1", "server-2"],
                                                                   "total": 2, "quorum_needs": 2, "can_lose": 0}),
             mock.patch.object(CAPACITY, "every_host", lambda: {"hosts": [{"node": "app-1", "verdict": "fits", "sentence": "fits"}]}),
             mock.patch.object(MAINTENANCE, "inventory", lambda get, pods, **k: {"local_storage": [], "blockers": []}),
@@ -224,7 +224,7 @@ class PlanTests(PlanBase):
             self.blocked("k3s")
 
     def test_blocks_without_etcd(self):
-        with mock.patch.object(LIFECYCLE, "quorum_report", lambda: {"members": [], "ready": [], "total": 0, "quorum_needs": 1, "can_lose": 0}):
+        with mock.patch.object(NODE_ACTIONS, "quorum_report", lambda: {"members": [], "ready": [], "total": 0, "quorum_needs": 1, "can_lose": 0}):
             self.blocked("etcd")
 
     def test_blocks_a_server(self):
@@ -264,7 +264,7 @@ class PlanTests(PlanBase):
         self.blocked("k3s-agent-uninstall.sh")
 
     def test_blocks_a_member_down(self):
-        with mock.patch.object(LIFECYCLE, "quorum_report", lambda: {"members": ["server-1", "server-2"], "ready": ["server-1"],
+        with mock.patch.object(NODE_ACTIONS, "quorum_report", lambda: {"members": ["server-1", "server-2"], "ready": ["server-1"],
                                                                    "total": 2, "quorum_needs": 2, "can_lose": 0}):
             self.blocked("server-2")
 
@@ -284,7 +284,7 @@ class PlanTests(PlanBase):
         self.assertIn("TIGHT", " ".join(p["warnings"]))
 
     def test_one_member_says_two_need_both(self):
-        with mock.patch.object(LIFECYCLE, "quorum_report", lambda: {"members": ["server-1"], "ready": ["server-1"],
+        with mock.patch.object(NODE_ACTIONS, "quorum_report", lambda: {"members": ["server-1"], "ready": ["server-1"],
                                                                    "total": 1, "quorum_needs": 1, "can_lose": 0}):
             self.assertTrue(any("1 → 2" in w and "both" in w for w in PROMOTE.plan("app-1")["warnings"]))
 
@@ -358,8 +358,8 @@ class JobTests(PlanBase):
                 mock.patch.object(PROMOTE, "POD", "homestead-a"),
                 mock.patch.object(PROMOTE, "_thread", lambda target: target()),
                 mock.patch.object(PROMOTE, "is_leader", lambda: True),
-                mock.patch.object(LIFECYCLE, "set_cordon", lambda n, on: self.cordons.append((n, on))),
-                mock.patch.object(LIFECYCLE, "drain", lambda n, **k: self.drains.append((n, k)) or {"ok": True}),
+                mock.patch.object(NODE_ACTIONS, "set_cordon", lambda n, on: self.cordons.append((n, on))),
+                mock.patch.object(NODE_ACTIONS, "drain", lambda n, **k: self.drains.append((n, k)) or {"ok": True}),
                 mock.patch.object(PLATFORM, "join_guide", lambda: {"agent": "AGENT-JOIN-CMD"})]
         for p in more:
             p.start()
@@ -434,7 +434,7 @@ class JobTests(PlanBase):
         self.assertFalse(any("systemd-run" in s for _, s in self.host.calls))
 
     def test_drain_failure_fails_and_uncordons(self):
-        with mock.patch.object(LIFECYCLE, "drain", mock.Mock(side_effect=ValueError("drain timed out"))):
+        with mock.patch.object(NODE_ACTIONS, "drain", mock.Mock(side_effect=ValueError("drain timed out"))):
             item = self.started()
         self.assertEqual("failed", item["status"])
         self.assertIn("drain timed out", item["message"])
@@ -500,7 +500,7 @@ class JobTests(PlanBase):
 
     def test_joining_done_uncordons(self):
         item = self.joined_item()
-        with mock.patch.object(LIFECYCLE, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
+        with mock.patch.object(NODE_ACTIONS, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
                                                                    "ready": ["server-1", "server-2", "app-1"], "total": 3,
                                                                    "quorum_needs": 2, "can_lose": 1}):
             result = PROMOTE.status(item, now=item["ref"]["joining_since"] + 5)
@@ -516,7 +516,7 @@ class JobTests(PlanBase):
     def test_joining_reports_a_lost_label(self):
         item = self.joined_item()
         del self.cluster.nodes[2]["metadata"]["labels"]["homelab/zone"]
-        with mock.patch.object(LIFECYCLE, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
+        with mock.patch.object(NODE_ACTIONS, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
                                                                    "ready": ["server-1", "server-2", "app-1"], "total": 3,
                                                                    "quorum_needs": 2, "can_lose": 1}):
             result = PROMOTE.status(item, now=item["ref"]["joining_since"] + 5)
@@ -568,7 +568,7 @@ class FixTests(JobTests):
         def taken(*a, **k):
             self.ops.items[0]["ref"]["worker"] = "homestead-b"
             return {"ok": True}
-        with mock.patch.object(LIFECYCLE, "drain", taken):
+        with mock.patch.object(NODE_ACTIONS, "drain", taken):
             item = self.started()
         self.assertFalse(any("systemd-run" in s for _, s in self.host.calls))
         self.assertNotEqual("failed", item["status"])
@@ -577,7 +577,7 @@ class FixTests(JobTests):
         def cancel(*a, **k):
             self.ops.items[0]["status"] = "cancelling"
             return {"ok": True}
-        with mock.patch.object(LIFECYCLE, "drain", cancel):
+        with mock.patch.object(NODE_ACTIONS, "drain", cancel):
             self.started()
         self.assertFalse(any("systemd-run" in s for _, s in self.host.calls))
 
@@ -632,7 +632,7 @@ class FixTests(JobTests):
         item = self.started()
         self.cluster.nodes[2]["metadata"]["labels"].update({"node-role.kubernetes.io/control-plane": "true",
                                                             "node-role.kubernetes.io/etcd": "true"})
-        with mock.patch.object(LIFECYCLE, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
+        with mock.patch.object(NODE_ACTIONS, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
                                                                    "ready": ["server-1", "server-2", "app-1"], "total": 3,
                                                                    "quorum_needs": 2, "can_lose": 1}):
             _, result = self.run_with("CODE 1\n", item=item)
@@ -644,7 +644,7 @@ class FixTests(JobTests):
             progress("draining", 10, "Waiting for drained pods to leave: lab/db-0; power has not been sent")
             raise ValueError("Host remains cordoned; drain timed out after 2 minutes. Pods have not left the host: lab/db-0. "
                              "Power was not sent; inspect Longhorn volumes, disruption budgets and pod events")
-        with mock.patch.object(LIFECYCLE, "drain", slow):
+        with mock.patch.object(NODE_ACTIONS, "drain", slow):
             item = self.started()
         text = " ".join(m for _, m in self.ops.phases)
         self.assertNotIn("ower", text)
@@ -659,7 +659,7 @@ class FixTests(JobTests):
                 raise urllib.error.HTTPError(path, 404, "not found", {}, None)
             return real(path)
         PROMOTE.bind(kget, lambda *a, **k: {}, self.host, lambda: "server-1")
-        with mock.patch.object(LIFECYCLE, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
+        with mock.patch.object(NODE_ACTIONS, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
                                                                    "ready": ["server-1", "server-2", "app-1"], "total": 3,
                                                                    "quorum_needs": 2, "can_lose": 1}):
             result = PROMOTE.status(item, now=item["ref"]["joining_since"] + 5)

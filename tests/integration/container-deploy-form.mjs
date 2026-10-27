@@ -7,19 +7,25 @@ try{for(const width of [1440,390,320])for(const theme of ['dark','light']){
  const page=await browser.newPage({viewport:{width,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(`${base}/?demo=1`);await page.locator('[data-widget="compute"]').waitFor();
  await page.evaluate(async theme=>{clearInterval(window.__loopTimer);SET.theme=theme;applySettings();await go('deploy');},theme);
- const select=async key=>width>900?page.getByRole('tab',{name:({basics:'Basics',hardware:'Hardware and access',environment:'Environment values',storage:'Storage',placement:'Placement, set after deploying',address:'Address',monitoring:'Monitoring',summary:'Summary'})[key],exact:true}).click():page.locator('#containerDeploy_section').selectOption(key);
+ const select=async key=>width>900?page.getByRole('tab',{name:({basics:'Basics',hardware:'Hardware and access',environment:'Environment values',storage:'Storage',placement:'Placement',address:'Address',monitoring:'Monitoring',summary:'Summary'})[key],exact:true}).click():page.locator('#containerDeploy_section').selectOption(key);
  const shown=()=>page.locator('#containerDeploy>.stepper-pane:visible').getAttribute('data-key');
  // (a) The same sections as Edit, in the same order, with Summary last (#544).
  assert.deepEqual(await page.locator('#containerDeploy [role="tab"]').evaluateAll(tabs=>tabs.map(t=>t.firstChild.textContent)),['Basics','Hardware and access','Environment values','Storage','Placement','Address','Monitoring','Summary']);
- // (b) Placement is greyed and says when it can be set.
+ // (b) Placement is live (#844): Edit's section, with pod copies and the tier, and nothing greyed.
  const placementTab=page.locator('#containerDeploy-tab-placement');
- assert.equal(await placementTab.getAttribute('aria-disabled'),null);assert.equal(await placementTab.getAttribute('aria-label'),'Placement, set after deploying');assert.match(await placementTab.textContent(),/Set after deploying/);
- assert.match(await page.locator('#containerDeploy_section option[value="placement"]').textContent(),/Placement · set after deploying/);
- // (c) Next steps over Placement.
- await page.evaluate(()=>UI.selectSection('containerDeploy','storage'));await page.getByRole('button',{name:'Next',exact:true}).click();assert.equal(await shown(),'address');
- await page.getByRole('button',{name:'Next',exact:true}).click();assert.equal(await shown(),'monitoring');
+ assert.equal(await placementTab.getAttribute('aria-disabled'),null);assert.equal(await placementTab.getAttribute('aria-label'),null);assert.doesNotMatch(await placementTab.textContent(),/Set after deploying/);
+ assert.equal(await page.locator('#containerDeploy [aria-label$="set after deploying"]').count(),0,'no section is greyed');
+ // (c) Next steps through Placement.
+ await page.evaluate(()=>UI.selectSection('containerDeploy','storage'));await page.getByRole('button',{name:'Next',exact:true}).click();assert.equal(await shown(),'placement');
+ await page.getByRole('button',{name:'Next',exact:true}).click();assert.equal(await shown(),'address');
  await page.getByRole('button',{name:'Back',exact:true}).click();await page.getByRole('button',{name:'Back',exact:true}).click();assert.equal(await shown(),'storage');
- await select('placement');assert.equal(await shown(),'placement','a greyed section still opens, to say why');assert.equal(await page.getByText('Set after deploying: once the app runs',{exact:false}).isVisible(),true);
+ await select('placement');assert.equal(await shown(),'placement');
+ for(const id of ['d_rep','d_spread','d_node','d_failover','d_priority'])assert.equal(await page.locator(`#${id}`).isVisible(),true,id);
+ assert.equal(await page.locator('#d_failover').inputValue(),'move','a new app still moves when its host fails');
+ const host=await page.locator('#d_node option').nth(1).getAttribute('value');await page.locator('#d_node').selectOption(host);await page.locator('#d_spread').selectOption('prefer');
+ await page.locator('#d_placement button',{hasText:'Add'}).first().click();const app=await page.locator('#d_with .aff-target option').nth(1).getAttribute('value');await page.locator('#d_with .aff-target').selectOption(app);
+ const placed=await page.evaluate(()=>JSON.parse(JSON.stringify(collect())));
+ assert.equal(placed.node,host);assert.equal(placed.placement.spread,'prefer');assert.deepEqual(placed.placement.with.map(r=>`${r.ns}/${r.name}`),[app]);
  await page.evaluate(()=>UI.selectSection('containerDeploy','basics'));
  await page.locator('#d_container_name').fill('web');await page.locator('#d_workload_name').fill('web-stack');await page.locator('#d_image').fill('nginx:alpine');
  assert.equal(await page.locator('#containerDeploy>.stepper-foot').count(),1);
@@ -40,7 +46,7 @@ try{for(const width of [1440,390,320])for(const theme of ['dark','light']){
   assert.equal(await page.locator('#containerDeploy>.stepper-pane:visible').count(),1);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,`${key} fits ${width}`);
   const fields=await page.locator('#containerDeploy [id]').evaluateAll(els=>els.map(el=>el.id));assert.equal(new Set(fields).size,fields.length,'fields are mounted once');
-  if(['basics','storage','summary'].includes(key))await page.screenshot({path:`${out}/${key}-${theme}-${width}.png`,fullPage:true});
+  if(['basics','storage','placement','summary'].includes(key))await page.screenshot({path:`${out}/${key}-${theme}-${width}.png`,fullPage:true});
  }
  assert.equal(await page.getByRole('button',{name:'Next',exact:true}).isVisible(),false);
  assert.deepEqual(await page.evaluate(()=>JSON.parse(JSON.stringify(collect()))),before,'navigation preserves every configuration field');
@@ -63,6 +69,8 @@ try{for(const width of [1440,390,320])for(const theme of ['dark','light']){
  assert.equal(await page.locator('#d_containers_block button',{hasText:'Add container'}).isVisible(),false);
  assert.equal(await page.locator('#d_containers_join').isVisible(),true);
  for(const key of ['basics','hardware','environment','storage','address']){await select(key);assert.equal(await page.locator('#containerDeploy .stepper-pane:visible .edit-container:visible').count(),0,key);}
+ await select('placement');assert.equal(await page.locator('#d_placement_join').isVisible(),true,'a joined app keeps its own placement');assert.equal(await page.locator('#d_placement').isVisible(),false);
+ for(const key of ['placement','node','failover'])assert.equal(key in (await page.evaluate(()=>collect())),false,key);
  await select('summary');await page.getByRole('button',{name:'Review deployment',exact:true}).click();await page.locator('#deployConfirm').waitFor();
  assert.equal(await page.locator('#deployGo').isDisabled(),true,'joining still requires a rollout acknowledgement');
  await page.locator('#deployConfirm').check();

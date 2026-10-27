@@ -636,6 +636,7 @@ class AgentToolTests(unittest.TestCase):
 
 
 import homestead_lifecycle as LC
+import homestead_workload_edit as WORKLOAD_EDIT
 
 
 class EditTests(unittest.TestCase):
@@ -651,51 +652,51 @@ class EditTests(unittest.TestCase):
 
     def test_from_its_group_sets_the_marker_and_the_groups_class(self):
         dep = app("ha", group="Home")
-        LC._apply_tier(dep, "group")
+        WORKLOAD_EDIT._apply_tier(dep, "group")
         self.assertEqual("x-critical", self.spec(dep)["priorityClassName"])
         self.assertEqual({"homestead.io/group": "Home", "homestead.io/tier": "group", "homestead.io/tier-class": "x-critical"},
                          dep["metadata"]["annotations"])
 
     def test_from_a_group_with_no_tier_is_normal_with_no_class(self):
         dep = app("ha", group="Garage", cls="x-low")
-        LC._apply_tier(dep, "group")
+        WORKLOAD_EDIT._apply_tier(dep, "group")
         self.assertNotIn("priorityClassName", self.spec(dep))
         self.assertEqual({"homestead.io/group": "Garage", "homestead.io/tier": "group"}, dep["metadata"]["annotations"])
 
     def test_choosing_a_tier_makes_it_the_apps_own(self):
         dep = app("ha", group="Home", follows=True, cls="x-critical", wrote="x-critical")
-        LC._apply_tier(dep, "low")
+        WORKLOAD_EDIT._apply_tier(dep, "low")
         self.assertEqual("x-low", self.spec(dep)["priorityClassName"])
         self.assertEqual({"homestead.io/group": "Home"}, dep["metadata"]["annotations"])
 
     def test_from_its_group_is_refused_for_an_app_in_no_group(self):
         with self.assertRaisesRegex(ValueError, "isn't in a group"):
-            LC._apply_tier(app("ha"), "group")
+            WORKLOAD_EDIT._apply_tier(app("ha"), "group")
 
     def test_from_its_group_waits_while_the_tiers_cant_be_read(self):
         self.cluster.unreadable = http(500, MAP)
         with self.assertRaisesRegex(ValueError, "couldn't read the group tiers"):
-            LC._apply_tier(app("ha", group="Home"), "group")
+            WORKLOAD_EDIT._apply_tier(app("ha", group="Home"), "group")
 
     def test_an_app_already_following_is_left_as_it_is_while_the_tiers_cant_be_read(self):
         self.cluster.unreadable = http(500, MAP)
         dep = app("ha", group="Home", follows=True, cls="x-critical", wrote="x-critical")
         before = copy.deepcopy(dep)
-        LC._apply_tier(dep, "group")
+        WORKLOAD_EDIT._apply_tier(dep, "group")
         self.assertEqual(before, dep)
 
     def test_a_class_that_isnt_on_the_cluster_is_left_alone(self):
         dep = app("ha", group="Home", cls="gone")
-        LC._apply_tier(dep, "group")
+        WORKLOAD_EDIT._apply_tier(dep, "group")
         self.assertEqual("gone", self.spec(dep)["priorityClassName"])
         self.assertNotIn("homestead.io/tier", dep["metadata"]["annotations"])
 
     def test_a_save_from_its_group_applies_the_groups_tier_now(self):
         before = app("ha", group="Media", follows=True, cls="x-critical", wrote="x-critical")
         after = copy.deepcopy(before)
-        LC._apply_tier(after, "group")
+        WORKLOAD_EDIT._apply_tier(after, "group")
         self.assertEqual("x-low", self.spec(after)["priorityClassName"])
-        self.assertTrue(LC.restarts(before, after), "the edit's review says it restarts")
+        self.assertTrue(WORKLOAD_EDIT.restarts(before, after), "the edit's review says it restarts")
 
     def test_the_edit_form_offers_from_its_group(self):
         dep = app("ha", group="Home", follows=True, cls="x-critical")
@@ -719,7 +720,7 @@ class EditTests(unittest.TestCase):
 
     def test_settings_sent_back_unchanged_keep_a_follower_following(self):
         dep = app("ha", group="Home", follows=True, cls="x-critical", wrote="x-critical")
-        LC._apply_tier(dep, GROUPS.edit_fields(dep, "critical", self.cluster.kget)["priority"])
+        WORKLOAD_EDIT._apply_tier(dep, GROUPS.edit_fields(dep, "critical", self.cluster.kget)["priority"])
         self.assertEqual("group", dep["metadata"]["annotations"]["homestead.io/tier"])
 
     def test_the_tier_an_edit_choice_means(self):
@@ -751,7 +752,7 @@ class EditRouteTests(unittest.TestCase):
         dep_after = [None]
 
         def fake_plan(b):
-            prepared = LC.prepare_edit(b)
+            prepared = WORKLOAD_EDIT.prepare_edit(b)
             dep_after[0] = prepared["deployment"]
             return {"deployment": dep_after[0]}, {}, {}
 

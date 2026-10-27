@@ -176,7 +176,7 @@ class RecoveryTests(unittest.TestCase):
                 mock.patch.object(recovery, "observe", return_value=(found, "")), \
                 mock.patch.object(shares, "_samba_ready", return_value=True), \
                 mock.patch.object(shares, "_samba_blocker", return_value="mount failed"), \
-                mock.patch.object(shares, "_get_optional", side_effect=lambda path: copy.deepcopy(self.dep)), \
+                mock.patch.object(shares.KUBE, "get_optional", side_effect=lambda path, **_: copy.deepcopy(self.dep)), \
                 mock.patch.object(shares, "ksend", side_effect=send), \
                 mock.patch.object(shares, "ROLLOUT_TIMEOUT", 0), \
                 mock.patch.object(shares.time, "time", return_value=1120):

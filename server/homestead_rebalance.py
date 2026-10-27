@@ -21,6 +21,7 @@ import json
 import time
 import urllib.error
 
+import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_routes as ROUTER
 
@@ -46,12 +47,10 @@ def bind(_kget, _ksend, _is_leader=None):
 
 
 def _items(path):
-    try:
-        return kget(path).get("items", [])
-    except urllib.error.HTTPError as error:
-        if error.code == 404:
-            return []
-        raise
+    """A list's items; none where it isn't there (404). A null answer is not
+    a 404: it fails, as before."""
+    listing = KUBE.get_optional(path, read=kget, missing=KUBE.GONE)
+    return [] if listing is KUBE.GONE else listing.get("items", [])
 
 
 def _setting(name, default=""):
