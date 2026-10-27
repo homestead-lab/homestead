@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "server"
 sys.path.insert(0, str(SERVER))
 
+import source_scan as SS
 import homestead_move_actions as ACT
 import homestead_move_engine as ENGINE
 import homestead_move_phases as PHASE
@@ -50,7 +51,7 @@ def engine_holders():
     """Which attribute of a server module is homestead_move_engine (server.MOVE_ENGINE)."""
     holds = {}
     for path in SERVER.glob("*.py"):
-        tree = ast.parse(path.read_text())
+        tree = SS.tree(path)
         holds[path.stem] = {a.asname or a.name for node in ast.walk(tree) if isinstance(node, ast.Import)
                             for a in node.names if a.name == "homestead_move_engine"}
     return holds
@@ -329,7 +330,7 @@ class MoveEngineModuleTests(unittest.TestCase):
         for path in sorted(SERVER.glob("*.py")):
             if path.stem == "homestead_move_engine":
                 continue
-            tree = ast.parse(path.read_text())
+            tree = SS.tree(path)
             aliases = {a.asname or a.name for node in ast.walk(tree) if isinstance(node, ast.Import)
                        for a in node.names if a.name == "homestead_move_engine"}
             found += [f"{path.name}:{node.lineno} {node.attr}" for node in ast.walk(tree)

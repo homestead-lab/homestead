@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_http as HTTP
 import homestead_self_data_server as SELF_DATA_ROUTES
 import server
+import source_scan as SS
 
 CSRF = {"X-Homestead-Auth": "1", "Content-Type": "application/json"}
 OP = "0123456789abcdef01234567"
@@ -260,7 +261,7 @@ class DeclaredInTheirModules(unittest.TestCase):
         self.assertNotIn("/api/self/data/handoff/", POLICY.CODE_PREFIXES)
         self.assertEqual("viewer", POLICY.role(HANDOFF, "GET"))
         self.assertEqual("/api/self/data/handoff/", ROUTES.COOKIES["homestead-data-move"])
-        source = Path(server.__file__).read_text(encoding="utf-8")
+        source = SS.text(Path(server.__file__))
         for gone in ('"/api/diagnostics/download"', "homestead-data-move=", 'self_data_handoff_status(p['):
             self.assertNotIn(gone, source)
 

@@ -17,6 +17,7 @@ import homestead_self as SELF
 import homestead_setup_code as CODE
 import homestead_shared as SHARED
 import server
+import source_scan as SS
 from fakes.kube import Kube
 
 
@@ -98,7 +99,7 @@ class SetupRouteTests(unittest.TestCase):
         self.assertEqual("curl/8.0", records[0][1]["agent"])
 
     def test_every_replica_runs_the_setup_code_start(self):
-        source = (ROOT / "server" / "server.py").read_text(encoding="utf-8")
+        source = SS.text(SS.SERVER_PY)
         body = source.split("def start_background_tasks", 1)[1].split("\ndef ", 1)[0]
         self.assertRegex(body, r"threading\.Thread\(target=SETUP_CODE\.run\b")
         self.assertNotIn("first_only=True", source)
