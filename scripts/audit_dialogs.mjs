@@ -10,7 +10,7 @@
 // dialog that could not be opened. CI runs it, so a dialog cannot regress.
 import { chromium } from "playwright";
 import { mkdir, writeFile } from "node:fs/promises";
-import { openAuditPage } from "./audit_ready.mjs";
+import { captureDialog, openAuditPage } from "./audit_ready.mjs";
 
 const output = process.env.DIALOG_OUTPUT || "release-assets/dialogs";
 await mkdir(output, { recursive: true });
@@ -430,13 +430,7 @@ async function audit([label, width, height, mobile], items) {
           squeezed: [...new Set(squeezed)].slice(0, 6),
         };
       });
-      // The whole dialog, not only what fits on the screen - with the page
-      // behind it hidden, so nothing shows through where it runs long.
-      await page.addStyleTag({ content: ".modalbox{max-height:none!important;overflow:visible!important}"
-        + "#modal{overflow:visible!important;position:absolute!important;inset:0 0 auto 0!important;display:block!important;background:#060607!important}"
-        + "body>*:not(#modal){visibility:hidden!important}.ui-actions{position:static!important}" });
-      await page.locator(".modalbox").screenshot({ path: `${output}/${name}-${label}.png` });
-      await page.evaluate(() => document.querySelectorAll("style").forEach((s) => { if (s.textContent.startsWith(".modalbox{max-height:none")) s.remove(); }));
+      await captureDialog(page, `${output}/${name}-${label}.png`);
       report.push({ name, label, ...metrics });
       if (metrics.overflow.length) failures.push(`${name} (${label}): content wider than the dialog: ${metrics.overflow.join(", ")}`);
       if (metrics.tiny.length) failures.push(`${name} (${label}): text under 10px: ${metrics.tiny.join(", ")}`);
