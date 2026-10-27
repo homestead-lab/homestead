@@ -159,6 +159,7 @@ const DIALOGS = [
   ["mqtt-configure", "settings", "settingsTab('monitoring')", "mqttConfigure()"],
   ["update-window", "settings", "settingsTab('updates')", "updateWindowEdit()"],
   ["catalog-edit", "settings", "settingsTab('connections')", "catalogEdit()"],
+  ["alert-webhook-configure", "settings", "settingsTab('connections')", "alertHookConfigure()"],
   ["cluster-storage", "settings", "settingsTab('fleet')", "clusterReady('staging')", "clusterStorage('staging')"],
   ["move-review", "settings", "settingsTab('fleet')", "moveReview('branch','container','frigate')"],
   ["vm-cluster-copy", "settings", "settingsTab('fleet')", "moveReview('branch','vm','home-assistant-os','copy','default')"],

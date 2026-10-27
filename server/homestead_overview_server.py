@@ -14,6 +14,7 @@ import copy
 import json
 import time
 import urllib.request, urllib.parse, urllib.error
+import homestead_alert_webhook as ALERT_WEBHOOK
 import homestead_alerts as ALERTS
 import homestead_api_v1 as API_V1
 import homestead_audit as AUDIT_LOG
@@ -325,9 +326,14 @@ def _alert_sources():
 
 
 def push_alerts(fresh):
-    """Wakes every device that wants one of these alerts, and belongs to a user still here."""
+    """Wakes every device that wants one of these alerts, and belongs to a user
+    still here; and sends them to the alert webhook, if one is set (#741)."""
     if not fresh:
         return None
+    try:
+        ALERT_WEBHOOK.deliver(fresh)
+    except Exception as error:
+        print(f"alert webhook: {str(error)[:160]}", flush=True)
     users = {u["name"] for u in AUTH.list_users()}
     urgent = any(e["severity"] == "critical" and e["phase"] in ("raised", "worsened") for e in fresh)
     visible = {user: ALERTS.for_user(fresh, user) for user in users}

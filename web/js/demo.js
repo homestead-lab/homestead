@@ -865,16 +865,33 @@
       const joining = body.target_mode === "existing";
       const workloadName = body.workload_name || body.name;
       const containerName = body.container_name || body.name;
+      // Placement chosen in Deploy (#844), as the server writes it: a preferred
+      // host, and a pod (anti-)affinity term for each rule.
+      const place = joining ? {} : body.placement || {}, host = joining ? "" : body.node || "";
+      const term = (mode, app) => {
+        const rule = { labelSelector: { matchLabels: { app: app.name } }, namespaces: [app.ns || body.namespace], topologyKey: "kubernetes.io/hostname" };
+        return mode === "require" ? ["requiredDuringSchedulingIgnoredDuringExecution", rule] : ["preferredDuringSchedulingIgnoredDuringExecution", { weight: 100, podAffinityTerm: rule }];
+      };
+      const affinity = {};
+      const add = (kind, mode, app) => { const [slot, item] = term(mode, app); ((affinity[kind] ||= {})[slot] ||= []).push(item); };
+      if (place.spread) add("podAntiAffinity", place.spread, { name: workloadName });
+      (place.with || []).forEach(row => add("podAffinity", row.mode, row));
+      (place.apart || []).forEach(row => add("podAntiAffinity", row.mode, row));
+      if (host) affinity.nodeAffinity = { preferredDuringSchedulingIgnoredDuringExecution: [{ weight: 100,
+        preference: { matchExpressions: [{ key: "kubernetes.io/hostname", operator: "In", values: [host] }] } }] };
+      const candidate = name => ({ name, eligible: true, metrics_available: true, used_gb: 6,
+        projected_gb: 6.5, capacity_gb: 16, projected_percent: 40.6, reservations_known: true, reserved_gb: 4, request_slots: 1 });
       return { deployment: { apiVersion: "apps/v1", kind: "Deployment",
           metadata: { name: joining ? body.target_workload : workloadName, namespace: body.namespace },
           spec: { template: { spec: { containers: [{ name: containerName, image: body.image }],
+            ...(Object.keys(affinity).length ? { affinity } : {}),
             ...(!joining && ["critical", "low"].includes(body.priority) ? { priorityClassName: "homestead-" + body.priority } : {}) } } } },
         service: null, capacity: { additional: 1, pod_request_gb: 0.25, pod_memory_gb: 0.5,
           pod_cpu_request_percent: 10, blocked: false, requires_confirmation: joining,
           ...(joining ? { rollout: { strategy: "Recreate", replicas: 1, ownership_known: true, owned_pods: ["demo-pod"], release_request_gb: 0.25 } } : {}),
+          ...(host ? { placement: { pinned: null, preferred: host, resident: null } } : {}),
           warnings: joining ? ["Recreate stops old pods before replacements start; every container will be unavailable during the restart"] : [],
-          candidates: [{ name: "harvester-node1", eligible: true, metrics_available: true, used_gb: 6,
-            projected_gb: 6.5, capacity_gb: 16, projected_percent: 40.6, reservations_known: true, reserved_gb: 4, request_slots: 1 }] },
+          candidates: [...new Set(["harvester-node1", ...(host ? [host] : [])])].map(candidate) },
         capacity_token: "demo-review", impact: { mode: joining ? "existing" : "new", workload: joining ? body.target_workload : workloadName,
           message: joining ? "Saving updates the Deployment template and restarts every container in its pods." : "Creates a new independently managed Deployment." } };
     },
@@ -2086,6 +2103,11 @@ ssh_pwauth: true
       sensors: { cluster: 15, node: 9 },
       status: { state: "publishing", detail: "publishing to 192.0.2.177:1883 every 60s", last_publish: Math.floor(Date.now() / 1000) - 20, published: 3120, error: "" } },
     "/api/mqtt/test": { ok: true, detail: "192.0.2.177:1883 accepted the connection" },
+    "/api/alerts/webhook": (url, init) => init?.method === "POST"
+      ? { ok: true, detail: "Not saved in the demo", webhook: "", format: "generic", min_severity: "degraded", lan: false, last: null }
+      : { webhook: "https://ntfy.example.com/(hidden)", format: "ntfy", min_severity: "degraded", lan: false,
+          last: { at: Math.floor(Date.now() / 1000) - 3600, ok: true, sent: 1 } },
+    "/api/alerts/webhook/test": { ok: true, detail: "ntfy took the test" },
     "/api/mqtt/control": (url, init) => init?.method === "POST" ? { ok: true } : {
       control: true, controlled: ["vm:vms/win11", "app:lab/frigate"], base: "harvester", items: [
         { id: "vm:vms/win11", kind: "vm", ns: "vms", name: "win11", on: true, refused: "" },
