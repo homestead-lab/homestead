@@ -286,17 +286,37 @@ NTFY_TAGS = {"down": "rotating_light", "gave-up": "rotating_light", "up": "white
              "restarted": "arrows_counterclockwise", "update": "package", "test": "test_tube"}
 
 
-def request_for(url, body, fmt="generic"):
-    """(url, data, headers) for one call in the webhook's format."""
-    headers = {"User-Agent": "Homestead outage actions"}
+# A notice's level as ntfy and Gotify say it.
+LEVELS = {"high": ("high", 8), "default": ("default", 5), "low": ("low", 2)}
+
+
+def _header(text):
+    """One line of header text; RFC 2047 (which ntfy reads) when it is not plain ASCII."""
+    text = " ".join(str(text or "").split())[:200]
+    try:
+        text.encode("ascii")
+        return text
+    except UnicodeEncodeError:
+        return "=?utf-8?b?" + base64.b64encode(text.encode()).decode() + "?="
+
+
+def request_for(url, body, fmt="generic", notice=None):
+    """(url, data, headers) for one call in the webhook's format. notice -
+    title, message, level (LEVELS) and tags - is what ntfy and Gotify show;
+    an outage's is Homestead, its sentence, high when urgent, and its tag.
+    Its agent, if any, is the User-Agent (alerts say so; outages as before)."""
+    headers = {"User-Agent": (notice or {}).get("agent") or "Homestead outage actions"}
     urgent = body.get("event") in URGENT
+    notice = notice or {"title": "Homestead", "message": body.get("message") or "",
+                        "level": "high" if urgent else "default", "tags": NTFY_TAGS.get(body.get("event"), "house")}
+    ntfy_level, gotify_level = LEVELS.get(notice.get("level"), LEVELS["default"])
     if fmt == "ntfy":
         # ntfy publishes the body of a POST to a topic as the message itself.
-        headers.update({"Content-Type": "text/plain; charset=utf-8", "Title": "Homestead",
-                        "Priority": "high" if urgent else "default", "Tags": NTFY_TAGS.get(body.get("event"), "house")})
-        return url, str(body.get("message") or "").encode(), headers
+        headers.update({"Content-Type": "text/plain; charset=utf-8", "Title": _header(notice["title"]),
+                        "Priority": ntfy_level, "Tags": _header(notice["tags"])})
+        return url, str(notice["message"] or "").encode(), headers
     if fmt == "gotify":
-        data = {"title": "Homestead", "message": body.get("message") or "", "priority": 8 if urgent else 5}
+        data = {"title": notice["title"], "message": notice["message"] or "", "priority": gotify_level}
     else:
         data = body
     headers["Content-Type"] = "application/json"
@@ -376,10 +396,10 @@ class _PinnedTLS(http.client.HTTPSConnection):
         self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
 
 
-def post(url, body, fmt="generic", allow_lan=False):
+def post(url, body, fmt="generic", allow_lan=False, notice=None):
     """Send one webhook; raises on failure, in words that never hold its secrets.
     No redirect is followed."""
-    url, data, headers = request_for(url, body, fmt)
+    url, data, headers = request_for(url, body, fmt, notice)
     parsed = urllib.parse.urlsplit(url)
     address, port = destination(url, allow_lan)
     if "@" in parsed.netloc:

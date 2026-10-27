@@ -180,8 +180,15 @@ def deploy_capacity_plan(config, existing=None):
     if cfg.get("target_mode") == "existing":
         return ROLLOUT_CAPACITY.plan(existing, dep, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
                                      threshold, planned_claims=claims)
-    return PLACE.manifest_plan(dep, ns, dep["metadata"]["name"], dep["spec"]["replicas"],
+    plan = PLACE.manifest_plan(dep, ns, dep["metadata"]["name"], dep["spec"]["replicas"],
                                threshold, planned_claims=claims)
+    # The host chosen in Deploy is a preference (#844): say so when it can't take the app.
+    host = cfg.get("node")
+    # With no copies to start, nothing is placed, so there is nothing to warn of.
+    if host and plan.get("additional") and not any(row.get("name") == host and row.get("eligible") for row in plan.get("candidates") or []):
+        plan["warnings"] = [*plan.get("warnings", []), f"the chosen host {host} cannot take this app now, so it starts on another host"]
+        plan["requires_confirmation"] = True
+    return plan
 
 
 def reviewed_deploy(b):

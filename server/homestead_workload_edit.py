@@ -489,6 +489,16 @@ def _apply_container_hardware(spec, dep, requested):
         annotations.pop(NAMES.key("hardware"), None)
 
 
+def apply_placement(dep, cfg):
+    """Which apps it runs beside or apart from, how its copies spread, and its
+    preferred host: one path for Edit and Deploy (#844), so both write the
+    same affinity and refuse the same rules."""
+    if "placement" in cfg:
+        AFFINITY.apply(dep, cfg.get("placement") or {})
+    if "node" in cfg:
+        PLACE.apply_node_placement(dep, cfg["node"], pin=False)
+
+
 def _pod_template(dep):
     """A Deployment's pod template without Homestead's own edit stamp: what,
     if it changes, makes Kubernetes replace the pods."""
@@ -697,9 +707,7 @@ def prepare_edit(cfg, current=None):
             ann.pop(NAMES.key("uptime"), None)
     if "placement" in cfg:
         dep["metadata"].setdefault("namespace", ns)
-        AFFINITY.apply(dep, cfg.get("placement") or {})
-    if "node" in cfg:
-        PLACE.apply_node_placement(dep, cfg["node"], pin=False)
+    apply_placement(dep, cfg)
     # Stamped only when the pods change anyway, so the stamp never causes a restart of its own.
     if _pod_template(dep) != template_before:
         dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[
