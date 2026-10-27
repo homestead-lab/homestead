@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_promote as PROMOTE
+import source_scan as SS
 
 # dash where it is installed (CI), as the installer's tests do; sh otherwise.
 SH = shutil.which("dash") or shutil.which("sh")
@@ -547,7 +548,7 @@ class KindTests(unittest.TestCase):
     def test_host_promote_is_a_host_job(self):
         import homestead_recovery as RECOVERY
         self.assertIn("host-promote", RECOVERY.MOVES_OR_RESTARTS)
-        source = (Path(__file__).resolve().parents[1] / "server" / "homestead_storage_conflicts.py").read_text()
+        source = SS.text("server/homestead_storage_conflicts.py")
         self.assertIn('"host-promote"', source)
 
 
@@ -698,7 +699,7 @@ class WiringTests(unittest.TestCase):
     """server.py sits at its line cap: the module wires itself when
     homestead_routes loads it at start, through hostrun's binding."""
     def test_server_py_does_not_name_the_module(self):
-        source = (Path(__file__).resolve().parents[1] / "server" / "server.py").read_text()
+        source = SS.text(SS.SERVER_PY)
         self.assertFalse("homestead_promote" in source, "server.py names homestead_promote")
 
     def test_import_registers_the_job_and_reaches_kubernetes_through_hostrun(self):

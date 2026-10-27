@@ -31,6 +31,7 @@ import homestead_updates as updates
 import homestead_files as files
 import homestead_fleet as fleet
 import homestead_config_backup as backup
+import source_scan as SS
 
 
 class AccountTests(unittest.TestCase):
@@ -429,7 +430,7 @@ class HttpTests(unittest.TestCase):
             self.assertEqual("admin", server.needed_role(path, "POST"))
 
     def test_all_literal_http_routes_have_a_declared_policy(self):
-        tree = ast.parse((ROOT / "server" / "server.py").read_text(encoding="utf-8"))
+        tree = SS.tree(SS.SERVER_PY)
         handler = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "H")
         for method in ("GET", "POST", "DELETE"):
             function = next(node for node in handler.body if isinstance(node, ast.FunctionDef) and node.name == "do_" + method)
