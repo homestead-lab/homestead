@@ -274,6 +274,9 @@ def health_facts(overview):
         critical = any(i.get("severity") == "critical" for i in issues)
         href = {"Node": "/nodes", "Disk": "/nodes", "Volume": "/volumes", "Backup": "/data-protection",
                 "Trim": "/data-protection#housekeeping"}.get(kind, "/containers")
+        if all(i.get("one_host") for i in issues):
+            # Short of hosts, not broken (#841): the offer is in Cluster Health.
+            href = "/system/cluster?section=health"
         title = {"Node": f"Host {name} is not ready", "Disk": f"Drive {name} needs attention",
                  "Volume": f"Volume {name} is {'faulted' if critical else 'degraded'}",
                  "Workload": f"{name.split('/')[-1]} is not ready",

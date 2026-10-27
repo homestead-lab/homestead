@@ -216,6 +216,7 @@ def mqtt_snapshot():
                       "wl": ", ".join(node.get("workloads") or []) or "none", "status": node.get("status", "NotReady")})
     return {"cluster": {"nodes_ready": ready, "nodes_total": total, "nodes_notready": notready,
                         "vol_total": o.get("volumes", 0), "vol_degraded": degraded, "vol_faulted": faulted,
+                        "vol_one_host": o.get("vol_one_host", 0),
                         "pods_system": sum(1 for p in running if system(p)),
                         "pods_workload": sum(1 for p in running if not system(p)),
                         "pods_sys_bad": sys_bad, "pods_wl_bad": wl_bad,

@@ -112,7 +112,7 @@ from homestead_workload_edit import (  # noqa: E402,F401
     _container_feature_ids, _apply_container_edit, _unique_volume_name, _is_storage_volume,
     _requested_volume_kind, _device_host_paths, _is_device_mount, _pvc_exists, _apply_container_volumes,
     _create_pending_pvcs, _apply_container_hardware, _pod_template, restarts, _apply_priority, _apply_tier,
-    prepare_edit, edit_workload,
+    prepare_edit, edit_workload, apply_placement,
 )
 from homestead_node_actions import (  # noqa: E402,F401
     quorum_report, node_action_check, set_cordon, LONGHORN_DRAIN_WAIT, drain, node_power, _send_power,
