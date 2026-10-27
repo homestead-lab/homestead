@@ -2,14 +2,14 @@
 // stops the helper it opened, once, and late file API answers never reopen it.
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
+import {openAuditPage} from '../../scripts/audit_ready.mjs';
 const base = process.env.HOMESTEAD_URL || 'http://127.0.0.1:4173';
 const browser = await chromium.launch({headless:true});
 try {
   for (const width of [1440, 375]) {
     const page = await browser.newPage({viewport:{width,height:1000}}), errors=[];
     page.on('pageerror', error=>errors.push(error.message));
-    await page.goto(`${base}/?demo=1`);
-    await page.waitForFunction(()=>typeof fileManager==='function' && ME && document.querySelector('#gate').classList.contains('hidden'));
+    await openAuditPage(page, `${base}/?demo=1`);
     await page.evaluate(()=>{
       clearInterval(window.__loopTimer);
       window.filesRequests=[];

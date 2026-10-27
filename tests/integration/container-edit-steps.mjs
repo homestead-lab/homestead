@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { openAuditPage } from "../../scripts/audit_ready.mjs";
 
 const web = fileURLToPath(new URL("../../web/", import.meta.url));
 const output = process.env.EDIT_SCREENSHOTS || "release-assets/container-edit";
@@ -34,8 +35,7 @@ try {
       JSON.stringify({ theme, bg: "soft", blur: 26, motion: "off", refresh: 60 })), theme);
     const page = await context.newPage();
     await page.route("**/*", route => route.request().url().startsWith(base) ? route.continue() : route.abort());
-    await page.goto(`${base}/?demo=1`);
-    await page.waitForFunction(() => typeof wlEdit === "function" && ME && document.querySelector("#gate").classList.contains("hidden"));
+    await openAuditPage(page, `${base}/?demo=1`);
     const name = multi ? "home-assistant" : "frigate";
     await page.evaluate(async ({ name, theme }) => {
       document.documentElement.dataset.theme = theme;

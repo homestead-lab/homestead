@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { openAuditPage } from "../../scripts/audit_ready.mjs";
 
 const web=fileURLToPath(new URL("../../web/",import.meta.url));
 const types={".js":"application/javascript",".css":"text/css",".html":"text/html",".svg":"image/svg+xml"};
@@ -42,8 +43,8 @@ try {
         window.__fixtureRollouts && typeof url==='string' && url.startsWith('/api/image-updates/')
           ? window.__fixtureNativeFetch(url,opts) : demoFetch(url,opts);})();
     `}));
-    await page.goto(`${base}/?demo=1`);
-    await page.waitForFunction(()=>typeof reviewImageActions==="function"&&document.querySelector("#gate").classList.contains("hidden")&&FLEET.view?.self);
+    await openAuditPage(page,`${base}/?demo=1`);
+    await page.waitForFunction(()=>FLEET.view?.self);
     const here=await page.evaluate(()=>FLEET.view.self),there="b2c0de";
     page.on("request",req=>{if(req.isNavigationRequest()&&req.frame()===page.mainFrame())navigations++;});
     await page.route("**/api/image-updates/**",async route=>{
