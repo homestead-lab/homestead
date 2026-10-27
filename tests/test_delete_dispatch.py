@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_deploy_server as DEPLOY_SERVER
 import homestead_http as HTTP
 import server
+import source_scan as SS
 
 CSRF = {"X-Homestead-Auth": "1"}
 WORKLOAD = "/api/workload/lab/web"
@@ -161,7 +162,7 @@ class DeclaredInItsModule(unittest.TestCase):
         route = ROUTES.find("DELETE", "/api/workload/lab/web")
         self.assertIsNotNone(route, "DELETE /api/workload/<ns>/<name> is not a module route")
         self.assertEqual(("operator", "homestead_deploy_server"), (route.role, route.module))
-        source = (Path(server.__file__)).read_text(encoding="utf-8")
+        source = SS.text(Path(server.__file__))
         self.assertNotIn("delete_workload(parts", source)
 
     def test_the_workload_prefix_is_no_longer_matched_in_code(self):

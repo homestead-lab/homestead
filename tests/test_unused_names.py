@@ -225,7 +225,7 @@ def findings(files=FILES):
 
 def report(modules):
     """findings() for (where, module name, source text) triples."""
-    scans = {(where, module): scan(ast.parse(text), text.splitlines()) for where, module, text in modules}
+    scans = {(where, module): scan(SS.tree(SS.code(text)), text.splitlines()) for where, module, text in modules}
     reached, strings = set(), set()
     for found in scans.values():
         reached |= {(found.aliases[alias], name) for alias, name in found.through if alias in found.aliases}

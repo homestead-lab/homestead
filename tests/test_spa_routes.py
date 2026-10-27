@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import server
+import source_scan as SS
 
 
 class SpaRouteTests(unittest.TestCase):
@@ -41,16 +42,16 @@ class SpaRouteTests(unittest.TestCase):
         self.assertEqual([(f"{server.WEBROOT}/index.html", "text/html; charset=utf-8")], served)
 
     def test_browser_and_server_route_allowlists_match(self):
-        source = (ROOT / "web" / "js" / "router.js").read_text(encoding="utf-8")
+        source = SS.text(ROOT / "web" / "js" / "router.js")
         browser_paths = set(re.findall(r'path:\s*"([^"]+)"', source))
         self.assertEqual(set(server.WEB_PATHS.SPA_ROUTES), browser_paths)
 
     def test_sidebar_links_use_canonical_routes(self):
-        html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+        html = SS.text(ROOT / "web" / "index.html")
         # The sidebar and the phone's bottom bar link pages by their canonical
         # route; a page left out of them is a tab of one that is, in router.js.
         hrefs = set(re.findall(r'<a href="([^"]+)" data-view=', html))
-        router = (ROOT / "web" / "js" / "router.js").read_text(encoding="utf-8")
+        router = SS.text(ROOT / "web" / "js" / "router.js")
         routed = set(re.findall(r'path: "([^"]+)"', router))
         self.assertLessEqual(hrefs, set(server.WEB_PATHS.SPA_ROUTES))
         self.assertEqual(set(server.WEB_PATHS.SPA_ROUTES), routed)

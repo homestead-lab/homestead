@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "server"
 sys.path.insert(0, str(SERVER))
 
+import source_scan as SS
 import homestead_container_import as CONTAINER_IMPORT
 import homestead_image_cache as IMAGE_CACHE
 import homestead_imports as IMPORTS
@@ -59,7 +60,7 @@ class ImportsModuleTests(unittest.TestCase):
 
     def test_the_moved_code_reads_every_replaced_name_through_homestead_imports(self):
         for part in PARTS:
-            tree = ast.parse(Path(part.__file__).read_text())
+            tree = SS.tree(Path(part.__file__))
             bare = sorted({node.id for fn in ast.walk(tree) if isinstance(fn, (ast.FunctionDef, ast.Lambda))
                            for node in ast.walk(fn) if isinstance(node, ast.Name)
                            and isinstance(node.ctx, ast.Load) and node.id in REPLACED})

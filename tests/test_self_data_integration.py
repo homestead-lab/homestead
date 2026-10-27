@@ -9,6 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
 import server
+import source_scan as SS
 import homestead_operations as OPS
 import homestead_shared as SHARED
 from homestead_storage_journal import Held
@@ -95,7 +96,7 @@ class MutationHooksTests(unittest.TestCase):
             with self.assertRaises(Held): server.initialize_self_data_fence()
             factory.return_value.inspect.assert_called_once()
             self.assertIs(factory.return_value, server._self_data_fence)
-        text = Path(server.__file__).read_text(encoding="utf-8")
+        text = SS.text(Path(server.__file__))
         self.assertLess(text.index("    initialize_self_data_fence()"), text.index("NAMES.bind(kget)"))
 
     def test_demo_startup_does_not_contact_a_cluster(self):
