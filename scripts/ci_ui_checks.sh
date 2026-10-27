@@ -60,6 +60,7 @@ case "${1:-}" in
     ARCHITECTURE_SCREENSHOTS=release-assets/pages/architecture node tests/integration/combined-architecture.mjs
     NOTIFICATION_SCREENSHOTS=release-assets/pages/notifications node tests/integration/mobile-notifications.mjs
     ALERT_SCREENSHOTS=release-assets/pages/alerts node tests/integration/notification-alerts.mjs
+    node tests/integration/evaluate-survives-gc.mjs
     node scripts/check_dashboard_storage.mjs
     node scripts/check_collection_layouts.mjs
     SEARCH_SCREENSHOTS=release-assets/pages/global-search node scripts/check_global_search.mjs
@@ -70,6 +71,7 @@ case "${1:-}" in
     node scripts/check_demo_scenarios.mjs
     node scripts/check_launch_import_logs.mjs
     node scripts/check_mobile_pwa.mjs
+    node tests/integration/setup-reach-late-focus.mjs
     ;;
   pages-live)
     node scripts/check_dashboard_stream.mjs

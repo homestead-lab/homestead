@@ -4,6 +4,7 @@ import {chromium, webkit, devices} from "playwright";
 import assert from "node:assert/strict";
 import {mkdir} from "node:fs/promises";
 import {checkMobileRefresh} from "./check_mobile_refresh.mjs";
+import {checkSetupReach} from "./check_setup_reach.mjs";
 const base=process.env.HOMESTEAD_URL || "http://127.0.0.1:4173";
 await mkdir("release-assets/pages/mobile-pwa",{recursive:true});
 const safari=process.env.HOMESTEAD_TEST_BROWSER === "webkit";
@@ -127,15 +128,7 @@ try {
       });
       assert.equal(nested,60);
       // Sign-in/setup stays reachable when the phone is held sideways.
-      await page.evaluate(()=>loginForm(null,true));
-      await page.locator("#lg_go").waitFor();
-      // Upright on a small phone the whole setup form fits: nothing to scroll
-      // while it is still settling into place (#737 made it taller).
-      if(viewport.height>=640) assert.equal(await page.locator("#gate").evaluate(el=>el.scrollHeight<=el.clientHeight),true,"the setup form fits the screen");
-      await page.locator("#lg_go").scrollIntoViewIfNeeded();
-      const login=await page.locator("#lg_go").boundingBox();
-      assert.ok(login.y>=0 && login.y+login.height<=viewport.height);
-      assert.equal(await page.locator("#gate").evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+      await checkSetupReach(page,viewport);
       await page.evaluate(()=>ungate());
       console.log(`Installed mobile layout passed at ${viewport.width}×${viewport.height}`);
     }
