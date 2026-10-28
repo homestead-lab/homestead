@@ -27,13 +27,10 @@ What shapes it:
   well-formed and names an existing rule.
 """
 import calendar
-import json
 import math
 import os
 import re
 import secrets
-import subprocess
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -211,29 +208,17 @@ def listing():
             "counted_at": max((s.get("at", 0) for s in state["status"].values()), default=None)}
 
 
-# The child that matches an expression: the query and lines on stdin, the
-# indexes of the matching lines on stdout. Run with -I: no site, no cwd.
-_CHILD = ("import json,re,sys\n"
-          "d=json.load(sys.stdin)\n"
-          "p=re.compile(d['q'],0 if d['c'] else re.I)\n"
-          "sys.stdout.write(json.dumps([i for i,l in enumerate(d['l']) if p.search(l)]))\n")
-
-
 def matching(lines, query, regex, case, limit=REGEX_SECONDS):
     """The indexes of the lines that match. TooSlow when an expression runs
-    out of time: its child process is killed."""
+    out of time: its child process (log search's run_regex) is killed."""
     if not regex:
         needle = query if case else query.lower()
         return [i for i, line in enumerate(lines) if needle in (line if case else line.lower())]
-    payload = json.dumps({"q": query, "c": bool(case), "l": list(lines)})
-    try:
-        done = subprocess.run([sys.executable, "-I", "-c", _CHILD], input=payload, capture_output=True,
-                              text=True, timeout=limit, check=False)
-    except subprocess.TimeoutExpired:
-        raise TooSlow(f"the expression took more than {limit:g} seconds") from None
-    if done.returncode != 0:
-        raise ValueError("the expression could not be run")
-    return json.loads(done.stdout or "[]")
+    lines = list(lines)
+    hits, checked = LOGSEARCH.run_regex(lines, query, case, limit)
+    if checked < len(lines):
+        raise TooSlow(f"the expression took more than {limit:g} seconds")
+    return hits
 
 
 def leftover_reads():

@@ -38,6 +38,7 @@ function logSearchGaps(d) {
   const gaps = [];
   if (d.skipped_pods) gaps.push(`${d.skipped_pods} more container${d.skipped_pods === 1 ? " was" : "s were"} not searched; choose an app to search it`);
   if ((d.capped || []).length) gaps.push(`${d.capped.join(", ")} wrote more than Homestead reads at once, so only the newest of ${d.capped.length === 1 ? "its" : "their"} output was searched; choose a shorter time`);
+  if ((d.cut || []).length) gaps.push(`The expression took more than ${d.cut_seconds} seconds, so ${d.cut.join(", ")} ${d.cut.length === 1 ? "was" : "were"} only partly searched, newest lines first; try plain text or a simpler expression`);
   if ((d.errors || []).length) gaps.push(`Could not read: ${d.errors.slice(0, 4).join("; ")}${d.errors.length > 4 ? ` and ${d.errors.length - 4} more` : ""}`);
   return gaps;
 }
