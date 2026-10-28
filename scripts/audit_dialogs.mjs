@@ -10,7 +10,7 @@
 // dialog that could not be opened. CI runs it, so a dialog cannot regress.
 import { chromium } from "playwright";
 import { mkdir, writeFile } from "node:fs/promises";
-import { openAuditPage } from "./audit_ready.mjs";
+import { captureDialog, openAuditPage } from "./audit_ready.mjs";
 
 const output = process.env.DIALOG_OUTPUT || "release-assets/dialogs";
 await mkdir(output, { recursive: true });
@@ -42,10 +42,12 @@ const DIALOGS = [
   ["firewall-review", "network", "firewallEdit()", "firewallReview()"],
   ["active-alerts", "dash", "pwaAlertsDialog()"],
   ["notifications", "dash", "notificationsDialog()"],
-  ["jobs-running", "workloads", "STATE.data.operations=[{id:'run',kind:'image-update',title:'Update Immich',status:'running',message:'Waiting for the new pod',progress:45}];jobsDialog()"],
-  ["jobs-recovery", "workloads", "STATE.data.operations=[{id:'held',kind:'self-data-handoff',title:'Move Homestead data',status:'failed',message:'Copy stopped. Both volumes are retained.',dismissible:false,storage_recovery:true}];jobsDialog()"],
-  ["jobs-empty", "workloads", "STATE.data.operations=[];jobsDialog()"],
-  ["jobs-disconnected", "workloads", "STATE.data.operations=[{id:'run',title:'Update Immich',status:'running',message:'Waiting for the new pod',progress:null}];STATE.operationsStale=true;jobsDialog()"],
+  // The jobs entries own their jobs (#934): the demo answers every jobs read from window.__demoOps, so the
+  // poll cannot swap its own in before the screenshot. Each entry starts with it reset (see audit()).
+  ["jobs-running", "workloads", "STATE.data.operations=window.__demoOps=[{id:'run',kind:'image-update',title:'Update Immich',status:'running',message:'Waiting for the new pod',progress:45}];jobsDialog()"],
+  ["jobs-recovery", "workloads", "STATE.data.operations=window.__demoOps=[{id:'held',kind:'self-data-handoff',title:'Move Homestead data',status:'failed',message:'Copy stopped. Both volumes are retained.',dismissible:false,storage_recovery:true}];jobsDialog()"],
+  ["jobs-empty", "workloads", "STATE.data.operations=window.__demoOps=[];jobsDialog()"],
+  ["jobs-disconnected", "workloads", "STATE.data.operations=window.__demoOps=[{id:'run',title:'Update Immich',status:'running',message:'Waiting for the new pod',progress:null}];STATE.operationsStale=true;jobsDialog()"],
   ["container-update-progress", "workloads", "modal('Updating containers',batchUpdateMarkup([{ns:'lab',name:'immich'},{ns:'lab',name:'plex'}],{[rolloutKey({ns:'lab',name:'immich'})]:{phase:'updating',ready:0,desired:1},[rolloutKey({ns:'lab',name:'plex'})]:{phase:'ready',ready:1,desired:1}},[],false,true))"],
 
   ["longhorn-v2-upgrade-ready", "settings", "window.__demoV2UpgradeState='ready';lhV2Upgrade('v1.13.0')"],
@@ -335,7 +337,7 @@ async function audit([label, width, height, mobile], items) {
   await page.addStyleTag({ content: "#jobTray{display:none!important}" });
 
   for (const [name, view, ...steps] of items) {
-    await page.evaluate(() => { window.__demoDataBatchRecovery = false; window.__demoSingleHostOutage = false; window.__demoSetRestartBlocked = false; window.__demoUpgradeCheck = false; STATE.operationsStale = false; });
+    await page.evaluate(() => { window.__demoDataBatchRecovery = false; window.__demoSingleHostOutage = false; window.__demoSetRestartBlocked = false; window.__demoUpgradeCheck = false; STATE.operationsStale = false; delete window.__demoOps; });
     try {
       await page.evaluate(() => { try { closeModal(); } catch (e) { /* none open */ } });
       await page.evaluate((v) => go(v), view);
@@ -430,13 +432,7 @@ async function audit([label, width, height, mobile], items) {
           squeezed: [...new Set(squeezed)].slice(0, 6),
         };
       });
-      // The whole dialog, not only what fits on the screen - with the page
-      // behind it hidden, so nothing shows through where it runs long.
-      await page.addStyleTag({ content: ".modalbox{max-height:none!important;overflow:visible!important}"
-        + "#modal{overflow:visible!important;position:absolute!important;inset:0 0 auto 0!important;display:block!important;background:#060607!important}"
-        + "body>*:not(#modal){visibility:hidden!important}.ui-actions{position:static!important}" });
-      await page.locator(".modalbox").screenshot({ path: `${output}/${name}-${label}.png` });
-      await page.evaluate(() => document.querySelectorAll("style").forEach((s) => { if (s.textContent.startsWith(".modalbox{max-height:none")) s.remove(); }));
+      await captureDialog(page, `${output}/${name}-${label}.png`);
       report.push({ name, label, ...metrics });
       if (metrics.overflow.length) failures.push(`${name} (${label}): content wider than the dialog: ${metrics.overflow.join(", ")}`);
       if (metrics.tiny.length) failures.push(`${name} (${label}): text under 10px: ${metrics.tiny.join(", ")}`);

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
 import {mkdir} from 'node:fs/promises';
+import {captureDialog} from '../../scripts/audit_ready.mjs';
 const base=process.env.HOMESTEAD_URL || 'http://127.0.0.1:4176',out=process.env.INSIGHTS_OUTPUT || 'release-assets/health-review';await mkdir(out,{recursive:true});
 const browser=await chromium.launch({headless:true});
 try {for(const width of [1440,390,320])for(const theme of ['dark','light']){
@@ -10,8 +11,7 @@ try {for(const width of [1440,390,320])for(const theme of ['dark','light']){
  await page.setViewportSize({width,height:1000});await page.waitForFunction(()=>document.querySelector('[data-insight="health"]')?.textContent.includes('scheduled'));
  const shot=async name=>{assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true,`${name} overflows ${width}`);await page.waitForTimeout(200);
  if(await page.locator('#modal').isVisible()){
-   const style=await page.addStyleTag({content:'.modalbox{max-height:none!important;overflow:visible!important}#modal{position:absolute!important;inset:0 0 auto!important;display:block!important}.ui-actions{position:static!important}'});
-   await page.locator('.modalbox').screenshot({path:`${out}/${name}-${theme}-${width}.png`});await style.evaluate(el=>el.remove());
+   await captureDialog(page,`${out}/${name}-${theme}-${width}.png`);
  }else await page.screenshot({path:`${out}/${name}-${theme}-${width}.png`,fullPage:true});};
  assert.equal(await page.locator('[data-insight]').count(),5);await shot('dashboard');
  await page.reload();await page.evaluate(theme=>{SET.theme=theme;applySettings();clearInterval(window.__loopTimer);},theme);await page.waitForSelector('[data-insight="health"]');assert.equal(await page.locator('[data-insight]').count(),5,'widgets persist');
