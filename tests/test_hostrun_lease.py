@@ -2,17 +2,20 @@
 that host's Lease first and gives it back when it ends; another change is
 refused while it is held, a read never waits for it, and a lease left by a
 replica that stopped runs out and is taken over (#597)."""
-import copy
 import datetime
 import sys
+import tempfile
 import threading
 import time
 import unittest
-import urllib.error
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_hostrun as HOSTRUN
+import homestead_kube as K
+import homestead_operations as OPS
+from fakes.kube import Kube
 
 PODS = "/api/v1/namespaces/lab/pods"
 LEASES = "/apis/coordination.k8s.io/v1/namespaces/lab/leases"
@@ -31,48 +34,32 @@ def held(node, holder, what, seconds_ago=0, duration=60):
                      "renewTime": stamp(seconds_ago), "acquireTime": stamp(seconds_ago)}}
 
 
-def not_found(path):
-    return urllib.error.HTTPError(path, 404, "not found", {}, None)
-
-
 class Cluster:
-    def __init__(self, leases=()):
-        self.pods, self.sent, self.ran = {}, [], []
-        self.leases = {f"{LEASES}/{lease['metadata']['name']}": lease for lease in leases}
-        self.lock = threading.Lock()
+    """The host's side (what the exec runs, and what happens during it) around
+    the shared fake API (tests/fakes/kube.py), where a helper pod that is made
+    starts Running, as it does once its node is up."""
+
+    def __init__(self, test, leases=()):
+        self.ran = []
+        self.kube = test.enterContext(Kube(*leases))
         self.during = None
+        # The shared fake runs the real write guards; the storage guard takes the job store's lock under DATA_DIR.
+        test.enterContext(mock.patch.object(OPS, "DATA_DIR", test.enterContext(tempfile.TemporaryDirectory())))
 
-    def get(self, path):
-        with self.lock:
-            if path.startswith(PODS + "?"):
-                return {"items": list(self.pods.values())}
-            if path.startswith(LEASES):
-                if path not in self.leases:
-                    raise not_found(path)
-                return copy.deepcopy(self.leases[path])
-            return self.pods.get(path)
+    @property
+    def pods(self):
+        return K.kget(PODS)["items"]
 
-    def send(self, method, path, body=None, **_):
-        with self.lock:
-            self.sent.append((method, path))
-            if path.startswith(LEASES):
-                if method == "POST":
-                    key = f"{path}/{body['metadata']['name']}"
-                    if key in self.leases:
-                        raise urllib.error.HTTPError(path, 409, "exists", {}, None)
-                    self.leases[key] = dict(body, metadata=dict(body["metadata"], resourceVersion="1"))
-                elif method == "PUT":
-                    current = self.leases.get(path)
-                    if current is None or current["metadata"]["resourceVersion"] != body["metadata"].get("resourceVersion"):
-                        raise urllib.error.HTTPError(path, 409, "conflict", {}, None)
-                    version = str(int(current["metadata"]["resourceVersion"]) + 1)
-                    self.leases[path] = dict(body, metadata=dict(body["metadata"], resourceVersion=version))
-                return {}
-            if method == "POST":
-                self.pods[f"{path}/{body['metadata']['name']}"] = dict(body, status={"phase": "Running"})
-            elif method == "DELETE":
-                self.pods.pop(path.split("?")[0], None)
-            return {}
+    @property
+    def sent(self):
+        return [(method, path) for method, path, _, _ in self.kube.writes]
+
+    def send(self, method, path, body=None, **kw):
+        result = K.ksend(method, path, body, **kw)
+        if method == "POST" and path == PODS:
+            K.ksend("PATCH", f"{PODS}/{body['metadata']['name']}/status", {"status": {"phase": "Running"}},
+                    ctype="application/merge-patch+json")
+        return result
 
     def exec_in(self, namespace, pod, argv, **kwargs):
         self.ran.append(argv[-1])
@@ -81,7 +68,7 @@ class Cluster:
         return b"ok", ""
 
     def lease(self, node):
-        return self.leases.get(f"{LEASES}/{HOSTRUN.lease_name(node)}")
+        return self.kube.object(f"{LEASES}/{HOSTRUN.lease_name(node)}")
 
     def holder(self, node):
         return ((self.lease(node) or {}).get("spec") or {}).get("holderIdentity", "")
@@ -93,8 +80,10 @@ def nap(_seconds):
 
 class HostLeaseTests(unittest.TestCase):
     def use(self, leases=()):
-        self.cluster = Cluster(leases)
-        HOSTRUN.bind(self.cluster.get, self.cluster.send, self.cluster.exec_in, "lab")
+        self.cluster = Cluster(self, leases)
+        self.enterContext(mock.patch.multiple(HOSTRUN, kget=HOSTRUN.kget, ksend=HOSTRUN.ksend,
+                                              exec_in=HOSTRUN.exec_in, NS=HOSTRUN.NS))
+        HOSTRUN.bind(K.kget, self.cluster.send, self.cluster.exec_in, "lab")
         return self.cluster
 
     def test_a_change_holds_the_hosts_lease_while_it_runs_and_gives_it_back(self):
@@ -134,7 +123,7 @@ class HostLeaseTests(unittest.TestCase):
         c = self.use([held("node-2", "other-replica/abc", "Install 3 updates on node-2")])
         with self.assertRaisesRegex(HOSTRUN.Busy, "another change is running on node-2: Install 3 updates on node-2"):
             HOSTRUN.run("node-2", "netplan apply", change="Move eth0 into br0 on node-2", sleep=nap)
-        self.assertEqual({}, c.pods)
+        self.assertEqual([], c.pods)
         self.assertFalse([p for m, p in c.sent if p.startswith(PODS)])
         self.assertEqual("other-replica/abc", c.holder("node-2"), "the other change keeps its lease")
 

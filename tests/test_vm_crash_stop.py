@@ -7,6 +7,7 @@ from unittest import mock
 
 import test_vms as fixtures
 import homestead_vms as VMS
+import homestead_vm_list as VM_LIST
 
 
 class CrashRetryStopTests(unittest.TestCase):
@@ -168,12 +169,12 @@ class CrashRetryStopTests(unittest.TestCase):
                 self.assertEqual(strategy, self.vm["spec"]["runStrategy"])
 
     def test_views_offer_stop_retries_only_for_a_verified_failed_boot_without_guest(self):
-        self.assertTrue(VMS._row(self.vm, {}, {}, {})["stop_retries"])
-        self.assertFalse(VMS._row(self.vm, {}, {}, {}, instance_known=False)["stop_retries"])
+        self.assertTrue(VM_LIST._row(self.vm, {}, {}, {})["stop_retries"])
+        self.assertFalse(VM_LIST._row(self.vm, {}, {}, {}, instance_known=False)["stop_retries"])
         self.instance("Running")
-        self.assertFalse(VMS._row(self.vm, self.vmi, {}, {})["stop_retries"])
+        self.assertFalse(VM_LIST._row(self.vm, self.vmi, {}, {})["stop_retries"])
         self.vm["spec"]["runStrategy"] = "Halted"
-        self.assertFalse(VMS._row(self.vm, {}, {}, {})["stop_retries"])
+        self.assertFalse(VM_LIST._row(self.vm, {}, {}, {})["stop_retries"])
 
 
 if __name__ == "__main__":

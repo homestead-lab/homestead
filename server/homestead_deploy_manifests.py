@@ -3,9 +3,9 @@
 What a deploy config implies (analyze_deploy_intent), the Deployment and
 Service for a new app, one with extra containers, a container added to an
 existing app, and the tier a new app starts in. Moved unchanged from
-homestead_deploy (#623); import that module, which re-exports these names.
-Names server.py binds on homestead_deploy are read through it (D.x), so a
-replacement there still applies.
+homestead_deploy (#623): read and replace these names here. Names server.py
+binds on homestead_deploy are read through it (D.x), so a replacement there
+still applies.
 """
 import json
 import re
@@ -14,13 +14,13 @@ import homestead_failover as FAILOVER
 import homestead_hardware as HW
 import homestead_host_access as HOSTACCESS
 import homestead_lan as LAN
-import homestead_lifecycle as LC
+import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_memory as MEMORY
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_vip_registry as REG
 import homestead_platform as PLATFORM
 import homestead_privileges as PRIV
-import homestead_updates as UPDATES
+import homestead_update_registry as REGISTRY
 import homestead_uptime as UPTIME
 import homestead_volowner as VOLOWNER
 
@@ -187,7 +187,7 @@ def _build_single_deployment(cfg):
               "name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
               "protocol": str(p.get("protocol", "TCP")).upper()}
              for p in cfg.get("ports") or []]
-    c = {"name": container_name, "image": UPDATES.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
+    c = {"name": container_name, "image": REGISTRY.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
     # Arguments to the image's own entrypoint - cloudflared's "tunnel run",
     # say. A list of plain strings, passed as they are; never a shell.
     args = cfg.get("args") or []
@@ -240,8 +240,6 @@ def _build_single_deployment(cfg):
     if cfg.get("network_mode") == "host":
         podspec["hostNetwork"] = True
         podspec["dnsPolicy"] = "ClusterFirstWithHostNet"
-    if cfg.get("node"):
-        podspec.setdefault("nodeSelector", {})["kubernetes.io/hostname"] = cfg["node"]
     FAILOVER.apply(podspec, cfg.get("failover") or "move")
     lan_address = cfg.get("lan") if cfg.get("network_mode") == "lan" else None
     # How it is monitored, if not automatically: an annotation, read by homestead_uptime.
@@ -262,7 +260,7 @@ def _build_single_deployment(cfg):
     exposed = [p for p in cfg.get("ports") or [] if p.get("expose")]
     if exposed and cfg.get("network_mode") not in ("host", "lan"):
         mode = cfg.get("vip_mode", "shared")
-        vip = cfg.get("lb_ip") if mode in ("manual", "automatic") else ((cfg.get("lb_ip") or NETWORK.shared_vip()) if mode == "shared" else "")
+        vip = cfg.get("lb_ip") if mode in ("manual", "automatic") else ((cfg.get("lb_ip") or REG.shared_vip()) if mode == "shared" else "")
         svc_type = "ClusterIP" if cfg.get("network_mode") == "internal" else "LoadBalancer"
         svc = {
             "apiVersion": "v1", "kind": "Service",
@@ -295,7 +293,10 @@ def build_deployment(cfg):
     tier = deploy_tier(cfg)
     dep, service = _build_deployment_with_extras(cfg)
     if tier:
-        LC._apply_priority(dep["spec"]["template"]["spec"], tier)
+        WORKLOAD_EDIT._apply_priority(dep["spec"]["template"]["spec"], tier)
+    # Its hosts, spread and neighbours, written as Edit writes them (#844).
+    # Only what was chosen: an empty host would still stamp the pods as moved.
+    WORKLOAD_EDIT.apply_placement(dep, {key: cfg[key] for key in ("placement", "node") if cfg.get(key)})
     return dep, service
 
 
@@ -307,7 +308,7 @@ def _build_deployment_with_extras(cfg):
     dep, _ = _build_single_deployment(cfg)
     changes = [dict(item, new=True, name=item["container_name"], privileges={
         key: item[key] for key in ("privileged", "cap_add", "tun") if key in item}) for item in extras]
-    prepared = LC.prepare_edit({"ns": dep["metadata"]["namespace"], "name": dep["metadata"]["name"],
+    prepared = WORKLOAD_EDIT.prepare_edit({"ns": dep["metadata"]["namespace"], "name": dep["metadata"]["name"],
                                 "containers": changes}, current=dep)
     dep = prepared["deployment"]
     pspec = dep["spec"]["template"]["spec"]
@@ -318,7 +319,7 @@ def _build_deployment_with_extras(cfg):
                   for path, owner in (item.get("volume_owners") or {}).items() if path in mounts]
         if owners:
             helper = VOLOWNER.init_container(owners)
-            helper["name"] = LC._unique_volume_name("hs-owner-" + container["name"], used_names)
+            helper["name"] = WORKLOAD_EDIT._unique_volume_name("hs-owner-" + container["name"], used_names)
             pspec.setdefault("initContainers", []).append(helper)
     all_ports = [port for item in [cfg, *extras] for port in item.get("ports") or []]
     service_ports = [dict(port, name=port.get("name") or f"p{port.get('host') or port['container']}-{str(port.get('protocol') or 'TCP').lower()}") for port in all_ports]
@@ -394,7 +395,7 @@ def build_sidecar_deployment(cfg, current):
               "name": (p.get("name") or f"p{p['container']}-{str(p.get('protocol', 'TCP')).lower()}")[:15],
               "protocol": str(p.get("protocol", "TCP")).upper()}
              for p in cfg.get("ports") or [] if p.get("container")]
-    container = {"name": container_name, "image": UPDATES.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
+    container = {"name": container_name, "image": REGISTRY.with_tag(cfg["image"]), "imagePullPolicy": "IfNotPresent"}
     if env:
         container["env"] = env
     if ports:
@@ -481,6 +482,8 @@ def build_sidecar_deployment(cfg, current):
     service_cfg["hardware"] = []
     service_cfg["gpu"] = False
     service_cfg.pop("priority", None)   # a joined app keeps the tier it has
+    for key in ("placement", "node"):   # and the placement it has (#844)
+        service_cfg.pop(key, None)
     _, service = build_deployment(service_cfg)
     if service:
         service["spec"]["selector"] = selector

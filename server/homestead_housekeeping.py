@@ -46,6 +46,7 @@ STORES = [
     ("Hosts coming back", ["recovery.json"], "which hosts returned in the last week, and whether that was dealt with"),
     ("App usage", ["usage.json"], "a summary a day of each container's CPU and memory, for 14 days"),
     ("Alerts", ["alerts.json"], "what is active, and recent alerts"),
+    ("Alert webhook", ["alert-webhook.json"], "the address, until it is turned off"),
     ("Schedules", ["schedules.json"], "the last stop or start of each schedule"),
     ("Log alerts", ["logalerts.json"], "the saved log alerts, and an hour of counts for each"),
     ("Outage actions", ["outage-actions.json"], "restarts done during the current outage of each app"),

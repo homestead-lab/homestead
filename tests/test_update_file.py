@@ -14,10 +14,11 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_agent_requests as REQUESTS
 import homestead_api_keys as KEYS
+import homestead_kube as K
 import homestead_passthrough as PASS
 import homestead_setup as SETUP
 import homestead_shared as SHARED
-from test_passthrough import Cluster, Host
+from test_passthrough import Host, Scene
 
 
 class OtherCopy:
@@ -145,11 +146,13 @@ class SetupTests(Folder):
 class PassthroughTests(Folder):
     def setUp(self):
         super().setUp()
-        self.cluster, self.host = Cluster(), Host()
+        self.cluster, self.host = Scene(self), Host()
         storage = mock.patch.object(PASS, "longhorn_block_paths", return_value=[])
         storage.start()
         self.addCleanup(storage.stop)
-        PASS.bind(self.cluster.kget, self.cluster.ksend, self.host,
+        saved = (PASS.kget, PASS.ksend, PASS.hostrun, PASS.platform, PASS.DATA_DIR)
+        self.addCleanup(lambda: PASS.bind(*saved))
+        PASS.bind(K.kget, K.ksend, self.host,
                   lambda force=False: {"harvester": False, "distribution": "k3s"}, self.dir.name)
 
     def test_handing_over_waits_for_another_copy(self):

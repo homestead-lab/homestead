@@ -18,7 +18,7 @@ import urllib.parse
 
 import homestead_history as HISTORY
 import homestead_leader as LEADER
-import homestead_lifecycle as LC
+import homestead_node_actions as NODE_ACTIONS
 import homestead_names as NAMES
 import homestead_operations as OPS
 import homestead_power as POWER
@@ -96,7 +96,7 @@ def run_power_job(operation_id, power_plan, force=False, resumed=False):
     def handoff(node, action, steps, rep, report):
         return send_handoff(operation_id, power_plan, steps, rep, report)
     try:
-        result = LC.node_power(node, action, True,
+        result = NODE_ACTIONS.node_power(node, action, True,
                                before_send=(lambda: POWER.recheck_planned_outage(power_plan)) if planned_outage else
                                (lambda: POWER.recheck_forced(power_plan)) if force
                                else (lambda: POWER.recheck_after_drain(power_plan)),
@@ -146,7 +146,7 @@ def send_handoff(operation_id, power_plan, steps, rep, report):
         replicas = int((kget(path).get("spec") or {}).get("replicas", 1) or 1)
     except Exception as error:
         report("verifying", 15, f"Homestead cannot hand the last step to the host ({str(error)[:160]}); sending the {action} directly")
-        return LC._send_power(node, action, steps, rep, report)
+        return NODE_ACTIONS._send_power(node, action, steps, rep, report)
     spec = own.get("spec") or {}
     pod_name = f"homestead-handoff-{action}-{int(time.time()) % 100000}"
     body = {"apiVersion": "v1", "kind": "Pod",
@@ -225,7 +225,7 @@ def restore_held(item, uncordon=True):
         # What waited is for this host; it cannot start here while cordoned.
         node = kget(f"/api/v1/nodes/{urllib.parse.quote(ref['node'], safe='')}")
         if ref.get("node_uid") and (node.get("metadata") or {}).get("uid") == ref["node_uid"]:
-            LC.set_cordon(ref["node"], False)
+            NODE_ACTIONS.set_cordon(ref["node"], False)
             ref["uncordoned"] = True
     started, left = HOLD.restore(ref.get("held") or [], item["id"])
     ref["restored"] = {"started": started, "left": left, "at": time.time()}
@@ -244,7 +244,7 @@ def allow_scheduling(item):
     if ref.get("node_uid") and (node.get("metadata") or {}).get("uid") != ref["node_uid"]:
         return False
     if (node.get("spec") or {}).get("unschedulable"):
-        LC.set_cordon(ref["node"], False)
+        NODE_ACTIONS.set_cordon(ref["node"], False)
     ref["uncordoned"] = True
     return True
 

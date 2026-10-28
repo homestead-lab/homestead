@@ -12,6 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_node_actions as NODE_ACTIONS
 import homestead_power as POWER
 import homestead_lifecycle as LC
 import homestead_maintenance as MAINTENANCE
@@ -93,7 +94,7 @@ class OneOwnerTests(unittest.TestCase):
             progress("sending", 20, "Submitting power helper")   # what precedes the send
             sent.append(True)
             return {}
-        with mock.patch.object(server.POWER_JOBS, "POD_NAME", "homestead-old"),              mock.patch.object(server.LC, "node_power", side_effect=node_power):
+        with mock.patch.object(server.POWER_JOBS, "POD_NAME", "homestead-old"),              mock.patch.object(NODE_ACTIONS, "node_power", side_effect=node_power):
             with self.assertRaises(server.OPS.Superseded):
                 server.POWER_JOBS.run_power_job("job-1", plan)
         self.assertEqual([], sent)
@@ -132,7 +133,7 @@ class ResumedDrainTests(unittest.TestCase):
     def drain(self, here, reviewed, resumed):
         with mock.patch.object(LC.MAINTENANCE, "items", return_value=here), \
              mock.patch.object(LC, "ksend"), mock.patch.object(LC, "kget", return_value={"items": []}):
-            return LC.drain("k3s-1", reviewed_pods=reviewed, resumed=resumed)
+            return NODE_ACTIONS.drain("k3s-1", reviewed_pods=reviewed, resumed=resumed)
 
     def test_pods_already_gone_are_fine_but_new_ones_are_not(self):
         reviewed = [list(row) for row in MAINTENANCE.pod_snapshot([self.pod("a"), self.pod("b")])]
@@ -213,7 +214,7 @@ class FailedBeforePowerTests(OneOwnerTests):
         server.OPS.record_phase("job-1", "holding", 8, "", held=[{"kind": "Deployment", "ns": "lab", "name": "plex", "was": "1"}])
         plan = {"node": "k3s-1", "action": "reboot", "drain_pods": [], "planned_outage": False}
         with mock.patch.object(server.POWER_JOBS, "POD_NAME", "homestead-new"), \
-             mock.patch.object(server.LC, "node_power", side_effect=ValueError("drain timed out")), \
+             mock.patch.object(NODE_ACTIONS, "node_power", side_effect=ValueError("drain timed out")), \
              mock.patch.object(server.HOLD, "restore", return_value=(["lab/plex"], [])) as restore:
             with self.assertRaises(server.POWER_JOBS.PowerNotSent):
                 server.POWER_JOBS.run_power_job("job-1", plan)

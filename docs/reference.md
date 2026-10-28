@@ -184,6 +184,17 @@ onto: **Settings > About > Redundancy** offers **Keep two copies**, which
 makes it and opens the move. On k3s and RKE2 Homestead raises its own
 volume's copies in place as hosts join.
 
+App volumes on that one host read degraded for the same reason, and are
+yours, so Homestead only offers: **Cluster > Health** lists them ("N volumes
+ask for more copies than this cluster has hosts"), and an admin's
+**Match copies to hosts** review lowers each listed volume to one copy. The
+count each asked for is kept on it as `homestead.io/one-host-copies`, and
+once a second host can hold copies the same row offers to put them back.
+Neither changes a class or a Longhorn setting, so volumes made later ask for
+their class's count and appear in the offer too. The dashboard banner, the
+alert, the MQTT sensor **Volumes Short of Hosts** and the installer's doctor
+say why such a volume is degraded.
+
 A claim's class cannot change. On a cluster installed from an older manifest
 that said `longhorn-r2`, check the claim first:
 
@@ -1179,7 +1190,15 @@ DataImportCron that pulls a registry image through the node
 (`pullMethod: node`), or the immediate managed-update rollback. A record that
 says which images are in use but cannot be read - a malformed rollback note or
 template, or one of the optional lists the role may not read - keeps every
-image, labelled *unreadable* with the record it names, until it is fixed. That
+image, labelled *not readable* with the record it names, until it is fixed. Each
+kept image's row also carries `kind` (the record's kind), `label` and `detail`
+(the reason in plain words: *running*, *roll back*, *Job paused*, *Job waiting*, *scaled to zero*, *no
+pods yet*, *scheduled job*, *stopped VM*, *VM pool at zero*, *VM template*, *VM snapshot*, *disk
+import*, *scheduled import*); `reason` keeps the coarse word clean-up uses. A
+disk import from an OpenShift image stream (`registry.imageStream` with
+`pullMethod: node` and no `url`) is not read - Homestead asks for no
+`image.openshift.io` permission, as it does not target OpenShift - so it keeps
+every image, labelled *image stream not read*, until the import is gone. That
 read is read-only `get` and `list` on `pool.kubevirt.io` `virtualmachinepools`,
 `kubevirt.io` `virtualmachineinstancereplicasets`, `harvesterhci.io`
 `virtualmachinetemplateversions`, `snapshot.kubevirt.io`

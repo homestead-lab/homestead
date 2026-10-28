@@ -25,9 +25,11 @@ import homestead_host_access as HOSTACCESS
 import homestead_icons as ICONS
 import homestead_lan as LAN
 import homestead_lifecycle as LC
+import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_logsearch as LOGSEARCH
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_network_services as SVC
+import homestead_network_inventory as INV
 import homestead_operations as OPS
 import homestead_outage as OUTAGE
 import homestead_place as PLACE
@@ -41,6 +43,7 @@ import homestead_routes as ROUTER
 import homestead_schedules as SCHEDULES
 import homestead_start_order as START_ORDER
 import homestead_updates as UPDATES
+import homestead_update_rollouts as ROLLOUTS
 import homestead_usage as USAGE
 
 # server.py's helpers this module calls, bound by name at start.
@@ -365,9 +368,9 @@ def get_workloads(pods=None):
                 if waiting:
                     reason = waiting.get("reason", "Waiting")
                     waits.append({"container": cs.get("name", ""), "reason": reason,
-                                  "message": (UPDATES.explain_pull(waiting.get("message")) or waiting.get("message") or "")[:400]})
+                                  "message": (ROLLOUTS.explain_pull(waiting.get("message")) or waiting.get("message") or "")[:400]})
                     if reason in fatal_reasons:
-                        why = UPDATES.explain_pull(waiting.get("message"))
+                        why = ROLLOUTS.explain_pull(waiting.get("message"))
                         fatal_waits.append(f"{p['metadata']['name']}: {reason}" + (f" - {why}" if why else ""))
             if not ready:
                 transition_ages.append(age_secs(p["metadata"].get("creationTimestamp")))
@@ -376,11 +379,11 @@ def get_workloads(pods=None):
             placed = conditions.get("PodScheduled") or {}
             if placed.get("status") == "False" and not p["metadata"].get("deletionTimestamp"):
                 own = []
-                if pspec.get("hostNetwork") and NETWORK.servicelb_present():
+                if pspec.get("hostNetwork") and INV.servicelb_present():
                     wanted = {cp.get("containerPort") for c in pspec.get("containers", []) or []
                               for cp in c.get("ports", []) or []}
                     own = sorted({row["port"] for row in ports if row.get("port") in wanted})
-                unplaced = UPDATES.explain_unplaced(placed.get("message", ""), own)
+                unplaced = ROLLOUTS.explain_unplaced(placed.get("message", ""), own)
                 if age_secs(p["metadata"].get("creationTimestamp")) > 60:
                     fatal_waits.append(f"{p['metadata']['name']} cannot be placed: {unplaced}")
             containers = pod_container_rows(p)
@@ -390,7 +393,7 @@ def get_workloads(pods=None):
             if not ready and not p["metadata"].get("deletionTimestamp") and any(
                     w["reason"] in ("ContainerCreating", "PodInitializing") for w in waits):
                 try:
-                    pull = UPDATES.pull_state(ns, p["metadata"]["name"]) or {}
+                    pull = ROLLOUTS.pull_state(ns, p["metadata"]["name"]) or {}
                     if pull.get("state") == "pulling":
                         pull.update(_pull_progress(p["spec"].get("nodeName", ""), pull.get("image", "")))
                     else:
@@ -611,7 +614,7 @@ def edit_capacity_plan(config):
         if (config["ns"], config["name"], config["workload_name"]) != (ns, name, new_name):
             raise ValueError("Use exact lowercase Kubernetes names for the rename")
         guard_self(ns, name, renaming=True)
-        proposed, context = RENAME.prepare(config, current, LC._renamed_deployment, kget)
+        proposed, context = RENAME.prepare(config, current, WORKLOAD_EDIT._renamed_deployment, kget)
         post_stop = copy.deepcopy(proposed)
         post_stop["spec"]["strategy"] = {"type": "Recreate"}  # rename orchestration, not a saved strategy change
         plan = ROLLOUT_CAPACITY.plan(current, post_stop, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
@@ -622,7 +625,7 @@ def edit_capacity_plan(config):
         return {"deployment": proposed, "name": new_name, "claims": [], "seeds": []}, context, plan
     if config.get("remove_containers") and is_self(ns, name):
         raise ValueError("Homestead cannot remove its own containers from this page")
-    prepared = LC.prepare_edit(config, current=current)
+    prepared = WORKLOAD_EDIT.prepare_edit(config, current=current)
     context = {"action": "edit", **rollout_review_context(current),
                "seeds": [(path, cm.get("metadata", {}).get("resourceVersion")) for path, cm in prepared["seeds"]]}
     proposed = copy.deepcopy(prepared["deployment"])
@@ -631,7 +634,7 @@ def edit_capacity_plan(config):
         raise ValueError("Increasing replicas of a paused Deployment needs a separate capacity review; resume it before editing replicas")
     if prepared["name"] != name:
         count = proposed["spec"].get("replicas", 1)
-        proposed = LC._renamed_deployment(proposed, ns, prepared["name"])
+        proposed = WORKLOAD_EDIT._renamed_deployment(proposed, ns, prepared["name"])
         proposed["spec"].update(replicas=count, strategy={"type": "Recreate"})
     moves = RESTRUCTURE.copies(config)
     if moves:
@@ -666,7 +669,7 @@ def edit_capacity_plan(config):
         exposed = [port for container in config.get("containers") or []
                    for port in container.get("ports") or [] if port.get("expose")]
         if exposed and config.get("manage_ports"):
-            NETWORK._ports({"ports": [{"name": port.get("name"), "port": port.get("host") or port.get("container"),
+            SVC._ports({"ports": [{"name": port.get("name"), "port": port.get("host") or port.get("container"),
                                       "target_port": port.get("container"), "protocol": port.get("protocol") or "TCP"}
                                      for port in exposed]})
         plan["container_changes"] = {"added": additions, "removed": removals}
@@ -829,7 +832,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         # Starts after (#746): the setting, and whether its gate is in the template.
         "starts_after": START_ORDER.read(deployment), "start_gate": START_ORDER.gate_state(deployment),
         "has_service": bool(listeners),
-        "seed_configs": LC.seed_configs(ns, deployment),
+        "seed_configs": WORKLOAD_EDIT.seed_configs(ns, deployment),
         "container_name": first["name"], "image": first["image"], "cpu": first["cpu"], "memory": first["memory"],
         "memory_limit": first["memory_limit"],
         "env": first["env"], "ports": first["ports"], "volumes": first["volumes"], "gpu": "igpu" in detected,

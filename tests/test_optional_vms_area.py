@@ -188,11 +188,11 @@ class VmsReadTests(unittest.TestCase):
 
     def crashed(self, instance, strategy="RerunOnFailure"):
         """A VM in a boot crash loop; instance is the answer for its VMI.
-        Writes are only recorded."""
-        cluster = VM_FIXTURES.Cluster()
-        cluster.vm["spec"]["runStrategy"] = strategy
-        cluster.vm["status"] = {"printableStatus": "CrashLoopBackOff", "startFailure": {"consecutiveFailCount": 3},
-                                "conditions": [{"type": "Ready", "status": "False", "reason": "", "message": "not running"}]}
+        Writes go to the shared fake (tests/fakes/kube.py), which keeps the record."""
+        cluster = VM_FIXTURES.Cluster(self)
+        cluster.change(lambda vm: (vm["spec"].update(runStrategy=strategy), vm.update(status={
+            "printableStatus": "CrashLoopBackOff", "startFailure": {"consecutiveFailCount": 3},
+            "conditions": [{"type": "Ready", "status": "False", "reason": "", "message": "not running"}]})))
         self.reads = []
 
         def read(path):
@@ -202,8 +202,7 @@ class VmsReadTests(unittest.TestCase):
                     raise instance
                 return instance
             return cluster.get(path)
-        VMS.bind(read, lambda method, path, body=None, **_: cluster.sent.append((method, path, body)) or {},
-                 lambda *a: [])
+        VMS.bind(read, cluster.send, lambda *a: [])
         return cluster
 
     def test_detail_takes_only_404_as_no_instance(self):

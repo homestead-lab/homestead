@@ -13,6 +13,7 @@ from test_disk_v2 import Cluster, HOST_FACTS
 import test_disk_v2 as FIXTURES
 import homestead_disk_v2 as V
 import homestead_disk_region as R
+import homestead_kube as K
 
 
 def region(kind='lvm'):
@@ -39,7 +40,7 @@ class RegionConversionTests(unittest.TestCase):
     def setUp(self):
         for name in ('kget', 'ksend', 'platform', 'ops', 'NS', 'read_log'):
             saved = patch.object(V, name, getattr(V, name)); saved.start(); self.addCleanup(saved.stop)
-        self.cluster = Cluster()
+        self.cluster = Cluster(self)
         self.host = patch.object(V.HOST, 'run', side_effect=self.cluster.host)
         self.host_mock = self.host.start(); self.addCleanup(self.host.stop)
 
@@ -110,10 +111,10 @@ class RegionConversionTests(unittest.TestCase):
         for collection in ('replicas', 'volumes', 'engines', 'backingimages', 'orphans'):
             for metadata in ({'continue':'next-page'}, {'remainingItemCount':1}):
                 with self.subTest(collection=collection, metadata=metadata):
-                    self.cluster = Cluster(); self.cluster.facts = region()
+                    self.cluster = Cluster(self); self.cluster.facts = region()
                     self.host_mock.side_effect = self.cluster.host
                     self.cluster.awaiting(); self.cluster.prepare()
-                    original = self.cluster.get
+                    original = K.kget
                     def partial(path):
                         value = original(path)
                         if path.endswith('/' + collection): value['metadata'] = metadata
@@ -131,25 +132,25 @@ class RegionConversionTests(unittest.TestCase):
     def test_late_store_or_orphan_or_backing_image_stops_dispatch_after_approval(self):
         for kind in ('store', 'orphan', 'backing-image'):
             with self.subTest(kind=kind):
-                self.cluster = Cluster(); self.cluster.facts = region()
+                self.cluster = Cluster(self); self.cluster.facts = region()
                 self.host_mock.side_effect = self.cluster.host
                 self.cluster.awaiting(); self.cluster.prepare()
                 if kind == 'store': self.cluster.store_devices['spare'] = '/dev/dm-1'
-                if kind == 'orphan': self.cluster.orphans = [{'metadata': {'name':'orphan-data'}, 'spec': {'nodeID':'node-1','parameters': {'DiskUUID':'disk-source-uuid'}}}]
-                if kind == 'backing-image': self.cluster.backingimages = [{'metadata': {'name':'image-data'}, 'spec': {'diskFileSpecMap': {'disk-source-uuid':{}}}}]
+                if kind == 'orphan': self.cluster.kube.add(FIXTURES.lh('Orphan', 'orphan-data', spec={'nodeID':'node-1','parameters': {'DiskUUID':'disk-source-uuid'}}))
+                if kind == 'backing-image': self.cluster.kube.add(FIXTURES.lh('BackingImage', 'image-data', spec={'diskFileSpecMap': {'disk-source-uuid':{}}}))
                 self.cluster.tick()
                 self.assertFalse(self.cluster.jobs)
 
     def test_disappeared_volume_is_not_assumed_deliberately_deleted(self):
         self.cluster.facts = region(); self.cluster.awaiting()
-        self.cluster.volumes.clear()
+        for volume in K.kget(V.LH + '/volumes')['items']: self.cluster.kube.discard(FIXTURES.VOL(volume['metadata']['name']))
         with self.assertRaisesRegex(ValueError, 'disappeared'): self.cluster.prepare()
         self.assertFalse(self.cluster.jobs)
 
     def test_offline_replacement_host_cannot_be_counted_from_stale_rw_status(self):
         self.cluster.facts = region(); self.cluster.awaiting(); self.cluster.prepare()
         self.cluster.tick()  # remove the old V1 registration
-        self.cluster.nodes['node-2']['status']['conditions'] = []
+        self.cluster.put(FIXTURES.NODE('node-2'), ('status', 'conditions'), [])
         self.cluster.tick()
         self.assertFalse(self.cluster.jobs)
 

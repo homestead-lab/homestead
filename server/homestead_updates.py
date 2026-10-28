@@ -1,7 +1,7 @@
 """Registry update discovery and deterministic Kubernetes rollouts: the bound
 state, the "updated by something else" marks, and the routes. The work lives
 by feature in homestead_update_registry, homestead_update_checks and
-homestead_update_rollouts (#623), re-exported here.
+homestead_update_rollouts (#623): read and replace their names there.
 
 
 Only the Python standard library is used. Registry credentials are read from
@@ -109,7 +109,7 @@ def set_managed(ns, name, by):
         raise ValueError(f"{ns}/{name} is managed by {managed_by(dep)['by']}, which Homestead detects; there is no mark to clear")
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
           {"metadata": {"annotations": {MANAGED: by or None}}}, ctype="application/merge-patch+json")
-    invalidate()
+    CHECKS.invalidate()
     return {"ok": True, "ns": ns, "name": name,
             "managed": managed_by(kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"))}
 
@@ -143,7 +143,7 @@ def _report(request):
     force = (request.query.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
     # Settings › Homestead checks Homestead's own parts, not every app.
     only = (request.query.get("only") or [""])[0] == "homestead"
-    answer = json.loads(json.dumps(homestead_report() if force and only else report(force)))
+    answer = json.loads(json.dumps(CHECKS.homestead_report() if force and only else CHECKS.report(force)))
     answer["policy"] = update_policy_status()
     return answer
 
@@ -175,7 +175,7 @@ def _apply(request, action):
         {"kind": "Deployment", "name": b["name"], "namespace": b["ns"]},
         "/containers?" + urllib.parse.urlencode({"find": b["name"]}),
         {"namespace": b["ns"], "name": b["name"]})
-    ROUTER.forget("wl", "ov"); refresh_soon(b["ns"], b["name"])
+    ROUTER.forget("wl", "ov"); CHECKS.refresh_soon(b["ns"], b["name"])
     return result
 
 
@@ -183,10 +183,10 @@ def _apply(request, action):
 # target is an app before apply, rollback and preview get here.
 ROUTES = {
     ("GET", "/api/image-updates"): ("viewer", _report),
-    ("GET", "/api/image-updates/progress"): ("viewer", lambda request: progress(request.query["ns"][0], request.query["name"][0])),
+    ("GET", "/api/image-updates/progress"): ("viewer", lambda request: ROLLOUTS.progress(request.query["ns"][0], request.query["name"][0])),
     # Read while a scan is in flight, so it needs no session cache
     # and must not be served from one.
-    ("GET", "/api/image-updates/scan-progress"): ("viewer", lambda request: scan_progress()),
+    ("GET", "/api/image-updates/scan-progress"): ("viewer", lambda request: CHECKS.scan_progress()),
     ("POST", "/api/image-updates/mode"): ("operator", lambda request: set_update_mode(request.body)),
     ("POST", "/api/image-updates/channel"): ("admin", _set_channel),
     ("POST", "/api/image-updates/preview"): ("operator", lambda request: preview_image_update(request.body)),
@@ -196,23 +196,11 @@ ROUTES = {
 }
 
 
-# Moved by feature (#623). Re-exported for one release, so other modules,
-# server.py and tests that use or replace these names here keep working.
-from homestead_update_registry import (  # noqa: E402,F401
-    MANIFEST_ACCEPT, _CACHE, _CACHE_LOCK, parse_image, with_tag, _secret_credentials, _credential,
-    _NoAuthRedirect, _auth_realm, _open, RATE_LIMIT_WAITS, _retry_after, _read_capped, _registry_json, manifest_info,
-    image_layers, manifest_digest, registry_tags, semver, newer_semver, RELEASE, release_key, channel_newest,
-    channel_release, channel_behind,
-)
-from homestead_update_checks import (  # noqa: E402,F401
-    _pod_digest, _matching_pods, _last_known, _names_tag, followed, _check_deployment,
-    SCAN, _SCAN_LOCK, scan_progress, _scan_note,
-    scan, _summary, _LATEST, _STARTED, _RUN_LOCK, FRESH_FOR, RETRY_RATE_LIMITED, _fresh_for, invalidate,
-    refresh_one, RECONCILE_EVERY, _RECONCILED, reconcile, refresh_soon, homestead_report, report,
-)
-from homestead_update_rollouts import (  # noqa: E402,F401
-    PINNED_VERSION_ENV, _pod_containers, _same_repository, _drop_pinned_version, _immutable, _history,
-    _review_pods, _previous_image, prepare_update, prepare_rollback, commit_prepared, apply_update, rollback,
-    PULL_IMAGE, PULL_TOOK, _event_age, pull_state, STUCK_REASONS, STUCK_AFTER, PULL_CAUSES, explain_pull,
-    explain_unplaced, _why_waiting, _age, progress,
-)
+# The parts (#623), imported last: each imports this module for what bind() sets.
+import homestead_update_checks as CHECKS  # noqa: E402
+import homestead_update_rollouts as ROLLOUTS  # noqa: E402
+# What automatic updates reads through this module, which server.py hands it in
+# bind() (its tests hand in a fake). Everything else is read, and replaced in
+# tests, where it is defined.
+from homestead_update_rollouts import _pod_containers, commit_prepared, prepare_update, rollback  # noqa: E402,F401
+from homestead_update_checks import refresh_soon  # noqa: E402,F401

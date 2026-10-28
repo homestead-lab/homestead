@@ -1600,6 +1600,7 @@ th.sortable[aria-sort="descending"]::after{content:" ↓";color:var(--tx)}
    unbroken image name pushed its button out of the box. */
 .imgtable td.imgname{min-width:220px;max-width:420px;word-break:break-all}
 .imgtable td:nth-child(3),.imgtable td:nth-child(4){white-space:nowrap}
+.image-keeper{display:inline-flex;align-items:center;gap:2px;max-width:100%}.image-keeper .dim,.image-keeper .linkish{min-width:0;overflow-wrap:anywhere;text-align:left}
 .prepull-note{gap:12px;align-items:center}.prepull-note>span{min-width:0;overflow-wrap:anywhere}.prepull-note>.btn{flex:0 0 auto}
 /* Docker Compose import: the file on the left, what it becomes on the right. */
 .modalbox[data-context="compose"]{width:min(1240px,100%)}
@@ -2651,6 +2652,7 @@ html[data-theme="light"] .modalbox[data-context="cluster-shutdown"]{background:v
 .evfilters .evf{width:auto;min-width:0;min-height:32px;padding:5px 30px 5px 10px;font-size:12.5px}
 .evfilters .evf-text{flex:1 1 180px;max-width:280px;padding-right:10px}
 .ev-when-sm{display:none}
+.audit-pager{justify-content:flex-end;margin-top:10px}
 @media(max-width:560px){
   .evfilters{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
   .evfilters .evf{width:100%;min-height:36px}

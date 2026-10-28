@@ -19,6 +19,8 @@ import urllib.error
 import urllib.parse
 
 import homestead_updates as U
+import homestead_update_checks as CHECKS
+import homestead_update_registry as REGISTRY
 
 SHA256 = re.compile(r"sha256:[0-9a-f]{64}")
 
@@ -46,12 +48,12 @@ def image_config(ref, auths, arch="amd64"):
     """The image's config (Env, ExposedPorts, Volumes, User, Labels) on this
     architecture: its manifest, the platform's own when that is an index, then
     the config blob - at most three registry requests, none when cached."""
-    parsed = U.parse_image(U.with_tag(ref))
+    parsed = REGISTRY.parse_image(REGISTRY.with_tag(ref))
     if parsed["digest"] and not SHA256.fullmatch(parsed["digest"]):
         raise NotesError("only sha256 image digests are read")
     def manifest(reference):
-        return U._registry_json(parsed, "manifests/" + urllib.parse.quote(reference, safe=":"), auths,
-                                U.MANIFEST_ACCEPT, limit=MANIFEST_MAX_BYTES)[0]
+        return REGISTRY._registry_json(parsed, "manifests/" + urllib.parse.quote(reference, safe=":"), auths,
+                                REGISTRY.MANIFEST_ACCEPT, limit=MANIFEST_MAX_BYTES)[0]
     key = lambda top: (parsed["registry"], parsed["repo"], top, arch)
     def cached(top):
         with _CONFIGS_LOCK:
@@ -91,7 +93,7 @@ def image_config(ref, auths, arch="amd64"):
     if size > CONFIG_MAX_BYTES:
         raise NotesError("the image's config is too large to read")
     # Read no more than the manifest says, and only that many bytes count.
-    body = U._registry_json(parsed, "blobs/" + config_digest, auths, limit=size)[0]
+    body = REGISTRY._registry_json(parsed, "blobs/" + config_digest, auths, limit=size)[0]
     if len(body) != size:
         raise NotesError("the image's config is not the size its manifest gives")
     config = _verified(body, config_digest, "config").get("config") or {}
@@ -289,11 +291,11 @@ def _new_image(item, auths):
     """The new image as the scan found it: by the digest it recorded, else by
     the digest its tag names in the scan's own short cache, else its tag.
     Each manifest read counts as a pull on Docker Hub, so none is repeated."""
-    candidate = U.parse_image(item.get("candidate") or item["source"])
+    candidate = REGISTRY.parse_image(item.get("candidate") or item["source"])
     digest = item.get("remote_digest") or ""
     if not SHA256.fullmatch(digest):
         try:
-            digest = U.manifest_info(candidate["original"], auths).get("digest") or ""
+            digest = REGISTRY.manifest_info(candidate["original"], auths).get("digest") or ""
         except Exception:
             digest = ""
     return _image(candidate["base"], digest, candidate["original"])
@@ -303,14 +305,14 @@ def notes_for(ns, name):
     """Each container the last scan found an update for: links and changes.
     Which images are read is the server's own record, never the request's."""
     ns, name = _dns(ns, "namespace"), _dns(name, "workload name")
-    with U._SCAN_LOCK:
-        report = U._LATEST.get("report") or {}
+    with CHECKS._SCAN_LOCK:
+        report = CHECKS._LATEST.get("report") or {}
     workload = next((w for w in report.get("workloads") or [] if (w.get("ns"), w.get("name")) == (ns, name)), None)
     if not workload:
         return {"ns": ns, "name": name, "images": [], "error": "not in the last update check"}
     try:
         dep = U.kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-        auths = U._secret_credentials(ns, dep)
+        auths = REGISTRY._secret_credentials(ns, dep)
     except Exception as error:  # its words can name the API server
         return {"ns": ns, "name": name, "images": [], "error": f"the app could not be read ({type(error).__name__})"}
     arch = _arch(ns, dep)
@@ -320,7 +322,7 @@ def notes_for(ns, name):
             continue
         out = {"container": item.get("container", "")}
         try:
-            parsed = U.parse_image(item.get("source") or "")
+            parsed = REGISTRY.parse_image(item.get("source") or "")
             out.update(from_tag=parsed["tag"], to_tag=item.get("candidate_tag") or "")
             if not SHA256.fullmatch(item.get("current_digest") or ""):
                 raise NotesError("the running image is not known yet")

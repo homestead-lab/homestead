@@ -137,6 +137,16 @@ class ReadTests(unittest.TestCase):
             self.assertTrue(listing["metadata"]["resourceVersion"])
             self.assertEqual(names(K.kget("/api/v1/pods")), ["a", "b"])
 
+    def test_the_metrics_api_kinds_are_at_the_paths_it_serves_them_on(self):
+        node = {"apiVersion": "metrics.k8s.io/v1beta1", "kind": "NodeMetrics", "metadata": {"name": "host-1"}, "usage": {"cpu": "1"}}
+        use = {"apiVersion": "metrics.k8s.io/v1beta1", "kind": "PodMetrics", "metadata": {"name": "a", "namespace": "lab"},
+               "containers": [{"usage": {"cpu": "2"}}]}
+        with Kube(node, use, pod("b")) as kube:
+            self.assertEqual(names(K.kget("/apis/metrics.k8s.io/v1beta1/nodes")), ["host-1"])
+            self.assertEqual(names(K.kget("/apis/metrics.k8s.io/v1beta1/pods")), ["a"])
+            self.assertEqual(names(K.kget("/api/v1/pods")), ["b"], "the core pods are another resource")
+            self.assertEqual(kube.path_of(use), "/apis/metrics.k8s.io/v1beta1/namespaces/lab/pods/a")
+
     def test_label_selectors(self):
         with Kube(pod("a", labels={"app": "web", "tier": "front"}), pod("b", labels={"app": "db"}), pod("c")):
             for selector, expected in (("app=web", ["a"]), ("app%3D%3Dweb", ["a"]), ("app!=web", ["b", "c"]),
@@ -276,6 +286,25 @@ class WriteTests(unittest.TestCase):
             self.assertIsNone(kube.object(PODS + "/a"))
             self.assertIsNone(K.delete_if_present(PODS + "/a"))
 
+    def test_deleting_a_collection_removes_its_rows(self):
+        with Kube(pod("a"), pod("b"), pod("c", ns="other"), {"apiVersion": "v1", "kind": "Node", "metadata": {"name": "host-1"}}) as kube:
+            K.ksend("DELETE", PODS)
+            self.assertEqual(names(K.kget(PODS)), [])
+            self.assertEqual(names(K.kget("/api/v1/namespaces/other/pods")), ["c"], "another namespace is left alone")
+            K.ksend("DELETE", NODES)
+            self.assertEqual(names(K.kget(NODES)), [], "a cluster-scoped kind has no namespace to miss")
+
+    def test_the_api_server_does_not_delete_a_namespaced_kind_across_all_namespaces(self):
+        with Kube() as kube:
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                K.ksend("DELETE", "/api/v1/pods")
+            self.assertEqual(caught.exception.code, 405, "an empty store answers the same")
+        with Kube(pod("a"), pod("c", ns="other")) as kube:
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                K.ksend("DELETE", "/api/v1/pods")
+            self.assertEqual(caught.exception.code, 405)
+            self.assertEqual(names(K.kget("/api/v1/pods")), ["a", "c"], "nothing is removed")
+
     def test_deleting_an_owner_takes_what_it_alone_owns(self):
         owner = pod("owner", uid="u1")
         owned = pod("owned", ownerReferences=[{"uid": "u1"}])
@@ -352,6 +381,31 @@ class FailureTests(unittest.TestCase):
             self.assertEqual(caught.exception.code, 403)
             self.assertIsNotNone(kube.object(PODS + "/a"))
 
+    def test_a_failure_can_be_any_error_not_only_an_http_status(self):
+        with Kube(pod("a")) as kube:
+            kube.fail(PODS + "/a", OSError("no route"), method="PATCH")
+            with self.assertRaisesRegex(OSError, "no route"):
+                K.ksend("PATCH", PODS + "/a", {"metadata": {"labels": {"x": "1"}}}, ctype=MERGE)
+            self.assertEqual(kube.object(PODS + "/a")["metadata"]["labels"], {}, "nothing was done")
+
+    def test_a_failure_can_skip_the_first_requests(self):
+        with Kube(pod("a")) as kube:
+            kube.fail(PODS + "/a", 500, method="PATCH", skip=1)
+            K.ksend("PATCH", PODS + "/a", {"metadata": {"labels": {"x": "1"}}}, ctype=MERGE)
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                K.ksend("PATCH", PODS + "/a", {"metadata": {"labels": {"x": "2"}}}, ctype=MERGE)
+            self.assertEqual(caught.exception.code, 500)
+            self.assertEqual(kube.object(PODS + "/a")["metadata"]["labels"], {"x": "1"})
+
+    def test_a_reply_can_be_lost_after_the_write_was_done(self):
+        with Kube(pod("a")) as kube:
+            kube.fail(PODS + "/a", TimeoutError("timed out"), method="PATCH", applied=True)
+            with self.assertRaises(TimeoutError):
+                K.ksend("PATCH", PODS + "/a", {"metadata": {"labels": {"x": "1"}}}, ctype=MERGE)
+            self.assertEqual(kube.object(PODS + "/a")["metadata"]["labels"], {"x": "1"})
+            K.ksend("PATCH", PODS + "/a", {"metadata": {"labels": {"x": "2"}}}, ctype=MERGE)
+            self.assertEqual(len(kube.writes), 2)
+
     def test_a_reaction_answers_in_place_of_the_fake(self):
         with Kube(pod("a")) as kube:
             kube.react("PATCH", PODS + "/a", lambda method, path, body: {"ignored": True})
@@ -360,6 +414,49 @@ class FailureTests(unittest.TestCase):
             self.assertEqual(kube.object(PODS + "/a")["metadata"]["labels"], {})
             kube.react("GET", PODS + "/a/log", lambda *_: "line one")
             self.assertEqual(K.kget(PODS + "/a/log"), "line one")
+
+    def test_a_field_given_as_none_is_left_out_of_the_object(self):
+        """A pod a real server never gives out: one without its creation time."""
+        with Kube(pod("a", creationTimestamp=None), pod("b")) as kube:
+            self.assertNotIn("creationTimestamp", kube.object(PODS + "/a")["metadata"])
+            self.assertIn("creationTimestamp", kube.object(PODS + "/b")["metadata"])
+
+
+    def test_an_object_can_be_taken_away_without_a_write_of_the_apps(self):
+        owner = {"apiVersion": "batch/v1", "kind": "Job", "metadata": {"name": "j", "namespace": "lab", "uid": "job-uid"}}
+        owned = pod("p", ownerReferences=[{"kind": "Job", "name": "j", "uid": "job-uid"}])
+        with Kube(owner, owned, pod("other")) as kube:
+            kube.discard("/apis/batch/v1/namespaces/lab/jobs/j")
+            self.assertIsNone(kube.object("/apis/batch/v1/namespaces/lab/jobs/j"))
+            self.assertEqual(names(K.kget(PODS)), ["other"], "what it owned is collected, as after a delete")
+            self.assertEqual(kube.writes, [], "it is the test changing the cluster, not a write of the app's")
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                K.kget("/apis/batch/v1/namespaces/lab/jobs/j")
+            self.assertEqual(caught.exception.code, 404)
+            kube.discard(PODS + "/not-there")  # already gone is no error
+
+
+    def test_an_owner_reference_without_a_uid_is_not_collected(self):
+        # The API server rejects an owner reference without a uid, so there is nothing to follow:
+        # a test object that carries one stays when something else is deleted.
+        owned = pod("p", ownerReferences=[{"kind": "ReplicaSet", "name": "rs"}])
+        with Kube(owned, pod("other")) as kube:
+            kube.discard(PODS + "/other")
+            self.assertEqual(names(K.kget(PODS)), ["p"])
+
+    def test_a_secrets_string_data_is_kept_as_base64_data(self):
+        secrets = "/api/v1/namespaces/lab/secrets"
+        with Kube() as kube:
+            K.ksend("POST", secrets, {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "s", "namespace": "lab"},
+                                     "stringData": {"password": "hunter2"}})
+            self.assertEqual(K.kget(secrets + "/s")["data"], {"password": "aHVudGVyMg=="})
+            self.assertNotIn("stringData", K.kget(secrets + "/s"))
+            K.ksend("PATCH", secrets + "/s", {"stringData": {"user": "ada"}}, ctype=MERGE)
+            self.assertEqual(K.kget(secrets + "/s")["data"], {"password": "aHVudGVyMg==", "user": "YWRh"})
+            K.ksend("PUT", secrets + "/s", {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "s", "namespace": "lab"},
+                                           "stringData": {"password": "x"}})
+            self.assertEqual(K.kget(secrets + "/s")["data"], {"password": "eA=="})
+            self.assertNotIn("stringData", kube.object(secrets + "/s"))
 
 
 if __name__ == "__main__":

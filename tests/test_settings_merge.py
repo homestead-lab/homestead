@@ -11,6 +11,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_update_checks as CHECKS
 
 
 STORED = server.APP_SETTINGS.validate({
@@ -40,7 +41,7 @@ class SettingsMergeTests(unittest.TestCase):
         handler._send = mock.Mock()
         with mock.patch.object(server.KUBE_HELPERS, "kget", return_value=copy.deepcopy(current)), \
              mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=put_fails) as send, \
-             mock.patch.object(server.UPDATES, "invalidate"), \
+             mock.patch.object(CHECKS, "invalidate"), \
              mock.patch.object(server.SETTINGS_HELPERS, "_fleet_rename"):
             if before:
                 before()
@@ -106,7 +107,7 @@ class SettingsMergeTests(unittest.TestCase):
         missing = urllib.error.HTTPError("/api/v1", 404, "Not Found", {}, io.BytesIO(b"{}"))
         with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=missing), \
              mock.patch.object(server.KUBE_HELPERS, "ksend") as send, \
-             mock.patch.object(server.UPDATES, "invalidate"), \
+             mock.patch.object(CHECKS, "invalidate"), \
              mock.patch.object(server.SETTINGS_HELPERS, "_fleet_rename"):
             saved = server.SETTINGS_HELPERS.save_app_settings({"site_name": "Barn", "revision": ""})
         self.assertEqual("Barn", saved["site_name"])

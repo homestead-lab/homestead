@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_power as power
 import homestead_lifecycle as lifecycle
+import homestead_node_actions as NODE_ACTIONS
 import test_node_power_plan as fixture
 
 ONE_NODE = lambda: {"members": ["node1"], "can_lose": 0, "ready": ["node1"], "total": 1, "quorum_needs": 1}
@@ -49,14 +50,14 @@ class ForcedSendTests(unittest.TestCase):
     def test_forced_sends_without_cordon_or_drain(self):
         calls, sent = [], []
         with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), \
-                mock.patch.object(lifecycle, "set_cordon", lambda *a: calls.append(("cordon", a))), \
-                mock.patch.object(lifecycle, "drain", lambda *a, **k: calls.append(("drain", a))), \
-                mock.patch.object(lifecycle, "node_action_check", lambda *a: (False, "quorum", {})), \
-                mock.patch.object(lifecycle, "quorum_report", lambda: {"members": ["node1"]}), \
+                mock.patch.object(NODE_ACTIONS, "set_cordon", lambda *a: calls.append(("cordon", a))), \
+                mock.patch.object(NODE_ACTIONS, "drain", lambda *a, **k: calls.append(("drain", a))), \
+                mock.patch.object(NODE_ACTIONS, "node_action_check", lambda *a: (False, "quorum", {})), \
+                mock.patch.object(NODE_ACTIONS, "quorum_report", lambda: {"members": ["node1"]}), \
                 mock.patch.object(lifecycle, "_bust", lambda *a: None), \
                 mock.patch.object(lifecycle, "ksend", lambda method, path, body=None, **k: sent.append(body) or
                                   {"metadata": {"uid": "u", "name": body["metadata"]["name"], "namespace": "lab"}}):
-            result = lifecycle.node_power("node1", "reboot", True, before_send=lambda: calls.append(("checked",)),
+            result = NODE_ACTIONS.node_power("node1", "reboot", True, before_send=lambda: calls.append(("checked",)),
                                           reviewed_pods=[], force=True)
         self.assertEqual([("checked",)], calls, "no cordon, no drain - only the fresh check")
         self.assertIn("systemctl reboot", sent[0]["spec"]["containers"][0]["command"][-1])

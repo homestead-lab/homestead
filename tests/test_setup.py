@@ -11,6 +11,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_setup as SETUP
 import homestead_share_servers as SERVERS
+import homestead_longhorn_target as BACKUP_TARGET
+import homestead_vip_registry as REG
+import homestead_deploy_manifests as MANIFESTS
+import homestead_node_actions as NODE_ACTIONS
 
 
 class SetupTests(unittest.TestCase):
@@ -138,11 +142,11 @@ class UniFiSetupStateTests(unittest.TestCase):
         # Isolate the other guide observations; exercise the real IPAM loader
         # against a ConfigMap response, rather than mocking its tuple away.
         observations = [(SETUP, "DATA_DIR", directory.name), (server.PLATFORM, "detect", {}),
-                        (server.LC, "quorum_report", {"total": 1, "members": [], "ready": 1, "can_lose": 0}),
+                        (NODE_ACTIONS, "quorum_report", {"total": 1, "members": [], "ready": 1, "can_lose": 0}),
                         (server.SELF_ADDRESS, "report", {"on_vip": False, "url": ""}),
-                        (server.NETWORK, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
+                        (REG, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
                         (server, "storage_classes", []), (server, "vm_network_details", []),
-                        (SERVERS, "samba_state", {}), (server.LH, "backup_target", {}),
+                        (SERVERS, "samba_state", {}), (BACKUP_TARGET, "backup_target", {}),
                         (server.OS_ROLLOUT, "settings", {}), (server.AUTH, "list_users", []),
                         (server.IMP, "list_sources", []), (server.API_KEYS, "list_keys", []),
                         (server.FLEET, "summary", {}), (server.HOST_CONSOLE, "inventory", {}),
@@ -235,10 +239,10 @@ class NetworkSetupStateTests(unittest.TestCase):
         self.server = server
         directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
         observations = [(SETUP, "DATA_DIR", directory.name), (server.PLATFORM, "detect", {}),
-                        (server.LC, "quorum_report", {"total": 1, "members": [], "ready": 1, "can_lose": 0}),
+                        (NODE_ACTIONS, "quorum_report", {"total": 1, "members": [], "ready": 1, "can_lose": 0}),
                         (server.SELF_ADDRESS, "report", {"on_vip": False, "url": ""}),
-                        (server.NETWORK, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
-                        (server, "storage_classes", []), (server.LH, "backup_target", {}),
+                        (REG, "registered", []), (server.DISKS, "inventory", {"nodes": {}}),
+                        (server, "storage_classes", []), (BACKUP_TARGET, "backup_target", {}),
                         (server.OS_ROLLOUT, "settings", {}), (server.AUTH, "list_users", []),
                         (server.IPAM, "load", ({}, None)), (server.IMP, "list_sources", []),
                         (server.API_KEYS, "list_keys", []), (server.FLEET, "summary", {}),
@@ -313,12 +317,12 @@ class DeployArgsTests(unittest.TestCase):
 
     def test_args_reach_the_container_and_bad_ones_are_refused(self):
         import server
-        dep, _ = server.DEPLOY.build_deployment({"name": "cloudflared", "image": "cloudflare/cloudflared:latest",
+        dep, _ = MANIFESTS.build_deployment({"name": "cloudflared", "image": "cloudflare/cloudflared:latest",
                                           "args": ["tunnel", "--no-autoupdate", "run"], "network_mode": "internal"})
         self.assertEqual(["tunnel", "--no-autoupdate", "run"], dep["spec"]["template"]["spec"]["containers"][0]["args"])
         for bad in ("tunnel run", [1], ["x"] * 33, ["a" * 600]):
             with self.subTest(bad=str(bad)[:20]), self.assertRaises(ValueError):
-                server.DEPLOY.build_deployment({"name": "c", "image": "busybox", "args": bad})
+                MANIFESTS.build_deployment({"name": "c", "image": "busybox", "args": bad})
 
 
 if __name__ == "__main__":

@@ -3,64 +3,61 @@ import copy
 import json
 import os
 import sys
+import tempfile
 import unittest
-import urllib.error
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
+import homestead_kube as K
+import homestead_operations as OPS
 import homestead_self_data_anchor as anchor
 from homestead_storage_journal import Held, Journal
+from fakes.kube import Kube
 
 
+ANCHOR = "/api/v1/namespaces/lab/configmaps/homestead-data-handoff"
 OP = "1234567890abcdef12345678"
 
 
-class Cluster:
-    def __init__(self):
-        self.objects = {}
-        self.sent = []
-        self.lose_at = None
-        self.reject_at = None
-        self.uid = 0
+class Setup:
+    """The claim the journal writes to, on the shared fake API
+    (tests/fakes/kube.py), and where faults are put in: a request lost
+    before it is done, or a reply lost after."""
+
+    def __init__(self, test):
         self.pvc = "/api/v1/namespaces/lab/persistentvolumeclaims/data"
-        self.objects[self.pvc] = {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+        # The shared fake runs the real write guards; the storage guard takes the job
+        # store's lock, which lives under its DATA_DIR.
+        test.enterContext(mock.patch.object(OPS, "DATA_DIR", test.enterContext(tempfile.TemporaryDirectory())))
+        self.kube = test.enterContext(Kube({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
             "metadata": {"namespace": "lab", "name": "data", "uid": "pvc-old", "resourceVersion": "1"},
-            "spec": {"volumeName": "old-pv"}}
+            "spec": {"volumeName": "old-pv"}}))
+        self.read, self.send = K.kget, K.ksend
 
-    def read(self, path):
-        if path not in self.objects:
-            raise urllib.error.HTTPError(path, 404, "absent", {}, None)
-        return copy.deepcopy(self.objects[path])
+    @property
+    def sent(self):
+        return [(method, path, body) for method, path, body, _ in self.kube.writes]
 
-    def send(self, method, path, body, **kwargs):
-        self.sent.append((method, path, copy.deepcopy(body)))
-        if len(self.sent) == self.reject_at:
-            raise OSError("secret API diagnostic")
-        if method == "POST":
-            path += "/" + body["metadata"]["name"]
-            if path in self.objects:
-                raise urllib.error.HTTPError(path, 409, "already exists", {}, None)
-            obj = copy.deepcopy(body)
-            self.uid += 1
-            obj["metadata"].update(uid=f"created-{self.uid}", resourceVersion="1")
-        else:
-            old = self.objects[path]
-            for key in ("uid", "resourceVersion"):
-                if old["metadata"][key] != body["metadata"][key]:
-                    raise urllib.error.HTTPError(path, 409, "changed", {}, None)
-            obj = copy.deepcopy(body) if method == "PUT" else copy.deepcopy(old)
-            if method == "PATCH":
-                obj["spec"].update(body.get("spec", {}))
-            obj["metadata"]["resourceVersion"] = str(int(old["metadata"]["resourceVersion"]) + 1)
-        self.objects[path] = obj
-        if len(self.sent) == self.lose_at:
-            raise TimeoutError("secret response diagnostic")
-        return copy.deepcopy(obj)
+    def lose_reply(self, path, method, skip=0):
+        """The request after skip of them is done, and the caller never hears."""
+        self.kube.fail(path, TimeoutError("secret response diagnostic"), method=method, skip=skip, applied=True)
+
+    def reject(self, path, method, skip=0):
+        """The request after skip of them is not done: the caller gets an error."""
+        self.kube.fail(path, OSError("secret API diagnostic"), method=method, skip=skip)
+
+    def discard(self, path):
+        self.kube.discard(path)
+
+    def stored(self):
+        return [self.kube.object(path) for path in (self.pvc, ANCHOR) if self.kube.object(path)] + [body for _, _, body, _ in self.kube.writes]
+
 
 
 class AnchorTests(unittest.TestCase):
     def setUp(self):
-        self.cluster = Cluster()
+        self.cluster = Setup(self)
         self.record = self.fresh()
         self.handle = self.create(self.record)
 
@@ -98,14 +95,16 @@ class AnchorTests(unittest.TestCase):
         self.patch(self.writer(self.record))
         # Restore original PVC shape/version to model two workers inspecting
         # before the winner wrote. The control CAS still excludes the loser.
-        self.cluster.objects[self.cluster.pvc]["metadata"]["resourceVersion"] = "1"
+        pvc = self.cluster.kube.object(self.cluster.pvc)
+        pvc["metadata"]["resourceVersion"] = "1"
+        self.cluster.kube.add(pvc)
         with self.assertRaises(Held):
             self.patch(self.writer(stale))
         self.assertEqual(1, sum(p == self.cluster.pvc for _, p, _ in self.cluster.sent))
         self.assertTrue(stale.failed)
 
     def test_lost_intent_checkpoint_sends_no_resource_write_or_retry(self):
-        self.cluster.lose_at = 2
+        self.cluster.lose_reply(self.record.path, "PUT")
         writer = self.writer(self.record)
         with self.assertRaises(Held): self.patch(writer)
         self.assertEqual("intent", self.restored().item()["ref"]["storage_writes"][0]["state"])
@@ -113,20 +112,20 @@ class AnchorTests(unittest.TestCase):
         self.assertEqual(0, sum(p == self.cluster.pvc for _, p, _ in self.cluster.sent))
 
     def test_lost_resource_response_remains_uncertain_after_restart(self):
-        self.cluster.lose_at = 3
+        self.cluster.lose_reply(self.cluster.pvc, "PATCH")
         with self.assertRaises(Held): self.patch(self.writer(self.record))
         self.assertEqual("uncertain", self.restored().item()["ref"]["storage_writes"][0]["state"])
         with self.assertRaises(Held): self.patch(self.writer(self.restored()))
         self.assertEqual(1, sum(p == self.cluster.pvc for _, p, _ in self.cluster.sent))
 
     def test_lost_accepted_checkpoint_can_be_observed_not_resent(self):
-        self.cluster.lose_at = 4
+        self.cluster.lose_reply(self.record.path, "PUT", skip=1)
         with self.assertRaises(Held): self.patch(self.writer(self.record))
         self.patch(self.writer(self.restored()))
         self.assertEqual(1, sum(p == self.cluster.pvc for _, p, _ in self.cluster.sent))
 
     def test_failed_accepted_checkpoint_leaves_intent_not_retry_permission(self):
-        self.cluster.reject_at = 4
+        self.cluster.reject(self.record.path, "PUT", skip=1)
         with self.assertRaises(Held): self.patch(self.writer(self.record))
         self.assertEqual("intent", self.restored().item()["ref"]["storage_writes"][0]["state"])
         with self.assertRaises(Held): self.patch(self.writer(self.restored()))
@@ -134,14 +133,16 @@ class AnchorTests(unittest.TestCase):
 
     def status_write_before_first_request(self):
         """A controller writes the claim's status between the journal's read and its request (#826)."""
-        original = self.cluster.send
-        def send(method, path, body, **kwargs):
-            if path == self.cluster.pvc and not any(p == path for _, p, _ in self.cluster.sent):
-                pvc = self.cluster.objects[path]
+        done = []
+
+        def status_written(method, path, body):
+            if not done:
+                done.append(path)
+                pvc = self.cluster.kube.object(path)
                 pvc["status"] = {"phase": "Bound"}
-                pvc["metadata"]["resourceVersion"] = str(int(pvc["metadata"]["resourceVersion"]) + 1)
-            return original(method, path, body, **kwargs)
-        self.cluster.send = send
+                pvc["metadata"]["resourceVersion"] = "2"
+                self.cluster.kube.add(pvc)
+        self.cluster.kube.react("PATCH", self.cluster.pvc, status_written)   # answers nothing: the fake goes on
 
     def test_a_status_conflict_retry_is_recorded_and_survives_restart(self):
         self.status_write_before_first_request()
@@ -155,7 +156,7 @@ class AnchorTests(unittest.TestCase):
         self.assertEqual(2, sum(p == self.cluster.pvc for _, p, _ in self.cluster.sent))
 
     def test_only_a_status_retry_may_rewrite_an_open_intent(self):
-        self.cluster.lose_at = 2  # leave the intent open, nothing sent
+        self.cluster.lose_reply(self.record.path, "PUT")  # leave the intent open, nothing sent
         with self.assertRaises(Held): self.patch(self.writer(self.record))
         record = self.restored()
         intent = record.item()["ref"]["storage_writes"][0]
@@ -206,9 +207,9 @@ class AnchorTests(unittest.TestCase):
         obj = copy.deepcopy(original); obj["metadata"]["labels"][anchor.LABEL] = "another"; variants.append(obj)
         for obj in variants:
             with self.subTest(obj=obj):
-                self.cluster.objects[self.record.path] = obj
+                self.cluster.kube.add(obj)
                 with self.assertRaises(Held): self.restored()
-        del self.cluster.objects[self.record.path]
+        self.cluster.discard(self.record.path)
         with self.assertRaises(Held): self.restored()
         self.assertEqual(1, len(self.cluster.sent))
 
@@ -216,8 +217,8 @@ class AnchorTests(unittest.TestCase):
         duplicate = self.fresh()
         with self.assertRaises(Held): self.create(duplicate)
         with self.assertRaises(Held): duplicate.handle()
-        del self.cluster.objects[self.record.path]
-        self.cluster.lose_at = len(self.cluster.sent) + 1
+        self.cluster.discard(self.record.path)
+        self.cluster.lose_reply(self.record.path.rsplit("/", 1)[0], "POST")
         lost = self.fresh()
         with self.assertRaises(Held) as caught: self.create(lost)
         self.assertNotIn("secret", str(caught.exception))
@@ -229,7 +230,7 @@ class AnchorTests(unittest.TestCase):
         with self.assertRaises(Held): self.record.advance("switch")
         self.record.advance("quiesce")
         with self.assertRaises(Held): stale.advance("quiesce")
-        self.cluster.lose_at = len(self.cluster.sent) + 2
+        self.cluster.lose_reply(self.cluster.pvc, "PATCH")
         with self.assertRaises(Held): self.patch(self.writer(self.record))
         with self.assertRaises(Held): self.restored().advance("copy")
 
@@ -238,7 +239,7 @@ class AnchorTests(unittest.TestCase):
                        lambda j: j["ref"].update(config={"password": "not-real"})):
             job = self.record.item(); mutate(job)
             with self.assertRaises(Held): self.record.checkpoint(job)
-        self.assertNotIn("not-real", json.dumps(self.cluster.objects))
+        self.assertNotIn("not-real", json.dumps(self.cluster.stored()))
 
     def test_invalid_or_unknown_protocol_record_is_read_only(self):
         original = self.cluster.read(self.record.path)
@@ -247,7 +248,7 @@ class AnchorTests(unittest.TestCase):
             obj = copy.deepcopy(original)
             state = json.loads(obj["data"]["state.json"]); state[key] = value
             obj["data"]["state.json"] = json.dumps(state)
-            self.cluster.objects[self.record.path] = obj
+            self.cluster.kube.add(obj)
             with self.assertRaises(Held): self.restored()
         self.assertEqual(1, len(self.cluster.sent))
 

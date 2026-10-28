@@ -9,6 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_deploy_manifests as MANIFESTS
 from fakes.platform import plain_platform
 
 STACK = """services:
@@ -65,7 +66,7 @@ class ComposeApplyTests(unittest.TestCase):
         if cfg["workload_name"] == self.fail_on:
             raise ValueError("the cluster said no")
         self.created.append(cfg["workload_name"])
-        dep, _ = server.DEPLOY.build_deployment(cfg)
+        dep, _ = MANIFESTS.build_deployment(cfg)
         dep["metadata"]["uid"] = cfg["workload_name"] + "-uid"
         self.controllers[cfg["workload_name"]] = dep
         return {"ok": True, "name": cfg["workload_name"]}

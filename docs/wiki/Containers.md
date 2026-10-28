@@ -494,11 +494,13 @@ the registry gives. Kubernetes itself reports no more than "Pulling".
 node's largest ones, so Homestead asks each node's containerd for all of them
 (a short scan, again whenever the last is over fifteen minutes old) and keeps
 the answer, adding anything pulled since. **Clean up** removes an image nothing
-uses. *Active* images are what running containers use; *stopped* ones are what
-a container scaled to zero starts from, and *scheduled* ones a scheduled job's,
-so neither reads as unused. *Rollback* copies are
-the image a container had before its last update, kept so **Roll back** can
-return to it; **Forget** one and it becomes unused, to clean up like the rest.
+uses. A *running* image is what running containers use. An image also stays
+while something not running yet will start from it, and the Retention column
+says which: *Job paused* or *Job waiting*, *scaled to zero* or *no pods yet*
+for an app, *scheduled job*, *stopped VM*, *VM pool at zero*, *VM template*, *VM snapshot*, *disk
+import* or *scheduled import*. An app or VM is a link to its page. An import from an OpenShift image stream is\nnot read, so it keeps every image and says *image stream not read*. *Roll back* copies are the image a container had before its last
+update, kept so **Roll back** can return to it; **Forget** one and it becomes
+unused, to clean up like the rest.
 
 An update keeps one previous image per container for Roll back; the one before
 it becomes unused. Unused images stay on every host that ran them until they

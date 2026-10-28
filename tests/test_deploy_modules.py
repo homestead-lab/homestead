@@ -1,8 +1,8 @@
 """homestead_deploy split by feature (#623): the App Store catalogue lives in
 homestead_deploy_appstore and the Deployment builders in
-homestead_deploy_manifests, and homestead_deploy keeps the bound helpers, the
-routes and a re-export of every name, so other modules, server.py and tests
-keep working."""
+homestead_deploy_manifests, and homestead_deploy keeps the bound helpers and
+the routes. Other modules, server.py and tests read and replace each name
+where it is defined (test_split_reexports)."""
 import subprocess
 import sys
 import unittest
@@ -21,19 +21,11 @@ PARTS = (APPSTORE, MANIFESTS)
 
 
 class DeployModuleTests(unittest.TestCase):
-    def test_every_moved_name_is_the_same_object_on_homestead_deploy(self):
-        for part in PARTS:
-            moved = [name for name in vars(part) if not name.startswith("__")
-                     and getattr(vars(part)[name], "__module__", part.__name__) == part.__name__
-                     and name not in ("D",) and not isinstance(vars(part)[name], type(sys))]
-            self.assertTrue(moved, part.__name__)
-            for name in moved:
-                self.assertIs(getattr(DEPLOY, name), getattr(part, name), f"{part.__name__}.{name}")
-
     def test_each_module_can_be_imported_first(self):
         for name in ("homestead_deploy_appstore", "homestead_deploy_manifests", "homestead_deploy"):
             done = subprocess.run([sys.executable, "-c",
-                                   f"import {name}, homestead_deploy as D; D.fetch_appstore; D.build_deployment"],
+                                   f"import {name}, homestead_deploy as D, homestead_deploy_appstore as A, "
+                                   "homestead_deploy_manifests as M; A.fetch_appstore; M.build_deployment; D.ROUTES"],
                                   cwd=SERVER, capture_output=True, text=True)
             self.assertEqual(0, done.returncode, f"importing {name} first: {done.stderr}")
 
@@ -51,12 +43,12 @@ class DeployModuleTests(unittest.TestCase):
         with mock.patch.object(DEPLOY, "cached", lambda key, ttl, read: read(), create=True), \
                 mock.patch.object(DEPLOY, "get_app_settings",
                                   lambda: {"catalog_url": "https://feed.example.com/apps.json"}, create=True):
-            self.assertEqual("https://feed.example.com/apps.json", DEPLOY.catalog_source())
+            self.assertEqual("https://feed.example.com/apps.json", APPSTORE.catalog_source())
 
-    def test_a_replacement_on_homestead_deploy_reaches_the_moved_code(self):
-        # tests/test_deploy.py replaces analyze_deploy_intent on homestead_deploy.
-        with mock.patch.object(DEPLOY, "analyze_deploy_intent", return_value={"seen": True}):
-            self.assertEqual({"seen": True}, DEPLOY.template_to_cfg({"name": "app", "repo": "nginx", "config": []}))
+    def test_a_replacement_where_a_name_is_defined_reaches_the_other_part(self):
+        # tests/test_deploy.py replaces analyze_deploy_intent on homestead_deploy_manifests.
+        with mock.patch.object(MANIFESTS, "analyze_deploy_intent", return_value={"seen": True}):
+            self.assertEqual({"seen": True}, APPSTORE.template_to_cfg({"name": "app", "repo": "nginx", "config": []}))
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ from pathlib import Path
 from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
+import homestead_vm_create as VM_CREATE
 import homestead_k3scluster as K3S
 
 NAD = "/apis/k8s.cni.cncf.io/v1/namespaces/default/network-attachment-definitions/vlan1"
@@ -31,7 +32,7 @@ class StaticAddressTests(unittest.TestCase):
 
     def create(self, **cfg):
         cfg = {"name": "k3s-demo-server-1", "password": "a-long-password", **cfg}
-        return imports.create_vm(cfg, {"harvester": True, "cdi": True}, "longhorn-r2")
+        return VM_CREATE.create_vm(cfg, {"harvester": True, "cdi": True}, "longhorn-r2")
 
     def test_a_bridged_vm_gets_its_address_through_cloud_init(self):
         result = self.create(network="default/vlan1",
@@ -63,7 +64,7 @@ class StaticAddressTests(unittest.TestCase):
             cfg = K3S.prepare(K3sClusterTests.CFG)["configs"][0]
         for harvester in (False, True):
             with self.subTest(harvester=harvester):
-                built = imports.prepare_vm(cfg, {"harvester": harvester, "cdi": True})
+                built = VM_CREATE.prepare_vm(cfg, {"harvester": harvester, "cdi": True})
                 domain = built["vm"]["spec"]["template"]["spec"]["domain"]
                 self.assertEqual({"efi": {"secureBoot": False}}, domain["firmware"]["bootloader"])
                 if harvester:

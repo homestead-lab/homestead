@@ -271,8 +271,11 @@ def inventory():
                         csrs, harvester, unavailable=unavailable)
 
 
-def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protection=None):
-    """Separate real availability faults from normal workload transitions."""
+def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protection=None, short_of_hosts=()):
+    """Separate real availability faults from normal workload transitions.
+    short_of_hosts: the Longhorn volumes Match copies to hosts offers to
+    lower (homestead_app_copies, #841); their warning says why they are
+    degraded and points to the offer, so the two never disagree."""
     issues, activities = list(protection or []), []
     for node in nodes:
         if node.get("status") != "Ready":
@@ -291,6 +294,12 @@ def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protec
         if robustness == "faulted":
             issues.append({"severity": "critical", "kind": "Volume", "name": label,
                            "reason": "Longhorn reports the volume faulted"})
+        elif robustness == "degraded" and volume.get("name") in short_of_hosts:
+            copies = int(volume.get("replicas") or 0)
+            issues.append({"severity": "degraded", "kind": "Volume", "name": label, "one_host": True,
+                           "reason": f"This cluster has one host, so Longhorn keeps 1 of the {copies} copies this "
+                                     "volume asks for. An admin can match its copies to hosts: Cluster Health, "
+                                     "Match copies to hosts"})
         elif robustness == "degraded":
             issues.append({"severity": "degraded", "kind": "Volume", "name": label,
                            "reason": "Longhorn is rebuilding or missing a replica"})
