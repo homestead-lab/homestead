@@ -37,12 +37,16 @@ class Base(unittest.TestCase):
         self.dir = tempfile.mkdtemp()
         self.logs, self.calls, self.leader = {}, [], [True]
         self.workloads = list(WL)
-        LA.bind(self.dir, workloads=lambda: self.workloads, read=self.read, is_leader=lambda: self.leader[0])
+        self.withdrawn, self.noted = [], []
+        LA.bind(self.dir, workloads=lambda: self.workloads, read=self.read, is_leader=lambda: self.leader[0],
+                withdraw=lambda key, title, body: self.withdrawn.append((key, title, body)) or self.raised,
+                note=self.noted.append)
+        self.raised = {"id": 1}   # what withdraw answers: the alert was raised
         LA.reset()
 
-    def read(self, ns, pod, container, since, limit):
-        self.calls.append((pod, since))
-        value = self.logs.get(pod, "")
+    def read(self, ns, pod, container, since, limit, previous=False):
+        self.calls.append((pod, since, "previous") if previous else (pod, since))
+        value = self.logs.get((pod, "previous") if previous else pod, "")
         if isinstance(value, Exception):
             raise value
         return value[:limit]
@@ -513,6 +517,225 @@ class PreviewBounds(Base):
                 LA.preview(dict(self.BODY, regex=True))
 
 
+def restarted(name, restarts, pod=None):
+    return {"ns": "lab", "name": name, "pods": [{"name": pod or f"{name}-1", "phase": "Running",
+                                                 "containers": [{"name": name, "restarts": restarts}]}]}
+
+
+class Pause(Base):
+    """#929: a rule can be paused and resumed instead of deleted and made again."""
+
+    def test_a_paused_rule_reads_and_raises_nothing_until_resumed(self):
+        rule = self.rule()
+        self.logs["app-x-1"] = lines(12)
+        self.assertEqual({"ok": True, "paused": True}, LA.pause(rule["id"], True))
+        self.assertEqual([], LA.evaluate(now=T0))
+        self.assertEqual([], self.calls, "a paused rule's apps are not read")
+        listed = LA.listing()["rules"][0]
+        self.assertTrue(listed["paused"])
+        self.assertEqual("paused", listed["status"]["state"])
+        LA.pause(rule["id"], False)
+        self.assertFalse(LA.listing()["rules"][0]["paused"])
+        self.assertEqual(1, len(LA.evaluate(now=T0)), "counted again once resumed")
+
+    def test_pausing_a_raised_rule_ends_its_alert_as_paused_not_back_under(self):
+        rule = self.rule()
+        self.logs["app-x-1"] = lines(12)
+        self.assertEqual(1, len(LA.evaluate(now=T0)))
+        LA.pause(rule["id"], True)
+        self.assertEqual([(f"logs:{rule['id']}", "App X trouble: paused")], [w[:2] for w in self.withdrawn])
+        self.assertNotIn("back under", self.withdrawn[0][2])
+        self.assertEqual([], LA.alert_facts(now=T0 + 5), "the last round's fact is not raised again")
+        LA.pause(rule["id"], True)
+        self.assertEqual(1, len(self.withdrawn), "pausing a paused rule changes nothing")
+
+    def test_pause_takes_only_an_existing_id(self):
+        for bad in (None, "la-000000000000", "x", 5):
+            with self.assertRaises(ValueError):
+                LA.pause(bad, True)
+
+    def test_an_edit_keeps_a_rule_paused(self):
+        rule = self.rule()
+        LA.pause(rule["id"], True)
+        self.rule(id=rule["id"], threshold=20)
+        self.assertTrue(LA.listing()["rules"][0]["paused"])
+
+    def test_a_rule_paused_during_a_round_is_not_raised_by_it(self):
+        rule = self.rule()
+        self.logs["app-x-1"] = lines(12)
+        real = LA._count
+
+        def count(*args, **kwargs):
+            LA.pause(rule["id"], True)
+            return real(*args, **kwargs)
+        with mock.patch.object(LA, "_count", count):
+            self.assertEqual([], LA.evaluate(now=T0))
+        self.assertEqual("paused", LA.listing()["rules"][0]["status"]["state"])
+
+    def test_ten_rounds_in_a_row_out_of_time_pause_the_rule_and_say_so(self):
+        self.rule(query="x", regex=True)
+        self.logs["app-x-1"] = lines(12)
+        with mock.patch.object(LA, "matching", side_effect=LA.TooSlow("the expression took more than 2 seconds")):
+            for i in range(LA.AUTO_PAUSE - 1):
+                LA.evaluate(now=T0 + 60 * i)
+            self.assertFalse(LA.listing()["rules"][0].get("paused"))
+            LA.evaluate(now=T0 + 60 * (LA.AUTO_PAUSE - 1))
+        listed = LA.listing()["rules"][0]
+        self.assertTrue(listed["paused"])
+        self.assertIn(f"{LA.AUTO_PAUSE} minutes in a row", listed["status"]["detail"])
+        self.assertEqual("App X trouble: paused by Homestead", self.withdrawn[0][1])
+        self.assertEqual([], self.noted, "a raised alert ended says so; no second notice")
+
+    def test_an_auto_pause_with_nothing_raised_leaves_a_notice(self):
+        self.rule(query="qzqz", regex=True)
+        self.raised = None
+        self.logs["app-x-1"] = lines(1)
+        with mock.patch.object(LA, "matching", side_effect=LA.TooSlow("x")):
+            for i in range(LA.AUTO_PAUSE):
+                LA.evaluate(now=T0 + 60 * i)
+        self.assertEqual(1, len(self.noted))
+        self.assertEqual(("logs", "info", "App X trouble: paused by Homestead"),
+                         (self.noted[0]["category"], self.noted[0]["severity"], self.noted[0]["title"]))
+        self.assertNotIn("qzqz", json.dumps(self.noted), "never the query")
+        self.assertTrue(self.noted[0]["event"])
+
+    def test_a_round_in_time_starts_the_count_again(self):
+        rule = self.rule(query="x", regex=True)
+        self.logs["app-x-1"] = lines(1)
+        with mock.patch.object(LA, "matching", side_effect=LA.TooSlow("x")):
+            for i in range(LA.AUTO_PAUSE - 1):
+                LA.evaluate(now=T0 + 60 * i)
+        LA.evaluate(now=T0 + 60 * (LA.AUTO_PAUSE - 1))
+        with mock.patch.object(LA, "matching", side_effect=LA.TooSlow("x")):
+            LA.evaluate(now=T0 + 60 * LA.AUTO_PAUSE)
+        self.assertFalse(LA.listing()["rules"][0].get("paused"), rule["id"])
+
+
+class Removed(Base):
+    def test_deleting_a_raised_rule_ends_its_alert_as_removed(self):
+        rule = self.rule()
+        self.logs["app-x-1"] = lines(12)
+        self.assertEqual(1, len(LA.evaluate(now=T0)))
+        LA.delete(rule["id"])
+        self.assertEqual([(f"logs:{rule['id']}", "App X trouble: removed")], [w[:2] for w in self.withdrawn])
+        self.assertEqual([], LA.alert_facts(now=T0 + 5), "the last round's fact is not raised again")
+
+    def test_facts_say_when_they_were_taken(self):
+        # The alert loop takes these, then other sources, then observes: a
+        # withdraw in between must win over a fact taken before it (review 1).
+        self.rule()
+        self.logs["app-x-1"] = lines(12)
+        LA.evaluate(now=T0)
+        before = time.time()
+        facts = LA.alert_facts(now=T0 + 5)
+        self.assertTrue(before <= facts[0]["collected"] <= time.time())
+
+    def test_resume_leaves_the_paused_minutes_not_read(self):
+        # A 5-minute rule resumed must not count the paused minutes as 0 (review 7).
+        rule = self.rule(window=5)
+        LA.pause(rule["id"], True, now=T0)
+        LA.pause(rule["id"], False, now=T0 + 180)
+        counts = dict(map(tuple, LA.listing()["rules"][0]["counts"]))
+        start = int(T0 // 60)
+        self.assertEqual({m: None for m in range(start, start + 4)}, counts)
+
+
+class CrashLoops(Base):
+    """#929: a container that restarted between rounds wrote lines before it
+    died; they are in its previous log, which is read too."""
+
+    def test_a_restart_since_the_last_round_reads_the_previous_log(self):
+        rule = self.rule()
+        self.workloads = [restarted("app-x", 0)]
+        LA.evaluate(now=T0)
+        self.workloads = [restarted("app-x", 1)]
+        self.logs[("app-x-1", "previous")] = lines(12, minute=1)
+        facts = LA.evaluate(now=T0 + 60)
+        self.assertTrue([c for c in self.calls if c[-1] == "previous"])
+        self.assertEqual([f"logs:{rule['id']}"], [f.get("key") for f in facts])
+
+    def test_no_previous_read_without_a_restart_seen_happening(self):
+        self.rule()
+        self.workloads = [restarted("app-x", 3)]
+        self.logs[("app-x-1", "previous")] = lines(12)
+        self.assertEqual([], LA.evaluate(now=T0), "restarts from before the first round are not news")
+        self.assertEqual([], LA.evaluate(now=T0 + 60))
+        self.assertFalse([c for c in self.calls if c[-1] == "previous"])
+
+    def test_lines_in_both_logs_count_once(self):
+        self.rule()
+        self.workloads = [restarted("app-x", 0)]
+        self.logs["app-x-1"] = lines(6, minute=0)
+        LA.evaluate(now=T0)
+        self.workloads = [restarted("app-x", 1)]
+        self.logs[("app-x-1", "previous")] = lines(6, minute=0) + "\n" + lines(6, minute=1)
+        self.logs["app-x-1"] = lines(6, minute=1, text="ERROR again {}")
+        facts = LA.evaluate(now=T0 + 60)
+        self.assertEqual(1, len(facts))
+        self.assertIn("12 matching lines", facts[0]["title"], "the 6 read last round are not counted again")
+
+    def test_a_previous_log_that_cannot_be_read_is_not_zero(self):
+        rule = self.rule()
+        self.workloads = [restarted("app-x", 0)]
+        LA.evaluate(now=T0)
+        self.workloads = [restarted("app-x", 1)]
+        self.logs[("app-x-1", "previous")] = OSError("gone")
+        self.assertEqual([{"unknown_key": f"logs:{rule['id']}"}], LA.evaluate(now=T0 + 60))
+        # A previous log that is gone for good (a node rebooted) must not hold
+        # the rule unread forever (review 2): that round is not counted, and
+        # the next one reads the current container as usual.
+        self.logs["app-x-1"] = lines(12, minute=3)   # minute 2 was the failed round: not read
+        self.calls.clear()
+        facts = LA.evaluate(now=T0 + 120)
+        self.assertFalse([c for c in self.calls if c[-1] == "previous"])
+        self.assertEqual([f"logs:{rule['id']}"], [f.get("key") for f in facts])
+        self.assertEqual("ok", LA.listing()["rules"][0]["status"]["state"])
+
+
+class Withdraw(unittest.TestCase):
+    """homestead_alerts.withdraw: a condition its source stopped watching
+    ends at once, with what happened, never as "back under"."""
+
+    def setUp(self):
+        import homestead_alerts as ALERTS
+        self.A, self.dir = ALERTS, tempfile.mkdtemp()
+        ALERTS.bind(self.dir)
+        self.fact = {"key": "logs:la-0123456789ab", "category": "logs", "severity": "degraded", "urgent": True,
+                     "title": "Door: 12 matching lines in a minute", "resolved": "Door: back under 10 in a minute",
+                     "body": "b", "signals": {"level": 0}}
+
+    def test_a_raised_alert_ends_with_the_given_title(self):
+        self.A.observe({"logs": [self.fact]}, now=1000)
+        row = self.A.active(user="ada")[0]
+        self.A.acknowledge("ada", row["key"], row["version"], now=1001)
+        entry = self.A.withdraw(self.fact["key"], "Door: removed", "This log alert was removed.", now=1002)
+        self.assertEqual(("resolved", "Door: removed", "This log alert was removed."),
+                         (entry["phase"], entry["title"], entry["body"]))
+        self.assertEqual([], self.A.active())
+        self.assertEqual([], self.A.observe({"logs": []}, now=1200), "nothing left to end later as back under")
+        self.assertNotIn("back under", json.dumps(self.A.log()["alerts"]))
+        with open(os.path.join(self.dir, "alerts.json"), encoding="utf-8") as handle:
+            self.assertNotIn(self.fact["key"], json.load(handle)["acknowledgements"].get("ada", {}))
+
+    def test_a_fact_taken_before_the_withdraw_does_not_raise_it_again(self):
+        # Review 1: the alert loop took the fact, then a person deleted the rule.
+        self.A.observe({"logs": [self.fact]}, now=1000)
+        self.A.withdraw(self.fact["key"], "Door: removed", "x", now=1002)
+        self.assertEqual([], self.A.observe({"logs": [{**self.fact, "collected": 1001}]}, now=1003))
+        self.assertEqual([], self.A.active())
+        self.assertEqual([], self.A.observe({"logs": []}, now=1200), "and nothing ends later as back under")
+        raised = self.A.observe({"logs": [{**self.fact, "collected": 1300}]}, now=1301)
+        self.assertEqual(["raised"], [e["phase"] for e in raised], "taken after it (resumed): raised as usual")
+        self.assertNotIn("collected", self.A.active()[0])
+
+    def test_nothing_raised_is_none(self):
+        self.assertIsNone(self.A.withdraw(self.fact["key"], "Door: removed", ""))
+        self.A.observe({"logs": [{**self.fact, "urgent": False}]}, now=1000)
+        self.assertIsNone(self.A.withdraw(self.fact["key"], "Door: removed", "", now=1001), "seen, not yet raised")
+        self.assertEqual([], self.A.active())
+        self.assertEqual(0, self.A.log()["latest"])
+
+
 class Matching(unittest.TestCase):
     def test_plain_text_matching_spawns_nothing(self):
         with mock.patch("subprocess.run", side_effect=AssertionError("spawned")):
@@ -568,6 +791,31 @@ class Wiring(unittest.TestCase):
         self.assertEqual("viewer", POLICY.role("/api/logalerts/preview", "POST"))
         self.assertEqual("operator", POLICY.role("/api/logalerts", "POST"))
         self.assertEqual("operator", POLICY.role("/api/logalerts/delete", "POST"))
+        self.assertEqual("operator", POLICY.role("/api/logalerts/pause", "POST"))
+
+    def test_the_kubernetes_read_asks_for_the_previous_container_when_told(self):
+        import homestead_kube as KUBE
+        urls = []
+
+        class Answer:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self, n):
+                return b""
+
+        def urlopen(request, **kwargs):
+            urls.append(request.full_url)
+            return Answer()
+        with mock.patch.multiple(KUBE, API="https://k.example.com", TOKEN="t", CTX=None, create=True), \
+                mock.patch.object(KUBE.urllib.request, "urlopen", urlopen):
+            KUBE.logsearch_read("lab", "web-1", "web", 60, 100)
+            KUBE.logsearch_read("lab", "web-1", "web", 60, 100, True)
+        self.assertNotIn("previous", urls[0])
+        self.assertIn("&previous=true", urls[1])
 
     def test_push_category_and_store_listed(self):
         import homestead_housekeeping as HOUSEKEEPING

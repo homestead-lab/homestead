@@ -127,6 +127,7 @@ Tools come in three classes:
 | `get_container_settings` | A container's settings as Edit shows them; priority may be group, for an app that follows its group's tier | `read` | read |
 | `list_events` | Kubernetes' recent events for a container or VM, newest first | `read` | read |
 | `get_container_logs` | A container's last lines of output (at most 500) | `logs:read` | read |
+| `list_log_alerts` | The log alerts: what each counts, whether it is paused, and its last hour of counts. Making, pausing and deleting them stays in the app | `logs:read` | read |
 | `get_container_diagnostics` | Owned pods, restarts, current and last exit details, and current/previous logs, including crash loops, with the restarts Homestead kept and why each happened | `logs:read` | read |
 | `run_container_command` | Ask an administrator to approve an exact argument array in one app container; bounded output and execution time | `containers:manage` | destructive |
 | `deploy_options` | What a new container can use: storage classes, networks, hosts, hardware, addresses | `read` | read |

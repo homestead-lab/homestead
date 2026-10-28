@@ -3601,6 +3601,14 @@ ssh_pwauth: true
       rules.splice(at, 1);
       return { ok: true };
     };
+    responses["/api/logalerts/pause"] = (url, init) => {
+      const body = JSON.parse(init.body || "{}");
+      const rule = rules.find(r => r.id === body.id) || refuse("that log alert no longer exists; refresh and try again");
+      if (typeof body.paused !== "boolean") refuse("say whether to pause the log alert or resume it");
+      rule.paused = body.paused;
+      rule.status = body.paused ? { state: "paused", detail: "" } : { state: "waiting", detail: "" };
+      return { ok: true, paused: body.paused };
+    };
     responses["/api/logalerts/preview"] = (url, init) => {
       const body = JSON.parse(init.body || "{}"), rule = check(body), app = rule.apps[0];
       const rate = app.endsWith("/frigate") ? 1 : app.endsWith("/paperless") ? 0.15 : 0.4;
