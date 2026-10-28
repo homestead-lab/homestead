@@ -12,6 +12,7 @@ import homestead_vm_power_receipts as POWER_RECEIPTS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
 import homestead_cdi_cleanup as CDI_CLEANUP
 import homestead_storage_journal as STORAGE_JOURNAL
+import homestead_job_steps as STEPS
 import json
 import re
 import contextlib
@@ -963,20 +964,32 @@ def advance_soon():
 
 def tick(is_leader, beat=None):
     """One round of the jobs loop: on the leader, run every active job's
-    resolver, and once a day tidy the locks of jobs that are gone. beat(error=None)
-    is told how the round went, so health shows a stalled or failing loop.
-    Returns how long to wait before the next round."""
+    resolver (or start its step, for the kinds resolved outside the store's
+    lock), and once a day tidy the locks of jobs that are gone. beat(error=None)
+    is told how the round went, so health shows a stalled or failing loop, a
+    step that failed, or one that may be hung. Returns how long to wait before
+    the next round."""
     if not is_leader():
         return IDLE_SECONDS
     try:
-        jobs = list_operations()
+        jobs = list_operations(wait=False)
     except Exception as error:
         print(f"jobs not advanced: {str(error)[:160]}", flush=True)
         if beat:
             beat(error)
         return IDLE_SECONDS
+    # Steps run on their own threads (#933): one that raised, or one running
+    # so long it may be hung, is told to health here, round by round.
+    problem = None
+    for _, label, error in STEPS.take_errors():
+        print(f"job {label} not advanced: {str(error)[:160]}", flush=True)
+        problem = problem or error
+    late = STEPS.overdue()
+    if late and not problem:
+        label, seconds = late[0]
+        problem = TimeoutError(f"{label}: its step has run for {seconds // 60} min {seconds % 60} s")
     if beat:
-        beat()
+        beat(problem)
     if time.time() - _tidied["at"] >= LOCK_TIDY_EVERY:
         # After the jobs, so a new leader's first round moves them on first.
         try:
@@ -1009,6 +1022,9 @@ def run_jobs(is_leader, stop=None, beat=None):
         # Cleared after the pause: asks that came during it are answered by
         # the round about to start, not by another one straight after it.
         _wake.clear()
+    # A stop waits for the steps in flight, as it waited for its round (#933),
+    # but not for ever on one that hung: its job's lock still keeps it its own.
+    STEPS.wait(STEPS.OVERDUE_SECONDS)
 
 
 # A lock file per job that ran outside the store's lock (_job_lock) stays on the
@@ -1147,17 +1163,63 @@ def _resolve_outside(operation_id):
         return False
 
 
-def list_operations():
+_HOST_KINDS = {"host-os", "host-bond", "host-bridge"}
+
+
+def step_claims(item):
+    """What a step of this job works on (homestead_job_steps): two jobs whose
+    claims meet never step at the same time. A host job claims its host; a
+    data move its workload and volumes; the weekly trim every volume. A kind
+    not named here claims everything, so it steps alone, as every job did."""
+    kind, ref = item.get("kind"), item.get("ref") or {}
+    if kind in _HOST_KINDS:
+        node = ref.get("node") or (item.get("resource") or {}).get("name")
+        return {("host", node)} if node else {("all",)}
+    if kind == "workload-copy":
+        return {("object", ns, name) for ns, name in _vm_targets(kind, ref)} or {("all",)}
+    if kind == "weekly-trim":
+        return {("object", "*")}
+    return {("all",)}
+
+
+def _steppable(item):
+    return item.get("kind") in OUTSIDE_LOCK and bool(item.get("cancel_request") or (
+        item.get("status") not in TERMINAL and item.get("status") != CANCELLING))
+
+
+def list_operations(wait=True):
     """Advance every active job by running its resolver, and save. Only the
-    leader's jobs loop calls this (tick); requests read snapshot()."""
+    leader's jobs loop calls this (tick); requests read snapshot().
+
+    The kinds resolved outside the store's lock step on their own threads,
+    a few at a time (homestead_job_steps, #933). The loop passes wait=False:
+    it starts the steps there is room for and goes on, so one slow step holds
+    up no other job; a job still stepping is left until its step ends. With
+    wait (the default), every active job takes one step before this returns,
+    as before, and a step's error is raised."""
     try:
         require_write()
     except STORAGE_JOURNAL.Held:
         return snapshot()  # inspection stays available without advancing old jobs
-    for item in _read():
-        if item.get("kind") in OUTSIDE_LOCK and (item.get("cancel_request") or (
-                item.get("status") not in TERMINAL and item.get("status") != CANCELLING)):
-            _resolve_outside(item["id"])
+    pending = {item["id"]: item for item in _read() if _steppable(item)}
+    mine = []   # the steps this call started (wait: their errors are its own)
+
+    def start_steps(prune):
+        reserved = set()   # what the jobs waiting this round claim: no later job overtakes them
+        for job_id in STEPS.fair(list(pending), prune=prune):
+            item = pending[job_id]
+            claims = step_claims(item)
+            step = lambda job_id=job_id: _resolve_outside(job_id)
+            started = STEPS.submit(job_id, claims, step, label=item.get("title") or item.get("kind"),
+                                   reserved=reserved)
+            if started == "started":
+                mine.append(step)
+            elif started == "waiting":
+                reserved |= claims
+            # With wait, a job still in flight from the loop gets its own step after.
+            if started == "started" or not wait:
+                pending.pop(job_id)
+    start_steps(prune=True)
     with _lock:
         items = _read()
         changed = False
@@ -1167,7 +1229,17 @@ def list_operations():
         if changed:
             _write(items)
         items.sort(key=lambda item: item.get("started_at", ""), reverse=True)
-        return [_public(item) for item in items if not _history_hidden(item)]
+        listed = [_public(item) for item in items if not _history_hidden(item)]
+    if not wait:
+        return listed
+    while pending:
+        STEPS.wait_change()
+        start_steps(prune=False)
+    STEPS.wait()
+    failed = STEPS.take_errors(mine)
+    if failed:
+        raise failed[0][2]
+    return snapshot()
 
 
 def dismiss_finished():
