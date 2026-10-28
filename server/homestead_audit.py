@@ -41,6 +41,7 @@ NOT_AUDITED = {
     ("POST", "/api/auth/login"): "the sign-in history records it, and a failed sign-in has no user",
     ("POST", "/api/auth/preferences/dashboard"): "a person's own dashboard layout, not the cluster",
     ("POST", "/api/timeline/seen"): "a person's own 'last here' marker, not the cluster",
+    ("POST", "/api/timeline/summary"): "a person's own summary push setting, not the cluster",
 }
 # What a request may note for its line; the MCP tool's class decides whether
 # a call to /mcp is a change, and is not written itself.
