@@ -16,7 +16,7 @@ import homestead_ipam as IPAM
 import homestead_lan as LAN
 import homestead_leader as LEADER
 import homestead_mqtt as MQTT
-import homestead_networking as NETWORK
+import homestead_vip_registry as REG
 import homestead_platform as PLATFORM
 import homestead_self_address as SELF_ADDRESS
 import homestead_vips as VIPS
@@ -145,8 +145,8 @@ def vm_subnets():
 def installer_vip(vip):
     """The VIP the installer was given: reserved, the apps' default, and
     Homestead's own services on it beside the nodes' addresses."""
-    NETWORK.add_vips({"ip": vip, "label": "Homestead and apps"}, IPAM.load()[0].get("records") or {})
-    NETWORK.set_default_vip(vip)
+    REG.add_vips({"ip": vip, "label": "Homestead and apps"}, IPAM.load()[0].get("records") or {})
+    REG.set_default_vip(vip)
     moved = SELF_ADDRESS.move(vip)
     for key in ("network", "ov"):
         _cache.pop(key, None)
@@ -216,6 +216,7 @@ def mqtt_snapshot():
                       "wl": ", ".join(node.get("workloads") or []) or "none", "status": node.get("status", "NotReady")})
     return {"cluster": {"nodes_ready": ready, "nodes_total": total, "nodes_notready": notready,
                         "vol_total": o.get("volumes", 0), "vol_degraded": degraded, "vol_faulted": faulted,
+                        "vol_one_host": o.get("vol_one_host", 0),
                         "pods_system": sum(1 for p in running if system(p)),
                         "pods_workload": sum(1 for p in running if not system(p)),
                         "pods_sys_bad": sys_bad, "pods_wl_bad": wl_bad,

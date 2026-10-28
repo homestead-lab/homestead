@@ -6,6 +6,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_vms as VMS
+import homestead_vm_list as VM_LIST
+import homestead_vm_edit as VM_EDIT
 import homestead_vmusage as U
 
 METRICS = """# HELP kubevirt_vmi_storage_read_traffic_bytes_total Total number of bytes read from storage.
@@ -76,12 +78,12 @@ class UsageTests(unittest.TestCase):
                 cluster = Cluster(running=running)
                 VMS.bind(cluster.get, cluster.send, lambda *a, **k: [])
                 with unittest.mock.patch.object(U.time, "time", lambda: 1031):
-                    row = VMS.list_vms()[0]
+                    row = VM_LIST.list_vms()[0]
                 self.assertEqual(expect, "usage" in row)
                 if expect:
                     u = row["usage"]
                     self.assertEqual((25.0, 1000, 100), (u["cpu_pct"], u["read_bps"], u["write_bps"]))
-                    self.assertEqual(round(100 * 4 * 2**30 / VMS._bytes(row["memory"]), 1), u["mem_pct"])
+                    self.assertEqual(round(100 * 4 * 2**30 / VM_EDIT._bytes(row["memory"]), 1), u["mem_pct"])
                     self.assertEqual(["192.0.2.50"], row["ips"])
 
 

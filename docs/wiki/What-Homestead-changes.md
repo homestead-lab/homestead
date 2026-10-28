@@ -153,7 +153,7 @@ writes starts with `homestead.io/`. Among them:
 | `homestead.io/restore-tested` | `Deployment` | a restore test of the app finishes |
 | `homestead.io/renamed-from`, `renamed-at` | `Deployment` | you rename an app |
 | `homestead.io/rebalancing` | Longhorn `Volume` | a volume's copies move to balance hosts |
-| `homestead.io/one-host-copies` | Homestead's own Longhorn `Volume` | on a one-host cluster Homestead lowers its data volume to one copy; it holds the count asked for before |
+| `homestead.io/one-host-copies` | Longhorn `Volume` | on a one-host cluster Homestead lowers its own data volume to one copy, or an admin lowers app volumes with **Match copies to hosts** in Cluster Health; it holds the count asked for before, and is removed when **Put copies back** restores it |
 | `homestead.io/iso-unused-since` | ISO `PersistentVolumeClaim` | an ISO volume no VM uses |
 | `homestead.io/starts-after` | `Deployment` | you set **Starts after** on an app. It comes with the start gate: an init container, `homestead-start-gate`, first in the pod template, which only opens TCP connections to the apps it waits for. Saving it, changing it or clearing it restarts the app once. Never written on an app Flux or Argo CD applies |
 

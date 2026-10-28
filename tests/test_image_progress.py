@@ -2,8 +2,9 @@ import json, sys, unittest, urllib.error
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_pullwatch as PULL
-import homestead_updates as UPDATES
+import homestead_update_registry as REGISTRY
 import homestead_imports as IMP
+import homestead_image_cache as IMAGES
 import homestead_operations as OPS
 
 A, B, C = "a" * 64, "b" * 64, "c" * 64
@@ -73,8 +74,8 @@ class RegistryLayerTests(unittest.TestCase):
 
         def fake(parsed, path, auths, accept="application/json"):
             return json.dumps(amd if path.endswith("sha256:amd") else index).encode(), {}
-        with unittest.mock.patch.object(UPDATES, "_registry_json", fake):
-            self.assertEqual([{"digest": f"sha256:{A}", "size": 7}], UPDATES.image_layers("nginx:1.27", "amd64"))
+        with unittest.mock.patch.object(REGISTRY, "_registry_json", fake):
+            self.assertEqual([{"digest": f"sha256:{A}", "size": 7}], REGISTRY.image_layers("nginx:1.27", "amd64"))
 
 
 class TrayMessageTests(unittest.TestCase):
@@ -111,14 +112,14 @@ class ScanTests(unittest.TestCase):
         import homestead_names as NAMES
         self.addCleanup(setattr, NAMES, "kget", NAMES.kget)
         NAMES.kget = kget
-        IMP._SCANS.clear()
+        IMAGES._SCANS.clear()
         # Scans saved to disk belong to the tests that ask for it.
         self.addCleanup(setattr, IMP, "SCAN_DIR", IMP.SCAN_DIR)
         IMP.SCAN_DIR = ""
 
     def test_a_scan_starts_a_pod_per_ready_node(self):
         with unittest.mock.patch("homestead_runtime.binaries", lambda: {"crictl": "/c", "ctr": "/t"}):
-            IMP.start_image_scan()
+            IMAGES.start_image_scan()
         body = self.sent[0][2]
         self.assertEqual("node1", body["spec"]["nodeName"])
         self.assertIn("images -o json", body["spec"]["containers"][0]["command"][-1])
@@ -132,16 +133,16 @@ class ScanTests(unittest.TestCase):
         shim = types.ModuleType("homestead_shim")
         shim.raw_get = lambda path: json.dumps(listing)
         with unittest.mock.patch.dict(sys.modules, {"homestead_shim": shim}):
-            report = IMP.image_cache()
+            report = IMAGES.image_cache()
             self.assertEqual([], self.sent, "looking removes nothing (#622)")
-            IMP.tick()
+            IMAGES.tick()
         self.assertTrue(report["complete"])
         self.assertEqual({"big:1", "small:2"}, {i["name"] for i in report["images"]})
         self.assertTrue(any(m == "DELETE" for m, p, b in self.sent), "the leader's tick removes the finished pod")
 
     def test_forgetting_a_rollback_drops_the_kept_image(self):
         IMP.kget = lambda path: {"metadata": {"annotations": {"homestead.io/update-previous": "{}"}}}
-        IMP.forget_rollback("lab", "frigate")
+        IMAGES.forget_rollback("lab", "frigate")
         method, path, body = self.sent[0]
         self.assertEqual({"homestead.io/update-previous": None}, body["metadata"]["annotations"])
 

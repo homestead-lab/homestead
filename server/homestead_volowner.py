@@ -25,7 +25,7 @@ import time
 import urllib.parse
 import urllib.request
 
-import homestead_updates as UPDATES
+import homestead_update_registry as REGISTRY
 
 IMAGE = "alpine:3.24"
 INIT = "homestead-owner"
@@ -118,26 +118,26 @@ def scan_layers(layers, paths, budget=None):
 
 
 def _registry(image):
-    parsed = UPDATES.parse_image(UPDATES.with_tag(image))
+    parsed = REGISTRY.parse_image(REGISTRY.with_tag(image))
     reference = parsed["digest"] or parsed["tag"]
-    body, _ = UPDATES._registry_json(parsed, "manifests/" + urllib.parse.quote(reference, safe=":"), {},
-                                     UPDATES.MANIFEST_ACCEPT)
+    body, _ = REGISTRY._registry_json(parsed, "manifests/" + urllib.parse.quote(reference, safe=":"), {},
+                                     REGISTRY.MANIFEST_ACCEPT)
     manifest = json.loads(body.decode())
     if manifest.get("manifests"):
         child = next((m for m in manifest["manifests"]
                       if (m.get("platform") or {}).get("os", "linux") == "linux"
                       and (m.get("platform") or {}).get("architecture") == "amd64"), None) or manifest["manifests"][0]
-        body, _ = UPDATES._registry_json(parsed, "manifests/" + child["digest"], {}, UPDATES.MANIFEST_ACCEPT)
+        body, _ = REGISTRY._registry_json(parsed, "manifests/" + child["digest"], {}, REGISTRY.MANIFEST_ACCEPT)
         manifest = json.loads(body.decode())
     config_digest = (manifest.get("config") or {}).get("digest")
-    config = json.loads(UPDATES._registry_json(parsed, "blobs/" + config_digest, {})[0].decode()) if config_digest else {}
+    config = json.loads(REGISTRY._registry_json(parsed, "blobs/" + config_digest, {})[0].decode()) if config_digest else {}
     return parsed, manifest, config
 
 
 def _blob(parsed, digest):
     def open_blob():
         url = f"https://{parsed['endpoint']}/v2/{parsed['repo']}/blobs/{digest}"
-        return UPDATES._open(urllib.request.Request(url, headers={"User-Agent": "Homestead/2.0"}), timeout=20)
+        return REGISTRY._open(urllib.request.Request(url, headers={"User-Agent": "Homestead/2.0"}), timeout=20)
     return open_blob
 
 

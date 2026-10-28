@@ -4,17 +4,18 @@ from pathlib import Path
 from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
-import homestead_updates as UPDATES
+import homestead_network_inventory as INV
+import homestead_update_rollouts as ROLLOUTS
 
 PORTS = "0/1 nodes are available: 1 node(s) didn't have free ports for the requested pod ports. preemption: 0/1 nodes are available: 1 No preemption victims found for incoming pod."
 
 
 class ExplainTests(unittest.TestCase):
     def test_the_schedulers_reasons_said_plainly(self):
-        self.assertIn("ServiceLB, publishing this app's own Service", UPDATES.explain_unplaced(PORTS, [32400]))
-        self.assertIn("port it needs on the host is taken", UPDATES.explain_unplaced(PORTS))
-        self.assertIn("enough free memory", UPDATES.explain_unplaced("0/1 nodes are available: 1 Insufficient memory."))
-        self.assertIn("pinned", UPDATES.explain_unplaced("0/2 nodes are available: 2 node(s) didn't match Pod's node affinity/selector."))
+        self.assertIn("ServiceLB, publishing this app's own Service", ROLLOUTS.explain_unplaced(PORTS, [32400]))
+        self.assertIn("port it needs on the host is taken", ROLLOUTS.explain_unplaced(PORTS))
+        self.assertIn("enough free memory", ROLLOUTS.explain_unplaced("0/1 nodes are available: 1 Insufficient memory."))
+        self.assertIn("pinned", ROLLOUTS.explain_unplaced("0/2 nodes are available: 2 node(s) didn't match Pod's node affinity/selector."))
 
 
 class PullTests(unittest.TestCase):
@@ -24,11 +25,11 @@ class PullTests(unittest.TestCase):
             '"https://registry-1.docker.io/v2/openspeedtest/latest/manifests/latest": ')
 
     def test_the_cause_comes_first(self):
-        self.assertIn("DNS", UPDATES.explain_pull(self.HEAD + "dial tcp: lookup registry-1.docker.io on 10.43.0.10:53: server misbehaving"))
-        self.assertIn("IPv6", UPDATES.explain_pull(self.HEAD + "dial tcp [2600:1f18::1]:443: connect: network is unreachable"))
-        self.assertIn("pull limit", UPDATES.explain_pull("toomanyrequests: You have reached your pull rate limit"))
-        self.assertIn("in time", UPDATES.explain_pull(self.HEAD + "dial tcp 54.1.2.3:443: i/o timeout"))
-        self.assertEqual("", UPDATES.explain_pull("Back-off restarting failed container"))
+        self.assertIn("DNS", ROLLOUTS.explain_pull(self.HEAD + "dial tcp: lookup registry-1.docker.io on 10.43.0.10:53: server misbehaving"))
+        self.assertIn("IPv6", ROLLOUTS.explain_pull(self.HEAD + "dial tcp [2600:1f18::1]:443: connect: network is unreachable"))
+        self.assertIn("pull limit", ROLLOUTS.explain_pull("toomanyrequests: You have reached your pull rate limit"))
+        self.assertIn("in time", ROLLOUTS.explain_pull(self.HEAD + "dial tcp 54.1.2.3:443: i/o timeout"))
+        self.assertEqual("", ROLLOUTS.explain_pull("Back-off restarting failed container"))
 
 
 class PlexOnK3sTests(unittest.TestCase):
@@ -53,7 +54,7 @@ class PlexOnK3sTests(unittest.TestCase):
         items = {"/apis/apps/v1/deployments": {"items": [dep]}, "/api/v1/pods": {"items": [pod]},
                  "/api/v1/services": {"items": [svc]}}
         with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=lambda path, **kw: items.get(path, {"items": []})), \
-                mock.patch.object(server.NETWORK, "servicelb_present", return_value=True):
+                mock.patch.object(INV, "servicelb_present", return_value=True):
             plex = server.WORKLOADS.get_workloads()[0]
         self.assertIn("ServiceLB, publishing this app's own Service", plex["pods"][0]["unplaced"])
         self.assertTrue(any("cannot be placed" in p for p in plex["problems"]))

@@ -8,7 +8,6 @@ import tempfile
 import threading
 import types
 import unittest
-import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -16,9 +15,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
 import homestead_capacity_review as REVIEW
 import homestead_disk_v2 as V
 import homestead_disks as DISKS
+import homestead_kube as K
 import homestead_operations as OPS
 import homestead_storage_conflicts as CONFLICTS
 from fakes.job_store import JobStore
+from fakes.kube import Kube
 
 GB = 1024 ** 3
 READY = [{'type': 'Ready', 'status': 'True'}, {'type': 'Schedulable', 'status': 'True'}]
@@ -51,93 +52,107 @@ class Operations(JobStore):
         return [self._public(i) for i in self.items]
 
 
+GONE = object()
+NODES = ('node-1', 'node-2', 'node-3')
+JOBS = '/apis/batch/v1/namespaces/lab/jobs'
+
+
+def NODE(name): return '/api/v1/nodes/' + name
+def LHN(name): return V.LH + '/nodes/' + name
+def VOL(name): return V.LH + '/volumes/' + name
+def ENG(volume): return V.LH + '/engines/' + volume + '-engine'
+def SET(name): return V.LH + '/settings/' + name
+
+
+def lh(kind, name, **body):
+    return dict(apiVersion='longhorn.io/v1beta2', kind=kind, metadata={'namespace': 'longhorn-system', 'name': name, 'uid': name + '-uid'}, **body)
+
+
 class Cluster:
-    def __init__(self):
-        self.ops = Operations(); self.writes = []; self.jobs = {}; self.harvester = False
-        self.settings = {'v2-data-engine': 'true', 'storage-minimal-available-percentage': '25',
+    """Longhorn, its nodes and one volume of three replicas on the shared fake
+    API (tests/fakes/kube.py); the host's own answers (facts, the blank check)
+    are set here. put() changes an object as it stands, as something outside
+    Homestead would."""
+    def __init__(self, test):
+        self.ops = Operations(); self.harvester = False
+        settings = {'v2-data-engine': 'true', 'storage-minimal-available-percentage': '25',
             'storage-over-provisioning-percentage': '100', 'replica-soft-anti-affinity': 'false',
             'replica-disk-soft-anti-affinity': 'false', 'replica-zone-soft-anti-affinity': 'true',
             'allow-empty-node-selector-volume': 'true', 'allow-empty-disk-selector-volume': 'true'}
-        self.nodes = {n: {'metadata': {'name': n, 'uid': n + '-uid'}, 'spec': {}, 'status': {
-            'nodeInfo': {'bootID': 'boot-1'}, 'conditions': copy.deepcopy(READY)}} for n in ('node-1', 'node-2', 'node-3')}
-        self.lh = {n: {'metadata': {'name': n, 'uid': n + '-lh-uid', 'resourceVersion': '1'},
-            'spec': {'allowScheduling': True, 'tags': [], 'disks': {}},
-            'status': {'conditions': copy.deepcopy(READY), 'diskStatus': {}}} for n in self.nodes}
-        for n in self.nodes: self.disk(n, 'data', 'filesystem', 'disk-source-uuid' if n == 'node-1' else n + '-disk')
+        self.kube = test.enterContext(Kube(
+            *[lh('Setting', name, value=value) for name, value in settings.items()],
+            *[{'apiVersion': 'v1', 'kind': 'Node', 'metadata': {'name': n, 'uid': n + '-uid'}, 'spec': {}, 'status': {
+                'nodeInfo': {'bootID': 'boot-1'}, 'conditions': copy.deepcopy(READY)}} for n in NODES],
+            *[lh('Node', n, spec={'allowScheduling': True, 'tags': [], 'disks': {}},
+                 status={'conditions': copy.deepcopy(READY), 'diskStatus': {}}) | {'metadata': {
+                     'namespace': 'longhorn-system', 'name': n, 'uid': n + '-lh-uid', 'resourceVersion': '1'}} for n in NODES],
+            lh('InstanceManager', 'im-v2', spec={'nodeID': 'node-1', 'dataEngine': 'v2', 'type': 'aio'},
+               status={'currentState': 'running'})))
+        # The shared fake runs the real write guards; the storage guard takes the job store's lock under DATA_DIR.
+        test.enterContext(patch.object(OPS, 'DATA_DIR', test.enterContext(tempfile.TemporaryDirectory())))
+        for n in NODES: self.disk(n, 'data', 'filesystem', 'disk-source-uuid' if n == 'node-1' else n + '-disk')
         self.disk('node-1', 'spare', 'filesystem', 'disk-spare-uuid')
-        self.managers = [{'metadata': {'name': 'im-v2'}, 'spec': {'nodeID': 'node-1', 'dataEngine': 'v2', 'type': 'aio'},
-                          'status': {'currentState': 'running'}}]
-        self.volumes = {}; self.replicas = []; self.engines = []; self.control = None
-        self.backingimages = []; self.orphans = []; self.store_devices = {}
+        self.store_devices = {}
         self.volume('volume-data', 100)
         self.facts = HOST_FACTS; self.blank = 'VERIFIED\n'
         REVIEW.bind(lambda: b'test-only-review-key')
-        V.bind(self.get, self.send, lambda force=False: {'harvester': self.harvester}, self.ops, 'lab', lambda path: 'fixture helper output')
+        V.bind(K.kget, self.send, lambda force=False: {'harvester': self.harvester}, self.ops, 'lab', lambda path: 'fixture helper output')
+    def put(self, path, keys, value):
+        """Set (or, with GONE, take out) the value at keys in the object at path."""
+        obj = self.kube.object(path); parent = obj
+        for key in keys[:-1]: parent = parent[key]
+        if value is GONE: del parent[keys[-1]]
+        else: parent[keys[-1]] = copy.deepcopy(value)
+        self.kube.add(obj)
+    def lh_node(self, node): return self.kube.object(LHN(node))
     def disk(self, node, name, kind, uid):
-        self.lh[node]['spec']['disks'][name] = {'path': '/mnt/' + name, 'diskType': kind,
-            'allowScheduling': True, 'evictionRequested': False, 'storageReserved': 0, 'tags': []}
-        self.lh[node]['status']['diskStatus'][name] = {'diskUUID': uid, 'conditions': copy.deepcopy(READY),
-            'storageMaximum': 1000 * GB, 'storageAvailable': 900 * GB, 'storageScheduled': 100 * GB, 'scheduledReplica': {}}
+        self.put(LHN(node), ('spec', 'disks', name), {'path': '/mnt/' + name, 'diskType': kind,
+            'allowScheduling': True, 'evictionRequested': False, 'storageReserved': 0, 'tags': []})
+        self.put(LHN(node), ('status', 'diskStatus', name), {'diskUUID': uid, 'conditions': copy.deepcopy(READY),
+            'storageMaximum': 1000 * GB, 'storageAvailable': 900 * GB, 'storageScheduled': 100 * GB, 'scheduledReplica': {}})
     def volume(self, name, size):
-        self.volumes[name] = {'metadata': {'name': name, 'uid': name + '-uid'},
-            'spec': {'size': str(size * GB), 'numberOfReplicas': 3, 'dataEngine': 'v1'},
-            'status': {'state': 'attached', 'robustness': 'healthy', 'currentNodeID': 'node-1'}}
+        self.kube.add(lh('Volume', name, spec={'size': str(size * GB), 'numberOfReplicas': 3, 'dataEngine': 'v1'},
+            status={'state': 'attached', 'robustness': 'healthy', 'currentNodeID': 'node-1'}))
         modes = {}
-        for node in self.nodes:
-            uid = self.lh[node]['status']['diskStatus']['data']['diskUUID']
+        for node in NODES:
+            uid = self.lh_node(node)['status']['diskStatus']['data']['diskUUID']
             rname = name + '-' + node
-            self.replicas.append({'metadata': {'name': rname}, 'spec': {'volumeName': name, 'nodeID': node,
-                'diskID': uid, 'diskPath': '/mnt/data', 'volumeSize': str(size * GB)}, 'status': {'currentState': 'running'}})
-            self.lh[node]['status']['diskStatus']['data']['scheduledReplica'][rname] = size * GB
+            self.kube.add(lh('Replica', rname, spec={'volumeName': name, 'nodeID': node,
+                'diskID': uid, 'diskPath': '/mnt/data', 'volumeSize': str(size * GB)}, status={'currentState': 'running'}))
+            self.put(LHN(node), ('status', 'diskStatus', 'data', 'scheduledReplica', rname), size * GB)
             modes[rname] = 'RW'
-        self.engines.append({'metadata': {'name': name + '-engine'}, 'spec': {'volumeName': name},
-            'status': {'currentState': 'running', 'replicaModeMap': modes}})
-    def get(self, path):
-        if path == '/api/v1/nodes': return copy.deepcopy({'items': list(self.nodes.values())})
-        if path.startswith('/api/v1/nodes/'): return copy.deepcopy(self.nodes[path.rsplit('/', 1)[1]])
-        if path == V.LH + '/nodes': return copy.deepcopy({'items': list(self.lh.values())})
-        if path.startswith(V.LH + '/nodes/'): return copy.deepcopy(self.lh[path.rsplit('/', 1)[1]])
-        if path == V.LH + '/replicas': return copy.deepcopy({'items': self.replicas})
-        if path == V.LH + '/volumes': return copy.deepcopy({'items': list(self.volumes.values())})
-        if path == V.LH + '/engines': return copy.deepcopy({'items': self.engines})
-        if path == V.LH + '/backingimages': return copy.deepcopy({'items': self.backingimages})
-        if path == V.LH + '/orphans': return copy.deepcopy({'items': self.orphans})
-        if path == V.LH + '/instancemanagers': return copy.deepcopy({'items': self.managers})
-        if path.startswith(V.LH + '/settings/'): return {'value': self.settings[path.rsplit('/', 1)[1]]}
-        if '/instancemanagerupgradecontrols/' in path and self.control is not None: return self.control
-        if '/jobs/' in path and path.rsplit('/', 1)[1] in self.jobs: return copy.deepcopy(self.jobs[path.rsplit('/', 1)[1]])
-        if '/pods?' in path:
-            return {'items': [{'metadata': {'name': 'helper', 'ownerReferences': [{'uid': job['metadata']['uid']}]}} for job in self.jobs.values()]}
-        raise urllib.error.HTTPError(path, 404, 'missing', None, None)
+        self.kube.add(lh('Engine', name + '-engine', spec={'volumeName': name},
+            status={'currentState': 'running', 'replicaModeMap': modes}))
+    def keep_first_replica(self):
+        for row in K.kget(V.LH + '/replicas')['items'][1:]: self.kube.discard(V.LH + '/replicas/' + row['metadata']['name'])
+    def remove_managers(self):
+        for row in K.kget(V.LH + '/instancemanagers')['items']: self.kube.discard(V.LH + '/instancemanagers/' + row['metadata']['name'])
+    def add_control(self, status):
+        self.kube.add(lh('InstanceManagerUpgradeControl', 'longhorn-instance-manager-upgrade-control', status=status))
+    @property
+    def writes(self): return [(method, path, body) for method, path, body, _ in self.kube.writes]
+    @property
+    def jobs(self): return {job['metadata']['name']: job for job in K.kget(JOBS)['items']}
+    def job_path(self): return JOBS + '/' + next(iter(self.jobs))
+    def clear_jobs(self):
+        for name in self.jobs: self.kube.discard(JOBS + '/' + name)
     def send(self, method, path, body, **options):
         assert self.ops.stored(), 'The approval must be durable before any mutation'
-        self.writes.append((method, path, copy.deepcopy(body)))
-        if '/nodes/' in path:
-            obj = self.lh[path.rsplit('/', 1)[1]]
-            for change in body:
-                keys = change['path'].strip('/').split('/'); parent = obj
-                for key in keys[:-1]: parent = parent[key]
-                key = keys[-1]
-                if change['op'] == 'test':
-                    if parent.get(key) != change['value']: raise urllib.error.HTTPError(path, 422, 'test failed', None, None)
-                elif change['op'] == 'remove': del parent[key]
-                else: parent[key] = copy.deepcopy(change['value'])
-            obj['metadata']['resourceVersion'] = str(int(obj['metadata']['resourceVersion']) + 1)
-            return copy.deepcopy(obj)
-        if method == 'POST' and path.endswith('/jobs'):
-            job = copy.deepcopy(body); job['metadata']['uid'] = 'own-job-uid'
-            self.jobs[job['metadata']['name']] = job
-            return copy.deepcopy(job)
-        if method == 'DELETE' and '/jobs/' in path:
-            name = path.rsplit('/', 1)[1]
-            assert body['preconditions']['uid'] == self.jobs[name]['metadata']['uid']
-            del self.jobs[name]
-            return {}
-        raise AssertionError((method, path))
+        assert (method == 'PATCH' and '/nodes/' in path) or (method == 'POST' and path.endswith('/jobs')) \
+            or (method == 'DELETE' and '/jobs/' in path), (method, path)
+        if method == 'DELETE': assert body['preconditions']['uid'] == self.kube.object(path)['metadata']['uid']
+        result = K.ksend(method, path, body, **options)
+        if method == 'POST':
+            # The Job's pod, which the preparation looks up by the Job's name.
+            name = body['metadata']['name']
+            self.kube.add({'apiVersion': 'v1', 'kind': 'Pod', 'metadata': {'name': 'helper', 'namespace': 'lab',
+                'labels': {'job-name': name}, 'ownerReferences': [{'apiVersion': 'batch/v1', 'kind': 'Job', 'name': name,
+                                                                   'uid': result['metadata']['uid']}]}})
+        return result
     def host(self, node, script, **options):
         if 'echo STORECHECK' in script:
             device = next(line.split()[1] for line in self.facts.splitlines() if line.startswith('DEVICE '))
-            stores = self.lh[node]['spec']['disks']
+            stores = self.lh_node(node)['spec']['disks']
             return '\n'.join(['STORECHECK'] + ['STORE ' + name + ' ' + self.store_devices.get(name, device if name == 'data' else '/dev/sdc') for name, spec in stores.items() if spec.get('diskType', 'filesystem') == 'filesystem'] + ['STORESEND']), ''
         return (self.blank if 'echo VERIFIED' in script else self.facts), ''
     def review(self): return V.review({'node': 'node-1', 'disk': 'data'})
@@ -148,10 +163,11 @@ class Cluster:
         self.ops.list_operations()  # what the leader's jobs loop does (#622)
         return V.status(self.ops.stored()[0]['id'])
     def evacuate(self):
-        for replica in self.replicas:
+        for replica in K.kget(V.LH + '/replicas')['items']:
             if replica['spec']['nodeID'] == 'node-1':
                 replica['spec'].update(diskID='disk-spare-uuid', diskPath='/mnt/spare')
-        self.lh['node-1']['status']['diskStatus']['data']['scheduledReplica'] = {}
+                self.kube.add(replica)
+        self.put(LHN('node-1'), ('status', 'diskStatus', 'data', 'scheduledReplica'), {})
     def awaiting(self): self.start(); self.tick(); self.evacuate(); return self.tick()
     def prepare(self):
         review = V.prepare_review(self.ops.stored()[0]['id'])
@@ -165,7 +181,7 @@ class DiskV2Tests(unittest.TestCase):
         for module, names in ((V, ('kget', 'ksend', 'platform', 'ops', 'NS', 'read_log')), (REVIEW, ('_key',))):
             for name in names:
                 saved = patch.object(module, name, getattr(module, name)); saved.start(); self.addCleanup(saved.stop)
-        self.c = Cluster()
+        self.c = Cluster(self)
         p = patch.object(V.HOST, 'run', self.c.host); p.start(); self.addCleanup(p.stop)
     def test_a_look_at_the_job_asks_the_loop_to_run_soon(self):
         self.c.start(); self.c.ops.woken = 0
@@ -173,42 +189,42 @@ class DiskV2Tests(unittest.TestCase):
         self.assertEqual(1, self.c.ops.woken, 'the page polling here would wait for the idle tick')
     def test_review_is_read_only_and_v2_capacity_does_not_count(self):
         plan = self.c.review(); self.assertEqual(plan['blockers'], []); self.assertFalse(self.c.writes)
-        self.c.lh['node-1']['spec']['disks']['spare']['diskType'] = 'block'
+        self.c.put(LHN('node-1'), ('spec', 'disks', 'spare', 'diskType'), 'block')
         self.assertTrue(self.c.review()['blockers'])
     def test_only_copy_degraded_detached_and_unconfirmed_replica_block(self):
         for change in ('only-copy', 'degraded', 'detached', 'WO'):
             with self.subTest(change=change):
-                c = Cluster()
-                if change == 'only-copy': c.replicas = c.replicas[:1]
-                if change == 'degraded': c.volumes['volume-data']['status']['robustness'] = 'degraded'
-                if change == 'detached': c.volumes['volume-data']['status']['state'] = 'detached'
-                if change == 'WO': c.engines[0]['status']['replicaModeMap']['volume-data-node-2'] = 'WO'
+                c = Cluster(self)
+                if change == 'only-copy': c.keep_first_replica()
+                if change == 'degraded': c.put(VOL('volume-data'), ('status', 'robustness'), 'degraded')
+                if change == 'detached': c.put(VOL('volume-data'), ('status', 'state'), 'detached')
+                if change == 'WO': c.put(ENG('volume-data'), ('status', 'replicaModeMap', 'volume-data-node-2'), 'WO')
                 self.assertTrue(c.review()['blockers']); self.assertFalse(c.writes)
     def test_capacity_budget_covers_all_volumes_and_full_replica_sizes(self):
         self.c.volume('volume-extra', 100)
-        self.c.lh['node-1']['status']['diskStatus']['spare']['storageAvailable'] = 400 * GB
+        self.c.put(LHN('node-1'), ('status', 'diskStatus', 'spare', 'storageAvailable'), 400 * GB)
         self.assertTrue(self.c.review()['blockers'])
     def test_tags_empty_selector_policy_and_zone_affinity_are_respected(self):
-        self.c.lh['node-1']['spec']['disks']['spare']['tags'] = ['ssd']
-        self.c.settings['allow-empty-disk-selector-volume'] = 'false'
+        self.c.put(LHN('node-1'), ('spec', 'disks', 'spare', 'tags'), ['ssd'])
+        self.c.put(SET('allow-empty-disk-selector-volume'), ('value',), 'false')
         self.assertTrue(self.c.review()['blockers'])
-        self.c.volumes['volume-data']['spec']['diskSelector'] = ['ssd']
+        self.c.put(VOL('volume-data'), ('spec', 'diskSelector'), ['ssd'])
         self.assertEqual(self.c.review()['blockers'], [])
-        self.c.settings['replica-zone-soft-anti-affinity'] = 'false'
+        self.c.put(SET('replica-zone-soft-anti-affinity'), ('value',), 'false')
         self.assertTrue(self.c.review()['blockers'])  # unlabelled nodes share a zone
     def test_unknown_inventory_is_not_empty_and_backing_images_block(self):
-        get = self.c.get
+        get = K.kget
         with patch.object(V, 'kget', lambda path: {} if path.endswith('/replicas') else get(path)):
             with self.assertRaisesRegex(ValueError, 'incomplete'): self.c.review()
-        self.c.lh['node-1']['status']['diskStatus']['data']['scheduledBackingImage'] = {'image': 1}
+        self.c.put(LHN('node-1'), ('status', 'diskStatus', 'data', 'scheduledBackingImage'), {'image': 1})
         with self.assertRaisesRegex(ValueError, 'backing-image'): self.c.review()
         self.assertFalse(self.c.writes)
     def test_harvester_missing_v2_and_active_upgrade_refuse_review(self):
         self.c.harvester = True
         with self.assertRaisesRegex(ValueError, 'Harvester'): self.c.review()
-        self.c.harvester = False; self.c.managers = []
+        self.c.harvester = False; self.c.remove_managers()
         with self.assertRaisesRegex(ValueError, 'Set up V2'): self.c.review()
-        self.c.control = {'status': {'currentNode': 'node-2'}}
+        self.c.add_control({'currentNode': 'node-2'})
         with self.assertRaisesRegex(ValueError, 'upgrade'): self.c.review()
     def test_host_inspection_rejects_partition_system_missing_identity_and_partial_output(self):
         for text in (HOST_FACTS.replace('KIND disk', 'KIND part'), HOST_FACTS.replace('SERIAL TEST-DISK-01', 'SERIAL').replace('WWN test-wwn', 'WWN'), HOST_FACTS.replace('END', ''), 'ERR Filesystem has other mounts'):
@@ -234,11 +250,11 @@ class DiskV2Tests(unittest.TestCase):
         self.assertFalse(self.c.writes)
     def test_evacuation_waits_for_both_inventory_and_rw_health_without_erasing(self):
         self.c.start(); self.c.tick(); self.assertFalse(self.c.jobs)
-        self.c.lh['node-1']['status']['diskStatus']['data']['scheduledReplica'] = {}
+        self.c.put(LHN('node-1'), ('status', 'diskStatus', 'data', 'scheduledReplica'), {})
         self.assertEqual(self.c.tick()['phase'], 'evacuating')  # actual CRs remain
-        self.c.evacuate(); self.c.engines[0]['status']['replicaModeMap']['volume-data-node-1'] = 'WO'
+        self.c.evacuate(); self.c.put(ENG('volume-data'), ('status', 'replicaModeMap', 'volume-data-node-1'), 'WO')
         self.assertEqual(self.c.tick()['phase'], 'evacuating')
-        self.c.engines[0]['status']['replicaModeMap']['volume-data-node-1'] = 'RW'
+        self.c.put(ENG('volume-data'), ('status', 'replicaModeMap', 'volume-data-node-1'), 'RW')
         for _ in range(3): self.assertEqual(self.c.tick()['phase'], 'awaiting-erase')
         self.assertFalse(self.c.jobs); self.assertEqual(len(self.c.writes), 1)
     def test_new_boot_needs_fresh_erase_review_and_device_confirmation(self):
@@ -246,7 +262,7 @@ class DiskV2Tests(unittest.TestCase):
         body = {k: review[k] for k in ('operation_id', 'request_id', 'capacity_token')}
         body.update(confirm_capacity=True, confirm_device='/dev/sdc')
         with self.assertRaisesRegex(ValueError, 'exact device'): V.prepare(body)
-        body['confirm_device'] = '/dev/sdb'; self.c.nodes['node-1']['status']['nodeInfo']['bootID'] = 'boot-2'
+        body['confirm_device'] = '/dev/sdb'; self.c.put(NODE('node-1'), ('status', 'nodeInfo', 'bootID'), 'boot-2')
         with self.assertRaisesRegex(ValueError, 'fresh preparation'): V.prepare(body)
         self.c.prepare(); self.assertEqual(self.c.ops.items[0]['ref']['boot_id'], 'boot-2')
         self.assertFalse(self.c.jobs)
@@ -254,7 +270,7 @@ class DiskV2Tests(unittest.TestCase):
         self.c.awaiting(); item, body = self.c.prepare()
         self.assertEqual(item['phase'], 'removing'); self.assertFalse(self.c.jobs)
         self.assertEqual(V.prepare(body)['id'], item['id'])
-        self.c.tick(); self.assertNotIn('data', self.c.lh['node-1']['spec']['disks'])
+        self.c.tick(); self.assertNotIn('data', self.c.lh_node('node-1')['spec']['disks'])
         self.assertFalse(self.c.jobs)
         self.c.tick(); self.assertEqual(len(self.c.jobs), 1)
         self.c.tick(); self.assertEqual(len(self.c.jobs), 1)
@@ -266,18 +282,18 @@ class DiskV2Tests(unittest.TestCase):
         self.assertNotIn('umount -f', script); self.assertNotIn('umount -l', script)
     def test_changed_replacement_health_after_removal_prevents_dispatch(self):
         self.c.awaiting(); self.c.prepare(); self.c.tick()
-        self.c.volumes['volume-data']['status']['robustness'] = 'degraded'
+        self.c.put(VOL('volume-data'), ('status', 'robustness'), 'degraded')
         item = self.c.tick(); self.assertEqual(item['status'], 'failed'); self.assertFalse(self.c.jobs)
         self.assertFalse(item['dismissible'])
     def test_expansion_migration_and_replaced_host_invalidate_pending_erase(self):
         self.c.awaiting()
         for change in ({'size': str(101 * GB)}, {'migrationNodeID': 'node-2'}):
-            original = copy.deepcopy(self.c.volumes['volume-data']['spec'])
-            self.c.volumes['volume-data']['spec'].update(change)
+            original = self.c.kube.object(VOL('volume-data'))['spec']
+            self.c.put(VOL('volume-data'), ('spec',), dict(original, **change))
             with self.assertRaises(ValueError): V.prepare_review('task-0')
-            self.c.volumes['volume-data']['spec'] = original
+            self.c.put(VOL('volume-data'), ('spec',), original)
         self.c.prepare(); self.c.tick()
-        self.c.nodes['node-1']['metadata']['uid'] = 'replacement-host'
+        self.c.put(NODE('node-1'), ('metadata', 'uid'), 'replacement-host')
         self.assertEqual(self.c.tick()['status'], 'failed'); self.assertFalse(self.c.jobs)
     def test_stale_cancel_retry_does_not_patch_disk_twice(self):
         self.c.awaiting(); V.cancel_run(self.c.ops.items[0], {})
@@ -286,42 +302,43 @@ class DiskV2Tests(unittest.TestCase):
         self.assertEqual(len(self.c.writes), count)
     def test_lost_or_foreign_job_is_never_recreated_or_deleted(self):
         self.c.awaiting(); self.c.prepare(); self.c.tick(); self.c.tick()
-        self.c.jobs.clear(); writes = len(self.c.writes)
+        self.c.clear_jobs(); writes = len(self.c.writes)
         self.assertEqual(self.c.tick()['status'], 'failed'); self.assertEqual(len(self.c.writes), writes)
         self.assertFalse(self.c.tick()['dismissible'])
     def test_job_admission_injection_and_uid_replacement_are_rejected(self):
         self.c.awaiting(); self.c.prepare(); self.c.tick(); self.c.tick()
-        job = next(iter(self.c.jobs.values())); job['spec']['template']['spec']['containers'][0]['envFrom'] = [{'secretRef': {'name': 'other'}}]
+        envFrom = ('spec', 'template', 'spec', 'containers', 0, 'envFrom')
+        self.c.put(self.c.job_path(), envFrom, [{'secretRef': {'name': 'other'}}])
         self.assertEqual(self.c.tick()['status'], 'failed')
-        ref = self.c.ops.items[0]['ref']; job['spec']['template']['spec']['containers'][0].pop('envFrom'); job['metadata']['uid'] = 'foreign'
+        ref = self.c.ops.items[0]['ref']; self.c.put(self.c.job_path(), envFrom, GONE); self.c.put(self.c.job_path(), ('metadata', 'uid'), 'foreign')
         with self.assertRaisesRegex(ValueError, 'identity'): V._job(ref)
         V._cleanup(ref); self.assertEqual(len(self.c.jobs), 1)
     def test_lost_dispatch_response_adopts_owned_helper_despite_later_health_change(self):
         self.c.awaiting(); self.c.prepare(); self.c.tick(); self.c.tick()
         saved = self.c.ops.items[0]; saved['ref']['phase'] = 'dispatching'; saved['ref'].pop('job_uid')
-        self.c.volumes['volume-data']['status']['robustness'] = 'degraded'
+        self.c.put(VOL('volume-data'), ('status', 'robustness'), 'degraded')
         writes = len(self.c.writes)
         self.assertEqual(self.c.tick()['phase'], 'preparing')
         self.assertEqual(len(self.c.writes), writes)
     def test_registration_requires_blank_receipt_then_longhorn_ready_and_cleans_only_owned_helper(self):
         self.c.awaiting(); self.c.prepare(); self.c.tick(); self.c.tick()
-        next(iter(self.c.jobs.values()))['status'] = {'succeeded': 1}
+        self.c.put(self.c.job_path(), ('status',), {'succeeded': 1})
         self.c.blank = ''
         self.assertEqual(self.c.tick()['phase'], 'registering')
-        self.assertFalse(any(d.get('diskType') == 'block' for d in self.c.lh['node-1']['spec']['disks'].values()))
+        self.assertFalse(any(d.get('diskType') == 'block' for d in self.c.lh_node('node-1')['spec']['disks'].values()))
         self.c.blank = 'VERIFIED\n'
         item = self.c.tick(); self.assertEqual(item['phase'], 'verifying'); self.assertEqual(item['status'], 'running')
         ref = self.c.ops.items[0]['ref']; name = ref['v2_disk']
-        self.c.lh['node-1']['status']['diskStatus'][name] = {'diskUUID': 'new-block-uuid', 'conditions': copy.deepcopy(READY)}
+        self.c.put(LHN('node-1'), ('status', 'diskStatus', name), {'diskUUID': 'new-block-uuid', 'conditions': copy.deepcopy(READY)})
         self.assertEqual(self.c.tick()['status'], 'succeeded'); self.assertFalse(self.c.jobs)
-        self.assertEqual(self.c.lh['node-1']['spec']['disks'][name]['path'], '/dev/disk/by-id/ata-TEST-DISK-01')
-        self.assertEqual(self.c.volumes['volume-data']['spec']['dataEngine'], 'v1')
+        self.assertEqual(self.c.lh_node('node-1')['spec']['disks'][name]['path'], '/dev/disk/by-id/ata-TEST-DISK-01')
+        self.assertEqual(self.c.kube.object(VOL('volume-data'))['spec']['dataEngine'], 'v1')
         self.assertTrue(self.c.ops.items[0]['ref']['preparation_log'])
     def test_cancel_can_stop_evacuation_with_degraded_host_and_keeps_disk_disabled(self):
-        self.c.start(); self.c.tick(); self.c.managers = []; self.c.nodes['node-1']['status']['conditions'] = []
+        self.c.start(); self.c.tick(); self.c.remove_managers(); self.c.put(NODE('node-1'), ('status', 'conditions'), [])
         item = self.c.ops.items[0]
         V.cancel_run(item, {})
-        disk = self.c.lh['node-1']['spec']['disks']['data']
+        disk = self.c.lh_node('node-1')['spec']['disks']['data']
         self.assertFalse(disk['allowScheduling']); self.assertFalse(disk['evictionRequested'])
         self.assertEqual(self.c.ops.items[0]['ref']['phase'], 'cancelled'); self.assertFalse(self.c.jobs)
     def test_cancellation_after_erase_approval_is_refused(self):
@@ -329,7 +346,7 @@ class DiskV2Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'approved'): V.cancel_run(self.c.ops.items[0], {})
     def test_partial_preparation_retains_log_disk_guard_and_maintenance_exclusions(self):
         self.c.awaiting(); self.c.prepare(); self.c.tick(); self.c.tick()
-        next(iter(self.c.jobs.values()))['status'] = {'failed': 1}
+        self.c.put(self.c.job_path(), ('status',), {'failed': 1})
         item = self.c.tick(); self.assertEqual(item['status'], 'failed'); self.assertFalse(item['dismissible'])
         with self.assertRaises(ValueError): V.mutation_guard('node-1', 'data')
         V.mutation_guard('node-2', 'data')
@@ -357,7 +374,7 @@ class DiskV2Tests(unittest.TestCase):
         self.c.awaiting(); V.protect_mutations(DISKS)
         self.assertTrue(DISKS.v2_tasks())
         writes = []
-        DISKS.bind(self.c.get, lambda *args, **kw: writes.append(args), lambda: {})
+        DISKS.bind(K.kget, lambda *args, **kw: writes.append(args), lambda: {})
         self.assertEqual(DISKS.v2_tasks(), [])
         with patch.object(V, 'ops', None):
             DISKS.evict('node-1', 'data', False)  # no inherited production /data store
@@ -366,12 +383,12 @@ class DiskV2Tests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'saved V2'): DISKS.evict('node-1', 'data', False)
         self.assertEqual(len(writes), 1)
     def test_json_patch_protects_unreviewed_disk_changes(self):
-        self.c.start(); self.c.lh['node-1']['spec']['disks']['data']['tags'] = ['changed']
+        self.c.start(); self.c.put(LHN('node-1'), ('spec', 'disks', 'data', 'tags'), ['changed'])
         self.assertIn('configuration changed', self.c.tick()['message']); self.assertFalse(self.c.writes)
     def test_persisted_phases_survive_process_restart_without_repeated_erase(self):
         directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
         with patch.object(OPS, 'DATA_DIR', directory.name), patch.object(OPS, 'WRITE_GUARD', None), patch.dict(OPS.RESOLVERS, {V.KIND: V.progress}):
-            V.bind(self.c.get, self.c.send, lambda force=False: {}, OPS, 'lab', lambda path: 'helper log')
+            V.bind(K.kget, self.c.send, lambda force=False: {}, OPS, 'lab', lambda path: 'helper log')
             self.c.ops = OPS
             item = self.c.start(); operation_id = item['id']
             advanced = lambda: (OPS.list_operations(), V.status(operation_id))[1]  # the jobs loop, then a look

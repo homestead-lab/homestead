@@ -16,17 +16,17 @@ import homestead_hardware as HW
 import homestead_host_os as HOST_OS
 import homestead_impact as IMPACT
 import homestead_lhcapacity as LHCAP
-import homestead_lifecycle as LC
+import homestead_node_actions as NODE_ACTIONS
 import homestead_names as NAMES
 import homestead_node_probes as PROBES
-import homestead_networking as NETWORK
+import homestead_network_inventory as INV
 import homestead_nfs as NFS
 import homestead_operations as OPS
 import homestead_place as PLACE
 import homestead_ports as PORTS
 import homestead_routes as ROUTER
 import homestead_smart as SMART
-import homestead_vms as VMS
+import homestead_vm_list as VM_LIST
 
 kget = ksend = None
 DEFAULT_NS, SYS_NS = "lab", set()
@@ -240,7 +240,7 @@ def node_duties(pods, vols=None):
     except Exception:
         leases = []
     try:
-        network = cached("network", 5, NETWORK.inventory)
+        network = cached("network", 5, INV.inventory)
     except Exception:
         network = {}
     platform = network.get("platform_addresses") or {}
@@ -497,7 +497,7 @@ def node_impact(node, sources=None):
     src = sources or _impact_sources()
     try:
         # inventory()["addresses"] is VIPS.address_map(): {"nodes": [...], "addresses": [...]} (#372).
-        places = (cached("network", 5, NETWORK.inventory) or {}).get("addresses") or {}
+        places = (cached("network", 5, INV.inventory) or {}).get("addresses") or {}
         addresses = (places.get("addresses") or []) if isinstance(places, dict) else list(places)
     except Exception:
         addresses = []
@@ -505,7 +505,7 @@ def node_impact(node, sources=None):
         placement = cached("impact:" + node, 5, lambda: PLACE.impact(node))
     except Exception:
         placement = None
-    return IMPACT.preview(node, cached("wl", 5, get_workloads), src["deployments"], cached("vms", 5, VMS.list_vms), src["raw_vms"],
+    return IMPACT.preview(node, cached("wl", 5, get_workloads), src["deployments"], cached("vms", 5, VM_LIST.list_vms), src["raw_vms"],
                           cached("vol", 8, get_volumes), addresses, nodes, placement,
                           sets=src["sets"], pvs=src["pvs"], node_down=src["node_down"])
 
@@ -620,7 +620,7 @@ def _drain(request):
     impact = PLACE.impact(b["node"])
     if impact["stranded"] and not b.get("allow_stranded"):
         return ROUTER.Reply(409, {"error": "some workloads have no eligible failover host", "impact": impact})
-    return LC.drain(b["node"], b.get("grace", 30), b.get("system", False))
+    return NODE_ACTIONS.drain(b["node"], b.get("grace", 30), b.get("system", False))
 
 
 ROUTES = {

@@ -7,6 +7,7 @@ from unittest import mock
 
 import test_vm_capacity as fixtures
 import server
+import homestead_vm_create as VM_CREATE
 import homestead_capacity_review as review
 import homestead_passthrough as passthrough
 
@@ -80,7 +81,7 @@ class VMCreateAdmissionTests(unittest.TestCase):
 
     def test_isolated_preview_and_reviewed_create_need_no_generated_mac(self):
         self.body["isolated"] = True
-        with mock.patch.object(server.IMP, "_vm_mac") as mac:
+        with mock.patch.object(VM_CREATE, "_vm_mac") as mac:
             body = self.reviewed()
             self.assertNotIn("mac", body)
             result, writes, records = self.call("/api/vm/create", body)
@@ -151,7 +152,7 @@ class VMCreateAdmissionTests(unittest.TestCase):
 
     def test_create_context_is_snapshot_not_mutable_manifest_alias(self):
         cfg = server.VM_REVIEW.vm_create_configuration(self.body, preview=True)
-        prepared = server.IMP.prepare_vm(cfg, self.platform, "storage")
+        prepared = VM_CREATE.prepare_vm(cfg, self.platform, "storage")
         _, _, context = server.VM_REVIEW.vm_creation_capacity(prepared)
         prepared["claims"][0]["spec"]["volumeMode"] = "Block"
         self.assertEqual("Filesystem", context["prepared"]["claims"][0]["spec"]["volumeMode"])
@@ -263,7 +264,7 @@ class VMCreateAdmissionTests(unittest.TestCase):
 
     def test_failed_vm_write_never_rolls_back_by_deleting_claims(self):
         body = self.reviewed()
-        original = server.IMP.commit_vm
+        original = VM_CREATE.commit_vm
         sent=[]
         def commit(prepared, before_save=None):
             def send(method, path, data=None, **kwargs):
@@ -273,7 +274,7 @@ class VMCreateAdmissionTests(unittest.TestCase):
                 return data
             with mock.patch.object(server.IMP,"ksend",side_effect=send):
                 return original(prepared,before_save=before_save)
-        with mock.patch.object(server.IMP,"commit_vm",side_effect=commit):
+        with mock.patch.object(VM_CREATE,"commit_vm",side_effect=commit):
             result, _, _ = self.call("/api/vm/create",body)
         self.assertEqual(500,result[0])
         self.assertNotIn("DELETE",[method for method,_ in sent])

@@ -7,6 +7,7 @@ without losing access the next time a share is changed.
 """
 import homestead_specs as SPECS
 import base64
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_smb_recovery as RECOVERY
 import homestead_storage_resize as RESIZE
@@ -103,15 +104,6 @@ def _not_found(error):
     return isinstance(error, urllib.error.HTTPError) and error.code == 404
 
 
-def _get_optional(path):
-    try:
-        return kget(path)
-    except Exception as error:
-        if _not_found(error):
-            return None
-        raise
-
-
 def _quantity_gb(value):
     """Return a Kubernetes storage quantity in binary GiB."""
     match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)([KMGTPE]i?|)", str(value or "").strip())
@@ -132,9 +124,9 @@ def _quantity_gb(value):
 
 def _deployment_state():
     """Read legacy share definitions only when there is no saved inventory."""
-    dep = _get_optional(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{SAMBA_NAME}")
+    dep = KUBE.get_optional(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{SAMBA_NAME}", read=kget)
     if not dep:
-        dep = _get_optional(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{LEGACY_NAME}")
+        dep = KUBE.get_optional(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{LEGACY_NAME}", read=kget)
     if not dep:
         return [], {}, None
     spec = ((dep.get("spec") or {}).get("template") or {}).get("spec") or {}
@@ -175,7 +167,7 @@ def _deployment_state():
 
 
 def _config_rows():
-    obj = _get_optional(f"/api/v1/namespaces/{NAMESPACE}/configmaps/{CONFIGMAP()}")
+    obj = KUBE.get_optional(f"/api/v1/namespaces/{NAMESPACE}/configmaps/{CONFIGMAP()}", read=kget)
     if not obj:
         return [], None
     try:
@@ -188,7 +180,7 @@ def _config_rows():
 
 
 def _credentials(tolerant=False):
-    obj = _get_optional(f"/api/v1/namespaces/{NAMESPACE}/secrets/{SECRET()}")
+    obj = KUBE.get_optional(f"/api/v1/namespaces/{NAMESPACE}/secrets/{SECRET()}", read=kget)
     if not obj:
         return {}, None
     try:
@@ -323,7 +315,7 @@ def _save_credentials(credentials, current=None):
 
 def _restore_object(path, previous, written):
     """Restore the exact pre-change object, including an absent object."""
-    live = _get_optional(path)
+    live = KUBE.get_optional(path, read=kget)
     written_version = ((written or {}).get("metadata") or {}).get("resourceVersion")
     live_version = ((live or {}).get("metadata") or {}).get("resourceVersion")
     if written_version and live_version != written_version:
@@ -481,14 +473,14 @@ def _longhorn_volume(pvc):
     name = (pvc.get("spec") or {}).get("volumeName") or ""
     if not name:
         return None
-    return _get_optional(
-        f"/apis/longhorn.io/v1beta2/namespaces/{LONGHORN_NAMESPACE}/volumes/{name}")
+    return KUBE.get_optional(
+        f"/apis/longhorn.io/v1beta2/namespaces/{LONGHORN_NAMESPACE}/volumes/{name}", read=kget)
 
 
 def _samba_node():
     for name in (SAMBA_NAME, LEGACY_NAME):
-        pods = _get_optional(
-            f"/api/v1/namespaces/{NAMESPACE}/pods?labelSelector=app%3D{name}") or {}
+        pods = KUBE.get_optional(
+            f"/api/v1/namespaces/{NAMESPACE}/pods?labelSelector=app%3D{name}", read=kget) or {}
         for pod in pods.get("items", []) or []:
             node = (pod.get("spec") or {}).get("nodeName")
             if node:
@@ -552,7 +544,7 @@ def _samba_ready():
 
 def _samba_blocker():
     """Whatever Kubernetes last complained about, so the error names the cause."""
-    events = _get_optional(f"/api/v1/namespaces/{NAMESPACE}/events") or {}
+    events = KUBE.get_optional(f"/api/v1/namespaces/{NAMESPACE}/events", read=kget) or {}
     messages = [item.get("message", "") for item in events.get("items", []) or []
                 if str((item.get("involvedObject") or {}).get("name", "")).startswith(
                     (SAMBA_NAME + "-", LEGACY_NAME + "-"))
@@ -762,7 +754,7 @@ def _guard_rollout(previous, was_serving, name):
             return ""
         time.sleep(1.5)
     blocker = _samba_blocker()
-    live = _get_optional(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{name}")
+    live = KUBE.get_optional(f"/apis/apps/v1/namespaces/{NAMESPACE}/deployments/{name}", read=kget)
     if live and previous:
         restored = copy.deepcopy(previous)
         restored["metadata"]["resourceVersion"] = live["metadata"].get("resourceVersion", "")

@@ -210,8 +210,8 @@ class HeldEditTests(WorkloadEditFixture, unittest.TestCase):
         self.deployment["spec"]["replicas"] = 3
         result = self.edit([{"path": "/config", "kind": "existing", "source": "media"}])
         self.assertNotIn("held_replicas", result)
-        import homestead_lifecycle as lifecycle
-        result = lifecycle.edit_workload({"ns": "lab", "name": "frigate", "containers": [
+        import homestead_workload_edit as WORKLOAD_EDIT
+        result = WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "frigate", "containers": [
             {"original_name": "frigate", "name": "frigate", "image": "frigate:test",
              "volumes": [{"path": "/config", "kind": "existing", "source": "media"}]}]}, hold=True)
         self.assertEqual(3, result["held_replicas"])

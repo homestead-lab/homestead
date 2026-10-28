@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_usage as usage
 import server
+import homestead_workload_edit as WORKLOAD_EDIT
 
 DAY = 86400
 NOW = 1_760_000_000
@@ -177,7 +178,7 @@ class UsageTests(unittest.TestCase):
                                "template": {"metadata": {"labels": {"app": "web"}},
                                             "spec": {"containers": [{"name": "app", "image": "nginx",
                                                                      "resources": {"requests": {"cpu": "50m"}}}]}}}}
-        with mock.patch.object(server.LC, "seed_configs", return_value=[]), \
+        with mock.patch.object(WORKLOAD_EDIT, "seed_configs", return_value=[]), \
                 mock.patch.object(usage.time, "time", return_value=NOW):
             payload = server.WORKLOADS.workload_edit_payload("lab", "web", deployment, hardware_definitions=[], services=[])
         self.assertIn("suggest", payload["containers"][0]["usage"])

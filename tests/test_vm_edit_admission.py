@@ -7,6 +7,7 @@ from unittest import mock
 
 import test_vm_capacity as fixtures
 import server
+import homestead_vm_edit as VM_EDIT
 import homestead_capacity_review as review
 import homestead_passthrough as passthrough
 
@@ -134,11 +135,11 @@ class VMEditAdmissionTests(unittest.TestCase):
     def test_resident_device_credit_is_rechecked_immediately_before_save(self):
         _, launcher = self.running_passthrough()
         body = self.reviewed()
-        original = server.VMS.commit_edit
+        original = VM_EDIT.commit_edit
         def commit(prepared, before_save=None, send=None):
             del launcher["spec"]["containers"][0]["resources"]["requests"]["example.test/gpu"]
             return original(prepared, before_save=before_save, send=send)
-        with mock.patch.object(server.VMS, "commit_edit", side_effect=commit):
+        with mock.patch.object(VM_EDIT, "commit_edit", side_effect=commit):
             result, writes = self.call("/api/vm/edit", body)
         self.assertEqual(409, result[0], result)
         writes.assert_not_called()
@@ -290,13 +291,13 @@ class VMEditAdmissionTests(unittest.TestCase):
     def test_profile_mode_change_before_edit_writes_requires_new_review(self):
         self.disk_setup({"harvester": False, "cdi": True})
         body = self.reviewed()
-        original = server.VMS.commit_edit
+        original = VM_EDIT.commit_edit
         def commit(prepared, before_save=None, send=None):
             profile = self.objects["/apis/cdi.kubevirt.io/v1beta1/storageprofiles/storage"]
             profile["metadata"]["resourceVersion"] = "2"
             profile["status"]["claimPropertySets"][0]["volumeMode"] = "Filesystem"
             return original(prepared, before_save=before_save, send=send)
-        with mock.patch.object(server.VMS, "commit_edit", side_effect=commit):
+        with mock.patch.object(VM_EDIT, "commit_edit", side_effect=commit):
             result, writes = self.call("/api/vm/edit", body)
         self.assertEqual(409, result[0], result)
         writes.assert_not_called()
@@ -338,11 +339,11 @@ class VMEditAdmissionTests(unittest.TestCase):
         self.assertEqual(409, result[0], result)
         writes.assert_not_called()
         body = self.reviewed()
-        original = server.VMS.commit_edit
+        original = VM_EDIT.commit_edit
         def commit(prepared, before_save=None, send=None):
             self.profile_memory = "7Gi"
             return original(prepared, before_save=before_save, send=send)
-        with mock.patch.object(server.VMS, "commit_edit", side_effect=commit):
+        with mock.patch.object(VM_EDIT, "commit_edit", side_effect=commit):
             result, writes = self.call("/api/vm/edit", body)
         self.assertEqual(409, result[0], result)
         self.assertIn("profile expansion changed", result[1]["error"])
@@ -417,11 +418,11 @@ class VMEditAdmissionTests(unittest.TestCase):
 
     def test_fresh_capacity_change_before_dependency_writes_blocks(self):
         body = self.reviewed()
-        original = server.VMS.commit_edit
+        original = VM_EDIT.commit_edit
         def commit(prepared, before_save=None, send=None):
             self.nodes[0]["allocatable"]["memory"] = "1Gi"
             return original(prepared, before_save=before_save, send=send)
-        with mock.patch.object(server.VMS, "commit_edit", side_effect=commit):
+        with mock.patch.object(VM_EDIT, "commit_edit", side_effect=commit):
             result, writes = self.call("/api/vm/edit", body)
         self.assertEqual(409, result[0], result)
         writes.assert_not_called()
@@ -474,7 +475,7 @@ class VMEditAdmissionTests(unittest.TestCase):
         result, writes = self.call("/api/vm/edit/preview", self.body)
         self.assertNotIn("test-only-private-data", str(result))
         body = self.reviewed()
-        original = server.VMS.commit_edit
+        original = VM_EDIT.commit_edit
         sent = []
         def commit(prepared, before_save=None, send=None):
             def transport(method, path, body=None, **kw):
@@ -484,7 +485,7 @@ class VMEditAdmissionTests(unittest.TestCase):
                 return {**body, "apiVersion": "v1", "kind": "Secret", "metadata": {**body["metadata"], "namespace": "lab", "name": "ci", "resourceVersion": "6"}}
             send.send = transport
             return original(prepared, before_save=before_save, send=send)
-        with mock.patch.object(server.VMS, "commit_edit", side_effect=commit):
+        with mock.patch.object(VM_EDIT, "commit_edit", side_effect=commit):
             result, _ = self.call("/api/vm/edit", body)
         self.assertNotEqual(200, result[0])
         self.assertEqual(["PATCH", "PUT"], [method for method, _ in sent])

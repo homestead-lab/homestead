@@ -6,6 +6,9 @@ from unittest import mock
 import test_rollout_capacity as fixtures
 import server
 import homestead_updates as updates
+import homestead_update_rollouts as ROLLOUTS
+import homestead_update_registry as REGISTRY
+import homestead_update_checks as CHECKS
 import homestead_cancel as cancel
 
 
@@ -19,9 +22,9 @@ class ImageUpdateCapacityTests(unittest.TestCase):
         self.old_digest = "sha256:" + "a" * 64
         self.current["spec"]["template"]["spec"]["containers"][0]["image"] = "example/main@" + self.old_digest
         for patch in (mock.patch.object(updates, "kget", side_effect=self.get),
-                      mock.patch.object(updates, "_check_deployment", side_effect=self.check),
-                      mock.patch.object(updates, "progress", return_value={"phase": "starting"}),
-                      mock.patch.object(updates, "_history")):
+                      mock.patch.object(CHECKS, "_check_deployment", side_effect=self.check),
+                      mock.patch.object(ROLLOUTS, "progress", return_value={"phase": "starting"}),
+                      mock.patch.object(ROLLOUTS, "_history")):
             patch.start()
             self.addCleanup(patch.stop)
 
@@ -60,14 +63,14 @@ class ImageUpdateCapacityTests(unittest.TestCase):
         self.assertTrue(result[1]["images"][0]["after"].endswith(self.digest))
         self.assertEqual(before, self.current)
         send.assert_not_called()
-        updates._history.assert_not_called()
+        ROLLOUTS._history.assert_not_called()
 
     def test_no_acknowledgement_never_writes(self):
         result, send, job = self.call("/api/image-updates/apply", self.body)
         self.assertEqual(409, result[0], result)
         send.assert_not_called()
         job.assert_not_called()
-        updates._history.assert_not_called()
+        ROLLOUTS._history.assert_not_called()
 
     def test_approved_put_preserves_controller_version_and_digest(self):
         result, send, job = self.call("/api/image-updates/apply", self.reviewed())
@@ -76,7 +79,7 @@ class ImageUpdateCapacityTests(unittest.TestCase):
         self.assertEqual("10", dep["metadata"]["resourceVersion"])
         self.assertTrue(dep["spec"]["template"]["spec"]["containers"][0]["image"].endswith(self.digest))
         job.assert_called_once()
-        updates._history.assert_called_once()
+        ROLLOUTS._history.assert_called_once()
 
     def test_registry_target_drift_requires_new_review(self):
         body = self.reviewed()
@@ -198,7 +201,7 @@ class ImageUpdateCapacityTests(unittest.TestCase):
                 mock.patch.object(server.OPS, "start") as job:
             with self.assertRaises(urllib.error.HTTPError):
                 server.CLUSTER_ROUTES.reviewed_image_update(body, "update")
-        updates._history.assert_not_called()
+        ROLLOUTS._history.assert_not_called()
         job.assert_not_called()
 
     def test_capacity_warning_override_is_preserved(self):
@@ -231,8 +234,8 @@ class ImageUpdateCapacityTests(unittest.TestCase):
         self.pods = []
         init = {"name": "permissions", "image": "example/main:1"}
         self.current["spec"]["template"]["spec"]["initContainers"] = [init]
-        with mock.patch.object(updates, "_secret_credentials", return_value={}), \
-                mock.patch.object(updates, "manifest_info", return_value={"digest": self.old_digest}):
+        with mock.patch.object(REGISTRY, "_secret_credentials", return_value={}), \
+                mock.patch.object(REGISTRY, "manifest_info", return_value={"digest": self.old_digest}):
             result, send, _ = self.call("/api/image-updates/preview", self.body)
         self.assertEqual(200, result[0], result)
         self.assertIn("not claimed", " ".join(result[1]["capacity"]["warnings"]))

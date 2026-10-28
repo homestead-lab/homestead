@@ -9,7 +9,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import homestead_imports as imports
+import homestead_container_import as CONTAINER_IMPORT
 import server
+import homestead_deploy_manifests as MANIFESTS
 from fixtures_source import source
 
 
@@ -20,7 +22,7 @@ class ImportMappingTests(unittest.TestCase):
     """An Unraid app with several appdata folders becomes one volume."""
 
     def test_each_mapping_gets_its_own_folder_in_one_volume(self):
-        rows = imports.import_mappings({"mappings": [
+        rows = CONTAINER_IMPORT.import_mappings({"mappings": [
             {"remote_path": "/mnt/user/appdata/plex/config", "mount_path": "/config"},
             {"remote_path": "/mnt/user/appdata/plex/transcode", "mount_path": "/transcode"},
         ]})
@@ -29,7 +31,7 @@ class ImportMappingTests(unittest.TestCase):
         self.assertEqual(["/config", "/transcode"], [row["mount_path"] for row in rows])
 
     def test_colliding_folder_names_are_kept_apart(self):
-        rows = imports.import_mappings({"mappings": [
+        rows = CONTAINER_IMPORT.import_mappings({"mappings": [
             {"remote_path": "/mnt/user/appdata/a/data", "mount_path": "/one"},
             {"remote_path": "/mnt/user/appdata/b/data", "mount_path": "/two"},
         ]})
@@ -37,7 +39,7 @@ class ImportMappingTests(unittest.TestCase):
         self.assertEqual(["data", "data-2"], [row["folder"] for row in rows])
 
     def test_a_single_mapping_still_lands_at_the_volume_root(self):
-        rows = imports.import_mappings({"remote_path": "/mnt/user/appdata/plex",
+        rows = CONTAINER_IMPORT.import_mappings({"remote_path": "/mnt/user/appdata/plex",
                                         "mount_path": "/config"})
 
         self.assertEqual([{"remote_path": "/mnt/user/appdata/plex", "mount_path": "/config",
@@ -46,13 +48,13 @@ class ImportMappingTests(unittest.TestCase):
 
     def test_bad_mappings_are_refused(self):
         with self.assertRaisesRegex(ValueError, "remote path must be absolute"):
-            imports.import_mappings({"mappings": [{"remote_path": "relative", "mount_path": "/x"}]})
+            CONTAINER_IMPORT.import_mappings({"mappings": [{"remote_path": "relative", "mount_path": "/x"}]})
         with self.assertRaisesRegex(ValueError, "mapped twice"):
-            imports.import_mappings({"mappings": [
+            CONTAINER_IMPORT.import_mappings({"mappings": [
                 {"remote_path": "/a", "mount_path": "/config"},
                 {"remote_path": "/b", "mount_path": "/config"}]})
         with self.assertRaisesRegex(ValueError, "climb out"):
-            imports.import_mappings({"mappings": [
+            CONTAINER_IMPORT.import_mappings({"mappings": [
                 {"remote_path": "/a", "mount_path": "/x", "folder": "../etc"}]})
 
 
@@ -66,7 +68,7 @@ class ImportManifestTests(unittest.TestCase):
         server.HW.features = self.features
 
     def test_one_claim_backs_every_folder_of_the_workload(self):
-        deployment, _ = server.DEPLOY.build_deployment({
+        deployment, _ = MANIFESTS.build_deployment({
             "name": "plex", "workload_name": "plex", "container_name": "plex",
             "image": "plex:1", "namespace": "lab",
             "volumes": [
@@ -83,7 +85,7 @@ class ImportManifestTests(unittest.TestCase):
         self.assertEqual({spec["volumes"][0]["name"]}, {m["name"] for m in mounts})
 
     def test_a_mapping_without_a_folder_has_no_sub_path(self):
-        deployment, _ = server.DEPLOY.build_deployment({
+        deployment, _ = MANIFESTS.build_deployment({
             "name": "app", "workload_name": "app", "container_name": "app",
             "image": "app:1", "namespace": "lab",
             "volumes": [{"path": "/config", "source": "app-appdata", "type": "pvc", "sub_path": ""}]})
@@ -109,20 +111,20 @@ class MultipleVolumeTests(unittest.TestCase):
     }
 
     def test_each_folder_lands_in_the_volume_it_was_given(self):
-        rows = imports.import_mappings(self.FRIGATE)
+        rows = CONTAINER_IMPORT.import_mappings(self.FRIGATE)
 
         self.assertEqual(["frigate-appdata", "frigate-appdata", "frigate-recordings"],
                          [row["pvc"] for row in rows])
 
     def test_folders_sharing_a_volume_get_subdirectories_and_a_lone_one_does_not(self):
-        rows = imports.import_mappings(self.FRIGATE)
+        rows = CONTAINER_IMPORT.import_mappings(self.FRIGATE)
 
         self.assertEqual(["frigate", "clips"], [row["folder"] for row in rows[:2]])
         self.assertEqual("", rows[2]["folder"],
                          "the only folder on a volume takes its root")
 
     def test_the_same_folder_name_on_two_volumes_is_not_a_collision(self):
-        rows = imports.import_mappings({
+        rows = CONTAINER_IMPORT.import_mappings({
             "name": "app",
             "volumes": [{"name": "app-one"}, {"name": "app-two"}],
             "mappings": [{"remote_path": "/a/data", "mount_path": "/one", "pvc": "app-one"},
@@ -132,15 +134,15 @@ class MultipleVolumeTests(unittest.TestCase):
 
     def test_a_mapping_cannot_name_a_volume_the_import_does_not_have(self):
         with self.assertRaisesRegex(ValueError, "which this import does not create"):
-            imports.import_mappings({"name": "app", "volumes": [{"name": "app-data"}],
+            CONTAINER_IMPORT.import_mappings({"name": "app", "volumes": [{"name": "app-data"}],
                                      "mappings": [{"remote_path": "/a", "mount_path": "/x",
                                                    "pvc": "somewhere-else"}]})
 
     def test_duplicate_and_malformed_volumes_are_refused(self):
         with self.assertRaisesRegex(ValueError, "listed twice"):
-            imports.import_volumes({"volumes": [{"name": "a"}, {"name": "a"}]})
+            CONTAINER_IMPORT.import_volumes({"volumes": [{"name": "a"}, {"name": "a"}]})
         with self.assertRaisesRegex(ValueError, "lowercase letters"):
-            imports.import_volumes({"volumes": [{"name": "Bad Name"}]})
+            CONTAINER_IMPORT.import_volumes({"volumes": [{"name": "Bad Name"}]})
 
 
 class ScratchMountTests(unittest.TestCase):
@@ -154,7 +156,7 @@ class ScratchMountTests(unittest.TestCase):
     }
 
     def test_a_scratch_mount_has_no_source_and_is_never_copied(self):
-        rows = imports.import_mappings(self.FRIGATE)
+        rows = CONTAINER_IMPORT.import_mappings(self.FRIGATE)
 
         scratch = rows[1]
         self.assertEqual(("", "memory", 1000), (scratch["remote_path"], scratch["medium"],
@@ -162,13 +164,13 @@ class ScratchMountTests(unittest.TestCase):
         self.assertEqual(0, scratch["bytes"], "there is nothing to measure")
 
     def test_scratch_does_not_push_the_real_folder_into_a_subdirectory(self):
-        rows = imports.import_mappings(self.FRIGATE)
+        rows = CONTAINER_IMPORT.import_mappings(self.FRIGATE)
 
         self.assertEqual("", rows[0]["folder"],
                          "one copied folder still owns the volume root")
 
     def _scratch(self, **extra):
-        return imports.import_mappings({"name": "app", "volumes": [{"name": "app-data"}],
+        return CONTAINER_IMPORT.import_mappings({"name": "app", "volumes": [{"name": "app-data"}],
                                         "mappings": [dict({"mount_path": "/tmp/cache",
                                                            "medium": "memory"}, **extra)]})[0]
 
@@ -210,7 +212,7 @@ class SourceMeasurementTests(unittest.TestCase):
         self.lines = ["### /mnt/user/appdata/plex/config", "1024	/mnt/user/appdata/plex/config",
                       "### /mnt/user/appdata/plex/media", "10485760	/mnt/user/appdata/plex/media"]
 
-        result = imports.measure_source_paths("tower", ["/mnt/user/appdata/plex/config",
+        result = CONTAINER_IMPORT.measure_source_paths("tower", ["/mnt/user/appdata/plex/config",
                                                         "/mnt/user/appdata/plex/media"])
 
         self.assertEqual([1048576, 10737418240], [row["bytes"] for row in result["paths"]])
@@ -222,7 +224,7 @@ class SourceMeasurementTests(unittest.TestCase):
         self.lines = ["### /mnt/user/appdata/frigate", "MISSING",
                       "### /mnt/user/appdata/plex", "2048	/mnt/user/appdata/plex"]
 
-        result = imports.measure_source_paths("tower", ["/mnt/user/appdata/frigate",
+        result = CONTAINER_IMPORT.measure_source_paths("tower", ["/mnt/user/appdata/frigate",
                                                         "/mnt/user/appdata/plex"])
 
         self.assertEqual(["/mnt/user/appdata/frigate"], result["missing"])
@@ -234,7 +236,7 @@ class SourceMeasurementTests(unittest.TestCase):
         self.lines = ["### /mnt/user/appdata/plex/config", "1024	/mnt/user/appdata/plex/config",
                       "### /mnt/user/media", "TIMEOUT"]
 
-        result = imports.measure_source_paths("tower", ["/mnt/user/appdata/plex/config",
+        result = CONTAINER_IMPORT.measure_source_paths("tower", ["/mnt/user/appdata/plex/config",
                                                         "/mnt/user/media"])
 
         self.assertFalse(result["paths"][1]["measured"])
@@ -246,14 +248,14 @@ class SourceMeasurementTests(unittest.TestCase):
 
     def test_every_folder_is_measured_under_its_own_timeout(self):
         self.lines = []
-        imports.measure_source_paths("tower", ["/a", "/b"], seconds=30)
+        CONTAINER_IMPORT.measure_source_paths("tower", ["/a", "/b"], seconds=30)
 
         self.assertEqual(2, self.script.count("timeout 30 du -sk"))
 
     def test_paths_must_be_absolute(self):
         self.lines = []
         with self.assertRaisesRegex(ValueError, "must be absolute"):
-            imports.measure_source_paths("tower", ["relative/path"])
+            CONTAINER_IMPORT.measure_source_paths("tower", ["relative/path"])
 
 
 class ImportCapacityTests(unittest.TestCase):
@@ -286,7 +288,7 @@ class ImportCapacityTests(unittest.TestCase):
                "mappings": [{"remote_path": "/mnt/user/appdata/ha", "mount_path": "/config",
                              "bytes": int(11.8 * 1024 ** 3)}]}
         cfg.update(extra)
-        return imports.import_container(cfg)
+        return CONTAINER_IMPORT.import_container(cfg)
 
     def test_an_import_that_cannot_fit_is_refused_before_it_starts(self):
         with self.assertRaisesRegex(ValueError, "11.8 GiB but ha-appdata has"):
@@ -326,7 +328,7 @@ class MountEmptyTests(unittest.TestCase):
         imports._source = lambda name: dict(SOURCE)
 
     def test_a_volume_mounted_empty_is_mapped_but_never_copied(self):
-        imports.import_container({
+        CONTAINER_IMPORT.import_container({
             "source": "tower", "name": "frigate", "image": "frigate:1",
             "volumes": [{"name": "frigate-appdata", "size_gb": 5}, {"name": "frigate-media", "size_gb": 500}],
             "mappings": [{"remote_path": "/mnt/user/appdata/frigate", "mount_path": "/config", "pvc": "frigate-appdata"},
@@ -341,7 +343,7 @@ class MountEmptyTests(unittest.TestCase):
         self.assertIn("step 1/1", script)
 
     def test_mounted_empty_needs_no_source_folder(self):
-        rows = imports.import_mappings({"mappings": [{"remote_path": "", "mount_path": "/media", "copy": False}]})
+        rows = CONTAINER_IMPORT.import_mappings({"mappings": [{"remote_path": "", "mount_path": "/media", "copy": False}]})
         self.assertEqual((False, 0), (rows[0]["copy"], rows[0]["bytes"]))
 
 
@@ -366,7 +368,7 @@ class OwnershipTests(unittest.TestCase):
 
     def test_the_copy_keeps_the_ownership_the_source_had(self):
         """A fresh deployment writes its own files; an import must not undo that."""
-        imports.import_container({"source": "tower", "name": "z2m", "image": "z2m:1",
+        CONTAINER_IMPORT.import_container({"source": "tower", "name": "z2m", "image": "z2m:1",
                                   "create_workload": False, "reuse_existing": True,
                                   "pvc_name": "z2m-appdata", "remote_path": "/mnt/user/appdata/z2m"})
 
@@ -377,7 +379,7 @@ class OwnershipTests(unittest.TestCase):
         self.assertNotIn("chown", script, "nothing to correct when ownership survives the copy")
 
     def test_an_override_still_hands_the_files_over(self):
-        imports.import_container({"source": "tower", "name": "ha", "image": "ha:1",
+        CONTAINER_IMPORT.import_container({"source": "tower", "name": "ha", "image": "ha:1",
                                   "create_workload": False, "reuse_existing": True,
                                   "pvc_name": "ha-appdata", "remote_path": "/mnt/user/appdata/ha",
                                   "env": {"PUID": "1000", "PGID": "1000"}})
@@ -385,7 +387,7 @@ class OwnershipTests(unittest.TestCase):
         self.assertIn("chown -R 1000:1000 /appdata", self._script())
 
     def test_an_explicit_owner_beats_the_environment(self):
-        imports.import_container({"source": "tower", "name": "mq", "image": "mosquitto:2",
+        CONTAINER_IMPORT.import_container({"source": "tower", "name": "mq", "image": "mosquitto:2",
                                   "create_workload": False, "reuse_existing": True,
                                   "pvc_name": "mq-appdata", "remote_path": "/mnt/user/appdata/mq",
                                   "env": {"PUID": "1000"}, "uid": "1883"})
@@ -393,14 +395,14 @@ class OwnershipTests(unittest.TestCase):
         self.assertIn("chown -R 1883:1883 /appdata", self._script())
 
     def test_without_an_owner_nothing_is_chowned(self):
-        imports.import_container({"source": "tower", "name": "plain", "image": "app:1",
+        CONTAINER_IMPORT.import_container({"source": "tower", "name": "plain", "image": "app:1",
                                   "create_workload": False, "reuse_existing": True,
                                   "pvc_name": "plain-appdata", "remote_path": "/mnt/user/appdata/plain"})
 
         self.assertNotIn("chown", self._script())
 
     def test_jobs_are_named_after_homestead(self):
-        imports.import_container({"source": "tower", "name": "plex", "image": "plex:1",
+        CONTAINER_IMPORT.import_container({"source": "tower", "name": "plex", "image": "plex:1",
                                   "create_workload": False, "reuse_existing": True,
                                   "pvc_name": "plex-appdata", "remote_path": "/mnt/user/appdata/plex"})
 
@@ -413,7 +415,7 @@ class OwnershipTests(unittest.TestCase):
                 raise urllib.error.HTTPError(path, 404, "missing", {}, None)
             return {"items": []}
         with mock.patch.object(imports, "kget", get):
-            result = imports.chown_claim("lab", "mosquitto-appdata", "1883", "")
+            result = CONTAINER_IMPORT.chown_claim("lab", "mosquitto-appdata", "1883", "")
 
         job = self.bodies[-1]
         self.assertEqual("homestead-chown-mosquitto-appdata", job["metadata"]["name"])
@@ -428,7 +430,7 @@ class OwnershipTests(unittest.TestCase):
         for uid in ("root", "-5", "99999999"):
             with self.subTest(uid=uid):
                 with self.assertRaises(ValueError):
-                    imports.chown_claim("lab", "media", uid, "")
+                    CONTAINER_IMPORT.chown_claim("lab", "media", uid, "")
 
 
 class OwnershipHintTests(unittest.TestCase):
@@ -453,7 +455,7 @@ class OwnershipHintTests(unittest.TestCase):
         self._bind({"name": "app", "image": "lscr.io/linuxserver/app",
                     "env": [{"name": "PUID", "value": "1000"}, {"name": "PGID", "value": "1000"}]})
 
-        hint = imports.ownership_hint("lab", "app-appdata")
+        hint = CONTAINER_IMPORT.ownership_hint("lab", "app-appdata")
 
         self.assertEqual((1000, 1000, True), (hint["uid"], hint["gid"], hint["known"]))
         self.assertIn("PUID/PGID", hint["source"])
@@ -462,7 +464,7 @@ class OwnershipHintTests(unittest.TestCase):
         self._bind({"name": "app", "image": "mosquitto:2",
                     "securityContext": {"runAsUser": 1883, "runAsGroup": 1883}})
 
-        hint = imports.ownership_hint("lab", "app-appdata")
+        hint = CONTAINER_IMPORT.ownership_hint("lab", "app-appdata")
 
         self.assertEqual(1883, hint["uid"])
         self.assertIn("security context", hint["source"])
@@ -470,7 +472,7 @@ class OwnershipHintTests(unittest.TestCase):
     def test_an_fs_group_alone_still_names_a_group(self):
         self._bind({"name": "app", "image": "app:1"}, securityContext={"fsGroup": 568})
 
-        hint = imports.ownership_hint("lab", "app-appdata")
+        hint = CONTAINER_IMPORT.ownership_hint("lab", "app-appdata")
 
         self.assertEqual(568, hint["gid"])
         self.assertTrue(hint["known"])
@@ -478,7 +480,7 @@ class OwnershipHintTests(unittest.TestCase):
     def test_a_workload_that_says_nothing_says_so_and_names_the_image(self):
         self._bind({"name": "app", "image": "eclipse-mosquitto:2"})
 
-        hint = imports.ownership_hint("lab", "app-appdata")
+        hint = CONTAINER_IMPORT.ownership_hint("lab", "app-appdata")
 
         self.assertFalse(hint["known"])
         self.assertIsNone(hint["uid"])
@@ -487,7 +489,7 @@ class OwnershipHintTests(unittest.TestCase):
     def test_an_unused_volume_is_not_second_guessed(self):
         self._bind({"name": "app", "image": "app:1"})
 
-        hint = imports.ownership_hint("lab", "some-other-claim")
+        hint = CONTAINER_IMPORT.ownership_hint("lab", "some-other-claim")
 
         self.assertFalse(hint["known"])
         self.assertIn("nothing mounts this volume", hint["source"])
@@ -505,7 +507,7 @@ class ImportProgressTests(unittest.TestCase):
             "  9,000,000  50%  22.10MB/s  0:00:20",
         ])
 
-        progress = imports.import_progress(log)
+        progress = CONTAINER_IMPORT.import_progress(log)
 
         self.assertEqual((2, 4, "data"), (progress["step"], progress["steps"], progress["folder"]))
         self.assertEqual(50, progress["step_percent"])
@@ -513,13 +515,13 @@ class ImportProgressTests(unittest.TestCase):
         self.assertEqual("22.10MB/s", progress["rate"])
 
     def test_a_carriage_returned_bar_is_read_as_lines(self):
-        progress = imports.import_progress(
+        progress = CONTAINER_IMPORT.import_progress(
             "==> step 1/1 appdata :: a -> /config\r  10  9%  1MB/s  0:00:01\r  99  93%  2MB/s  0:00:00")
 
         self.assertEqual(93, progress["step_percent"])
 
     def test_a_finished_job_reads_as_complete(self):
-        progress = imports.import_progress(
+        progress = CONTAINER_IMPORT.import_progress(
             "==> step 1/2 a :: x -> /a\n==> step 1/2 a complete\n"
             "==> step 2/2 b :: y -> /b\n==> step 2/2 b complete\n==> done\n1.2G\t/appdata")
 
@@ -535,7 +537,7 @@ class ImportProgressTests(unittest.TestCase):
             "  50,000  50%  9MB/s  0:00:30",
         ])
 
-        progress = imports.import_progress(log)
+        progress = CONTAINER_IMPORT.import_progress(log)
 
         self.assertTrue(progress["weighted"])
         self.assertEqual(50.5, progress["percent"])
@@ -549,7 +551,7 @@ class ImportProgressTests(unittest.TestCase):
             "  50,000  50%  9MB/s  0:00:30",
         ])
 
-        progress = imports.import_progress(log)
+        progress = CONTAINER_IMPORT.import_progress(log)
 
         self.assertFalse(progress["weighted"])
         self.assertEqual(75.0, progress["percent"])
@@ -561,26 +563,26 @@ class ImportProgressTests(unittest.TestCase):
             "rsync error: error in file IO (code 11) at receiver.c(401) [receiver=3.4.3]",
         ])
 
-        progress = imports.import_progress(log)
+        progress = CONTAINER_IMPORT.import_progress(log)
 
         self.assertEqual("ran out of space on the volume", progress["error"])
         self.assertIn("No space left on device", progress["error_detail"])
 
     def test_a_copy_that_never_starts_still_reports_why(self):
-        progress = imports.import_progress(
+        progress = CONTAINER_IMPORT.import_progress(
             "==> checking the source folders exist\n==> missing /mnt/user/appdata/frigate")
 
         self.assertEqual("a source folder does not exist on the host", progress["error"])
         self.assertEqual("/mnt/user/appdata/frigate", progress["error_detail"])
 
     def test_a_refused_connection_is_named_too(self):
-        progress = imports.import_progress(
+        progress = CONTAINER_IMPORT.import_progress(
             "==> step 1/1 appdata :: a -> /config\nssh: connect to host 10.0.0.9 port 22: Connection refused")
 
         self.assertEqual("the source host refused the connection", progress["error"])
 
     def test_output_without_markers_reports_nothing_rather_than_guessing(self):
-        self.assertEqual({}, imports.import_progress("connecting...\nsome noise"))
+        self.assertEqual({}, CONTAINER_IMPORT.import_progress("connecting...\nsome noise"))
 
 
 if __name__ == "__main__":
@@ -598,7 +600,7 @@ class FsGroupTests(unittest.TestCase):
         server.HW.features = self.features
 
     def test_an_owner_group_becomes_the_pod_fs_group(self):
-        deployment, _ = server.DEPLOY.build_deployment({
+        deployment, _ = MANIFESTS.build_deployment({
             "name": "mq", "workload_name": "mq", "container_name": "mq", "image": "mosquitto:2",
             "namespace": "lab", "fs_group": 1883,
             "volumes": [{"path": "/mosquitto/data", "source": "mq-appdata", "type": "pvc"}]})
@@ -607,7 +609,7 @@ class FsGroupTests(unittest.TestCase):
         self.assertEqual(1883, spec["securityContext"]["fsGroup"])
 
     def test_no_owner_leaves_the_pod_security_context_alone(self):
-        deployment, _ = server.DEPLOY.build_deployment({
+        deployment, _ = MANIFESTS.build_deployment({
             "name": "app", "workload_name": "app", "container_name": "app", "image": "app:1",
             "namespace": "lab", "volumes": []})
 
@@ -628,7 +630,7 @@ class NestedFolderTests(unittest.TestCase):
     }
 
     def test_a_folder_mapped_on_its_own_is_kept_out_of_its_parent(self):
-        rows = imports.import_mappings(self.FRIGATE)
+        rows = CONTAINER_IMPORT.import_mappings(self.FRIGATE)
 
         self.assertEqual(["/recordings"], rows[0]["exclude"],
                          "the recordings must not also ride along into appdata")
@@ -639,7 +641,7 @@ class NestedFolderTests(unittest.TestCase):
         cfg = copy.deepcopy(self.FRIGATE)
         cfg["mappings"] = [dict(cfg["mappings"][0], exclude=["clips/", "/recordings"])]
 
-        rows = imports.import_mappings(cfg)
+        rows = CONTAINER_IMPORT.import_mappings(cfg)
 
         self.assertEqual(["/clips", "/recordings"], rows[0]["exclude"])
 
@@ -647,13 +649,13 @@ class NestedFolderTests(unittest.TestCase):
         cfg = copy.deepcopy(self.FRIGATE)
         cfg["mappings"] = [dict(cfg["mappings"][0], exclude=["../../etc", "", "/"])]
 
-        self.assertEqual([], imports.import_mappings(cfg)[0]["exclude"])
+        self.assertEqual([], CONTAINER_IMPORT.import_mappings(cfg)[0]["exclude"])
 
     def test_a_sibling_with_a_similar_name_is_not_excluded(self):
         cfg = copy.deepcopy(self.FRIGATE)
         cfg["mappings"][1]["remote_path"] = "/mnt/user/cctv/Frigate-recordings"
 
-        self.assertEqual([], imports.import_mappings(cfg)[0]["exclude"],
+        self.assertEqual([], CONTAINER_IMPORT.import_mappings(cfg)[0]["exclude"],
                          "Frigate-recordings is beside Frigate, not inside it")
 
     def test_the_copy_tells_rsync_to_leave_the_nested_folder_alone(self):
@@ -663,7 +665,7 @@ class NestedFolderTests(unittest.TestCase):
                      lambda *a, **k: {}, lambda cfg: ({"metadata": {"name": "x"}}, None),
                      "lab", {})
         imports._source = lambda name: dict(SOURCE)
-        imports.import_container(dict(self.FRIGATE, source="tower", image="frigate:1",
+        CONTAINER_IMPORT.import_container(dict(self.FRIGATE, source="tower", image="frigate:1",
                                       create_workload=False))
 
         script = sent[-1]["spec"]["template"]["spec"]["containers"][0]["command"][-1]
@@ -676,7 +678,7 @@ class NestedFolderTests(unittest.TestCase):
                 {"path": "/mnt/user/cctv/Frigate/recordings", "bytes": 4 * 1024 ** 3,
                  "measured": True}]
 
-        imports._deduct_nested(rows)
+        CONTAINER_IMPORT._deduct_nested(rows)
 
         self.assertEqual(1024 ** 3, rows[0]["bytes"], "du counted the recordings twice")
         self.assertEqual(5 * 1024 ** 3, rows[0]["gross_bytes"])
@@ -687,7 +689,7 @@ class NestedFolderTests(unittest.TestCase):
                 {"path": "/a/b", "bytes": 60, "measured": True},
                 {"path": "/a/b/c", "bytes": 20, "measured": True}]
 
-        imports._deduct_nested(rows)
+        CONTAINER_IMPORT._deduct_nested(rows)
 
         self.assertEqual([40, 40, 20], [row["bytes"] for row in rows])
 
@@ -704,7 +706,7 @@ class SharedMemoryTests(unittest.TestCase):
         self.assertEqual(0, imports._shm_mb(None))
 
     def test_a_shm_volume_is_memory_backed_and_copies_nothing(self):
-        rows = imports.import_mappings({
+        rows = CONTAINER_IMPORT.import_mappings({
             "name": "frigate", "volumes": [{"name": "frigate-appdata"}],
             "mappings": [{"remote_path": "/mnt/user/cctv/Frigate", "mount_path": "/config"},
                          {"mount_path": "/dev/shm", "medium": "memory", "size_mb": 512}]})
@@ -722,25 +724,25 @@ class NoStorageTests(unittest.TestCase):
            "mappings": [], "volumes": []}
 
     def test_no_claim_is_invented_for_a_container_that_keeps_nothing(self):
-        self.assertEqual([], imports.import_volumes(self.CFG))
+        self.assertEqual([], CONTAINER_IMPORT.import_volumes(self.CFG))
 
     def test_no_mappings_means_no_mappings(self):
-        self.assertEqual([], imports.import_mappings(self.CFG))
+        self.assertEqual([], CONTAINER_IMPORT.import_mappings(self.CFG))
 
     def test_the_older_single_folder_shape_still_gets_its_default(self):
         """A client that sends no mappings key at all predates the list."""
-        rows = imports.import_mappings({"name": "plex", "remote_path": "/mnt/user/appdata/plex"})
+        rows = CONTAINER_IMPORT.import_mappings({"name": "plex", "remote_path": "/mnt/user/appdata/plex"})
 
         self.assertEqual("/mnt/user/appdata/plex", rows[0]["remote_path"])
         self.assertEqual(["plex-appdata"],
-                         [v["name"] for v in imports.import_volumes({"name": "plex"})])
+                         [v["name"] for v in CONTAINER_IMPORT.import_volumes({"name": "plex"})])
 
     def test_a_ram_only_container_still_gets_its_scratch_but_no_claim(self):
         cfg = dict(self.CFG, mappings=[{"mount_path": "/tmp/cache", "medium": "memory",
                                         "size_mb": 512}])
 
-        self.assertEqual([], imports.import_volumes(cfg))
-        self.assertEqual("memory", imports.import_mappings(cfg)[0]["medium"])
+        self.assertEqual([], CONTAINER_IMPORT.import_volumes(cfg))
+        self.assertEqual("memory", CONTAINER_IMPORT.import_mappings(cfg)[0]["medium"])
 
 
 class ConfigMountTests(unittest.TestCase):

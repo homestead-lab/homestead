@@ -7,7 +7,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_deploy_manifests as MANIFESTS
+import homestead_network_services as SVC
 import homestead_lifecycle as lifecycle
+import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_host_access as host_access
 
 
@@ -29,7 +32,7 @@ class ContainerSetTests(unittest.TestCase):
             patch.start(); self.addCleanup(patch.stop)
 
     def prepare(self, **changes):
-        return lifecycle.prepare_edit({"ns": "lab", "name": "media", **changes}, current=self.current)
+        return WORKLOAD_EDIT.prepare_edit({"ns": "lab", "name": "media", **changes}, current=self.current)
 
     def test_add_and_remove_are_explicit_and_leave_source_and_data_untouched(self):
         before = copy.deepcopy(self.current)
@@ -128,7 +131,7 @@ class ContainerSetTests(unittest.TestCase):
 
     def test_new_workload_manifest_and_service_include_every_container(self):
         config = self.config(); before = copy.deepcopy(config)
-        dep, svc = server.DEPLOY.build_deployment(config)
+        dep, svc = MANIFESTS.build_deployment(config)
         self.assertEqual(["main", "metrics"], [c["name"] for c in dep["spec"]["template"]["spec"]["containers"]])
         self.assertEqual([8080, 9090], [p["targetPort"] for p in svc["spec"]["ports"]])
         self.assertEqual(2, dep["spec"]["replicas"])
@@ -147,13 +150,13 @@ class ContainerSetTests(unittest.TestCase):
         config = self.config()
         config["additional_containers"][0]["privileges"] = {"privileged": True}
         with mock.patch.object(host_access, "_allowed", return_value=False), self.assertRaises(host_access.Refused):
-            server.DEPLOY.build_deployment(config)
+            MANIFESTS.build_deployment(config)
 
     def test_additional_container_cannot_override_shared_pod_or_privilege_settings(self):
         for changes in ({"node": "elsewhere"}, {"privileges": {"namespace": "system"}}, {"args": ["unsupported"]}):
             config = self.config(); config["additional_containers"][0].update(changes)
             with self.subTest(changes=changes), self.assertRaises(ValueError):
-                server.DEPLOY.build_deployment(config)
+                MANIFESTS.build_deployment(config)
 
     def test_batch_of_additional_containers_cannot_silently_join_existing_workload(self):
         config = self.config(); config["target_mode"] = "existing"
@@ -162,7 +165,7 @@ class ContainerSetTests(unittest.TestCase):
 
     def test_network_preparation_checks_additional_listeners_but_keeps_primary_ports(self):
         config = self.config()
-        with mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: dict(cfg, lb_ip="192.0.2.1")) as network:
+        with mock.patch.object(SVC, "prepare_deploy", side_effect=lambda cfg: dict(cfg, lb_ip="192.0.2.1")) as network:
             prepared = server.DEPLOY_ROUTES.prepare_deploy_network(config)
         self.assertEqual([8080, 9090], [p["container"] for p in network.call_args.args[0]["ports"]])
         self.assertEqual(config["ports"], prepared["ports"])
@@ -171,7 +174,7 @@ class ContainerSetTests(unittest.TestCase):
     def test_execution_provisions_additional_claims_and_saves_one_complete_pod_template(self):
         config = self.config()
         with mock.patch.object(server.OVERVIEW_ROUTES, "guard_managed_smb"), mock.patch.object(server.DEPLOY_ROUTES, "persist_icon_config"), \
-                mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: cfg), \
+                mock.patch.object(SVC, "prepare_deploy", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server.VM_ROUTES, "prepare_lan", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server.VOLOWNER, "prepare", side_effect=lambda cfg: cfg), \
                 mock.patch.object(server.STORAGE_ROUTES, "ensure_claim", return_value=False) as claim, \
@@ -193,7 +196,7 @@ class ContainerSetTests(unittest.TestCase):
     def test_owner_helper_maps_additional_container_to_its_actual_volume(self):
         config = self.config()
         config["additional_containers"][0]["volume_owners"] = {"/config": [1000, 1000, 493]}
-        dep, _ = server.DEPLOY.build_deployment(config)
+        dep, _ = MANIFESTS.build_deployment(config)
         spec = dep["spec"]["template"]["spec"]
         self.assertEqual(spec["containers"][1]["volumeMounts"][0]["name"], spec["initContainers"][0]["volumeMounts"][0]["name"])
         self.assertEqual("hs-owner-metrics", spec["initContainers"][0]["name"])

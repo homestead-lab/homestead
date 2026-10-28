@@ -26,7 +26,7 @@ import homestead_names as NAMES
 import homestead_routes as ROUTER
 import homestead_vm_transfer_devices as VM_DEVICES
 from homestead_pod_resources import storage_gib
-from homestead_longhorn import move_snapshot_error
+from homestead_longhorn_backups import move_snapshot_error
 import homestead_transfer_cleanup as CLEANUP
 
 kget = ksend = None

@@ -4,14 +4,16 @@ Homestead again on the new boot.
 
 Rebooting k3s-test with Homestead still on its data volume brought
 homestead-data back faulted: Longhorn stopped under a mounted filesystem."""
-import copy
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_kube as K
+import homestead_operations as OPS
 import homestead_power_handoff as H
 from fakes.kube import Kube
 
@@ -114,27 +116,30 @@ class SendTests(unittest.TestCase):
     Homestead stops only after the helper was confirmed."""
     def test_helper_then_homestead_stops(self):
         import server
-        calls, recorded = [], []
+        recorded = []
         own = {"spec": {"serviceAccountName": "homestead", "imagePullSecrets": [{"name": "pull"}]}}
-        def ksend(method, path, body=None, ctype=None):
-            calls.append((method, path, body))
-            return {"metadata": {"uid": "helper-uid", "name": body["metadata"]["name"]}} if method == "POST" else {}
+        kube = self.enterContext(Kube({"apiVersion": "apps/v1", "kind": "Deployment",
+                                       "metadata": {"name": "homestead", "namespace": "lab"}, "spec": {"replicas": 1}}))
+        # The shared fake runs the real write guards; the storage guard takes the job store's lock under DATA_DIR.
+        self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
         with mock.patch.object(server.POWER_JOBS, "_self_data_helper_image", return_value=(own, "img@sha256:" + "a" * 64)), \
              mock.patch.object(server.POWER_JOBS, "homestead_running_on", return_value=("homestead-data", True)), \
-             mock.patch.object(server.POWER_JOBS, "kget", return_value={"spec": {"replicas": 1}}), \
-             mock.patch.object(server.POWER_JOBS, "ksend", side_effect=ksend):
+             mock.patch.object(server.POWER_JOBS, "kget", K.kget), \
+             mock.patch.object(server.POWER_JOBS, "ksend", K.ksend):
             server.POWER_JOBS.send_handoff("job-1", {"node": "k3s-test", "action": "reboot", "boot_id": "old"}, [], {},
                                 lambda phase, pct, msg, **kw: recorded.append((phase, kw)))
-        (post, pod_path, pod), (patch, dep_path, scale) = calls
+        (post, pod_path, pod, _), (patch, dep_path, scale, _) = kube.writes
         self.assertEqual(("POST", "PATCH"), (post, patch))
         self.assertEqual("OnFailure", pod["spec"]["restartPolicy"], "it restarts on the new boot")
         self.assertEqual("homestead", pod["spec"]["serviceAccountName"])
         self.assertIn("homestead_power_handoff.py", " ".join(pod["spec"]["containers"][0]["command"]))
         self.assertEqual(0, scale["spec"]["replicas"])
         self.assertEqual("1", scale["metadata"]["annotations"]["homestead.io/held-as"])
+        self.assertEqual(0, kube.object(DEP)["spec"]["replicas"])
         self.assertEqual("sending", recorded[0][0])
         self.assertTrue(recorded[0][1]["handoff"])
-        self.assertEqual("helper-uid", recorded[1][1]["helper_uid"])
+        helper = kube.object(f"{pod_path}/{pod['metadata']['name']}")
+        self.assertEqual(helper["metadata"]["uid"], recorded[1][1]["helper_uid"])
 
 
 if __name__ == "__main__":
@@ -145,10 +150,12 @@ class StatusTests(unittest.TestCase):
     def status(self, ref, boot="old", helper_phase=None):
         import homestead_power as POWER
         import time
-        node = {"metadata": {"uid": "u"}, "status": {"conditions": [{"type": "Ready", "status": "True"}], "nodeInfo": {"bootID": boot}}}
-        helper = {"metadata": {"uid": "h"}, "status": {"phase": helper_phase or "Running"}}
-        get = lambda path: copy.deepcopy(helper if "/pods/" in path else node)
-        with mock.patch.object(POWER, "kget", get):
+        self.enterContext(Kube(
+            {"apiVersion": "v1", "kind": "Node", "metadata": {"name": "k3s-test", "uid": "u"},
+             "status": {"conditions": [{"type": "Ready", "status": "True"}], "nodeInfo": {"bootID": boot}}},
+            {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "p", "namespace": "lab", "uid": "h"},
+             "status": {"phase": helper_phase or "Running"}}))
+        with mock.patch.object(POWER, "kget", K.kget):
             return POWER.status({"id": "job-1", "progress": 20, "ref": {"node": "k3s-test", "node_uid": "u", "boot_id": "old",
                                  "phase": "observing", "started_epoch": time.time() - 60, "helper_pod": "p", "helper_uid": "h", **ref}})
 
