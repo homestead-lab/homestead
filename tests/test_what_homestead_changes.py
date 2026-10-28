@@ -228,6 +228,24 @@ class WhatHomesteadChanges(unittest.TestCase):
         missing = sorted(kind for kind in HAND_LISTED if f"`{kind}`" not in page)
         self.assertEqual(missing, [], "Name these hand-listed kinds on the page: " + ", ".join(missing))
 
+    def test_the_marks_a_restore_into_an_app_leaves_are_on_the_page(self):
+        # Restore into an app (#743) marks the claims it moves an app between,
+        # and swaps back or deletes on its own (#935): every key it writes,
+        # and the default time a previous volume is kept, must be on the page.
+        source = (ROOT / "server" / "homestead_restore_swap.py").read_text(encoding="utf-8")
+        keys = sorted(set(re.findall(r'NAMES\.key\("([a-z-]+)"\)', source)))
+        for key in ("previous-volume", "previous-of", "replaced-by", "restored-into", "keep-previous"):
+            self.assertIn(key, keys, "the scan found nothing it should")
+        page = PAGE.read_text(encoding="utf-8")
+        missing = [key for key in keys if f"homestead.io/{key}" not in page and f"`{key}`" not in page]
+        self.assertEqual(missing, [], "Name these restore-swap marks on the page: " + ", ".join(missing))
+        days = re.search(r"^DEFAULT_KEEP_DAYS = (\d+)", source, re.M).group(1)
+        flat = " ".join(page.split())
+        self.assertRegex(flat, re.compile(rf"previous volumes?[^|]*\b{days} days", re.I),
+                         "the page must say how long a previous volume is kept")
+        self.assertRegex(flat, re.compile(r"restore into an app[^|]*swapped back", re.I),
+                         "the page must say a restore into an app swaps back on its own")
+
     def test_the_label_check_catches_every_form_of_the_advice(self):
         # Each of these would delete apps; each must be caught.
         for text in ("Most carry `homestead.io/managed=true`. Delete the ones you no longer want.",
