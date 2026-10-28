@@ -497,8 +497,13 @@ def _resource(request):
     arg = lambda key: (q.get(key) or [""])[0]
     if p == "/api/resources/list":
         return RESOURCES.list_objects(arg("group"), arg("version"), arg("resource"), arg("ns"))
-    return RESOURCES.get_object(arg("group"), arg("version"), arg("resource"), arg("ns"),
-                                arg("name"), reveal=p.endswith("reveal"))
+    # Secret-bearing fields (Helm values, cloud-init, any custom resource's
+    # spec) go only to the role that may reveal a Secret; everyone else gets
+    # each field's name and size.
+    need = ROUTES[("GET", "/api/resources/reveal")][0]
+    return RESOURCES.get_object(arg("group"), arg("version"), arg("resource"), arg("ns"), arg("name"),
+                                reveal=p.endswith("reveal"), see_values=AUTH.allows(request.role, need),
+                                reveal_role=need)
 
 
 def _push_test(request):

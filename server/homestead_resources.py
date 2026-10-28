@@ -145,7 +145,262 @@ def _clean(obj):
     return obj
 
 
-def get_object(group, version, resource, namespace, name, reveal=False):
+# Fields that hold what a Secret would - Helm values, inline cloud-init, and
+# the copies controllers keep of them - outside a Secret. Homestead's own
+# pages show them to admins only (/api/helm/release, /api/vm); here everyone
+# below the role that may reveal a Secret sees each field's name and size,
+# never its value.
+HIDDEN = "•••"
+SENSITIVE = {
+    ("helm.cattle.io", "HelmChart"): (("spec", "valuesContent"), ("spec", "set"), ("spec", "chartContent")),
+    ("helm.cattle.io", "HelmChartConfig"): (("spec", "valuesContent"),),
+    ("helm.toolkit.fluxcd.io", "HelmRelease"): (("spec", "values"),),
+    # A snapshot of a whole object: KubeVirt keeps each started VM's spec,
+    # cloud-init included, and StatefulSets and DaemonSets their pod template.
+    ("apps", "ControllerRevision"): (("data",),),
+    ("catalog.cattle.io", "App"): (("spec", "values"), ("spec", "chart", "values")),
+}
+# Found wherever they sit in the object, outside metadata:
+# - a KubeVirt cloud-init volume (VM, VMI, a template, a pool, a backup's or
+#   snapshot's copy);
+CLOUD_INIT = ("cloudInitNoCloud", "cloudInitConfigDrive")
+CLOUD_INIT_FIELDS = ("userData", "networkData", "userDataBase64", "networkDataBase64")
+# - a "helm" block's values (Argo CD's Application, Fleet's Bundle,
+#   BundleDeployment and HelmApp);
+HELM_FIELDS = ("values", "valuesObject", "parameters")
+# - a Harvester backup's copies of the VM's Secrets, and CDI's download
+#   headers (often "Authorization: Bearer ...").
+LISTS = {"secretBackups": "data", "extraHeaders": None}
+# An annotation that holds a copy of the whole object (k3s'
+# objectset.rio.cattle.io/applied, gzipped; kubectl's
+# last-applied-configuration; kapp's original): it carries every field masked
+# here, a Secret's data included.
+APPLIED = re.compile(r"applied|original", re.I)
+# What the k3s Helm controller makes from a HelmChart: chart-values-* and
+# chart-content-* ConfigMaps and the helm-install Job and its Pods, whose
+# arguments and environment carry the values.
+CHART_LABEL = "helmcharts.helm.cattle.io/chart"
+CHART_CONFIGMAPS = ("chart-values-", "chart-content-")
+CONTAINER_LISTS = ("containers", "initContainers", "ephemeralContainers")
+# Env a controller copies from a masked field into any Pod: CDI's importer
+# gets a DataVolume's extraHeaders.
+SECRET_ENV = re.compile(r"IMPORTER_EXTRA_HEADER_")
+# ConfigMaps whose whole data is values or cloud-init: a Helm release stored
+# with HELM_DRIVER=configmap, and a Harvester cloud-init template.
+VALUE_CONFIGMAP_LABELS = (("owner", "helm"), ("harvesterhci.io/cloud-init-template", None))
+
+# The first layer, an allowlist: a role below reveal sees the whole object
+# only for the kinds this page groups as built in (CATEGORIES; a Secret's
+# data is hidden on its own) and the k3s HelmChart and HelmChartConfig, whose
+# every field is known. Any other kind - a custom resource can keep anything
+# anywhere - shows its metadata and status, with each other field replaced
+# by a note. The masks above apply on top, to status as well.
+SAFE_RESOURCES = set().union(*(members for _, members in CATEGORIES)) | {
+    ("helm.cattle.io", "helmcharts"), ("helm.cattle.io", "helmchartconfigs")}
+SHOWN = ("apiVersion", "kind", "metadata", "status")
+# Of such a kind's status, only these generic fields: what the page and a
+# person need to see whether it is healthy.
+STATUS_FIELDS = ("conditions", "phase", "state", "observedGeneration", "ready", "replicas", "readyReplicas",
+                 "availableReplicas", "updatedReplicas", "currentReplicas", "unavailableReplicas")
+CONDITION_FIELDS = ("type", "status", "reason", "message", "lastTransitionTime", "lastUpdateTime",
+                    "lastProbeTime", "observedGeneration")
+# Annotations a role below reveal sees in full, at every depth: those under
+# these domains, unless they hold a copy of the object (APPLIED). Any other
+# annotation keeps its name and shows its size.
+SAFE_ANNOTATION_DOMAINS = ("homestead.io", "kubernetes.io", "k8s.io", "x-k8s.io", "kubevirt.io", "longhorn.io",
+                           "harvesterhci.io", "helm.sh", "cattle.io", "cni.cncf.io", "projectcalico.org",
+                           "kube-vip.io", "fluxcd.io", "argoproj.io")
+
+
+def _safe_annotation(key):
+    domain = key.split("/", 1)[0] if "/" in key else ""
+    return not APPLIED.search(key) and any(domain == d or domain.endswith("." + d) for d in SAFE_ANNOTATION_DOMAINS)
+
+
+def _note(value, role):
+    lines = len(YAML.dump(value).splitlines()) if isinstance(value, (dict, list)) else len(str(value).splitlines() or [""])
+    return f"{HIDDEN} (hidden: needs the {role} role, {lines} line{'' if lines == 1 else 's'})"
+
+
+def _leaves(value):
+    """A map's keys and a list's length, with every leaf as HIDDEN."""
+    if isinstance(value, dict):
+        return {key: _leaves(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_leaves(item) for item in value]
+    return HIDDEN
+
+
+def _masked(value):
+    """A field's shape without its content: a text's lines or length, a
+    map's or list's structure. Masking twice changes nothing."""
+    if isinstance(value, (dict, list)):
+        return _leaves(value)
+    text = str(value)
+    if text.startswith(HIDDEN):
+        return text
+    if "\n" in text:
+        lines = len(text.splitlines())
+        return f"{HIDDEN} (hidden, {lines} line{'' if lines == 1 else 's'})"
+    return f"{HIDDEN} (hidden, {len(text)} characters)"
+
+
+def _annotation_fields(metadata, at, keep):
+    annotations = metadata.get("annotations") if isinstance(metadata, dict) else None
+    if not isinstance(annotations, dict):
+        return []
+    return [(annotations, key, f"{at}.annotations.{key}", _masked) for key, value in annotations.items()
+            if not keep(key) and value not in (None, "")]
+
+
+def _applied_annotations(obj):
+    return _annotation_fields(obj.get("metadata"), "metadata", lambda key: not APPLIED.search(key))
+
+
+def _from_helm_controller(obj):
+    meta = obj.get("metadata") or {}
+    spec = obj.get("spec") if isinstance(obj.get("spec"), dict) else {}
+    template = spec.get("template") if isinstance(spec.get("template"), dict) else {}
+    template = template.get("metadata") if isinstance(template.get("metadata"), dict) else {}
+    return (any(str(o.get("apiVersion", "")).startswith("helm.cattle.io/") for o in meta.get("ownerReferences") or [])
+            or CHART_LABEL in (meta.get("labels") or {}) or CHART_LABEL in (template.get("labels") or {})
+            or (obj.get("kind") == "ConfigMap" and str(meta.get("name", "")).startswith(CHART_CONFIGMAPS)))
+
+
+def _values_configmap(obj, group):
+    if obj.get("kind") != "ConfigMap" or group != "":
+        return False
+    labels = (obj.get("metadata") or {}).get("labels") or {}
+    return _from_helm_controller(obj) or any(key in labels and (value is None or labels[key] == value)
+                                             for key, value in VALUE_CONFIGMAP_LABELS)
+
+
+def _present(value):
+    return value not in (None, "", {}, [])
+
+
+def _sensitive_fields(obj, group):
+    """(parent, key, path, mask) of every secret-bearing field the object
+    holds; mask(value) is what a role that may not see it gets instead.
+    Annotations count unless they are on the safe list, at every depth."""
+    found = _annotation_fields(obj.get("metadata"), "metadata", _safe_annotation)
+    for path in SENSITIVE.get((group, obj.get("kind")), ()):
+        parent = obj
+        for step in path[:-1]:
+            parent = parent.get(step) if isinstance(parent, dict) else None
+        if isinstance(parent, dict) and _present(parent.get(path[-1])):
+            found.append((parent, path[-1], ".".join(path), _masked))
+    if _values_configmap(obj, group):
+        for field in ("data", "binaryData"):
+            data = obj.get(field)
+            if isinstance(data, dict):
+                found.extend((data, key, f"{field}.{key}", _masked) for key, value in data.items() if _present(value))
+    helm = _from_helm_controller(obj)
+    taken = {(id(parent), key) for parent, key, _, _ in found}
+
+    def fields(parent, names, at, mask=_masked):
+        found.extend((parent, name, f"{at}.{name}", mask) for name in names if _present(parent.get(name)))
+
+    def walk(node, where):
+        if isinstance(node, dict):
+            for key, item in node.items():
+                if (id(node), key) in taken or (node is obj and key in ("metadata", "apiVersion", "kind")):
+                    continue        # masked whole already, or the object's own name and labels
+                if key == "metadata" and isinstance(item, dict):
+                    found.extend(_annotation_fields(item, f"{where}{key}", _safe_annotation))
+                elif key in CLOUD_INIT and isinstance(item, dict):
+                    fields(item, CLOUD_INIT_FIELDS, f"{where}{key}")
+                elif key == "helm" and isinstance(item, dict):
+                    fields(item, HELM_FIELDS, f"{where}{key}")
+                elif key in LISTS and isinstance(item, list):
+                    inner = LISTS[key]
+                    if inner is None:
+                        found.append((node, key, f"{where}{key}", _masked))
+                    for index, entry in enumerate(item if inner else ()):
+                        if isinstance(entry, dict):
+                            fields(entry, (inner,), f"{where}{key}[{index}]")
+                elif key in CONTAINER_LISTS and isinstance(item, list):
+                    for index, container in enumerate(item):
+                        if not isinstance(container, dict):
+                            continue
+                        at = f"{where}{key}[{index}]"
+                        if helm:
+                            fields(container, ("command", "args"), at)
+                        found.extend((env, "value", f"{at}.env[{i}].value", _leaves)
+                                     for i, env in enumerate(container.get("env") or [])
+                                     if isinstance(env, dict) and _present(env.get("value"))
+                                     and (helm or SECRET_ENV.match(str(env.get("name") or ""))))
+                else:
+                    walk(item, f"{where}{key}.")
+        elif isinstance(node, list):
+            for index, item in enumerate(node):
+                walk(item, f"{where[:-1]}[{index}].")
+    # Everywhere but metadata: a copy can sit in data or status, not only spec.
+    walk(obj, "")
+    return found
+
+
+def _hide(fields):
+    hidden = []
+    for parent, key, path, mask in fields:
+        parent[key] = mask(parent[key])
+        hidden.append(path)
+    return hidden
+
+
+def hide_sensitive(obj, group):
+    """The object with every secret-bearing field masked, in place; returns
+    the paths it masked. The second layer, under the safe list."""
+    return _hide(_sensitive_fields(obj, group))
+
+
+def hide_for_low_role(obj, kind, role):
+    """What a role below reveal sees, in place; returns the masked paths.
+    A kind off the safe list keeps its metadata and status only."""
+    hidden = []
+    if (kind["group"], kind["resource"]) not in SAFE_RESOURCES:
+        for key in [k for k in obj if k not in SHOWN]:
+            obj[key] = _note(obj[key], role)
+            hidden.append(key)
+        status = obj.get("status")
+        if isinstance(status, dict):
+            # Status can carry credentials too (Rancher's registration
+            # token and import command): only generic fields stay.
+            for key in [k for k in status if k not in STATUS_FIELDS]:
+                status[key] = _note(status[key], role)
+                hidden.append(f"status.{key}")
+            if isinstance(status.get("conditions"), list):
+                status["conditions"] = [{k: v for k, v in c.items() if k in CONDITION_FIELDS} if isinstance(c, dict) else c
+                                        for c in status["conditions"]]
+        elif status is not None:
+            obj["status"] = _note(status, role)
+            hidden.append("status")
+    return hidden + [path for path in hide_sensitive(obj, kind["group"]) if path not in hidden]
+
+
+def _has_mask(value):
+    """Whether a value holds one of the mask's own forms (not any "•••")."""
+    if isinstance(value, dict):
+        return any(_has_mask(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_mask(item) for item in value)
+    return isinstance(value, str) and (value == HIDDEN or value.startswith(f"{HIDDEN} (hidden"))
+
+
+def _refuse_masked(obj, group):
+    """A masked copy saved back would overwrite the real values with the mask."""
+    masked = [key for key, value in obj.items() if key not in ("apiVersion", "kind", "metadata") and _has_mask(value)]
+    masked += [path for parent, key, path, _ in _sensitive_fields(obj, group) if _has_mask(parent[key])]
+    if masked:
+        raise ValueError(f"{masked[0]} is hidden in this copy; open the object as an admin (and reveal a "
+                         "Secret) and edit that copy, or the mask would be saved as its value")
+
+
+def get_object(group, version, resource, namespace, name, reveal=False, see_values=False, reveal_role="admin"):
+    """One object as YAML. A Secret's data is masked unless revealed. Unless
+    see_values (a role that may reveal) or revealed, a kind off the safe list
+    shows only metadata and status, and every secret-bearing field (SENSITIVE,
+    cloud-init, annotations off the safe list) is masked."""
     kind = _kind(group, version, resource)
     obj = _clean(kget(_path(kind, namespace, _name(name))))
     if kind["kind"] == "Secret" and kind["group"] == "" and not reveal:
@@ -154,7 +409,14 @@ def get_object(group, version, resource, namespace, name, reveal=False):
     if not reveal and (obj.get("metadata") or {}).get("annotations"):
         # An outage webhook's address can carry a token (#741).
         obj["metadata"]["annotations"] = OUTAGE.mask_annotations(obj["metadata"]["annotations"])
-    return {"kind": kind, "object": obj, "yaml": YAML.dump(obj), "secret_hidden": kind["kind"] == "Secret" and not reveal}
+    hidden = []
+    if kind["kind"] == "Secret" and kind["group"] == "" and not reveal:
+        # Its applied copy holds the data just hidden: for every role.
+        hidden = _hide(_applied_annotations(obj))
+    if not reveal and not see_values:
+        hidden += [path for path in hide_for_low_role(obj, kind, reveal_role) if path not in hidden]
+    return {"kind": kind, "object": obj, "yaml": YAML.dump(obj), "secret_hidden": kind["kind"] == "Secret" and not reveal,
+            "values_hidden": bool(hidden), "hidden": hidden}
 
 
 def events_for(namespace, name, uid=""):
@@ -187,6 +449,7 @@ def save_object(group, version, resource, namespace, name, text):
         raise ValueError("the name and namespace cannot change here; create a new object instead")
     if kind["kind"] == "Secret" and any(v == "(hidden)" for v in (obj.get("data") or {}).values()):
         raise ValueError("reveal the secret's values before editing it, or they would be saved as '(hidden)'")
+    _refuse_masked(obj, kind["group"])
     if OUTAGE.HIDDEN in str((meta.get("annotations") or {}).get(OUTAGE.NAMES.key(OUTAGE.KEY)) or ""):
         current = (kget(_path(kind, namespace, name)).get("metadata") or {}).get("annotations") or {}
         meta["annotations"] = OUTAGE.unmask_annotations(meta["annotations"], current)
@@ -213,6 +476,10 @@ def create_objects(text, default_namespace="default"):
     docs = [d for d in re.split(r"^---[ \t]*$", text or "", flags=re.M) if d.strip() and not re.fullmatch(r"(\s*#.*\n?)*\s*", d)]
     if not docs:
         raise ValueError("paste one or more objects")
+    for doc in docs:
+        # Before anything is created: a masked copy would plant the mask.
+        obj = _parse(doc)
+        _refuse_masked(obj, obj["apiVersion"].rpartition("/")[0])
     kinds = discover()
     made = []
     for doc in docs:
