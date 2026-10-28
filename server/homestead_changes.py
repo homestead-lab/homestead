@@ -496,7 +496,7 @@ def undo(body):
     """Put an app's settings back as they were before a change, reviewed like any rollout."""
     import homestead_capacity_review as CAPACITY_REVIEW
     import homestead_names as NAMES
-    import homestead_updates as UPDATES
+    import homestead_update_checks as CHECKS
     current, proposed, rows, capacity, context = _bound["plan"](body)
     CAPACITY_REVIEW.enforce(body, capacity, context)
     ns, name = proposed["metadata"]["namespace"], proposed["metadata"]["name"]
@@ -504,7 +504,7 @@ def undo(body):
         time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     _bound["ksend"]("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", proposed)
     homestead_routes.forget("wl")
-    UPDATES.refresh_soon(ns, name)
+    CHECKS.refresh_soon(ns, name)
     return {"ok": True, "changes": rows,
             "detail": f"{name} is back to its settings from before that change; its pods are being replaced"}
 

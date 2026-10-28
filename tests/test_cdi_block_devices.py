@@ -11,6 +11,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import homestead_vms as VMS
+import homestead_vm_list as VM_LIST
 
 SCRIPT = ROOT / "scripts" / "bootstrap-k3s.sh"
 SH = shutil.which("dash") or shutil.which("sh")
@@ -100,7 +101,7 @@ class BlockImportDiagnosticsTests(unittest.TestCase):
             {"type": "Bound", "status": "False", "message": "target PVC test-disk Pending"}]}}
         with mock.patch.object(VMS, "kget", get), mock.patch.object(VMS, "events_for",
                 lambda ns, name, uid="": [{"type": "Warning", "message": message}] if name == "prime-claim-uid" else []):
-            return VMS._why_not_filling("lab", dv)
+            return VM_LIST._why_not_filling("lab", dv)
 
     def test_permission_error_is_not_lost_after_long_combined_event_prefix(self):
         message = "Starting importer exit status 1; " * 20 + "blockdev: cannot open /dev/cdi-block-volume: Permission denied"

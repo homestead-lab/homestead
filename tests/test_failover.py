@@ -6,6 +6,7 @@ import homestead_failover as FAILOVER
 import homestead_kube as K
 import homestead_lhcapacity as LHCAP
 import homestead_operations as OPS
+import homestead_deploy_manifests as MANIFESTS
 from fakes.kube import Kube
 
 UNREACHABLE, NOT_READY = FAILOVER.KEYS
@@ -114,7 +115,7 @@ class DeployTests(unittest.TestCase):
         import server
         with mock.patch.object(server.HW, "features", lambda: []):
             cfg = dict(name="coral-app", namespace="lab", image="busybox", ports=[], volumes=[], **extra)
-            dep, _ = server.DEPLOY.build_deployment(cfg)
+            dep, _ = MANIFESTS.build_deployment(cfg)
         return dep["spec"]["template"]["spec"]
 
     def test_a_new_container_moves_unless_told_otherwise(self):

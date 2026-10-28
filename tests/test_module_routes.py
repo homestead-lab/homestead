@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "server"))
 import homestead_route_policy as POLICY
 import homestead_routes as ROUTES
 import homestead_web_paths as WEB_PATHS
+import homestead_node_actions as NODE_ACTIONS
 import source_scan as SS
 
 SERVER = SS.text(SS.SERVER_PY)
@@ -333,7 +334,7 @@ class ThroughTheServer(unittest.TestCase):
         server, handler = self.handler("POST", "/api/node/drain", {"node": "node1"})
         impact = {"stranded": [{"ns": "lab", "name": "web"}]}
         with mock.patch.object(server.PLACE, "impact", return_value=impact), \
-                mock.patch.object(server.LC, "drain") as drain:
+                mock.patch.object(NODE_ACTIONS, "drain") as drain:
             handler.do_POST()
         code, body = handler._send.call_args.args[:2]
         self.assertEqual((409, impact), (code, body["impact"]))

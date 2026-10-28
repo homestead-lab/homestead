@@ -44,6 +44,7 @@ import urllib.error
 # homestead_group_tiers imports this module too; each reads the other's names
 # only when called, so either may be imported first.
 import homestead_group_tiers as GROUPS
+import homestead_kube as KUBE
 
 KIND = "set-priority"
 MAX_APPS = 50
@@ -311,13 +312,10 @@ def ensure(tiers=("critical", "low"), lad=None):
 
 
 def _items(path):
-    """A list's items; none where the API isn't there (404)."""
-    try:
-        return kget(path).get("items", [])
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        return []
+    """A list's items; none where the API isn't there (404). A null answer
+    is not a 404: it fails, as before."""
+    listing = KUBE.get_optional(path, read=kget, missing=KUBE.GONE)
+    return [] if listing is KUBE.GONE else listing.get("items", [])
 
 
 def _workloads():

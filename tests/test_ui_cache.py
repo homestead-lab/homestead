@@ -223,14 +223,14 @@ class RefreshTests(unittest.TestCase):
     def test_hosts_apps_vms_and_storage_are_kept_past_one_refresh(self):
         import homestead_nodes as NODES
         import homestead_storage as STORAGE
-        import homestead_vms as VMS
+        import homestead_vm_list as VM_LIST
         import homestead_workloads as WORKLOADS
         clock, calls = Clock(), []
         count = lambda name, value: (lambda *a, **k: calls.append(name) or value)
         with mock.patch.object(CACHE.time, "time", clock), \
                 mock.patch.object(NODES, "get_nodes", count("nodes", [])), \
                 mock.patch.object(WORKLOADS, "get_workloads", count("wl", [])), \
-                mock.patch.object(VMS, "list_vms", count("vms", [])), \
+                mock.patch.object(VM_LIST, "list_vms", count("vms", [])), \
                 mock.patch.object(STORAGE, "get_volumes", count("vol", [])), \
                 mock.patch.object(STORAGE, "get_storage", count("stor", {})):
             paths = ["/api/nodes", "/api/workloads", "/api/vms", "/api/volumes", "/api/storage"]

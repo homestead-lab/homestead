@@ -21,7 +21,7 @@ import homestead_placement_mode as PLACEMODE
 import homestead_recovery as RECOVERY
 import homestead_routes as MODULE_ROUTES
 import homestead_setup as SETUP
-import homestead_updates as UPDATES
+import homestead_update_checks as CHECKS
 
 ROUTE_NEEDS = ("kget", "ksend", "_settings_map")
 VALUES = ("DEFAULT_NS", "_cache")
@@ -68,7 +68,7 @@ def save_app_settings(value):
             raise
         _stale()
     _forget()
-    UPDATES.invalidate()
+    CHECKS.invalidate()
     PLACEMODE.saved(settings["placement"])
     # A different catalogue source is a different catalogue.
     for key in [k for k in _cache if k.startswith("appstore")]:

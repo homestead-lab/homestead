@@ -1,7 +1,7 @@
 """homestead_vms split by feature (#623): listing VMs lives in homestead_vm_list
 and editing one in homestead_vm_edit, and homestead_vms keeps the bound state,
-status, detail, power, delete, the routes and a re-export of every name, so
-other modules, server.py and tests keep working."""
+status, detail, power, delete and the routes. Other modules, server.py and
+tests read and replace each name where it is defined (test_split_reexports)."""
 import copy
 import subprocess
 import sys
@@ -23,18 +23,10 @@ PARTS = (VM_LIST, VM_EDIT)
 
 
 class VmModuleTests(unittest.TestCase):
-    def test_every_moved_name_is_the_same_object_on_homestead_vms(self):
-        for part in PARTS:
-            moved = [name for name in vars(part) if not name.startswith("__")
-                     and getattr(vars(part)[name], "__module__", part.__name__) == part.__name__
-                     and name != "V" and not isinstance(vars(part)[name], type(sys))]
-            self.assertTrue(moved, part.__name__)
-            for name in moved:
-                self.assertIs(getattr(VMS, name), getattr(part, name), f"{part.__name__}.{name}")
-
     def test_each_module_can_be_imported_first(self):
         for name in ("homestead_vm_list", "homestead_vm_edit", "homestead_vms"):
-            done = subprocess.run([sys.executable, "-c", f"import {name}, homestead_vms as V; V.list_vms; V.edit"],
+            done = subprocess.run([sys.executable, "-c", f"import {name}, homestead_vms as V, homestead_vm_list as VL, "
+                                   "homestead_vm_edit as VE; VL.list_vms; VE.edit; V.ROUTES"],
                                   cwd=SERVER, capture_output=True, text=True)
             self.assertEqual(0, done.returncode, f"importing {name} first: {done.stderr}")
 
@@ -71,17 +63,17 @@ class VmModuleTests(unittest.TestCase):
         with mock.patch.object(VMS, "kget", VMS.kget), mock.patch.object(VMS, "ksend", VMS.ksend), \
                 mock.patch.object(VMS, "events_for", VMS.events_for), \
                 mock.patch.object(VMS, "display_icon", VMS.display_icon), \
-                mock.patch.object(VMS, "_recheck_edit"):
+                mock.patch.object(VM_EDIT, "_recheck_edit"):
             VMS.bind(lambda path: {"items": []}, ksend, lambda *a: [], _display_icon=lambda annotations: "bound icon")
             self.assertEqual("bound icon", VM_LIST._row(copy.deepcopy(VM), {})["icon"])
             with self.assertRaises(Stop):
                 VM_EDIT.commit_edit(prepared)
         self.assertEqual([("PATCH", "/api/v1/namespaces/lab/secrets/vm-ci")], sent)
 
-    def test_a_name_replaced_on_homestead_vms_reaches_the_moved_code(self):
-        # Tests replace commit_edit on homestead_vms; editing reads it there.
+    def test_a_name_replaced_where_it_is_defined_reaches_the_edit(self):
+        # Tests replace commit_edit on homestead_vm_edit; editing reads it there.
         with mock.patch.object(VM_EDIT, "prepare_edit", return_value="prepared"), \
-                mock.patch.object(VMS, "commit_edit", return_value="saved") as commit:
+                mock.patch.object(VM_EDIT, "commit_edit", return_value="saved") as commit:
             self.assertEqual("saved", VM_EDIT.edit("lab", "vm", {}))
         commit.assert_called_once_with("prepared")
 

@@ -640,6 +640,53 @@ class DoctorTests(unittest.TestCase):
         self.assertIn("+ k3s kubectl delete pods -A --field-selector=status.phase=Failed", out)
         self.assertNotIn("delete pod plex-1", out, "restarting failing pods is asked, never automatic")
 
+    def longhorn(self, rows, nodes="node1 Ready control-plane 1d v1.31", lh_nodes="node1 true true\\n"):
+        """The k3s stand-in with Longhorn installed: its volumes as name,
+        robustness and the Scheduled condition's reason, and Longhorn's node
+        records."""
+        text = STUBS["k3s"].replace('  *"get crd"*) exit 1 ;;',
+                                    '  *"get crd"*) exit 0 ;;\n  *"get volumes.longhorn.io"*) printf "%b" "' + rows + '" ;;'
+                                    '\n  *"get nodes.longhorn.io"*) printf "%b" "' + lh_nodes + '" ;;')
+        text = text.replace('"get nodes --no-headers") echo "node1 Ready control-plane 1d v1.31" ;;',
+                            '"get nodes --no-headers") printf "%b" "' + nodes + '\\n" ;;')
+        Path(self.bin, "k3s").write_text(text + "\n", encoding="utf-8", newline="\n")
+        # The findings themselves, with their details: the report shows titles only.
+        code, out = functions('KC="k3s kubectl"; NODE=node1; KIND=k3s-server; SERVICE=k3s; FOUND="$TMPDIR/found"; '
+                              ': > "$FOUND"; check_cluster; cat "$FOUND"', path_extra=self.bin)
+        return out.replace("|warn|", "\n[WARN] ").replace("|ok|", "\n[ OK ] ")
+
+    def test_one_host_says_why_its_volumes_read_degraded_and_points_to_the_offer(self):
+        out = self.longhorn("pvc-a degraded ReplicaSchedulingFailure\\npvc-b healthy <none>\\n")
+        self.assertIn("[WARN] Longhorn volumes ask for more copies than this host can hold", out)
+        self.assertIn("pvc-a (degraded: more copies than hosts)", out)
+        self.assertIn("This cluster has one host", out)
+        self.assertIn("Match copies to hosts", out)
+        self.assertNotIn("rebuild automatically", out)
+
+    def test_one_node_with_two_longhorn_records_is_not_one_host(self):
+        # #809's test: one Kubernetes node and one Longhorn node record.
+        out = self.longhorn("pvc-a degraded ReplicaSchedulingFailure\\n", lh_nodes="node1 true true\\nnode2 true true\\n")
+        self.assertIn("pvc-a (degraded)", out)
+        self.assertNotIn("Match copies to hosts", out)
+
+    def test_otherwise_the_longhorn_check_is_as_before(self):
+        out = self.longhorn("pvc-a degraded ReplicaSchedulingFailure\\n",
+                            nodes="node1 Ready control-plane 1d v1.31\\nnode2 Ready <none> 1d v1.31")
+        self.assertIn("[WARN] Longhorn volumes are not healthy", out)
+        self.assertIn("pvc-a (degraded)", out)
+        self.assertNotIn("Match copies to hosts", out)
+        out = self.longhorn("pvc-a degraded <none>\\npvc-b faulted <none>\\n")
+        self.assertIn("pvc-a (degraded)\npvc-b (faulted)", out)
+        self.assertIn("rebuild automatically", out)
+        self.assertNotIn("Match copies to hosts", out)
+
+    def test_a_one_host_cluster_with_a_faulted_volume_says_both(self):
+        out = self.longhorn("pvc-a degraded ReplicaSchedulingFailure\\npvc-b faulted <none>\\n")
+        self.assertIn("[WARN] Longhorn volumes are not healthy", out)
+        self.assertIn("pvc-a (degraded: more copies than hosts)\npvc-b (faulted)", out)
+        self.assertIn("Match copies to hosts", out)
+        self.assertIn("restored from a backup", out)
+
 
 def functions(snippet, env=None, path_extra=None):
     """The installer's functions without its main program, then snippet, as a dry run."""

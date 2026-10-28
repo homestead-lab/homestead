@@ -3,8 +3,9 @@ weekly trim live in homestead_longhorn_jobs, volumes, groups and snapshots in
 homestead_longhorn_volumes, the backup target in homestead_longhorn_target,
 backups in homestead_longhorn_backups and restores in
 homestead_longhorn_restore. homestead_longhorn keeps what bind() sets, the
-helpers the parts share, the overview and the routes, and re-exports every
-moved name."""
+helpers the parts share, the overview and the routes, and offers only the
+moved names the move source and the move engine read through the LH their
+bind() is given (test_split_reexports)."""
 import ast
 import re
 import subprocess
@@ -77,7 +78,7 @@ def read_inside():
     """Moved names the six modules read: as ALIAS.name, or bare in the part that defines them."""
     found = set()
     for module in PARTS + (LH,):
-        text = Path(module.__file__).read_text().split("# Every moved name, for one release")[0]
+        text = Path(module.__file__).read_text().split("# What the move source and the move engine read")[0]
         found |= set(re.findall(r"\b(?:JOBS|VOLUMES|BACKUP_TARGET|BACKUPS|RESTORE)\.(\w+)", text))
         if module is not LH:
             found |= {name for name in moved(module) if len(re.findall(rf"\b{name}\b", text)) > 1}
@@ -85,7 +86,7 @@ def read_inside():
 
 
 class LonghornModuleTests(unittest.TestCase):
-    def test_every_moved_name_is_the_same_object_on_homestead_longhorn(self):
+    def test_each_moved_name_is_defined_once(self):
         seen = set()
         for part in PARTS:
             names = moved(part)
@@ -94,16 +95,18 @@ class LonghornModuleTests(unittest.TestCase):
                 self.assertNotIn(name, seen, f"{name} is defined twice")
                 self.assertNotIn(name, OWN, f"{part.__name__}.{name} is homestead_longhorn's")
                 seen.add(name)
-                self.assertIs(getattr(LH, name), getattr(part, name), f"{part.__name__}.{name}")
         self.assertEqual(62, len(seen))
         self.assertIn("TRIM_JOB", seen)
         self.assertIn("K8S_LABEL", seen)
 
-    def test_what_other_modules_read_is_still_on_homestead_longhorn(self):
+    def test_what_other_modules_read_is_on_homestead_longhorn_as_the_same_object(self):
         self.assertIn("STORAGE_CLASS", read_elsewhere())
-        self.assertIn("move_snapshot_error", read_elsewhere())
+        self.assertNotIn("move_snapshot_error", read_elsewhere())
         for name in sorted(read_elsewhere()):
             self.assertTrue(hasattr(LH, name), name)
+            for part in PARTS:
+                if name in vars(part):
+                    self.assertIs(getattr(part, name), getattr(LH, name), f"{part.__name__}.{name}")
 
     def test_what_bind_sets_lives_only_on_homestead_longhorn(self):
         for name in BOUND:
@@ -113,8 +116,10 @@ class LonghornModuleTests(unittest.TestCase):
 
     def test_each_module_can_be_imported_first(self):
         for name in NAMES:
-            done = subprocess.run([sys.executable, "-c", f"import {name}, homestead_longhorn as L; "
-                                   "L.list_jobs; L.save_group; L.backup_target; L.backups; L.restore_plan; L.ROUTES"],
+            done = subprocess.run([sys.executable, "-c", f"import {name}, homestead_longhorn as L, "
+                                   "homestead_longhorn_jobs as J, homestead_longhorn_volumes as V, "
+                                   "homestead_longhorn_restore as R; "
+                                   "J.list_jobs; V.save_group; L.backup_target; L.backups; R.restore_plan; L.ROUTES"],
                                   cwd=SERVER, capture_output=True, text=True)
             self.assertEqual(0, done.returncode, f"importing {name} first: {done.stderr}")
 
@@ -184,8 +189,7 @@ class LonghornModuleTests(unittest.TestCase):
         # A replacement there would not reach the moved code, so it must go to the
         # module that defines the name. The exceptions: what homestead_longhorn
         # defines itself (bind()'s clients, the shared helpers, the routes), and a
-        # name another server module reads through homestead_longhorn
-        # (server.LH.restore_backup), or one the move engine or move source reads
+        # name the move engine or move source reads
         # through the LH their bind() is given: replacing it there reaches those
         # reads, and only those. Read: assignments (tuple targets too), setattr,
         # mock.patch("homestead_longhorn.…") and mock.patch("server.LH.…"),
@@ -201,9 +205,6 @@ class LonghornModuleTests(unittest.TestCase):
         # the tests that drive another module's read of it may make one.
         inside = read_inside() & read_elsewhere()
         drives_another_module = {
-            "test_csi_restore_recovery.py": {"restore_backup"},   # homestead_storage_server
-            "test_setup.py": {"backup_target"},                   # homestead_setup
-            "test_objectstore.py": {"set_backup_target"},          # homestead_objectstore
             "test_move_backup.py": {"backups"},                   # homestead_move_source, as SOURCE.LH
         }
         found = []

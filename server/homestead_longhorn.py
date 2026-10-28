@@ -23,8 +23,9 @@ homestead_longhorn_restore. This module keeps what bind() sets (kget, ksend,
 _cache, STORAGE_CLASS, DEFAULT_NS: server.py sets STORAGE_CLASS here as it
 finds the cluster's default class, and other modules read kget and
 STORAGE_CLASS here), the helpers the parts share, the overview, the routes
-and their handlers, and re-exports every moved name for one release. Replace
-a moved name in the module that defines it.
+and their handlers. Read and replace a moved name in the module that defines
+it; this module offers only the few the move source and the move engine read
+through the LH their bind() is given (see the end of this file).
 """
 import json
 import homestead_csi_restore as CSI_RESTORE
@@ -221,27 +222,13 @@ def register(ops):
     ops.RESOLVERS["protect-run"] = JOBS.run_status
 
 
-# Every moved name, for one release (#623).
-from homestead_longhorn_jobs import (  # noqa: E402,F401
-    list_jobs, _cron_runs, cron_run_state, run_job, run_status, save_job, delete_job, TRIM_JOB,
-    TRIM_CRON, BACKEND, _backend, trim_volume,
-)
-from homestead_longhorn_volumes import (  # noqa: E402,F401
-    _volumes, volumes, groups, SOURCE_LABEL, _patch_labels, assign, bulk_assign, _job_objects,
-    _set_job_groups, _only_default, save_group, delete_group, snapshots, create_snapshot,
-)
+# What the move source and the move engine read through this module, which
+# server.py hands them in bind() (their tests hand in a fake). Everything else
+# is read, and replaced in tests, where it is defined (#623).
 from homestead_longhorn_target import (  # noqa: E402,F401
-    backup_target, TARGET_SECRET, SCHEMES, _target_secret, HARVESTER_TARGET, _harvester_setting,
-    _seconds, harvester_target_value, _set_harvester_target, _secret_keys, on_harvester,
-    _backup_target_object, _backup_target_state, backup_target_state, transfer_target_state,
-    replace_backup_target_state, set_backup_target,
+    backup_target, backup_target_state, transfer_target_state, replace_backup_target_state,
 )
-from homestead_longhorn_backups import (  # noqa: E402,F401
-    backups, create_backup, move_snapshot_error, ensure_move_backup, backup_volumes, _pvc_of_backup,
-    delete_backup,
-)
+from homestead_longhorn_backups import backups, ensure_move_backup  # noqa: E402,F401
 from homestead_longhorn_restore import (  # noqa: E402,F401
-    K8S_LABEL, _valid_k8s_name, _backup, _restore_source, restore_plan, restore_backup,
-    validate_restore_class, restore_support, ensure_restore_support, restore_problem,
-    cleanup_restore_snapshots, finish_restore_resize,
+    restore_backup, validate_restore_class, restore_support, ensure_restore_support, restore_problem,
 )

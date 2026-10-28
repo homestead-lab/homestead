@@ -13,8 +13,9 @@ homestead_network_inventory, the Services that publish an app in
 homestead_network_services, the addresses Homestead may hand out in
 homestead_vip_registry, and the VM networks in homestead_network_vms. This
 module keeps bind(), the guard and node probes server.py hands it, and the
-routes, and re-exports every moved name except the bound clients for one
-release. Replace a name in the module that defines it: the bound clients
+routes, and offers only the few moved names the move engine and the self
+address read through the module their bind() is given (see the end of this
+file). Read and replace a name in the module that defines it: the bound clients
 (kget, ksend, SYSTEM_NAMESPACES, DEFAULT_NAMESPACE, SHARED_VIP) are only on
 homestead_network_state.
 """
@@ -119,25 +120,9 @@ ROUTES = {
 }
 
 
-# Every moved name, for one release (#623).
-from homestead_network_state import (  # noqa: E402,F401
-    DNS_NAME, VIP_ANNOTATION, _items, _unread, _complete, _read, _name, _ipv4,
-)
-from homestead_network_inventory import (  # noqa: E402,F401
-    _endpoint_index, _access_url, _pool_inventory, _ingress_inventory, HARVESTER_VIP, _ours,
-    SHARE_KEY, _shares, _address_owners, address_problem, check_address, cluster_address_problem,
-    inventory, _controller, node_addresses_only, servicelb_present,
-)
-from homestead_network_services import (  # noqa: E402,F401
-    _node_port_owner, _node_port_problem, _ports, service_plan, create_service, prepare_deploy,
-    workload_services, _listener_owner, sync_workload_ports, _own_service, set_workload_address,
-    delete_service, workload_service_names,
-)
-from homestead_vip_registry import (  # noqa: E402,F401
-    VIP_MAP, MAX_ADD, _NothingAdded, _vip_map_path, registered, shared_vip, set_default_vip,
-    _update_registered, add_vips, remove_vip, VIP_KEYS, change_vip, set_vip_label,
-)
-from homestead_network_vms import (  # noqa: E402,F401
-    CLUSTER_NETWORKS, NAD_API, MULTUS_HELP, _macvtap, _multus, host_interfaces, vm_network_options,
-    _vlan, _host_network_config, create_vm_network,
-)
+# What the move engine and the self address read through this module, which
+# server.py hands them in bind() (their tests hand in a fake). Everything else
+# is read, and replaced in tests, where it is defined (#623).
+from homestead_network_inventory import inventory, servicelb_present  # noqa: E402,F401
+from homestead_network_services import service_plan, create_service  # noqa: E402,F401
+from homestead_vip_registry import set_default_vip  # noqa: E402,F401

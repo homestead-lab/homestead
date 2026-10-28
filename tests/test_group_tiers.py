@@ -1,5 +1,6 @@
 """#430: a tier for a group of apps, and where each app's tier comes from."""
 import copy
+import tempfile
 import io
 import json
 import sys
@@ -10,10 +11,15 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_group_tiers as GROUPS
+import homestead_kube as K
+import homestead_changes as CHANGES
+import homestead_host_access as HOSTACCESS
+import homestead_operations as OPS
 import homestead_priority as P
 import homestead_route_policy as ROUTE_POLICY
 import homestead_routes as ROUTER
 import homestead_updates as UPDATES
+from fakes.kube import Kube
 # Binds every module as the app does, before any test runs, so use() always
 # puts the app's own bindings back - never a module's unbound defaults.
 import server  # noqa: F401
@@ -58,82 +64,79 @@ def app(name, ns="lab", group="", cls="", follows=False, wrote="", labels=None, 
             "status": {"observedGeneration": 1, "replicas": 1, "updatedReplicas": 1, "readyReplicas": 1}}
 
 
+def workload(found, kind="Deployment", api="apps/v1"):
+    return {"apiVersion": api, "kind": kind, **found}
+
+
+def configmap(tiers=None, raw=None):
+    if tiers is None and raw is None:
+        return None
+    return {"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": "homestead-group-tiers", "namespace": NS, "resourceVersion": "1"},
+            "data": {"group-tiers.json": raw if raw is not None else json.dumps(tiers)}}
+
+
 class Cluster:
-    """Deployments, VMs, priority classes and the group-tiers ConfigMap,
-    answered and changed as the API server does: a merge patch answers with
-    the object, and a PUT over a stale resourceVersion is a 409."""
+    """Deployments, VMs, priority classes and the group-tiers ConfigMap on the
+    shared fake API (tests/fakes/kube.py): a merge patch answers with the
+    object, and a PUT over a stale resourceVersion is a 409."""
+    kget, ksend = staticmethod(K.kget), staticmethod(K.ksend)
 
-    def __init__(self, deps, tiers=None, raw=None):
-        self.deps = {f"{d['metadata']['namespace']}/{d['metadata']['name']}": d for d in deps}
-        self.vms, self.sent, self.unreadable, self.race, self.other = {}, [], None, False, None
-        self.stss = {}
-        self.cm = None
-        if tiers is not None or raw is not None:
-            self.cm = {"metadata": {"name": "homestead-group-tiers", "namespace": NS, "resourceVersion": "1"},
-                       "data": {"group-tiers.json": raw if raw is not None else json.dumps(tiers)}}
+    def __init__(self, case, deps, tiers=None, raw=None):
+        # The shared fake runs the real write guards; the storage guard takes the
+        # job store's lock, which lives under its DATA_DIR.
+        case.enterContext(mock.patch.object(OPS, "DATA_DIR", case.enterContext(tempfile.TemporaryDirectory())))
+        # No signed-in person on this thread, whatever an earlier test left behind: the write guards read who is asking.
+        case.enterContext(mock.patch.object(HOSTACCESS, "role", lambda: None))
+        case.enterContext(mock.patch.object(CHANGES.REQUEST, "user", None, create=True))
+        # And no signing key for the change note, so no Deployment write carries a changedBy mark: with
+        # the key bound by an earlier test it would, and the bodies these tests compare would differ.
+        case.enterContext(mock.patch.object(CHANGES, "_author_key", mock.Mock(side_effect=OSError("no key"))))
+        self.kube = case.enterContext(Kube(
+            *[workload(d) for d in deps],
+            *[{"apiVersion": "scheduling.k8s.io/v1", "kind": "PriorityClass", **found} for found in CLASSES],
+            *([configmap(tiers, raw)] if configmap(tiers, raw) else [])))
 
-    def kget(self, path, **_):
-        if path == "/apis/scheduling.k8s.io/v1/priorityclasses":
-            return {"items": copy.deepcopy(CLASSES)}
-        if path == "/apis/apps/v1/deployments":
-            return {"items": [copy.deepcopy(d) for d in self.deps.values()]}
-        if path == P.VMS:
-            return {"items": [copy.deepcopy(v) for v in self.vms.values()]}
-        if path == "/apis/apps/v1/statefulsets":
-            return {"items": [copy.deepcopy(s) for s in self.stss.values()]}
-        if path == MAP:
-            if self.unreadable:
-                raise self.unreadable
-            if self.cm is None:
-                raise http(404, path)
-            return copy.deepcopy(self.cm)
-        if "/deployments/" in path:
-            ns, name = path.split("/namespaces/")[1].split("/deployments/")
-            if f"{ns}/{name}" not in self.deps:
-                raise http(404, path)
-            return copy.deepcopy(self.deps[f"{ns}/{name}"])
-        if self.other is not None:
-            return copy.deepcopy(self.other)
-        raise http(404, path)
+    @property
+    def sent(self):
+        return list(self.kube.writes)
 
-    def ksend(self, method, path, body=None, ctype="application/json", **_):
-        self.sent.append((method, path, copy.deepcopy(body), ctype))
-        if "/deployments/" in path and method == "PATCH":
-            ns, name = path.split("/namespaces/")[1].split("/deployments/")
-            dep = self.deps[f"{ns}/{name}"]
-            annotations = dep["metadata"].setdefault("annotations", {})
-            for key, value in ((body.get("metadata") or {}).get("annotations") or {}).items():
-                if value is None:
-                    annotations.pop(key, None)
-                else:
-                    annotations[key] = value
-            for key, value in (((body.get("spec") or {}).get("template") or {}).get("spec") or {}).items():
-                pod = dep["spec"]["template"]["spec"]
-                if value is None:
-                    pod.pop(key, None)
-                else:
-                    pod[key] = value
-            return copy.deepcopy(dep)
-        if method == "POST" and path == f"/api/v1/namespaces/{NS}/configmaps":
-            if self.cm is not None:
-                raise http(409, path)
-            self.cm = copy.deepcopy(body)
-            self.cm["metadata"]["resourceVersion"] = "1"
-            return copy.deepcopy(self.cm)
-        if method == "PUT" and path == MAP:
-            if self.race or body["metadata"].get("resourceVersion") != self.cm["metadata"]["resourceVersion"]:
-                raise http(409, path)
-            version = str(int(self.cm["metadata"]["resourceVersion"]) + 1)
-            self.cm = copy.deepcopy(body)
-            self.cm["metadata"]["resourceVersion"] = version
-            return copy.deepcopy(self.cm)
-        raise AssertionError(f"unexpected {method} {path}")
+    def add_vms(self, vms):
+        for found in vms.values():
+            self.kube.add(workload(found, "VirtualMachine", "kubevirt.io/v1"))
+
+    def add_stss(self, stss):
+        for found in stss.values():
+            self.kube.add(workload(found, "StatefulSet"))
+
+    def dep(self, key):
+        ns, name = key.split("/")
+        return self.kube.object(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
+
+    def unreadable(self, error):
+        """Reads of the map answer with error's code."""
+        self.kube.fail(MAP, error.code, times=99, method="GET")
+
+    def race(self):
+        """Another writer saves the map first: every save here is a 409."""
+        self.kube.fail(MAP, 409, times=99, method="PUT")
+
+    def write_map(self, raw):
+        found = self.kube.object(MAP)
+        found["data"]["group-tiers.json"] = raw
+        self.kube.add(found)
+
+    def forget_map(self):
+        written = len(self.kube.writes)
+        self.kube("DELETE", MAP)
+        del self.kube.writes[written:]
 
     def tiers(self):
-        return None if self.cm is None else json.loads(self.cm["data"]["group-tiers.json"])
+        found = self.kube.object(MAP)
+        return None if found is None else json.loads(found["data"]["group-tiers.json"])
 
     def annotations(self, key):
-        return self.deps[key]["metadata"].get("annotations") or {}
+        return self.dep(key)["metadata"].get("annotations") or {}
 
     def deployment_writes(self):
         return [s for s in self.sent if "/deployments/" in s[1]]
@@ -162,36 +165,36 @@ def use(case, cluster):
 
 class MapTests(unittest.TestCase):
     def test_no_map_yet_is_no_group_tiers(self):
-        use(self, Cluster([]))
+        use(self, Cluster(self, []))
         self.assertEqual({}, GROUPS.stored())
         self.assertEqual(({}, None), GROUPS.read())
 
     def test_the_map_is_read_from_homesteads_namespace(self):
-        use(self, Cluster([], {"Home": "critical"}))
+        use(self, Cluster(self, [], {"Home": "critical"}))
         self.assertEqual(({"Home": "critical"}, "1"), GROUPS.read())
 
     def test_entries_that_arent_tiers_are_dropped(self):
-        use(self, Cluster([], raw='{"Home": "critical", "Media": "urgent", "Lab": 3}'))
+        use(self, Cluster(self, [], raw='{"Home": "critical", "Media": "urgent", "Lab": 3}'))
         self.assertEqual({"Home": "critical"}, GROUPS.stored())
 
     def test_a_map_that_cant_be_read_is_unknown_not_empty(self):
-        cluster = Cluster([], {"Home": "critical"})
-        cluster.unreadable = http(403, MAP)
+        cluster = Cluster(self, [], {"Home": "critical"})
+        cluster.unreadable(http(403, MAP))
         use(self, cluster)
         self.assertIsNone(GROUPS.stored())
 
     def test_a_map_that_isnt_a_map_of_tiers_is_unknown(self):
         for raw in ("not json", '["Home"]'):
             with self.subTest(raw=raw):
-                use(self, Cluster([], raw=raw))
+                use(self, Cluster(self, [], raw=raw))
                 self.assertIsNone(GROUPS.stored())
                 self.assertEqual((None, "1"), GROUPS.read())
 
     def test_stored_reads_through_the_reader_it_is_given(self):
         # The plan and Edit read through their own module's kget.
-        use(self, Cluster([], {"Home": "low"}))
-        other = Cluster([], {"Home": "critical"})
-        self.assertEqual({"Home": "critical"}, GROUPS.stored(other.kget))
+        use(self, Cluster(self, [], {"Home": "low"}))
+        other = Kube(configmap({"Home": "critical"}))      # not entered: only the reader below reaches it
+        self.assertEqual({"Home": "critical"}, GROUPS.stored(lambda path, **kw: other("GET", path)))
 
 
 class ResolveTests(unittest.TestCase):
@@ -248,7 +251,7 @@ class ResolveTests(unittest.TestCase):
 
 class MembershipTests(unittest.TestCase):
     def setUp(self):
-        self.cluster = Cluster([app("ha"), app("db", cls="x-critical"), app("web", labels=FLUX),
+        self.cluster = Cluster(self, [app("ha"), app("db", cls="x-critical"), app("web", labels=FLUX),
                                 app("homestead", ns="homestead"),
                                 app("frigate", group="Home", follows=True),
                                 app("plex", group="Media", follows=True, cls="x-low", wrote="x-low")],
@@ -277,15 +280,15 @@ class MembershipTests(unittest.TestCase):
         self.assertEqual({"homestead.io/group": "Home"}, self.cluster.annotations("homestead/homestead"))
 
     def test_joining_touches_no_template(self):
-        before = copy.deepcopy(self.cluster.deps["lab/ha"]["spec"])
+        before = copy.deepcopy(self.cluster.dep("lab/ha")["spec"])
         self.move("Home", "ha", "db")
-        self.assertEqual(before, self.cluster.deps["lab/ha"]["spec"])
+        self.assertEqual(before, self.cluster.dep("lab/ha")["spec"])
         self.assertTrue(all(set(body) == {"metadata"} for _, _, body, _ in self.cluster.deployment_writes()))
 
     def test_ungrouping_removes_the_marker_and_leaves_the_class(self):
         self.move("", "plex")
         self.assertEqual({}, self.cluster.annotations("lab/plex"))
-        self.assertEqual("x-low", self.cluster.deps["lab/plex"]["spec"]["template"]["spec"]["priorityClassName"])
+        self.assertEqual("x-low", self.cluster.dep("lab/plex")["spec"]["template"]["spec"]["priorityClassName"])
 
     def test_moving_to_another_group_keeps_the_marker(self):
         self.move("Media", "frigate")
@@ -306,7 +309,7 @@ class MembershipTests(unittest.TestCase):
         self.assertEqual("group", self.cluster.annotations("lab/frigate")["homestead.io/tier"])
 
     def test_a_rename_makes_no_member_a_follower(self):
-        self.cluster = Cluster([app("frigate", group="Home", follows=True), app("ha", group="Home")], {"Home": "critical"})
+        self.cluster = Cluster(self, [app("frigate", group="Home", follows=True), app("ha", group="Home")], {"Home": "critical"})
         use(self, self.cluster)
         result = self.move("House", "frigate", "ha", renamed_from="Home")
         self.assertEqual({"homestead.io/group": "House", "homestead.io/tier": "group"}, self.cluster.annotations("lab/frigate"))
@@ -320,7 +323,7 @@ class MembershipTests(unittest.TestCase):
         self.assertEqual({"Media": "low"}, self.cluster.tiers())
 
     def test_a_change_of_groups_still_works_when_the_tiers_cant_be_read(self):
-        self.cluster.unreadable = http(403, MAP)
+        self.cluster.unreadable(http(403, MAP))
         result = self.move("Home", "ha")
         self.assertEqual("group", self.cluster.annotations("lab/ha")["homestead.io/tier"])
         self.assertIn("couldn't", result["detail"])
@@ -341,7 +344,7 @@ class MembershipTests(unittest.TestCase):
 
 class GroupTierRouteTests(unittest.TestCase):
     def setUp(self):
-        self.cluster = Cluster([app("ha", group="Home", follows=True),
+        self.cluster = Cluster(self, [app("ha", group="Home", follows=True),
                                 app("frigate", group="Home", follows=True, cls="x-critical", wrote="x-critical"),
                                 app("db", group="Home", cls="x-low"), app("web", group="Home", labels=FLUX)], {})
         use(self, self.cluster)
@@ -355,13 +358,13 @@ class GroupTierRouteTests(unittest.TestCase):
         self.assertEqual("critical", result["tier"])
 
     def test_none_removes_the_groups_tier(self):
-        self.cluster.cm["data"]["group-tiers.json"] = json.dumps({"Home": "critical", "Media": "low"})
+        self.cluster.write_map(json.dumps({"Home": "critical", "Media": "low"}))
         result = GROUPS.set_group_tier({"group": "Home", "tier": "none"})
         self.assertEqual({"Media": "low"}, self.cluster.tiers())
         self.assertEqual(("", 1), (result["tier"], result["restart"]), "frigate runs critical; the default is normal")
 
     def test_the_first_save_makes_the_map(self):
-        self.cluster.cm = None
+        self.cluster.forget_map()
         GROUPS.set_group_tier({"group": "Home", "tier": "low"})
         method, path, body, _ = self.cluster.sent[-1]
         self.assertEqual(("POST", f"/api/v1/namespaces/{NS}/configmaps"), (method, path))
@@ -387,8 +390,8 @@ class GroupTierRouteTests(unittest.TestCase):
             GROUPS.set_group_tier({"group": "Home", "tier": "urgent"})
 
     def test_a_save_that_crosses_another_is_a_409_and_merges_nothing(self):
-        self.cluster.cm["data"]["group-tiers.json"] = json.dumps({"Home": "low"})
-        self.cluster.race = True
+        self.cluster.write_map(json.dumps({"Home": "low"}))
+        self.cluster.race()
         result = GROUPS.set_group_tier({"group": "Home", "tier": "critical"})
         self.assertIsInstance(result, ROUTER.Reply)
         self.assertEqual(409, result.code)
@@ -396,7 +399,7 @@ class GroupTierRouteTests(unittest.TestCase):
         self.assertEqual({"Home": "low"}, self.cluster.tiers())
 
     def test_a_map_that_isnt_json_is_replaced_by_a_save(self):
-        self.cluster.cm["data"]["group-tiers.json"] = "not json"
+        self.cluster.write_map("not json")
         GROUPS.set_group_tier({"group": "Home", "tier": "critical"})
         self.assertEqual({"Home": "critical"}, self.cluster.tiers())
 
@@ -411,9 +414,10 @@ class GroupTierRouteTests(unittest.TestCase):
 
 class PlanTests(unittest.TestCase):
     def plan(self, deps, tiers, chosen=None, vms=None, unreadable=None):
-        self.cluster = Cluster(deps, tiers)
-        self.cluster.vms = vms or {}
-        self.cluster.unreadable = unreadable
+        self.cluster = Cluster(self, deps, tiers)
+        self.cluster.add_vms(vms or {})
+        if unreadable:
+            self.cluster.unreadable(unreadable)
         use(self, self.cluster)
         return P.plan(chosen)
 
@@ -476,8 +480,8 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(("own", "in_line", "", False), (row["source"], row["status"], row["group"], row["follows"]))
 
     def test_a_statefulset_never_follows_a_group(self):
-        self.cluster = Cluster([], {"Home": "critical"})
-        self.cluster.stss = {"lab/x-db": app("x-db", group="Home", follows=True)}
+        self.cluster = Cluster(self, [], {"Home": "critical"})
+        self.cluster.add_stss({"lab/x-db": app("x-db", group="Home", follows=True)})
         use(self, self.cluster)
         out = P.plan()
         row = self.row(out, "sts:lab/x-db")
@@ -506,7 +510,7 @@ class PlanTests(unittest.TestCase):
 
 class JobTests(unittest.TestCase):
     def review(self, deps, tiers, chosen=None):
-        self.cluster = Cluster(deps, tiers)
+        self.cluster = Cluster(self, deps, tiers)
         use(self, self.cluster)
         out = P.plan(chosen)
         return P.reviewed([a for a in out["apps"] if a["tier"] != a["current"]], out["review_token"])
@@ -519,27 +523,29 @@ class JobTests(unittest.TestCase):
         P.patch(apps[0])
         self.assertEqual({"homestead.io/group": "Home", "homestead.io/tier": "group", "homestead.io/tier-class": "x-critical"},
                          self.cluster.annotations("lab/ha"))
-        self.assertEqual("x-critical", self.cluster.deps["lab/ha"]["spec"]["template"]["spec"]["priorityClassName"])
+        self.assertEqual("x-critical", self.cluster.dep("lab/ha")["spec"]["template"]["spec"]["priorityClassName"])
 
     def test_a_tier_picked_against_the_group_becomes_the_apps_own(self):
         apps = self.review([app("ha", group="Home", follows=True)], {"Home": "critical"}, chosen={"lab/ha": "low"})
         P.patch(apps[0])
         self.assertEqual({"homestead.io/group": "Home"}, self.cluster.annotations("lab/ha"))
-        self.assertEqual("x-low", self.cluster.deps["lab/ha"]["spec"]["template"]["spec"]["priorityClassName"])
+        self.assertEqual("x-low", self.cluster.dep("lab/ha")["spec"]["template"]["spec"]["priorityClassName"])
 
     def test_an_own_tier_change_writes_no_annotations(self):
         apps = self.review([app("db")], {}, chosen={"lab/db": "critical"})
         P.patch(apps[0])
-        self.assertNotIn("metadata", self.last_patch())
+        # The write guards add an empty annotations map to a body that has none (the change note, no name to give).
+        self.assertIn(self.last_patch().get("metadata"), (None, {"annotations": {}}))
 
     def test_a_job_reviewed_before_this_version_writes_no_marker(self):
-        self.cluster = Cluster([app("ha", group="Home", follows=True)], {"Home": "critical"})
+        self.cluster = Cluster(self, [app("ha", group="Home", follows=True)], {"Home": "critical"})
         use(self, self.cluster)
         P.patch({"kind": "app", "ns": "lab", "name": "ha", "tier": "critical"})   # a ref stored before #430
-        self.assertNotIn("metadata", self.last_patch())
+        # The write guards add an empty annotations map to a body that has none (the change note, no name to give).
+        self.assertIn(self.last_patch().get("metadata"), (None, {"annotations": {}}))
 
     def test_plan_rows_say_whether_the_job_keeps_an_app_following(self):
-        self.cluster = Cluster([app("ha", group="Home", follows=True), app("fr", group="Home", follows=True), app("db")],
+        self.cluster = Cluster(self, [app("ha", group="Home", follows=True), app("fr", group="Home", follows=True), app("db")],
                                {"Home": "critical"})
         use(self, self.cluster)
         out = P.plan({"lab/fr": "low", "lab/db": "low"})
@@ -549,16 +555,16 @@ class JobTests(unittest.TestCase):
         self.assertNotEqual(out["review_token"], P.review_token(flipped), "the token binds follow")
 
     def test_a_group_tier_changed_between_review_and_start_is_refused(self):
-        self.cluster = Cluster([app("ha", group="Home", follows=True)], {"Home": "critical"})
+        self.cluster = Cluster(self, [app("ha", group="Home", follows=True)], {"Home": "critical"})
         use(self, self.cluster)
         out = P.plan()
         changes = [a for a in out["apps"] if a["tier"] != a["current"]]
-        self.cluster.cm["data"]["group-tiers.json"] = json.dumps({"Home": "low"})
+        self.cluster.write_map(json.dumps({"Home": "low"}))
         with self.assertRaisesRegex(ValueError, "review again"):
             P.reviewed(changes, out["review_token"])
 
     def test_a_follow_the_server_doesnt_see_is_refused(self):
-        self.cluster = Cluster([app("ha", group="Home", follows=True)], {"Home": "critical"})
+        self.cluster = Cluster(self, [app("ha", group="Home", follows=True)], {"Home": "critical"})
         use(self, self.cluster)
         changes = [dict(a, follow=False) for a in P.plan()["apps"] if a["tier"] != a["current"]]
         with self.assertRaisesRegex(ValueError, "review again"):
@@ -593,11 +599,11 @@ class JobTests(unittest.TestCase):
 
     def started(self, deps, tiers, change):
         """P.start() with the group map unreadable once the review is done."""
-        self.cluster = Cluster(deps, tiers)
+        self.cluster = Cluster(self, deps, tiers)
         use(self, self.cluster)
         out = P.plan()
         picked = [a for a in out["apps"] if a["id"] in change]
-        self.cluster.unreadable = http(500, MAP)
+        self.cluster.unreadable(http(500, MAP))
         began = []
         ops = mock.Mock(TERMINAL=("succeeded", "failed"), RESOLVERS={}, CANCELLERS={})
         ops.snapshot.return_value = []
@@ -636,11 +642,12 @@ class AgentToolTests(unittest.TestCase):
 
 
 import homestead_lifecycle as LC
+import homestead_workload_edit as WORKLOAD_EDIT
 
 
 class EditTests(unittest.TestCase):
     def setUp(self):
-        self.cluster = Cluster([], {"Home": "critical", "Media": "low"})
+        self.cluster = Cluster(self, [], {"Home": "critical", "Media": "low"})
         use(self, self.cluster)
         patcher = mock.patch.object(LC, "kget", side_effect=self.cluster.kget)
         patcher.start()
@@ -651,51 +658,51 @@ class EditTests(unittest.TestCase):
 
     def test_from_its_group_sets_the_marker_and_the_groups_class(self):
         dep = app("ha", group="Home")
-        LC._apply_tier(dep, "group")
+        WORKLOAD_EDIT._apply_tier(dep, "group")
         self.assertEqual("x-critical", self.spec(dep)["priorityClassName"])
         self.assertEqual({"homestead.io/group": "Home", "homestead.io/tier": "group", "homestead.io/tier-class": "x-critical"},
                          dep["metadata"]["annotations"])
 
     def test_from_a_group_with_no_tier_is_normal_with_no_class(self):
         dep = app("ha", group="Garage", cls="x-low")
-        LC._apply_tier(dep, "group")
+        WORKLOAD_EDIT._apply_tier(dep, "group")
         self.assertNotIn("priorityClassName", self.spec(dep))
         self.assertEqual({"homestead.io/group": "Garage", "homestead.io/tier": "group"}, dep["metadata"]["annotations"])
 
     def test_choosing_a_tier_makes_it_the_apps_own(self):
         dep = app("ha", group="Home", follows=True, cls="x-critical", wrote="x-critical")
-        LC._apply_tier(dep, "low")
+        WORKLOAD_EDIT._apply_tier(dep, "low")
         self.assertEqual("x-low", self.spec(dep)["priorityClassName"])
         self.assertEqual({"homestead.io/group": "Home"}, dep["metadata"]["annotations"])
 
     def test_from_its_group_is_refused_for_an_app_in_no_group(self):
         with self.assertRaisesRegex(ValueError, "isn't in a group"):
-            LC._apply_tier(app("ha"), "group")
+            WORKLOAD_EDIT._apply_tier(app("ha"), "group")
 
     def test_from_its_group_waits_while_the_tiers_cant_be_read(self):
-        self.cluster.unreadable = http(500, MAP)
+        self.cluster.unreadable(http(500, MAP))
         with self.assertRaisesRegex(ValueError, "couldn't read the group tiers"):
-            LC._apply_tier(app("ha", group="Home"), "group")
+            WORKLOAD_EDIT._apply_tier(app("ha", group="Home"), "group")
 
     def test_an_app_already_following_is_left_as_it_is_while_the_tiers_cant_be_read(self):
-        self.cluster.unreadable = http(500, MAP)
+        self.cluster.unreadable(http(500, MAP))
         dep = app("ha", group="Home", follows=True, cls="x-critical", wrote="x-critical")
         before = copy.deepcopy(dep)
-        LC._apply_tier(dep, "group")
+        WORKLOAD_EDIT._apply_tier(dep, "group")
         self.assertEqual(before, dep)
 
     def test_a_class_that_isnt_on_the_cluster_is_left_alone(self):
         dep = app("ha", group="Home", cls="gone")
-        LC._apply_tier(dep, "group")
+        WORKLOAD_EDIT._apply_tier(dep, "group")
         self.assertEqual("gone", self.spec(dep)["priorityClassName"])
         self.assertNotIn("homestead.io/tier", dep["metadata"]["annotations"])
 
     def test_a_save_from_its_group_applies_the_groups_tier_now(self):
         before = app("ha", group="Media", follows=True, cls="x-critical", wrote="x-critical")
         after = copy.deepcopy(before)
-        LC._apply_tier(after, "group")
+        WORKLOAD_EDIT._apply_tier(after, "group")
         self.assertEqual("x-low", self.spec(after)["priorityClassName"])
-        self.assertTrue(LC.restarts(before, after), "the edit's review says it restarts")
+        self.assertTrue(WORKLOAD_EDIT.restarts(before, after), "the edit's review says it restarts")
 
     def test_the_edit_form_offers_from_its_group(self):
         dep = app("ha", group="Home", follows=True, cls="x-critical")
@@ -719,7 +726,7 @@ class EditTests(unittest.TestCase):
 
     def test_settings_sent_back_unchanged_keep_a_follower_following(self):
         dep = app("ha", group="Home", follows=True, cls="x-critical", wrote="x-critical")
-        LC._apply_tier(dep, GROUPS.edit_fields(dep, "critical", self.cluster.kget)["priority"])
+        WORKLOAD_EDIT._apply_tier(dep, GROUPS.edit_fields(dep, "critical", self.cluster.kget)["priority"])
         self.assertEqual("group", dep["metadata"]["annotations"]["homestead.io/tier"])
 
     def test_the_tier_an_edit_choice_means(self):
@@ -737,10 +744,10 @@ class EditRouteTests(unittest.TestCase):
 
     def run_edit(self, dep, body, unreadable=False):
         import homestead_workloads as WL
-        cluster = Cluster([dep], {"Home": "critical"})
+        cluster = Cluster(self, [dep], {"Home": "critical"})
         use(self, cluster)
         if unreadable:
-            cluster.unreadable = http(500, MAP)
+            cluster.unreadable(http(500, MAP))
         events, written = self.events, self.written
 
         def apply(*args, **kwargs):
@@ -751,7 +758,7 @@ class EditRouteTests(unittest.TestCase):
         dep_after = [None]
 
         def fake_plan(b):
-            prepared = LC.prepare_edit(b)
+            prepared = WORKLOAD_EDIT.prepare_edit(b)
             dep_after[0] = prepared["deployment"]
             return {"deployment": dep_after[0]}, {}, {}
 
@@ -793,8 +800,7 @@ class EditRouteTests(unittest.TestCase):
 
 class WorkloadListTests(unittest.TestCase):
     def test_each_row_carries_its_groups_tier(self):
-        cluster = Cluster([app("ha", group="Home"), app("plex", group="Media"), app("web")], {"Home": "critical"})
-        cluster.other = {"items": []}       # pods, metrics, services: none
+        cluster = Cluster(self, [app("ha", group="Home"), app("plex", group="Media"), app("web")], {"Home": "critical"})
         use(self, cluster)
         with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=cluster.kget):
             rows = {w["name"]: w for w in server.WORKLOADS.get_workloads()}
