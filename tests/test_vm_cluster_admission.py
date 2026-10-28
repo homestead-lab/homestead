@@ -8,6 +8,7 @@ from unittest import mock
 import test_vm_capacity as fixtures
 import test_vm_resources as resource_fixtures
 import server
+import homestead_vm_create as VM_CREATE
 import homestead_capacity_review as review
 
 
@@ -292,12 +293,12 @@ class VMClusterAdmissionTests(unittest.TestCase):
         self.assertEqual([], self.sent)
 
     def persistent_batch(self):
-        original = server.IMP.prepare_vm
+        original = VM_CREATE.prepare_vm
         def prepare(*args, **kwargs):
             value = original(*args, **kwargs)
             value["vm"]["spec"]["template"]["spec"]["domain"].setdefault("devices", {})["tpm"] = {"persistent": True}
             return value
-        patch = mock.patch.object(server.IMP, "prepare_vm", side_effect=prepare)
+        patch = mock.patch.object(VM_CREATE, "prepare_vm", side_effect=prepare)
         patch.start()
         self.addCleanup(patch.stop)
         self.config["spec"]["configuration"]["vmStateStorageClass"] = "state"

@@ -4,8 +4,8 @@ DataVolume, the disks and images Homestead shows, and preparing and committing
 a new VM.
 
 Split by feature from homestead_imports (#623), moved unchanged. Names that
-homestead_imports owns, that server.py binds there, or that tests replace there,
-are read through it (I.name); homestead_imports re-exports everything here.
+homestead_imports owns or that server.py binds there are read through it (I.name),
+so a replacement there still applies; read and replace the names defined here, here.
 """
 import base64
 import copy
@@ -36,7 +36,7 @@ def _required_name(value, label="name"):
 
 def _get_or_none(path):
     """The object, or None when it is not there (404); kept by name because
-    homestead_imports re-exports it."""
+    the Unraid VM import reads it through homestead_imports."""
     return KUBE.get_optional(path, read=I.kget)
 
 
@@ -512,7 +512,7 @@ def prepare_vm(cfg, platform=None, default_class=""):
     interface = net = None
     network_data = address = mac = ""
     if not network_isolated:
-        mac = str(cfg.get("mac") or I._vm_mac()).lower()
+        mac = str(cfg.get("mac") or _vm_mac()).lower()
         if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac) or int(mac.split(":")[0], 16) & 1:
             raise ValueError("MAC must be a unicast hardware address like 52:54:00:12:34:56")
         # The card the guest sees: VirtIO unless asked, but a Windows guest has
@@ -763,7 +763,7 @@ def commit_vm(prepared, before_save=None, send=None):
 
 
 def create_vm(cfg, platform=None, default_class=""):
-    return I.commit_vm(I.prepare_vm(cfg, platform, default_class))
+    return commit_vm(prepare_vm(cfg, platform, default_class))
 
 
-import homestead_imports as I  # noqa: E402  (imports at the bottom: homestead_imports re-exports this module)
+import homestead_imports as I  # noqa: E402  (imports at the bottom: homestead_imports imports this module)

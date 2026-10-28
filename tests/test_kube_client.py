@@ -69,6 +69,17 @@ class GetTests(unittest.TestCase):
                 K.get_optional(PODS + "/c", read=read)
         self.assertEqual(read.paths, [PODS + "/a", PODS + "/b", PODS + "/c"])
 
+    def test_get_optional_answers_what_it_is_given_for_missing(self):
+        # A module that must tell a 404 from a null answer passes its own
+        # marker: only a 404 comes back as it, a null answer stays None.
+        gone = object()
+        read = Reads({PODS + "/a": http_error(404), PODS + "/b": None, PODS + "/c": {"kind": "Pod"}})
+        self.assertIs(K.get_optional(PODS + "/a", read=read, missing=gone), gone)
+        self.assertIsNone(K.get_optional(PODS + "/b", read=read, missing=gone))
+        self.assertEqual(K.get_optional(PODS + "/c", read=read, missing=gone), {"kind": "Pod"})
+        with self.assertRaises(urllib.error.HTTPError):
+            K.get_optional(PODS + "/a", read=Reads({PODS + "/a": http_error(500)}), missing=gone)
+
     def test_an_unbound_reader_fails_rather_than_reading_the_cluster(self):
         # A module whose bind() never ran passes read=None: that is a mistake
         # to report, not a cue to read through the real client.

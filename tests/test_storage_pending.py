@@ -1,71 +1,78 @@
 import sys
 import time
 import unittest
-import urllib.error
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_kube as K
 import homestead_storage_pending as PENDING
 import homestead_updates as UPDATES
+import homestead_update_rollouts as ROLLOUTS
 import homestead_operations as OPS
+from fakes.kube import Kube
 
 NOW = 1_790_000_000
 STAMP = lambda seconds_ago: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(NOW - seconds_ago))
 
 
-class Cluster:
-    def __init__(self, nodes, registered=(), longhorn=True):
-        self.nodes, self.registered, self.longhorn, self.sent = nodes, set(registered), longhorn, []
-
-    def get(self, path):
-        if path == "/api/v1/nodes":
-            return {"items": self.nodes}
-        if path.endswith("/csidrivers/driver.longhorn.io"):
-            if self.longhorn:
-                return {}
-            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
-        if "/csinodes/" in path:
-            name = path.rsplit("/", 1)[-1]
-            return {"spec": {"drivers": [{"name": "driver.longhorn.io"}] if name in self.registered else []}}
-        raise urllib.error.HTTPError(path, 404, "missing", {}, None)
-
-    def send(self, method, path, body=None, ctype=None):
-        self.sent.append((path.rsplit("/", 1)[-1], body, ctype))
-
-
 def node(name, age, taints=None):
     spec = {"taints": taints} if taints is not None else {}
-    return {"metadata": {"name": name, "creationTimestamp": STAMP(age), "resourceVersion": "7"}, "spec": spec}
+    return {"apiVersion": "v1", "kind": "Node",
+            "metadata": {"name": name, "creationTimestamp": STAMP(age), "resourceVersion": "7"}, "spec": spec}
+
+
+def cluster(nodes, registered=(), longhorn=True):
+    """The nodes, Longhorn's CSI driver (unless longhorn is False) and a CSINode
+    for each node that lists the driver for those in registered."""
+    objects = list(nodes)
+    if longhorn:
+        objects.append({"apiVersion": "storage.k8s.io/v1", "kind": "CSIDriver", "metadata": {"name": PENDING.DRIVER}})
+    for each in nodes:
+        name = each["metadata"]["name"]
+        objects.append({"apiVersion": "storage.k8s.io/v1", "kind": "CSINode", "metadata": {"name": name},
+                        "spec": {"drivers": [{"name": PENDING.DRIVER}] if name in registered else []}})
+    return objects
 
 
 TAINT = {"key": PENDING.KEY, "value": "longhorn", "effect": "PreferNoSchedule"}
 
 
 class StoragePendingTests(unittest.TestCase):
-    def run_tick(self, cluster):
-        PENDING.bind(cluster.get, cluster.send)
-        return PENDING.tick(now=NOW)
+    """On the shared fake API (tests/fakes/kube.py)."""
+
+    def start(self, *args, **kwargs):
+        kube = self.enterContext(Kube(*cluster(*args, **kwargs)))
+        for name, value in (("kget", PENDING.kget), ("ksend", PENDING.ksend)):
+            self.addCleanup(setattr, PENDING, name, value)
+        PENDING.bind(K.kget, K.ksend)
+        return kube
+
+    def sent(self, kube):
+        return [(path.rsplit("/", 1)[-1], body, ctype) for _, path, body, ctype in kube.writes]
 
     def test_a_node_that_just_joined_is_steered_clear_of_until_longhorn_is_there(self):
-        cluster = Cluster([node("old", 86400), node("new", 60)], registered={"old"})
-        self.assertEqual(["new"], [name for name, _ in self.run_tick(cluster)])
-        name, ops, ctype = cluster.sent[0]
+        kube = self.start([node("old", 86400), node("new", 60)], registered={"old"})
+        self.assertEqual(["new"], [name for name, _ in PENDING.tick(now=NOW)])
+        name, ops, ctype = self.sent(kube)[0]
         self.assertEqual("application/json-patch+json", ctype)
         self.assertEqual({"op": "test", "path": "/metadata/resourceVersion", "value": "7"}, ops[0],
                          "a taint Kubernetes adds meanwhile is never overwritten")
         self.assertEqual([TAINT], ops[1]["value"])
+        self.assertEqual([TAINT], kube.object("/api/v1/nodes/new")["spec"]["taints"])
 
     def test_the_taint_comes_off_once_the_driver_registers_and_keeps_the_others(self):
         other = {"key": "node.kubernetes.io/not-ready", "effect": "NoSchedule"}
-        cluster = Cluster([node("new", 120, [other, TAINT])], registered={"new"})
-        self.run_tick(cluster)
-        self.assertEqual([other], cluster.sent[0][1][1]["value"])
+        kube = self.start([node("new", 120, [other, TAINT])], registered={"new"})
+        PENDING.tick(now=NOW)
+        self.assertEqual([other], self.sent(kube)[0][1][1]["value"])
+        self.assertEqual([other], kube.object("/api/v1/nodes/new")["spec"]["taints"])
 
     def test_an_old_node_without_longhorn_is_left_alone_and_no_longhorn_means_no_waiting(self):
-        self.assertEqual([], self.run_tick(Cluster([node("old", 86400)])))
-        cluster = Cluster([node("new", 60, [TAINT])], longhorn=False)
-        self.run_tick(cluster)
-        self.assertEqual([], cluster.sent[0][1][1]["value"], "the installer's taint is lifted with nothing to wait for")
+        self.start([node("old", 86400)])
+        self.assertEqual([], PENDING.tick(now=NOW))
+        kube = self.start([node("new", 60, [TAINT])], longhorn=False)
+        PENDING.tick(now=NOW)
+        self.assertEqual([], self.sent(kube)[0][1][1]["value"], "the installer's taint is lifted with nothing to wait for")
 
     def test_the_installer_taints_a_joining_node_from_its_first_moment(self):
         script = (Path(__file__).resolve().parents[1] / "scripts" / "bootstrap-k3s.sh").read_text()
@@ -89,7 +96,7 @@ class WaitingPodTests(unittest.TestCase):
         event = {"reason": "FailedAttachVolume", "lastTimestamp": "x",
                  "message": 'AttachVolume.Attach failed for volume "pvc-1" : CSINode k3s-2 does not contain driver driver.longhorn.io'}
         UPDATES.kget = lambda path: {"items": [event]}
-        found = UPDATES._why_waiting("lab", pod)
+        found = ROLLOUTS._why_waiting("lab", pod)
         self.assertIn("Longhorn is not running on k3s-2 yet", found["message"])
         self.assertFalse(found["stuck"], "five minutes after a join is not stuck")
         self.assertNotIn("hint", found)

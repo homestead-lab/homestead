@@ -3,13 +3,14 @@
     with Kube(pod, claim, absent_groups=("snapshot.storage.k8s.io",)) as kube:
         MODULE.bind(K.kget, K.ksend)   # or anything that already calls them
         ...
-        kube.object(path), kube.writes
+        kube.object(path), kube.writes, kube.discard(path)
 
 It holds objects by API path and answers the way the API server does: 404,
 409 AlreadyExists and Conflict, 422 for a JSON patch that does not apply,
 merge, JSON and strategic-merge patches, delete preconditions, finalizers,
 owner garbage collection, label and field selectors, limit/continue pages,
-and /apis discovery. It replaces homestead_kube.transport, so a read goes
+a Secret's stringData kept as data, and /apis discovery. It replaces
+homestead_kube.transport, so a read goes
 through kget (and its 429 retry) and a write goes round WRITE_GUARDS first,
 as in the app. While it is in use the helpers server.py binds into
 homestead_kube (the self-data fence and the cluster shutdown state) are
@@ -21,6 +22,7 @@ Not modelled (add it when a test needs it): watches, server-side apply,
 admission and validation, namespace existence and termination, the
 $setElementOrder / $retainKeys strategic-merge directives, and subresources
 other than status and pod eviction (answer those with react())."""
+import base64
 import contextlib
 import copy
 import io
@@ -117,6 +119,15 @@ class Kube:
             found = self._objects.get(self._key(self._parse(path)))
             return copy.deepcopy(found)
 
+    def discard(self, path):
+        """Take the object at path away as something outside the app would: no
+        write is logged, no finalizer or guard is asked, what it owned is
+        collected. Not there already is no error."""
+        with self._lock:
+            if self._objects.pop(self._key(self._parse(path)), None) is not None:
+                self._rv += 1
+                self._collect()
+
     def fail(self, path, code, times=1, method=None):
         """Answer the next times requests for path (any method, or just
         method) with code, before anything else happens."""
@@ -200,6 +211,7 @@ class Kube:
         meta["generation"] = 1
         if req["group"]:
             self.groups.add(req["group"])
+        _fold_string_data(req, body)
         self._objects[self._key(req)] = body
         return body
 
@@ -259,6 +271,7 @@ class Kube:
     # Bookkeeping ------------------------------------------------------------
 
     def _store(self, req, new):
+        _fold_string_data(req, new)
         meta = new["metadata"]
         if meta.get("deletionTimestamp") and not meta.get("finalizers"):
             self._objects.pop(self._key(req), None)
@@ -368,6 +381,16 @@ class Kube:
 
 
 # Patches ----------------------------------------------------------------------
+
+def _fold_string_data(req, obj):
+    """A Secret's stringData is kept as base64 data, as the API server does."""
+    if req["plural"] == "secrets" and not req["group"] and obj.get("stringData"):
+        data = obj.setdefault("data", {})
+        for key, value in obj.pop("stringData").items():
+            data[key] = base64.b64encode(str(value).encode()).decode()
+    elif req["plural"] == "secrets" and not req["group"]:
+        obj.pop("stringData", None)
+
 
 def _merge_patch(target, patch):
     """RFC 7386: objects merge, null removes, anything else replaces."""

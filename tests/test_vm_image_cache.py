@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
+import homestead_vm_create as VM_CREATE
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 
@@ -58,7 +59,7 @@ class VmImageCacheTests(unittest.TestCase):
         imports.kget, imports.ksend, imports._cache = self.restore
 
     def rows(self):
-        return {row["name"]: row for row in imports.vm_image_cache()["images"]}
+        return {row["name"]: row for row in VM_CREATE.vm_image_cache()["images"]}
 
     def test_each_image_says_where_it_is_kept_and_what_was_made_from_it(self):
         a = self.rows()["image-a"]
@@ -70,18 +71,18 @@ class VmImageCacheTests(unittest.TestCase):
 
     def test_an_image_a_disk_was_made_from_is_not_deleted(self):
         with self.assertRaisesRegex(PermissionError, "lab/pihole-disk"):
-            imports.delete_vm_image("lab", "image-a", "x.img")
+            VM_CREATE.delete_vm_image("lab", "image-a", "x.img")
         self.assertEqual([], self.sent)
 
     def test_an_unused_image_is_deleted_once_its_name_is_typed(self):
         with self.assertRaisesRegex(ValueError, "type debian.qcow2"):
-            imports.delete_vm_image("lab", "image-b", "debian")
-        imports.delete_vm_image("lab", "image-b", "debian.qcow2")
+            VM_CREATE.delete_vm_image("lab", "image-b", "debian")
+        VM_CREATE.delete_vm_image("lab", "image-b", "debian.qcow2")
         self.assertEqual([("DELETE", "/apis/harvesterhci.io/v1beta1/namespaces/lab/virtualmachineimages/image-b")], self.sent)
 
     def test_without_harvester_it_says_why_there_is_no_cache(self):
         del self.objects["/apis/harvesterhci.io/v1beta1/virtualmachineimages"]
-        report = imports.vm_image_cache()
+        report = VM_CREATE.vm_image_cache()
         self.assertEqual((False, []), (report["harvester"], report["images"]))
         self.assertIn("CDI downloads each VM's disk", report["note"])
 

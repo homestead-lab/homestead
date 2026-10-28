@@ -9,6 +9,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_updates as UPDATES
+import homestead_update_registry as REGISTRY
+import homestead_update_checks as CHECKS
 import homestead_update_notes as NOTES
 
 
@@ -55,7 +57,7 @@ class ConfigTests(unittest.TestCase):
     def setUp(self):
         NOTES._CONFIGS.clear()
         self.registry = Registry()
-        patch = mock.patch.object(UPDATES, "_registry_json", self.registry)
+        patch = mock.patch.object(REGISTRY, "_registry_json", self.registry)
         patch.start()
         self.addCleanup(patch.stop)
 
@@ -280,10 +282,10 @@ class RouteTests(unittest.TestCase):
         self.dep = {"spec": {"template": {"spec": {"securityContext": {"runAsUser": 568}, "containers": [
             {"name": "app", "env": [{"name": "TZ", "value": "Europe/Stockholm"}]}]}}}}
         self.read = []
-        patches = [mock.patch.object(UPDATES, "_registry_json", self.registry),
-                   mock.patch.object(UPDATES, "_LATEST", {"report": self.report}),
+        patches = [mock.patch.object(REGISTRY, "_registry_json", self.registry),
+                   mock.patch.object(CHECKS, "_LATEST", {"report": self.report}),
                    mock.patch.object(UPDATES, "kget", self.kget, create=True),
-                   mock.patch.object(UPDATES, "_secret_credentials", lambda ns, dep: {"registry.example.com": ("u", "p")})]
+                   mock.patch.object(REGISTRY, "_secret_credentials", lambda ns, dep: {"registry.example.com": ("u", "p")})]
         for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
@@ -344,7 +346,7 @@ class RouteTests(unittest.TestCase):
     def test_other_value_errors_show_their_kind_only(self):
         def garbled(*_, **__):
             raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
-        with mock.patch.object(UPDATES, "_registry_json", garbled):
+        with mock.patch.object(REGISTRY, "_registry_json", garbled):
             error = NOTES.notes_for("lab", "app")["images"][0]["error"]
         self.assertEqual("could not read the images (UnicodeDecodeError)", error)
 
@@ -382,7 +384,7 @@ class RouteTests(unittest.TestCase):
         def info(ref, auths=None, force=False):
             asked.append((ref, force))
             return {"digest": self.new["top"], "children": []}
-        with mock.patch.object(UPDATES, "manifest_info", info):
+        with mock.patch.object(REGISTRY, "manifest_info", info):
             image = NOTES.notes_for("lab", "app")["images"][0]
         self.assertEqual([("registry.example.com/example/app:1.2.0", False)], asked)
         self.assertNotIn("manifests/1.2.0", [p for _, p, _ in self.registry.calls])
@@ -406,13 +408,13 @@ class RouteTests(unittest.TestCase):
             return answer
         for code, words in ((429, "slow down"), (401, "authentication"), (403, "authentication"), (500, "HTTP 500")):
             NOTES._CONFIGS.clear()
-            with mock.patch.object(UPDATES, "_registry_json", failing(code)):
+            with mock.patch.object(REGISTRY, "_registry_json", failing(code)):
                 error = NOTES.notes_for("lab", "app")["images"][0]["error"]
             self.assertIn(words, error)
             self.assertNotIn("secret-path", error)
         def boom(*_, **__):
             raise RuntimeError("token=abc at https://registry.example.com")
-        with mock.patch.object(UPDATES, "_registry_json", boom):
+        with mock.patch.object(REGISTRY, "_registry_json", boom):
             error = NOTES.notes_for("lab", "app")["images"][0]["error"]
         self.assertNotIn("token", error)
         self.assertIn("RuntimeError", error)
@@ -442,9 +444,9 @@ class RegistryLimitTests(unittest.TestCase):
             return False
 
     def fetch(self, answer, limit):
-        parsed = UPDATES.parse_image("registry.example.com/example/app:1")
-        with mock.patch.object(UPDATES, "_open", lambda req, credential=None, timeout=12: answer):
-            return UPDATES._registry_json(parsed, "blobs/sha256:a", {}, limit=limit)
+        parsed = REGISTRY.parse_image("registry.example.com/example/app:1")
+        with mock.patch.object(REGISTRY, "_open", lambda req, credential=None, timeout=12: answer):
+            return REGISTRY._registry_json(parsed, "blobs/sha256:a", {}, limit=limit)
 
     def test_an_answer_within_the_limit_is_read(self):
         answer = self.Answer(b"x" * 10, length=10)

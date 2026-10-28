@@ -9,6 +9,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
+import homestead_container_import as CONTAINER_IMPORT
 import homestead_restructure as restructure
 from fixtures_source import source
 
@@ -17,19 +18,19 @@ class PathValidationTests(unittest.TestCase):
     def test_aliases_and_overlapping_import_destinations_are_rejected(self):
         for folder in (".", "x/../y", "x/./y"):
             with self.assertRaises(ValueError):
-                imports.import_mappings({"mappings": [{"remote_path": "/source", "mount_path": "/config", "folder": folder}]})
+                CONTAINER_IMPORT.import_mappings({"mappings": [{"remote_path": "/source", "mount_path": "/config", "folder": folder}]})
             with self.assertRaises(ValueError):
                 restructure._folder(folder, "/config")
         for folder in ("data", "data/sub"):
             with self.assertRaisesRegex(ValueError, "overlap"):
-                imports.import_mappings({"mappings": [
+                CONTAINER_IMPORT.import_mappings({"mappings": [
                     {"remote_path": "/a", "mount_path": "/a", "folder": "data"},
                     {"remote_path": "/b", "mount_path": "/b", "folder": folder}]})
 
     def test_source_traversal_and_control_characters_are_refused(self):
         for path in ("/a/../b", "/a/./b", "/a\nb"):
             with self.assertRaises(ValueError):
-                imports.import_mappings({"remote_path": path})
+                CONTAINER_IMPORT.import_mappings({"remote_path": path})
 
     def test_import_checks_total_per_volume_before_first_write(self):
         cfg = {"source": "fixture", "name": "test", "create_workload": False,
@@ -37,13 +38,13 @@ class PathValidationTests(unittest.TestCase):
                    {"remote_path": "/a", "mount_path": "/a", "bytes": 1024},
                    {"remote_path": "/b", "mount_path": "/b", "bytes": 2048}]}
         with mock.patch.object(imports, "_source", return_value=source()):
-            script = imports.prepare_import(cfg)["job"]["spec"]["template"]["spec"]["containers"][0]["command"][-1]
+            script = CONTAINER_IMPORT.prepare_import(cfg)["job"]["spec"]["template"]["spec"]["containers"][0]["command"][-1]
         self.assertIn("copy_space /appdata 3", script)
         self.assertLess(script.index("copy_space /appdata 3"), script.index("mkdir -p /appdata"))
         self.assertLess(script.index("sync; du"), script.index("echo '==> done'"))
 
     def test_preflight_failure_is_visible_in_import_progress(self):
-        result = imports.import_progress("==> error: insufficient destination free space. Grow the volume.")
+        result = CONTAINER_IMPORT.import_progress("==> error: insufficient destination free space. Grow the volume.")
         self.assertEqual("copy preflight failed", result["error"])
         self.assertIn("Grow the volume", result["error_detail"])
 

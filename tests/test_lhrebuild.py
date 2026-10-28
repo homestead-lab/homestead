@@ -3,53 +3,90 @@
 nas-backup sat detached with one of its two copies for hours: Longhorn
 rebuilds only while a volume is attached, and its offline rebuilding was off.
 A reboot of the host holding that copy then stalled in its drain."""
-import copy
+import itertools
 import sys
+import tempfile
 import time
 import unittest
-import urllib.error
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_kube as K
 import homestead_lhrebuild as R
+import homestead_changes as CHANGES
+import homestead_host_access as HOSTACCESS
+import homestead_operations as OPS
+from fakes.kube import Kube
 
 LH = R.LH
+SERIAL = itertools.count(1)
 
 
 def replica(volume, node, state="stopped", healthy=True, failed=False):
-    return {"spec": {"volumeName": volume, "nodeID": node, **({"healthyAt": "2026-10-01T00:00:00Z"} if healthy else {}),
+    return {"apiVersion": "longhorn.io/v1beta2", "kind": "Replica",
+            "metadata": {"namespace": "longhorn-system", "name": f"{volume}-r-{next(SERIAL)}"},
+            "spec": {"volumeName": volume, "nodeID": node, **({"healthyAt": "2026-10-01T00:00:00Z"} if healthy else {}),
                      **({"failedAt": "2026-10-02T00:00:00Z"} if failed else {})},
             "status": {"currentState": state}}
 
 
 def volume(name, wanted=2, state="detached", robustness="unknown", claim="nas-backup"):
-    return {"metadata": {"name": name}, "spec": {"numberOfReplicas": wanted},
+    return {"apiVersion": "longhorn.io/v1beta2", "kind": "Volume",
+            "metadata": {"namespace": "longhorn-system", "name": name}, "spec": {"numberOfReplicas": wanted},
             "status": {"state": state, "robustness": robustness,
                        "kubernetesStatus": {"namespace": "lab", "pvcName": claim}}}
 
 
 class Cluster:
-    def __init__(self, setting="false", annotations=None):
-        self.objects = {f"{LH}/volumes": {"items": []}, f"{LH}/replicas": {"items": []},
-                        f"{LH}/volumeattachments": {"items": []}}
+    """Longhorn's volumes, replicas, attachments and offline-rebuilding setting
+    on the shared fake API (tests/fakes/kube.py)."""
+
+    def __init__(self, case, setting="false", annotations=None):
+        # The shared fake runs the real write guards; the storage guard takes the
+        # job store's lock, which lives under its DATA_DIR.
+        case.enterContext(mock.patch.object(OPS, "DATA_DIR", case.enterContext(tempfile.TemporaryDirectory())))
+        # No signed-in person on this thread, whatever an earlier test left behind: the write guards read who is asking.
+        case.enterContext(mock.patch.object(HOSTACCESS, "role", lambda: None))
+        case.enterContext(mock.patch.object(CHANGES.REQUEST, "user", None, create=True))
+        self.kube = case.enterContext(Kube())
         if setting is not None:
-            self.objects[f"{LH}/settings/{R.SETTING}"] = {"metadata": {"annotations": annotations or {}}, "value": setting}
-        self.sent = []
+            self.kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "Setting",
+                           "metadata": {"namespace": "longhorn-system", "name": R.SETTING,
+                                        "annotations": annotations or {}},
+                           "value": setting})
 
-    def get(self, path):
-        if path.startswith(f"{LH}/volumeattachments/"):
-            name = path.rsplit("/", 1)[1]
-            found = next((a for a in self.objects[f"{LH}/volumeattachments"]["items"] if a["metadata"]["name"] == name), None)
-            if found:
-                return copy.deepcopy(found)
-            return {"metadata": {"name": name, "resourceVersion": "1"}, "spec": {"attachmentTickets": {}}}
-        if path not in self.objects:
-            raise urllib.error.HTTPError(path, 404, "not found", {}, None)
-        return copy.deepcopy(self.objects[path])
+    def volumes(self, *volumes):
+        """Each volume with the attachment Longhorn keeps for it (no tickets yet)."""
+        for each in volumes:
+            self.kube.add(each)
+            self.attachment(each["metadata"]["name"])
 
-    def send(self, method, path, body=None, ctype=None):
-        self.sent.append((method, path, body))
-        return {}
+    def replicas(self, *replicas):
+        for each in replicas:
+            self.kube.add(each)
+
+    def attachment(self, name, tickets=None):
+        self.kube.add({"apiVersion": "longhorn.io/v1beta2", "kind": "VolumeAttachment",
+                       "metadata": {"namespace": "longhorn-system", "name": name},
+                       "spec": {"attachmentTickets": tickets or {}}})
+
+    def status(self, name, **status):
+        path = f"{LH}/volumes/{name}"
+        found = self.kube.object(path)
+        found["status"].update(status)
+        self.kube.add(found)
+
+    @property
+    def sent(self):
+        return [(method, path, body) for method, path, body, _ in self.kube.writes]
+
+
+class RebuildCase(unittest.TestCase):
+    def bind(self, enabled=True):
+        for name, value in (("kget", R.kget), ("ksend", R.ksend), ("_enabled", R._enabled)):
+            self.addCleanup(setattr, R, name, value)
+        R.bind(K.kget, K.ksend, lambda: enabled)
 
 
 class ShortTests(unittest.TestCase):
@@ -77,48 +114,45 @@ class ShortTests(unittest.TestCase):
         self.assertEqual(0, R.short([volume("v1")], [replica("v1", "k1", healthy=False)])[0]["whole"])
 
 
-class DefaultTests(unittest.TestCase):
-    def bind(self, cluster, enabled=True):
-        R.bind(cluster.get, cluster.send, lambda: enabled)
-
+class DefaultTests(RebuildCase):
     def test_offline_rebuilding_is_turned_on_once(self):
-        cluster = Cluster("false")
-        self.bind(cluster)
+        cluster = Cluster(self, "false")
+        self.bind()
         R.tick()
         method, path, body = cluster.sent[0]
         self.assertEqual((f"{LH}/settings/{R.SETTING}", "true"), (path, body["value"]))
         self.assertIn(R.DEFAULTED, body["metadata"]["annotations"], "marked, so it is never forced back on")
+        self.assertEqual("true", cluster.kube.object(path)["value"])
 
     def test_a_setting_turned_off_after_that_is_left_alone(self):
-        cluster = Cluster("false", {R.DEFAULTED: "set"})
-        self.bind(cluster)
+        cluster = Cluster(self, "false", {R.DEFAULTED: "set"})
+        self.bind()
         R.tick()
         self.assertEqual([], cluster.sent)
 
     def test_rebuild_now_uses_longhorns_offline_rebuild_where_it_has_one(self):
-        cluster = Cluster("false", {R.DEFAULTED: "set"})
-        cluster.objects[f"{LH}/volumes"]["items"] = [volume("v1")]
-        cluster.objects[f"{LH}/replicas"]["items"] = [replica("v1", "k1")]
-        self.bind(cluster)
+        cluster = Cluster(self, "false", {R.DEFAULTED: "set"})
+        cluster.volumes(volume("v1"))
+        cluster.replicas(replica("v1", "k1"))
+        self.bind()
         R.rebuild_now("v1")
         self.assertEqual([("PATCH", f"{LH}/volumes/v1", {"spec": {"offlineRebuilding": "enabled"}})], cluster.sent)
 
 
-class FallbackTests(unittest.TestCase):
+class FallbackTests(RebuildCase):
     """Longhorn without offline rebuilding: Homestead holds a short volume
     attached, with no frontend, until it is whole."""
     def setUp(self):
         R._gave_up.clear()
-        self.cluster = Cluster(setting=None)
-        self.cluster.objects[f"{LH}/volumes"]["items"] = [volume("v1"), volume("v2", claim="other")]
-        self.cluster.objects[f"{LH}/replicas"]["items"] = [replica("v1", "k1"), replica("v2", "k2")]
-        R.bind(self.cluster.get, self.cluster.send, lambda: True)
+        self.cluster = Cluster(self, setting=None)
+        self.cluster.volumes(volume("v1"), volume("v2", claim="other"))
+        self.cluster.replicas(replica("v1", "k1"), replica("v2", "k2"))
+        self.bind()
 
     def held(self, name, since=None, others=()):
         tickets = {R.TICKET: {"id": R.TICKET, "parameters": {"since": str(int(since or time.time()))}}}
         tickets.update({o: {"id": o} for o in others})
-        self.cluster.objects[f"{LH}/volumeattachments"]["items"] = [
-            {"metadata": {"name": name, "resourceVersion": "2"}, "spec": {"attachmentTickets": tickets}}]
+        self.cluster.attachment(name, tickets)
 
     def test_one_short_volume_at_a_time_is_held_without_a_frontend(self):
         R.tick()
@@ -127,14 +161,15 @@ class FallbackTests(unittest.TestCase):
         ticket = body["spec"]["attachmentTickets"][R.TICKET]
         self.assertEqual((f"{LH}/volumeattachments/v1", "k1", "true"),
                          (path, ticket["nodeID"], ticket["parameters"]["disableFrontend"]))
+        self.assertIn(R.TICKET, self.cluster.kube.object(path)["spec"]["attachmentTickets"])
 
     def test_it_lets_go_when_whole_when_asked_for_or_after_six_hours(self):
-        for setup in (lambda: self.cluster.objects[f"{LH}/volumes"]["items"][0]["status"].update(robustness="healthy"),
+        for setup in (lambda: self.cluster.status("v1", robustness="healthy"),
                       lambda: self.held("v1", others=["csi-abc"]),
                       lambda: self.held("v1", since=time.time() - R.TICKET_LIMIT - 1)):
             self.held("v1")
             setup()
-            self.cluster.sent = []
+            self.cluster.kube.writes.clear()
             R.tick()
             self.assertIn(("PATCH", f"{LH}/volumeattachments/v1", {"spec": {"attachmentTickets": {R.TICKET: None}}}),
                           self.cluster.sent)
@@ -143,19 +178,23 @@ class FallbackTests(unittest.TestCase):
         """A held volume missing from the list is let go: an answer of null
         is not an empty list."""
         self.held("v1")
-        self.cluster.objects[f"{LH}/volumes"] = None
+
+        def kget(path, *args, **kwargs):
+            # The API server never answers null; a proxy or a bug could.
+            return None if path == f"{LH}/volumes" else K.kget(path, *args, **kwargs)
+        self.enterContext(mock.patch.object(R, "kget", kget))
         with self.assertRaises(AttributeError):
             R.tick()
         self.assertEqual([], self.cluster.sent)
 
     def test_a_volume_still_rebuilding_is_kept_and_no_second_one_taken(self):
         self.held("v1")
-        self.cluster.objects[f"{LH}/volumes"]["items"][0]["status"].update(state="attached", robustness="degraded")
+        self.cluster.status("v1", state="attached", robustness="degraded")
         R.tick()
         self.assertEqual([], self.cluster.sent)
 
     def test_turned_off_it_holds_nothing_new(self):
-        R.bind(self.cluster.get, self.cluster.send, lambda: False)
+        self.bind(enabled=False)
         R.tick()
         self.assertEqual([], self.cluster.sent)
 

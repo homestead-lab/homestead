@@ -9,6 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_vms as VMS
+import homestead_vm_edit as VM_EDIT
+import homestead_vm_list as VM_LIST
 
 # A VM whose DataVolume CDI refused: its URL was a file name.
 VM = {"metadata": {"name": "web", "namespace": "lab", "uid": "u1", "resourceVersion": "10"},
@@ -67,26 +69,26 @@ class Cluster:
 class VmEditTests(unittest.TestCase):
     def test_a_refused_disk_says_so_and_a_stopped_vm_is_not_a_problem(self):
         Cluster({"harvester": True, "cdi": True})
-        row = VMS._row(copy.deepcopy(VM), {})
+        row = VM_LIST._row(copy.deepcopy(VM), {})
         self.assertIn("Invalid source URL", row["problem"])
         self.assertIn("never made", row["problem"])
         vm = copy.deepcopy(VM)
         vm["status"]["conditions"] = vm["status"]["conditions"][:1]
-        self.assertEqual("", VMS._row(vm, {})["problem"])
+        self.assertEqual("", VM_LIST._row(vm, {})["problem"])
 
     def test_an_unmade_disk_takes_a_new_source(self):
         c = Cluster({"harvester": False, "cdi": True})
         with self.assertRaisesRegex(ValueError, "not a download address"):
-            VMS.edit("lab", "web", {"disks": [{"name": "root", "source": {"url": "ubuntu.img"}}]})
+            VM_EDIT.edit("lab", "web", {"disks": [{"name": "root", "source": {"url": "ubuntu.img"}}]})
         with self.assertRaisesRegex(ValueError, "existing DataVolume"):
-            VMS.edit("lab", "web", {"disks": [{"name": "root", "source": {"url": "https://example.test/u.img"}}]})
+            VM_EDIT.edit("lab", "web", {"disks": [{"name": "root", "source": {"url": "https://example.test/u.img"}}]})
         self.assertEqual([], c.sent)
         def read(path):
             if path.endswith("/datavolumes/web-disk"):
                 raise urllib.error.HTTPError(path, 404, "not created", {}, None)
             return c.get(path)
         with mock.patch.object(VMS, "kget", side_effect=read):
-            VMS.edit("lab", "web", {"disks": [{"name": "root", "source": {"url": "https://example.test/u.img"}}]})
+            VM_EDIT.edit("lab", "web", {"disks": [{"name": "root", "source": {"url": "https://example.test/u.img"}}]})
         template = c.vm["spec"]["dataVolumeTemplates"][0]
         self.assertEqual("https://example.test/u.img", template["spec"]["source"]["http"]["url"])
         self.assertEqual({"resources": {"requests": {"storage": "20Gi"}}, "storageClassName": "longhorn-r2"},
@@ -100,7 +102,7 @@ class VmEditTests(unittest.TestCase):
                 raise urllib.error.HTTPError(path, 404, "not created", {}, None)
             return c.get(path)
         with mock.patch.object(VMS, "kget", side_effect=read):
-            VMS.edit("lab", "web", {"disks": [{"name": "root", "source": {"image": "default/image-ubuntu"}}]})
+            VM_EDIT.edit("lab", "web", {"disks": [{"name": "root", "source": {"image": "default/image-ubuntu"}}]})
         self.assertNotIn("dataVolumeTemplates", c.vm["spec"])
         claim = json.loads(c.vm["metadata"]["annotations"][VMS.CLAIM_TEMPLATES])[0]
         self.assertEqual(("web-disk", "longhorn-image-ubuntu"),
@@ -110,7 +112,7 @@ class VmEditTests(unittest.TestCase):
 
     def test_adding_disks_nics_and_changing_boot_and_host(self):
         c = Cluster({"harvester": False, "cdi": False})
-        VMS.edit("lab", "web", {"node": "node-1",
+        VM_EDIT.edit("lab", "web", {"node": "node-1",
                                 "disks": [{"name": "root", "boot": "2", "bus": "sata"}],
                                 "add_disks": [{"kind": "disk", "size": "30", "storage_class": "local-path", "boot": 1}],
                                 "nics": [{"name": "default", "model": "e1000", "mac": "52:54:00:AA:BB:CC"}],
@@ -129,13 +131,13 @@ class VmEditTests(unittest.TestCase):
         self.assertEqual({"name": "nic-0", "model": "virtio", "bridge": {}}, ifaces[1])
         self.assertEqual({"name": "nic-0", "multus": {"networkName": "default/vlan1"}}, tspec["networks"][1])
         with self.assertRaisesRegex(ValueError, "CD-ROM needs"):
-            VMS.edit("lab", "web", {"add_disks": [{"kind": "cd-rom"}]})
+            VM_EDIT.edit("lab", "web", {"add_disks": [{"kind": "cd-rom"}]})
         with self.assertRaisesRegex(ValueError, "pod network once"):
-            VMS.edit("lab", "web", {"add_nics": [{"network": "pod"}]})
+            VM_EDIT.edit("lab", "web", {"add_nics": [{"network": "pod"}]})
 
     def test_detaching_keeps_the_volume_and_drops_its_template(self):
         c = Cluster({"harvester": False, "cdi": True})
-        result = VMS.edit("lab", "web", {"disks": [{"name": "root", "remove": True}]})
+        result = VM_EDIT.edit("lab", "web", {"disks": [{"name": "root", "remove": True}]})
         self.assertNotIn("dataVolumeTemplates", c.vm["spec"])
         self.assertEqual(["cloudinit"], [d["name"] for d in c.vm["spec"]["template"]["spec"]["domain"]["devices"]["disks"]])
         self.assertIn("detached and kept", result["detail"])
@@ -145,7 +147,7 @@ class VmEditTests(unittest.TestCase):
         c = Cluster({"harvester": False, "cdi": True})
         self.assertEqual([{"claim": "web-disk", "phase": "ImportInProgress", "progress": 47.5,
                            "seconds": 0, "stuck": False, "why": []}],
-                         VMS._filling(copy.deepcopy(VM), VMS._datavolumes("lab")))
+                         VM_LIST._filling(copy.deepcopy(VM), VM_LIST._datavolumes("lab")))
         result = VMS.delete("lab", "web")
         self.assertFalse([p for m, p, b in c.sent if m == "PATCH"])       # never released
         vm_delete = next(b for m, p, b in c.sent if m == "DELETE" and p.endswith("/virtualmachines/web"))
@@ -154,7 +156,7 @@ class VmEditTests(unittest.TestCase):
         self.assertIn("unfinished download", result["detail"])
         deleting = copy.deepcopy(VM)
         deleting["metadata"]["deletionTimestamp"] = "2026-09-24T12:00:00Z"
-        self.assertEqual(("Deleting", []), (VMS._row(deleting, {})["status"], VMS._row(deleting, {})["actions"]))
+        self.assertEqual(("Deleting", []), (VM_LIST._row(deleting, {})["status"], VM_LIST._row(deleting, {})["actions"]))
 
     def test_an_import_stuck_scheduled_says_why(self):
         c = Cluster({"harvester": False, "cdi": True})
@@ -169,7 +171,7 @@ class VmEditTests(unittest.TestCase):
                               {"metadata": {"uid": "u9"}} if path.endswith("/persistentvolumeclaims/web-disk") else get(path))
         VMS.bind(c.get, c.send, lambda ns, name, uid="": [{"type": "Warning", "message": f"{name}: waiting"}]
                  if name.startswith("prime-u9") and not name.endswith("scratch") else [])
-        row = VMS._filling(copy.deepcopy(VM), {("lab", "web-disk"): dv})[0]
+        row = VM_LIST._filling(copy.deepcopy(VM), {("lab", "web-disk"): dv})[0]
         self.assertTrue(row["stuck"])
         self.assertEqual(["PVC prime-u9 Pending",
                           "the importer cannot be placed: 0/3 nodes are available: 3 Insufficient memory.",
@@ -184,15 +186,15 @@ class VmEditTests(unittest.TestCase):
         vm["status"] = {"printableStatus": "Provisioning", "conditions": []}
         vm["metadata"]["annotations"] = {VMS.CLAIM_TEMPLATES: json.dumps([
             {"metadata": {"name": "web-disk", "annotations": {"harvesterhci.io/imageId": "lab/image-abc"}}}])}
-        row = VMS._row(vm, {})
+        row = VM_LIST._row(vm, {})
         self.assertEqual([("web-disk", "ImageDownloading", 42.0)],
                          [(f["claim"], f["phase"], f["progress"]) for f in row["filling"]])
 
     def test_cloud_init_in_harvesters_secret_is_edited_there(self):
         c = Cluster({"harvester": True, "cdi": True})
         self.assertEqual({"user_data": "#cloud-config\n", "network_data": "", "source": "secret"},
-                         VMS._read_cloud_init(copy.deepcopy(VM), "lab"))
-        VMS.edit("lab", "web", {"cloud_init": {"user_data": "#cloud-config\nhostname: web\n", "network_data": ""}})
+                         VM_EDIT._read_cloud_init(copy.deepcopy(VM), "lab"))
+        VM_EDIT.edit("lab", "web", {"cloud_init": {"user_data": "#cloud-config\nhostname: web\n", "network_data": ""}})
         patch = next(b for m, p, b in c.sent if m == "PATCH" and p.endswith("/secrets/web-ci"))
         self.assertEqual("#cloud-config\nhostname: web\n", base64.b64decode(patch["data"]["userdata"]).decode())
 

@@ -4,6 +4,7 @@ from unittest import mock
 
 import test_rollout_capacity as fixtures
 import homestead_lifecycle as lifecycle
+import homestead_workload_edit as WORKLOAD_EDIT
 
 
 class EditRestartTests(unittest.TestCase):
@@ -22,7 +23,7 @@ class EditRestartTests(unittest.TestCase):
 
     def edit(self, **extra):
         cfg = {"ns": "lab", "name": "shared", "containers": [dict(self.same, **extra.pop("container", {}))], **extra}
-        return lifecycle.prepare_edit(cfg, copy.deepcopy(self.current))["deployment"]
+        return WORKLOAD_EDIT.prepare_edit(cfg, copy.deepcopy(self.current))["deployment"]
 
     def test_a_logo_or_monitoring_change_keeps_the_pods(self):
         for extra in ({"icon": "/api/icons/" + "a" * 64 + ".png", "icon_source": "https://example.com/a.png"},
@@ -30,7 +31,7 @@ class EditRestartTests(unittest.TestCase):
                       {"monitoring": {"mode": "off"}}):
             with self.subTest(extra=list(extra)):
                 saved = self.edit(**copy.deepcopy(extra))
-                self.assertFalse(lifecycle.restarts(self.current, saved))
+                self.assertFalse(WORKLOAD_EDIT.restarts(self.current, saved))
                 self.assertNotIn("homestead.io/editedAt", (saved["spec"]["template"].get("metadata") or {}).get("annotations") or {})
 
     def test_monitoring_is_saved_on_the_deployment(self):
@@ -56,11 +57,11 @@ class EditRestartTests(unittest.TestCase):
         saved = self.edit(starts_after=wanted)
         self.assertEqual("homestead-start-gate", saved["spec"]["template"]["spec"]["initContainers"][0]["name"])
         self.assertEqual("rendered", START.gate_state(saved))
-        self.assertTrue(lifecycle.restarts(self.current, saved))
+        self.assertTrue(WORKLOAD_EDIT.restarts(self.current, saved))
         self.current = saved
         self.objects["/apis/apps/v1/deployments"]["items"][0] = copy.deepcopy(saved)
         again = self.edit(starts_after=wanted)
-        self.assertFalse(lifecycle.restarts(saved, again), "the same setting saved again")
+        self.assertFalse(WORKLOAD_EDIT.restarts(saved, again), "the same setting saved again")
         self.assertEqual(saved, again)
         untouched = self.edit()
         self.assertEqual(saved, untouched, "an edit without it keeps the gate and the setting")
@@ -117,7 +118,7 @@ class EditRestartTests(unittest.TestCase):
 
     def test_a_change_the_pods_run_with_still_restarts_them(self):
         saved = self.edit(container={"memory": "1Gi", "memory_limit": "1Gi"})
-        self.assertTrue(lifecycle.restarts(self.current, saved))
+        self.assertTrue(WORKLOAD_EDIT.restarts(self.current, saved))
         self.assertIn("homestead.io/editedAt", saved["spec"]["template"]["metadata"]["annotations"])
 
 

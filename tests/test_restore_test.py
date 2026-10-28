@@ -1,19 +1,27 @@
-import copy
 import json
 import sys
+import tempfile
 import unittest
-import urllib.error
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
+import homestead_kube as K
 import homestead_names as NAMES
+import homestead_changes as CHANGES
+import homestead_host_access as HOSTACCESS
+import homestead_operations as OPS
 import homestead_restore_test as RT
+from fakes.kube import Kube
+
+DEPLOYMENT = "/apis/apps/v1/namespaces/lab/deployments/paperless"
 
 
 def deployment():
-    return {"metadata": {"name": "paperless", "namespace": "lab", "labels": {"app": "paperless"},
+    return {"apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"name": "paperless", "namespace": "lab", "labels": {"app": "paperless"},
                          "annotations": {}},
             "spec": {"template": {"metadata": {"labels": {"app": "paperless"},
                                                "annotations": {"k8s.v1.cni.cncf.io/networks": "default/lan"}},
@@ -32,48 +40,67 @@ def deployment():
                             {"name": "env", "secret": {"secretName": "paperless-env"}}]}}}}
 
 
+
+def claim(name, volume):
+    return {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": name, "namespace": "lab"},
+            "spec": {"volumeName": volume, "storageClassName": "longhorn"}}
+
+
+def volume(name):
+    return {"apiVersion": "v1", "kind": "PersistentVolume", "metadata": {"name": name},
+            "spec": {"csi": {"driver": "driver.longhorn.io", "volumeHandle": name}}}
+
+
 class Cluster:
-    """A fake of what a restore test reads and writes."""
-    def __init__(self):
-        self.objects = {
-            "/apis/apps/v1/namespaces/lab/deployments/paperless": deployment(),
-            "/api/v1/namespaces/lab/persistentvolumeclaims/paperless-data": {"spec": {"volumeName": "pvc-data", "storageClassName": "longhorn"}},
-            "/api/v1/namespaces/lab/persistentvolumeclaims/paperless-cache": {"spec": {"volumeName": "pvc-cache", "storageClassName": "longhorn"}},
-            "/api/v1/persistentvolumes/pvc-data": {"spec": {"csi": {"driver": "driver.longhorn.io", "volumeHandle": "pvc-data"}}},
-            "/api/v1/persistentvolumes/pvc-cache": {"spec": {"csi": {"driver": "driver.longhorn.io", "volumeHandle": "pvc-cache"}}},
-        }
-        self.sent, self.restored, self.restore_state, self.pod = [], [], "succeeded", None
+    """What a restore test reads and writes, on the shared fake API (tests/fakes/kube.py)."""
+    def __init__(self, case):
+        # The shared fake runs the real write guards; the storage guard takes the
+        # job store's lock, which lives under its DATA_DIR.
+        case.enterContext(mock.patch.object(OPS, "DATA_DIR", case.enterContext(tempfile.TemporaryDirectory())))
+        # No signed-in person on this thread, whatever an earlier test left behind: the write guards read who is asking.
+        case.enterContext(mock.patch.object(HOSTACCESS, "role", lambda: None))
+        case.enterContext(mock.patch.object(CHANGES.REQUEST, "user", None, create=True))
+        # And no signing key for the change note, so no Deployment write carries a changedBy mark: with
+        # the key bound by an earlier test it would, and the bodies these tests compare would differ.
+        case.enterContext(mock.patch.object(CHANGES, "_author_key", mock.Mock(side_effect=OSError("no key"))))
+        self.kube = case.enterContext(Kube(
+            deployment(), claim("paperless-data", "pvc-data"), claim("paperless-cache", "pvc-cache"),
+            volume("pvc-data"), volume("pvc-cache")))
+        self.restored, self.restore_state = [], "succeeded"
         self.answer = {"ok": True, "port": 8000}
 
-    def get(self, path):
-        if "/pods?labelSelector=" in path:
-            return {"items": [self.pod] if self.pod else []}
-        if path in self.objects:
-            return copy.deepcopy(self.objects[path])
-        raise urllib.error.HTTPError(path, 404, "not found", {}, None)
+    @property
+    def sent(self):
+        return [(method, path, body) for method, path, body, _ in self.kube.writes]
 
-    def send(self, method, path, body=None, ctype=None):
-        self.sent.append((method, path, body))
-        if method == "POST":
-            self.objects[path.rstrip("s") + "/" + body["metadata"]["name"] if False else f"{path}/{body['metadata']['name']}"] = body
-        if method == "DELETE":
-            self.objects.pop(path, None)
-        return {}
+    def set_pod(self, item, status):
+        """The copy's pod, as Kubernetes keeps it: found by the label the test puts on it."""
+        self.kube.add({"apiVersion": "v1", "kind": "Pod",
+                       "metadata": {"name": "restore-test-pod", "namespace": "lab",
+                                    "labels": {NAMES.key(RT.LABEL): item["id"]}},
+                       "status": status})
+
+    def change_deployment(self, change):
+        found = self.kube.object(DEPLOYMENT)
+        change(found)
+        self.kube.add(found)
 
 
 class Base(unittest.TestCase):
     def setUp(self):
-        self.c = Cluster()
+        self.c = Cluster(self)
         backups = {"pvc-data": [{"name": "backup-data-2", "restorable": True, "created": "2026-10-06", "volume_size_gb": 20},
                                 {"name": "backup-data-1", "restorable": True, "created": "2026-10-01", "volume_size_gb": 20}],
                    "pvc-cache": [{"name": "backup-cache-1", "restorable": False}]}
 
         def restore(cfg):
             self.c.restored.append(cfg)
-            path = f"/api/v1/namespaces/{cfg['namespace']}/persistentvolumeclaims/{cfg['name']}"
-            self.c.objects[path] = {"metadata": {"name": cfg["name"]}}
+            self.c.kube.add({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                             "metadata": {"namespace": cfg["namespace"], "name": cfg["name"]}})
             return {"ok": True}
-        RT.bind(self.c.get, self.c.send, NAMES, lambda volume: backups.get(volume, []), restore,
+        for name in ("kget", "ksend"):
+            self.addCleanup(setattr, RT, name, getattr(RT, name))
+        RT.bind(K.kget, K.ksend, NAMES, lambda volume: backups.get(volume, []), restore,
                 lambda item: (self.c.restore_state, 100 if self.c.restore_state == "succeeded" else 40, "restoring"),
                 lambda: [], lambda: {"largest": {"1": 500, "2": 300, "3": 200}}, lambda target: self.c.answer, lambda: "lab")
         self.item = {"id": "abcdef0123456789abcdef", "progress": 0,
@@ -86,7 +113,7 @@ class Base(unittest.TestCase):
         return RT.resolve(self.item, checkpoint, now=now)
 
     def ready_pod(self, ip="10.42.1.9"):
-        self.c.pod = {"status": {"podIP": ip, "conditions": [{"type": "Ready", "status": "True"}]}}
+        self.c.set_pod(self.item, {"podIP": ip, "conditions": [{"type": "Ready", "status": "True"}]})
 
 
 class PlanTests(Base):
@@ -206,7 +233,7 @@ class JobTests(Base):
     def test_a_copy_that_crashes_on_the_restored_data_fails(self):
         self.step(1000)
         self.step(1100)
-        self.c.pod = {"status": {"containerStatuses": [{"name": "app", "state": {"waiting": {"reason": "CrashLoopBackOff"}}}]}}
+        self.c.set_pod(self.item, {"containerStatuses": [{"name": "app", "state": {"waiting": {"reason": "CrashLoopBackOff"}}}]})
         self.assertEqual("running", self.step(1150)[0], "a crash loop gets a little time")
         status, _, message = self.step(1100 + 181)
         self.assertEqual("failed", status)
@@ -231,7 +258,7 @@ class JobTests(Base):
         self.assertIn("/apis/apps/v1/namespaces/lab/deployments", [p for m, p, _ in self.c.sent if m == "POST"])
 
     def test_an_app_with_nothing_to_restore_is_not_a_failure(self):
-        self.c.objects["/apis/apps/v1/namespaces/lab/deployments/paperless"]["spec"]["template"]["spec"]["volumes"] = []
+        self.c.change_deployment(lambda dep: dep["spec"]["template"]["spec"].update(volumes=[]))
         self.assertEqual("succeeded", self.step(1000)[0])
         self.assertEqual([], self.c.restored)
 

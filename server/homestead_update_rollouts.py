@@ -2,9 +2,9 @@
 
 Prepares and commits an update or a rollback (pinned by digest), then reports
 its rollout: image pulls, pods waiting and why. Moved unchanged from
-homestead_updates (#623); import that module, which re-exports these names.
-Names server.py or the tests replace on homestead_updates are read through it
-(U.x), so those replacements still apply.
+homestead_updates (#623): read and replace these names here. Names server.py
+binds on homestead_updates are read through it (U.x), so a replacement there
+still applies.
 """
 import calendar
 import copy
@@ -91,7 +91,7 @@ def _previous_image(dep, container, pods, fallback_digest=""):
             raise ValueError(f"{name} has multiple running digests; no single immutable rollback target is known")
         digest = next(iter(observed), "") or fallback_digest
         if not digest and int(dep["spec"].get("replicas", 1) or 0) == 0:
-            digest = U.manifest_info(ref, U._secret_credentials(dep["metadata"]["namespace"], dep), True)["digest"]
+            digest = REGISTRY.manifest_info(ref, REGISTRY._secret_credentials(dep["metadata"]["namespace"], dep), True)["digest"]
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest or ""):
         raise ValueError(f"immutable recovery image is unavailable for {name}; no image change was applied")
     return _immutable(ref, digest)
@@ -104,7 +104,7 @@ def prepare_update(ns, name):
         raise ValueError(U.managed_message(ns, name, U.managed_by(current)))
     dep = copy.deepcopy(current)
     pods = _review_pods(current)
-    check = U._check_deployment(dep, pods, True, persist=False)
+    check = CHECKS._check_deployment(dep, pods, True, persist=False)
     chosen = {x["container"]: x for x in check["images"] if x["available"]}
     if not chosen:
         raise ValueError("no image update is currently available")
@@ -198,9 +198,9 @@ def commit_prepared(prepared):
     U._write(annotations, U.LAST_ACTION, prepared["action"] + " " + now)
     dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[U.ROLLOUT_AT] = now
     result = U.ksend("PUT", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", dep)
-    U._history({"at": now, "action": prepared["action"], "namespace": ns, "deployment": name,
+    _history({"at": now, "action": prepared["action"], "namespace": ns, "deployment": name,
               "before": prepared["before"], "after": {c["name"]: c["image"] for c in _pod_containers(result)}})
-    return U.progress(ns, name, result)
+    return progress(ns, name, result)
 def apply_update(ns, name):
     return commit_prepared(prepare_update(ns, name))
 def rollback(ns, name):
@@ -376,7 +376,7 @@ def progress(ns, name, dep=None):
         running = all(cs.get("ready") for cs in
                       pod.get("status", {}).get("containerStatuses", []) or [{}])
         if not running:
-            row["pull"] = U.pull_state(ns, row["name"])
+            row["pull"] = pull_state(ns, row["name"])
             # PodInitializing and ContainerCreating say only that a pod is
             # waiting; its warning events say for what - most often a volume
             # it cannot attach or mount.
@@ -426,3 +426,5 @@ def progress(ns, name, dep=None):
 from homestead_update_checks import _matching_pods  # noqa: E402
 from homestead_update_registry import parse_image  # noqa: E402
 import homestead_updates as U  # noqa: E402
+import homestead_update_registry as REGISTRY  # noqa: E402
+import homestead_update_checks as CHECKS  # noqa: E402

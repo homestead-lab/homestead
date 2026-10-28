@@ -11,6 +11,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_baseline as BASELINE
 import homestead_components as C
+import homestead_kube as K
+import homestead_lhv2_upgrade as V2
+from fakes.kube import Kube
 
 KUBE_VIP_INDEX = """apiVersion: v1
 entries:
@@ -41,11 +44,23 @@ RKE2_INDEX = """entries:
   - version: v4.3.001
 """
 CHART = "/apis/helm.cattle.io/v1/namespaces/kube-system/helmcharts/"
+REQUEST = "/api/v1/namespaces/lab/configmaps/homestead-install"
 DS = "/apis/apps/v1/namespaces/kube-system/daemonsets/"
+SECRETS = "/api/v1/namespaces/{}/secrets"
 
 
-def daemonset(image):
-    return {"spec": {"template": {"spec": {"containers": [{"image": image}]}}}}
+def daemonset(image, name="kube-vip", namespace="kube-system"):
+    return {"apiVersion": "apps/v1", "kind": "DaemonSet", "metadata": {"name": name, "namespace": namespace},
+            "spec": {"template": {"spec": {"containers": [{"image": image}]}}}}
+
+
+def helmchart(name, spec):
+    return {"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart", "metadata": {"name": name, "namespace": "kube-system"},
+            "spec": spec}
+
+
+def job(name, status):
+    return {"apiVersion": "batch/v1", "kind": "Job", "metadata": {"name": name, "namespace": "kube-system"}, "status": status}
 
 
 class Addons:
@@ -55,17 +70,21 @@ class Addons:
 
 
 class Cluster:
-    def __init__(self, platform, objects):
-        self.platform, self.objects, self.helm_calls = platform, objects, []
+    """The cluster the components report reads, on the shared fake API
+    (tests/fakes/kube.py)."""
+
+    def __init__(self, test, platform, *objects, groups=(), absent_groups=()):
+        self.platform, self.helm_calls = platform, []
+        self.kube = test.enterContext(Kube(*objects, groups=groups, absent_groups=absent_groups))
+        # The components read the cluster through the shared client here, whatever another test bound.
+        test.enterContext(patch.multiple(C, kget=C.kget, ksend=C.ksend, platform=C.platform, helm_upgrade=C.helm_upgrade,
+                                         addons=C.addons, fetch_json=C.fetch_json, ktext=C.ktext))
+        test.enterContext(patch.multiple(V2, kget=V2.kget, ksend=V2.ksend, platform=V2.platform, version=V2.version,
+                                         parse=V2.parse))
         C._releases.clear()
         C._apps.clear()
-        C.bind(self.get, lambda *a, **k: None, lambda force=False: self.platform, self.helm_calls.append, Addons(),
+        C.bind(K.kget, lambda *a, **k: None, lambda force=False: self.platform, self.helm_calls.append, Addons(),
                lambda url: {"data": []} if "k3s.io" in url else [])
-
-    def get(self, path):
-        if path in self.objects:
-            return self.objects[path]
-        raise urllib.error.HTTPError(path, 404, "missing", {}, None)
 
 
 K3S = {"distribution": "k3s", "load_balancer": "kube-vip", "multus": True, "servicelb": True, "helm_controller": True}
@@ -84,71 +103,81 @@ class NetworkRowTests(unittest.TestCase):
         return next(r for r in C.report()["components"] if r["id"] == component)
 
     def test_kube_vip_and_multus_installed_by_homestead_move_on_by_chart(self):
-        Cluster(K3S, {"/api/v1/nodes": {"items": []},
-                      CHART + "kube-vip": {"metadata": {"name": "kube-vip"}, "spec": {"chart": "kube-vip", "version": "0.11.1"}},
-                      CHART + "multus": {"metadata": {"name": "multus"}, "spec": {"chart": "rke2-multus", "version": "v4.3.102"}},
-                      DS + "kube-vip": daemonset("ghcr.io/kube-vip/kube-vip:v1.2.3")})
+        Cluster(self, K3S, helmchart("kube-vip", {"chart": "kube-vip", "version": "0.11.1"}),
+                helmchart("multus", {"chart": "rke2-multus", "version": "v4.3.102"}),
+                daemonset("ghcr.io/kube-vip/kube-vip:v1.2.3"))
         vip, multus = self.row("kube-vip"), self.row("multus")
         self.assertEqual(("0.11.1", "0.12.0", "helmchart", "v1.2.3"), (vip["installed"], vip["next"], vip["how"], vip["app"]))
         self.assertEqual(("v4.3.102", "v4.3.103", "helmchart"), (multus["installed"], multus["next"], multus["how"]))
 
     def test_an_unpinned_chart_is_read_from_the_image_it_runs(self):
-        Cluster(K3S, {"/api/v1/nodes": {"items": []},
-                      CHART + "kube-vip": {"metadata": {"name": "kube-vip"}, "spec": {"chart": "kube-vip"}},
-                      DS + "kube-vip": daemonset("ghcr.io/kube-vip/kube-vip:v1.2.2")})
+        Cluster(self, K3S, helmchart("kube-vip", {"chart": "kube-vip"}), daemonset("ghcr.io/kube-vip/kube-vip:v1.2.2"))
         self.assertEqual(("0.11.0", "0.11.1"), (self.row("kube-vip")["installed"], self.row("kube-vip")["next"]))
 
     def test_installed_another_way_is_shown_not_upgraded(self):
-        Cluster(K3S, {"/api/v1/nodes": {"items": []}, DS + "kube-vip-ds": daemonset("ghcr.io/kube-vip/kube-vip:v0.8.9")})
+        Cluster(self, K3S, daemonset("ghcr.io/kube-vip/kube-vip:v0.8.9", "kube-vip-ds"))
         self.assertEqual(("manual", "v0.8.9"), (self.row("kube-vip")["how"], self.row("kube-vip")["installed"]))
         with self.assertRaisesRegex(ValueError, "installed outside Homestead"):
             C.upgrade("kube-vip", "0.12.0")
 
     def test_harvester_s_own_are_shown_as_harvester_s(self):
-        Cluster({"harvester": True, "load_balancer": "kube-vip", "multus": True},
-                {"/apis/apps/v1/namespaces/harvester-system/daemonsets/kube-vip": daemonset("ghcr.io/kube-vip/kube-vip:v0.8.1")})
+        Cluster(self, {"harvester": True, "load_balancer": "kube-vip", "multus": True},
+                daemonset("ghcr.io/kube-vip/kube-vip:v0.8.1", "kube-vip", "harvester-system"))
         self.assertEqual("harvester", self.row("kube-vip")["how"])
 
     def test_upgrading_moves_the_chart_version_and_keeps_its_values(self):
-        cluster = Cluster(K3S, {"/api/v1/nodes": {"items": []},
-                                CHART + "kube-vip": {"metadata": {"name": "kube-vip"}, "spec": {"chart": "kube-vip", "version": "0.11.1"}}})
+        cluster = Cluster(self, K3S, helmchart("kube-vip", {"chart": "kube-vip", "version": "0.11.1"}))
         result = C.upgrade("kube-vip", "0.12.0")
         self.assertEqual([{"namespace": "kube-system", "name": "kube-vip", "version": "0.12.0"}], cluster.helm_calls)
         self.assertIn("0.12.0 (v1.3.0)", result["detail"])
 
 
 class NetworkUpgradeStatusTests(unittest.TestCase):
-    def seed(self, component="multus", namespace="kube-system"):
+    def seed(self, component="multus", namespace="kube-system", agent=True, agent_name=None, api=True):
         self.component = component
         self.target = "v4.3.103" if component == "multus" else "0.12.0"
         self.previous = "v4.3.102" if component == "multus" else "0.11.1"
         self.name = "Multus" if component == "multus" else "kube-vip"
         self.namespace = namespace
         self.item = {"ref": {"component": component, "name": self.name, "from": self.previous, "to": self.target}}
-        self.secret_path = (f"/api/v1/namespaces/{namespace}/secrets?labelSelector="
-                            + C.urllib.parse.quote(f"owner=helm,name={component}", safe=""))
-        self.agent_path = DS.replace("kube-system", namespace) + component
-        agent = daemonset("example.test/network-agent:4.3.1")
-        agent["metadata"] = {"name": component, "generation": 2}
-        agent["status"] = {"observedGeneration": 2, "desiredNumberScheduled": 3,
-                           "updatedNumberScheduled": 3, "numberAvailable": 3}
-        self.cluster = Cluster(K3S, {
-            CHART + component: {"metadata": {"name": component}, "spec": {
-                "chart": "rke2-multus" if component == "multus" else component,
-                "version": self.target, "targetNamespace": namespace}},
-            self.agent_path: agent,
-            "/apis/k8s.cni.cncf.io/v1/network-attachment-definitions": {"items": []}})
+        self.secrets_path = SECRETS.format(namespace)
+        self.agent_path = f"/apis/apps/v1/namespaces/{namespace}/daemonsets/{agent_name or component}"
+        objects = [helmchart(component, {
+            "chart": "rke2-multus" if component == "multus" else component,
+            "version": self.target, "targetNamespace": namespace})]
+        if agent:
+            agent_set = daemonset("example.test/network-agent:4.3.1", agent_name or component, namespace)
+            agent_set["metadata"]["generation"] = 2
+            agent_set["status"] = {"observedGeneration": 2, "desiredNumberScheduled": 3,
+                                   "updatedNumberScheduled": 3, "numberAvailable": 3}
+            objects.append(agent_set)
+        self.cluster = Cluster(self, K3S, *objects, groups=("k8s.cni.cncf.io",) if api else (),
+                               absent_groups=() if api else ("k8s.cni.cncf.io",))
         self.release(self.target)
+
+    def encoded(self, record):
+        return base64.b64encode(base64.b64encode(gzip.compress(json.dumps(record).encode()))).decode()
+
+    def secret(self, revision, data):
+        """A Helm release record as the cluster keeps it: labelled for the
+        lookup, one Secret per revision."""
+        return {"apiVersion": "v1", "kind": "Secret",
+                "metadata": {"name": f"sh.helm.release.v1.{self.component}.v{revision}", "namespace": self.namespace,
+                             "labels": {"owner": "helm", "name": self.component, "version": str(revision)}},
+                "data": {"release": data}}
 
     def release(self, version, state="deployed", revision=2):
         record = {"name": self.component, "namespace": self.namespace, "version": revision,
                   "chart": {"metadata": {"name": "rke2-multus" if self.component == "multus" else self.component,
                                          "version": version, "appVersion": "4.3.1" if self.component == "multus" else "v1.3.0"}},
                   "info": {"status": state}}
-        encoded = base64.b64encode(base64.b64encode(gzip.compress(json.dumps(record).encode()))).decode()
-        secret = {"metadata": {"labels": {"version": str(revision)}}, "data": {"release": encoded}}
-        self.cluster.objects[self.secret_path] = {"items": [secret]}
+        secret = self.secret(revision, self.encoded(record))
+        self.cluster.kube.add(secret)
         return secret
+
+    def forget_releases(self):
+        for row in K.kget(self.secrets_path)["items"]:
+            self.cluster.kube.discard(f"{self.secrets_path}/{row['metadata']['name']}")
 
     def test_both_network_upgrades_complete_without_reading_cdi(self):
         for component in ("multus", "kube-vip"):
@@ -171,9 +200,8 @@ class NetworkUpgradeStatusTests(unittest.TestCase):
 
     def test_newest_pending_release_does_not_fall_back_to_older_deployed_revision(self):
         self.seed()
-        older = self.release(self.target, revision=1)
-        newest = self.release(self.target, "pending-upgrade", revision=2)
-        self.cluster.objects[self.secret_path] = {"items": [older, newest]}
+        self.release(self.target, revision=1)
+        self.release(self.target, "pending-upgrade", revision=2)
         self.assertEqual("running", C.status(self.item)[0])
 
     def test_v_prefix_difference_is_normalized_for_deployed_chart(self):
@@ -183,20 +211,19 @@ class NetworkUpgradeStatusTests(unittest.TestCase):
 
     def test_missing_or_unreadable_release_does_not_complete(self):
         self.seed()
-        for secrets in ([], [{"metadata": {"labels": {"version": "2"}}, "data": {"release": "invalid"}}]):
+        for secrets in ([], [self.secret(2, "invalid")]):
             with self.subTest(secrets=secrets):
-                self.cluster.objects[self.secret_path] = {"items": secrets}
+                self.forget_releases()
+                for secret in secrets:
+                    self.cluster.kube.add(secret)
                 self.assertEqual("running", C.status(self.item)[0])
 
     def test_release_api_denial_does_not_complete_or_leak_error_body(self):
         self.seed()
-        original = self.cluster.get
-        def get(path):
-            if path == self.secret_path:
-                raise urllib.error.HTTPError(path, 403, "private error body", {}, None)
-            return original(path)
-        with patch.object(C, "kget", side_effect=get):
-            state, _, message = C.status(self.item)
+        def refuse(method, path, body):
+            raise urllib.error.HTTPError(path, 403, "private error body", {}, None)
+        self.cluster.kube.react("GET", self.secrets_path, refuse)
+        state, _, message = C.status(self.item)
         self.assertEqual("running", state)
         self.assertNotIn("private error body", message)
 
@@ -204,13 +231,14 @@ class NetworkUpgradeStatusTests(unittest.TestCase):
         for field in ("name", "namespace", "chart"):
             with self.subTest(field=field):
                 self.seed()
-                secret = self.cluster.objects[self.secret_path]["items"][0]
+                secret = self.cluster.kube.object(f"{self.secrets_path}/sh.helm.release.v1.{self.component}.v2")
                 record = C.HELM.decode(secret)
                 if field == "chart":
                     record["chart"]["metadata"]["name"] = "other-chart"
                 else:
                     record[field] = "other"
-                secret["data"]["release"] = base64.b64encode(base64.b64encode(gzip.compress(json.dumps(record).encode()))).decode()
+                secret["data"]["release"] = self.encoded(record)
+                self.cluster.kube.add(secret)
                 self.assertEqual("running", C.status(self.item)[0])
 
     def test_deployed_chart_waits_for_observed_updated_available_agents(self):
@@ -218,37 +246,39 @@ class NetworkUpgradeStatusTests(unittest.TestCase):
                        {"desiredNumberScheduled": 0, "updatedNumberScheduled": 0, "numberAvailable": 0}):
             with self.subTest(change=change):
                 self.seed()
-                self.cluster.objects[self.agent_path]["status"].update(change)
+                agent = self.cluster.kube.object(self.agent_path)
+                agent["status"].update(change)
+                self.cluster.kube.add(agent)
                 self.assertEqual("running", C.status(self.item)[0])
 
     def test_missing_or_deleting_agents_and_missing_multus_api_do_not_complete(self):
         for missing in ("agent", "api", "deleting"):
             with self.subTest(missing=missing):
-                self.seed()
+                self.seed(agent=missing != "agent", api=missing != "api")
                 if missing == "deleting":
-                    self.cluster.objects[self.agent_path]["metadata"]["deletionTimestamp"] = "2026-01-01T00:00:00Z"
-                else:
-                    self.cluster.objects.pop(self.agent_path if missing == "agent" else
-                                             "/apis/k8s.cni.cncf.io/v1/network-attachment-definitions")
+                    agent = self.cluster.kube.object(self.agent_path)
+                    agent["metadata"]["deletionTimestamp"] = "2026-01-01T00:00:00Z"
+                    self.cluster.kube.add(agent)
                 self.assertEqual("running", C.status(self.item)[0])
 
     def test_alternate_agent_name_and_target_namespace_are_supported(self):
-        self.seed(namespace="network-system")
-        self.cluster.objects[self.agent_path.replace("/daemonsets/multus", "/daemonsets/rke2-multus")] = self.cluster.objects.pop(self.agent_path)
+        self.seed(namespace="network-system", agent_name="rke2-multus")
         self.assertEqual("succeeded", C.status(self.item)[0])
 
     def test_failed_release_and_active_retry_are_distinguished(self):
         self.seed()
         self.release(self.target, "failed")
         self.assertEqual("failed", C.status(self.item)[0])
-        self.cluster.objects["/apis/batch/v1/namespaces/kube-system/jobs/helm-install-multus"] = {"status": {"active": 1}}
+        self.cluster.kube.add(job("helm-install-multus", {"active": 1}))
         self.assertEqual(("running", 50), C.status(self.item)[:2])
 
     def test_controller_job_failure_uses_its_reported_job_name(self):
         self.seed()
         self.release(self.previous)
-        self.cluster.objects[CHART + self.component]["status"] = {"jobName": "helm-install-network"}
-        self.cluster.objects["/apis/batch/v1/namespaces/kube-system/jobs/helm-install-network"] = {"status": {"failed": 1}}
+        chart = self.cluster.kube.object(CHART + self.component)
+        chart["status"] = {"jobName": "helm-install-network"}
+        self.cluster.kube.add(chart)
+        self.cluster.kube.add(job("helm-install-network", {"failed": 1}))
         with patch.object(C, "_elapsed", return_value=121):
             state, _, message = C.status(self.item)
         self.assertEqual("failed", state)
@@ -281,18 +311,33 @@ class FakeAddons:
 class BaselineTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.request = {"data": {"kube-vip": "yes", "kube-vip-version": "", "multus": "yes", "multus-version": "v4.3.101"}}
+        self.kube = self.enterContext(Kube(
+            {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "homestead-install", "namespace": "lab"},
+             "data": {"kube-vip": "yes", "kube-vip-version": "", "multus": "yes", "multus-version": "v4.3.101"}}))
+        # BASELINE reads the cluster through the shared client here, whatever another test bound.
+        self.enterContext(patch.multiple(BASELINE, kget=BASELINE.kget, addons=BASELINE.addons, platform=BASELINE.platform,
+                                         DEFAULT_NS=BASELINE.DEFAULT_NS, DATA_DIR=BASELINE.DATA_DIR,
+                                         macvtap=BASELINE.macvtap, probe=BASELINE.probe,
+                                         probe_version=BASELINE.probe_version))
         self.platform = {"distribution": "k3s", "helm_controller": True, "load_balancer": "servicelb", "multus": False}
         self.addons = FakeAddons({"kube_vip": {"installing": False}, "multus": {"installed": False, "installing": False}})
-        BASELINE.bind(self.get, self.addons, lambda force=False: self.platform, "lab", self.tmp.name)
+        BASELINE.bind(K.kget, self.addons, lambda force=False: self.platform, "lab", self.tmp.name)
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def get(self, path):
-        if path == "/api/v1/namespaces/lab/configmaps/homestead-install" and self.request:
-            return self.request
-        raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+    def ask(self, **data):
+        """Change what the installer asked for, as it would (None takes a key out)."""
+        request = self.kube.object(REQUEST)
+        for key, value in data.items():
+            if value is None:
+                request["data"].pop(key, None)
+            else:
+                request["data"][key] = value
+        self.kube.add(request)
+
+    def withdraw(self):
+        self.kube.discard(REQUEST)
 
     def test_the_installer_s_request_is_installed_once(self):
         results = BASELINE.tick()
@@ -308,7 +353,7 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(["multus"], [part for part, _ in self.addons.installed])
 
     def test_no_request_no_install(self):
-        self.request = None
+        self.withdraw()
         self.assertEqual([], BASELINE.tick())
         self.assertEqual([], self.addons.installed)
 
@@ -330,8 +375,8 @@ class BaselineTests(unittest.TestCase):
         made = []
         probe = type("P", (), {"installed": staticmethod(lambda: "homestead-nodeprobe" if made else ""),
                                "install": staticmethod(lambda version: made.append(version) or {"detail": "installed"})})
-        BASELINE.bind(self.get, self.addons, lambda force=False: self.platform, "lab", self.tmp.name, None, probe, "2.8.235")
-        self.request["data"]["node-probe"] = "yes"
+        BASELINE.bind(K.kget, self.addons, lambda force=False: self.platform, "lab", self.tmp.name, None, probe, "2.8.235")
+        self.ask(**{"node-probe": "yes"})
         BASELINE.tick()
         BASELINE.tick()
         self.assertEqual(["2.8.235"], made, "asked once: a probe removed later stays removed")
@@ -340,11 +385,11 @@ class BaselineTests(unittest.TestCase):
         made = []
         probe = type("P", (), {"installed": staticmethod(lambda: ""),
                                "install": staticmethod(lambda version: made.append(version) or {"detail": "installed"})})
-        self.request = None
+        self.withdraw()
         for distribution in ("k3s", "rke2", "harvester", "kubernetes"):
             with self.subTest(distribution=distribution), tempfile.TemporaryDirectory() as directory:
                 self.platform = {"distribution": distribution, "harvester": distribution == "harvester"}
-                BASELINE.bind(self.get, self.addons, lambda force=False: self.platform, "lab", directory, None, probe, "2.8.283")
+                BASELINE.bind(K.kget, self.addons, lambda force=False: self.platform, "lab", directory, None, probe, "2.8.283")
                 self.assertTrue(BASELINE.probe_tick()["ok"])
                 self.assertIsNone(BASELINE.probe_tick(), "a later intentional removal stays removed")
         self.assertEqual(["2.8.283"] * 4, made)
@@ -357,13 +402,13 @@ class BaselineTests(unittest.TestCase):
                 raise ValueError("API temporarily unavailable")
             return {"detail": "installed"}
         probe = type("P", (), {"installed": staticmethod(lambda: ""), "install": staticmethod(install)})
-        BASELINE.bind(self.get, self.addons, lambda force=False: self.platform, "lab", self.tmp.name, None, probe)
+        BASELINE.bind(K.kget, self.addons, lambda force=False: self.platform, "lab", self.tmp.name, None, probe)
         with patch.dict(BASELINE.os.environ, {"HOMESTEAD_NODEPROBE_AUTO_INSTALL": "false"}):
             self.assertIsNone(BASELINE.probe_tick(), "Helm opt-out is preserved")
-        self.request["data"]["node-probe"] = "no"
+        self.ask(**{"node-probe": "no"})
         self.assertIsNone(BASELINE.probe_tick())
         self.assertEqual([], attempts)
-        self.request["data"].pop("node-probe")
+        self.ask(**{"node-probe": None})
         self.assertFalse(BASELINE.probe_tick()["ok"])
         self.assertTrue(BASELINE.probe_tick()["ok"])
         self.assertIsNone(BASELINE.probe_tick())

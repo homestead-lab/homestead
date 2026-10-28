@@ -11,7 +11,7 @@ import time
 
 import homestead_kube as KUBE
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_network_services as SVC
 import homestead_nfs as NFS
 import homestead_operations as OPS
 import homestead_platform as PLATFORM
@@ -100,7 +100,7 @@ def _migrate_samba_locked(legacy):
         cfg = {"name": SMB_NAME, "container_name": SMB_NAME, "image": SAMBA_IMAGE,
                "namespace": SMB_NAMESPACE, "ports": [{"container": 445, "name": "smb", "expose": True}],
                "vip_mode": "automatic"}
-        cfg = NETWORK.prepare_deploy(cfg)
+        cfg = SVC.prepare_deploy(cfg)
         _, new_service = build_deployment(cfg)
     made_dep = removed_service = made_service = stopped_old = False
     try:
@@ -170,7 +170,7 @@ def install_samba(address=""):
            "vip_mode": "manual" if address else "automatic", "lb_ip": address,
            "args": ["-g", "server min protocol = SMB2"],
            "env": {**SHARES.filesystem_identity(), "PERMISSIONS": ""}}
-    cfg = NETWORK.prepare_deploy(cfg)
+    cfg = SVC.prepare_deploy(cfg)
     dep, svc = build_deployment(cfg)
     created = ksend("POST", f"/apis/apps/v1/namespaces/{SMB_NAMESPACE}/deployments", dep)
     if svc:
@@ -370,7 +370,7 @@ def _nfs_deployment(rows, address=""):
            "image": NFS.IMAGE, "cpu": "50m", "memory": "128Mi",
            "ports": [{"container": 2049, "name": "nfs", "protocol": "TCP", "expose": True}],
            "vip_mode": "manual" if address else "automatic", "lb_ip": address, "exclusive_vip": True}
-    cfg = NETWORK.prepare_deploy(cfg)
+    cfg = SVC.prepare_deploy(cfg)
     dep, svc = build_deployment(cfg)
     dep = NFS.configure(dep, selected)
     if svc:

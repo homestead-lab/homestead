@@ -3,8 +3,8 @@ Importing a container: measuring the source folders, the Job that copies them
 into a claim, its progress, and the imports Homestead lists and cleans up.
 
 Split by feature from homestead_imports (#623), moved unchanged. Names that
-homestead_imports owns, that server.py binds there, or that tests replace there,
-are read through it (I.name); homestead_imports re-exports everything here.
+homestead_imports owns or that server.py binds there are read through it (I.name),
+so a replacement there still applies; read and replace the names defined here, here.
 """
 import copy
 import re
@@ -891,15 +891,15 @@ def delete_import(name, ns=None):
             I.ksend("PUT", path, dep)  # resourceVersion protects concurrent edits
     KUBE.delete_if_present(f"/apis/batch/v1/namespaces/{ns}/jobs/{name}?propagationPolicy=Background",
                            send=I.ksend)
-    stopped = I._stop_job_pods(name, ns=ns)
+    stopped = _stop_job_pods(name, ns=ns)
     _drop_source_copy(name, ns)
     # A pre-pull started for this app outlives the import that wanted it: it is
     # a DaemonSet, so deleting its pods only makes it build new ones.
     app = re.sub(r"^homestead-import-", "", name)
-    pulls = [f"{prefix}{app}" for prefix in I.PREPULL_NAMES]
-    stopped_pulls = [pull for pull in pulls if I._daemonset_exists(pull)]
+    pulls = [f"{prefix}{app}" for prefix in IMAGES.PREPULL_NAMES]
+    stopped_pulls = [pull for pull in pulls if _daemonset_exists(pull)]
     for pull in stopped_pulls:
-        I.stop_prepull(pull)
+        IMAGES.stop_prepull(pull)
     I._bust("wl", "ov")
     return {"ok": True, "name": name, "pods_removed": stopped,
             "prepulls_removed": stopped_pulls,
@@ -1036,4 +1036,5 @@ def import_status():
     return sorted(out, key=lambda x: x["start"], reverse=True)
 
 
-import homestead_imports as I  # noqa: E402  (imports at the bottom: homestead_imports re-exports this module)
+import homestead_imports as I  # noqa: E402  (imports at the bottom: homestead_imports imports this module)
+import homestead_image_cache as IMAGES  # noqa: E402

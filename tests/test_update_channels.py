@@ -7,50 +7,52 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_updates as updates
+import homestead_update_checks as CHECKS
+import homestead_update_registry as REGISTRY
 
 
 class ChannelTests(unittest.TestCase):
     def test_prod_excludes_previews_and_sorts_versions_numerically(self):
-        self.assertEqual("2.8.100", updates.channel_release("2.8.9", ["2.8.10", "2.8.100", "2.8.101-dev.1", "3.0.0"], "prod"))
+        self.assertEqual("2.8.100", REGISTRY.channel_release("2.8.9", ["2.8.10", "2.8.100", "2.8.101-dev.1", "3.0.0"], "prod"))
 
     def test_dev_sorts_preview_numbers_and_excludes_stable_and_other_majors(self):
-        self.assertEqual("2.9.0-dev.10", updates.channel_release("2.8.289", ["2.9.0-dev.2", "2.9.0-dev.10", "2.9.0", "3.0.0-dev.1"], "dev"))
+        self.assertEqual("2.9.0-dev.10", REGISTRY.channel_release("2.8.289", ["2.9.0-dev.2", "2.9.0-dev.10", "2.9.0", "3.0.0-dev.1"], "dev"))
 
     def test_an_older_release_is_never_offered_from_either_channel(self):
         # A dev build ahead of prod waits for prod to catch up, and says so.
-        self.assertEqual("2.8.290-dev.1", updates.channel_release("2.8.290-dev.1", ["2.8.288", "2.8.289", "2.8.290-dev.1"], "prod"))
-        self.assertEqual("2.8.289", updates.channel_behind("2.8.290-dev.1", ["2.8.288", "2.8.289"], "prod"))
+        self.assertEqual("2.8.290-dev.1", REGISTRY.channel_release("2.8.290-dev.1", ["2.8.288", "2.8.289", "2.8.290-dev.1"], "prod"))
+        self.assertEqual("2.8.289", REGISTRY.channel_behind("2.8.290-dev.1", ["2.8.288", "2.8.289"], "prod"))
         # A prod release just out is ahead of the last dev build of it.
-        self.assertEqual("2.8.316", updates.channel_release("2.8.316", ["2.8.316-dev.2", "2.8.316"], "dev"))
-        self.assertEqual("2.8.316-dev.2", updates.channel_behind("2.8.316", ["2.8.316-dev.2"], "dev"))
-        self.assertEqual("", updates.channel_behind("2.8.316", ["2.8.317-dev.1"], "dev"))
+        self.assertEqual("2.8.316", REGISTRY.channel_release("2.8.316", ["2.8.316-dev.2", "2.8.316"], "dev"))
+        self.assertEqual("2.8.316-dev.2", REGISTRY.channel_behind("2.8.316", ["2.8.316-dev.2"], "dev"))
+        self.assertEqual("", REGISTRY.channel_behind("2.8.316", ["2.8.317-dev.1"], "dev"))
 
     def test_a_release_comes_after_its_own_previews(self):
         # Prod catching up with the dev build installed is an update.
-        self.assertEqual("2.8.317", updates.channel_release("2.8.317-dev.2", ["2.8.316", "2.8.317"], "prod"))
-        self.assertEqual("2.8.318-dev.1", updates.channel_release("2.8.317", ["2.8.317-dev.3", "2.8.318-dev.1"], "dev"))
-        self.assertLess(updates.release_key("2.8.317-dev.9"), updates.release_key("2.8.317"))
-        self.assertLess(updates.release_key("2.8.317"), updates.release_key("2.8.318-dev.1"))
+        self.assertEqual("2.8.317", REGISTRY.channel_release("2.8.317-dev.2", ["2.8.316", "2.8.317"], "prod"))
+        self.assertEqual("2.8.318-dev.1", REGISTRY.channel_release("2.8.317", ["2.8.317-dev.3", "2.8.318-dev.1"], "dev"))
+        self.assertLess(REGISTRY.release_key("2.8.317-dev.9"), REGISTRY.release_key("2.8.317"))
+        self.assertLess(REGISTRY.release_key("2.8.317"), REGISTRY.release_key("2.8.318-dev.1"))
 
     def test_a_partial_registry_listing_does_not_downgrade_within_a_channel(self):
-        self.assertEqual("2.8.290", updates.channel_release("2.8.290", ["2.8.289"], "prod"))
-        self.assertEqual("2.8.291-dev.10", updates.channel_release("2.8.291-dev.10", ["2.8.291-dev.2"], "dev"))
+        self.assertEqual("2.8.290", REGISTRY.channel_release("2.8.290", ["2.8.289"], "prod"))
+        self.assertEqual("2.8.291-dev.10", REGISTRY.channel_release("2.8.291-dev.10", ["2.8.291-dev.2"], "dev"))
 
     def test_a_missing_dev_release_is_an_error_and_never_falls_back_to_prod(self):
         with self.assertRaisesRegex(ValueError, "No dev release"):
-            updates.channel_release("2.8.289", ["2.8.289", "3.0.0-dev.1"], "dev")
+            REGISTRY.channel_release("2.8.289", ["2.8.289", "3.0.0-dev.1"], "dev")
 
     def test_an_unknown_version_cannot_select_a_different_major(self):
         with self.assertRaisesRegex(ValueError, "No release version"):
-            updates.channel_release("latest", ["2.8.289", "3.0.0"], "prod")
+            REGISTRY.channel_release("latest", ["2.8.289", "3.0.0"], "prod")
 
     def test_channel_changes_invalidate_cached_reports_even_without_a_forced_check(self):
         prod = {"channel": "prod", "workloads": []}
         dev = {"channel": "dev", "workloads": []}
         with mock.patch.object(updates, "CHANNEL", return_value="dev"), \
-             mock.patch.object(updates, "_LATEST", {"report": prod, "number": 1, "finished": time.time()}), \
-             mock.patch.object(updates, "scan", return_value=dev) as scan:
-            self.assertEqual(dev, updates.report())
+             mock.patch.object(CHECKS, "_LATEST", {"report": prod, "number": 1, "finished": time.time()}), \
+             mock.patch.object(CHECKS, "scan", return_value=dev) as scan:
+            self.assertEqual(dev, CHECKS.report())
             scan.assert_called_once_with(False)
 
     def check(self, part, channel, current="2.8.289", digest="sha256:" + "a" * 64, tags=None, running=""):
@@ -61,10 +63,10 @@ class ChannelTests(unittest.TestCase):
                 {"name": "homestead", "image": "ghcr.io/homestead-lab/homestead@" + digest if digest else source}]}}}}
         with mock.patch.object(updates, "PART", return_value=part),              mock.patch.object(updates, "VERSION", return_value=running), \
              mock.patch.object(updates, "CHANNEL", return_value=channel), \
-             mock.patch.object(updates, "_secret_credentials", return_value={}), \
-             mock.patch.object(updates, "registry_tags", return_value=tags or ["2.8.289", "2.8.290-dev.1"]), \
-             mock.patch.object(updates, "manifest_info", return_value={"digest": "sha256:" + "b" * 64, "children": []}):
-            return updates._check_deployment(copy.deepcopy(dep), [], persist=False)
+             mock.patch.object(REGISTRY, "_secret_credentials", return_value={}), \
+             mock.patch.object(REGISTRY, "registry_tags", return_value=tags or ["2.8.289", "2.8.290-dev.1"]), \
+             mock.patch.object(REGISTRY, "manifest_info", return_value={"digest": "sha256:" + "b" * 64, "children": []}):
+            return CHECKS._check_deployment(copy.deepcopy(dep), [], persist=False)
 
     def test_a_stale_record_of_the_installed_tag_does_not_offer_an_older_release(self):
         # Updated outside the page: the record says 2.8.289, 2.8.317-dev.2 runs.

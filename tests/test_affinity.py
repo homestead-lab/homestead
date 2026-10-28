@@ -92,9 +92,9 @@ from test_container_storage import WorkloadEditFixture
 
 class EditorPlacementTests(WorkloadEditFixture, unittest.TestCase):
     def test_saving_the_editor_writes_the_rules(self):
-        import homestead_lifecycle as lifecycle
+        import homestead_workload_edit as WORKLOAD_EDIT
         self.deployment["spec"]["selector"] = {"matchLabels": {"app": "frigate"}}
-        lifecycle.edit_workload({"ns": "lab", "name": "frigate", "placement": {"spread": "prefer"}})
+        WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "frigate", "placement": {"spread": "prefer"}})
         saved = self.sent[-1][2]
         term = saved["spec"]["template"]["spec"]["affinity"]["podAntiAffinity"][
             "preferredDuringSchedulingIgnoredDuringExecution"][0]["podAffinityTerm"]
@@ -103,9 +103,9 @@ class EditorPlacementTests(WorkloadEditFixture, unittest.TestCase):
         self.assertIn(AFFINITY.RULES, saved["metadata"]["annotations"])
 
     def test_an_edit_without_rules_leaves_placement_alone(self):
-        import homestead_lifecycle as lifecycle
+        import homestead_workload_edit as WORKLOAD_EDIT
         self.deployment["spec"]["template"]["spec"]["affinity"] = {"podAffinity": {"x": 1}}
-        lifecycle.edit_workload({"ns": "lab", "name": "frigate", "replicas": 1})
+        WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "frigate", "replicas": 1})
         self.assertEqual({"podAffinity": {"x": 1}}, self.sent[-1][2]["spec"]["template"]["spec"]["affinity"])
 
 

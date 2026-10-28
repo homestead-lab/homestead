@@ -12,15 +12,21 @@ until an admin allows the LAN or the webhook is saved again."""
 import inspect
 import json
 import sys
+import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_kube as K
 import homestead_names as NAMES
+import homestead_changes as CHANGES
+import homestead_host_access as HOSTACCESS
+import homestead_operations as OPS
 import homestead_outage as O
 import homestead_outage_carry as C
+from fakes.kube import Kube
 
 ADDRESSES = {"ntfy.example.com": ["10.0.0.5"], "public.example.com": ["93.184.216.34"],
              "mixed.example.com": ["93.184.216.34", "10.0.0.6"], "loop.example.com": ["127.0.0.1"],
@@ -35,80 +41,102 @@ T0 = 1_800_000_000
 DAY = 24 * 3600
 
 
-def missing(path):
-    return urllib.error.HTTPError(path, 404, "missing", {}, None)
-
-
 def down(path):
     return urllib.error.HTTPError(path, 503, "unavailable", {}, None)
 
 
 class Cluster:
-    """Deployments, VMs and Homestead's ConfigMaps, as the API server keeps them."""
+    """Deployments, VMs and Homestead's ConfigMaps on the shared fake API
+    (tests/fakes/kube.py)."""
 
-    def __init__(self):
-        self.objects, self.maps, self.patches = {}, {}, []
+    def __init__(self, case):
+        # The shared fake runs the real write guards; the storage guard takes the
+        # job store's lock, which lives under its DATA_DIR.
+        case.enterContext(mock.patch.object(OPS, "DATA_DIR", case.enterContext(tempfile.TemporaryDirectory())))
+        # No signed-in person on this thread, whatever an earlier test left behind: the write guards read who is asking.
+        case.enterContext(mock.patch.object(HOSTACCESS, "role", lambda: None))
+        case.enterContext(mock.patch.object(CHANGES.REQUEST, "user", None, create=True))
+        # And no signing key for the change note, so no Deployment write carries a changedBy mark: with
+        # the key bound by an earlier test it would, and the bodies these tests compare would differ.
+        case.enterContext(mock.patch.object(CHANGES, "_author_key", mock.Mock(side_effect=OSError("no key"))))
+        self.kube = case.enterContext(Kube(groups=("apps", "kubevirt.io")))
         self.failing = set()           # paths whose reads fail
-        self.partial = set()           # lists that come back cut short
         self.refuse_writes = set()     # paths whose writes fail
-        self.kubevirt = True
+        self.paths = []                # what add() made
 
-    def kget(self, path):
-        if path in self.failing:
-            raise down(path)
-        if path == "/apis":
-            return {"groups": [{"name": "apps"}] + ([{"name": "kubevirt.io"}] if self.kubevirt else [])}
-        if path in (DEPLOYMENTS, VMS):
-            if path == VMS and not self.kubevirt:
-                raise missing(path)
-            kind = "vm" if path == VMS else "app"
-            return {"metadata": {"continue": "x"} if path in self.partial else {},
-                    "items": [json.loads(json.dumps(o)) for (k, p), o in sorted(self.objects.items()) if k == kind]}
-        for (kind, p), obj in self.objects.items():
-            if p == path:
-                return json.loads(json.dumps(obj))
-        if path in self.maps:
-            return json.loads(json.dumps(self.maps[path]))
-        raise missing(path)
+    def _refuse(self, reads):
+        def answer(method, path, body):
+            if path.partition("?")[0] in (self.failing if reads else self.refuse_writes) and (method == "GET") == reads:
+                raise down(path)
+        return answer
 
-    def ksend(self, method, path, body=None, **options):
-        if path in self.refuse_writes:
-            raise down(path)
-        if method == "PATCH":
-            for (kind, p), obj in self.objects.items():
-                if p == path:
-                    sent = body["metadata"]
-                    if sent.get("resourceVersion") and sent["resourceVersion"] != obj["metadata"]["resourceVersion"]:
-                        raise urllib.error.HTTPError(path, 409, "conflict", {}, None)
-                    obj["metadata"]["annotations"].update(sent["annotations"])
-                    self.patches.append((path, body))
-                    return obj
-            raise missing(path)
-        if method == "POST":
-            path = f"{path}/{body['metadata']['name']}"
-        self.maps[path] = json.loads(json.dumps(body))
-        self.maps[path]["metadata"]["resourceVersion"] = str(len(self.maps) + 100)
-        return body
+    def fail(self, path):
+        """Reads of path fail with a 503."""
+        self.failing.add(path)
+        self.kube.react("GET", path, self._refuse(True))
+
+    def refuse(self, path):
+        """Writes to path fail with a 503."""
+        self.refuse_writes.add(path)
+        self.kube.react("*", path, self._refuse(False))
+
+    def heal(self):
+        self.failing.clear()
+        self.refuse_writes.clear()
+
+    def cut_short(self, path):
+        """The list at path comes back with a continue token and nothing more."""
+        self.kube.react("GET", path, lambda method, where, body: {"metadata": {"continue": "x"}, "items": []})
+
+    def no_kubevirt(self):
+        self.kube.absent_groups.add("kubevirt.io")
+
+    @property
+    def patches(self):
+        return [(path, body) for method, path, body, _ in self.kube.writes if method == "PATCH"]
 
     def add(self, name, actions, kind="app"):
         path = O._path_of(kind, "lab", name)
-        self.objects[(kind, path)] = {"metadata": {"name": name, "namespace": "lab", "resourceVersion": "7",
-                                                   "annotations": {NAMES.key(O.KEY): json.dumps(actions)}}}
+        self.kube.add({"apiVersion": "kubevirt.io/v1" if kind == "vm" else "apps/v1",
+                       "kind": "VirtualMachine" if kind == "vm" else "Deployment",
+                       "metadata": {"name": name, "namespace": "lab", "resourceVersion": "7",
+                                    "annotations": {NAMES.key(O.KEY): json.dumps(actions)}}})
+        self.paths.append(path)
+        return path
 
     def actions(self, name, kind="app"):
-        return json.loads(self.objects[(kind, O._path_of(kind, "lab", name))]["metadata"]["annotations"][NAMES.key(O.KEY)])
+        found = self.kube.object(O._path_of(kind, "lab", name))
+        return json.loads(found["metadata"]["annotations"][NAMES.key(O.KEY)])
+
+    def remove_all(self):
+        """Every app and VM gone; not a write of Homestead's."""
+        written = len(self.kube.writes)
+        for path in self.paths:
+            if self.kube.object(path):
+                self.kube("DELETE", path)
+        del self.kube.writes[written:]
+
+    def store(self):
+        """Homestead's ConfigMap, as kept."""
+        return self.kube.object(STORE)
+
+    def forget_store(self):
+        written = len(self.kube.writes)
+        if self.store():
+            self.kube("DELETE", STORE)
+        del self.kube.writes[written:]
 
     def state(self):
-        found = self.maps.get(STORE)
+        found = self.store()
         return json.loads(found["data"][C.STATE_KEY]) if found else None
 
 
 class CarryBase(unittest.TestCase):
     def setUp(self):
-        self.cluster = Cluster()
+        self.cluster = Cluster(self)
         saved = dict(O._bound)
         self.addCleanup(lambda: (O._bound.clear(), O._bound.update(saved)))
-        O.bind("/nonexistent", kget=self.cluster.kget, ksend=self.cluster.ksend,
+        O.bind("/nonexistent", kget=K.kget, ksend=K.ksend,
                dns_name=lambda value, what: value, guard=lambda ns, name: None, ns="lab")
         self.looked = []
         for patch in (mock.patch.object(O, "_resolve", side_effect=self.resolve), mock.patch("builtins.print")):
@@ -194,12 +222,12 @@ class OnceTests(CarryBase):
 
     def test_once_done_this_copy_does_not_read_the_cluster_again(self):
         self.run_at(T0)
-        self.cluster.failing.add(STORE)
+        self.cluster.fail(STORE)
         self.assertTrue(self.run_at(T0 + 3600)["done"])
 
     def test_the_marker_lives_in_a_configmap_of_homesteads_own(self):
         self.run_at(T0)
-        made = self.cluster.maps[STORE]
+        made = self.cluster.store()
         self.assertEqual("ConfigMap", made["kind"])
         self.assertEqual("true", made["metadata"]["labels"][NAMES.key("managed")])
         self.assertEqual(T0, self.cluster.state()["done"])
@@ -209,24 +237,24 @@ class ListTests(CarryBase):
     def test_a_failing_vm_list_is_not_taken_for_no_vms(self):
         self.cluster.add("frigate", {"webhook": "http://ntfy.example.com/x"})
         self.cluster.add("ha", {"webhook": "http://ntfy.example.com/x"}, "vm")
-        self.cluster.failing.add(VMS)
+        self.cluster.fail(VMS)
         self.assertFalse(self.run_at(T0)["done"])
         self.assertEqual([], self.cluster.patches, "nothing is done on half a picture")
         self.assertEqual([], self.looked)
         self.assertFalse((self.cluster.state() or {}).get("done"))
-        self.cluster.failing.clear()
+        self.cluster.heal()
         self.assertIsNone(self.run_at(T0 + 10), "not before the next round")
         self.assertTrue(self.run_at(T0 + C.EVERY)["done"])
         self.assertEqual({"webhook": "http://ntfy.example.com/x", "lan": True}, self.cluster.actions("ha", "vm"))
 
     def test_an_incomplete_app_list_is_not_taken_for_all_apps(self):
         self.cluster.add("frigate", {"webhook": "http://ntfy.example.com/x"})
-        self.cluster.partial.add(DEPLOYMENTS)
+        self.cluster.cut_short(DEPLOYMENTS)
         self.assertFalse(self.run_at(T0)["done"])
         self.assertEqual([], self.cluster.patches)
 
     def test_no_kubevirt_is_no_vms(self):
-        self.cluster.kubevirt = False
+        self.cluster.no_kubevirt()
         self.cluster.add("frigate", {"webhook": "http://ntfy.example.com/x"})
         self.assertTrue(self.run_at(T0)["done"])
         self.assertEqual(1, len(self.cluster.patches))
@@ -291,7 +319,7 @@ class AlertClearsTests(CarryBase):
         self.assertEqual({}, self.titles())
 
     def test_it_clears_when_the_app_is_gone(self):
-        self.cluster.objects.clear()
+        self.cluster.remove_all()
         self.assertEqual({}, self.titles())
 
     def test_cleared_stays_cleared_after_a_restart(self):
@@ -303,7 +331,7 @@ class AlertClearsTests(CarryBase):
         self.assertEqual({}, self.titles(), "a cleared one is forgotten in the cluster too")
 
     def test_an_unreadable_app_keeps_its_alert(self):
-        self.cluster.failing.add(O._path_of("app", "lab", "frigate"))
+        self.cluster.fail(O._path_of("app", "lab", "frigate"))
         self.assertEqual([{"unknown_key": "outage-lan:app:lab/frigate"}], C.alert_facts())
 
     def test_a_new_copy_raises_it_too(self):
@@ -313,14 +341,14 @@ class AlertClearsTests(CarryBase):
 
     def test_an_unreadable_store_says_unknown(self):
         self.restart()
-        self.cluster.failing.add(STORE)
+        self.cluster.fail(STORE)
         self.assertEqual([{"unknown_prefix": "outage-lan:"}], C.alert_facts())
 
 
 class BoundTests(CarryBase):
     def test_a_write_that_keeps_failing_stops_after_24_hours_and_is_said(self):
         self.cluster.add("frigate", {"webhook": "http://ntfy.example.com/x"})
-        self.cluster.refuse_writes.add(O._path_of("app", "lab", "frigate"))
+        self.cluster.refuse(O._path_of("app", "lab", "frigate"))
         self.assertFalse(self.run_at(T0)["done"])
         self.assertFalse(self.run_at(T0 + C.EVERY)["done"], "tried again next round")
         result = self.run_at(T0 + DAY)
@@ -330,14 +358,14 @@ class BoundTests(CarryBase):
 
     def test_an_unwritable_store_means_no_lookups_and_backs_off(self):
         self.cluster.add("frigate", {"webhook": "http://ntfy.example.com/x"})
-        self.cluster.refuse_writes.add(COLLECTION)
+        self.cluster.refuse(COLLECTION)
         self.assertFalse(self.run_at(T0)["done"])
         self.assertEqual([], self.looked, "nothing is looked up when where it is kept cannot be written")
         self.assertEqual([], self.cluster.patches)
         self.assertIsNone(self.run_at(T0 + C.EVERY))
         self.assertFalse(self.run_at(T0 + 2 * C.EVERY)["done"], "tried again, less often each time")
         self.assertIsNone(self.run_at(T0 + 3 * C.EVERY))
-        self.cluster.refuse_writes.clear()
+        self.cluster.heal()
         self.assertIsNone(self.run_at(T0 + 5 * C.EVERY))
         self.assertTrue(self.run_at(T0 + 6 * C.EVERY)["done"])
         wait = 0
@@ -350,11 +378,11 @@ class BoundTests(CarryBase):
         self.assertFalse(self.run_at(T0)["done"])          # the first try, kept
         ADDRESSES["soon.example.com"] = ["10.0.0.9"]
         self.addCleanup(ADDRESSES.pop, "soon.example.com")
-        self.cluster.refuse_writes.add(STORE)
+        self.cluster.refuse(STORE)
         self.assertTrue(self.run_at(T0 + C.EVERY)["done"])
         self.assertFalse(self.cluster.state().get("done"))
         self.looked.clear()
-        self.cluster.refuse_writes.clear()
+        self.cluster.heal()
         self.run_at(T0 + 3 * C.EVERY)
         self.assertEqual([], self.looked)
         self.assertEqual(T0 + C.EVERY, self.cluster.state()["done"])
@@ -377,7 +405,7 @@ class MalformedTests(CarryBase):
         self.cluster.add("frigate", {"webhook": "http://gone.example.com/x"})
         for bad in ("soon", None, [1], {"at": 1}, True):
             self.restart()
-            self.cluster.maps.pop(STORE, None)
+            self.cluster.forget_store()
             C._write(lambda current: {"first": bad, "left": "x"})
             result = self.run_at(T0)
             self.assertFalse(result["done"], bad)
@@ -385,14 +413,14 @@ class MalformedTests(CarryBase):
 
     def test_a_kept_state_that_is_not_json_starts_again(self):
         self.cluster.add("frigate", {"webhook": "http://ntfy.example.com/x"})
-        self.cluster.maps[STORE] = {"apiVersion": "v1", "kind": "ConfigMap",
-                                    "metadata": {"name": STORE.rsplit("/", 1)[1], "resourceVersion": "3"},
-                                    "data": {C.STATE_KEY: "{not json"}}
+        self.cluster.kube.add({"apiVersion": "v1", "kind": "ConfigMap",
+                               "metadata": {"name": STORE.rsplit("/", 1)[1], "namespace": "lab", "resourceVersion": "3"},
+                               "data": {C.STATE_KEY: "{not json"}})
         self.assertTrue(self.run_at(T0)["done"])
         self.assertEqual(T0, self.cluster.state()["done"])
 
     def test_left_entries_that_are_not_names_are_ignored(self):
-        self.cluster.maps.pop(STORE, None)
+        self.cluster.forget_store()
         C._write(lambda current: {"first": T0, "done": T0, "left": {"nonsense": "unresolved", "app:nons": "x", "app:lab/a": 3}})
         self.assertEqual([], C.alert_facts())
 

@@ -362,5 +362,34 @@ class FailureTests(unittest.TestCase):
             self.assertEqual(K.kget(PODS + "/a/log"), "line one")
 
 
+    def test_an_object_can_be_taken_away_without_a_write_of_the_apps(self):
+        owner = {"apiVersion": "batch/v1", "kind": "Job", "metadata": {"name": "j", "namespace": "lab", "uid": "job-uid"}}
+        owned = pod("p", ownerReferences=[{"kind": "Job", "name": "j", "uid": "job-uid"}])
+        with Kube(owner, owned, pod("other")) as kube:
+            kube.discard("/apis/batch/v1/namespaces/lab/jobs/j")
+            self.assertIsNone(kube.object("/apis/batch/v1/namespaces/lab/jobs/j"))
+            self.assertEqual(names(K.kget(PODS)), ["other"], "what it owned is collected, as after a delete")
+            self.assertEqual(kube.writes, [], "it is the test changing the cluster, not a write of the app's")
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                K.kget("/apis/batch/v1/namespaces/lab/jobs/j")
+            self.assertEqual(caught.exception.code, 404)
+            kube.discard(PODS + "/not-there")  # already gone is no error
+
+
+    def test_a_secrets_string_data_is_kept_as_base64_data(self):
+        secrets = "/api/v1/namespaces/lab/secrets"
+        with Kube() as kube:
+            K.ksend("POST", secrets, {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "s", "namespace": "lab"},
+                                     "stringData": {"password": "hunter2"}})
+            self.assertEqual(K.kget(secrets + "/s")["data"], {"password": "aHVudGVyMg=="})
+            self.assertNotIn("stringData", K.kget(secrets + "/s"))
+            K.ksend("PATCH", secrets + "/s", {"stringData": {"user": "ada"}}, ctype=MERGE)
+            self.assertEqual(K.kget(secrets + "/s")["data"], {"password": "aHVudGVyMg==", "user": "YWRh"})
+            K.ksend("PUT", secrets + "/s", {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "s", "namespace": "lab"},
+                                           "stringData": {"password": "x"}})
+            self.assertEqual(K.kget(secrets + "/s")["data"], {"password": "eA=="})
+            self.assertNotIn("stringData", kube.object(secrets + "/s"))
+
+
 if __name__ == "__main__":
     unittest.main()

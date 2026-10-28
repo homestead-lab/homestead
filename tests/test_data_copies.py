@@ -7,34 +7,45 @@ cluster with exactly one Kubernetes node and one Longhorn node."""
 import sys
 import tempfile
 import unittest
-import urllib.error
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_kube as K
 import homestead_node_parity as PARITY
 import homestead_data_copies as COPIES
 import homestead_lhcapacity as LHCAP
+import homestead_changes as CHANGES
+import homestead_host_access as HOSTACCESS
+import homestead_operations as OPS
+from fakes.kube import Kube
 
 LH_NODES = PARITY.LH_NODES
 GiB = 1024 ** 3
+LONGHORN = {"apiVersion": "longhorn.io/v1beta2"}
+VOLUME = f"{PARITY.LH_VOLUMES}/pvc-0001"
+CLAIM = "/api/v1/namespaces/lab/persistentvolumeclaims/homestead-data"
 
 
 def node(name, ready=True):
-    return {"metadata": {"name": name}, "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
+    return {"apiVersion": "v1", "kind": "Node",
+            "metadata": {"name": name}, "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
 
 
 def lh_node(name, ready=True):
-    return {"metadata": {"name": name}, "spec": {"allowScheduling": True, "disks": {"d": {"allowScheduling": True}}},
+    return {**LONGHORN, "kind": "Node", "metadata": {"name": name, "namespace": "longhorn-system"},
+            "spec": {"allowScheduling": True, "disks": {"d": {"allowScheduling": True}}},
             "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
 
 
-def volume(copies, robustness="degraded", size=2 * GiB, unschedulable=True):
+def volume(copies, robustness="degraded", size=2 * GiB, unschedulable=True, name="pvc-0001"):
     """unschedulable: Longhorn's own proof that a copy cannot be placed - its
     Scheduled condition False, reason ReplicaSchedulingFailure."""
     scheduled = ({"type": "Scheduled", "status": "False", "reason": "ReplicaSchedulingFailure",
                   "message": "replica scheduling failed"} if unschedulable else
                  {"type": "Scheduled", "status": "True", "reason": ""})
-    return {"metadata": {"name": "pvc-0001"}, "spec": {"numberOfReplicas": copies, "size": str(size)},
+    return {**LONGHORN, "kind": "Volume", "metadata": {"name": name, "namespace": "longhorn-system"},
+            "spec": {"numberOfReplicas": copies, "size": str(size)},
             "status": {"robustness": robustness, "conditions": [scheduled]}}
 
 
@@ -42,38 +53,55 @@ ENGINES = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines?labelSel
 
 
 def engines(*modes):
-    return {"items": [{"spec": {"volumeName": "pvc-0001"},
-                       "status": {"replicaModeMap": {f"pvc-0001-r-{i}": mode for i, mode in enumerate(modes)}}}]}
+    return {**LONGHORN, "kind": "Engine",
+            "metadata": {"name": "pvc-0001-e-0", "namespace": "longhorn-system", "labels": {"longhornvolume": "pvc-0001"}},
+            "spec": {"volumeName": "pvc-0001"},
+            "status": {"replicaModeMap": {f"pvc-0001-r-{i}": mode for i, mode in enumerate(modes)}}}
 
 
 class Cluster:
-    def __init__(self, nodes, lh_nodes, copies=3, robustness="degraded", storage_class="longhorn", extra=None):
-        deployment = {"spec": {"template": {"spec": {"volumes": [
-            {"name": "data", "persistentVolumeClaim": {"claimName": "homestead-data"}},
-            {"name": "tmp", "emptyDir": {}}]}}}}
-        self.objects = {
-            "/api/v1/nodes": {"items": nodes},
-            LH_NODES: {"items": lh_nodes},
-            "/apis/apps/v1/namespaces/lab/deployments/homestead": deployment,
-            "/api/v1/namespaces/lab/persistentvolumeclaims/homestead-data": {
-                "spec": {"volumeName": "pvc-0001", "storageClassName": storage_class,
-                         "resources": {"requests": {"storage": "2Gi"}}}},
-            f"{PARITY.LH_VOLUMES}/pvc-0001": volume(copies, robustness),
-            f"{PARITY.LH_VOLUMES}/pvc-0002": volume(3),
-            ENGINES: engines("RW"),
-            **(extra or {})}
-        self.sent = []
-        self.fail = set()
+    """The nodes, Homestead's data volume and Longhorn's records of it, on the
+    shared fake API (tests/fakes/kube.py). extra: more objects."""
+    kget, ksend = staticmethod(K.kget), staticmethod(K.ksend)
 
-    def kget(self, path):
-        if path in self.fail:
-            raise KeyError(path)
-        if path not in self.objects:
-            raise urllib.error.HTTPError(path, 404, "not found", {}, None)
-        return self.objects[path]
+    def __init__(self, case, nodes, lh_nodes, copies=3, robustness="degraded", storage_class="longhorn", extra=()):
+        # The shared fake runs the real write guards; the storage guard takes the
+        # job store's lock, which lives under its DATA_DIR.
+        case.enterContext(mock.patch.object(OPS, "DATA_DIR", case.enterContext(tempfile.TemporaryDirectory())))
+        # No signed-in person on this thread, whatever an earlier test left behind: the write guards read who is asking.
+        case.enterContext(mock.patch.object(HOSTACCESS, "role", lambda: None))
+        case.enterContext(mock.patch.object(CHANGES.REQUEST, "user", None, create=True))
+        self.kube = case.enterContext(Kube(
+            *nodes, *lh_nodes,
+            {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "homestead", "namespace": "lab"},
+             "spec": {"template": {"spec": {"volumes": [
+                 {"name": "data", "persistentVolumeClaim": {"claimName": "homestead-data"}},
+                 {"name": "tmp", "emptyDir": {}}]}}}},
+            {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": "homestead-data", "namespace": "lab"},
+             "spec": {"volumeName": "pvc-0001", "storageClassName": storage_class,
+                      "resources": {"requests": {"storage": "2Gi"}}}},
+            volume(copies, robustness), volume(3, name="pvc-0002"), engines("RW"), *extra))
 
-    def ksend(self, method, path, body=None, ctype=""):
-        self.sent.append((method, path, body))
+    @property
+    def sent(self):
+        return [(method, path, body) for method, path, body, _ in self.kube.writes]
+
+    def edit(self, path, change):
+        found = self.kube.object(path)
+        change(found)
+        self.kube.add(found)
+
+    def remove(self, path):
+        """Gone from the cluster; not a write of Homestead's."""
+        written = len(self.kube.writes)
+        self.kube("DELETE", path)
+        del self.kube.writes[written:]
+
+    def unreadable(self, path):
+        """The read of path fails with an error that names it, as a dropped connection's does."""
+        def refuse(method, where, body):
+            raise OSError(f"cannot read {path}")
+        self.kube.react("GET", path.partition("?")[0], refuse)
 
 
 class FitSingleHostTests(unittest.TestCase):
@@ -87,7 +115,7 @@ class FitSingleHostTests(unittest.TestCase):
                     lambda: {}, self.data, ("lab", "homestead"))
 
     def test_one_host_stock_longhorn_lowers_own_volume_to_one(self):
-        cluster = Cluster([node("node-a")], [lh_node("node-a")])
+        cluster = Cluster(self, [node("node-a")], [lh_node("node-a")])
         self.bind(cluster)
         line = COPIES.fit_single_host()
         self.assertEqual("Homestead's data volume homestead-data keeps 1 copy: this cluster has one host", line)
@@ -97,7 +125,7 @@ class FitSingleHostTests(unittest.TestCase):
         self.assertEqual(1, PARITY._load()["own_copies"])
 
     def test_other_volumes_and_settings_untouched(self):
-        cluster = Cluster([node("node-a")], [lh_node("node-a")])
+        cluster = Cluster(self, [node("node-a")], [lh_node("node-a")])
         self.bind(cluster)
         COPIES.fit_single_host()
         paths = [path for _, path, _ in cluster.sent]
@@ -107,27 +135,27 @@ class FitSingleHostTests(unittest.TestCase):
     def test_any_distribution(self):
         for distribution in ("k3s", "rke2", "kubeadm", "talos", ""):
             with self.subTest(distribution=distribution):
-                cluster = Cluster([node("node-a")], [lh_node("node-a")])
+                cluster = Cluster(self, [node("node-a")], [lh_node("node-a")])
                 self.bind(cluster, distribution=distribution)
                 self.assertTrue(COPIES.fit_single_host())
 
     def test_two_k8s_nodes_one_longhorn_node_lowers_nothing(self):
         # A tiebreaker, or an agent Longhorn does not run on: still two hosts.
-        cluster = Cluster([node("node-a"), node("node-b")], [lh_node("node-a")])
+        cluster = Cluster(self, [node("node-a"), node("node-b")], [lh_node("node-a")])
         self.bind(cluster)
         self.assertIsNone(COPIES.fit_single_host())
         self.assertEqual([], cluster.sent)
 
     def test_one_ready_of_three_lowers_nothing(self):
         # Review focus 1: hosts down or rebooting are still hosts.
-        cluster = Cluster([node("node-a"), node("node-b", ready=False), node("node-c", ready=False)],
+        cluster = Cluster(self, [node("node-a"), node("node-b", ready=False), node("node-c", ready=False)],
                           [lh_node("node-a"), lh_node("node-b", ready=False), lh_node("node-c", ready=False)])
         self.bind(cluster)
         self.assertIsNone(COPIES.fit_single_host())
         self.assertEqual([], cluster.sent)
 
     def test_one_k8s_node_two_longhorn_records_lowers_nothing(self):
-        cluster = Cluster([node("node-a")], [lh_node("node-a"), lh_node("node-b", ready=False)])
+        cluster = Cluster(self, [node("node-a")], [lh_node("node-a"), lh_node("node-b", ready=False)])
         self.bind(cluster)
         self.assertIsNone(COPIES.fit_single_host())
         self.assertEqual([], cluster.sent)
@@ -135,7 +163,7 @@ class FitSingleHostTests(unittest.TestCase):
     def test_harvester_and_no_longhorn_do_nothing(self):
         for kwargs in ({"harvester": True}, {"longhorn": False}):
             with self.subTest(**kwargs):
-                cluster = Cluster([node("node-a")], [lh_node("node-a")])
+                cluster = Cluster(self, [node("node-a")], [lh_node("node-a")])
                 self.bind(cluster, **kwargs)
                 self.assertIsNone(COPIES.fit_single_host())
                 self.assertEqual([], cluster.sent)
@@ -144,36 +172,36 @@ class FitSingleHostTests(unittest.TestCase):
         # Soft anti-affinity on one host with several disks: after a reboot the
         # volume reads degraded while its copies rebuild, and Longhorn can
         # place them. Only a copy Longhorn cannot schedule is proof.
-        cluster = Cluster([node("node-a")], [lh_node("node-a")])
-        cluster.objects[f"{PARITY.LH_VOLUMES}/pvc-0001"] = volume(3, unschedulable=False)
+        cluster = Cluster(self, [node("node-a")], [lh_node("node-a")])
+        cluster.kube.add(volume(3, unschedulable=False))
         self.bind(cluster)
         self.assertIsNone(COPIES.fit_single_host())
         self.assertEqual([], cluster.sent)
 
     def test_a_rebuilding_copy_lowers_nothing(self):
-        cluster = Cluster([node("node-a")], [lh_node("node-a")])
-        cluster.objects[ENGINES] = engines("RW", "WO")
+        cluster = Cluster(self, [node("node-a")], [lh_node("node-a")])
+        cluster.kube.add(engines("RW", "WO"))
         self.bind(cluster)
         self.assertIsNone(COPIES.fit_single_host())
         self.assertEqual([], cluster.sent)
 
     def test_unreadable_engines_lower_nothing(self):
-        cluster = Cluster([node("node-a")], [lh_node("node-a")])
-        cluster.fail = {ENGINES}
+        cluster = Cluster(self, [node("node-a")], [lh_node("node-a")])
+        cluster.unreadable(ENGINES)
         self.bind(cluster)
         self.assertIsNone(COPIES.fit_single_host())
         self.assertEqual([], cluster.sent)
 
     def test_a_copy_longhorn_cannot_place_is_proof(self):
         # The older map form of Longhorn's conditions counts too.
-        cluster = Cluster([node("node-a")], [lh_node("node-a")])
-        cluster.objects[f"{PARITY.LH_VOLUMES}/pvc-0001"]["status"]["conditions"] = {
-            "scheduled": {"type": "Scheduled", "status": "False", "reason": "ReplicaSchedulingFailure"}}
+        cluster = Cluster(self, [node("node-a")], [lh_node("node-a")])
+        cluster.edit(VOLUME, lambda found: found["status"].update(conditions={
+            "scheduled": {"type": "Scheduled", "status": "False", "reason": "ReplicaSchedulingFailure"}}))
         self.bind(cluster)
         self.assertTrue(COPIES.fit_single_host())
 
     def test_already_one_does_nothing(self):
-        cluster = Cluster([node("node-a")], [lh_node("node-a")], copies=1, robustness="healthy")
+        cluster = Cluster(self, [node("node-a")], [lh_node("node-a")], copies=1, robustness="healthy")
         self.bind(cluster)
         self.assertIsNone(COPIES.fit_single_host())
         self.assertEqual([], cluster.sent)
@@ -181,7 +209,7 @@ class FitSingleHostTests(unittest.TestCase):
     def test_a_healthy_volume_keeps_its_copies(self):
         # Copies the one host does hold (soft anti-affinity, several disks)
         # are not thrown away: there is nothing to fix.
-        cluster = Cluster([node("node-a")], [lh_node("node-a")], copies=3, robustness="healthy")
+        cluster = Cluster(self, [node("node-a")], [lh_node("node-a")], copies=3, robustness="healthy")
         self.bind(cluster)
         self.assertIsNone(COPIES.fit_single_host())
         self.assertEqual([], cluster.sent)
@@ -190,14 +218,14 @@ class FitSingleHostTests(unittest.TestCase):
         for path in ("/api/v1/nodes", LH_NODES, f"{PARITY.LH_VOLUMES}/pvc-0001",
                      "/apis/apps/v1/namespaces/lab/deployments/homestead"):
             with self.subTest(path=path):
-                cluster = Cluster([node("node-a")], [lh_node("node-a")])
-                cluster.fail = {path}
+                cluster = Cluster(self, [node("node-a")], [lh_node("node-a")])
+                cluster.unreadable(path)
                 self.bind(cluster)
                 self.assertIsNone(COPIES.fit_single_host())
                 self.assertEqual([], cluster.sent)
 
     def test_own_data_volumes_describes_the_claim(self):
-        cluster = Cluster([node("node-a")], [lh_node("node-a")])
+        cluster = Cluster(self, [node("node-a")], [lh_node("node-a")])
         self.bind(cluster)
         [found] = COPIES.own_data_volumes()
         self.assertEqual("homestead-data", found["claim"])
@@ -207,8 +235,8 @@ class FitSingleHostTests(unittest.TestCase):
         self.assertEqual(3, found["volume"]["spec"]["numberOfReplicas"])
 
     def test_own_data_volumes_without_longhorn_volume(self):
-        cluster = Cluster([node("node-a")], [lh_node("node-a")], storage_class="local-path")
-        del cluster.objects[f"{PARITY.LH_VOLUMES}/pvc-0001"]
+        cluster = Cluster(self, [node("node-a")], [lh_node("node-a")], storage_class="local-path")
+        cluster.remove(VOLUME)
         self.bind(cluster)
         [found] = COPIES.own_data_volumes()
         self.assertIsNone(found["volume"])
@@ -223,11 +251,9 @@ def lh_store(name, room_gib=20, ready=True):
     return found
 
 
-R2 = "/apis/storage.k8s.io/v1/storageclasses/longhorn-r2"
-
 
 def r2_class(replicas="2", migratable="false", provisioner="driver.longhorn.io", **extra):
-    return {"metadata": {"name": "longhorn-r2"}, "provisioner": provisioner,
+    return {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass", "metadata": {"name": "longhorn-r2"}, "provisioner": provisioner,
             "parameters": {"numberOfReplicas": replicas, "migratable": migratable, **extra}}
 
 
@@ -238,8 +264,8 @@ class FactsTests(unittest.TestCase):
     def cluster(self, names=("node-a", "node-b"), copies=1, rooms=None, distribution="kubeadm", harvester=False,
                 longhorn=True, storage_class="longhorn", extra=None):
         rooms = rooms or [20] * len(names)
-        cluster = Cluster([node(n) for n in names], [lh_store(n, r) for n, r in zip(names, rooms)], copies=copies,
-                          robustness="healthy", storage_class=storage_class, extra=extra)
+        cluster = Cluster(self, [node(n) for n in names], [lh_store(n, r) for n, r in zip(names, rooms)], copies=copies,
+                          robustness="healthy", storage_class=storage_class, extra=extra or ())
         hostrun = type("H", (), {"run": staticmethod(lambda *a, **k: ("", ""))})
         PARITY.bind(cluster.kget, cluster.ksend, hostrun,
                     lambda force=False: {"distribution": distribution, "longhorn": longhorn, "harvester": harvester},
@@ -279,7 +305,7 @@ class FactsTests(unittest.TestCase):
         self.assertTrue(PARITY.own_copies_due(storing))
         self.assertEqual([], cluster.sent, "a pure read")
         self.assertEqual([("homestead-data", 2)], PARITY.own_copies(storing))
-        cluster.objects[f"{PARITY.LH_VOLUMES}/pvc-0001"]["spec"].update(cluster.sent[-1][2]["spec"])
+        # The fake applied the raise itself.
         self.assertFalse(PARITY.own_copies_due(storing), "raised: nothing left to do")
 
     def test_own_copies_due_not_on_other_distributions_or_harvester(self):
@@ -296,7 +322,7 @@ class FactsTests(unittest.TestCase):
 
     def test_a_host_longhorn_cannot_store_on_does_not_count(self):
         cluster = self.cluster(names=("node-a", "node-b"))
-        cluster.objects[LH_NODES]["items"][1]["status"]["conditions"][0]["status"] = "False"
+        cluster.edit(f"{LH_NODES}/node-b", lambda found: found["status"]["conditions"][0].update(status="False"))
         self.assertEqual("single-host", COPIES.facts()["state"])
 
     def test_facts_two_copies_ok(self):
@@ -309,36 +335,35 @@ class FactsTests(unittest.TestCase):
         self.cluster(longhorn=False)
         self.assertEqual("n/a", COPIES.facts()["state"])
         cluster = self.cluster(storage_class="local-path")
-        del cluster.objects[f"{PARITY.LH_VOLUMES}/pvc-0001"]
+        cluster.remove(VOLUME)
         self.assertEqual("n/a", COPIES.facts()["state"])
 
     def test_facts_unreadable_is_unknown_and_says_why(self):
         # #620: a read that failed is said, never shown as nothing to say.
         cluster = self.cluster()
-        cluster.fail = {"/apis/apps/v1/namespaces/lab/deployments/homestead"}
+        cluster.unreadable("/apis/apps/v1/namespaces/lab/deployments/homestead")
         facts = COPIES.facts()
         self.assertEqual("unknown", facts["state"])
         self.assertIn("deployments/homestead", facts["error"])
 
     def test_storage_hosts_unreadable_is_unknown(self):
         cluster = self.cluster()
-        cluster.fail = {LH_NODES}
+        cluster.unreadable(LH_NODES)
         facts = COPIES.facts()
         self.assertEqual("unknown", facts["state"])
         self.assertIn("Longhorn's nodes could not be read", facts["error"])
 
     def test_unreadable_size_is_not_room(self):
         cluster = self.cluster()
-        volume = cluster.objects[f"{PARITY.LH_VOLUMES}/pvc-0001"]
-        volume["spec"]["size"] = "0"
-        cluster.objects["/api/v1/namespaces/lab/persistentvolumeclaims/homestead-data"]["spec"]["resources"] = {}
+        cluster.edit(VOLUME, lambda found: found["spec"].update(size="0"))
+        cluster.edit(CLAIM, lambda found: found["spec"].update(resources={}))
         facts = COPIES.facts()
         self.assertEqual("unknown", facts["state"])
         self.assertIn("size", facts["error"])
         self.assertEqual(0, facts["room_hosts"])
 
     def test_on_a_two_copy_class_with_one_copy_the_offer_raises_in_place(self):
-        self.cluster(storage_class="longhorn-r2", extra={R2: r2_class()})
+        self.cluster(storage_class="longhorn-r2", extra=[r2_class()])
         facts = COPIES.facts()
         self.assertEqual(("can-keep-two", "raise"), (facts["state"], facts["action"]))
 
@@ -355,7 +380,7 @@ class FactsTests(unittest.TestCase):
                  (r2_class(nodeSelector="fast"), False, "only on hosts tagged fast"))
         for found, usable, why in cases:
             with self.subTest(found=found):
-                self.cluster(extra={R2: found})
+                self.cluster(extra=[found])
                 r2 = COPIES.facts()["r2"]
                 self.assertTrue(r2["exists"])
                 self.assertEqual(usable, r2["usable"])

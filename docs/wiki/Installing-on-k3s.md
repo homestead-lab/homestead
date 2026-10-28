@@ -354,7 +354,10 @@ placed. It only lowers one thing: on a cluster of one host, when Longhorn
 says a copy of Homestead's own data volume cannot be placed (a stock
 Longhorn class asks for three) and none is being rebuilt, that volume asks
 for one copy, and the count it asked for before is kept on the volume as
-`homestead.io/one-host-copies`. Existing volumes keep their count: **Settings →
+`homestead.io/one-host-copies`. App volumes that ask for more copies than one
+host holds are only offered: **Cluster → Health** lists them, and an admin's
+**Match copies to hosts** lowers them, recording each count the same way, to
+put back once a host joins. Existing volumes keep their count: **Settings →
 Hardware and storage → Storage classes** makes a class with three copies the default. **Volumes** shows each volume's copies - `×1` in orange is a
 volume a single failed disk would lose - and
 [Changing a volume's storage class](Storage#changing-a-volumes-storage-class)

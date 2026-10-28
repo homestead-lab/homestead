@@ -5,6 +5,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_privileges as PRIV
+import homestead_deploy_manifests as MANIFESTS
+import homestead_deploy_appstore as APPSTORE
 
 
 class FromDockerTests(unittest.TestCase):
@@ -54,9 +56,9 @@ class DeployTests(unittest.TestCase):
         app = {"name": "transmission-openvpn", "repo": "haugene/transmission-openvpn", "network": "bridge",
                "config": [], "extra_params": "--cap-add=NET_ADMIN --device=/dev/net/tun", "privileged": False}
         with mock.patch.object(server.HW, "features", lambda: []):
-            cfg = server.DEPLOY.template_to_cfg(app)
+            cfg = APPSTORE.template_to_cfg(app)
             self.assertEqual((True, ["NET_ADMIN"], False), (cfg["tun"], cfg["cap_add"], cfg["privileged"]))
-            dep, _ = server.DEPLOY.build_deployment(dict(cfg, name="vpn", namespace="lab", ports=[], volumes=[]))
+            dep, _ = MANIFESTS.build_deployment(dict(cfg, name="vpn", namespace="lab", ports=[], volumes=[]))
         container = dep["spec"]["template"]["spec"]["containers"][0]
         self.assertEqual(["NET_ADMIN"], container["securityContext"]["capabilities"]["add"])
         self.assertIn({"name": PRIV.TUN_VOLUME, "mountPath": "/dev/net/tun"}, container["volumeMounts"])
