@@ -62,6 +62,7 @@ MODULES = (
     "homestead_addons",
     "homestead_agent_audit",
     "homestead_agent_requests",
+    "homestead_alert_webhook",
     "homestead_alerts",
     "homestead_allocation_probe",
     "homestead_api_keys",

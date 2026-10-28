@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.error
 import urllib.parse
 from pathlib import Path
 from unittest import mock
@@ -170,6 +171,85 @@ class FakeServerTests(FakeCase):
         self.assertEqual(["/x"], [g["path"] for g in same.got])
 
 
+class EveryAddressTests(FakeCase):
+    """#931: a host with more than one address (IPv6 and IPv4, say) is called
+    on the next checked address when one cannot be reached."""
+
+    def setUp(self):
+        super().setUp()
+        self.tried = []
+        real = O.socket.create_connection
+
+        def connect(address, timeout=None, *args, **kw):
+            self.tried.append((address[0], timeout))
+            if address[0] != "127.0.0.1":
+                raise OSError(f"{address[0]} is unreachable")
+            return real(address, timeout, *args, **kw)
+
+        patch = mock.patch.object(O.socket, "create_connection", side_effect=connect)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def addresses(self, ips):
+        O._resolve.side_effect = lambda host, port: self.resolved.append(host) or list(ips)
+
+    def test_the_next_address_is_called_when_the_first_cannot_be_reached(self):
+        fake = self.fake()
+        self.addresses(["2001:db8::5", "192.0.2.7", "127.0.0.1"])
+        O.post(self.named(fake, f"/x?token={SECRET}"), O.payload(dict(ITEM), "test"), "generic")
+        self.assertEqual(["2001:db8::5", "192.0.2.7", "127.0.0.1"], [ip for ip, _ in self.tried])
+        self.assertEqual(1, len(fake.got), "sent once, to the address that answered")
+        self.assertEqual(["hooks.example.com"], self.resolved, "still resolved once")
+
+    def test_the_tries_share_the_timeout(self):
+        # Addresses that never answer each use all the time they are given.
+        now, tried = [0.0], []
+
+        def blackhole(address, timeout):
+            tried.append(timeout)
+            now[0] += timeout
+            raise TimeoutError("timed out")
+
+        with mock.patch.object(O.socket, "create_connection", side_effect=blackhole), self.assertRaises(OSError):
+            O._connect(["2001:db8::5", "192.0.2.7", "198.51.100.7"], 443, 9, clock=lambda: now[0])
+        self.assertEqual([3.0, 3.0, 3.0], [round(t, 6) for t in tried])
+        self.assertLessEqual(now[0], 9)
+
+    def test_a_quick_refusal_leaves_the_rest_for_the_others(self):
+        now, tried = [0.0], []
+
+        def refuse(address, timeout):
+            tried.append(timeout)
+            raise ConnectionRefusedError("refused")
+
+        with mock.patch.object(O.socket, "create_connection", side_effect=refuse), self.assertRaises(OSError):
+            O._connect(["2001:db8::5", "192.0.2.7"], 443, 10, clock=lambda: now[0])
+        self.assertEqual([5.0, 10.0], tried)
+
+    def test_when_none_can_be_reached_it_says_so_without_the_token(self):
+        self.addresses(["2001:db8::5", "192.0.2.7"])
+        with self.assertRaises(OSError) as caught:
+            O.post(f"https://hooks.example.com/x?token={SECRET}", O.payload(dict(ITEM), "test"), "generic")
+        self.assertEqual(["2001:db8::5", "192.0.2.7"], [ip for ip, _ in self.tried])
+        self.assertIn("unreachable", str(caught.exception))
+        self.assertNotIn(SECRET, str(caught.exception))
+
+    def test_an_address_that_answered_is_never_called_twice(self):
+        fake = self.fake(status=500)
+        self.addresses(["127.0.0.1", "192.0.2.7"])
+        with self.assertRaises(OSError):
+            O.post(self.named(fake, "/x"), O.payload(dict(ITEM), "test"), "generic")
+        self.assertEqual(["127.0.0.1"], [ip for ip, _ in self.tried])
+        self.assertEqual(1, len(fake.got))
+
+    def test_every_address_is_still_checked_before_any_is_called(self):
+        self.addresses(["192.0.2.7", "127.0.0.1"])
+        O._kind.side_effect = lambda ip: "never" if ip == "127.0.0.1" else "public"
+        with self.assertRaises(O.Refused):
+            O.post("https://hooks.example.com/x", O.payload(dict(ITEM), "test"), "generic")
+        self.assertEqual([], self.tried)
+
+
 class DestinationTests(unittest.TestCase):
     def check(self, ips, allow_lan=False, url="https://hooks.example.com/x"):
         with mock.patch.object(O, "_resolve", return_value=ips):
@@ -274,14 +354,34 @@ class RouteBase(FakeCase):
         super().setUp()
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
-        self.stored = {}
-        O.bind(self.dir.name, kget=lambda path: {"metadata": {"annotations": dict(self.stored)}},
-               ksend=lambda *a, **k: self.sent.append(a), dns_name=lambda value, what: value, guard=lambda ns, name: None)
+        self.stored, self.secrets = {}, {}
+        O.bind(self.dir.name, kget=self.kget, ksend=self.ksend, dns_name=lambda value, what: value,
+               guard=lambda ns, name: None)
         self.sent = []
         O._tests.clear()
 
+    def kget(self, path):
+        """The app with its annotations; the Secrets its webhook address is kept in (#931)."""
+        if "/secrets/" in path:
+            if path not in self.secrets:
+                raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+            return json.loads(json.dumps(self.secrets[path]))
+        return {"metadata": {"annotations": dict(self.stored)}}
+
+    def ksend(self, method, path, body=None, **options):
+        self.sent.append((method, path, body))
+        if "/secrets" in path:
+            if method == "DELETE":
+                self.secrets.pop(path, None)
+            else:
+                self.secrets[f"{path}/{body['metadata']['name']}" if method == "POST" else path] = body
+
     def keep(self, actions):
         self.stored = {NAMES.key(O.KEY): json.dumps(actions)}
+
+    def kept(self):
+        """The whole address saved, read back as the leader reads it."""
+        return O._stored_actions("app", "lab", "frigate").get("webhook")
 
     def saved(self):
         return json.loads(self.sent[-1][2]["metadata"]["annotations"][NAMES.key(O.KEY)])
@@ -329,7 +429,9 @@ class RouteTests(RouteBase):
         self.keep({"webhook": real, "format": "gotify"})
         shown = O.read(self.stored, NAMES)["webhook"]
         answer = O.set_actions({**ITEM, "actions": {"webhook": shown, "format": "gotify"}})
-        self.assertEqual(real, self.saved()["webhook"])
+        self.assertNotIn(SECRET, json.dumps(self.saved()), "kept in its Secret, not on the annotation (#931)")
+        self.keep(self.saved())
+        self.assertEqual(real, self.kept())
         self.assertNotIn(SECRET, json.dumps(answer), "the answer to the browser hides it too")
 
     def test_the_leader_sends_with_the_stored_token_and_keeps_no_token_in_its_record(self):
@@ -362,8 +464,10 @@ class LanTests(RouteBase):
 
     def test_an_admin_allows_it_and_an_operator_keeps_it_unchanged(self):
         O.set_actions({**ITEM, "actions": {"webhook": "http://ntfy.example.com/alerts", "format": "ntfy", "lan": True}}, "admin")
-        self.assertEqual({"webhook": "http://ntfy.example.com/alerts", "format": "ntfy", "lan": True}, self.saved())
+        self.assertEqual({"webhook": "http://ntfy.example.com/(hidden)", "format": "ntfy", "lan": True,
+                          "secret": "homestead-outage-app-frigate"}, self.saved())
         self.keep(self.saved())
+        self.assertEqual("http://ntfy.example.com/alerts", self.kept())
         shown = O.read(self.stored, NAMES)
         O.set_actions({**ITEM, "actions": {**shown, "restart": {"after_min": 5, "max": 2}}}, "operator")
         self.assertTrue(self.saved()["lan"], "an operator's other edit keeps the admin's allowance")
