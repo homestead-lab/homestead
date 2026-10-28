@@ -190,9 +190,21 @@ def _apply_container_edit(container, change, workload_name, own_secret=""):
                 if item.get("valueFrom") and item.get("name")
                 and not (own_secret and ((item["valueFrom"].get("secretKeyRef") or {}).get("name") == own_secret))]
         protected = {item["name"] for item in refs}
-        literals = [{"name": str(key), "value": str(value)}
-                    for key, value in (change.get("env") or {}).items()
-                    if key not in protected]
+        # A value masked in the form (ENVSEC.MASK: shown to someone who may
+        # not see it) and sent back unchanged keeps what the Secret holds.
+        held = {item["name"]: item for item in container.get("env", []) or []
+                if own_secret and item.get("name")
+                and ((item.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name") == own_secret}
+        literals = []
+        for key, value in (change.get("env") or {}).items():
+            if key in protected:
+                continue
+            if str(value) == ENVSEC.MASK:
+                if key not in held:
+                    raise ValueError(f"{container.get('name')}: {key}'s value is hidden; type it in again")
+                literals.append(copy.deepcopy(held[key]))
+            else:
+                literals.append({"name": str(key), "value": str(value)})
         env = refs + literals
         if env:
             container["env"] = env
