@@ -9,6 +9,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_env_secrets as ENVSEC
 import homestead_lifecycle as lifecycle
+import homestead_workload_edit as WORKLOAD_EDIT
 import server
 
 
@@ -162,7 +163,7 @@ class EditRoundTripTests(unittest.TestCase):
         self.assertEqual({"TUNNEL_TOKEN": "first", "TZ": "UTC"}, container["env"])
         self.assertEqual([], container["env_refs"])
         self.assertEqual(["TUNNEL_TOKEN"], container["secret_env"])
-        lifecycle.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+        WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared", "env": {"TUNNEL_TOKEN": "second", "TZ": "UTC"}}]})
         saved = self.store.sent[-1][2]
         self.assertNotIn("second", json.dumps(saved))
@@ -173,7 +174,7 @@ class EditRoundTripTests(unittest.TestCase):
         """#735 review: the real save (the Deployment PUT) moves what the YAML
         for git shows as a reference - a renamed Secret-held variable and a
         credential URL under a plain name."""
-        lifecycle.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+        WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared",
              "env": {"LOGIN": "first", "DATABASE_URL": "postgres://u:pw-5c@db.example.com/x", "TZ": "UTC"}}]})
         method, path, saved = self.store.sent[-1]
@@ -189,7 +190,7 @@ class EditRoundTripTests(unittest.TestCase):
                          (data["cloudflared.LOGIN"], data["cloudflared.DATABASE_URL"]))
 
     def test_removing_the_variable_in_the_form_removes_it(self):
-        lifecycle.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+        WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared", "env": {"TZ": "UTC"}}]})
         env = self.store.sent[-1][2]["spec"]["template"]["spec"]["containers"][0]["env"]
         self.assertEqual([{"name": "TZ", "value": "UTC"}], env)
@@ -199,7 +200,7 @@ class EditRoundTripTests(unittest.TestCase):
         self.store.objects["/apis/apps/v1/namespaces/lab/deployments/tunnel"] = deployment(
             [{"name": "TUNNEL_TOKEN", "value": "legacy"}])
         del self.store.objects[SECRET]
-        lifecycle.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+        WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared", "env": {"TUNNEL_TOKEN": "legacy"}}]})
         self.assertNotIn("legacy", json.dumps(self.store.sent[-1][2]))
         self.assertEqual(b64("legacy"), self.store.objects[SECRET]["data"]["cloudflared.TUNNEL_TOKEN"])

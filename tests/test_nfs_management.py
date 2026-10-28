@@ -9,6 +9,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_nfs as NFS
 import server
+import homestead_network_services as SVC
 import homestead_share_servers as SERVERS
 
 
@@ -126,7 +127,7 @@ class NfsLifecycleTests(unittest.TestCase):
         pvc = {"spec": {"accessModes": ["ReadWriteMany"]}, "status": {"phase": "Bound"}}
         with mock.patch.object(server.SHARES, "_pvc", return_value=pvc), \
                 mock.patch.object(server.PLATFORM, "detect", return_value={"load_balancer": "kube-vip"}), \
-                mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: cfg):
+                mock.patch.object(SVC, "prepare_deploy", side_effect=lambda cfg: cfg):
             dep, svc = SERVERS._nfs_deployment(rows, "192.0.2.246")
         self.assertEqual(NFS.NAME, dep["metadata"]["name"])
         self.assertEqual("Local", svc["spec"]["externalTrafficPolicy"])

@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_updates as UPDATES
+import homestead_update_rollouts as ROLLOUTS
 
 
 def pod(age):
@@ -33,8 +34,8 @@ class RolloutWhyTests(unittest.TestCase):
             "replicas": 1, "selector": {"matchLabels": {"app": "homestead"}}}, "status": {
                 "replicas": 2, "updatedReplicas": 1, "availableReplicas": 1, "readyReplicas": 1}}
         with mock.patch.object(UPDATES, "kget", return_value={"items": [waiting]}), \
-                mock.patch.object(UPDATES, "pull_state", return_value={}):
-            result = UPDATES.progress("lab", "homestead", dep)
+                mock.patch.object(ROLLOUTS, "pull_state", return_value={}):
+            result = ROLLOUTS.progress("lab", "homestead", dep)
         self.assertEqual("failed", result["phase"])
         self.assertTrue(result["pods"][0]["waiting"][0]["init"])
         self.assertIn("init data-permissions", result["problems"][0])
@@ -42,19 +43,19 @@ class RolloutWhyTests(unittest.TestCase):
 
     def test_a_young_pod_is_given_time(self):
         with mock.patch.object(UPDATES, "kget", lambda path: EVENTS):
-            self.assertIsNone(UPDATES._why_waiting("lab", pod(20)))
+            self.assertIsNone(ROLLOUTS._why_waiting("lab", pod(20)))
 
     def test_a_pod_waiting_on_its_volume_says_so_and_is_stuck_after_three_minutes(self):
         with mock.patch.object(UPDATES, "kget", lambda path: EVENTS):
-            waiting = UPDATES._why_waiting("lab", pod(90))
+            waiting = ROLLOUTS._why_waiting("lab", pod(90))
             self.assertIn("invalid controller count 2", waiting["message"])
             self.assertFalse(waiting["stuck"])
             self.assertIn("Scale the workload to 0", waiting["hint"])
-            self.assertTrue(UPDATES._why_waiting("lab", pod(400))["stuck"])
+            self.assertTrue(ROLLOUTS._why_waiting("lab", pod(400))["stuck"])
 
     def test_no_warnings_no_reason(self):
         with mock.patch.object(UPDATES, "kget", lambda path: {"items": []}):
-            self.assertIsNone(UPDATES._why_waiting("lab", pod(400)))
+            self.assertIsNone(ROLLOUTS._why_waiting("lab", pod(400)))
 
 
 if __name__ == "__main__":

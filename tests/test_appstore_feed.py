@@ -8,6 +8,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_deploy_appstore as APPSTORE
 
 
 def template(name, **fields):
@@ -47,20 +48,20 @@ class FeedTests(unittest.TestCase):
         self.addCleanup(self.clear)
         with mock.patch.object(server.urllib.request, "urlopen",
                                lambda *a, **k: Response(json.dumps(FEED).encode())):
-            self.apps = server.DEPLOY.fetch_appstore()
+            self.apps = APPSTORE.fetch_appstore()
 
     def test_only_containers_are_offered(self):
         self.assertEqual({"Plain", "Spotlit", "Earlier spotlight", "Newest"}, {a["name"] for a in self.apps})
 
     def test_spotlights_come_newest_first_with_why(self):
-        spot = server.DEPLOY.rank_appstore(self.apps, "spotlight")
+        spot = APPSTORE.rank_appstore(self.apps, "spotlight")
         self.assertEqual(["Spotlit", "Earlier spotlight"], [a["name"] for a in spot])
         self.assertEqual({"date": 1785556800, "month": "Aug 2026", "reason": "Calling all birders!",
                           "who": "Unraid Staff"}, spot[0]["spotlight"])
         self.assertEqual("Earlier", spot[1]["spotlight"]["reason"])
 
     def test_the_newest_template_leads_recently_added(self):
-        self.assertEqual("Newest", server.DEPLOY.rank_appstore(self.apps, "recent")[0]["name"])
+        self.assertEqual("Newest", APPSTORE.rank_appstore(self.apps, "recent")[0]["name"])
 
     def test_an_app_carries_what_its_page_shows(self):
         app = next(a for a in self.apps if a["name"] == "Spotlit")
@@ -70,7 +71,7 @@ class FeedTests(unittest.TestCase):
         self.assertEqual("Line one\n\nBold and html\nLine two", app["overview"])
 
     def test_a_list_leaves_the_heavy_parts_for_the_page(self):
-        summary = server.DEPLOY.appstore_summary(next(a for a in self.apps if a["name"] == "Spotlit"))
+        summary = APPSTORE.appstore_summary(next(a for a in self.apps if a["name"] == "Spotlit"))
         self.assertNotIn("overview", summary)
         self.assertNotIn("config", summary)
         self.assertIn("deploy", summary, "a card can still be configured straight away")
@@ -94,17 +95,17 @@ class SourceTests(unittest.TestCase):
     def test_the_feed_in_use_is_the_one_set_else_the_default(self):
         with mock.patch.object(server.SETTINGS_HELPERS, "get_app_settings", return_value={"catalog_url": ""}):
             server._cache.pop("settings", None)
-            self.assertEqual(server.DEPLOY.CA_FEED, server.DEPLOY.catalog_source())
+            self.assertEqual(APPSTORE.CA_FEED, APPSTORE.catalog_source())
         with mock.patch.object(server.SETTINGS_HELPERS, "get_app_settings", return_value={"catalog_url": "https://m.example/f.json"}):
             server._cache.pop("settings", None)
-            self.assertEqual("https://m.example/f.json", server.DEPLOY.catalog_source())
+            self.assertEqual("https://m.example/f.json", APPSTORE.catalog_source())
         server._cache.pop("settings", None)
 
 
 class MarkupTests(unittest.TestCase):
     def test_forum_codes_and_html_are_removed_but_brackets_that_mean_something_stay(self):
         text = "Media server.[br][b][span style='color: #E80000;']Converted[/span][/b] keeps [1] and [x86]"
-        self.assertEqual("Media server. · Converted keeps [1] and [x86]", server.DEPLOY.catalog_text(text))
+        self.assertEqual("Media server. · Converted keeps [1] and [x86]", APPSTORE.catalog_text(text))
 
 
 if __name__ == "__main__":

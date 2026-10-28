@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
+import homestead_vm_create as VM_CREATE
 
 HARVESTER = {"harvester": True, "cdi": True}
 K3S_CDI = {"harvester": False, "cdi": True}
@@ -37,7 +38,7 @@ class VmCreateTests(unittest.TestCase):
 
     def create(self, platform, sc="", **cfg):
         cfg = {"name": "web", "password": "a-long-password", **cfg}
-        return imports.create_vm(cfg, platform, sc)
+        return VM_CREATE.create_vm(cfg, platform, sc)
 
     def test_a_vm_can_ask_for_its_console_to_be_kept_and_others_do_not(self):
         self.create(HARVESTER, "harvester-longhorn", log_console=True)

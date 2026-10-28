@@ -28,7 +28,8 @@ import urllib.parse
 
 import homestead_disks as DISKS
 import homestead_helm as HELM
-import homestead_imports as IMP
+import homestead_container_import as CONTAINER_IMPORT
+import homestead_image_cache as IMAGES
 import homestead_kube as KUBE
 import homestead_longhorn as LH
 import homestead_move_actions as MOVE_ACTIONS
@@ -245,7 +246,7 @@ def pull_plan(item):
 
 
 def pull_cancel(item, _options):
-    IMP.stop_prepull(item["ref"]["name"])
+    IMAGES.stop_prepull(item["ref"]["name"])
     return "Pull stopped; nodes that had finished keep the image"
 
 
@@ -343,7 +344,7 @@ def job_cancel(item, _options):
 
 # ----------------------------------------------------------------- imports
 def import_plan(item):
-    plan = IMP.import_cleanup_plan(item["ref"]["name"], item["ref"].get("namespace"))
+    plan = CONTAINER_IMPORT.import_cleanup_plan(item["ref"]["name"], item["ref"].get("namespace"))
     made = [row["name"] for row in plan["volumes"] if row["created"]]
     borrowed = [row["name"] for row in plan["volumes"] if not row["created"]]
     keeps = ["The source is not touched"]
@@ -362,15 +363,15 @@ def import_plan(item):
 
 
 def import_cancel(item, options):
-    plan = IMP.import_cleanup_plan(item["ref"]["name"], item["ref"].get("namespace"))
-    IMP.delete_import(item["ref"]["name"], item["ref"].get("namespace"))
+    plan = CONTAINER_IMPORT.import_cleanup_plan(item["ref"]["name"], item["ref"].get("namespace"))
+    CONTAINER_IMPORT.delete_import(item["ref"]["name"], item["ref"].get("namespace"))
     done = ["copy stopped"]
     if plan["workload"]:
         if remove_workload:
             remove_workload(plan["namespace"], plan["workload"])
         else:
             _delete(_deployment_path(plan["namespace"], plan["workload"]))
-        IMP.wait_for_pods_gone(plan["namespace"], f"app={plan['workload']}")
+        CONTAINER_IMPORT.wait_for_pods_gone(plan["namespace"], f"app={plan['workload']}")
         done.append(f"{plan['workload']} removed")
     if options.get("volumes"):
         made = [row["name"] for row in plan["volumes"] if row["created"]]

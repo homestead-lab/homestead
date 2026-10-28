@@ -2,12 +2,13 @@
 which workloads and VMs use those volumes, and the ports and VIPs that reach
 them - read from the cluster as it is now."""
 import homestead_hardware as HW
-import homestead_longhorn as LH
+import homestead_longhorn_jobs as JOBS
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_network_inventory as INV
 import homestead_routes
 import homestead_start_order as START_ORDER
 import homestead_vms as VMS
+import homestead_vm_edit as VM_EDIT
 
 # server.py's: the Kubernetes read, the namespaces that are the platform's
 # own, a workload's logo, the copy count of a volume part-way through a move,
@@ -74,7 +75,7 @@ def _flow_jobs(vol_by_pvc=None):
         out.append({
             "id": f"j:{meta['namespace']}/{meta['name']}", "name": meta["name"], "ns": meta["namespace"],
             "schedule": spec.get("schedule", ""), "time_zone": spec.get("timeZone") or "",
-            "suspended": bool(spec.get("suspend")), **LH.cron_run_state(status),
+            "suspended": bool(spec.get("suspend")), **JOBS.cron_run_state(status),
             "claims": [{"pvc": c, "vid": ((vol_by_pvc or {}).get(c) or {}).get("id", "")} for c in claims],
         })
     return sorted(out, key=lambda j: (j["ns"], j["name"]))
@@ -156,7 +157,7 @@ def get_flow2():
     # one it carries: a VIP kube-vip answers for but never recorded is where
     # the app is meant to be, and the page says why it is not reachable there.
     try:
-        network = homestead_routes.cached("network", 5, NETWORK.inventory)
+        network = homestead_routes.cached("network", 5, INV.inventory)
     except Exception:
         network = {}
     places = network.get("addresses") or {"nodes": [], "addresses": []}
@@ -276,7 +277,7 @@ def get_flow2():
                    or (((vm.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or [])
         addresses = [a for i in (vmi.get("status") or {}).get("interfaces") or []
                      for a in (i.get("ipAddresses") or [i.get("ipAddress")]) if a and ":" not in a]
-        row = {"disks": [{"claim": VMS._volume_claim(v)} for v in volumes], "ip": addresses[0] if addresses else "",
+        row = {"disks": [{"claim": VM_EDIT._volume_claim(v)} for v in volumes], "ip": addresses[0] if addresses else "",
                "status": VMS._status(vm, vmi), "node": (vmi.get("status") or {}).get("nodeName", ""),
                "running": (vmi.get("status") or {}).get("phase") == "Running"}
         launcher = launchers.get((ns, nm))

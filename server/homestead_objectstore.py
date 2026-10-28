@@ -64,8 +64,10 @@ VIP_ANNOTATION = "kube-vip.io/loadbalancerIPs"
 TARGET_REQUEST = "homestead.io/backup-target-request"
 _target_lock = threading.RLock()
 import homestead_platform as PLATFORM
-import homestead_networking as NETWORK
+import homestead_network_services as SVC
+import homestead_network_inventory as INV
 import homestead_longhorn as LH
+import homestead_longhorn_target as BACKUP_TARGET
 import homestead_move as MOVE
 import homestead_move_source as MOVE_SOURCE
 import homestead_routes
@@ -422,7 +424,7 @@ VIP_KEYS = ("kube-vip.io/loadbalancerIPs", "metallb.io/loadBalancerIPs", "metall
 
 
 def _shared_plan(port):
-    return NETWORK.service_plan({
+    return SVC.service_plan({
         "namespace": NS, "name": f"{NAME}-plan", "workload": NAME, "type": "LoadBalancer",
         "vip_mode": "shared",
         "ports": [{"port": port, "target_port": "s3", "name": "s3"},
@@ -480,7 +482,7 @@ def deploy(cfg=None):
     if not 1 <= port <= 65534:
         raise ValueError("the backup storage port is between 1 and 65534 (the one above it is its console)")
     if address:
-        NETWORK.check_address(address)
+        INV.check_address(address)
     elif existing and cfg.get("vip_mode") != "shared" and port == _port(existing):
         address = _current_address(existing)
     else:
@@ -627,8 +629,8 @@ def _save_target_request(deployment, request):
 
 
 def _target_location():
-    target = LH.backup_target()
-    keys = LH._secret_keys(target["secret"]) if target.get("secret") else {}
+    target = BACKUP_TARGET.backup_target()
+    keys = BACKUP_TARGET._secret_keys(target["secret"]) if target.get("secret") else {}
     return {"url": target.get("url", ""), "secret": target.get("secret", ""),
             "endpoint": keys.get("endpoint", "")}
 
@@ -711,11 +713,11 @@ def point_longhorn(replace=False):
     if not service:
         raise ValueError("the object store is not deployed yet")
     where = endpoint()
-    current = LH.backup_target()
+    current = BACKUP_TARGET.backup_target()
     kept = ""
     if current.get("configured") and current.get("url", "").rstrip("/") != backup_url().rstrip("/") and not replace:
         kept = current.get("url", "")
-    if not kept and LH.on_harvester():
+    if not kept and BACKUP_TARGET.on_harvester():
         # Harvester validates the bucket by listing it during the settings
         # update. A newly started pod or an absent bucket makes that update
         # fail with 422, leaving Longhorn on its previous endpoint.
@@ -742,7 +744,7 @@ def point_longhorn(replace=False):
     # says. A target already pointing somewhere else - an NFS share - is left
     # alone unless asked, since changing it moves where every backup goes.
     if not kept:
-        LH.set_backup_target(backup_url(), LONGHORN_SECRET)
+        BACKUP_TARGET.set_backup_target(backup_url(), LONGHORN_SECRET)
     # Backups work either way; only the far cluster cares which address this is.
     return {"url": backup_url(), "secret": LONGHORN_SECRET, "endpoint": where, "kept_target": kept,
             "reachable_off_cluster": ".svc:" not in where,

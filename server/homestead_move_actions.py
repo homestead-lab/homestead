@@ -183,5 +183,5 @@ def _remove_source(move_id, volumes):
 
 
 # Last, so that importing this module first works: homestead_move_phases
-# imports this one and, at its end, homestead_move_engine, which re-exports it.
+# imports this one and, at its end, homestead_move_engine, which imports it.
 import homestead_move_phases as PHASE  # noqa: E402

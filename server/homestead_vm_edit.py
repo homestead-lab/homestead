@@ -3,8 +3,8 @@ Editing a virtual machine: what a disk is made from, its disks, network
 interfaces and cloud-init, and preparing, re-checking and saving an edit.
 
 Split by feature from homestead_vms (#623), moved unchanged. Names that stay
-there, that server.py binds there, or that tests replace there, are read
-through it (V.name); homestead_vms re-exports everything here.
+there, or that server.py binds there, are read through it (V.name), so a
+replacement there still applies; read and replace the names defined here, here.
 """
 import base64
 import copy
@@ -423,7 +423,7 @@ def _queue_secret(ns, name, key, text, effects):
     effect = next((row for row in effects if row.get("kind") == "secret" and row.get("path") == path), None)
     if effect is None:
         current = V.kget(path)
-        effect = {"kind": "secret", "path": path, "identity": V._identity(current), "data": {}}
+        effect = {"kind": "secret", "path": path, "identity": _identity(current), "data": {}}
         effects.append(effect)
     effect["data"][key] = base64.b64encode(text.encode()).decode()
 
@@ -432,7 +432,7 @@ def _edit_cloud_init(vm, ns, cfg, effects):
     tspec = vm["spec"]["template"]["spec"]
     user, network = str(cfg.get("user_data") or ""), str(cfg.get("network_data") or "")
     volume, key = _cloud_volume(tspec)
-    current = V._read_cloud_init(vm, ns)
+    current = _read_cloud_init(vm, ns)
     if current["source"] == "unreadable":
         raise ValueError("Cloud-init could not be read; nothing can be changed until its Secret is available")
     if user == current["user_data"] and network == current["network_data"]:
@@ -467,7 +467,7 @@ def prepare_edit(ns, name, cfg, current=None):
     """Validate and prepare all VM changes without writing dependent resources."""
     V._name(ns, "namespace"), V._name(name, "VM name")
     current = copy.deepcopy(current if current is not None else V._get(ns, name))
-    identity = V._identity(current)
+    identity = _identity(current)
     if current["metadata"].get("deletionTimestamp"):
         raise ValueError("The VM is deleting; wait before editing")
     vm = copy.deepcopy(current)
@@ -478,7 +478,7 @@ def prepare_edit(ns, name, cfg, current=None):
     dom = tspec["domain"]
     changed_hardware = False
     to_create, resize, dropped, effects = [], [], [], []
-    claims = V._claims(ns, strict=True) if cfg.get("disks") or cfg.get("add_disks") else {}
+    claims = VM_LIST._claims(ns, strict=True) if cfg.get("disks") or cfg.get("add_disks") else {}
     if "node" in cfg:
         selector = dict(tspec.get("nodeSelector") or {})
         node = str(cfg.get("node") or "")
@@ -561,11 +561,11 @@ def prepare_edit(ns, name, cfg, current=None):
                 labels = (current_map.get("metadata") or {}).get("labels") or {}
                 if labels.get("homestead.io/managed") != "true" or labels.get("app") != name:
                     raise ValueError("The vBIOS ConfigMap belongs to another resource; inspect it before editing this VM")
-            effect["identity"] = V._identity(current_map) if current_map else None
+            effect["identity"] = _identity(current_map) if current_map else None
         if effect["kind"] == "replace-datavolume" and effect["current"] is not None:
-            effect["identity"] = V._identity(effect.pop("current"))
+            effect["identity"] = _identity(effect.pop("current"))
     for claim, _ in resize:
-        V._identity(claims[claim])
+        _identity(claims[claim])
     return {"namespace": ns, "name": name, "current": current, "identity": identity,
             "vm": vm, "effects": effects, "to_create": to_create, "resize": resize,
             "claims": claims, "dropped": dropped, "changed_hardware": changed_hardware,
@@ -574,13 +574,13 @@ def prepare_edit(ns, name, cfg, current=None):
 
 def _recheck_edit(prepared):
     ns, name = prepared["namespace"], prepared["name"]
-    if V._identity(V._get(ns, name)) != prepared["identity"]:
+    if _identity(V._get(ns, name)) != prepared["identity"]:
         raise ValueError("The VM changed; review its edit again")
     for effect in prepared["effects"]:
         if effect["kind"] in ("image-download", "kubevirt-gates"):
             continue
         current = KUBE.get_optional(effect["path"], read=V.kget)
-        if (None if current is None else V._identity(current)) != effect.get("identity"):
+        if (None if current is None else _identity(current)) != effect.get("identity"):
             raise ValueError("A VM dependency changed; review its edit again")
         if effect["kind"] == "replace-datavolume":
             path = f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(effect['claim'])}"
@@ -588,7 +588,7 @@ def _recheck_edit(prepared):
                 raise ValueError("The disk now has a PVC; its source cannot be replaced")
     for claim, _ in prepared["resize"]:
         current = V.kget(f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}")
-        if V._identity(current) != V._identity(prepared["claims"][claim]):
+        if _identity(current) != _identity(prepared["claims"][claim]):
             raise ValueError("A disk changed; review its resize again")
         RESIZE.require(current, V.kget)
     old_names = {_volume_claim(v) for v in prepared["current"]["spec"]["template"]["spec"].get("volumes") or []}
@@ -619,7 +619,7 @@ def commit_edit(prepared, before_save=None, send=None):
     ns, name, vm = prepared["namespace"], prepared["name"], prepared["vm"]
     to_create, resize, dropped = prepared["to_create"], prepared["resize"], prepared["dropped"]
     changed_hardware = prepared["changed_hardware"]
-    V._recheck_edit(prepared)
+    _recheck_edit(prepared)
     if any(effect["kind"] == "replace-datavolume" and effect.get("identity") for effect in prepared["effects"]):
         raise ValueError("An existing DataVolume cannot be replaced safely in a VM edit. Add a disk with a new name/source, then detach the old disk; its data is retained.")
     for effect in prepared["effects"]:
@@ -630,7 +630,7 @@ def commit_edit(prepared, before_save=None, send=None):
             target["metadata"].setdefault("annotations", {})["harvesterhci.io/imageId"] = f"{result['namespace']}/{result['name']}"
             target["spec"]["storageClassName"] = result["storage_class"]
             _set_claim_templates(vm, templates)
-    V._recheck_edit(prepared)
+    _recheck_edit(prepared)
     if before_save:
         before_save(prepared)
     for effect in prepared["effects"]:
@@ -656,7 +656,7 @@ def commit_edit(prepared, before_save=None, send=None):
     for claim, size in resize:
         try:
             send("PATCH", f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{urllib.parse.quote(claim)}",
-                  {"metadata": V._identity(prepared["claims"][claim]),
+                  {"metadata": _identity(prepared["claims"][claim]),
                    "spec": {"resources": {"requests": {"storage": size}}}}, ctype="application/merge-patch+json")
             grown.append(f"{claim} to {size}")
         except urllib.error.HTTPError as error:
@@ -681,8 +681,9 @@ def commit_edit(prepared, before_save=None, send=None):
 
 
 def edit(ns, name, cfg):
-    return V.commit_edit(prepare_edit(ns, name, cfg))
+    return commit_edit(prepare_edit(ns, name, cfg))
 
 
-# homestead_vms holds the bound state and re-exports this module, so it is imported last.
+# homestead_vms holds the bound state and imports this module, so it is imported last.
 import homestead_vms as V  # noqa: E402
+import homestead_vm_list as VM_LIST  # noqa: E402

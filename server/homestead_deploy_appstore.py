@@ -2,9 +2,9 @@
 
 The Community Applications feed, read and cached; its text made plain; search,
 ranking and the spotlight; and an App Store template turned into a deploy
-config. Moved unchanged from homestead_deploy (#623); import that module,
-which re-exports these names. Names server.py binds on homestead_deploy, or the
-tests replace there, are read through it (D.x), so those replacements still apply.
+config. Moved unchanged from homestead_deploy (#623): read and replace these
+names here. Names server.py binds on homestead_deploy are read through it
+(D.x), so a replacement there still applies.
 """
 import html
 import json
@@ -284,7 +284,7 @@ def fetch_appstore():
                 "comment": catalog_text(a.get("CAComment") or a.get("ModeratorComment") or "", 600),
                 "license": catalog_text(a.get("License") or a.get("Licence") or "", 80),
             }
-            item["deploy"] = D.template_to_cfg(item)
+            item["deploy"] = template_to_cfg(item)
             out.append(item)
         return out
     return D.cached(f"appstore:{source}", 21600, go)
@@ -416,9 +416,10 @@ def template_to_cfg(app):
             "template_devices": devices, "template_network": network,
             "network_mode": network_mode, "vip_mode": vip_mode,
             "env_bindings": {}}
-    return D.analyze_deploy_intent(cfg)
+    return MANIFESTS.analyze_deploy_intent(cfg)
 
 
 # Imported last, so this module can be imported before or after homestead_deploy:
 # both only look these names up when a function runs.
 import homestead_deploy as D  # noqa: E402
+import homestead_deploy_manifests as MANIFESTS  # noqa: E402

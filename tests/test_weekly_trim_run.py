@@ -13,10 +13,13 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_kube as K
 import homestead_longhorn as LH
 import homestead_longhorn_jobs as LH_JOBS
 import homestead_operations as OPS
 import homestead_weekly_trim as WT
+from fakes.kube import Kube
 
 VOLS = f"{LH.API}/namespaces/{LH.LHNS}/volumes"
 JOBS = f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs"
@@ -26,7 +29,8 @@ DETACHED = ValueError("Longhorn refused the trim: Action [trimFilesystem] not av
 
 
 def vol(name, state, pvc=None):
-    return {"metadata": {"name": name, "labels": {}},
+    return {"apiVersion": "longhorn.io/v1beta2", "kind": "Volume",
+            "metadata": {"namespace": LH.LHNS, "name": name, "labels": {}},
             "status": {"state": state, "kubernetesStatus": {"pvName": name, "pvcName": pvc or f"data-{name}",
                                                             "namespace": "apps"}}}
 
@@ -82,25 +86,25 @@ class PlanTests(unittest.TestCase):
             self.assertEqual(("skipped", "deleted"), WT.classify(wrapped))
 
 
+def api_down(*_):
+    raise OSError("api down")
+
+
 class Cluster:
-    """Longhorn's volumes and the PVs as the API server answers, and the
-    backend's answer to each trim: an exception per volume, or None."""
+    """Longhorn's volumes and the PVs on the shared fake API (tests/fakes/kube.py),
+    and the backend's answer to each trim: an exception per volume, or None.
+    The backend is Longhorn's own HTTP API, not Kubernetes', so it stays a
+    stand-in. The fake starts when a test uses the cluster."""
     def __init__(self, volumes=(), modes=None, answers=None, unreadable=False):
         self.volumes, self.modes, self.answers = list(volumes), dict(modes or {}), dict(answers or {})
-        self.unreadable, self.trimmed, self.sent = unreadable, [], []
+        self.unreadable, self.trimmed = unreadable, []
 
-    def get(self, path):
-        if path == VOLS:
-            if self.unreadable:
-                raise OSError("api down")
-            return {"items": self.volumes}
-        if path == PVS:
-            return {"items": [{"metadata": {"name": n}, "spec": {"volumeMode": m}} for n, m in self.modes.items()]}
-        raise AssertionError(path)
-
-    def send(self, method, path, body=None, **kw):
-        self.sent.append((method, path))
-        return {}
+    def start(self, test):
+        pvs = [{"apiVersion": "v1", "kind": "PersistentVolume", "metadata": {"name": n}, "spec": {"volumeMode": m}}
+               for n, m in self.modes.items()]
+        self.kube = test.enterContext(Kube(*self.volumes, *pvs))
+        if self.unreadable:
+            self.kube.react("GET", VOLS, api_down)
 
     def backend(self, method, path, body=None):
         self.trimmed.append((method, path, body))
@@ -118,6 +122,14 @@ class StateCase(unittest.TestCase):
         WT.bind(self.dir.name)
         self.checkpoints = []
 
+    def use(self, cluster):
+        """Start the cluster's fake API and bind Longhorn's module to it."""
+        cluster.start(self)
+        self.addCleanup(LH.bind, *(getattr(LH, name, None) for name in (
+            "kget", "ksend", "_cache", "STORAGE_CLASS", "DEFAULT_NS")))
+        LH.bind(K.kget, K.ksend, {}, "longhorn")
+        return cluster
+
     def state(self):
         try:
             with open(os.path.join(self.dir.name, WT.STATE), encoding="utf-8") as handle:
@@ -133,7 +145,7 @@ class StateCase(unittest.TestCase):
 class JobTests(StateCase):
     def run_job(self, cluster, ref=None):
         """Step the job to its end, as the job store would; returns the last answer."""
-        LH.bind(cluster.get, cluster.send, {}, "longhorn")
+        self.use(cluster)
         item = {"id": "j1", "ref": dict(ref or {"phase": "plan", "why": "weekly", "slot": SAT})}
         with mock.patch.object(LH_JOBS, "_backend", cluster.backend):
             for _ in range(50):
@@ -211,7 +223,7 @@ class JobTests(StateCase):
 
     def test_progress_names_the_volume_being_trimmed(self):
         lh = Cluster([vol("pvc-a", "attached"), vol("pvc-c", "attached")])
-        LH.bind(lh.get, lh.send, {}, "longhorn")
+        self.use(lh)
         item = {"id": "j1", "ref": {"phase": "plan", "why": "weekly", "slot": SAT}}
         with mock.patch.object(LH_JOBS, "_backend", lh.backend):
             first = WT.resolve(item, lambda i: None)
@@ -239,34 +251,46 @@ class JobTests(StateCase):
 
 
 def recurring(name, task="filesystem-trim", cron=LH_JOBS.TRIM_CRON, groups=("default", "media"), labels=MANAGED):
-    return {"metadata": {"name": name, "labels": dict(labels)},
+    return {"apiVersion": "longhorn.io/v1beta2", "kind": "RecurringJob",
+            "metadata": {"namespace": LH.LHNS, "name": name, "labels": dict(labels)},
             "spec": {"name": name, "task": task, "cron": cron, "groups": list(groups)}}
 
 
 class Jobs:
-    """Longhorn's RecurringJobs as the API server answers."""
-    def __init__(self, jobs=(), unreadable=False):
-        self.jobs, self.unreadable, self.sent = {j["metadata"]["name"]: j for j in jobs}, unreadable, []
+    """Longhorn's RecurringJobs on the shared fake API (tests/fakes/kube.py).
+    delete says how the trim job's removal goes wrong: an HTTP code, or "lost"
+    for Longhorn deleting it while the answer never comes back."""
+    def __init__(self, jobs=(), unreadable=False, delete=None):
+        self.jobs, self.unreadable, self.delete = list(jobs), unreadable, delete
 
-    def get(self, path):
-        if path == JOBS:
-            if self.unreadable:
-                raise OSError("api down")
-            return {"items": list(self.jobs.values())}
-        raise AssertionError(path)
+    def start(self, test):
+        self.kube = test.enterContext(Kube(*self.jobs))
+        if self.unreadable:
+            self.kube.react("GET", JOBS, api_down)
+        path = f"{JOBS}/{LH_JOBS.TRIM_JOB}"
+        if isinstance(self.delete, int):
+            self.kube.fail(path, self.delete, method="DELETE")
+        elif self.delete == "lost":
+            gone = []
 
-    def send(self, method, path, body=None, **kw):
-        self.sent.append((method, path))
-        if method == "DELETE":
-            self.jobs.pop(path.rsplit("/", 1)[1], None)
-        return {}
+            def lost(method, target, body):
+                if gone:
+                    return None
+                gone.append(target)
+                self.kube(method, target, body)       # Longhorn deleted it ...
+                raise TimeoutError("timed out")       # ... the answer never came back
+            self.kube.react("DELETE", path, lost)
+
+    @property
+    def sent(self):
+        return [(method, path) for method, path, _, _ in self.kube.writes]
 
 
 class TickTests(StateCase):
     NOW = SAT + 600
 
     def tick(self, lh, operations=(), now=None):
-        LH.bind(lh.get, lh.send, {}, "longhorn")
+        self.use(lh)
         with mock.patch.object(WT, "start", return_value={"id": "j1"}) as start:
             said = WT.tick(now or self.NOW, list(operations))
         return said, start
@@ -321,11 +345,7 @@ class TickTests(StateCase):
 
     def test_a_crash_after_the_delete_still_counts_it_as_removed(self):
         self.save({"created": True, "groups": ["default", "media"]})
-        lh = Jobs([recurring(LH_JOBS.TRIM_JOB)])
-        def lost(method, path, body=None, **kw):     # Longhorn deleted it; the answer never came back
-            lh.jobs.pop(LH_JOBS.TRIM_JOB, None)
-            raise TimeoutError("timed out")
-        lh.send = lost
+        lh = Jobs([recurring(LH_JOBS.TRIM_JOB)], delete="lost")     # Longhorn deleted it; the answer never came back
         said, start = self.tick(lh)
         self.assertTrue(said.startswith("weekly trim not checked"), said)
         said, start = self.tick(Jobs([]))
@@ -334,23 +354,17 @@ class TickTests(StateCase):
 
     def test_a_job_already_gone_when_deleted_counts_as_removed(self):
         self.save({"created": True, "groups": ["default", "media"]})
-        lh = Jobs([recurring(LH_JOBS.TRIM_JOB)])
-        def gone(method, path, body=None, **kw):
-            raise urllib.error.HTTPError(path, 404, "not found", {}, None)
-        lh.send = gone
+        lh = Jobs([recurring(LH_JOBS.TRIM_JOB)], delete=404)
         said, start = self.tick(lh)
         self.assertEqual((True, True), (self.state()["enabled"], self.state()["retired"]))
 
     def test_an_error_while_acting_is_reported_not_raised(self):
         self.save({"created": True, "groups": ["default", "media"]})
-        lh = Jobs([recurring(LH_JOBS.TRIM_JOB)])
-        def refused(method, path, body=None, **kw):
-            raise urllib.error.HTTPError(path, 403, "forbidden", {}, None)
-        lh.send = refused
+        lh = Jobs([recurring(LH_JOBS.TRIM_JOB)], delete=403)
         said, start = self.tick(lh)
         self.assertTrue(said.startswith("weekly trim not checked: "), said)
         self.save({"retired": True, "enabled": True})
-        LH.bind(Jobs([]).get, Jobs([]).send, {}, "longhorn")
+        self.use(Jobs([]))
         with mock.patch.object(WT, "start", side_effect=ValueError("Weekly trim is running")):
             self.assertEqual("weekly trim not checked: Weekly trim is running", WT.tick(self.NOW, []))
 
@@ -400,8 +414,7 @@ class LockTests(unittest.TestCase):
 
 class RouteTests(StateCase):
     def view(self, operations=(), jobs=()):
-        lh = Jobs(jobs)
-        LH.bind(lh.get, lh.send, {}, "longhorn")
+        self.use(Jobs(jobs))
         with mock.patch.object(OPS, "snapshot", return_value=list(operations)), \
                 mock.patch.object(WT.time, "time", return_value=SAT + 3 * 86400):
             return WT.view()

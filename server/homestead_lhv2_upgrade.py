@@ -8,6 +8,7 @@ import urllib.error
 from urllib.parse import quote
 
 import homestead_capacity_review as REVIEW
+import homestead_kube as KUBE
 import homestead_operations as OPS
 
 LH = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
@@ -24,11 +25,11 @@ def bind(read, send, detect, installed, parse_version):
 
 def _get(path, optional=False):
     try:
-        obj = kget(path)
+        obj = KUBE.get_optional(path, read=kget, missing=KUBE.GONE) if optional else kget(path)
     except urllib.error.HTTPError as error:
-        if optional and error.code == 404:
-            return None
         raise ValueError(f"Longhorn upgrade inventory is unavailable (HTTP {error.code}); check access and try again") from error
+    if obj is KUBE.GONE:
+        return None
     if not isinstance(obj, dict):
         raise ValueError("Longhorn upgrade inventory is incomplete; check again")
     return obj

@@ -9,6 +9,7 @@ import math
 import time
 import urllib.error
 
+import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_storage_guard as STORAGE_GUARD
 
@@ -43,7 +44,10 @@ def _items(path, label, warnings, optional=False):
     # turn a failed/partial inventory into permission to remove data.
     for attempt in range(2):
         try:
-            listing = kget(path)
+            # An optional list that is not there (404) is empty, with no warning.
+            listing = KUBE.get_optional(path, read=kget, missing=KUBE.GONE) if optional else kget(path)
+            if listing is KUBE.GONE:
+                return []
             if not isinstance(listing.get("items"), list) or listing.get("metadata", {}).get("continue"):
                 raise ValueError("incomplete inventory")
             return listing["items"]
@@ -58,8 +62,6 @@ def _items(path, label, warnings, optional=False):
                 error.close()
                 time.sleep(min(2.0, delay))
                 continue
-            if optional and error.code == 404:
-                return []
             warnings.append(f"{label} inventory unavailable (HTTP {error.code})" +
                             ("; temporarily rate limited, refresh the review shortly" if error.code == 429 else ""))
         except Exception as error:

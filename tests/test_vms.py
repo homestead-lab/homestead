@@ -9,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_vms as VMS
+import homestead_vm_list as VM_LIST
+import homestead_vm_edit as VM_EDIT
 
 # The shape Harvester writes: runStrategy, limits, a multus network, a disk
 # claim and a cloud-init volume.
@@ -88,7 +90,7 @@ class VmTests(unittest.TestCase):
 
     def test_a_stopped_harvester_vm_offers_start(self):
         self.use()
-        v = VMS.list_vms()[0]
+        v = VM_LIST.list_vms()[0]
         self.assertEqual(("Stopped", "RerunOnFailure", ["start"]), (v["status"], v["run_strategy"], v["actions"]))
         self.assertEqual(("windows", "desk", "8092Mi", 4), (v["os"], v["description"], v["memory"], v["cores"]))
         self.assertEqual([("disk-0", "disk", "win11-disk-0", "80Gi"), ("cloudinitdisk", "cloud-init", "", "")],
@@ -107,7 +109,7 @@ class VmTests(unittest.TestCase):
     def test_a_crashed_vm_clears_backoff_when_switched_off_without_erasing_history(self):
         c = self.crashed()
         before = copy.deepcopy(c.vm)
-        row, detail = VMS.list_vms()[0], VMS.detail("default", "win11")
+        row, detail = VM_LIST.list_vms()[0], VMS.detail("default", "win11")
         for view in (row, detail):
             self.assertEqual(("Stopped", ["start"], False, ""),
                              (view["status"], view["actions"], view["running"], view["problem"]))
@@ -125,7 +127,7 @@ class VmTests(unittest.TestCase):
                     c.vm["spec"]["runStrategy"] = strategy
                 else:
                     c.vm["spec"]["running"] = running
-                self.assertEqual("Stopped", VMS.list_vms()[0]["status"])
+                self.assertEqual("Stopped", VM_LIST.list_vms()[0]["status"])
                 self.assertEqual(["start"], VMS.detail("default", "win11")["actions"])
 
     def test_completed_instances_are_off_but_live_and_unfinished_instances_keep_backoff(self):
@@ -135,7 +137,7 @@ class VmTests(unittest.TestCase):
                 c.vmi = {"metadata": {"name": "win11", "namespace": "default", "deletionTimestamp": "2026-10-01T00:00:00Z"},
                          "status": {"phase": phase}}
                 expected = "Stopped" if phase in ("Succeeded", "Failed") else "CrashLoopBackOff"
-                self.assertEqual(expected, VMS.list_vms()[0]["status"])
+                self.assertEqual(expected, VM_LIST.list_vms()[0]["status"])
                 self.assertEqual(expected, VMS.detail("default", "win11")["status"])
 
     def test_automatic_retries_missing_policy_and_queued_power_keep_backoff(self):
@@ -145,17 +147,17 @@ class VmTests(unittest.TestCase):
                 c.vm["spec"].pop("runStrategy")
                 if strategy:
                     c.vm["spec"]["runStrategy"] = strategy
-                self.assertEqual("CrashLoopBackOff", VMS.list_vms()[0]["status"])
+                self.assertEqual("CrashLoopBackOff", VM_LIST.list_vms()[0]["status"])
                 self.assertEqual(["stop", "force-stop"], VMS.detail("default", "win11")["actions"])
         for request in ("Start", "Stop"):
             with self.subTest(request=request):
                 c = self.crashed()
                 c.vm["status"]["stateChangeRequests"] = [{"action": request}]
-                self.assertEqual("CrashLoopBackOff", VMS.list_vms()[0]["status"])
+                self.assertEqual("CrashLoopBackOff", VM_LIST.list_vms()[0]["status"])
                 self.assertEqual("CrashLoopBackOff", VMS.detail("default", "win11")["status"])
         c = self.crashed()
         c.vm["metadata"]["deletionTimestamp"] = "2026-10-01T00:00:00Z"
-        self.assertEqual(("Deleting", []), (VMS.list_vms()[0]["status"], VMS.detail("default", "win11")["actions"]))
+        self.assertEqual(("Deleting", []), (VM_LIST.list_vms()[0]["status"], VMS.detail("default", "win11")["actions"]))
 
     def test_failed_incomplete_or_malformed_instance_inventory_cannot_prove_off(self):
         for inventory in (None, {}, {"items": None}, {"items": {}}, {"items": [{}]},
@@ -169,7 +171,7 @@ class VmTests(unittest.TestCase):
                         return inventory
                     return c.get(path)
                 VMS.bind(get, c.send, lambda *a: [])
-                self.assertEqual("CrashLoopBackOff", VMS.list_vms()[0]["status"])
+                self.assertEqual("CrashLoopBackOff", VM_LIST.list_vms()[0]["status"])
 
     def test_only_not_found_proves_an_instance_is_absent_on_the_vm_page(self):
         for code in (403, 404, 500):
@@ -188,18 +190,18 @@ class VmTests(unittest.TestCase):
     def test_stopping_after_a_crash_keeps_real_disk_failures_visible(self):
         c = self.crashed()
         c.vm["status"]["conditions"].append({"type": "Failure", "status": "True", "message": "DataVolume refused the disk source"})
-        for row in (VMS.list_vms()[0], VMS.detail("default", "win11")):
+        for row in (VM_LIST.list_vms()[0], VMS.detail("default", "win11")):
             self.assertEqual("Stopped", row["status"])
             self.assertIn("DataVolume refused", row["problem"])
         c.vm["status"]["conditions"] = []
         dv = {"metadata": {"namespace": "default", "name": "win11-disk-0"}, "status": {"phase": "Failed"}}
-        row = VMS._row(c.vm, {}, dvs={("default", "win11-disk-0"): dv})
+        row = VM_LIST._row(c.vm, {}, dvs={("default", "win11-disk-0"): dv})
         self.assertEqual("Stopped", row["status"])
         self.assertIn("disk win11-disk-0 has been Failed", row["problem"])
 
     def test_a_running_vm_shows_its_guest_and_offers_stop_restart_pause(self):
         self.use(running=True)
-        v = VMS.list_vms()[0]
+        v = VM_LIST.list_vms()[0]
         self.assertEqual(["console", "stop", "restart", "pause", "migrate"], v["actions"])
         self.assertEqual(("192.0.2.50", "harvester-node1", "Windows 11 Pro"), (v["ip"], v["node"], v["os"]))
         d = VMS.detail("default", "win11")
@@ -227,10 +229,10 @@ class VmTests(unittest.TestCase):
         self.assertEqual("0/2 nodes are available: 2 Insufficient memory.", VMS._problem(vm, {}))
 
     def test_display_says_where_the_picture_goes(self):
-        self.assertEqual("virtual", VMS._display({}))
-        self.assertEqual("gpu", VMS._display({"autoattachGraphicsDevice": False, "gpus": [{"name": "gpu1"}]}))
-        self.assertEqual("gpu", VMS._display({"autoattachGraphicsDevice": False, "hostDevices": [{"name": "hd1"}]}))
-        self.assertEqual("none", VMS._display({"autoattachGraphicsDevice": False}))
+        self.assertEqual("virtual", VM_LIST._display({}))
+        self.assertEqual("gpu", VM_LIST._display({"autoattachGraphicsDevice": False, "gpus": [{"name": "gpu1"}]}))
+        self.assertEqual("gpu", VM_LIST._display({"autoattachGraphicsDevice": False, "hostDevices": [{"name": "hd1"}]}))
+        self.assertEqual("none", VM_LIST._display({"autoattachGraphicsDevice": False}))
 
     def test_power_uses_subresources_without_fallback_policy_mutation(self):
         c = self.use()
@@ -253,7 +255,7 @@ class VmTests(unittest.TestCase):
 
     def test_editing_cpu_memory_and_strategy(self):
         c = self.use(running=True)
-        result = VMS.edit("default", "win11", {"cores": 6, "memory": "12Gi", "run_strategy": "Always", "description": "", "restart": True})
+        result = VM_EDIT.edit("default", "win11", {"cores": 6, "memory": "12Gi", "run_strategy": "Always", "description": "", "restart": True})
         dom = c.vm["spec"]["template"]["spec"]["domain"]
         self.assertEqual((6, "12Gi", "6", "12Gi"), (dom["cpu"]["cores"], dom["memory"]["guest"],
                                                     dom["resources"]["limits"]["cpu"], dom["resources"]["limits"]["memory"]))
@@ -263,7 +265,7 @@ class VmTests(unittest.TestCase):
         self.assertIn("restarting now", result["detail"])
         for bad in ({"cores": 0}, {"memory": "lots"}, {"run_strategy": "Sometimes"}):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
-                VMS.edit("default", "win11", bad)
+                VM_EDIT.edit("default", "win11", bad)
 
     def test_deleting_with_its_disks_spares_the_iso_library_and_other_vms_disks(self):
         c = self.use()
@@ -338,16 +340,16 @@ class UnreadVmListTests(unittest.TestCase):
     def test_a_failed_read_raises(self):
         self.bind(urllib.error.URLError("timed out"))
         with self.assertRaises(Exception):
-            VMS.list_vms()
+            VM_LIST.list_vms()
 
     def test_a_404_with_kubevirt_installed_raises(self):
         self.bind(urllib.error.HTTPError("/apis/kubevirt.io/v1/virtualmachines", 404, "not found", None, io.BytesIO(b"")))
         with self.assertRaises(urllib.error.HTTPError):
-            VMS.list_vms()
+            VM_LIST.list_vms()
 
     def test_no_kubevirt_is_no_vms(self):
         self.bind(urllib.error.HTTPError("/apis/kubevirt.io/v1/virtualmachines", 404, "not found", None, io.BytesIO(b"")), groups=("apps",))
-        self.assertEqual([], VMS.list_vms())
+        self.assertEqual([], VM_LIST.list_vms())
 
     def test_an_incomplete_list_raises(self):
         def get(path):
@@ -356,7 +358,7 @@ class UnreadVmListTests(unittest.TestCase):
             return {"items": []}
         VMS.bind(get, lambda *a, **k: {}, lambda *a, **k: [])
         with self.assertRaises(ValueError):
-            VMS.list_vms()
+            VM_LIST.list_vms()
 
 
 if __name__ == "__main__":

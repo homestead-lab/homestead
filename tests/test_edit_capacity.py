@@ -5,6 +5,7 @@ from unittest import mock
 import test_rollout_capacity as fixtures
 import server
 import homestead_lifecycle as lifecycle
+import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_capacity_review as review
 
 
@@ -120,7 +121,7 @@ class EditCapacityTests(unittest.TestCase):
     def test_new_volume_is_planned_without_creating(self):
         self.config["containers"][0]["volumes"] = [{"kind": "new-rwx", "source": "new-data", "path": "/data", "size_gb": 5}]
         with mock.patch.object(lifecycle, "create_pvc") as create:
-            prepared = lifecycle.prepare_edit(self.config, self.current)
+            prepared = WORKLOAD_EDIT.prepare_edit(self.config, self.current)
         create.assert_not_called()
         self.assertEqual("ReadWriteMany", prepared["claims"][0]["access_mode"])
 
@@ -202,7 +203,7 @@ class EditCapacityTests(unittest.TestCase):
         self.config = {"ns": "lab", "name": "shared", "workload_name": "renamed"}
         config = self.reviewed()
         with mock.patch.object(server.RENAME, "dispatch", return_value={"ok": True, "renamed": True}) as rename, \
-                mock.patch.object(server.KUBE_HELPERS, "ksend") as send, mock.patch.object(lifecycle, "edit_workload") as edit:
+                mock.patch.object(server.KUBE_HELPERS, "ksend") as send, mock.patch.object(WORKLOAD_EDIT, "edit_workload") as edit:
             result, _, create, icons = self.call("/api/edit", config)
         self.assertEqual(200, result[0], result)
         rename.assert_called_once()
