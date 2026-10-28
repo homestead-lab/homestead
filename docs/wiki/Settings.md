@@ -12,7 +12,7 @@ Settings has ten sections: nine that change the cluster for everyone, and
 | **Monitoring** | when bars and node cards turn amber or red; drive health |
 | **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space, replica rebuilds and the V2 engine; storage classes; namespaces |
 | **Linked clusters** | other Homesteads managed from this one, and moving workloads between them |
-| **Connections** | UniFi Network; MQTT and Home Assistant - stats, and power control for the containers and VMs you pick; the App Store catalogue |
+| **Connections** | UniFi Network; MQTT and Home Assistant - stats, and power control for the containers and VMs you pick; the alert webhook (alerts to ntfy, Gotify or any webhook, see [Alerts and PWA notifications](https://github.com/homestead-lab/homestead/blob/main/docs/notifications.md#alert-webhook)); the App Store catalogue |
 | **Users and access** | users and their roles, and [API keys](API) |
 | **Troubleshooting** | bug reports and logs |
 | **You** | appearance, notifications on this device, refresh rate, your password and signing out |
@@ -366,6 +366,16 @@ took. Opening a console or a host shell writes one line when it ends.
 - Sign-ins are in the [sign-in history](#sign-in-history), and what AI agents
   asked for, with their arguments, in the agent audit.
 
+Admins read it under **Events → Audit**, together with the agent audit (every
+call an API key made, on `/api/v1` and `/mcp`): one list, newest first, each
+row saying which log it came from, who, what and how it ended. Filter it by log
+or by person; **Older** and **Newer** move 100 rows at a time. The two files
+stay apart: an agent's arguments are shown only under **Settings → AI agent requests**.
+Each page reads the logs from their newest end, so a full log stays quick; when
+a filter matches little, only the newest 20,000 lines of each log are searched,
+and the page says so. A change an AI agent made through `/mcp` appears in both
+logs, once as the request and once as the agent's call.
+
 ## Sign-in history
 
 Every sign-in to Homestead, failed attempt, sign-out, password change and
@@ -482,6 +492,11 @@ notifications - outages, degraded storage and workloads, failed jobs, hosts
 joining, image updates - even while closed. **This device → Turn on
 notifications**. Pushes carry nothing: the app fetches what happened over its own
 signed-in connection. On iPhone, add Homestead to the Home Screen first.
+
+To get the same alerts in ntfy, Gotify or any webhook, an admin sets
+**Connections → Alert webhook**: its format, the address, which alerts
+(critical only, warnings and critical, or everything) and, for a self-hosted
+service on the home network, **Allow a LAN address**.
 
 Browsers allow neither on a plain-HTTP address; see
 [Installing Homestead](Installing-Homestead#reaching-it-from-outside).

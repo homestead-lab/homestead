@@ -171,7 +171,7 @@ def delete_backup(name):
 
 
 # Last, so that importing any of these modules first works: homestead_longhorn
-# imports this one and re-exports its names.
+# imports this one.
 import homestead_longhorn_volumes as VOLUMES  # noqa: E402
 import homestead_longhorn_target as BACKUP_TARGET  # noqa: E402
 import homestead_longhorn_restore as RESTORE  # noqa: E402

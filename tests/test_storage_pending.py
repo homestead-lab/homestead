@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_storage_pending as PENDING
 import homestead_updates as UPDATES
+import homestead_update_rollouts as ROLLOUTS
 import homestead_operations as OPS
 
 NOW = 1_790_000_000
@@ -89,7 +90,7 @@ class WaitingPodTests(unittest.TestCase):
         event = {"reason": "FailedAttachVolume", "lastTimestamp": "x",
                  "message": 'AttachVolume.Attach failed for volume "pvc-1" : CSINode k3s-2 does not contain driver driver.longhorn.io'}
         UPDATES.kget = lambda path: {"items": [event]}
-        found = UPDATES._why_waiting("lab", pod)
+        found = ROLLOUTS._why_waiting("lab", pod)
         self.assertIn("Longhorn is not running on k3s-2 yet", found["message"])
         self.assertFalse(found["stuck"], "five minutes after a join is not stuck")
         self.assertNotIn("hint", found)

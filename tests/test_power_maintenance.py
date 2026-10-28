@@ -10,7 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_history as HISTORY
-import homestead_lifecycle as LC
+import homestead_node_actions as NODE_ACTIONS
 import homestead_operations as OPS
 import homestead_power as POWER
 import homestead_power_jobs as POWER_JOBS
@@ -58,7 +58,7 @@ class MaintenanceEventTests(unittest.TestCase):
                 progress(phase, 10, phase)
                 seen[phase] = list(self.events())
             return {}
-        with mock.patch.object(LC, "node_power", side_effect=node_power):
+        with mock.patch.object(NODE_ACTIONS, "node_power", side_effect=node_power):
             try:
                 POWER_JOBS.run_power_job("op-1", power_plan)
             except POWER_JOBS.PowerNotSent:

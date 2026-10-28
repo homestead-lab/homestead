@@ -12,6 +12,7 @@ from fakes.job_store import store_writes
 import homestead_import_job as flow
 import homestead_import_guard as guard
 import homestead_imports as imports
+import homestead_container_import as CONTAINER_IMPORT
 import homestead_operations as ops
 import homestead_capacity_review as review
 import homestead_vm_mutation_recovery as recovery
@@ -287,8 +288,8 @@ class ImportJobTests(unittest.TestCase):
         with mock.patch.object(ops.time, "time", return_value=int(self.body["capacity_token"].split(".")[0]) + 1):
             self.assertFalse(ops._public(self.item())["dismissible"])
         before = copy.deepcopy(self.objects[self.pvc_path])
-        self.assertTrue(imports.import_cleanup_plan("homestead-import-app")["journalled"])
-        result = imports.delete_import("homestead-import-app")
+        self.assertTrue(CONTAINER_IMPORT.import_cleanup_plan("homestead-import-app")["journalled"])
+        result = CONTAINER_IMPORT.delete_import("homestead-import-app")
         self.assertIn("all volumes retained", result["message"])
         self.assertEqual(before, self.objects[self.pvc_path])
         deletes = [row for row in self.sent if row[0] == "DELETE"]
@@ -306,9 +307,9 @@ class ImportJobTests(unittest.TestCase):
                 self.objects.pop(self.job_path, None)
             else:
                 self.objects[self.job_path] = replacement
-            self.assertTrue(imports.import_cleanup_plan("homestead-import-app")["journalled"])
+            self.assertTrue(CONTAINER_IMPORT.import_cleanup_plan("homestead-import-app")["journalled"])
             with self.assertRaises(ValueError):
-                imports.delete_import("homestead-import-app")
+                CONTAINER_IMPORT.delete_import("homestead-import-app")
         self.assertNotIn("DELETE", [row[0] for row in self.sent])
 
     def test_cleanup_replacement_workload_is_never_touched(self):
@@ -316,7 +317,7 @@ class ImportJobTests(unittest.TestCase):
         self.objects[self.dep_path]["metadata"]["uid"] = "someone-else"
         count = len(self.sent)
         with self.assertRaises(ValueError):
-            imports.delete_import("homestead-import-app")
+            CONTAINER_IMPORT.delete_import("homestead-import-app")
         self.assertEqual(count, len(self.sent))
 
     def test_changed_recovery_inventory_needs_fresh_approval(self):
@@ -349,8 +350,8 @@ class ImportJobTests(unittest.TestCase):
         handler._body = lambda: {"name": "homestead-import-app", "remove_workload": True, "remove_volumes": ["data"]}
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
-        with mock.patch.object(imports, "import_cleanup_plan", return_value=plan), \
-             mock.patch.object(imports, "delete_import", return_value=result) as cleanup, \
+        with mock.patch.object(CONTAINER_IMPORT, "import_cleanup_plan", return_value=plan), \
+             mock.patch.object(CONTAINER_IMPORT, "delete_import", return_value=result) as cleanup, \
              mock.patch.object(server.KUBE_HELPERS, "ksend") as send, mock.patch.object(server.OVERVIEW_ROUTES, "guard_managed_smb"):
             handler.do_POST()
         send.assert_not_called()

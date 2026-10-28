@@ -3,10 +3,10 @@ weekly trim live in homestead_longhorn_jobs, volumes, groups and snapshots in
 homestead_longhorn_volumes, the backup target in homestead_longhorn_target,
 backups in homestead_longhorn_backups and restores in
 homestead_longhorn_restore. homestead_longhorn keeps what bind() sets, the
-helpers the parts share, the overview and the routes, and re-exports every
-moved name."""
+helpers the parts share, the overview and the routes, and offers only the
+moved names the move source and the move engine read through the LH their
+bind() is given (test_split_reexports)."""
 import ast
-import re
 import subprocess
 import sys
 import unittest
@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "server"
 sys.path.insert(0, str(SERVER))
 
+import source_scan as SS
 import homestead_csi_restore as CSI_RESTORE
 import homestead_longhorn as LH
 import homestead_longhorn_backups as BACKUPS
@@ -49,27 +50,27 @@ def moved(part):
 def bound_holders():
     """Server modules whose LH is set by their bind(): server.py hands them
     homestead_longhorn (the move source, the move engine's state)."""
-    return {path.stem for path in SERVER.glob("*.py")
-            if re.search(r"^LH\s*=(?:\s*\w+\s*=)*\s*None\s*$", path.read_text(), re.M)}
+    return {path.stem for path in SS.server_files()
+            if any(isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant) and node.value.value is None
+                   and any(isinstance(target, ast.Name) and target.id == "LH" for target in node.targets)
+                   for node in SS.tree(path).body)}
 
 
 def read_elsewhere():
     """Names other server modules read through homestead_longhorn, imported or bound."""
     found = set()
     holders = bound_holders()
-    for path in SERVER.glob("*.py"):
+    for path in SS.server_files():
         if path.stem in NAMES:
             continue
-        text = path.read_text()
-        for alias in re.findall(r"homestead_longhorn as (\w+)", text):
-            found |= set(re.findall(rf"\b{alias}\.(\w+)", text))
+        for alias in SS.import_aliases(path, "homestead_longhorn"):
+            found |= SS.attribute_reads(path, alias)
         if path.stem in holders:
-            found |= set(re.findall(r"(?<![\w.])LH\.(\w+)", text))
+            found |= SS.attribute_reads(path, "LH")
         for holder in holders:
-            for alias in re.findall(rf"\b{holder} as (\w+)", text):
-                found |= set(re.findall(rf"\b{alias}\.LH\.(\w+)", text))
-        for names in re.findall(r"from homestead_longhorn import ([\w, ]+)", text):
-            found |= {name.strip() for name in names.split(",")}
+            for alias in SS.import_aliases(path, holder):
+                found |= SS.attribute_reads(path, f"{alias}.LH")
+        found |= SS.from_imports(path, "homestead_longhorn")
     return found
 
 
@@ -77,15 +78,18 @@ def read_inside():
     """Moved names the six modules read: as ALIAS.name, or bare in the part that defines them."""
     found = set()
     for module in PARTS + (LH,):
-        text = Path(module.__file__).read_text().split("# Every moved name, for one release")[0]
-        found |= set(re.findall(r"\b(?:JOBS|VOLUMES|BACKUP_TARGET|BACKUPS|RESTORE)\.(\w+)", text))
+        text = SS.text(module.__file__).split("# What the move source and the move engine read")[0]
+        above = SS.tree(SS.code(text))
+        for alias in ("JOBS", "VOLUMES", "BACKUP_TARGET", "BACKUPS", "RESTORE"):
+            found |= SS.attribute_reads(above, alias)
         if module is not LH:
-            found |= {name for name in moved(module) if len(re.findall(rf"\b{name}\b", text)) > 1}
+            used = SS.name_counts(above)
+            found |= {name for name in moved(module) if used[name] > 1}
     return found
 
 
 class LonghornModuleTests(unittest.TestCase):
-    def test_every_moved_name_is_the_same_object_on_homestead_longhorn(self):
+    def test_each_moved_name_is_defined_once(self):
         seen = set()
         for part in PARTS:
             names = moved(part)
@@ -94,16 +98,18 @@ class LonghornModuleTests(unittest.TestCase):
                 self.assertNotIn(name, seen, f"{name} is defined twice")
                 self.assertNotIn(name, OWN, f"{part.__name__}.{name} is homestead_longhorn's")
                 seen.add(name)
-                self.assertIs(getattr(LH, name), getattr(part, name), f"{part.__name__}.{name}")
         self.assertEqual(62, len(seen))
         self.assertIn("TRIM_JOB", seen)
         self.assertIn("K8S_LABEL", seen)
 
-    def test_what_other_modules_read_is_still_on_homestead_longhorn(self):
+    def test_what_other_modules_read_is_on_homestead_longhorn_as_the_same_object(self):
         self.assertIn("STORAGE_CLASS", read_elsewhere())
-        self.assertIn("move_snapshot_error", read_elsewhere())
+        self.assertNotIn("move_snapshot_error", read_elsewhere())
         for name in sorted(read_elsewhere()):
             self.assertTrue(hasattr(LH, name), name)
+            for part in PARTS:
+                if name in vars(part):
+                    self.assertIs(getattr(part, name), getattr(LH, name), f"{part.__name__}.{name}")
 
     def test_what_bind_sets_lives_only_on_homestead_longhorn(self):
         for name in BOUND:
@@ -113,8 +119,10 @@ class LonghornModuleTests(unittest.TestCase):
 
     def test_each_module_can_be_imported_first(self):
         for name in NAMES:
-            done = subprocess.run([sys.executable, "-c", f"import {name}, homestead_longhorn as L; "
-                                   "L.list_jobs; L.save_group; L.backup_target; L.backups; L.restore_plan; L.ROUTES"],
+            done = subprocess.run([sys.executable, "-c", f"import {name}, homestead_longhorn as L, "
+                                   "homestead_longhorn_jobs as J, homestead_longhorn_volumes as V, "
+                                   "homestead_longhorn_restore as R; "
+                                   "J.list_jobs; V.save_group; L.backup_target; L.backups; R.restore_plan; L.ROUTES"],
                                   cwd=SERVER, capture_output=True, text=True)
             self.assertEqual(0, done.returncode, f"importing {name} first: {done.stderr}")
 
@@ -184,8 +192,7 @@ class LonghornModuleTests(unittest.TestCase):
         # A replacement there would not reach the moved code, so it must go to the
         # module that defines the name. The exceptions: what homestead_longhorn
         # defines itself (bind()'s clients, the shared helpers, the routes), and a
-        # name another server module reads through homestead_longhorn
-        # (server.LH.restore_backup), or one the move engine or move source reads
+        # name the move engine or move source reads
         # through the LH their bind() is given: replacing it there reaches those
         # reads, and only those. Read: assignments (tuple targets too), setattr,
         # mock.patch("homestead_longhorn.…") and mock.patch("server.LH.…"),
@@ -201,20 +208,13 @@ class LonghornModuleTests(unittest.TestCase):
         # the tests that drive another module's read of it may make one.
         inside = read_inside() & read_elsewhere()
         drives_another_module = {
-            "test_csi_restore_recovery.py": {"restore_backup"},   # homestead_storage_server
-            "test_setup.py": {"backup_target"},                   # homestead_setup
-            "test_objectstore.py": {"set_backup_target"},          # homestead_objectstore
             "test_move_backup.py": {"backups"},                   # homestead_move_source, as SOURCE.LH
         }
         found = []
-        trees = {path: ast.parse(path.read_text()) for path in sorted((ROOT / "tests").glob("test_*.py"))}
-        imported = {path.stem: {a.asname or a.name for node in ast.walk(tree) if isinstance(node, ast.Import)
-                                for a in node.names if a.name == "homestead_longhorn"}
-                    for path, tree in trees.items()}
+        trees = {path: SS.tree(path) for path in SS.test_files()}
+        imported = {path.stem: SS.import_aliases(tree, "homestead_longhorn") for path, tree in trees.items()}
         # Which attribute of a server module is homestead_longhorn.
-        holds = {}
-        for path in SERVER.glob("*.py"):
-            holds[path.stem] = set(re.findall(r"homestead_longhorn as (\w+)", path.read_text()))
+        holds = {path.stem: SS.import_aliases(path, "homestead_longhorn") for path in SS.server_files()}
         for stem in bound_holders():
             holds[stem].add("LH")
         strings = ("homestead_longhorn.",) + tuple(f"{stem}.{alias}." for stem, aliases in holds.items()

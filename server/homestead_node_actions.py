@@ -3,8 +3,8 @@ Node actions: the etcd quorum report, the checks before cordoning, draining,
 rebooting or shutting down a host, and the actions themselves.
 
 Split by feature from homestead_lifecycle (#623), moved unchanged. Names that
-server.py binds there, or that tests replace there, are read through it (L.name);
-homestead_lifecycle re-exports everything here.
+server.py binds there are read through it (L.name), so a replacement there
+still applies; read and replace the names defined here, here.
 """
 import time
 import urllib.error
@@ -34,7 +34,7 @@ def quorum_report():
 
 def node_action_check(node, action):
     """Refuse anything that would break etcd quorum. Returns (ok, reason, report)."""
-    rep = L.quorum_report()
+    rep = quorum_report()
     is_etcd = node in rep["members"]
     if action in ("cordon", "uncordon"):
         return True, "", rep
@@ -141,7 +141,7 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
         # Longhorn lets its instance managers go once their engines have
         # moved off; V2 engines take longer than V1. When nothing but those
         # is left, waiting longer is safe - it never forces anything.
-        limit = L.LONGHORN_DRAIN_WAIT if waiting and len(waiting) == len(targets) else 120
+        limit = LONGHORN_DRAIN_WAIT if waiting and len(waiting) == len(targets) else 120
         if time.monotonic() >= started + limit:
             raise ValueError(f"Host remains cordoned; drain timed out after {limit // 60} minutes. {reason}: {names}. "
                              "Power was not sent; inspect Longhorn volumes, disruption budgets and pod events")
@@ -178,30 +178,30 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
         report("verifying", 15, "Rechecking the planned single-host cluster outage")
         # The callback requires a fresh matching one-host inventory and review
         # token. Eviction would remove Homestead before it could send power.
-        rep = L.quorum_report()
+        rep = quorum_report()
         before_send()
         if hold and hold():
             steps.append("stopped the apps and VMs that wait for the host")
         steps.append("planned whole-cluster outage: no cordon or drain")
         # send: the caller's own last step - on a single host, a helper that
         # waits for Homestead to stop before it powers the host.
-        return (send or L._send_power)(node, action, steps, rep, report)
+        return (send or _send_power)(node, action, steps, rep, report)
     if force:
         # Overridden by an admin: no cordon or drain - which on a one-node
         # cluster would evict Homestead before it could send anything, and
         # leave the host cordoned after it came back. The host's own systemd
         # still stops everything in order.
-        rep = L.quorum_report()
+        rep = quorum_report()
         report("verifying", 15, "Forced: checking the host has not changed since the review")
         before_send()
         steps.append("forced: no cordon or drain")
-        return L._send_power(node, action, steps, rep, report)
-    ok, why, rep = L.node_action_check(node, action)
+        return _send_power(node, action, steps, rep, report)
+    ok, why, rep = node_action_check(node, action)
     if not ok:
         raise PermissionError(why)
 
     report("cordoning", 5, "Cordoning host; power has not been sent")
-    L.set_cordon(node, True)
+    set_cordon(node, True)
     steps.append("cordoned")
     held = bool(hold and hold())
     if held:
@@ -209,7 +209,7 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
     if drain_first:
         report("draining", 10, "Evicting workload and system pods through disruption budgets; power has not been sent")
         # What was stopped or moved has gone from the reviewed pods; nothing may be new.
-        d = L.drain(node, include_system=True, reviewed_pods=reviewed_pods, wait=True, progress=report, resumed=resumed or held)
+        d = drain(node, include_system=True, reviewed_pods=reviewed_pods, wait=True, progress=report, resumed=resumed or held)
         steps.append(f"drained {len(d['evicted'])} pod(s)")
         refused = [item for item in d["skipped"] if "(HTTP " in item]
         if refused:
@@ -218,11 +218,11 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
 
     # A long drain can outlive the reviewed quorum, VM and replica state.
     report("verifying", 15, "Drain completed; rechecking quorum, VMs, pods and volume replicas before power")
-    ok, why, rep = L.node_action_check(node, action)
+    ok, why, rep = node_action_check(node, action)
     if not ok:
         raise PermissionError("Host remains cordoned; power was not sent: " + why)
     before_send()
-    return L._send_power(node, action, steps, rep, report)
+    return _send_power(node, action, steps, rep, report)
 
 
 def _send_power(node, action, steps, rep, report):
@@ -260,5 +260,5 @@ def _send_power(node, action, steps, rep, report):
             "helper_pod": pod_name, "quorum": rep}
 
 
-# homestead_lifecycle holds the bound state and re-exports this module, so it is imported last.
+# homestead_lifecycle holds the bound state and imports this module, so it is imported last.
 import homestead_lifecycle as L  # noqa: E402

@@ -7,7 +7,7 @@ const fs = require("node:fs");
 const vm = require("node:vm");
 const between = require("./helpers/between");
 
-const context = { window: {}, console, document: {},
+const context = { window: {}, console, document: { addEventListener() {} },
   esc: value => String(value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])),
   icon: name => `<svg data-icon="${name}"></svg>` };
 vm.createContext(context);
@@ -67,7 +67,7 @@ test("the container block is the same for both forms", () => {
   const deploy = context.appFormContainerBlock("d", "deploy", "");
   assert.match(deploy, /id="d_basics_containers"/);
   assert.match(deploy, /containerAdd\((&quot;|')deploy(&quot;|')\)/);
-  assert.match(deploy, /Set pod copies above/);
+  assert.match(deploy, /Set pod copies under Placement/);
 });
 
 test("a container gets one panel in each section that holds containers", () => {
@@ -105,7 +105,7 @@ test("Deploy builds its sections from the shared list", () => {
   const workloads = fs.readFileSync("web/js/views-workloads.js", "utf8");
   const deploy = between(workloads, "async function viewDeploy", "\n}\n");
   assert.match(deploy, /appFormSections\("deploy"/);
-  assert.match(deploy, /later:\s*\{\s*placement:/);
+  assert.doesNotMatch(deploy, /later:/, "Placement is live in Deploy (#844)");
   assert.doesNotMatch(deploy, /later:\s*\{[^}]*monitoring/, "Monitoring stays settable in Deploy");
   assert.match(deploy, /appFormContainerBlock\("d"/);
   assert.doesNotMatch(deploy, /key:\s*"containers"/);
@@ -127,4 +127,14 @@ test("Review deployment names no field when another container's panel is not fou
   await c.window.doDeploy();
   assert.deepEqual(notices, ["Every container needs a name and image."]);
   assert.ok(asked.every(s => !/undefined/.test(String(s))), `asked for ${asked.join(", ")}`);
+});
+
+test("both forms say which containers share the pod in the same words", () => {
+  const host = { innerHTML: "" };
+  context.$ = sel => sel === "#d_pod_containers" ? host : null;
+  context.UI.chip = (text) => `[${text}]`;
+  context.appFormPodContainers("d", ["web", ""]);
+  assert.equal(host.innerHTML, "[web] [unnamed] run together in every pod, sharing its network and volumes.");
+  const lifecycle = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
+  assert.match(between(lifecycle, "function editContainerListChanged", "\n}\n"), /appFormPodContainers\("e",/);
 });

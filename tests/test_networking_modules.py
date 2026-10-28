@@ -3,10 +3,10 @@ shared readers live in homestead_network_state, the network picture in
 homestead_network_inventory, the Services that publish an app in
 homestead_network_services, the VIP registry in homestead_vip_registry and the
 VM networks in homestead_network_vms. homestead_networking keeps bind(), the
-guard and node probes server.py hands it, and the routes, and re-exports every
-moved name except the bound clients."""
+guard and node probes server.py hands it, and the routes, and offers only the
+moved names the move engine and the self address read through it
+(test_split_reexports)."""
 import ast
-import re
 import subprocess
 import sys
 import unittest
@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVER = ROOT / "server"
 sys.path.insert(0, str(SERVER))
 
+import source_scan as SS
 import homestead_network_inventory as INV
 import homestead_network_services as SVC
 import homestead_network_state as STATE
@@ -45,12 +46,11 @@ def moved(part):
 def read_elsewhere():
     """Names other server modules read through homestead_networking."""
     found = set()
-    for path in SERVER.glob("*.py"):
+    for path in SS.server_files():
         if path.stem in NAMES:
             continue
-        text = path.read_text()
-        for alias in re.findall(r"homestead_networking as (\w+)", text):
-            found |= set(re.findall(rf"\b{alias}\.(\w+)", text))
+        for alias in SS.import_aliases(path, "homestead_networking"):
+            found |= SS.attribute_reads(path, alias)
     return found
 
 
@@ -58,15 +58,18 @@ def read_inside():
     """Names the six modules read: as ALIAS.name, or bare in the module that defines them."""
     found = set()
     for part in PARTS + (NETWORKING,):
-        text = Path(part.__file__).read_text().split("# Every moved name, for one release")[0]
-        found |= set(re.findall(r"\b(?:STATE|INV|SVC|REG|VMNET)\.(\w+)", text))
+        text = SS.text(part.__file__).split("# What the move engine and the self address read")[0]
+        above = SS.tree(SS.code(text))
+        for alias in ("STATE", "INV", "SVC", "REG", "VMNET"):
+            found |= SS.attribute_reads(above, alias)
         if part is not NETWORKING:
-            found |= {name for name in moved(part) if len(re.findall(rf"\b{name}\b", text)) > 1}
+            used = SS.name_counts(above)
+            found |= {name for name in moved(part) if used[name] > 1}
     return found
 
 
 class NetworkingModuleTests(unittest.TestCase):
-    def test_every_moved_name_is_the_same_object_on_homestead_networking(self):
+    def test_each_moved_name_is_defined_once(self):
         seen = set()
         for part in PARTS:
             names = moved(part)
@@ -74,11 +77,10 @@ class NetworkingModuleTests(unittest.TestCase):
             for name in names:
                 self.assertNotIn(name, seen, f"{name} is defined twice")
                 seen.add(name)
-                self.assertIs(getattr(NETWORKING, name), getattr(part, name), f"{part.__name__}.{name}")
         self.assertIn("DNS_NAME", seen)
         self.assertIn("_NothingAdded", seen)
 
-    def test_what_other_modules_read_is_still_on_homestead_networking(self):
+    def test_what_other_modules_read_is_on_homestead_networking(self):
         for name in sorted(read_elsewhere()):
             self.assertTrue(hasattr(NETWORKING, name), name)
 
@@ -90,8 +92,9 @@ class NetworkingModuleTests(unittest.TestCase):
 
     def test_each_module_can_be_imported_first(self):
         for name in NAMES:
-            done = subprocess.run([sys.executable, "-c", f"import {name}, homestead_networking as N; "
-                                   "N.inventory; N.service_plan; N.registered; N.create_vm_network; N.ROUTES"],
+            done = subprocess.run([sys.executable, "-c", f"import {name}, homestead_networking as N, "
+                                   "homestead_vip_registry as R, homestead_network_vms as V; "
+                                   "N.inventory; N.service_plan; R.registered; V.create_vm_network; N.ROUTES"],
                                   cwd=SERVER, capture_output=True, text=True)
             self.assertEqual(0, done.returncode, f"importing {name} first: {done.stderr}")
 
@@ -138,9 +141,9 @@ class NetworkingModuleTests(unittest.TestCase):
 
     def test_no_test_replaces_a_moved_name_on_homestead_networking(self):
         # A replacement there would not reach the moved code, so it must go to the
-        # module that defines the name. The exception is a name another server
-        # module reads through homestead_networking (server.NETWORK.prepare_deploy):
-        # replacing it there reaches that module's reads, and only those.
+        # module that defines the name. The exception would be a name another
+        # server module reads through homestead_networking: replacing it there
+        # reaches that module's reads, and only those.
         # Read: assignments, setattr, mock.patch(...), patch.object (name given
         # positionally or as attribute=) and patch.multiple, on homestead_networking
         # as a test imported it, took it from another test module, or reached it
@@ -151,17 +154,12 @@ class NetworkingModuleTests(unittest.TestCase):
         # homestead_networking reaches none of those reads, so only the tests that
         # drive another module's read of it may make one.
         inside = read_inside() & read_elsewhere()
-        drives_another_module = {"test_setup.py": {"registered"}, "test_unplaced.py": {"servicelb_present"},
-                                 "test_objectstore.py": {"service_plan"}}
+        drives_another_module = {}
         found = []
-        trees = {path: ast.parse(path.read_text()) for path in sorted((ROOT / "tests").glob("test_*.py"))}
-        imported = {path.stem: {a.asname or a.name for node in ast.walk(tree) if isinstance(node, ast.Import)
-                                for a in node.names if a.name == "homestead_networking"}
-                    for path, tree in trees.items()}
+        trees = {path: SS.tree(path) for path in SS.test_files()}
+        imported = {path.stem: SS.import_aliases(tree, "homestead_networking") for path, tree in trees.items()}
         # Which attribute of a server module is homestead_networking.
-        holds = {}
-        for path in SERVER.glob("*.py"):
-            holds[path.stem] = set(re.findall(r"homestead_networking as (\w+)", path.read_text()))
+        holds = {path.stem: SS.import_aliases(path, "homestead_networking") for path in SS.server_files()}
         for path, tree in trees.items():
             aliases = imported[path.stem] | {a.asname or a.name for node in ast.walk(tree)
                                              if isinstance(node, ast.ImportFrom) and node.module in imported
@@ -204,7 +202,7 @@ class NetworkingModuleTests(unittest.TestCase):
         self.assertEqual([], found)
 
     def test_only_what_other_modules_read_may_be_replaced_on_homestead_networking(self):
-        self.assertIn("prepare_deploy", read_elsewhere())
+        self.assertNotIn("prepare_deploy", read_elsewhere())
         self.assertNotIn("kget", read_elsewhere())
         self.assertNotIn("_update_registered", read_elsewhere())
 

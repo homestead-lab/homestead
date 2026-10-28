@@ -12,17 +12,18 @@ object, for _cache)."""
 import time
 import homestead_api_v1 as API_V1
 import homestead_cancel as CANCEL
-import homestead_deploy as DEPLOY
+import homestead_deploy_appstore as APPSTORE
 import homestead_helm as HELM
 import homestead_icons as ICONS
-import homestead_imports as IMP
+import homestead_vm_create as VM_CREATE
 import homestead_ipam as IPAM
 import homestead_isos as ISOS
 import homestead_lan as LAN
 import homestead_leader as LEADER
 import homestead_logos as LOGOS
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_network_vms as VMNET
+import homestead_network_inventory as INV
 import homestead_nodes as NODES
 import homestead_platform as PLATFORM
 import homestead_routes as MODULE_ROUTES
@@ -101,7 +102,7 @@ def logo_choices(ns, name, term, kind="workload"):
         (w for w in cached("wl", 5, WORKLOADS.get_workloads) if w.get("ns") == ns and w.get("name") == name), None)
     images = (workload or {}).get("images") or []
     chart = helm_chart_logos().get((ns, (workload or {}).get("helm_release"))) if workload else None
-    return {"tiles": LOGOS.suggest(DEPLOY.fetch_appstore(), images, term if term is not None else name, DEPLOY.search_appstore,
+    return {"tiles": LOGOS.suggest(APPSTORE.fetch_appstore(), images, term if term is not None else name, APPSTORE.search_appstore,
                                    chart=chart), "images": images}
 
 
@@ -115,11 +116,11 @@ def vm_create_options():
             "storage_classes": selectable_storage_classes(rows),
             "storage_class_facts": storage_class_facts(rows),
             "default_class": vm_default_class(rows),
-            "images": IMP.list_vm_images() if platform.get("harvester") else [],
+            "images": VM_CREATE.list_vm_images() if platform.get("harvester") else [],
             "store": VMSTORE.choices() if (platform.get("harvester") or platform.get("cdi")) else [],
             "networks": vm_networks(),
             "network_details": vm_network_details(),
-            "vm_network_options": NETWORK.vm_network_options(NODES.node_temps()),
+            "vm_network_options": VMNET.vm_network_options(NODES.node_temps()),
             "subnets": vm_subnets(),
             "nodes": sorted(n["metadata"]["name"] for n in nodes),
             # The Hardware tab: CPU models every node offers, and KubeVirt's features.
@@ -150,7 +151,7 @@ def create_vm_with_address(cfg):
         problem = vm_address_problem(str(static.get("address") or "").strip())
         if problem:
             raise ValueError(problem)
-    result = IMP.create_vm(cfg, PLATFORM.detect(), vm_default_class())
+    result = VM_CREATE.create_vm(cfg, PLATFORM.detect(), vm_default_class())
     if result.get("address"):
         try:
             IPAM.save_record({"ip": result["address"], "name": cfg.get("name", ""), "kind": "static",
@@ -202,7 +203,7 @@ def _remove_cluster_vm(ns, node):
 
 def _vm_image_disks():
     try:
-        return {f"{row['namespace']}/{row['name']}": row.get("disks") or [] for row in IMP.vm_image_cache()["images"]}
+        return {f"{row['namespace']}/{row['name']}": row.get("disks") or [] for row in VM_CREATE.vm_image_cache()["images"]}
     except Exception:
         return {}
 
@@ -236,7 +237,7 @@ def _logos(request):
 
 def _logos_missing(request):
     try:
-        apps = DEPLOY.fetch_appstore()
+        apps = APPSTORE.fetch_appstore()
     except Exception as e:
         return MODULE_ROUTES.Reply(502, {"error": f"app feed unavailable: {e}"})
     return {"apps": LOGOS.missing(cached("wl", 5, WORKLOADS.get_workloads), apps, helm_chart_logos())}
@@ -293,10 +294,10 @@ def vm_address_problem(ip):
         if start and end and int(ipaddress.ip_address(start)) <= int(ipaddress.ip_address(ip)) <= int(ipaddress.ip_address(end)):
             return f"{ip} is inside the DHCP range {start}-{end}: the router may hand it to something else"
     try:
-        network = cached("network", 5, NETWORK.inventory)
+        network = cached("network", 5, INV.inventory)
     except Exception:
         network = {}
-    problem = NETWORK.cluster_address_problem(ip, network)
+    problem = INV.cluster_address_problem(ip, network)
     if problem:
         return problem
     # A few ports a machine usually has, quickly: a free address answers none.

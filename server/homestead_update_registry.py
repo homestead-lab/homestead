@@ -2,9 +2,9 @@
 
 Parses image references, reads a workload's pull credentials, asks registries
 for manifests and tags (with a short cache), and orders release tags by
-channel. Moved unchanged from homestead_updates (#623); import that module,
-which re-exports these names. Names server.py or the tests replace on
-homestead_updates are read through it (U.x), so those replacements still apply.
+channel. Moved unchanged from homestead_updates (#623): read and replace
+these names here. Names server.py binds on homestead_updates are read
+through it (U.x), so a replacement there still applies.
 """
 import base64
 import hashlib
@@ -125,7 +125,7 @@ def _open(req, credential=None, timeout=12):
         realm = fields.get("realm")
         if not realm:
             raise
-        U._auth_realm(req.full_url, realm, credential)
+        _auth_realm(req.full_url, realm, credential)
         query = {k: v for k, v in fields.items() if k in ("service", "scope") and v}
         separator = "&" if "?" in realm else "?"
         token_req = urllib.request.Request(realm + (separator + urllib.parse.urlencode(query) if query else ""),
@@ -174,7 +174,7 @@ def _registry_json(parsed, path, auths, accept="application/json", limit=None):
     for attempt in range(len(RATE_LIMIT_WAITS) + 1):
         req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "Homestead/2.0"})
         try:
-            with U._open(req, _credential(auths, parsed)) as response:
+            with _open(req, _credential(auths, parsed)) as response:
                 body = _read_capped(response, limit)
                 return body, response.headers
         except urllib.error.HTTPError as error:
@@ -190,7 +190,7 @@ def manifest_info(ref, auths=None, force=False):
         cached = _CACHE.get(key)
     if cached and not force and time.time() - cached[0] < 300:
         return cached[1]
-    body, headers = U._registry_json(parsed, "manifests/" + urllib.parse.quote(parsed["tag"], safe=""),
+    body, headers = _registry_json(parsed, "manifests/" + urllib.parse.quote(parsed["tag"], safe=""),
                                      auths or {}, MANIFEST_ACCEPT)
     digest = headers.get("Docker-Content-Digest") or "sha256:" + hashlib.sha256(body).hexdigest()
     children = []
@@ -208,18 +208,18 @@ def image_layers(ref, arch="amd64", auths=None):
     sizes - what a pull's progress is measured against."""
     parsed = parse_image(ref)
     reference = parsed["digest"] or parsed["tag"]
-    body, _ = U._registry_json(parsed, "manifests/" + urllib.parse.quote(reference, safe=":"), auths or {}, MANIFEST_ACCEPT)
+    body, _ = _registry_json(parsed, "manifests/" + urllib.parse.quote(reference, safe=":"), auths or {}, MANIFEST_ACCEPT)
     manifest = json.loads(body.decode())
     if manifest.get("manifests"):
         child = next((m for m in manifest["manifests"]
                       if (m.get("platform") or {}).get("os", "linux") == "linux"
                       and (m.get("platform") or {}).get("architecture") == arch), None) or manifest["manifests"][0]
-        body, _ = U._registry_json(parsed, "manifests/" + child["digest"], auths or {}, MANIFEST_ACCEPT)
+        body, _ = _registry_json(parsed, "manifests/" + child["digest"], auths or {}, MANIFEST_ACCEPT)
         manifest = json.loads(body.decode())
     return [{"digest": layer["digest"], "size": int(layer.get("size") or 0)}
             for layer in manifest.get("layers") or [] if layer.get("digest")]
 def manifest_digest(ref, auths=None, force=False):
-    return U.manifest_info(ref, auths, force)["digest"]
+    return manifest_info(ref, auths, force)["digest"]
 def registry_tags(ref, auths=None, force=False):
     parsed = parse_image(ref)
     key = "tags:" + parsed["base"]
@@ -227,7 +227,7 @@ def registry_tags(ref, auths=None, force=False):
         cached = _CACHE.get(key)
     if cached and not force and time.time() - cached[0] < 900:
         return cached[1]
-    body, _ = U._registry_json(parsed, "tags/list?n=1000", auths or {})
+    body, _ = _registry_json(parsed, "tags/list?n=1000", auths or {})
     tags = json.loads(body.decode()).get("tags") or []
     with _CACHE_LOCK:
         _CACHE[key] = (time.time(), tags)

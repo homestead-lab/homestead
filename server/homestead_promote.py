@@ -22,7 +22,7 @@ import urllib.error
 
 import homestead_capacity as CAPACITY
 import homestead_leader as LEADER
-import homestead_lifecycle as LIFECYCLE
+import homestead_node_actions as NODE_ACTIONS
 import homestead_maintenance as MAINTENANCE
 import homestead_operations as OPS
 import homestead_platform as PLATFORM
@@ -243,7 +243,7 @@ def plan(node):
     if host is None:
         raise ValueError(f"{node} is not a host in this cluster")
     p = PLATFORM.detect(True) or {}
-    q = LIFECYCLE.quorum_report()
+    q = NODE_ACTIONS.quorum_report()
     members = list(q.get("members") or [])
     blockers, warnings = [], []
     if p.get("harvester") or p.get("distribution") != "k3s":
@@ -427,8 +427,8 @@ def _prepare(op_id, ref):
             except HOSTRUN.Busy as error:
                 record("failed", 100, f"{node} was not changed: {error}"[:400])
                 return
-            LIFECYCLE.set_cordon(node, True)
-            LIFECYCLE.drain(node, include_system=True, wait=True,
+            NODE_ACTIONS.set_cordon(node, True)
+            NODE_ACTIONS.drain(node, include_system=True, wait=True,
                             progress=lambda phase, pct, msg: record("draining", 20, _drain_text(msg)))
             record("writing", 35, f"Writing the server settings on {node}")
         token = check_token(read_token(kget("/api/v1/nodes").get("items", []), node))
@@ -453,7 +453,7 @@ def _prepare(op_id, ref):
                 record("launching", 45, f"Could not confirm the reinstall on {node} started ({str(error)[:160]}); "
                                         "following the host", running_since=time.time())
             else:
-                LIFECYCLE.set_cordon(node, False)
+                NODE_ACTIONS.set_cordon(node, False)
                 record("failed", 100, f"{node} was not changed: {_drain_text(str(error))}"[:400])
         except Exception:
             pass
@@ -492,7 +492,7 @@ def _joined(ref):
     labels = (host.get("metadata") or {}).get("labels") or {}
     if not (_ready(host) and "node-role.kubernetes.io/etcd" in labels and "node-role.kubernetes.io/control-plane" in labels):
         return None
-    if ref["node"] not in (LIFECYCLE.quorum_report().get("ready") or []):
+    if ref["node"] not in (NODE_ACTIONS.quorum_report().get("ready") or []):
         return None
     return host
 
@@ -518,7 +518,7 @@ def status(item, now=None):
             state = None   # the host is out of reach while k3s is gone
         if state is not None and not state["marked"] and not state["active"]:
             # Reachable, and this job's unit never started there.
-            LIFECYCLE.set_cordon(node, False)
+            NODE_ACTIONS.set_cordon(node, False)
             return "failed", 100, f"{node} was not changed: the reinstall did not start there"
         if state is None or state["code"] is None:
             if now - since > RUN_LIMIT:
@@ -526,7 +526,7 @@ def status(item, now=None):
             ref["phase"] = "running"
             return "running", 55, f"Reinstalling k3s on {node}" + (f": {state['last']}" if state and state["last"] else "")
         if state["code"] == "20":
-            LIFECYCLE.set_cordon(node, False)
+            NODE_ACTIONS.set_cordon(node, False)
             return "failed", 100, (f"{node} could not download the k3s installer, so nothing was removed: it is still an app "
                                    f"host, and has been uncordoned. See {LOG} there")
         if state["code"] == "10":
@@ -554,11 +554,11 @@ def status(item, now=None):
             if now - ref.get("joining_since", now) > JOIN_LIMIT:
                 return "failed", 100, f"{node} has not come back as an etcd member after {JOIN_LIMIT // 60} minutes; see {LOG} there"
             return "running", 85, f"Waiting for {node} to come back as an etcd member"
-        LIFECYCLE.set_cordon(node, False)
+        NODE_ACTIONS.set_cordon(node, False)
         ref["phase"] = "done"
         labels = (host.get("metadata") or {}).get("labels") or {}
         lost = sorted(k for k, v in (ref.get("labels") or {}).items() if labels.get(k) != v)
-        members = len(LIFECYCLE.quorum_report().get("members") or [])
+        members = len(NODE_ACTIONS.quorum_report().get("members") or [])
         notes = [f"Labels to set again: {', '.join(lost)}"] if lost else []
         if ref.get("longhorn_scheduling") is not None:
             now_scheduling = _longhorn_scheduling(node)
@@ -581,7 +581,7 @@ def cancel_plan(item):
 
 
 def cancel_run(item, options):
-    LIFECYCLE.set_cordon(item["ref"]["node"], False)
+    NODE_ACTIONS.set_cordon(item["ref"]["node"], False)
     return f"Stopped; {item['ref']['node']} is uncordoned"
 
 

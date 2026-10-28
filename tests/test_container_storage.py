@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import homestead_lifecycle as lifecycle
+import homestead_workload_edit as WORKLOAD_EDIT
 import server
 
 
@@ -76,7 +77,7 @@ class WorkloadEditFixture:
         change = {"original_name": "frigate", "name": "frigate", "image": "frigate:test",
                   "volumes": volumes}
         change.update(extra)
-        return lifecycle.edit_workload({"ns": "lab", "name": "frigate", "containers": [change]})
+        return WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "frigate", "containers": [change]})
 
 
 class ContainerStorageTests(WorkloadEditFixture, unittest.TestCase):
@@ -143,7 +144,7 @@ class ContainerStorageTests(WorkloadEditFixture, unittest.TestCase):
     def test_second_container_can_share_a_volume_already_in_the_pod(self):
         self.deployment["spec"]["template"]["spec"]["containers"].append(
             {"name": "sync", "image": "rclone:1"})
-        lifecycle.edit_workload({"ns": "lab", "name": "frigate", "containers": [
+        WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "frigate", "containers": [
             {"original_name": "frigate", "name": "frigate", "volumes": [
                 {"path": "/config", "kind": "existing", "source": "frigate-config"}]},
             {"original_name": "sync", "name": "sync", "volumes": [
@@ -170,7 +171,7 @@ class ContainerStorageTests(WorkloadEditFixture, unittest.TestCase):
         self.assertEqual([], self.sent)
 
     def test_untouched_containers_keep_their_storage(self):
-        lifecycle.edit_workload({"ns": "lab", "name": "frigate", "containers": [
+        WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "frigate", "containers": [
             {"original_name": "frigate", "name": "detector", "image": "frigate:2"}]})
 
         spec = self.saved_spec()
@@ -182,7 +183,7 @@ class AutostartTests(WorkloadEditFixture, unittest.TestCase):
     """Autostart is the replica count expressed the way people think about it."""
 
     def test_switching_autostart_off_parks_the_replica_count(self):
-        lifecycle.edit_workload({"ns": "lab", "name": "frigate", "replicas": 3,
+        WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "frigate", "replicas": 3,
                                  "autostart": False})
 
         saved = self.sent[-1][2]
@@ -194,7 +195,7 @@ class AutostartTests(WorkloadEditFixture, unittest.TestCase):
         self.assertEqual(3, payload["start_replicas"])
 
     def test_switching_autostart_on_restores_at_least_one_replica(self):
-        lifecycle.edit_workload({"ns": "lab", "name": "frigate", "replicas": 0,
+        WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "frigate", "replicas": 0,
                                  "autostart": True})
 
         saved = self.sent[-1][2]
@@ -203,7 +204,7 @@ class AutostartTests(WorkloadEditFixture, unittest.TestCase):
         self.assertTrue(server.WORKLOADS.workload_edit_payload("lab", "frigate", saved, FEATURES)["autostart"])
 
     def test_a_replica_edit_without_autostart_keeps_working(self):
-        lifecycle.edit_workload({"ns": "lab", "name": "frigate", "replicas": 2})
+        WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "frigate", "replicas": 2})
 
         self.assertEqual(2, self.sent[-1][2]["spec"]["replicas"])
 

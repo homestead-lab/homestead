@@ -10,7 +10,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_capacity_review as review
-import homestead_lifecycle as lifecycle
+import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_operations as ops
 from fakes.job_store import put
 import homestead_rename as rename
@@ -90,7 +90,7 @@ class RenameTests(unittest.TestCase):
         return copy.deepcopy(obj)
 
     def prepare(self):
-        self.proposed, self.context = rename.prepare(self.body, self.source, lifecycle._renamed_deployment, self.read)
+        self.proposed, self.context = rename.prepare(self.body, self.source, WORKLOAD_EDIT._renamed_deployment, self.read)
         self.body.update(capacity_token=review.issue(self.body, self.context), confirm_capacity=True)
 
     def dispatch(self, **kwargs):
@@ -164,7 +164,7 @@ class RenameTests(unittest.TestCase):
     def test_repeated_rename_preserves_labels_a_later_service_may_select(self):
         self.dispatch()
         before = self.objects["new"]
-        again = lifecycle._renamed_deployment(before, "lab", "third")
+        again = WORKLOAD_EDIT._renamed_deployment(before, "lab", "third")
         labels = again["spec"]["template"]["metadata"]["labels"]
         for key, value in before["spec"]["selector"]["matchLabels"].items():
             self.assertEqual(value, labels[key])

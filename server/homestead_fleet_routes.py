@@ -12,7 +12,7 @@ import homestead_move as MOVE
 import homestead_nodes as NODES
 import homestead_routes as MODULE_ROUTES
 import homestead_storage as STORAGE
-import homestead_vms as VMS
+import homestead_vm_list as VM_LIST
 import homestead_workloads as WORKLOADS
 
 Reply, Cookie = MODULE_ROUTES.Reply, MODULE_ROUTES.Cookie
@@ -20,7 +20,7 @@ Reply, Cookie = MODULE_ROUTES.Reply, MODULE_ROUTES.Cookie
 # The resources the combined view gathers, and how this cluster answers locally.
 FLEET_LISTS = {
     "workloads": lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads),
-    "vms": lambda: CACHE.cached("vms", 5, VMS.list_vms),
+    "vms": lambda: CACHE.cached("vms", 5, VM_LIST.list_vms),
     "nodes": lambda: CACHE.cached("nodes", 5, NODES.get_nodes),
     "volumes": lambda: CACHE.cached("vol", 8, STORAGE.get_volumes),
     "flow": lambda: FLOW.view(),

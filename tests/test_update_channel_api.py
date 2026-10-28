@@ -7,6 +7,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_update_checks as CHECKS
 
 
 class ChannelAPITests(unittest.TestCase):
@@ -22,7 +23,7 @@ class ChannelAPITests(unittest.TestCase):
         handler._send = mock.Mock()
         with mock.patch.object(server.KUBE_HELPERS, "kget", return_value=copy.deepcopy(current)), \
              mock.patch.object(server.KUBE_HELPERS, "ksend") as send, \
-             mock.patch.object(server.UPDATES, "invalidate") as invalidate, \
+             mock.patch.object(CHECKS, "invalidate") as invalidate, \
              mock.patch.object(server.SETTINGS_HELPERS, "_fleet_rename"):
             handler.do_POST()
         return handler._send.call_args.args, send, invalidate
