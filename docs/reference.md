@@ -184,6 +184,17 @@ onto: **Settings > About > Redundancy** offers **Keep two copies**, which
 makes it and opens the move. On k3s and RKE2 Homestead raises its own
 volume's copies in place as hosts join.
 
+App volumes on that one host read degraded for the same reason, and are
+yours, so Homestead only offers: **Cluster > Health** lists them ("N volumes
+ask for more copies than this cluster has hosts"), and an admin's
+**Match copies to hosts** review lowers each listed volume to one copy. The
+count each asked for is kept on it as `homestead.io/one-host-copies`, and
+once a second host can hold copies the same row offers to put them back.
+Neither changes a class or a Longhorn setting, so volumes made later ask for
+their class's count and appear in the offer too. The dashboard banner, the
+alert, the MQTT sensor **Volumes Short of Hosts** and the installer's doctor
+say why such a volume is degraded.
+
 A claim's class cannot change. On a cluster installed from an older manifest
 that said `longhorn-r2`, check the claim first:
 

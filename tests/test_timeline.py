@@ -227,6 +227,15 @@ class FeedTests(DataDir):
         self.assertEqual(T0 - T.FIRST_LOOK, out["since"])
         self.assertEqual(["last-here"], [u["source"] for u in out["unread"] if u["source"] == "last-here"])
 
+    def test_failures_are_counted_over_the_whole_window_not_alerts(self):
+        before = self.feed()
+        failed = sum(1 for e in before["entries"] if e["tone"] == "bad" and e["kind"] != "alert")
+        self.assertGreater(failed, 0)
+        self.assertEqual(failed, before["failed"])
+        self.src.changes = [{"at": T0 - i, "namespace": "apps", "name": f"a{i}", "source": "outside", "by": "",
+                             "changes": [{"field": "Copies", "before": "1", "after": "2"}]} for i in range(1, 400)]
+        self.assertEqual(failed, self.feed()["failed"])     # the failures are past the cap now
+
     def test_entries_capped_newest_first_and_counted(self):
         self.src.changes = [{"at": T0 - i, "namespace": "apps", "name": f"a{i}", "source": "outside", "by": "",
                              "changes": [{"field": "Copies", "before": "1", "after": "2"}]} for i in range(1, 400)]

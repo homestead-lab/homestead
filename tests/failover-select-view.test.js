@@ -8,10 +8,11 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 
 const source = fs.readFileSync("web/js/views-lifecycle.js", "utf8");
+const form = fs.readFileSync("web/js/app-form.js", "utf8");   // Placement, shared with Deploy (#844)
 const css = fs.readFileSync("web/style.css", "utf8");
 
 test("the failover choice is not squeezed into the Copies column", () => {
-  assert.match(source, /<div class="place-grid failover"><div class="f">\$\{failoverSelect\("e_failover"/);
+  assert.match(form, /<div class="place-grid failover"><div class="f">\$\{failoverSelect\(id\("failover"\)/);
   assert.match(css, /\.place-grid\.failover\{grid-template-columns:max-content 1fr/);
   assert.match(css, /\.place-grid\.failover select\{width:auto;min-width:max-content\}/);
 });
@@ -21,7 +22,7 @@ test("the failover grid stacks on a phone like the others", () => {
 });
 
 test("the explanation follows the chosen failover", () => {
-  assert.match(source, /onchange="\$\('#e_failover_help'\)\.textContent = FAILOVER_HELP\[this\.value\]/);
-  assert.match(source, /id="e_failover_help"/);
+  assert.match(form, /onchange="\$\(\$\{jsq\("#" \+ id\("failover_help"\)\)\}\)\.textContent = FAILOVER_HELP\[this\.value\]/);
+  assert.match(form, /id="\$\{id\("failover_help"\)\}"/);
   assert.match(source, /window\.FAILOVER_HELP = FAILOVER_HELP;/);
 });

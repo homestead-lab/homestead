@@ -14,7 +14,9 @@ import copy
 import json
 import time
 import urllib.request, urllib.parse, urllib.error
+import homestead_alert_webhook as ALERT_WEBHOOK
 import homestead_alerts as ALERTS
+import homestead_app_copies as APP_COPIES
 import homestead_api_v1 as API_V1
 import homestead_audit as AUDIT_LOG
 import homestead_auth as AUTH
@@ -46,6 +48,7 @@ import homestead_place as PLACE
 import homestead_portal as PORTAL
 import homestead_ports as PORTS
 import homestead_push as PUSH
+import homestead_timeline_summary as SUMMARY
 import homestead_recovery as RECOVERY
 import homestead_resources as RESOURCES
 import homestead_restarts as RESTARTS
@@ -325,9 +328,14 @@ def _alert_sources():
 
 
 def push_alerts(fresh):
-    """Wakes every device that wants one of these alerts, and belongs to a user still here."""
+    """Wakes every device that wants one of these alerts, and belongs to a user
+    still here; and sends them to the alert webhook, if one is set (#741)."""
     if not fresh:
         return None
+    try:
+        ALERT_WEBHOOK.deliver(fresh)
+    except Exception as error:
+        print(f"alert webhook: {str(error)[:160]}", flush=True)
     users = {u["name"] for u in AUTH.list_users()}
     urgent = any(e["severity"] == "critical" and e["phase"] in ("raised", "worsened") for e in fresh)
     visible = {user: ALERTS.for_user(fresh, user) for user in users}
@@ -338,6 +346,8 @@ def push_alerts(fresh):
 
 def _alerts_loop():
     LOGALERTS.start()
+    # The summary push (#921) has its own thread: building one reads the Timeline.
+    SUMMARY.start()
     while True:
         # One replica raises alerts, or every notification arrives twice.
         if LEADER.is_leader():
@@ -686,7 +696,16 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
                                        cached("trim-health", 60, WEEKLY_TRIM.last_state))
     except Exception:
         protection = []
-    health = CLUSTER.classify_cluster_health(nodes, wl, vols, protection=protection)
+    # On one host, the degraded volumes Match copies to hosts offers to lower
+    # (#841) say why; read only then, and a failed read says nothing new.
+    short = set()
+    if len(nodes) == 1 and deg:
+        try:
+            offer = APP_COPIES.cached_facts()
+            short = {row["volume"] for row in offer["volumes"]} if offer.get("state") == "lower" else set()
+        except Exception:
+            short = set()
+    health = CLUSTER.classify_cluster_health(nodes, wl, vols, protection=protection, short_of_hosts=short)
     tcap = sum(n["cpu_cap"] for n in nodes) or 1
     tuse = sum(n["cpu_used"] for n in nodes)
     mcap = sum(n["mem_cap_gb"] for n in nodes) or 1
@@ -700,6 +719,7 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
         "workload_pods": len(usrp),
         "system_pods": len(sysp),
         "volumes": len(vols), "vol_degraded": len(deg), "vol_faulted": len(flt),
+        "vol_one_host": sum(1 for issue in health["health_issues"] if issue.get("one_host")),
         "cpu_pct": round(tuse / tcap * 100, 1),
         "mem_pct": round(muse / mcap * 100, 1),
         "cpu_used": round(tuse, 2), "cpu_cap": tcap,

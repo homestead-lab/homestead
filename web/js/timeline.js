@@ -28,10 +28,12 @@ const Timeline = (() => {
   const kindWords = (kind, n) => (KINDS[kind] || [kind, kind])[n === 1 ? 0 : 1];
   const many = (n, one, more) => `${n} ${n === 1 ? one : more}`;
 
-  /* range "last" (the card's, and the page's first) or a page range. */
+  /* range "last" (the card's, and the page's first), a page range, or "from":
+     the start a summary push linked to (/timeline?since=…, #921). */
   async function load(range = "last", { page = false } = {}) {
     const seconds = RANGES[range]?.[1] || 0;
-    const query = seconds ? `?since=${Math.floor(Date.now() / 1000) - seconds}` : "";
+    const query = range === "from" && state.from ? `?since=${state.from}`
+      : seconds ? `?since=${Math.floor(Date.now() / 1000) - seconds}` : "";
     const [data, error] = page ? ["data", "error"] : ["card", "cardError"];
     try {
       state[data] = await api(`/api/timeline${query}`);
@@ -110,7 +112,13 @@ const Timeline = (() => {
   async function view() {
     // go() counts every navigation in NAV_TOKEN; the refresh loop does not.
     const navigation = typeof window !== "undefined" ? window.NAV_TOKEN : undefined;
-    if (navigation !== state.filterFor) state.filter = { kind: "", app: "", host: "" };
+    if (navigation !== state.filterFor) {
+      state.filter = { kind: "", app: "", host: "" };
+      // A summary push opens the Timeline from where its summary starts.
+      const from = typeof location !== "undefined" ? new URLSearchParams(location.search).get("since") : "";
+      if (/^\d{1,12}$/.test(from || "")) { state.range = "from"; state.from = +from; }
+      else if (state.range === "from") state.range = "last";
+    }
     state.filterFor = navigation;
     page();
     await load(state.range, { page: true });
@@ -126,13 +134,89 @@ const Timeline = (() => {
     document.addEventListener("visibilitychange", tick);
   }
 
-  return { KINDS, counts, top, filter, load, markSeen, widget, view, page, state, RANGES, start };
+  /* The summary push (#921): Settings > You. One push a day or a week with
+     what the Timeline recorded, to every device of yours with notifications on. */
+  const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const clock = hour => `${String(hour).padStart(2, "0")}:00`;
+  const browserZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; } };
+  const summaryText = s => !s || s.every === "off" || !s.every ? "Off"
+    : `${s.every === "weekly" ? `Weekly on ${WEEKDAYS[s.day] || "?"}` : "Daily"} at ${clock(s.hour)} (${s.tz})`;
+
+  function summaryCard() {
+    return UI.settingsCard(`${UI.moduleHeader("Summary push", "What the Timeline recorded, once a day or a week, on your devices",
+      UI.button("Change", "summaryEdit()", { id: "summaryChange" }))}
+      <div class="srows" id="summaryRows"><div class="empty small"><span class="spin2"></span></div></div>`, { tab: "device", id: "summaryCard" });
+  }
+
+  async function summaryPaint() {
+    try {
+      state.summary = await api("/api/timeline/summary");
+      state.summaryError = "";
+    } catch (e) {
+      state.summaryError = e?.message || String(e);
+    }
+    const rows = $("#summaryRows");
+    if (!rows) return;
+    if (state.summaryError) {
+      // Unread is not Off (#620): say so, and offer nothing that would act on a guess.
+      rows.innerHTML = UI.callout("warn", "Could not read your summary setting", esc(state.summaryError)) + UI.button("Retry", "Timeline.summaryPaint()");
+      const change = $("#summaryChange"); if (change) change.disabled = true;
+      return;
+    }
+    const s = state.summary || { every: "off" }, on = s.every === "daily" || s.every === "weekly";
+    const change = $("#summaryChange"); if (change) change.disabled = false;
+    const help = [on && s.next ? `Next ${fmtAt(s.next)}` : on ? "Its time zone is not one Homestead knows: choose another" : "Pushes tell you when something starts; this tells you how the day or week went",
+      on && s.sent_at ? `last ${fmtAt(s.sent_at)}${s.result ? `, ${s.result}` : ""}` : ""].filter(Boolean).join(" · ");
+    rows.innerHTML = settingRow("Summary", esc(help), `<b id="summaryValue">${esc(summaryText(s))}</b>`);
+  }
+
+  function summaryEdit() {
+    const s = state.summary && state.summary.every ? state.summary : { every: "off" };
+    const zone = s.tz || browserZone();
+    let zones = [];
+    try { zones = Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : []; } catch { zones = []; }
+    zones = [...new Set([zone, "UTC", ...zones])].sort();
+    const option = (value, label, chosen) => `<option value="${esc(value)}"${String(chosen) === String(value) ? " selected" : ""}>${esc(label)}</option>`;
+    modal("Summary push", UI.lead("One push with what happened, counted by kind. It opens the Timeline from where the summary starts.") +
+      UI.fields(
+        UI.field("Send", `<select id="sum_every" onchange="summaryEveryChanged()">${[["off", "Off"], ["daily", "Daily"], ["weekly", "Weekly"]]
+          .map(([v, l]) => option(v, l, s.every)).join("")}</select>`),
+        `<div id="sum_day_field"${s.every === "weekly" ? "" : " hidden"}>${UI.field("On", `<select id="sum_day">${WEEKDAYS.map((d, i) => option(i, d, s.day ?? 6)).join("")}</select>`)}</div>`,
+        UI.field("At", `<select id="sum_hour">${Array.from({ length: 24 }, (_, h) => option(h, clock(h), s.hour ?? 8)).join("")}</select>`)) +
+      // Typed, with the browser's zones offered: a list of all of them would be 400 names.
+      UI.field("Time zone", `<input id="sum_tz" type="text" maxlength="64" autocomplete="off" spellcheck="false" list="sum_tz_list" value="${esc(zone)}">
+        <datalist id="sum_tz_list">${zones.map(z => `<option value="${esc(z)}"></option>`).join("")}</datalist>`) +
+      UI.actions(UI.cancel() + UI.button("Save", "summarySave(this)", { kind: "pri" })));
+  }
+
+  async function summarySave(button) {
+    const every = $("#sum_every").value;
+    const body = every === "off" ? { every } : { every, ...(every === "weekly" ? { day: +$("#sum_day").value } : {}),
+      hour: +$("#sum_hour").value, tz: $("#sum_tz").value.trim() };
+    if (button) button.disabled = true;
+    try {
+      state.summary = await api("/api/timeline/summary", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      closeModal();
+      toast(every === "off" ? "Summary push off" : "Summary push saved", "ok");
+      summaryPaint();
+    } catch (e) {
+      // Refused: the dialog stays, with what was chosen in it.
+      toast(e?.message || String(e), "bad");
+      if (button) button.disabled = false;
+    }
+  }
+
+  return { KINDS, counts, top, filter, load, markSeen, widget, view, page, state, RANGES, start,
+    summaryCard, summaryPaint, summaryEdit, summarySave };
 })();
 
 async function viewTimeline() { await Timeline.view(); }
 window.timelineFilter = (key, value) => { Timeline.state.filter[key] = value; Timeline.page(); };
 window.timelineRange = async range => { if (!Timeline.RANGES[range]) return; Timeline.state.range = range; await Timeline.load(range, { page: true }); Timeline.page(); };
 window.Timeline = Timeline;
+window.summaryEdit = () => Timeline.summaryEdit();
+window.summarySave = button => Timeline.summarySave(button);
+window.summaryEveryChanged = () => { const day = $("#sum_day_field"); if (day) day.hidden = $("#sum_every").value !== "weekly"; };
 
 if (typeof setInterval === "function" && typeof document !== "undefined" && document.addEventListener) {
   Timeline.start({ setTimeout, setInterval, document });

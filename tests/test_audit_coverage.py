@@ -78,7 +78,7 @@ class EveryChangeIsAudited(unittest.TestCase):
     def test_the_exemptions_are_exactly_these(self):
         """A new exemption is a visible edit here, for the reviewer."""
         self.assertEqual({("POST", "/api/auth/login"), ("POST", "/api/auth/preferences/dashboard"),
-                          ("POST", "/api/timeline/seen")},
+                          ("POST", "/api/timeline/seen"), ("POST", "/api/timeline/summary")},
                          set(AUDIT_LOG.NOT_AUDITED))
 
     def test_the_hook_is_registered_through_modules_for_named_fields_only(self):

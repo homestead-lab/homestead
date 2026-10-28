@@ -352,8 +352,10 @@ not mean its fields are valid and must never give it a completion tick.
 Render each field once and hide inactive panes. Switching sections must preserve
 values, added items and staged removals. Container edit groups Basics, Hardware
 and access, Environment values, Storage, Placement, Address and Monitoring by container.
-The full-page container deploy form also uses `UI.sectionForm`: Basics, Hardware
-and access, Environment values, Storage, Address, Additional containers and Summary.
+The full-page container deploy form also uses `UI.sectionForm`, with the same
+sections from `web/js/app-form.js` and Summary last. Placement is one section in
+both forms (`appFormPlacement`, by id prefix): copies, spread, preferred host,
+other apps, failover and tier, never greyed in Deploy.
 Use Back/Next and one final Review deployment action; the review still checks capacity
 and any restart acknowledgement. Page forms use `page: true` for an in-flow footer and supply `cancelHtml` to return to their
 collection, while dialogs keep their dismiss action. Keep the live summary in its

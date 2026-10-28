@@ -248,9 +248,11 @@ def pending(user, endpoint, confirm_delivery=False):
     active = len([a for a in ALERTS.active(user=user) if a.get("announced", 0) > 0 and not a["acknowledged"]])
     if not row:
         return {"alerts": [], "active": active, "known": False}
-    got = ALERTS.log(after=row.get("cursor", 0), categories=wanted | {"test"}, limit=300)
+    got = ALERTS.log(after=row.get("cursor", 0), categories=wanted | set(ALERTS.PRIVATE), limit=300)
     own = tag(endpoint)
-    alerts = [a for a in got["alerts"] if a["category"] != "test" or a.get("to") == own]
+    # A test is this device's own; a summary (#921) goes to every device of its person.
+    alerts = [a for a in got["alerts"] if a["category"] not in ALERTS.PRIVATE
+              or a["category"] == "test" and a.get("to") == own or a["category"] == "summary" and a.get("for") == user]
     # Replace old raises with their latest outcome before displaying a backlog.
     latest = {a["key"]: a for a in alerts}
     current = {a["key"]: a for a in ALERTS.active()}

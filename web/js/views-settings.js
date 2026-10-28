@@ -73,7 +73,7 @@ const SETTINGS_SECTIONS = [
   ["monitoring", "Monitoring", "Thresholds and drives", ["monitoring", "health"], "Cluster", "pulse"],
   ["hardware", "Hardware and storage", "Devices, add-ons, Longhorn", ["hardware", "cluster", "namespaces"], "Cluster", "chip"],
   ["fleet", "Linked clusters", "Other Homesteads, moves", ["fleet"], "Cluster", "link"],
-  ["connections", "Connections", "UniFi, MQTT, App Store", ["connections", "mqtt", "apps", "integrations"], "Cluster", "plug"],
+  ["connections", "Connections", "UniFi, MQTT, alert webhook, App Store", ["connections", "mqtt", "apps", "integrations"], "Cluster", "plug"],
   ["access", "Users and access", "Accounts and roles", ["access"], "Cluster", "users"],
   ["troubleshooting", "Troubleshooting", "Bug reports and logs", ["troubleshooting"], "Cluster", "bug"],
   ["you", "You", "Appearance, this device, account", ["you", "device", "general"], "Just you", "user"],
@@ -284,10 +284,12 @@ async function viewSettings() {
       ${can("admin") ? UI.settingsCard('<div class="empty small"><span class="spin2"></span>reading agent settings</div>', {tab:"access",id:"mcpCard",wide:false}) : ""}
 
       ${pwaCard()}
+      ${Timeline.summaryCard()}
 
       ${ipamUnifiCard()}
 
       ${UI.settingsCard(``, {tab:`mqtt`, id:`mqttCard`})}
+      ${UI.settingsCard(``, {tab:`connections`, id:`alertHookCard`})}
       ${UI.settingsCard(`<div class="empty small"><span class="spin2"></span> asking each cluster</div>`, {tab:`fleet`, id:`fleetCard`})}
       ${UI.settingsCard(``, {tab:`fleet`, id:`fleetMovesCard`, hidden:true})}
       ${UI.settingsCard(``, {tab:`cluster`, id:`addonsCard`, hidden:true})}
@@ -360,12 +362,12 @@ const SETTINGS_LOADERS = {
   placement: [() => capacityForecastLoad()],
   hardware: [() => namespacesPaint(), () => lhSettingsPaint(), () => window.storageClassesPaint?.(), () => window.addonsPaint?.()],
   fleet: [() => window.fleetSettingsPaint?.()],
-  connections: [() => mqttPaint(),
+  connections: [() => mqttPaint(), () => alertHookPaint(),
     // The UniFi card needs the IPAM record, which Settings does not otherwise load.
     () => unifiCardLoad()],
   access: [() => window.apiKeysPaint?.(), () => window.mcpCardPaint?.()],
   troubleshooting: [() => window.troubleshootingPaint?.()],
-  you: [() => pwaPaint()],
+  you: [() => pwaPaint(), () => Timeline.summaryPaint()],
 };
 /* Read the section's cards once per painted page: a section shown again
    without a repaint keeps what it read. */
