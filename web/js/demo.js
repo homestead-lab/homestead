@@ -2302,10 +2302,12 @@ ssh_pwauth: true
         const mode = modes[name] || "ignored", effective = mode === "enabled" || (mode === "ignored" && on);
         const whenOn = engine === "v2" ? "no" : volumeMode === "Block" || access === "rwx" ? "sync" : "yes";
         const whyOn = engine === "v2" ? "A V2 volume: Longhorn never freezes these" : syncWhy[volumeMode] || syncWhy[access] || "";
+        const attached = name !== "pvc-demo-frigate";   // the demo has one volume nothing mounts
         const shown = effective || engine === "v2";
-        return { name, claim, mode, engine, access, volume_mode: volumeMode, when_on: whenOn, freezes: shown ? whenOn : "no",
+        const later = shown && whenOn === "yes" && !attached;
+        return { name, claim, mode, engine, access, volume_mode: volumeMode, when_on: whenOn, attached, freezes: later ? "later" : shown ? whenOn : "no",
           changed: mode === "ignored" ? null : { who: "admin", at: Math.floor(Date.now() / 1000) - 3 * 86400 },
-          why: shown ? whyOn : mode === "disabled" ? "Set to never freeze" : "Follows the cluster, which is off" };
+          why: later ? "Not attached: Longhorn only syncs it until an app uses it, then freezes it" : shown ? whyOn : mode === "disabled" ? "Set to never freeze" : "Follows the cluster, which is off" };
       });
       return { supported: true, version: "v1.13.0", enabled: on, value: JSON.stringify({ v1: String(on) }), unknown_value: false,
         from_chart: false, changed: demoState.fsFreezeChanged ? { who: "admin", at: demoState.fsFreezeChanged } : null,
@@ -3600,6 +3602,14 @@ ssh_pwauth: true
       if (at < 0) refuse("that log alert no longer exists; refresh and try again");
       rules.splice(at, 1);
       return { ok: true };
+    };
+    responses["/api/logalerts/pause"] = (url, init) => {
+      const body = JSON.parse(init.body || "{}");
+      const rule = rules.find(r => r.id === body.id) || refuse("that log alert no longer exists; refresh and try again");
+      if (typeof body.paused !== "boolean") refuse("say whether to pause the log alert or resume it");
+      rule.paused = body.paused;
+      rule.status = body.paused ? { state: "paused", detail: "" } : { state: "waiting", detail: "" };
+      return { ok: true, paused: body.paused };
     };
     responses["/api/logalerts/preview"] = (url, init) => {
       const body = JSON.parse(init.body || "{}"), rule = check(body), app = rule.apps[0];

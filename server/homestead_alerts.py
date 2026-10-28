@@ -14,6 +14,7 @@ import homestead_shared as SHARED
 DATA_DIR = "/data"
 HOLD = 60
 LOG_SIZE = 300
+WITHDRAWN_KEEP = 600            # seconds a withdrawn key outranks facts taken before it
 _lock = SHARED.SharedLock("alerts")
 SEVERITY = {"info": 0, "degraded": 1, "critical": 2}
 
@@ -123,6 +124,10 @@ def observe(results, now=None):
                             if not row["announced"]:
                                 row["since"] = now
                     continue
+                fact = dict(fact)
+                collected = fact.pop("collected", None)
+                if collected is not None and collected <= state.get("withdrawn", {}).get(fact["key"], -1):
+                    continue   # taken before its source withdrew it (homestead_alerts.withdraw)
                 key = fact["key"]
                 seen.add(key)
                 row = active.get(key)
@@ -186,6 +191,30 @@ def observe(results, now=None):
         state["sources"] = sorted(watched)
         _save(state)
         return fresh
+
+
+def withdraw(key, title, body, now=None):
+    """A condition its source stopped watching on someone's say-so (a log
+    alert deleted or paused): its row goes now, and one that was raised ends
+    with this title and body rather than reading, a minute later, as if it
+    had cleared. The entry, or None when nothing was raised.
+    The alert loop may already hold a fact taken before this: observe skips
+    a fact whose "collected" time is not after the withdraw."""
+    now = now or time.time()
+    with _lock:
+        state = _load()
+        row = state["active"].pop(key, None)
+        entry = None
+        if row and row.get("announced", 0) > 0 and not row.get("event"):
+            entry = _append(state, {**row, "resolved": title}, "resolved", now)
+            entry["body"] = body
+        for account in state["acknowledgements"].values():
+            account.pop(key, None)
+        withdrawn = state.setdefault("withdrawn", {})
+        withdrawn[key] = now
+        state["withdrawn"] = {k: at for k, at in withdrawn.items() if now - at < WITHDRAWN_KEEP}
+        _save(state)
+        return entry
 
 
 class AlertChanged(ValueError):

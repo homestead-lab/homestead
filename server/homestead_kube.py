@@ -210,10 +210,11 @@ def parse_mem(s):
     except: return 0
 
 
-def logsearch_read(ns, pod, container, since, limit):
-    """One container's log lines of the last since seconds, with timestamps."""
+def logsearch_read(ns, pod, container, since, limit, previous=False):
+    """One container's log lines of the last since seconds, with timestamps;
+    with previous, those of the container before its last restart."""
     query = f"sinceSeconds={int(since)}&limitBytes={int(limit)}&timestamps=true" + (
-        f"&container={urllib.parse.quote(container)}" if container else "")
+        f"&container={urllib.parse.quote(container)}" if container else "") + ("&previous=true" if previous else "")
     req = urllib.request.Request(f"{API}/api/v1/namespaces/{urllib.parse.quote(ns)}/pods/{urllib.parse.quote(pod)}/log?{query}",
                                  headers={"Authorization": f"Bearer {TOKEN}"})
     with urllib.request.urlopen(req, context=CTX, timeout=20) as r:

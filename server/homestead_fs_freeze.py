@@ -115,6 +115,8 @@ def _row(volume, enabled, modes):
     access = spec.get("accessMode") or "rwo"
     volume_mode = modes.get(k8s.get("pvName") or name, "unknown")
     on = mode == "enabled" or (mode not in ("enabled", "disabled") and bool(enabled))
+    # Longhorn only syncs a volume nothing mounts; it freezes once an app uses it.
+    attached = (volume.get("status") or {}).get("state") != "detached"
     # What a snapshot of it does once it is set to freeze, whatever it is set to now.
     if engine == "v2":
         when_on, why_on = "no", "A V2 volume: Longhorn never freezes these"
@@ -128,12 +130,14 @@ def _row(volume, enabled, modes):
         when_on, why_on = "yes", ""
     if on or engine == "v2":
         freezes, why = when_on, why_on
+        if freezes == "yes" and not attached:
+            freezes, why = "later", "Not attached: Longhorn only syncs it until an app uses it, then freezes it"
     else:
         freezes, why = "no", ("Set to never freeze" if mode == "disabled" else "Follows the cluster, which is off")
     # Who set an override, when the mark checks out for it; set elsewhere when it does not.
     changed = CHANGES.object_author("Volume", LHNS, name, volume, mode) if mode != "ignored" else None
     return {"name": name, "claim": "/".join(x for x in (k8s.get("namespace"), k8s.get("pvcName")) if x),
-            "mode": mode, "freezes": freezes, "why": why, "when_on": when_on, "engine": engine, "access": access,
+            "mode": mode, "freezes": freezes, "why": why, "when_on": when_on, "attached": attached, "engine": engine, "access": access,
             "volume_mode": volume_mode, "changed": changed or ({"outside": True} if mode != "ignored" else None)}
 
 

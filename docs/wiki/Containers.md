@@ -624,7 +624,9 @@ an error, a request ID, a user - or, from a container's menu, in that app's
 alone. Choose how far back (15 minutes to 24 hours); matches come newest first,
 with what matched marked, and each opens that app's live logs. **Match case**
 and **Regular expression** are options (an expression that repeats a repeating
-group is refused, as it can take ages to run).
+group is refused, as it can take ages to run, and any expression gets 10
+seconds of matching per search: when they run out, the newest lines already
+checked are shown and the search names the apps it searched only in part).
 
 It asks Kubernetes for each running pod's logs, so it reaches back only as far
 as each pod still holds them; lines from pods since replaced are not searched.

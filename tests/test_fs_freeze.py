@@ -136,12 +136,14 @@ LH = F.LH
 SETTING_PATH = f"{LH}/settings/{F.SETTING}"
 
 
-def lh_volume(name, mode="ignored", engine="v1", access="rwo", frontend="blockdev", pv=None, claim="data"):
+def lh_volume(name, mode="ignored", engine="v1", access="rwo", frontend="blockdev", pv=None, claim="data", state=None):
     spec = {"freezeFilesystemForSnapshot": mode, "dataEngine": engine, "accessMode": access, "frontend": frontend}
     if mode is None:
         spec.pop("freezeFilesystemForSnapshot")
-    return {"metadata": {"name": name, "namespace": "longhorn-system"}, "spec": spec,
-            "status": {"kubernetesStatus": {"namespace": "lab", "pvcName": claim, "pvName": pv or name}}}
+    status = {"kubernetesStatus": {"namespace": "lab", "pvcName": claim, "pvName": pv or name}}
+    if state:
+        status["state"] = state
+    return {"metadata": {"name": name, "namespace": "longhorn-system"}, "spec": spec, "status": status}
 
 
 def pv(name, mode="Filesystem"):
@@ -289,6 +291,29 @@ class Status(WithCluster):
         self.assertEqual({name: row["when_on"] for name, row in rows.items()},
                          {"pvc-fs": "yes", "pvc-v2": "no", "pvc-vm": "sync", "pvc-rwx": "sync", "pvc-off": "yes"})
         self.assertEqual(rows["pvc-fs"]["freezes"], "no")
+
+    def test_a_detached_volume_freezes_once_attached_not_now(self):
+        """While nothing mounts it Longhorn only syncs; the freeze starts when an app uses it (#930)."""
+        self.use(Cluster(value="true").volumes(
+            lh_volume("pvc-up", state="attached"), lh_volume("pvc-down", state="detached"), lh_volume("pvc-new"),
+            lh_volume("pvc-on", mode="enabled", state="detached"), lh_volume("pvc-never", mode="disabled", state="detached"),
+            lh_volume("pvc-vm", state="detached"), lh_volume("pvc-v2", engine="v2", state="detached")).pvs(
+            pv("pvc-up"), pv("pvc-down"), pv("pvc-new"), pv("pvc-on"), pv("pvc-never"), pv("pvc-vm", "Block"), pv("pvc-v2")))
+        d = F.status()
+        rows = {v["name"]: v for v in d["volumes"]}
+        self.assertEqual({n: r["freezes"] for n, r in rows.items()},
+                         {"pvc-up": "yes", "pvc-down": "later", "pvc-new": "yes", "pvc-on": "later", "pvc-never": "no",
+                          "pvc-vm": "sync", "pvc-v2": "no"})
+        self.assertIn("not attached", rows["pvc-down"]["why"].lower())
+        self.assertIn("then freezes", rows["pvc-down"]["why"].lower())
+        self.assertEqual([r["attached"] for r in (rows["pvc-up"], rows["pvc-down"], rows["pvc-new"])], [True, False, True])
+        self.assertEqual(rows["pvc-down"]["when_on"], "yes")
+        self.assertEqual(d["counts"]["freezing"], 2, "a detached volume is not frozen now")
+
+    def test_a_detached_volume_set_to_never_still_says_never(self):
+        self.use(Cluster(value="true").volumes(lh_volume("pvc-never", mode="disabled", state="detached")).pvs(pv("pvc-never")))
+        row = F.status()["volumes"][0]
+        self.assertEqual((row["freezes"], row["why"]), ("no", "Set to never freeze"))
 
     def test_a_volume_without_a_pv_or_kubernetes_status_is_still_listed(self):
         bare = {"metadata": {"name": "pvc-bare"}, "spec": {"freezeFilesystemForSnapshot": "ignored"}}
