@@ -9,6 +9,7 @@ import test_node_power_plan as fixtures
 import homestead_power as power
 import homestead_maintenance as maintenance
 import homestead_lifecycle as lifecycle
+import homestead_node_actions as NODE_ACTIONS
 import homestead_operations as ops
 
 
@@ -96,13 +97,13 @@ class MaintenanceSafetyTests(unittest.TestCase):
             calls.append("final-check")
             power.recheck_after_drain(original)
         with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), \
-                mock.patch.object(lifecycle, "node_action_check", return_value=(True, "", {})), \
-                mock.patch.object(lifecycle, "set_cordon", side_effect=lambda *a: calls.append("cordon")), \
+                mock.patch.object(NODE_ACTIONS, "node_action_check", return_value=(True, "", {})), \
+                mock.patch.object(NODE_ACTIONS, "set_cordon", side_effect=lambda *a: calls.append("cordon")), \
                 mock.patch.object(lifecycle, "kget", side_effect=self.get), \
                 mock.patch.object(lifecycle, "ksend", side_effect=send) as evict, \
                 mock.patch.object(lifecycle.time, "sleep"), \
-                mock.patch.object(lifecycle, "_send_power", side_effect=lambda *a: calls.append("power") or {}) as helper:
-            lifecycle.node_power("node1", "poweroff", reviewed_pods=original["drain_pods"],
+                mock.patch.object(NODE_ACTIONS, "_send_power", side_effect=lambda *a: calls.append("power") or {}) as helper:
+            NODE_ACTIONS.node_power("node1", "poweroff", reviewed_pods=original["drain_pods"],
                                  before_send=checked, progress=lambda *a: phases.append(a))
         self.assertEqual(["cordon", "app-a", "instance-manager-test", "instance-manager-test", "final-check", "power"], calls)
         self.assertTrue(all(c.args[1].endswith("/eviction") for c in evict.call_args_list))
@@ -118,17 +119,17 @@ class MaintenanceSafetyTests(unittest.TestCase):
                 raise urllib.error.HTTPError(path, 429, "last replica", {}, None)
             self.objects["/api/v1/pods"]["items"] = [self.objects["/api/v1/pods"]["items"][0]]
         with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), \
-                mock.patch.object(lifecycle, "node_action_check", return_value=(True, "", {})), \
-                mock.patch.object(lifecycle, "set_cordon") as cordon, \
+                mock.patch.object(NODE_ACTIONS, "node_action_check", return_value=(True, "", {})), \
+                mock.patch.object(NODE_ACTIONS, "set_cordon") as cordon, \
                 mock.patch.object(lifecycle, "kget", side_effect=self.get), \
                 mock.patch.object(lifecycle, "ksend", side_effect=send), \
                 mock.patch.object(lifecycle.time, "monotonic", side_effect=[0, 121, 301]), \
                 mock.patch.object(lifecycle.time, "sleep"), \
-                mock.patch.object(lifecycle, "_send_power") as helper:
+                mock.patch.object(NODE_ACTIONS, "_send_power") as helper:
             # Longhorn alone holding the host is waited on past the usual two
             # minutes - V2 engines let go slowly - and still never forced.
             with self.assertRaisesRegex(ValueError, "after 5 minutes. Longhorn still prevents eviction.*Power was not sent"):
-                lifecycle.node_power("node1", "reboot", reviewed_pods=original["drain_pods"], before_send=lambda: None)
+                NODE_ACTIONS.node_power("node1", "reboot", reviewed_pods=original["drain_pods"], before_send=lambda: None)
         cordon.assert_called_once_with("node1", True)
         helper.assert_not_called()
 
@@ -151,7 +152,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
                     mock.patch.object(lifecycle, "ksend", side_effect=send) as evict:
                 # The pod that changed is named, so the next look starts there.
                 with self.assertRaisesRegex(ValueError, r"pods changed during drain \([\w.-]+/[\w.-]+ (arrived|changed)"):
-                    lifecycle.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
+                    NODE_ACTIONS.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
                 self.assertEqual(2, evict.call_count)
 
     def test_homesteads_own_host_command_arriving_mid_drain_is_not_a_changed_pod(self):
@@ -175,7 +176,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
                 self.objects["/api/v1/pods"]["items"] = [p for p in self.objects["/api/v1/pods"]["items"]
                                                          if p["metadata"]["name"] != body["metadata"]["name"]]
         with mock.patch.object(lifecycle, "kget", side_effect=self.get),                 mock.patch.object(lifecycle, "ksend", side_effect=send),                 mock.patch.object(lifecycle.time, "sleep"):
-            result = lifecycle.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
+            result = NODE_ACTIONS.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
         self.assertTrue(result["ok"])
         self.assertNotIn("homestead-host-node1", calls, "Homestead's own helper is not evicted")
 
@@ -184,14 +185,14 @@ class MaintenanceSafetyTests(unittest.TestCase):
         snapshot = power.plan("node1", "reboot")["drain_pods"]
         for code in (403, 409, 500):
             with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), \
-                    mock.patch.object(lifecycle, "node_action_check", return_value=(True, "", {})), \
-                    mock.patch.object(lifecycle, "set_cordon"), \
+                    mock.patch.object(NODE_ACTIONS, "node_action_check", return_value=(True, "", {})), \
+                    mock.patch.object(NODE_ACTIONS, "set_cordon"), \
                     mock.patch.object(lifecycle, "kget", side_effect=self.get), \
                     mock.patch.object(lifecycle, "ksend", side_effect=urllib.error.HTTPError("eviction", code, "refused", {}, None)) as evict, \
                     mock.patch.object(lifecycle.time, "sleep") as sleep, \
-                    mock.patch.object(lifecycle, "_send_power") as helper:
+                    mock.patch.object(NODE_ACTIONS, "_send_power") as helper:
                 with self.assertRaisesRegex(ValueError, "drain was refused"):
-                    lifecycle.node_power("node1", "reboot", reviewed_pods=snapshot, before_send=lambda: None)
+                    NODE_ACTIONS.node_power("node1", "reboot", reviewed_pods=snapshot, before_send=lambda: None)
                 self.assertEqual(2, evict.call_count)
                 sleep.assert_not_called()
                 helper.assert_not_called()
@@ -200,7 +201,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
         with mock.patch.object(lifecycle, "kget", side_effect=self.get), \
                 mock.patch.object(lifecycle, "ksend", side_effect=urllib.error.HTTPError("eviction", 429, "budget", {}, None)) as send, \
                 mock.patch.object(lifecycle.time, "sleep") as sleep:
-            result = lifecycle.drain("node1", wait=True)
+            result = NODE_ACTIONS.drain("node1", wait=True)
         self.assertEqual(["lab/app-a (HTTP 429)"], result["skipped"])
         send.assert_called_once()
         sleep.assert_not_called()
@@ -214,7 +215,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
         with mock.patch.object(lifecycle, "kget", side_effect=self.get), \
                 mock.patch.object(lifecycle, "ksend", side_effect=send) as evict, \
                 mock.patch.object(lifecycle.time, "sleep", side_effect=lambda _: self.objects["/api/v1/pods"].update(items=[])):
-            result = lifecycle.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
+            result = NODE_ACTIONS.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
         self.assertEqual(2, evict.call_count)
         self.assertEqual(["lab/app-a", "longhorn-system/instance-manager-test"], result["evicted"])
 
@@ -224,7 +225,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
             raise urllib.error.HTTPError(path, 404, "gone", {}, None)
         snapshot = power.plan("node1", "reboot")["drain_pods"]
         with mock.patch.object(lifecycle, "kget", side_effect=self.get), mock.patch.object(lifecycle, "ksend", side_effect=send):
-            self.assertEqual([], lifecycle.drain("node1", reviewed_pods=snapshot, wait=True)["skipped"])
+            self.assertEqual([], NODE_ACTIONS.drain("node1", reviewed_pods=snapshot, wait=True)["skipped"])
 
     def test_zero_budget_blocks_before_drain(self):
         self.with_budget()
@@ -379,28 +380,28 @@ class MaintenanceSafetyTests(unittest.TestCase):
     def test_eviction_uid_precondition_and_inventory_race(self):
         snapshot = maintenance.pod_snapshot([self.pod])
         with mock.patch.object(lifecycle, "kget", side_effect=self.get), mock.patch.object(lifecycle, "ksend") as send:
-            lifecycle.drain("node1", include_system=True, reviewed_pods=snapshot)
+            NODE_ACTIONS.drain("node1", include_system=True, reviewed_pods=snapshot)
             self.assertEqual({"uid": "pod1"}, send.call_args.args[2]["deleteOptions"]["preconditions"])
             send.reset_mock()
             self.pod["metadata"]["uid"] = "replacement"
             with self.assertRaisesRegex(ValueError, "changed"):
-                lifecycle.drain("node1", include_system=True, reviewed_pods=snapshot)
+                NODE_ACTIONS.drain("node1", include_system=True, reviewed_pods=snapshot)
             send.assert_not_called()
 
     def test_power_requires_review_before_cordon(self):
-        with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), mock.patch.object(lifecycle, "set_cordon") as cordon:
+        with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), mock.patch.object(NODE_ACTIONS, "set_cordon") as cordon:
             with self.assertRaisesRegex(ValueError, "reviewed drain"):
-                lifecycle.node_power("node1", "reboot")
+                NODE_ACTIONS.node_power("node1", "reboot")
             cordon.assert_not_called()
 
     def test_failed_post_drain_check_never_creates_power_helper(self):
         with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), \
-                mock.patch.object(lifecycle, "node_action_check", return_value=(True, "", {})), \
-                mock.patch.object(lifecycle, "set_cordon"), \
-                mock.patch.object(lifecycle, "drain", return_value={"evicted": [], "skipped": []}) as drain, \
+                mock.patch.object(NODE_ACTIONS, "node_action_check", return_value=(True, "", {})), \
+                mock.patch.object(NODE_ACTIONS, "set_cordon"), \
+                mock.patch.object(NODE_ACTIONS, "drain", return_value={"evicted": [], "skipped": []}) as drain, \
                 mock.patch.object(lifecycle, "ksend") as send:
             with self.assertRaisesRegex(ValueError, "changed"):
-                lifecycle.node_power("node1", "reboot", reviewed_pods=[],
+                NODE_ACTIONS.node_power("node1", "reboot", reviewed_pods=[],
                                      before_send=mock.Mock(side_effect=ValueError("changed")))
             self.assertTrue(drain.call_args.kwargs["include_system"])
             send.assert_not_called()
@@ -415,11 +416,11 @@ class MaintenanceSafetyTests(unittest.TestCase):
             calls.append(phase)
             receipts.append(details)
         with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), \
-                mock.patch.object(lifecycle, "node_action_check", return_value=(True, "", {})), \
-                mock.patch.object(lifecycle, "set_cordon"), \
-                mock.patch.object(lifecycle, "drain", return_value={"evicted": [], "skipped": []}), \
+                mock.patch.object(NODE_ACTIONS, "node_action_check", return_value=(True, "", {})), \
+                mock.patch.object(NODE_ACTIONS, "set_cordon"), \
+                mock.patch.object(NODE_ACTIONS, "drain", return_value={"evicted": [], "skipped": []}), \
                 mock.patch.object(lifecycle, "ksend", side_effect=send):
-            lifecycle.node_power("node1", "reboot", reviewed_pods=[], before_send=lambda: calls.append("CHECK"),
+            NODE_ACTIONS.node_power("node1", "reboot", reviewed_pods=[], before_send=lambda: calls.append("CHECK"),
                                  progress=progress)
         self.assertLess(calls.index("CHECK"), calls.index("sending"))
         self.assertLess(calls.index("sending"), calls.index("POST"))
@@ -429,12 +430,12 @@ class MaintenanceSafetyTests(unittest.TestCase):
     def test_missing_creation_receipt_leaves_sending_intent_and_does_not_retry(self):
         phases = []
         with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), \
-                mock.patch.object(lifecycle, "node_action_check", return_value=(True, "", {})), \
-                mock.patch.object(lifecycle, "set_cordon"), \
-                mock.patch.object(lifecycle, "drain", return_value={"evicted": [], "skipped": []}), \
+                mock.patch.object(NODE_ACTIONS, "node_action_check", return_value=(True, "", {})), \
+                mock.patch.object(NODE_ACTIONS, "set_cordon"), \
+                mock.patch.object(NODE_ACTIONS, "drain", return_value={"evicted": [], "skipped": []}), \
                 mock.patch.object(lifecycle, "ksend", return_value={}) as send:
             with self.assertRaisesRegex(ValueError, "not confirmed"):
-                lifecycle.node_power("node1", "reboot", reviewed_pods=[], before_send=lambda: None,
+                NODE_ACTIONS.node_power("node1", "reboot", reviewed_pods=[], before_send=lambda: None,
                                      progress=lambda phase, *a, **k: phases.append(phase))
         self.assertEqual("sending", phases[-1])
         send.assert_called_once()

@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
 import homestead_power as power
 import homestead_lifecycle as lifecycle
+import homestead_node_actions as NODE_ACTIONS
 import test_node_power_plan as fixture
 
 
@@ -94,9 +95,9 @@ class SingleNodePowerTests(unittest.TestCase):
                 if case == "new-boot": self.objects["/api/v1/nodes/node1"]["status"]["nodeInfo"]["bootID"] = "new-boot"
                 if case == "new-uid": self.objects["/api/v1/nodes/node1"]["metadata"]["uid"] = "new-node"
                 if case == "new-volume-risk": self.objects[f"{power.LH}/volumes"]["items"][0]["status"]["robustness"] = "degraded"
-                with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), mock.patch.object(lifecycle, "quorum_report", return_value=original["quorum"]), mock.patch.object(lifecycle, "ksend") as send:
+                with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), mock.patch.object(NODE_ACTIONS, "quorum_report", return_value=original["quorum"]), mock.patch.object(lifecycle, "ksend") as send:
                     with self.assertRaises(ValueError):
-                        lifecycle.node_power("node1", "reboot", planned_outage=True,
+                        NODE_ACTIONS.node_power("node1", "reboot", planned_outage=True,
                                              before_send=lambda: power.recheck_planned_outage(original))
                 send.assert_not_called()
 
@@ -104,11 +105,11 @@ class SingleNodePowerTests(unittest.TestCase):
         for action in ("reboot", "poweroff"):
             original = power.plan("node1", action)
             with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), \
-                    mock.patch.object(lifecycle, "set_cordon") as cordon, mock.patch.object(lifecycle, "drain") as drain, \
-                    mock.patch.object(lifecycle, "quorum_report", return_value=original["quorum"]), \
+                    mock.patch.object(NODE_ACTIONS, "set_cordon") as cordon, mock.patch.object(NODE_ACTIONS, "drain") as drain, \
+                    mock.patch.object(NODE_ACTIONS, "quorum_report", return_value=original["quorum"]), \
                     mock.patch.object(lifecycle, "_bust"), mock.patch.object(lifecycle, "ksend", side_effect=lambda method,path,body:
                         {"metadata": {**body["metadata"], "uid": "helper-uid"}}) as send:
-                result = lifecycle.node_power("node1", action, planned_outage=True,
+                result = NODE_ACTIONS.node_power("node1", action, planned_outage=True,
                                               before_send=lambda: power.recheck_planned_outage(original))
             cordon.assert_not_called()
             drain.assert_not_called()
@@ -166,13 +167,13 @@ class SingleNodePowerTests(unittest.TestCase):
         def slow_power(*args, **kwargs):
             started.set(); release.wait(5)
             return {"ok": True}
-        with mock.patch.object(server.OPS, "start", return_value={"id": "job-2"}),                 mock.patch.object(server.OPS, "record_phase") as phase,                 mock.patch.object(lifecycle, "node_power", side_effect=slow_power):
+        with mock.patch.object(server.OPS, "start", return_value={"id": "job-2"}),                 mock.patch.object(server.OPS, "record_phase") as phase,                 mock.patch.object(NODE_ACTIONS, "node_power", side_effect=slow_power):
             result = server.POWER_JOBS.send_reviewed_power(plan, background=True)
             self.assertEqual({"id": "job-2"}, result["operation"])
             self.assertTrue(result["background"])
             self.assertTrue(started.wait(5), "the work runs after the reply")
             release.set()
-        with mock.patch.object(server.OPS, "start", return_value={"id": "job-3"}),                 mock.patch.object(server.OPS, "record_phase") as phase,                 mock.patch.object(lifecycle, "node_power", side_effect=RuntimeError("drain stuck")):
+        with mock.patch.object(server.OPS, "start", return_value={"id": "job-3"}),                 mock.patch.object(server.OPS, "record_phase") as phase,                 mock.patch.object(NODE_ACTIONS, "node_power", side_effect=RuntimeError("drain stuck")):
             server.POWER_JOBS.send_reviewed_power(plan, background=True)
             for _ in range(50):
                 if phase.called: break
@@ -182,9 +183,9 @@ class SingleNodePowerTests(unittest.TestCase):
     def test_outage_cannot_skip_the_fresh_check_or_also_be_forced(self):
         with mock.patch.object(lifecycle, "NODE_POWER_ENABLED", True), mock.patch.object(lifecycle, "ksend") as send:
             with self.assertRaises(ValueError):
-                lifecycle.node_power("node1", "poweroff", planned_outage=True)
+                NODE_ACTIONS.node_power("node1", "poweroff", planned_outage=True)
             with self.assertRaises(ValueError):
-                lifecycle.node_power("node1", "poweroff", planned_outage=True, force=True, before_send=lambda: None)
+                NODE_ACTIONS.node_power("node1", "poweroff", planned_outage=True, force=True, before_send=lambda: None)
         send.assert_not_called()
 
     def test_job_records_the_outage_and_uses_a_fresh_pre_power_check(self):
@@ -193,7 +194,7 @@ class SingleNodePowerTests(unittest.TestCase):
         with mock.patch.object(server.OPS, "start", return_value=job) as start, \
                 mock.patch.object(server.OPS, "record_phase"), \
                 mock.patch.object(power, "recheck_planned_outage", return_value=None) as recheck, \
-                mock.patch.object(lifecycle, "node_power", side_effect=lambda *args, **kwargs:
+                mock.patch.object(NODE_ACTIONS, "node_power", side_effect=lambda *args, **kwargs:
                     kwargs["before_send"]() or {"ok":True}) as send:
             result = server.POWER_JOBS.send_reviewed_power(plan)
         self.assertTrue(start.call_args.args[4]["planned_outage"])

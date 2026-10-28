@@ -19,6 +19,7 @@ import homestead_capacity_review as REVIEW
 import homestead_hostrun as HOST
 import homestead_disk_setup as SETUP
 import homestead_disk_region as REGION
+import homestead_kube as KUBE
 
 KIND = 'disk-v2-convert'
 LABEL = 'homestead.io/disk-v2-convert'
@@ -35,11 +36,11 @@ def bind(read, send, detect, operations, namespace, logs):
 
 def _get(path, optional=False):
     try:
-        obj = kget(path)
+        obj = KUBE.get_optional(path, read=kget, missing=KUBE.GONE) if optional else kget(path)
     except urllib.error.HTTPError as error:
-        if optional and error.code == 404:
-            return None
         raise ValueError(f'Disk preparation inventory is unavailable (HTTP {error.code}); nothing is assumed empty') from error
+    if obj is KUBE.GONE:
+        return None
     if not isinstance(obj, dict):
         raise ValueError('Disk preparation inventory is incomplete')
     return obj

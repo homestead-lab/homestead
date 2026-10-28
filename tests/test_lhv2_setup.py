@@ -1,5 +1,4 @@
 """Host setup is reviewed, durable, and never turns zero capacity into readiness."""
-import copy
 import os
 import re
 import shutil
@@ -8,14 +7,19 @@ import tempfile
 import sys
 import threading
 import unittest
-import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
+import homestead_kube as K
 import homestead_lhv2_setup as V
+import homestead_changes as CHANGES
+import homestead_host_access as HOSTACCESS
+import homestead_operations as OPS
 from fakes.job_store import JobStore
+from fakes.kube import Kube
 
 BOOT = '01234567-89ab-cdef-0123-456789abcdef'
+JOBS = f'/apis/batch/v1/namespaces/{V.NS}/jobs'
 
 
 class Operations(JobStore):
@@ -32,48 +36,80 @@ class Operations(JobStore):
 
 
 class Cluster:
-    def __init__(self):
+    """The host, Longhorn's settings and managers and the setup Jobs, on the
+    shared fake API (tests/fakes/kube.py)."""
+    def __init__(self, case):
         self.ops = Operations()
-        self.node = {'metadata': {'name': 'k3s-test', 'uid': 'node-uid'}, 'status': {
-            'nodeInfo': {'bootID': BOOT, 'operatingSystem': 'linux'},
-            'conditions': [{'type': 'Ready', 'status': 'True'}], 'capacity': {}, 'allocatable': {}}}
-        self.settings = {'v2-data-engine': {'value': 'false'}}
-        self.jobs, self.pods, self.managers, self.sent = [], [], [], []
+        # The shared fake runs the real write guards; the storage guard takes the
+        # job store's lock, which lives under its DATA_DIR.
+        case.enterContext(patch.object(OPS, 'DATA_DIR', case.enterContext(tempfile.TemporaryDirectory())))
+        # No signed-in person on this thread, whatever an earlier test left behind: the write guards read who is asking.
+        case.enterContext(patch.object(HOSTACCESS, 'role', lambda: None))
+        case.enterContext(patch.object(CHANGES.REQUEST, 'user', None, create=True))
+        self.kube = case.enterContext(Kube(
+            {'apiVersion': 'v1', 'kind': 'Node', 'metadata': {'name': 'k3s-test', 'uid': 'node-uid'}, 'status': {
+                'nodeInfo': {'bootID': BOOT, 'operatingSystem': 'linux'},
+                'conditions': [{'type': 'Ready', 'status': 'True'}], 'capacity': {}, 'allocatable': {}}},
+            {'apiVersion': 'longhorn.io/v1beta2', 'kind': 'Node',
+             'metadata': {'name': 'k3s-test', 'namespace': 'longhorn-system'}}))
+        self.setting('v2-data-engine', 'false')
         self.base = {'distribution': 'k3s', 'longhorn_ok': True, 'nodes': [{'name': 'k3s-test', 'checks': {'cpu': True, 'modules': False}}]}
-        self.harvester = None
-        V.bind(self.get, self.send, lambda: self.base, self.ops, 'lab')
-    def get(self, path):
-        if path == '/api/v1/nodes': return {'items': [self.node]}
-        if path == '/api/v1/nodes/k3s-test': return self.node
-        if path == '/api/v1/pods': return {'items': self.pods}
-        if path == V.LH + '/nodes': return {'items': [{'metadata': {'name': 'k3s-test'}}]}
-        if path == V.LH + '/instancemanagers': return {'items': self.managers}
-        if path.startswith(V.LH + '/settings/'):
-            if path.rsplit('/', 1)[-1] in self.settings: return self.settings[path.rsplit('/', 1)[-1]]
-        if path == V.CAP.HARVESTER_V2 and self.harvester is not None: return self.harvester
-        if '/jobs?' in path: return {'items': self.jobs}
-        if '/jobs/' in path:
-            for job in self.jobs:
-                if job['metadata']['name'] == path.rsplit('/', 1)[-1]: return job
-        raise urllib.error.HTTPError(path, 404, 'missing', None, None)
-    def send(self, method, path, body):
-        self.sent.append((method, path, body))
-        assert self.ops.items, 'Persist approval before Kubernetes mutation'
-        self.jobs.append(copy.deepcopy(body))
-        return self.jobs[-1]
+        for name in ('kget', 'ksend', 'status', 'ops', 'NS'):
+            case.addCleanup(setattr, V, name, getattr(V, name))
+        V.bind(K.kget, K.ksend, lambda: self.base, self.ops, 'lab')
+
+        def approved_first(method, path, body):
+            assert self.ops.items, 'Persist approval before Kubernetes mutation'
+        self.kube.react('POST', JOBS, approved_first)
+
+    # What the tests change on the cluster, as the API server would keep it.
+    @property
+    def sent(self):
+        return [(method, path, body) for method, path, body, _ in self.kube.writes]
+    def change(self, path, change):
+        found = self.kube.object(path)
+        change(found)
+        self.kube.add(found)
+    def change_node(self, change): self.change('/api/v1/nodes/k3s-test', change)
+    def setting(self, name, value):
+        self.kube.add({'apiVersion': 'longhorn.io/v1beta2', 'kind': 'Setting',
+                       'metadata': {'name': name, 'namespace': 'longhorn-system'}, 'value': value})
+    def pods(self, *pods):
+        """The only pods there are."""
+        for number, pod in enumerate(pods):
+            self.kube.add({'apiVersion': 'v1', 'kind': 'Pod', 'metadata': {'name': f'pod-{number}', 'namespace': 'lab'}, **pod})
+    def managers(self, *managers):
+        for number, manager in enumerate(managers):
+            self.kube.add({'apiVersion': 'longhorn.io/v1beta2', 'kind': 'InstanceManager',
+                           'metadata': {'name': f'manager-{number}', 'namespace': 'longhorn-system'}, **manager})
+    def harvester(self, value):
+        self.kube.add({'apiVersion': 'harvesterhci.io/v1beta1', 'kind': 'Setting',
+                       'metadata': {'name': 'longhorn-v2-data-engine-enabled'}, 'value': value})
+    def jobs(self): return K.kget(JOBS)['items']
+    def job(self): return K.kget(JOBS)['items'][0]
+    def change_job(self, change):
+        job = self.job()
+        self.change(f"{JOBS}/{job['metadata']['name']}", change)
+    def drop_jobs(self):
+        """Every Job gone (a TTL clean-up, say); not a write of Homestead's."""
+        written = len(self.kube.writes)
+        self.kube('DELETE', JOBS)
+        del self.kube.writes[written:]
     def request(self):
         row = V.plan()['nodes'][0]
         return {'node': row['node'], 'review_token': row['review_token'], 'confirm': True, 'request_id': 'a' * 24}
     def configure(self):
         V.prepare(self.request())
-        self.jobs[0]['status'] = {'succeeded': 1}
+        self.change_job(lambda job: job.update(status={'succeeded': 1}))
         self.ops.items[0]['status'] = 'succeeded'
     def capacity(self, quantity='2Gi'):
-        for key in ('capacity', 'allocatable'): self.node['status'][key]['hugepages-2Mi'] = quantity
+        def set_quantity(node):
+            for key in ('capacity', 'allocatable'): node['status'][key]['hugepages-2Mi'] = quantity
+        self.change_node(set_quantity)
 
 
 class SetupTests(unittest.TestCase):
-    def setUp(self): self.c = Cluster()
+    def setUp(self): self.c = Cluster(self)
     def test_zero_capacity_is_actionable_but_cannot_enable(self):
         plan = V.plan()
         self.assertFalse(plan['can_enable'])
@@ -84,7 +120,7 @@ class SetupTests(unittest.TestCase):
         save.assert_not_called()
     def test_host_job_is_durable_pinned_and_does_not_restart_or_touch_disks(self):
         self.c.configure()
-        pod = self.c.jobs[0]['spec']['template']['spec']
+        pod = self.c.job()['spec']['template']['spec']
         self.assertEqual('k3s-test', pod['nodeName'])
         self.assertFalse(pod['automountServiceAccountToken'])
         self.assertTrue(pod['securityContext']['privileged'] if 'securityContext' in pod else pod['containers'][0]['securityContext']['privileged'])
@@ -107,9 +143,9 @@ class SetupTests(unittest.TestCase):
             V.enable({'confirm': True, 'review_token': plan['review_token']})
         save.assert_called_once_with({'v2': True}, allow_v2_enable=True)
     def cpus(self, n, mask='{"v2":"0x3"}', isolation='{"v2":"true"}'):
-        self.c.node['status']['capacity']['cpu'] = str(n)
-        self.c.settings['data-engine-cpu-mask'] = {'value': mask}
-        self.c.settings['data-engine-cpu-isolation-enabled'] = {'value': isolation}
+        self.c.change_node(lambda node: node['status']['capacity'].update(cpu=str(n)))
+        self.c.setting('data-engine-cpu-mask', mask)
+        self.c.setting('data-engine-cpu-isolation-enabled', isolation)
 
     def test_two_cpu_hosts_get_one_polling_core_when_v2_is_enabled(self):
         # Longhorn 1.13 polls with two cores and keeps them: on a 2-CPU host
@@ -120,7 +156,9 @@ class SetupTests(unittest.TestCase):
         self.assertEqual({'from': '{"v2":"0x3"}', 'to': '{"v2": "0x1"}', 'cores': 1, 'was': 2, 'host_cpus': 2}, plan['cpu_mask_fix'])
         with patch.object(V.CAP, 'save') as save:
             V.enable({'confirm': True, 'review_token': plan['review_token']})
-        self.assertIn(('PUT', V.LH + '/settings/data-engine-cpu-mask', {'value': '{"v2": "0x1"}'}), self.c.sent)
+        self.assertIn(('PUT', V.LH + '/settings/data-engine-cpu-mask', '{"v2": "0x1"}'),
+                      [(m, p, b['value']) for m, p, b in self.c.sent if m == 'PUT'])
+        self.assertEqual('{"v2": "0x1"}', self.c.kube.object(V.LH + '/settings/data-engine-cpu-mask')['value'])
         save.assert_called_once_with({'v2': True}, allow_v2_enable=True)
 
     def test_hosts_with_cpus_to_spare_keep_longhorns_mask(self):
@@ -139,18 +177,18 @@ class SetupTests(unittest.TestCase):
         # An RKE2 server on 2 CPUs: the control plane and V1 reserve 1875m,
         # V2's instance manager wants 12% (240m) and is never scheduled.
         self.c.configure(); self.c.capacity()
-        self.c.node['status']['allocatable']['cpu'] = '2'
-        self.c.pods = [{'spec': {'nodeName': 'k3s-test', 'containers': [{'resources': {'requests': {'cpu': '1875m'}}}]},
-                        'status': {'phase': 'Running'}}]
+        self.c.change_node(lambda node: node['status']['allocatable'].update(cpu='2'))
+        self.c.pods({'spec': {'nodeName': 'k3s-test', 'containers': [{'resources': {'requests': {'cpu': '1875m'}}}]},
+                        'status': {'phase': 'Running'}})
         plan = V.plan()
         self.assertFalse(plan['can_enable'])
         self.assertIn("reserves 240m of CPU and Kubernetes has 125m left", ' '.join(plan['blockers']))
-        self.c.pods[0]['spec']['containers'][0]['resources']['requests']['cpu'] = '1500m'
+        self.c.change('/api/v1/namespaces/lab/pods/pod-0', lambda pod: pod['spec']['containers'][0]['resources']['requests'].update(cpu='1500m'))
         self.assertTrue(V.plan()['can_enable'], "room for it: enable")
 
     def test_reboot_requires_fresh_module_observations(self):
         self.c.configure(); self.c.capacity()
-        self.c.node['status']['nodeInfo']['bootID'] = 'a' * 36
+        self.c.change_node(lambda node: node['status']['nodeInfo'].update(bootID='a' * 36))
         self.assertFalse(V.plan()['can_enable'])
         self.c.base['nodes'][0]['checks']['modules'] = True
         self.assertTrue(V.plan()['can_enable'])
@@ -158,7 +196,7 @@ class SetupTests(unittest.TestCase):
         body = self.c.request()
         for key, value in [('confirm', False), ('review_token', 'old'), ('node', 'other'), ('request_id', ';reboot')]:
             with self.subTest(key=key), self.assertRaises(ValueError): V.prepare({**body, key: value})
-        self.c.node['metadata']['uid'] = 'replacement'
+        self.c.change_node(lambda node: node['metadata'].update(uid='replacement'))
         with self.assertRaisesRegex(ValueError, 'changed'): V.prepare(body)
         self.assertEqual([], self.c.sent)
     def test_duplicate_request_returns_saved_operation_and_new_request_is_blocked(self):
@@ -166,23 +204,23 @@ class SetupTests(unittest.TestCase):
         first = V.prepare(body)
         self.assertEqual(first, V.prepare(body))
         with self.assertRaisesRegex(ValueError, 'already active'): V.prepare({**body, 'request_id': 'b' * 24})
-        self.assertEqual(1, len(self.c.jobs))
+        self.assertEqual(1, len(self.c.jobs()))
     def test_maintenance_excludes_host_preparation(self):
         for kind in ('node-power', 'host-os'):
             self.c.ops.items = [{'kind': kind, 'status': 'running', 'ref': {'node': 'k3s-test'}}]
             with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, 'already active'): V.prepare(self.c.request())
         self.assertEqual([], self.c.sent)
     def test_missing_job_is_never_replayed_by_observer(self):
-        V.prepare(self.c.request()); self.c.jobs.clear()
+        V.prepare(self.c.request()); self.c.drop_jobs()
         self.assertEqual('failed', V.progress(self.c.ops.items[0])[0])
         self.assertEqual(1, len(self.c.sent))
     def test_altered_or_failed_job_never_proves_configuration(self):
         self.c.configure(); self.c.capacity()
-        self.c.jobs[0]['spec']['template']['spec']['containers'][0]['command'] = ['true']
+        self.c.change_job(lambda job: job['spec']['template']['spec']['containers'][0].update(command=['true']))
         self.assertFalse(V.plan()['nodes'][0]['configured'])
         self.assertEqual('failed', V.progress(self.c.ops.items[0])[0])
-        self.c.jobs[0] = V._body(self.c.ops.items[0]['ref'])
-        self.c.jobs[0]['status'] = {'conditions': [{'type': 'Failed', 'status': 'True'}]}
+        self.c.change_job(lambda job: job.update(V._body(self.c.ops.items[0]['ref'])))
+        self.c.change_job(lambda job: job.update(status={'conditions': [{'type': 'Failed', 'status': 'True'}]}))
         self.assertEqual('failed', V.progress(self.c.ops.items[0])[0])
         self.assertFalse(V.plan()['can_enable'])
     def test_external_job_without_saved_approval_is_not_proof(self):
@@ -190,20 +228,20 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(V.plan()['can_enable'])
     def test_changed_memory_requirement_invalidates_enable_review(self):
         self.c.configure(); self.c.capacity(); plan = V.plan()
-        self.c.settings['data-engine-memory-size'] = {'value': '{"v2":"4096"}'}
+        self.c.setting('data-engine-memory-size', '{"v2":"4096"}')
         with patch.object(V.CAP, 'save') as save, self.assertRaisesRegex(ValueError, 'changed'):
             V.enable({'confirm': True, 'review_token': plan['review_token']})
         save.assert_not_called()
         self.assertEqual(4096, V.plan()['required_mib'])
     def test_old_setting_and_disabled_hugepages_are_respected(self):
-        self.c.settings['v2-data-engine-hugepage-limit'] = {'value': '4096'}
+        self.c.setting('v2-data-engine-hugepage-limit', '4096')
         self.assertEqual(2048, V.plan()['nodes'][0]['target_pages'])
-        self.c.settings['data-engine-hugepage-enabled'] = {'value': '{"v2":"false"}'}
+        self.c.setting('data-engine-hugepage-enabled', '{"v2":"false"}')
         self.c.configure()
         self.assertEqual(0, V.plan()['required_mib'])
         self.assertTrue(V.plan()['can_enable'])
     def test_other_pod_hugepage_requests_are_preserved_and_subtracted(self):
-        self.c.pods = [{'spec': {'nodeName': 'k3s-test', 'containers': [{'resources': {'requests': {'hugepages-2Mi': '1Gi'}}}]}}]
+        self.c.pods({'spec': {'nodeName': 'k3s-test', 'containers': [{'resources': {'requests': {'hugepages-2Mi': '1Gi'}}}]}})
         self.assertEqual(1536, V.plan()['nodes'][0]['target_pages'])
         self.c.configure(); self.c.capacity()
         self.assertFalse(V.plan()['can_enable'])
@@ -213,23 +251,23 @@ class SetupTests(unittest.TestCase):
         self.c.base['distribution'] = 'harvester'
         with self.assertRaisesRegex(ValueError, 'Harvester'): V.plan()
         self.c.base['distribution'] = 'k3s'
-        original = self.c.get
+        original = K.kget
         def read(path):
             if path == '/api/v1/nodes': return {'items': [], 'metadata': {'continue': 'next'}}
             return original(path)
         with patch.object(V, 'kget', read), self.assertRaisesRegex(ValueError, 'incomplete'): V.plan()
     def test_harvester_owns_setup_and_cannot_run_generic_host_jobs(self):
-        self.c.base['distribution'] = 'harvester'; self.c.harvester = {'value': 'false'}
+        self.c.base['distribution'] = 'harvester'; self.c.harvester('false')
         plan = V.plan()
         self.assertTrue(plan['can_enable'])
         self.assertFalse(plan['nodes'][0]['can_prepare'])
         with self.assertRaises(ValueError): V.prepare(self.c.request())
-        self.c.harvester['value'] = 'true'
+        self.c.harvester('true')
         self.assertFalse(V.plan()['can_enable'])
     def test_engine_is_ready_only_after_running_manager_is_observed(self):
-        self.c.settings['v2-data-engine']['value'] = 'true'
+        self.c.setting('v2-data-engine', 'true')
         self.assertFalse(V.plan()['engine_ready'])
-        self.c.managers = [{'spec': {'nodeID': 'k3s-test', 'dataEngine': 'v2'}, 'status': {'currentState': 'running'}}]
+        self.c.managers({'spec': {'nodeID': 'k3s-test', 'dataEngine': 'v2'}, 'status': {'currentState': 'running'}})
         self.assertTrue(V.plan()['engine_ready'])
     def test_host_tasks_cannot_be_cancelled_through_direct_api(self):
         import homestead_operations as operations

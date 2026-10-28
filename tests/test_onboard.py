@@ -1,107 +1,88 @@
 """The guide to adding a host, and removing a dead one."""
-import base64
 import sys
 import tempfile
 import time
 import unittest
-import urllib.error
 from pathlib import Path
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_kube as K
 import homestead_onboard as onboard
+import homestead_operations as OPS
+from fakes.kube import Kube
+
+NODES = "/api/v1/nodes"
+MACHINES = "/apis/cluster.x-k8s.io/v1beta1/namespaces/fleet-local/machines"
+LONGHORN = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 
 
 def node(name, ready=True, roles=(), machine=""):
     labels = {f"node-role.kubernetes.io/{r}": "true" for r in roles}
     annotations = {"cluster.x-k8s.io/machine": machine, "cluster.x-k8s.io/cluster-namespace": "fleet-local"} if machine else {}
-    return {"metadata": {"name": name, "labels": labels, "annotations": annotations},
+    return {"apiVersion": "v1", "kind": "Node", "metadata": {"name": name, "labels": labels, "annotations": annotations},
             "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "Unknown",
                                        "lastTransitionTime": "2026-09-20T10:00:00Z"}],
                        "addresses": [{"type": "InternalIP", "address": "192.0.2.51"}]}}
 
 
+def machine(name, node_name, phase="Running", **meta):
+    return {"apiVersion": "cluster.x-k8s.io/v1beta1", "kind": "Machine",
+            "metadata": {"name": name, "namespace": "fleet-local", **meta},
+            "status": {"nodeRef": {"name": node_name}, "phase": phase}}
+
+
+def longhorn_node(name):
+    return {"apiVersion": "longhorn.io/v1beta2", "kind": "Node", "metadata": {"name": name, "namespace": "longhorn-system"}}
+
+
+def replica(name, node_name, volume, state="running"):
+    return {"apiVersion": "longhorn.io/v1beta2", "kind": "Replica", "metadata": {"name": name, "namespace": "longhorn-system"},
+            "spec": {"nodeID": node_name, "volumeName": volume}, "status": {"currentState": state}}
+
+
+def setting(name, value):
+    return {"apiVersion": "harvesterhci.io/v1beta1", "kind": "Setting", "metadata": {"name": name}, "value": value}
+
+
 class Cluster:
-    def __init__(self):
-        self.objects = {
-            "/api/v1/nodes": {"items": [node("node1", roles=("control-plane", "etcd"), machine="custom-1"),
-                                        node("node2", roles=("control-plane", "etcd"), machine="custom-2"),
-                                        node("node3", roles=("control-plane", "etcd"), machine="custom-3")]},
-            "/api/v1/namespaces/harvester-system/configmaps/vip": {"data": {"ip": "192.0.2.240"}},
-            "/apis/harvesterhci.io/v1beta1/settings/server-version": {"value": "v1.4.1"},
-        }
-        self.machines = [{"metadata": {"name": f"custom-{i}", "namespace": "fleet-local"},
-                          "status": {"nodeRef": {"name": f"node{i}"}, "phase": "Running"}} for i in (1, 2, 3)]
-        self.replicas = []
-        self.lh_nodes = ["node1", "node2", "node3"]
-        self.sent = []
-        self.secrets = {}
+    """Three control-plane hosts, their machines and Longhorn nodes, on the
+    shared fake API (tests/fakes/kube.py)."""
 
-    def get(self, path):
-        if path == "/apis/cluster.x-k8s.io/v1beta1/namespaces/fleet-local/machines":
-            return {"items": self.machines}
-        if path.startswith("/apis/cluster.x-k8s.io/v1beta1/namespaces/fleet-local/machines/"):
-            found = [m for m in self.machines if m["metadata"]["name"] == path.rsplit("/", 1)[1]]
-            if found:
-                return found[0]
-            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
-        if path.startswith("/api/v1/pods"):
-            return {"items": getattr(self, "pods", [])}
-        if path == "/apis/kubevirt.io/v1/virtualmachineinstances":
-            return {"items": getattr(self, "vmis", [])}
-        if path == "/apis/storage.k8s.io/v1/volumeattachments":
-            return {"items": getattr(self, "attachments", [])}
-        if path == "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas":
-            return {"items": self.replicas}
-        if path == "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes":
-            return {"items": [{"metadata": {"name": n}} for n in self.lh_nodes]}
-        if path.startswith("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes/"):
-            name = path.rsplit("/", 1)[1]
-            if name in self.lh_nodes:
-                return {"metadata": {"name": name}}
-            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
-        if path.startswith("/api/v1/nodes/"):
-            name = path.rsplit("/", 1)[1]
-            found = [n for n in self.objects["/api/v1/nodes"]["items"] if n["metadata"]["name"] == name]
-            if found:
-                return found[0]
-            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
-        if "/secrets/" in path:
-            name = path.rsplit("/", 1)[1]
-            if name in self.secrets:
-                return self.secrets[name]
-            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
-        if path in self.objects:
-            return self.objects[path]
-        raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+    def __init__(self, test):
+        self.kube = test.enterContext(Kube(
+            node("node1", roles=("control-plane", "etcd"), machine="custom-1"),
+            node("node2", roles=("control-plane", "etcd"), machine="custom-2"),
+            node("node3", roles=("control-plane", "etcd"), machine="custom-3"),
+            {"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "vip", "namespace": "harvester-system"},
+             "data": {"ip": "192.0.2.240"}},
+            setting("server-version", "v1.4.1"),
+            *[machine(f"custom-{i}", f"node{i}") for i in (1, 2, 3)],
+            *[longhorn_node(f"node{i}") for i in (1, 2, 3)]))
+        # The shared fake runs the real write guards; the storage guard takes the job store's lock under DATA_DIR.
+        test.enterContext(mock.patch.object(OPS, "DATA_DIR", test.enterContext(tempfile.TemporaryDirectory())))
 
-    def send(self, method, path, body=None, ctype="application/json", **kwargs):
-        self.sent.append((method, path))
-        if method == "POST" and path.endswith("/secrets"):
-            data = {k: base64.b64encode(v.encode()).decode() for k, v in body["stringData"].items()}
-            self.secrets[body["metadata"]["name"]] = {"data": data}
-        if method == "DELETE" and "/secrets/" in path:
-            self.secrets.pop(path.rsplit("/", 1)[1], None)
-        if method == "DELETE" and path.startswith("/api/v1/nodes/"):
-            name = path.rsplit("/", 1)[1]
-            self.objects["/api/v1/nodes"]["items"] = [n for n in self.objects["/api/v1/nodes"]["items"]
-                                                      if n["metadata"]["name"] != name]
-        if method == "DELETE" and "/machines/" in path:
-            name = path.rsplit("/", 1)[1]
-            for m in self.machines:
-                if m["metadata"]["name"] == name and m["metadata"].get("finalizers"):
-                    # A finalizer holds it: deletion starts and waits.
-                    m["metadata"]["deletionTimestamp"] = "2026-09-23T10:00:00Z"
-                    return body or {}
-            self.machines = [m for m in self.machines if m["metadata"]["name"] != name]
-        if method == "PATCH" and "/machines/" in path and body.get("metadata", {}).get("finalizers", 1) is None:
-            name = path.rsplit("/", 1)[1]
-            self.machines = [m for m in self.machines if m["metadata"]["name"] != name]
-        if method == "DELETE" and "/replicas/" in path:
-            self.replicas = [r for r in self.replicas if r["metadata"]["name"] != path.rsplit("/", 1)[1]]
-        if method == "DELETE" and "/longhorn-system/nodes/" in path:
-            self.lh_nodes.remove(path.rsplit("/", 1)[1])
-        return body or {}
+    @property
+    def sent(self):
+        return [(method, path) for method, path, _, _ in self.kube.writes]
+
+    def edit(self, path, change):
+        """Change an object as it stands, as something outside Homestead would."""
+        obj = self.kube.object(path)
+        change(obj)
+        self.kube.add(obj)
+
+    def names(self, path):
+        return [item["metadata"]["name"] for item in K.kget(path)["items"]]
+
+    @property
+    def machines(self):
+        return self.names(MACHINES)
+
+    @property
+    def lh_nodes(self):
+        return self.names(f"{LONGHORN}/nodes")
 
 
 class Ops:
@@ -117,15 +98,16 @@ class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        self.cluster = Cluster()
+        self.cluster = Cluster(self)
         self.ops = Ops()
-        onboard.bind(self.cluster.get, self.cluster.send, "lab", self.ops)
+        # onboard reads the cluster through the shared client here, whatever another test bound.
+        self.enterContext(mock.patch.multiple(onboard, kget=onboard.kget, ksend=onboard.ksend, NS=onboard.NS, OPS=onboard.OPS))
+        onboard.bind(K.kget, K.ksend, "lab", self.ops)
 
 
 class GuideTests(Base):
     def test_the_guide_answers_from_the_cluster(self):
-        self.cluster.objects["/apis/harvesterhci.io/v1beta1/settings/ntp-servers"] = {
-            "value": '{"ntpServers":["0.uk.pool.ntp.org","1.uk.pool.ntp.org"]}'}
+        self.cluster.kube.add(setting("ntp-servers", '{"ntpServers":["0.uk.pool.ntp.org","1.uk.pool.ntp.org"]}'))
         g = onboard.guide()
 
         self.assertEqual("1.4.1", g["version"])
@@ -149,20 +131,16 @@ class GuideTests(Base):
         self.assertEqual("", onboard.next_hostname(["alpha"]))
 
     def test_join_plans_left_by_an_older_release_are_deleted_with_their_tokens(self):
-        self.cluster.secrets = {"homestead-onboard-abc": {}, "homestead-auth": {}}
-        self.cluster.objects["/api/v1/namespaces/lab/secrets"] = {"items": [
-            {"metadata": {"name": n}} for n in self.cluster.secrets]}
-        self.cluster.objects["/api/v1/namespaces/lab/pods?labelSelector=app%3Dhomestead-pxe"] = {"items": []}
+        for name in ("homestead-onboard-abc", "homestead-auth"):
+            self.cluster.kube.add({"apiVersion": "v1", "kind": "Secret", "metadata": {"name": name, "namespace": "lab"}})
 
         self.assertEqual(1, onboard.tidy_old_plans())
-        self.assertEqual({"homestead-auth"}, set(self.cluster.secrets))
+        self.assertEqual(["homestead-auth"], self.cluster.names("/api/v1/namespaces/lab/secrets"))
 
 
 class RemovalTests(Base):
     def kill(self, name):
-        for n in self.cluster.objects["/api/v1/nodes"]["items"]:
-            if n["metadata"]["name"] == name:
-                n["status"]["conditions"][0]["status"] = "Unknown"
+        self.cluster.edit(f"{NODES}/{name}", lambda n: n["status"]["conditions"][0].update(status="Unknown"))
 
     def test_a_ready_node_is_not_removed_from_here(self):
         report = onboard.removal_plan("node3")
@@ -171,9 +149,7 @@ class RemovalTests(Base):
         self.assertIn("rke2-uninstall.sh", report["blockers"][0])
 
     def test_a_ready_k3s_node_gets_k3s_steps(self):
-        for n in self.cluster.objects["/api/v1/nodes"]["items"]:
-            if n["metadata"]["name"] == "node3":
-                n["status"].setdefault("nodeInfo", {})["kubeletVersion"] = "v1.33.4+k3s1"
+        self.cluster.edit(f"{NODES}/node3", lambda n: n["status"].setdefault("nodeInfo", {}).update(kubeletVersion="v1.33.4+k3s1"))
 
         blocker = onboard.removal_plan("node3")["blockers"][0]
 
@@ -199,11 +175,9 @@ class RemovalTests(Base):
 
     def test_the_last_copy_of_a_volume_is_called_out(self):
         self.kill("node3")
-        self.cluster.replicas = [
-            {"spec": {"nodeID": "node3", "volumeName": "only-here"}, "status": {"currentState": "running"}},
-            {"spec": {"nodeID": "node3", "volumeName": "mirrored"}, "status": {"currentState": "running"}},
-            {"spec": {"nodeID": "node1", "volumeName": "mirrored"}, "status": {"currentState": "running"}},
-        ]
+        self.cluster.kube.add(replica("only-here-r-3", "node3", "only-here"))
+        self.cluster.kube.add(replica("mirrored-r-3", "node3", "mirrored"))
+        self.cluster.kube.add(replica("mirrored-r-1", "node1", "mirrored"))
 
         report = onboard.removal_plan("node3")
         self.assertEqual((["only-here"], ["mirrored"]), (report["lost_volumes"], report["rebuilt_volumes"]))
@@ -218,20 +192,20 @@ class RemovalTests(Base):
         order = [(m, p.split("/")[-1]) for m, p in self.cluster.sent]
         self.assertEqual([("PATCH", "node3"), ("DELETE", "node3"), ("DELETE", "custom-3"), ("DELETE", "node3")], order)
         self.assertEqual(4, len(result["log"]))
-        self.assertNotIn("custom-3", [m["metadata"]["name"] for m in self.cluster.machines])
+        self.assertNotIn("custom-3", self.cluster.machines)
 
     def hold_things_on(self, name):
         """A host that died holding a pod, a VM, a volume attachment and a replica."""
         self.kill(name)
-        self.cluster.pods = [{"metadata": {"name": "app-1", "namespace": "lab"}, "spec": {"nodeName": name}}]
-        self.cluster.vmis = [{"metadata": {"name": "haos", "namespace": "lab"}, "status": {"nodeName": name}}]
-        self.cluster.attachments = [{"metadata": {"name": "csi-abc"}, "spec": {"nodeName": name}}]
-        self.cluster.replicas = [
-            {"metadata": {"name": "vol-r-3"}, "spec": {"nodeID": name, "volumeName": "vol"}, "status": {"currentState": "running"}},
-            {"metadata": {"name": "vol-r-1"}, "spec": {"nodeID": "node1", "volumeName": "vol"}, "status": {"currentState": "running"}}]
-        for m in self.cluster.machines:
-            if m["status"]["nodeRef"]["name"] == name:
-                m["metadata"]["finalizers"] = ["machine.cluster.x-k8s.io"]
+        self.cluster.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "app-1", "namespace": "lab"},
+                               "spec": {"nodeName": name}})
+        self.cluster.kube.add({"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachineInstance",
+                               "metadata": {"name": "haos", "namespace": "lab"}, "status": {"nodeName": name}})
+        self.cluster.kube.add({"apiVersion": "storage.k8s.io/v1", "kind": "VolumeAttachment", "metadata": {"name": "csi-abc"},
+                               "spec": {"nodeName": name}})
+        self.cluster.kube.add(replica("vol-r-3", name, "vol"))
+        self.cluster.kube.add(replica("vol-r-1", "node1", "vol"))
+        self.cluster.edit(f"{MACHINES}/custom-3", lambda m: m["metadata"].update(finalizers=["machine.cluster.x-k8s.io"]))
 
     def test_the_plan_says_what_a_dead_host_still_holds(self):
         self.hold_things_on("node3")
@@ -251,8 +225,7 @@ class RemovalTests(Base):
         self.assertIn("/api/v1/namespaces/lab/pods/app-1", deleted)
         self.assertIn("/apis/storage.k8s.io/v1/volumeattachments/csi-abc", deleted)
         self.assertIn("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas/vol-r-3", deleted)
-        self.assertNotIn("custom-3", [m["metadata"]["name"] for m in self.cluster.machines],
-                         "the machine held by its finalizer is let go")
+        self.assertNotIn("custom-3", self.cluster.machines, "the machine held by its finalizer is let go")
         self.assertNotIn("node3", self.cluster.lh_nodes, "no replicas left, so Longhorn's record goes too")
         self.assertTrue(any("finalizers" in line for line in result["log"]))
 
@@ -263,25 +236,22 @@ class RemovalTests(Base):
 
         deleted = [p for m, p in self.cluster.sent if m == "DELETE"]
         self.assertNotIn("/api/v1/namespaces/lab/pods/app-1", deleted)
-        self.assertIn("custom-3", [m["metadata"]["name"] for m in self.cluster.machines], "still deleting")
+        self.assertIn("custom-3", self.cluster.machines, "still deleting")
 
     def test_a_node_that_only_just_went_down_gets_a_warning(self):
         self.kill("node3")
-        for n in self.cluster.objects["/api/v1/nodes"]["items"]:
-            if n["metadata"]["name"] == "node3":
-                n["status"]["conditions"][0]["lastTransitionTime"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        self.cluster.edit(f"{NODES}/node3", lambda n: n["status"]["conditions"][0].update(
+            lastTransitionTime=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
 
         report = onboard.removal_plan("node3")
 
         self.assertTrue(any("rebooting" in w for w in report["warnings"]))
 
     def test_a_stuck_machine_or_longhorn_node_needs_force(self):
-        self.cluster.machines.append({"metadata": {"name": "custom-9", "namespace": "fleet-local",
-                                                   "deletionTimestamp": "2026-09-23T10:00:00Z", "finalizers": ["x"]},
-                                      "status": {"nodeRef": {"name": "gone"}, "phase": "Deleting"}})
-        self.cluster.lh_nodes.append("gone")
-        self.cluster.replicas = [{"metadata": {"name": "r-gone"}, "spec": {"nodeID": "gone", "volumeName": "v"},
-                                  "status": {"currentState": "error"}}]
+        self.cluster.kube.add(machine("custom-9", "gone", phase="Deleting",
+                                      deletionTimestamp="2026-09-23T10:00:00Z", finalizers=["x"]))
+        self.cluster.kube.add(longhorn_node("gone"))
+        self.cluster.kube.add(replica("r-gone", "gone", "v", state="error"))
 
         with self.assertRaisesRegex(ValueError, "force"):
             onboard.cleanup("machine", "custom-9")
@@ -290,14 +260,13 @@ class RemovalTests(Base):
         onboard.cleanup("machine", "custom-9", force=True)
         onboard.cleanup("longhorn", "gone", force=True)
 
-        self.assertNotIn("custom-9", [m["metadata"]["name"] for m in self.cluster.machines])
+        self.assertNotIn("custom-9", self.cluster.machines)
         self.assertNotIn("gone", self.cluster.lh_nodes)
 
     def test_the_cleanup_report_finds_leftovers(self):
         self.kill("node2")
-        self.cluster.machines.append({"metadata": {"name": "custom-9", "namespace": "fleet-local"},
-                                      "status": {"nodeRef": {"name": "gone"}, "phase": "Running"}})
-        self.cluster.lh_nodes.append("gone")
+        self.cluster.kube.add(machine("custom-9", "gone"))
+        self.cluster.kube.add(longhorn_node("gone"))
 
         report = onboard.cleanup_report()
 
@@ -306,7 +275,7 @@ class RemovalTests(Base):
         self.assertEqual(["gone"], [n["name"] for n in report["stale_longhorn"]])
 
     def test_leftovers_are_cleaned_one_at_a_time_and_only_if_leftover(self):
-        self.cluster.lh_nodes.append("gone")
+        self.cluster.kube.add(longhorn_node("gone"))
 
         onboard.cleanup("longhorn", "gone")
 

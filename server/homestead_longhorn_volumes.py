@@ -272,6 +272,6 @@ def create_snapshot(volume, name=None, annotations=None):
 
 
 # Last, so that importing any of these modules first works: homestead_longhorn
-# imports this one and re-exports its names.
+# imports this one.
 import homestead_longhorn_jobs as JOBS  # noqa: E402
 import homestead_longhorn as LH  # noqa: E402

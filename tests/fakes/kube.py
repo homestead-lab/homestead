@@ -3,13 +3,14 @@
     with Kube(pod, claim, absent_groups=("snapshot.storage.k8s.io",)) as kube:
         MODULE.bind(K.kget, K.ksend)   # or anything that already calls them
         ...
-        kube.object(path), kube.writes
+        kube.object(path), kube.writes, kube.discard(path)
 
 It holds objects by API path and answers the way the API server does: 404,
 409 AlreadyExists and Conflict, 422 for a JSON patch that does not apply,
 merge, JSON and strategic-merge patches, delete preconditions, finalizers,
 owner garbage collection, label and field selectors, limit/continue pages,
-and /apis discovery. It replaces homestead_kube.transport, so a read goes
+a Secret's stringData kept as data, and /apis discovery. It replaces
+homestead_kube.transport, so a read goes
 through kget (and its 429 retry) and a write goes round WRITE_GUARDS first,
 as in the app. While it is in use the helpers server.py binds into
 homestead_kube (the self-data fence and the cluster shutdown state) are
@@ -21,6 +22,7 @@ Not modelled (add it when a test needs it): watches, server-side apply,
 admission and validation, namespace existence and termination, the
 $setElementOrder / $retainKeys strategic-merge directives, and subresources
 other than status and pod eviction (answer those with react())."""
+import base64
 import contextlib
 import copy
 import io
@@ -44,7 +46,8 @@ MERGE_KEYS = {"containers": "name", "initContainers": "name", "ephemeralContaine
 MERGED_PRIMITIVE_LISTS = {"finalizers"}
 LIST_KINDS = {"endpoints": "Endpoints"}
 # Resources whose name in the path is not the kind made plural.
-PLURALS = {"endpoints": "endpoints", "networkattachmentdefinition": "network-attachment-definitions"}
+PLURALS = {"endpoints": "endpoints", "networkattachmentdefinition": "network-attachment-definitions",
+          "nodemetrics": "nodes", "podmetrics": "pods"}
 
 
 def plural(kind):
@@ -98,7 +101,10 @@ class Kube:
             obj = copy.deepcopy(obj)
             group, _ = self._group_version(obj)
             meta = obj.setdefault("metadata", {})
+            bare = [field for field, value in meta.items() if value is None]  # given as None: left out
             self._stamp(meta, keep=True)
+            for field in bare:
+                meta.pop(field, None)
             if group:
                 self.groups.add(group)
             self._objects[(group, meta.get("namespace") or "", plural(obj["kind"]), meta["name"])] = obj
@@ -117,10 +123,22 @@ class Kube:
             found = self._objects.get(self._key(self._parse(path)))
             return copy.deepcopy(found)
 
-    def fail(self, path, code, times=1, method=None):
+    def discard(self, path):
+        """Take the object at path away as something outside the app would: no
+        write is logged, no finalizer or guard is asked, what it owned is
+        collected. Not there already is no error."""
+        with self._lock:
+            if self._objects.pop(self._key(self._parse(path)), None) is not None:
+                self._rv += 1
+                self._collect()
+
+    def fail(self, path, code, times=1, method=None, skip=0, applied=False):
         """Answer the next times requests for path (any method, or just
-        method) with code, before anything else happens."""
-        self._failures.append([path, method, code, times])
+        method) with code, before anything else happens: an HTTP status, or
+        an exception to raise (an OSError, a TimeoutError). skip lets that many
+        matching requests through first. applied lets the request be done and
+        loses the reply: the caller gets the failure, the write stands."""
+        self._failures.append([path, method, code, times, skip, applied])
 
     def react(self, method, path, answer):
         """answer(method, path, body) answers requests for path ("*" for any
@@ -135,10 +153,17 @@ class Kube:
         with self._lock:
             if method != "GET":
                 self.writes.append((method, path, copy.deepcopy(body), ctype))
+            lost = None
             for failure in self._failures:
                 if failure[0] == path_only and failure[1] in (None, method) and failure[3] > 0:
+                    if failure[4] > 0:
+                        failure[4] -= 1
+                        continue
                     failure[3] -= 1
-                    raise self._error(failure[2], "Failure", f"injected failure for {path_only}", path)
+                    if failure[5]:
+                        lost = failure
+                        break
+                    raise self._failed(failure, path)
             for want, where, answer in self._reactions:
                 if where == path_only and want in ("*", method):
                     result = answer(method, path, body)
@@ -154,7 +179,10 @@ class Kube:
             req["query"] = {k: v[-1] for k, v in urllib.parse.parse_qs(query).items()}
             handler = {"GET": self._get, "POST": self._post, "PUT": self._put,
                        "PATCH": self._patch, "DELETE": self._delete}[method]
-            return copy.deepcopy(handler(req, body, ctype, path))
+            done = copy.deepcopy(handler(req, body, ctype, path))
+            if lost:
+                raise self._failed(lost, path)
+            return done
 
     # Requests ---------------------------------------------------------------
 
@@ -200,6 +228,7 @@ class Kube:
         meta["generation"] = 1
         if req["group"]:
             self.groups.add(req["group"])
+        _fold_string_data(req, body)
         self._objects[self._key(req)] = body
         return body
 
@@ -259,6 +288,7 @@ class Kube:
     # Bookkeeping ------------------------------------------------------------
 
     def _store(self, req, new):
+        _fold_string_data(req, new)
         meta = new["metadata"]
         if meta.get("deletionTimestamp") and not meta.get("finalizers"):
             self._objects.pop(self._key(req), None)
@@ -292,6 +322,7 @@ class Kube:
             uids = {obj["metadata"].get("uid") for obj in self._objects.values()}
             orphans = [key for key, obj in self._objects.items()
                        if (obj["metadata"].get("ownerReferences") or [])
+                       and all(ref.get("uid") for ref in obj["metadata"]["ownerReferences"])
                        and not any(ref.get("uid") in uids for ref in obj["metadata"]["ownerReferences"])
                        and not obj["metadata"].get("deletionTimestamp")]
             if not orphans:
@@ -360,6 +391,13 @@ class Kube:
                            "the object has been modified; please apply your changes to the latest version and try again", path)
 
     @staticmethod
+    def _failed(failure, path):
+        code = failure[2]
+        if isinstance(code, int):
+            return Kube._error(code, "Failure", f"injected failure for {path.partition('?')[0]}", path)
+        return code
+
+    @staticmethod
     def _error(code, reason, message, path):
         status = {"kind": "Status", "apiVersion": "v1", "metadata": {}, "status": "Failure",
                   "message": message, "reason": reason, "code": code}
@@ -368,6 +406,16 @@ class Kube:
 
 
 # Patches ----------------------------------------------------------------------
+
+def _fold_string_data(req, obj):
+    """A Secret's stringData is kept as base64 data, as the API server does."""
+    if req["plural"] == "secrets" and not req["group"] and obj.get("stringData"):
+        data = obj.setdefault("data", {})
+        for key, value in obj.pop("stringData").items():
+            data[key] = base64.b64encode(str(value).encode()).decode()
+    elif req["plural"] == "secrets" and not req["group"]:
+        obj.pop("stringData", None)
+
 
 def _merge_patch(target, patch):
     """RFC 7386: objects merge, null removes, anything else replaces."""

@@ -13,6 +13,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_kube as K
 import homestead_imports as IMPORTS
+import homestead_image_cache as IMAGES
+import homestead_container_import as CONTAINER_IMPORT
 import homestead_names as NAMES
 from fakes.kube import Kube
 
@@ -53,17 +55,17 @@ def finished_copy():
 
 class Fixture(unittest.TestCase):
     def setUp(self):
-        saved = (IMPORTS.kget, IMPORTS.ksend, IMPORTS.NS, IMPORTS.SCAN_DIR, IMPORTS._SCAN_STARTED[0], NAMES.kget)
+        saved = (IMPORTS.kget, IMPORTS.ksend, IMPORTS.NS, IMPORTS.SCAN_DIR, IMAGES._SCAN_STARTED[0], NAMES.kget)
 
         def restore():
-            IMPORTS.kget, IMPORTS.ksend, IMPORTS.NS, IMPORTS.SCAN_DIR, IMPORTS._SCAN_STARTED[0], NAMES.kget = saved
-            IMPORTS._SCANS.clear()
-            IMPORTS._SCAN_FAILED.clear()
+            IMPORTS.kget, IMPORTS.ksend, IMPORTS.NS, IMPORTS.SCAN_DIR, IMAGES._SCAN_STARTED[0], NAMES.kget = saved
+            IMAGES._SCANS.clear()
+            IMAGES._SCAN_FAILED.clear()
         self.addCleanup(restore)
         IMPORTS.kget, IMPORTS.ksend, IMPORTS.NS, IMPORTS.SCAN_DIR = K.kget, K.ksend, "lab", ""
-        IMPORTS._SCANS.clear()
-        IMPORTS._SCAN_FAILED.clear()
-        IMPORTS._SCAN_STARTED[0] = 0.0
+        IMAGES._SCANS.clear()
+        IMAGES._SCAN_FAILED.clear()
+        IMAGES._SCAN_STARTED[0] = 0.0
         NAMES.kget = K.kget
         shim = types.ModuleType("homestead_shim")
         shim.raw_get = lambda path: json.dumps(LISTING)
@@ -78,7 +80,7 @@ class Fixture(unittest.TestCase):
 class ViewerReadsTests(Fixture):
     def test_looking_at_the_image_cache_writes_nothing(self):
         with Kube(node(), node("node2"), finished_scan(), finished_pull()) as kube:
-            report = IMPORTS.image_cache()
+            report = IMAGES.image_cache()
             self.assertEqual([], kube.writes, "a viewer's read started, removed or saved something")
         # What it shows is as before: the finished scan, and the pull as finished.
         self.assertIn("example.test/app:1", {row["name"] for row in report["images"]})
@@ -86,13 +88,13 @@ class ViewerReadsTests(Fixture):
 
     def test_looking_at_the_imports_writes_nothing(self):
         with Kube(*finished_copy()) as kube:
-            rows = IMPORTS.import_status()
+            rows = CONTAINER_IMPORT.import_status()
             self.assertEqual([], kube.writes)
         self.assertEqual(["done"], [row["state"] for row in rows])
 
     def test_the_leaders_minute_does_what_looking_used_to(self):
         with Kube(node(), node("node2"), finished_scan(), finished_pull(), *finished_copy()) as kube:
-            IMPORTS.tick()
+            IMAGES.tick()
             deleted = {path for method, path, *_ in kube.writes if method == "DELETE"}
             started = [path for method, path, *_ in kube.writes if method == "POST"]
             self.assertIn("/api/v1/namespaces/lab/pods/homestead-image-scan-x", deleted)
@@ -101,12 +103,12 @@ class ViewerReadsTests(Fixture):
             # node2 has never been scanned, so a scan starts there (and on node1,
             # whose scan was only just read).
             self.assertEqual(2, len(started))
-        self.assertIn("node1", IMPORTS._SCANS)
+        self.assertIn("node1", IMAGES._SCANS)
 
     def test_a_fresh_scan_is_not_asked_again(self):
-        IMPORTS._SCANS["node1"] = {"at": time.time(), "images": []}
+        IMAGES._SCANS["node1"] = {"at": time.time(), "images": []}
         with Kube(node()) as kube:
-            IMPORTS.tick()
+            IMAGES.tick()
             self.assertEqual([], [path for method, path, *_ in kube.writes if method == "POST"])
 
 
@@ -120,16 +122,16 @@ class BackgroundScanTests(Fixture):
     def test_a_cordoned_host_does_not_keep_every_host_rescanning(self):
         cordoned = node("node2")
         cordoned["spec"] = {"unschedulable": True}
-        IMPORTS._SCANS["node1"] = {"at": time.time(), "images": []}
+        IMAGES._SCANS["node1"] = {"at": time.time(), "images": []}
         with Kube(node(), cordoned) as kube:
-            IMPORTS.tick()
+            IMAGES.tick()
             self.assertEqual([], self.posts(kube), "node2 is never scanned, so it is not a reason to scan")
 
     def test_a_host_whose_scan_fails_is_not_asked_again_until_its_time(self):
         failed = finished_scan()
         failed["status"]["phase"] = "Failed"
         with Kube(node(), failed) as kube:
-            IMPORTS.tick()
+            IMAGES.tick()
             self.assertIn("/api/v1/namespaces/lab/pods/homestead-image-scan-x",
                           {path for method, path, *_ in kube.writes if method == "DELETE"})
             self.assertEqual([], self.posts(kube), "a scan that failed just now counts as this round's")
@@ -142,8 +144,8 @@ class BackgroundScanTests(Fixture):
                     "spec": {"nodeName": node_name, "containers": [{"name": "scan", "image": "scan"}]}}
         with Kube(node(), node("node2")), mock.patch.object(IMPORTS.RUNTIME, "pod", pod):
             with self.assertRaises(OSError):
-                IMPORTS.start_image_scan()
-        self.assertGreater(IMPORTS._SCAN_STARTED[0], 0, "otherwise the next tick starts node1's pod again")
+                IMAGES.start_image_scan()
+        self.assertGreater(IMAGES._SCAN_STARTED[0], 0, "otherwise the next tick starts node1's pod again")
 
 
 class LeaderLoopTests(unittest.TestCase):
@@ -163,7 +165,7 @@ class LeaderLoopTests(unittest.TestCase):
              mock.patch.object(CLUSTER, "cluster_shutdown", lambda: state), \
              mock.patch.object(CLUSTER.LHREBUILD, "tick", rebuild or mock.Mock()), \
              mock.patch.object(CLUSTER, "_cache", {}, create=True), \
-             mock.patch.object(CLUSTER.IMPORTS, "tick", tick), \
+             mock.patch.object(IMAGES, "tick", tick), \
              mock.patch("builtins.print"):
             with self.assertRaises(StopIteration):
                 CLUSTER._detached_copies_loop()

@@ -2,78 +2,97 @@
 
 k3s-test is one host with an NVMe (tagged nvme) and a SATA disk (tagged
 ssd). A Windows VM's 70 GiB disk had its only copy on the SATA disk; moving
-it to the NVMe must not stop the VM."""
-import copy
+it to the NVMe must not stop the VM. On the shared fake API
+(tests/fakes/kube.py)."""
 import sys
+import tempfile
 import unittest
-import urllib.error
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_copy_move as M
+import homestead_kube as K
+import homestead_operations as OPS
 import homestead_rebalance as REBALANCE
 import homestead_reclass as RECLASS
+from fakes.kube import Kube
 
 LH, GIB = M.LH, M.GIB
+LONGHORN = "longhorn.io/v1beta2"
 
 
-class Cluster:
-    def __init__(self, state="attached", soft=True, offline_field=True):
-        self.node = {"metadata": {"name": "k3s-test"}, "spec": {"allowScheduling": True, "tags": [], "disks": {
-            "default": {"path": "/var/lib/longhorn/", "tags": ["nvme", "os", "ssd"], "allowScheduling": True, "storageReserved": 10 * GIB},
-            "sda": {"path": "/mnt/sda", "tags": ["ssd"], "allowScheduling": True, "storageReserved": 0}}},
-            "status": {"diskStatus": {
-                "default": {"diskUUID": "u-nvme", "storageMaximum": 200 * GIB, "storageAvailable": 175 * GIB, "storageScheduled": 0},
-                "sda": {"diskUUID": "u-sda", "storageMaximum": 900 * GIB, "storageAvailable": 700 * GIB, "storageScheduled": 70 * GIB}}}}
+class Longhorn:
+    """One host, one volume and its copies, as Longhorn keeps them."""
+
+    def __init__(self, test, state="attached", soft=True, offline_field=True):
+        node = {"apiVersion": LONGHORN, "kind": "Node", "metadata": {"namespace": "longhorn-system", "name": "k3s-test"},
+                "spec": {"allowScheduling": True, "tags": [], "disks": {
+                    "default": {"path": "/var/lib/longhorn/", "tags": ["nvme", "os", "ssd"], "allowScheduling": True, "storageReserved": 10 * GIB},
+                    "sda": {"path": "/mnt/sda", "tags": ["ssd"], "allowScheduling": True, "storageReserved": 0}}},
+                "status": {"diskStatus": {
+                    "default": {"diskUUID": "u-nvme", "storageMaximum": 200 * GIB, "storageAvailable": 175 * GIB, "storageScheduled": 0},
+                    "sda": {"diskUUID": "u-sda", "storageMaximum": 900 * GIB, "storageAvailable": 700 * GIB, "storageScheduled": 70 * GIB}}}}
         spec = {"numberOfReplicas": 1, "size": str(70 * GIB), "diskSelector": [], "nodeSelector": []}
         if soft:
             spec["replicaSoftAntiAffinity"] = "ignored"
         if offline_field:
             spec["offlineRebuilding"] = "ignored"
-        self.volume = {"metadata": {"name": "pvc-win", "annotations": {}}, "spec": spec,
-                       "status": {"state": state, "robustness": "healthy" if state == "attached" else "unknown",
-                                  "currentNodeID": "k3s-test" if state == "attached" else "", "actualSize": 12 * GIB,
-                                  "kubernetesStatus": {"namespace": "lab", "pvcName": "win-dev-disk"}}}
-        self.replicas = [self.replica("pvc-win-r-old", "u-sda", "/mnt/sda")]
-        self.settings = {"offline-replica-rebuilding": "false"}
-        self.sent = []
+        volume = {"apiVersion": LONGHORN, "kind": "Volume", "metadata": {"namespace": "longhorn-system", "name": "pvc-win", "annotations": {}},
+                  "spec": spec,
+                  "status": {"state": state, "robustness": "healthy" if state == "attached" else "unknown",
+                             "currentNodeID": "k3s-test" if state == "attached" else "", "actualSize": 12 * GIB,
+                             "kubernetesStatus": {"namespace": "lab", "pvcName": "win-dev-disk"}}}
+        setting = {"apiVersion": LONGHORN, "kind": "Setting", "metadata": {"namespace": "longhorn-system", "name": "offline-replica-rebuilding"},
+                   "value": "false"}
+        self.kube = test.enterContext(Kube(node, volume, setting, self.replica("pvc-win-r-old", "u-sda", "/mnt/sda")))
+        # The engine reports each healthy copy as read-write, whatever copies there are now.
+        self.kube.react("GET", f"{LH}/engines", lambda method, path, body: {"items": [
+            {"spec": {"volumeName": "pvc-win"},
+             "status": {"replicaModeMap": {r["metadata"]["name"]: "RW" for r in self.replicas if r["spec"].get("healthyAt")}}}]})
+        # The shared fake runs the real write guards; the storage guard takes the job
+        # store's lock, which lives under its DATA_DIR.
+        test.enterContext(mock.patch.object(OPS, "DATA_DIR", test.enterContext(tempfile.TemporaryDirectory())))
 
-    def replica(self, name, uuid, path, healthy=True):
-        return {"metadata": {"name": name}, "spec": {"volumeName": "pvc-win", "nodeID": "k3s-test", "diskID": uuid, "diskPath": path,
-                                                     **({"healthyAt": "2026-10-24T00:00:00Z"} if healthy else {})},
+    @staticmethod
+    def replica(name, uuid, path, healthy=True):
+        return {"apiVersion": LONGHORN, "kind": "Replica", "metadata": {"namespace": "longhorn-system", "name": name},
+                "spec": {"volumeName": "pvc-win", "nodeID": "k3s-test", "diskID": uuid, "diskPath": path,
+                         **({"healthyAt": "2026-10-24T00:00:00Z"} if healthy else {})},
                 "status": {"currentState": "running" if healthy else "starting"}}
 
-    def get(self, path):
-        if path == f"{LH}/nodes":
-            return {"items": [copy.deepcopy(self.node)]}
-        if path == f"{LH}/volumes/pvc-win":
-            return copy.deepcopy(self.volume)
-        if path == f"{LH}/replicas":
-            return {"items": copy.deepcopy(self.replicas)}
-        if path == f"{LH}/engines":
-            return {"items": [{"spec": {"volumeName": "pvc-win"},
-                               "status": {"replicaModeMap": {r["metadata"]["name"]: "RW" for r in self.replicas if r["spec"].get("healthyAt")}}}]}
-        if path.startswith(f"{LH}/settings/") and path.rsplit("/", 1)[1] in self.settings:
-            return {"value": self.settings[path.rsplit("/", 1)[1]]}
-        raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+    @property
+    def node(self):
+        return self.kube.object(f"{LH}/nodes/k3s-test")
 
-    def send(self, method, path, body=None, ctype=None):
-        self.sent.append((method, path, copy.deepcopy(body)))
-        if method == "PATCH" and path == f"{LH}/volumes/pvc-win":
-            self.volume["spec"].update(body.get("spec") or {})
-            notes = self.volume["metadata"]["annotations"]
-            for key, value in ((body.get("metadata") or {}).get("annotations") or {}).items():
-                notes.pop(key, None) if value is None else notes.__setitem__(key, value)
-        if method == "DELETE" and "/replicas/" in path:
-            self.replicas = [r for r in self.replicas if r["metadata"]["name"] != path.rsplit("/", 1)[1]]
-        return {}
+    @property
+    def volume(self):
+        return self.kube.object(f"{LH}/volumes/pvc-win")
+
+    @property
+    def replicas(self):
+        return K.kget(f"{LH}/replicas")["items"]
+
+    def names(self):
+        return sorted(r["metadata"]["name"] for r in self.replicas)
+
+    def edit(self, path, change):
+        """Someone else changes the object at path; change(obj) edits a copy."""
+        obj = self.kube.object(path)
+        change(obj)
+        self.kube.add(obj)
+
+    def edit_volume(self, change):
+        self.edit(f"{LH}/volumes/pvc-win", change)
+
+    def edit_node(self, change):
+        self.edit(f"{LH}/nodes/k3s-test", change)
 
 
 class CopyMoveTests(unittest.TestCase):
     def setUp(self, **kw):
-        self.lh = Cluster(**kw)
-        for patch in (mock.patch.object(REBALANCE, "kget", self.lh.get), mock.patch.object(REBALANCE, "ksend", self.lh.send),
+        self.lh = Longhorn(self, **kw)
+        for patch in (mock.patch.object(REBALANCE, "kget", K.kget), mock.patch.object(REBALANCE, "ksend", K.ksend),
                       mock.patch.object(REBALANCE, "is_leader", lambda: True)):
             patch.start()
             self.addCleanup(patch.stop)
@@ -100,7 +119,7 @@ class CopyMoveTests(unittest.TestCase):
         self.assertIn("Choose the disk tags", M.plan("pvc-win")["blockers"][0])
         self.assertIn("already", M.plan("pvc-win", ["ssd"])["blockers"][0])
         self.assertIn("No disk Longhorn may use carries", M.plan("pvc-win", ["hdd"])["blockers"][0])
-        self.lh.node["status"]["diskStatus"]["default"]["storageAvailable"] = 40 * GIB
+        self.lh.edit_node(lambda node: node["status"]["diskStatus"]["default"].update(storageAvailable=40 * GIB))
         self.assertIn("room", " ".join(M.plan("pvc-win", ["nvme"])["blockers"]))
 
     def test_a_running_vms_copy_moves_without_ever_having_fewer_whole_copies(self):
@@ -112,12 +131,12 @@ class CopyMoveTests(unittest.TestCase):
         self.step(item)                                                         # one copy more asked for
         self.assertEqual(2, self.lh.volume["spec"]["numberOfReplicas"])
         self.assertEqual("1", self.lh.volume["metadata"]["annotations"][REBALANCE.MOVING])
-        self.lh.replicas.append(self.lh.replica("pvc-win-r-new", "u-nvme", "/var/lib/longhorn/", healthy=False))
+        self.lh.kube.add(self.lh.replica("pvc-win-r-new", "u-nvme", "/var/lib/longhorn/", healthy=False))
         self.assertIn("Building", self.step(item)[2])
-        self.assertEqual(["pvc-win-r-old", "pvc-win-r-new"], [r["metadata"]["name"] for r in self.lh.replicas], "the old copy stays while it builds")
-        self.lh.replicas[1] = self.lh.replica("pvc-win-r-new", "u-nvme", "/var/lib/longhorn/")
+        self.assertEqual(["pvc-win-r-new", "pvc-win-r-old"], self.lh.names(), "the old copy stays while it builds")
+        self.lh.kube.add(self.lh.replica("pvc-win-r-new", "u-nvme", "/var/lib/longhorn/"))
         self.step(item)                                                         # whole: the old copy goes
-        self.assertEqual(["pvc-win-r-new"], [r["metadata"]["name"] for r in self.lh.replicas])
+        self.assertEqual(["pvc-win-r-new"], self.lh.names())
         self.step(item, 2)                                                      # settles, then nothing left off the NVMe
         state, progress, message = self.step(item)
         self.assertEqual(("succeeded", 100), (state, progress), message)
@@ -128,11 +147,11 @@ class CopyMoveTests(unittest.TestCase):
     def test_a_copy_longhorn_puts_on_the_wrong_disk_is_dropped_and_the_old_tags_come_back(self):
         item = self.job(M.plan("pvc-win", ["nvme"]))
         self.step(item, 2)
-        self.lh.replicas.append(self.lh.replica("pvc-win-r-new", "u-sda", "/mnt/sda"))
+        self.lh.kube.add(self.lh.replica("pvc-win-r-new", "u-sda", "/mnt/sda"))
         state, _, message = self.step(item)
         self.assertEqual("failed", state)
         self.assertIn("/mnt/sda", message)
-        self.assertEqual(["pvc-win-r-old"], [r["metadata"]["name"] for r in self.lh.replicas])
+        self.assertEqual(["pvc-win-r-old"], self.lh.names())
         self.assertEqual((1, [], "ignored"), (self.lh.volume["spec"]["numberOfReplicas"], self.lh.volume["spec"]["diskSelector"],
                                               self.lh.volume["spec"]["replicaSoftAntiAffinity"]))
 
@@ -141,17 +160,17 @@ class CopyMoveTests(unittest.TestCase):
         self.step(item, 2)
         M.cancel_run(item, None)
         self.assertEqual((1, []), (self.lh.volume["spec"]["numberOfReplicas"], self.lh.volume["spec"]["diskSelector"]))
-        self.assertEqual(["pvc-win-r-old"], [r["metadata"]["name"] for r in self.lh.replicas])
+        self.assertEqual(["pvc-win-r-old"], self.lh.names())
 
     def test_a_detached_volume_moves_with_offline_rebuilding_on_for_it(self):
-        self.lh.volume["status"].update(state="detached", robustness="unknown", currentNodeID="")
+        self.lh.edit_volume(lambda volume: volume["status"].update(state="detached", robustness="unknown", currentNodeID=""))
         item = self.job(M.plan("pvc-win", ["nvme"]))
         self.step(item)
         self.assertEqual("enabled", self.lh.volume["spec"]["offlineRebuilding"])
 
     def test_a_detached_volume_on_a_longhorn_without_offline_rebuilding_cannot_start(self):
-        del self.lh.volume["spec"]["offlineRebuilding"]
-        self.lh.volume["status"].update(state="detached", robustness="unknown", currentNodeID="")
+        self.lh.edit_volume(lambda volume: volume["spec"].pop("offlineRebuilding"))
+        self.lh.edit_volume(lambda volume: volume["status"].update(state="detached", robustness="unknown", currentNodeID=""))
         self.assertIn("detached", M.plan("pvc-win", ["nvme"])["blockers"][0])
 
     def test_a_move_starts_only_as_reviewed(self):

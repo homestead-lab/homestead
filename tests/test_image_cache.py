@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
+import homestead_image_cache as IMAGES
 from fakes.platform import plain_platform
 
 
@@ -74,7 +75,7 @@ class ImageCacheTests(unittest.TestCase):
         # Scans saved to disk belong to the tests that ask for it.
         self.addCleanup(setattr, imports, "SCAN_DIR", imports.SCAN_DIR)
         imports.SCAN_DIR = ""
-        imports._SCANS.clear()
+        IMAGES._SCANS.clear()
         imports.kget = get
         imports.NAMES.bind(get)
         def send(method, path, body=None, **kwargs):
@@ -85,7 +86,7 @@ class ImageCacheTests(unittest.TestCase):
         imports.ksend = send
 
     def test_active_and_rollback_digests_are_protected(self):
-        report = imports.image_cache()
+        report = IMAGES.image_cache()
         by_digest = {row["digest"]: row for row in report["images"] if row["digest"]}
         self.assertTrue(by_digest[self.active]["protected"])
         self.assertEqual("active", by_digest[self.active]["retained_by"][0]["reason"])
@@ -95,15 +96,15 @@ class ImageCacheTests(unittest.TestCase):
         self.assertEqual(3, report["protected"])
 
     def test_active_tag_without_runtime_digest_matches_canonical_alias(self):
-        report = imports.image_cache()
+        report = IMAGES.image_cache()
         redis = next(row for row in report["images"] if row["name"] == "docker.io/library/redis:7.2")
         self.assertTrue(redis["protected"])
         self.assertEqual("redis", redis["retained_by"][0]["container"])
 
     def test_cleanup_revalidates_protection_and_builds_scoped_pod(self):
         with self.assertRaisesRegex(PermissionError, "protected by active"):
-            imports.cleanup_image(self.active, ["node1"])
-        result = imports.cleanup_image(self.unused, ["node1"])
+            IMAGES.cleanup_image(self.active, ["node1"])
+        result = IMAGES.cleanup_image(self.unused, ["node1"])
         self.assertEqual(["node1"], result["nodes"])
         pod = self.sent[-1][2]
         self.assertEqual("node1", pod["spec"]["nodeName"])
@@ -119,7 +120,7 @@ class ImageCacheTests(unittest.TestCase):
 
     def test_platform_images_cannot_be_cleaned(self):
         with self.assertRaisesRegex(PermissionError, "platform images"):
-            imports.cleanup_image("sha256:" + "d" * 64, ["node1"])
+            IMAGES.cleanup_image("sha256:" + "d" * 64, ["node1"])
 
 
 if __name__ == "__main__":
@@ -182,7 +183,7 @@ class PrepullTests(unittest.TestCase):
                 "status": {"desiredNumberScheduled": desired, "numberReady": ready}}
 
     def test_a_cordoned_or_unready_node_is_left_out(self):
-        result = imports.prepull("ghcr.io/x/frigate:0.18.0")
+        result = IMAGES.prepull("ghcr.io/x/frigate:0.18.0")
 
         self.assertEqual(["node1"], result["nodes"])
         self.assertEqual(["node2", "node3"], result["skipped"])
@@ -194,13 +195,13 @@ class PrepullTests(unittest.TestCase):
 
     def test_asking_for_only_an_unhealthy_node_is_refused(self):
         with self.assertRaisesRegex(ValueError, "node2 is not ready"):
-            imports.prepull("ghcr.io/x/frigate:0.18.0", ["node2"])
+            IMAGES.prepull("ghcr.io/x/frigate:0.18.0", ["node2"])
         self.assertNotIn(("POST", "/apis/apps/v1/namespaces/lab/daemonsets"), self.sent)
 
     def test_a_finished_pull_is_cleared_away_rather_than_left_running(self):
         self.daemonsets = [self._pull(desired=2, ready=2)]
 
-        status = imports.prepull_status()
+        status = IMAGES.prepull_status()
 
         self.assertEqual([], status["pulls"])
         self.assertEqual(["homestead-pull-frigate"], [row["name"] for row in status["finished"]])
@@ -210,7 +211,7 @@ class PrepullTests(unittest.TestCase):
     def test_a_pull_still_running_is_reported_and_kept(self):
         self.daemonsets = [self._pull(desired=3, ready=1)]
 
-        status = imports.prepull_status()
+        status = IMAGES.prepull_status()
 
         self.assertEqual([{"name": "homestead-pull-frigate", "image": "frigate:0.18.0",
                            "desired": 3, "ready": 1, "complete": False}], status["pulls"])
@@ -220,5 +221,5 @@ class PrepullTests(unittest.TestCase):
         for name in ("", "longhorn-manager", "../../kube-system/x", "homestead-import-frigate"):
             with self.subTest(name=name):
                 with self.assertRaisesRegex(ValueError, "not an image pre-pull"):
-                    imports.stop_prepull(name)
+                    IMAGES.stop_prepull(name)
 

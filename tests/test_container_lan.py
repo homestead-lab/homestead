@@ -6,6 +6,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_kube as K
 import homestead_lan as LAN
+import homestead_deploy_manifests as MANIFESTS
 from fakes.kube import Kube
 
 OWN = "/apis/k8s.cni.cncf.io/v1/namespaces/lab/network-attachment-definitions/zigbee2mqtt-lan"
@@ -92,7 +93,7 @@ class DeployTests(unittest.TestCase):
     def test_a_lan_container_has_no_service_and_joins_its_network(self):
         import server
         with mock.patch.object(server.HW, "features", lambda: []):
-            dep, svc = server.DEPLOY.build_deployment({"name": "zigbee2mqtt", "namespace": "lab", "image": "koenkk/zigbee2mqtt",
+            dep, svc = MANIFESTS.build_deployment({"name": "zigbee2mqtt", "namespace": "lab", "image": "koenkk/zigbee2mqtt",
                                                 "network_mode": "lan", "lan": LAN.clean(WANTED), "volumes": [],
                                                 "ports": [{"container": 8080, "expose": True}]})
         self.assertIsNone(svc)

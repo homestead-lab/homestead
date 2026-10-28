@@ -292,7 +292,7 @@ class ParallelListTests(unittest.TestCase):
             time.sleep(0.3)
             return {"items": []}
         self.enterContext(mock.patch.object(VMLIST.V, "kget", slow))
-        self.enterContext(mock.patch.object(VMLIST.V, "_row", lambda *a, **k: {"ns": a[0]["metadata"]["namespace"],
+        self.enterContext(mock.patch.object(VMLIST, "_row", lambda *a, **k: {"ns": a[0]["metadata"]["namespace"],
                                                                               "name": a[0]["metadata"]["name"], "running": False}))
         self.enterContext(mock.patch.object(VMLIST.VMUSAGE, "usage", lambda: ({}, "")))
         started = time.monotonic()

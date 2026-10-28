@@ -21,7 +21,7 @@ import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_cluster_shutdown as CLUSTER_SHUTDOWN
 import homestead_container_rebalance as CREBALANCE
 import homestead_host_console as HOST_CONSOLE
-import homestead_imports as IMPORTS
+import homestead_image_cache as IMAGES
 import homestead_housekeeping as HOUSEKEEPING
 import homestead_leader as LEADER
 import homestead_lhrebuild as LHREBUILD
@@ -42,6 +42,8 @@ import homestead_self as SELF
 import homestead_self_data_prepare as SELF_DATA_PREPARE
 import homestead_storage_guard as STORAGE_GUARD
 import homestead_updates as UPDATES
+import homestead_update_rollouts as ROLLOUTS
+import homestead_update_checks as CHECKS
 import homestead_upgrades as UPGRADES
 import homestead_uptime as UPTIME
 import homestead_workloads as WORKLOADS
@@ -124,7 +126,7 @@ def pod_container_rows(pod):
                 "state": state,
                 # Why, in a sentence, where it is a pull that failed; the
                 # whole message beside it - its cause is at the end.
-                "message": (UPDATES.explain_pull(message) or str(message))[:220],
+                "message": (ROLLOUTS.explain_pull(message) or str(message))[:220],
                 "detail": str(message)[:1200],
                 "restarts": int(cs.get("restartCount", 0) or 0),
             })
@@ -140,7 +142,7 @@ def image_update_capacity_plan(body, action):
     guard_managed_smb(ns, name)
     if action == "update":
         enforce_update_policy(body)
-    prepared = (UPDATES.prepare_update if action == "update" else UPDATES.prepare_rollback)(ns, name)
+    prepared = (ROLLOUTS.prepare_update if action == "update" else ROLLOUTS.prepare_rollback)(ns, name)
     current, proposed = prepared["current"], prepared["proposed"]
     if current["spec"].get("paused"):
         raise ValueError("resume this paused workload before reviewing an image rollout")
@@ -179,12 +181,12 @@ def release_tag(dep, container_name, image=""):
 def preview_image_update(body):
     action = body.get("action", "update")
     prepared, capacity, context = image_update_capacity_plan(body, action)
-    old = {c["name"]: c.get("image", "") for c in UPDATES._pod_containers(prepared["current"])}
+    old = {c["name"]: c.get("image", "") for c in ROLLOUTS._pod_containers(prepared["current"])}
     images = [{"container": c["name"], "before": old.get(c["name"], ""), "after": c.get("image", ""),
                "before_tag": release_tag(prepared["current"], c["name"], old.get(c["name"], "")),
                "after_tag": release_tag(prepared["proposed"], c["name"], c.get("image", "")),
                "rollback": prepared["before"].get(c["name"], "")}
-              for c in UPDATES._pod_containers(prepared["proposed"])
+              for c in ROLLOUTS._pod_containers(prepared["proposed"])
               if c.get("image", "") != old.get(c["name"], "")]
     return {"capacity": capacity, "capacity_token": CAPACITY_REVIEW.issue(body, context),
             "images": images, "action": action}
@@ -220,7 +222,7 @@ def _detached_copies_loop():
         except Exception as error:
             print(f"detached volume copies not checked: {str(error)[:160]}", flush=True)
         try:
-            IMPORTS.tick()
+            IMAGES.tick()
         except Exception as error:
             print(f"image scans and import clean-up not done: {str(error)[:160]}", flush=True)
 
@@ -390,7 +392,7 @@ def reviewed_image_update(body, action):
     CAPACITY_REVIEW.enforce(body, capacity, context)
     if action == "update":
         enforce_update_policy(body)  # Registry/preflight reads may cross a window boundary.
-    return UPDATES.commit_prepared(prepared)
+    return ROLLOUTS.commit_prepared(prepared)
 
 
 def _harvester_upgrade_status(item):
@@ -411,7 +413,7 @@ def autoupdate_tick():
     status = update_policy_status()
     operations = OPS.snapshot()
     AUTOUPDATE.tidy(operations)
-    report = UPDATES._LATEST.get("report") or {}
+    report = CHECKS._LATEST.get("report") or {}
     chosen = AUTOUPDATE.pick(cached("wl", 5, WORKLOADS.get_workloads), report, UPTIME.report(), operations,
                              status["window_open"], status["policy"], (CREBALANCE.KIND,))
     if not chosen:

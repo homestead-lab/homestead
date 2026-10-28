@@ -7,6 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_imports as imports
+import homestead_vm_create as VM_CREATE
 
 
 class VmDiskImportTests(unittest.TestCase):
@@ -45,7 +46,7 @@ class VmDiskImportTests(unittest.TestCase):
 
     def test_import_builds_cdi_datavolume_without_returning_source_url(self):
         secret_url = "https://images.example.test/server.qcow2?token=sensitive"
-        result = imports.import_vm_disk({
+        result = VM_CREATE.import_vm_disk({
             "namespace": "lab", "name": "server-disk", "source_url": secret_url,
             "size_gb": 32, "storage_class": "longhorn-r2",
             "access_mode": "ReadWriteOnce", "checksum": "sha256:" + "a" * 64,
@@ -65,11 +66,11 @@ class VmDiskImportTests(unittest.TestCase):
 
     def test_import_rejects_unsafe_source_and_bad_checksum(self):
         with self.assertRaisesRegex(ValueError, "HTTP or HTTPS"):
-            imports.import_vm_disk({"name": "disk", "source_url": "file:///tmp/disk.qcow2"})
+            VM_CREATE.import_vm_disk({"name": "disk", "source_url": "file:///tmp/disk.qcow2"})
         with self.assertRaisesRegex(ValueError, "credentials"):
-            imports.import_vm_disk({"name": "disk", "source_url": "https://user:pass@example.test/a.vmdk"})
+            VM_CREATE.import_vm_disk({"name": "disk", "source_url": "https://user:pass@example.test/a.vmdk"})
         with self.assertRaisesRegex(ValueError, "checksum"):
-            imports.import_vm_disk({"name": "disk", "source_url": "https://example.test/a.vmdk",
+            VM_CREATE.import_vm_disk({"name": "disk", "source_url": "https://example.test/a.vmdk",
                                     "checksum": "sha256:1234"})
         self.assertEqual([], self.sent)
 
@@ -78,17 +79,17 @@ class VmDiskImportTests(unittest.TestCase):
         pvc_path = "/api/v1/namespaces/lab/persistentvolumeclaims/taken"
         self.objects[dv_path] = {"metadata": {"name": "taken"}}
         self.objects[pvc_path] = {"metadata": {"name": "taken"}}
-        plan = imports.vm_disk_import_plan("lab", "taken")
+        plan = VM_CREATE.vm_disk_import_plan("lab", "taken")
         self.assertFalse(plan["ready"])
         self.assertEqual({"DataVolume", "PersistentVolumeClaim"},
                          {item["kind"] for item in plan["conflicts"]})
         with self.assertRaisesRegex(ValueError, "already exists"):
-            imports.import_vm_disk({"name": "taken", "source_url": "https://example.test/a.qcow2"})
+            VM_CREATE.import_vm_disk({"name": "taken", "source_url": "https://example.test/a.qcow2"})
 
     def test_list_returns_status_but_never_source_url(self):
         self.objects["/apis/cdi.kubevirt.io/v1beta1/datavolumes"] = {"items": [{
             "metadata": {"namespace": "lab", "name": "router-disk",
-                         "labels": {imports.VM_DISK_LABEL: "true"}},
+                         "labels": {VM_CREATE.VM_DISK_LABEL: "true"}},
             "spec": {"source": {"http": {"url": "https://example.test/a.vmdk?token=secret"}},
                      "storage": {"storageClassName": "longhorn-r2",
                                  "accessModes": ["ReadWriteOnce"],
@@ -96,7 +97,7 @@ class VmDiskImportTests(unittest.TestCase):
             "status": {"phase": "ImportInProgress", "progress": "47.3%", "claimName": "router-disk"},
         }]}
         self.objects["/apis/kubevirt.io/v1/virtualmachines"] = {"items": []}
-        rows = imports.list_vm_disks()
+        rows = VM_CREATE.list_vm_disks()
         self.assertEqual(47.3, rows[0]["progress"])
         self.assertEqual("16Gi", rows[0]["capacity"])
         self.assertNotIn("example.test", repr(rows))
@@ -106,7 +107,7 @@ class VmDiskImportTests(unittest.TestCase):
         disk_path = "/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/server-disk"
         self.objects[disk_path] = {"status": {"phase": "Succeeded"}}
         self.objects["/apis/kubevirt.io/v1/virtualmachines"] = {"items": []}
-        result = imports.create_vm({"name": "server", "namespace": "lab",
+        result = VM_CREATE.create_vm({"name": "server", "namespace": "lab",
                                     "disk_import": "server-disk", "password": ""})
         vm = self.sent[-1][2]
         self.assertEqual("server-disk", result["datavolume"])
@@ -120,7 +121,7 @@ class VmDiskImportTests(unittest.TestCase):
         disk_path = "/apis/cdi.kubevirt.io/v1beta1/namespaces/lab/datavolumes/server-disk"
         self.objects[disk_path] = {"status": {"phase": "ImportInProgress"}}
         with self.assertRaisesRegex(ValueError, "not ready"):
-            imports.create_vm({"name": "server", "disk_import": "server-disk"})
+            VM_CREATE.create_vm({"name": "server", "disk_import": "server-disk"})
         self.objects[disk_path]["status"]["phase"] = "Succeeded"
         self.objects["/apis/kubevirt.io/v1/virtualmachines"] = {"items": [{
             "metadata": {"namespace": "lab", "name": "existing"},
@@ -128,7 +129,7 @@ class VmDiskImportTests(unittest.TestCase):
                 {"name": "root", "dataVolume": {"name": "server-disk"}}]}}},
         }]}
         with self.assertRaisesRegex(ValueError, "already attached"):
-            imports.create_vm({"name": "server", "disk_import": "server-disk"})
+            VM_CREATE.create_vm({"name": "server", "disk_import": "server-disk"})
 
 
 if __name__ == "__main__":
@@ -145,7 +146,7 @@ class ImportedVmDisksTests(unittest.TestCase):
     def test_the_boot_bus_and_extra_disks_come_through(self):
         self.objects["/apis/kubevirt.io/v1/virtualmachines"] = {"items": []}
         self.ready("win-disk"); self.ready("win-disk-2")
-        prepared = imports.prepare_vm({"name": "win", "disk_import": "win-disk", "disk_bus": "sata", "start": False,
+        prepared = VM_CREATE.prepare_vm({"name": "win", "disk_import": "win-disk", "disk_bus": "sata", "start": False,
                                        "extra_disks": [{"name": "win-disk-2", "bus": "virtio"}]}, {"cdi": True})
         spec = prepared["vm"]["spec"]["template"]["spec"]
         self.assertEqual([{"name": "root", "disk": {"bus": "sata"}, "bootOrder": 1},
@@ -157,6 +158,6 @@ class ImportedVmDisksTests(unittest.TestCase):
         self.objects["/apis/kubevirt.io/v1/virtualmachines"] = {"items": []}
         self.ready("win-disk")
         with self.assertRaises(ValueError):
-            imports.prepare_vm({"name": "win", "disk_import": "win-disk", "extra_disks": ["win-disk-2"]}, {"cdi": True})
+            VM_CREATE.prepare_vm({"name": "win", "disk_import": "win-disk", "extra_disks": ["win-disk-2"]}, {"cdi": True})
         with self.assertRaises(ValueError):
-            imports.prepare_vm({"name": "win", "disk_import": "win-disk", "disk_bus": "ide"}, {"cdi": True})
+            VM_CREATE.prepare_vm({"name": "win", "disk_import": "win-disk", "disk_bus": "ide"}, {"cdi": True})

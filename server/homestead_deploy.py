@@ -5,7 +5,8 @@ server.py used to answer all of this in place (#363). The routes are declared
 here now; the helpers they still share with server.py's other code are bound
 by name (bind), so a test that replaces one in server.py replaces it here too.
 The App Store catalogue and the Deployment builders live by feature in
-homestead_deploy_appstore and homestead_deploy_manifests (#623), re-exported here.
+homestead_deploy_appstore and homestead_deploy_manifests (#623): read and
+replace their names there.
 """
 import copy
 import urllib.request
@@ -49,7 +50,7 @@ def _arg(request, key, default=""):
 def _catalogue():
     """The App Store's apps, or the 502 that says its feed did not answer."""
     try:
-        return fetch_appstore(), None
+        return APPSTORE.fetch_appstore(), None
     except Exception as e:
         return None, ROUTER.Reply(502, {"error": f"app feed unavailable: {e}"})
 
@@ -63,31 +64,31 @@ def appstore(request):
     apps, refused = _catalogue()
     if refused:
         return refused
-    source = {"url": catalog_source(), "default": catalog_source() == CA_FEED}
+    source = {"url": APPSTORE.catalog_source(), "default": APPSTORE.catalog_source() == APPSTORE.CA_FEED}
     if sort_mode == "home" and not term and not cat:
         # The catalogue's front page, as Community Applications lays it out.
         return {"sort": "home", "total": len(apps), "source": source, "sections": {
-            mode: [appstore_summary(a) for a in rank_appstore(apps, mode)[:count]]
+            mode: [APPSTORE.appstore_summary(a) for a in APPSTORE.rank_appstore(apps, mode)[:count]]
             for mode, count in (("spotlight", 4), ("recent", 8), ("trending", 8), ("popular", 8))}}
     if sort_mode == "home":
         sort_mode = "popular"
     if term:
-        apps = search_appstore(apps, term)
+        apps = APPSTORE.search_appstore(apps, term)
     else:
-        apps = rank_appstore(apps, sort_mode)
+        apps = APPSTORE.rank_appstore(apps, sort_mode)
     if cat:
         apps = [a for a in apps if any(cat in value.lower() for value in a.get("categories", []))]
-    spotlight = None if term else appstore_spotlight(apps)
+    spotlight = None if term else APPSTORE.appstore_spotlight(apps)
     limit = 60 if term else 30
-    return {"total": len(apps), "apps": [appstore_summary(a) for a in apps[:limit]],
+    return {"total": len(apps), "apps": [APPSTORE.appstore_summary(a) for a in apps[:limit]],
             "sort": "search" if term else sort_mode, "source": source,
-            "spotlight": appstore_summary(spotlight) if spotlight else None}
+            "spotlight": APPSTORE.appstore_summary(spotlight) if spotlight else None}
 
 
 def appstore_app(request):
     key = _arg(request, "key")
     try:
-        app = next((a for a in fetch_appstore() if appstore_key(a) == key), None)
+        app = next((a for a in APPSTORE.fetch_appstore() if APPSTORE.appstore_key(a) == key), None)
     except Exception as e:
         return ROUTER.Reply(502, {"error": f"app feed unavailable: {e}"})
     if not app:
@@ -97,7 +98,7 @@ def appstore_app(request):
 
 def appstore_install(request):
     b = request.body
-    cfg = template_to_cfg(b["app"])
+    cfg = APPSTORE.template_to_cfg(b["app"])
     cfg.update(b.get("overrides") or {})
     # Older API clients must use the same review as the current UI.
     # The token is issued by /api/preview for the resolved template
@@ -112,7 +113,7 @@ def appstore_install(request):
 
 def preview(request):
     """What Deploy would create, and its capacity review, without creating it."""
-    b = analyze_deploy_intent(request.body)
+    b = MANIFESTS.analyze_deploy_intent(request.body)
     current = None
     context = None
     if b.get("target_mode") == "existing":
@@ -127,14 +128,14 @@ def preview(request):
     b = apply_generated_secrets(b)
     if b.get("target_mode") == "existing":
         target = _dns_name(b.get("target_workload"), "existing workload")
-        dep, svc = build_sidecar_deployment(b, current)
+        dep, svc = MANIFESTS.build_sidecar_deployment(b, current)
         return {"deployment": redact_deployment_preview(dep, b), "service": svc,
                 "capacity": capacity, "capacity_token": capacity_token,
                 "app_profile": b.get("app_profile"),
                 "impact": {"mode": "existing", "workload": target,
                            "containers": [c.get("name") for c in current.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])],
                            "message": "Saving updates the Deployment template and restarts every container in its pods."}}
-    dep, svc = build_deployment(b)
+    dep, svc = MANIFESTS.build_deployment(b)
     return {"deployment": redact_deployment_preview(dep, b), "service": svc,
             "capacity": capacity, "capacity_token": capacity_token,
             "app_profile": b.get("app_profile"),
@@ -144,7 +145,7 @@ def preview(request):
 
 def run_deploy(b, *, reviewed_current=None):
     """Create (or join) a workload. HTTP Deploy uses reviewed_deploy first."""
-    b = analyze_deploy_intent(b)
+    b = MANIFESTS.analyze_deploy_intent(b)
     ns = b.get("namespace") or DEFAULT_NS
     target = b.get("target_workload") if b.get("target_mode") == "existing" else b.get("workload_name") or b.get("name")
     guard_managed_smb(ns, target)
@@ -162,13 +163,13 @@ def run_deploy(b, *, reviewed_current=None):
     if target_mode == "existing":
         target = _dns_name(b.get("target_workload"), "existing workload")
         current = copy.deepcopy(reviewed_current) if reviewed_current is not None else kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
-        dep, svc = build_sidecar_deployment(b, current)
+        dep, svc = MANIFESTS.build_sidecar_deployment(b, current)
     elif target_mode == "new":
-        dep, svc = build_deployment(b)
+        dep, svc = MANIFESTS.build_deployment(b)
         target = dep["metadata"]["name"]
         # The class exists before the Deployment names it, as Edit does it.
-        if deploy_tier(b):
-            PRIORITY.ensure([deploy_tier(b)])
+        if MANIFESTS.deploy_tier(b):
+            PRIORITY.ensure([MANIFESTS.deploy_tier(b)])
     else:
         raise ValueError("deployment target must be new or existing")
     reused = []
@@ -264,14 +265,6 @@ ROUTES = {
 }
 
 
-# Moved by feature (#623). Re-exported for one release, so other modules,
-# server.py and tests that use or replace these names here keep working.
-from homestead_deploy_appstore import (  # noqa: E402,F401
-    CA_FEED, category_values, CATALOG_MARKUP, catalog_text, catalog_paragraphs, catalog_reason, catalog_links,
-    appstore_key, APPSTORE_HEAVY, appstore_summary, search_appstore, appstore_number, unique_appstore_apps,
-    rank_appstore, appstore_spotlight, catalog_source, fetch_appstore, appdata_folders, template_to_cfg,
-)
-from homestead_deploy_manifests import (  # noqa: E402,F401
-    analyze_deploy_intent, _build_single_deployment, deploy_tier, build_deployment,
-    _build_deployment_with_extras, apply_container_settings, _unique_volume_name, build_sidecar_deployment,
-)
+# The parts (#623), imported last: each imports this module for what bind() sets.
+import homestead_deploy_appstore as APPSTORE  # noqa: E402
+import homestead_deploy_manifests as MANIFESTS  # noqa: E402

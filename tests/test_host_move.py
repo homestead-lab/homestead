@@ -1,9 +1,10 @@
 """Moving an app to another host lands it there, or says why not.
 
 Frigate was moved to k3s-3 twice and restarted on k3s-1 both times: the move
-only preferred k3s-3, and k3s-1 already held its 2.2 GB image."""
-import copy
+only preferred k3s-3, and k3s-1 already held its 2.2 GB image. On the shared
+fake API (tests/fakes/kube.py)."""
 import sys
+import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
@@ -12,42 +13,38 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_host_move as MOVE
 import homestead_image_cache as IMAGES
+import homestead_kube as K
+import homestead_operations as OPS
 import homestead_workloads as W
+from fakes.kube import Kube
 
 IMAGE = "ghcr.io/blakeblackshear/frigate:stable"
 DIGEST = "ghcr.io/blakeblackshear/frigate@sha256:" + "f" * 64
 
 
 def deployment(image=IMAGE):
-    return {"metadata": {"namespace": "lab", "name": "frigate", "resourceVersion": "7"},
+    return {"apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"namespace": "lab", "name": "frigate", "resourceVersion": "7"},
             "spec": {"template": {"spec": {"containers": [{"name": "frigate", "image": image}]}}}}
 
 
-class Cluster:
-    def __init__(self, held):
-        self.nodes = {"k3s-3": {"status": {"images": [{"names": held}]}}}
-        self.daemonsets, self.sent = {}, []
+def node(held):
+    return {"apiVersion": "v1", "kind": "Node", "metadata": {"name": "k3s-3"}, "status": {"images": [{"names": held}]}}
 
-    def get(self, path):
-        if path.startswith("/api/v1/nodes/"):
-            return self.nodes[path.rsplit("/", 1)[1]]
-        if "/daemonsets/" in path:
-            name = path.rsplit("/", 1)[1]
-            if name not in self.daemonsets:
-                raise urllib.error.HTTPError(path, 404, "gone", {}, None)
-            return self.daemonsets[name]
-        raise AssertionError(path)
 
-    def send(self, method, path, body=None, **kwargs):
-        self.sent.append((method, path, copy.deepcopy(body)))
-        return body
+def pull_daemonset(ready):
+    return {"apiVersion": "apps/v1", "kind": "DaemonSet", "metadata": {"namespace": "lab", "name": "homestead-pull-frigate"},
+            "status": {"desiredNumberScheduled": 1, "numberReady": ready}}
 
 
 class HostMoveTests(unittest.TestCase):
     def setUp(self, held=()):
-        self.cluster = Cluster(list(held))
+        self.kube = self.enterContext(Kube(node(list(held)), deployment()))
+        # The shared fake runs the real write guards; the storage guard takes the job
+        # store's lock, which lives under its DATA_DIR.
+        self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
         self.started = []
-        for patch in (mock.patch.object(W, "kget", self.cluster.get, create=True), mock.patch.object(W, "ksend", self.cluster.send, create=True),
+        for patch in (mock.patch.object(W, "kget", K.kget, create=True), mock.patch.object(W, "ksend", K.ksend, create=True),
                       mock.patch.object(MOVE.OPS, "start", side_effect=lambda kind, title, res, href, ref, *a, **k:
                                         self.started.append({"kind": kind, "title": title, "ref": ref}) or {"id": "op"}),
                       mock.patch.object(IMAGES, "prepull", side_effect=lambda image, nodes: {"daemonset": "homestead-pull-frigate"}),
@@ -66,13 +63,13 @@ class HostMoveTests(unittest.TestCase):
         item = self.move()
         IMAGES.prepull.assert_called_once_with(IMAGE, ["k3s-3"])
         self.assertEqual([], self.applied, "the app keeps running where it is while its image is pulled")
-        self.cluster.daemonsets["homestead-pull-frigate"] = {"status": {"desiredNumberScheduled": 1, "numberReady": 0}}
+        self.kube.add(pull_daemonset(0))
         self.assertEqual("running", MOVE.status(item)[0])
-        self.assertEqual([], self.cluster.sent)
-        self.cluster.daemonsets["homestead-pull-frigate"]["status"]["numberReady"] = 1
+        self.assertEqual([], self.kube.writes)
+        self.kube.add(pull_daemonset(1))
         state, _, message = MOVE.status(item)
-        self.assertEqual(("running", "PUT"), (state, self.cluster.sent[0][0]))
-        self.assertEqual("7", self.cluster.sent[0][2]["metadata"]["resourceVersion"], "the reviewed manifest, as reviewed")
+        self.assertEqual(("running", "PUT"), (state, self.kube.writes[0][0]))
+        self.assertEqual("7", self.kube.writes[0][2]["metadata"]["resourceVersion"], "the reviewed manifest, as reviewed")
         self.assertNotIn("proposed", item["ref"])
 
     def test_a_host_that_has_the_image_moves_at_once(self):

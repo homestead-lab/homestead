@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import homestead_operations as operations
 import homestead_updates as updates
+import homestead_update_rollouts as ROLLOUTS
 
 
 def _stamp(seconds_ago):
@@ -55,7 +56,7 @@ class ImagePullProgressTests(unittest.TestCase):
         self.events = [{"reason": "Pulling", "lastTimestamp": _stamp(75),
                         "message": 'Pulling image "ghcr.io/example/plex:2"'}]
 
-        pull = updates.progress("lab", "plex")["pull"]
+        pull = ROLLOUTS.progress("lab", "plex")["pull"]
 
         self.assertEqual("pulling", pull["state"])
         self.assertEqual("ghcr.io/example/plex:2", pull["image"])
@@ -69,7 +70,7 @@ class ImagePullProgressTests(unittest.TestCase):
              "message": 'Successfully pulled image "plex:2" in 1m24.5s (1m24.5s including waiting)'},
         ]
 
-        pull = updates.progress("lab", "plex")["pull"]
+        pull = ROLLOUTS.progress("lab", "plex")["pull"]
 
         self.assertEqual("pulled", pull["state"])
         self.assertEqual("1m24.5s", pull["took"])
@@ -78,7 +79,7 @@ class ImagePullProgressTests(unittest.TestCase):
         self.events = [{"reason": "Failed", "lastTimestamp": _stamp(3),
                         "message": 'Failed to pull image "plex:2": not found'}]
 
-        self.assertEqual("failed", updates.progress("lab", "plex")["pull"]["state"])
+        self.assertEqual("failed", ROLLOUTS.progress("lab", "plex")["pull"]["state"])
 
     def test_a_running_pod_is_not_asked_about_pulls(self):
         ready = copy.deepcopy(POD)
@@ -94,7 +95,7 @@ class ImagePullProgressTests(unittest.TestCase):
             raise AssertionError(path)
 
         updates.bind(get, lambda *a, **k: {}, "lab", str(Path(__file__).parent))
-        self.assertEqual({}, updates.progress("lab", "plex")["pull"])
+        self.assertEqual({}, ROLLOUTS.progress("lab", "plex")["pull"])
 
 
 class ActivityTrayMessageTests(unittest.TestCase):

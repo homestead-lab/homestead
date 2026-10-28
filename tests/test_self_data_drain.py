@@ -148,13 +148,14 @@ class WriterHooksTests(unittest.TestCase):
         import homestead_move_state as STATE
         import homestead_console as console
         import homestead_updates as updates
+        import homestead_update_rollouts as ROLLOUTS
         def refused(_): raise Held("frozen")
         with mock.patch.object(S, "WRITE_SCOPE", side_effect=refused), \
              mock.patch.object(alerts, "DATA_DIR", self.directory), mock.patch.object(push, "DATA_DIR", self.directory), \
              mock.patch.object(STATE, "DATA_DIR", self.directory), mock.patch.object(updates, "DATA_DIR", self.directory):
             for action in (lambda: alerts._save({}), lambda: push._write([]), lambda: STATE._write([]),
                            lambda: icons.store(b"icon", self.directory, "image/png"),
-                           lambda: console.audit(self.directory, {}), lambda: updates._history({})):
+                           lambda: console.audit(self.directory, {}), lambda: ROLLOUTS._history({})):
                 with self.subTest(action=action), self.assertRaises(Held): action()
         self.assertEqual([], list(Path(self.directory).iterdir()))
 

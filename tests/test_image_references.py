@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import urllib.error
 import homestead_imports as imports
+import homestead_image_cache as IMAGES
 
 VMS = "/apis/kubevirt.io/v1/virtualmachines"
 POOLS = "/apis/pool.kubevirt.io/v1alpha1/virtualmachinepools"
@@ -44,10 +45,10 @@ def api_group(name, version):
 class Fixture(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.saved = imports.SCAN_DIR, dict(imports._SCANS), imports._SCAN_STARTED[0]
+        self.saved = imports.SCAN_DIR, dict(IMAGES._SCANS), IMAGES._SCAN_STARTED[0]
         imports.SCAN_DIR = self.tmp.name
-        imports._SCANS.clear()
-        imports._SCAN_STARTED[0] = 0.0
+        IMAGES._SCANS.clear()
+        IMAGES._SCAN_STARTED[0] = 0.0
         self.sent = []
         self.nodes = [ready("node1", [
             {"names": ["ghcr.io/esphome/esphome:2025.9.0", "ghcr.io/esphome/esphome@" + ESPHOME], "sizeBytes": 600 << 20},
@@ -110,8 +111,8 @@ class Fixture(unittest.TestCase):
     def tearDown(self):
         imports.kget, imports.ksend = self.restore
         imports.SCAN_DIR = self.saved[0]
-        imports._SCANS.clear(); imports._SCANS.update(self.saved[1])
-        imports._SCAN_STARTED[0] = self.saved[2]
+        IMAGES._SCANS.clear(); IMAGES._SCANS.update(self.saved[1])
+        IMAGES._SCAN_STARTED[0] = self.saved[2]
         self.tmp.cleanup()
 
     def image(self, report, name):
@@ -120,23 +121,23 @@ class Fixture(unittest.TestCase):
 
 class StoppedReferenceTests(Fixture):
     def test_a_stopped_containers_image_is_kept_and_says_why(self):
-        esphome = self.image(imports.image_cache(), "esphome")
+        esphome = self.image(IMAGES.image_cache(), "esphome")
         self.assertTrue(esphome["protected"])
         self.assertEqual([("stopped", "esphome")], [(r["reason"], r["workload"]) for r in esphome["retained_by"]])
 
     def test_it_cannot_be_cleaned_up_while_the_container_is_there(self):
         with self.assertRaisesRegex(PermissionError, "stopped:lab/esphome"):
-            imports.cleanup_image(ESPHOME, ["node1"])
+            IMAGES.cleanup_image(ESPHOME, ["node1"])
 
     def test_a_scheduled_jobs_image_is_kept_between_runs(self):
-        restic = self.image(imports.image_cache(), "restic")
+        restic = self.image(IMAGES.image_cache(), "restic")
         self.assertEqual(["scheduled"], [r["reason"] for r in restic["retained_by"]])
 
     def test_a_running_workload_is_named_by_its_pods_not_as_stopped(self):
-        self.assertFalse(self.image(imports.image_cache(), "unused")["protected"])
+        self.assertFalse(self.image(IMAGES.image_cache(), "unused")["protected"])
 
     def test_a_stopped_vms_container_disk_is_kept_and_says_why(self):
-        fedora = self.image(imports.image_cache(), "fedora")
+        fedora = self.image(IMAGES.image_cache(), "fedora")
         self.assertTrue(fedora["protected"])
         self.assertEqual([("stopped", "lab", "lab-vm", "rootdisk")],
                          [(r["reason"], r["namespace"], r["workload"], r["container"]) for r in fedora["retained_by"]])
@@ -145,19 +146,19 @@ class StoppedReferenceTests(Fixture):
         vm = self.objects[VMS]["items"][0]
         vm["spec"]["template"]["spec"]["domain"] = {"firmware": {"kernelBoot": {"container": {
             "image": "docker.io/library/unused:1", "kernelPath": "/boot/vmlinuz"}}}}
-        unused = self.image(imports.image_cache(), "unused")
+        unused = self.image(IMAGES.image_cache(), "unused")
         self.assertTrue(unused["protected"])
         self.assertIn(("stopped", "lab-vm", "kernel-boot"),
                       [(r["reason"], r["workload"], r["container"]) for r in unused["retained_by"]])
 
     def test_a_running_vm_is_named_by_its_pod_not_as_stopped(self):
-        self.assertFalse(self.image(imports.image_cache(), "debian")["protected"])
+        self.assertFalse(self.image(IMAGES.image_cache(), "debian")["protected"])
 
     def test_the_digest_it_last_ran_on_holds_the_image_whatever_its_tag(self):
         dep = self.objects["/apis/apps/v1/deployments"]["items"][0]
         dep["spec"]["template"]["spec"]["containers"][0]["image"] = "ghcr.io/esphome/esphome:stable"
         dep["metadata"]["annotations"] = {"homestead.io/ran-digests": '{"esphome": "%s"}' % ESPHOME}
-        self.assertTrue(self.image(imports.image_cache(), "esphome")["protected"])
+        self.assertTrue(self.image(IMAGES.image_cache(), "esphome")["protected"])
 
 
 class ScanTests(Fixture):
@@ -166,29 +167,29 @@ class ScanTests(Fixture):
                {"repoTags": ["docker.io/library/small:1"], "repoDigests": [], "size": "1024"}]
 
     def scanned(self, at):
-        imports._SCANS["node1"] = {"at": at, "images": self.LISTING}
-        imports._save_scans()
+        IMAGES._SCANS["node1"] = {"at": at, "images": self.LISTING}
+        IMAGES._save_scans()
 
     def test_a_scan_is_seen_by_another_replica_and_after_a_restart(self):
         self.scanned(time.time())
-        imports._SCANS.clear()
-        report = imports.image_cache()
+        IMAGES._SCANS.clear()
+        report = IMAGES.image_cache()
         self.assertTrue(report["complete"])
         self.assertIn("docker.io/library/small:1", {row["name"] for row in report["images"]})
 
     def test_an_old_scan_is_still_used_with_what_kubernetes_lists_added(self):
-        self.scanned(time.time() - imports.SCAN_FRESH - 60)
-        names = {row["name"] for row in imports.image_cache()["images"]}
+        self.scanned(time.time() - IMAGES.SCAN_FRESH - 60)
+        names = {row["name"] for row in IMAGES.image_cache()["images"]}
         # small:1 only the scan knows; restic only Kubernetes lists (pulled since).
         self.assertTrue({"docker.io/library/small:1", "docker.io/restic/restic:0.17"} <= names)
 
     def test_an_old_scan_is_asked_again_but_not_over_and_over(self):
-        self.scanned(time.time() - imports.SCAN_FRESH - 60)
+        self.scanned(time.time() - IMAGES.SCAN_FRESH - 60)
         with mock.patch.object(imports.RUNTIME, "pod", lambda *a, **k: {"spec": {}}):
-            imports.image_cache()
+            IMAGES.image_cache()
             self.assertEqual([], [p for m, p, _ in self.sent if m == "POST"], "looking starts nothing (#622)")
-            imports.tick()
-            imports.tick()
+            IMAGES.tick()
+            IMAGES.tick()
         posts = [path for method, path, _ in self.sent if method == "POST" and path.endswith("/pods")]
         self.assertEqual(1, len(posts), "the leader's tick asks once, not every minute")
 
@@ -198,10 +199,10 @@ class ScanTests(Fixture):
         # Running, with its pod on another node: nothing here holds it.
         dep["spec"]["replicas"], dep["status"] = 1, {"replicas": 1, "updatedReplicas": 1}
         with mock.patch.object(imports.RUNTIME, "pod", lambda *a, **k: {"spec": {}}):
-            imports.cleanup_image(ESPHOME, ["node1"])
-        imports._SCANS.clear()
-        imports._load_scans()
-        self.assertEqual([["docker.io/library/small:1"]], [i["repoTags"] for i in imports._SCANS["node1"]["images"]])
+            IMAGES.cleanup_image(ESPHOME, ["node1"])
+        IMAGES._SCANS.clear()
+        IMAGES._load_scans()
+        self.assertEqual([["docker.io/library/small:1"]], [i["repoTags"] for i in IMAGES._SCANS["node1"]["images"]])
 
 
 class RemovalFixture(Fixture):
@@ -227,7 +228,7 @@ class RemovalFixture(Fixture):
         after adding `item` to the list at `path`."""
         if path:
             self.objects[path]["items"].append(item)
-        rows = self.image(imports.image_cache(), "unused")["retained_by"]
+        rows = self.image(IMAGES.image_cache(), "unused")["retained_by"]
         return [(r["reason"], r["workload"], r["container"]) for r in rows]
 
 
@@ -239,7 +240,7 @@ class UnreadInventoryTests(RemovalFixture):
              *(f"/apis/{group}/{version}" for group, version in OPTIONAL.items()))
 
     def test_an_image_nothing_needs_is_cleaned_up(self):
-        imports.cleanup_image(self.UNUSED, ["node1"])
+        IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual(1, len(self.posted()))
 
     def test_nothing_is_removed_when_a_list_cannot_be_read(self):
@@ -255,7 +256,7 @@ class UnreadInventoryTests(RemovalFixture):
                     return read(path)
                 with self.subTest(failed=failed, how=how), mock.patch.object(imports, "kget", get):
                     with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
-                        imports.cleanup_image(self.UNUSED, ["node1"])
+                        IMAGES.cleanup_image(self.UNUSED, ["node1"])
                     self.assertEqual([], self.posted())
 
     def kubevirt_answers_404(self, served):
@@ -279,7 +280,7 @@ class UnreadInventoryTests(RemovalFixture):
         web = self.objects["/apis/apps/v1/deployments"]["items"][1]
         web["metadata"]["annotations"] = {"homestead.io/update-previous": json.dumps(
             {"images": {"web": "docker.io/library/unused@" + self.UNUSED}, "at": "2026-10-01T00:00:00Z"})}
-        report = imports.image_cache()
+        report = IMAGES.image_cache()
         self.assertEqual([("rollback", "web")],
                          [(r["reason"], r["workload"]) for r in self.image(report, "unused")["retained_by"]])
         self.assertFalse(self.image(report, "debian")["protected"])
@@ -287,24 +288,24 @@ class UnreadInventoryTests(RemovalFixture):
     def test_a_rollback_annotation_naming_no_images_keeps_nothing(self):
         web = self.objects["/apis/apps/v1/deployments"]["items"][1]
         web["metadata"]["annotations"] = {"homestead.io/update-previous": json.dumps({"images": {}})}
-        imports.cleanup_image(self.UNUSED, ["node1"])
+        IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual(1, len(self.posted()))
 
     def test_an_unreadable_ran_digests_note_still_keeps_the_image_by_name(self):
         dep = self.objects["/apis/apps/v1/deployments"]["items"][0]
         dep["metadata"]["annotations"] = {"homestead.io/ran-digests": "not json"}
-        self.assertTrue(self.image(imports.image_cache(), "esphome")["protected"])
+        self.assertTrue(self.image(IMAGES.image_cache(), "esphome")["protected"])
 
     # Gap 11: a record Homestead cannot read keeps every image until it can,
     # and says whose it is, rather than reading as "this keeps nothing".
     def assert_everything_kept_by(self, workload, what):
-        report = imports.image_cache()
+        report = IMAGES.image_cache()
         for name in ("unused", "debian"):
             rows = self.image(report, name)["retained_by"]
             self.assertIn(("unreadable", "lab", workload, what),
                           [(r["reason"], r["namespace"], r["workload"], r["container"]) for r in rows])
         with self.assertRaisesRegex(PermissionError, f"unreadable:lab/{workload}"):
-            imports.cleanup_image(self.UNUSED, ["node1"])
+            IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
         import homestead_image_cleanup as cleanup
         self.assertEqual([], cleanup.unused(report))
@@ -347,15 +348,15 @@ class UnreadInventoryTests(RemovalFixture):
             with self.subTest(path=path):
                 self.objects[path] = {"items": [item]}
                 try:
-                    rows = self.image(imports.image_cache(), "unused")["retained_by"]
+                    rows = self.image(IMAGES.image_cache(), "unused")["retained_by"]
                     self.assertEqual([("stopped", "lab", "workers", "rootdisk")],
                                      [(r["reason"], r["namespace"], r["workload"], r["container"]) for r in rows])
                     with self.assertRaisesRegex(PermissionError, "stopped:lab/workers"):
-                        imports.cleanup_image(self.UNUSED, ["node1"])
+                        IMAGES.cleanup_image(self.UNUSED, ["node1"])
                     self.assertEqual([], self.posted())
                     item["spec"]["replicas"] = 2       # running ones are named by their VMs and pods
                     self.asked.clear()
-                    self.assertFalse(self.image(imports.image_cache(), "unused")["protected"])
+                    self.assertFalse(self.image(IMAGES.image_cache(), "unused")["protected"])
                     self.assertIn(path, self.asked)
                 finally:
                     self.objects[path] = {"items": []}
@@ -370,13 +371,13 @@ class UnreadInventoryTests(RemovalFixture):
                     raise urllib.error.HTTPError(asked, 403, "Forbidden", {}, None)
                 return read(asked)
             with self.subTest(path=path), mock.patch.object(imports, "kget", get):
-                report = imports.image_cache()
+                report = IMAGES.image_cache()
                 for name in ("unused", "debian"):
                     self.assertIn(("unreadable", "", kind, "no permission to list"),
                                   [(r["reason"], r["namespace"], r["workload"], r["container"])
                                    for r in self.image(report, name)["retained_by"]])
                 with self.assertRaisesRegex(PermissionError, f"unreadable:/{kind}"):
-                    imports.cleanup_image(self.UNUSED, ["node1"])
+                    IMAGES.cleanup_image(self.UNUSED, ["node1"])
                 self.assertEqual([], self.posted())
 
     def test_other_errors_on_those_lists_still_stop_the_page(self):
@@ -388,15 +389,15 @@ class UnreadInventoryTests(RemovalFixture):
             return read(asked)
         with mock.patch.object(imports, "kget", get):
             with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
-                imports.image_cache()
+                IMAGES.image_cache()
 
     def test_replicas_count_as_zero_unless_a_positive_number(self):
         for replicas, zero in ((0, True), (2, False), (-1, True), ("2", True), ("x", True),
                                (True, True), (2.0, True)):
             with self.subTest(replicas=replicas):
-                self.assertIs(zero, imports._scaled_to_zero({"replicas": replicas}))
-        self.assertFalse(imports._scaled_to_zero({}), "missing means one, the Kubernetes default")
-        self.assertFalse(imports._scaled_to_zero({"replicas": None}))
+                self.assertIs(zero, IMAGES._scaled_to_zero({"replicas": replicas}))
+        self.assertFalse(IMAGES._scaled_to_zero({}), "missing means one, the Kubernetes default")
+        self.assertFalse(IMAGES._scaled_to_zero({"replicas": None}))
 
     def test_without_vm_pools_installed_clean_up_still_works(self):
         read = imports.kget
@@ -411,7 +412,7 @@ class UnreadInventoryTests(RemovalFixture):
                 return {"groups": [{"name": "apps"}, {"name": "kubevirt.io"}]}
             return read(path)
         with mock.patch.object(imports, "kget", get):
-            imports.cleanup_image(self.UNUSED, ["node1"])
+            IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertIn(POOLS, asked, "the pool list is asked for, and its 404 then checked with discovery")
         self.assertIn("/apis", asked)
         self.assertEqual(1, len(self.posted()))
@@ -427,30 +428,30 @@ class UnreadInventoryTests(RemovalFixture):
             return read(path)
         with mock.patch.object(imports, "kget", get):
             with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
-                imports.cleanup_image(self.UNUSED, ["node1"])
+                IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
     def test_without_kubevirt_installed_clean_up_still_works(self):
         with self.kubevirt_answers_404(["apps", "batch"]):
-            imports.cleanup_image(self.UNUSED, ["node1"])
+            IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual(1, len(self.posted()))
 
     def test_a_404_for_vms_while_kubevirt_is_served_removes_nothing(self):
         with self.kubevirt_answers_404(["apps", "batch", "kubevirt.io"]):
             with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
-                imports.cleanup_image(self.UNUSED, ["node1"])
+                IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
     def test_an_empty_discovery_answer_removes_nothing(self):
         with self.kubevirt_answers_404([]):
             with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
-                imports.cleanup_image(self.UNUSED, ["node1"])
+                IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
     def test_a_discovery_that_fails_after_a_404_removes_nothing(self):
         with self.kubevirt_answers_404(OSError("timed out")):
             with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
-                imports.cleanup_image(self.UNUSED, ["node1"])
+                IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
 
@@ -478,7 +479,7 @@ class WaitingWorkloadTests(RemovalFixture):
                 self.objects[path]["items"] = [item]
                 try:
                     with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
-                        imports.cleanup_image(self.UNUSED, ["node1"])
+                        IMAGES.cleanup_image(self.UNUSED, ["node1"])
                 finally:
                     self.objects[path]["items"] = []
         self.assertEqual([], self.posted())
@@ -500,7 +501,7 @@ class WaitingWorkloadTests(RemovalFixture):
     def test_a_suspended_job_keeps_its_image(self):
         self.assertEqual([("stopped", "migrate", "migrate")], self.kept(self.JOBS, self.job({"suspend": True})))
         with self.assertRaisesRegex(PermissionError, "stopped:lab/migrate"):
-            imports.cleanup_image(self.UNUSED, ["node1"])
+            IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
     def test_a_job_between_retries_keeps_its_image(self):
@@ -618,7 +619,7 @@ class OtherRecordsTests(RemovalFixture):
         # A version's resource list that cannot be read keeps everything.
         self.objects["/apis/snapshot.kubevirt.io/v1"] = {"resources": "x"}
         with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
-            imports.cleanup_image(self.UNUSED, ["node1"])
+            IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
     def test_no_permission_to_read_a_groups_discovery_keeps_every_image(self):
@@ -652,7 +653,7 @@ class OtherRecordsTests(RemovalFixture):
             with self.subTest(group=group):
                 self.asked.clear()
                 with self.answers(f"/apis/{group}", 404, groups=["apps", "batch", "kubevirt.io"]):
-                    imports.cleanup_image(self.UNUSED, ["node1"])
+                    IMAGES.cleanup_image(self.UNUSED, ["node1"])
                 self.assertFalse([path for path in self.asked if path.startswith(f"/apis/{group}/")])
         self.assertEqual(len(OPTIONAL), len(self.posted()))
 
@@ -660,7 +661,7 @@ class OtherRecordsTests(RemovalFixture):
         for group in OPTIONAL:
             with self.subTest(group=group), self.answers(f"/apis/{group}", 404, groups=["apps", group]):
                 with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
-                    imports.cleanup_image(self.UNUSED, ["node1"])
+                    IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
     def test_an_odd_discovery_answer_removes_nothing(self):
@@ -670,7 +671,7 @@ class OtherRecordsTests(RemovalFixture):
             with self.subTest(answer=answer):
                 self.objects["/apis/cdi.kubevirt.io"] = answer
                 with self.assertRaisesRegex(ValueError, "no image is cleaned up"):
-                    imports.cleanup_image(self.UNUSED, ["node1"])
+                    IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
     def test_a_harvester_vm_template_keeps_the_images_it_boots_from(self):
@@ -678,7 +679,7 @@ class OtherRecordsTests(RemovalFixture):
             "template": {"spec": {"volumes": [self.DISK]}}}}}}
         self.assertEqual([("stopped", "fedora-template-v1", "rootdisk")], self.kept(TEMPLATES, item))
         with self.assertRaisesRegex(PermissionError, "stopped:lab/fedora-template-v1"):
-            imports.cleanup_image(self.UNUSED, ["node1"])
+            IMAGES.cleanup_image(self.UNUSED, ["node1"])
         # ...and the image its disk templates import through the node's runtime.
         item["spec"]["vm"]["spec"]["template"]["spec"]["volumes"] = []
         item["spec"]["vm"]["spec"]["dataVolumeTemplates"] = [{"metadata": {"name": "root"}, "spec": {"source": self.NODE_PULL}}]
@@ -732,7 +733,7 @@ class OtherRecordsTests(RemovalFixture):
             with self.subTest(path=path), self.answers(path, 403):
                 self.assertEqual([("unreadable", kind, "no permission to list")], self.kept())
                 with self.assertRaisesRegex(PermissionError, f"unreadable:/{kind}"):
-                    imports.cleanup_image(self.UNUSED, ["node1"])
+                    IMAGES.cleanup_image(self.UNUSED, ["node1"])
         self.assertEqual([], self.posted())
 
 
