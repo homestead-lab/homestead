@@ -92,6 +92,8 @@ def sync(request, b):
     return FLEET.adopt(b, sender)
 
 
+# The cookie only these routes set (homestead_routes.answer refuses it from any other).
+OWN_COOKIES = (FLEET.COOKIE,)
 # Its routes and who may use them (homestead_routes.py). Each combined list
 # is its own route, so an unknown one is refused as undeclared, not a 404.
 ROUTES = {

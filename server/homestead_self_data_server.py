@@ -329,6 +329,8 @@ def _handoff(request):
     return MODULE_ROUTES.Reply(503 if status["status"] == "unknown" else 200, status)
 
 
+# The cookie only these routes set (homestead_routes.answer refuses it from any other).
+OWN_COOKIES = ("homestead-data-move",)
 ROUTES = {
     ("GET", "/api/self/data/prepare"): ("viewer", _preparation_state),
     ("GET", "/api/self/data/handoff/*"): ("viewer", _handoff),
