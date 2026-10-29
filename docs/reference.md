@@ -184,6 +184,44 @@ onto: **Settings > About > Redundancy** offers **Keep two copies**, which
 makes it and opens the move. On k3s and RKE2 Homestead raises its own
 volume's copies in place as hosts join.
 
+App volumes on that one host read degraded for the same reason, and are
+yours, so Homestead only offers: **Cluster > Health** lists them ("N volumes
+ask for more copies than this cluster has hosts"), and an admin's
+**Match copies to hosts** review lowers each listed volume to one copy. The
+count each asked for is kept on it as `homestead.io/one-host-copies`, and
+once a second host can hold copies the same row offers to put them back.
+Neither changes a class or a Longhorn setting, so volumes made later ask for
+their class's count and appear in the offer too. The dashboard banner, the
+alert, the MQTT sensor **Volumes Short of Hosts** and the installer's doctor
+say why such a volume is degraded.
+
+**Cluster > Health** also names what storage leaves behind (it changes
+nothing by itself):
+
+- **Released volumes:** a volume whose claim was deleted while its class keeps
+  the data (reclaim policy Retain), CDI's import scratch for one. Longhorn keeps
+  its whole size allocated on each host with a copy until it is deleted. The
+  row says how many there are, what they hold and on which hosts; its list
+  gives each one's last claim, class, size and when it was released, and opens
+  the reviewed delete for a Longhorn volume (admin), or **Remove old copy** for
+  the original a storage-class change kept. Volumes of other drivers are named
+  only: delete them with that storage's own tools. The delete is asked for by
+  the volume's PV. When an app was deployed again with the same claim name, its
+  review sets the Released volume beside the one the claim uses now (PV name and
+  UID, phase, claim UID, Longhorn volume, what uses it), refuses unless they are
+  plainly different volumes, and is confirmed by the Released volume's name; the
+  delete is pinned to that PV's name, UID and version and never changes the
+  current one. Such an app's card and details say how many old volumes of its
+  claims still hold space, and how much, with the reviewed delete.
+- **Stale iSCSI sessions:** when a host is lost while a Longhorn engine runs on
+  it, the instance-manager is replaced, and the host keeps its iSCSI session to
+  the old address once it comes back. A later attach of that volume on the host
+  can fail in a loop (iscsiadm exit 32 on logout). The node probe lists each
+  host's sessions from its read-only `/sys`, and a session to a Longhorn target
+  whose address no instance-manager pod has now is named on its host, with the
+  commands that end it there (`iscsiadm` logout, or removing the stale disk and
+  record) or a restart of that host. Homestead runs nothing on the host for this.
+
 A claim's class cannot change. On a cluster installed from an older manifest
 that said `longhorn-r2`, check the claim first:
 

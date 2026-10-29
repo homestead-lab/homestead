@@ -9,6 +9,7 @@ import math
 import time
 import urllib.error
 
+import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_storage_guard as STORAGE_GUARD
 
@@ -187,8 +188,10 @@ def _consumers(namespace, claim, warnings):
     return result
 
 
-def deletion_plan(namespace, name, volume=""):
+def deletion_plan(namespace, name, volume="", pv=""):
     namespace, name = _identity(namespace, name)
+    if pv:
+        return released_plan(namespace, name, volume, pv)
     try:
         pvc = kget(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}")
     except urllib.error.HTTPError as error:
@@ -335,13 +338,16 @@ def delete(cfg, validate=None):
     action = cfg.get("action")
     if action not in ("delete_claim", "delete_data"):
         raise ValueError("action must be delete_claim or delete_data")
-    plan = deletion_plan(namespace, name, cfg.get("volume", ""))
+    plan = deletion_plan(namespace, name, cfg.get("volume", ""), cfg.get("pv", ""))
     if validate is not None:
         plan = validate(plan)
     if not cfg.get("uid") or cfg.get("uid") != plan["uid"]:
         raise ValueError("the volume changed after preview; review its impact again")
-    if cfg.get("confirmation") != name:
-        raise ValueError(f'type "{name}" exactly to confirm')
+    # A Released volume whose claim name is in use again is confirmed by its
+    # own name: the claim name is the current volume's too.
+    expected = plan.get("confirm") or name
+    if cfg.get("confirmation") != expected:
+        raise ValueError(f'type "{expected}" exactly to confirm')
     if plan["blocking_reasons"]:
         raise PermissionError("volume deletion blocked: " + "; ".join(plan["blocking_reasons"]))
     if action == "delete_data" and not plan["inventory_complete"]:
@@ -441,19 +447,142 @@ def orphan_plan(namespace, name, volume):
                         "delete_data": {"enabled": not blockers}}}
 
 
+def _released_identity(pv_name, namespace, name, volume):
+    """The Released PV asked for, read by name: it must be Longhorn's volume
+    `volume`, last claimed as namespace/name. Anything else is a different
+    volume than the one reviewed, and is refused outright."""
+    if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?", str(pv_name or "")):
+        raise ValueError("the persistent volume name must be a valid Kubernetes name")
+    pv = KUBE.get_optional(f"/api/v1/persistentvolumes/{pv_name}", read=kget)
+    if pv is None:
+        raise ValueError("That Released volume no longer exists; refresh the list")
+    spec = pv.get("spec") or {}
+    csi, ref = spec.get("csi") or {}, spec.get("claimRef") or {}
+    if csi.get("driver") != "driver.longhorn.io" or csi.get("volumeHandle") != volume:
+        raise ValueError("This persistent volume is not that Longhorn volume's; nothing will be deleted")
+    if (ref.get("namespace"), ref.get("name")) != (namespace, name):
+        raise ValueError("This persistent volume was not that claim's; nothing will be deleted")
+    return pv
+
+
+def released_plan(namespace, name, volume, pv_name):
+    """A Released Longhorn volume asked for by its PV (#932 follow-up). When
+    a claim of its old name exists again, that claim and its volume are the
+    app's now: the review names both, and refuses unless the Released one is
+    plainly another volume (another PV, PV UID, claim UID and Longhorn volume).
+    With no claim of that name, the orphan review answers, for this PV only."""
+    _, volume = _identity(namespace, volume)
+    pv = _released_identity(pv_name, namespace, name, volume)
+    pm, ps, pstatus = pv.get("metadata") or {}, pv.get("spec") or {}, pv.get("status") or {}
+    claim = KUBE.get_optional(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{name}", read=kget)
+    if claim is None:
+        plan = orphan_plan(namespace, name, volume)
+        if plan["pv"]["name"] != pv_name:
+            raise ValueError("Another persistent volume holds that Longhorn volume; nothing will be deleted")
+        return plan
+    warnings, blockers = [], []
+    cm, cs, cstatus = claim.get("metadata") or {}, claim.get("spec") or {}, claim.get("status") or {}
+    current_pv_name = cs.get("volumeName") or ""
+    current = {"claim_uid": cm.get("uid", ""), "phase": cstatus.get("phase", "Unknown"), "pv": current_pv_name,
+               "pv_uid": "", "longhorn": "", "consumers": []}
+    if pstatus.get("phase") != "Released":
+        blockers.append("This persistent volume is not Released; it may be bound or available for reuse")
+    if current["phase"] != "Bound" or not current_pv_name:
+        blockers.append(f"The claim now named {name} is not bound yet, so the volume it uses cannot be shown; refresh once it is")
+    if current_pv_name == pv_name:
+        blockers.append("This is the volume the claim uses now")
+    if not (ps.get("claimRef") or {}).get("uid") or (ps.get("claimRef") or {}).get("uid") == current["claim_uid"]:
+        blockers.append("This persistent volume's claim reference is the current claim's")
+    if current_pv_name and current_pv_name != pv_name:
+        try:
+            now = kget(f"/api/v1/persistentvolumes/{current_pv_name}")
+            current["pv_uid"] = (now.get("metadata") or {}).get("uid", "")
+            current["longhorn"] = ((now.get("spec") or {}).get("csi") or {}).get("volumeHandle", "")
+        except Exception as error:
+            warnings.append(f"the volume the claim uses now could not be read: {error}")
+        if current["pv_uid"] and current["pv_uid"] == pm.get("uid"):
+            blockers.append("This is the volume the claim uses now")
+        if current["longhorn"] == volume:
+            blockers.append("The claim uses this Longhorn volume now")
+    # The app mounts the claim name, which is the volume it uses now: shown
+    # beside the review, never a reason to keep the Released one.
+    current["consumers"] = _consumers(namespace, name, warnings)
+
+    path = f"/apis/longhorn.io/v1beta2/namespaces/{LONGHORN_NAMESPACE}"
+    lh = KUBE.get_optional(f"{path}/volumes/{volume}", read=kget)
+    if lh is None:
+        raise ValueError("Longhorn no longer has that volume; refresh the list")
+    meta, spec, status = lh.get("metadata") or {}, lh.get("spec") or {}, lh.get("status") or {}
+    ks = status.get("kubernetesStatus") or {}
+    if ks.get("pvName") not in (None, "", pv_name):
+        blockers.append("Longhorn last bound this volume to another persistent volume")
+    if ks.get("namespace") not in (None, "", namespace) or ks.get("pvcName") not in (None, "", name):
+        blockers.append("Longhorn last bound this volume to another claim")
+    if status.get("state") != "detached" or status.get("currentNodeID") or spec.get("nodeID") or spec.get("migrationNodeID"):
+        blockers.append("Longhorn must be fully detached with no requested attachment")
+    pvs = [p for p in _items("/api/v1/persistentvolumes", "persistent volume", warnings)
+           if ((p.get("spec") or {}).get("csi") or {}).get("volumeHandle") == volume]
+    if len(pvs) > 1:
+        blockers.append("Multiple PVs refer to this Longhorn volume; resolve ownership first")
+    for other in _items("/api/v1/persistentvolumeclaims", "claim", warnings):
+        if (other.get("spec") or {}).get("volumeName") == pv_name:
+            blockers.append("A claim is bound to this persistent volume")
+    for attachment in _items("/apis/storage.k8s.io/v1/volumeattachments", "CSI attachment", warnings):
+        if ((attachment.get("spec") or {}).get("source") or {}).get("persistentVolumeName") == pv_name:
+            blockers.append("A CSI attachment still references this persistent volume")
+    for attachment in _items(f"{path}/volumeattachments", "Longhorn attachment", warnings):
+        a = attachment.get("spec") or {}
+        if a.get("volume") == volume and a.get("attachmentTickets"):
+            blockers.append("Longhorn attachment tickets still request this volume")
+    snaps = [s for s in _items(f"{path}/snapshots", "snapshot", warnings) if (s.get("spec") or {}).get("volume") == volume]
+    bks = [b for b in _items(f"{path}/backups", "backup", warnings)
+           if ((b.get("metadata") or {}).get("labels") or {}).get("backup-volume", (b.get("status") or {}).get("volumeName")) == volume]
+    if namespace in SYSTEM_NAMESPACES:
+        blockers.append("System namespace backing data requires Kubernetes administration tools")
+    if warnings:
+        blockers.append("Impact inventory is incomplete")
+    if not meta.get("uid") or not pm.get("uid") or not pm.get("resourceVersion"):
+        blockers.append("Backing object identity/version is unavailable")
+    blockers = list(dict.fromkeys(blockers))
+    return {"orphan": True, "released": True, "namespace": namespace, "name": name, "confirm": pv_name,
+            "uid": meta.get("uid", ""), "resource_version": meta.get("resourceVersion", ""),
+            "phase": "Claim name in use again", "requested_storage": (ps.get("capacity") or {}).get("storage", ""),
+            "consumers": [], "current": current, "warnings": warnings,
+            "snapshots": {"count": len(snaps)}, "backups": {"count": len(bks)},
+            "inventory_complete": not warnings, "blocked": bool(blockers), "blocking_reasons": blockers,
+            "pv": {"name": pv_name, "uid": pm.get("uid", ""), "resource_version": pm.get("resourceVersion", ""),
+                   "phase": pstatus.get("phase", ""), "claim_uid": (ps.get("claimRef") or {}).get("uid", ""),
+                   "longhorn": volume, "reclaim_policy": ps.get("persistentVolumeReclaimPolicy", "")},
+            "longhorn": {"name": volume, "state": status.get("state"), "attached_node": status.get("currentNodeID", ""),
+                         "replicas": spec.get("numberOfReplicas", 0),
+                         "actual_gb": round(int(status.get("actualSize") or 0) / 1024**3, 2)},
+            "actions": {"detach": {"complete": not blockers}, "delete_claim": {"enabled": False},
+                        "delete_data": {"enabled": not blockers}}}
+
+
 def delete_orphan(plan, cfg):
     if cfg.get("action") != "delete_data":
         raise ValueError("The PVC is already absent; only explicit backing-data deletion applies")
     pv = plan["pv"]
     if cfg.get("pv_uid", "") != pv.get("uid", ""):
         raise ValueError("Backing PV changed after preview; review again")
+    pinned = []
+    if plan.get("released"):
+        # The claim name is in use again: write only the old PV, and never one
+        # the current claim is bound to, whatever the plan said.
+        current = plan.get("current") or {}
+        if not pv["name"] or pv["name"] == current.get("pv") or pv.get("uid") == current.get("pv_uid") \
+                or plan["longhorn"]["name"] == current.get("longhorn") or not pv.get("claim_uid"):
+            raise PermissionError("This is the volume the claim uses now; it is not deleted")
+        pinned = [{"op": "test", "path": "/spec/claimRef/uid", "value": pv["claim_uid"]},
+                  {"op": "test", "path": "/spec/csi/volumeHandle", "value": plan["longhorn"]["name"]}]
     if pv["name"]:
         # A Released PV with Delete policy is reclaimed by CSI, with its own
         # finalizers. Test the complete observed revision before changing policy.
         ksend("PATCH", f"/api/v1/persistentvolumes/{pv['name']}", [
             {"op": "test", "path": "/metadata/uid", "value": pv["uid"]},
             {"op": "test", "path": "/metadata/resourceVersion", "value": pv["resource_version"]},
-            {"op": "test", "path": "/status/phase", "value": "Released"},
+            {"op": "test", "path": "/status/phase", "value": "Released"}, *pinned,
             {"op": "add", "path": "/spec/persistentVolumeReclaimPolicy", "value": "Delete"}],
               ctype="application/json-patch+json")
     else:
@@ -464,7 +593,7 @@ def delete_orphan(plan, cfg):
         if key.startswith(("vol", "stor", "flow", "lhov")):
             cache.pop(key, None)
     return {"ok": True, "orphan": True, "namespace": plan["namespace"], "name": plan["name"],
-            "action": "delete_data", "pv": pv["name"], "longhorn_volume": plan["longhorn"]["name"],
+            "action": "delete_data", "pv": pv["name"], "longhorn_volume": plan["longhorn"]["name"], "released": bool(plan.get("released")),
             "message": "Retained backing-data deletion requested; external backups are kept"}
 
 
@@ -478,6 +607,16 @@ def delete_reviewed(cfg):
     storage job starts on the volume meanwhile."""
     with OPS.transaction():
         result = delete(cfg, validate=_review)
+        if result.get("released"):
+            # The claim name is the current volume's: the job is the PV's
+            # alone, so nothing fences or names the claim in use.
+            result["operation"] = OPS.start(
+                "volume-delete", f"Delete Released volume {result['pv']}",
+                {"kind": "PersistentVolume", "name": result["pv"]},
+                "/volumes", {"namespace": result["namespace"], "name": result["pv"], "claim": result["name"],
+                              "released": True, "action": result["action"], "pv": result["pv"], "orphan": True,
+                              "volume": result["longhorn_volume"]}, result["message"])
+            return result
         result["operation"] = OPS.start(
             "volume-delete", f"Delete volume {result['name']}",
             {"kind": "PersistentVolumeClaim", "name": result["name"],
@@ -496,6 +635,6 @@ def _q(request, name, default=""):
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/volumes/delete-plan"): ("viewer", lambda request: _review(deletion_plan(
-        _q(request, "ns", DEFAULT_NAMESPACE), _q(request, "name"), _q(request, "volume")))),
+        _q(request, "ns", DEFAULT_NAMESPACE), _q(request, "name"), _q(request, "volume"), _q(request, "pv")))),
     ("POST", "/api/volumes/delete"): ("admin", lambda request: delete_reviewed(request.body)),
 }

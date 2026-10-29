@@ -39,7 +39,8 @@ def targets(kind, ref, resource=None):
         # Restore into an app (#743): both claims and the app's volume, while it runs.
         claim(ref.get("old_claim")); claim(ref.get("new_claim")); handle(ref.get("old_volume"))
     elif kind in ("volume-delete", "volume-restore"):
-        claim(ref.get("name") or resource.get("name"))
+        if not ref.get("released"):   # a Released volume's claim name is another volume's now (#932)
+            claim(ref.get("name") or resource.get("name"))
         pv(ref.get("pv")); handle(ref.get("volume"))
     return result
 

@@ -10,7 +10,14 @@ async function viewWorkloads() {
   gitopsLoad().then(report => {
     if (Object.keys(report?.apps || {}).length && STATE.view === "workloads" && $("#modal").classList.contains("hidden")) renderWorkloads();
   });
+  // Old Released volumes of each app's claims (#932): shown once read.
+  if (typeof releasedVolumesLoad === "function") releasedVolumesLoad().then(rows => {
+    if (rows.length && STATE.view === "workloads" && $("#modal").classList.contains("hidden")) renderWorkloads();
+  });
 }
+
+/* An app's old Released volumes and the space they hold (storage-leftovers.js). */
+const workloadReleasedRow = (w, detail = false) => !remoteRow(w) && typeof appReleasedRow === "function" ? appReleasedRow(w, detail) : "";
 
 const updateKey = (ns, name) => `${ns}/${name}`;
 const workloadUpdate = (ns, name) => (STATE.data.imageUpdateMap || {})[updateKey(ns, name)];
@@ -951,6 +958,7 @@ function workloadCard(w) {
         <div class="dim xs mono wimg"><span class="wimage-name" title="${imageTitle(w.images)}">${imageShort(w.images)}</span>
           <span class="wimage-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</span></div>
         ${answerCardRow(w)}
+        ${workloadReleasedRow(w)}
         ${workloadPull(w) ? pullBar(workloadPull(w)) : ""}
         ${workloadBlocked(w) ? `<div class="wblocked" title="${esc(workloadBlocked(w))}">${esc(workloadBlocked(w))}</div>` : ""}
         <div class="wfoot">
@@ -1035,6 +1043,7 @@ function workloadTableRows(rows) {
           <div class="wl-detail-access"><span>Access</span><b class="waccess">${accessPorts(w.ports)}</b></div>
           ${(w.claims || []).length && !remoteRow(w) ? `<div class="wl-detail-volumes"><span>Volumes</span><b class="row">${w.claims.map(claim =>
             `<button type="button" class="tag info linkish" title="Open ${esc(claim)} in Volumes" onclick="openWorkloadVolume(${jsq(claim)})">${esc(claim)}</button>`).join("")}</b></div>` : ""}
+          ${(released => released ? `<div class="wl-detail-released"><span>Old volumes</span>${released}</div>` : "")(workloadReleasedRow(w, true))}
           ${gitopsDetail(w)}
           ${startsAfterFact(w)}
         </div>
@@ -2479,19 +2488,20 @@ function generatedSecret() {
   const bytes = new Uint8Array(18); crypto.getRandomValues(bytes);
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
-/* A new app's tier (#431), chosen as Edit chooses it. Normal writes no class. */
-function deployTierField(tier) {
-  if (!["critical", "normal", "low"].includes(tier)) tier = "normal";
-  return `<div class="f"><label>When the cluster is short of room</label>${prioritySelect("d_priority", tier,
-    `aria-label="Tier when the cluster is short of room" aria-describedby="d_priority_help" onchange="$('#d_priority_help').textContent = PRIORITY_HELP[this.value] || ''"`)}
-    <div class="dim small" id="d_priority_help" aria-live="polite">${esc(PRIORITY_HELP[tier])}</div></div>`;
+/* A new app as Placement reads it (#844): it moves when its host fails and
+   takes the normal tier, as Deploy always built it, unless chosen otherwise.
+   A tier the form does not know (#431) is shown as normal. */
+function deployPlacementApp(cfg) {
+  const tier = ["critical", "normal", "low"].includes(cfg.priority) ? cfg.priority : "normal";
+  return { failover: cfg.failover || "move", priority: tier, start_replicas: cfg.replicas ?? 1, node: cfg.node || "" };
 }
 async function viewDeploy(pre) {
   pre = pre || window.__deployPrefill;
   // The form's hosts, namespaces, storage and addresses come from these reads;
   // without one it would offer a guess (#620). The page shows the error instead.
-  const [, liveNodes, nss, network] = await Promise.all([loadHardwareFeatures(), mustRead("/api/nodes", "the hosts"),
-    mustRead("/api/namespaces", "the namespaces"), mustRead("/api/network", "the network")]);
+  const [, liveNodes, nss, network, others] = await Promise.all([loadHardwareFeatures(), mustRead("/api/nodes", "the hosts"),
+    mustRead("/api/namespaces", "the namespaces"), mustRead("/api/network", "the network"),
+    STATE.data.wl ? Promise.resolve(STATE.data.wl) : mustRead("/api/workloads", "the other apps")]);
   // Every read is done before the form's settings change, so a failure leaves them as they were.
   const next = Object.assign(deployDefaults(), pre || {});
   if (!nss.includes(next.namespace)) next.namespace = nss.includes("lab") ? "lab" : nss[0];
@@ -2519,6 +2529,8 @@ async function viewDeploy(pre) {
   const vips = await vipChoices(network);
   const sharedVip = vips.shared || "";
   resetPaint();
+  appFormPlacementContext("d", { ns: DCFG.namespace, others: others || [], nodes: nodes0(liveNodes).length,
+    volumes: () => readVolumeRows($("#containerDeploy")), pvcs: () => DOPT.pvcs || [] });
   const sections = appFormSections("deploy", {
     basics: `
       ${DCFG.app_profile ? `<div class="app-profile ${esc(DCFG.app_profile.level || "review")}">
@@ -2538,11 +2550,7 @@ async function viewDeploy(pre) {
       <div class="f"><label>Image ${tip("The registry image and tag Kubernetes will pull, for example ghcr.io/home-assistant/home-assistant:stable")}</label><input type="text" id="d_image" value="${esc(DCFG.image)}" placeholder="nginx:alpine · ghcr.io/user/app:tag"><span class="dim xs" id="d_image_note">${imagePullNote(DCFG.image)}</span></div>
       <div class="row" id="d_primary_actions"><button class="btn danger" type="button" id="d_remove_primary" onclick="deployRemovePrimary()" disabled>Remove this container</button></div>
       ${UI.more("Container appearance", `<div class="f"><label>Container logo ${tip("The address of an image (PNG, JPEG, GIF, WebP, ICO or SVG), or of a site: Homestead then takes the site's own logo if it is an SVG or at least 64 px. It keeps its own copy, so the logo stays if the source changes.")}</label><input type="url" id="d_icon" value="${esc(DCFG.icon || "")}" placeholder="https://…/logo.png or https://example.com"></div>`)}
-      <div class="f2 compact-fields">
-        <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
-        <div class="f" id="d_rep_wrap"><label>Pod copies ${tip("How many copies of this app run at once. Most homelab apps want one; Longhorn replicas are a separate, storage-level idea.")}</label><input type="number" id="d_rep" value="${DCFG.replicas}" min="0" max="5"></div>
-      </div>
-      <div id="d_priority_wrap">${UI.more("Optional settings", deployTierField(DCFG.priority))}</div>
+      <div class="f"><label>Namespace</label><select id="d_ns">${nss.map(n => `<option ${n === DCFG.namespace ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></div>
       ${appFormContainerBlock("d", "deploy", "")}
       <div id="d_containers_join" class="empty small" hidden>Add one container to the existing app at a time.</div>
     `,
@@ -2572,8 +2580,9 @@ async function viewDeploy(pre) {
       <div id="d_vols"></div><button class="btn sm" onclick="addVol()">＋ add storage mapping</button>
       <div id="d_storage_containers"></div>
     `,
-    // Phase 1 of #544: placement is chosen in Edit once the app runs.
-    placement: `<div class="ui-stack"></div>`,
+    // Edit's section (#844), applied in the first rollout. A joined app keeps its own.
+    placement: `<div id="d_placement_join" class="empty small" hidden>The app it joins keeps its own placement, copies and tier: change them in its Edit.</div>
+      <div id="d_placement_wrap">${appFormPlacement("d", DCFG.placement || {}, deployPlacementApp(DCFG), nodes0(liveNodes), [{ name: DCFG.container_name }], { minCopies: 0 })}</div>`,
     address: `${addressStepHtml("d", DCFG, vips, sharedVip, {
         lanHtml: '<div id="d_lan_box" hidden></div>',
         portsHtml: `<div id="d_ports"></div><button class="btn sm" onclick="addPort()">＋ add port</button><div id="d_address_containers"></div>`})}
@@ -2587,11 +2596,11 @@ async function viewDeploy(pre) {
     hardware: "Set resources and host access for the first container.",
     environment: "Set the values the first container needs.",
     storage: "Choose where the first container stores its data.",
-    placement: "Set after deploying: once the app runs, Edit chooses its hosts, how its copies spread and which apps it runs beside.",
+    placement: "Choose its hosts, how its copies spread and which apps it runs beside.",
     address: "Choose how clients reach the app.",
     monitoring: "Choose how Homestead checks the app is up.",
     summary: "Check the configuration, then review capacity and rollout impact.",
-  }, later: { placement: "Set after deploying" } });
+  } });
   paint(`${UI.pageHeader("Deploy a container", "Configure the app, then review before deploying.", '<button class="btn" data-need="operator" onclick="composeImport()">Import Docker Compose</button>')}
     <div class="card flat deploy-form">${UI.sectionForm("containerDeploy", sections,
       UI.button("Preview manifest", "previewYaml()") + UI.button("Review deployment", "doDeploy()", {kind:"pri",disabled:!!DCFG.app_profile?.blocked}),
@@ -2599,7 +2608,7 @@ async function viewDeploy(pre) {
   DRENDERING = true;
   renderDeployTargets(); renderPorts(); renderVols(); renderEnv(); renderDeployContainers(); applyDeployMode();
   DRENDERING = false; syncSummary();
-  ["d_workload_name", "d_container_name", "d_image", "d_icon", "d_rep", "d_cpu", "d_mem", "d_mem_limit", "d_net", "d_vip_mode", "d_lb_ip", "d_target_workload"].forEach(id => {
+  ["d_workload_name", "d_container_name", "d_image", "d_icon", "d_cpu", "d_mem", "d_mem_limit", "d_net", "d_vip_mode", "d_lb_ip", "d_target_workload", "d_placement"].forEach(id => {
     const el = $("#" + id); if (!el) return;
     el.addEventListener("input", syncSummary); el.addEventListener("change", syncSummary);
   });
@@ -2631,6 +2640,7 @@ function updateJoinNote() {
 async function refreshDeployOptions() {
   collect();
   const ns = $("#d_ns").value;
+  APP_FORM_PLACEMENT.d.ns = ns;
   try { DOPT = await api("/api/deploy/options?ns=" + encodeURIComponent(ns)); }
   catch (e) { toast("Could not load namespace storage: " + e.message, "bad"); DOPT = { deployments: [], pvcs: [], storage_classes: [] }; }
   DCFG.target_workload = ""; renderDeployTargets(); renderVols(); renderDeployContainers(); applyDeployMode(); syncSummary();
@@ -2639,9 +2649,10 @@ function applyDeployMode() {
   const joining = $("#d_target_mode")?.value === "existing";
   $("#d_join_wrap").style.display = joining ? "block" : "none";
   $("#d_workload_name_wrap").style.display = joining ? "none" : "block";
-  $("#d_rep_wrap").style.display = joining ? "none" : "block";
+  // The app it joins keeps its own placement, copies and tier.
+  $("#d_placement_wrap").hidden = joining;
+  $("#d_placement_join").hidden = !joining;
   $("#d_primary_actions").hidden = joining;
-  $("#d_priority_wrap").hidden = joining;   // the app it joins keeps its own tier
   // Joining adds one container: no list of others, in any section.
   $("#d_containers_block").hidden = joining;
   APP_FORM_CONTAINER_SECTIONS.forEach(section => { $(`#d_${section}_containers`).hidden = joining; });
@@ -2662,6 +2673,8 @@ function collect() {
   DCFG.memory_limit = $("#d_mem_limit").value.trim(); DCFG.icon = $("#d_icon").value.trim();
   if ($("#d_mon")) DCFG.monitoring = monitoringFieldValue("d");
   DCFG.priority = $("#d_priority")?.value || "normal";
+  // Placement (#844), as Edit sends it.
+  DCFG.placement = readPlacement("d"); DCFG.node = $("#d_node")?.value || ""; DCFG.failover = $("#d_failover")?.value || "move";
   DCFG.hardware = selectedHardware("d_hw");
   Object.assign(DCFG, readPrivileges("d_pv") || {});
   DCFG.gpu = DCFG.hardware.includes("igpu"); DCFG.network_mode = $("#d_net").value;
@@ -2674,7 +2687,16 @@ function collect() {
   DCFG.env = {}; $$("#d_env .env-row").forEach(r => { const k = $(".ek", r).value.trim(); if (k) DCFG.env[k] = $(".ev", r).value; });
   const removePrimary = $("#d_remove_primary");
   if (removePrimary) removePrimary.disabled = DCFG.target_mode !== "new" || !DCFG.additional_containers?.length;
-  return DCFG.target_mode === "existing" ? { ...DCFG, additional_containers: [] } : DCFG;
+  if (DCFG.target_mode !== "existing") return DCFG;
+  const joined = { ...DCFG, additional_containers: [] };
+  for (const key of ["placement", "node", "failover"]) delete joined[key];
+  return joined;
+}
+/* The summary's line for Placement: its host, how copies spread, and its rules. */
+function deployPlacementWords(c) {
+  const rules = (c.placement?.with?.length || 0) + (c.placement?.apart?.length || 0);
+  return [c.node ? `prefers ${c.node}` : "any host", c.placement?.spread ? `${c.placement.spread} different hosts` : "",
+    rules ? `${rules} rule${rules === 1 ? "" : "s"} for other apps` : ""].filter(Boolean).join(" · ");
 }
 function syncSummary() {
   const c = collect();
@@ -2682,6 +2704,7 @@ function syncSummary() {
   // cannot show what [hidden] hides with !important.
   const vipWrap = $("#d_vip_wrap"); if (vipWrap) vipWrap.hidden = !(c.network_mode === "loadbalancer" && c.vip_mode === "manual");
   const imageNote = $("#d_image_note"); if (imageNote) imageNote.innerHTML = imagePullNote(c.image);
+  if (c.target_mode !== "existing") appFormPodContainers("d", [c.container_name, ...(c.additional_containers || []).map(item => item.name)]);
   const row = (i, l, v) => `<div class="drow"><div class="di">${i}</div><div class="dl">${l}</div><div class="dv">${v}</div></div>`;
   $("#d_summary").innerHTML =
     (c.target_mode === "existing" ? "" : row("◈", "App / pod", c.workload_name ? `<b>${esc(c.workload_name)}</b>` : '<span class="dim">—</span>')) +
@@ -2689,6 +2712,7 @@ function syncSummary() {
     row("▣", "Container", c.container_name ? `<b>${esc(c.container_name)}</b>` : '<span class="dim">—</span>') +
     row("❏", "Image", c.image ? `<span class="small mono">${esc(c.image)}</span>` : '<span class="dim">—</span>') +
     row("⌗", "Namespace", esc(c.namespace)) + row("⧉", c.target_mode === "existing" ? "Joins app" : "Pod copies", c.target_mode === "existing" ? esc(c.target_workload || "—") : c.replicas) +
+    (c.target_mode === "existing" ? "" : row("⌖", "Placement", `<span class="small">${esc(deployPlacementWords(c))}</span>`)) +
     row("◴", "Requests", `<span class="small mono">${esc(c.cpu)} · ${esc(c.memory)}</span>`) +
     row("▣", "Memory max", c.memory_limit ? `<span class="small mono">${esc(c.memory_limit)}</span>` : '<span class="dim">no limit</span>') +
     ((c.command || []).length || (c.args || []).length ? row("›", "Runs", `<span class="small mono">${esc([...(c.command || []), ...(c.args || [])].join(" "))}</span>`) : "") +

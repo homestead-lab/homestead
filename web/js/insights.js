@@ -2,8 +2,8 @@
    Missing observations stay unknown; advice never changes cluster configuration. */
 const HealthInsights = (() => {
   const titles = {health:"Health suggestions", workloads:"App and VM health", containers:"Containers", vms:"Virtual machines", backups:"Backup freshness", updates:"Updates awaiting review", jobs:"Running and failed jobs"};
-  const sources = {alerts:"/api/alerts",overview:"/api/overview",cluster:"/api/cluster", protection:"/api/lh/overview", nodes:"/api/nodes", self:"/api/self/health", settings:"/api/settings", workloads:"/api/workloads", vms:"/api/vms", updates:"/api/image-updates", jobs:"/api/operations", components:"/api/cluster/components", hosts:"/api/os-updates"};
-  const needs = {health:["cluster","protection","nodes","self","settings","overview","alerts"], workloads:["workloads","vms"], containers:["workloads"], vms:["vms"], backups:["protection"], updates:["updates","components","hosts"], jobs:["jobs"]};
+  const sources = {alerts:"/api/alerts",overview:"/api/overview",cluster:"/api/cluster", protection:"/api/lh/overview", nodes:"/api/nodes", self:"/api/self/health", settings:"/api/settings", workloads:"/api/workloads", vms:"/api/vms", updates:"/api/image-updates", jobs:"/api/operations", components:"/api/cluster/components", hosts:"/api/os-updates", copies:"/api/longhorn/one-host-copies", leftovers:"/api/storage/leftovers"};
+  const needs = {health:["cluster","protection","nodes","self","settings","overview","alerts","copies","leftovers"], workloads:["workloads","vms"], containers:["workloads"], vms:["vms"], backups:["protection"], updates:["updates","components","hosts"], jobs:["jobs"]};
   const rank = {critical:0,medium:1,low:2};
   const tone = severity => ({critical:"bad",medium:"warn",low:"",healthy:"ok"}[severity] ?? "");
   const item = (id,severity,title,detail,route) => ({id,severity,title,detail,route});
@@ -52,10 +52,14 @@ const HealthInsights = (() => {
       }
     }
     // Keep the exact reasons behind the dashboard banner visible here too.
+    // Volumes short of hosts are said once, in the offer's own row below (#841).
+    const offerRow=data.copies?.state==="lower" && data.copies.volumes?.length;
     for(const issue of data.overview?.health_issues || []) {
+      if(issue.one_host && offerRow)continue;
       const id=issue.kind==="Disk"?"disk:"+issue.name.replace("/",":"):issue.kind==="Node"?"node:"+issue.name:"condition:"+issue.kind+":"+issue.name;
       const existing=rows.findIndex(row=>row.id===id), severity=issue.severity==="critical"?"critical":"medium";
-      const route=["Disk","Node"].includes(issue.kind)?id:({Volume:"storage",Backup:"protect",Trim:"protect",Workload:"workloads"})[issue.kind] || "cluster";
+      // A volume only short of hosts (#841) opens the offer to match its copies.
+      const route=issue.one_host?"one-host-copies":["Disk","Node"].includes(issue.kind)?id:({Volume:"storage",Backup:"protect",Trim:"protect",Workload:"workloads"})[issue.kind] || "cluster";
       const finding=item(id,severity,`${({Node:"Host",Workload:"App",Trim:"Weekly trim failed:"})[issue.kind] || issue.kind} ${issue.name}`,issue.reason || "Review this condition.",route);
       if(existing<0)rows.push(finding);
       else if(rank[severity]<rank[rows[existing].severity])rows[existing]=finding;
@@ -72,7 +76,14 @@ const HealthInsights = (() => {
       if (h.probe && (!h.probe.installed || h.probe.reporting < h.probe.desired)) rows.push(item("probe","low","Host monitoring is incomplete","Check node probes to restore temperature and drive observations.","settings:about#selfHealthCard"));
       if (h.addresses?.problem || h.addresses?.clashes?.length) rows.push(item("addresses","critical","A service address conflicts with the cluster","Review service addresses before changing hosts.","network:addresses"));
     }
-    for (const key of needs.health) if (key !== "alerts" && data[key] === null) rows.push(item("unknown:"+key,"low",`${({cluster:"Platform",protection:"Backup",nodes:"Host",self:"Homestead",settings:"Threshold",overview:"Cluster health"})[key]} checks unavailable`,"Retry or check access. Health cannot be confirmed from missing data.","retry"));
+    // App volumes asking for more copies than the hosts can hold (#841): an
+    // admin reviews matching them, or putting them back once hosts join.
+    const c=data.copies, n=c?.volumes?.length || 0, volumes=`${n} volume${n===1?"":"s"}`;
+    if (c?.state === "lower" && n) rows.push(item("one-host-copies","medium",`${volumes} ask${n===1?"s":""} for more copies than this cluster has hosts`,`This cluster has ${c.hosts} host, so Longhorn keeps one copy of each and marks ${n===1?"it":"them"} degraded. An admin can lower ${n===1?"it":"them"} in Match copies to hosts.`,"one-host-copies"));
+    else if (c?.state === "raise" && n) rows.push(item("one-host-copies","low",`${volumes} can have ${n===1?"its":"their"} copies back`,`${c.hosts} hosts can now hold the copies ${n===1?"it":"they"} asked for before this cluster had one host.`,"one-host-copies"));
+    else if (c?.state === "unknown") rows.push(item("one-host-copies","low","Could not read volume copies",c.error || "Retry or check access.","storage"));
+    rows.push(...leftoverRows(data.leftovers));
+    for (const key of needs.health) if (key !== "alerts" && data[key] === null) rows.push(item("unknown:"+key,"low",`${({cluster:"Platform",protection:"Backup",nodes:"Host",self:"Homestead",settings:"Threshold",overview:"Cluster health",copies:"Volume copy",leftovers:"Leftover storage"})[key]} checks unavailable`,"Retry or check access. Health cannot be confirmed from missing data.","retry"));
     // A finding the cluster tracks as an alert can be acknowledged by this
     // account; it returns by itself when the condition gets worse.
     const alerts=new Map((data.alerts?.active || []).map(a=>[a.key,a]));
@@ -81,6 +92,29 @@ const HealthInsights = (() => {
       if (alert?.version) row.alert={key:alert.key,version:alert.version,acknowledged:!!alert.acknowledged};
     }
     return rows.sort((a,b)=>Number(!!a.alert?.acknowledged)-Number(!!b.alert?.acknowledged) || rank[a.severity]-rank[b.severity] || a.id.localeCompare(b.id));
+  }
+  // What storage leaves behind (#932, homestead_storage_leftovers): Released
+  // volumes a Retain class keeps, holding their space until each is deleted,
+  // and a host's iSCSI sessions to an instance-manager that is gone, which
+  // keep a volume from attaching there.
+  const gib = bytes => {const g=(bytes || 0)/1024**3;return `${g>=10?Math.round(g):Math.round(g*10)/10} GiB`;};
+  function leftoverRows(l) {
+    const rows=[], r=l?.released, s=l?.iscsi;
+    if (r?.state === "unknown") rows.push(item("released-volumes","low","Could not read Released volumes",r.error || "Retry or check access.","storage"));
+    else if (r?.volumes?.length) {
+      const n=r.volumes.length, hosts=[...new Set(r.volumes.flatMap(v=>v.hosts || []))].sort();
+      rows.push(item("released-volumes","low",`${n} Released volume${n===1?" holds":"s hold"} ${gib(r.volumes.reduce((sum,v)=>sum+(v.allocated_bytes || 0),0))}`,
+        `${n===1?"Its claim was":"Their claims were"} deleted and ${n===1?"its class keeps":"their classes keep"} the data (Retain), so the space stays allocated${hosts.length?` on ${hosts.join(", ")}`:""} until ${n===1?"it is":"each is"} deleted. Review ${n===1?"it":"them"} to delete what is no longer needed.`,"released-volumes"));
+    }
+    if (s?.state === "unknown") rows.push(item("iscsi","low","Could not check hosts' iSCSI sessions",s.error || "Retry or check access.","storage"));
+    for (const h of s?.hosts || []) {
+      const n=h.sessions?.length || 0;
+      if (!n) continue;
+      const addresses=[...new Set(h.sessions.map(x=>x.address))].join(", "), claims=[...new Set(h.sessions.map(x=>x.claim?`${x.namespace}/${x.claim}`:x.volume))].join(", ");
+      rows.push(item("iscsi:"+h.node,"medium",`${h.node} keeps ${n===1?"a stale iSCSI session":`${n} stale iSCSI sessions`}`,
+        `${n===1?"A session":`${n} sessions`} to a Longhorn instance-manager address that is gone (${addresses}). Attaching ${claims} on ${h.node} can fail in a loop until ${n===1?"it ends":"they end"}. Log ${n===1?"it":"them"} out on the host, or restart ${h.node}.`,"iscsi:"+h.node));
+    }
+    return rows;
   }
   // The alert behind a finding: health:<kind>:<name>, as the server names it.
   function alertKey(id) {
@@ -142,6 +176,9 @@ const HealthInsights = (() => {
     // settings:<section>#<card>:<row> opens the section at that card, with the row marked.
     if(route.startsWith("settings:")){const [, topic, anchor="", mark=""]=route.match(/^settings:([^#]+)(?:#([^:]*))?(?::(.*))?$/) || [];settingsTab(topic);return go("settings",{anchor,mark});}
     if(route==="images")return imageUpdateCenter();
+    if(route==="one-host-copies")return oneHostCopiesReview();
+    if(route==="released-volumes")return releasedVolumesReview();
+    if(route.startsWith("iscsi:"))return staleSessionsReview(route.slice(6));
     if(route.startsWith("network:"))return go("network",{params:{tab:route.slice(8)}});
     return go(route); };
   const list = (rows,limit=Infinity) => UI.insightList(rows.slice(0,limit).map(r=>{
@@ -216,10 +253,11 @@ const HealthInsights = (() => {
       // What the page itself just read (the overview, every refresh) is not read twice (#705).
       const results=await Promise.all(keys.filter(key=>!(seeded[key] && Date.now()-seeded[key]<SEED_FRESH)).map(async key=>{
         if(key==="protection" && STATE.platform?.longhorn===false)return [key,{volumes:[]}];
+        if(key==="copies" && STATE.platform?.longhorn===false)return [key,{state:"n/a",hosts:0,volumes:[]}];
         if(key==="vms" && STATE.platform?.kubevirt===false)return [key,[]];
         try{
           const value=await api(sources[key],{keep:true});
-          const arrays=["nodes","workloads","vms","jobs"], fields={alerts:"active",overview:"health_issues",cluster:"control_plane",protection:"volumes",self:"api",settings:"thresholds",updates:"workloads",components:"components"};
+          const arrays=["nodes","workloads","vms","jobs"], fields={alerts:"active",overview:"health_issues",cluster:"control_plane",protection:"volumes",self:"api",settings:"thresholds",updates:"workloads",components:"components",copies:"state",leftovers:"released"};
           const valid=arrays.includes(key)?Array.isArray(value):value && typeof value==="object" && !value.error && (!fields[key] || value[fields[key]]!==undefined);
           return [key,valid?value:null];
         }catch{return [key,null];}

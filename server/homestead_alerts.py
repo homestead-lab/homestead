@@ -16,6 +16,9 @@ HOLD = 60
 LOG_SIZE = 300
 _lock = SHARED.SharedLock("alerts")
 SEVERITY = {"info": 0, "degraded": 1, "critical": 2}
+# Log lines meant for one device (a test) or one person (their summary, #921):
+# never in the shared list, the Timeline or the alert webhook.
+PRIVATE = ("test", "summary")
 
 
 def bind(data_dir):
@@ -219,9 +222,15 @@ def forget_user(user):
 def note(fact, now=None):
     with _lock:
         state = _load()
+        if fact.get("category") == "summary":
+            # A person's newer summary replaces their older one, so summaries
+            # never push real alerts out of the log's LOG_SIZE lines (#921).
+            state["log"] = [e for e in state["log"] if e.get("category") != "summary" or e.get("for") != fact.get("for")]
         entry = _append(state, fact, "raised", now or time.time())
         if fact.get("to"):
             entry["to"] = fact["to"]
+        if fact.get("for"):
+            entry["for"] = fact["for"]
         _save(state)
         return entry
 
@@ -274,6 +283,9 @@ def health_facts(overview):
         critical = any(i.get("severity") == "critical" for i in issues)
         href = {"Node": "/nodes", "Disk": "/nodes", "Volume": "/volumes", "Backup": "/data-protection",
                 "Trim": "/data-protection#housekeeping"}.get(kind, "/containers")
+        if all(i.get("one_host") for i in issues):
+            # Short of hosts, not broken (#841): the offer is in Cluster Health.
+            href = "/system/cluster?section=health"
         title = {"Node": f"Host {name} is not ready", "Disk": f"Drive {name} needs attention",
                  "Volume": f"Volume {name} is {'faulted' if critical else 'degraded'}",
                  "Workload": f"{name.split('/')[-1]} is not ready",
@@ -401,6 +413,6 @@ def _unknown(read, *args):
 ROUTES = {
     ("GET", "/api/alerts"): ("viewer", lambda request: {
         "active": [a for a in active(user=request.user) if a.get("announced", 0) > 0],
-        "log": [a for a in log(limit=30)["alerts"] if a["category"] != "test"],
+        "log": [a for a in log(limit=30)["alerts"] if a["category"] not in PRIVATE],
         "devices": _unknown(DEVICES[0], request.user), "agents": _unknown(AGENTS[0])}),
 }
