@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import homestead_self_data_anchor as A
 import homestead_self_data_coordinator as C
+import homestead_self_data_cookie as COOKIE
 from homestead_storage_journal import Held
 
 
@@ -256,7 +257,7 @@ def status_server(address, runner, token_digest, *, maintenance=False):
             if not values and maintenance:
                 try:
                     cookies = SimpleCookie(); cookies.load(self.headers.get("Cookie", ""))
-                    token = cookies["homestead-data-move"].value if "homestead-data-move" in cookies else ""
+                    token = cookies[COOKIE.NAME].value if COOKIE.NAME in cookies else ""
                 except Exception:
                     token = ""
             if not re.fullmatch(r"[a-f0-9]{64}", token) or not hmac.compare_digest(hashlib.sha256(token.encode()).hexdigest(), token_digest):

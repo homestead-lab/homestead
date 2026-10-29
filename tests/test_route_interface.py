@@ -273,41 +273,47 @@ class AccessIdentity(unittest.TestCase):                                  # secu
         self.assertEqual([{"email": "ada@example.com"}, None], seen)
 
 
+def answering(test, path, answer, guard_headers=(), module="test"):
+    """server.H, with a route at path in module that returns answer."""
+    import server
+    handler = object.__new__(server.H)
+    handler.path, handler.headers, handler.command = path, {}, "POST"
+    handler._client_ip = lambda: "127.0.0.1"
+    handler._send = mock.Mock()
+    handler._send_stream = mock.Mock()
+    handler.user, handler.role = "ada", "admin"
+    handler._body = lambda: {}
+
+    def guard(path):
+        handler._extra_headers.extend(guard_headers)
+        return False
+    handler._guard = guard
+    ROUTES.table()
+    ROUTES._table[("POST", path)] = ROUTES.Route("POST", path, "admin", lambda request: answer, module)
+    test.addCleanup(ROUTES._table.pop, ("POST", path), None)
+    return handler
+
+
 class Answering(unittest.TestCase):
     """A module's Reply is written through server.H.do_POST."""
 
     def handler(self, path, answer, guard_headers=()):
-        import server
-        handler = object.__new__(server.H)
-        handler.path, handler.headers, handler.command = path, {}, "POST"
-        handler._client_ip = lambda: "127.0.0.1"
-        handler._send = mock.Mock()
-        handler._send_stream = mock.Mock()
-        handler.user, handler.role = "ada", "admin"
-        handler._body = lambda: {}
-
-        def guard(path):
-            handler._extra_headers.extend(guard_headers)
-            return False
-        handler._guard = guard
-        ROUTES.table()
-        ROUTES._table[("POST", path)] = ROUTES.Route("POST", path, "admin", lambda request: answer, "test")
-        self.addCleanup(ROUTES._table.pop, ("POST", path), None)
-        return handler
+        return answering(self, path, answer, guard_headers)
 
     def test_reply_cookies_and_headers_are_written_after_the_guards(self):
         guards = ("Set-Cookie", "homestead_session=old; Path=/; HttpOnly; SameSite=Strict; Max-Age=60")
-        handler = self.handler("/api/test/reply", ROUTES.Reply(
+        handler = answering(self, "/api/test/reply", ROUTES.Reply(
             200, {"ok": True}, cookies=(C("homestead_cluster", "", max_age=0),), headers=(("Location", "/"),)),
-            [guards])
+            [guards], module="homestead_fleet_routes")
         handler.do_POST()
         self.assertEqual([guards, ("Set-Cookie", "homestead_cluster=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"),
                           ("Location", "/")], handler._extra_headers)
         self.assertEqual((200, {"ok": True}, "application/json"), handler._send.call_args.args)
 
     def test_a_refused_reply_is_a_500_and_carries_none_of_its_cookies(self):   # D4
-        handler = self.handler("/api/test/refused", ROUTES.Reply(
-            200, {}, cookies=(C("homestead_session", "ok", max_age=1),), headers=(("Set-Cookie", "x=1"),)))
+        handler = answering(self, "/api/test/refused", ROUTES.Reply(        # its owner: the header alone is refused
+            200, {}, cookies=(C("homestead_session", "ok", max_age=1),), headers=(("Set-Cookie", "x=1"),)),
+            module="homestead_auth_routes")
         handler.do_POST()
         self.assertEqual(500, handler._send.call_args.args[0])
         self.assertFalse(any("homestead_session=ok" in value for _, value in handler._extra_headers))
@@ -356,6 +362,83 @@ class Answering(unittest.TestCase):
         conn = ROUTES.connected(seen[0])
         self.assertEqual(("UA", None, {"homestead_session": "s"}),
                          (conn.headers.get("User-Agent"), conn.headers.get("Cookie"), dict(conn.cookies)))
+
+
+# Each of Homestead's cookies, the one module that may set it, and one it sets (#936).
+OWNED = (("homestead_session", "homestead_auth_routes", C("homestead_session", "t", max_age=60)),
+         ("homestead_cluster", "homestead_fleet_routes", C("homestead_cluster", "node1", max_age=2592000)),
+         ("homestead-data-move", "homestead_self_data_server",
+          C("homestead-data-move", "t", "/api/self/data/handoff/", 86400)))
+
+
+class CookieOwners(unittest.TestCase):
+    """Each cookie is set only by the one module that owns it (#936)."""
+
+    def send(self, cookie, module, tls=False):
+        handler = answering(self, "/api/test/cookie", ROUTES.Reply(200, {"ok": True}, cookies=(cookie,)),
+                            module=module)
+        if tls:
+            handler.headers = {"X-Forwarded-Proto": "https"}
+        handler.do_POST()
+        return handler
+
+    def test_each_cookie_has_exactly_one_owner(self):
+        self.assertEqual({name: module for name, module, _ in OWNED}, ROUTES.owners())
+        self.assertEqual(set(ROUTES.COOKIES), set(ROUTES.owners()))
+
+    def test_owners_are_read_once_with_the_table(self):                    # review I2
+        ROUTES.table()
+        with mock.patch.object(ROUTES.importlib, "import_module", side_effect=AssertionError("read again")):
+            self.assertEqual({name: module for name, module, _ in OWNED}, ROUTES.owners())
+            self.assertEqual(200, self.send(OWNED[0][2], OWNED[0][1])._send.call_args.args[0])
+
+    def test_the_owner_sets_its_cookie_as_before(self):
+        for name, module, cookie in OWNED:
+            for tls in (False, True):
+                with self.subTest(cookie=name, tls=tls):
+                    handler = self.send(cookie, module, tls)
+                    self.assertEqual((200, {"ok": True}, "application/json"), handler._send.call_args.args)
+                    self.assertEqual([("Set-Cookie", ROUTES.cookie_header(cookie, tls))], handler._extra_headers)
+
+    def test_a_cookie_from_another_module_is_refused(self):
+        for name, owner, cookie in OWNED:
+            for module in ["homestead_firewall", "test"] + [m for _, m, _ in OWNED if m != owner]:
+                with self.subTest(cookie=name, module=module):
+                    handler = self.send(cookie, module)
+                    self.assertEqual(500, handler._send.call_args.args[0])
+                    self.assertFalse(any(key == "Set-Cookie" for key, _ in handler._extra_headers))
+
+    def test_the_refusal_names_the_cookie_its_owner_and_the_module(self):
+        handler = answering(self, "/api/test/named", {})
+        with self.assertRaises(ROUTES.Refused) as refused:
+            ROUTES.answer(handler, ROUTES.Reply(200, {}, cookies=(C("homestead_session", "t"),)), "homestead_firewall")
+        for word in ("homestead_session", "homestead_auth_routes", "homestead_firewall"):
+            self.assertIn(word, str(refused.exception))
+        handler._send.assert_not_called()
+
+    def declare(self, **owned):
+        """table() as it reads modules that each declare only the cookies they own."""
+        modules = {}
+        for index, (name, cookies) in enumerate(owned.items()):
+            module = type(sys)(name)
+            module.ROUTES = {("GET", f"/api/test-owner-{index}"): ("viewer", lambda request: {})}
+            module.OWN_COOKIES = cookies
+            modules[name] = module
+        with mock.patch.dict(sys.modules, modules), mock.patch.object(ROUTES, "MODULES", tuple(modules)), \
+                mock.patch.object(ROUTES, "_table", {}):
+            return ROUTES.table()
+
+    def test_two_modules_owning_one_cookie_are_refused_at_load(self):
+        with self.assertRaises(ValueError) as refused:
+            self.declare(homestead_test_a=("homestead_session",), homestead_test_b=("homestead_session",))
+        for word in ("homestead_session", "homestead_test_a", "homestead_test_b"):
+            self.assertIn(word, str(refused.exception))
+
+    def test_a_module_may_own_only_homesteads_cookies(self):
+        for cookies in (("CF_Authorization",), "homestead_session", ("homestead_session", "homestead_session"), None):
+            with self.subTest(cookies=cookies), self.assertRaises(ValueError):
+                self.declare(homestead_test_a=cookies)
+        self.assertIn(("GET", "/api/test-owner-0"), self.declare(homestead_test_a=("homestead_cluster",)))
 
 
 if __name__ == "__main__":
