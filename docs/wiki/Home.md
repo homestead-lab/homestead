@@ -53,6 +53,7 @@ probe - and your first sign-in.
 
 - [Dashboard and nodes](Dashboard-and-nodes) - health, every disk, hardware, drive health
 - [Containers](Containers) - deploy, edit, groups, updates, privileges, placement, reservations and priority tiers
+- [Log alerts](Log-alerts) - a saved log search that raises an alert when it matches too many lines
 - [App Store](App-Store) - Unraid's Community Applications, deployed properly
 - [Importing](Importing) - containers and VMs from an Unraid server, a Docker Compose file, or a VM disk image
 - [Storage](Storage) - volumes, Longhorn allocation, adding disks, changing a storage class

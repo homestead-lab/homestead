@@ -1,6 +1,8 @@
 import sys
 import threading
+import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
@@ -96,6 +98,117 @@ class SearchTests(unittest.TestCase):
     def test_long_lines_are_cut_and_unstamped_lines_kept(self):
         d = LS.search([app("x", [pod("x-1")])], "needle", lambda *a: "needle " + "y" * 5000 + "\n")
         self.assertEqual(("", LS.MAX_LINE), (d["matches"][0]["at"], len(d["matches"][0]["line"])))
+
+
+SLOW = r"^(x?){30}x{30}$|ERROR"     # passes the shape guard, backtracks for minutes on 30 x's
+
+
+class ExpressionTimeTests(unittest.TestCase):
+    """#929: an expression the shape guard lets through still cannot hold the
+    request thread: it is matched in a child process with a time limit."""
+
+    def test_a_runaway_expression_is_cut_and_the_search_says_so(self):
+        newest = "".join(f"2026-10-07T09:05:{i % 60:02d}Z ERROR newest {i}\n" for i in range(300))
+        text = "2026-10-07T09:00:00Z " + "x" * 30 + "\n" + newest
+        with mock.patch.object(LS, "REGEX_SECONDS", 1):
+            began = time.monotonic()
+            d = LS.search(WORKLOADS, SLOW, lambda *a: text, apps=["lab/frigate"], regex=True)
+            took = time.monotonic() - began
+        self.assertLess(took, 5, "the search ends soon after its time limit, not minutes later")
+        self.assertEqual(["frigate"], d["cut"])
+        self.assertEqual(1, d["cut_seconds"])
+        lines = [m["line"] for m in d["matches"]]
+        frigate = sorted(int(line.rsplit(" ", 1)[1]) for line in lines if line.startswith("ERROR newest"))
+        self.assertGreaterEqual(len(frigate), 256,
+                                "a container's newest lines are matched first, so what was matched before the cut is kept")
+        self.assertEqual(list(range(300 - len(frigate), 300)), frigate, "the newest ones, without a gap")
+
+    def test_once_the_time_is_spent_the_rest_is_not_matched(self):
+        many = [app(f"a{i}", [pod(f"a{i}-1", (f"a{i}", "app"))]) for i in range(4)]
+        with mock.patch.object(LS, "REGEX_SECONDS", 1):
+            began = time.monotonic()
+            d = LS.search(many, SLOW, lambda *a: "x" * 30 + "\n", regex=True)
+            took = time.monotonic() - began
+        self.assertLess(took, 4, "the limit is for the whole search, not per container")
+        self.assertEqual([f"a{i}" for i in range(4)], d["cut"])
+
+    def test_a_quick_expression_is_not_cut(self):
+        d = LS.search(WORKLOADS, r"OCR|frames", reader(), regex=True)
+        self.assertEqual((2, []), (d["total"], d["cut"]))
+        self.assertEqual([], LS.search(WORKLOADS, "error", reader())["cut"], "plain text is never cut")
+
+    def test_matching_in_order_and_what_was_checked(self):
+        self.assertEqual(([0, 2], 3), LS.run_regex(["a 500 x", "a 200 x", "b 503"], r" 5\d\d", False, 5))
+        self.assertEqual(([], 0), LS.run_regex([], "a", False, 5), "nothing to match spawns nothing")
+        hits, checked = LS.run_regex(["ERROR"] * 300 + ["x" * 30], SLOW, False, 1)
+        self.assertLess(checked, 301)
+        self.assertEqual(list(range(checked)), hits, "every line before the cut that matched, nothing after it")
+        self.assertEqual(([], 0), LS.run_regex(["ERROR"], "ERROR", False, 0), "no time left: not started")
+
+    def test_the_childs_startup_does_not_count_against_the_limit(self):
+        # #929 follow-up: a child that takes 1.5 s to come up, a limit of 1 s.
+        slow_start = "import time;time.sleep(1.5)\n" + LS._CHILD
+        with mock.patch.object(LS, "_CHILD", slow_start):
+            self.assertEqual(([0], 1), LS.run_regex(["ERROR"], "ERROR", False, 1))
+            with mock.patch.object(LS, "REGEX_SECONDS", 1):
+                budget = LS._Budget("ERROR", False)
+                self.assertEqual(([0], 1), budget.run(["ERROR"]))
+                self.assertGreater(budget.left, 0.9, "start-up is not taken from the search's time")
+                d = LS.search(WORKLOADS, "ERROR", lambda *a: "2026-10-07T09:00:00Z ERROR x\n",
+                              apps=["lab/frigate"], regex=True)
+        self.assertEqual(([], 1), (d["cut"], d["total"]))
+
+    def test_a_very_slow_start_and_a_child_that_never_comes_up_are_charged_to_the_search(self):
+        slow_start = "import time;time.sleep(1.2)\n" + LS._CHILD
+        with mock.patch.object(LS, "_CHILD", slow_start), mock.patch.object(LS, "STARTUP_FREE", 0.5):
+            budget = LS._Budget("ERROR", False)
+            budget.run(["ERROR"])
+            self.assertLess(budget.left, LS.REGEX_SECONDS - 0.5, "start-up beyond the free part is spent")
+        with mock.patch.object(LS, "_CHILD", "import time;time.sleep(30)\n"), mock.patch.object(LS, "READY_SECONDS", 0.4):
+            budget = LS._Budget("ERROR", False)
+            with self.assertRaises(ValueError):
+                budget.run(["ERROR"])
+            self.assertLess(budget.left, LS.REGEX_SECONDS - 0.3, "the wait for a child that never came up is spent")
+
+    def test_a_child_that_never_comes_up_is_named_not_waited_for(self):
+        with mock.patch.object(LS, "_CHILD", "import time;time.sleep(30)\n"), \
+                mock.patch.object(LS, "READY_SECONDS", 0.3):
+            began = time.monotonic()
+            with self.assertRaises(ValueError):
+                LS.run_regex(["ERROR"], "ERROR", False, 5)
+        self.assertLess(time.monotonic() - began, 3)
+
+    def test_a_row_cut_by_the_kill_is_not_read(self):
+        # "c 1" cut from "c 12": only whole rows (ending in a newline) count.
+        self.assertEqual(([0], 3), LS._child_rows("m 0\nc 3\nc 1"))
+        self.assertEqual(([0, 2], 3), LS._child_rows("m 0\nm 2\nc 3\n"))
+
+    def test_a_child_that_cannot_start_is_named_not_a_failed_search(self):
+        with mock.patch.object(LS.subprocess, "Popen", side_effect=OSError("out of processes")):
+            d = LS.search(WORKLOADS, "OCR|frames", reader(), regex=True)
+        self.assertEqual(0, d["total"])
+        self.assertEqual(3, len(d["errors"]))
+        self.assertIn("the expression could not be run", d["errors"][0])
+
+    def test_an_expression_search_reads_few_containers_at_once(self):
+        # Matching is one child at a time; more readers would only hold
+        # their logs in memory while they wait (256Mi pod).
+        many = [app(f"a{i}", [pod(f"a{i}-1", (f"a{i}", "app"))]) for i in range(12)]
+        lock, now, most = threading.Lock(), [0], [0]
+
+        def read(*args):
+            with lock:
+                now[0] += 1
+                most[0] = max(most[0], now[0])
+            time.sleep(0.05)
+            with lock:
+                now[0] -= 1
+            return "2026-10-07T09:00:00Z hit\n"
+        LS.search(many, "h.t", read, regex=True)
+        self.assertLessEqual(most[0], LS.REGEX_READERS)
+        most[0] = 0
+        LS.search(many, "hit", read)
+        self.assertGreater(most[0], LS.REGEX_READERS, "plain text reads as many at once as before")
 
 
 class OneAtATimeTests(unittest.TestCase):
