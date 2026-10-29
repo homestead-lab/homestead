@@ -218,6 +218,13 @@ what each volume does:
 - Some volumes are never frozen. Block volumes, such as VM disks, and shared
   (RWX) volumes have no filesystem on the host to freeze, so Longhorn syncs
   them instead. V2 volumes are never frozen.
+- A volume that isn't attached shows **freezes once attached**: while nothing
+  mounts it, Longhorn only syncs it, and it freezes once an app uses it. A
+  volume still being created, attaching or detaching counts as not attached.
+- An agent can read all of this with `get_filesystem_freeze`. It can ask for
+  a change with `set_filesystem_freeze`, but the change waits for an admin to
+  approve it in Homestead, and the request names any host on kernel 5.17 or
+  older ([AI agents](AI-agents)).
 
 The trade-offs:
 

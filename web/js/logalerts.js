@@ -3,7 +3,7 @@
    counts once a minute; an alert carries the rule's name, its apps and a
    count, never a line and never the query: lines and searches can hold
    secrets, and alerts reach lock screens. The lines stay behind the
-   signed-in search. Saving and deleting need operator; anyone signed in can
+   signed-in search. Saving, pausing and deleting need operator; anyone signed in can
    see the rules and try one on the last hour, as anyone can search. */
 const LOGALERT = { draft: null, rules: [] };
 const LOGALERT_WINDOWS = [[1, "a minute"], [5, "5 minutes"], [15, "15 minutes"]];
@@ -48,6 +48,7 @@ function logAlertBars(counts, threshold, window = 1, { h = 64, now = null } = {}
 /* What stopped the last count, if anything: a rule not counted is never shown as quiet. */
 function logAlertStatus(status) {
   const state = status?.state || "";
+  if (state === "paused") return `<div class="la-status small dim">${esc(status.detail || "Not counted while paused.")}</div>`;
   if (!LOGALERT_NOT_COUNTED.includes(state)) return "";
   return `<div class="la-status small">${UI.chip("Could not count", "warn")} ${esc(status.detail || "")}</div>`;
 }
@@ -58,9 +59,11 @@ function logAlertRow(r, raised) {
     known.filter(c => c[0] > end - r.window && c[0] <= end).reduce((a, c) => a + c[1], 0)));
   const app = r.apps[0] || "/", [ns, name] = app.split("/");
   const change = can("operator")
-    ? UI.button("Edit", `logAlertEdit(${jsArg(r.id)})`, { icon: "edit" }) + UI.button("Delete", `logAlertDelete(${jsArg(r.id)})`, { icon: "trash" })
+    ? UI.button(r.paused ? "Resume" : "Pause", `logAlertPause(${jsArg(r.id)},${!r.paused})`, { icon: r.paused ? "play" : "pause" })
+      + UI.button("Edit", `logAlertEdit(${jsArg(r.id)})`, { icon: "edit" }) + UI.button("Delete", `logAlertDelete(${jsArg(r.id)})`, { icon: "trash" })
     : "";
-  const chip = raised ? UI.chip("Raised", "bad") : LOGALERT_NOT_COUNTED.includes(r.status?.state) ? "" : UI.chip("Watching", "ok");
+  const chip = r.paused ? UI.chip("Paused", "neutral") : raised ? UI.chip("Raised", "bad")
+    : LOGALERT_NOT_COUNTED.includes(r.status?.state) ? "" : UI.chip("Watching", "ok");
   return `<div class="la-rule${raised ? " la-raised" : ""}">
     <div class="la-rule-head"><b>${esc(r.name)}</b>${chip}</div>
     <div class="dim small">${esc(r.apps.map(a => a.split("/")[1]).join(", "))} · more than ${Number(r.threshold)} lines matching <code>${esc(r.query)}</code>${r.regex ? " (expression)" : ""} in ${esc(logAlertSpan(r.window))}${known.length ? ` · ${r.window === 1 ? "last minute" : `last ${Number(r.window)} minutes`}: ${recent}` : ""}</div>
@@ -169,10 +172,21 @@ window.logAlertSave = async () => {
 
 window.logAlertDelete = async id => {
   const rule = LOGALERT.rules.find(r => r.id === id);
-  if (!rule || !await ask(`Delete the log alert "${rule.name}"? It stops counting, and an alert it raised clears.`, { title: "Delete log alert", ok: "Delete", danger: true })) return;
+  if (!rule || !await ask(`Delete the log alert "${rule.name}"? It stops counting, and an alert it raised ends as removed. To stop it for a while, pause it instead.`, { title: "Delete log alert", ok: "Delete", danger: true })) return;
   try {
     await api("/api/logalerts/delete", { method: "POST", body: JSON.stringify({ id }) });
     toast(`Deleted: ${rule.name}`);
+  } catch (e) { toast(e.message, "bad"); }
+  logAlerts();
+};
+
+/* Pause stops counting (an alert it raised ends as paused); Resume starts again. */
+window.logAlertPause = async (id, paused) => {
+  const rule = LOGALERT.rules.find(r => r.id === id);
+  if (!rule) return;
+  try {
+    await api("/api/logalerts/pause", { method: "POST", body: JSON.stringify({ id, paused }) });
+    toast(`${paused ? "Paused" : "Resumed"}: ${rule.name}`);
   } catch (e) { toast(e.message, "bad"); }
   logAlerts();
 };
