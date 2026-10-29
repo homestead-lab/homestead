@@ -12,7 +12,7 @@ Settings has ten sections: nine that change the cluster for everyone, and
 | **Monitoring** | when bars and node cards turn amber or red; drive health |
 | **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space, replica rebuilds and the V2 engine; storage classes; namespaces |
 | **Linked clusters** | other Homesteads managed from this one, and moving workloads between them |
-| **Connections** | UniFi Network; MQTT and Home Assistant - stats, and power control for the containers and VMs you pick; the App Store catalogue |
+| **Connections** | UniFi Network; MQTT and Home Assistant - stats, and power control for the containers and VMs you pick; the alert webhook (alerts to ntfy, Gotify or any webhook, see [Alerts and PWA notifications](https://github.com/homestead-lab/homestead/blob/main/docs/notifications.md#alert-webhook)); the App Store catalogue |
 | **Users and access** | users and their roles, and [API keys](API) |
 | **Troubleshooting** | bug reports and logs |
 | **You** | appearance, notifications on this device, refresh rate, your password and signing out |
@@ -335,6 +335,11 @@ took. Opening a console or a host shell writes one line when it ends.
 {"v":1,"at":"2026-10-21T09:14:03.512Z","replica":"homestead-6d9f-abcde","via":"browser","user":"ada","role":"operator","addr":"192.0.2.10","method":"POST","path":"/api/workload/scale","target":{"ns":"lab","kind":"Deployment","name":"app-1"},"status":200,"ms":142}
 ```
 
+- **What Homestead deletes on its own** writes a line too, with `"via":"leader"`,
+  `"user":"homestead"` and an `event`, but no `addr`, `target`, `status` or `ms`:
+  `outage-secret-swept` when the Secret of an outage webhook is deleted because
+  its app or VM was deleted outside Homestead an hour before (`"for"` names it,
+  `"detail"` says for how long it was missing).
 - **The pod log always has every line**, for Loki, Vector or anything else that
   reads pod logs.
 - **`audit.jsonl` on Homestead's data volume** keeps them across restarts: two
@@ -482,6 +487,11 @@ notifications - outages, degraded storage and workloads, failed jobs, hosts
 joining, image updates - even while closed. **This device → Turn on
 notifications**. Pushes carry nothing: the app fetches what happened over its own
 signed-in connection. On iPhone, add Homestead to the Home Screen first.
+
+To get the same alerts in ntfy, Gotify or any webhook, an admin sets
+**Connections → Alert webhook**: its format, the address, which alerts
+(critical only, warnings and critical, or everything) and, for a self-hosted
+service on the home network, **Allow a LAN address**.
 
 Browsers allow neither on a plain-HTTP address; see
 [Installing Homestead](Installing-Homestead#reaching-it-from-outside).

@@ -23,8 +23,16 @@ uses the stored one, and only while the scheme, host and port are unchanged,
 so a hidden part never moves to another host. The admin-only reveal on the
 Resources page shows it all.
 
+Where it is kept (#931): an address with anything after its host is kept in
+a Secret of Homestead's own per app or VM (homestead_outage_secret); the
+annotation holds only what anyone may see, and the Secret's name ("secret").
+An annotation that still holds a whole address - saved before, or typed on
+the Resources page - is used as it is, and the leader moves it over after
+its next monitoring round (migrate).
+
 Where a webhook may go: every address its name resolves to is checked, and
-the call is made to the address checked (no second lookup). Loopback,
+the call is made to the addresses checked (no second lookup): each in turn,
+until one answers, within WEBHOOK_TIMEOUT. Loopback,
 link-local, multicast and cloud metadata addresses are never reached; an
 IPv6 address that carries an IPv4 one (NAT64 64:ff9b::/96, 6to4) is checked
 as the IPv4 inside, and local-use NAT64 and Teredo are never reached. A LAN
@@ -55,8 +63,10 @@ import threading
 import time
 import urllib.parse
 
+import homestead_kube as KUBE
 import homestead_leader_state as LEADER_STATE
 import homestead_names as NAMES
+import homestead_outage_secret as SECRET
 import homestead_routes as ROUTER
 import homestead_shared as SHARED
 import homestead_uptime as UPTIME
@@ -154,11 +164,23 @@ def restore(given, stored):
     raise ValueError("the address changed, so its hidden part is not used: type the whole address again")
 
 
+def kept_apart(actions):
+    """Whether the annotation keeps the address in a Secret: it holds the
+    address hidden, and the Secret's name."""
+    hook = (actions or {}).get("webhook")
+    return isinstance(hook, str) and HIDDEN in hook and bool(actions.get("secret"))
+
+
 def public(actions):
-    """Actions as the browser may read them: the address hidden after its host."""
+    """Actions as the browser may read them: the address hidden after its
+    host. The Secret's name only while the address is kept there: the
+    leader moves one without it (migrate)."""
     if not actions or not actions.get("webhook"):
         return actions
-    return {**actions, "webhook": hide(actions["webhook"])}
+    shown = {**actions, "webhook": hide(actions["webhook"])}
+    if not kept_apart(actions):
+        shown.pop("secret", None)
+    return shown
 
 
 def mask_annotations(annotations):
@@ -190,7 +212,13 @@ def unmask_annotations(annotations, current):
     hook = restore(str(value.get("webhook") or ""), before.get("webhook"))
     if hook != before.get("webhook"):
         raise ValueError("the outage actions annotation is hidden: reveal it before editing it")
-    return {**annotations, NAMES.key(KEY): json.dumps({**value, "webhook": hook}, separators=(",", ":"))}
+    value = {**value, "webhook": hook}
+    # The Secret it is kept in stays the one saved: the YAML cannot point it at another.
+    if kept_apart(before):
+        value["secret"] = before["secret"]
+    else:
+        value.pop("secret", None)
+    return {**annotations, NAMES.key(KEY): json.dumps(value, separators=(",", ":"))}
 
 
 def clean(value, kind="app", monitored_on_port=True, before=None, role="operator"):
@@ -249,6 +277,21 @@ def read(annotations, names):
     return public(stored(annotations, names))
 
 
+def resolved(kind, ns, annotations):
+    """The actions with the webhook's whole address, from its Secret when it
+    is kept there: never for the browser. The Secret is used only when it is
+    Homestead's for this webhook and its address has the scheme, host and
+    port the annotation shows; else there is no address, and a call says so."""
+    actions = dict(stored(annotations, NAMES) or {})
+    apart, ref, hook = kept_apart(actions), actions.pop("secret", None), actions.get("webhook")
+    whole = SECRET.load(kind, ns, ref, _bound["kget"]) if apart else None
+    if whole and hide(whole) == hook:
+        actions["webhook"] = whole
+    elif isinstance(hook, str) and HIDDEN in hook:
+        actions.pop("webhook")      # the mask alone is no address to call
+    return actions
+
+
 def items(workloads, vms):
     """Every app and VM with actions: kind, ns, name, key (as monitoring keys it), actions."""
     out = []
@@ -286,17 +329,37 @@ NTFY_TAGS = {"down": "rotating_light", "gave-up": "rotating_light", "up": "white
              "restarted": "arrows_counterclockwise", "update": "package", "test": "test_tube"}
 
 
-def request_for(url, body, fmt="generic"):
-    """(url, data, headers) for one call in the webhook's format."""
-    headers = {"User-Agent": "Homestead outage actions"}
+# A notice's level as ntfy and Gotify say it.
+LEVELS = {"high": ("high", 8), "default": ("default", 5), "low": ("low", 2)}
+
+
+def _header(text):
+    """One line of header text; RFC 2047 (which ntfy reads) when it is not plain ASCII."""
+    text = " ".join(str(text or "").split())[:200]
+    try:
+        text.encode("ascii")
+        return text
+    except UnicodeEncodeError:
+        return "=?utf-8?b?" + base64.b64encode(text.encode()).decode() + "?="
+
+
+def request_for(url, body, fmt="generic", notice=None):
+    """(url, data, headers) for one call in the webhook's format. notice -
+    title, message, level (LEVELS) and tags - is what ntfy and Gotify show;
+    an outage's is Homestead, its sentence, high when urgent, and its tag.
+    Its agent, if any, is the User-Agent (alerts say so; outages as before)."""
+    headers = {"User-Agent": (notice or {}).get("agent") or "Homestead outage actions"}
     urgent = body.get("event") in URGENT
+    notice = notice or {"title": "Homestead", "message": body.get("message") or "",
+                        "level": "high" if urgent else "default", "tags": NTFY_TAGS.get(body.get("event"), "house")}
+    ntfy_level, gotify_level = LEVELS.get(notice.get("level"), LEVELS["default"])
     if fmt == "ntfy":
         # ntfy publishes the body of a POST to a topic as the message itself.
-        headers.update({"Content-Type": "text/plain; charset=utf-8", "Title": "Homestead",
-                        "Priority": "high" if urgent else "default", "Tags": NTFY_TAGS.get(body.get("event"), "house")})
-        return url, str(body.get("message") or "").encode(), headers
+        headers.update({"Content-Type": "text/plain; charset=utf-8", "Title": _header(notice["title"]),
+                        "Priority": ntfy_level, "Tags": _header(notice["tags"])})
+        return url, str(notice["message"] or "").encode(), headers
     if fmt == "gotify":
-        data = {"title": "Homestead", "message": body.get("message") or "", "priority": 8 if urgent else 5}
+        data = {"title": notice["title"], "message": notice["message"] or "", "priority": gotify_level}
     else:
         data = body
     headers["Content-Type"] = "application/json"
@@ -344,49 +407,75 @@ def _addresses(url):
     return parsed, found, port
 
 
-def destination(url, allow_lan=False):
-    """(address, port) to connect to: every address the host resolves to checked."""
+def destinations(url, allow_lan=False):
+    """([addresses], port) to connect to: every address the host resolves to checked."""
     parsed, found, port = _addresses(url)
     kinds = {_kind(ip) for ip in found}
     if "never" in kinds:
         raise Refused(f"{parsed.hostname} is this host, a link-local or a cloud metadata address, which a webhook never reaches")
     if "lan" in kinds and not allow_lan:
         raise Refused(f"{parsed.hostname} is a LAN address: an admin must tick Allow a LAN address for this webhook")
+    return found, port
+
+
+def destination(url, allow_lan=False):
+    """(first address, port): every address the host resolves to checked."""
+    found, port = destinations(url, allow_lan)
     return found[0], port
 
 
-class _Pinned(http.client.HTTPConnection):
-    """A connection to the address checked, whatever the name resolves to now."""
+def _connect(addresses, port, timeout, clock=time.monotonic):
+    """A socket to the first of the checked addresses that answers (#931): a
+    host with an IPv6 and an IPv4 address, one of them unreachable, still
+    gets its call. The tries share timeout, each given an equal part of what
+    is left; once one answers it has timeout for each read, as before."""
+    deadline = clock() + timeout
+    error = None
+    for left, address in zip(range(len(addresses), 0, -1), addresses):
+        remaining = deadline - clock()
+        if remaining <= 0:
+            break
+        try:
+            sock = socket.create_connection((address, port), remaining / left)
+        except OSError as failed:
+            error = failed
+            continue
+        sock.settimeout(timeout)
+        return sock
+    raise error or TimeoutError("timed out")
 
-    def __init__(self, host, port, address, timeout):
+
+class _Pinned(http.client.HTTPConnection):
+    """A connection to an address checked, whatever the name resolves to now."""
+
+    def __init__(self, host, port, addresses, timeout):
         super().__init__(host, port, timeout=timeout)
-        self.address = address
+        self.addresses = addresses
 
     def connect(self):
-        self.sock = socket.create_connection((self.address, self.port), self.timeout)
+        self.sock = _connect(self.addresses, self.port, self.timeout)
 
 
 class _PinnedTLS(http.client.HTTPSConnection):
-    def __init__(self, host, port, address, timeout):
+    def __init__(self, host, port, addresses, timeout):
         super().__init__(host, port, timeout=timeout, context=ssl.create_default_context())
-        self.address = address
+        self.addresses = addresses
 
     def connect(self):
-        sock = socket.create_connection((self.address, self.port), self.timeout)
-        self.sock = self._context.wrap_socket(sock, server_hostname=self.host)
+        self.sock = self._context.wrap_socket(_connect(self.addresses, self.port, self.timeout), server_hostname=self.host)
 
 
-def post(url, body, fmt="generic", allow_lan=False):
+def post(url, body, fmt="generic", allow_lan=False, notice=None):
     """Send one webhook; raises on failure, in words that never hold its secrets.
     No redirect is followed."""
-    url, data, headers = request_for(url, body, fmt)
+    url, data, headers = request_for(url, body, fmt, notice)
     parsed = urllib.parse.urlsplit(url)
-    address, port = destination(url, allow_lan)
+    addresses, port = destinations(url, allow_lan)
     if "@" in parsed.netloc:
         user, _, password = parsed.netloc.rpartition("@")[0].partition(":")
         pair = f"{urllib.parse.unquote(user)}:{urllib.parse.unquote(password)}".encode()
         headers["Authorization"] = "Basic " + base64.b64encode(pair).decode()
-    connection = (_PinnedTLS if parsed.scheme == "https" else _Pinned)(parsed.hostname, port, address, WEBHOOK_TIMEOUT)
+    connection = (_PinnedTLS if parsed.scheme == "https" else _Pinned)(parsed.hostname, port, addresses, WEBHOOK_TIMEOUT)
     try:
         connection.request("POST", (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else ""), body=data, headers=headers)
         status = connection.getresponse().status
@@ -489,10 +578,141 @@ def _path_of(kind, ns, name):
             else f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
 
 
+def _annotations(kind, ns, name):
+    current = _bound["kget"](_path_of(kind, ns, name)) or {}
+    return (current.get("metadata") or {}).get("annotations") or {}
+
+
 def _stored_actions(kind, ns, name):
     """The actions saved on the app or VM now, secrets included."""
-    current = _bound["kget"](_path_of(kind, ns, name)) or {}
-    return stored((current.get("metadata") or {}).get("annotations") or {}, NAMES) or {}
+    return resolved(kind, ns, _annotations(kind, ns, name))
+
+
+def _gone(owner, ns):
+    """Whether the app or VM a Secret was written for (kind/name) is no longer there."""
+    kind, _, name = str(owner or "").partition("/")
+    if kind not in ("app", "vm") or not name:
+        return False
+    return KUBE.get_optional(_path_of(kind, ns, name), read=_bound["kget"]) is None
+
+
+def _undo(ns, saved):
+    if not saved:
+        return
+    try:
+        SECRET.undo(ns, saved, _bound["ksend"])
+    except Exception as error:
+        print(f"outage actions: Secret {ns}/{saved['ref']} not put back ({type(error).__name__})", flush=True)
+
+
+def _drop_secret(kind, ns, name, refs, keep=None):
+    """Delete the Secrets in refs that nothing names now (the address is
+    gone, needs no Secret, or moved to the app's own name): only one
+    Homestead keeps for this kind's webhook, written for this app or VM, or
+    for one no longer there (the name before a rename). Never another's."""
+    for ref in sorted(set(refs) - {keep, None, ""}):
+        try:
+            secret = SECRET.read_secret(kind, ns, ref, _bound["kget"])
+            owner = SECRET.owner_of(secret)
+            if secret and (owner == f"{kind}/{name}" or _gone(owner, ns)):
+                SECRET.remove(kind, ns, ref, _bound["kget"], _bound["ksend"], owner)
+        except Exception as error:
+            print(f"outage actions: Secret {ns}/{ref} not deleted ({type(error).__name__}); "
+                  "nothing names it now, so delete it by hand", flush=True)
+
+
+def forget(kind, ns, obj):
+    """When an app or VM is deleted: the Secret its webhook address was kept in goes too."""
+    meta = (obj or {}).get("metadata") or {}
+    name = meta.get("name") or ""
+    _drop_secret(kind, ns, name, {(stored(meta.get("annotations") or {}, NAMES) or {}).get("secret"),
+                                  SECRET.secret_name(kind, name) if name else None})
+
+
+MOVE_LIMIT = 20
+_unmovable = {}
+
+
+def _to_move(item):
+    """"whole" when the lists show an address kept whole on the annotation,
+    "renamed" when it is kept in a Secret of another name (the name before a
+    rename), else None."""
+    shown = item.get("actions") or {}
+    hook = shown.get("webhook")
+    if not isinstance(hook, str) or HIDDEN not in hook:
+        return None
+    if not shown.get("secret"):
+        return "whole"
+    return "renamed" if shown["secret"] != SECRET.secret_name(item["kind"], item["name"]) else None
+
+
+def migrate(found):
+    """On the leader, after each monitoring round, every address is moved
+    into the app's or VM's own Secret, every other key kept as it was:
+    one still whole on its annotation (saved before #931, or typed on the
+    Resources page), and one in the Secret of the name it had before a
+    rename (whose Secret then goes, unless that name is in use again). The
+    lists show which, so one in place costs no read. Each write names what
+    it read: a save meanwhile wins, a Secret holding another address is
+    never overwritten, and a Secret written for an annotation that could
+    not be written is put back. One that fails is tried again next round,
+    at most MOVE_LIMIT a round. Returns the keys moved."""
+    moved, tries = [], 0
+    for item in found or []:
+        why, hook = _to_move(item), (item.get("actions") or {}).get("webhook")
+        kind, ns, name = item["kind"], item["ns"], item["name"]
+        key = f"{kind}:{ns}/{name}"
+        if not why or _unmovable.get(key) == hook:
+            continue
+        if tries >= MOVE_LIMIT:
+            break
+        tries += 1
+        path, url, saved = _path_of(kind, ns, name), "", None
+        try:
+            # The Secret first, then the app or VM: each write names what was
+            # read, so a save made after either read makes the move fail, never
+            # overwrites (a save between the two shows on the annotation).
+            secret_now = SECRET.current(kind, ns, name, _bound["kget"])
+            meta = (_bound["kget"](path) or {}).get("metadata") or {}
+            actions = stored(meta.get("annotations") or {}, NAMES) or {}
+            old = actions.pop("secret", None)
+            if why == "renamed":
+                url = SECRET.load(kind, ns, old, _bound["kget"]) if old and old != SECRET.secret_name(kind, name) else None
+                if not url or hide(url) != actions.get("webhook"):
+                    continue                # moved or saved meanwhile, or nothing there to move
+            else:
+                url = actions.get("webhook")
+                if not isinstance(url, str) or HIDDEN in url or hide(url) == url:
+                    continue
+                try:
+                    webhook_url(url)
+                except ValueError:
+                    _unmovable[key] = hook  # no call could use it either; left as it is
+                    continue
+            try:
+                saved = SECRET.save(kind, ns, name, url, _bound["kget"], _bound["ksend"], secret_now)
+            except ValueError as error:     # a Secret of that name Homestead did not make: said once, left
+                _unmovable[key] = hook
+                print(f"outage actions: {key}'s webhook stays where it is: {error}", flush=True)
+                continue
+            patch = {"annotations": {NAMES.key(KEY): json.dumps({**actions, "webhook": hide(url), "secret": saved["ref"]},
+                                                                separators=(",", ":"))}}
+            if meta.get("resourceVersion"):
+                patch["resourceVersion"] = meta["resourceVersion"]
+            try:
+                _bound["ksend"]("PATCH", path, {"metadata": patch}, ctype="application/merge-patch+json")
+            except Exception:
+                _undo(ns, saved)            # nothing names it: no token is left behind
+                raise
+            moved.append(key)
+            _drop_secret(kind, ns, name, {old}, keep=saved["ref"])
+        except Exception as error:
+            print(f"outage actions: {key}'s webhook not moved into its Secret yet "
+                  f"({scrub(str(error), url)[:120]}); tried again next round", flush=True)
+    if moved:
+        ROUTER.forget("wl", "vms")
+        print(f"outage actions: {len(moved)} webhook address(es) moved from annotations into Secrets", flush=True)
+    return moved
 
 
 def _send_later(url, body, actions=None):
@@ -502,8 +722,11 @@ def _send_later(url, body, actions=None):
     def run():
         real = url
         try:
-            now = _stored_actions(body["kind"], body["namespace"], body["name"])
+            annotations = _annotations(body["kind"], body["namespace"], body["name"])
+            now = resolved(body["kind"], body["namespace"], annotations)
             real, fmt = now.get("webhook") or "", now.get("format") or "generic"
+            if not real and (stored(annotations, NAMES) or {}).get("webhook"):
+                raise OSError("its address could not be read from its Secret: save the webhook again")
             if not real or hide(real) != url:
                 raise OSError("its webhook changed meanwhile; the next call uses the new one")
             post(real, body, fmt, bool(now.get("lan")))
@@ -578,13 +801,13 @@ def target(b):
 def set_actions(b, role="operator"):
     """What to do when an app or VM is down - nothing unless asked. An annotation, so nothing restarts."""
     kind, ns, name, path = target(b)
+    annotations = _annotations(kind, ns, name)
     on_port = True
     if kind == "vm":
-        current = _bound["kget"](path)
-        chosen = UPTIME.setting(NAMES.read((current.get("metadata") or {}).get("annotations") or {}, "uptime"))
+        chosen = UPTIME.setting(NAMES.read(annotations, "uptime"))
         on_port = chosen["mode"] in ("tcp", "http") and bool(chosen.get("port"))
     given = b.get("actions") if isinstance(b.get("actions"), dict) else {}
-    before = _stored_actions(kind, ns, name) if given.get("webhook") else {}
+    before = resolved(kind, ns, annotations) if given.get("webhook") else {}
     actions = clean(b.get("actions"), kind, on_port, before, role)
     if actions and actions.get("webhook"):
         try:
@@ -593,9 +816,20 @@ def set_actions(b, role="operator"):
             raise ValueError(str(error)) from None
         except OSError:
             pass    # not found now: checked again at each call
-    _bound["ksend"]("PATCH", path, {"metadata": {"annotations": {
-        NAMES.key(KEY): json.dumps(actions, separators=(",", ":")) if actions else None}}},
-        ctype="application/merge-patch+json")
+    kept, saved = actions, None
+    if actions and actions.get("webhook") and hide(actions["webhook"]) != actions["webhook"]:
+        # The whole address goes into the Secret first; the annotation then names it (#931).
+        saved = SECRET.save(kind, ns, name, actions["webhook"], _bound["kget"], _bound["ksend"])
+        kept = {**actions, "webhook": hide(actions["webhook"]), "secret": saved["ref"]}
+    try:
+        _bound["ksend"]("PATCH", path, {"metadata": {"annotations": {
+            NAMES.key(KEY): json.dumps(kept, separators=(",", ":")) if kept else None}}},
+            ctype="application/merge-patch+json")
+    except Exception:
+        _undo(ns, saved)    # a save that failed leaves the Secret as it was
+        raise
+    _drop_secret(kind, ns, name, {(stored(annotations, NAMES) or {}).get("secret"), SECRET.secret_name(kind, name)},
+                 keep=(saved or {}).get("ref"))
     ROUTER.forget("wl" if kind == "app" else "vms")
     said = []
     if actions and actions.get("restart"):

@@ -37,6 +37,7 @@ import homestead_names as NAMES
 import homestead_namespaces as NSMOD
 import homestead_networking as NETWORK
 import homestead_operations as OPS
+import homestead_outage as OUTAGE
 import homestead_place as PLACE
 import homestead_pullwatch as PULLWATCH
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
@@ -400,6 +401,7 @@ def delete_workload(ns, name):
             ENVSEC.remove(ns, current, kget, ksend)  # its variables' Secret goes with it
         except Exception:
             pass
+        OUTAGE.forget("app", ns, current)           # and its outage webhook's (#931)
     removed = []
     for service in sorted(services):
         try:

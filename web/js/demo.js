@@ -2086,6 +2086,11 @@ ssh_pwauth: true
       sensors: { cluster: 15, node: 9 },
       status: { state: "publishing", detail: "publishing to 192.0.2.177:1883 every 60s", last_publish: Math.floor(Date.now() / 1000) - 20, published: 3120, error: "" } },
     "/api/mqtt/test": { ok: true, detail: "192.0.2.177:1883 accepted the connection" },
+    "/api/alerts/webhook": (url, init) => init?.method === "POST"
+      ? { ok: true, detail: "Not saved in the demo", webhook: "", format: "generic", min_severity: "degraded", lan: false, last: null }
+      : { webhook: "https://ntfy.example.com/(hidden)", format: "ntfy", min_severity: "degraded", lan: false,
+          last: { at: Math.floor(Date.now() / 1000) - 3600, ok: true, sent: 1 } },
+    "/api/alerts/webhook/test": { ok: true, detail: "ntfy took the test" },
     "/api/mqtt/control": (url, init) => init?.method === "POST" ? { ok: true } : {
       control: true, controlled: ["vm:vms/win11", "app:lab/frigate"], base: "harvester", items: [
         { id: "vm:vms/win11", kind: "vm", ns: "vms", name: "win11", on: true, refused: "" },

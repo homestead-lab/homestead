@@ -31,6 +31,7 @@ import homestead_kube as KUBE
 import homestead_hvimage as HVIMAGE  # noqa: F401
 import homestead_lifecycle as LC
 import homestead_operations as OPS
+import homestead_outage as OUTAGE
 
 kget = ksend = None
 events_for = lambda ns, name, uid="": []
@@ -389,6 +390,7 @@ def delete(ns, name, with_disks=False):
               {"kind": "DeleteOptions", "apiVersion": "v1", "propagationPolicy": "Foreground"})
     except urllib.error.HTTPError as error:
         raise ValueError(f"KubeVirt refused to delete {name}: {_refusal(error)}")
+    OUTAGE.forget("vm", ns, vm)     # its outage webhook's Secret goes with it (#931)
     removed = []
     for claim in claims:
         # The DataVolume first: deleting it stops CDI's importer; the claim
