@@ -84,52 +84,41 @@ def _initialized(marker=STORE_MARKER):
     return True
 
 
-# The last good read of each store, for the version of its files it was read
-# from (#986): GET /api/operations is polled every 3 s by every tab while a job
-# runs, and about twenty modules read the store. Every write replaces a file
-# whole (a new inode), so an unchanged (inode, mtime, size) of the store and its
-# marker (or both missing) is an unchanged store. Kept pickled: each read gets its own copy, as
-# a parse did, and unpickling costs a third of one.
+# The last good parse of each store, for the exact bytes it was parsed from
+# (#986): GET /api/operations is polled by every tab every 3 s while a job
+# runs, and about twenty modules read the store. Every read still reads the
+# file - the data volume is NFS, whose attribute cache can answer stat() from
+# before another copy's write, so no file metadata is trusted - and only the
+# parse and the checks are skipped when the bytes are those of the last read.
+# Kept pickled: each read gets its own copy, as a parse did, and unpickling
+# costs a third of one.
 _memo = {}
 
 
-def _version(name):
-    try:
-        st = os.stat(os.path.join(DATA_DIR, name))
-    except FileNotFoundError:
-        return None
-    return st.st_ino, st.st_mtime_ns, st.st_size
-
-
 def _read_store(store, marker):
-    try:
-        version = (DATA_DIR, _version(store), _version(marker))
-    except OSError:
-        version = None
-    held = _memo.get(store)
-    if version and held and held[0] == version:
-        return pickle.loads(held[1])
-    value = _parse_store(store, marker)
-    if version:
-        _memo[store] = (version, pickle.dumps(value, pickle.HIGHEST_PROTOCOL))
-    return value
-
-
-def _parse_store(store, marker):
     initialized = _initialized(marker)
+    path = os.path.join(DATA_DIR, store)
     try:
-        with open(os.path.join(DATA_DIR, store), encoding="utf-8") as handle:
-            value = json.load(handle)
+        with open(path, "rb") as handle:
+            raw = handle.read()
     except FileNotFoundError:
         if not initialized:
             return []
         raise ValueError("Previously initialized job history is missing. Recover the store before changing jobs; missing history is not an empty queue.")
-    except (OSError, ValueError, TypeError) as error:
+    except OSError as error:
+        raise ValueError("Job history could not be read safely. Restore access or recover the store before starting or changing jobs; existing records were not replaced.") from error
+    held = _memo.get(path)
+    if held and held[0] == raw:
+        return pickle.loads(held[1])
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (ValueError, TypeError) as error:
         raise ValueError("Job history could not be read safely. Restore access or recover the store before starting or changing jobs; existing records were not replaced.") from error
     if (not isinstance(value, list) or any(not isinstance(item, dict) or not isinstance(item.get("id"), str)
             or not item["id"] or not isinstance(item.get("ref"), dict) or not isinstance(item.get("status"), str)
             for item in value) or len({item["id"] for item in value}) != len(value)):
         raise ValueError("Job history has invalid records. Recover the store before starting or changing jobs; existing records were not replaced.")
+    _memo[path] = (raw, pickle.dumps(value, pickle.HIGHEST_PROTOCOL))
     return value
 
 

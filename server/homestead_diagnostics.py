@@ -73,17 +73,20 @@ def _load(report_id, owner):
 # What cleanup and the listing need of each report - its owner, expiry and
 # summary - kept for the version of its file it was read from (#986): a report
 # can hold megabytes of events and logs, and cleanup runs every 5 minutes on
-# every copy and before every listing. Every save replaces the file whole.
+# every copy and before every listing. The version is taken from the opened
+# file (fstat), not stat(): on NFS an open revalidates what the attribute
+# cache holds, so another copy's save is seen. Change time is part of it, so
+# even an in-place rewrite of the same size is read again.
 _heads = {}
 
 
 def _head(path):
-    st = os.stat(path)
-    version = (st.st_ino, st.st_mtime_ns, st.st_size)
-    held = _heads.get(path)
-    if held and held[0] == version:
-        return held[1]
     with open(path, encoding="utf-8") as handle:
+        st = os.fstat(handle.fileno())
+        version = (st.st_ino, st.st_mtime_ns, st.st_ctime_ns, st.st_size)
+        held = _heads.get(path)
+        if held and held[0] == version:
+            return held[1]
         record = json.load(handle)
     head = {"owner": record["owner"], "expires": record["expires"], "summary": _summary(record)}
     _heads[path] = (version, head)

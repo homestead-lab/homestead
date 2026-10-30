@@ -23,9 +23,15 @@ class StoreMemoTests(unittest.TestCase):
                          "/containers", {})
 
     def parses(self, read):
-        with mock.patch.object(operations.json, "load", wraps=json.load) as load:
+        # The store is parsed with json.loads; the tiny markers with json.load.
+        real, stores = json.loads, []
+
+        def loads(text, *a, **kw):
+            stores.extend([1] if '"id"' in str(text) else [])
+            return real(text, *a, **kw)
+        with mock.patch.object(operations.json, "loads", loads):
             value = read()
-        return load.call_count, value
+        return len(stores), value
 
     def test_reading_an_unchanged_store_twice_parses_it_once(self):
         operations.stored()
@@ -46,21 +52,48 @@ class StoreMemoTests(unittest.TestCase):
         operations.stored()[0]["title"] = "scribbled"
         self.assertEqual("Update web automatically", operations.stored()[0]["title"])
 
-    def test_a_progress_step_does_not_reread_the_legacy_store(self):
+    def test_a_progress_step_does_not_rewrite_the_legacy_store(self):
         operations.stored()
-        legacy = os.path.join(self.tmp.name, operations.LEGACY_STORE)
-        with operations.transaction() as tx:
-            tx.items[0]["message"] = "step 2"
-            opened = []
-            real = open
+        written = []
+        real = operations.SHARED.write_json
 
-            def watch(path, *a, **kw):
-                opened.append(os.path.basename(str(path)))
-                return real(path, *a, **kw)
-            with mock.patch("builtins.open", watch):
+        def watch(path, *a, **kw):
+            written.append(os.path.basename(path))
+            return real(path, *a, **kw)
+        with mock.patch.object(operations.SHARED, "write_json", watch):
+            with operations.transaction() as tx:
+                tx.items[0]["message"] = "step 2"
                 tx.save()
-        self.assertNotIn(os.path.basename(legacy), opened)
-        self.assertNotIn(operations.LEGACY_MARKER, opened)
+        self.assertEqual([operations.STORE], written)
+
+    def test_a_same_size_rewrite_in_place_is_read(self):
+        # The data volume is NFS, whose attribute cache can answer stat()
+        # from before another copy's write; an in-place rewrite can keep the
+        # inode, size and (to the clock's tick) mtime.
+        operations.stored()
+        path = os.path.join(self.tmp.name, operations.STORE)
+        before = os.stat(path)
+        text = Path(path).read_text()
+        changed = text.replace("Update web automatically", "Update web Automatically")
+        self.assertEqual(len(text), len(changed))
+        with open(path, "r+", encoding="utf-8") as handle:
+            handle.write(changed)
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        self.assertEqual(before.st_ino, os.stat(path).st_ino)
+        self.assertEqual("Update web Automatically", operations.stored()[0]["title"])
+
+    def test_a_change_under_the_lock_always_reads_the_file(self):
+        operations.stored()
+        opened = []
+        real = open
+
+        def watch(path, *a, **kw):
+            opened.append(os.path.basename(str(path)))
+            return real(path, *a, **kw)
+        with mock.patch("builtins.open", watch):
+            with operations.transaction() as tx:
+                tx.items
+        self.assertIn(operations.STORE, opened)
 
     def test_a_damaged_store_still_raises(self):
         operations.stored()
