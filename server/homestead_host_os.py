@@ -28,6 +28,7 @@ import threading
 import time
 import urllib.error
 
+import homestead_host_reads as READS
 import homestead_job_cadence as CADENCE
 import homestead_operations as OPS
 import homestead_shared as SHARED
@@ -331,7 +332,7 @@ def report(node=None):
     return {"applies": applies(p), "hosts": rows, "every_s": EVERY, "checking": checking()}
 
 
-# Every Ready host read again now, one at a time, refreshing its package
+# Every Ready host read again now, a few at a time, refreshing its package
 # lists first (#371): what a host has had installed by hand shows without
 # waiting up to EVERY for the next round. This replica's own, in a thread -
 # each read can take minutes.
@@ -361,17 +362,22 @@ def check_all(reader=None, wait=False):
         _CHECK.update(running=bool(hosts), hosts=hosts, done=[], failed={}, at=time.time())
         started = checking_locked()
 
-    def run():
-        for name in hosts:
-            try:
-                reader(name)
-            except Exception as error:
-                with _check_lock:
-                    _CHECK["failed"][name] = str(error)[:160]
+    def one(name):
+        try:
+            reader(name)
+        except Exception as error:
             with _check_lock:
-                _CHECK["done"].append(name)
+                _CHECK["failed"][name] = str(error)[:160]
         with _check_lock:
-            _CHECK["running"] = False
+            _CHECK["done"].append(name)
+
+    def run():
+        # A few hosts at a time (#976): each read can take minutes.
+        try:
+            READS.each(hosts, one)
+        finally:
+            with _check_lock:
+                _CHECK["running"] = False
 
     if hosts:
         thread = threading.Thread(target=run, name="host-os-check", daemon=True)
@@ -385,14 +391,20 @@ def checking_locked():
     return {**_CHECK, "hosts": list(_CHECK["hosts"]), "done": list(_CHECK["done"]), "failed": dict(_CHECK["failed"])}
 
 
+# Hosts whose scheduled read failed, {node: {"count", "at"}}: after
+# READS.TRIES in a row one is read at the EVERY cadence, not every round (#976).
+_FAILED = {}
+
+
 def tick(now=None):
-    """Each Ready host whose facts are older than EVERY, read again. Returns
-    the hosts read; one that cannot be read waits for the next round."""
+    """Each Ready host whose facts are older than EVERY, read again, a few
+    at a time. Returns the hosts read; one that cannot be read waits for the
+    next round, and after a few failures for EVERY."""
     if not applies():
         return []
     now = now or time.time()
     state = _load()
-    read_now = []
+    due = []
     for item in (kget("/api/v1/nodes") or {}).get("items", []):
         name = item["metadata"]["name"]
         ready = any(c.get("type") == "Ready" and c.get("status") == "True"
@@ -402,10 +414,15 @@ def tick(now=None):
         restarted = bool(boot and known.get("boot_id") and boot != known["boot_id"])
         if not ready or (now - known.get("at", 0) < EVERY and not restarted):
             continue
-        try:
-            read(name, now=now)
+        if restarted or READS.due(_FAILED, name, now, EVERY):
+            due.append(name)
+    read_now = []
+    for name, _, error in READS.each(due, lambda name: read(name, now=now)):
+        if error is None:
+            READS.worked(_FAILED, name)
             read_now.append(name)
-        except Exception as error:
+        else:
+            READS.failed(_FAILED, name, now)
             print(f"host OS: {name}: {str(error)[:160]}", flush=True)
     return read_now
 
