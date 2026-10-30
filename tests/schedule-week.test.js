@@ -48,6 +48,20 @@ test("Longhorn runs are listed, and the two the server says clash are marked", (
   same(week.unread, []);
 });
 
+test("Homestead's own weekly trim is listed as Homestead's, and a clash with it is marked on its run (#927)", () => {
+  const { W } = setup();
+  const trim = { name: "Homestead weekly trim", task: "filesystem-trim", cron: "0 2 * * 6", volumes: ["pvc-a"], homestead: true };
+  const lh = { jobs: [LH.jobs[0]], homestead_jobs: [trim],
+    clashes: [{ severity: "clash", jobs: [{ name: "nightly-backup", task: "backup" }, { name: trim.name, task: "filesystem-trim" }],
+      volumes: ["pvc-a"], times: [[SAT_0200, SAT_0200]], count: 1, gap_min: 0 }] };
+  const week = W.collect({ lh }, FROM);
+  const runs = week.items.filter(i => i.name === trim.name);
+  same(runs.map(i => [iso(i.at), i.clash, i.kind, i.what]), [["2026-10-24T02:00", "clash", "Homestead", "trim"]]);
+  same(week.items.filter(i => i.name === "nightly-backup" && i.clash).map(i => iso(i.at)), ["2026-10-24T02:00"]);
+  // An older server's answer has no homestead_jobs: nothing changes.
+  assert.equal(W.collect({ lh: LH }, FROM).items.filter(i => i.kind === "Homestead").length, 0);
+});
+
 test("a job that runs more than six times a day is one 'runs all day' line, not 168 rows", () => {
   const { W } = setup();
   const week = W.collect({ lh: LH }, FROM);
@@ -153,7 +167,7 @@ test("each source that could not be read is named; one that does not apply is no
   const { W } = setup();
   const week = W.collect({ lh: { failed: "timed out" }, crons: { error: "forbidden" }, power: "nonsense",
     os: { failed: "x" }, settings: { failed: "x" } }, FROM);
-  same(week.unread, ["Longhorn's recurring jobs", "CronJobs", "power schedules", "host OS update settings", "the maintenance window"]);
+  same(week.unread, ["Longhorn's recurring jobs and Homestead's weekly trim", "CronJobs", "power schedules", "host OS update settings", "the maintenance window"]);
   same(W.collect({ lh: null }, FROM).unread, []);
 });
 
@@ -187,6 +201,15 @@ test("with every source read and nothing clashing, the page says so", async () =
   await ctx.viewScheduleWeek();
   assert.match(out.html, /No clashes this week/);
   assert.doesNotMatch(out.html, /Could not read/);
+});
+
+test("Longhorn's jobs that could not be read are named, never a quiet week with no clashes (#927)", async () => {
+  const { ctx, out } = setup({ "/api/lh/overview": { jobs: [], clashes: [], volumes: [], jobs_unread: "Longhorn's recurring jobs could not be read: forbidden" },
+    "/api/schedules": [], "/api/power-schedules": { items: [] },
+    "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });
+  await ctx.viewScheduleWeek();
+  assert.match(out.html, /Could not read Longhorn's recurring jobs/);
+  assert.doesNotMatch(out.html, /No clashes this week/);
 });
 
 test("without Longhorn, clashes are not checked and nothing is said to be unread", async () => {
@@ -313,4 +336,12 @@ test("review: a stop at the backup's own start minute is close, and so is one kn
     { kind: "app", ns: "other", name: "db", next: [{ at: SAT_0200 + 300.4, action: "stop" }] }] } }, FROM);
   same(next.overlaps.map(o => o.reason), ["app db stops during its backup nightly"]);
   same(next.items.filter(i => i.kind === "Power").map(i => i.clash), ["close", ""], "only the app in lab, not its namesake in other");
+});
+
+test("unread Longhorn jobs say Homestead's weekly trim is missing too, since it is read with them (#927)", async () => {
+  const { ctx, out } = setup({ "/api/lh/overview": { jobs: [], clashes: [], volumes: [], homestead_jobs: [], jobs_unread: "forbidden" },
+    "/api/schedules": [], "/api/power-schedules": { items: [] },
+    "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });
+  await ctx.viewScheduleWeek();
+  assert.match(out.html, /Could not read Longhorn's recurring jobs and Homestead's weekly trim/);
 });
