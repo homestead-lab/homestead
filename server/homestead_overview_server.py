@@ -290,6 +290,7 @@ def _alert_sources():
             results[name] = None
 
     take("health", lambda: ALERTS.health_facts(MODULE_ROUTES.page("ov", get_overview)))
+    take("longhorn", lambda: ALERTS.longhorn_facts(MODULE_ROUTES.page("ov", get_overview)))
     take("jobs", lambda: ALERTS.job_facts(OPS.snapshot()))
     take("joins", lambda: ALERTS.join_facts(kget("/api/v1/nodes").get("items", [])))
     take("addresses", lambda: VIPS.alert_facts(cached("network", 5, INV.inventory).get("addresses")))

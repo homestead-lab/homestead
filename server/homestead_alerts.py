@@ -13,6 +13,14 @@ import homestead_shared as SHARED
 
 DATA_DIR = "/data"
 HOLD = 60
+# Longhorn not answering for this long is news of its own (#1002 follow-up).
+# Longhorn's manager restarts in a minute or three on an upgrade or a node
+# reboot; ten minutes is well past that, and well before held alerts go stale.
+LONGHORN_QUIET = 600
+# An alert held this long because its source could not be read says it is
+# the last known state. It stays open: only a read that no longer finds it
+# resolves it.
+STALE = 3600
 LOG_SIZE = 300
 WITHDRAWN_KEEP = 600            # seconds a withdrawn key outranks facts taken before it
 _lock = SHARED.SharedLock("alerts")
@@ -112,6 +120,7 @@ def observe(results, now=None):
                         seen.add(k)
                         row["missing"] = 0
                         row.pop("worsening_since", None)
+                        row.setdefault("held_since", now)
                         if not row["announced"]:
                             row["since"] = now
                 continue
@@ -124,6 +133,7 @@ def observe(results, now=None):
                             seen.add(k)
                             row["missing"] = 0
                             row.pop("worsening_since", None)
+                            row.setdefault("held_since", now)
                             if not row["announced"]:
                                 row["since"] = now
                     continue
@@ -144,6 +154,7 @@ def observe(results, now=None):
                                    if "signals" not in row and "signals" in fact else _snapshot(row))
                     row.update(fact)
                 row["source"], row["missing"] = source, 0
+                row.pop("held_since", None)
                 if row["announced"]:
                     if row.get("event"):
                         continue
@@ -278,14 +289,19 @@ def for_user(entries, user):
             or not _acknowledged(state, user, state["active"].get(e["key"], e))]
 
 
-def active(categories=None, user=None):
+def active(categories=None, user=None, now=None):
+    now = time.time() if now is None else now
     with _lock:
         state = _load()
     rows = []
     for row in state["active"].values():
         if row.get("event") or (categories is not None and row["category"] not in categories):
             continue
-        result = {k: v for k, v in row.items() if k not in ("missing", "notice", "worsening_since")}
+        result = {k: v for k, v in row.items() if k not in ("missing", "notice", "worsening_since", "held_since")}
+        result["stale"] = now - row.get("held_since", now) >= STALE
+        if result["stale"]:
+            result["body"] = ("Last known, not current: Homestead has not been able to check this for over an hour. "
+                              + (row.get("body") or ""))
         if user is not None:
             result.update(acknowledged=_acknowledged(state, user, row), version=_version(row))
         rows.append(result)
@@ -357,6 +373,18 @@ def health_facts(overview):
                 if not smart.get("available") or (smart.get("asleep") and not smart.get("read_at")):
                     facts.append({"unknown_key": prefix + disk.get("name", "unknown")})
     return facts
+
+
+def longhorn_facts(overview):
+    """Longhorn installed but its volumes not read: raised after LONGHORN_QUIET."""
+    if not overview.get("volumes_unread"):
+        return []
+    return [{"key": "longhorn:unread", "category": "degraded", "severity": "degraded",
+             "title": "Longhorn is not answering", "resolved": "Longhorn is answering again",
+             "body": ("Homestead has not been able to read Longhorn's volumes for at least "
+                      f"{LONGHORN_QUIET // 60} minutes. Volume and disk alerts keep their last known state "
+                      "until it answers."),
+             "signals": {"condition": 1}, "href": "/volumes", "hold": LONGHORN_QUIET}]
 
 
 def job_facts(operations):

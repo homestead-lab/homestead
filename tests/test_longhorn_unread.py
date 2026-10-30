@@ -298,5 +298,92 @@ class NodeImpactTests(LonghornFixture):
         self.assertIsNone(p["counts"]["at_risk"])
 
 
+class NotAnsweringTests(LonghornFixture):
+    """While Longhorn cannot be read its alerts are held. After ten minutes
+    an alert says Longhorn is not answering; after an hour the held alerts
+    say they are the last known state, not the current one."""
+    KEY = "disks:node-a:d1"
+
+    def sources(self):
+        self.cluster.server.MODULE_ROUTES.forget("ov")
+        self.cluster.server.MODULE_ROUTES.forget("disks")
+        found = self.OV._alert_sources()
+        return {name: found[name] for name in ("health", "disks", "longhorn")}
+
+    def mend(self):
+        self.cluster.kube._failures.clear()
+
+    def longhorn(self, fresh):
+        return [(e["phase"], e["title"]) for e in fresh if e["key"] == "longhorn:unread"]
+
+    def row(self, at):
+        return next(r for r in ALERTS.active(now=at) if r["key"] == self.KEY)
+
+    def open_disk_alert(self):
+        lh_disk_not_ready(self.cluster)
+        read = self.sources()
+        ALERTS.observe(read, now=1000)
+        ALERTS.observe(read, now=1000 + ALERTS.HOLD)
+        self.assertIn(self.KEY, ALERTS._load()["active"])
+        return read
+
+    def test_longhorn_not_answering_is_raised_after_ten_minutes_not_before(self):
+        self.assertEqual(600, ALERTS.LONGHORN_QUIET)
+        self.break_read(VOLUMES)
+        unread = self.sources()
+        self.assertEqual(["longhorn:unread"], [f["key"] for f in unread["longhorn"]])
+        fresh = []
+        for at in (1000, 1000 + ALERTS.HOLD, 1000 + ALERTS.LONGHORN_QUIET - 1):
+            fresh += ALERTS.observe(unread, now=at)
+        self.assertEqual([], self.longhorn(fresh))
+        self.assertEqual([("raised", "Longhorn is not answering")],
+                         self.longhorn(ALERTS.observe(unread, now=1000 + ALERTS.LONGHORN_QUIET)))
+
+    def test_longhorn_answering_again_clears_the_alert(self):
+        self.break_read(VOLUMES)
+        unread = self.sources()
+        ALERTS.observe(unread, now=1000)
+        ALERTS.observe(unread, now=1000 + ALERTS.LONGHORN_QUIET)
+        self.mend()
+        read = self.sources()
+        self.assertEqual([], read["longhorn"])
+        fresh = ALERTS.observe(read, now=2000) + ALERTS.observe(read, now=2000 + ALERTS.HOLD)
+        self.assertEqual([("resolved", "Longhorn is answering again")], self.longhorn(fresh))
+
+    def test_a_cluster_without_longhorn_has_no_longhorn_alert(self):
+        self.cluster.kube.absent_groups.add("longhorn.io")
+        self.assertEqual([], self.sources()["longhorn"])
+
+    def test_held_alerts_say_last_known_after_an_hour_and_stay_open(self):
+        self.assertEqual(3600, ALERTS.STALE)
+        self.open_disk_alert()
+        body = ALERTS._load()["active"][self.KEY]["body"]
+        self.break_read(VOLUMES)
+        self.break_read(LH_NODES)
+        unread = self.sources()
+        self.assertIsNone(unread["disks"])
+        start = 2000
+        ALERTS.observe(unread, now=start)
+        ALERTS.observe(unread, now=start + ALERTS.STALE - 1)
+        early = self.row(start + ALERTS.STALE - 1)
+        self.assertEqual((body, False), (early["body"], early["stale"]))
+        fresh = ALERTS.observe(unread, now=start + ALERTS.STALE)
+        held = self.row(start + ALERTS.STALE)
+        self.assertTrue(held["stale"])
+        self.assertTrue(held["body"].startswith("Last known, not current:"), held["body"])
+        self.assertTrue(held["body"].endswith(body), held["body"])
+        self.assertEqual([], [e for e in fresh if e["phase"] == "resolved"])
+
+    def test_the_last_known_mark_goes_once_the_alert_is_read_again(self):
+        read = self.open_disk_alert()
+        ALERTS.observe({"disks": None}, now=2000)
+        ALERTS.observe({"disks": None}, now=2000 + ALERTS.STALE)
+        self.assertTrue(self.row(2000 + ALERTS.STALE)["stale"])
+        ALERTS.observe({"disks": read["disks"]}, now=2000 + ALERTS.STALE + 1)
+        row = self.row(9000 + ALERTS.STALE)
+        self.assertFalse(row["stale"])
+        self.assertFalse(row["body"].startswith("Last known"))
+
+
 if __name__ == "__main__":
     unittest.main()
