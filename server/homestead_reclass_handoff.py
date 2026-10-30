@@ -5,11 +5,58 @@ until cutover, restart admission, cancellation and reviewed recovery are wired.
 """
 import copy
 import re
+import time
 
 import homestead_kube as KUBE
 import homestead_reclass as RC
 import homestead_storage_journal as JOURNAL
 import homestead_rollout_capacity as ROLLOUT
+
+CLOCK = time.time
+# How long each wait may last before the move is held for review, naming what
+# it waited for. A hold keeps everything as it is; nothing waits for ever.
+MINUTE = 60
+WAITS = {
+    "quiesce": (10 * MINUTE, "workload controllers to finish stopping"),
+    "source-pods": (10 * MINUTE, "pods using the volume to end"),
+    # As the legacy engine's START_LIMIT: a copy pod that has not started by then
+    # never will (its new volume could not be made or attached).
+    "copy-start": (10 * MINUTE, "the copy pod to start"),
+    "copy-run": (None, "the copy to finish"),   # 1 h + 2 min per GiB, see _limit
+    "helper-removal": (10 * MINUTE, "the copy helper and its pods to be removed"),
+    "temporary-finalizers": (10 * MINUTE, "the temporary claim's finalizers"),
+    "source-finalizers": (10 * MINUTE, "the original claim's finalizers"),
+    "binding": (10 * MINUTE, "the replacement claim to bind to the copied volume"),
+    "readiness": (15 * MINUTE, "workloads to become ready"),
+}
+
+
+def _limit(item, what):
+    limit = WAITS[what][0]
+    if limit is None:
+        limit = 60 * MINUTE + 2 * MINUTE * -(-RC._bytes(item["ref"]["size"]) // RC.GiB)
+    return limit
+
+
+def _wait(item, what, progress, message):
+    """A bounded wait; storage_workflow.step holds the move once it is overdue.
+
+    The clock starts on the first poll that sees this wait, and starts again
+    when the move makes progress or a person retries the step."""
+    ref = item["ref"]
+    if (ref.get("storage_wait") or {}).get("what") != what:
+        ref["storage_wait"] = {"what": what, "since": CLOCK(), "limit": _limit(item, what)}
+    item["_waited"] = message
+    return "running", progress, message
+
+
+def overdue(item, message):
+    """The hold message for a wait past its deadline, else None."""
+    wait = item["ref"].get("storage_wait") or {}
+    if wait.get("what") not in WAITS or CLOCK() - wait.get("since", CLOCK()) <= wait.get("limit", 0):
+        return None
+    return (f"Stopped waiting after {int(wait['limit'] // MINUTE)} min for {WAITS[wait['what']][1]} ({message}). "
+            "The move is held for review; nothing was deleted and the original data is retained.")
 
 
 def _receipt(item, step):
@@ -190,7 +237,7 @@ def copy_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journal):
     writer = journal_factory(item, RC.kget, RC.ksend, checkpoint)
     writer.check()
     if not quiescent(item, writer):
-        return "running", 8, "Waiting for workload controllers to finish stopping before copying"
+        return _wait(item, "quiesce", 8, "Waiting for workload controllers to finish stopping before copying")
     claim(item, ref["claim"], writer, source=True)
     known_job = _receipt(item, "copy-job")
     job_uid = known_job.get("after", {}).get("uid") if known_job else None
@@ -199,7 +246,7 @@ def copy_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journal):
     if foreign:
         if known_job:
             raise JOURNAL.Held("Another pod is using the copy's data; inspect the workloads and copy before continuing")
-        return "running", 8, "Waiting for all source pods to terminate before copying"
+        return _wait(item, "source-pods", 8, "Waiting for all source pods to terminate before copying")
     created = _receipt(item, "copy-volume")
     if not created:
         body = {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
@@ -222,7 +269,7 @@ def copy_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journal):
         # Admission can take time. Recheck the stopped workloads and both claims
         # afterwards, immediately before the durable create intent.
         if not quiescent(item, writer):
-            return "running", 8, "Waiting for workload controllers to finish stopping before copying"
+            return _wait(item, "quiesce", 8, "Waiting for workload controllers to finish stopping before copying")
         claim(item, ref["claim"], writer, source=True)
         claim(item, ref["temp"], writer)
         if any(p.get("status", {}).get("phase") not in RC.FINISHED for p in pods(item)):
@@ -238,7 +285,8 @@ def copy_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journal):
     copy_pods = [p for p in using if _owned(p, job_uid)]
     if not complete or any(p.get("status", {}).get("phase") not in RC.FINISHED for p in copy_pods):
         progress, message = _copy_progress(item, job_uid, copy_pods)
-        return "running", progress, message
+        started = any(p.get("status", {}).get("phase") in ("Running", "Succeeded", "Failed") for p in copy_pods)
+        return _wait(item, "copy-run" if started else "copy-start", progress, message)
     if not copy_pods or not all(ref["copy_claims"][n].get("pv") for n in (ref["claim"], ref["temp"])):
         raise JOURNAL.Held("Copy verification evidence or bound volume identity is unavailable")
     verified = False
@@ -260,16 +308,24 @@ def copy_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journal):
     return "running", 75, "Copy verified; both volumes retained for guarded cutover"
 
 
-def restart_proposals(item, writer, *, remaining=False):
-    """Build request-local proposed objects; never put workload secrets in history."""
+def _stop_receipt(item, consumer):
+    path = _path(item["ref"]["namespace"], consumer["kind"], consumer["name"])
+    return _receipt(item, "stop:" + ("PUT" if consumer["kind"] == "VirtualMachine" else "PATCH") + ":" + path)
+
+
+def restart_proposals(item, writer, *, remaining=False, prefix="restart:", stopped_only=False):
+    """Build request-local proposed objects; never put workload secrets in history.
+
+    stopped_only (rollback): a workload this move never stopped is left alone."""
     out = []
     for consumer in item["ref"]["consumers"]:
         path = _path(item["ref"]["namespace"], consumer["kind"], consumer["name"])
-        if remaining and _receipt(item, "restart:" + path):
-            _restored(consumer, writer.observe(_receipt(item, "restart:" + path)))
+        if remaining and _receipt(item, prefix + path):
+            _restored(consumer, writer.observe(_receipt(item, prefix + path)))
             continue
-        method = "PUT" if consumer["kind"] == "VirtualMachine" else "PATCH"
-        entry = _receipt(item, "stop:" + method + ":" + path)
+        entry = _stop_receipt(item, consumer)
+        if not entry and stopped_only:
+            continue
         if not entry:
             raise JOURNAL.Held("A restart has no verified stop receipt")
         obj = copy.deepcopy(writer.observe(entry))
@@ -346,7 +402,7 @@ def cutover_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journa
     writer = journal_factory(item, RC.kget, RC.ksend, checkpoint)
     writer.check()
     if not quiescent(item, writer):
-        return "running", 75, "Waiting for workload controllers to finish stopping before cutover"
+        return _wait(item, "quiesce", 75, "Waiting for workload controllers to finish stopping before cutover")
     proof = ref.get("copy_verified")
     if not proof or proof.get("claims") != ref.get("copy_claims"):
         raise JOURNAL.Held("Cutover needs verified copy and volume-identity evidence")
@@ -359,7 +415,7 @@ def cutover_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journa
             raise JOURNAL.Held("Post-copy workload placement needs review before cutover")
         # Recheck after slow admission: no writes may rely on the earlier read.
         if not quiescent(item, writer):
-            return "running", 75, "Waiting for workload controllers to finish stopping before cutover"
+            return _wait(item, "quiesce", 75, "Waiting for workload controllers to finish stopping before cutover")
         source = claim(item, ref["claim"], writer, source=True)
         copied = claim(item, ref["temp"], writer)
         if any(p.get("status", {}).get("phase") not in RC.FINISHED for p in pods(item)):
@@ -432,7 +488,7 @@ def cutover_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journa
         writer.write("delete-copy-job", "DELETE", job_entry["target"]["path"], {"propagationPolicy": "Foreground"}, expected=JOURNAL.identity(job), own=True)
         return "running", 80, "Removing the verified copy helper; waiting for its pods to disappear"
     if writer.observe(_receipt(item, "delete-copy-job")) is not None or using:
-        return "running", 81, "Waiting for the copy helper and all pods naming these claims to be removed"
+        return _wait(item, "helper-removal", 81, "Waiting for the copy helper and all pods naming these claims to be removed")
     if not _receipt(item, "delete-temporary"):
         # This journal created the temporary claim (copy-volume); pv-controller
         # may still update it, so only its uid is pinned (#824). The user's
@@ -440,12 +496,12 @@ def cutover_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journa
         writer.write("delete-temporary", "DELETE", f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['temp']}", expected=JOURNAL.identity(temporary), own=True)
         return "running", 83, "Releasing the temporary claim; its copied data remains protected"
     if temporary is not None:
-        return "running", 84, "Waiting for the temporary claim's finalizers; no forced removal"
+        return _wait(item, "temporary-finalizers", 84, "Waiting for the temporary claim's finalizers; no forced removal")
     if not _receipt(item, "delete-source"):
         writer.write("delete-source", "DELETE", f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['claim']}", expected=JOURNAL.identity(source))
         return "running", 85, "Releasing the original claim; original data remains retained"
     if source is not None and not replacement:
-        return "running", 86, "Waiting for the original claim's finalizers; no forced removal"
+        return _wait(item, "source-finalizers", 86, "Waiting for the original claim's finalizers; no forced removal")
     if not _receipt(item, "reserve-new"):
         patch("reserve-new", new, {"spec": {"claimRef": {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
               "namespace": ref["namespace"], "name": ref["claim"], "uid": None, "resourceVersion": None}}})
@@ -463,7 +519,7 @@ def cutover_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journa
             RC._bytes(spec.get("resources", {}).get("requests", {}).get("storage")) != RC._bytes(ref["size"])):
         raise JOURNAL.Held("The replacement claim does not point at the copied volume")
     if source.get("status", {}).get("phase") != "Bound" or owner.get("uid") != replacement["after"]["uid"]:
-        return "running", 89, "Waiting for exact replacement claim and backing volume binding"
+        return _wait(item, "binding", 89, "Waiting for exact replacement claim and backing volume binding")
     if not _receipt(item, "restore-policy"):
         patch("restore-policy", new, {"spec": {"persistentVolumeReclaimPolicy": state["reclaim"]}})
         return "running", 90, "Replacement bound; destination reclaim policy restored"
@@ -565,10 +621,19 @@ def restart_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journa
         consumer = next(c for c in ref["consumers"] if _path(ref["namespace"], c["kind"], c["name"]) == selected["path"])
         _restored(consumer, saved)
         return "running", 93, "One workload restored on the copied volume; checking the rest before their next writes"
+    waiting = _not_ready(item, writer, ref["consumers"], "restart:")
+    if waiting:
+        return _wait(item, "readiness", 96, "Waiting for workload readiness: " + ", ".join(waiting))
+    ref.update(handoff_phase="done", retain_resources=False)
+    checkpoint(item)
+    return "succeeded", 100, "Storage moved and workloads ready; original data retained. Verify application data separately."
+
+
+def _not_ready(item, writer, consumers, prefix):
     waiting = []
-    for consumer in ref["consumers"]:
-        path = _path(ref["namespace"], consumer["kind"], consumer["name"])
-        obj = writer.observe(_receipt(item, "restart:" + path))
+    for consumer in consumers:
+        path = _path(item["ref"]["namespace"], consumer["kind"], consumer["name"])
+        obj = writer.observe(_receipt(item, prefix + path))
         status = obj.get("status", {})
         kind = consumer["kind"]
         if kind in ("Deployment", "StatefulSet"):
@@ -582,8 +647,69 @@ def restart_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journa
         elif kind == "VirtualMachine" and consumer["run_strategy"] != "Halted":
             if status.get("printableStatus") != "Running" or not any(c.get("type") == "Ready" and c.get("status") == "True" for c in status.get("conditions", [])):
                 waiting.append(consumer["name"])
+    return waiting
+
+
+# Any of these means the original claim was released or marked as the old copy:
+# from then on only finishing forward is safe.
+RELEASED = ("mark-original", "delete-temporary", "delete-source", "reserve-new", "replacement", "restore-policy")
+
+
+def can_roll_back(item):
+    """By the journal, the original claim is still the app's, untouched."""
+    ref = item["ref"]
+    return (ref.get("handoff_phase") in ("stop", "copy", "cutover") and not ref.get("cutover_complete")
+            and not any(_receipt(item, step) for step in RELEASED))
+
+
+def rollback_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journal):
+    """Put the app back on its original volume, one checked write per poll.
+
+    Only workloads this move stopped are restarted, each from its stop receipt,
+    so an edit made since holds instead of being overwritten. The copy Job (ours)
+    is deleted and its pods gone first. The copy volume is kept, never deleted.
+    """
+    ref = item["ref"]
+    writer = journal_factory(item, RC.kget, RC.ksend, checkpoint)
+    writer.check()
+    if any(_receipt(item, step) for step in RELEASED):
+        raise JOURNAL.Held("The original claim was already released; only finishing the move on the copy is possible")
+    job = _receipt(item, "copy-job")
+    if job and not _receipt(item, "delete-copy-job"):
+        current = writer.observe(job)
+        writer.write("delete-copy-job", "DELETE", job["target"]["path"], {"propagationPolicy": "Foreground"},
+                     expected=JOURNAL.identity(current), own=True)
+        return "running", 10, "Stopping the copy helper before restarting on the original volume"
+    using = pods(item)
+    if job and (writer.observe(_receipt(item, "delete-copy-job")) is not None or
+                any(_owned(p, job["after"]["uid"]) and p.get("status", {}).get("phase") not in RC.FINISHED for p in using)):
+        return _wait(item, "helper-removal", 10, "Waiting for the copy helper and its pods to be removed")
+    if any(ref.get("temp") in RC._claims_in(p.get("spec")) and p.get("status", {}).get("phase") not in RC.FINISHED for p in using):
+        raise JOURNAL.Held("A pod is using the copy volume; inspect it before restarting on the original")
+    claim(item, ref["claim"], writer, source=True)
+    stopped = [c for c in ref["consumers"] if _stop_receipt(item, c)]
+    proposals = restart_proposals(item, writer, remaining=True, prefix="rollback-restart:", stopped_only=True)
+    if proposals:
+        if admission(proposals).get("blocked") is not False:
+            raise JOURNAL.Held("Restarting on the original volume needs a fresh placement review")
+        claim(item, ref["claim"], writer, source=True)
+        fresh = restart_proposals(item, writer, remaining=True, prefix="rollback-restart:", stopped_only=True)
+        reviewed = lambda found: [(p["kind"], p["path"], p["settled"], JOURNAL.settled(p["object"])) for p in found]
+        if reviewed(proposals) != reviewed(fresh):
+            raise JOURNAL.Held("Workload configuration changed during restart admission")
+        selected = fresh[0]
+        saved = writer.write("rollback-restart:" + selected["path"], "PUT", selected["path"], selected["object"],
+                             expected={**JOURNAL.identity(selected["object"]), "settled": selected["settled"]})
+        consumer = next(c for c in ref["consumers"] if _path(ref["namespace"], c["kind"], c["name"]) == selected["path"])
+        _restored(consumer, saved)
+        return "running", 93, "One workload restarted on the original volume; checking the rest"
+    waiting = _not_ready(item, writer, stopped, "rollback-restart:")
     if waiting:
-        return "running", 96, "Waiting for workload readiness: " + ", ".join(waiting)
-    ref.update(handoff_phase="done", retain_resources=False)
+        return _wait(item, "readiness", 96, "Waiting for workload readiness on the original volume: " + ", ".join(waiting))
+    ref.update(handoff_phase="rolled-back", phase="rolled-back", retain_resources=False)
+    ref.pop("storage_wait", None)
     checkpoint(item)
-    return "succeeded", 100, "Storage moved and workloads ready; original data retained. Verify application data separately."
+    kept = (f" The copy volume {ref['temp']} on {ref['target']} was kept; remove it from Volumes when it is no longer needed."
+            if _receipt(item, "copy-volume") else "")
+    return ("cancelled", 100, f"Move rolled back: workloads run on the original volume {ref['claim']} "
+            f"({ref.get('from_class') or 'its original class'}) again.{kept}")

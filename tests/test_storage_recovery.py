@@ -2,6 +2,7 @@ import copy
 import json
 import tempfile
 import unittest
+import urllib.error
 from unittest import mock
 
 from test_reclass_handoff import CopyCluster
@@ -11,6 +12,8 @@ from fakes.job_store import put, store_writes
 import homestead_capacity_review as review
 import homestead_storage_workflow as workflow
 import homestead_storage_recovery as recovery
+import homestead_reclass_handoff as handoff
+import homestead_storage_conflicts as conflicts
 import server
 import homestead_storage_admission as admission
 import homestead_place as place
@@ -19,7 +22,7 @@ import homestead_storage_runtime as runtime
 from test_storage_runtime import pod as runtime_pod
 
 
-class StorageRecoveryTests(unittest.TestCase):
+class RecoveryFixture(unittest.TestCase):
     def setUp(self):
         self.cluster = CopyCluster()
         self.cluster.item.update(progress=5, resource={"name": "data", "namespace": "lab"}, title="Move data", href="/volumes")
@@ -72,6 +75,9 @@ class StorageRecoveryTests(unittest.TestCase):
         self.assertEqual("failed", self.poll()[0])
         self.assertIn("capacity warnings", self.load()["ref"]["storage_hold"])
 
+
+
+class StorageRecoveryTests(RecoveryFixture):
     def test_inspection_never_creates_volume_job_or_durable_intent(self):
         before, sent = copy.deepcopy(ops.stored()), len(self.cluster.sent)
         with store_writes(ops) as written, mock.patch.object(rc, "ksend") as send:
@@ -277,3 +283,241 @@ class StorageRecoveryTests(unittest.TestCase):
             self.assertEqual("succeeded", self.poll()[0])
             self.assertFalse(self.load()["ref"]["retain_resources"])
             self.assertEqual("Retain", self.cluster.objects["/api/v1/persistentvolumes/pv-data"]["spec"]["persistentVolumeReclaimPolicy"])
+
+
+DEPLOYMENT = "/apis/apps/v1/namespaces/lab/deployments/app"
+
+
+class HeldMoveRecoveryTests(RecoveryFixture):
+    """A held move has a way out: every wait ends, and retry, finish or roll back."""
+    def setUp(self):
+        super().setUp()
+        self.now = 1000.0
+        patch = mock.patch.object(handoff, "CLOCK", lambda: self.now)
+        patch.start(); self.addCleanup(patch.stop)
+
+    def writes(self):
+        return [(method, path) for method, path, _ in self.cluster.sent]
+
+    def ready(self):
+        dep = self.cluster.objects[DEPLOYMENT]
+        dep["status"] = {"observedGeneration": dep["metadata"]["generation"], "replicas": 1,
+                         "updatedReplicas": 1, "readyReplicas": 1, "availableReplicas": 1}
+
+    def running_copy(self):
+        self.warnings = []
+        self.assertEqual(12, self.poll()[1])
+        self.assertEqual(20, self.poll()[1])
+        job = self.cluster.objects["/apis/batch/v1/namespaces/lab/jobs/data-copy-job"]
+        job["status"] = {"active": 1}
+        self.cluster.add("v1", "pods", "copy-pod", "Pod", copy.deepcopy(job["spec"]["template"]["spec"]))
+        pod = self.cluster.objects["/api/v1/namespaces/lab/pods/copy-pod"]
+        pod["metadata"]["ownerReferences"] = [{"kind": "Job", "controller": True, "uid": job["metadata"]["uid"]}]
+        pod["status"] = {"phase": "Running"}
+
+    def to_cutover(self, until):
+        self.warnings = []
+        path = "/apis/storage.k8s.io/v1/storageclasses/new"
+        self.cluster.objects[path] = {"apiVersion": "storage.k8s.io/v1", "kind": "StorageClass",
+            "metadata": {"name": "new", "uid": "class-new", "resourceVersion": "1"}, "reclaimPolicy": "Delete"}
+        self.cluster.item["ref"]["review_fences"][path] = journal.identity(self.cluster.objects[path])
+        self.save()
+        self.poll(); self.poll(); self.cluster.complete()
+        for _ in range(20):
+            self.poll()
+            if handoff._receipt(self.load(), until): return
+        self.fail(f"{until} was never reached: {self.load()['message']}")
+
+    # (a) every wait ends in a named hold
+
+    def test_quiesce_wait_holds_after_its_deadline_and_names_what_it_waited_for(self):
+        dep = self.cluster.objects[DEPLOYMENT]
+        dep["status"]["observedGeneration"] = 0
+        before = len(self.cluster.sent)
+        self.assertEqual(("running", 8), self.poll()[:2])
+        self.now += 599
+        self.assertEqual("running", self.poll()[0])
+        self.now += 2
+        status, _, message = self.poll()
+        self.assertEqual("failed", status)
+        self.assertIn("workload controllers to finish stopping", message)
+        self.assertIn("10 min", message)
+        self.assertEqual(message, self.load()["ref"]["storage_hold"])
+        self.assertEqual(before, len(self.cluster.sent))
+        view = self.preview()
+        self.assertTrue(view["plan"]["can_retry"])
+        self.assertIn("retry", view["tokens"])
+        self.act("retry", view)
+        self.assertEqual(("running", 8), self.poll()[:2])  # the deadline starts again
+
+    def test_copy_pod_that_never_starts_holds_instead_of_waiting_for_ever(self):
+        self.warnings = []
+        self.assertEqual(12, self.poll()[1])
+        self.assertEqual(20, self.poll()[1])
+        self.assertEqual("running", self.poll()[0])
+        self.now += 601
+        status, _, message = self.poll()
+        self.assertEqual("failed", status)
+        self.assertIn("copy pod to start", message)
+
+    def test_a_running_copy_gets_a_size_based_deadline(self):
+        self.running_copy()
+        self.assertEqual("running", self.poll()[0])
+        self.now += 3600 + 120 * 10 - 1   # 1 h + 2 min per GiB of a 10 GiB volume
+        self.assertEqual("running", self.poll()[0])
+        self.now += 2
+        self.assertIn("copy to finish", self.poll()[2])
+        self.assertEqual(1, sum(path.endswith("/jobs") for _, path in self.writes()))  # nothing deleted on its own
+
+    def test_the_wait_clock_restarts_when_the_move_makes_progress(self):
+        dep = self.cluster.objects[DEPLOYMENT]
+        dep["status"]["observedGeneration"] = 0
+        self.warnings = []
+        self.assertEqual(8, self.poll()[1])
+        self.now += 500
+        dep["status"]["observedGeneration"] = dep["metadata"]["generation"]
+        self.assertEqual(12, self.poll()[1])
+        self.assertNotIn("storage_wait", self.load()["ref"])
+        self.assertEqual(20, self.poll()[1])
+        self.now += 200
+        self.assertEqual("running", self.poll()[0])   # copy pod pending: a new 10 min wait
+        self.now += 590
+        self.assertEqual("running", self.poll()[0])
+
+    def test_inspection_never_holds_on_an_overdue_wait(self):
+        self.cluster.objects[DEPLOYMENT]["status"]["observedGeneration"] = 0
+        self.poll()
+        self.now += 601
+        view = self.preview()
+        self.assertEqual([], view["plan"]["blockers"])
+        self.assertEqual("running", self.load()["status"])
+
+    # (b) retry a rejected request; finish forward once the copy is verified
+
+    def test_a_rejected_request_can_be_retried_after_review(self):
+        self.warnings = []
+        self.assertEqual(12, self.poll()[1])
+        real = self.cluster.send
+        def refuse(method, path, body, **kw):
+            if method == "POST" and path.endswith("/jobs"):
+                raise urllib.error.HTTPError(path, 422, "Unprocessable", {}, None)
+            return real(method, path, body, **kw)
+        with mock.patch.object(rc, "ksend", refuse):
+            self.assertEqual("failed", self.poll()[0])
+        view = self.preview()
+        self.assertTrue(view["plan"]["can_retry"], view["plan"]["blockers"])
+        self.assertTrue(view["plan"]["can_rollback"])
+        self.act("retry", view)
+        ref = self.load()["ref"]
+        self.assertEqual(["refused"], [e["state"] for e in ref["storage_refused"]])
+        self.assertFalse(handoff._receipt(self.load(), "copy-job"))
+        self.assertEqual(20, self.poll()[1])
+        self.assertEqual("accepted", handoff._receipt(self.load(), "copy-job")["state"])
+
+    def test_a_request_with_no_confirmed_outcome_offers_neither_retry_nor_rollback(self):
+        self.warnings = []
+        self.poll()
+        self.cluster.lose_reply = len(self.cluster.sent) + 1
+        self.assertEqual("failed", self.poll()[0])
+        plan = self.preview()["plan"]
+        self.assertFalse(plan["can_retry"] or plan["can_finish"] or plan["can_rollback"])
+
+    def test_finish_forward_is_offered_once_the_copy_is_verified(self):
+        self.to_cutover("retain-original")
+        self.act("pause")
+        view = self.preview()
+        self.assertTrue(view["plan"]["can_finish"])
+        self.assertFalse(view["plan"]["can_retry"])
+        self.assertTrue(view["plan"]["can_rollback"])   # the original claim was never released
+        self.act("finish", view)
+        self.assertEqual("running", self.load()["status"])
+
+    # (b, c) roll back to the original volume and bring the app back up there
+
+    def test_rollback_restarts_the_app_on_the_original_and_frees_the_volume(self):
+        self.awaiting_helper()
+        original = copy.deepcopy(self.cluster.objects["/api/v1/namespaces/lab/persistentvolumeclaims/data"])
+        view = self.preview()
+        self.assertTrue(view["plan"]["can_rollback"])
+        self.assertEqual("PUT", view["plan"]["rollback"]["next_write"]["method"])
+        self.act("rollback", view)
+        self.assertEqual("rollback", self.load()["ref"]["handoff_phase"])
+        self.assertEqual("running", self.poll()[0])
+        dep = self.cluster.objects[DEPLOYMENT]
+        self.assertEqual(1, dep["spec"]["replicas"])
+        self.assertNotIn("homestead.io/storage-copy-job", dep["metadata"].get("annotations", {}))
+        self.assertEqual("running", self.poll()[0])   # waiting for readiness
+        self.ready()
+        status, _, message = self.poll()
+        self.assertEqual("cancelled", status)
+        self.assertIn("original volume", message)
+        self.assertIn("data-copy", message)   # the kept copy is named, never deleted
+        item = self.load()
+        self.assertFalse(item["ref"]["retain_resources"])
+        self.assertFalse(conflicts.unresolved(item))
+        self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/data-copy", self.cluster.objects)
+        self.assertEqual(original, self.cluster.objects["/api/v1/namespaces/lab/persistentvolumeclaims/data"])
+        self.assertFalse(any(method == "DELETE" for method, _ in self.writes()))
+        self.assertFalse(ops._public(item)["storage_recovery"])
+
+    def test_rollback_stops_a_running_copy_before_restarting_the_app(self):
+        self.running_copy()
+        self.assertEqual("running", self.poll()[0])
+        self.act("pause")
+        self.act("rollback")
+        self.poll()
+        self.assertEqual(("DELETE", "/apis/batch/v1/namespaces/lab/jobs/data-copy-job"), self.writes()[-1])
+        self.assertEqual(0, self.cluster.objects[DEPLOYMENT]["spec"]["replicas"])
+        self.poll()
+        self.assertEqual(("PUT", DEPLOYMENT), self.writes()[-1])
+
+    def test_rollback_is_refused_once_the_original_claim_was_released(self):
+        self.to_cutover("delete-source")
+        self.act("pause")
+        view = self.preview()
+        self.assertFalse(view["plan"]["can_rollback"])
+        self.assertTrue(view["plan"]["can_finish"])
+        self.assertNotIn("rollback", view["tokens"])
+        with self.assertRaises(ValueError):
+            self.act("rollback", view, capacity_token=view["tokens"]["finish"])
+
+    def test_rollback_never_overwrites_a_workload_edited_while_it_was_held(self):
+        self.awaiting_helper(); self.act("rollback")
+        self.cluster.objects[DEPLOYMENT]["spec"]["template"]["spec"]["containers"][0]["image"] = "example/app:2"
+        before = len(self.cluster.sent)
+        self.assertEqual("failed", self.poll()[0])
+        self.assertEqual(before, len(self.cluster.sent))
+        self.assertEqual("example/app:2", self.cluster.objects[DEPLOYMENT]["spec"]["template"]["spec"]["containers"][0]["image"])
+
+    def test_rollback_readiness_has_a_deadline_and_retry_keeps_rolling_back(self):
+        self.awaiting_helper(); self.act("rollback")
+        self.poll(); self.poll()
+        self.now += 901
+        status, _, message = self.poll()
+        self.assertEqual("failed", status)
+        self.assertIn("app", message)
+        plan = self.preview()["plan"]
+        self.assertTrue(plan["can_retry"])
+        self.assertFalse(plan["can_finish"] or plan["can_rollback"])
+        self.act("retry")
+        self.ready()
+        self.assertEqual("cancelled", self.poll()[0])
+
+    def test_rollback_from_a_partial_stop_restarts_only_what_was_stopped(self):
+        ref = self.cluster.item["ref"]
+        worker = self.cluster.add("apps/v1", "deployments", "worker", "Deployment", {"replicas": 1,
+            "template": {"spec": {"containers": [{"name": "w", "image": "example/w:1"}],
+                "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "data"}}]}}})
+        self.cluster.consumer("Deployment", "worker", replicas=1)
+        self.cluster.objects[worker]["metadata"]["resourceVersion"] = "2"   # changed after review
+        ref["handoff_phase"] = "stop"
+        self.save()
+        self.assertEqual("failed", self.poll()[0])
+        self.assertIn("changed after review", self.load()["ref"]["storage_hold"])
+        self.assertFalse(self.preview()["plan"]["can_retry"])
+        self.act("rollback")
+        self.poll()
+        self.assertEqual(1, self.cluster.objects[DEPLOYMENT]["spec"]["replicas"])
+        self.assertFalse(any(path == worker for _, path in self.writes()))
+        self.ready()
+        self.assertEqual("cancelled", self.poll()[0])

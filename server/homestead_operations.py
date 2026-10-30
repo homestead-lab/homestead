@@ -486,7 +486,7 @@ def _view_copy(item, out):
 def _view_reclass(item, out):
     if "storage_protocol" in item.get("ref", {}):
         out.update(cancellable=False, cleanable=False, resumable=False,
-                   storage_recovery=item["ref"]["storage_protocol"] == 1 and item["ref"].get("handoff_phase") != "done")
+                   storage_recovery=item["ref"]["storage_protocol"] == 1 and item["ref"].get("handoff_phase") not in ("done", "rolled-back"))
 
 
 # What each kind adds to the shared part of the tray's view: kind ->

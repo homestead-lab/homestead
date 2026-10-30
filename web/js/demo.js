@@ -1632,9 +1632,11 @@ ssh_pwauth: true
     "/api/operations/storage-recovery/preview": (url, init) => {
       const id=JSON.parse(init.body).id, state=window.__demoStorageState || "running";
       const held=state==="ready", uncertain=state==="uncertain", running=state==="running";
-      return {tokens:held?{continue:"demo-storage-ready"}:running?{pause:"demo-storage-running"}:{},plan:{
+      return {tokens:held?{continue:"demo-storage-ready",retry:"demo-storage-ready",rollback:"demo-storage-rollback"}:running?{pause:"demo-storage-running"}:{},plan:{
         id,claim:"paperless-data",namespace:"lab",phase:"copy",status:running?"running":"failed",from_class:"longhorn-r2",to_class:"longhorn-r3",
-        can_continue:held,can_pause:running,requires_confirmation:true,
+        can_continue:held,can_retry:held,can_finish:false,can_rollback:held,can_pause:running,requires_confirmation:true,
+        rollback:{next_write:held?{step:"rollback-restart:paperless",method:"PUT",target:{kind:"Deployment",name:"paperless"}}:null,message:"",
+          blockers:held?[]:running?["Pause the move before rolling it back."]:["An API request has no confirmed outcome. Inspect its Kubernetes audit trail and retained resources; this screen cannot safely retry or adopt it."]},
         message:uncertain?"The response to the copy job request was lost.":held?"Copy volume created. Review current capacity before starting the copy.":"Copying and checking data; the original remains protected.",
         blockers:uncertain?["The copy request has no confirmed outcome. Inspect the Kubernetes audit trail and retained resources; this screen cannot safely retry it."]:[],
         warnings:["This review does not delete data. Continuing may restart workloads and never rolls back or repeats an uncertain request.",...(held?["Projected RAM on lab-node-2 is above its configured warning threshold."]:[])],
@@ -1646,10 +1648,11 @@ ssh_pwauth: true
     },
     "/api/operations/storage-recovery/act": (url, init) => {
       const b=JSON.parse(init.body), state=window.__demoStorageState || "running";
-      if(!b.confirm_capacity || (b.action==="continue"?state!=="ready" || b.capacity_token!=="demo-storage-ready":
-          b.action!=="pause" || state!=="running" || b.capacity_token!=="demo-storage-running")) throw new Error("Refresh the storage review first");
-      window.__demoStorageState=b.action==="continue"?"running":"ready";
-      return {ok:true,detail:b.action==="continue"?"Move queued to continue with fresh safety checks":"Move paused; data and running copy jobs retained"};
+      const token={continue:"demo-storage-ready",retry:"demo-storage-ready",rollback:"demo-storage-rollback",pause:"demo-storage-running"}[b.action];
+      if(!b.confirm_capacity || !token || b.capacity_token!==token || state!==(b.action==="pause"?"running":"ready")) throw new Error("Refresh the storage review first");
+      window.__demoStorageState=b.action==="pause"?"ready":"running";
+      return {ok:true,detail:b.action==="pause"?"Move paused; data and running copy jobs retained":
+        b.action==="rollback"?"Move queued to roll back onto the original volume with fresh safety checks":"Move queued to continue with fresh safety checks"};
     },
     "/api/operations/power-recovery/preview": (url, init) => {
       const id=JSON.parse(init.body).id, op=(window.__demoOps || []).find(row=>row.id===id);

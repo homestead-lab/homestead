@@ -57,3 +57,33 @@ test('closing while action is pending leaves the new dialog untouched',async()=>
   const pending=t.ctx.storageRecoveryApply();t.ctx.modal();finish({ok:true});await pending;
   assert.equal(t.closed,0);assert.equal(t.refreshes,1);
 });
+function held({forward=true}={}) {
+  const t=setup();
+  t.ctx.api=async(path,opts)=>{const body=JSON.parse(opts.body);t.calls.push({path,body});
+    if(path.endsWith('/preview'))return {tokens:{...(forward?{retry:'retry-token',continue:'retry-token'}:{}),rollback:'rollback-token'},plan:{
+      id:body.id,claim:'data',phase:forward?'copy':'stop',status:'failed',can_continue:forward,can_retry:forward,can_finish:false,can_rollback:true,can_pause:false,
+      resources:[],workloads:[],warnings:[],blockers:forward?[]:['A workload changed after review'],message:'Held',rollback:{blockers:[],next_write:null}}};
+    return {ok:true,detail:'Queued'};};
+  t.fields['#storageRecoveryRollback']={};
+  return t;
+}
+test('a held move offers retry and roll back, each sent with its own token',async()=>{
+  const t=held();await t.ctx.storageRecoveryReview('job');
+  const html=t.fields['#storageRecoveryContent'].innerHTML;
+  assert.match(html,/Retry this step/);assert.match(html,/Roll back to the original/);
+  t.fields['#storageRecoveryAck'].checked=true;await t.ctx.storageRecoveryApply('rollback');
+  assert.deepEqual(t.calls.at(-1).body,{id:'job',action:'rollback',capacity_token:'rollback-token',confirm_capacity:true});
+  await t.ctx.storageRecoveryReview('job');t.fields['#storageRecoveryAck'].checked=true;await t.ctx.storageRecoveryApply();
+  assert.equal(t.calls.at(-1).body.action,'retry');
+});
+test('when the move cannot go forward, roll back is the action and the reason is shown',async()=>{
+  const t=held({forward:false});await t.ctx.storageRecoveryReview('job');
+  const html=t.fields['#storageRecoveryContent'].innerHTML;
+  assert.match(html,/changed after review/);assert.match(html,/Roll back to the original/);assert.doesNotMatch(html,/Retry this step/);
+  t.fields['#storageRecoveryAck'].checked=true;await t.ctx.storageRecoveryApply();
+  assert.equal(t.calls.at(-1).body.action,'rollback');
+});
+test('an action without its token is never sent',async()=>{
+  const t=held();await t.ctx.storageRecoveryReview('job');t.fields['#storageRecoveryAck'].checked=true;
+  await t.ctx.storageRecoveryApply('finish');assert.equal(t.calls.length,1);
+});
