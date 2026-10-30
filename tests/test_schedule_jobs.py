@@ -226,7 +226,8 @@ class ScheduleJobTests(unittest.TestCase):
         body = self.sent[-1][2]
         self.assertEqual(86400, body["spec"]["ttlSecondsAfterFinished"])
         self.assertEqual([{"apiVersion": "batch/v1", "kind": "CronJob", "name": "backup", "uid": "uid-backup",
-                           "controller": True, "blockOwnerDeletion": False}], body["metadata"]["ownerReferences"])
+                           "blockOwnerDeletion": False}], body["metadata"]["ownerReferences"],
+                         "not its controller: concurrencyPolicy and the history limits stay the CronJob's own runs'")
         self.assertNotIn("ttlSecondsAfterFinished", self.existing["backup"]["spec"]["jobTemplate"]["spec"],
                          "the CronJob itself is not changed")
 

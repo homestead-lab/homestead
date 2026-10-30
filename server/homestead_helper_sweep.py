@@ -39,6 +39,7 @@ JOBS = {
     "restructure": (7 * DAY, re.compile(r"[a-z0-9.-]*-restructure-[0-9a-f]{6}")),
 }
 IMPORT_KEPT = 7 * DAY
+MAX_PER_ROUND = 50      # a backlog (the first round after an upgrade) goes over a few minutes
 IMPORT_NAME = re.compile(r"homestead-import-[a-z0-9][a-z0-9-]{0,60}")
 
 
@@ -67,24 +68,45 @@ def sweep(now=None):
     for task, (kept, name) in PODS.items():
         for pod in _listed(f"/api/v1/namespaces/{NS}/pods", task):
             meta = pod.get("metadata") or {}
+            if len(removed) >= MAX_PER_ROUND:
+                return removed
             if (name.fullmatch(meta.get("name", "")) and (pod.get("status") or {}).get("phase") in ("Succeeded", "Failed")
-                    and now - _pod_ended(pod) > kept and not _is_followed(meta, followed)
+                    and now - _pod_ended(pod, now) > kept and not _is_followed(meta, followed)
                     and _delete(f"/api/v1/namespaces/{NS}/pods/{meta['name']}", meta)):
                 removed.append(meta["name"])
     for task, (kept, name) in JOBS.items():
         for job in _listed("/apis/batch/v1/jobs", task):
             meta = job.get("metadata") or {}
-            ended = _job_ended(job)
+            if len(removed) >= MAX_PER_ROUND:
+                return removed
+            ended = _job_ended(job, now)
             if (name.fullmatch(meta.get("name", "")) and ended is not None and now - ended > kept
                     and not _is_followed(meta, followed)
                     and _delete(f"/apis/batch/v1/namespaces/{meta['namespace']}/jobs/{meta['name']}", meta,
                                 propagationPolicy="Background")):
                 removed.append(meta["name"])
-    removed += _old_imports(items, now)
+    removed += _old_imports(items, now, MAX_PER_ROUND - len(removed))
     return removed
 
 
-def _old_imports(items, now):
+def removed_note(item, task, now=None):
+    """What a job's log says of a helper this sweep has removed: None while
+    the job is not finished or ended less than its task's bound ago (then a
+    helper that is missing is news, and the log says so its own way)."""
+    kept = (PODS.get(task) or JOBS.get(task) or (None,))[0]
+    ended = _epoch((item or {}).get("finished_at"))
+    now = time.time() if now is None else now
+    if not kept or (item or {}).get("status") not in OPS.TERMINAL or ended is None or now - ended <= kept:
+        return None
+    return f"removed automatically {_span(kept)} after it finished; the steps above are the record"
+
+
+def _span(seconds):
+    count, unit = (seconds // DAY, "day") if seconds >= DAY else (seconds // HOUR, "hour")
+    return f"{count} {unit}{'' if count == 1 else 's'}"
+
+
+def _old_imports(items, now, budget):
     """Imports whose Job completed a week ago, with a receipt of a verified
     success not yet removed: removed as the import page's Remove does it."""
     receipts = {(i["ref"].get("namespace"), i["ref"].get("job")): i["ref"].get("job_uid")
@@ -93,11 +115,13 @@ def _old_imports(items, now):
                 and not i["ref"].get("helper_removed") and not i["ref"].get("retain_resources")}
     removed = []
     for job in _listed("/apis/batch/v1/jobs", "import"):
+        if len(removed) >= budget:
+            break
         meta = job.get("metadata") or {}
         ns, name = meta.get("namespace", ""), meta.get("name", "")
         if not IMPORT_NAME.fullmatch(name) or receipts.get((ns, name)) != meta.get("uid") or not meta.get("uid"):
             continue
-        if not _complete(job) or now - (_job_ended(job) or now) <= IMPORT_KEPT:
+        if not _complete(job) or now - (_job_ended(job, now) or now) <= IMPORT_KEPT:
             continue
         try:
             IMPORT_JOB.remove_completed_job(ns, name, job, KUBE.kget, KUBE.ksend, OPS)
@@ -109,7 +133,12 @@ def _old_imports(items, now):
 
 
 def _followed(items):
-    """Every name and uid a job still follows, or one kept for inspection."""
+    """Every name and uid a job still follows, or one kept for inspection.
+    Every string in such a job's ref counts, whatever its kind: a kind that
+    names its helper under a new key (helper_pod, job, run, ...) is covered
+    without being listed here. A kind that refers to its helper in some other
+    way (not by name, uid or a run id in the name) is not, and has to keep its
+    helper some other way, as an import does with its receipt."""
     words = set()
 
     def walk(value):
@@ -122,7 +151,9 @@ def _followed(items):
             for inner in value:
                 walk(inner)
     for item in items:
-        ref = item.get("ref") if isinstance(item, dict) else None
+        if not isinstance(item, dict):
+            continue
+        ref = item.get("ref")
         if item.get("status") not in OPS.TERMINAL or (isinstance(ref, dict) and ref.get("retain_resources")):
             walk(ref)
     return words
@@ -153,7 +184,9 @@ def _delete(path, meta, **options):
         KUBE.ksend("DELETE", path, body)
     except urllib.error.HTTPError as error:
         error.close()
-        return False        # gone already (404), or replaced since it was read (409)
+        if error.code not in (404, 409):    # not gone already, nor replaced since it was read
+            print(f"finished helper {meta.get('name')} not removed: HTTP {error.code}", flush=True)
+        return False
     except Exception as error:
         print(f"finished helper {meta.get('name')} not removed: {str(error)[:160]}", flush=True)
         return False
@@ -167,9 +200,9 @@ def _epoch(stamp):
         return None
 
 
-def _pod_ended(pod):
+def _pod_ended(pod, now):
     """When a finished pod ended: its last container's end, else when it
-    started or was made. Unknown is now, so an unreadable one is kept."""
+    started or was made. Unknown is now (this round's), so an unreadable one is kept."""
     status = pod.get("status") or {}
     ends = [_epoch(((c.get("state") or {}).get("terminated") or {}).get("finishedAt"))
             for c in (status.get("containerStatuses") or []) + (status.get("initContainerStatuses") or [])
@@ -180,7 +213,7 @@ def _pod_ended(pod):
     for stamp in (status.get("startTime"), (pod.get("metadata") or {}).get("creationTimestamp")):
         if _epoch(stamp) is not None:
             return _epoch(stamp)
-    return time.time()
+    return now
 
 
 def _complete(job):
@@ -188,7 +221,7 @@ def _complete(job):
                for c in (job.get("status") or {}).get("conditions") or [] if isinstance(c, dict))
 
 
-def _job_ended(job):
+def _job_ended(job, now):
     """When a Job ended, Complete or Failed with no pod still running; None
     while it has not."""
     status = job.get("status") or {}
@@ -201,4 +234,4 @@ def _job_ended(job):
     for stamp in [status.get("completionTime")] + [c.get("lastTransitionTime") for c in ended]:
         if _epoch(stamp) is not None:
             return _epoch(stamp)
-    return time.time()
+    return now

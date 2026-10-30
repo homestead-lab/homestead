@@ -9,8 +9,10 @@ KubeVirt keeps as the log of the guest-console-log container in the VM's
 launcher pod (KubeVirt 1.1 and later). Where there is nothing to read, the
 job's own steps are all there is, and it says so.
 """
+import urllib.error
 import urllib.parse
 
+import homestead_helper_sweep as HELPER_SWEEP
 import homestead_k3scluster as K3SC
 import homestead_value_masks as MASKS
 
@@ -21,6 +23,11 @@ TAIL = 200
 def bind(_kget, _ktext):
     global kget, ktext
     kget, ktext = _kget, _ktext
+
+
+def _removed(item, task):
+    """The words for a helper the leader's sweep removed, or None."""
+    return HELPER_SWEEP.removed_note(item, task)
 
 
 def _q(value):
@@ -197,7 +204,10 @@ def node_power(item):
         return [{"title": "Power helper", "text": "", "note": f"Creation of {ns}/{name} was not confirmed. Inspect it in Kubernetes before retrying; no same-name pod is assumed to belong to this request."}]
     try:
         pod = kget(f"/api/v1/namespaces/{_q(ns)}/pods/{_q(name)}")
-    except Exception:
+    except Exception as error:
+        removed = isinstance(error, urllib.error.HTTPError) and error.code == 404 and _removed(item, "node-power")
+        if removed:
+            return [{"title": "Power helper", "text": "", "note": f"{ns}/{name} was {removed}."}]
         return [{"title": "Power helper", "text": "", "note": f"{ns}/{name} is unavailable. This does not confirm shutdown; check the host's console or physical power."}]
     if (pod.get("metadata") or {}).get("uid") != uid:
         return [{"title": "Power helper", "text": "", "note": "Helper identity changed; replacement events and logs are not shown."}]
@@ -212,7 +222,13 @@ def copy_job(item):
     ref = item.get("ref") or {}
     if not ref.get("job_uid"):
         return [{"title": "Copy", "text": "", "note": "No confirmed copy Job identity; inspect the durable job steps."}]
-    obj = kget(f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs/{ref['job']}")
+    try:
+        obj = kget(f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs/{ref['job']}")
+    except urllib.error.HTTPError as error:
+        removed = error.code == 404 and _removed(item, "restructure")
+        if not removed:
+            raise
+        return [{"title": "Copy", "text": "", "note": f"The copy Job {ref['namespace']}/{ref['job']} was {removed}."}]
     if obj.get("metadata", {}).get("uid") != ref["job_uid"]:
         return [{"title": "Copy", "text": "", "note": "Copy Job identity changed; replacement logs are not shown."}]
     pods = [p for p in _pods(ref["namespace"], f"job-name={ref['job']}") if any(

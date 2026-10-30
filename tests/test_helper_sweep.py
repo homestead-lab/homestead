@@ -76,6 +76,17 @@ class FinishedPodTests(Base):
         self.assertTrue(self.left("Pod", "lab", "homestead-image-clean-0123456789-a1b2c4"), "its log is still read")
         self.assertTrue(self.left("Pod", "lab", "homestead-image-clean-9876543210-a1b2c4"), "never a running one")
 
+    def test_a_pod_not_known_to_have_ended_is_kept_however_old(self):
+        self.run_sweep(pod("homestead-image-clean-0123456789-a1b2c3", "image-cleanup", phase="Running"),
+                       pod("homestead-image-clean-0123456789-a1b2c4", "image-cleanup", phase="Unknown"),
+                       pod("homestead-image-clean-0123456789-a1b2c5", "image-cleanup", phase="Pending"))
+        self.assertEqual([], [w for w in self.kube.writes if w[0] == "DELETE"])
+
+    def test_at_most_fifty_go_in_one_round(self):
+        many = [pod(f"homestead-image-clean-0123456789-{i:06x}", "image-cleanup") for i in range(60)]
+        self.run_sweep(*many)
+        self.assertEqual(50, len([w for w in self.kube.writes if w[0] == "DELETE"]))
+
     def test_the_delete_names_the_pod_it_read(self):
         self.run_sweep(pod("homestead-image-clean-0123456789-a1b2c3", "image-cleanup", uid="uid-cleaner"))
         deletes = [w for w in self.kube.writes if w[0] == "DELETE"]
@@ -149,6 +160,12 @@ class FinishedJobTests(Base):
         delete = next(w for w in self.kube.writes if w[0] == "DELETE")
         self.assertEqual("Background", delete[2]["propagationPolicy"])
 
+    def test_a_job_with_a_pod_still_running_is_kept_however_old(self):
+        old = job("app-restructure-a1b2c3", "restructure", finished=NOW - 30 * DAY)
+        old["status"]["active"] = 1
+        self.run_sweep(old)
+        self.assertTrue(self.left("Job", "apps", "app-restructure-a1b2c3"))
+
     def test_a_copy_kept_for_inspection_keeps_its_job(self):
         failed = {"id": "op-3", "kind": "workload-copy", "status": "failed",
                   "ref": {"namespace": "apps", "job": "app-restructure-a1b2c3", "retain_resources": True}}
@@ -159,6 +176,28 @@ class FinishedJobTests(Base):
     def test_a_user_job_with_a_homestead_label_is_left(self):
         self.run_sweep(job("nightly-backup", "restructure", finished=NOW - 30 * DAY))
         self.assertTrue(self.left("Job", "apps", "nightly-backup"))
+
+
+class DeleteTests(unittest.TestCase):
+    def test_a_refused_delete_is_said_and_gone_or_replaced_are_not(self):
+        import io
+        import urllib.error
+        for code, said in ((403, True), (404, False), (409, False)):
+            error = urllib.error.HTTPError("/x", code, "no", {}, io.BytesIO(b""))
+            with self.subTest(code=code), mock.patch.object(SWEEP.KUBE, "ksend", side_effect=error), \
+                    mock.patch("builtins.print") as printed:
+                self.assertFalse(SWEEP._delete("/api/v1/namespaces/lab/pods/p", {"name": "p", "uid": "u"}))
+            self.assertEqual(said, printed.called)
+
+    def test_a_job_store_row_that_is_not_an_object_is_skipped(self):
+        self.assertEqual({"homestead-reboot-node-a-1"},
+                         SWEEP._followed(["junk", None, {"status": "running", "ref": {"helper_pod": "homestead-reboot-node-a-1"}}]))
+
+    def test_a_finished_one_with_no_time_on_it_counts_as_ending_at_the_round_given(self):
+        bare = {"metadata": {"name": "p"}, "status": {"phase": "Succeeded"}}
+        self.assertEqual(NOW, SWEEP._pod_ended(bare, NOW))
+        undated = {"status": {"conditions": [{"type": "Complete", "status": "True"}]}}
+        self.assertEqual(NOW, SWEEP._job_ended(undated, NOW))
 
 
 class FinishedImportTests(Base):

@@ -171,17 +171,17 @@ def run_job_now(name):
         raise ValueError("name must be a CronJob's: lowercase letters, numbers, dashes and dots, at most 52")
     cj = I.kget(f"/apis/batch/v1/namespaces/{I.NS}/cronjobs/{name}")
     spec = dict(cj["spec"]["jobTemplate"]["spec"])
-    # A run started here is the CronJob's, as kubectl's create job --from
-    # makes it: it goes with the CronJob and its history limit, and a day
-    # after it ends (as Homestead's own schedules' runs do) when the
-    # template does not say otherwise.
+    # A run started here goes with its CronJob, and a day after it ends (as
+    # Homestead's own schedules' runs do) when the template does not say
+    # otherwise. Owned but not controlled: as its controller the CronJob
+    # would apply concurrencyPolicy to it (Replace deletes it while it runs,
+    # Forbid skips the scheduled runs) and trim a failed one's log early.
     spec.setdefault("ttlSecondsAfterFinished", 86400)
     body = {"apiVersion": "batch/v1", "kind": "Job",
             "metadata": {"name": f"{name}-{int(time.time()) % 1000000}", "namespace": I.NS,
                          "labels": {NAMES.key("managed"): "true", NAMES.key("from"): name},
                          "ownerReferences": [{"apiVersion": "batch/v1", "kind": "CronJob", "name": name,
-                                              "uid": cj["metadata"]["uid"], "controller": True,
-                                              "blockOwnerDeletion": False}]},
+                                              "uid": cj["metadata"]["uid"], "blockOwnerDeletion": False}]},
             "spec": spec}
     return I.ksend("POST", f"/apis/batch/v1/namespaces/{I.NS}/jobs", body)
 
