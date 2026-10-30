@@ -83,7 +83,10 @@ def record(key, via, action, args=None, outcome="ok", detail="", addr="", approv
                 handle.write(line + "\n")
             _written[0] += 1
             if _written[0] % TRIM_EVERY == 0:
-                _trim_locked()
+                try:
+                    _trim_locked()
+                except Exception as error:      # the line is written; only the trim waits
+                    _not_trimmed(error)
     except Exception as error:      # full, unwritable, or held by a data move
         # The pod log keeps the line the data volume did not take.
         print(f"agent audit: not written to the data volume ({str(error)[:160]}): {line}", flush=True)
@@ -134,12 +137,17 @@ def _trim_locked(now=None):
     return len(rows)
 
 
+def _not_trimmed(error):
+    print(f"agent audit: not trimmed, the log is kept as it is ({str(error)[:160]})", flush=True)
+
+
 def trim(now=None):
     """Daily, from housekeeping: drop what is older than KEEP_DAYS."""
     try:
         with _lock:
             return _trim_locked(now)
-    except Exception:
+    except Exception as error:
+        _not_trimmed(error)
         return 0
 
 

@@ -138,6 +138,21 @@ class NewestFromTheEndTests(unittest.TestCase):
             self.assertEqual(0, agent_audit.trim())
         self.assertEqual(1, len(agent_audit.recent()), "the trim did not save an empty log over it")
 
+    def test_a_refused_trim_says_why_and_a_written_line_is_not_called_lost(self):
+        path = Path(self.dir.name, agent_audit.FILE)
+        path.write_text(json.dumps({"at": time.time(), "key": "k1"}) + "\n", encoding="utf-8")
+        failing = mock.patch.object(agent_audit, "_read", side_effect=OSError(5, "Homestead could not read the AI agents' audit log"))
+        out = io.StringIO()
+        with failing, contextlib.redirect_stdout(out):
+            self.assertEqual(0, agent_audit.trim())
+        self.assertIn("agent audit: not trimmed", out.getvalue())
+        out = io.StringIO()
+        with failing, mock.patch.object(agent_audit, "TRIM_EVERY", 1), contextlib.redirect_stdout(out):
+            agent_audit.record({"id": "k1"}, "mcp", "read")
+        self.assertEqual(2, len(path.read_text(encoding="utf-8").splitlines()), "the line was written")
+        self.assertNotIn("not written", out.getvalue())
+        self.assertIn("agent audit: not trimmed", out.getvalue())
+
 
 class LostLinesAndDurableTrimTests(unittest.TestCase):
     """Review of #986 §1: a line the data-move barrier refuses reaches the pod
