@@ -24,6 +24,7 @@ Longhorn 1.10 and later keep the value per data engine ({"v1":"false"});
 """
 import json
 import re
+import urllib.error
 
 import homestead_changes as CHANGES
 import homestead_kube as KUBE
@@ -183,8 +184,26 @@ def save(enabled):
     if not isinstance(enabled, bool):
         raise ValueError("enabled must be true or false")
     item = _setting_or_refuse()
-    with CHANGES.marking(_word(enabled)):
-        ksend("PATCH", f"{LH}/settings/{SETTING}", {"value": encode_value(enabled, item.get("value"))}, ctype=MERGE)
+    for attempt in range(2):
+        # The value holds every data engine's half: the write names the
+        # resourceVersion read, so one rebuilt from a stale read is refused
+        # (409) rather than putting the other engine's half back.
+        body = {"value": encode_value(enabled, item.get("value"))}
+        version = (item.get("metadata") or {}).get("resourceVersion")
+        if version:
+            body["metadata"] = {"resourceVersion": version}
+        try:
+            with CHANGES.marking(_word(enabled)):
+                ksend("PATCH", f"{LH}/settings/{SETTING}", body, ctype=MERGE)
+            break
+        except urllib.error.HTTPError as error:
+            if error.code != 409:
+                raise
+            error.close()
+            if attempt:
+                raise RuntimeError(f"{SETTING} kept changing while it was being saved, "
+                                   "so this change was not saved; try again") from None
+            item = _setting_or_refuse()
     detail = ("Longhorn now freezes each volume's filesystem for its snapshots and backups" if enabled
               else "Longhorn no longer freezes filesystems for snapshots, except on volumes set to always")
     if _from_chart():
