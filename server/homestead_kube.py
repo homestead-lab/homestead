@@ -68,8 +68,9 @@ def api_path(path):
     """A Kubernetes API path, refused if a name in it could step out of the
     object it names. Names come from requests - ?name=, a body - and the API
     server is asked as Homestead, so "../" in one must never reach it, nor a
-    "?" (plain or encoded) that cuts the path short: a second "?", or a
-    query that is not parameters as Homestead sends them, is refused."""
+    "?" or "#" (plain or encoded) that cuts the path short. A backstop on
+    structure only: one "?", no "#", and query parameters with plain names;
+    names are checked where they enter (request_name)."""
     head, cut, query = str(path).partition("?")
     if (_DOT_SEGMENT.search(head) or any(code in head.lower() for code in ("%2f", "%5c", "%3f", "%23"))
             or any(c in head for c in ("\\", " ", "\t", "\r", "\n", "#"))):
@@ -79,61 +80,10 @@ def api_path(path):
     return path
 
 
-# A selector's parts, as Kubernetes parses them. A label key may carry one
-# "/", after a DNS prefix; Homestead's and Kubernetes' own prefixes all hold
-# a dot (app.kubernetes.io), which keeps a path cut short out of a key.
-_LABEL_NAME = r"[A-Za-z0-9](?:[-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?"
-_LABEL_KEY = re.compile(r"(?:[a-z0-9](?:[-a-z0-9]*[a-z0-9])?(?:\.[a-z0-9](?:[-a-z0-9]*[a-z0-9])?)+/)?" + _LABEL_NAME)
-_LABEL_VALUE = re.compile(r"(?:" + _LABEL_NAME + r")?")
-_FIELD_KEY = re.compile(r"[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*")
-_FIELD_VALUE = re.compile(r"[-A-Za-z0-9_.:]*")
-_TERM = re.compile(r"\s*(?P<key>[^\s=!(),]+)\s*(?:(?P<op>==|=|!=)\s*(?P<value>[^\s=!(),]*)|"
-                   r"\s(?P<set>in|notin)\s*\((?P<values>[^()]*)\))?\s*")
-
-
-def _terms(selector):
-    """A selector's terms: split on the commas that are not inside "( )"."""
-    terms, depth, start = [], 0, 0
-    for at, char in enumerate(selector):
-        depth += {"(": 1, ")": -1}.get(char, 0)
-        if char == "," and depth == 0:
-            terms.append(selector[start:at])
-            start = at + 1
-    return terms + [selector[start:]]
-
-
-def _selector(selector, field):
-    key_ok, value_ok = (_FIELD_KEY, _FIELD_VALUE) if field else (_LABEL_KEY, _LABEL_VALUE)
-    for term in _terms(selector):
-        term = term.strip()
-        exists = not field and term.startswith("!")
-        match = _TERM.fullmatch(term[1:] if exists else term)
-        if not match or not key_ok.fullmatch(match["key"]):
-            return False
-        if match["set"] or exists:
-            if field or (exists and match["op"]):
-                return False
-            values = [v.strip() for v in (match["values"] or "").split(",")] if match["set"] else []
-            if not all(_LABEL_VALUE.fullmatch(v) for v in values):
-                return False
-        elif match["op"] and not value_ok.fullmatch(match["value"] or ""):
-            return False
-        elif field and not match["op"]:
-            return False
-    return True
-
-
 def _query_part(part):
-    """A query parameter as Homestead sends them: a plain name, and a value
-    with no "/". A selector is parsed term by term: a "/" only in a label
-    key's prefix, never in a value."""
-    key, _, value = part.partition("=")
-    if not _QUERY_KEY.fullmatch(key):
-        return False
-    value = urllib.parse.unquote(value)
-    if key in ("labelSelector", "fieldSelector"):
-        return _selector(value, key == "fieldSelector")
-    return "/" not in value
+    """A query parameter with a plain name. Its value - a selector, a
+    token - is Kubernetes' to read: names are checked where they enter."""
+    return bool(_QUERY_KEY.fullmatch(part.partition("=")[0]))
 
 
 def request_name(value, label="name", namespace=False):
@@ -484,6 +434,10 @@ def update_json(path, key, fn, *, replace=False, attempts=4, labels=None, read=N
 
 
 def require_workload_target(ns, name):
+    # An admin's request with no name is let through as before; one that
+    # names a workload names a valid one.
+    if HOSTACCESS.role() in (None, "admin") and not name:
+        return
     request_name(ns, "namespace", namespace=True)
     request_name(name, "workload name")
     if HOSTACCESS.role() not in (None, "admin"):

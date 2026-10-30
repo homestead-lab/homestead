@@ -229,6 +229,7 @@ def scale(request):
 def set_failover(request):
     b = request.body
     for item in b.get("items") or []:
+        _path_names(item.get("ns"), item.get("name"))
         guard_managed_smb(item.get("ns"), item.get("name"))
     result = FAILOVER.set_many(b.get("items") or [])
     ROUTER.forget("wl")

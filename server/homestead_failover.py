@@ -16,6 +16,7 @@ A container whose volume one node mounts at a time only really moves if
 Longhorn lets go of the volume on the dead node, which its "Pod Deletion
 Policy When Node is Down" setting decides; see homestead_lhcapacity.
 """
+import homestead_kube as KUBE
 
 KEYS = ("node.kubernetes.io/unreachable", "node.kubernetes.io/not-ready")
 FAST_SECONDS = 15
@@ -68,6 +69,8 @@ def set_many(items):
     changed, unchanged = [], []
     for item in items or []:
         ns, name, mode = str(item.get("ns") or ""), str(item.get("name") or ""), str(item.get("mode") or "")
+        KUBE.request_name(ns, "namespace", namespace=True)
+        KUBE.request_name(name, "workload name")
         dep = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
         podspec = ((dep.get("spec") or {}).get("template") or {}).get("spec") or {}
         if mode_of(podspec) == mode:

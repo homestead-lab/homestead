@@ -639,6 +639,7 @@ def guard_managed_smb(ns, name):
 
 
 def workload_start_plan(ns, name, replicas=1):
+    _path_names(ns, name)
     ns, name = _dns_name(ns, "namespace"), _dns_name(name, "workload name")
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
     plan = PLACE.start_plan(ns, name, replicas, threshold)

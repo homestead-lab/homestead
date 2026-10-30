@@ -4,8 +4,10 @@ A namespace or workload name is put straight into the API path Homestead
 asks as itself, so one holding "?" or "/" would point the request at a
 different object. Each route that takes such a name refuses one that is not
 a valid Kubernetes name, before anything is read or written."""
+import ast
 import sys
 import unittest
+import urllib.parse
 from pathlib import Path
 from unittest import mock
 
@@ -69,6 +71,26 @@ class RequestNameTests(unittest.TestCase):
     def test_restarting_refuses_a_name_that_is_not_a_kubernetes_name(self):
         self.assert_refused("POST", "/api/restart")
 
+    def test_the_start_plan_refuses_a_name_that_is_not_a_kubernetes_name(self):
+        self.assert_refused("GET", "/api/workloads/start-plan")
+
+    def test_failover_settings_refuse_a_name_that_is_not_a_kubernetes_name(self):
+        _, handler = server.WORKLOADS.ROUTES[("POST", "/api/workloads/failover")]
+        for ns, name in [(ns, "web") for ns in BAD_NAMESPACES] + [("lab", name) for name in BAD_NAMES]:
+            with self.subTest(ns=ns, name=name), self.assertRaisesRegex(ValueError, "Kubernetes name"):
+                handler(ROUTER.Request("POST", "/api/workloads/failover", {},
+                                       {"items": [{"ns": ns, "name": name, "mode": "fast"}]}, "someone", "admin"))
+        import homestead_failover as FAILOVER
+        with self.assertRaisesRegex(ValueError, "Kubernetes name"):
+            FAILOVER.set_many([{"ns": "lab", "name": "web?x=", "mode": "fast"}])
+
+    def test_the_target_check_keeps_an_admins_request_with_no_name(self):
+        import homestead_host_access as HOST
+        self.addCleanup(HOST.set_role, None)
+        for role in ("admin", None):
+            HOST.set_role(role)
+            self.assertIsNone(server.KUBE_HELPERS.require_workload_target("lab", ""))
+
     def test_the_target_check_refuses_a_name_that_is_not_a_kubernetes_name(self):
         import homestead_host_access as HOST
         self.addCleanup(HOST.set_role, None)
@@ -79,7 +101,9 @@ class RequestNameTests(unittest.TestCase):
 
 
 class ApiPathCutTests(unittest.TestCase):
-    """The shared path check refuses a path a name has cut short with "?"."""
+    """The shared path check is a backstop on structure: one "?", no "#",
+    neither (plain or encoded) inside a path segment, and query parameters
+    with plain names. What a selector says is Kubernetes' to read."""
 
     def test_a_second_query_start_is_refused(self):
         with self.assertRaises(ValueError):
@@ -88,53 +112,83 @@ class ApiPathCutTests(unittest.TestCase):
     def test_a_query_that_starts_with_a_path_is_refused(self):
         for path in ("/api/v1/namespaces/kube-system/secrets/homestead-auth?/pods/web",
                      "/apis/apps/v1/namespaces/lab/deployments/web?/scale",
-                     "/api/v1/namespaces/lab/pods?=x",
-                     "/api/v1/namespaces/lab?limit=/pods/web",
-                     "/api/v1/namespaces/lab?labelSelector=x/pods/web",
-                     "/api/v1/namespaces/lab?labelSelector=/pods",
-                     "/api/v1/namespaces/lab?container=a%2Fb"):
+                     "/api/v1/namespaces/lab/pods?=x", "/api/v1/namespaces/lab/pods?limit=1#x"):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 server.KUBE_HELPERS.api_path(path)
 
-    def test_a_selector_value_with_a_slash_is_refused(self):
-        for path in ("/api/v1/namespaces/lab?labelSelector=a=b/pods/web",
-                     "/api/v1/namespaces/lab?labelSelector=app.kubernetes.io/name=x/log",
-                     "/api/v1/namespaces/lab?labelSelector=app.kubernetes.io/name%3Dx%2Flog",
-                     "/api/v1/namespaces/lab?labelSelector=x/log",
-                     "/api/v1/namespaces/lab?labelSelector=app in (a,b/c)",
-                     "/api/v1/namespaces/lab?fieldSelector=metadata.name=web/log",
-                     "/api/v1/namespaces/lab?fieldSelector=spec/nodeName=node-a"):
-            with self.subTest(path=path), self.assertRaises(ValueError):
-                server.KUBE_HELPERS.api_path(path)
-
-    def test_an_encoded_question_mark_in_the_path_is_refused(self):
-        for path in ("/api/v1/namespaces/lab%3f/pods/web", "/api/v1/namespaces/lab/pods/web%3F/log"):
+    def test_an_encoded_question_mark_or_hash_in_a_segment_is_refused(self):
+        for path in ("/api/v1/namespaces/lab%3f/pods/web", "/api/v1/namespaces/lab/pods/web%3F/log",
+                     "/api/v1/namespaces/lab/pods/web%23x"):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 server.KUBE_HELPERS.api_path(path)
 
     def test_selectors_in_every_form_kubernetes_takes_pass(self):
-        for selector in ("app.kubernetes.io/name=x", "app.kubernetes.io/name%3Dx", "app==web", "tier!=low",
-                         "homestead.example.com/managed", "!homestead.example.com/held",
-                         "env in (prod,staging)", "env%20notin%20(dev)", "app=web,tier!=low,release",
-                         "job-name%3Dbackup-1", "app="):
+        for selector in ("app.kubernetes.io/name=x", "app.kubernetes.io/name%3Dx", "example/app=web",
+                         "x/log", "app==web", "tier!=low", "!example.com/held", "env in (prod,staging)",
+                         "env+notin+(dev)", "app=", "app=web,tier!=low,release", "job-name%3Dbackup-1",
+                         "replicas>1"):
             path = "/api/v1/pods?labelSelector=" + selector
             with self.subTest(selector=selector):
                 self.assertEqual(path, server.KUBE_HELPERS.api_path(path))
-        for selector in ("spec.nodeName%3Dnode-a", "involvedObject.name=web,involvedObject.uid=0a1b-2c",
-                         "status.phase!=Succeeded", "metadata.name==web.example.com"):
-            path = "/api/v1/pods?fieldSelector=" + selector
+        for selector in ("type%3Dkubernetes.io%2Ftls", "type=kubernetes.io/tls", "spec.nodeName%3Dnode-a",
+                         "involvedObject.fieldPath=spec.containers{web}", "status.phase!=Succeeded"):
+            path = "/api/v1/secrets?fieldSelector=" + selector
             with self.subTest(selector=selector):
                 self.assertEqual(path, server.KUBE_HELPERS.api_path(path))
 
     def test_ordinary_queries_pass(self):
         for path in ("/api/v1/pods?labelSelector=app.kubernetes.io/name%3Dweb&limit=10",
                      "/api/v1/namespaces/lab/pods/web/log?tailLines=300&timestamps=true&container=main",
-                     "/api/v1/pods?labelSelector=homestead.example.com/managed=true",
-                     "/api/v1/pods?labelSelector=homestead.example.com/managed%3Dtrue,app.kubernetes.io/name!=x",
-                     "/api/v1/namespaces/lab/pods?fieldSelector=spec.nodeName%3Dnode-a",
                      "/apis/batch/v1/namespaces/lab/cronjobs/nightly?propagationPolicy=Background",
+                     "/api/v1/pods?limit=50&continue=eyJ2IjoibWV0YS5rOHMuaW8vdjEi",
                      "/api/v1/namespaces/lab/pods/web", "/api/v1/nodes?"):
             with self.subTest(path=path):
+                self.assertEqual(path, server.KUBE_HELPERS.api_path(path))
+
+
+class HomesteadsOwnQueriesTests(unittest.TestCase):
+    """Every selector and query Homestead itself builds passes the check:
+    each f-string or string in server/ holding labelSelector= or
+    fieldSelector= is built with sample names and checked."""
+
+    SAMPLES = (("selector", "example/app=web,app.kubernetes.io/name=web"), ("label", "example.com/managed"),
+               ("query", "example/app=web"), ("key", "example.com/role"), ("token", "eyJ2IjoxfQ"))
+
+    def sample(self, source):
+        low = source.lower()
+        value = next((v for k, v in self.SAMPLES if k in low), "web")
+        if "quote(" in source:
+            value = urllib.parse.quote(value, safe="")
+        return value
+
+    def built(self):
+        out, seen = [], set()
+        for path in sorted((Path(__file__).resolve().parents[1] / "server").glob("*.py")):
+            source = path.read_text()
+            tree = ast.parse(source)
+            parts = {id(part) for node in ast.walk(tree) if isinstance(node, ast.JoinedStr) for part in node.values}
+            for node in ast.walk(tree):
+                if id(node) in parts:
+                    continue
+                if isinstance(node, ast.JoinedStr):
+                    text = "".join(part.value if isinstance(part, ast.Constant) else
+                                   self.sample(ast.get_source_segment(source, part.value) or "")
+                                   for part in node.values)
+                elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                    text = node.value
+                else:
+                    continue
+                if "labelSelector=" not in text and "fieldSelector=" not in text:
+                    continue
+                text = text[min(i for i in (text.find("/api"), text.find("?")) if i >= 0):]
+                out.append((f"{path.name}:{node.lineno}", text if text.startswith("/") else "/api/v1/pods" + text))
+        return out
+
+    def test_every_query_homestead_builds_passes_the_path_check(self):
+        built = self.built()
+        self.assertGreater(len(built), 40, "the scan found Homestead's selectors")
+        for where, path in built:
+            with self.subTest(where=where, path=path):
                 self.assertEqual(path, server.KUBE_HELPERS.api_path(path))
 
 
