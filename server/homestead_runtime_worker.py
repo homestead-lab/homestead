@@ -56,16 +56,57 @@ def administrative(path):
     return path
 
 
+# Extended attributes, kept by namespace (#973). The kernel maintains these
+# itself: they are neither copied nor compared.
+KERNEL_MANAGED = ('security.ima', 'security.evm')
+
+
+def _label(name):
+    """A Linux security module's label (SELinux, AppArmor, Smack)."""
+    return name in ('security.selinux', 'security.apparmor') or name.startswith('security.SMACK64')
+
+
+def read_attrs(path):
+    """The attributes kept for path, base64 by name: all but the kernel-managed."""
+    return {name: base64.b64encode(os.getxattr(path, name)).decode()
+            for name in sorted(os.listxattr(path)) if name not in KERNEL_MANAGED}
+
+
+def keep_attrs(path, attrs):
+    """Give path the attributes read_attrs() returned for its source. Only what
+    differs is written: on an SELinux host every file has a label, and a
+    confined or unprivileged writer cannot set one, even to the same value.
+    user.*, trusted.* and security.capability must be kept exactly; a refused
+    write raises. A label the kernel refuses stops maintenance, naming both."""
+    for name, value in attrs.items():
+        if name in KERNEL_MANAGED:
+            continue
+        wanted = base64.b64decode(value)
+        try:
+            current = os.getxattr(path, name)
+        except OSError:
+            current = None
+        if current == wanted:
+            continue
+        try:
+            os.setxattr(path, name, wanted)
+        except OSError as error:
+            if not _label(name):
+                raise
+            have = 'absent or unreadable' if current is None else repr(current)
+            require(False, f'Cannot keep {name} on {path}: it is {have}, the source has {wanted!r} '
+                           f'({error.strerror}). Check for a context= mount or a policy that refuses the relabel.')
+
+
 def metadata(path):
     info = path.stat()
-    return {'mode':stat.S_IMODE(info.st_mode), 'uid':info.st_uid, 'gid':info.st_gid,
-            'attrs':{name:base64.b64encode(os.getxattr(path,name)).decode() for name in sorted(os.listxattr(path))}}
+    return {'mode':stat.S_IMODE(info.st_mode), 'uid':info.st_uid, 'gid':info.st_gid, 'attrs':read_attrs(path)}
 
 
 def apply_metadata(path, values):
     os.chown(path, values['uid'], values['gid'])
     os.chmod(path, values['mode'])
-    for name,value in values['attrs'].items():os.setxattr(path,name,base64.b64decode(value))
+    keep_attrs(path, values['attrs'])
 
 
 def durable(path, content):
@@ -144,7 +185,7 @@ def manifest(folder, *, source=False):
         if source and stat.S_ISSOCK(entry.st_mode) and rel.split('/')[0] in ('unix-domain-socket', 'instance-manager'):
             return
         require(stat.S_ISDIR(entry.st_mode) or stat.S_ISREG(entry.st_mode), 'Unexpected runtime file: ' + rel)
-        attrs = {name: base64.b64encode(os.getxattr(path, name)).decode() for name in sorted(os.listxattr(path))}
+        attrs = read_attrs(path)
         item = {'mode': stat.S_IMODE(entry.st_mode), 'uid': entry.st_uid, 'gid': entry.st_gid, 'attrs': attrs,
                 'directory': stat.S_ISDIR(entry.st_mode)}
         if item['directory']:
@@ -203,7 +244,7 @@ def copy_runtime(source, target, expected):
                 out.flush(); os.fsync(out.fileno())
         os.chown(dst, entry['uid'], entry['gid'])
         os.chmod(dst, entry['mode'])
-        for name, value in entry['attrs'].items(): os.setxattr(dst, name, base64.b64decode(value))
+        keep_attrs(dst, entry['attrs'])
         if not entry['directory']: os.utime(dst, ns=(entry['mtime'], entry['mtime']))
     require(manifest(target) == expected, 'Runtime copy verification failed; source remains intact')
     apply_metadata(target, metadata(source))
