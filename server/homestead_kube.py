@@ -42,8 +42,9 @@ VALUES = ("API", "CTX", "TOKEN")
 KGET_RETRY = (0.5, 1.0, 2.0)  # a busy API server (priority and fairness) answers reads 429 for a moment
 # A read of one object is a few kilobytes: an API server that has not answered
 # it in OBJECT_TIMEOUT is slow or hung, and waiting longer only holds the page
-# (#984). A list, a subresource or discovery is not known to be small and keeps
-# LIST_TIMEOUT. Either bounds each wait on the socket, not the whole answer, so
+# (#984). Only a request's reads (a page waiting) are given it; background work
+# (power, host moves, a VM's state) keeps LIST_TIMEOUT, as do a list, a
+# subresource and discovery, which are not known to be small. Either bounds each wait on the socket, not the whole answer, so
 # a big list arriving steadily is never cut; the request's deadline bounds all.
 OBJECT_TIMEOUT = 5
 LIST_TIMEOUT = 10
@@ -267,11 +268,13 @@ def _one_object(path):
 
 
 def kget(path, timeout=None):
-    """A read, given OBJECT_TIMEOUT for one object and LIST_TIMEOUT otherwise
-    unless the caller says, at most what is left of the request's time for
-    reads (homestead_read_deadline), and a 429 asked again only while it lasts."""
+    """A read, given OBJECT_TIMEOUT for one object in a request and LIST_TIMEOUT
+    otherwise unless the caller says, at most what is left of the request's
+    time for reads (homestead_read_deadline), and a 429 asked again only while
+    it lasts."""
     if timeout is None:
-        timeout = OBJECT_TIMEOUT if _one_object(path) else LIST_TIMEOUT
+        in_request = DEADLINE.remaining() is not None
+        timeout = OBJECT_TIMEOUT if in_request and _one_object(path) else LIST_TIMEOUT
     for attempt in range(len(KGET_RETRY) + 1):
         try:
             return DEADLINE.read(timeout, lambda allowed: transport("GET", api_path(path), timeout=allowed))
@@ -478,11 +481,14 @@ def transport(method, path, body=None, ctype=None, timeout=15):
 # pool keeps 16 (#984): about forty background threads and 8-worker pools read
 # at once, and with 8 half of each burst reconnected. An idle connection over
 # a minute old is not reused (the API server closes idle ones at 90 s). A
-# connection that fails is closed; one dropped or refused (a reset, a closed
-# connection, an unreachable server) drops the whole idle pool too, as an API
-# server that went away would otherwise cost a full timeout for every pooled
-# connection in turn. A timeout drops only its own connection: it says that
-# one answer was slow (a slow metrics-server), not that the server went away.
+# connection that fails is closed. One dropped or refused (a reset, a closed
+# connection, an unreachable server), a connect that timed out, and a reused
+# connection that got no answer at all in time drop the whole idle pool too:
+# an API server that went away, with or without a reset (a powered-off host,
+# a moved virtual IP), would otherwise cost a full timeout for every pooled
+# connection in turn. A timeout once the headers came (a slow body), on a new
+# connection that is open, or one the request's deadline cut, drops only its
+# own: the server is there, and that one answer was slow.
 _IDLE_MAX = 16
 _IDLE_SECONDS = 60
 _idle = []
@@ -583,8 +589,11 @@ def _request(method, path, data, headers, timeout, max_bytes=None):
     With max_bytes, at most max_bytes + 1 bytes of the answer are read; a
     connection whose answer was not read to its end is closed, not pooled."""
     headers = {**headers, "Authorization": f"Bearer {TOKEN}"}
+    left = DEADLINE.remaining()
+    at_deadline = left is not None and timeout >= left
     pooled = _take(timeout) if method in _READS else None
     connection = pooled or _open(timeout)
+    answered = False
     try:
         try:
             connection.request(method, path, body=data, headers=headers)
@@ -594,15 +603,19 @@ def _request(method, path, data, headers, timeout, max_bytes=None):
             close_connections()
             if pooled is None:
                 raise
-            connection = _open(timeout)
+            pooled, connection = None, _open(timeout)
             connection.request(method, path, body=data, headers=headers)
             response = connection.getresponse()
+        answered = True
         payload = _body(connection, response, max_bytes)
     except BaseException as error:
+        # Whether this connection was open (a connect that timed out leaves it
+        # without a socket) and was a new one: see the pool's comment above.
+        fresh_and_open = pooled is None and connection.sock is not None
         connection.close()
-        # A timeout (the read's own or the request's deadline, #984) says
-        # nothing about the other connections: only this one is dropped.
-        if not isinstance(error, TimeoutError):
+        slow_answer = isinstance(error, DEADLINE.Spent) or isinstance(error, TimeoutError) and (
+            at_deadline or answered or fresh_and_open)
+        if not slow_answer:
             close_connections()
         if isinstance(error, http.client.HTTPException):
             raise urllib.error.URLError(error) from error

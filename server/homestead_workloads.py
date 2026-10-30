@@ -38,6 +38,7 @@ import homestead_value_masks as MASKS
 import homestead_place as PLACE
 import homestead_priority as PRIORITY
 import homestead_privileges as PRIV
+import homestead_read_deadline as DEADLINE
 import homestead_rename as RENAME
 import homestead_restore_test as RESTORE_TEST
 import homestead_restructure as RESTRUCTURE
@@ -179,6 +180,10 @@ def logs(request):
     except urllib.error.HTTPError as error:
         return ROUTER.Reply(409 if error.code in (400, 404) else error.code,
                             {"error": logs_refusal(error, pod, container)})
+    except TimeoutError:
+        # The API server is slow or not answering: the same answer as a page
+        # whose reads ran out of time (#984), not a server error.
+        return ROUTER.Reply(503, {"error": DEADLINE.MESSAGE, "unavailable": True})
 
 
 def search_logs(request):
