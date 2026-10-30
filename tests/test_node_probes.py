@@ -255,9 +255,9 @@ class GetNodesTests(Base):
                                  workload_names=lambda pods, system: ([], [])), \
                 mock.patch.object(NODES.DISKS, "summary", lambda: {}), \
                 mock.patch.object(NODES.HOST_OS, "report", lambda: {"hosts": {}}), \
-                mock.patch.object(NODES.HW, "reconcile_node", lambda name, labels, notes, found: (labels, set())), \
+                mock.patch.object(NODES.HW, "reconcile_node", lambda name, labels, notes, found, definitions=None: (labels, set())), \
                 mock.patch.object(NODES.HW, "inventory",
-                                  lambda labels, found, auto: [{"id": "igpu", "available": False, "detected": False}]):
+                                  lambda labels, found, auto, definitions=None: [{"id": "igpu", "available": False, "detected": False}]):
             PROBES._round["read"] = time.monotonic()       # answer from the state, as with the loop
             return {n["name"]: n for n in NODES.get_nodes()}
 
