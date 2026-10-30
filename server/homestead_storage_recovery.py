@@ -93,7 +93,8 @@ def _snapshot(item, read, actor, helper_admission, restart_admission, runtime_ch
     verified = bool(ref.get("copy_verified")) and phase in ("copy", "cutover", "restart")
     can_pause = item.get("status") in ("queued", "running") and phase not in ("done", "rolled-back")
     rollback = {"next_write": None, "blockers": [], "decisions": [], "message": ""}
-    if not held or not HANDOFF.can_roll_back(item):
+    # As act() will see it: a rejected request (nothing applied) is set aside.
+    if not held or not HANDOFF.can_roll_back(_set_aside(copy.deepcopy(item))):
         rollback["blockers"].append("Rolling back is offered for a held move whose original claim was never released."
                                     if held else "Pause the move before rolling it back.")
     else:
@@ -106,7 +107,8 @@ def _snapshot(item, read, actor, helper_admission, restart_admission, runtime_ch
         warnings.extend(sorted({w for d in found["decisions"] for w in d["warnings"]} - set(warnings)))
     can_rollback = not rollback["blockers"]
     if can_rollback:
-        warnings.append("Rolling back restarts what this move stopped on the original volume. The copy volume is kept; nothing is deleted.")
+        warnings.append("Rolling back restarts what this move stopped on the original volume. The copy is then kept as an old "
+                        "copy under Volumes, with the Retain reclaim policy, for you to remove; nothing is deleted.")
     allowed = {"continue": can_continue, "retry": can_continue and not verified, "finish": can_continue and verified,
                "rollback": can_rollback, "pause": can_pause}
     plan = {"id": item["id"], "claim": ref["claim"], "namespace": ref["namespace"],

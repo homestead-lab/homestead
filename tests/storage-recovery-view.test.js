@@ -64,14 +64,19 @@ function held({forward=true}={}) {
       id:body.id,claim:'data',phase:forward?'copy':'stop',status:'failed',can_continue:forward,can_retry:forward,can_finish:false,can_rollback:true,can_pause:false,
       resources:[],workloads:[],warnings:[],blockers:forward?[]:['A workload changed after review'],message:'Held',rollback:{blockers:[],next_write:null}}};
     return {ok:true,detail:'Queued'};};
-  t.fields['#storageRecoveryRollback']={};
+  t.fields['#storageRecoveryRollback']={};t.fields['#storageRecoveryRollbackAck']={checked:false};
   return t;
 }
 test('a held move offers retry and roll back, each sent with its own token',async()=>{
   const t=held();await t.ctx.storageRecoveryReview('job');
   const html=t.fields['#storageRecoveryContent'].innerHTML;
   assert.match(html,/Retry this step/);assert.match(html,/Roll back to the original/);
+  assert.equal((html.match(/type="checkbox"/g)||[]).length,2);assert.match(html,/old copy/);
   t.fields['#storageRecoveryAck'].checked=true;await t.ctx.storageRecoveryApply('rollback');
+  assert.equal(t.calls.length,1);   // the retry acknowledgement does not cover a rollback
+  t.fields['#storageRecoveryAck'].checked=false;t.fields['#storageRecoveryRollbackAck'].checked=true;
+  await t.ctx.storageRecoveryApply();assert.equal(t.calls.length,1);   // nor the other way round
+  await t.ctx.storageRecoveryApply('rollback');
   assert.deepEqual(t.calls.at(-1).body,{id:'job',action:'rollback',capacity_token:'rollback-token',confirm_capacity:true});
   await t.ctx.storageRecoveryReview('job');t.fields['#storageRecoveryAck'].checked=true;await t.ctx.storageRecoveryApply();
   assert.equal(t.calls.at(-1).body.action,'retry');
@@ -80,6 +85,7 @@ test('when the move cannot go forward, roll back is the action and the reason is
   const t=held({forward:false});await t.ctx.storageRecoveryReview('job');
   const html=t.fields['#storageRecoveryContent'].innerHTML;
   assert.match(html,/changed after review/);assert.match(html,/Roll back to the original/);assert.doesNotMatch(html,/Retry this step/);
+  assert.match(html,/old copy/);assert.doesNotMatch(html,/Continue despite/);
   t.fields['#storageRecoveryAck'].checked=true;await t.ctx.storageRecoveryApply();
   assert.equal(t.calls.at(-1).body.action,'rollback');
 });

@@ -449,16 +449,36 @@ class HeldMoveRecoveryTests(RecoveryFixture):
         self.assertEqual("running", self.poll()[0])   # waiting for readiness
         self.ready()
         status, _, message = self.poll()
+        self.assertEqual("running", status)   # the app is up; now the copy is set aside
+        self.assertEqual(("PATCH", "/api/v1/persistentvolumes/pv-copy"), self.writes()[-1])
+        for _ in range(4):
+            status, _, message = self.poll()
+            if status != "running": break
         self.assertEqual("cancelled", status)
         self.assertIn("original volume", message)
-        self.assertIn("data-copy", message)   # the kept copy is named, never deleted
+        self.assertIn("data-copy", message)
+        self.assertIn("free for a later move", message)
+        self.assertIn("Retain", message)
+        self.assertIn("old copy", message)
         item = self.load()
         self.assertFalse(item["ref"]["retain_resources"])
         self.assertFalse(conflicts.unresolved(item))
-        self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/data-copy", self.cluster.objects)
         self.assertEqual(original, self.cluster.objects["/api/v1/namespaces/lab/persistentvolumeclaims/data"])
-        self.assertFalse(any(method == "DELETE" for method, _ in self.writes()))
+        # The copy's name is free, but its data is kept as an old copy, removable
+        # only by the separate, confirmed old-copy action.
+        self.assertNotIn("/api/v1/namespaces/lab/persistentvolumeclaims/data-copy", self.cluster.objects)
+        pv = self.cluster.objects["/api/v1/persistentvolumes/pv-copy"]
+        self.assertEqual("Retain", pv["spec"]["persistentVolumeReclaimPolicy"])
+        self.assertEqual("lab/data-copy", pv["metadata"]["annotations"][rc.OLD_COPY])
+        self.assertEqual([("DELETE", "/api/v1/namespaces/lab/persistentvolumeclaims/data-copy")],
+                         [w for w in self.writes() if w[0] == "DELETE"])
         self.assertFalse(ops._public(item)["storage_recovery"])
+        pv["status"] = {"phase": "Released"}
+        with mock.patch.object(rc, "_items", return_value=[copy.deepcopy(pv)]):
+            self.assertEqual(["pv-copy"], [row["pv"] for row in rc.old_copies()])
+        with mock.patch.object(rc, "ksend") as send:
+            self.assertTrue(rc.remove_old_copy("pv-copy", ops)["ok"])
+        self.assertEqual("Delete", send.call_args.args[2]["spec"]["persistentVolumeReclaimPolicy"])
 
     def test_rollback_stops_a_running_copy_before_restarting_the_app(self):
         self.running_copy()
@@ -492,16 +512,75 @@ class HeldMoveRecoveryTests(RecoveryFixture):
     def test_rollback_readiness_has_a_deadline_and_retry_keeps_rolling_back(self):
         self.awaiting_helper(); self.act("rollback")
         self.poll(); self.poll()
-        self.now += 901
+        self.now += 1799
+        self.assertEqual("running", self.poll()[0])
+        self.now += 2
         status, _, message = self.poll()
         self.assertEqual("failed", status)
         self.assertIn("app", message)
+        self.assertIn("30 min", message)
+        self.assertIn("already started again on the original volume", message)
         plan = self.preview()["plan"]
         self.assertTrue(plan["can_retry"])
         self.assertFalse(plan["can_finish"] or plan["can_rollback"])
         self.act("retry")
         self.ready()
-        self.assertEqual("cancelled", self.poll()[0])
+        self.assertEqual("cancelled", self.until_done())
+
+    def until_done(self):
+        for _ in range(6):
+            status = self.poll()[0]
+            if status != "running": return status
+        return status
+
+    def test_rollback_counts_a_copy_job_removed_by_hand_once_its_pods_are_gone(self):
+        self.running_copy()
+        self.assertEqual("running", self.poll()[0])
+        self.act("pause"); self.act("rollback")
+        del self.cluster.objects["/apis/batch/v1/namespaces/lab/jobs/data-copy-job"]   # by hand; its pod lingers
+        before = len(self.cluster.sent)
+        self.assertEqual("running", self.poll()[0])
+        self.assertEqual(before, len(self.cluster.sent))
+        self.assertNotIn("copy_job_gone", self.load()["ref"])
+        del self.cluster.objects["/api/v1/namespaces/lab/pods/copy-pod"]
+        self.poll()
+        self.assertIn("copy_job_gone", self.load()["ref"])
+        self.assertEqual(("PUT", DEPLOYMENT), self.writes()[-1])
+        self.assertFalse(any(path.endswith("/jobs/data-copy-job") for _, path in self.writes()))
+        self.ready()
+        self.assertEqual("cancelled", self.until_done())
+
+    def test_retry_after_a_copy_run_hold_keeps_watching_the_same_job(self):
+        self.running_copy()
+        self.poll()
+        self.now += 4801
+        self.assertEqual("failed", self.poll()[0])
+        self.act("retry")
+        self.assertEqual("running", self.poll()[0])
+        self.cluster.complete()
+        self.assertEqual(75, self.poll()[1])
+        self.assertEqual(1, sum(method == "POST" and path.endswith("/jobs") for method, path in self.writes()))
+        self.assertEqual("data-copy-job-uid", self.load()["ref"]["copy_verified"]["job_uid"])
+
+    def test_a_rejected_original_marker_still_allows_rollback(self):
+        self.to_cutover("retain-copy")
+        real = self.cluster.send
+        def refuse(method, path, body, **kw):
+            if method == "PATCH" and rc.OLD_COPY in json.dumps(body):
+                raise urllib.error.HTTPError(path, 422, "Unprocessable", {}, None)
+            return real(method, path, body, **kw)
+        with mock.patch.object(rc, "ksend", refuse):
+            self.assertEqual("failed", self.poll()[0])
+        self.assertEqual("refused", handoff._receipt(self.load(), "mark-original")["state"])
+        view = self.preview()
+        self.assertTrue(view["plan"]["can_rollback"], view["plan"]["rollback"])
+        self.act("rollback", view)
+        self.poll(); self.poll()   # copy Job removed, then the app restarted
+        self.ready()
+        status = self.until_done()
+        self.assertEqual("cancelled", status)
+        self.assertIn("pv-data keeps the Retain reclaim policy", self.load()["message"])
+        self.assertNotIn(rc.OLD_COPY, self.cluster.objects["/api/v1/persistentvolumes/pv-data"]["metadata"].get("annotations", {}))
 
     def test_rollback_from_a_partial_stop_restarts_only_what_was_stopped(self):
         ref = self.cluster.item["ref"]

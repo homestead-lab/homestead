@@ -335,6 +335,7 @@ window.storageRecoveryReview = async id => {
       copy:"Continue copying and checking the data. Apps and VMs remain stopped during the copy.",
       cutover:"Switch the verified copy into place. Restarting apps and VMs gets its own capacity review.",
       restart:"Restart apps and VMs on the copied volume after fresh capacity checks. The original data is retained."};
+    const rollbackAck = "Roll back: restart on the original volume and keep the copy as an old copy under Volumes, to remove later";
     const labels = {continue:"Continue move", retry:"Retry this step", finish:"Finish the move", rollback:"Roll back to the original", pause:"Pause move"};
     const issues = p.blockers.length ? p.blockers : p.warnings;
     const writeNames = {accepted:"Confirmed",intent:"No receipt",uncertain:"Response lost",unverified:"Unverified receipt",refused:"Rejected"};
@@ -352,7 +353,8 @@ window.storageRecoveryReview = async id => {
       UI.more("Apps and VMs and retained resources", UI.table(["App or VM","Type"], (p.workloads || []).map(c=>[esc(c.name),esc(c.kind)])) +
         UI.table(["Resource","Last request","Observed now"], p.resources.map(r=>[esc(r.resource?.name || "—"),esc(writeNames[r.receipt] || r.receipt),esc(r.relationship)]))) +
       (action ? UI.ack("storageRecoveryAck", action === "pause" ? "Pause it; a copy already running still finishes" :
-        action === "rollback" || rollback ? "I have reviewed the current state and warnings" : "Continue despite the warnings", {onchange:"storageRecoveryReady()"}) : "") +
+        action === "rollback" ? rollbackAck : "Continue despite the warnings", {onchange:"storageRecoveryReady()"}) : "") +
+      (rollback ? UI.ack("storageRecoveryRollbackAck", rollbackAck, {onchange:"storageRecoveryReady()"}) : "") +
       UI.actions(UI.cancel("Close") + UI.button("Refresh review", `storageRecoveryReview(${jsArg(id)})`) +
         (rollback ? UI.button(labels.rollback, "storageRecoveryApply('rollback')", {id:"storageRecoveryRollback",disabled:true}) : "") +
         (action ? UI.button(labels[action], "storageRecoveryApply()", {kind:"pri",id:"storageRecoveryApply",disabled:true}) : ""));
@@ -361,13 +363,18 @@ window.storageRecoveryReview = async id => {
       host.innerHTML = UI.callout("bad","Review unavailable",esc(error.message)) + UI.actions(UI.cancel("Close"));
   }
 };
-window.storageRecoveryReady = () => {
-  const ready = !!(STORAGE_RECOVERY?.action && $("#storageRecoveryAck")?.checked && !STORAGE_RECOVERY_BUSY);
-  for (const button of ["#storageRecoveryApply","#storageRecoveryRollback"]) if ($(button)) $(button).disabled = !ready;
-  return ready;
+// Each action has its own acknowledgement: the primary one, and roll back's
+// when it is offered beside a way forward.
+window.storageRecoveryReady = (choice = null) => {
+  const open = !!(STORAGE_RECOVERY?.action && !STORAGE_RECOVERY_BUSY);
+  const primary = open && !!$("#storageRecoveryAck")?.checked;
+  const rollback = open && !!$("#storageRecoveryRollbackAck")?.checked;
+  if ($("#storageRecoveryApply")) $("#storageRecoveryApply").disabled = !primary;
+  if ($("#storageRecoveryRollback")) $("#storageRecoveryRollback").disabled = !rollback;
+  return choice && choice !== STORAGE_RECOVERY?.action ? rollback && choice === "rollback" : primary;
 };
 window.storageRecoveryApply = async choice => {
-  if (!storageRecoveryReady()) return;
+  if (!storageRecoveryReady(choice)) return;
   const pending = {...STORAGE_RECOVERY};
   if (choice) {
     if (!pending.tokens[choice]) return;

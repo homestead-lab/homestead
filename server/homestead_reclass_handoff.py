@@ -28,6 +28,7 @@ WAITS = {
     "source-finalizers": (10 * MINUTE, "the original claim's finalizers"),
     "binding": (10 * MINUTE, "the replacement claim to bind to the copied volume"),
     "readiness": (15 * MINUTE, "workloads to become ready"),
+    "rollback-readiness": (30 * MINUTE, "the workloads, already started again on the original volume, to report ready"),
 }
 
 
@@ -667,7 +668,10 @@ def rollback_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journ
 
     Only workloads this move stopped are restarted, each from its stop receipt,
     so an edit made since holds instead of being overwritten. The copy Job (ours)
-    is deleted and its pods gone first. The copy volume is kept, never deleted.
+    is deleted and its pods gone first; a Job already removed by hand counts once
+    none of its pods run, and that observation is recorded. Once the app is up,
+    the copy claim is released and its volume kept (Retain, marked) as an old
+    copy: removing that data is a separate, confirmed action under Volumes.
     """
     ref = item["ref"]
     writer = journal_factory(item, RC.kget, RC.ksend, checkpoint)
@@ -675,15 +679,22 @@ def rollback_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journ
     if any(_receipt(item, step) for step in RELEASED):
         raise JOURNAL.Held("The original claim was already released; only finishing the move on the copy is possible")
     job = _receipt(item, "copy-job")
-    if job and not _receipt(item, "delete-copy-job"):
-        current = writer.observe(job)
-        writer.write("delete-copy-job", "DELETE", job["target"]["path"], {"propagationPolicy": "Foreground"},
-                     expected=JOURNAL.identity(current), own=True)
-        return "running", 10, "Stopping the copy helper before restarting on the original volume"
     using = pods(item)
-    if job and (writer.observe(_receipt(item, "delete-copy-job")) is not None or
-                any(_owned(p, job["after"]["uid"]) and p.get("status", {}).get("phase") not in RC.FINISHED for p in using)):
-        return _wait(item, "helper-removal", 10, "Waiting for the copy helper and its pods to be removed")
+    if job:
+        running = any(_owned(p, job["after"]["uid"]) and p.get("status", {}).get("phase") not in RC.FINISHED for p in using)
+        deleted = _receipt(item, "delete-copy-job")
+        if not deleted and not ref.get("copy_job_gone"):
+            if writer._get(job["target"]["path"]) is not None:
+                current = writer.observe(job)
+                writer.write("delete-copy-job", "DELETE", job["target"]["path"], {"propagationPolicy": "Foreground"},
+                             expected=JOURNAL.identity(current), own=True)
+                return "running", 10, "Stopping the copy helper before restarting on the original volume"
+            if not running:
+                # Removed outside Homestead: nothing of ours is left to stop.
+                ref["copy_job_gone"] = {"uid": job["after"]["uid"], "seen": CLOCK()}
+                checkpoint(item)
+        if running or (deleted and writer.observe(deleted) is not None):
+            return _wait(item, "helper-removal", 10, "Waiting for the copy helper and its pods to be removed")
     if any(ref.get("temp") in RC._claims_in(p.get("spec")) and p.get("status", {}).get("phase") not in RC.FINISHED for p in using):
         raise JOURNAL.Held("A pod is using the copy volume; inspect it before restarting on the original")
     claim(item, ref["claim"], writer, source=True)
@@ -705,11 +716,64 @@ def rollback_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journ
         return "running", 93, "One workload restarted on the original volume; checking the rest"
     waiting = _not_ready(item, writer, stopped, "rollback-restart:")
     if waiting:
-        return _wait(item, "readiness", 96, "Waiting for workload readiness on the original volume: " + ", ".join(waiting))
+        return _wait(item, "rollback-readiness", 96, "Started again on the original volume; waiting for them to report ready: " + ", ".join(waiting))
+    released = _release_copy(item, writer)
+    if released:
+        return released
     ref.update(handoff_phase="rolled-back", phase="rolled-back", retain_resources=False)
     ref.pop("storage_wait", None)
     checkpoint(item)
-    kept = (f" The copy volume {ref['temp']} on {ref['target']} was kept; remove it from Volumes when it is no longer needed."
-            if _receipt(item, "copy-volume") else "")
-    return ("cancelled", 100, f"Move rolled back: workloads run on the original volume {ref['claim']} "
-            f"({ref.get('from_class') or 'its original class'}) again.{kept}")
+    message = (f"Move rolled back: workloads run on the original volume {ref['claim']} "
+               f"({ref.get('from_class') or 'its original class'}) again.")
+    if _receipt(item, "retain-original"):
+        message += (f" Its backing volume {ref['old_pv']} keeps the Retain reclaim policy the move set "
+                    "(the earlier policy was not recorded), so deleting the claim later keeps that volume.")
+    copied = (ref.get("copy_claims") or {}).get(ref["temp"]) or {}
+    if _receipt(item, "rollback-release-copy") and copied.get("pv"):
+        message += (f" The copy claim {ref['temp']} was released, so that name is free for a later move. Its volume "
+                    f"{copied['pv']} is kept with the Retain reclaim policy as an old copy: remove it under Volumes "
+                    "when it is no longer needed.")
+    elif _receipt(item, "rollback-release-copy"):
+        message += f" The copy claim {ref['temp']} had no volume yet and was removed, so that name is free for a later move."
+    return "cancelled", 100, message
+
+
+def _release_copy(item, writer):
+    """Free the copy claim's fixed name without deleting its data.
+
+    The copied volume is set to Retain and marked as an old copy first, so it
+    is listed for a separate, confirmed removal (homestead_reclass old copies).
+    A claim that never got a volume holds no data and is simply released."""
+    ref = item["ref"]
+    if not _receipt(item, "copy-volume") or ref.get("copy_claim_gone"):
+        return None
+    path = f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['temp']}"
+    done = _receipt(item, "rollback-release-copy")
+    if done:
+        if writer.observe(done) is not None:
+            return _wait(item, "temporary-finalizers", 99, "Waiting for the copy claim's finalizers; its volume is kept")
+        return None
+    if writer._get(path) is None:
+        ref["copy_claim_gone"] = {"seen": CLOCK()}   # removed outside Homestead
+        return None
+    temporary = claim(item, ref["temp"], writer)
+    pv_name = ref["copy_claims"][ref["temp"]].get("pv")
+    if pv_name:
+        pv_path = f"/api/v1/persistentvolumes/{pv_name}"
+        pv = RC.kget(pv_path)
+        def patch(step, body):
+            writer.write(step, "PATCH", pv_path, body, expected={**JOURNAL.identity(pv), "settled": JOURNAL.settled(pv)},
+                         ctype="application/merge-patch+json")
+        if pv["spec"].get("persistentVolumeReclaimPolicy") != "Retain":
+            if _receipt(item, "rollback-retain-copy") or _receipt(item, "retain-copy"):
+                raise JOURNAL.Held("The copy volume's Retain protection was changed")
+            patch("rollback-retain-copy", {"spec": {"persistentVolumeReclaimPolicy": "Retain"}})
+            return "running", 97, "Copy volume protected with Retain before its claim is released"
+        marker = f"{ref['namespace']}/{ref['temp']}"
+        if pv["metadata"].get("annotations", {}).get(RC.OLD_COPY) != marker:
+            if _receipt(item, "rollback-mark-copy"):
+                raise JOURNAL.Held("The copy volume's old-copy marker changed")
+            patch("rollback-mark-copy", {"metadata": {"annotations": {RC.OLD_COPY: marker}}})
+            return "running", 98, "Copy volume recorded as an old copy"
+    writer.write("rollback-release-copy", "DELETE", path, expected=JOURNAL.identity(temporary), own=True)
+    return "running", 99, "Releasing the copy claim; its volume is kept as an old copy"
