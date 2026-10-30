@@ -110,11 +110,6 @@ class EveryStoreTells_MissingFromUnreadable(Base):
 class AlertSourcesKeepTheirAlerts(Base):
     """A source that raises is None in _alert_sources, so ALERTS.observe keeps its alerts."""
 
-    def test_outage(self):
-        self.corrupt("outage-actions.json")
-        with self.assertRaises(SHARED.Unreadable):
-            OUTAGE.alert_facts()
-
     def test_root_guard(self):
         self.corrupt("root-guard.json")
         with self.assertRaises(SHARED.Unreadable):
@@ -126,11 +121,6 @@ class AlertSourcesKeepTheirAlerts(Base):
         with self.assertRaises(SHARED.Unreadable):
             HOST_OS.alert_facts()
 
-    def test_schedules(self):
-        self.corrupt("schedules.json")
-        with self.assertRaises(SHARED.Unreadable):
-            SCHEDULES.alert_facts()
-
     def test_forecast(self):
         self.corrupt("storage-forecast.json")
         with self.assertRaises(SHARED.Unreadable):
@@ -140,6 +130,58 @@ class AlertSourcesKeepTheirAlerts(Base):
         self.corrupt("recovery.json")
         with self.assertRaises(SHARED.Unreadable):
             RECOVERY.alert_facts(mode="suggest", maintenance=None)
+
+
+class StoppedActionsSaySo(Base):
+    """Outage actions and schedules that cannot run while their file is
+    unreadable keep their alerts and raise one that says they are not running."""
+
+    def observe(self, source, file, facts_fn, held_key, new_key, words):
+        import homestead_alerts as ALERTS
+        before = ALERTS.DATA_DIR
+        self.addCleanup(ALERTS.bind, before)
+        ALERTS.bind(tempfile.mkdtemp())
+        ALERTS.observe({source: []}, now=900)
+        ALERTS.observe({source: [{"key": held_key, "title": "down", "severity": "critical", "category": "outage"}]}, now=1000)
+        ALERTS.observe({source: [{"key": held_key, "title": "down", "severity": "critical", "category": "outage"}]}, now=1100)
+        self.corrupt(file)
+        facts = facts_fn()
+        fresh = ALERTS.observe({source: facts}, now=1200) + ALERTS.observe({source: facts_fn()}, now=1300)
+        self.assertEqual([("raised", new_key)], [(e["phase"], e["key"]) for e in fresh], "only the new alert; none cleared")
+        row = ALERTS._load()["active"][new_key]
+        self.assertIn(words, row["title"])
+        self.assertIn(file, row["title"])
+        self.assertIn(held_key, ALERTS._load()["active"])
+
+    def test_outage_actions(self):
+        self.observe("outage", "outage-actions.json", OUTAGE.alert_facts, "outage:app:lab/web",
+                     "outage-actions:unreadable", "Outage actions are not running")
+
+    def test_schedules(self):
+        self.observe("schedules", "schedules.json", SCHEDULES.alert_facts, "schedule:app:lab/web",
+                     "schedules:unreadable", "Scheduled stops and starts are not running")
+
+    def test_the_outage_round_beats_its_own_error_and_still_carries_over(self):
+        import server
+        import homestead_self_health as SELF_HEALTH
+        routes = server.OVERVIEW_ROUTES
+        calls, beats = [], []
+
+        def tick(*args):
+            calls.append("tick")
+            raise SHARED.Unreadable("Homestead could not read outage-actions.json on its data volume")
+        with mock.patch.object(routes, "cached", side_effect=lambda key, ttl, fn: [{"ns": "lab", "name": "web"}] if key == "wl" else []), \
+             mock.patch.object(routes.OUTAGE, "items", return_value=[{"kind": "app", "ns": "lab", "name": "web"}]), \
+             mock.patch.object(routes.UPTIME, "report", return_value={}), \
+             mock.patch.object(routes.OPS, "snapshot", return_value=[]), \
+             mock.patch.object(routes.OUTAGE_CARRY, "carry_lan", side_effect=lambda: calls.append("carry")), \
+             mock.patch.object(routes.OUTAGE, "tick", side_effect=tick), \
+             mock.patch.object(routes, "beat", side_effect=lambda *a, **k: beats.append(a)):
+            self.assertEqual([], routes.outage_tick())
+        self.assertEqual(["tick", "carry"], calls)
+        self.assertEqual("outage-actions", beats[-1][0])
+        self.assertIn("outage-actions.json", str(beats[-1][2]))
+        self.assertEqual("Outage actions", SELF_HEALTH.LOOP_WORDS["outage-actions"])
 
 
 class LoopsDoNothingAndSaveNothingOver(Base):

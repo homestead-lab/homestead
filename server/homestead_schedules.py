@@ -248,8 +248,18 @@ def report(scheduled, now=None):
 
 def alert_facts(last=None):
     """A scheduled stop or start that could not be done, until one is."""
+    if last is None:
+        try:
+            last = results()
+        except SHARED.Unreadable as error:
+            # tick() cannot run either: its alerts kept, and one saying so.
+            return [{"unknown_prefix": "schedule:"},
+                    {"key": "schedules:unreadable", "category": "degraded", "severity": "degraded",
+                     "title": "Scheduled stops and starts are not running: schedules.json can't be read",
+                     "body": f"{error}. No app or VM is stopped or started on its schedule until it can be read.",
+                     "resolved": "Scheduled stops and starts run again", "href": "/settings?tab=about"}]
     facts = []
-    for key, result in sorted((last if last is not None else results()).items()):
+    for key, result in sorted(last.items()):
         if result.get("ok"):
             continue
         kind, ref = key.split(":", 1)
