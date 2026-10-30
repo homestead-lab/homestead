@@ -1479,7 +1479,7 @@ class H(HTTP.LimitedHandler):
         checked the role the module declared for it."""
         route = MODULE_ROUTES.find(method, path)
         if route is not None:
-            MODULE_ROUTES.answer(self, route.handler(MODULE_ROUTES.Request(
+            MODULE_ROUTES.answer(self, MODULE_ROUTES.call(route, MODULE_ROUTES.Request(
                 method, path, query, body, getattr(self, "user", None), getattr(self, "role", None),
                 self._client_ip() if getattr(self, "client_address", None) else "", MODULE_ROUTES.connection(self))), route.module)
         return route is not None
@@ -1506,7 +1506,7 @@ class H(HTTP.LimitedHandler):
 
     def _begin(self):
         """Per request: a connection can carry several, and the handler stays."""
-        REQUEST_SCOPE.unbind()
+        REQUEST_SCOPE.begin(self)
         self.api_key = None
         self._extra_headers = []
         self._raw = None

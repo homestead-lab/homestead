@@ -33,6 +33,7 @@ import homestead_changes as CHANGES
 import homestead_host_access as HOSTACCESS
 import homestead_names as NAMES
 import homestead_operations as OPS
+import homestead_read_deadline as DEADLINE
 import homestead_self as SELF
 import homestead_storage_guard as STORAGE_GUARD
 
@@ -230,19 +231,21 @@ def _never_started(pod):
 
 def raw_get(path, timeout=20):
     """Plain-text GET against the API (pod logs and similar)."""
-    return _request("GET", path, None, {}, timeout).decode("utf-8", "replace")
+    return DEADLINE.read(timeout, lambda allowed: _request("GET", path, None, {}, allowed)).decode("utf-8", "replace")
 
 
 def ktable(path, timeout=20):
     """A list as the API server prints it: the columns kubectl get shows."""
-    return json.loads(_request("GET", path, None, {
-        "Accept": "application/json;as=Table;v=v1;g=meta.k8s.io,application/json"}, timeout).decode())
+    return json.loads(DEADLINE.read(timeout, lambda allowed: _request("GET", path, None, {
+        "Accept": "application/json;as=Table;v=v1;g=meta.k8s.io,application/json"}, allowed)).decode())
 
 
 def kget(path, timeout=10):
+    """A read, given at most what is left of the request's time for reads
+    (homestead_read_deadline), and a 429 asked again only while it lasts."""
     for attempt in range(len(KGET_RETRY) + 1):
         try:
-            return transport("GET", api_path(path), timeout=timeout)
+            return DEADLINE.read(timeout, lambda allowed: transport("GET", api_path(path), timeout=allowed))
         except urllib.error.HTTPError as error:
             # A read is safe to ask again; a write's 429 (an eviction a
             # disruption budget refuses) is an answer, and ksend keeps it.
@@ -253,7 +256,10 @@ def kget(path, timeout=10):
             except (TypeError, ValueError):
                 delay = KGET_RETRY[attempt]
             error.close()
-            time.sleep(max(0.1, min(3.0, delay)))
+            pause = max(0.1, min(3.0, delay))
+            if not DEADLINE.allows(pause):
+                raise DEADLINE.spent() from error
+            time.sleep(pause)
 
 
 def ksend(method, path, body=None, ctype="application/json", timeout=15):
@@ -495,6 +501,34 @@ def _give_back(connection):
     connection.close()
 
 
+def _body(connection, response):
+    """The answer's body. A socket timeout bounds each read from the socket,
+    not the whole answer, so under a request's deadline (#984) the body is
+    read a piece at a time, each piece given at most what is left: an API
+    server trickling its answer is cut at the deadline, not after minutes."""
+    if DEADLINE.remaining() is None:
+        return response.read()
+    # An answer that ends the connection has left it (http.client): its
+    # socket is then only the response's own.
+    sock = connection.sock or getattr(getattr(response, "fp", None) and response.fp.raw, "_sock", None)
+    pieces = []
+    while True:
+        left = DEADLINE.remaining()
+        if left <= 0:
+            raise DEADLINE.spent()
+        if sock is not None:
+            sock.settimeout(min(connection.timeout, left))
+        try:
+            piece = response.read1(65536)
+        except TimeoutError as error:
+            if left < connection.timeout:
+                raise DEADLINE.spent() from error
+            raise
+        if not piece:
+            return b"".join(pieces)
+        pieces.append(piece)
+
+
 def _request(method, path, data, headers, timeout):
     """One request to the API server on a kept-open connection: the answer's
     bytes, or urllib's HTTPError for any answer that is not a success. A
@@ -523,7 +557,7 @@ def _request(method, path, data, headers, timeout):
             connection = _open(timeout)
             connection.request(method, path, body=data, headers=headers)
             response = connection.getresponse()
-        payload = response.read()
+        payload = _body(connection, response)
     except BaseException as error:
         connection.close()
         close_connections()

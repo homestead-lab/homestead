@@ -6,6 +6,9 @@ Tests patch cached here."""
 import threading
 import time
 
+import homestead_read_deadline as DEADLINE
+
+
 class _Answers(dict):
     """The kept answers. Many writes drop their page's key with a plain
     _cache.pop(key) rather than forget_where(); a pop is told to the
@@ -71,11 +74,18 @@ def _last(key):
 
 
 def _compute(key, fn, epoch):
+    # A request's reads cut short by its deadline (#984) leave an answer that
+    # may be partial even when fn() returned: never kept, never passed on to
+    # those waiting. The last complete one is served instead, or Spent.
+    cuts = DEADLINE.cuts()
     try:
         v = fn()
+        if DEADLINE.cuts() > cuts:
+            raise DEADLINE.Spent(DEADLINE.MESSAGE)
     except Exception:
         e = _last(key)
         if e:
+            DEADLINE.forgive(cuts)
             return e[1]
         raise
     _keep(key, epoch, v)
@@ -94,10 +104,13 @@ def cached(key, ttl, fn):
     if not mine and flight.owner == threading.get_ident():
         return _compute(key, fn, flight.epoch)  # the computation asks for its own key: no waiting on itself
     if not mine:
-        if not flight.done.wait(WAIT_SECONDS):
+        wait = DEADLINE.remaining()
+        if not flight.done.wait(WAIT_SECONDS if wait is None else max(0, min(WAIT_SECONDS, wait))):
             e = _last(key)
             if e:
                 return e[1]
+            if wait is not None and wait < WAIT_SECONDS:
+                raise DEADLINE.spent()
             raise TimeoutError(f"{key} is still being read")
         if flight.error is not None:
             raise flight.error

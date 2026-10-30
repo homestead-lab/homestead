@@ -9,6 +9,10 @@ import functools
 
 import homestead_changes as CHANGES
 import homestead_host_access as HOSTACCESS
+import homestead_read_deadline as DEADLINE
+
+# GET connections that stay open as long as someone uses them: no deadline.
+LONG_CONNECTIONS = ("/api/console", "/api/node/shell", "/api/vm/console")
 
 
 def unbind():
@@ -18,6 +22,16 @@ def unbind():
     This ends a request's binding; it does not tighten anything."""
     CHANGES.REQUEST.user = None
     HOSTACCESS.set_role(None)
+    DEADLINE.end()
+
+
+def begin(handler):
+    """A request starts: nothing of the last one bound, and a GET's
+    Kubernetes reads given one deadline together (homestead_read_deadline)."""
+    unbind()
+    path = (getattr(handler, "path", "") or "").split("?", 1)[0]
+    if getattr(handler, "command", None) == "GET" and path not in LONG_CONNECTIONS:
+        DEADLINE.begin()
 
 
 def unbinds_after(decorator):
