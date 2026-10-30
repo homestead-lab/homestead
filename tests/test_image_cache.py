@@ -223,3 +223,47 @@ class PrepullTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "not an image pre-pull"):
                     IMAGES.stop_prepull(name)
 
+
+    def test_two_jobs_pulling_the_same_image_each_get_their_own_pull(self):
+        """One job's cancel, or the end of its pulling stage, deletes its own
+        DaemonSet only, and a second job's pull does not replace the first."""
+        first = IMAGES.prepull("ghcr.io/x/frigate:0.18.0", ["node1"], own=True)["daemonset"]
+        self.sent.clear()
+        second = IMAGES.prepull("ghcr.io/x/frigate:0.18.0", ["node1"], own=True)["daemonset"]
+        self.assertNotEqual(first, second)
+        for name in (first, second):
+            self.assertRegex(name, r"^homestead-pull-frigate-[0-9a-f]{8}$")
+        self.assertEqual([], [path for method, path in self.sent
+                              if method == "DELETE" and path.rsplit("/", 1)[-1].split("?")[0] == first])
+        apps = [body["spec"]["template"]["metadata"]["labels"]["app"] for body in self.posted]
+        self.assertEqual([first, second], apps)
+        self.assertEqual([first, second], [body["spec"]["selector"]["matchLabels"]["app"] for body in self.posted])
+        self.sent.clear()
+        IMAGES.stop_prepull(second)
+        self.assertEqual([("DELETE", f"/apis/apps/v1/namespaces/lab/daemonsets/{second}?propagationPolicy=Background")],
+                         self.sent)
+
+    def test_a_job_pull_name_stays_a_valid_label_for_a_long_image_name(self):
+        name = IMAGES.prepull("ghcr.io/x/" + "a" * 80 + ":1", ["node1"], own=True)["daemonset"]
+        self.assertLessEqual(len(name), 63)
+
+    def test_a_pull_without_a_job_keeps_its_one_name_per_image(self):
+        self.assertEqual("homestead-pull-frigate", IMAGES.prepull("ghcr.io/x/frigate:0.18.0")["daemonset"])
+
+    def test_an_old_per_image_pull_from_a_job_can_still_be_stopped_and_swept(self):
+        IMAGES.stop_prepull("homestead-pull-frigate")
+        self.assertIn(("DELETE", "/apis/apps/v1/namespaces/lab/daemonsets/"
+                       "homestead-pull-frigate?propagationPolicy=Background"), self.sent)
+        self.daemonsets = [self._pull("homestead-pull-frigate"), self._pull("homestead-pull-frigate-0a1b2c3d")]
+        self.assertEqual(["homestead-pull-frigate", "homestead-pull-frigate-0a1b2c3d"],
+                         [row["name"] for row in IMAGES.prepull_status()["finished"]])
+
+    def test_a_pull_started_from_image_cache_is_its_own_job(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        started = []
+        with mock.patch.object(imports.OPS, "start", side_effect=lambda *a: started.append(a) or {"id": "op"}):
+            first = imports._prepull(SimpleNamespace(body={"image": "ghcr.io/x/frigate:0.18.0", "nodes": ["node1"]}))
+            second = imports._prepull(SimpleNamespace(body={"image": "ghcr.io/x/frigate:0.18.0", "nodes": ["node1"]}))
+        self.assertNotEqual(first["daemonset"], second["daemonset"])
+        self.assertEqual([first["daemonset"], second["daemonset"]], [a[4]["name"] for a in started])

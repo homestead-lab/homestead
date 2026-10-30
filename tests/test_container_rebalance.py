@@ -420,6 +420,14 @@ class JobTests(unittest.TestCase):
                 self.assertNotIn("pulls", item["ref"])
                 self.assertEqual([], self.c.moved)
 
+    def test_its_pulls_are_its_own_so_another_job_pulling_the_same_image_is_not_stopped(self):
+        import homestead_host_move as HOST_MOVE
+        import homestead_image_cache as IMAGES
+        with mock.patch.object(HOST_MOVE, "missing", return_value=["example/frigate:stable"]), \
+                mock.patch.object(IMAGES, "prepull", return_value={"daemonset": "homestead-pull-frigate-0a1b2c3d"}) as pull:
+            self.assertEqual((["homestead-pull-frigate-0a1b2c3d"], ["example/frigate:stable"]), C._pull_first({"x": 1}, "k1"))
+        pull.assert_called_once_with("example/frigate:stable", ["k1"], own=True)
+
     def test_one_that_restarts_on_its_old_host_says_so(self):
         C.status(self.item)
         self.item["ref"]["started"] -= 700

@@ -10,6 +10,7 @@ import json
 import hashlib
 import os
 import re
+import secrets
 import time
 import urllib.error
 import urllib.parse
@@ -784,10 +785,15 @@ def _pullable_nodes():
     return healthy, all_names
 
 
-def prepull(image, nodes=None):
-    """Warm an image onto every healthy node with a DaemonSet-style pull."""
+def prepull(image, nodes=None, own=False):
+    """Warm an image onto every healthy node with a DaemonSet-style pull.
+
+    own: a job's pull, under a name of its own, so two jobs pulling the same
+    image never share one DaemonSet - one's cancel, the end of its pulling
+    stage or its next pull would stop the other's. Without it the name is
+    one per image, as before (the start gate's image, pulled once)."""
     tag = re.sub(r"[^a-z0-9-]", "-", image.split("/")[-1].split(":")[0].lower())[:30]
-    name = f"homestead-pull-{tag}"
+    name = f"homestead-pull-{tag}" + (f"-{secrets.token_hex(4)}" if own else "")
     healthy, every = _pullable_nodes()
     wanted = [node for node in (nodes or every) if node in healthy]
     skipped = sorted(set(nodes or every) - set(wanted))

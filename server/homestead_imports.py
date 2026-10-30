@@ -452,7 +452,7 @@ def bind_routes(helpers):
 
 def _prepull(request):
     b = request.body
-    result = IMAGES.prepull(b["image"], b.get("nodes"))
+    result = IMAGES.prepull(b["image"], b.get("nodes"), own=True)
     result["operation"] = OPS.start(
         "image-pull", f"Pull {b['image']}",
         {"kind": "Image", "name": b["image"], "namespace": NS},

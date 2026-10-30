@@ -756,7 +756,7 @@ def _pull_first(dep, node):
     import homestead_image_cache as IMAGES
     try:
         need = HOST_MOVE.missing(dep, node) if dep else []
-        return [IMAGES.prepull(image, [node])["daemonset"] for image in need], need
+        return [IMAGES.prepull(image, [node], own=True)["daemonset"] for image in need], need
     except Exception:
         return [], []
 
