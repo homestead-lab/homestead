@@ -41,6 +41,7 @@ import urllib.parse
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_host_access as HOSTACCESS
 import homestead_kube as KUBE
+import homestead_kube_metrics as KUBE_METRICS
 import homestead_operations as OPS
 import homestead_pod_resources as RESOURCES
 import homestead_routes as ROUTER
@@ -167,11 +168,22 @@ def _budget_why(ns, labels, budgets):
     return ""
 
 
+# metrics-server's states (homestead_kube_metrics), from best to worst.
+_WORSE = ("ok", "stale", "waiting", "absent", "unavailable")
+
+
 def inventory(role=None):
     """Hosts and apps; role, when given, is who the moves are for - an app
     they may not change is listed with why, as one that cannot move is."""
     nodes = _items("/api/v1/nodes")
-    usage = {(m.get("metadata") or {}).get("name"): m.get("usage") or {} for m in _items("/apis/metrics.k8s.io/v1beta1/nodes")}
+    # The background reading, with its state, never metrics-server itself (#928).
+    node_metrics, node_state = KUBE_METRICS.read("nodes", kget)
+    pod_metrics, pod_state = KUBE_METRICS.read("pods", kget)
+    # The plan rests on both lists: it says the worse state of the two, and
+    # without current or recent app figures every app would read as idle.
+    state = max(node_state, pod_state, key=lambda s: _WORSE.index(s["state"]) if s["state"] in _WORSE else 0)
+    apps_read = pod_state["state"] in ("ok", "stale")
+    usage = {(m.get("metadata") or {}).get("name"): m.get("usage") or {} for m in node_metrics}
     hosts = {}
     for node in nodes:
         name = (node.get("metadata") or {}).get("name")
@@ -179,11 +191,11 @@ def inventory(role=None):
         hosts[name] = {"name": name, "cpu": cpu((usage.get(name) or {}).get("cpu")), "mem": mem((usage.get(name) or {}).get("memory")),
                        "cpu_total": cpu(alloc.get("cpu")) or 1, "mem_total": mem(alloc.get("memory")) or 1,
                        "takes": _ready(node) and not (node.get("spec") or {}).get("unschedulable"), "node": node,
-                       "metrics": name in usage}
+                       "metrics": name in usage and apps_read, "metrics_state": state}
     pods = _items("/api/v1/pods")
     budgets = _items("/apis/policy/v1/poddisruptionbudgets")
     pod_usage = {}
-    for m in _items("/apis/metrics.k8s.io/v1beta1/pods"):
+    for m in pod_metrics:
         meta = m.get("metadata") or {}
         pod_usage[(meta.get("namespace"), meta.get("name"))] = (
             sum(cpu((c.get("usage") or {}).get("cpu")) for c in m.get("containers") or []),
@@ -523,7 +535,8 @@ def plan(exclude=(), avoid=(), role=None):
             "skipped": [{"id": a["id"], "why": a["why"]} for a in apps if a["why"]]
                        + _not_moved(apps, load, hosts, refused, reachable, exclude, moved, main_spread(load) if hosts else 0,
                                     main_spread, len(moves) >= MAX_MOVES),
-            "metrics": all(h["metrics"] for h in hosts.values()), "review_token": token}
+            "metrics": all(h["metrics"] for h in hosts.values()),
+            "metrics_state": next((h["metrics_state"] for h in hosts.values()), None), "review_token": token}
 
 
 def _versions(moves):

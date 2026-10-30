@@ -29,7 +29,7 @@ class UsageTests(unittest.TestCase):
                             {"usage": {"cpu": "250000000n", "memory": "0"}}]},
             {"metadata": {"name": "frigate-7d9", "namespace": "lab"}, "containers": [{"usage": {"cpu": "1", "memory": "1Gi"}}]}]}
 
-        def get(path):
+        def get(path, **_):
             if path.startswith("/apis/metrics.k8s.io"):
                 return self.pod_metrics
             if "virt-handler" in path:

@@ -61,7 +61,7 @@ class Cluster:
         }
         self.moved = []
 
-    def get(self, path):
+    def get(self, path, **_):
         if path == "/apis/apps/v1/deployments":
             return {"items": copy.deepcopy(list(self.deps.values()))}
         if path.startswith("/apis/apps/v1/namespaces/lab/deployments/"):

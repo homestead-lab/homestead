@@ -19,6 +19,8 @@ import time
 import urllib.parse
 import urllib.request
 
+import homestead_kube_metrics as KUBE_METRICS
+
 kget = None
 PORT = 8443
 TIMEOUT = 4
@@ -29,7 +31,7 @@ STALE = 180
 _lock = threading.Lock()
 _readings = []        # the last two: {"at": time, "io": {(ns, vm): [read, write]}}
 _usage = {}           # (ns, vm) -> {"cpu": cores, "mem": bytes}
-_note = {"io": ""}
+_note = {"io": "", "metrics": None}
 LINE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)\{([^}]*)\}\s+([-+0-9.eE]+|NaN)')
 LABEL = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 
@@ -95,8 +97,11 @@ def sample(fetch=None, now=None):
     fetch = fetch or _fetch
     now = now or time.time()
     usage = {}
+    # The background reading, with its state: a hung metrics-server no
+    # longer holds the sampler loop, which also drives the page snapshot (#928).
+    items, metrics = KUBE_METRICS.read("pods", kget, now=now)
     try:
-        for m in kget("/apis/metrics.k8s.io/v1beta1/pods").get("items", []):
+        for m in items:
             meta = m.get("metadata") or {}
             vm = (meta.get("labels") or {}).get("vm.kubevirt.io/name") or ""
             if not vm and str(meta.get("name", "")).startswith("virt-launcher-"):
@@ -122,6 +127,7 @@ def sample(fetch=None, now=None):
     with _lock:
         _usage.clear()
         _usage.update(usage)
+        _note["metrics"] = metrics
         if io or not failed:
             _readings.append({"at": now, "io": io})
             del _readings[:-2]
@@ -149,3 +155,10 @@ def usage(now=None):
                 row["read_bps"], row["write_bps"] = (round(x) for x in rates[key])
             out[key] = row
         return out, _note["io"]
+
+
+def metrics_state():
+    """The state of the CPU and memory figures the last sample took
+    (homestead_kube_metrics), or None before the first sample."""
+    with _lock:
+        return _note["metrics"]

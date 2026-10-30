@@ -13,6 +13,7 @@ import urllib.parse
 
 import homestead_disks as DISKS
 import homestead_hardware as HW
+import homestead_kube_metrics as KUBE_METRICS
 import homestead_host_os as HOST_OS
 import homestead_impact as IMPACT
 import homestead_lhcapacity as LHCAP
@@ -72,8 +73,10 @@ def node_temps(wait=True, unreachable=False):
 
 
 def start_probes():
-    """This replica's background probe loop (#705)."""
+    """This replica's background loops: the node probes (#705) and
+    metrics-server (#906)."""
     PROBES.start(DEFAULT_NS)
+    KUBE_METRICS.start(lambda path, **options: kget(path, **options))
 
 
 def reconcile_hardware(fresh=False):
@@ -311,10 +314,9 @@ def get_nodes(pods=None, vols=None):
     (get_volumes()): when the caller has read them already (the leader's
     page snapshot)."""
     nodes = kget("/api/v1/nodes")
-    try:
-        metrics = {m["metadata"]["name"]: m for m in kget("/apis/metrics.k8s.io/v1beta1/nodes").get("items", [])}
-    except Exception:
-        metrics = {}
+    # The loop's last reading, with its state: never waits on metrics-server (#906).
+    usage, metrics_state = KUBE_METRICS.read("nodes", kget)
+    metrics = {m["metadata"]["name"]: m for m in usage}
     pods = kget("/api/v1/pods") if pods is None else pods
     try:
         vmis = kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", [])
@@ -379,6 +381,7 @@ def get_nodes(pods=None, vols=None):
             "mem_pct": round(umem / cmem * 100, 1) if cmem else 0,
             "mem_used_gb": round(umem / 1024**3, 1), "mem_cap_gb": round(cmem / 1024**3, 1),
             "mem_metrics_available": bool((m.get("usage") or {}).get("memory")),
+            "metrics": metrics_state,
             "pods": len(npods),
             "pods_sys": len([p for p in npods if p["metadata"]["namespace"] in SYS_NS]),
             "pods_wl": len([p for p in npods if p["metadata"]["namespace"] not in SYS_NS]),

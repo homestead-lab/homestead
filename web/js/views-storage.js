@@ -114,7 +114,7 @@ async function viewFlow() {
     </div></div>`;
   };
   const graphs=answer.clusters?.map(cluster=>({site:cluster.site,...Object.fromEntries(["workloads","volumes","nodes","vips","jobs"].map(key=>[key,f[key].filter(row=>row.site.id===cluster.site.id)]))}));
-  paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · point at, tap or Tab to anything to trace it`, `
+  paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · point at, tap or Tab to anything to trace it${metricsNotice([answer])}`, `
         ${disconnectedVolumes.length ? `<button class="btn sm ${STATE.archDisconnected ? "pri" : ""}" onclick="STATE.archDisconnected=!STATE.archDisconnected;viewFlow()"
           data-tip="Volumes no container, VM or scheduled job is defined to mount. They stay hidden so old and retained data does not obscure the live paths.">${STATE.archDisconnected ? "Hide" : "Show"} ${disconnectedVolumes.length} disconnected</button>` : ""}
         <div class="row hide-sm arch-legend">
@@ -499,21 +499,65 @@ function otherVolumesHtml(rows) {
         need: "admin", danger: true, tip: "Review what uses it and what would be lost before deleting" }], { shown: 0, label: `Actions for ${r.name}` })}</td></tr>`).join("")}</tbody></table></div></div>`;
 }
 
+/* The page is drawn as its reads return, not once all of them have (#705).
+   Every read starts at once; the page is drawn when the volumes answer, and
+   each other part - the totals, the forecast, old copies, other volumes - fills
+   in when its own read does. Until then it says it is being read. A refresh
+   keeps each part's last answer on screen until the new one arrives; another
+   visit to the page starts afresh. Parts that answer together are drawn in one
+   paint, and a load overtaken by a newer one draws nothing. */
+let storageLoad = { id: 0, token: null, parts: {}, missed: {} };
+const partReading = what => `<div class="empty small"><span class="spin2"></span> Reading ${what}…</div>`;
+
 async function viewStorage() {
   if (platformLacks("longhorn", "Volumes")) return;
+  const token = window.NAV_TOKEN;
+  // Same visit: last answers stay until replaced. Another visit: nothing kept.
+  const same = storageLoad.token === token;
+  const load = storageLoad = { id: storageLoad.id + 1, token,
+    parts: { ...(same ? storageLoad.parts : {}) }, missed: { ...(same ? storageLoad.missed : {}) } };
+  const current = () => storageLoad === load;
   // A part of the page that could not be read is named above the page, not
-  // silently left out (#620): no old copies listed is not no old copies.
-  const missed = [];
-  const part = (path, label, fallback) => api(path).catch(e => { missed.push(`${label}: ${e.message}`); return fallback; });
-  const [v, st, classes, v2, cap, forecast] = await Promise.all([api("/api/volumes"), part("/api/storage", "totals", null),
-    part("/api/storage/classes", "storage classes", []), part("/api/storage/v2", "the V2 engine", null),
-    part("/api/longhorn/capacity", "capacity", null), part("/api/storage/forecast", "the forecast", null)]);
-  STATE.data.forecast = forecast;
-  const [allOldCopies, allOthers] = await Promise.all([part("/api/volumes/old-copies", "old copies", []),
-    part("/api/volumes/other", "other volumes", [])]);
+  // silently left out (#620): no old copies listed is not no old copies. A
+  // failure is kept like an answer, so it is still named while it is read again.
+  let volumes = null, queued = null, broken = null;
+  const draw = () => {
+    if (queued || !current() || !volumes) return;
+    queued = new Promise(resolve => setTimeout(() => {
+      queued = null;
+      try { if (current()) storagePaint(volumes, load.parts, Object.values(load.missed)); }
+      catch (e) { broken = broken || e; }
+      resolve();
+    }, 0));
+  };
+  // A paint that throws fails the load, as before, rather than leaving it unsettled.
+  const drawn = async () => { while (queued) await queued; if (broken) throw broken; };
+  // The path comes first and is written out, so the API contract test reads it.
+  const part = (path, key, label, fallback) => api(path)
+    .then(answer => { delete load.missed[key]; return answer; },
+      e => { load.missed[key] = `${label}: ${e.message}`; return fallback; })
+    .then(answer => { load.parts[key] = answer; draw(); });
+  const parts = [part("/api/storage", "st", "totals", null), part("/api/storage/classes", "classes", "storage classes", []),
+    part("/api/storage/v2", "v2", "the V2 engine", null), part("/api/longhorn/capacity", "cap", "capacity", null),
+    part("/api/storage/forecast", "forecast", "the forecast", null), part("/api/volumes/old-copies", "oldCopies", "old copies", []),
+    part("/api/volumes/other", "others", "other volumes", [])];
+  volumes = await api("/api/volumes");
+  if (!current()) return;
+  draw();
+  await drawn();
+  // Settled when the whole page is drawn, as before, for whoever waits on it.
+  await Promise.all(parts);
+  await drawn();
+}
+
+function storagePaint(v, parts, missed) {
+  const has = key => key in parts;
+  const { st, classes, v2, cap, forecast } = parts;
+  const allOldCopies = parts.oldCopies || [], allOthers = parts.others || [];
+  if (has("forecast")) STATE.data.forecast = forecast;
   STATE.data.lhcap = cap || STATE.data.lhcap;
-  STATE.data.storageClasses = classes;
-  STATE.data.v2 = v2;
+  if (has("classes")) STATE.data.storageClasses = classes;
+  if (has("v2")) STATE.data.v2 = v2;
   STATE.data.vols = v;
   const q = STATE.q.toLowerCase();
   // A search narrows every list on the page, not only Longhorn's.
@@ -531,7 +575,8 @@ async function viewStorage() {
         { label: "Storage classes", icon: "disk", run: "settingsTab('hardware');go('settings')", tip: "What new volumes are made from: in Settings › Hardware and storage" }])}
       <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button>`)}
   ${UI.notices(missed.map(text => ["warn", text]), "Parts of this page could not be read")}
-  ${st ? summaryLine("volumes", [
+  ${!has("st") ? summaryLine("volumes", [`<span class="dim small"><span class="spin2"></span> Reading the totals…</span>`])
+  : st ? summaryLine("volumes", [
       `<b>${st.avail_gb} GiB</b> free of ${st.cap_gb}`, `<b>${st.provisioned_gb} GiB</b> provisioned`,
       `${UI.chip(`${st.healthy} healthy`, "ok")}${st.degraded ? ` ${UI.chip(`${st.degraded} degraded`, "warn")}` : ""}${st.faulted ? ` ${UI.chip(`${st.faulted} faulted`, "bad")}` : ""}`,
       `${st.attached} of ${st.volumes} attached`],
@@ -552,7 +597,7 @@ async function viewStorage() {
       <div class="csub" style="margin-top:10px">${st.attached} attached of ${st.volumes}</div></div>
     ${lhCapacityCard(cap, st)}
   </div>`, "Per host") : ""}
-  ${forecastCard(forecast)}
+  ${has("forecast") ? forecastCard(forecast) : `<div class="card flat forecast-card"><div class="ctitle">Filling up</div>${partReading("the forecast")}</div>`}
   <div class="card flat pad0"><div class="tblwrap voltable"><table data-sort="volumes" class="tbl dense"><thead><tr>
    <th>Volume</th><th>Attached to</th><th>Health</th><th>Mode</th><th>Usage</th><th data-nosort>Last used</th><th></th>
    </tr></thead><tbody>${rows.map(x => `<tr data-vol="${esc(x.name)}"${clusterAttr(x)}>
