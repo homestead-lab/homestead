@@ -306,6 +306,9 @@ def reconcile(now=None):
         pods = U.kget("/api/v1/pods").get("items", [])
     except Exception:
         pods = None
+    by_ns = {}
+    for pod in pods or []:
+        by_ns.setdefault((pod.get("metadata") or {}).get("namespace"), []).append(pod)
     stale, gone = [], []
     for w in latest.get("workloads") or []:
         dep = deps.get((w.get("ns"), w.get("name")))
@@ -321,7 +324,7 @@ def reconcile(now=None):
         # since, a restart onto a newer build, or one that was not running
         # then and is now (#380).
         if pods is not None:
-            running = [p for p in _matching_pods(dep, pods) if (p.get("status") or {}).get("phase") == "Running"]
+            running = [p for p in _matching_pods(dep, by_ns.get(w.get("ns"), [])) if (p.get("status") or {}).get("phase") == "Running"]
             for i in w.get("images") or []:
                 digest = _pod_digest(running, i.get("container")) if i.get("container") else ""
                 if digest and (digest != i.get("current_digest") or i.get("starting")):
@@ -339,6 +342,30 @@ def reconcile(now=None):
         except Exception:
             pass                    # the line stays as it was; the next scan settles it
     return stale
+_RECONCILE_THREAD = [None]
+_RECONCILING = threading.Lock()
+def reconcile_soon(now=None):
+    """reconcile() on a thread of its own, at most one at a time and at most
+    every RECONCILE_EVERY seconds. It lists every Deployment and pod and may
+    ask registries about the apps that changed, so a quiet request answers
+    with the last report at once instead of waiting for that (#985)."""
+    now = now or time.time()
+    with _SCAN_LOCK:
+        if not U._LATEST.get("report") or now - _RECONCILED[0] < RECONCILE_EVERY:
+            return None
+    if not _RECONCILING.acquire(blocking=False):
+        return None
+    def run():
+        try:
+            U.reconcile()
+        except Exception:
+            pass                    # a report a little behind beats none
+        finally:
+            _RECONCILING.release()
+    thread = threading.Thread(target=run, name="update-reconcile", daemon=True)
+    _RECONCILE_THREAD[0] = thread
+    thread.start()
+    return thread
 def refresh_soon(ns, name):
     """refresh_one in the background; if it cannot, the next request scans again."""
     def run():
@@ -372,10 +399,7 @@ def report(force=False):
     running scan found if that is good enough, instead of starting another.
     """
     if not force:
-        try:
-            reconcile()
-        except Exception:
-            pass                    # a report a little behind beats none
+        reconcile_soon()
     with _SCAN_LOCK:
         latest, begun = dict(_LATEST), _STARTED[0]
     if not force and latest["report"] and latest["report"].get("channel", "prod") == U.CHANNEL() and time.time() - latest["finished"] < _fresh_for(latest["report"]):

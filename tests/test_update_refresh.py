@@ -1,9 +1,12 @@
 import sys
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_update_checks as UPDATE_CHECKS
 import homestead_updates as UPDATES
 import homestead_update_checks as CHECKS
 
@@ -62,6 +65,71 @@ class RefreshOneTests(unittest.TestCase):
         with mock.patch.object(CHECKS, "_check_deployment") as check:
             self.assertIsNone(CHECKS.refresh_one("lab", "sonarr"))
         check.assert_not_called()
+
+
+class ReconcileOffRequestTests(unittest.TestCase):
+    """A quiet /api/image-updates answers from the last report; the check of
+    what the cluster runs now happens on its own thread (#985 §1)."""
+    def setUp(self):
+        # A reconcile another test's report() started finishes first.
+        self.assertTrue(UPDATE_CHECKS._RECONCILING.acquire(timeout=10))
+        UPDATE_CHECKS._RECONCILING.release()
+        self.saved = dict(UPDATES._LATEST)
+        self.addCleanup(lambda: (UPDATES._LATEST.clear(), UPDATES._LATEST.update(self.saved)))
+        UPDATES._RECONCILED[0] = 0.0
+        self.addCleanup(UPDATES._RECONCILED.__setitem__, 0, 0.0)
+        UPDATES._LATEST.update(report=UPDATES._summary([
+            {"ns": "lab", "name": "sonarr", "available": True, "homestead": "",
+             "images": [{"container": "sonarr", "deployed": "lscr.io/linuxserver/sonarr:latest", "available": True}]}],
+            checked_at="2026-10-07T02:00:00Z", channel="prod"), number=3, finished=time.time())
+
+    def test_a_quiet_request_reads_no_pods_and_asks_no_registry_on_its_thread(self):
+        caller, calls, release = threading.current_thread(), [], threading.Event()
+        dep = {"metadata": {"namespace": "lab", "name": "sonarr"},
+               "spec": {"template": {"spec": {"containers": [{"name": "sonarr", "image": "lscr.io/linuxserver/sonarr:2"}]}}}}
+        def kget(path):
+            calls.append((threading.current_thread() is caller, path))
+            release.wait(5)
+            return {"items": [dep]} if "deployments" in path else {"items": []}
+        refreshed = []
+        with mock.patch.object(UPDATES, "kget", side_effect=kget), \
+                mock.patch.object(UPDATES, "CHANNEL", lambda: "prod"), \
+                mock.patch.object(UPDATES, "refresh_one", side_effect=lambda ns, name: refreshed.append(name)):
+            answer = UPDATES.report()
+            self.assertEqual("sonarr", answer["workloads"][0]["name"], "the last report, at once")
+            release.set()
+            UPDATE_CHECKS._RECONCILE_THREAD[0].join(5)
+        self.assertEqual([], [path for mine, path in calls if mine], "nothing read on the request's thread")
+        self.assertIn("/api/v1/pods", [path for _mine, path in calls])
+        self.assertEqual(["sonarr"], refreshed, "the changed app is refreshed in the background")
+
+    def test_requests_while_one_runs_start_no_other(self):
+        started, release = [], threading.Event()
+        with mock.patch.object(UPDATES, "reconcile", side_effect=lambda: (started.append(1), release.wait(5))), \
+                mock.patch.object(UPDATES, "CHANNEL", lambda: "prod"):
+            for _ in range(20):
+                UPDATES.report()
+            release.set()
+            UPDATE_CHECKS._RECONCILE_THREAD[0].join(5)
+        self.assertEqual(1, len(started), "one reconcile at a time")
+
+    def test_pods_are_matched_within_their_namespace(self):
+        dep = lambda ns: {"metadata": {"namespace": ns, "name": "app"},
+                          "spec": {"selector": {"matchLabels": {"app": "app"}},
+                                   "template": {"spec": {"containers": [{"name": "app", "image": "x:1"}]}}}}
+        UPDATES._LATEST["report"] = UPDATES._summary(
+            [{"ns": ns, "name": "app", "available": False, "homestead": "", "images": [
+                {"container": "app", "deployed": "x:1", "current_digest": "sha256:" + "a" * 64}]}
+             for ns in ("one", "two")], checked_at="2026-10-07T02:00:00Z", channel="prod")
+        pod = lambda ns, digest: {"metadata": {"namespace": ns, "labels": {"app": "app"}}, "status": {
+            "phase": "Running", "containerStatuses": [{"name": "app", "imageID": "x@sha256:" + digest * 64,
+                                                       "state": {"running": {}}}]}}
+        listed = {"/apis/apps/v1/deployments": {"items": [dep("one"), dep("two")]},
+                  "/api/v1/pods": {"items": [pod("one", "a"), pod("two", "b")]}}
+        with mock.patch.object(UPDATES, "kget", side_effect=lambda path: listed[path]), \
+                mock.patch.object(UPDATES, "refresh_one"):
+            self.assertEqual([("two", "app")], UPDATES.reconcile(now=100),
+                             "only the app whose own pod runs another build")
 
 
 if __name__ == "__main__":
