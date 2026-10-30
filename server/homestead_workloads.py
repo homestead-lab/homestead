@@ -52,7 +52,7 @@ import homestead_usage as USAGE
 # server.py's helpers this module calls, bound by name at start.
 NEEDS = ("kget", "ksend", "workload_start_plan", "scale_workload", "restart_workload",
          "guard_managed_smb", "guard_self", "_dns_name", "get_app_settings", "apply_reviewed_edit",
-         "logsearch_read", "rollout_review_context", "hardware_device_paths", "is_self", "is_managed_smb",
+         "logsearch_read", "raw_get", "rollout_review_context", "hardware_device_paths", "is_self", "is_managed_smb",
          "is_managed_nfs", "homestead_part", "own_group", "pod_container_rows", "parse_cpu", "parse_mem",
          "age_secs", "display_icon", "_pull_progress", "_service_listeners")
 # And its values: the API server, where apps go by default, where
@@ -120,12 +120,11 @@ def _tail(ns, pod, container, lines):
     for _ in range(TAIL_RETRIES + 1):
         query = f"tailLines={lines}&timestamps=true&limitBytes={LOG_BYTES}" + (
             f"&container={urllib.parse.quote(container)}" if container else "")
-        req = urllib.request.Request(f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?{query}",
-                                     headers={"Authorization": f"Bearer {TOKEN}"})
-        with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
-            raw = r.read(LOG_BYTES + 1)
-        text = raw.decode("utf-8", "replace")
-        if len(raw) < LOG_BYTES:
+        # On a pooled connection (#984), like every other read, and under
+        # the request's read deadline. Encoded again, the text is at least as
+        # long as the bytes read, so an answer that reached LOG_BYTES counts.
+        text = raw_get(f"/api/v1/namespaces/{ns}/pods/{pod}/log?{query}", timeout=15, max_bytes=LOG_BYTES)
+        if len(text.encode("utf-8")) < LOG_BYTES:
             if lines == wanted:
                 return text
             return text + f"\n(Log cut: its lines are long, so Homestead is showing the last {lines} lines.)\n"

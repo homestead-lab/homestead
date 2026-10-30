@@ -220,13 +220,12 @@ def parse_mem(s):
 
 def logsearch_read(ns, pod, container, since, limit, previous=False):
     """One container's log lines of the last since seconds, with timestamps;
-    with previous, those of the container before its last restart."""
+    with previous, those of the container before its last restart. At most
+    limit + 1 bytes, read on a pooled connection (#984)."""
     query = f"sinceSeconds={int(since)}&limitBytes={int(limit)}&timestamps=true" + (
         f"&container={urllib.parse.quote(container)}" if container else "") + ("&previous=true" if previous else "")
-    req = urllib.request.Request(f"{API}/api/v1/namespaces/{urllib.parse.quote(ns)}/pods/{urllib.parse.quote(pod)}/log?{query}",
-                                 headers={"Authorization": f"Bearer {TOKEN}"})
-    with urllib.request.urlopen(req, context=CTX, timeout=20) as r:
-        return r.read(int(limit) + 1).decode("utf-8", "replace")
+    return raw_get(f"/api/v1/namespaces/{urllib.parse.quote(ns)}/pods/{urllib.parse.quote(pod)}/log?{query}",
+                   max_bytes=int(limit))
 
 
 def _never_started(pod):
@@ -236,9 +235,11 @@ def _never_started(pod):
                and not (cs.get("lastState") or {}).get("terminated") for cs in statuses)
 
 
-def raw_get(path, timeout=20):
-    """Plain-text GET against the API (pod logs and similar)."""
-    return DEADLINE.read(timeout, lambda allowed: _request("GET", path, None, {}, allowed)).decode("utf-8", "replace")
+def raw_get(path, timeout=20, max_bytes=None):
+    """Plain-text GET against the API (pod logs and similar); with max_bytes,
+    at most max_bytes + 1 bytes of it, so a caller can tell it was cut."""
+    return DEADLINE.read(timeout, lambda allowed: _request("GET", path, None, {}, allowed, max_bytes)).decode(
+        "utf-8", "replace")
 
 
 def ktable(path, timeout=20):
@@ -470,13 +471,17 @@ def transport(method, path, body=None, ctype=None, timeout=15):
 
 # The API server keeps a connection open between requests (#705): a page that
 # makes thirty reads opens one connection and does one TLS handshake, not thirty.
-# Idle connections wait in a small pool shared by every thread; a thread takes
-# one, or opens one, and gives it back when the answer has been read in full.
-# An idle connection over a minute old is not reused (the API server closes idle
-# ones at 90 s), and any failure of a connection drops the whole idle pool: an
-# API server that went away without a reset would otherwise cost a full timeout
-# for every pooled connection in turn.
-_IDLE_MAX = 8
+# Idle connections wait in a pool shared by every thread; a thread takes one,
+# or opens one, and gives it back when the answer has been read in full. The
+# pool keeps 16 (#984): about forty background threads and 8-worker pools read
+# at once, and with 8 half of each burst reconnected. An idle connection over
+# a minute old is not reused (the API server closes idle ones at 90 s). A
+# connection that fails is closed; one dropped or refused (a reset, a closed
+# connection, an unreachable server) drops the whole idle pool too, as an API
+# server that went away would otherwise cost a full timeout for every pooled
+# connection in turn. A timeout drops only its own connection: it says that
+# one answer was slow (a slow metrics-server), not that the server went away.
+_IDLE_MAX = 16
 _IDLE_SECONDS = 60
 _idle = []
 _idle_lock = threading.Lock()
@@ -527,18 +532,19 @@ def _give_back(connection):
     connection.close()
 
 
-def _body(connection, response):
-    """The answer's body. A socket timeout bounds each read from the socket,
-    not the whole answer, so under a request's deadline (#984) the body is
-    read a piece at a time, each piece given at most what is left: an API
-    server trickling its answer is cut at the deadline, not after minutes."""
+def _body(connection, response, max_bytes=None):
+    """The answer's body, or with max_bytes its first max_bytes + 1 bytes. A
+    socket timeout bounds each read from the socket, not the whole answer, so
+    under a request's deadline (#984) the body is read a piece at a time, each
+    piece given at most what is left: an API server trickling its answer is
+    cut at the deadline, not after minutes."""
     if DEADLINE.remaining() is None:
-        return response.read()
+        return response.read() if max_bytes is None else response.read(max_bytes + 1)
     # An answer that ends the connection has left it (http.client): its
     # socket is then only the response's own.
     sock = connection.sock or getattr(getattr(response, "fp", None) and response.fp.raw, "_sock", None)
-    pieces = []
-    while True:
+    pieces, size = [], 0
+    while max_bytes is None or size <= max_bytes:
         left = DEADLINE.remaining()
         if left <= 0:
             raise DEADLINE.spent()
@@ -551,11 +557,14 @@ def _body(connection, response):
                 raise DEADLINE.spent() from error
             raise
         if not piece:
-            return b"".join(pieces)
+            break
         pieces.append(piece)
+        size += len(piece)
+    payload = b"".join(pieces)
+    return payload if max_bytes is None else payload[:max_bytes + 1]
 
 
-def _request(method, path, data, headers, timeout):
+def _request(method, path, data, headers, timeout, max_bytes=None):
     """One request to the API server on a kept-open connection: the answer's
     bytes, or urllib's HTTPError for any answer that is not a success. A
     redirect is an HTTPError too, never followed with the token. A connection
@@ -567,12 +576,11 @@ def _request(method, path, data, headers, timeout):
     the socket's TimeoutError (connecting or reading), and a connection dropped
     mid-answer (RemoteDisconnected, IncompleteRead and other http.client errors)
     is a URLError wrapping it. Every caller catches OSError or Exception, or
-    URLError, TimeoutError and ConnectionError, which cover both."""
+    URLError, TimeoutError and ConnectionError, which cover both.
+
+    With max_bytes, at most max_bytes + 1 bytes of the answer are read; a
+    connection whose answer was not read to its end is closed, not pooled."""
     headers = {**headers, "Authorization": f"Bearer {TOKEN}"}
-    # A timeout the request's deadline set (#984) says nothing about the
-    # other connections: only this one is dropped when it passes.
-    left = DEADLINE.remaining()
-    at_deadline = left is not None and timeout >= left
     pooled = _take(timeout) if method in _READS else None
     connection = pooled or _open(timeout)
     try:
@@ -587,16 +595,18 @@ def _request(method, path, data, headers, timeout):
             connection = _open(timeout)
             connection.request(method, path, body=data, headers=headers)
             response = connection.getresponse()
-        payload = _body(connection, response)
+        payload = _body(connection, response, max_bytes)
     except BaseException as error:
         connection.close()
-        if not (isinstance(error, DEADLINE.Spent) or isinstance(error, TimeoutError) and at_deadline):
+        # A timeout (the read's own or the request's deadline, #984) says
+        # nothing about the other connections: only this one is dropped.
+        if not isinstance(error, TimeoutError):
             close_connections()
         if isinstance(error, http.client.HTTPException):
             raise urllib.error.URLError(error) from error
         raise
-    if response.will_close:
-        connection.close()
+    if response.will_close or max_bytes is not None and len(payload) > max_bytes:
+        connection.close()   # the rest of a cut answer was never read
     else:
         _give_back(connection)
     if not 200 <= response.status < 300:

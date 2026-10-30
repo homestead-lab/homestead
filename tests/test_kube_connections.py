@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT / "server"))
 
 import server  # noqa: F401  (binds homestead_kube)
 import homestead_kube as KUBE
+import homestead_read_deadline as DEADLINE
 import homestead_storage as STORAGE
 import homestead_vm_list as VMLIST
 
@@ -40,6 +41,9 @@ class FakeApi(http.server.ThreadingHTTPServer):
         self.drop_before_reply = False
         self.hang = threading.Event()      # set: read the request, never answer
         self.release = threading.Event()   # set at the end so hung handlers return
+        self.gate = None                   # a Barrier: answer only once that many requests are in
+        self.payload = None                # bytes: the answer to every request, in place of JSON
+        self.trickle = 0                   # seconds between 100-byte pieces of the answer
         self.lock = threading.Lock()
         super().__init__(("127.0.0.1", 0), Handler)
 
@@ -67,6 +71,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.server.release.wait(10)
             self.close_connection = True
             return
+        if self.server.gate is not None:
+            self.server.gate.wait(5)
         if self.path.startswith("/redirect"):
             self.send_response(302)
             self.send_header("Location", "/api/v1/secrets")
@@ -75,13 +81,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if self.path.startswith("/missing"):
             payload, status = b'{"kind":"Status","code":404}', 404
+        elif self.server.payload is not None:
+            payload, status = self.server.payload, 200
         else:
             payload, status = json.dumps({"items": [], "path": self.path}).encode(), 200
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        if self.server.trickle:
+            for start in range(0, len(payload), 100):
+                self.wfile.write(payload[start:start + 100])
+                self.wfile.flush()
+                time.sleep(self.server.trickle)
+        else:
+            self.wfile.write(payload)
         if self.server.drop_after_reply:
             self.close_connection = True
 
@@ -100,6 +114,7 @@ class ConnectionReuseTests(unittest.TestCase):
         self.enterContext(mock.patch.object(KUBE, "TOKEN", "t0ken"))
         KUBE.close_connections()
         self.addCleanup(KUBE.close_connections)
+        DEADLINE.end()   # no request's read deadline: these are background reads
 
     def test_reads_in_a_row_share_one_connection(self):
         for _ in range(5):
@@ -190,7 +205,7 @@ class ConnectionReuseTests(unittest.TestCase):
         self.assertEqual(302, caught.exception.code)
         self.assertEqual(["/redirect/somewhere"], [r[1] for r in self.api.requests])
 
-    def test_a_pooled_read_that_times_out_is_not_retried_and_the_pool_is_dropped(self):
+    def test_a_pooled_read_that_times_out_is_not_retried_and_only_its_connection_is_dropped(self):
         # Two idle connections in the pool, then an API server that stops answering
         # without closing anything (a powered-off server behind a ClusterIP).
         barrier = threading.Barrier(2)
@@ -210,7 +225,104 @@ class ConnectionReuseTests(unittest.TestCase):
             KUBE.transport("GET", "/api/v1/nodes", timeout=0.5)
         self.assertLess(time.monotonic() - started, 1.5, "one timeout, not one per pooled connection")
         self.assertEqual(1, len([r for r in self.api.requests if r[1] == "/api/v1/nodes"]))
+        # A timeout says this answer was slow (a slow metrics-server), not that
+        # the API server went away: the other idle connection is kept (#984).
+        self.assertEqual(1, len(KUBE._idle))
+
+    def _two_idle(self):
+        barrier = threading.Barrier(2)
+
+        def read():
+            barrier.wait(5)
+            KUBE.transport("GET", "/api/v1/pods")
+        threads = [threading.Thread(target=read) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(5)
+        self.assertEqual(2, len(KUBE._idle))
+
+    def test_a_connection_the_server_dropped_still_drops_the_whole_pool(self):
+        # A dropped connection suggests the API server went away: every idle
+        # one is then likely dead too, and is not tried in turn.
+        self._two_idle()
+        self.api.drop_before_reply = True
+        with self.assertRaises((urllib.error.URLError, OSError)):
+            KUBE.transport("GET", "/api/v1/nodes")
         self.assertEqual([], KUBE._idle)
+
+    def test_sixteen_readers_at_once_all_keep_their_connections(self):
+        # About forty background threads and 8-worker pools read at once; a
+        # burst of 16 must not leave half of them to reconnect next time (#984).
+        self.api.gate = threading.Barrier(16)
+
+        def read():
+            KUBE.transport("GET", "/api/v1/pods")
+        for _ in range(2):
+            threads = [threading.Thread(target=read) for _ in range(16)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(10)
+            self.assertEqual(16, len(KUBE._idle))
+        self.assertEqual(16, self.api.connections)
+
+    def test_log_reads_share_the_pool_one_connection_per_worker(self):
+        # Log search reads up to 60 containers with 8 workers (#984).
+        from concurrent.futures import ThreadPoolExecutor
+        self.api.payload = b"2026-01-01T00:00:00Z a line\n"
+        with ThreadPoolExecutor(8) as pool:
+            texts = list(pool.map(lambda n: KUBE.logsearch_read("lab", f"web-{n}", "web", 60, 1000), range(60)))
+        self.assertEqual(["2026-01-01T00:00:00Z a line\n"] * 60, texts)
+        self.assertEqual(60, len(self.api.requests))
+        self.assertLessEqual(self.api.connections, 8)
+        path = self.api.requests[0][1]
+        self.assertIn("/api/v1/namespaces/lab/pods/web-", path)
+        self.assertIn("sinceSeconds=60&limitBytes=1000&timestamps=true&container=web", path)
+
+    def test_a_log_longer_than_its_limit_is_cut_and_its_connection_not_reused(self):
+        self.api.payload = b"x" * 5000
+        self.assertEqual("x" * 101, KUBE.logsearch_read("lab", "web-1", "web", 60, 100))
+        self.assertEqual([], KUBE._idle, "the rest of the answer is unread: the connection is closed")
+        self.api.payload = b"short"
+        self.assertEqual("short", KUBE.logsearch_read("lab", "web-1", "web", 60, 100))
+        self.assertEqual(2, self.api.connections)
+        self.assertEqual(1, len(KUBE._idle))
+
+    def test_a_log_cut_under_a_request_deadline_is_cut_the_same_way(self):
+        self.addCleanup(DEADLINE.end)
+        DEADLINE.begin(15)
+        self.api.payload = b"x" * 200000
+        self.assertEqual("x" * 1001, KUBE.logsearch_read("lab", "web-1", "web", 60, 1000))
+        self.assertEqual([], KUBE._idle)
+
+    def test_a_log_error_is_still_an_http_error(self):
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            KUBE.raw_get("/missing/pods/web-1/log")
+        self.assertEqual(404, caught.exception.code)
+
+    def test_the_logs_view_reads_through_the_pool(self):
+        import homestead_workloads as WORKLOADS
+        from types import SimpleNamespace
+        self.api.payload = b"2026-01-01T00:00:00Z a line\n"
+        request = SimpleNamespace(query={"ns": ["lab"], "pod": ["web-1"], "container": ["web"], "tail": ["50"]})
+        for _ in range(3):
+            reply = WORKLOADS.logs(request)
+            self.assertEqual(200, reply.code)
+        self.assertIn("a line", reply.body if isinstance(reply.body, str) else reply.body.decode())
+        self.assertEqual(1, self.api.connections)
+        self.assertEqual("/api/v1/namespaces/lab/pods/web-1/log?tailLines=50&timestamps=true&container=web",
+                         self.api.requests[0][1])
+
+    def test_a_large_list_answered_slowly_but_steadily_is_not_cut(self):
+        # A socket timeout bounds each read from the socket, not the whole
+        # answer: a big list arriving steadily takes as long as it needs.
+        self.api.payload = json.dumps({"items": [{"n": n} for n in range(150)]}).encode()
+        self.api.trickle = 0.02
+        started = time.monotonic()
+        answer = KUBE.transport("GET", "/api/v1/pods", timeout=0.3)
+        self.assertGreater(time.monotonic() - started, 0.3)
+        self.assertEqual(150, len(answer["items"]))
 
     def test_a_connection_idle_for_over_a_minute_is_not_reused(self):
         clock = [1000.0]
@@ -245,6 +357,7 @@ class TlsConnectionTests(unittest.TestCase):
         self.enterContext(mock.patch.object(KUBE, "CTX", ssl._create_unverified_context()))
         KUBE.close_connections()
         self.addCleanup(KUBE.close_connections)
+        DEADLINE.end()   # no request's read deadline: these are background reads
 
     def test_reads_over_tls_share_one_connection(self):
         for _ in range(3):

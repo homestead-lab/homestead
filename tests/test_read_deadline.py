@@ -132,7 +132,7 @@ class KgetTests(DeadlineCase):
         DEADLINE.begin(15)
         self.clock.advance(10)
         seen = []
-        with mock.patch.object(K, "_request", lambda m, p, d, h, timeout: seen.append(timeout) or b"{}"):
+        with mock.patch.object(K, "_request", lambda m, p, d, h, timeout, max_bytes=None: seen.append(timeout) or b"{}"):
             K.raw_get("/api/v1/namespaces/lab/pods/web/log")
             K.ktable("/api/v1/pods")
         self.assertEqual([5, 5], seen)
