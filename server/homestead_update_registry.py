@@ -18,6 +18,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import homestead_fetch as FETCH
+
 
 MANIFEST_ACCEPT = ", ".join((
     "application/vnd.oci.image.index.v1+json",
@@ -135,7 +137,8 @@ def _open(req, credential=None, timeout=12):
             token_req.add_unredirected_header("Authorization", "Basic " + raw)
         opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), _NoAuthRedirect())
         with opener.open(token_req, timeout=timeout) as response:
-            token_body = json.loads(response.read().decode())
+            token_body = json.loads(FETCH.read(response, TOKEN_MAX_BYTES, time.monotonic() + timeout,
+                                               "the registry's token").decode())
         token = token_body.get("token") or token_body.get("access_token")
         if not token:
             raise PermissionError("registry authentication did not return a token")
@@ -156,31 +159,37 @@ def _retry_after(error, default):
         return max(0.0, min(5.0, float((error.headers or {}).get("Retry-After", default))))
     except (TypeError, ValueError):
         return default
-def _read_capped(response, limit):
-    """The answer's body; with a limit, never more than that many bytes,
-    whatever its Content-Length says."""
-    if limit is None:
-        return response.read()
+# A manifest, an index or a tag list is small: the distribution spec caps a
+# manifest at 4 MiB, and 1,000 tags are tens of KiB. A token answer is a few KiB.
+ANSWER_MAX_BYTES = 4 << 20
+TOKEN_MAX_BYTES = 1 << 20
+# The whole read - connecting, any token exchange, 429 pauses and the body -
+# ends by then: urllib's timeout is per wait, so a trickling registry had none.
+READ_DEADLINE = 30.0
+def _read_capped(response, limit, deadline=None):
+    """The answer's body; never more than limit bytes (ANSWER_MAX_BYTES when
+    None), whatever its Content-Length says, and none of it after deadline."""
     try:
-        declared = int((response.headers or {}).get("Content-Length") or 0)
-    except (TypeError, ValueError):
-        declared = 0
-    body = b"" if declared > limit else response.read(limit + 1)
-    if declared > limit or len(body) > limit:
-        raise ValueError("the registry's answer is larger than expected")
-    return body
-def _registry_json(parsed, path, auths, accept="application/json", limit=None):
+        return FETCH.read(response, ANSWER_MAX_BYTES if limit is None else limit, deadline, "the registry's answer")
+    except FETCH.TooLarge:
+        raise ValueError("the registry's answer is larger than expected") from None
+def _registry_json(parsed, path, auths, accept="application/json", limit=None, deadline=None):
     url = f"https://{parsed['endpoint']}/v2/{parsed['repo']}/{path}"
+    deadline = time.monotonic() + READ_DEADLINE if deadline is None else deadline
     for attempt in range(len(RATE_LIMIT_WAITS) + 1):
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("the registry took too long to answer")
         req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "Homestead/2.0"})
         try:
-            with _open(req, _credential(auths, parsed)) as response:
-                body = _read_capped(response, limit)
+            with _open(req, _credential(auths, parsed), min(12, left)) as response:
+                body = _read_capped(response, limit, deadline)
                 return body, response.headers
         except urllib.error.HTTPError as error:
-            if error.code != 429 or attempt == len(RATE_LIMIT_WAITS):
+            pause = _retry_after(error, RATE_LIMIT_WAITS[min(attempt, len(RATE_LIMIT_WAITS) - 1)])
+            if error.code != 429 or attempt == len(RATE_LIMIT_WAITS) or time.monotonic() + pause >= deadline:
                 raise
-            time.sleep(_retry_after(error, RATE_LIMIT_WAITS[attempt]))
+            time.sleep(pause)
 def manifest_info(ref, auths=None, force=False):
     parsed = parse_image(ref)
     if parsed["digest"]:

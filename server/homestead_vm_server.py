@@ -231,13 +231,22 @@ def _logos(request):
     try:
         return logo_choices((q.get("ns") or [""])[0], (q.get("name") or [""])[0],
                             (q.get("q") or [None])[0], (q.get("kind") or ["workload"])[0])
+    except APPSTORE.FeedLoading as e:
+        return _feed_loading(e)
     except Exception as e:
         return MODULE_ROUTES.Reply(502, {"error": f"app feed unavailable: {e}"})
+
+
+def _feed_loading(error):
+    """The App Store's feed is still being read: ask again shortly."""
+    return MODULE_ROUTES.Reply(503, {"error": str(error), "loading": True}, headers=(("Retry-After", "2"),))
 
 
 def _logos_missing(request):
     try:
         apps = APPSTORE.fetch_appstore()
+    except APPSTORE.FeedLoading as e:
+        return _feed_loading(e)
     except Exception as e:
         return MODULE_ROUTES.Reply(502, {"error": f"app feed unavailable: {e}"})
     return {"apps": LOGOS.missing(cached("wl", 5, WORKLOADS.get_workloads), apps, helm_chart_logos())}

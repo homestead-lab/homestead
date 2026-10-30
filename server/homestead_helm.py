@@ -17,14 +17,17 @@ changed: Homestead does not know what else would fight over them.
 Charts are found through Artifact Hub's public API.
 """
 import base64
+import collections
 import gzip
 import json
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
+import homestead_fetch as FETCH
 import homestead_names as NAMES
 import homestead_value_masks as MASKS
 import homestead_routes
@@ -34,7 +37,17 @@ CONTROLLER_NS = "kube-system"
 PREVIOUS_SPEC = NAMES.key("helm-previous")
 HUB = "https://artifacthub.io/api/v1"
 SYSTEM_PREFIXES = ("cattle-", "harvester-", "longhorn-", "kube-", "fleet-", "rancher-", "cis-operator")
-_cache = {}
+# Searches kept, least recently used first: each distinct query was kept for
+# ever, so a script (or a lot of typing) grew it without end.
+_cache = collections.OrderedDict()
+_cache_lock = threading.Lock()
+SEARCH_MAX = 256
+SEARCH_SECONDS = 600
+QUERY_MAX = 100
+# An Artifact Hub answer: a search page or a package is tens of KiB, a chart's
+# values file rarely more than a few hundred.
+HUB_MAX_BYTES = 4 << 20
+HUB_DEADLINE = 30
 fetch = None
 
 
@@ -47,7 +60,8 @@ def bind(_kget, _ksend, _fetch=None):
 def _hub_get(url, raw=False):
     request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "homestead"})
     with urllib.request.urlopen(request, timeout=15) as response:
-        body = response.read().decode("utf-8", "replace")
+        body = FETCH.read(response, HUB_MAX_BYTES, time.monotonic() + HUB_DEADLINE,
+                          "Artifact Hub's answer").decode("utf-8", "replace")
     return body if raw else json.loads(body or "{}")
 
 
@@ -323,11 +337,14 @@ def uninstall(namespace, name):
 # ------------------------------------------------------------------ finding charts
 def search(query):
     query = str(query or "").strip()
-    if len(query) < 2:
+    if not 2 <= len(query) <= QUERY_MAX:
         return []
     key = ("search", query.lower())
-    if key in _cache and time.time() - _cache[key][0] < 600:
-        return _cache[key][1]
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit and time.time() - hit[0] < SEARCH_SECONDS:
+            _cache.move_to_end(key)
+            return hit[1]
     found = fetch(f"{HUB}/packages/search?{urllib.parse.urlencode({'ts_query_web': query, 'kind': 0, 'limit': 20, 'offset': 0})}")
     rows = []
     for pkg in found.get("packages") or []:
@@ -338,7 +355,11 @@ def search(query):
                      "verified": bool(repo.get("verified_publisher")), "official": bool(pkg.get("official") or repo.get("official")),
                      "stars": pkg.get("stars", 0), "package_id": pkg.get("package_id", ""),
                      "logo": f"https://artifacthub.io/image/{pkg['logo_image_id']}" if pkg.get("logo_image_id") else ""})
-    _cache[key] = (time.time(), rows)
+    with _cache_lock:
+        _cache[key] = (time.time(), rows)
+        _cache.move_to_end(key)
+        while len(_cache) > SEARCH_MAX:
+            _cache.popitem(last=False)
     return rows
 
 

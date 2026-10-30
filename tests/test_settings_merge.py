@@ -113,6 +113,19 @@ class SettingsMergeTests(unittest.TestCase):
         self.assertEqual("Barn", saved["site_name"])
         self.assertEqual("POST", send.call_args.args[0])
 
+    def test_a_save_lets_the_kept_app_feed_go(self):
+        # A different catalogue address is a different catalogue.
+        import homestead_deploy_appstore as APPSTORE
+        self.addCleanup(APPSTORE.forget_feed)
+        APPSTORE._feed.update(source="https://example.com/feed", apps=[{"name": "kept"}], at=1e12)
+        missing = urllib.error.HTTPError("/api/v1", 404, "Not Found", {}, io.BytesIO(b"{}"))
+        with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=missing), \
+             mock.patch.object(server.KUBE_HELPERS, "ksend"), \
+             mock.patch.object(CHECKS, "invalidate"), \
+             mock.patch.object(server.SETTINGS_HELPERS, "_fleet_rename"):
+            server.SETTINGS_HELPERS.save_app_settings({"catalog_url": "https://mirror.example.com/f.json", "revision": ""})
+        self.assertIsNone(APPSTORE._feed["apps"])
+
     def test_an_invalid_section_is_refused_and_changes_nothing(self):
         result, send = self.call("POST", {"mcp": {"enabled": "yes"}})
         self.assertEqual(400, result[0])

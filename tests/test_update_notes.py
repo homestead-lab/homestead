@@ -437,7 +437,9 @@ class RegistryLimitTests(unittest.TestCase):
             self.headers = {"Content-Length": str(length)} if length is not None else {}
         def read(self, size=-1):
             self.read_sizes.append(size)
-            return self.body if size < 0 else self.body[:size]
+            piece = self.body if size < 0 else self.body[:size]
+            self.body = self.body[len(piece):]
+            return piece
         def __enter__(self):
             return self
         def __exit__(self, *_):
@@ -451,7 +453,8 @@ class RegistryLimitTests(unittest.TestCase):
     def test_an_answer_within_the_limit_is_read(self):
         answer = self.Answer(b"x" * 10, length=10)
         self.assertEqual(b"x" * 10, self.fetch(answer, 10)[0])
-        self.assertEqual([11], answer.read_sizes)
+        self.assertEqual(11, answer.read_sizes[0])
+        self.assertTrue(all(0 < size <= 11 for size in answer.read_sizes), answer.read_sizes)
 
     def test_a_declared_length_over_the_limit_is_not_read(self):
         answer = self.Answer(b"x" * 10, length=11)
@@ -467,10 +470,13 @@ class RegistryLimitTests(unittest.TestCase):
                 self.fetch(answer, 10)
             self.assertEqual([11], answer.read_sizes)
 
-    def test_without_a_limit_nothing_changes(self):
+    def test_without_a_limit_the_default_cap_applies(self):
         answer = self.Answer(b"x" * 100, length=100)
         self.assertEqual(b"x" * 100, self.fetch(answer, None)[0])
-        self.assertEqual([-1], answer.read_sizes)
+        self.assertNotIn(-1, answer.read_sizes, "never an unbounded read")
+        answer = self.Answer(b"x", length=REGISTRY.ANSWER_MAX_BYTES + 1)
+        with self.assertRaisesRegex(ValueError, "larger"):
+            self.fetch(answer, None)
 
 
 if __name__ == "__main__":

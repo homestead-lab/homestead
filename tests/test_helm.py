@@ -1,9 +1,11 @@
 import base64
 import gzip
+import io
 import json
 import sys
 import unittest
 import urllib.error
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -130,6 +132,43 @@ class HelmTests(unittest.TestCase):
         rows = HELM.search("grafana")
         self.assertEqual(("grafana", "https://artifacthub.io/image/img", True), (rows[0]["repo_name"], rows[0]["logo"], rows[0]["verified"]))
         self.assertEqual([], HELM.search("g"))
+
+    def test_searches_kept_are_bounded_and_the_least_recent_goes_first(self):
+        asked = []
+        HELM.bind(HELM.kget, HELM.ksend, lambda url, raw=False: asked.append(url) or {"packages": []})
+        HELM._cache.clear()
+        self.addCleanup(HELM._cache.clear)
+        with mock.patch.object(HELM, "SEARCH_MAX", 3):
+            for query in ("aa", "bb", "cc"):
+                HELM.search(query)
+            HELM.search("aa")            # a hit: "aa" is now the most recent
+            HELM.search("dd")            # one too many: "bb" goes
+            self.assertEqual(3, len(HELM._cache))
+            self.assertEqual(4, len(asked))
+            HELM.search("aa")
+            self.assertEqual(4, len(asked), "a recent search is still kept")
+            HELM.search("bb")
+            self.assertEqual(5, len(asked), "the least recent one was let go")
+            self.assertLessEqual(len(HELM._cache), 3)
+
+    def test_a_search_longer_than_a_chart_name_is_not_sent(self):
+        HELM.bind(HELM.kget, HELM.ksend, lambda url, raw=False: self.fail("not asked"))
+        HELM._cache.clear()
+        self.assertEqual([], HELM.search("x" * (HELM.QUERY_MAX + 1)))
+
+    def test_artifact_hub_answers_are_capped(self):
+        class Huge(io.BytesIO):
+            headers = {"Content-Length": str(HELM.HUB_MAX_BYTES + 1)}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        with mock.patch.object(HELM.urllib.request, "urlopen", return_value=Huge(b"{}")):
+            with self.assertRaises(ValueError):
+                HELM._hub_get(HELM.HUB + "/packages/search?ts_query_web=x")
 
 
 if __name__ == "__main__":
