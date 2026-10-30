@@ -45,6 +45,7 @@ class NamespaceTests(unittest.TestCase):
         self.kube = self.enterContext(Kube(*objects, absent_groups=absent))
         # A short API error on a kind, in every namespace.
         for kind in failing:
+            self.kube.fail(PATHS[kind].replace("/namespaces/{}", ""), 500, times=99)
             for name in names:
                 self.kube.fail(PATHS[kind].format(name), 500, times=99)
         saved = tuple(getattr(ns, name, None) for name in ("kget", "ksend", "DEFAULT_NS", "OWN_NS"))
@@ -121,6 +122,54 @@ class NamespaceTests(unittest.TestCase):
         row = next(r for r in ns.inventory()["namespaces"] if r["name"] == "old")
         self.assertEqual(["cronjobs"], row["unread"])
         self.assertFalse(row["empty"])
+
+
+class InventoryCostTests(unittest.TestCase):
+    """The namespaces page lists each kind once for the cluster, not once per
+    namespace (#985 §5)."""
+    def cluster(self, count):
+        objects = [{"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": f"team-{i}"}} for i in range(count)]
+        for i in range(count):
+            objects.append({"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "web", "namespace": f"team-{i}"}})
+            if i % 2:
+                objects.append({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "by-hand", "namespace": f"team-{i}"},
+                                "status": {"phase": "Running"}})
+        return Kube(*objects)
+
+    def gets(self, count):
+        with self.cluster(count) as kube:
+            ns.bind(K.kget, K.ksend, "lab", "lab")
+            seen = []
+            real = K.transport
+            def counting(method, path, *args, **kwargs):
+                seen.append(path)
+                return real(method, path, *args, **kwargs)
+            K.transport = counting
+            try:
+                found = ns.inventory()
+            finally:
+                K.transport = real
+        return len(seen), found
+
+    def test_the_call_count_does_not_grow_with_namespaces(self):
+        small, _ = self.gets(2)
+        large, found = self.gets(26)
+        self.assertEqual(small, large)
+        self.assertLessEqual(large, 9)
+        rows = {r["name"]: r for r in found["namespaces"]}
+        self.assertEqual(1, rows["team-3"]["deployments"])
+        self.assertEqual(1, rows["team-3"]["pods"])
+        self.assertEqual(0, rows["team-2"]["pods"])
+        self.assertFalse(rows["team-2"]["empty"])
+
+    def test_a_kind_that_cannot_be_read_marks_every_namespace(self):
+        with self.cluster(3) as kube:
+            ns.bind(K.kget, K.ksend, "lab", "lab")
+            kube.fail("/api/v1/persistentvolumeclaims", 500, times=5)
+            for path in [f"/api/v1/namespaces/team-{i}/persistentvolumeclaims" for i in range(3)]:
+                kube.fail(path, 500, times=5)
+            rows = ns.inventory()["namespaces"]
+        self.assertTrue(all("volumes" in r["unread"] and not r["empty"] for r in rows))
 
 
 if __name__ == "__main__":
