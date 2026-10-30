@@ -85,7 +85,8 @@ def record(key, via, action, args=None, outcome="ok", detail="", addr="", approv
             if _written[0] % TRIM_EVERY == 0:
                 _trim_locked()
     except Exception as error:      # full, unwritable, or held by a data move
-        print(f"agent audit: {str(error)[:160]}", flush=True)
+        # The pod log keeps the line the data volume did not take.
+        print(f"agent audit: not written to the data volume ({str(error)[:160]}): {line}", flush=True)
     return entry
 
 
@@ -112,6 +113,8 @@ def _trim_locked(now=None):
     try:
         with open(temp, "w", encoding="utf-8") as handle:
             handle.writelines(json.dumps(r, separators=(",", ":"), ensure_ascii=False) + "\n" for r in rows)
+            handle.flush()
+            os.fsync(handle.fileno())       # on disk before it replaces the log
         os.replace(temp, _path())
     except BaseException:
         try:

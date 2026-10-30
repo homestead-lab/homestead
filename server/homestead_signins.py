@@ -11,6 +11,7 @@ a failed attempt records the name tried, not what was typed for it.
 import json
 import os
 import re
+import threading
 import time
 
 import homestead_shared as SHARED
@@ -22,7 +23,12 @@ TRIM_EVERY = 200         # records written by this process between trims
 EVENTS = ("signin", "signin-failed", "signin-blocked", "signout", "signout-everywhere", "password",
           "password-failed", "setup", "user-added", "user-removed", "role",
           "key-added", "key-changed", "key-revoked", "key-refused")
-_lock = SHARED.SharedLock("signins", directory=lambda: DATA_DIR)
+LOCK_SECONDS = 2        # the longest a sign-in waits for another copy's write
+# Strict, for its timeout: a copy stuck holding the shared lock (a hung NFS
+# server) must not hold anyone's sign-in. Then this copy writes under its own
+# lock, as before #986, and says so.
+_lock = SHARED.SharedLock("signins", strict=True, timeout=LOCK_SECONDS, directory=lambda: DATA_DIR)
+_local = threading.Lock()
 _writes = {"n": 0}
 
 
@@ -61,14 +67,32 @@ def record(event, user, ip="", ok=True, detail="", agent="", via=""):
     line = json.dumps(row, separators=(",", ":")) + "\n"
     try:
         with _lock:
-            os.makedirs(DATA_DIR, exist_ok=True)
-            with open(_path(), "a", encoding="utf-8") as handle:
-                handle.write(line)
+            _append(line)
             _writes["n"] += 1
             if _writes["n"] % TRIM_EVERY == 0:
                 _trim()
+        return
+    except TimeoutError:
+        print("sign-ins: the shared lock is busy, so this copy writes under its own lock", flush=True)
     except Exception as error:      # full, unwritable, or held by a data move
-        print(f"sign-ins: {str(error)[:160]}", flush=True)
+        _lost(line, error)
+        return
+    try:
+        with _local, SHARED.write_scope(_path()):
+            _append(line)
+    except Exception as error:
+        _lost(line, error)
+
+
+def _append(line):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(_path(), "a", encoding="utf-8") as handle:
+        handle.write(line)
+
+
+def _lost(line, error):
+    # The pod log keeps the line the data volume did not take.
+    print(f"sign-ins: not written to the data volume ({str(error)[:160]}): {line.strip()}", flush=True)
 
 
 def _trim():
@@ -84,6 +108,8 @@ def _trim():
     try:
         with open(temp, "w", encoding="utf-8") as handle:
             handle.writelines(lines[-KEEP:])
+            handle.flush()
+            os.fsync(handle.fileno())       # on disk before it replaces the log
         os.replace(temp, _path())
     except BaseException:
         try:
