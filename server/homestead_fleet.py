@@ -425,37 +425,103 @@ def verify(headers, method, target, body=b""):
     return {"sender": origin, "role": role, "user": (f"{via}:{user}" if user else via) if role else ""}
 
 
+class ReplayStore:
+    """The nonces linked Homesteads have used, shared by every copy of this
+    one through a ConfigMap whose resourceVersion is the replay boundary.
+
+    A claim is durable before it returns, as before, so a nonce one copy
+    took is refused by the other. What changed (#985): claims that arrive
+    while a write is under way wait for it and then go out together in the
+    next write, one GET and one PUT for the batch instead of per request;
+    and the ConfigMap as this copy last wrote it is kept, so a claim reads
+    it again only after another copy changed it (the PUT answers 409)."""
+    LIMIT = 8000
+
+    def __init__(self):
+        self._cv = threading.Condition()
+        self._pending = []          # tickets waiting for the next write
+        self._writing = False
+        self._current = None        # the ConfigMap as this copy last wrote or read it
+
+    def claim(self, sender, nonce):
+        ticket = {"digest": hashlib.sha256((sender + ":" + nonce).encode()).hexdigest(), "done": False, "error": None}
+        with self._cv:
+            self._pending.append(ticket)
+            while not ticket["done"]:
+                if self._writing:
+                    self._cv.wait()
+                    continue
+                self._writing, batch, self._pending = True, self._pending, []
+                self._cv.release()
+                try:
+                    self._write(batch)
+                finally:
+                    self._cv.acquire()
+                    self._writing = False
+                    self._cv.notify_all()
+        if ticket["error"]:
+            raise PermissionError(ticket["error"])
+
+    def _write(self, batch):
+        path = f"/api/v1/namespaces/{NS}/configmaps/{NAMES.BRAND}-fleet-replay"
+        try:
+            for _attempt in range(4):
+                current = self._current
+                if current is None:
+                    try:
+                        current = kget(path)
+                    except urllib.error.HTTPError as error:
+                        if error.code != 404:
+                            raise PermissionError("fleet replay store is unavailable") from error
+                        current = {}
+                now = time.time()
+                records = {k: until for k, until in json.loads((current.get("data") or {}).get("nonces", "{}")).items()
+                           if until > now}
+                for ticket in batch:
+                    ticket["error"] = None
+                    if ticket["digest"] in records:
+                        ticket["error"] = "signed request was already used"
+                    elif len(records) >= self.LIMIT:
+                        ticket["error"] = "fleet request limit reached; try again later"
+                    else:
+                        records[ticket["digest"]] = now + 2 * SKEW
+                if all(ticket["error"] for ticket in batch):
+                    return
+                meta = {"name": NAMES.BRAND + "-fleet-replay", "namespace": NS}
+                if current.get("metadata", {}).get("resourceVersion"):
+                    meta["resourceVersion"] = current["metadata"]["resourceVersion"]
+                body = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": meta,
+                        "data": {"nonces": json.dumps(records, separators=(",", ":"))}}
+                try:
+                    written = ksend("PUT" if current else "POST", path if current else path.rsplit("/", 1)[0], body)
+                except urllib.error.HTTPError as error:
+                    self._current = None        # changed or gone elsewhere: read it again
+                    if error.code not in (404, 409):
+                        raise PermissionError("fleet replay store is unavailable") from error
+                    continue
+                kept = written if isinstance(written, dict) and (written.get("metadata") or {}).get("resourceVersion") else None
+                self._current = kept and {"metadata": kept["metadata"], "data": kept.get("data") or {}}
+                return
+            raise PermissionError("fleet replay store is busy; try again")
+        except PermissionError as error:
+            for ticket in batch:
+                ticket["error"] = ticket["error"] or str(error)
+        except Exception as error:
+            self._current = None
+            for ticket in batch:
+                ticket["error"] = "fleet replay store is unavailable"
+            print(f"Fleet replay store: {str(error)[:200]}", flush=True)
+        finally:
+            for ticket in batch:
+                ticket["done"] = True
+
+
+_replay = ReplayStore()
+
+
 def _claim_nonce(sender, nonce):
     """Kubernetes resourceVersion provides a replay boundary across replicas."""
-    path = f"/api/v1/namespaces/{NS}/configmaps/{NAMES.BRAND}-fleet-replay"
-    digest = hashlib.sha256((sender + ":" + nonce).encode()).hexdigest()
-    with _lock:
-        for attempt in range(4):
-            try:
-                current = kget(path)
-            except urllib.error.HTTPError as error:
-                if error.code != 404:
-                    raise PermissionError("fleet replay store is unavailable") from error
-                current = {}
-            now = time.time()
-            records = {k: until for k, until in json.loads((current.get("data") or {}).get("nonces", "{}")).items() if until > now}
-            if digest in records:
-                raise PermissionError("signed request was already used")
-            if len(records) >= 8000:
-                raise PermissionError("fleet request limit reached; try again later")
-            records[digest] = now + 2 * SKEW
-            meta = {"name": NAMES.BRAND + "-fleet-replay", "namespace": NS}
-            if current.get("metadata", {}).get("resourceVersion"):
-                meta["resourceVersion"] = current["metadata"]["resourceVersion"]
-            body = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": meta,
-                    "data": {"nonces": json.dumps(records, separators=(",", ":"))}}
-            try:
-                ksend("PUT" if current else "POST", path if current else path.rsplit("/", 1)[0], body)
-                return
-            except urllib.error.HTTPError as error:
-                if error.code != 409:
-                    raise PermissionError("fleet replay store is unavailable") from error
-        raise PermissionError("fleet replay store is busy; try again")
+    _replay.claim(sender, nonce)
 
 
 def console_authorizer(sender):
