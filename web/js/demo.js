@@ -1260,7 +1260,7 @@
         managed: false, managed_by: "", owner: "flux", runnable: false, editable: false,
         result: "ok", result_at: "2026-09-22T02:45:31Z", result_reason: "", last_success: "2026-09-22T02:45:31Z",
         missed: false, next_run: "" }],
-    "/api/events": () => ({ total: 3, events: [
+    "/api/events": () => ({ total: 3, limited: false, events: [
       { obj: "frigate-7d9f8c6b5-x2abc", ns: "lab", kind: "Pod", type: "Normal", reason: "Pulled",
         msg: "Successfully pulled image \"ghcr.io/blakeblackshear/frigate:stable\" in 12.4s", count: 1,
         time: new Date(Date.now() - 4 * 60e3).toISOString() },
@@ -3667,7 +3667,7 @@ ssh_pwauth: true
     const events = responses["/api/events"];
     responses["/api/events"] = (...args) => {
       const rows = events(...args).events.filter(row => row.type !== "Warning");
-      return { total: rows.length, events: rows };
+      return { total: rows.length, limited: false, events: rows };
     };
     const operations = responses["/api/operations"];
     responses["/api/operations"] = (...args) => operations(...args).map(row => row.id === "op2"

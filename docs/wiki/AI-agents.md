@@ -114,7 +114,7 @@ Tools come in three classes:
 | `preview_cancel_job` | What cancelling a job would undo and keep, and the options and confirmation it needs | `containers:control` | change |
 | `cancel_job` | Cancels a running job as preview_cancel_job described: pass its options and, when it asked, confirm | `containers:control` | change |
 | `dismiss_job` | Takes a finished job off the list, or every finished one with all: true | `containers:control` | change |
-| `list_cluster_events` | Kubernetes' recent warnings and events across the cluster | `read` | read |
+| `list_cluster_events` | Kubernetes' newest warnings and events across the cluster (up to 120, newest first), with `total` (how many it read) and `limited` (true when it stopped before the end of a very long list) | `read` | read |
 | `get_placement` | The placement mode, each host's part, standby hosts, and how many apps reserve nothing | `read` | read |
 | `get_agent_request` | Follows a request a destructive tool filed, until a person answers it | any key | read |
 

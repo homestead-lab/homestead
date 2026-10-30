@@ -1,8 +1,12 @@
 """Read-only Harvester/Kubernetes platform health and node-onboarding guidance."""
+import heapq
 import math
 import re
+import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
 from datetime import datetime, timezone
 import homestead_alerts as ALERTS
 import homestead_roles as ROLES
@@ -467,8 +471,15 @@ ALERTS.HEALTH[0] = lambda: health_brief()
 
 # The Events page's rows: the newest, from the whole list (#988). The API
 # server lists events by namespace and name, so a limited read kept whichever
-# namespaces sort first; the list is read whole and cut after sorting.
+# namespaces sort first. The list is read a page at a time and only the newest
+# EVENT_ROWS are kept as it goes, so a busy cluster costs a page and the rows,
+# never the whole list. A read stops at EVENT_CEILING events or EVENT_SECONDS
+# and says limited, as an expired continue token does.
 EVENT_ROWS = 120
+EVENT_PAGE = 500
+EVENT_CEILING = 20000
+EVENT_SECONDS = 8.0
+_clock = time.monotonic
 
 
 def _event_when(e):
@@ -485,16 +496,8 @@ def _event_when(e):
     return "", 0.0
 
 
-def events():
-    """The newest EVENT_ROWS events, newest first, and how many there were:
-    total above len(events) says the list was cut."""
-    try:
-        items = kget("/api/v1/events").get("items") or []
-    except Exception:
-        return {"events": [], "total": 0}
-    dated = sorted(((_event_when(e), e) for e in items if isinstance(e, dict)),
-                   key=lambda pair: pair[0][1], reverse=True)
-    return {"total": len(dated), "events": [{
+def _event_row(e, when):
+    return {
         "ns": (e.get("metadata") or {}).get("namespace", ""),
         "obj": e.get("involvedObject", {}).get("name", ""),
         "kind": e.get("involvedObject", {}).get("kind", ""),
@@ -503,7 +506,45 @@ def events():
         "type": e.get("type", "Normal"),
         "time": when,
         "count": e.get("count", 1),
-    } for (when, _), e in dated[:EVENT_ROWS]]}
+    }
+
+
+def events():
+    """The newest EVENT_ROWS events, newest first; total: how many were read
+    (above len(events) the list was cut); limited: the read stopped before
+    the end of the list; error: nothing could be read."""
+    kept, total, token, limited, started = [], 0, "", False, _clock()
+    while True:
+        query = {"limit": EVENT_PAGE, **({"continue": token} if token else {})}
+        try:
+            page = kget(f"/api/v1/events?{urllib.parse.urlencode(query)}")
+            items = page.get("items") or []
+        except Exception as error:
+            if not token:
+                print(f"Events read failed: {error}", file=sys.stderr)
+                return {"events": [], "total": 0, "limited": False,
+                        "error": "Kubernetes did not answer the events read; refresh to try again"}
+            # 410: the continue token expired. Either way, keep what was read.
+            if not (isinstance(error, urllib.error.HTTPError) and error.code == 410):
+                print(f"Events read stopped after {total}: {error}", file=sys.stderr)
+            limited = True
+            break
+        for e in items:
+            if not isinstance(e, dict):
+                continue
+            when, seconds = _event_when(e)
+            # Ties keep Kubernetes' order: the earlier-listed one is the larger key.
+            entry = (seconds, -total, _event_row(e, when))
+            total += 1
+            (heapq.heappush if len(kept) < EVENT_ROWS else heapq.heappushpop)(kept, entry)
+        token = (page.get("metadata") or {}).get("continue") or ""
+        if not token:
+            break
+        if total >= EVENT_CEILING or _clock() - started > EVENT_SECONDS:
+            limited = True
+            break
+    kept.sort(key=lambda entry: entry[:2], reverse=True)
+    return {"events": [row for _, _, row in kept], "total": total, "limited": limited}
 
 
 # Its routes and who may use them (homestead_routes.py).
