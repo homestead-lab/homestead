@@ -65,6 +65,15 @@ class ReaderTests(unittest.TestCase):
         return {"metadata": {"name": name, "creationTimestamp": "2026-09-25T12:00:00Z"},
                 "spec": {"containers": [{"name": c} for c in containers]}, "status": {"phase": phase}}
 
+    def test_a_tail_read_is_bounded_in_bytes(self):
+        # #986: Kubernetes splits lines at 16 KB, so tailLines alone can
+        # return megabytes; only the last 60,000 characters are kept.
+        asked = []
+        JL.bind(lambda path: {}, lambda path: asked.append(path) or "x")
+        JL._tail("lab", "pod-a", "main")
+        self.assertIn(f"limitBytes={JL.LIMIT_BYTES}", asked[0])
+        self.assertLessEqual(JL.LIMIT_BYTES, 1024 * 1024)
+
     def test_a_k3s_node_shows_its_console_and_a_node_not_running_says_so(self):
         sel = lambda vm: JL._q(f"vm.kubevirt.io/name={vm}")
         self.objects[("/api/v1/namespaces/lab/pods", sel("c-server-1"))] = {"items": [

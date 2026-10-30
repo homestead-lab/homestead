@@ -16,6 +16,11 @@ import homestead_value_masks as MASKS
 
 kget = ktext = None
 TAIL = 200
+# The most one tail read asks for (#986): Kubernetes splits lines at 16 KB, so
+# TAIL lines can be 3 MB, and only the last 60,000 characters are kept.
+# limitBytes keeps the oldest of the lines asked for; this bound is far above
+# what an ordinary log's TAIL lines take.
+LIMIT_BYTES = 512 * 1024
 
 
 def bind(_kget, _ktext):
@@ -33,7 +38,7 @@ def _pods(ns, selector):
 
 
 def _tail(ns, pod, container="", lines=TAIL, *, timestamps=False):
-    query = f"?tailLines={lines}" + (f"&container={_q(container)}" if container else "") + ("&timestamps=true" if timestamps else "")
+    query = f"?tailLines={lines}" + (f"&container={_q(container)}" if container else "") + ("&timestamps=true" if timestamps else "") + f"&limitBytes={LIMIT_BYTES}"
     return str(ktext(f"/api/v1/namespaces/{_q(ns)}/pods/{_q(pod)}/log{query}") or "")
 
 
