@@ -302,6 +302,13 @@ def restore_cancel(item, _options):
     if claim and ref.get("backup") and made_by != ref["backup"]:
         return f"Restore stopped; {ref['name']} is no longer the claim it made, so it is kept"
     gone = _delete(path)
+    # Its snapshot is removed only once a claim binds: with the claim gone,
+    # this restore's own is removed here (a backup is never touched).
+    try:
+        import homestead_csi_restore as CSI_RESTORE
+        CSI_RESTORE.discard(ref["namespace"], ref["name"])
+    except Exception as error:
+        print(f"Restore metadata cleanup deferred: {error}", flush=True)
     if tidy_restore:
         try:
             tidy_restore()

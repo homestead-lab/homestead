@@ -141,6 +141,22 @@ class LonghornRestoreTests(unittest.TestCase):
         self.assertEqual(1, sum(path.endswith("/volumesnapshotcontents") for _, path, _, _ in self.sent))
         self.assertEqual(1, sum(path.endswith("/volumesnapshots") for _, path, _, _ in self.sent))
 
+    def test_a_reviewed_restore_whose_claim_cannot_be_made_removes_its_snapshot_again(self):
+        """No job follows a refused first create: nothing else would remove them."""
+        original = longhorn.ksend
+        def fail(method, path, body=None, **kwargs):
+            if path.endswith("/persistentvolumeclaims"):
+                raise urllib.error.HTTPError(path, 422, "invalid", {}, None)
+            return original(method, path, body, **kwargs)
+        with patch.object(longhorn, "ksend", fail):
+            with self.assertRaises(urllib.error.HTTPError):
+                RESTORE.restore_backup({"backup": "backup-123", "namespace": "lab", "name": "restored-data",
+                                        "restore_id": "attempt-one"}, discard_on_failure=True)
+        deletes = [path for method, path, _, _ in self.sent if method == "DELETE"]
+        self.assertEqual(2, len(deletes))
+        self.assertFalse(any("volumesnapshot" in path for path in self.objects if "homestead-restore-" in path))
+        self.assertIn("/apis/longhorn.io/v1beta2/namespaces/longhorn-system/backups/backup-123", self.objects)
+
     def test_dismissed_failed_attempt_and_new_attempt_use_distinct_metadata(self):
         first = self.restore(restore_id="attempt-one")
         self.objects.pop("/api/v1/namespaces/lab/persistentvolumeclaims/restored-data")

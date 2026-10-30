@@ -168,5 +168,71 @@ class CleanupControllerRaceTests(unittest.TestCase):
         self.assertEqual("replacement", self.kube.object(self.content)["metadata"]["uid"])
 
 
+class StoppedRestoreTests(unittest.TestCase):
+    """A restore's VolumeSnapshot and VolumeSnapshotContent (Retain) were
+    removed only once its claim bound: a restore whose claim was never made,
+    or that was cancelled and its claim deleted, kept both for good."""
+    def setUp(self):
+        self.enterContext(patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+        self.kube = self.enterContext(Kube(groups=("snapshot.storage.k8s.io",)))
+        self.kube.react("GET", CSI.API, lambda *_: {"kind": "APIResourceList", "groupVersion": "snapshot.storage.k8s.io/v1"})
+        self.enterContext(patch.multiple(CSI, kget=KUBE.kget, ksend=KUBE.ksend))
+        self.name = CSI.import_backup("lab", "example-data", "backup-a", "disk-a", "s3://example/backup-a", "Filesystem")
+        self.snapshot = CSI.API + "/namespaces/lab/volumesnapshots/" + self.name
+        self.content = CSI.API + "/volumesnapshotcontents/" + self.name
+        self.claim = "/api/v1/namespaces/lab/persistentvolumeclaims/example-data"
+
+    def add_claim(self, snapshot=None, **meta):
+        self.kube.add({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                       "metadata": {"name": "example-data", "namespace": "lab",
+                                    "annotations": {"homestead.io/restored-from-backup": "backup-a"}, **meta},
+                       "spec": {"dataSource": {"name": snapshot or self.name, "kind": "VolumeSnapshot",
+                                               "apiGroup": "snapshot.storage.k8s.io"}},
+                       "status": {"phase": "Pending"}})
+
+    def gone(self):
+        return self.kube.object(self.snapshot) is None and self.kube.object(self.content) is None
+
+    def test_a_restore_whose_claim_was_never_made_is_tidied(self):
+        self.assertEqual([self.name], CSI.discard("lab", "example-data", self.name))
+        self.assertTrue(self.gone())
+
+    def test_a_live_claim_restoring_from_it_keeps_it(self):
+        self.add_claim()
+        self.assertEqual([], CSI.discard("lab", "example-data", self.name))
+        self.assertEqual([], CSI.discard("lab", "example-data"))
+        self.assertFalse(self.gone())
+
+    def test_a_claim_restoring_from_another_snapshot_or_being_deleted_does_not(self):
+        self.add_claim(snapshot="homestead-restore-other")
+        self.assertEqual([self.name], CSI.discard("lab", "example-data"))
+        self.assertTrue(self.gone())
+
+    def test_other_claims_and_moves_are_left_alone(self):
+        self.assertEqual([], CSI.discard("lab", "other-data"))
+        self.assertEqual([], CSI.discard("other", "example-data"))
+        moved = CSI.import_backup("lab", "example-data", "backup-a", "disk-a", "s3://example/backup-a", "Filesystem",
+                                  "0123456789ab")
+        self.assertEqual([self.name], CSI.discard("lab", "example-data"))
+        self.assertIsNotNone(self.kube.object(CSI.API + "/volumesnapshotcontents/" + moved))
+
+    def test_cancelling_a_restore_removes_its_snapshot_with_its_claim(self):
+        import homestead_cancel as CANCEL
+        self.add_claim()
+        self.enterContext(patch.multiple(CANCEL, kget=KUBE.kget, ksend=KUBE.ksend, tidy_restore=None))
+        item = {"ref": {"namespace": "lab", "name": "example-data", "backup": "backup-a"}}
+        self.assertIn("being deleted", CANCEL.restore_cancel(item, {}))
+        self.assertIsNone(self.kube.object(self.claim))
+        self.assertTrue(self.gone())
+
+    def test_cancel_keeps_a_claim_it_did_not_make_and_its_snapshot(self):
+        import homestead_cancel as CANCEL
+        self.add_claim(annotations={})
+        self.enterContext(patch.multiple(CANCEL, kget=KUBE.kget, ksend=KUBE.ksend, tidy_restore=None))
+        item = {"ref": {"namespace": "lab", "name": "example-data", "backup": "backup-a"}}
+        self.assertIn("kept", CANCEL.restore_cancel(item, {}))
+        self.assertFalse(self.gone())
+
+
 if __name__ == "__main__":
     unittest.main()

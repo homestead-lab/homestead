@@ -79,7 +79,7 @@ def restore_plan(backup, namespace, pvc_name):
     }
 
 
-def restore_backup(cfg):
+def restore_backup(cfg, discard_on_failure=False):
     backup = str(cfg.get("backup") or "").strip()
     namespace = str(cfg.get("namespace") or "").strip()
     pvc_name = str(cfg.get("name") or "").strip()
@@ -140,7 +140,17 @@ def restore_backup(cfg):
                  "volumeMode": volume_mode,
                  "resources": {"requests": {"storage": str(plan["volume_size_bytes"])}}},
     }
-    out = LH.ksend("POST", f"/api/v1/namespaces/{namespace}/persistentvolumeclaims", pvc)
+    try:
+        out = LH.ksend("POST", f"/api/v1/namespaces/{namespace}/persistentvolumeclaims", pvc)
+    except Exception:
+        # A job retrying this restore reuses its snapshot; with none to
+        # follow (discard_on_failure), nothing else would ever remove it.
+        if discard_on_failure:
+            try:
+                CSI_RESTORE.discard(namespace, pvc_name, snapshot_name)
+            except Exception as error:
+                print(f"Restore metadata cleanup deferred: {error}", flush=True)
+        raise
     LH._bust("lhvols", "vol")
     return {**result, "created": True, "snapshot": snapshot_name,
             "uid": (out.get("metadata", {}) or {}).get("uid", ""),
