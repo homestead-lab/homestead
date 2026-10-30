@@ -1260,7 +1260,7 @@
         managed: false, managed_by: "", owner: "flux", runnable: false, editable: false,
         result: "ok", result_at: "2026-09-22T02:45:31Z", result_reason: "", last_success: "2026-09-22T02:45:31Z",
         missed: false, next_run: "" }],
-    "/api/events": () => [
+    "/api/events": () => ({ total: 3, events: [
       { obj: "frigate-7d9f8c6b5-x2abc", ns: "lab", kind: "Pod", type: "Normal", reason: "Pulled",
         msg: "Successfully pulled image \"ghcr.io/blakeblackshear/frigate:stable\" in 12.4s", count: 1,
         time: new Date(Date.now() - 4 * 60e3).toISOString() },
@@ -1268,7 +1268,7 @@
         msg: "failed to provision volume with StorageClass \"longhorn-r2\": no disk space to create the replicas required: 1 of 2 replicas scheduled on nodes with enough free space",
         count: 14, time: new Date(Date.now() - 11 * 60e3).toISOString() },
       { obj: "home-assistant", ns: "lab", kind: "Deployment", type: "Normal", reason: "ScalingReplicaSet",
-        msg: "Scaled up replica set home-assistant-6c8d9 to 1", count: 1, time: new Date(Date.now() - 20 * 60e3).toISOString() }],
+        msg: "Scaled up replica set home-assistant-6c8d9 to 1", count: 1, time: new Date(Date.now() - 20 * 60e3).toISOString() }] }),
     "/api/move/moves/retry": { ok: true }, "/api/move/moves/abandon": { ok: true },
     "/api/move/moves/finish": { ok: true, message: "mosquitto lives here now; removed workload mosquitto on branch" },
     "/api/move/moves": () => [
@@ -3665,7 +3665,10 @@ ssh_pwauth: true
       Object.assign(address, { state: "ok", reason: "", unrouted: [] });
     }
     const events = responses["/api/events"];
-    responses["/api/events"] = (...args) => events(...args).filter(row => row.type !== "Warning");
+    responses["/api/events"] = (...args) => {
+      const rows = events(...args).events.filter(row => row.type !== "Warning");
+      return { total: rows.length, events: rows };
+    };
     const operations = responses["/api/operations"];
     responses["/api/operations"] = (...args) => operations(...args).map(row => row.id === "op2"
       ? { ...row, status: "succeeded", progress: 100, message: "Image cached" } : row);

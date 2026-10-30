@@ -806,7 +806,7 @@ TOOLS = [
     Tool("dismiss_job", "Dismiss a job", "containers:control", CHANGE,
          "Takes a finished job off the list, or every finished one with all: true.", {"id": S, "all": B},
          run=_post("/api/operations/dismiss", {"id": "id", "all": "all"})),
-    Tool("list_cluster_events", "Cluster events", "read", READ, "Kubernetes' recent warnings and events across the cluster.",
+    Tool("list_cluster_events", "Cluster events", "read", READ, "Kubernetes' newest warnings and events across the cluster; total says how many it holds.",
          run=_get("/api/events")),
     Tool("get_change_history", "Change history", "read", READ,
          "What changed in an app and when - each change can be undone with undo_change.", {"namespace": NS, "name": NAME_ARG},

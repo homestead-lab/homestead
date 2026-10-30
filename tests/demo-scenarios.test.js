@@ -50,7 +50,7 @@ test("public and local demos start with consistent healthy cluster data", async 
     assert.ok(imageUpdates.workloads.every(row => row.images.every(image => !image.error)));
     assert.equal(imageUpdates.updates, 3, "available updates are compatible with healthy checks (one in Flux, a notice)");
     assert.ok(operations.every(row => row.status !== "failed"));
-    assert.ok(events.every(row => row.type !== "Warning"));
+    assert.ok(events.events.every(row => row.type !== "Warning"));
     assert.deepEqual(alerts.active, []);
     await api("/api/setup/complete", { completed: true });
     assert.equal((await api("/api/setup")).completed, true);
@@ -64,7 +64,7 @@ test("explicit incident and critical scenarios retain unhealthy evaluation cases
     assert.ok(overview.health_issues.length > 0);
     assert.equal(setup.steps.health.done, false);
     assert.ok((await api("/api/storage")).degraded > 0);
-    assert.ok((await api("/api/events")).some(row => row.type === "Warning"));
+    assert.ok((await api("/api/events")).events.some(row => row.type === "Warning"));
     assert.ok((await api("/api/operations")).some(row => row.status === "failed"));
     const imageUpdates = await api("/api/image-updates");
     assert.equal(imageUpdates.errors, 1);

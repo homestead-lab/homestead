@@ -465,23 +465,45 @@ def health_brief():
 ALERTS.HEALTH[0] = lambda: health_brief()
 
 
+# The Events page's rows: the newest, from the whole list (#988). The API
+# server lists events by namespace and name, so a limited read kept whichever
+# namespaces sort first; the list is read whole and cut after sorting.
+EVENT_ROWS = 120
+
+
+def _event_when(e):
+    """The event's latest time as Kubernetes gives it, and that time in
+    seconds (0 when it has none): lastTimestamp, a series' last sighting,
+    eventTime, then when the object was made."""
+    for stamp in (e.get("lastTimestamp"), (e.get("series") or {}).get("lastObservedTime"),
+                  e.get("eventTime"), (e.get("metadata") or {}).get("creationTimestamp")):
+        if isinstance(stamp, str) and stamp:
+            try:
+                return stamp, datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                continue
+    return "", 0.0
+
+
 def events():
+    """The newest EVENT_ROWS events, newest first, and how many there were:
+    total above len(events) says the list was cut."""
     try:
-        ev = kget("/api/v1/events?limit=160")
+        items = kget("/api/v1/events").get("items") or []
     except Exception:
-        return []
-    items = ev.get("items", [])
-    items.sort(key=lambda e: e.get("lastTimestamp") or e.get("eventTime") or "", reverse=True)
-    return [{
-        "ns": e["metadata"]["namespace"],
+        return {"events": [], "total": 0}
+    dated = sorted(((_event_when(e), e) for e in items if isinstance(e, dict)),
+                   key=lambda pair: pair[0][1], reverse=True)
+    return {"total": len(dated), "events": [{
+        "ns": (e.get("metadata") or {}).get("namespace", ""),
         "obj": e.get("involvedObject", {}).get("name", ""),
         "kind": e.get("involvedObject", {}).get("kind", ""),
         "reason": e.get("reason", ""),
         "msg": (e.get("message") or "")[:160],
         "type": e.get("type", "Normal"),
-        "time": e.get("lastTimestamp") or e.get("eventTime") or "",
+        "time": when,
         "count": e.get("count", 1),
-    } for e in items[:120]]
+    } for (when, _), e in dated[:EVENT_ROWS]]}
 
 
 # Its routes and who may use them (homestead_routes.py).
