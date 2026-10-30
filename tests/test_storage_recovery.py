@@ -424,9 +424,46 @@ class HeldMoveRecoveryTests(RecoveryFixture):
 
     def test_the_original_reclaim_policy_is_journalled_before_retain_is_set(self):
         self.to_cutover("retain-original")
-        saved = [i for i in self.cluster.saves if i["ref"].get("cutover")]
-        self.assertEqual("Delete", saved[0]["ref"]["cutover"]["old_reclaim"])
-        self.assertFalse(handoff._receipt(saved[0], "retain-original"))
+        saved = [i for i in self.cluster.saves if "reclaim_before_retain" in i["ref"].get("cutover", {})]
+        self.assertEqual("Delete", saved[0]["ref"]["cutover"]["reclaim_before_retain"])
+        # Saved with the PATCH's durable intent, before the request was sent.
+        self.assertEqual("intent", handoff._receipt(saved[0], "retain-original")["state"])
+
+    def to_cutover_state(self, policy_after_first_read):
+        """Up to the poll that writes retain-original, with the original's
+        policy changed between the cutover's first read and the PATCH."""
+        self.to_cutover("copy-job")
+        self.cluster.complete()
+        for _ in range(10):
+            if self.load()["ref"]["handoff_phase"] == "cutover": break
+            self.poll()
+        self.assertNotIn("cutover", self.load()["ref"])
+        path, changed = "/api/v1/persistentvolumes/pv-data", []
+        base = self.cluster.read
+        def read(target):
+            # The first read once the cutover state is checkpointed: after the
+            # earlier read that state was built from, before the PATCH.
+            if target == path and self.cluster.durable["ref"].get("cutover") and not changed:
+                changed.append(True)
+                self.cluster.objects[path]["spec"]["persistentVolumeReclaimPolicy"] = policy_after_first_read
+                self.cluster.objects[path]["metadata"]["resourceVersion"] = "9"
+            return base(target)
+        with mock.patch.object(rc, "kget", read):
+            self.poll()
+        self.assertEqual("accepted", handoff._receipt(self.load(), "retain-original")["state"])
+        self.act("pause"); self.act("rollback")
+        self.poll(); self.poll(); self.ready()
+        self.assertEqual("cancelled", self.until_done())
+        return self.cluster.objects[path]["spec"]["persistentVolumeReclaimPolicy"]
+
+    def test_rollback_restores_the_policy_seen_when_retain_was_set(self):
+        self.assertEqual("Recycle", self.to_cutover_state("Recycle"))
+        self.assertIn("earlier Recycle reclaim policy", self.load()["message"])
+
+    def test_rollback_leaves_a_volume_that_was_already_retain_alone(self):
+        self.assertEqual("Retain", self.to_cutover_state("Retain"))
+        self.assertFalse(handoff._receipt(self.load(), "rollback-restore-original-policy"))
+        self.assertNotIn("Its backing volume", self.load()["message"])
 
     def test_finish_forward_is_offered_once_the_copy_is_verified(self):
         self.to_cutover("retain-original")
@@ -595,7 +632,7 @@ class HeldMoveRecoveryTests(RecoveryFixture):
         self.to_cutover("retain-original")
         self.act("pause")
         item = self.load()
-        item["ref"]["cutover"].pop("old_reclaim")   # journalled by an older version
+        item["ref"]["cutover"].pop("reclaim_before_retain")   # journalled by an older version
         put(ops, [item])
         self.act("rollback")
         self.poll(); self.poll(); self.ready()

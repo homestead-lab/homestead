@@ -432,10 +432,7 @@ def cutover_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journa
                  "old_uid": JOURNAL.identity(old_pv)["uid"], "new_uid": JOURNAL.identity(new_pv)["uid"],
                  "old_shape": _pv_shape(old_pv), "new_shape": _pv_shape(new_pv),
                  "source_shape": JOURNAL.shape(source), "temp_shape": JOURNAL.shape(copied),
-                 "reclaim": sc.get("reclaimPolicy", "Delete"),
-                 # Journalled before retain-original sets Retain, so a rollback
-                 # can put back exactly what the original volume had.
-                 "old_reclaim": old_pv.get("spec", {}).get("persistentVolumeReclaimPolicy")}
+                 "reclaim": sc.get("reclaimPolicy", "Delete")}
         if (state["old_uid"], state["new_uid"]) != (proof["claims"][ref["claim"]]["pv_uid"], proof["claims"][ref["temp"]]["pv_uid"]):
             raise JOURNAL.Held("Backing volume identities changed while preparing cutover")
         if state["old_uid"] == state["new_uid"] or state["reclaim"] not in ("Delete", "Retain"):
@@ -474,6 +471,10 @@ def cutover_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journa
         writer.write(step, "PATCH", path, body, expected={**JOURNAL.identity(obj), "settled": JOURNAL.settled(obj)},
                      ctype="application/merge-patch+json")
     if not _receipt(item, "retain-original"):
+        # The policy in the very read this PATCH is pinned to (its settled()
+        # digest refuses any later change), saved with the write's durable
+        # intent: what a rollback may put back. "Retain" means no change.
+        state["reclaim_before_retain"] = old["spec"].get("persistentVolumeReclaimPolicy")
         patch("retain-original", old, {"spec": {"persistentVolumeReclaimPolicy": "Retain"}})
         return "running", 77, "Original volume protected with Retain"
     if not _receipt(item, "retain-copy"):
@@ -748,7 +749,7 @@ def rollback_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journ
 
 def _earlier_policy(item):
     """The original volume's reclaim policy before the move, when journalled."""
-    value = (item["ref"].get("cutover") or {}).get("old_reclaim")
+    value = (item["ref"].get("cutover") or {}).get("reclaim_before_retain")
     return value if value in ("Delete", "Retain", "Recycle") else None
 
 
