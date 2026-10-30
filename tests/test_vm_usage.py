@@ -1,6 +1,8 @@
 """Each running VM says what it uses: CPU and memory from its launcher pod,
 and disk traffic from KubeVirt's own counts, as a rate between readings."""
 import sys
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -90,6 +92,39 @@ class UsageTests(unittest.TestCase):
 
 
 import unittest.mock  # noqa: E402
+
+
+class HandlerPoolTests(unittest.TestCase):
+    """virt-handlers are read at the same time with a short timeout, so one
+    that does not answer adds at most that timeout to the sampler (#976)."""
+
+    def setUp(self):
+        handlers = [{"spec": {"nodeName": f"node-{i}"}, "status": {"phase": "Running", "podIP": f"192.0.2.{i + 1}"}}
+                    for i in range(3)]
+        U.bind(lambda path: {"items": handlers} if "virt-handler" in path else {"items": []})
+        U._readings.clear()
+
+    def test_handlers_are_read_at_the_same_time(self):
+        lock, running, most = threading.Lock(), [0], [0]
+
+        def fetch(ip):
+            with lock:
+                running[0] += 1
+                most[0] = max(most[0], running[0])
+            time.sleep(0.4)
+            with lock:
+                running[0] -= 1
+            if ip == "192.0.2.2":
+                raise OSError("timed out")
+            return metrics(1, 1, 1)
+        started = time.monotonic()
+        U.sample(fetch=fetch, now=1000)
+        self.assertLess(time.monotonic() - started, 0.9, "three handlers at 0.4 s were read one after another")
+        self.assertEqual(3, most[0])
+        self.assertIn("node-1", U.usage(now=1000)[1], "the one that did not answer is named")
+
+    def test_the_timeout_is_short(self):
+        self.assertLessEqual(U.TIMEOUT, 2)
 
 if __name__ == "__main__":
     unittest.main()

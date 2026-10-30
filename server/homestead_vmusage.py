@@ -20,12 +20,14 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 
 import homestead_kube_metrics as KUBE_METRICS
 
 kget = None
 PORT = 8443
-TIMEOUT = 4
+TIMEOUT = 2
+MAX_WORKERS = 8
 READ = "kubevirt_vmi_storage_read_traffic_bytes_total"
 WRITE = "kubevirt_vmi_storage_write_traffic_bytes_total"
 # Rates from readings further apart than this say little about now.
@@ -87,6 +89,20 @@ def _fetch(ip):
         return response.read().decode("utf-8", "replace")
 
 
+def _read_handlers(handlers, fetch):
+    """[(pod, its /metrics text or None)] for every handler, read at the same time."""
+    if not handlers:
+        return []
+
+    def one(pod):
+        try:
+            return pod, fetch(pod["status"]["podIP"])
+        except Exception:
+            return pod, None
+    with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, len(handlers))) as pool:
+        return list(pool.map(one, handlers))
+
+
 def _handlers():
     selector = urllib.parse.quote("kubevirt.io=virt-handler", safe="")
     return [p for p in kget(f"/api/v1/pods?labelSelector={selector}").get("items", [])
@@ -122,11 +138,13 @@ def sample(fetch=None, now=None):
         handlers = _handlers()
     except Exception:
         handlers = []
-    for pod in handlers:
-        try:
-            io.update(parse_io(fetch(pod["status"]["podIP"])))
-        except Exception:
+    # Every handler at once (#976): one that does not answer adds TIMEOUT
+    # to the sampler's turn, not TIMEOUT for each one before it.
+    for pod, text in _read_handlers(handlers, fetch):
+        if text is None:
             failed.append((pod.get("spec") or {}).get("nodeName") or pod["status"]["podIP"])
+        else:
+            io.update(parse_io(text))
     with _lock:
         if io or not failed:
             _readings.append({"at": now, "io": io})
