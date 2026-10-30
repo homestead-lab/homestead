@@ -20,6 +20,7 @@ import re
 import contextlib
 import copy
 import os
+import pickle
 import secrets
 import sys
 import threading
@@ -83,7 +84,38 @@ def _initialized(marker=STORE_MARKER):
     return True
 
 
+# The last good read of each store, for the version of its files it was read
+# from (#986): GET /api/operations is polled every 3 s by every tab while a job
+# runs, and about twenty modules read the store. Every write replaces a file
+# whole (a new inode), so an unchanged (inode, mtime, size) of the store and its
+# marker (or both missing) is an unchanged store. Kept pickled: each read gets its own copy, as
+# a parse did, and unpickling costs a third of one.
+_memo = {}
+
+
+def _version(name):
+    try:
+        st = os.stat(os.path.join(DATA_DIR, name))
+    except FileNotFoundError:
+        return None
+    return st.st_ino, st.st_mtime_ns, st.st_size
+
+
 def _read_store(store, marker):
+    try:
+        version = (DATA_DIR, _version(store), _version(marker))
+    except OSError:
+        version = None
+    held = _memo.get(store)
+    if version and held and held[0] == version:
+        return pickle.loads(held[1])
+    value = _parse_store(store, marker)
+    if version:
+        _memo[store] = (version, pickle.dumps(value, pickle.HIGHEST_PROTOCOL))
+    return value
+
+
+def _parse_store(store, marker):
     initialized = _initialized(marker)
     try:
         with open(os.path.join(DATA_DIR, store), encoding="utf-8") as handle:
