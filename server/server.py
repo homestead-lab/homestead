@@ -1636,8 +1636,8 @@ class H(HTTP.LimitedHandler):
             if is_asset_path(p) and not is_icon_png(p):
                 return self._file(f"{WEBROOT}/assets/{os.path.basename(p)}", "image/svg+xml")
             if is_vendor_path(p):
-                # Vendored paths carry no version, so the browser checks back
-                # each time; the installed app's worker keeps them per release.
+                # Vendored paths carry no version, so the browser checks back each time (a
+                # file named by its content is kept); the installed app's worker keeps them per release.
                 return self._file(f"{WEBROOT}{p}", VENDOR_TYPES[os.path.splitext(p)[1]], cache="no-cache")
             if p == "/app.js":
                 return self._file(f"{WEBROOT}/app.js", "application/javascript")

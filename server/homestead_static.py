@@ -10,6 +10,10 @@ and kept in memory with the file until the file changes on disk.
 demo.js is made-up data for the screenshots and the live demo; a plain visit is
 served the page without it, so a real install neither downloads nor parses it.
 
+A vendored file named by its content (Name.<first 10 hex of its sha256>.woff2,
+as scripts/subset_fonts.py names the fonts) is kept for good too, but only
+while the bytes on disk still hash to that name (#982).
+
 The page's big per-tick reads (COMPRESSED_ANSWERS) are gzipped as well (#982).
 Nothing else from /api is: compressing an answer that holds a secret next to
 text the requester chose lets the answer's size give the secret away (BREACH),
@@ -19,6 +23,7 @@ import gzip
 import hashlib
 import json
 import os
+import re
 import threading
 import urllib.parse
 
@@ -29,6 +34,7 @@ MIN_GZIP = 1024
 COMPRESSIBLE = ("text/", "application/javascript", "application/json",
                 "application/manifest+json", "image/svg+xml")
 DEMO_SCRIPT = b'<script src="/js/demo.js'
+FINGERPRINT = re.compile(r"\.([0-9a-f]{10})\.[a-z0-9]+$")
 # The reads a page repeats on every tick and that grow with the cluster. Each is a
 # GET any role may read (tests/test_api_compression.py checks); add one only if no
 # answer it gives can hold a secret, a log line or a value masked for some roles.
@@ -89,6 +95,12 @@ def _wants_gzip(handler):
     return False
 
 
+def _fingerprinted(path, entry):
+    """The file is named by its content and the bytes still match the name."""
+    match = FINGERPRINT.search(os.path.basename(path))
+    return bool(match) and entry["etag"][1:].startswith(match.group(1))
+
+
 def answer(handler, code, body, ctype):
     """The bytes _send writes for body, gzipped when it is one of the page's big
     listed reads and the browser accepts gzip; the headers that go with it are
@@ -127,7 +139,8 @@ def serve(handler, path, ctype, cache="", version=""):
         entry = _entry(path, plain_page)
     except (FileNotFoundError, NotADirectoryError):
         return handler._send(404, {"error": "not found"})
-    policy = KEEP if not page and version and (query.get("v") or [""])[0] == version else (cache or REVALIDATE)
+    versioned = version and (query.get("v") or [""])[0] == version
+    policy = KEEP if not page and (versioned or _fingerprinted(path, entry)) else (cache or REVALIDATE)
     compressible = ctype.startswith(COMPRESSIBLE) and len(entry["body"]) >= MIN_GZIP
     headers = [("Cache-Control", policy), ("ETag", entry["etag"])]
     if compressible:

@@ -108,9 +108,12 @@ if (desktop) images.desktop = await dataUrl("desktop");
 
 // The frames use the fonts Homestead ships (web/vendor/fonts), embedded: a page made with
 // setContent has no origin, so the browser would refuse to fetch them from the server.
-const faces = await Promise.all([[500, "Medium"], [600, "SemiBold"], [700, "Bold"], [800, "ExtraBold"]].map(async ([weight, file]) => {
-  const font = await readFile(new URL(`../web/vendor/fonts/inter-tight/InterTight-${file}.woff2`, import.meta.url));
-  return `@font-face{font-family:"Inter Tight";font-weight:${weight};src:url(data:font/woff2;base64,${font.toString("base64")}) format("woff2")}`;
+// Which files those are, and the characters each holds, is in fonts.json (scripts/subset_fonts.py).
+const fontList = JSON.parse(await readFile(new URL("../web/vendor/fonts/fonts.json", import.meta.url), "utf8"));
+const inter = fontList.families.find((family) => family.family === "Inter Tight");
+const faces = await Promise.all(inter.files.map(async (face) => {
+  const font = await readFile(new URL(`../web/${face.path}`, import.meta.url));
+  return `@font-face{font-family:"Inter Tight";font-weight:${inter.weights.join(" ")};unicode-range:${face.unicode_range};src:url(data:font/woff2;base64,${font.toString("base64")}) format("woff2")}`;
 }));
 const STYLE = `
 ${faces.join("\n")}
