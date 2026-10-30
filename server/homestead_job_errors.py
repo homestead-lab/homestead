@@ -39,10 +39,15 @@ LIMITS = {
 }
 # A job that needs attention is asked again this often.
 RETRY_EVERY = 60
+# A failure this long after the one before starts a new streak: Homestead was
+# down (a power cut, its pod rescheduled) or the clock stepped forward, so the
+# time between says nothing about the resolver. The latest failure's time is
+# saved at most once per LAST_EVERY, so a failing job is not written every round.
+GAP = 5 * 60
+LAST_EVERY = 60
 
 # kind -> why failing it after its limit lets go of nothing still in motion.
 FAILS = {
-    "backup": "Longhorn runs the backup by itself and the volume is not changed",
     "cluster-cleanup": "it holds nothing once it has started",
     "deployment": "it only follows a rollout Kubernetes runs",
     "harvester-upgrade": "Harvester runs and follows its own upgrade",
@@ -58,7 +63,6 @@ FAILS = {
     "network-service": "it only follows a Service's endpoints",
     "onboard": "it holds nothing once it has started",
     "os-rollout": "the rollout ends itself and lets go of its holds (homestead_os_rollout)",
-    "protect-run": "Longhorn runs the backup by itself and the volume is not changed",
     "set-priority": "each app's change stands alone; the rest are left as they are",
     "set-requests": "each app's change stands alone; the rest are left as they are",
     "smart-test": "the drive runs its self-test by itself",
@@ -70,6 +74,7 @@ FAILS = {
 # kind -> what is still in motion, so its guards stay (said in the message).
 KEEPS_GUARDS = {
     "auto-update": "it may still roll an app back to its snapshot",
+    "backup": "a backup may still be reading its snapshot",
     "cluster-shutdown": "apps and hosts are being stopped",
     "container-rebalance": "apps are being moved between hosts",
     "disk-allocation": "a disk is being grown",
@@ -87,6 +92,7 @@ KEEPS_GUARDS = {
     "longhorn-v2-prepare": "hosts may be cordoned for Longhorn V2",
     "move": "an app and its data are being moved to another cluster",
     "node-power": "a host is being drained and its apps may be held",
+    "protect-run": "a backup may still be reading its snapshot",
     "platform-upgrade": "the cluster's hosts are being upgraded",
     "reclass": "volume data is being copied",
     "restore-swap": "an app's volumes are being restored",
@@ -145,11 +151,16 @@ def failed(item, error, now=None):
     now = clock() if now is None else now
     kind = item.get("kind")
     state = item.get(KEY) or {}
-    since = state.get("since")
-    if not isinstance(since, (int, float)) or since > now:
-        since = now   # first failure, or a count saved by a clock ahead of this one
+    since, last = state.get("since"), state.get("last", state.get("since"))
+    if (not isinstance(since, (int, float)) or not isinstance(last, (int, float))
+            or since > now or last > now or now - last > GAP):
+        # The first failure, a count saved by a clock ahead of this one, or a
+        # gap in polling: a new streak.
+        since = last = now
+    elif now - last >= LAST_EVERY:
+        last = now
     text = " ".join(str(error).split())[:240]
-    state = {"since": since, "error": text}
+    state = {"since": since, "last": last, "error": text}
     if now - since <= limit(kind):
         item[KEY] = state
         return None

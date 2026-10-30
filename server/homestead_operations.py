@@ -895,7 +895,9 @@ def _refresh(item):
     # next phase - and that has to be written too, or a restart repeats it.
     before = json.dumps(item, sort_keys=True, default=str)
     try:
-        result = resolver(item)
+        # _finish inside: an answer of the wrong shape is this job's error,
+        # not one that stops every other job's round.
+        changed = _finish(item, *resolver(item))
     except urllib.error.HTTPError as error:
         if error.code == 404:
             # Which object, so a job that stops here says what went missing.
@@ -909,7 +911,7 @@ def _refresh(item):
     except Exception as error:
         return _resolver_failed(item, error, f"Status temporarily unavailable: {error}", before)
     ERRORS.clear(item)
-    return _finish(item, *result) or json.dumps(item, sort_keys=True, default=str) != before
+    return changed or json.dumps(item, sort_keys=True, default=str) != before
 
 
 def _resolver_failed(item, error, unavailable, before):
@@ -935,10 +937,12 @@ def _attention_action(item):
     block = CANCEL_BLOCKS.get(item.get("kind"))
     why_not = block(item) if block else ""
     if why_not:
-        return why_not
+        return f"Fix what the error names. {why_not}"
     if item.get("kind") in CANCELLERS:
         return "Fix what the error names, or cancel it: the cancel review says what it puts back."
-    return "Fix what the error names; Homestead cannot cancel this kind of job."
+    # _plan_for's default for a kind with no canceller: Cancel only stops tracking it.
+    return ("Fix what the error names, or stop tracking it here (Cancel); "
+            "what it started carries on in Kubernetes.")
 
 
 def _archived_preparation(item):

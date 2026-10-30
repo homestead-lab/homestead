@@ -190,7 +190,8 @@ class RolloutTests(unittest.TestCase):
         self.hosts.upgrade_state = lambda name: (_ for _ in ()).throw(OSError("node-2 is not answering")) \
             if name == "node-2" else original(name)
         ROLLOUT.start(now=1000)
-        clock = self.tick_for(ROLLOUT.ERROR_LIMIT / 60 - 2, 1000)
+        # Installing, it is given its install time (INSTALL_LIMIT), as a host-os job is.
+        clock = self.tick_for(ROLLOUT.INSTALL_LIMIT / 60 - 2, 1000)
         rollout = ROLLOUT._load()["rollout"]
         self.assertEqual("running", rollout["status"], "errors are waited out for a while")
         self.assertIn("not answering", rollout["message"])
@@ -206,6 +207,26 @@ class RolloutTests(unittest.TestCase):
         self.assertIn("node-2", self.hosts.held, "the install may still run there: its own hold lapses by itself")
         self.assertEqual(["node-2"], self.hosts.began, "no other host was started")
         ROLLOUT.start(now=clock + 600)   # a new rollout is no longer refused
+
+    def test_a_host_whose_check_keeps_failing_ends_the_rollout_after_30_min(self):
+        original = self.hosts.read
+        self.hosts.read = lambda name, refresh=False: (_ for _ in ()).throw(OSError("node-2 is not answering")) \
+            if name == "node-2" else original(name, refresh)
+        ROLLOUT.start(now=1000)
+        clock = self.tick_for(ROLLOUT.ERROR_LIMIT / 60 - 2, 1000)
+        self.assertEqual("running", ROLLOUT._load()["rollout"]["status"])
+        clock = self.tick_for(4, clock)
+        self.assertEqual("failed", ROLLOUT._load()["rollout"]["status"])
+        self.assertEqual([], self.hosts.began)
+
+    def test_a_gap_in_ticks_starts_the_count_again(self):
+        original = self.hosts.read
+        self.hosts.read = lambda name, refresh=False: (_ for _ in ()).throw(OSError("busy")) \
+            if name == "node-2" else original(name, refresh)
+        ROLLOUT.start(now=1000)
+        clock = self.tick_for(5, 1000)
+        clock = self.tick_for(ROLLOUT.ERROR_LIMIT / 60 - 2, clock + 3600)   # Homestead was down an hour
+        self.assertEqual("running", ROLLOUT._load()["rollout"]["status"])
 
     def test_errors_that_clear_start_the_count_again(self):
         self.bind(own="node-3")

@@ -155,15 +155,44 @@ class GiveUpTests(StoreTest):
         self.rounds(ERRORS.DEFAULT_LIMIT / MINUTE - 1, every=30)
         self.assertEqual("running", self.job(job)["status"])
 
-    def test_an_error_that_stays_the_same_is_not_written_every_round(self):
+    def test_an_error_that_stays_the_same_is_written_at_most_once_a_minute(self):
         job = self.start("network-service", {"namespace": "apps", "name": "web"})
         self.fail_always(SERVICE_PATH)
         self.rounds(1)
-        saved = self.job(job)
         with mock.patch.object(OPS, "_write", wraps=OPS._write) as write:
-            self.rounds(1)
-        self.assertEqual(0, write.call_count)
-        self.assertEqual(saved[ERRORS.KEY], self.job(job)[ERRORS.KEY])
+            self.rounds(5)                                    # 100 rounds 3 s apart
+        self.assertLessEqual(write.call_count, 5)
+        self.assertEqual("running", self.job(job)["status"])
+
+    def test_a_gap_in_polling_starts_the_count_again(self):
+        # Homestead was down an hour (a power cut, its pod rescheduled), or the
+        # clock stepped forward: the first error after that is a new streak.
+        job = self.start("network-service", {"namespace": "apps", "name": "web"})
+        self.fail_always(SERVICE_PATH)
+        self.rounds(5)
+        self.clock.now += 3600
+        self.rounds(ERRORS.DEFAULT_LIMIT / MINUTE - 1, every=30)
+        item = self.job(job)
+        self.assertEqual("running", item["status"])
+        self.assertIn("temporarily unavailable", item["message"])
+        self.rounds(3, every=30)
+        self.assertEqual("failed", self.job(job)["status"], "a streak without gaps still ends")
+
+    def test_a_resolver_answering_in_the_wrong_shape_is_an_error_of_that_job_only(self):
+        other = self.start("deployment", {"namespace": "apps", "name": "other"})
+        with mock.patch.dict(OPS.RESOLVERS, {"network-service": lambda item: None,
+                                             "deployment": lambda item: ("running", 40, "Rolling out")}):
+            job = self.start("network-service", {"namespace": "apps", "name": "web"})
+            OPS.list_operations()
+            self.assertEqual("Rolling out", self.job(other)["message"], "the other job still moves on")
+            self.assertEqual("running", self.job(job)["status"])
+            self.assertIn("temporarily unavailable", self.job(job)["message"])
+            for answer in (("running", 1, "a", "b"), ("running", "half", "x")):
+                with mock.patch.dict(OPS.RESOLVERS, {"network-service": lambda item, answer=answer: answer}):
+                    OPS.list_operations()
+                self.assertIn("temporarily unavailable", self.job(job)["message"])
+            self.rounds(ERRORS.DEFAULT_LIMIT / MINUTE + 1, every=30)
+        self.assertEqual("failed", self.job(job)["status"])
 
 
 class AttentionTests(StoreTest):
@@ -223,7 +252,27 @@ class AttentionTests(StoreTest):
         item = self.job(job)
         self.assertEqual("running", item["status"])
         self.assertIn("the host remains cordoned", item["message"])
-        self.assertIn(OPS._block_longhorn_v2_prepare(item), item["message"])
+        self.assertIn("Fix what the error names. " + OPS._block_longhorn_v2_prepare(item), item["message"])
+
+    def test_one_with_no_canceller_names_stopping_tracking(self):
+        stub = mock.Mock(side_effect=RuntimeError("share server gone"))
+        with mock.patch.dict(OPS.RESOLVERS, {"share-remove": stub}):
+            job = OPS.start("share-remove", "Remove a share", {"kind": "Deployment", "name": "share"}, "/", {})["id"]
+            self.rounds(ERRORS.DEFAULT_LIMIT / MINUTE + 1, every=30)
+            item = self.job(job)
+            self.assertNotIn("share-remove", OPS.CANCELLERS)
+            self.assertEqual("forget", OPS._plan_for(item)["mode"], "Cancel offers to stop tracking it")
+        self.assertIn("Fix what the error names", item["message"])
+        self.assertIn("stop tracking it", item["message"])
+
+    def test_one_with_a_canceller_names_cancelling(self):
+        plan = (lambda item: {"mode": "stop"}, lambda item, options: None)
+        self.enterContext(mock.patch.dict(OPS.CANCELLERS, {"volume-delete": plan}))
+        job = self.start("volume-delete", {"namespace": "apps", "name": "data"})
+        self.fail_always(CLAIM_PATH)
+        self.rounds(ERRORS.DEFAULT_LIMIT / MINUTE + 1, every=30)
+        message = self.job(job)["message"]
+        self.assertIn("Fix what the error names, or cancel it", message)
 
 
 class EveryKindTests(unittest.TestCase):
@@ -254,6 +303,12 @@ class EveryKindTests(unittest.TestCase):
     def test_a_kind_no_table_names_keeps_its_guards(self):
         self.assertEqual("attention", ERRORS.outcome("a-new-kind"))
         self.assertEqual("failed", ERRORS.outcome("network-service"))
+
+    def test_a_backup_keeps_its_guards(self):
+        # Failed, it would stop guarding the snapshot it reads: a snapshot
+        # removal during a long outage could take it away mid-backup.
+        for kind in ("backup", "protect-run"):
+            self.assertEqual("attention", ERRORS.outcome(kind), kind)
 
 
 if __name__ == "__main__":

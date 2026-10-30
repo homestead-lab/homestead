@@ -52,6 +52,8 @@ RESTART_LIMIT = 45 * 60
 # A step that keeps raising (a host gone or NotReady, its OS read cut short)
 # ends the rollout after this long, as a job's resolver would (homestead_job_errors).
 ERROR_LIMIT = 30 * 60
+# An error this long after the one before starts a new streak (Homestead was down).
+ERROR_GAP = 5 * 60
 # The hosts restarted before this one leave their copies of volumes rebuilding
 # for a while; meanwhile this host can hold a volume's only healthy copy.
 COPIES_WAIT = 15 * 60
@@ -391,7 +393,8 @@ def _finish(state, rollout, now):
 
 
 def _failing(state, error, now=None):
-    """A step raised. Waited out for ERROR_LIMIT; after that the host being
+    """A step raised. Waited out for ERROR_LIMIT (INSTALL_LIMIT while a host
+    installs); after that the host being
     updated is marked failed with the error and the rollout ends, which lets go
     of the hosts' automatic-update holds and lets a new rollout start. What
     may still be going on is left alone: a host still installing keeps its own
@@ -399,18 +402,23 @@ def _failing(state, error, now=None):
     now = now or time.time()
     rollout = state.get("rollout") or {}
     text = " ".join(str(error).split())[:200]
-    since = rollout.get("error_since")
-    if not isinstance(since, (int, float)) or since > now:
-        rollout["error_since"] = since = now
-    if now - since <= ERROR_LIMIT or rollout.get("status") != "running":
+    since, last = rollout.get("error_since"), rollout.get("error_last", rollout.get("error_since"))
+    if (not isinstance(since, (int, float)) or not isinstance(last, (int, float))
+            or since > now or last > now or now - last > ERROR_GAP):
+        since = now   # the first error, a clock behind, or Homestead was down: a new streak
+    rollout["error_since"], rollout["error_last"] = since, now
+    phase = rollout.get("phase")
+    # A host installing gets its install time, as a lone host-os job does.
+    limit = INSTALL_LIMIT if phase == "installing" else ERROR_LIMIT
+    if now - since <= limit or rollout.get("status") != "running":
         rollout["message"] = f"waiting: {text}"
         return False
-    phase = rollout.get("phase")
     left = ("; its updates may still be installing" if phase == "installing" else
             "; it is left cordoned" if phase == "restarting" else "")
-    _result(rollout, False, f"no answer for {ERROR_LIMIT // 60} min: {text}{left}")
+    _result(rollout, False, f"no answer for {limit // 60} min: {text}{left}")
     rollout["stop"], rollout["failed"] = True, True
     rollout.pop("error_since", None)
+    rollout.pop("error_last", None)
     return _finish(state, rollout, now)
 
 
@@ -440,7 +448,8 @@ def tick(now=None):
             state = _load()
             try:
                 advanced = step(state, now)
-                (state.get("rollout") or {}).pop("error_since", None)
+                for key in ("error_since", "error_last"):
+                    (state.get("rollout") or {}).pop(key, None)
             except Exception as error:
                 advanced = _failing(state, error, now)
             _save(state)
