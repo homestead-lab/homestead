@@ -4,6 +4,7 @@ Only this live invocation may prepare the handoff. Polling/restarting the app
 never resumes setup or repeats a lost creation. After publication the existing
 Kubernetes-resident coordinator owns the move; source files are no longer written.
 """
+import calendar
 import copy
 import json
 import time
@@ -17,6 +18,12 @@ import homestead_self_data_prepare as PREPARE
 from homestead_storage_journal import Held, identity, shape
 
 KIND = "self-data-handoff"
+# Setup records its control record's uid in its first seconds. A job older
+# than this without one, whose setup is not running in this process, stopped
+# (a restart, or a failed first step): it fails, and Close recovery or
+# abandon in Move data clears it once that is checked (stuck-jobs C7).
+SETUP_STALE = 600
+_ACTIVE = set()  # job ids whose setup thread runs in this process
 
 
 def idle(ops, own_id=None):
@@ -104,8 +111,11 @@ def _reconcile_receipt(ops, directory, namespace, deployment):
                     "operation": state["operation"], "anchor_uid": anchor.handle()["uid"],
                     "source": state["source"]["name"], "destination": state["destination"]}
         items = t.items
+        # A job whose setup never saved the control record's uid is still this
+        # move: its operation is a random id. A different uid is not.
         matches = [i for i in items if i.get("kind") == KIND and
-                   all(i.get("ref", {}).get(k) == v for k, v in expected.items())]
+                   all(i.get("ref", {}).get(k) == v or k == "anchor_uid" and k not in i.get("ref", {})
+                       for k, v in expected.items())]
         if len(matches) > 1: raise Held("Duplicate data-move jobs need review")
         if not matches: return False
         item = matches[0]
@@ -131,7 +141,15 @@ def resolve(item, read, *, clock=time.time, directory=None):
     if ref.get("setup_error"):
         return "failed", 0, ref["setup_error"]
     if not ref.get("anchor_uid"):
-        return "running", 0, "Preparing the move. If Homestead restarted, inspect this job; setup will not be replayed."
+        try:
+            age = clock() - calendar.timegm(time.strptime(item.get("started_at", ""), "%Y-%m-%dT%H:%M:%SZ"))
+        except (TypeError, ValueError):
+            age = 0
+        if item.get("id") in _ACTIVE or age <= SETUP_STALE:
+            return "running", 0, "Preparing the move. If Homestead restarted, inspect this job; setup will not be replayed."
+        ref["setup_error"] = ("Setup stopped before it recorded its control record; nothing was handed over and Homestead "
+                              "keeps its original volume. Abandon the preparation, or close this record in Move data.")
+        return "failed", 0, ref["setup_error"]
     try:
         anchor = A.Anchor(read, None, ref["namespace"], ref["deployment"]).load(operation=ref["operation"], uid=ref["anchor_uid"])
         view = W.progress(anchor, clock())
@@ -157,6 +175,13 @@ class Execution:
             self.ops.checkpoint(item)
 
     def run(self):
+        _ACTIVE.add(self.job_id)
+        try:
+            return self._run()
+        finally:
+            _ACTIVE.discard(self.job_id)
+
+    def _run(self):
         e, ops = self.execution, self.ops
         scope, cfg = e["scope"], e["config"]
         anchor = A.Anchor(self.read, self.send, scope.namespace, scope.deployment)
@@ -166,6 +191,8 @@ class Execution:
             with self.barrier.activity():
                 with ops.transaction():
                     idle(ops, self.job_id)
+                    if next(i for i in ops.stored() if i["id"] == self.job_id).get("status") in ops.TERMINAL:
+                        raise Held("This move's job was already closed; start a new move")
                     handle = anchor.create(operation=scope.operation,
                         deployment={"name": scope.deployment, **identity(e["deployment"])},
                         source={"name": e["source"]["metadata"]["name"], **identity(e["source"])},

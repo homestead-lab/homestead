@@ -366,5 +366,86 @@ class FailedPreparationTests(unittest.TestCase):
             self.assertFalse(self.P.can_close_recovery(self.OPS.stored()[0]))
 
 
+class SetupWithoutControlRecordTests(unittest.TestCase):
+    """C7: a move whose setup never recorded its control record is bounded."""
+
+    def setUp(self):
+        import homestead_operations as OPS
+        import homestead_self_data_execute as E
+        import test_self_data_execute as execute_fixture
+        self.OPS, self.E = OPS, E
+        self.fixture = execute_fixture.ExecutionTests("test_no_new_service_or_vip_and_no_volume_delete"); self.fixture.setUp()
+        self.addCleanup(self.fixture.doCleanups)
+        self.started = self.stored()["started_at"]
+
+    def stored(self):
+        return next(i for i in self.OPS.stored() if i["id"] == self.fixture.job["id"])
+
+    def at(self, seconds):
+        import calendar, time
+        return lambda: calendar.timegm(time.strptime(self.started, "%Y-%m-%dT%H:%M:%SZ")) + seconds
+
+    def test_setup_that_never_recorded_its_record_fails_after_the_bound(self):
+        item = self.stored()
+        self.assertEqual("running", self.E.resolve(item, self.fixture.read, clock=self.at(self.E.SETUP_STALE - 1))[0])
+        self.E._ACTIVE.add(item["id"])
+        try:
+            self.assertEqual("running", self.E.resolve(item, self.fixture.read, clock=self.at(self.E.SETUP_STALE + 1))[0])
+        finally:
+            self.E._ACTIVE.discard(item["id"])
+        status, _, _ = self.E.resolve(item, self.fixture.read, clock=self.at(self.E.SETUP_STALE + 1))
+        self.assertEqual("failed", status)
+        self.assertIn("Setup stopped", item["ref"]["setup_error"])
+        self.assertTrue(item["ref"]["retain_resources"], "closing it is a reviewed step")
+
+    def test_a_late_setup_thread_never_creates_a_record_for_a_closed_job(self):
+        from fakes.job_store import put
+        items = self.OPS.stored()
+        next(i for i in items if i["id"] == self.fixture.job["id"])["status"] = "failed"
+        put(self.OPS, items)
+        sent = len(self.fixture.cluster.sent)
+        self.assertIsNone(self.fixture.task().run())
+        self.assertFalse(any(m == "POST" for m, _, _ in self.fixture.cluster.sent[sent:]))
+        self.assertNotIn(self.fixture.cluster.anchor.path, self.fixture.cluster.objects)
+
+    def close(self, body=None, *, start=False):
+        import homestead_self_data_prepare as P
+        return P.close_recovery(body or {"id": self.fixture.job["id"]}, "admin", "lab", "homestead", self.OPS,
+                                lambda: ("source", True), start=start, read=self.fixture.read)
+
+    def test_failed_setup_without_a_record_can_be_closed_once_no_record_exists(self):
+        import homestead_self_data_prepare as P
+        self.fixture.cluster.lost = lambda method, path, body: method == "POST" and body.get("kind") == "ConfigMap"
+        self.assertIsNone(self.fixture.task().run())
+        self.fixture.cluster.lost = None
+        item = self.stored()
+        self.assertEqual("failed", self.E.resolve(item, self.fixture.read)[0])
+        from fakes.job_store import put
+        put(self.OPS, [{**item, "status": "failed"}])
+        self.assertTrue(P.blocking_jobs(self.OPS)[0]["closable"])
+        with self.assertRaisesRegex(Held, "control record still exists"): self.close()
+        del self.fixture.cluster.objects[self.fixture.cluster.anchor.path]
+        review = self.close()
+        self.close({"id": item["id"], "capacity_token": review["capacity_token"], "confirm_close": True}, start=True)
+        self.assertEqual([], P.blocking_jobs(self.OPS))
+
+
+class CompletionWithoutAnchorUidTests(unittest.TestCase):
+    """C7: an abandoned or finished move whose job never saved its control
+    record's uid is still matched by its operation once cleanup proves it."""
+
+    def test_completion_matches_a_job_without_its_anchor_uid(self):
+        import homestead_operations as OPS
+        import homestead_self_data_execute as E
+        from fakes.job_store import put
+        from test_self_data_finish import CleanupTests
+        fixture = CleanupTests("test_replaced_helper_is_retained"); fixture.setUp(); self.addCleanup(fixture.doCleanups)
+        fixture.finish()
+        items = OPS.stored(); items[0]["ref"].pop("anchor_uid"); put(OPS, items)
+        self.assertTrue(E.reconcile_completed(OPS, fixture.directory, "lab", "homestead"))
+        self.assertEqual("succeeded", OPS.stored()[0]["status"])
+        self.assertFalse(OPS.stored()[0]["ref"]["retain_resources"])
+
+
 if __name__ == "__main__":
     unittest.main()

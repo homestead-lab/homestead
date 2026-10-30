@@ -249,8 +249,17 @@ def can_close_recovery(item):
     checked gone before it closes."""
     ref = item.get("ref") or {}
     return ((item.get("kind") == HANDOFF and item.get("status") == "cancelled"
-             or item.get("kind") == KIND and item.get("status") == "failed")
+             or item.get("kind") == KIND and item.get("status") == "failed"
+             or _setup_without_record(item))
             and ref.get("retain_resources") is True and not ref.get("recovery_closed"))
+
+
+def _setup_without_record(item):
+    """A move whose setup failed before saving its control record's uid
+    (stuck-jobs C7): nothing past that record was created."""
+    ref = item.get("ref") or {}
+    return (item.get("kind") == HANDOFF and item.get("status") == "failed"
+            and bool(ref.get("setup_error")) and not ref.get("anchor_uid"))
 
 
 def _leftovers(read, ref):
@@ -293,6 +302,12 @@ def close_recovery(body, actor, namespace, deployment, ops, running_on, *, start
                          f"(it mounts {claim or 'no data volume'}); inspect the move before closing it")
         if not ready:
             raise J.Held("Homestead is not ready on its original volume yet; close the move once it is")
+        if _setup_without_record(item):
+            if read is None:
+                raise J.Held("The move's control record cannot be checked")
+            record = _get(read, f"/api/v1/namespaces/{namespace}/configmaps/{deployment}-data-handoff")
+            if record is not None:
+                raise J.Held("The move's control record still exists; abandon the preparation in Move data first")
         if preparation:
             left = _leftovers(read, ref)
             if left:
