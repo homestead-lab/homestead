@@ -56,7 +56,7 @@ def _tail(ns, pod, container="", lines=TAIL, *, timestamps=False):
         if lines <= 1:
             break
         lines = max(1, lines // 2)
-    return text + (f"\n(Log cut at {LIMIT_BYTES // 1024} KB of its oldest lines asked for: "
+    return text + (f"\n(Log cut at {LIMIT_BYTES // 1024} KiB of its oldest lines asked for: "
                    "the newest lines may be missing.)\n")
 
 
