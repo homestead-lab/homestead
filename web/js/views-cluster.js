@@ -349,13 +349,15 @@ function upgradeNewer(version, current) {
 
 function upgradesCard(r) {
   const behind = r.stable && r.current;
+  // What Harvester could not be asked is unknown: never "up to date" then.
+  const unknown = [r.history === null && "whether an upgrade is under way", r.offered === null && "what Harvester offers"].filter(Boolean);
   const status = !r.current ? "Harvester did not report its version"
     : behind ? `${r.stable.tag} is out; this cluster runs v${r.current}` : `v${r.current} is the newest stable release`;
   return `<section class="card flat cluster-wide upgrades-card" style="margin-top:14px">
-    ${UI.moduleHeader(`Harvester releases`, `${esc(status)}. An upgrade Harvester offers can be started here or from its own dashboard; either way it is followed here.`, `${clusterPill(r.active ? "attention" : behind ? "attention" : "healthy", r.active ? "upgrading" : behind ? "update available" : "up to date")}
+    ${UI.moduleHeader(`Harvester releases`, `${esc(status)}. An upgrade Harvester offers can be started here or from its own dashboard; either way it is followed here.`, `${clusterPill(r.active || behind ? "attention" : unknown.length ? "unknown" : "healthy", r.active ? "upgrading" : behind ? "update available" : unknown.length ? "not read" : "up to date")}
         <button class="btn sm" onclick="clusterUpgradesPaint(true)">${icon("refresh")}Check now</button>`)}
     ${r.last ? upgradeProgress(r.last) : ""}
-    ${r.unread ? UI.callout("warn", "Upgrades not read", `${esc(r.unread)}. Whether an upgrade is under way, and what Harvester offers, is not known; Check now tries again.`) : ""}
+    ${r.unread ? UI.callout("warn", "Upgrades not read", `${esc(r.unread)}, so ${esc(unknown.join(" and ") || "this")} is not known. Check now tries again.`) : ""}
     <div class="release-list">
       ${releaseRow("NEWEST STABLE", r.stable, "stable")}
       ${releaseRow("NEWEST TEST BUILD", r.test, "test")}
