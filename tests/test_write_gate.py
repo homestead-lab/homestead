@@ -252,6 +252,29 @@ class WriteGateTests(unittest.TestCase):
                 K.send("PATCH", path, patch, ctype=ctype)
                 self.assertEqual(1, len(self.written(kube, "PATCH")))
 
+    def test_a_cronjob_whose_job_template_carries_homesteads_labels_needs_an_admin(self):
+        import homestead_names as NAMES
+        for labels in ({"app": NAMES.BRAND}, {NAMES.key("task"): "backup"}):
+            body = cronjob("nightly")
+            body["spec"]["jobTemplate"]["metadata"] = {"labels": labels}
+            with self.subTest(labels=labels), Kube() as kube:
+                HOST.set_role("operator")
+                with self.assertRaisesRegex(PermissionError, "only an admin"):
+                    K.send("POST", CRONJOBS, body)
+                self.assertEqual([], kube.writes)
+
+    def test_a_patch_leaving_containers_or_volumes_unreadable_is_refused(self):
+        path = DEPLOYMENTS.format(ns="lab") + "/frigate"
+        for patch in ({"spec": {"template": {"spec": {"containers": ["not-a-container"]}}}},
+                      {"spec": {"template": {"spec": {"volumes": "not-a-list"}}}},
+                      {"spec": {"template": {"spec": {"volumes": [{"name": "v", "hostPath": "x"}]}}}},
+                      [{"op": "add", "path": "/spec/template/spec/initContainers", "value": [7]}]):
+            with self.subTest(patch=patch), Kube(deployment("frigate")) as kube:
+                HOST.set_role("operator")
+                with self.assertRaises(ValueError):
+                    K.send("PATCH", path, patch, ctype="application/merge-patch+json")
+                self.assertEqual([], kube.writes)
+
     def test_the_self_data_fence_stops_a_write_while_homesteads_data_is_moved(self):
         held = []
 

@@ -33,22 +33,24 @@ def require_target(obj, namespace=None, kind=None):
     _require_shape(obj, kind)
     meta = (obj or {}).get("metadata") or {}
     ns = namespace or meta.get("namespace", "")
-    labels = dict(meta.get("labels") or {})
-    for template_meta, _ in _templates(obj):
-        labels.update(template_meta.get("labels") or {})
+    # Every set of labels the object carries: its own, a CronJob's
+    # jobTemplate's, and each pod template's - each checked on its own.
+    job_meta = _dict(_dict(_dict((obj or {}).get("spec"), "spec").get("jobTemplate"), "jobTemplate").get("metadata"),
+                     "jobTemplate metadata")
+    label_sets = [_dict(m.get("labels"), "labels") for m in [meta, job_meta] + [t for t, _ in _templates(obj)]]
     name = meta.get("name", "")
     reserved = lambda value: value == NAMES.BRAND or str(value).startswith(NAMES.BRAND + "-")
-    protected = (ns in _system_namespaces or reserved(name) or reserved(labels.get("app", "")) or
-                 labels.get(NAMES.key("task")) or
+    protected = (ns in _system_namespaces or reserved(name) or
+                 any(reserved(labels.get("app", "")) or labels.get(NAMES.key("task")) for labels in label_sets) or
                  bool(grants(obj)))
     for _, spec in _templates(obj):
         # serviceAccount is the older name of serviceAccountName; the API server still honours it.
         for field in ("serviceAccountName", "serviceAccount"):
             protected = protected or spec.get(field, "default") not in ("", "default", None)
-        for volume in spec.get("volumes") or []:
-            protected = protected or reserved((volume.get("secret") or {}).get("secretName", ""))
-            protected = protected or reserved((volume.get("persistentVolumeClaim") or {}).get("claimName", ""))
-            for source in (volume.get("projected") or {}).get("sources") or []:
+        for volume in _dicts(spec.get("volumes"), "volumes"):
+            protected = protected or reserved(_dict(volume.get("secret"), "secret").get("secretName", ""))
+            protected = protected or reserved(_dict(volume.get("persistentVolumeClaim"), "claim").get("claimName", ""))
+            for source in _dicts(_dict(volume.get("projected"), "projected").get("sources"), "sources"):
                 protected = protected or bool(source.get("serviceAccountToken"))
     if protected:
         raise PermissionError("only an admin can operate management, system, service-account or host-privileged workloads")
@@ -236,6 +238,25 @@ def grants(obj, device_paths=()):
     return out
 
 
+def _dict(value, what):
+    """value as an object; missing is empty, anything else is refused, so a
+    write the check cannot read is never let through."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{what} must be an object")
+    return value
+
+
+def _dicts(value, what):
+    """value as a list of objects, on the same terms as _dict."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise ValueError(f"{what} must be a list of objects")
+    return value
+
+
 def _spec_grants(spec, devices):
     out = set()
     for key, label in (("hostNetwork", "the host's network"), ("hostPID", "the host's processes"),
@@ -243,20 +264,23 @@ def _spec_grants(spec, devices):
         if spec.get(key):
             out.add(label)
     passthrough = False
-    for volume in spec.get("volumes") or []:
-        path = (volume.get("hostPath") or {}).get("path")
+    for volume in _dicts(spec.get("volumes"), "volumes"):
+        path = _dict(volume.get("hostPath"), "hostPath").get("path")
         if path is None:
             continue
         if path in devices:
             passthrough = True
             continue
         out.add(f"the host folder {path}")
-    for container in ((spec.get("containers") or []) + (spec.get("initContainers") or [])
-                      + (spec.get("ephemeralContainers") or [])):
-        security = container.get("securityContext") or {}
+    for container in (_dicts(spec.get("containers"), "containers") + _dicts(spec.get("initContainers"), "initContainers")
+                      + _dicts(spec.get("ephemeralContainers"), "ephemeralContainers")):
+        security = _dict(container.get("securityContext"), "securityContext")
         if security.get("privileged") and not passthrough:
             out.add("privileged mode")
-        for cap in (security.get("capabilities") or {}).get("add") or []:
+        added = _dict(security.get("capabilities"), "capabilities").get("add")
+        if added is not None and not isinstance(added, list):
+            raise ValueError("capabilities to add must be a list")
+        for cap in added or []:
             out.add(f"the {str(cap).upper()} capability")
     return out
 
