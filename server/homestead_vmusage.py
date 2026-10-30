@@ -26,7 +26,7 @@ import homestead_kube_metrics as KUBE_METRICS
 
 kget = None
 PORT = 8443
-TIMEOUT = 2
+TIMEOUT = 3
 MAX_WORKERS = 8
 READ = "kubevirt_vmi_storage_read_traffic_bytes_total"
 WRITE = "kubevirt_vmi_storage_write_traffic_bytes_total"

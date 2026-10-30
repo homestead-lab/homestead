@@ -64,17 +64,17 @@ class Base(unittest.TestCase):
         self.addCleanup(PROBES.reset)
 
     def get_nodes(self, cluster):
-        with mock.patch.multiple(NODES, kget=cluster.kget, get_app_settings=lambda: {},
+        with mock.patch.multiple(NODES, kget=cluster.kget, get_app_settings=lambda *args, **kwargs: {},
                                  DEFAULT_APP_SETTINGS={"smart": {}}, parse_cpu=lambda value: 0.0,
-                                 parse_mem=lambda value: 1.0, SYS_NS=set(), node_duties=lambda pods, vols=None: {},
-                                 workload_names=lambda pods, system: ([], [])), \
-                mock.patch.object(NODES.DISKS, "summary", lambda: {}), \
-                mock.patch.object(NODES.HOST_OS, "report", lambda: {"hosts": {}}), \
+                                 parse_mem=lambda value: 1.0, SYS_NS=set(), node_duties=lambda *args, **kwargs: {},
+                                 workload_names=lambda *args, **kwargs: ([], [])), \
+                mock.patch.object(NODES.DISKS, "summary", lambda *args, **kwargs: {}), \
+                mock.patch.object(NODES.HOST_OS, "report", lambda *args, **kwargs: {"hosts": {}}), \
                 mock.patch.object(NODES, "node_temps", lambda **kw: {}), \
-                mock.patch.object(NODES.PROBES, "status", lambda: {}), \
-                mock.patch.object(NODES.HW, "reconcile_node", lambda name, labels, notes, found: (labels, set())), \
+                mock.patch.object(NODES.PROBES, "status", lambda *args, **kwargs: {}), \
+                mock.patch.object(NODES.HW, "reconcile_node", lambda name, labels, *args, **kwargs: (labels, set())), \
                 mock.patch.object(NODES.HW, "inventory",
-                                  lambda labels, found, auto: [{"id": "igpu", "available": False, "detected": False}]):
+                                  lambda *args, **kwargs: [{"id": "igpu", "available": False, "detected": False}]):
             return {n["name"]: n for n in NODES.get_nodes()}
 
     def loop_running(self):
@@ -93,7 +93,7 @@ class InPlaceTests(Base):
         self.assertLess(took, 1.0, "three hosts at 0.4 s each were read one after another")
         self.assertEqual(sorted(NAMES), sorted(name for name, _ in cluster.calls))
         self.assertEqual({KSTATS.TIMEOUT}, {timeout for _, timeout in cluster.calls})
-        self.assertLessEqual(KSTATS.TIMEOUT, 2)
+        self.assertEqual(4, KSTATS.TIMEOUT, "off the request path: a busy kubelet should not miss every round")
         self.assertEqual(10.0, nodes["node-a"]["fs_pct"])
         self.assertEqual("eth0", nodes["node-a"]["net_iface"])
 
@@ -113,7 +113,7 @@ class BackgroundTests(Base):
         self.assertNotIn("fs_pct", nodes["node-a"], "no reading yet: no figures")
         self.assertEqual(set(NAMES), set(KSTATS._wanted), "the loop reads the hosts asked about")
 
-    def test_the_loop_reading_is_used_and_kept_stale_when_a_kubelet_stops(self):
+    def test_the_loop_reading_is_used_and_unknown_once_a_kubelet_stops(self):
         cluster = Cluster()
         with self.loop_running():
             self.get_nodes(cluster)
@@ -124,15 +124,34 @@ class BackgroundTests(Base):
             nodes = self.get_nodes(cluster)
             self.assertEqual([], cluster.calls)
             self.assertEqual(1.0, nodes["node-a"]["rx_mbps"])
-            self.assertFalse(nodes["node-a"]["stats_stale"])
             again = self.get_nodes(cluster)
             self.assertEqual(1.0, again["node-a"]["rx_mbps"], "asking twice for one reading keeps its rate")
             cluster.down = {"node-b"}
             KSTATS.run_round(cluster.kget)
             nodes = self.get_nodes(cluster)
-        self.assertTrue(nodes["node-b"]["stats_stale"])
-        self.assertEqual(10.0, nodes["node-b"]["fs_pct"], "the last reading is kept")
-        self.assertFalse(nodes["node-a"]["stats_stale"])
+        for key in ("rx_mbps", "tx_mbps", "fs_pct", "fs_used_gb"):
+            self.assertNotIn(key, nodes["node-b"], "a kubelet that missed its read is unknown, not its last figures")
+        self.assertEqual(10.0, nodes["node-a"]["fs_pct"])
+
+    def test_a_reading_two_rounds_old_is_unknown(self):
+        cluster = Cluster()
+        with self.loop_running():
+            self.get_nodes(cluster)
+            KSTATS.run_round(cluster.kget, now=time.time() - 2 * KSTATS.INTERVAL - 1)
+            nodes = self.get_nodes(cluster)
+        self.assertNotIn("fs_pct", nodes["node-a"])
+
+    def test_the_first_rate_after_a_restart_is_unknown(self):
+        cluster = Cluster()
+        with self.loop_running():
+            self.get_nodes(cluster)
+            cluster.rx = 10 ** 9
+            KSTATS.run_round(cluster.kget, now=time.time() - 15)
+            cluster.rx = 1000                                  # counters started again
+            KSTATS.run_round(cluster.kget)
+            nodes = self.get_nodes(cluster)
+        self.assertIsNone(nodes["node-a"]["rx_mbps"])
+        self.assertIsNone(nodes["node-a"]["tx_mbps"])
 
     def test_a_reading_too_old_is_dropped(self):
         cluster = Cluster()

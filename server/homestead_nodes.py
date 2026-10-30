@@ -106,9 +106,12 @@ def reconcile_hardware(fresh=False):
 def node_stats(name):
     """Per-node network + filesystem counters from the kubelet summary API,
     as homestead_kubelet_stats last read it: nothing is read here, and the
-    rates come from that reading and the one before it."""
+    rates come from that reading and the one before it. A kubelet that
+    missed its last read, or whose reading is older than two rounds, is
+    unknown ({}), as when it was read here and did not answer: its last
+    figures are not shown as current."""
     reading = KSTATS.latest([name]).get(name)
-    if not reading:
+    if not reading or reading["stale"]:
         return {}
     pick, rx, tx = _interface(reading["summary"])
     before = reading["before"]
@@ -116,22 +119,23 @@ def node_stats(name):
     if before and reading["at"] > before["at"]:
         _, rx0, tx0 = _interface(before["summary"], pick.get("name"))
         span = reading["at"] - before["at"]
-        rx_rate = (rx - rx0) / span if rx >= rx0 else 0.0
-        tx_rate = (tx - tx0) / span if tx >= tx0 else 0.0
+        # Counters that went down: the host restarted, the rate is unknown.
+        rx_rate = (rx - rx0) / span if rx >= rx0 else None
+        tx_rate = (tx - tx0) / span if tx >= tx0 else None
+    mbps = lambda value: None if value is None else round(value * 8 / 1e6, 2)
     nd = reading["summary"].get("node", {}) or {}
     fs = nd.get("fs", {}) or {}
     runtime = (nd.get("runtime", {}) or {}).get("imageFs", {}) or {}
     return {
         "net_iface": pick.get("name", ""),
-        "rx_mbps": round(rx_rate * 8 / 1e6, 2),
-        "tx_mbps": round(tx_rate * 8 / 1e6, 2),
+        "rx_mbps": mbps(rx_rate),
+        "tx_mbps": mbps(tx_rate),
         "rx_total_gb": round(rx / 1024**3, 1),
         "tx_total_gb": round(tx / 1024**3, 1),
         "fs_used_gb": round((fs.get("usedBytes") or 0) / 1024**3, 1),
         "fs_cap_gb": round((fs.get("capacityBytes") or 0) / 1024**3, 1),
         "fs_pct": round((fs.get("usedBytes") or 0) / (fs.get("capacityBytes") or 1) * 100, 1),
         "img_used_gb": round((runtime.get("usedBytes") or 0) / 1024**3, 1),
-        "stats_stale": reading["stale"],
     }
 
 

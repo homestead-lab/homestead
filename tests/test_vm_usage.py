@@ -123,8 +123,8 @@ class HandlerPoolTests(unittest.TestCase):
         self.assertEqual(3, most[0])
         self.assertIn("node-1", U.usage(now=1000)[1], "the one that did not answer is named")
 
-    def test_the_timeout_is_short(self):
-        self.assertLessEqual(U.TIMEOUT, 2)
+    def test_the_timeout_is_short_but_not_too_short(self):
+        self.assertEqual(3, U.TIMEOUT)
 
 if __name__ == "__main__":
     unittest.main()

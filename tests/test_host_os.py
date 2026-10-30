@@ -301,6 +301,18 @@ class PoolTests(unittest.TestCase):
         self.assertEqual(3, host.most)
         self.assertEqual(6, len(HOST_OS.report()["checking"]["done"]))
 
+    def test_check_now_starts_a_backing_off_host_afresh(self):
+        self.nodes["items"] = self.nodes["items"][:1]
+        host = Slow(UBUNTU, delay=0, broken={"node-0"})
+        self.bind(host)
+        for round_ in range(3):
+            HOST_OS.tick(now=10 ** 10 + round_ * 600)
+        self.assertEqual(3, HOST_OS._FAILED["node-0"]["count"])
+        HOST_OS.check_all(wait=True)
+        self.assertNotIn("node-0", HOST_OS._FAILED, "after Check now the next round tries it again")
+        HOST_OS.tick(now=10 ** 10 + 3 * 600)
+        self.assertEqual(5, len(host.read))
+
     def test_a_host_that_fails_three_times_waits_for_the_six_hour_cadence(self):
         self.nodes["items"] = self.nodes["items"][:2]
         host = Slow(UBUNTU, delay=0, broken={"node-1"})

@@ -359,6 +359,10 @@ def check_all(reader=None, wait=False):
         if _CHECK["running"]:
             return checking_locked()
         hosts = sorted(_ready_hosts())
+        # Someone asked: a host backing off after failed reads is tried
+        # again from now on (#976), whatever this check finds.
+        for name in hosts:
+            READS.worked(_FAILED, name)
         _CHECK.update(running=bool(hosts), hosts=hosts, done=[], failed={}, at=time.time())
         started = checking_locked()
 

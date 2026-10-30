@@ -7,10 +7,10 @@ turn, up to 8 s for one that did not answer, and the volume list read the
 same summaries again.
 
 Here a loop reads the hosts someone asked about in the last WANTED_FOR
-seconds, all at once with a short timeout, and keeps each host's last
-summary with when it came. Pages answer from that: a host whose kubelet
-missed a read keeps its last summary, marked stale, until it is DROP_AFTER
-old. Before the loop runs (and in tests) a caller reads in place, all hosts
+seconds, all at once, and keeps each host's last summary with when it came.
+Pages answer from that. A summary whose host missed its last read, or that
+is older than two rounds, is stale: the Hosts page shows that host's
+figures as unknown, and the volume list does not use it. Before the loop runs (and in tests) a caller reads in place, all hosts
 at the same time, as before but in parallel.
 """
 import threading
@@ -18,8 +18,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 INTERVAL = 15        # seconds between rounds
-TIMEOUT = 2          # one kubelet's summary
-FRESH = 30           # a summary this young is used as it is
+TIMEOUT = 4          # one kubelet's summary: off the request path, so a busy one has time
+FRESH = 2 * INTERVAL # older than two rounds: stale, and the Hosts page shows it as unknown
 DROP_AFTER = 300     # a summary this old is not shown at all
 WANTED_FOR = 60      # a host nobody asked about for this long is not read
 MAX_WORKERS = 8
