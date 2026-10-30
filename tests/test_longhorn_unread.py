@@ -14,7 +14,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_alerts as ALERTS
+import homestead_cluster as CLUSTER
 import homestead_impact as IMPACT
+import homestead_kube as K
 from test_page_snapshot import Cluster, clean_cache, clean_snapshot, setUpModule  # noqa: F401 (restart record off)
 
 VOLUMES = "/apis/longhorn.io/v1beta2/volumes"
@@ -38,6 +40,11 @@ class LonghornFixture(unittest.TestCase):
         self.OV = self.cluster.server.OVERVIEW_ROUTES
         self.STORAGE = self.cluster.server.STORAGE
         self.enterContext(mock.patch.object(self.STORAGE.VOLUME_USAGE, "collect", lambda get, claims: {}))
+        # Other test files bind homestead_disks to fakes of their own and leave
+        # it so (as Cluster says of homestead_lhcapacity): read through this one.
+        DISKS = self.cluster.server.DISKS
+        for name, value in (("kget", K.kget), ("ksend", K.ksend), ("temps", lambda: {})):
+            self.enterContext(mock.patch.object(DISKS, name, value))
         # V2 disk preparations live in the data dir, which these tests have none of.
         self.enterContext(mock.patch.object(self.cluster.server.DISKS, "v2_tasks", lambda: []))
         directory = tempfile.TemporaryDirectory()
@@ -88,8 +95,42 @@ class SnapshotAndOverviewTests(LonghornFixture):
         self.assertTrue(done["ov"])
         self.assertTrue(self.PAGES.read("ov")[1]["volumes_unread"])
 
+    def no_workloads(self):
+        """The fake's one workload is past its start-up grace, which makes the
+        verdict degraded: with none, and a hold that has seen no earlier test's
+        issues, it is healthy."""
+        self.enterContext(mock.patch.object(self.OV.WORKLOADS, "get_workloads", lambda **_: []))
+        self.enterContext(mock.patch.object(self.OV.CLUSTER, "HOLD", CLUSTER.HealthHold()))
+
     def test_a_normal_overview_has_its_volumes_read(self):
-        self.assertFalse(self.OV.get_overview()["volumes_unread"])
+        self.no_workloads()
+        overview = self.OV.get_overview()
+        self.assertFalse(overview["volumes_unread"])
+        self.assertEqual("healthy", overview["health_state"])
+
+    def test_the_dashboard_and_every_page_s_pill_say_unknown_with_the_reason_while_volumes_are_unread(self):
+        # The verdict is set where the overview is built, so the pill that
+        # every page paints from /api/alerts (#949) says it too, not only the
+        # Dashboard.
+        self.no_workloads()
+        self.break_read(VOLUMES)
+        self.PAGES.cycle(self.OV.page_inputs(), self.OV.page_builders())
+        overview = self.PAGES.read("ov")[1]
+        self.assertEqual("unknown", overview["health_state"])
+        self.assertRegex(overview["health_summary"], r"^Longhorn's volumes could not be read, so their health is not known\. ")
+        brief = CLUSTER.health_brief()
+        self.assertEqual("unknown", brief["state"])
+        self.assertIn("Longhorn's volumes could not be read", brief["summary"])
+
+    def test_known_bad_news_and_activities_stay_while_a_part_is_unread(self):
+        unread = ["Longhorn's volumes could not be read, so their health is not known"]
+        for state in ("critical", "degraded", "updating"):
+            report = {"health": "degraded", "health_state": state, "health_summary": "Node a: down"}
+            self.assertEqual(report, CLUSTER.unknown_when_unread(report, unread))
+        healthy = {"health": "healthy", "health_state": "healthy", "health_summary": "All good"}
+        self.assertEqual(healthy, CLUSTER.unknown_when_unread(healthy, []))
+        self.assertEqual({**healthy, "health_state": "unknown", "health_summary": f"{unread[0]}. All good"},
+                         CLUSTER.unknown_when_unread(healthy, unread))
 
     def test_open_volume_alerts_stay_open_and_no_cleared_push_is_sent(self):
         key = "health:Volume:data"
@@ -120,6 +161,69 @@ class SnapshotAndOverviewTests(LonghornFixture):
         self.assertNotIn({"unknown_prefix": "health:Volume:"}, facts)
         fresh = ALERTS.observe({"health": facts}, now=2000) + ALERTS.observe({"health": facts}, now=2000 + ALERTS.HOLD)
         self.assertEqual(["resolved"], [e["phase"] for e in fresh if e["key"] == key])
+
+
+class ElsewhereTests(LonghornFixture):
+    """What else reads the overview's volume counts, and the other callers
+    of the Longhorn node read."""
+
+    def test_a_non_volume_health_alert_still_clears_while_volumes_are_unread(self):
+        key = "health:Workload:lab/gone"
+        gone = {"key": key, "category": "degraded", "severity": "degraded", "title": "gone is not ready",
+                "resolved": "Workload readiness warning cleared: gone", "body": "", "signals": {"condition": 1},
+                "href": "/containers"}
+        ALERTS.observe({"health": [gone]}, now=1000)
+        ALERTS.observe({"health": [gone]}, now=1000 + ALERTS.HOLD)
+        self.break_read(VOLUMES)
+        facts = ALERTS.health_facts(self.OV.get_overview())
+        fresh = ALERTS.observe({"health": facts}, now=2000) + ALERTS.observe({"health": facts}, now=2000 + ALERTS.HOLD)
+        self.assertEqual(["resolved"], [e["phase"] for e in fresh if e["key"] == key])
+
+    def mqtt(self):
+        return self.cluster.server.NETWORK_ROUTES.mqtt_snapshot()["cluster"]
+
+    def test_mqtt_publishes_no_volume_counts_and_an_unknown_health_while_volumes_are_unread(self):
+        self.assertEqual(("healthy", 1, 0), (self.mqtt()["health"], self.mqtt()["vol_total"], self.mqtt()["vol_faulted"]))
+        self.cluster.server.MODULE_ROUTES.forget("ov")
+        self.break_read(VOLUMES)
+        cluster = self.mqtt()
+        self.assertEqual("unknown", cluster["health"])
+        for field in ("vol_total", "vol_degraded", "vol_faulted"):
+            self.assertIsNone(cluster[field], field)
+
+    def test_a_host_not_ready_is_still_critical_while_volumes_are_unread(self):
+        node = self.cluster.kube.object("/api/v1/nodes/node-b")
+        node["status"]["conditions"] = [{"type": "Ready", "status": "False"}]
+        self.cluster.kube.add(node)
+        self.break_read(VOLUMES)
+        self.assertEqual("critical", self.mqtt()["health"])
+
+    def test_history_records_no_volume_count_for_a_cycle_that_did_not_read_them(self):
+        HISTORY = self.cluster.server.HISTORY
+        self.assertIsNone(HISTORY.sample_from({"volumes_unread": True, "vol_degraded": 0, "vol_faulted": 0})["vol_bad"])
+        self.assertEqual(2, HISTORY.sample_from({"vol_degraded": 1, "vol_faulted": 1})["vol_bad"])
+        hour = HISTORY._rollup([{"vol_bad": None}, {"vol_bad": 2}, {"vol_bad": 4}], 0)
+        self.assertEqual((3, 4), (hour["vol_bad"], hour["vol_bad_max"]))
+        self.assertEqual((None, None), (lambda h: (h["vol_bad"], h["vol_bad_max"]))(HISTORY._rollup([{"vol_bad": None}], 0)))
+
+    def test_a_tagged_storage_class_says_longhorn_could_not_be_read_not_that_no_node_has_the_tag(self):
+        self.break_read(LH_NODES)
+        result = self.cluster.server.STORAGE_CLASSES.create_storage_class({"name": "tagged", "disk_tags": ["ssd"]})
+        self.assertIn("could not be read from Longhorn", str(result))
+        self.assertNotIn("no node has", str(result))
+
+    def test_retiring_a_disk_is_refused_when_longhorn_s_nodes_cannot_be_read(self):
+        lh_disk_not_ready(self.cluster)
+        self.break_read(LH_NODES)
+        with self.assertRaisesRegex(RuntimeError, "Longhorn's disks could not be read"):
+            self.cluster.server.DISKS.retire_plan("node-a", "d1")
+
+    def test_disk_auto_tagging_that_fails_does_not_stop_the_host_fixes_after_it(self):
+        STORAGE_ROUTES = self.cluster.server.STORAGE_ROUTES
+        with mock.patch.object(STORAGE_ROUTES.DISKS, "auto_tag", side_effect=RuntimeError("Longhorn's disks could not be read")), \
+                mock.patch("builtins.print") as printed:
+            STORAGE_ROUTES._auto_tag()
+        self.assertIn("disks not tagged", str(printed.call_args))
 
 
 class DisksTests(LonghornFixture):

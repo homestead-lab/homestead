@@ -201,10 +201,14 @@ def mqtt_snapshot():
     ready = o.get("nodes_ready", 0)
     total = o.get("nodes_total", 0)
     notready = total - ready
-    degraded, faulted = o.get("vol_degraded", 0), o.get("vol_faulted", 0)
+    # Longhorn's volumes not read: no counts (null, which Home Assistant shows
+    # as unknown) and a health that is not "healthy" on a guess (#1002).
+    unread = bool(o.get("volumes_unread"))
+    degraded, faulted = (None, None) if unread else (o.get("vol_degraded", 0), o.get("vol_faulted", 0))
     wl_bad = sum(1 for p in bad if not system(p))
     sys_bad = sum(1 for p in bad if system(p))
-    health = ("critical" if notready or faulted else "degraded" if degraded or wl_bad or sys_bad else "healthy")
+    health = ("critical" if notready or faulted else "unknown" if unread
+              else "degraded" if degraded or wl_bad or sys_bad else "healthy")
     nodes = []
     for node in o.get("nodes") or []:
         name = node["name"]
@@ -215,8 +219,8 @@ def mqtt_snapshot():
                       "vms": sum(1 for v in vmis if (v.get("status") or {}).get("nodeName") == name),
                       "wl": ", ".join(node.get("workloads") or []) or "none", "status": node.get("status", "NotReady")})
     return {"cluster": {"nodes_ready": ready, "nodes_total": total, "nodes_notready": notready,
-                        "vol_total": o.get("volumes", 0), "vol_degraded": degraded, "vol_faulted": faulted,
-                        "vol_one_host": o.get("vol_one_host", 0),
+                        "vol_total": None if unread else o.get("volumes", 0), "vol_degraded": degraded, "vol_faulted": faulted,
+                        "vol_one_host": None if unread else o.get("vol_one_host", 0),
                         "pods_system": sum(1 for p in running if system(p)),
                         "pods_workload": sum(1 for p in running if not system(p)),
                         "pods_sys_bad": sys_bad, "pods_wl_bad": wl_bad,

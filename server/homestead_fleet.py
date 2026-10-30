@@ -1194,7 +1194,9 @@ def gather(what, local, user, role):
     try:
         results[view["self"]] = local()
     except Exception as error:
-        if what != "flow":
+        # The local Volumes read raises when Longhorn could not be read
+        # (#1002): this cluster is named, the others' rows are kept.
+        if what not in ("flow", "volumes"):
             raise
         missing.append({"id": view["self"], "name": tags[view["self"]]["name"], "error": str(error)[:200],
                         "state": "error"})

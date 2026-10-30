@@ -445,6 +445,17 @@ class HealthHold:
 HOLD = HealthHold()
 
 
+def unknown_when_unread(report, unread):
+    """A "healthy" verdict while a part of the cluster could not be read is
+    unknown, with what was not read first: never good news on a guess
+    (#1002). Known bad news and activities stay as they are. Set where the
+    overview is built, so the Dashboard and every page's pill (#949) say it."""
+    if not unread or report.get("health_state") != "healthy":
+        return report
+    why = report.get("health_summary") or ""
+    return {**report, "health_state": "unknown", "health_summary": ". ".join([*unread, *([why] if why else [])])}
+
+
 def health_brief():
     """The sidebar pill's verdict on every page (#940), from the overview the
     Dashboard reads: the leader's snapshot part while it is fresh, else the

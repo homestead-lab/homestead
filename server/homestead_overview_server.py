@@ -761,6 +761,8 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
     # the alerts' hold (#941).
     health = CLUSTER.HOLD.apply(CLUSTER.classify_cluster_health(
         nodes, wl, vols, protection=protection, maintenance=in_maintenance, overran=overran, short_of_hosts=short))
+    health = CLUSTER.unknown_when_unread(
+        health, ["Longhorn's volumes could not be read, so their health is not known"] if volumes_unread else [])
     tcap = sum(n["cpu_cap"] for n in nodes) or 1
     tuse = sum(n["cpu_used"] for n in nodes)
     mcap = sum(n["mem_cap_gb"] for n in nodes) or 1
