@@ -90,12 +90,21 @@ def record(key, via, action, args=None, outcome="ok", detail="", addr="", approv
     return entry
 
 
+def _unreadable(error):
+    return OSError(error.errno, f"Homestead could not read the AI agents' audit log on its data volume "
+                                f"({error.strerror or error})")
+
+
 def _read():
+    """Every row. No log yet is none; one that cannot be read raises, so the
+    daily trim does not save an empty log over it."""
     try:
         with open(_path(), encoding="utf-8") as handle:
             lines = handle.readlines()
-    except OSError:
+    except FileNotFoundError:
         return []
+    except OSError as error:
+        raise _unreadable(error) from error
     out = []
     for line in lines:
         try:
@@ -140,8 +149,10 @@ def _newest(keep, limit, chunk=1 << 16):
     out = []
     try:
         handle = open(_path(), "rb")
-    except OSError:
+    except FileNotFoundError:
         return out
+    except OSError as error:
+        raise _unreadable(error) from error     # not "no calls"
     with handle:
         end, tail = os.fstat(handle.fileno()).st_size, b""
         while end > 0 and len(out) < limit:

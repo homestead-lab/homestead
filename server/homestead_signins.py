@@ -120,12 +120,17 @@ def _trim():
 
 
 def history(user="", failures=False, limit=500):
-    """Newest first: everything, or one person's, or only what failed."""
+    """Newest first: everything, or one person's, or only what failed. No
+    file yet is no sign-ins; one that cannot be read raises, so the page says
+    so rather than "No sign-ins recorded yet"."""
     try:
         with open(_path(), encoding="utf-8") as handle:
             lines = handle.readlines()
-    except OSError:
+    except FileNotFoundError:
         return []
+    except OSError as error:
+        raise OSError(error.errno, f"Homestead could not read the sign-in history on its data volume "
+                                   f"({error.strerror or error})") from error
     user = str(user or "").strip().lower()
     out = []
     for line in reversed(lines):

@@ -121,6 +121,23 @@ class NewestFromTheEndTests(unittest.TestCase):
         self.assertEqual([9, 7, 5, 3, 1], [r["at"] for r in agent_audit.recent("k1", 50)])
         self.assertEqual([8, 6, 4], [r["at"] for r in agent_audit.recent("k2", 3)])
 
+    def test_a_log_that_cannot_be_read_is_an_error_not_no_calls(self):
+        """Sweep unknown-as-fine, row 15: an unreadable log is not "no calls", and the daily trim keeps it."""
+        self.assertEqual([], agent_audit.recent(), "no log yet is no calls")
+        path = Path(self.dir.name, agent_audit.FILE)
+        path.write_text(json.dumps({"at": time.time(), "key": "k1"}) + "\n", encoding="utf-8")
+        real = open
+
+        def failing(name, *args, **kwargs):
+            if str(name) == str(path):
+                raise OSError(5, "Input/output error")
+            return real(name, *args, **kwargs)
+        with mock.patch("builtins.open", failing):
+            with self.assertRaises(OSError):
+                agent_audit.recent()
+            self.assertEqual(0, agent_audit.trim())
+        self.assertEqual(1, len(agent_audit.recent()), "the trim did not save an empty log over it")
+
 
 class LostLinesAndDurableTrimTests(unittest.TestCase):
     """Review of #986 §1: a line the data-move barrier refuses reaches the pod
