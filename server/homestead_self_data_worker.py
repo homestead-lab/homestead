@@ -69,6 +69,23 @@ def transient(error):
     return False
 
 
+RECOVERY_MODULE = "/srv/homestead_self_data_recovery.py"
+
+
+def recovery_command(namespace, state):
+    """The preview command to run for a held move while Homestead is stopped:
+    the worker's status server stays read-only, so recovery is kubectl exec
+    into this move's coordinator (docs/data-move-recovery.md)."""
+    return f"kubectl -n {namespace} exec {state['plan']['worker']['name']} -- python3 {RECOVERY_MODULE} --action resume"
+
+
+def recovery_help(namespace, state):
+    command = recovery_command(namespace, state)
+    cutover = any(e["step"] in ("switch", "start") for e in state["journal"]["ref"]["storage_writes"])
+    return (f" To review recovery, run: {command}" + ("" if cutover else " (or --action return-original)")
+            + ", then run it again with --confirm <fingerprint>. It writes nothing until confirmed.")
+
+
 def unavailable_status(operation):
     return {"operation": operation, "phase": None, "status": "unknown", "stale": True,
             "message": "The move record cannot be verified right now. No completion is assumed.",
@@ -117,6 +134,10 @@ def progress(anchor, now):
                "The worker has not reported recently. The last verified stage is shown; do not assume the move is running." if status == "unknown" else
                "Waiting for confirmation of the current request. It will not be sent again." if pending else
                "Returning Homestead to its original volume; waiting for mount release and verified startup." if recovering else DESCRIPTIONS[phase])
+    help_fields = {}
+    if held and not preparing and state.get("plan", {}).get("worker"):
+        message += recovery_help(anchor.namespace, state)
+        help_fields["recovery_command"] = recovery_command(anchor.namespace, state)
     current = A.PHASES.index(phase)
     stages = [{"id": key, "label": label,
                "state": "complete" if i < current or status == "done" else "current" if i == current else "pending"}
@@ -124,7 +145,7 @@ def progress(anchor, now):
     return {"operation": state["operation"], "phase": phase, "status": status,
             "message": message, "checked_at": stamp, "stale": not fresh and phase != "done",
             "stages": stages, "copy_percent": None, "retention_policy": "keep_both_volumes",
-            "requires_review": held, "can_cancel": False}
+            "requires_review": held, "can_cancel": False, **help_fields}
 
 
 class Runner:
@@ -162,9 +183,13 @@ class Runner:
     def snapshot(self):
         """Status polling is read-only, including when the API cannot be reached."""
         try:
-            view = progress(self._load(), self.clock())
+            anchor = self._load()
+            view = progress(anchor, self.clock())
             if self.hold:
                 view.update(status="held", message=self.hold, requires_review=True)
+                if "pointer_receipt" in anchor.state and anchor.state.get("plan", {}).get("worker"):
+                    view.update(message=self.hold + recovery_help(self.namespace, anchor.state),
+                                recovery_command=recovery_command(self.namespace, anchor.state))
             elif self.outage_since is not None and view["status"] != "done":
                 view.update(message="The Kubernetes API is not answering; the move retries it and repeats no request. " + view["message"])
             elif (self.start_wait is not None and view["phase"] == "start" and view["status"] != "done"

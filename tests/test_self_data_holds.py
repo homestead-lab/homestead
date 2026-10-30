@@ -482,5 +482,67 @@ class CompletionWithoutAnchorUidTests(unittest.TestCase):
         self.assertFalse(OPS.stored()[0]["ref"]["retain_resources"])
 
 
+class InvolvedHostTests(unittest.TestCase):
+    """A reboot of a host the move does not use no longer holds it."""
+
+    def reboot(self, c, name):
+        c.objects["/api/v1/nodes/" + name]["status"]["nodeInfo"]["bootID"] = "new-boot"
+
+    def test_reboot_of_an_unrelated_host_does_not_hold(self):
+        c = Cluster(extra_nodes=("node-b",))
+        self.reboot(c, "node-b")
+        c.objects["/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/node-b"]["spec"]["renewTime"] = "1970-01-01T00:00:00Z"
+        self.assertEqual("quiesce", c.step()["phase"])
+        c.settle_stop(); c.step(); c.step()
+        self.assertIn(c.job_path, c.objects)
+
+    def test_reboot_of_a_host_the_move_uses_still_holds(self):
+        for where in ("homestead", "volume"):
+            with self.subTest(where=where):
+                c = Cluster(extra_nodes=("node-b",))
+                if where == "homestead":
+                    c.objects["/api/v1/namespaces/lab/pods/old-1"]["spec"]["nodeName"] = "node-b"
+                else:
+                    c.objects["/api/v1/persistentvolumes/old-pv"]["spec"]["nodeAffinity"] = {"required": {"nodeSelectorTerms": [
+                        {"matchExpressions": [{"key": "kubernetes.io/hostname", "operator": "In", "values": ["node-b"]}]}]}}
+                    c.anchor = c.fresh().load(**c.handle)  # shape pinned at setup; rebuild the plan's fact
+                    from test_self_data_coordinator import fact
+                    state = c.anchor.state; state["plan"]["source_pv"] = fact(c.objects["/api/v1/persistentvolumes/old-pv"])
+                    state["pointer_receipt"] = A.pointer_digest("lab", state, c.handle["uid"])
+                    c.objects[c.anchor.path]["data"]["state.json"] = A._validate(state, "lab")
+                self.reboot(c, "node-b")
+                with self.assertRaisesRegex(Held, "rebooted"): c.step()
+                self.assertEqual(2, c.objects[c.dep_path]["spec"]["replicas"])
+
+    def test_a_host_the_move_uses_that_was_not_reviewed_holds(self):
+        c = Cluster()
+        c.objects["/api/v1/namespaces/lab/pods/old-1"]["spec"]["nodeName"] = "node-c"
+        with self.assertRaisesRegex(Held, "not reviewed"): c.step()
+
+
+class RecoveryCommandTests(unittest.TestCase):
+    """While Homestead is stopped, a hold names the exact recovery command."""
+
+    def test_held_view_names_the_kubectl_command_for_this_worker(self):
+        c = Cluster()
+        c.fresh().load(**c.handle).report("coordinator-uid", 1000, "held", "A host heartbeat is stale")
+        view = W.progress(c.fresh().load(**c.handle), 1000)
+        command = "kubectl -n lab exec coordinator -- python3 /srv/homestead_self_data_recovery.py --action resume"
+        self.assertIn(command, view["message"])
+        self.assertEqual(command, view["recovery_command"])
+        self.assertIn("return-original", view["message"])
+
+    def test_after_cutover_it_offers_resume_only(self):
+        c = Cluster(); c.switching(); c.step()
+        c.fresh().load(**c.handle).report("coordinator-uid", 1000, "held", "Startup needs review")
+        view = W.progress(c.fresh().load(**c.handle), 1000)
+        self.assertIn("--action resume", view["message"])
+        self.assertNotIn("return-original", view["message"])
+
+    def test_a_running_move_has_no_command(self):
+        c = Cluster(); c.step()
+        self.assertNotIn("recovery_command", W.progress(c.fresh().load(**c.handle), 1000))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -18,6 +18,9 @@ recovery module. Find its Pod
 in the move's namespace by label `homestead.io/self-data-handoff=<operation>`;
 select the independent `homestead-handoff-*` coordinator, not the copy Pod.
 These commands require a coordinator running a release with this module.
+While a move is held, its status page (and the Jobs entry) shows the exact
+preview command for that coordinator, with the namespace and Pod filled in.
+The page itself stays read-only; there is no recovery button.
 
 ```sh
 kubectl -n <namespace> exec <coordinator-pod> -- \
@@ -76,6 +79,13 @@ would have without the hold.
 
 A restart that is still not ready after 15 minutes says so on the status
 page. It does not hold, since a hold would keep the new pods unready.
+
+Only the hosts the move uses are checked for reboots and stale heartbeats: the
+copy host, the nodes of the coordinator, of Homestead's own pods and of any pod
+mounting either claim, and the nodes either volume is pinned to. A reboot of
+another host does not hold the move. A pod that has left the API was removed
+normally (nothing force-deletes one), so its writer had stopped. If a volume's
+placement names no reviewed host, every reviewed host is checked.
 
 Recovery refuses replaced resources, structural drift, stale/rebooted hosts,
 unexpected consumers and unknown API write outcomes. This command

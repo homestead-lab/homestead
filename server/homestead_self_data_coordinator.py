@@ -92,8 +92,41 @@ class Coordinator:
             raise Held("A data volume is no longer bound to its reviewed claim")
         return pvc
 
+    def _involved(self):
+        """The hosts that can hold a writer or a mount of either volume: the
+        copy host, the nodes of every pod in the namespace that mounts either
+        claim, is Homestead's own or is this coordinator, and the nodes either
+        PV is pinned to. A reboot elsewhere proves nothing about this move's
+        writers. A pod that left the API was removed normally (nothing here
+        force-deletes), so its writer stopped. A PV pinned by a hostname
+        that names no reviewed node checks every reviewed node, as before."""
+        names = {n["name"] for n in self.plan["nodes"]}
+        involved = {self.plan.get("copy_node")} - {None}
+        claims_ = {self.state["source"]["name"], self.state["destination"]}
+        sets = {identity(r)["uid"] for r in self._sets()}
+        for pod in self._pods():
+            if (claims(pod) & claims_ or pod.get("metadata", {}).get("name") == self.plan["worker"]["name"]
+                    or any(owner(pod, "ReplicaSet", uid) for uid in sets)):
+                if pod.get("spec", {}).get("nodeName"):
+                    involved.add(pod["spec"]["nodeName"])
+        if involved - names:
+            raise Held("A host this data move uses was not reviewed; review the move again")
+        for fact in (self.plan["source_pv"], self.plan["destination_pv"]):
+            pv = self.read("/api/v1/persistentvolumes/" + fact["name"])
+            terms = pv.get("spec", {}).get("nodeAffinity", {}).get("required", {}).get("nodeSelectorTerms", [])
+            for term in terms:
+                for rule in term.get("matchExpressions", []) + term.get("matchFields", []):
+                    values = set(rule.get("values", []))
+                    if rule.get("key") not in ("kubernetes.io/hostname", "metadata.name") or rule.get("operator") != "In" or values - names:
+                        return names  # a topology this can't map to reviewed hosts: check them all
+                    involved |= values
+        return involved
+
     def _hosts(self):
+        involved = self._involved()
         for pinned in self.plan["nodes"]:
+            if pinned["name"] not in involved:
+                continue
             node = self.read("/api/v1/nodes/" + pinned["name"])
             if (identity(node)["uid"] != pinned["uid"] or node["metadata"].get("deletionTimestamp")
                     or node.get("status", {}).get("nodeInfo", {}).get("bootID") != pinned["boot_id"]
