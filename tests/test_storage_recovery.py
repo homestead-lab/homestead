@@ -422,6 +422,12 @@ class HeldMoveRecoveryTests(RecoveryFixture):
         plan = self.preview()["plan"]
         self.assertFalse(plan["can_retry"] or plan["can_finish"] or plan["can_rollback"])
 
+    def test_the_original_reclaim_policy_is_journalled_before_retain_is_set(self):
+        self.to_cutover("retain-original")
+        saved = [i for i in self.cluster.saves if i["ref"].get("cutover")]
+        self.assertEqual("Delete", saved[0]["ref"]["cutover"]["old_reclaim"])
+        self.assertFalse(handoff._receipt(saved[0], "retain-original"))
+
     def test_finish_forward_is_offered_once_the_copy_is_verified(self):
         self.to_cutover("retain-original")
         self.act("pause")
@@ -579,8 +585,23 @@ class HeldMoveRecoveryTests(RecoveryFixture):
         self.ready()
         status = self.until_done()
         self.assertEqual("cancelled", status)
+        original = self.cluster.objects["/api/v1/persistentvolumes/pv-data"]
+        self.assertNotIn(rc.OLD_COPY, original["metadata"].get("annotations", {}))
+        # The policy it had before the move was journalled, and is back.
+        self.assertEqual("Delete", original["spec"]["persistentVolumeReclaimPolicy"])
+        self.assertIn("pv-data has its earlier Delete reclaim policy again", self.load()["message"])
+
+    def test_rollback_keeps_retain_when_no_earlier_policy_was_journalled(self):
+        self.to_cutover("retain-original")
+        self.act("pause")
+        item = self.load()
+        item["ref"]["cutover"].pop("old_reclaim")   # journalled by an older version
+        put(ops, [item])
+        self.act("rollback")
+        self.poll(); self.poll(); self.ready()
+        self.assertEqual("cancelled", self.until_done())
+        self.assertEqual("Retain", self.cluster.objects["/api/v1/persistentvolumes/pv-data"]["spec"]["persistentVolumeReclaimPolicy"])
         self.assertIn("pv-data keeps the Retain reclaim policy", self.load()["message"])
-        self.assertNotIn(rc.OLD_COPY, self.cluster.objects["/api/v1/persistentvolumes/pv-data"]["metadata"].get("annotations", {}))
 
     def test_rollback_from_a_partial_stop_restarts_only_what_was_stopped(self):
         ref = self.cluster.item["ref"]

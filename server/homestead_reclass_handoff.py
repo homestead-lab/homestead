@@ -432,7 +432,10 @@ def cutover_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journa
                  "old_uid": JOURNAL.identity(old_pv)["uid"], "new_uid": JOURNAL.identity(new_pv)["uid"],
                  "old_shape": _pv_shape(old_pv), "new_shape": _pv_shape(new_pv),
                  "source_shape": JOURNAL.shape(source), "temp_shape": JOURNAL.shape(copied),
-                 "reclaim": sc.get("reclaimPolicy", "Delete")}
+                 "reclaim": sc.get("reclaimPolicy", "Delete"),
+                 # Journalled before retain-original sets Retain, so a rollback
+                 # can put back exactly what the original volume had.
+                 "old_reclaim": old_pv.get("spec", {}).get("persistentVolumeReclaimPolicy")}
         if (state["old_uid"], state["new_uid"]) != (proof["claims"][ref["claim"]]["pv_uid"], proof["claims"][ref["temp"]]["pv_uid"]):
             raise JOURNAL.Held("Backing volume identities changed while preparing cutover")
         if state["old_uid"] == state["new_uid"] or state["reclaim"] not in ("Delete", "Retain"):
@@ -717,6 +720,9 @@ def rollback_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journ
     waiting = _not_ready(item, writer, stopped, "rollback-restart:")
     if waiting:
         return _wait(item, "rollback-readiness", 96, "Started again on the original volume; waiting for them to report ready: " + ", ".join(waiting))
+    restored = _restore_original_policy(item, writer)
+    if restored:
+        return restored
     released = _release_copy(item, writer)
     if released:
         return released
@@ -725,7 +731,9 @@ def rollback_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journ
     checkpoint(item)
     message = (f"Move rolled back: workloads run on the original volume {ref['claim']} "
                f"({ref.get('from_class') or 'its original class'}) again.")
-    if _receipt(item, "retain-original"):
+    if _receipt(item, "rollback-restore-original-policy"):
+        message += f" Its backing volume {ref['old_pv']} has its earlier {_earlier_policy(item)} reclaim policy again."
+    elif _receipt(item, "retain-original") and _earlier_policy(item) != "Retain":
         message += (f" Its backing volume {ref['old_pv']} keeps the Retain reclaim policy the move set "
                     "(the earlier policy was not recorded), so deleting the claim later keeps that volume.")
     copied = (ref.get("copy_claims") or {}).get(ref["temp"]) or {}
@@ -736,6 +744,30 @@ def rollback_stage(item, checkpoint, admission, *, journal_factory=JOURNAL.Journ
     elif _receipt(item, "rollback-release-copy"):
         message += f" The copy claim {ref['temp']} had no volume yet and was removed, so that name is free for a later move."
     return "cancelled", 100, message
+
+
+def _earlier_policy(item):
+    """The original volume's reclaim policy before the move, when journalled."""
+    value = (item["ref"].get("cutover") or {}).get("old_reclaim")
+    return value if value in ("Delete", "Retain", "Recycle") else None
+
+
+def _restore_original_policy(item, writer):
+    """Undo retain-original with exactly the journalled value, else keep Retain."""
+    ref, earlier = item["ref"], _earlier_policy(item)
+    if not _receipt(item, "retain-original") or earlier in (None, "Retain") or _receipt(item, "rollback-restore-original-policy"):
+        return None
+    state = ref["cutover"]
+    old = _checked_pv(writer, state["old_pv"], state["old_uid"], state["old_shape"])
+    owner = old.get("spec", {}).get("claimRef", {})
+    if (owner.get("uid"), owner.get("name"), owner.get("namespace")) != (state["source_uid"], ref["claim"], ref["namespace"]):
+        raise JOURNAL.Held("The original backing volume is no longer the app's claim; its reclaim policy is left as Retain")
+    if old["spec"].get("persistentVolumeReclaimPolicy") != "Retain":
+        raise JOURNAL.Held("The original volume's Retain protection was changed")
+    writer.write("rollback-restore-original-policy", "PATCH", f"/api/v1/persistentvolumes/{state['old_pv']}",
+                 {"spec": {"persistentVolumeReclaimPolicy": earlier}},
+                 expected={**JOURNAL.identity(old), "settled": JOURNAL.settled(old)}, ctype="application/merge-patch+json")
+    return "running", 97, f"Original volume's earlier {earlier} reclaim policy restored"
 
 
 def _release_copy(item, writer):
