@@ -20,6 +20,7 @@ import homestead_cache as CACHE
 import homestead_cluster as CLUSTER
 import homestead_kube as K
 import homestead_operations as OPS
+import homestead_shared as SHARED_MODULE
 from test_longhorn_unread import LonghornFixture
 from test_page_snapshot import LH, setUpModule  # noqa: F401 (restart record off)
 
@@ -292,6 +293,60 @@ class ProtectionHealthTests(ProtectionFixture):
         overview = self.overview()
         self.assertNotIn("Backup", overview["protection_unread"])
         self.assertNotIn(("Backup", "nightly"), self.kinds(overview))
+
+
+class HealthCardTests(LonghornFixture):
+    """Settings > Homestead's health: the backup storage, MQTT and node probe rows."""
+    PROBE = "/apis/apps/v1/namespaces/lab/daemonsets/homestead-nodeprobe"
+
+    def setUp(self):
+        super().setUp()
+        self.SELF_HEALTH = self.cluster.server.SELF_HEALTH
+        S = self.SELF_HEALTH
+        # The leader's shared beats live under homestead_shared.DIR (/data).
+        self.enterContext(mock.patch.object(SHARED_MODULE, "DIR", self.enterContext(tempfile.TemporaryDirectory())))
+        for name, value in (("kget", K.kget), ("replicas_now", lambda: {"desired": 1, "pods": []}),
+                            ("node_temps", lambda: {}), ("samba_state", lambda: {"installed": False}),
+                            ("heartbeats", lambda: {}), ("data_copies", lambda: {})):
+            self.enterContext(mock.patch.object(S, name, value))
+        self.enterContext(mock.patch.object(S.LEADER, "is_leader", lambda: True))
+        self.enterContext(mock.patch.object(S.NETWORK, "inventory", lambda: {}))
+        self.enterContext(mock.patch.object(S.NAMES, "NODEPROBE", "homestead-nodeprobe"))
+        self.enterContext(mock.patch.object(S, "NAMESPACE", "lab"))
+
+    def report(self):
+        return self.SELF_HEALTH.report()
+
+    def test_backup_storage_unread_says_so_rather_than_none(self):
+        with mock.patch.object(self.SELF_HEALTH.OBJECTS, "status", side_effect=RuntimeError("timed out")):
+            backups = self.report()["backups"]
+        self.assertIn("timed out", backups["error"])
+        self.assertIsNone(backups["deployed"])
+
+    def test_backup_storage_read_is_shown_as_read(self):
+        with mock.patch.object(self.SELF_HEALTH.OBJECTS, "status",
+                               lambda: {"deployed": True, "ready": True, "endpoint": "http://192.0.2.5:9000"}):
+            backups = self.report()["backups"]
+        self.assertEqual((True, True, None), (backups["deployed"], backups["ready"], backups.get("error")))
+
+    def test_mqtt_unread_is_shown_as_unknown_not_left_out(self):
+        with mock.patch.object(self.SELF_HEALTH.OBJECTS, "status", lambda: {}), \
+                mock.patch.object(self.SELF_HEALTH.MQTT, "shown_status", side_effect=RuntimeError("lock")):
+            mqtt = self.report()["mqtt"]
+        self.assertEqual("unknown", mqtt["state"])
+        self.assertIn("lock", mqtt["error"])
+
+    def test_the_node_probe_unread_is_unknown_not_not_installed(self):
+        self.cluster.kube.fail(self.PROBE, 500, times=999)
+        with mock.patch.object(self.SELF_HEALTH.OBJECTS, "status", lambda: {}):
+            probe = self.report()["probe"]
+        self.assertIsNone(probe["installed"])
+        self.assertIn("500", probe["error"])
+
+    def test_a_node_probe_that_is_not_there_is_not_installed(self):
+        with mock.patch.object(self.SELF_HEALTH.OBJECTS, "status", lambda: {}):
+            probe = self.report()["probe"]
+        self.assertIs(False, probe["installed"])
 
 
 if __name__ == "__main__":

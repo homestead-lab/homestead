@@ -3,6 +3,7 @@ background task, the node probe, Samba, and how many Homesteads run and
 where. Settings shows it; server.py runs the tasks and keeps their beats.
 """
 import time
+import urllib.error
 import urllib.parse
 
 import homestead_data_copies as DATA_COPIES
@@ -75,13 +76,17 @@ def report():
     except Exception as error:
         replicas = {"error": str(error)[:160]}
     probe = dict(PROBE.status())
+    # Not there (404) is not installed; a read that failed is unknown (None).
     try:
         ds = kget(f"/apis/apps/v1/namespaces/{NAMESPACE}/daemonsets/{NAMES.NODEPROBE}")
         st = ds.get("status") or {}
         probe.update(installed=True, desired=int(st.get("desiredNumberScheduled", 0) or 0),
                      ready=int(st.get("numberReady", 0) or 0))
-    except Exception:
-        probe.update(installed=False, desired=0, ready=0)
+    except urllib.error.HTTPError as error:
+        probe.update(installed=False if error.code == 404 else None, desired=0, ready=0,
+                     **({} if error.code == 404 else {"error": f"The node probe could not be read: {str(error)[:160]}"}))
+    except Exception as error:
+        probe.update(installed=None, desired=0, ready=0, error=f"The node probe could not be read: {str(error)[:160]}")
     try:
         # Hosts whose probe is answering: node_temps() leaves out one that
         # has stopped (homestead_node_probes).
@@ -94,15 +99,15 @@ def report():
         samba = samba_state()
     except Exception as error:
         samba = {"error": str(error)[:160]}
+    # Unread is said, not shown as no backup storage or no MQTT row.
     try:
         backups = OBJECTS.status()
-    except Exception:
-        backups = {}
-    mqtt = {}
+    except Exception as error:
+        backups = {"error": f"Backup storage could not be read: {str(error)[:160]}"}
     try:
         mqtt = MQTT.shown_status()
-    except Exception:
-        pass
+    except Exception as error:
+        mqtt = {"state": "unknown", "error": f"MQTT's state could not be read: {str(error)[:160]}"}
     # Homestead's shared address, and any app, on the cluster's own address:
     # host joining (RKE2's 9345) and the dashboard answer there.
     try:
@@ -114,7 +119,7 @@ def report():
         addresses = {"lb_ip": LB_IP, "error": str(error)[:160]}
     return {"version": VERSION, "addresses": addresses, "api": api, "leader": leading, "identity": LEADER.IDENTITY,
             "replicas": replicas, "loops": loops, "probe": probe, "samba": samba,
-            "permissions": dict(SELF.LAST), "backups": {k: backups.get(k) for k in ("deployed", "ready", "endpoint")},
+            "permissions": dict(SELF.LAST), "backups": {k: backups.get(k) for k in ("deployed", "ready", "endpoint", "error")},
             "mqtt": {k: mqtt.get(k) for k in ("state", "detail", "error", "last_publish")},
             "data_copies": data_copies()}
 
