@@ -223,7 +223,11 @@ def sweep_source_secrets(now=None):
     now = time.time() if now is None else now
     removed = []
     with SOURCE_LOCK:
-        _cm, srcs = _sources_state()
+        cm, srcs = _sources_state()
+        if cm is None:
+            # No list at all is not "no sources": it may be gone or not
+            # restored yet, so nothing is removed until there is one.
+            return removed
         named = {source_secret(s["name"], s) for s in srcs}
         selector = urllib.parse.quote(SOURCE_LABEL)
         unnamed = []

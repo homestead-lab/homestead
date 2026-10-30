@@ -99,6 +99,8 @@ class ImportSourceCleanupTests(unittest.TestCase):
 
     def test_an_add_whose_inventory_write_is_uncertain_leaves_it_to_the_sweep(self):
         # The write may have landed: the password is never taken back on a guess.
+        imports.add_source("source-a", "192.0.2.11", "root", "fixture-password")
+        kept = self.labelled()
         real = K.ksend
 
         def timeout(method, path, body=None, **options):
@@ -107,9 +109,11 @@ class ImportSourceCleanupTests(unittest.TestCase):
             return real(method, path, body, **options)
         with mock.patch.object(imports, "ksend", timeout):
             with self.assertRaises(TimeoutError):
-                imports.add_source("source-a", "192.0.2.11", "root", "fixture-password")
-        self.assertEqual(1, len(self.labelled()))
-        self.assertEqual(self.labelled(), imports.sweep_source_secrets(now=self.later()))
+                imports.add_source("source-b", "192.0.2.12", "root", "fixture-password")
+        left = sorted(set(self.labelled()) - set(kept))
+        self.assertEqual(1, len(left))
+        self.assertEqual(left, imports.sweep_source_secrets(now=self.later()))
+        self.assertEqual(kept, self.labelled())
 
     def test_nothing_is_removed_when_the_inventory_cannot_be_read(self):
         imports.add_source("source-a", "192.0.2.11", "root", "fixture-password")
@@ -139,6 +143,36 @@ class ImportSourceCleanupTests(unittest.TestCase):
         self.kube.add(inventory)
         imports.del_source("source-a")
         self.assertIsNotNone(self.kube.object(f"{SECRETS}/homestead-other"))
+
+    def test_no_sources_list_at_all_removes_nothing(self):
+        # A missing list is not "no sources": it may have been deleted or not restored yet.
+        imports.add_source("source-a", "192.0.2.11", "root", "fixture-password")
+        K.ksend("DELETE", INVENTORY)
+        self.assertEqual([], imports.sweep_source_secrets(now=self.later()))
+        self.assertEqual(1, len(self.labelled()))
+
+    def test_every_way_a_pod_reads_a_secret_counts(self):
+        cases = {
+            "env": {"containers": [{"name": "c", "env": [
+                {"name": "A", "value": "plain"},
+                {"name": "B", "valueFrom": {"secretKeyRef": {"name": "s-env", "key": "k"}}},
+                {"name": "C", "valueFrom": {"configMapKeyRef": {"name": "not-a-secret", "key": "k"}}}]}]},
+            "envFrom": {"containers": [{"name": "c", "envFrom": [{"secretRef": {"name": "s-envfrom"}},
+                                                                  {"configMapRef": {"name": "not-a-secret"}}]}]},
+            "initContainers": {"containers": [{"name": "c"}], "initContainers": [{"name": "i", "env": [
+                {"name": "B", "valueFrom": {"secretKeyRef": {"name": "s-init", "key": "k"}}}]}]},
+            "secret volume": {"containers": [{"name": "c"}], "volumes": [{"name": "v", "secret": {"secretName": "s-volume"}}]},
+            "projected volume": {"containers": [{"name": "c"}], "volumes": [{"name": "v", "projected": {"sources": [
+                {"secret": {"name": "s-projected"}}, {"configMap": {"name": "not-a-secret"}},
+                {"serviceAccountToken": {"path": "token"}}]}}]},
+            "nothing": {"containers": [{"name": "c"}], "volumes": [{"name": "v", "emptyDir": {}}]},
+            "empty": None,
+        }
+        expected = {"env": {"s-env"}, "envFrom": {"s-envfrom"}, "initContainers": {"s-init"},
+                    "secret volume": {"s-volume"}, "projected volume": {"s-projected"}, "nothing": set(), "empty": set()}
+        for case, spec in cases.items():
+            with self.subTest(case):
+                self.assertEqual(expected[case], imports._spec_secrets(spec))
 
     def test_the_leaders_minute_sweeps_them(self):
         import homestead_image_cache as CACHE
