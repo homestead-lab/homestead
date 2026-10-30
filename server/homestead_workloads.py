@@ -26,6 +26,7 @@ import homestead_kube_metrics as KUBE_METRICS
 import homestead_host_access as HOSTACCESS
 import homestead_icons as ICONS
 import homestead_lan as LAN
+import homestead_kube as KUBE
 import homestead_lifecycle as LC
 import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_logsearch as LOGSEARCH
@@ -188,8 +189,14 @@ def search_logs(request):
         regex=_arg(request, "regex") == "1", case=_arg(request, "case") == "1")
 
 
+def _path_names(ns, name):
+    """The namespace and workload a request names, checked before either
+    goes into an API path."""
+    return KUBE.request_name(ns, "namespace", namespace=True), KUBE.request_name(name, "workload name")
+
+
 def edit_form(request):
-    ns, name = request.query["ns"][0], request.query["name"][0]
+    ns, name = _path_names(request.query["ns"][0], request.query["name"][0])
     deployment = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     payload = workload_edit_payload(ns, name, deployment)
     return payload if may_see_secret_values(request.role, deployment, ns) else ENVSEC.mask(payload)
@@ -230,7 +237,8 @@ def set_failover(request):
 
 def set_primary_port(request):
     b = request.body
-    ns, name = b.get("ns") or DEFAULT_NS, _dns_name(b.get("name"), "workload name")
+    ns = KUBE.request_name(b.get("ns") or DEFAULT_NS, "namespace", namespace=True)
+    name = _dns_name(b.get("name"), "workload name")
     guard_managed_smb(ns, name)
     port = int(b.get("port") or 0)
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
@@ -243,6 +251,7 @@ def set_primary_port(request):
 
 def preview_edit(request):
     b = request.body
+    _path_names(b.get("ns"), b.get("name"))
     guard_managed_smb(b.get("ns", ""), b.get("name", ""))
     prepared, context, plan = edit_capacity_plan(b)
     current = kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}")
@@ -261,6 +270,7 @@ def preview_edit(request):
 
 def edit(request):
     b = request.body
+    _path_names(b.get("ns"), b.get("name"))
     guard_managed_smb(b.get("ns", ""), b.get("name", ""))
     # Homestead's manifest sets its own priority on every upgrade.
     if is_self(b.get("ns", ""), b.get("name", "")):
