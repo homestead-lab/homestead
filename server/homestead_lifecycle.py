@@ -12,6 +12,7 @@ binds, moving apps and VMs, and the routes, and re-exports both.
 import os
 import re
 import time
+import homestead_cache as CACHE
 import homestead_names as NAMES
 import homestead_maintenance as MAINTENANCE  # noqa: F401  (tests reach it through here)
 
@@ -53,9 +54,7 @@ def bind(_kget, _ksend, _sys_ns, _cache_ref, _hardware_features=None,
 
 
 def _bust(*keys):
-    for k in list(_cache):
-        if not keys or any(k.startswith(x) for x in keys):
-            _cache.pop(k, None)
+    CACHE.drop_where(_cache, lambda k: not keys or k.startswith(keys))
 
 
 # --------------------------------------------------------------- move

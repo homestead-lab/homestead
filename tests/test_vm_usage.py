@@ -29,14 +29,14 @@ class UsageTests(unittest.TestCase):
                             {"usage": {"cpu": "250000000n", "memory": "0"}}]},
             {"metadata": {"name": "frigate-7d9", "namespace": "lab"}, "containers": [{"usage": {"cpu": "1", "memory": "1Gi"}}]}]}
 
-        def get(path):
+        def get(path, **_):
             if path.startswith("/apis/metrics.k8s.io"):
                 return self.pod_metrics
             if "virt-handler" in path:
                 return {"items": [{"spec": {"nodeName": "n1"}, "status": {"phase": "Running", "podIP": "10.0.0.5"}}]}
             raise AssertionError(path)
         U.bind(get)
-        U._readings.clear(); U._usage.clear()
+        U._readings.clear()
 
     def test_drives_are_summed_per_vm(self):
         self.assertEqual({("lab", "pihole"): [300.0, 50.0]}, U.parse_io(metrics(100, 200, 50)))
@@ -67,8 +67,10 @@ class UsageTests(unittest.TestCase):
 
     def test_the_vm_list_gives_a_running_vm_its_usage_as_shares_of_its_size(self):
         from test_vms import Cluster
-        U._readings.clear(); U._usage.clear()
-        U._usage[("default", "win11")] = {"cpu": 1.0, "mem": 4 * 2**30}
+        U._readings.clear()
+        self.pod_metrics = {"items": [{"metadata": {"name": "virt-launcher-win11-abcde", "namespace": "default",
+                                                    "labels": {"vm.kubevirt.io/name": "win11"}},
+                                       "containers": [{"usage": {"cpu": "1", "memory": "4Gi"}}]}]}
         U._readings.extend([{"at": 1000, "io": {("default", "win11"): [0, 0]}},
                             {"at": 1030, "io": {("default", "win11"): [30_000, 3_000]}}])
         for running, expect in ((True, True), (False, False)):

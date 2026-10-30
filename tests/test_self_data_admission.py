@@ -101,6 +101,22 @@ class AdmissionTests(unittest.TestCase):
         self.assertFalse(report["nodes"][0]["metrics_available"])
         self.assertTrue(self.admit()("start", self.dep))
 
+    def test_live_memory_is_read_at_each_check_never_the_pages_background_reading(self):
+        # The pages' background reading is served up to 5 minutes old (#906,
+        # #928); admission must not admit on that. It reads metrics.k8s.io
+        # itself, in the worker, and counts a figure over 2 minutes old as
+        # unavailable, which needs its own acknowledgement.
+        import homestead_kube_metrics as KUBE_METRICS
+        with mock.patch.object(KUBE_METRICS, "read", side_effect=AssertionError("took the background reading")):
+            self.metrics[0]["timestamp"] = "1970-01-01T00:14:40Z"      # 120 s before the check
+            self.assertTrue(self.review()["nodes"][0]["metrics_available"])
+            self.metrics[0]["timestamp"] = "1970-01-01T00:14:39Z"      # 121 s
+            self.paths.clear()
+            report = self.review()
+        self.assertIn("/apis/metrics.k8s.io/v1beta1/nodes", self.paths)
+        self.assertFalse(report["nodes"][0]["metrics_available"])
+        self.assertIn("live memory usage is unavailable", report["warnings"])
+
     def test_changed_template_or_replica_count_invalidates_approval(self):
         admit = self.admit()
         for change in (lambda d: d["spec"].update(replicas=2),

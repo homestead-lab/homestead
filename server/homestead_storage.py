@@ -16,6 +16,7 @@ import homestead_lhrebuild as LHREBUILD
 import homestead_operations as OPS
 import homestead_rebalance as REBALANCE
 import homestead_routes
+import homestead_cache as CACHE
 import homestead_storage_classes as STORAGE_CLASSES
 import homestead_storage_resize as STORAGE_RESIZE
 import homestead_storage_workflow as STORAGE_WORKFLOW
@@ -533,9 +534,7 @@ def create_volume(cfg):
         raise ValueError("access mode must be ReadWriteOnce or ReadWriteMany")
     # No class chosen: create_pvc puts it on server.py's current default.
     out = create_pvc(ns, name, size, cfg.get("storage_class") or None, mode)
-    for k in list(_cache):
-        if k.startswith(("vol", "stor", "flow")):
-            _cache.pop(k, None)
+    CACHE.drop_where(_cache, lambda k: k.startswith(("vol", "stor", "flow")))
     return {"ok": True, "name": name, "namespace": ns, "pvc": out}
 
 
@@ -606,9 +605,7 @@ def edit_volume(cfg):
         if current is not None and current != reps:
             ksend("PATCH", path, {"spec": {"numberOfReplicas": reps}}, ctype="application/merge-patch+json")
             done.append(f"{reps} cop{'y' if reps == 1 else 'ies'}")
-    for k in list(_cache):
-        if k.startswith(("vol", "stor", "flow")):
-            _cache.pop(k, None)
+    CACHE.drop_where(_cache, lambda k: k.startswith(("vol", "stor", "flow")))
     return {"ok": True, "name": name, "detail": (f"{name}: " + ", ".join(done)) if done else f"{name} is unchanged"}
 
 

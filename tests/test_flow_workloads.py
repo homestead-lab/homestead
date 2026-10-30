@@ -78,7 +78,7 @@ API = {
 
 class FlowWorkloadTests(unittest.TestCase):
     def setUp(self):
-        patches = [mock.patch.object(server.FLOW, "kget", side_effect=lambda path: API[path]),
+        patches = [mock.patch.object(server.FLOW, "kget", side_effect=lambda path, **_: API[path]),
                    mock.patch.object(server.HW, "workload_features", return_value=[])]
         for patcher in patches:
             patcher.start()

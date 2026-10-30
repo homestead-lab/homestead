@@ -58,6 +58,10 @@ class Base(unittest.TestCase):
         PROBES.reset()
         self.addCleanup(PROBES.stop)
         self.addCleanup(PROBES.reset)
+        # start_probes() starts the metrics-server loop too (#906).
+        import homestead_kube_metrics as KUBE_METRICS
+        self.addCleanup(KUBE_METRICS.reset)
+        self.addCleanup(KUBE_METRICS.stop)
         self.cluster = Cluster()
         for patch in (mock.patch.object(PROBES.NAMES, "kget", self.cluster.kget, create=True),
                       mock.patch.object(PROBES.urllib.request, "urlopen", self.cluster.urlopen)):
@@ -212,6 +216,14 @@ class ProbeTests(Base):
 
 class NodesTests(Base):
     """The nodes module answers from the background state."""
+
+    def test_the_metrics_loop_start_probes_starts_is_stopped_after_the_test(self):
+        # start_probes() also starts the metrics-server loop (#906); left
+        # running, it would answer get_nodes() in every later test of the shard.
+        import homestead_kube_metrics as KUBE_METRICS
+        inner = NodesTests("test_node_temps_with_three_slow_probes_answers_at_once_once_the_loop_runs")
+        self.assertTrue(inner.run().wasSuccessful())
+        self.assertFalse(KUBE_METRICS.running())
 
     def test_node_temps_with_three_slow_probes_answers_at_once_once_the_loop_runs(self):
         self.cluster.delay = 1.0

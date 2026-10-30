@@ -34,6 +34,7 @@ import urllib.error
 import urllib.parse
 import homestead_operations as OPS
 import homestead_routes
+import homestead_cache as CACHE
 import homestead_longhorn_jobs as JOBS
 import homestead_longhorn_volumes as VOLUMES
 import homestead_longhorn_target as BACKUP_TARGET
@@ -72,9 +73,7 @@ def bind(_kget, _ksend, _cache_ref, storage_class="longhorn-r2", default_namespa
 
 
 def _bust(*keys):
-    for k in list(_cache):
-        if not keys or any(k.startswith(x) for x in keys):
-            _cache.pop(k, None)
+    CACHE.drop_where(_cache, lambda k: not keys or k.startswith(keys))
 
 
 JOB_CHANGED = "This job was changed or deleted elsewhere since you opened it; open it again to see it"

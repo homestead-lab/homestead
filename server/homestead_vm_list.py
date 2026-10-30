@@ -269,11 +269,15 @@ def list_vms():
         dvs = dv_read.result()
     rows = sorted((V._row(v, vmis.get((v["metadata"]["namespace"], v["metadata"]["name"]), {}), claims, dvs, instance_known) for v in vms),
                   key=lambda r: (r["ns"], r["name"]))
+    # Each running VM's use, and on every row the state of the CPU and memory
+    # figures, so the page can say when they are old or missing (#928).
     try:
-        measured, note = VMUSAGE.usage()
+        measured, note, metrics = VMUSAGE.measured()
     except Exception:
-        measured, note = {}, ""
+        measured, note, metrics = {}, "", None
     for row in rows:
+        if metrics:
+            row["metrics"] = metrics
         got = measured.get((row["ns"], row["name"])) if row["running"] else None
         if got:
             cpus, memory = max(1, int(row["cores"] or 1)), V._bytes(row["memory"])

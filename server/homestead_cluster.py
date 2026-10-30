@@ -3,6 +3,7 @@ import math
 import re
 import time
 from datetime import datetime, timezone
+import homestead_alerts as ALERTS
 import homestead_roles as ROLES
 import homestead_routes
 
@@ -337,6 +338,26 @@ def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protec
             "health_issues": issues, "activities": activities}
 
 
+def health_brief():
+    """The sidebar pill's verdict on every page (#940), from the overview the
+    Dashboard reads: the leader's snapshot part while it is fresh, else the
+    kept read, else None. It never builds the overview, so the alerts it rides
+    with never wait on the cluster. as_of and age_s say when it was read."""
+    dated = homestead_routes.page_kept("ov")
+    if dated is None:
+        return None
+    as_of, value = dated
+    issues = value.get("health_issues") or []
+    critical = sum(1 for issue in issues if issue.get("severity") == "critical")
+    return {"state": value.get("health_state") or value.get("health") or "unknown",
+            "summary": value.get("health_summary") or "",
+            "critical": critical, "degraded": len(issues) - critical,
+            "as_of": round(as_of, 3), "age_s": max(0, int(time.time() - as_of))}
+
+
+ALERTS.HEALTH[0] = lambda: health_brief()
+
+
 def events():
     try:
         ev = kget("/api/v1/events?limit=160")
@@ -359,6 +380,6 @@ def events():
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/cluster"): ("viewer", lambda request: homestead_routes.cached("cluster", 15, inventory)),
-    ("GET", "/api/overview"): ("viewer", lambda request: homestead_routes.page("ov", overview)),
+    ("GET", "/api/overview"): ("viewer", lambda request: homestead_routes.page_aged("ov", overview)),
     ("GET", "/api/events"): ("viewer", lambda request: homestead_routes.cached("ev", 10, events)),
 }

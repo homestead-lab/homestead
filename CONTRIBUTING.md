@@ -131,7 +131,7 @@ CI also opens every page and dialog in Chromium, at a desktop and a phone
 width, against the demo. They need Playwright:
 
 ```bash
-npm install --no-save --no-package-lock playwright@1.55.0
+npm install --no-save --no-package-lock playwright@1.64.1
 npx playwright install chromium
 PORT=4173 WEBROOT=web DATA_DIR=/tmp/homestead-demo-data python server/server.py &
 sh scripts/ci_ui_checks.sh pages

@@ -30,6 +30,7 @@ import math
 import os
 import time
 
+import homestead_kube_metrics as KUBE_METRICS
 import homestead_names as NAMES
 import homestead_shared as SHARED
 
@@ -265,13 +266,37 @@ def readings(pods, metrics, owner, skip_ns=()):
     return out
 
 
+class MetricsMissing(RuntimeError):
+    """No current figures from metrics-server; code 404 when it is not installed."""
+
+    def __init__(self, message, code=None):
+        super().__init__(message)
+        self.code = code
+
+
+# The metrics-server reading last recorded, by when it answered: a round
+# never records the same reading twice.
+_taken = {"last_ok": None}
+
+
 def sample(read, owner, skip_ns=(), skip=lambda pod: False):
     """One round: every running app container's use, from metrics-server,
     recorded. skip(pod) leaves out pods that are not apps - Homestead's
-    helpers, say."""
-    metrics = read("/apis/metrics.k8s.io/v1beta1/pods").get("items", [])
+    helpers, say. The figures are the background reading
+    (homestead_kube_metrics), never metrics-server itself (#928): only a
+    current reading is recorded, and each one once. True when recorded."""
+    metrics, state = KUBE_METRICS.read("pods", read)
+    if state["state"] == "waiting" or (state["state"] == "ok" and state["last_ok"] == _taken["last_ok"]):
+        return False
+    if state["state"] == "absent":
+        raise MetricsMissing("metrics-server is not installed", code=404)
+    if state["state"] != "ok":
+        raise MetricsMissing(f"metrics-server is not answering ({state['detail'] or state['state']}), "
+                             "so this round records nothing")
     pods = [pod for pod in read("/api/v1/pods").get("items", []) if not skip(pod)]
     record(readings(pods, metrics, owner, skip_ns))
+    _taken["last_ok"] = state["last_ok"]
+    return True
 
 
 def run(sleep=time.sleep):
@@ -284,7 +309,10 @@ def run(sleep=time.sleep):
             # would otherwise be asked, and logged, every 30 seconds.
             last = time.time()
             try:
-                sample(_read, _owner, _skip_ns, _helper)
+                if sample(_read, _owner, _skip_ns, _helper) is False:
+                    # No new reading yet (the first after a start, say): try
+                    # again next turn rather than a whole STEP later.
+                    last = 0
                 _beat("usage", STEP, leader_only=True)
             except Exception as error:
                 if getattr(error, "code", None) == 404:

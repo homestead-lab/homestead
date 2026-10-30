@@ -389,6 +389,9 @@ DEVICES = [lambda user: []]
 # AI agents' requests waiting for a person, and whether agents may connect -
 # homestead_mcp sets it - so the bell and the sidebar can lead to /agents.
 AGENTS = [lambda: {"enabled": False, "pending": 0}]
+# The cluster's verdict for the sidebar's health pill, which every page reads
+# from here (#940) - homestead_cluster sets it (health_brief).
+HEALTH = [lambda: None]
 
 def _unknown(read, *args):
     """The bell still answers when a store it shows could not be read: that part is unknown (None), not empty."""
@@ -398,9 +401,19 @@ def _unknown(read, *args):
         return None
 
 
+def _health():
+    """The pill's verdict, or None when it could not be read: the alerts it
+    rides with are answered whatever went wrong reading it."""
+    try:
+        return HEALTH[0]()
+    except Exception:
+        return None
+
+
 ROUTES = {
     ("GET", "/api/alerts"): ("viewer", lambda request: {
         "active": [a for a in active(user=request.user) if a.get("announced", 0) > 0],
         "log": [a for a in log(limit=30)["alerts"] if a["category"] != "test"],
-        "devices": _unknown(DEVICES[0], request.user), "agents": _unknown(AGENTS[0])}),
+        "devices": _unknown(DEVICES[0], request.user), "agents": _unknown(AGENTS[0]),
+        "health": _health()}),
 }

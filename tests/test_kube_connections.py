@@ -294,7 +294,7 @@ class ParallelListTests(unittest.TestCase):
         self.enterContext(mock.patch.object(VMLIST.V, "kget", slow))
         self.enterContext(mock.patch.object(VMLIST.V, "_row", lambda *a, **k: {"ns": a[0]["metadata"]["namespace"],
                                                                               "name": a[0]["metadata"]["name"], "running": False}))
-        self.enterContext(mock.patch.object(VMLIST.VMUSAGE, "usage", lambda: ({}, "")))
+        self.enterContext(mock.patch.object(VMLIST.VMUSAGE, "measured", lambda: ({}, "", None)))
         started = time.monotonic()
         VMLIST.list_vms()
         self.assertLess(time.monotonic() - started, 1.0)  # four namespaces and the DataVolumes in turn take 1.5 s

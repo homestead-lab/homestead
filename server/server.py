@@ -740,7 +740,7 @@ OUTAGE.bind(DATA_DIR, kget=lambda path: KUBE_HELPERS.kget(path), ksend=lambda *a
 CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k: KUBE_HELPERS.ksend(*a, **k), is_leader=LEADER.is_leader, beat=beat,
              deployments=lambda: [d for d in KUBE_HELPERS.kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS])
 FORECAST.bind(DATA_DIR, lambda: (CACHE.cached("vol", 8, STORAGE.get_volumes), LHCAP.status()), LEADER.is_leader, beat)
-USAGE.bind(DATA_DIR, parse_cpu, parse_mem, lambda path: KUBE_HELPERS.kget(path), FLOW._flow_owner, SYS_NS, LEADER.is_leader, beat)
+USAGE.bind(DATA_DIR, parse_cpu, parse_mem, lambda path, **options: KUBE_HELPERS.kget(path, **options), FLOW._flow_owner, SYS_NS, LEADER.is_leader, beat)
 RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
              HOSTACCESS.require_target_as, OPS)
 PLACEMODE.bind(kget, ksend, lambda: CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings), SYS_NS)
@@ -955,7 +955,7 @@ SHARES.install = SHARE_SERVERS.install_samba
 SHARE_SERVERS.bind(kget, ksend, lambda cfg: DEPLOY.build_deployment(cfg), SMB_NAMESPACE, _cache,
                    shared_storage_classes, lambda: STORAGE_CLASS, share_storage_options)
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP, lambda ns, name: OVERVIEW_ROUTES.guard_managed_smb(ns, name), lambda: NODES.node_temps())
-FLOW.bind(lambda path: KUBE_HELPERS.kget(path), SYS_NS, lambda annotations: display_icon(annotations), STORAGE._moving_copy,
+FLOW.bind(lambda path, **options: KUBE_HELPERS.kget(path, **options), SYS_NS, lambda annotations: display_icon(annotations), STORAGE._moving_copy,
           parse_cpu, parse_mem, age_secs)
 FIREWALL.bind(kget, ksend, PLATFORM.detect, _own_namespace())
 VIPS.bind(kget, ksend)

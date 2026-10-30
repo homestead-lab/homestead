@@ -421,10 +421,37 @@ def use_snapshot(read):
 def page(key, fn, seconds=PAGE_SECONDS):
     """A page's main read: the leader's snapshot part for key while it is
     fresh, else fn() kept seconds under key, as cached() does (#705)."""
+    return page_dated(key, fn, seconds)[1]
+
+
+def page_dated(key, fn, seconds=PAGE_SECONDS):
+    """page() and when its answer was read from the cluster: (as_of, value).
+    A snapshot part is dated by its cycle; a kept answer by its read, also
+    when it is served because a newer read failed; a read just made, but not
+    kept (a write overtook it), is dated now."""
     part = _snapshot[0](key)
     if part is not None:
-        return part[1]
-    return cached(key, seconds, fn)
+        return part
+    value = cached(key, seconds, fn)
+    kept = CACHE.kept(key)
+    return (kept[0] if kept and kept[1] is value else time.time()), value
+
+
+def page_kept(key):
+    """page_dated() without reading the cluster: (as_of, value) of the
+    leader's fresh snapshot part, else of the kept read, else None. For a
+    route read on every page that must never wait on a page's build (#940)."""
+    return _snapshot[0](key) or CACHE.kept(key)
+
+
+def page_aged(key, fn, seconds=PAGE_SECONDS):
+    """page() for a route whose answer is a dict, with as_of (when its numbers
+    were read) and age_s (how long ago that is), so the page can say how old
+    they are (#705 step 8). The kept answer itself is not changed."""
+    as_of, value = page_dated(key, fn, seconds)
+    if not isinstance(value, dict):
+        return value
+    return {**value, "as_of": round(as_of, 3), "age_s": max(0, int(time.time() - as_of))}
 
 
 def table():
