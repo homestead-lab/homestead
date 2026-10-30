@@ -6,6 +6,7 @@ Edit read unread Services as no exposure, and the VM disk and import lists
 read a failed read as nothing there. Each now says what could not be read.
 Everything here runs on the shared fake."""
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -15,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_impact as IMPACT
 import homestead_kube as K
 import homestead_network_inventory as INV
+import homestead_uptime as UP
 import homestead_vip_registry as REG
 from test_page_snapshot import Cluster, clean_cache, clean_snapshot, setUpModule  # noqa: F401 (restart record off)
 
@@ -132,6 +134,70 @@ class YourVipsTests(unittest.TestCase):
     def test_the_overview_still_answers_without_a_vip_when_the_registry_is_unread(self):
         self.break_registry()
         self.assertIsNone(self.cluster.route("ov")["lb_ip"])
+
+
+
+SERVICES = "/api/v1/services"
+
+
+class ServicesTests(unittest.TestCase):
+    """Containers' listeners and Edit's exposed ports come from the Services."""
+    def setUp(self):
+        clean_cache(self)
+        clean_snapshot(self)
+        self.cluster = Cluster(self)
+        self.WL = self.cluster.server.WORKLOADS
+        self.cluster.kube.add({"apiVersion": "v1", "kind": "Service",
+                               "metadata": {"namespace": "lab", "name": "web"},
+                               "spec": {"type": "LoadBalancer", "selector": {"app": "web"},
+                                        "ports": [{"name": "http", "port": 80, "targetPort": 8080, "protocol": "TCP"}]},
+                               "status": {"loadBalancer": {"ingress": [{"ip": "192.0.2.50"}]}}})
+        deployment = self.cluster.kube.object("/apis/apps/v1/namespaces/lab/deployments/web")
+        deployment["spec"]["template"]["spec"]["containers"][0]["ports"] = [{"containerPort": 8080, "protocol": "TCP"}]
+        self.cluster.kube.add(deployment)
+
+    def web(self):
+        return next(w for w in self.WL.get_workloads() if w["name"] == "web")
+
+    def test_read_services_give_the_app_its_listener(self):
+        self.assertEqual([("192.0.2.50", 80)], [(p["ip"], p["port"]) for p in self.web()["ports"]])
+
+    def test_unread_services_leave_the_apps_listeners_unknown_never_none(self):
+        self.cluster.kube.fail(SERVICES, 500, times=999)
+        self.assertIsNone(self.web()["ports"])
+
+    def test_edit_shows_the_exposed_port_when_services_are_read(self):
+        form = self.WL.edit_form(type("R", (), {"query": {"ns": ["lab"], "name": ["web"]}, "role": "admin"})())
+        port = form["containers"][0]["ports"][0]
+        self.assertEqual((True, 80), (port["expose"], port["host"]))
+
+    def test_edit_refuses_to_open_when_services_are_unread(self):
+        # Opened with every port unexposed, its save would delete the Service
+        # (sync_workload_ports removes one with no exposed port left).
+        self.cluster.kube.fail("/api/v1/namespaces/lab/services", 500, times=999)
+        with self.assertRaisesRegex(ValueError, "Services could not be read"):
+            self.WL.edit_form(type("R", (), {"query": {"ns": ["lab"], "name": ["web"]}, "role": "admin"})())
+
+
+class UptimeWithServicesUnreadTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        UP.bind(directory.name)
+
+    def test_an_app_whose_listeners_are_unknown_is_not_asked_and_keeps_its_state(self):
+        app = {"ns": "lab", "name": "web", "desired": 1,
+               "ports": [{"ip": "192.0.2.50", "port": 80, "protocol": "TCP"}]}
+        miss = lambda t: {"ok": False, "ms": None, "code": None, "error": "connection refused"}
+        for minute in range(UP.DOWN_AFTER):
+            UP.observe([app], now=1_000_000 + 60 * minute, ask=miss)
+        self.assertEqual("down", UP.report()["lab/web"]["state"])
+        t, why = UP.target({**app, "ports": None})
+        self.assertIsNone(t)
+        self.assertIn("couldn't be read", why)
+        UP.observe([{**app, "ports": None}], now=1_000_000 + 60 * UP.DOWN_AFTER, ask=miss)
+        self.assertEqual("down", UP.report()["lab/web"]["state"])
+        self.assertEqual(1, len(UP.alert_facts(UP.report())))
 
 
 if __name__ == "__main__":
