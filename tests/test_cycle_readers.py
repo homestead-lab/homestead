@@ -1,8 +1,12 @@
 """Readers of what the leader's page snapshot already reads (#978, #980): a
 loop or route that asks for a page's key with a shorter cache time than the
 cycle that refreshes it is served the cycle's part, not a read of its own; the
-alerts loop reads the Harvester version alone, not a whole Cluster inventory."""
+alerts loop reads the Harvester version alone, not a whole Cluster inventory;
+the restart record lists ReplicaSets only when a pod names one it has not
+seen; and the Cluster page asks the API server for Warnings only."""
+import copy
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -11,8 +15,10 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_cache as CACHE
+import homestead_kube as K
 import homestead_restarts as RESTARTS
 import homestead_routes as ROUTER
+import homestead_shared as SHARED
 from test_page_snapshot import Cluster, clean_cache, clean_snapshot
 
 # The keys the cycle (or a page) keeps PAGE_SECONDS, and the readers that ask
@@ -138,6 +144,137 @@ class ShortReadersTests(unittest.TestCase):
                                "metadata": {"name": "server-version"}, "value": "v1.4.1"})
         self.assertEqual(CLUSTER.inventory()["versions"]["harvester"], CLUSTER.harvester_version())
         self.assertEqual("1.4.1", CLUSTER.harvester_version())
+
+
+class ClusterPageReadsTests(unittest.TestCase):
+    def setUp(self):
+        clean_cache(self)
+        self.clock = Clock(self)
+        self.cluster = Cluster(self)
+        self.PAGES = clean_snapshot(self)
+        self.OV = self.cluster.server.OVERVIEW_ROUTES
+        import homestead_cluster as CLUSTER
+        self.CLUSTER = CLUSTER
+        stamp = "2026-10-29T10:00:00Z"
+        self.cluster.kube.add({"apiVersion": "v1", "kind": "Pod",
+                               "metadata": {"namespace": "kube-system", "name": "coredns-1", "labels": {"k8s-app": "coredns"}},
+                               "spec": {"nodeName": "node-b", "containers": [{"name": "c", "image": "example.com/dns:1"}]},
+                               "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}],
+                                          "containerStatuses": [{"name": "c", "ready": True, "restartCount": 0}]}})
+        self.enterContext(mock.patch.object(CLUSTER, "_iso_age", lambda value, now=None: 60))
+        for i, (kind, ns, typ) in enumerate((("Node", "default", "Warning"), ("Pod", "kube-system", "Warning"),
+                                             ("Pod", "kube-system", "Normal"), ("Pod", "lab", "Warning"))):
+            self.cluster.kube.add({"apiVersion": "v1", "kind": "Event",
+                                   "metadata": {"namespace": ns, "name": f"ev-{i}", "creationTimestamp": stamp},
+                                   "involvedObject": {"kind": kind, "name": f"x{i}", "namespace": ns},
+                                   "reason": "BackOff", "message": "m", "type": typ, "lastTimestamp": stamp})
+
+    def test_the_cluster_page_asks_for_warnings_only_and_shows_the_same_rows(self):
+        every = self.CLUSTER._warning_rows(K.kget("/api/v1/events").get("items", []))
+        self.cluster.calls.clear()
+        queries = []
+        inner = K.transport
+
+        def seen(method, path, *args, **kwargs):
+            queries.append(path)
+            return inner(method, path, *args, **kwargs)
+        with mock.patch.object(K, "transport", seen):
+            report = self.CLUSTER.inventory()
+        events = [q for q in queries if q.split("?", 1)[0] == "/api/v1/events"]
+        self.assertEqual(["/api/v1/events?fieldSelector=type%3DWarning"], events)
+        self.assertEqual(every, report["warnings"])
+        self.assertEqual(2, len(report["warnings"]))
+
+    def test_after_a_cycle_the_cluster_page_lists_no_pods_and_shows_the_same_services(self):
+        before = self.CLUSTER.inventory()["services"]
+        clean_cache(self)
+        self.cycle = self.PAGES.cycle(self.OV.page_inputs(), self.OV.page_builders())
+        self.cluster.calls.clear()
+        self.clock.now += 10
+        self.assertEqual(before, self.CLUSTER.inventory()["services"])
+        self.assertEqual([], self.cluster.gets("/api/v1/pods"))
+
+    def test_a_pod_write_makes_the_cluster_page_list_pods_again(self):
+        self.PAGES.cycle(self.OV.page_inputs(), self.OV.page_builders())
+        dns = lambda: [row["pods"] for row in self.CLUSTER.inventory()["services"] if row["id"] == "dns"]  # noqa: E731
+        self.assertEqual([1], dns(), "the system pod is shown")
+        K.ksend("DELETE", "/api/v1/namespaces/kube-system/pods/coredns-1")
+        self.assertIsNone(CACHE.kept_at("pods"), "the write forgets the cycle's pod list")
+        self.assertEqual([0], dns(), "the next Cluster page lists pods again and shows it gone")
+
+
+class RestartOwnersTests(unittest.TestCase):
+    """The restart record maps a pod's ReplicaSet to its Deployment. The
+    ReplicaSet list is the largest list Homestead reads (#980), and a
+    ReplicaSet's controller is set when it is made."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.enterContext(mock.patch.object(SHARED, "DIR", temp.name))
+        self.clock = [1_800_000_000.0]
+        self.enterContext(mock.patch.object(RESTARTS.time, "time", lambda: self.clock[0]))
+        self.reads = []
+        self.sets = {}
+
+    def read(self, path):
+        self.reads.append(path)
+        if path == "/apis/apps/v1/replicasets":
+            return {"items": [{"metadata": {"name": name, "namespace": "lab", "uid": f"rs-{name}", "ownerReferences": [
+                {"kind": "Deployment", "name": dep, "controller": True, "uid": f"dep-{dep}"}]}}
+                for name, dep in self.sets.items()]}
+        if path == "/api/v1/nodes":
+            return {"items": []}
+        return {"items": []}
+
+    def pod(self, name, rs, restarts=0):
+        self.sets.setdefault(rs, rs.rsplit("-", 1)[0])
+        return {"metadata": {"name": name, "uid": f"pod-{name}", "namespace": "lab",
+                             "creationTimestamp": "2026-10-22T08:00:00Z", "labels": {},
+                             "ownerReferences": [{"kind": "ReplicaSet", "name": rs, "controller": True,
+                                                  "uid": f"rs-{rs}"}]},
+                "spec": {"nodeName": "node-a", "containers": [{"name": "c", "image": "example.com/web:1"}]},
+                "status": {"phase": "Running", "containerStatuses": [
+                    {"name": "c", "restartCount": restarts, "image": "example.com/web:1", "state": {"running": {}}}]}}
+
+    def look(self, *pods, after=20):
+        self.clock[0] += after
+        return RESTARTS.observe({"items": [copy.deepcopy(p) for p in pods]}, read=self.read,
+                                tail=lambda ns, pod, c: {"text": ""}, outage=lambda: {}, sys_ns=frozenset())
+
+    def lists(self):
+        return self.reads.count("/apis/apps/v1/replicasets")
+
+    def test_a_minute_of_looks_at_the_same_pods_lists_replicasets_once(self):
+        web = self.pod("web-1", "web-5d9")
+        for _ in range(4):
+            self.look(web)
+        self.assertEqual(1, self.lists())
+
+    def test_a_pod_of_a_new_replicaset_lists_them_again(self):
+        self.look(self.pod("web-1", "web-5d9"))
+        self.look(self.pod("web-1", "web-5d9"), self.pod("web-2", "web-7c1"))
+        self.assertEqual(2, self.lists())
+
+    def test_whose_each_replicaset_is_is_read_again_now_and_then(self):
+        web = self.pod("web-1", "web-5d9")
+        self.look(web)
+        self.look(web, after=RESTARTS.OWNERS_FOR + 1)
+        self.assertEqual(2, self.lists())
+
+    def test_restarts_are_still_credited_to_the_deployment(self):
+        self.look(self.pod("web-1", "web-5d9"))
+        self.look(self.pod("web-1", "web-5d9", restarts=1))
+        self.assertEqual(1, self.lists())
+        apps = SHARED.read_json(RESTARTS._path(), {}).get("apps") or {}
+        self.assertTrue(any("/Deployment/web/" in key for key in apps), apps)
+
+    def test_a_failed_list_still_skips_the_look(self):
+        def failing(path):
+            raise OSError("connection refused")
+        self.clock[0] += 20
+        self.assertEqual(0, RESTARTS.observe({"items": [self.pod("web-1", "web-5d9")]}, read=failing,
+                                             tail=lambda *a: {}, outage=lambda: {}, sys_ns=frozenset()))
 
 
 if __name__ == "__main__":

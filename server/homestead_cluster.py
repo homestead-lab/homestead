@@ -240,6 +240,11 @@ def build_report(kubernetes_version, raw_nodes, node_summaries, pods, events, cs
     }
 
 
+# The whole pod list, kept by the leader's page snapshot each cycle and
+# forgotten by a write to pods (homestead_kube.SHOWN_KEYS); kept no longer
+# than the Cluster page keeps its own answer.
+PODS_KEY = "pods"
+PODS_SECONDS = 15
 VERSION_KEY = "harvester-version"
 
 
@@ -277,9 +282,17 @@ def inventory():
 
     version = read("Kubernetes version", "/version", {})
     raw_nodes = read("Nodes", "/api/v1/nodes", {"items": []}).get("items", [])
-    pods = read("System services", "/api/v1/pods", {"items": []}).get("items", [])
+    try:
+        # The leader's page snapshot lists every pod each cycle and keeps
+        # the list (#980): the system services are read from it.
+        pods = homestead_routes.cached(PODS_KEY, PODS_SECONDS, lambda: kget("/api/v1/pods")).get("items", [])
+    except Exception as error:
+        unavailable.append({"section": "System services", "reason": str(error)[:180]})
+        pods = []
     pods = [pod for pod in pods if (pod.get("metadata") or {}).get("namespace") in SYS_NS]
-    events = read("Cluster warnings", "/api/v1/events", {"items": []}).get("items", [])
+    # Only Warnings are shown (_warning_rows): the API server filters, so the
+    # list is a small part of every event (#980).
+    events = read("Cluster warnings", "/api/v1/events?fieldSelector=type%3DWarning", {"items": []}).get("items", [])
     csrs = read("Certificate requests", "/apis/certificates.k8s.io/v1/certificatesigningrequests",
                 {"items": []}).get("items", [])
     harvester = _version_setting()

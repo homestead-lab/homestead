@@ -404,16 +404,20 @@ class RestartRecordTests(unittest.TestCase):
         self.look(pod(restarts=1, last=oom()), now=T0 + 20)
         self.assertEqual(1, len(self.records()))
         self.dep_uids["game"] = "dep-game-2"
-        self.look(pod(name="game-6d4f-new", uid="pod-9", images={"server": "example/server:9"}), now=T0 + 40)
+        # The new Deployment makes a ReplicaSet of its own (a new uid).
+        self.look(pod(name="game-7a1b-new", uid="pod-9", rs="game-7a1b", hash_="7a1b",
+                      images={"server": "example/server:9"}), now=T0 + 40)
         self.assertEqual([], self.records())
         self.assertEqual(1, len(self.records(uid="dep-game")), "the old app's record ages out")
 
     def test_replicasets_that_could_not_be_read_change_nothing(self):
         self.look(pod())
         self.rs_fail = True
-        self.assertEqual(0, self.look(pod(restarts=1, last=oom()), now=T0 + 20))
+        # Whose each ReplicaSet is is kept a while (#980): this look reads them again.
+        later = T0 + R.OWNERS_FOR
+        self.assertEqual(0, self.look(pod(restarts=1, last=oom()), now=later + 20))
         self.rs_fail = False
-        self.look(pod(restarts=1, last=oom()), now=T0 + 40)
+        self.look(pod(restarts=1, last=oom()), now=later + 40)
         self.assertEqual(1, len(self.records()), "recorded once, when it could be told whose pod it is")
 
     # #871: the timeline filters by host, so a record names the host it happened on.
