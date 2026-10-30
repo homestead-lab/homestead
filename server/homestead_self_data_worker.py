@@ -60,6 +60,11 @@ def transient(error):
             return error.code in TRANSIENT_CODES
         if getattr(error, "transient", False) is True or isinstance(error, (OSError, http.client.HTTPException)):
             return True
+        # __context__ too: the move's wrappers raise Held(...) from None, which
+        # keeps only that link. Following it is safe: a hold it wrongly calls
+        # transient is retried at most OUTAGE_LIMIT, each try starting again
+        # from the durable record and rechecking everything, and a write the
+        # API may have applied holds at once in _retry_later().
         error = error.__cause__ or error.__context__
     return False
 

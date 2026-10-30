@@ -157,6 +157,19 @@ class HelperCleanupTests(unittest.TestCase):
              mock.patch.object(server.time, "sleep"):
             server.finish_self_data_helpers()
         self.assertEqual(server.SELF_DATA_FINISH.ATTEMPTS, down.call_count)
+        # Failures count only in a row: a pass that makes progress resets them.
+        answers = [urllib.error.URLError("x")] * (server.SELF_DATA_FINISH.ATTEMPTS - 1) + [{"done": False}]
+        answers = answers * 2 + [{"done": True}]
+        def flaky(*_):
+            answer = answers.pop(0)
+            if isinstance(answer, Exception): raise answer
+            return answer
+        with mock.patch.object(server, "_self_data_fence", object()), \
+             mock.patch.object(server.SELF_DATA_FINISH, "finish", side_effect=flaky), \
+             mock.patch.object(server.SELF_DATA_EXECUTE, "reconcile_completed") as reconcile, \
+             mock.patch.object(server.time, "sleep"):
+            server.finish_self_data_helpers()
+        self.assertEqual([], answers); reconcile.assert_called_once()
 
 
 class HeldMoveRecoveryTests(unittest.TestCase):
@@ -268,6 +281,13 @@ class HeldMoveRecoveryTests(unittest.TestCase):
                 self.assertEqual("done", runner.tick()["status"])
                 self.assertEqual("target", self.c.objects[self.c.dep_path]["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
 
+    def test_resume_at_start_needs_a_verified_copy_receipt(self):
+        self.started_then_held(False)
+        anchor = self.anchor(); state = anchor.state
+        state["copy_receipt"] = {"state": "intent", "worker_uid": "coordinator-uid"}
+        self.c.objects[anchor.path]["data"]["state.json"] = A._validate(state, "lab")
+        with self.assertRaisesRegex(Held, "verified copy"): self.confirm("resume")
+
     def test_resume_at_start_is_refused_while_a_stranger_mounts_a_volume(self):
         self.started_then_held(False)
         from test_self_data_coordinator import obj
@@ -344,6 +364,21 @@ class FailedPreparationTests(unittest.TestCase):
         self.assertFalse(saved["ref"]["retain_resources"])
         self.assertEqual("failed", saved["status"])
         self.assertIn("Recovery closed", saved["history"][-1]["m"])
+
+    def test_a_same_name_object_that_is_not_this_preparations_is_left_alone(self):
+        # The name was taken by someone else (the preparation then failed):
+        # without this preparation's label it neither blocks nor is called ours.
+        for path in (self.pvc, self.pod):
+            obj = self.kube.object(path); self.remove(path)
+            obj["metadata"]["labels"] = {"app": "someone-else"}
+            obj["metadata"].pop("uid", None); obj["metadata"].pop("resourceVersion", None)
+            self.kube.add(obj)
+        review = self.close()
+        self.assertIn("not this preparation's", review["detail"])
+        self.assertNotIn("remove", review["detail"].lower())
+        self.close({"id": "prep-job", "capacity_token": review["capacity_token"], "confirm_close": True}, start=True)
+        self.assertEqual([], self.P.blocking_jobs(self.OPS))
+        self.assertIsNotNone(self.kube.object(self.pvc), "the other claim is untouched")
 
     def test_a_claim_made_again_after_review_refuses_the_close(self):
         self.remove(self.pvc); self.remove(self.pod)

@@ -78,6 +78,8 @@ def review(anchor, read, logs, action, *, clock=time.time):
     elif not engine._quiet(dep, helper_uid=known["after"]["uid"] if known else None):
         raise Held("Wait for normal Homestead pod removal before reviewing recovery")
     if cutover:
+        if state.get("copy_receipt", {}).get("state") != "verified":
+            raise Held("Resuming onto the new volume needs a verified copy receipt")
         if not released or engine.writer.observe(released) is not None:
             raise Held("The verified copy Job has no completed release; inspect it before recovery")
     elif known and not released:

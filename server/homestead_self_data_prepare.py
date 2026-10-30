@@ -263,17 +263,22 @@ def _setup_without_record(item):
 
 
 def _leftovers(read, ref):
-    """What a failed preparation could have made, by the fixed names its
-    creations use - whatever its receipts say, since an uncertain creation
-    has no uid. Read live; an unreadable cluster is not "gone"."""
+    """What a failed preparation made that still exists, and same-name
+    objects that are not its own, by the fixed names its creations use -
+    whatever its receipts say, since an uncertain creation has no uid. Only
+    an object carrying this preparation's label (manifests() sets it) is its
+    own: a name someone else took, which may be why it failed, may hold
+    their data and is left alone. Read live; unreadable is not "gone"."""
     if read is None:
         raise J.Held("The preparation's resources cannot be checked")
-    found = []
+    own, other = [], []
     for body in manifests(ref):
         path = f"/api/v1/namespaces/{ref['namespace']}/{'pods' if body['kind'] == 'Pod' else 'persistentvolumeclaims'}/{body['metadata']['name']}"
-        if _get(read, path) is not None:
-            found.append(f"{body['kind']} {body['metadata']['name']}")
-    return found
+        found = _get(read, path)
+        if found is not None:
+            mine = (found.get("metadata", {}).get("labels") or {}).get("homestead.io/data-preparation") == ref["operation"]
+            (own if mine else other).append(f"{body['kind']} {body['metadata']['name']}")
+    return own, other
 
 
 def close_recovery(body, actor, namespace, deployment, ops, running_on, *, start=False, read=None):
@@ -308,16 +313,18 @@ def close_recovery(body, actor, namespace, deployment, ops, running_on, *, start
             record = _get(read, f"/api/v1/namespaces/{namespace}/configmaps/{deployment}-data-handoff")
             if record is not None:
                 raise J.Held("The move's control record still exists; abandon the preparation in Move data first")
+        others = []
         if preparation:
-            left = _leftovers(read, ref)
+            left, others = _leftovers(read, ref)
             if left:
-                raise J.Held(f"{', '.join(left)} still exists; remove it, or check it is not this preparation's, "
-                             "before closing the record")
+                raise J.Held(f"{', '.join(left)} still exists and carries this preparation's label; "
+                             "remove it once you have checked it holds nothing you need, then close the record")
         cfg = {"id": item["id"]}
         context = {"action": "self-data-handoff-close", "actor": actor, "namespace": namespace,
                    "status": item["status"], "ref": J.digest(ref)}
         detail = (f"This preparation failed. Its claim {ref.get('destination')} and binding pod are gone, so closing "
                   f"the record lets you prepare another volume. Homestead stays on {source}; nothing is created or deleted."
+                  + (f" {', '.join(others)} has the same name but is not this preparation's, so it is left alone." if others else "")
                   if preparation else
                   f"Homestead runs on its original volume {source}. Closing this record lets you "
                   f"prepare another volume. Both {source} and {ref.get('destination')} are kept, "

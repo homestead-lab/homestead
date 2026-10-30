@@ -1790,11 +1790,11 @@ def finish_self_data_helpers():
                 if result["done"]:
                     SELF_DATA_EXECUTE.reconcile_completed(OPS, DATA_DIR, SELF.NS, NAMES.BRAND)
             if result["done"]: return
+            failures = 0  # counted in a row; a pass that answered resets it
         except SELF_DATA_FENCE.Held as error:
             print("Data move helper cleanup needs review: " + str(error), flush=True)
             return
-        except Exception:
-            # An API error: the next pass observes a delete (and keeps both PVCs).
+        except Exception:  # an API error: the next pass observes a delete, keeps both PVCs
             failures += 1
         time.sleep(2 * failures or 2)
     print("Data move helper cleanup needs review; both volumes are retained", flush=True)
