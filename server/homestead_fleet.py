@@ -33,6 +33,7 @@ import urllib.parse
 import urllib.request
 
 import homestead_audit as AUDIT_LOG
+import homestead_fetch as FETCH
 import homestead_names as NAMES
 import homestead_sessions as SESSIONS
 
@@ -49,6 +50,13 @@ SECRET = "homestead-fleet-key"
 # stays valid.
 SKEW = 300
 TIMEOUT = 15
+# A member's answer: read to at most this many bytes (the same as the
+# largest request body Homestead takes), and all of it within the call's
+# timeout. It was read whole, and the timeout was per wait on the socket.
+ANSWER_MAX_BYTES = 8 << 20
+REASON_MAX_BYTES = 64 << 10
+# How long the Fleet page waits for all the members' checks together.
+SUMMARY_WAIT = 6
 
 H_FROM = "X-Homestead-Fleet"
 H_TIME = "X-Homestead-Fleet-Time"
@@ -475,7 +483,7 @@ def _open(request, timeout):
 
 def _reason(error):
     try:
-        return str(json.loads(error.read().decode("utf-8", "replace") or "{}").get("error") or "")[:240]
+        return str(json.loads(error.read(REASON_MAX_BYTES).decode("utf-8", "replace") or "{}").get("error") or "")[:240]
     except Exception:
         return ""
 
@@ -492,9 +500,11 @@ def _json(url, method, path, body=None, token="", headers=None, timeout=TIMEOUT)
         request.add_header("Cookie", f"homestead_session={token}")
     for name, value in (headers or {}).items():
         request.add_header(name, value)
+    deadline = time.monotonic() + timeout
     try:
         with _open(request, timeout) as response:
-            return json.loads(response.read().decode() or "{}"), response
+            body = FETCH.read(response, ANSWER_MAX_BYTES, deadline, "the linked cluster's answer")
+            return json.loads(body.decode() or "{}"), response
     except urllib.error.HTTPError as error:
         reason = _reason(error)
         if error.code >= 500:
@@ -597,8 +607,9 @@ def summary(via=None):
     threads = [threading.Thread(target=run, args=(row,), daemon=True) for row in rows]
     for thread in threads:
         thread.start()
+    end = time.monotonic() + SUMMARY_WAIT     # one wait for all of them, not one each
     for thread in threads:
-        thread.join(6)
+        thread.join(max(0, end - time.monotonic()))
     # A member that has heard of a newer list than this one: bring it here.
     ahead = max((c for c in checks.values() if c.get("reachable")), key=lambda c: c["revision"], default=None)
     if ahead and ahead["revision"] > int(state.get("revision") or 0):

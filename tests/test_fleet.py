@@ -557,3 +557,77 @@ class PlainHttpConsentTests(unittest.TestCase):
     def test_https_only_needs_no_consent(self):
         self.a.fleet.join(self.c.url, "admin", "secret")
         self.a.fleet.remove(self.c.fleet.self_id())
+
+
+class _Trickle(__import__("http.server").server.BaseHTTPRequestHandler):
+    """Headers at once, then the body a byte every 0.1 s (or all of it)."""
+    body = b'{"ok": true}'
+    drip = True
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        if not self.drip:
+            self.wfile.write(self.body)
+            return
+        try:
+            while not self.server.stop.wait(0.1):
+                self.wfile.write(b" ")
+                self.wfile.flush()
+        except OSError:
+            pass
+
+    def log_message(self, *args):
+        pass
+
+
+class MemberAnswerBoundTests(unittest.TestCase):
+    """A linked member's answer was read whole, with a per-wait timeout."""
+
+    def serve(self, **kind):
+        import http.server
+        handler = type("H", (_Trickle,), kind)
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.daemon_threads = True
+        server.stop = threading.Event()
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.stop.set)
+        return f"http://127.0.0.1:{server.server_address[1]}"
+
+    def test_a_trickling_answer_ends_at_one_deadline(self):
+        fleet = fresh_module("fleet_trickle")
+        url = self.serve()
+        started = time.monotonic()
+        with self.assertRaises(fleet.Unreachable):
+            fleet._json(url, "GET", "/api/fleet/hello", timeout=0.5)
+        self.assertLess(time.monotonic() - started, 2.0)
+
+    def test_an_answer_past_the_cap_is_refused(self):
+        fleet = fresh_module("fleet_large")
+        url = self.serve(drip=False, body=b'{"rows": "' + b"x" * 5000 + b'"}')
+        with mock.patch.object(fleet, "ANSWER_MAX_BYTES", 1000), self.assertRaises(ValueError) as caught:
+            fleet._json(url, "GET", "/api/workloads", timeout=2)
+        self.assertIn("larger than", str(caught.exception))
+        self.assertEqual({"ok": True}, fleet._json(self.serve(drip=False), "GET", "/api/fleet/hello", timeout=2)[0])
+
+    def test_the_fleet_page_waits_once_for_all_members_not_once_each(self):
+        a = Cluster("loft", "https://10.0.0.1:8088", {})
+        b = Cluster("shed", "https://10.0.0.2:8088", {})
+        c = Cluster("garage", "https://10.0.0.3:8088", {})
+        wire([a, b, c])
+        a.fleet.join(b.url, "admin", "secret")
+        a.fleet.join(c.url, "admin", "secret")
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def stuck(target):
+            release.wait(30)
+            return {}
+        started = time.monotonic()
+        with mock.patch.object(a.fleet, "check", stuck), mock.patch.object(a.fleet, "SUMMARY_WAIT", 0.3):
+            view = a.fleet.summary()
+        self.assertLess(time.monotonic() - started, 0.55, "joined one after another")
+        self.assertEqual(3, len(view["members"]))
