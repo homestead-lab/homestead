@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
 import homestead_kube as K
+import homestead_kubelet_stats as KSTATS
 import homestead_names as NAMES
 import homestead_node_probes as PROBES
 import homestead_nodes as NODES
@@ -73,8 +74,10 @@ class Base(unittest.TestCase):
     def setUp(self):
         PROBES.stop()
         PROBES.reset()
+        KSTATS.reset()
         self.addCleanup(PROBES.stop)
         self.addCleanup(PROBES.reset)
+        self.addCleanup(KSTATS.reset)      # start_probes() starts the kubelet loop too (#976)
         # start_probes() starts the metrics-server loop too (#906).
         import homestead_kube_metrics as KUBE_METRICS
         self.addCleanup(KUBE_METRICS.reset)

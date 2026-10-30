@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_kube as K
+import homestead_kubelet_stats as KSTATS
 import homestead_volume_usage as usage
 import server
 import homestead_storage as STORAGE
@@ -55,12 +56,18 @@ class Scene:
 
 
 class FilesystemUsageTests(unittest.TestCase):
+    def setUp(self):
+        # Each test's kubelet answers on its own, not from an earlier test's
+        # reading (homestead_kubelet_stats keeps the last one, #976).
+        KSTATS.reset()
+        self.addCleanup(KSTATS.reset)
+
     def test_reports_filesystem_bytes_not_snapshot_footprint(self):
         c = Scene()
         result = c.collect()[KEY]
         self.assertEqual((180, 196, 91.8, "kubelet"),
                          (result["used_gb"], result["capacity_gb"], result["used_pct"], result["source"]))
-        self.assertEqual(("/api/v1/nodes/node1/proxy/stats/summary", {"timeout": 4}), c.calls[-1])
+        self.assertEqual(("/api/v1/nodes/node1/proxy/stats/summary", {"timeout": KSTATS.TIMEOUT}), c.calls[-1])
 
     def test_empty_filesystem_is_a_real_zero(self):
         c = Scene()
@@ -140,6 +147,8 @@ class FilesystemUsageTests(unittest.TestCase):
 
 class VolumeUsageIntegrationTests(unittest.TestCase):
     def setUp(self):
+        KSTATS.reset()
+        self.addCleanup(KSTATS.reset)
         self.cluster = Scene()
         self.claim = self.cluster.claims[KEY]
         self.claim.update(apiVersion="v1", kind="PersistentVolumeClaim")
