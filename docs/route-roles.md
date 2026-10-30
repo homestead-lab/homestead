@@ -6,11 +6,19 @@ any role that is lower in the code than here, so a change to who may use a
 route is a changed row in review.
 
 Roles, lowest first: `public` (no sign-in), `key` (any API key), `viewer`,
-`operator`, `admin`.
+`operator`, `admin`, `nobody` (refused for everyone).
+
+What the table does not show:
+- A request relayed to a linked cluster is decided there, by that cluster's
+  own table.
+- On a path marked "API key: yes", a request with a key gets the key's scope
+  (checked per endpoint and per tool, below), not the role in Needs.
+- The answers the guard gives while Homestead starts on a moved data volume or
+  recovers from one (`_guard` in server.py).
 
 ## HTTP routes
 
-Pages, app files and `/js/*.js` are public too; they are not listed.
+Also public, and not listed one by one: every path `needs_no_session` in `server/homestead_web_paths.py` lets through, such as the app's pages, `/js/*.js`, `/vendor/`, `/assets/` and `/icons/` files.
 
 | Method | Path | Needs | API key | Declared in |
 |---|---|---|---|---|

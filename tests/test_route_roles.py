@@ -7,16 +7,15 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 sys.path.insert(0, str(ROOT / "scripts"))
+import homestead_mcp as MCP  # noqa: E402
+import homestead_web_paths as WEB  # noqa: E402
 import render_route_roles as RR  # noqa: E402
-import source_scan as SS  # noqa: E402
-
-
-def handler_method(name):
-    return "\n".join(found.text for found in SS.every_function(SS.SERVER_PY)[f"H.{name}"])
+import server  # noqa: E402
 
 
 class TableIsCurrent(unittest.TestCase):
@@ -68,11 +67,19 @@ class RolesNeverGoDownUnseen(unittest.TestCase):
         now[tool] = (now[tool][0], "")
         self.assertEqual([f"tool {tool[2]}: approved by admin -> approved by nobody"], RR.lowered(table, now))
 
-    def test_a_raised_role_or_a_new_route_is_not_a_lowering(self):
+    def test_a_raised_role_or_a_new_signed_in_route_is_not_a_lowering(self):
         table = RR.parse(RR.render())
         now = {k: ("admin", v[1]) for k, v in RR.current().items()}
-        now[("route", "GET", "/api/brand-new")] = ("public", "")
+        now[("route", "GET", "/api/brand-new")] = ("viewer", "")
         self.assertEqual([], RR.lowered(table, now))
+
+    def test_a_new_public_or_key_row_is_named(self):
+        table = RR.parse(RR.render())
+        now = dict(RR.current())
+        now[("route", "GET", "/api/brand-new")] = ("public", "")
+        now[("tool", "-", "brand_new_tool")] = ("key", "")
+        self.assertEqual(["GET /api/brand-new: new, public", "tool brand_new_tool: new, key"],
+                         RR.lowered(table, now))
 
 
 class WhatTheTableSays(unittest.TestCase):
@@ -108,20 +115,55 @@ class WhatTheTableSays(unittest.TestCase):
         self.assertIn(("tool", "-", "get_agent_request"), self.rows)
 
 
-class TheTableReadsTheGuard(unittest.TestCase):
-    """The table repeats two of the guard's decisions: which paths need no
-    session, and which take an API key. These fail when the guard changes
-    either, so the table's rules are revisited with it."""
+class TheTableAndTheGuardShareTheirRules(unittest.TestCase):
+    """Which paths need no session and which take an API key are decided once,
+    in homestead_web_paths; server.py's guard and the table both ask it."""
 
-    def test_the_unsigned_paths_are_the_guards(self):
-        self.assertIn("if (is_spa_route(path) or is_page_path(path) or is_public_path(path) or is_vendor_path(path) or\n"
-                      "                (path.startswith(\"/js/\") and path.endswith(\".js\"))):\n"
-                      "            return None", handler_method("_guard"))
+    def setUp(self):
+        for patch in (mock.patch.object(server, "_self_data_boot_pending", False),
+                      mock.patch.object(server.CFACCESS, "enabled", return_value=False)):
+            patch.start(); self.addCleanup(patch.stop)
 
-    def test_the_key_paths_are_the_key_guards(self):
-        self.assertIn('if not path.startswith("/api/v1/") and path not in (MCP.PATH, "/metrics"):',
-                      handler_method("_api_key_guard"))
-        self.assertEqual(("/api/v1/", "/mcp", "/metrics"), RR.KEY_PATHS)
+    def handler(self, path, headers=None):
+        h = object.__new__(server.H)
+        h.command, h.path, h.headers = "GET", path, dict(headers or {})
+        h._send, h._who, h._client_ip = mock.Mock(), mock.Mock(return_value=None), mock.Mock(return_value="192.0.2.1")
+        return h
+
+    def test_the_guard_asks_needs_no_session(self):
+        with mock.patch.object(WEB, "needs_no_session", return_value=True) as asked:
+            h = self.handler("/api/addons")
+            self.assertIsNone(h._guard("/api/addons"))
+        asked.assert_called_with("/api/addons")
+        h._who.assert_not_called()
+        with mock.patch.object(WEB, "needs_no_session", return_value=False):
+            h = self.handler("/healthz")
+            self.assertTrue(h._guard("/healthz"))
+        self.assertEqual(401, h._send.call_args.args[0])
+
+    def test_the_key_guard_asks_takes_key(self):
+        key = {"id": "k1", "name": "k", "scopes": ["read"]}
+        with mock.patch.object(WEB, "takes_key", return_value=True) as asked, \
+             mock.patch.object(server.API_KEYS, "verify", return_value=key):
+            h = self.handler("/api/addons", {"Authorization": "Bearer hsk_x"})
+            self.assertIsNone(h._guard("/api/addons"))
+        asked.assert_called_with("/api/addons")
+        with mock.patch.object(WEB, "takes_key", return_value=False):
+            h = self.handler(MCP.PATH, {"Authorization": "Bearer hsk_x"})
+            self.assertTrue(h._guard(MCP.PATH))
+        self.assertEqual(401, h._send.call_args.args[0])
+        self.assertTrue(WEB.takes_key(MCP.PATH), "the MCP endpoint takes a key")
+
+    def test_the_table_asks_the_same_functions(self):
+        with mock.patch.object(WEB, "needs_no_session", side_effect=lambda path: path == "/api/addons"):
+            self.assertEqual("public", RR.current()[("route", "GET", "/api/addons")][0])
+        with mock.patch.object(WEB, "takes_key", return_value=False):
+            self.assertNotIn("| yes |", RR.render())
+
+    def test_a_code_prefix_that_needs_a_session_is_refused_for_everyone(self):
+        import homestead_route_policy as POLICY
+        with mock.patch.object(POLICY, "CODE_PREFIXES", ("/api/other/",)):
+            self.assertEqual("nobody", RR.current()[("route", "GET", "/api/other/*")][0])
 
 
 if __name__ == "__main__":

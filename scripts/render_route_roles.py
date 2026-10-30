@@ -27,10 +27,9 @@ import homestead_routes as ROUTES  # noqa: E402
 import homestead_web_paths as WEB  # noqa: E402
 
 OUT = ROOT / "docs" / "route-roles.md"
-# Lowest first. public: no sign-in; key: any valid API key.
-RANKS = ("public", "key", *ROUTES.ROLES)
-# Where server.py's _api_key_guard takes an API key instead of a session.
-KEY_PATHS = ("/api/v1/", MCP.PATH, "/metrics")
+# Lowest first. public: no sign-in; key: any valid API key; nobody: refused
+# for everyone (a path with no declared role).
+RANKS = ("public", "key", *ROUTES.ROLES, "nobody")
 
 HEADER = """# Which role each route needs
 
@@ -40,22 +39,28 @@ any role that is lower in the code than here, so a change to who may use a
 route is a changed row in review.
 
 Roles, lowest first: `public` (no sign-in), `key` (any API key), `viewer`,
-`operator`, `admin`.
+`operator`, `admin`, `nobody` (refused for everyone).
+
+What the table does not show:
+- A request relayed to a linked cluster is decided there, by that cluster's
+  own table.
+- On a path marked "API key: yes", a request with a key gets the key's scope
+  (checked per endpoint and per tool, below), not the role in Needs.
+- The answers the guard gives while Homestead starts on a moved data volume or
+  recovers from one (`_guard` in server.py).
 """
-
-
-def unsigned(path):
-    """Whether server.py's guard lets a request for path through without a session."""
-    return (WEB.is_spa_route(path) or WEB.is_page_path(path) or WEB.is_public_path(path) or WEB.is_vendor_path(path)
-            or (path.startswith("/js/") and path.endswith(".js")))
-
-
-def takes_key(path):
-    return path.startswith(KEY_PATHS[0]) or path in KEY_PATHS[1:]
 
 
 def _scope_role(scope):
     return KEYS.SCOPES[scope][0] if scope else "key"
+
+
+def _needs(path, method):
+    """The role server.py's guard asks for: none for a path it lets through
+    unsigned, else the declared one; a path with none is refused for everyone."""
+    if WEB.needs_no_session(path):
+        return "public"
+    return POLICY.role(path, method) or "nobody"
 
 
 def _routes():
@@ -63,14 +68,17 @@ def _routes():
     table, out = ROUTES.table(), {}
     for method, path in sorted({*table, *POLICY.POLICY}, key=lambda k: (k[1], k[0])):
         route = table.get((method, path))
-        needs = "public" if unsigned(path) else POLICY.role(path, method)
-        out[(method, path)] = (needs, route.module if route else "homestead_route_policy", takes_key(path))
-    out[("POST", MCP.PATH)] = ("key", "server.py (homestead_mcp)", True)
+        out[(method, path)] = (_needs(path, method), route.module if route else "homestead_route_policy",
+                               WEB.takes_key(path))
+    # server.py answers these itself: the MCP endpoint (a key only, every tool
+    # with its own scope), its own prefix branches, and the public paths.
+    out[("POST", MCP.PATH)] = ("key" if WEB.takes_key(MCP.PATH) else _needs(MCP.PATH, "POST"),
+                               "server.py (homestead_mcp)", WEB.takes_key(MCP.PATH))
     for prefix in POLICY.CODE_PREFIXES:
-        out[("GET", prefix + "*")] = ("public" if unsigned(prefix) else "admin", "server.py", False)
+        out[("GET", prefix + "*")] = (_needs(prefix, "GET"), "server.py", WEB.takes_key(prefix))
     for path in sorted(WEB.PUBLIC):
         if not any(p == path for _, p in out):
-            out[("ANY", path)] = ("public", "server.py", takes_key(path))
+            out[("ANY", path)] = (_needs(path, "GET"), "server.py", WEB.takes_key(path))
     return dict(sorted(out.items(), key=lambda item: (item[0][1], item[0][0])))
 
 
@@ -80,7 +88,9 @@ def _tools():
     for tool in TOOLS.TOOLS:
         approves = tool.role if tool.kind == TOOLS.DESTRUCTIVE else ""
         out[tool.name] = (_scope_role(tool.scope), tool.scope or "any key", tool.kind, approves)
-    out[MCP.FOLLOW["name"]] = ("key", "any key", TOOLS.READ, "")
+    # Offered to every key (homestead_mcp.tools_for) and answered before any scope check.
+    follow = MCP.FOLLOW["annotations"]
+    out[MCP.FOLLOW["name"]] = ("key", "any key", TOOLS.READ if follow["readOnlyHint"] else TOOLS.CHANGE, "")
     return out
 
 
@@ -94,7 +104,9 @@ def current():
 
 def render():
     lines = [HEADER, "## HTTP routes", "",
-             "Pages, app files and `/js/*.js` are public too; they are not listed.", "",
+             "Also public, and not listed one by one: every path `needs_no_session` in "
+             "`server/homestead_web_paths.py` lets through, such as the app's pages, `/js/*.js`, "
+             "`/vendor/`, `/assets/` and `/icons/` files.", "",
              "| Method | Path | Needs | API key | Declared in |", "|---|---|---|---|---|"]
     for (method, path), (needs, where, key) in _routes().items():
         lines.append(f"| {method} | `{path}` | {needs} | {'yes' if key else ''} | {where} |")
@@ -131,19 +143,27 @@ def parse(text):
     return rows
 
 
+def _name(key):
+    return f"tool {key[2]}" if key[0] == "tool" else f"{key[1]} {key[2]}"
+
+
 def lowered(table, now):
-    """Rows whose role in the code (now) is lower than in the table."""
+    """Rows whose role in the code (now) is lower than in the table, and new
+    rows anyone may use (public, or any API key)."""
     def rank(role):
         return RANKS.index(role) if role in RANKS else -1
     out = []
     for key, (needs, approves) in sorted(table.items()):
         if key not in now:
             continue
-        name = f"tool {key[2]}" if key[0] == "tool" else f"{key[1]} {key[2]}"
+        name = _name(key)
         if rank(now[key][0]) < rank(needs):
             out.append(f"{name}: {needs} -> {now[key][0]}")
         if approves and rank(now[key][1]) < rank(approves):
             out.append(f"{name}: approved by {approves} -> approved by {now[key][1] or 'nobody'}")
+    for key, (needs, _) in sorted(now.items()):
+        if key not in table and rank(needs) <= RANKS.index("key"):
+            out.append(f"{_name(key)}: new, {needs}")
     return out
 
 

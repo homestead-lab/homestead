@@ -2252,6 +2252,7 @@ scripts/render_icons.py       regenerate web/icons/ from the mark's geometry
 scripts/bump_version.py       move every file that names the release to a new version
 scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 scripts/render_chart.py       regenerate charts/homestead from the manifests
+scripts/render_route_roles.py regenerate docs/route-roles.md, which role each route needs
 scripts/capture_screenshots.mjs  the release screenshots, from demo data
 scripts/capture_mobile.mjs    the README's phone pictures, in phone frames
 scripts/audit_dialogs.mjs     every dialog, desktop and phone, checked against docs/design.md

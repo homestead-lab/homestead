@@ -169,6 +169,7 @@ icons: re-run their script and commit the PNGs with any change to it.
 | `deploy/rbac.yaml` | the RBAC objects in `deploy/deploy.yaml` | `python scripts/render_rbac.py` | `tests/test_self.py` |
 | `charts/homestead/` | `deploy/deploy.yaml`, and the probe as for `deploy/nodeprobe.yaml` | `python scripts/render_chart.py` | `tests/test_chart.py` |
 | `docs/api/openapi.json` | the endpoints in `server/homestead_api_v1.py`, the scopes in `server/homestead_api_keys.py` | `python scripts/build_api_docs.py` | `tests/test_api_v1.py` |
+| `docs/route-roles.md` | the routes in each module's `ROUTES`, `server/homestead_route_policy.py`, `server/homestead_web_paths.py`, the API endpoints and MCP tools | `python scripts/render_route_roles.py` (`--check` only compares) | `tests/test_route_roles.py` |
 | `web/icons/*.png` | the mark's geometry in the script | `python scripts/render_icons.py` | none |
 
 ## Style
