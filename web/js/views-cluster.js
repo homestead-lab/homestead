@@ -355,6 +355,7 @@ function upgradesCard(r) {
     ${UI.moduleHeader(`Harvester releases`, `${esc(status)}. An upgrade Harvester offers can be started here or from its own dashboard; either way it is followed here.`, `${clusterPill(r.active ? "attention" : behind ? "attention" : "healthy", r.active ? "upgrading" : behind ? "update available" : "up to date")}
         <button class="btn sm" onclick="clusterUpgradesPaint(true)">${icon("refresh")}Check now</button>`)}
     ${r.last ? upgradeProgress(r.last) : ""}
+    ${r.unread ? UI.callout("warn", "Upgrades not read", `${esc(r.unread)}. Whether an upgrade is under way, and what Harvester offers, is not known; Check now tries again.`) : ""}
     <div class="release-list">
       ${releaseRow("NEWEST STABLE", r.stable, "stable")}
       ${releaseRow("NEWEST TEST BUILD", r.test, "test")}
@@ -364,7 +365,7 @@ function upgradesCard(r) {
       ${r.offered.filter(o => !r.current || upgradeNewer(o.version, r.current)).map(o => `${UI.chip(o.version, "neutral")}${r.active ? "" :
         `<button class="btn sm pri" data-need="admin" onclick="harvesterUpgradeStart(${jsq(o.version)})">Upgrade to ${esc(o.version)}</button>`}`).join("")
         || r.offered.map(o => UI.chip(o.version, "neutral")).join("")}</div>` : ""}
-    ${r.stable && !r.stable.offered ? `<div class="note" style="margin-top:10px">Harvester shows an Upgrade button once it lists a version, which its upgrade checker does for supported upgrade paths - sometimes a few days after release. A test build is never offered: installing one means creating its Version by hand, as Harvester's upgrade guide describes.</div>` : ""}
+    ${r.stable && r.stable.offered === false ? `<div class="note" style="margin-top:10px">Harvester shows an Upgrade button once it lists a version, which its upgrade checker does for supported upgrade paths - sometimes a few days after release. A test build is never offered: installing one means creating its Version by hand, as Harvester's upgrade guide describes.</div>` : ""}
   </section>`;
 }
 
