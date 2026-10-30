@@ -9,9 +9,15 @@ and kept in memory with the file until the file changes on disk.
 
 demo.js is made-up data for the screenshots and the live demo; a plain visit is
 served the page without it, so a real install neither downloads nor parses it.
+
+The page's big per-tick reads (COMPRESSED_ANSWERS) are gzipped as well (#982).
+Nothing else from /api is: compressing an answer that holds a secret next to
+text the requester chose lets the answer's size give the secret away (BREACH),
+so the list holds only summary and list reads any role may see.
 """
 import gzip
 import hashlib
+import json
 import os
 import threading
 import urllib.parse
@@ -23,6 +29,15 @@ MIN_GZIP = 1024
 COMPRESSIBLE = ("text/", "application/javascript", "application/json",
                 "application/manifest+json", "image/svg+xml")
 DEMO_SCRIPT = b'<script src="/js/demo.js'
+# The reads a page repeats on every tick and that grow with the cluster. Each is a
+# GET any role may read (tests/test_api_compression.py checks); add one only if no
+# answer it gives can hold a secret, a log line or a value masked for some roles.
+COMPRESSED_ANSWERS = frozenset((
+    "/api/overview", "/api/nodes", "/api/nodes/uptime", "/api/history/long", "/api/uptime",
+    "/api/workloads", "/api/volumes", "/api/storage", "/api/lh/overview", "/api/operations"))
+# Below about one packet gzip saves nothing a user would notice.
+MIN_ANSWER_GZIP = 1400
+ANSWER_LEVEL = 5
 
 _files = {}
 _lock = threading.Lock()
@@ -58,8 +73,41 @@ def _entry(path, plain_page):
 
 
 def _wants_gzip(handler):
-    accepted = handler.headers.get("Accept-Encoding", "")
-    return any(part.split(";")[0].strip() == "gzip" for part in accepted.split(","))
+    """Accept-Encoding names gzip, and not with q=0."""
+    for part in (handler.headers.get("Accept-Encoding", "") or "").split(","):
+        coding, *params = [piece.strip() for piece in part.split(";")]
+        if coding.lower() != "gzip":
+            continue
+        for param in params:
+            name, _, value = param.partition("=")
+            if name.strip().lower() == "q":
+                try:
+                    return float(value) > 0
+                except ValueError:
+                    return False
+        return True
+    return False
+
+
+def answer(handler, code, body, ctype):
+    """The bytes _send writes for body, gzipped when it is one of the page's big
+    listed reads and the browser accepts gzip; the headers that go with it are
+    added to the handler's own."""
+    if isinstance(body, (dict, list)):
+        body = json.dumps(body).encode()
+    elif isinstance(body, str):
+        body = body.encode()
+    extra = handler._extra_headers or []
+    if (code != 200 or getattr(handler, "command", "") != "GET" or not ctype.startswith("application/json")
+            or urllib.parse.urlsplit(handler.path or "").path not in COMPRESSED_ANSWERS
+            or any(name.lower() in ("content-encoding", "content-disposition") for name, _ in extra)):
+        return body
+    headers = [("Vary", "Accept-Encoding")]
+    if len(body) >= MIN_ANSWER_GZIP and _wants_gzip(handler):
+        body = gzip.compress(body, compresslevel=ANSWER_LEVEL, mtime=0)
+        headers.append(("Content-Encoding", "gzip"))
+    handler._extra_headers = list(extra) + headers
+    return body
 
 
 def _matches(entry, wanted):

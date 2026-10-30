@@ -1205,10 +1205,7 @@ class H(HTTP.LimitedHandler):
                 pass  # Recording must never change the result of a cluster action.
         if code >= 400:
             self.close_connection = True
-        if isinstance(body, (dict, list)):
-            body = json.dumps(body).encode()
-        elif isinstance(body, str):
-            body = body.encode()
+        body = STATIC.answer(self, code, body, ctype)  # bytes; gzipped for the big listed reads (#982)
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
