@@ -562,7 +562,7 @@ window.operationLog = async id => {
     polling = true;
     let d;
     try { d = await api(`/api/operations/log?id=${encodeURIComponent(id)}`, signal ? { keep: true, signal } : undefined); }
-    catch (e) { if (!signal?.aborted && window.__logSequence === sequence && $("#oplogState")) $("#oplogState").textContent = e.message; return; }
+    catch (e) { if (!UI.pollCancelled(signal) && window.__logSequence === sequence && $("#oplogState")) $("#oplogState").textContent = e.message; return; }
     finally { polling = false; }
     if (window.__logSequence !== sequence || $("#modal").classList.contains("hidden") || !$("#oplogBody")) return;
     const follow = $("#oplogFollow")?.checked;

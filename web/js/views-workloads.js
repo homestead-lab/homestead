@@ -1786,18 +1786,20 @@ function openLogs(title, path, pods = null, ns = "") {
     if ($("#modal").classList.contains("hidden")) return false;
     try {
       const t = await api(LOG.path + (LOG.path.includes("?") ? "&" : "?") + "tail=500", { keep: true, signal });
+      if (UI.pollCancelled(signal)) return;
       const pre = $("#mbody .logview"); if (!pre) return;
       pre.textContent = t || "(the container is running but has not written any logs yet)";
       $("#logstate").innerHTML = '<span class="ld"></span> live · refreshes every 2s';
       if ($("#logfollow")?.checked) pre.scrollTop = pre.scrollHeight;
     } catch (e) {
-      if (signal?.aborted) return;
+      if (UI.pollCancelled(signal)) return;
       const pre = $("#mbody .logview"); if (pre) pre.textContent = e.message;
       if ($("#logstate")) $("#logstate").innerHTML = '<span class="cd badbg"></span> no logs';
     }
   };
   const timer = window.__logTimer = UI.poll(poll, 2000);
-  LOG.poll = () => timer.now();
+  // Another pod or container: the old one's read is cancelled, so its output never paints here.
+  LOG.poll = () => timer.restart();
 }
 
 window.logPodChanged = () => {
@@ -2216,7 +2218,7 @@ window.monitorImageRollouts = (items, startFailures = [], initialStates = {}, al
         return { item, state };
       } catch (error) { return { item, error }; }
     }));
-    if (signal?.aborted) return false;
+    if (UI.pollCancelled(signal)) return false;
     const successful = results.filter(result => result.state);
     misses = results.some(result=>result.error) ? misses + 1 : 0;
     successful.forEach(result => { states[rolloutKey(result.item)] = result.state; });
@@ -2294,7 +2296,7 @@ window.monitorImageRollout = (ns, name) => {
         return false;
       }
     } catch (e) {
-      if (signal?.aborted) return false;
+      if (UI.pollCancelled(signal)) return false;
       misses++;
       paintRollout($("#mbody"), UI.callout("warn","Connection lost","Retrying automatically. The update may still be running; showing the last known progress.") + (lastState ? rolloutMarkup(lastState) : UI.actions(UI.cancel("Monitor in background"))));
     }

@@ -142,6 +142,37 @@ test("now() reads at once, or straight after the read still running", async () =
   assert.equal(calls, 3);
 });
 
+test("a read that never answers is given up after its limit, and the poll carries on", async () => {
+  const { UI, clock } = loadUI();
+  const signals = [];
+  let calls = 0;
+  // One read honours its signal (api's fetch does), the other never settles at all.
+  UI.poll(signal => { calls++; signals.push(signal); return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason))); }, 2000);
+  UI.poll(signal => { calls++; signals.push(signal); return new Promise(() => {}); }, 2000);
+  assert.equal(calls, 2);
+  await clock.advance(29999);
+  assert.equal(calls, 2, "the limit is 30 s (or 5 intervals, if longer)");
+  await clock.advance(1);
+  assert.ok(signals.slice(0, 2).every(s => s.aborted), "the stuck reads are cancelled");
+  assert.equal(signals[0].reason.name, "TimeoutError");
+  assert.equal(UI.pollCancelled(signals[0]), false, "a read that timed out is a failed read the dialog shows, not a cancelled one");
+  await clock.advance(2000);
+  assert.equal(calls, 4, "both polls read again");
+  UI.stopPolls();
+  assert.equal(UI.pollCancelled(signals[2]), true, "closing the dialog is a cancel the dialog does not show");
+});
+
+test("restart() cancels the read running and reads again at once", async () => {
+  const { UI, clock } = loadUI();
+  const signals = [];
+  const poll = UI.poll(signal => { signals.push(signal); return new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason))); }, 2000);
+  poll.restart(); await clock.settle();
+  assert.equal(signals.length, 2, "the new pod's read starts straight away");
+  assert.equal(signals[0].aborted, true, "the old pod's read is cancelled, so its output never paints");
+  assert.equal(UI.pollCancelled(signals[0]), true);
+  assert.equal(signals[1].aborted, false);
+});
+
 test("a poll that starts later waits its interval before the first read", async () => {
   const { UI, clock } = loadUI();
   let calls = 0;
@@ -180,37 +211,63 @@ test("a busy volume with a hidden tab makes no /api/volumes read in 60 s", async
 });
 
 /* The ratchet: a repeating timer that reads must be a poll, which waits for
-   its last read and stops in a hidden tab. setInterval does neither. */
-test("no setInterval in web/js starts a read (use UI.poll)", () => {
+   its last read and stops in a hidden tab. setInterval does neither. A
+   callback that is async, or calls api(), fetch() or post(), is flagged; one
+   that calls refresh() or a load*() helper is flagged unless it checks
+   document.hidden itself (the main refresh loop, which has its own busy
+   guard, and the 15-minute image-update check). A member callback
+   (setInterval(obj.fn, ...)) cannot be read here, so it is flagged too. */
+function intervalOffenders(file, src) {
   const offenders = [];
-  for (const file of fs.readdirSync("web/js").filter(f => f.endsWith(".js"))) {
-    const src = fs.readFileSync(`web/js/${file}`, "utf8");
-    for (const m of src.matchAll(/\bsetInterval\(\s*/g)) {
-      const start = m.index + m[0].length;
-      const name = /^[A-Za-z_$][\w$]*(?=\s*,)/.exec(src.slice(start))?.[0];
-      let callback;
-      if (name) {
-        const def = new RegExp(`(?:(?:const|let|var)\\s+${name}\\s*=\\s*(async\\b)?|(async\\s+)?function\\s+${name}\\b)`).exec(src);
-        if (!def) continue;
-        if (def[1] || def[2]) { offenders.push(`${file}: setInterval(${name}) - ${name} is async`); continue; }
-        callback = between(src.slice(def.index), def[0], /\n(?:\s*\n|\S)/);
-      } else {
-        // The inline callback: up to the comma that closes it at depth 0.
-        let depth = 0, end = start;
-        for (; end < src.length; end++) {
-          const c = src[end];
-          if ("([{".includes(c)) depth++;
-          else if (")]}".includes(c)) { if (depth === 0) break; depth--; }
-          else if (c === "," && depth === 0) break;
-        }
-        callback = src.slice(start, end);
+  for (const m of src.matchAll(/\bsetInterval\(\s*/g)) {
+    const start = m.index + m[0].length, line = `${file}:${src.slice(0, m.index).split("\n").length}`;
+    if (/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\s*,/.test(src.slice(start))) { offenders.push(`${line} member callback`); continue; }
+    const name = /^[A-Za-z_$][\w$]*(?=\s*,)/.exec(src.slice(start))?.[0];
+    let callback;
+    if (name) {
+      const def = new RegExp(`(?:(?:const|let|var)\\s+${name}\\s*=\\s*(async\\b)?|(async\\s+)?function\\s+${name}\\b)`).exec(src);
+      if (!def) continue;
+      if (def[1] || def[2]) { offenders.push(`${line} ${name} is async`); continue; }
+      callback = between(src.slice(def.index), def[0], /\n(?:\s*\n|\S)/);
+    } else {
+      // The inline callback: up to the comma that closes it at depth 0.
+      let depth = 0, end = start;
+      for (; end < src.length; end++) {
+        const c = src[end];
+        if ("([{".includes(c)) depth++;
+        else if (")]}".includes(c)) { if (depth === 0) break; depth--; }
+        else if (c === "," && depth === 0) break;
       }
-      if (/^\s*async\b/.test(callback) || /(?:^|[^\w$.])api\(/.test(callback)) {
-        offenders.push(`${file}:${src.slice(0, m.index).split("\n").length}`);
-      }
+      callback = src.slice(start, end);
     }
+    const reads = /(?:^|[^\w$.])(?:api|fetch|post)\(/.test(callback);
+    const helper = /(?:^|[^\w$.])(?:refresh|load[A-Z]\w*)\(/.test(callback) && !/document\.hidden/.test(callback);
+    if (/^\s*async\b/.test(callback) || reads || helper) offenders.push(line);
   }
+  return offenders;
+}
+
+test("no setInterval in web/js starts a read (use UI.poll)", () => {
+  const offenders = fs.readdirSync("web/js").filter(f => f.endsWith(".js"))
+    .flatMap(file => intervalOffenders(file, fs.readFileSync(`web/js/${file}`, "utf8")));
   assert.deepEqual(offenders, []);
+});
+
+test("the ratchet catches each shape of a reading interval", () => {
+  const cases = {
+    "setInterval(async () => { await x(); }, 1000);": 1,
+    "setInterval(() => api('/api/x'), 1000);": 1,
+    "setInterval(() => { fetch('/x'); }, 1000);": 1,
+    "setInterval(() => post('/x', {}), 1000);": 1,
+    "setInterval(() => refresh(), 1000);": 1,
+    "setInterval(() => { loadThings(true); }, 1000);": 1,
+    "setInterval(() => { if (!document.hidden) loadThings(true); }, 1000);": 0,
+    "setInterval(Watch.tick, 1000);": 1,
+    "const tick = async () => {}; setInterval(tick, 1000);": 1,
+    "function sweep() { tidy(); }\nsetInterval(sweep, 1000);": 0,
+    "setInterval(() => refreshPwaAlerts(), 1000);": 0,
+  };
+  for (const [src, n] of Object.entries(cases)) assert.equal(intervalOffenders("x.js", src).length, n, src);
 });
 
 test("closing a dialog stops its polls", () => {

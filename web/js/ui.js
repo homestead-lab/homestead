@@ -450,7 +450,14 @@ const UI = (() => {
      AbortSignal to pass to api(); returning false ends the poll. Closing the
      dialog stops its polls and cancels the read still running (stopPolls,
      from closeModal); `dialog: false` is for a poll that is not a dialog's.
-     `later` waits `ms` before the first read. */
+     `later` waits `ms` before the first read.
+     A read that never answers (a connection left half open while Homestead
+     restarts, say) would hold the poll for good, the dialog frozen on its
+     last answer. So a read is given up after 5 intervals or 30 s, whichever
+     is longer: its signal aborts with a TimeoutError, the dialog shows the
+     failure as it shows any other, and the poll carries on.
+     pollCancelled(signal) says the read was cancelled on purpose (the dialog
+     closed, another pod picked): its answer or error is not shown. */
   const polls = new Set();
   function poll(read, ms, { later = false, dialog = true } = {}) {
     const doc = typeof document !== "undefined" ? document : null;
@@ -463,8 +470,18 @@ const UI = (() => {
       if (running) { again = true; return; }
       if (hidden()) return;
       const mine = running = typeof AbortController === "function" ? new AbortController() : { signal: undefined, abort() {} };
-      let result;
-      try { result = await read(mine.signal); } catch (_) { /* a failed read is the poll's own to show; the next one tries again */ }
+      let result, limit = null;
+      const given = new Promise((_, fail) => {
+        // A cancelled read ends now, even one that does not listen to its signal.
+        mine.signal?.addEventListener?.("abort", () => fail(mine.signal.reason), { once: true });
+        limit = setTimeout(() => {
+          const late = timedOut(Math.max(5 * ms, 30000));
+          mine.abort(late); fail(late);
+        }, Math.max(5 * ms, 30000));
+      });
+      given.catch(() => { /* raced below */ });
+      try { result = await Promise.race([read(mine.signal), given]); } catch (_) { /* a failed read is the poll's own to show; the next one tries again */ }
+      finally { clearTimeout(limit); }
       if (running === mine) running = null;
       if (stopped) return;
       if (result === false) return handle.stop();
@@ -482,6 +499,8 @@ const UI = (() => {
       },
       // Read now, or straight after the read still running (a new pod picked).
       now() { run(); },
+      // Cancel the read running and read again at once (another pod picked).
+      restart() { if (running) { running.abort(); again = true; } else run(); },
       get stopped() { return stopped; },
     };
     doc?.addEventListener?.("visibilitychange", shown);
@@ -490,6 +509,12 @@ const UI = (() => {
     return handle;
   }
   function stopPolls() { [...polls].forEach(p => p.stop()); }
+  function timedOut(after) {
+    const message = `No answer in ${Math.round(after / 1000)} s`;
+    if (typeof DOMException === "function") return new DOMException(message, "TimeoutError");
+    return Object.assign(new Error(message), { name: "TimeoutError" });
+  }
+  const pollCancelled = signal => !!signal?.aborted && signal.reason?.name !== "TimeoutError";
 
   if (typeof document !== "undefined" && document.addEventListener) {
     document.addEventListener("input", event => { const box = event.target.closest?.(".qty"); if (box && !event.target.matches('input[type="hidden"]')) quantityUpdate(box); });
@@ -502,7 +527,7 @@ const UI = (() => {
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,
     statusDot, insightList, selectSection: selectDialogSection, masterDetail: dialogMasterDetail,
-    quantity, parseMemory, parseCpu, who, reviewFlow, poll, stopPolls };
+    quantity, parseMemory, parseCpu, who, reviewFlow, poll, stopPolls, pollCancelled };
 })();
 window.UI = UI;
 

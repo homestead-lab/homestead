@@ -2435,7 +2435,7 @@ window.reclassWatch = async id => {
   const tick = async signal => {
     if ($("#modal").classList.contains("hidden")) return false;
     const ops = await api("/api/operations", { keep: true, signal }).catch(e => ({ unread: e.message }));
-    if (signal?.aborted) return false;
+    if (UI.pollCancelled(signal)) return false;
     if (window.__reclassWatchToken !== watchToken || $("#modal").classList.contains("hidden")) return false;
     if (ops.unread) {
       // A failed poll keeps what was last shown and says so; the next tick tries again (#620).
