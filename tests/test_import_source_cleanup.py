@@ -1,5 +1,6 @@
 """An import source's password Secret goes with the source. Runs on the shared
 fake API (tests/fakes/kube.py)."""
+import contextlib
 import json
 import sys
 import tempfile
@@ -176,10 +177,19 @@ class ImportSourceCleanupTests(unittest.TestCase):
 
     def test_the_leaders_minute_sweeps_them(self):
         import homestead_image_cache as CACHE
-        with mock.patch.object(CACHE, "_load_scans"), mock.patch.object(CACHE, "_collect_scans", return_value=True), \
-                mock.patch.object(CACHE, "prepull_status"), mock.patch.object(imports, "_drop_finished_copies"), \
-                mock.patch.object(imports, "sweep_source_secrets") as sweep, \
-                mock.patch.dict(sys.modules, {"homestead_image_cleanup": mock.Mock()}):
+        import homestead_container_import as CONTAINER_IMPORT
+        with contextlib.ExitStack() as stack:
+            # The tick's other steps are stubbed where the tick finds them: the
+            # module that defines _drop_finished_copies, and its re-export
+            # while homestead_imports still has one.
+            for module in (CONTAINER_IMPORT, imports):
+                if hasattr(module, "_drop_finished_copies"):
+                    stack.enter_context(mock.patch.object(module, "_drop_finished_copies"))
+            stack.enter_context(mock.patch.object(CACHE, "_load_scans"))
+            stack.enter_context(mock.patch.object(CACHE, "_collect_scans", return_value=True))
+            stack.enter_context(mock.patch.object(CACHE, "prepull_status"))
+            stack.enter_context(mock.patch.dict(sys.modules, {"homestead_image_cleanup": mock.Mock()}))
+            sweep = stack.enter_context(mock.patch.object(imports, "sweep_source_secrets"))
             CACHE.tick()
         sweep.assert_called_once_with()
 
