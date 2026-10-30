@@ -70,7 +70,11 @@ try {
   // Through Hosts and Volumes to Virtual machines, a moment on each.
   await page.evaluate(() => go("nodes"));
   await page.waitForTimeout(400);
-  await page.evaluate(() => go("storage"));
+  // Cluster, until its health card is reading: those reads are the page's
+  // too, and leaving cancels them (#987).
+  const health = await page.evaluate(() => { go("cluster"); return window.__reads.length; });
+  await page.waitForFunction(at => window.__reads.slice(at).some(r => r.path === "/api/self/health"), health, {timeout: 15000});
+  await page.evaluate(() => { window.__leftCluster = performance.now(); go("storage"); });
   await page.waitForTimeout(400);
   const left = await page.evaluate(() => { const before = window.__reads.length; window.__arrived = performance.now(); go("vms"); return before; });
   // The refresh tick (or coming back to the tab) during the load does not start
@@ -80,7 +84,9 @@ try {
   await page.waitForTimeout(3500);
   let reads = await page.evaluate(() => window.__reads);
   const earlier = reads.slice(first, left).filter(r => r.signal && r.method === "GET");
-  const stillRunning = earlier.filter(r => r.state !== "aborted");
+  // Cluster's own first read (its report) was answered before the card began.
+  const leftCluster = await page.evaluate(() => window.__leftCluster);
+  const stillRunning = earlier.filter(r => r.state !== "aborted" && !(r.answered < leftCluster));
   const vms = reads.slice(left).filter(r => r.path === "/api/vms");
   const arrived = await page.evaluate(() => window.__arrived);
   const queued = Math.round(vms[0].running - arrived);
@@ -88,6 +94,11 @@ try {
     + `${stillRunning.length} not cancelled; ${vms.length} reads of /api/vms`);
 
   assert.deepEqual(stillRunning.map(r => `${r.path} ${r.state}`), [], "the pages left behind cancel their reads");
+  const card = ["/api/lh/overview", "/api/self/health", "/api/settings", "/api/alerts"];
+  const healthReads = reads.slice(health, left).filter(r => card.includes(r.path));
+  assert.ok(healthReads.some(r => r.path === "/api/self/health"), "the health card was reading when Cluster was left");
+  assert.deepEqual(healthReads.filter(r => r.state !== "aborted").map(r => `${r.path} ${r.state}`), [],
+    "leaving Cluster cancels its health card's reads");
   assert.ok(queued < 500, `the page you went to does not queue behind the ones you left (${queued} ms)`);
   assert.equal(vms.length, 1, "a refresh during the load does not load the page a second time");
   assert.equal(await page.evaluate(() => window.__kept), "answered", "a kept read survives leaving the page");
