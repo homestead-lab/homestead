@@ -3,7 +3,7 @@ let lhV2Plan=null, lhV2Approval=null, lhV2Timer=null, lhV2Sequence=0;
 const lhV2Footer = main => UI.actions(UI.cancel('Close') + main, UI.button('Check again','lhV2Setup()'), { attrs: 'id="lhV2Foot"' });
 window.lhV2Setup = async () => {
   const sequence=++lhV2Sequence;
-  if(window.__logTimer) {clearInterval(window.__logTimer);window.__logTimer=null;}
+  if(window.__logTimer) {window.__logTimer.stop?.();window.__logTimer=null;}
   clearTimeout(lhV2Timer); lhV2Approval=null;
   // Setup is a resumable root dialog; discard completed child reviews.
   if(typeof MODAL_STACK!=='undefined') MODAL_STACK.length=0;

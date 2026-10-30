@@ -606,8 +606,9 @@ function closeModal(updateRoute = true) {
   paintModalBack();
   $("#modal").classList.add("hidden");
   const opener = MODAL_OPENER; MODAL_OPENER = null; restoreFocus(opener);
-  if (window.__logTimer) { clearInterval(window.__logTimer); window.__logTimer = null; }
-  if (window.__updateTimer) { clearInterval(window.__updateTimer); window.__updateTimer = null; }
+  // Its polls (logs, a job, a rollout) stop, and the read each has running is cancelled (#983).
+  window.UI?.stopPolls?.();
+  window.__logTimer = null; window.__updateTimer = null; window.__reclassTimer = null;
   if (window.__consoleSocket) { window.__consoleSocket.close(); window.__consoleSocket = null; }
   if (window.__consoleResize) { window.__consoleResize.disconnect(); window.__consoleResize = null; }
   // A node's terminal: closing it ends the session, and its helper goes.

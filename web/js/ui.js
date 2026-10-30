@@ -440,6 +440,57 @@ const UI = (() => {
     };
     return flow;
   };
+  /* A dialog that follows something (a container's logs, a job, a rollout)
+     reads it again and again (#983). setInterval did that whether or not the
+     tab was visible, and started each read on time even while the last one
+     was still waiting on a slow cluster, until those reads held most of the
+     browser's six connections to Homestead. A poll reads, waits for the
+     answer, then waits `ms` before the next; reads nothing while the tab is
+     hidden and once at once when it is shown again. `read` gets an
+     AbortSignal to pass to api(); returning false ends the poll. Closing the
+     dialog stops its polls and cancels the read still running (stopPolls,
+     from closeModal); `dialog: false` is for a poll that is not a dialog's.
+     `later` waits `ms` before the first read. */
+  const polls = new Set();
+  function poll(read, ms, { later = false, dialog = true } = {}) {
+    const doc = typeof document !== "undefined" ? document : null;
+    const hidden = () => doc?.visibilityState === "hidden" || doc?.hidden === true;
+    let timer = null, running = null, again = false, stopped = false;
+    const wait = () => { clearTimeout(timer); timer = stopped || hidden() ? null : setTimeout(run, ms); };
+    async function run() {
+      clearTimeout(timer); timer = null;
+      if (stopped) return;
+      if (running) { again = true; return; }
+      if (hidden()) return;
+      const mine = running = typeof AbortController === "function" ? new AbortController() : { signal: undefined, abort() {} };
+      let result;
+      try { result = await read(mine.signal); } catch (_) { /* a failed read is the poll's own to show; the next one tries again */ }
+      if (running === mine) running = null;
+      if (stopped) return;
+      if (result === false) return handle.stop();
+      if (again) { again = false; return run(); }
+      wait();
+    }
+    const shown = () => { if (!hidden()) run(); };
+    const handle = {
+      stop() {
+        if (stopped) return;
+        stopped = true; clearTimeout(timer); timer = null;
+        running?.abort(); running = null;
+        doc?.removeEventListener?.("visibilitychange", shown);
+        polls.delete(handle);
+      },
+      // Read now, or straight after the read still running (a new pod picked).
+      now() { run(); },
+      get stopped() { return stopped; },
+    };
+    doc?.addEventListener?.("visibilitychange", shown);
+    if (dialog) polls.add(handle);
+    if (later) wait(); else run();
+    return handle;
+  }
+  function stopPolls() { [...polls].forEach(p => p.stop()); }
+
   if (typeof document !== "undefined" && document.addEventListener) {
     document.addEventListener("input", event => { const box = event.target.closest?.(".qty"); if (box && !event.target.matches('input[type="hidden"]')) quantityUpdate(box); });
     document.addEventListener("change", event => { const box = event.target.closest?.(".qty"); if (box && !event.target.matches('input[type="hidden"]')) quantityUpdate(box); });
@@ -451,7 +502,7 @@ const UI = (() => {
     pageHeader, moduleHeader, settingsCard, settingsGrid, saveBar, collectionHeader, workspace, workspaceNav, selectWorkspace, navigateWorkspace,
     sectionForm: dialogSectionForm, sectionNavigation: dialogSectionNavigation,
     statusDot, insightList, selectSection: selectDialogSection, masterDetail: dialogMasterDetail,
-    quantity, parseMemory, parseCpu, who, reviewFlow };
+    quantity, parseMemory, parseCpu, who, reviewFlow, poll, stopPolls };
 })();
 window.UI = UI;
 

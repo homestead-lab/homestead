@@ -313,7 +313,7 @@ window.resumeOperation = async id => {
 let STORAGE_RECOVERY = null, STORAGE_RECOVERY_SEQ = 0, STORAGE_RECOVERY_BUSY = false;
 window.storageRecoveryReview = async id => {
   if (STORAGE_RECOVERY_BUSY) return;
-  clearInterval(window.__reclassTimer); window.__reclassWatchToken = null;
+  window.__reclassTimer?.stop?.(); window.__reclassWatchToken = null;
   STORAGE_RECOVERY = null;
   const sequence = ++STORAGE_RECOVERY_SEQ;
   modal("Review storage move", '<div id="storageRecoveryContent"><div class="empty"><span class="spin2"></span>Checking this move…</div></div>', true, "operation-review");
@@ -538,7 +538,7 @@ window.cancelOperationGo = async id => {
    some - the output of what does its work: an import's copy, a rollout's
    newest pod, a k3s node's console. Follows along while the job runs. */
 window.operationLog = async id => {
-  if (window.__logTimer) clearInterval(window.__logTimer);
+  window.__logTimer?.stop?.(); window.__logTimer = null;
   operationPanelOpen = false;
   renderOperations();
   const title = (STATE.data.operations || []).find(o => o.id === id)?.title || "Job";
@@ -555,13 +555,14 @@ window.operationLog = async id => {
   };
   $("#oplogFollow").onchange = followLatest;
   let polling = false, active = true;
-  const poll = async () => {
-    if ($("#modal").classList.contains("hidden") || !$("#oplogBody")) return clearInterval(window.__logTimer);
-    if (polling || window.__logSequence !== sequence) return;
+  // The dialog's own read (`keep`, not the page's): closing it cancels it.
+  const poll = async signal => {
+    if ($("#modal").classList.contains("hidden") || !$("#oplogBody")) return false;
+    if (polling || window.__logSequence !== sequence) return window.__logSequence === sequence;
     polling = true;
     let d;
-    try { d = await api(`/api/operations/log?id=${encodeURIComponent(id)}`); }
-    catch (e) { if (window.__logSequence === sequence && $("#oplogState")) $("#oplogState").textContent = e.message; return; }
+    try { d = await api(`/api/operations/log?id=${encodeURIComponent(id)}`, signal ? { keep: true, signal } : undefined); }
+    catch (e) { if (!signal?.aborted && window.__logSequence === sequence && $("#oplogState")) $("#oplogState").textContent = e.message; return; }
     finally { polling = false; }
     if (window.__logSequence !== sequence || $("#modal").classList.contains("hidden") || !$("#oplogBody")) return;
     const follow = $("#oplogFollow")?.checked;
@@ -585,10 +586,10 @@ window.operationLog = async id => {
     if (box) box.scrollTop = outerScroll;
     active = operationActive(d);
     $("#oplogState").innerHTML = active ? '<span class="ld"></span> live · refreshes every 3s' : `${esc(d.status)} · ${esc(stamp(d.finished_at || d.updated_at))}`;
-    if (!active) clearInterval(window.__logTimer);
+    if (!active) return false;
   };
   await poll();
-  if (active && window.__logSequence === sequence && $("#oplogBody")) window.__logTimer = setInterval(poll, 3000);
+  if (active && window.__logSequence === sequence && $("#oplogBody")) window.__logTimer = UI.poll(poll, 3000, { later: true });
 };
 
 function operationCopyProgress(progress, active) {

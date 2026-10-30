@@ -35,7 +35,7 @@ function diskV2Region(plan, scope={}) {
 const diskV2Post = (path, body) => api(`/api/disks/v2/${path}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
 function diskV2Reset() {
   clearTimeout(diskV2Timer); ++diskV2Sequence; diskV2Approval=null;
-  if(window.__logTimer) {clearInterval(window.__logTimer);window.__logTimer=null;}
+  if(window.__logTimer) {window.__logTimer.stop?.();window.__logTimer=null;}
 }
 function diskV2Volumes(rows, destinations=false) {
   const volumes=[...new Map(rows.map(r=>[r.volume,r])).values()];
