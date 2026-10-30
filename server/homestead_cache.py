@@ -38,6 +38,19 @@ _running = {}
 # Each key's generation. forget_where() moves it on, so a computation that
 # started before a write is not kept as the answer after it.
 _epoch = {}
+# Bounds on _cache. An entry used to expire only when read, so a key never
+# asked for again (the App Store feed under an old catalogue URL, an image or
+# a name seen once) stayed until the restart. Now a sweep, at most every
+# SWEEP_EVERY seconds when an answer is kept, drops each entry that is past
+# the longest time any reader asked of it and that nobody has asked for in
+# IDLE_SECONDS; an entry still asked for keeps its last copy for a reader to
+# fall back on. Past CACHE_MAX keys the least recently used go first.
+IDLE_SECONDS = 3600
+SWEEP_EVERY = 300
+CACHE_MAX = 4096
+_used = {}          # key -> when it was last kept or asked for
+_ttl = {}           # key -> the longest time a reader asked to keep it
+_swept = [0.0]
 # Keys a page keeps for a set time, refreshed by the leader's page snapshot
 # on its own cycle (#978): key -> the least time any reader keeps it. A loop,
 # /metrics or a dialog that asks for less would read the cluster again on
@@ -73,12 +86,47 @@ class _Flight:
 def _keep(key, epoch, value):
     with _lock:
         if _epoch.get(key, 0) == epoch:
-            _cache[key] = (time.time(), value)
+            _store(key, value, time.time())
+
+
+def _store(key, value, at):
+    """Keep value under key (the caller holds _lock), within the bounds."""
+    now = time.time()
+    if now - _swept[0] >= SWEEP_EVERY or now < _swept[0]:
+        _sweep(now)
+    if key not in _cache and len(_cache) >= CACHE_MAX:
+        _evict(len(_cache) - CACHE_MAX + 1 + CACHE_MAX // 8)
+    _cache[key] = (at, value)
+    _used[key] = now
+
+
+def _sweep(now):
+    """Drop what nobody asks for any more (the caller holds _lock)."""
+    _swept[0] = now
+    for key, entry in list(_cache.items()):
+        if key in _running:
+            continue
+        if now - _used.get(key, entry[0]) > IDLE_SECONDS and now - entry[0] >= _ttl.get(key, 0):
+            del _cache[key]
+    for store in (_used, _ttl):
+        for key in [key for key in store if key not in _cache and key not in _running]:
+            del store[key]
+
+
+def _evict(count):
+    """Drop the count least recently used answers (the caller holds _lock)."""
+    idle = sorted((k for k in _cache if k not in _running), key=lambda k: _used.get(k, _cache[k][0]))
+    for key in idle[:count]:
+        del _cache[key]
+        _used.pop(key, None)
 
 
 def _last(key):
     with _lock:
-        return _cache.get(key)
+        e = _cache.get(key)
+        if e:
+            _used[key] = time.time()
+        return e
 
 
 def _compute(key, fn, epoch):
@@ -129,8 +177,11 @@ def cached(key, ttl, fn):
         if part is not None and time.time() - part[0] < ttl:
             return part[1]
     with _lock:
+        _used[key] = now = time.time()
+        if ttl > _ttl.get(key, 0):
+            _ttl[key] = ttl
         e = _cache.get(key)
-        if e and time.time() - e[0] < ttl:
+        if e and now - e[0] < ttl:
             return e[1]
         flight = _running.get(key)
         mine = flight is None
@@ -183,7 +234,7 @@ def keep(key, value, epoch, at=None):
     with _lock:
         if _epoch.get(key, 0) != epoch:
             return False
-        _cache[key] = (time.time() if at is None else at, value)
+        _store(key, value, time.time() if at is None else at)
         return True
 
 
