@@ -3,22 +3,26 @@
 A line per sign-in, failed attempt, sign-out, password change and change to
 an account, kept in Homestead's data directory beside its console audit.
 Admins read it under Events › Sign-ins. It keeps the most recent entries and
-drops the oldest, so it cannot grow without end. Passwords are never in it -
+drops the oldest, so it cannot grow without end. Every copy of Homestead
+appends and trims it under one shared lock, so two copies on one volume lose
+no line (#986). Passwords are never in it -
 a failed attempt records the name tried, not what was typed for it.
 """
 import json
 import os
 import re
-import threading
 import time
+
+import homestead_shared as SHARED
 
 DATA_DIR = "/data"
 FILE = "signins.jsonl"
 KEEP = 5000
+TRIM_EVERY = 200         # records written by this process between trims
 EVENTS = ("signin", "signin-failed", "signin-blocked", "signout", "signout-everywhere", "password",
           "password-failed", "setup", "user-added", "user-removed", "role",
           "key-added", "key-changed", "key-revoked", "key-refused")
-_lock = threading.Lock()
+_lock = SHARED.SharedLock("signins", directory=lambda: DATA_DIR)
 _writes = {"n": 0}
 
 
@@ -61,13 +65,14 @@ def record(event, user, ip="", ok=True, detail="", agent="", via=""):
             with open(_path(), "a", encoding="utf-8") as handle:
                 handle.write(line)
             _writes["n"] += 1
-            if _writes["n"] % 200 == 0:
+            if _writes["n"] % TRIM_EVERY == 0:
                 _trim()
-    except OSError:
-        pass
+    except Exception as error:      # full, unwritable, or held by a data move
+        print(f"sign-ins: {str(error)[:160]}", flush=True)
 
 
 def _trim():
+    """Keep the newest KEEP lines. Called under _lock."""
     try:
         with open(_path(), encoding="utf-8") as handle:
             lines = handle.readlines()
@@ -75,10 +80,17 @@ def _trim():
         return
     if len(lines) <= KEEP:
         return
-    temp = _path() + ".tmp"
-    with open(temp, "w", encoding="utf-8") as handle:
-        handle.writelines(lines[-KEEP:])
-    os.replace(temp, _path())
+    temp = SHARED.temporary(_path())
+    try:
+        with open(temp, "w", encoding="utf-8") as handle:
+            handle.writelines(lines[-KEEP:])
+        os.replace(temp, _path())
+    except BaseException:
+        try:
+            os.remove(temp)
+        except OSError:
+            pass
+        raise
 
 
 def history(user="", failures=False, limit=500):
