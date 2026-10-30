@@ -65,10 +65,6 @@ ALLOWED = {
     ("platform", "Longhorn"): "the cluster inventory reads Longhorn, but only its Harvester version is "
                               "used, and the upgrades are read from Harvester, which still works",
     ("platform", "KubeVirt"): "as for Longhorn: the inventory's VM reads are not used",
-    # Still clears on a failed read: what fixes it.
-    ("platform", "every read"): "#TBD-upgrades-unread: homestead_upgrades.upgrades() and offered() answer [] "
-                                "on any failed read, so upgrade_facts drops the platform:* events and they "
-                                "fire again once the read works",
 }
 
 # Sources that answer None on the healthy fake cluster too, and why. Such a
