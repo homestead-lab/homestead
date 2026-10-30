@@ -14,6 +14,8 @@ import homestead_self_data_anchor as A
 from homestead_self_data_fence import require_app_readiness, pin_app_image
 from homestead_storage_journal import Held, Journal, identity, settled, shape
 
+READY_WAIT = "Waiting for every Homestead replica to become ready on the new volume"
+
 
 def owner(obj, kind, uid):
     return any(o.get("controller") is True and o.get("kind") == kind and o.get("uid") == uid
@@ -360,7 +362,7 @@ class Coordinator:
                 self._update_dep("start", dep, proposed, built_from)
                 return self._result("Homestead is starting on the new data volume")
             if not self._ready(dep):
-                return self._result("Waiting for every Homestead replica to become ready on the new volume")
+                return self._result(READY_WAIT)
             self.anchor.advance("done")
             return self._result("Homestead is ready on the new data volume; the original is retained")
         return self._result("Homestead's data move is complete; the original volume is retained")
@@ -371,6 +373,16 @@ class Coordinator:
             return self._result("Homestead is ready on its original volume; both volumes are retained")
         if any(e["step"] in ("switch", "start") for e in self.writer.entries):
             raise Held("Original-volume recovery is prohibited after cutover")
+        if not self.writer.entries:
+            # Held before the stop request: Homestead still runs its reviewed
+            # Deployment (_environment pinned its shape) on the original
+            # volume, so there is nothing to restart and nothing is written.
+            volumes = [v for v in dep["spec"]["template"]["spec"].get("volumes", []) if v.get("name") == self.plan["data_volume"]]
+            if (self.state["phase"] != "prepare" or dep["spec"].get("replicas") != self.state["replicas"]
+                    or len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != self.state["source"]["name"]):
+                raise Held("Recovery can keep only the unchanged original Deployment")
+            self.anchor.recovered()
+            return self._result("Homestead was never stopped and keeps its original volume; both volumes are retained")
         if self._entry("recover-start"):
             if self._ready(dep, original=True): self.anchor.recovered()
             return self._result("Checking Homestead on its original volume; both volumes are retained")

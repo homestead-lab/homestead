@@ -12,7 +12,15 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.environ.get("HOMESTEAD_TEST_SERVER_DIR", str(Path(__file__).resolve().parents[1] / "server")))
+import datetime
+import tempfile
+
+import homestead_self_data_anchor as A
+import homestead_self_data_fence as F
+import homestead_self_data_finish as FIN
+import homestead_self_data_recovery as R
 import homestead_self_data_worker as W
+import homestead_shared as SHARED
 from homestead_storage_journal import Held
 from test_self_data_coordinator import Cluster
 
@@ -149,6 +157,135 @@ class HelperCleanupTests(unittest.TestCase):
              mock.patch.object(server.time, "sleep"):
             server.finish_self_data_helpers()
         self.assertEqual(server.SELF_DATA_FINISH.ATTEMPTS, down.call_count)
+
+
+class HeldMoveRecoveryTests(unittest.TestCase):
+    """C1, C2: a hold in phase prepare or start has a reviewed way out."""
+
+    def setUp(self):
+        self.c = Cluster()
+        self.now = 1000
+
+    def anchor(self):
+        return self.c.fresh().load(**self.c.handle)
+
+    def hold(self, message="Copy admission preflight expired before Homestead stopped; obtain a fresh review"):
+        self.anchor().report("coordinator-uid", self.now, "held", message)
+
+    def confirm(self, action):
+        logs = lambda _: self.c.logs_text
+        review = R.review(self.anchor(), self.c.read, logs, action, clock=lambda: self.now)
+        return R.confirm(self.anchor(), self.c.read, logs, action, review["fingerprint"], clock=lambda: self.now)
+
+    def runner(self):
+        return W.Runner(self.c.read, self.c.send, lambda _: self.c.logs_text, self.c.admit,
+                        namespace="lab", deployment="homestead", operation=self.c.handle["operation"],
+                        anchor_uid=self.c.handle["uid"], worker_uid="coordinator-uid", clock=lambda: self.now)
+
+    def writes(self):
+        return [e["step"] for e in self.anchor().item()["ref"]["storage_writes"]]
+
+    def test_hold_before_the_stop_returns_to_the_original_volume_without_any_write(self):
+        self.hold()
+        result = self.confirm("return-original")
+        self.assertEqual("prepare", result["phase"])
+        with tempfile.TemporaryDirectory() as directory:
+            SHARED.write_json(os.path.join(directory, F.MARKER), A.pointer("lab", self.anchor().state, self.c.handle["uid"]), durable=True)
+            pod = self.c.objects["/api/v1/namespaces/lab/pods/old-0"]
+            pod["metadata"]["ownerReferences"][0]["name"] = "hs-rs"
+            pod["spec"]["containers"] = [{"name": "homestead", "volumeMounts": [{"name": "data", "mountPath": directory}]}]
+            fence = F.Fence(self.c.read, "lab", "homestead", "old-0", "homestead", directory)
+            self.assertFalse(fence.inspect()["writable"])  # still read-only until the worker confirms
+            sent = len(self.c.sent)
+            view = self.runner().tick()
+            self.assertEqual("cancelled", view["status"])
+            self.assertEqual("done", self.anchor().state["phase"])
+            self.assertEqual([], self.writes())
+            self.assertFalse(any(p == self.c.dep_path for _, p, _ in self.c.sent[sent:]))
+            self.assertEqual(2, self.c.objects[self.c.dep_path]["spec"]["replicas"])
+            self.assertTrue(fence.inspect()["writable"])
+            self.assertTrue(FIN.finish(fence, self.c.read, self.c.send)["done"])
+            self.assertIsNone(F.read_marker(directory))
+            for name in ("source", "target"):
+                self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/" + name, self.c.objects)
+
+    def test_hold_before_the_stop_can_resume_through_every_check(self):
+        self.hold("Current placement or capacity needs review before the data handoff can continue")
+        self.confirm("resume")
+        self.assertEqual("quiesce", self.runner().tick()["phase"])
+        self.assertEqual(["stop"], self.writes())
+
+    def test_untouched_return_is_refused_when_homestead_changed(self):
+        self.hold()
+        self.c.objects[self.c.dep_path]["spec"]["replicas"] = 3
+        with self.assertRaises(Held): self.confirm("return-original")
+        self.assertEqual("held", self.anchor().state["runtime"]["state"])
+
+    def stopped_then_held(self):
+        c = self.c
+        c.reject = lambda m, p, b: p == c.anchor.path and json.loads(b["data"]["state.json"])["phase"] == "quiesce"
+        with self.assertRaises(Held): c.step()
+        c.reject = None
+        self.assertEqual(("prepare", ["stop"]), (self.anchor().state["phase"], self.writes()))
+        self.hold("The data handoff control write was not verified; inspect it before continuing. Nothing was retried")
+        c.settle_stop()
+
+    def test_hold_after_the_stop_resumes_without_a_second_stop(self):
+        self.stopped_then_held()
+        self.confirm("resume")
+        self.assertEqual("quiesce", self.runner().tick()["phase"])
+        self.assertEqual(1, sum(p == self.c.dep_path for _, p, _ in self.c.sent))
+
+    def test_hold_after_the_stop_can_restart_homestead_on_its_original_volume(self):
+        self.stopped_then_held()
+        self.confirm("return-original")
+        runner = self.runner()
+        runner.tick()
+        self.assertEqual(["stop", "recover-start"], self.writes())
+        self.c.settle_start()
+        for i in range(2):
+            self.c.objects[f"/api/v1/namespaces/lab/pods/new-{i}"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] = "source"
+        self.assertEqual("cancelled", runner.tick()["status"])
+
+    def started_then_held(self, accepted_start):
+        self.c.switching(); self.c.step(); self.c.settle_stop()
+        self.assertEqual("start", self.anchor().state["phase"])
+        if accepted_start:
+            self.c.step()
+            self.assertIn("start", self.writes())
+        self.hold("Current placement or capacity needs review before the data handoff can continue")
+
+    def test_hold_at_start_resumes_forward_and_never_back(self):
+        for accepted_start in (False, True):
+            with self.subTest(accepted_start=accepted_start):
+                self.c = Cluster(); self.started_then_held(accepted_start)
+                with self.assertRaisesRegex(Held, "Cutover"): self.confirm("return-original")
+                self.confirm("resume")
+                runner = self.runner()
+                runner.tick()
+                self.assertEqual(1, self.writes().count("start"))
+                self.c.settle_start()
+                self.assertEqual("done", runner.tick()["status"])
+                self.assertEqual("target", self.c.objects[self.c.dep_path]["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
+
+    def test_resume_at_start_is_refused_while_a_stranger_mounts_a_volume(self):
+        self.started_then_held(False)
+        from test_self_data_coordinator import obj
+        self.c.put("/api/v1/namespaces/lab/pods/stranger", obj("Pod", "stranger", {"volumes": [{"persistentVolumeClaim": {"claimName": "target"}}]}))
+        with self.assertRaises(Held): self.confirm("resume")
+
+    def test_slow_start_says_so_without_holding(self):
+        self.c.switching(); self.c.step(); self.c.settle_stop()
+        runner = self.runner()
+        runner.tick()  # the start request
+        self.assertNotIn("has not become ready", runner.tick()["message"])
+        lease = "/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/node1"
+        self.now += W.READY_WARN
+        self.c.objects[lease]["spec"]["renewTime"] = datetime.datetime.fromtimestamp(self.now, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        view = runner.tick()
+        self.assertEqual("running", view["status"])
+        self.assertIn("has not become ready", view["message"])
+        self.assertIsNone(runner.hold)
 
 
 if __name__ == "__main__":

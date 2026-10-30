@@ -15,13 +15,25 @@ from homestead_storage_journal import Held, digest, identity, shape
 
 
 def review(anchor, read, logs, action, *, clock=time.time):
+    """Every held phase has one reviewed way out (stuck-jobs C1, C2):
+
+    - prepare, nothing sent: Homestead was never stopped. return-original
+      keeps it as it is, with no write; resume retries the stop's checks.
+    - prepare after the stop, quiesce, copy, verify, switch before its
+      request: resume, or return-original (restart on the original volume).
+    - after the switch request: only resume, forward to the new volume;
+      returning to the original volume could lose writes made on the new one.
+    """
     state = anchor.state
+    writes = state["journal"]["ref"]["storage_writes"]
     if (action not in ("resume", "return-original") or state.get("runtime", {}).get("state") != "held"
-            or state["phase"] not in ("quiesce", "copy", "verify", "switch")
-            or any(e["state"] != "accepted" for e in state["journal"]["ref"]["storage_writes"])):
-        raise Held("Recovery needs a held move before cutover with known request outcomes")
-    if any(e["step"] in ("switch", "start") for e in state["journal"]["ref"]["storage_writes"]):
-        raise Held("Cutover has been requested; neither retained volume can be restarted through this recovery")
+            or state["phase"] not in ("prepare", "quiesce", "copy", "verify", "switch", "start")
+            or any(e["state"] != "accepted" for e in writes)):
+        raise Held("Recovery needs a held move with known request outcomes")
+    cutover = any(e["step"] in ("switch", "start") for e in writes)
+    untouched = state["phase"] == "prepare" and not writes
+    if cutover and action != "resume":
+        raise Held("Cutover has been requested; Homestead can only resume onto its new volume, never return to the original")
     if action == "resume" and (state.get("copy_receipt", {}).get("state") == "uncertain"
                                or state.get("recovery", {}).get("action") == "return-original"):
         raise Held("An uncertain copy or original-volume recovery cannot resume the move")
@@ -46,17 +58,29 @@ def review(anchor, read, logs, action, *, clock=time.time):
                            worker_uid=state["plan"]["worker"]["uid"], clock=clock)
     dep = engine._environment()
     volumes = [v for v in dep["spec"]["template"]["spec"].get("volumes", []) if v["name"] == state["plan"]["data_volume"]]
-    if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != state["source"]["name"]:
-        raise Held("The Deployment no longer selects the reviewed original volume")
+    selected = state["destination"] if cutover else state["source"]["name"]
+    if len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != selected:
+        raise Held("The Deployment no longer selects the reviewed " + ("new" if cutover else "original") + " volume")
     known = engine._entry("copy-job")
     restarting = engine._entry("recover-start")
     released = engine._entry("release-copy") or engine._entry("recover-release-copy")
-    if restarting:
+    if cutover:
+        # The coordinator rechecks admission before its start request; once
+        # that is sent, a pod outside Homestead on either volume still holds.
+        if engine._entry("start"): engine._ready(dep)
+        elif not engine._quiet(dep): raise Held("Wait for normal Homestead pod removal before reviewing recovery")
+    elif untouched:
+        if dep["spec"].get("replicas") != state["replicas"]:
+            raise Held("Homestead's replica count changed after review; inspect it before recovery")
+    elif restarting:
         if action != "return-original": raise Held("Original-volume restart is already committed")
         engine._ready(dep, original=True)  # also detects unexpected data consumers
     elif not engine._quiet(dep, helper_uid=known["after"]["uid"] if known else None):
         raise Held("Wait for normal Homestead pod removal before reviewing recovery")
-    if known and not released:
+    if cutover:
+        if not released or engine.writer.observe(released) is not None:
+            raise Held("The verified copy Job has no completed release; inspect it before recovery")
+    elif known and not released:
         job = engine.writer.observe(known)
         if action == "resume":
             receipt = engine._copy_receipt(job, [p for p in engine._pods() if C.owner(p, "Job", known["after"]["uid"])])
@@ -68,7 +92,7 @@ def review(anchor, read, logs, action, *, clock=time.time):
     result = {"action": action, "operation": state["operation"], "anchor": identity(anchor.obj),
               "phase": state["phase"], "source": state["source"]["name"], "destination": state["destination"],
               "retention_policy": "keep_both_volumes"}
-    if action == "return-original" and not restarting and "admission" in state["plan"]:
+    if action == "return-original" and not restarting and not untouched and "admission" in state["plan"]:
         from homestead_self_data_admission import review as capacity
         proposed = copy.deepcopy(dep); proposed["spec"]["replicas"] = state["replicas"]
         from homestead_self_data_fence import pin_app_image

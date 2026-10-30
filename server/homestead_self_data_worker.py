@@ -42,6 +42,11 @@ DESCRIPTIONS = {
 # a write whose outcome is unknown still holds at once (its journal says so).
 OUTAGE_LIMIT = 300
 TRANSIENT_CODES = (429, 500, 502, 503, 504)
+# After this long on the new volume without every replica ready, the status
+# says so. It is not a hold: a hold would keep the new pods unready (the
+# fence answers 503 while held), and returning to the original volume is
+# not allowed after cutover anyway.
+READY_WARN = 900
 
 
 def transient(error):
@@ -76,7 +81,8 @@ def progress(anchor, now):
     recovering = state.get("recovery", {}).get("action") == "return-original"
     if recovering and state["phase"] == "done" and state.get("runtime", {}).get("state") != "held":
         writes = state["journal"]["ref"]["storage_writes"]
-        if (all(e["state"] == "accepted" for e in writes) and any(e["step"] == "recover-start" for e in writes)
+        # No write at all: held before the stop, so Homestead never stopped.
+        if (all(e["state"] == "accepted" for e in writes) and (not writes or any(e["step"] == "recover-start" for e in writes))
                 and not any(e["step"] in ("switch", "start") for e in writes)):
             return {"operation": state["operation"], "phase": "done", "status": "cancelled", "stale": False,
                     "message": "Homestead is ready on its original volume. Both data volumes are retained.",
@@ -131,6 +137,7 @@ class Runner:
         self.hold = None
         self.held_recovery = None
         self.outage_since = None
+        self.start_wait = None
         self._maintenance_active = False
 
     def maintenance_ready(self):
@@ -155,6 +162,10 @@ class Runner:
                 view.update(status="held", message=self.hold, requires_review=True)
             elif self.outage_since is not None and view["status"] != "done":
                 view.update(message="The Kubernetes API is not answering; the move retries it and repeats no request. " + view["message"])
+            elif (self.start_wait is not None and view["phase"] == "start" and view["status"] != "done"
+                    and self.clock() - self.start_wait >= READY_WARN):
+                view.update(message=f"Homestead has not become ready on the new volume for {READY_WARN // 60} minutes. Both volumes "
+                            "are retained. Check the new pods' logs; the move finishes by itself once they are ready.")
             return view
         except Exception:
             return unavailable_status(self.operation)
@@ -214,6 +225,8 @@ class Runner:
                 engine = C.Coordinator(anchor, self.read, self.send, self.logs, admit,
                                        worker_uid=self.worker_uid, clock=self.clock)
                 result = engine.step()
+                waiting = result["phase"] == "start" and result["message"] == C.READY_WAIT
+                self.start_wait = (self.start_wait or self.clock()) if waiting else None
                 anchor.report(self.worker_uid, int(self.clock()),
                               "done" if result["phase"] == "done" else "running", result["message"])
                 self.outage_since = None
