@@ -216,13 +216,51 @@ class CompactHistoryTests(Base):
                          "the template kept before the move is the one the next change undoes to")
 
     def test_a_template_no_entry_needs_is_removed(self):
+        import os
         CH.observe([dep()], now=1000)
         for i in range(CH.KEEP + 5):
             CH.observe([dep(image=f"example/sonarr:{i}")], now=1060 + i * 60)
         self.assertEqual(CH.KEEP, len(CH.history("lab", "sonarr")))
+        self.assertEqual(CH.KEEP + 6, len(list(Path(self.dir.name, CH.TEMPLATES).iterdir())), "none removed within the hour")
+        for f in Path(self.dir.name, CH.TEMPLATES).iterdir():
+            os.utime(f, (f.stat().st_mtime - CH.TEMPLATE_GRACE - 1,) * 2)
+        CH.observe([dep(image="example/sonarr:last")], now=1060 + (CH.KEEP + 6) * 60)
         self.assertEqual(CH.KEEP + 1, len(list(Path(self.dir.name, CH.TEMPLATES).iterdir())), "the 50 entries' and the app's own")
         for e in CH.history("lab", "sonarr"):
             CH.kept_before("lab", "sonarr", e["id"])
+
+    def test_a_template_another_leader_just_wrote_is_not_removed(self):
+        CH.observe([dep()], now=1000)
+        CH._keep(CH._template(dep(image="example/sonarr:9.9")))     # the new leader's, its index not saved yet
+        CH.observe([dep(image="example/sonarr:5.0")], now=1060)       # the old leader saves and tidies
+        self.assertEqual(3, len(list(Path(self.dir.name, CH.TEMPLATES).iterdir())))
+
+    def test_a_template_cut_short_is_written_again(self):
+        CH.observe([dep()], now=1000)
+        for f in Path(self.dir.name, CH.TEMPLATES).iterdir():
+            f.write_text("")                                          # a power cut after the index was saved
+        CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+        CH.observe([dep()], now=1120)                                 # back to 4.0: the same settings again
+        newest = CH.history("lab", "sonarr")[0]
+        self.assertEqual("example/sonarr:5.0", CH.kept_before("lab", "sonarr", newest["id"])["before"]["template"]["spec"]["containers"][0]["image"])
+        older = CH.history("lab", "sonarr")[1]
+        self.assertTrue(older["can_undo"], "the 4.0 settings were written again when kept again")
+        self.assertEqual("example/sonarr:4.0", CH.kept_before("lab", "sonarr", older["id"])["before"]["template"]["spec"]["containers"][0]["image"])
+
+    def test_templates_are_written_to_last(self):
+        with mock.patch.object(CH.SHARED, "write_json", wraps=CH.SHARED.write_json) as write:
+            CH.observe([dep()], now=1000)
+        durable = [c.kwargs.get("durable") for c in write.call_args_list if CH.TEMPLATES in c.args[0]]
+        self.assertEqual([True], durable)
+
+    def test_undo_without_its_template_is_said_and_not_offered(self):
+        CH.observe([dep()], now=1000)
+        CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+        for f in Path(self.dir.name, CH.TEMPLATES).iterdir():
+            f.unlink()
+        self.assertFalse(CH.history("lab", "sonarr")[0]["can_undo"])
+        with self.assertRaisesRegex(ValueError, "no longer kept"):
+            CH.undo_plan(dep(image="example/sonarr:5.0"), {"id": "x", "before": "0" * 32})
 
     def test_a_missing_template_is_no_longer_in_the_history(self):
         CH.observe([dep()], now=1000)
@@ -239,15 +277,15 @@ class CompactHistoryTests(Base):
             for i in range(3):
                 CH.observe([dep()], now=1060 + i * 60)
                 CH.history("lab", "sonarr")
-            self.assertEqual(0, read.call_count, "the minute's look and the page answer from what was read")
+            self.assertEqual(0, sum(1 for c in read.call_args_list if c.args[0].endswith("change-history.json")), "the minute's look and the page answer from what was read")
             CH.observe([dep(image="example/sonarr:5.0")], now=1300)
             CH.history("lab", "sonarr")
-            self.assertEqual(0, read.call_count, "nor after its own write")
+            self.assertEqual(0, sum(1 for c in read.call_args_list if c.args[0].endswith("change-history.json")), "nor after its own write")
             other = self.index()                          # another copy of Homestead leads now, and writes
             other["apps"]["lab/sonarr"]["entries"][0]["by"] = "someone"
             self.write_old(other)
             self.assertEqual("someone", CH.history("lab", "sonarr")[0]["by"])
-            self.assertEqual(1, read.call_count)
+            self.assertEqual(1, sum(1 for c in read.call_args_list if c.args[0].endswith("change-history.json")))
 
     def test_a_failed_write_is_not_remembered_as_written(self):
         CH.observe([dep()], now=1000)

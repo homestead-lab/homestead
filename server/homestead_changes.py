@@ -50,6 +50,10 @@ import homestead_shared as SHARED
 DATA_DIR = "/data"
 TEMPLATES = "change-templates"      # the settings kept for undo, a file each, named by digest
 _DIGEST = re.compile(r"^[0-9a-f]{32}$")
+# A template no entry points at is removed only once it is this old: a new
+# leader may have written it for an index it has not saved yet (two leaders
+# overlap for a moment at a handover).
+TEMPLATE_GRACE = 3600
 KEEP = 50
 KEEP_DAYS = 180
 SENSITIVE = re.compile(r"pass|secret|token|key|credential|auth|cookie|private|salt", re.I)
@@ -121,11 +125,16 @@ def _template_path(digest):
 
 
 def _keep(settings):
-    """Keep the settings for undo once, under their digest, and return it."""
+    """Keep the settings for undo once, under their digest, and return it.
+
+    Written durably (only on a change, so rarely): the index that points at it
+    is saved after, and must never outlive it. A file there already is used
+    only if it reads back; one a crash cut short is written again."""
     text = json.dumps(settings, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(text.encode()).hexdigest()[:32]
-    if not os.path.exists(_template_path(digest)):
-        SHARED.write_json(_template_path(digest), settings, separators=(",", ":"), sort_keys=True, mode=0o600)
+    if _kept(digest) is None:
+        SHARED.write_json(_template_path(digest), settings, durable=True, separators=(",", ":"), sort_keys=True,
+                          mode=0o600)
     return digest
 
 
@@ -135,8 +144,19 @@ def _kept(ref):
         return ref
     if not isinstance(ref, str) or not _DIGEST.match(ref):
         return None
-    settings = SHARED.read_json(_template_path(ref), {})
+    try:
+        settings = SHARED.read_json(_template_path(ref), {})
+    except ValueError:          # cut short or altered: as good as gone
+        return None
     return settings if isinstance(settings.get("template"), dict) else None
+
+
+def _can_undo(ref):
+    """Whether an entry's settings are there, from the entry or a look at the
+    folder: the template itself is not opened for a listing."""
+    if isinstance(ref, dict):
+        return True
+    return isinstance(ref, str) and bool(_DIGEST.match(ref)) and os.path.isfile(_template_path(ref))
 
 
 def _compact(app):
@@ -158,10 +178,16 @@ def _tidy_templates(apps):
         names = os.listdir(os.path.join(DATA_DIR, TEMPLATES))
     except OSError:
         return
+    now = time.time()
     for file in names:
         digest = file[:-5] if file.endswith(".json") else ""
         if _DIGEST.match(digest) and digest not in wanted:
             path = _template_path(digest)
+            try:
+                if now - os.path.getmtime(path) < TEMPLATE_GRACE:
+                    continue
+            except OSError:
+                continue
             with SHARED.write_scope(path):
                 if SHARED.WRITE_GUARD is not None:
                     SHARED.WRITE_GUARD(path)
@@ -549,7 +575,7 @@ def history(ns=None, name=None, limit=200):
                 continue
             for e in app.get("entries", []):
                 out.append({**{k: v for k, v in e.items() if k != "before"}, "namespace": a_ns, "name": a_name,
-                            "can_undo": bool(e.get("before"))})
+                            "can_undo": _can_undo(e.get("before"))})
     return sorted(out, key=lambda e: -e["at"])[:limit]
 
 
@@ -566,6 +592,8 @@ def kept_before(ns, name, entry_id):
 
 def undo_plan(current, entry):
     """current with the settings from before the change put back: (proposed, rows)."""
+    if not isinstance(entry.get("before"), dict) or not isinstance(entry["before"].get("template"), dict):
+        raise ValueError("the settings from before that change are no longer kept, so it cannot be undone")
     proposed = copy.deepcopy(current)
     proposed["spec"]["template"] = copy.deepcopy(entry["before"]["template"])
     proposed["spec"]["replicas"] = entry["before"].get("replicas", 1)
