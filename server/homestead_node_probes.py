@@ -18,10 +18,12 @@ tests) a read happens in the caller, as before, at most every INTERVAL.
 import json
 import threading
 import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 import homestead_names as NAMES
+import homestead_smart as SMART
 
 INTERVAL = 15            # seconds between rounds
 TIMEOUT = 2              # temperatures, devices and drives (9099)
@@ -42,8 +44,10 @@ _round = {"at": 0.0, "read": None, "done": threading.Event(), "thread": None, "s
 _namespace = ["lab"]
 
 
-def _read(ip, port, timeout):
-    with urllib.request.urlopen(f"http://{ip}:{port}/", timeout=timeout) as response:
+def _read(ip, port, timeout, headers=None):
+    url = f"http://{ip}:{port}/"
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers) if headers else url,
+                                timeout=timeout) as response:
         raw = response.read(LIMIT + 1)
     if len(raw) > LIMIT:
         raise ValueError("node telemetry exceeds the size limit")
@@ -51,26 +55,35 @@ def _read(ip, port, timeout):
 
 
 def _probe(pod):
-    """One host's temperatures, devices and drives, or None when the probe didn't answer."""
+    """(One host's temperatures, devices and drives, or None when no reading
+    came back; whether the host answered at all). A host that answered with
+    something unusable is still up: only a refused or timed-out connection is not."""
     try:
         payload = {"node": pod["spec"]["nodeName"], "thermal": [], "hwmon": [], "devices": {},
                    "disks": [], "sensors": 0}
         payload.update(_read(pod["status"]["podIP"], 9099, TIMEOUT))
-    except Exception:
-        return None
+    except Exception as error:
+        return None, isinstance(error, urllib.error.HTTPError) or not isinstance(error, OSError)
     # Provenance is assigned by this backend, never accepted from the probe
     # response, and stamped when the answer arrived. Consumers still verify
     # Pod/DaemonSet ownership, current host boot and sample age before
     # trusting NUMA data.
     payload["numa_source"] = {"pod": {key: pod.get("metadata", {}).get(key) for key in ("namespace", "name", "uid")},
                               "received_at": time.time()}
-    return payload
+    return payload, True
 
 
 def _smart(pod):
     """One host's SMART rows by drive name ({} when it has none), or None when the helper didn't answer."""
     try:
-        return {row.get("name"): row for row in _read(pod["status"]["podIP"], 9100, SMART_TIMEOUT).get("disks", [])}
+        # The helper answers only signed reads (homestead_smart.signed); without
+        # the key the read goes unsigned and the helper refuses it.
+        try:
+            headers = SMART.signed(b"GET /")
+        except Exception:
+            headers = None
+        answer = _read(pod["status"]["podIP"], 9100, SMART_TIMEOUT, headers)
+        return {row.get("name"): row for row in answer.get("disks", [])}
     except Exception:
         return None
 
@@ -117,7 +130,9 @@ def _run(now, smart):
     pods = _listing()
     listed = {(p.get("spec") or {}).get("nodeName") for p in pods} - {None}
     ready = {p["spec"]["nodeName"]: p for p in pods if _ready(p)}
-    readings = _pool({node: (lambda p=pod: _probe(p)) for node, pod in ready.items()})
+    answers = _pool({node: (lambda p=pod: _probe(p)) for node, pod in ready.items()})
+    readings = {node: payload for node, (payload, _) in answers.items()}
+    gone = []
     with _lock:
         for node in list(_state):
             if node in listed:
@@ -128,6 +143,7 @@ def _run(now, smart):
                 _state[node]["absent"] += 1
                 if _state[node]["absent"] >= GONE_AFTER:
                     del _state[node]
+                    gone.append(node)
         for node, payload in readings.items():
             entry = _state.setdefault(node, {"payload": None, "at": 0, "misses": 0, "last_ok": None,
                                              "smart": None, "smart_at": 0, "smart_stale": False, "absent": 0})
@@ -135,13 +151,28 @@ def _run(now, smart):
                 entry["misses"] += 1
             else:
                 entry.update(payload=payload, at=now, misses=0, last_ok=now)
+        # A host that did not answer its probe this round (refused, timed out)
+        # is not asked for SMART either: it would only wait out SMART_TIMEOUT
+        # too (#974). It stays due.
         due = {node: pod for node, pod in ready.items()
-               if node in _state and (smart or now - _state[node]["smart_at"] >= SMART_EVERY)}
+               if answers[node][1]
+               and (smart or now - _state[node]["smart_at"] >= SMART_EVERY)}
         _round["at"] = now
         _round["read"] = time.monotonic()
+    for node in gone:
+        SMART.drop_host(node)        # its kept SMART readings too, on the data volume
     # The temperatures are recorded before SMART is read, so nobody waits on it.
     _round["done"].set()
     rows = _pool({node: (lambda p=pod: _smart(p)) for node, pod in due.items()})
+    # A drive the host has put to sleep is left asleep by the helper; its last
+    # reading stands in. That may touch the data volume, so it happens outside
+    # _lock: a stalled volume must not hold up the pages reading the probe state.
+    for node, found in rows.items():
+        if found is not None:
+            serials = {disk.get("name"): disk.get("serial")
+                       for disk in ((readings.get(node) or {}).get("disks") or []) if isinstance(disk, dict)}
+            rows[node] = SMART.keep_last(node, found, serials=serials)
+    remembered = {}
     with _lock:
         for node, found in rows.items():
             entry = _state.get(node)
@@ -153,6 +184,10 @@ def _run(now, smart):
                 entry["smart_at"] = now - SMART_EVERY + SMART_RETRY
             else:
                 entry.update(smart=found, smart_at=now, smart_stale=False)
+                remembered[node] = found
+    for node, found in remembered.items():
+        # The SMART page answers from this reading until the next one has had time to land.
+        SMART.remember(node, found, keep=SMART_EVERY + SMART_TIMEOUT + INTERVAL)
 
 
 def _with_smart(entry):

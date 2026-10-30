@@ -48,7 +48,9 @@ const HealthInsights = (() => {
       if (temp && n.probe?.state !== "unreachable" && known(n.temps?.max_c) && n.temps.max_c >= temp.warning) rows.push(item("temperature:"+n.name,n.temps.max_c>=temp.critical?"critical":"medium",`${n.name}: maximum ${n.temps.max_c}°C`,"Inspect the sensor and cooling. Drive temperatures use their own thresholds.","node:"+n.name));
       for (const d of n.temps?.disks || []) {
         if (["critical","attention","degraded"].includes(d.health?.state)) rows.push(item("disk:"+n.name+":"+d.name,d.health.state==="critical"?"critical":"medium",`${n.name} / ${d.name}: drive needs attention`,d.health.summary || "Check SMART results and verify backups before replacing the drive.","disk:"+n.name+":"+d.name));
-        else if (!d.health || d.health.stale_probe || ["unknown","unsupported"].includes(d.health.state)) rows.push(item("disk:"+n.name+":"+d.name,"low",`${n.name} / ${d.name}: drive health unknown`,"Check the node probe and SMART support.","disk:"+n.name+":"+d.name));
+        // Asleep with no reading kept (#974): Homestead has nothing to judge it by.
+        else if (!d.health || d.health.stale_probe || ["unknown","unsupported"].includes(d.health.state)
+          || (d.health.state === "asleep" && !d.health.read_at)) rows.push(item("disk:"+n.name+":"+d.name,"low",`${n.name} / ${d.name}: drive health unknown`,"Check the node probe and SMART support.","disk:"+n.name+":"+d.name));
       }
     }
     // Keep the exact reasons behind the dashboard banner visible here too.

@@ -29,3 +29,17 @@ test("a running self-test is a UI.callout and .clusteralert is gone", () => {
   for (const file of ["web/style.css", ...fs.readdirSync("web/js").map(f => `web/js/${f}`)])
     assert.doesNotMatch(fs.readFileSync(file, "utf8"), /clusteralert/, `${file} has no .clusteralert`);
 });
+
+/* A drive left asleep by the regular SMART read says so, with its reading's age (#974). */
+test("an asleep drive says it is asleep and how old its last reading is", () => {
+  context.fmtAgo = sec => `${sec}s ago`;
+  const text = (smart, health, now) => vm.runInContext(
+    `diskAsleepText(${JSON.stringify(smart)}, ${JSON.stringify(health)}, ${now})`, context);
+  assert.equal(text({ asleep: true }, { state: "asleep", read_at: 1000 }, 8200), "asleep · last read 7200s ago");
+  assert.equal(text({ asleep: true }, { state: "critical", read_at: 1000 }, 1060), "asleep · last read 60s ago");
+  assert.equal(text({ asleep: true }, { state: "asleep" }, 1000), "asleep · not read awake yet");
+  assert.equal(text({}, { state: "healthy", read_at: 1000 }, 1000), "");
+  assert.equal(text(null, null, 1000), "");
+  const source = fs.readFileSync("web/js/views-overview.js", "utf8");
+  assert.equal((source.match(/diskAsleepText\(/g) || []).length, 2, "used on the drive row and the drive page");
+});

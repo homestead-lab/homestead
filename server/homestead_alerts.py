@@ -305,7 +305,9 @@ def health_facts(overview):
             facts.append({"unknown_prefix": prefix})
         else:
             for disk in temps["disks"]:
-                if not (disk.get("smart") or {}).get("available"):
+                smart = disk.get("smart") or {}
+                # A drive left asleep with no reading kept (after a restart, #974) proves nothing either.
+                if not smart.get("available") or (smart.get("asleep") and not smart.get("read_at")):
                     facts.append({"unknown_key": prefix + disk.get("name", "unknown")})
     return facts
 

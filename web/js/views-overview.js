@@ -34,6 +34,10 @@ const diskHealthTone = state => state === "healthy" ? "ok" : state === "attentio
   : state === "critical" ? "bad" : "";
 const diskHealthWord = state => state === "attention" ? "needs attention"
   : state === "unavailable" ? "not reported" : (state || "unknown");
+/* A drive the regular SMART read left asleep (#974): it says so, and how old
+   the reading it is judged by is. */
+const diskAsleepText = (smart, health, now = Date.now() / 1000) => !smart?.asleep ? ""
+  : health?.read_at ? `asleep · last read ${fmtAgo(Math.max(1, Math.round(now - health.read_at)))}` : "asleep · not read awake yet";
 /* Life remaining, where the drive reports something that means it. */
 const lifeTone = pct => pct == null ? "" : pct <= 10 ? "bad" : pct <= 25 ? "warn" : "ok";
 const smartMetric = value => value == null ? "unsupported" : String(value);
@@ -688,7 +692,7 @@ async function nodePage(name) {
     <div class="diskidentity"><b class="mono">${given[d.name] ? `${esc(given[d.name])} <span class="dim">${esc(d.name)}</span>` : esc(d.name)} ${UI.chip(d.kind || "Disk", "neutral")}
       ${can("admin") ? `<button class="btn sm" data-tip="Name this drive" onclick="diskRename(${jsq(n.name)},${jsq(d.name)},${jsq(given[d.name] || "")})">${given[d.name] ? "Rename" : "Name"}</button>` : ""}</b><span>${esc(s?.model || d.model || d.name)}</span><span class="mono">${esc(s?.serial || d.serial || "serial unavailable")}</span></div>
     <div><span class="disklabel">CAPACITY</span><b class="mono">${Number(d.size_gb || 0).toFixed(1)} GiB</b></div>
-    <div><span class="disklabel">HEALTH</span><b>${UI.chip(diskHealthWord(d.health?.state), diskHealthTone(d.health?.state) || "neutral", { tip: d.health?.summary || "no SMART data for this drive" })}</b></div>
+    <div><span class="disklabel">HEALTH</span><b>${UI.chip(diskHealthWord(d.health?.state), diskHealthTone(d.health?.state) || "neutral", { tip: d.health?.summary || "no SMART data for this drive" })}</b>${(t => t ? ` <span class="dim xs">${esc(t)}</span>` : "")(diskAsleepText(s, d.health))}</div>
     <div><span class="disklabel">LIFE</span><b class="mono ${lifeTone(d.health?.life_pct)}">${d.health?.life_pct == null ? "—" : esc(d.health.life_pct) + "%"}</b></div>
     <div><span class="disklabel">TEMP</span><b class="mono ${tempCls(s?.temperature_c)}">${s?.temperature_c == null ? "—" : esc(s.temperature_c) + "°C"}</b></div>
     <div><span class="disklabel">READ</span><b class="mono diskrate read">↓ ${Number(d.read_mbps || 0).toFixed(2)} MiB/s</b></div>
@@ -829,6 +833,7 @@ window.smartDisk = async (node, disk) => {
     target.innerHTML = `
       <div class="between smart-drive-head"><div><div class="ctitle">${esc(s.model || disk)}</div><div class="csub mono">${esc(s.path || "/dev/" + disk)} · ${esc(s.serial || "serial unavailable")} · ${esc(s.protocol || "protocol unknown")}</div></div>
         ${UI.chip(diskHealthWord(health.state), diskHealthTone(health.state) || "neutral")}</div>
+      ${(t => t ? `<div class="note"><b>${esc(t[0].toUpperCase() + t.slice(1))}.</b> Homestead leaves a drive the host has spun down asleep and shows its last reading, without a temperature.</div>` : "")(diskAsleepText(s, health))}
       ${s.available ? "" : `<div class="note"><b>SMART unavailable.</b> ${esc(s.unavailable_reason || "This drive or USB bridge does not expose SMART data.")}</div>`}
       ${health.issues?.length ? `<div class="note ${health.state === "critical" ? "bad" : "warn"}">
         <b>${health.state === "critical" ? "This drive needs replacing." : "This drive needs watching."}</b>

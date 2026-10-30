@@ -105,3 +105,9 @@ test("a schedule clash this week is a medium finding that opens the week; close 
  s.protection.clashes.push(clash("clash","a","b"));assert.equal(H.advice(s).find(r=>r.id==="schedule-clash").title,"2 schedule clashes this week");
  s.protection.clashes=[clash("close","offsite","weekly-trim")];assert.equal(H.advice(s).some(r=>r.id==="schedule-clash"),false);
 });
+test("a drive asleep with no reading yet is health unknown; one asleep on a clean reading is not listed",()=>{
+ const s=base();s.nodes=[{name:"host",temps:{disks:[{name:"sda",health:{state:"asleep"}},{name:"sdb",health:{state:"asleep",read_at:1700000000}}]}}];
+ const rows=H.advice(s);
+ assert.match(rows.find(r=>r.id==="disk:host:sda")?.title || "",/drive health unknown/);
+ assert.equal(rows.find(r=>r.id==="disk:host:sdb"),undefined);
+});
