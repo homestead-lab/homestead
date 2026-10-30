@@ -175,6 +175,54 @@ class RolloutTests(unittest.TestCase):
         self.assertEqual(["node-1"], self.restarts, "restarted once the API server answered")
         self.assertNotIn("needing a restart", rollout["message"])
 
+    def tick_for(self, minutes, clock, every=30):
+        end = clock + minutes * 60
+        while clock < end and (ROLLOUT._load().get("rollout") or {}).get("status") == "running":
+            clock += every
+            ROLLOUT.tick(now=clock)
+            self.finish_restarts()
+        return clock
+
+    def test_a_host_that_stops_answering_ends_the_rollout_and_lets_go_of_the_holds(self):
+        # node-2 (first: the leader's node-1 goes last) goes away while its
+        # updates install: every look at it fails.
+        original = self.hosts.upgrade_state
+        self.hosts.upgrade_state = lambda name: (_ for _ in ()).throw(OSError("node-2 is not answering")) \
+            if name == "node-2" else original(name)
+        ROLLOUT.start(now=1000)
+        clock = self.tick_for(ROLLOUT.ERROR_LIMIT / 60 - 2, 1000)
+        rollout = ROLLOUT._load()["rollout"]
+        self.assertEqual("running", rollout["status"], "errors are waited out for a while")
+        self.assertIn("not answering", rollout["message"])
+        self.tick_for(4, clock)
+        rollout = ROLLOUT._load()["rollout"]
+        self.assertEqual("failed", rollout["status"])
+        self.assertIn("node-2", rollout["message"])
+        self.assertIn("not answering", rollout["message"], "the last error is kept")
+        held = {name for name, on in self.hosts.holds if on}
+        self.assertTrue(held)
+        self.assertEqual(held, {name for name, on in self.hosts.holds if not on},
+                         "every host's automatic updates are let go of")
+        self.assertIn("node-2", self.hosts.held, "the install may still run there: its own hold lapses by itself")
+        self.assertEqual(["node-2"], self.hosts.began, "no other host was started")
+        ROLLOUT.start(now=clock + 600)   # a new rollout is no longer refused
+
+    def test_errors_that_clear_start_the_count_again(self):
+        self.bind(own="node-3")
+        broken = {"on": True}
+        original = self.hosts.read
+        self.hosts.read = lambda name, refresh=False: (_ for _ in ()).throw(OSError("busy")) \
+            if broken["on"] else original(name, refresh)
+        ROLLOUT.start(now=1000)
+        clock = self.tick_for(ROLLOUT.ERROR_LIMIT / 60 - 5, 1000)
+        broken["on"] = False
+        clock = self.tick_for(0.5, clock)                     # one round: node-1 moves on
+        broken["on"] = True
+        clock = self.tick_for(ROLLOUT.ERROR_LIMIT / 60 - 5, clock)
+        self.assertEqual("running", ROLLOUT._load()["rollout"]["status"])
+        broken["on"] = False
+        self.assertEqual("succeeded", self.tick_for(30, clock) and ROLLOUT._load()["rollout"]["status"])
+
     def test_a_restart_a_drained_leader_left_running_is_taken_up_not_asked_again(self):
         # The leader ran node-1's drain and was itself drained off; the job it
         # started carries on elsewhere. The new leader adopts it.

@@ -49,6 +49,9 @@ DEFAULTS = {"schedule": {"enabled": False, "days": ["sun"], "hour": 3, "tz": "",
             "reboot": "when-needed", "single_copy": False, "manage": "ubuntu"}
 INSTALL_LIMIT = 2 * 3600
 RESTART_LIMIT = 45 * 60
+# A step that keeps raising (a host gone or NotReady, its OS read cut short)
+# ends the rollout after this long, as a job's resolver would (homestead_job_errors).
+ERROR_LIMIT = 30 * 60
 # The hosts restarted before this one leave their copies of volumes rebuilding
 # for a while; meanwhile this host can hold a volume's only healthy copy.
 COPIES_WAIT = 15 * 60
@@ -387,6 +390,30 @@ def _finish(state, rollout, now):
     return True
 
 
+def _failing(state, error, now=None):
+    """A step raised. Waited out for ERROR_LIMIT; after that the host being
+    updated is marked failed with the error and the rollout ends, which lets go
+    of the hosts' automatic-update holds and lets a new rollout start. What
+    may still be going on is left alone: a host still installing keeps its own
+    hold, which lapses by itself, and a host being restarted stays cordoned."""
+    now = now or time.time()
+    rollout = state.get("rollout") or {}
+    text = " ".join(str(error).split())[:200]
+    since = rollout.get("error_since")
+    if not isinstance(since, (int, float)) or since > now:
+        rollout["error_since"] = since = now
+    if now - since <= ERROR_LIMIT or rollout.get("status") != "running":
+        rollout["message"] = f"waiting: {text}"
+        return False
+    phase = rollout.get("phase")
+    left = ("; its updates may still be installing" if phase == "installing" else
+            "; it is left cordoned" if phase == "restarting" else "")
+    _result(rollout, False, f"no answer for {ERROR_LIMIT // 60} min: {text}{left}")
+    rollout["stop"], rollout["failed"] = True, True
+    rollout.pop("error_since", None)
+    return _finish(state, rollout, now)
+
+
 def tick(now=None):
     """Keep holds as the settings say, start a due window, move a rollout on."""
     p = platform() or {}
@@ -413,10 +440,9 @@ def tick(now=None):
             state = _load()
             try:
                 advanced = step(state, now)
+                (state.get("rollout") or {}).pop("error_since", None)
             except Exception as error:
-                rollout = state.get("rollout") or {}
-                rollout["message"] = f"waiting: {str(error)[:200]}"
-                advanced = False
+                advanced = _failing(state, error, now)
             _save(state)
         moved = moved or advanced
         if not advanced:

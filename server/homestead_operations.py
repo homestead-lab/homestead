@@ -7,6 +7,7 @@ backup. Only identifiers and status are stored; request bodies and credentials
 are deliberately excluded.
 """
 import homestead_job_cadence as CADENCE
+import homestead_job_errors as ERRORS
 import homestead_kube as KUBE
 import homestead_shared as SHARED
 import homestead_vm_power_receipts as POWER_RECEIPTS
@@ -381,7 +382,7 @@ def checkpoint(item):
 def _public(item):
     out = {key: value for key, value in item.items()
            if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store", "cancel_request",
-                          CADENCE.KEY)}
+                          CADENCE.KEY, ERRORS.KEY)}
     # Every job still going can be cancelled unless its kind refuses (the same
     # refusals _plan_for gives; they read only the job). What cancelling does
     # is asked for separately, as it reads Kubernetes and the tray is polled often.
@@ -888,11 +889,13 @@ def _refresh(item):
     resolver = RESOLVERS.get(item.get("kind"))
     if not resolver:
         return _finish(item, "failed", item.get("progress", 0), "Unknown operation type")
+    if ERRORS.resting(item):
+        return False  # it needs attention: asked again once a minute, not every round
     # A step can move on without its message changing - a new job's name, the
     # next phase - and that has to be written too, or a restart repeats it.
     before = json.dumps(item, sort_keys=True, default=str)
     try:
-        return _finish(item, *resolver(item)) or json.dumps(item, sort_keys=True, default=str) != before
+        result = resolver(item)
     except urllib.error.HTTPError as error:
         if error.code == 404:
             # Which object, so a job that stops here says what went missing.
@@ -901,13 +904,41 @@ def _refresh(item):
             what = " ".join(parts) if len(parts) == 2 else "the resource it follows"
             return _finish(item, "failed", item.get("progress", 0),
                            f"Kubernetes no longer has {what}")
-        return _finish(item, "running", item.get("progress", 0),
-                       f"Status temporarily unavailable (HTTP {error.code})")
+        return _resolver_failed(item, f"HTTP {error.code}", f"Status temporarily unavailable (HTTP {error.code})",
+                                before)
     except Exception as error:
-        # Monitoring failures are not operation failures. Preserve the active
-        # state and let the next poll recover when Kubernetes is reachable.
-        return _finish(item, "running", item.get("progress", 0),
-                       f"Status temporarily unavailable: {error}")
+        return _resolver_failed(item, error, f"Status temporarily unavailable: {error}", before)
+    ERRORS.clear(item)
+    return _finish(item, *result) or json.dumps(item, sort_keys=True, default=str) != before
+
+
+def _resolver_failed(item, error, unavailable, before):
+    """Monitoring failures are not operation failures at first: the job stays
+    active and the next poll recovers once Kubernetes or the host answers. Past
+    its kind's limit (homestead_job_errors) it fails with the last error, or,
+    for a kind that moves data or holds a host or an app, keeps its guards and
+    says it needs attention."""
+    given_up = ERRORS.failed(item, error)
+    progress = item.get("progress", 0)
+    if given_up is None:
+        changed = _finish(item, "running", progress, unavailable)
+    elif given_up[0] == "failed":
+        changed = _finish(item, "failed", progress, given_up[1])
+    else:
+        changed = _finish(item, "running", progress, f"{given_up[1]} {_attention_action(item)}")
+    return changed or json.dumps(item, sort_keys=True, default=str) != before
+
+
+def _attention_action(item):
+    """What a person can do about a job that needs attention, read from the job
+    only (as _public's cancel refusals are)."""
+    block = CANCEL_BLOCKS.get(item.get("kind"))
+    why_not = block(item) if block else ""
+    if why_not:
+        return why_not
+    if item.get("kind") in CANCELLERS:
+        return "Fix what the error names, or cancel it: the cancel review says what it puts back."
+    return "Fix what the error names; Homestead cannot cancel this kind of job."
 
 
 def _archived_preparation(item):
