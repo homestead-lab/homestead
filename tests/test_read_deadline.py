@@ -7,6 +7,7 @@ left, none starts after it, and a 429 is not retried past it. A page some of
 whose reads were cut short answers 503 (or the last complete copy kept in
 the cache), never a partial page as if it were complete. Background loops
 set no deadline and keep their own timeouts."""
+import contextlib
 import sys
 import threading
 import types
@@ -338,6 +339,95 @@ class CacheTests(DeadlineCase):
         with Kube(NODE):
             self.assertEqual("node-a", CACHE.cached("deadline-test-d", 20, self.slow_read))
         self.assertEqual(0, DEADLINE.cuts())
+
+    def test_a_thread_that_cannot_start_leaves_no_flight_behind(self):
+        DEADLINE.begin(15)
+        with mock.patch.object(CACHE.threading.Thread, "start", side_effect=RuntimeError("can't start new thread")):
+            with self.assertRaises(DEADLINE.Spent):
+                CACHE.cached("deadline-test-h", 20, dict)
+        self.assertNotIn("deadline-test-h", CACHE._running)
+        DEADLINE.end()
+        self.assertEqual({}, CACHE.cached("deadline-test-h", 20, dict))   # the next caller is not kept waiting
+
+    def test_a_thread_that_cannot_start_serves_the_last_copy(self):
+        CACHE.keep("deadline-test-i", "old", CACHE.epoch("deadline-test-i"), at=0)
+        DEADLINE.begin(15)
+        with mock.patch.object(CACHE.threading.Thread, "start", side_effect=RuntimeError("can't start new thread")):
+            self.assertEqual("old", CACHE.cached("deadline-test-i", 20, dict))
+        self.assertNotIn("deadline-test-i", CACHE._running)
+
+    def test_background_computations_are_capped_across_keys(self):
+        started = []
+
+        def blocked():
+            started.append(1)
+            self.go.wait(10)
+            return "done"
+        self.enterContext(mock.patch.object(CACHE, "_background", threading.BoundedSemaphore(2)))
+        DEADLINE.begin(15)
+        self.clock.advance(14.99)
+        outcomes = []
+        for n in range(5):
+            try:
+                outcomes.append(CACHE.cached(f"deadline-test-cap-{n}", 20, blocked))
+            except DEADLINE.Spent:
+                outcomes.append("503")
+        self.assertEqual(["503"] * 5, outcomes)
+        self.assertEqual(2, len([k for k in CACHE._running if k.startswith("deadline-test-cap-")]))
+        self.go.set()
+        settle()
+        self.assertLessEqual(len(started), 2)
+        DEADLINE.begin(15)
+        CACHE.cached("deadline-test-cap-9", 20, lambda: "again")   # the slots were given back
+        settle()
+        self.assertEqual("again", CACHE._last("deadline-test-cap-9")[1])
+
+    def test_a_background_computation_counts_as_data_activity(self):
+        inside = []
+        active = threading.local()
+
+        @contextlib.contextmanager
+        def activity():
+            active.on = True
+            try:
+                yield
+            finally:
+                active.on = False
+        self.enterContext(mock.patch.object(K, "self_data_activity", activity, create=True))
+        self.go.set()
+        DEADLINE.begin(15)
+        CACHE.cached("deadline-test-j", 20, lambda: inside.append(getattr(active, "on", False)) or "x")
+        settle()
+        self.assertEqual([True], inside)
+
+    def test_a_background_computation_held_by_a_data_move_is_not_run(self):
+        ran = []
+
+        @contextlib.contextmanager
+        def held():
+            raise RuntimeError("Homestead is finishing current work for its data move")
+            yield
+        self.enterContext(mock.patch.object(K, "self_data_activity", held, create=True))
+        DEADLINE.begin(15)
+        with self.assertRaises(RuntimeError):
+            CACHE.cached("deadline-test-k", 20, lambda: ran.append(1))
+        self.assertEqual([], ran)
+
+    def test_a_background_failure_nobody_waits_for_is_logged(self):
+        def fails():
+            self.go.wait(10)
+            raise OSError("connection refused")
+        DEADLINE.begin(15)
+        self.clock.advance(14.99)
+        with mock.patch("builtins.print") as printed:
+            with self.assertRaises(DEADLINE.Spent):
+                CACHE.cached("deadline-test-l", 20, fails)
+            self.go.set()
+            settle()
+        lines = [c.args[0] for c in printed.call_args_list]
+        self.assertEqual(1, len(lines), lines)
+        self.assertIn("deadline-test-l", lines[0])
+        self.assertIn("connection refused", lines[0])
 
     def flight(self, key, error=None):
         flight = CACHE._Flight(0)
