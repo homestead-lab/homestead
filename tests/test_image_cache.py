@@ -267,3 +267,51 @@ class PrepullTests(unittest.TestCase):
             second = imports._prepull(SimpleNamespace(body={"image": "ghcr.io/x/frigate:0.18.0", "nodes": ["node1"]}))
         self.assertNotEqual(first["daemonset"], second["daemonset"])
         self.assertEqual([first["daemonset"], second["daemonset"]], [a[4]["name"] for a in started])
+
+    def test_a_job_pull_deletes_nothing_and_does_not_wait_first(self):
+        slept = []
+        imports.time.sleep = slept.append
+        name = IMAGES.prepull("ghcr.io/x/frigate:0.18.0", ["node1"], own=True)["daemonset"]
+        self.assertEqual([], [x for x in self.sent if x[0] == "DELETE"], "a name of its own has nothing to replace")
+        self.assertEqual([], slept)
+        self.assertEqual([("POST", "/apis/apps/v1/namespaces/lab/daemonsets")], self.sent)
+        self.assertTrue(name.startswith("homestead-pull-frigate-"))
+
+    def running(self, body):
+        """A posted pull as the API would list it, still pulling."""
+        return {**body, "status": {"desiredNumberScheduled": 1, "numberReady": 0}}
+
+    def click(self, image="ghcr.io/x/frigate:0.18.0"):
+        from types import SimpleNamespace
+        from unittest import mock
+        with mock.patch.object(imports.OPS, "start", side_effect=lambda *a: self.started.append(a) or {"id": "op"}):
+            return imports._prepull(SimpleNamespace(body={"image": image}))
+
+    def test_a_second_pre_pull_click_of_the_same_image_reuses_the_running_one(self):
+        self.started = []
+        first = self.click()
+        self.daemonsets = [self.running(self.posted[-1])]
+        second = self.click()
+        self.assertEqual(first["daemonset"], second["daemonset"])
+        self.assertTrue(second["reused"])
+        self.assertEqual(1, len(self.posted), "no second DaemonSet")
+        self.assertEqual(1, len(self.started), "no second job")
+        self.assertIn("Already pulling", second["message"])
+
+    def test_a_job_s_pull_of_the_same_image_is_not_reused_by_a_click(self):
+        self.started = []
+        job = IMAGES.prepull("ghcr.io/x/frigate:0.18.0", ["node1"], own=True)["daemonset"]
+        self.daemonsets = [self.running(self.posted[-1])]
+        clicked = self.click()
+        self.assertNotEqual(job, clicked["daemonset"])
+        self.assertNotIn("reused", clicked)
+        self.assertEqual(1, len(self.started))
+
+    def test_a_finished_or_other_image_pull_is_not_reused(self):
+        self.started = []
+        self.click()
+        done = {**self.posted[-1], "status": {"desiredNumberScheduled": 1, "numberReady": 1}}
+        self.daemonsets = [done]
+        self.assertNotIn("reused", self.click())
+        self.daemonsets = [self.running(self.posted[-1])]
+        self.assertNotIn("reused", self.click("ghcr.io/x/frigate:0.19.0"))

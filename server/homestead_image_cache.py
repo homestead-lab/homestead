@@ -785,13 +785,30 @@ def _pullable_nodes():
     return healthy, all_names
 
 
-def prepull(image, nodes=None, own=False):
+def _running_click(image, wanted):
+    """An Image cache pull of this image still running onto at least these nodes."""
+    for item in NAMES.find(f"/apis/apps/v1/namespaces/{I.NS}/daemonsets", "task", "prepull"):
+        meta, status = item.get("metadata") or {}, item.get("status") or {}
+        spec = ((item.get("spec") or {}).get("template") or {}).get("spec") or {}
+        desired, ready = int(status.get("desiredNumberScheduled") or 0), int(status.get("numberReady") or 0)
+        terms = (((spec.get("affinity") or {}).get("nodeAffinity") or {}).get(
+            "requiredDuringSchedulingIgnoredDuringExecution") or {}).get("nodeSelectorTerms") or [{}]
+        pinned = set(((terms[0].get("matchExpressions") or [{}])[0]).get("values") or [])
+        if (NAMES.label_of(meta, "pull-by") == "image-cache" and not (desired and ready >= desired)
+                and [c.get("image") for c in spec.get("initContainers") or []] == [image] and set(wanted) <= pinned):
+            return meta.get("name"), sorted(pinned)
+    return None
+
+
+def prepull(image, nodes=None, own=False, reuse=False):
     """Warm an image onto every healthy node with a DaemonSet-style pull.
 
     own: a job's pull, under a name of its own, so two jobs pulling the same
     image never share one DaemonSet - one's cancel, the end of its pulling
     stage or its next pull would stop the other's. Without it the name is
-    one per image, as before (the start gate's image, pulled once)."""
+    one per image, as before (the start gate's image, pulled once).
+    reuse: an Image cache click; one still pulling the same image onto these
+    nodes is answered with, not started again (a job's pulls never are)."""
     tag = re.sub(r"[^a-z0-9-]", "-", image.split("/")[-1].split(":")[0].lower())[:30]
     name = f"homestead-pull-{tag}" + (f"-{secrets.token_hex(4)}" if own else "")
     healthy, every = _pullable_nodes()
@@ -800,10 +817,14 @@ def prepull(image, nodes=None, own=False):
     if not wanted:
         raise ValueError(f"{', '.join(skipped)} is not ready to take an image pull"
                          if skipped else "no node is ready to take an image pull")
+    running = _running_click(image, wanted) if reuse else None
+    if running:
+        return {"ok": True, "daemonset": running[0], "image": image, "nodes": running[1], "skipped": skipped,
+                "reused": True, "message": f"Already pulling {image}"}
     body = {
         "apiVersion": "apps/v1", "kind": "DaemonSet",
         "metadata": {"name": name, "namespace": I.NS,
-                     "labels": NAMES.labels("prepull", image=tag)},
+                     "labels": NAMES.labels("prepull", image=tag, **({"pull_by": "image-cache"} if reuse else {}))},
         "spec": {"selector": {"matchLabels": {"app": name}},
                  "template": {"metadata": {"labels": {"app": name}},
                               "spec": {"terminationGracePeriodSeconds": 1,
@@ -818,12 +839,14 @@ def prepull(image, nodes=None, own=False):
         "requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": [
             {"matchExpressions": [{"key": "kubernetes.io/hostname",
                                    "operator": "In", "values": sorted(wanted)}]}]}}}
-    for previous in (name,):
+    if not own:
+        # One name per image: the last pull of it is replaced. A name of a
+        # job's own is new, with nothing to replace or wait for.
         try:
-            I.ksend("DELETE", f"/apis/apps/v1/namespaces/{I.NS}/daemonsets/{previous}")
+            I.ksend("DELETE", f"/apis/apps/v1/namespaces/{I.NS}/daemonsets/{name}")
         except urllib.error.HTTPError:
             pass
-    time.sleep(1)
+        time.sleep(1)
     I.ksend("POST", f"/apis/apps/v1/namespaces/{I.NS}/daemonsets", body)
     return {"ok": True, "daemonset": name, "image": image, "nodes": sorted(wanted),
             "skipped": skipped,
