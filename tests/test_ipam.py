@@ -81,7 +81,18 @@ class IpamTests(unittest.TestCase):
         with mock.patch.object(IPAM, "_clean_subnet", side_effect=AssertionError("read a row")), \
                 self.assertRaises(ValueError) as caught:
             IPAM.save_subnets([{"cidr": "nonsense"}] * 150_000)
-        self.assertIn(f"at most {IPAM.MAX_SUBNETS} subnets", str(caught.exception))
+        self.assertEqual("150000 subnets were sent; at most 64 can be documented, so remove 149936 "
+                         "and save again", str(caught.exception))
+        self.assertEqual(IPAM.MAX_SUBNETS, len(IPAM.load()[0]["subnets"]))
+
+    def test_the_cluster_lan_is_not_added_past_the_cap(self):
+        """view() adds a subnet for nodes no subnet covers: never a 65th."""
+        IPAM.save_subnets([{"cidr": f"10.0.{i}.0/30"} for i in range(IPAM.MAX_SUBNETS)])
+        view = IPAM.view()
+        self.assertEqual(IPAM.MAX_SUBNETS, len(IPAM.load()[0]["subnets"]))
+        self.assertNotIn("192.0.2.0/24", [s["cidr"] for s in view["subnets"]])
+        IPAM.save_subnets([{"cidr": f"10.0.{i}.0/30"} for i in range(IPAM.MAX_SUBNETS - 1)])
+        IPAM.view()                                  # two node /24s are missing: one fits
         self.assertEqual(IPAM.MAX_SUBNETS, len(IPAM.load()[0]["subnets"]))
 
     def test_overlaps_are_found_in_any_order_without_comparing_every_pair(self):

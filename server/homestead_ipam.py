@@ -151,7 +151,8 @@ def _clean_subnet(row):
 def save_subnets(rows):
     rows = rows or []
     if len(rows) > MAX_SUBNETS:
-        raise ValueError(f"at most {MAX_SUBNETS} subnets can be documented")
+        raise ValueError(f"{len(rows)} subnets were sent; at most {MAX_SUBNETS} can be documented, "
+                         f"so remove {len(rows) - MAX_SUBNETS} and save again")
     clean = [_clean_subnet(row) for row in rows]
     cidrs = [row["cidr"] for row in clean]
     if len(set(cidrs)) != len(cidrs):
@@ -306,6 +307,8 @@ def _cover_nodes(data, facts):
     def change(current):
         have = [ipaddress.ip_network(s["cidr"]) for s in current["subnets"]]
         for cidr in missing:
+            if len(current["subnets"]) >= MAX_SUBNETS:
+                break
             if not any(ipaddress.ip_network(cidr).overlaps(net) for net in have):
                 current["subnets"].append(_clean_subnet({"cidr": cidr, "name": "Cluster LAN", "note": AUTO_NOTE}))
         return {"ok": True}
