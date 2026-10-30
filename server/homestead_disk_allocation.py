@@ -387,6 +387,10 @@ def _job_body(ref):
             'resources':{'requests':{'cpu':'10m','memory':'64Mi'},'limits':{'memory':HOST.MEMORY_LIMIT}}}]}}}}
 
 
+class HelperMissing(ValueError):
+    pass
+
+
 def _job(ref, create=False):
     path = f'/apis/batch/v1/namespaces/{NS}/jobs/{ref["job"]}'
     try: obj = kget(path)
@@ -395,7 +399,7 @@ def _job(ref, create=False):
         obj = None
     expected = _job_body(ref)
     if obj is None:
-        if not create: raise ValueError('The helper is missing. Growth is not repeated automatically; recheck its saved outcome.')
+        if not create: raise HelperMissing('The helper is missing. Growth is not repeated automatically; recheck its saved outcome.')
         try: obj = ksend('POST', path.rsplit('/',1)[0], expected)
         except urllib.error.HTTPError as error:
             if error.code != 409: raise
@@ -412,6 +416,21 @@ def _job(ref, create=False):
         raise ValueError('Helper identity or configuration changed; no work is repeated')
     ref['job_uid'] = meta['uid']
     return obj
+
+
+def _ended(ref):
+    """How the helper ended, or None while it may still run. Kubernetes
+    removes a finished helper after 7 days (ttlSecondsAfterFinished): then
+    the end this job saw and kept (progress) stands in for it, for that same
+    helper only. A helper gone with no end seen may still be running."""
+    try:
+        status = _job(ref).get('status', {})
+    except HelperMissing:
+        seen = ref.get('helper_end') or {}
+        if seen.get('outcome') and seen.get('job') == ref['job'] and seen.get('job_uid') and seen['job_uid'] == ref.get('job_uid'):
+            return seen['outcome']
+        raise
+    return 'failed' if status.get('failed') else 'succeeded' if status.get('succeeded') else None
 
 
 def _verify_result(ref, facts):
@@ -443,6 +462,11 @@ def progress(item):
             job = _job(ref, create=True); ops.checkpoint(item)
         else: job = _job(ref)
         status = job.get('status', {})
+        if status.get('failed') or status.get('succeeded'):
+            # Kept with the job: recheck still knows the helper stopped once
+            # Kubernetes has removed it.
+            ref['helper_end'] = {'job':ref['job'], 'job_uid':ref['job_uid'],
+                                 'outcome':'failed' if status.get('failed') else 'succeeded'}
         if status.get('failed'): raise ValueError('Growth stopped. The logical volume may already be larger; recheck this job before any further allocation.')
         if not status.get('succeeded'): return 'running', 50, 'Growing the logical volume and mounted filesystem; existing files are retained'
         facts = inspect(ref['node']); area = _verify_result(ref, facts)
@@ -474,11 +498,11 @@ def recheck(operation_id):
             item.update(status='cancelled', progress=0, message='No helper was dispatched. Create a fresh allocation review.')
             ops.checkpoint(item)
             return {'operation':public(item), 'detail':'No helper was dispatched. Create a fresh allocation review.'}
-        try: job = _job(ref)
+        try: ended = _ended(ref)
         except ValueError:
             # An absent or altered helper cannot be assumed stopped.
             raise ValueError('The original helper cannot be verified. Inspect it and the host receipt before recovery; automatic recovery is blocked.') from None
-        if not (job.get('status', {}).get('failed') or job.get('status', {}).get('succeeded')):
+        if not ended:
             raise ValueError('The original helper may still be running')
         facts = inspect(ref['node']); area = _verify_result(ref, facts)
         if area['size_bytes'] == ref['target_bytes'] and area['fs_bytes'] == ref['target_bytes']:
@@ -505,8 +529,7 @@ def finish(body):
             if ref['approval'] != cfg['capacity_token']: raise ValueError('This is another recovery review')
             return public(item)
         if item.get('status') not in ops.TERMINAL: raise ValueError('The current allocation helper is still active')
-        job = _job(ref)
-        if not (job.get('status', {}).get('failed') or job.get('status', {}).get('succeeded')): raise ValueError('The original helper may still be running')
+        if not _ended(ref): raise ValueError('The original helper may still be running')
         facts = inspect(ref['node']); area = _verify_result(ref, facts)
         if not REVIEW.valid(cfg, _context(facts)) or area['size_bytes'] != ref['target_bytes'] or area['fs_bytes'] >= ref['target_bytes']:
             raise ValueError('Recovery needs a fresh review of the same incomplete filesystem')

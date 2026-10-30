@@ -142,6 +142,26 @@ class AllocationTests(unittest.TestCase):
         item=self.begin();self.tick();self.jobs.clear()
         self.assertEqual(self.tick()['status'],'failed');self.assertEqual(len(self.writes),1)
         with self.assertRaisesRegex(ValueError,'original helper'):A.recheck(item['id'])
+    def test_a_failed_growth_rechecked_after_its_helper_expired_still_recovers(self):
+        """Kubernetes removes a finished helper after 7 days (its TTL): the end
+        the job saw is kept with it, so a later recheck still knows it stopped."""
+        item=self.begin();self.tick();job=next(iter(self.jobs.values()));job['status']={'failed':1}
+        self.text=inventory(os_size=80,os_fs=64);self.assertEqual(self.tick()['status'],'failed')
+        self.jobs.clear()
+        plan=A.recheck(item['id']);self.assertEqual(plan['area']['fs_bytes'],64*GiB)
+        body={key:plan[key] for key in ('operation_id','request_id','action','capacity_token')};body['confirm_capacity']=True
+        self.assertEqual(A.finish(body)['phase'],'queued');self.assertTrue(self.store.items[0]['ref']['filesystem_only'])
+        self.assertEqual(len(self.writes),1)
+    def test_an_expired_helper_that_did_nothing_closes_the_job(self):
+        item=self.begin();self.tick();next(iter(self.jobs.values()))['status']={'failed':1}
+        self.assertEqual(self.tick()['status'],'failed');self.jobs.clear()
+        self.assertEqual(A.recheck(item['id'])['operation']['phase'],'cancelled')
+        self.assertIsNone(A._pending('host-1'))
+    def test_a_saved_end_never_stands_in_for_another_helper(self):
+        item=self.begin();self.tick();next(iter(self.jobs.values()))['status']={'failed':1}
+        self.assertEqual(self.tick()['status'],'failed');self.jobs.clear()
+        self.store.items[0]['ref']['job_uid']='another-helper-uid'
+        with self.assertRaisesRegex(ValueError,'original helper'):A.recheck(item['id'])
     def test_success_requires_filesystem_and_unchanged_siblings(self):
         self.begin();self.tick();next(iter(self.jobs.values()))['status']={'succeeded':1}
         self.text=inventory(os_size=80,lh_size=132)
