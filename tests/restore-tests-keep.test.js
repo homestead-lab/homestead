@@ -37,7 +37,7 @@ test("Restore tests show the placeholder only before the first list", async () =
 });
 
 test("the Data Protection page paints the Restore tests section", () => {
-  const page = between(src, "async function viewProtect", "loadRestoreTests();");
+  const page = between(src, "function protectBody", "function protectBackups");
   assert.match(page, /<div id="restore-tests" class="restore-tests">\$\{restoreTestsSection\(\)\}<\/div>/);
 });
 
