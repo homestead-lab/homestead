@@ -96,6 +96,36 @@ class ApiPathCutTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 server.KUBE_HELPERS.api_path(path)
 
+    def test_a_selector_value_with_a_slash_is_refused(self):
+        for path in ("/api/v1/namespaces/lab?labelSelector=a=b/pods/web",
+                     "/api/v1/namespaces/lab?labelSelector=app.kubernetes.io/name=x/log",
+                     "/api/v1/namespaces/lab?labelSelector=app.kubernetes.io/name%3Dx%2Flog",
+                     "/api/v1/namespaces/lab?labelSelector=x/log",
+                     "/api/v1/namespaces/lab?labelSelector=app in (a,b/c)",
+                     "/api/v1/namespaces/lab?fieldSelector=metadata.name=web/log",
+                     "/api/v1/namespaces/lab?fieldSelector=spec/nodeName=node-a"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                server.KUBE_HELPERS.api_path(path)
+
+    def test_an_encoded_question_mark_in_the_path_is_refused(self):
+        for path in ("/api/v1/namespaces/lab%3f/pods/web", "/api/v1/namespaces/lab/pods/web%3F/log"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                server.KUBE_HELPERS.api_path(path)
+
+    def test_selectors_in_every_form_kubernetes_takes_pass(self):
+        for selector in ("app.kubernetes.io/name=x", "app.kubernetes.io/name%3Dx", "app==web", "tier!=low",
+                         "homestead.example.com/managed", "!homestead.example.com/held",
+                         "env in (prod,staging)", "env%20notin%20(dev)", "app=web,tier!=low,release",
+                         "job-name%3Dbackup-1", "app="):
+            path = "/api/v1/pods?labelSelector=" + selector
+            with self.subTest(selector=selector):
+                self.assertEqual(path, server.KUBE_HELPERS.api_path(path))
+        for selector in ("spec.nodeName%3Dnode-a", "involvedObject.name=web,involvedObject.uid=0a1b-2c",
+                         "status.phase!=Succeeded", "metadata.name==web.example.com"):
+            path = "/api/v1/pods?fieldSelector=" + selector
+            with self.subTest(selector=selector):
+                self.assertEqual(path, server.KUBE_HELPERS.api_path(path))
+
     def test_ordinary_queries_pass(self):
         for path in ("/api/v1/pods?labelSelector=app.kubernetes.io/name%3Dweb&limit=10",
                      "/api/v1/namespaces/lab/pods/web/log?tailLines=300&timestamps=true&container=main",
