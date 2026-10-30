@@ -23,6 +23,8 @@ from test_page_snapshot import LH, setUpModule  # noqa: F401 (restart record off
 NS = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system"
 LH_VOLUMES = f"{NS}/volumes"
 RECURRING = f"{NS}/recurringjobs"
+BACKUP_VOLUMES = f"{NS}/backupvolumes"
+BACKUPS = f"{NS}/backups"
 G = "recurring-job-group.longhorn.io/"
 
 
@@ -92,6 +94,46 @@ class DeleteGroupTests(ProtectionFixture):
         self.assertEqual(["data"], result["back_to_default"])
         self.assertEqual(["default"], self.cluster.kube.object(f"{RECURRING}/nightly")["spec"]["groups"])
         self.assertNotIn(G + "media", self.cluster.kube.object(f"{NS}/volumes/pvc-1")["metadata"].get("labels") or {})
+
+
+class BackupVolumesTests(ProtectionFixture):
+    def setUp(self):
+        super().setUp()
+        self.BACKUPS = sys.modules["homestead_longhorn_backups"]
+        self.cluster.kube.add({"apiVersion": LH, "kind": "BackupVolume",
+                               "metadata": {"namespace": "longhorn-system", "name": "pvc-1"},
+                               "status": {"lastBackupAt": "2026-09-20T02:00:00Z", "size": "1048576"}})
+
+    def test_a_normal_read_lists_the_target_s_backup_volumes(self):
+        self.assertEqual([("pvc-1", "data", True)],
+                         [(row["name"], row["pvc"], row["exists"]) for row in self.BACKUPS.backup_volumes()])
+
+    def test_a_failed_read_raises_and_says_longhorn_s_backups_could_not_be_read(self):
+        # Data protection shows a failed call as unread; [] read as "No backups on the target yet."
+        self.break_read(BACKUP_VOLUMES)
+        with self.assertRaisesRegex(RuntimeError, "Longhorn's backups could not be read"):
+            self.BACKUPS.backup_volumes()
+
+    def test_backups_unread_do_not_count_as_none_taken(self):
+        self.break_read(BACKUPS)
+        with self.assertRaisesRegex(RuntimeError, "Longhorn's backups could not be read"):
+            self.BACKUPS.backup_volumes()
+
+    def test_volumes_unread_do_not_make_every_backup_one_of_a_deleted_volume(self):
+        self.break_read(LH_VOLUMES)
+        with self.assertRaisesRegex(RuntimeError, "Longhorn's backups could not be read"):
+            self.BACKUPS.backup_volumes()
+
+    def test_a_cluster_without_longhorn_has_no_backups(self):
+        self.cluster.kube.absent_groups.add("longhorn.io")
+        self.assertEqual([], self.BACKUPS.backup_volumes())
+
+    def test_metrics_say_the_backups_source_is_down_rather_than_leave_out_the_last_backup(self):
+        METRICS = sys.modules["homestead_metrics"]
+        self.assertTrue(METRICS.READERS["backups"]())
+        self.break_read(BACKUP_VOLUMES)
+        with self.assertRaises(RuntimeError):
+            METRICS.READERS["backups"]()
 
 
 if __name__ == "__main__":
