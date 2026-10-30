@@ -13,11 +13,14 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_capacity as CAPACITY
 import homestead_container_import as CONTAINER_IMPORT
 import homestead_impact as IMPACT
 import homestead_imports as IMP
 import homestead_kube as K
+import homestead_move_source as MOVE_SOURCE
 import homestead_network_inventory as INV
+import homestead_network_services as SVC
 import homestead_uptime as UP
 import homestead_vip_registry as REG
 import homestead_vm_create as VM_CREATE
@@ -50,6 +53,18 @@ class PreviewTests(unittest.TestCase):
         p = self.preview([], [self.ADDRESS])
         self.assertEqual(1, p["counts"]["addresses"])
 
+    def test_the_room_forecast_names_vms_and_apps_that_couldn_t_be_checked(self):
+        # Unknown rows need no room elsewhere, so "It fits" alone would hide them.
+        p = self.preview(None, [])
+        nodes = [{"metadata": {"name": n, "labels": {"kubernetes.io/hostname": n}},
+                  "status": {"allocatable": {"cpu": "4", "memory": "8Gi"}, "conditions": [{"type": "Ready", "status": "True"}]},
+                  "spec": {}} for n in ("node-a", "node-b")]
+        f = CAPACITY.forecast("node-a", nodes, [], p, lambda pod: "")
+        self.assertIn("1 VM couldn't be checked", f["sentence"])
+        p["apps"].append({"kind": "app", "ns": "lab", "name": "web", "outcome": "unknown"})
+        self.assertIn("1 app couldn't be checked and 1 VM couldn't be checked",
+                      CAPACITY.forecast("node-a", nodes, [], p, lambda pod: "")["sentence"])
+
     def test_unread_addresses_make_the_count_unknown_never_zero(self):
         p = self.preview([], None)
         self.assertIsNone(p["counts"]["addresses"])
@@ -63,6 +78,11 @@ class NodeImpactTests(unittest.TestCase):
         clean_snapshot(self)
         self.cluster = Cluster(self)
         self.NODES = self.cluster.server.NODES
+
+    def test_a_cluster_without_kubevirt_has_no_vms_to_check(self):
+        self.cluster.kube.absent_groups.add("kubevirt.io")     # its reads answer 404
+        self.assertEqual([], self.NODES._impact_sources()["raw_vms"])
+        self.assertNotIn(IMPACT.VMS_UNREAD, self.NODES.node_impact("node-a")["unread"])
 
     def test_a_host_preview_with_vm_definitions_unread_says_so(self):
         self.cluster.kube.fail(RAW_VMS, 500, times=1)
@@ -109,12 +129,12 @@ class YourVipsTests(unittest.TestCase):
 
     def test_a_registry_that_cannot_be_read_raises_never_empty(self):
         self.break_registry()
-        with self.assertRaisesRegex(RuntimeError, "Your VIPs could not be read"):
+        with self.assertRaisesRegex(REG.RegistryUnread, "Your VIPs could not be read"):
             REG.registered()
 
     def test_the_default_vip_is_not_the_shared_fallback_when_the_registry_is_unread(self):
         self.break_registry()
-        with self.assertRaisesRegex(RuntimeError, "Your VIPs could not be read"):
+        with self.assertRaisesRegex(REG.RegistryUnread, "Your VIPs could not be read"):
             REG.shared_vip()
 
     def test_the_inventory_names_the_registry_unread_and_offers_no_default(self):
@@ -135,6 +155,19 @@ class YourVipsTests(unittest.TestCase):
         inv = self.NETWORK.inventory()
         self.assertIn("could not read", INV.address_problem("192.0.2.200", inv))
 
+    def test_an_unread_registry_is_a_refusal_not_a_server_error(self):
+        self.assertTrue(issubclass(REG.RegistryUnread, ValueError))   # the routes answer 400
+
+    def test_automatic_on_a_service_is_refused_not_skipped_while_the_registry_is_unread(self):
+        self.cluster.kube.add({"apiVersion": "v1", "kind": "Service",
+                               "metadata": {"namespace": "lab", "name": "web",
+                                            "annotations": {"kube-vip.io/loadbalancerIPs": "192.0.2.60"}},
+                               "spec": {"type": "LoadBalancer", "selector": {"app": "web"},
+                                        "ports": [{"port": 80, "targetPort": 80, "protocol": "TCP"}]}})
+        self.break_registry()
+        with self.assertRaisesRegex(ValueError, "VIP registry"):
+            SVC.set_workload_address("lab", "web", "loadbalancer", "automatic", "")
+
     def test_the_overview_still_answers_without_a_vip_when_the_registry_is_unread(self):
         self.break_registry()
         self.assertIsNone(self.cluster.route("ov")["lb_ip"])
@@ -151,6 +184,9 @@ class ServicesTests(unittest.TestCase):
         clean_snapshot(self)
         self.cluster = Cluster(self)
         self.WL = self.cluster.server.WORKLOADS
+        # get_workloads keeps the fake's PriorityClass ladder; others' tests must not see it.
+        import homestead_priority as PRIORITY
+        self.addCleanup(PRIORITY._LADDER.update, at=0, value=None)
         self.cluster.kube.add({"apiVersion": "v1", "kind": "Service",
                                "metadata": {"namespace": "lab", "name": "web"},
                                "spec": {"type": "LoadBalancer", "selector": {"app": "web"},
@@ -248,7 +284,7 @@ class VmDisksAndImportsTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "500"):
             VM_CREATE.list_vm_disks()
         # A new VM may not take a disk another VM might hold.
-        with self.assertRaisesRegex(Exception, "500"):
+        with self.assertRaisesRegex(ValueError, "Couldn't check whether another VM uses this disk; try again in a moment"):
             VM_CREATE._disk_consumers()
 
     def test_no_imports_is_an_empty_list(self):
@@ -258,6 +294,27 @@ class VmDisksAndImportsTests(unittest.TestCase):
         self.kube.fail(JOBS, 500, times=999)
         with self.assertRaisesRegex(Exception, "500"):
             CONTAINER_IMPORT.import_status()
+
+
+
+class MoveSourceServicesTests(unittest.TestCase):
+    """A container moved to another cluster takes its Services with it, and
+    the source cleanup removes them: neither may read unread as none."""
+    def setUp(self):
+        self.kube = self.enterContext(Kube({"apiVersion": "v1", "kind": "Service",
+                                            "metadata": {"namespace": "lab", "name": "web"},
+                                            "spec": {"selector": {"app": "web"}, "ports": [{"port": 80}]}}))
+        saved = (MOVE_SOURCE.kget, MOVE_SOURCE.ksend, MOVE_SOURCE.LH, MOVE_SOURCE.NS)
+        MOVE_SOURCE.bind(K.kget, K.ksend, None, "lab")
+        self.addCleanup(MOVE_SOURCE.bind, *saved)
+
+    def test_read_services_are_found(self):
+        self.assertEqual(["web"], [s["metadata"]["name"] for s in MOVE_SOURCE._services_for({"app": "web"})])
+
+    def test_unread_services_refuse_never_none(self):
+        self.kube.fail("/api/v1/namespaces/lab/services", 500, times=999)
+        with self.assertRaisesRegex(ValueError, "Services .*could not be read"):
+            MOVE_SOURCE._services_for({"app": "web"})
 
 
 if __name__ == "__main__":

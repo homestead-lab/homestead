@@ -32,6 +32,10 @@ def _vip_map_path():
 UNREAD = "VIP registry"
 
 
+class RegistryUnread(ValueError):
+    """Your VIPs could not be read: a refusal (400), not a server error."""
+
+
 def registered():
     """Your VIPs, [] when the registry was never saved. One that cannot be
     read raises: it is not an empty one (the default VIP would fall back to
@@ -41,9 +45,9 @@ def registered():
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return []
-        raise RuntimeError(f"Your VIPs could not be read ({str(error)[:160]})") from error
+        raise RegistryUnread(f"Your VIPs could not be read ({str(error)[:160]})") from error
     except Exception as error:
-        raise RuntimeError(f"Your VIPs could not be read ({str(error)[:160]})") from error
+        raise RegistryUnread(f"Your VIPs could not be read ({str(error)[:160]})") from error
     try:
         rows = json.loads((cm.get("data") or {}).get("vips.json") or "[]")
     except ValueError:

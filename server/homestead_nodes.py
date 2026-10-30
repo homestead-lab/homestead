@@ -16,6 +16,7 @@ import homestead_hardware as HW
 import homestead_kube_metrics as KUBE_METRICS
 import homestead_host_os as HOST_OS
 import homestead_impact as IMPACT
+import homestead_kube as KUBE
 import homestead_lhcapacity as LHCAP
 import homestead_node_actions as NODE_ACTIONS
 import homestead_names as NAMES
@@ -494,7 +495,8 @@ def _impact_sources():
     A read that fails is None, never empty or a default."""
     deployments = [d for d in kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS]
     try:
-        raw_vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
+        # No KubeVirt installed is no VMs; any other failure is unread.
+        raw_vms = KUBE.items("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io", read=kget)
     except Exception:
         raw_vms = None          # the preview says the VMs couldn't be checked, never that none has a device
     return {"deployments": deployments, "raw_vms": raw_vms, "sets": _statefulsets(), "pvs": _pinned_volumes(),

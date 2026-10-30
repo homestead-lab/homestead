@@ -137,7 +137,7 @@ def _disk_consumers():
     try:
         vms = KUBE.items("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io", read=I.kget)
     except Exception as error:
-        raise ValueError(f"VM disk ownership inventory is incomplete: the VMs could not be read ({str(error)[:120]})") from error
+        raise ValueError(f"Couldn't check whether another VM uses this disk; try again in a moment ({str(error)[:120]})") from error
     for vm in vms:
         meta = vm.get("metadata", {}) or {}
         ns, vm_name = meta.get("namespace", ""), meta.get("name", "")

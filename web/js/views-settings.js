@@ -19,6 +19,15 @@ const ROLE_TABLE = [
 ];
 const USERS_FILTER = { role: "" };
 
+
+/* Settings › About's cluster VIP: the default workload VIP, else the
+   platform's own. lb_ip null means Your VIPs couldn't be read: unknown,
+   never the platform address standing in for it. */
+function clusterVipText(overview, info, hostsUnread) {
+  if (!hostsUnread && overview.lb_ip === null) return "unknown";
+  return (hostsUnread ? "" : overview.lb_ip) || info.vip || "—";
+}
+
 function userRow(u, admin, count) {
   const me = u.name === ME;
   const role = !admin ? `<span class="${roleClass(u.role)} rolechip">${esc(ROLE_NAMES[u.role] || u.role)}</span>`
@@ -317,7 +326,7 @@ async function viewSettings() {
           <div><span>Kubernetes</span><b>${esc(info.kubernetes || "—")}</b></div>
           <div><span>Default namespace</span><b class="mono">${esc(info.namespace || "lab")}</b></div>
           <div><span>Storage class</span><b class="mono">${esc(info.storage_class || "—")}</b></div>
-          <div><span>Cluster VIP</span><b class="mono">${esc((hostsUnread ? "" : overview.lb_ip) || info.vip || "—")}</b></div>
+          <div><span>Cluster VIP</span><b class="mono">${esc(clusterVipText(overview, info, hostsUnread))}</b></div>
           <div><span>Hosts ready</span><b>${hostsUnread ? `<span class="dim" title="${esc(hostsUnread)}">not read</span>` : `${overview.nodes_ready}/${overview.nodes_total}`}</b></div>
           <div><span>Node probe ${tip("Homestead keeps the probe's scripts in step with its own release, so an upgrade needs no kubectl. Installation and removal live under Cluster → Add-ons because the SMART sidecar is privileged.")}</span>
             <b>${esc(probeWord(info.node_probe?.state))}</b><small>${esc(info.node_probe?.detail || "")}</small></div>
