@@ -60,6 +60,8 @@ SAVE_EVERY = 300
 FORGET_AFTER = 7 * 86400     # an app gone this long is dropped from the history
 HTTPS_PORTS = (443, 8443, 9443, 5001)
 MAX_PORTS = 4
+# What a round waits beyond its slowest target's bound (target_bound).
+ROUND_SLACK = 2
 VM_PORTS = (22, 3389, 443, 80, 8006, 8123, 9443)
 DISCOVER_TIMEOUT = 1.2
 PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,199}$")
@@ -240,13 +242,26 @@ def target(w):
             "path": chosen.get("path", "/"), "strict": chosen["mode"] == "http"}, ""
 
 
+def target_bound(t):
+    """How long asking all of t's ports may take: each probe ends within
+    twice its timeout (probe()), one after another."""
+    return len(t.get("asks") or [t]) * 2 * (t.get("timeout") or TIMEOUT)
+
+
 def ask_ports(t, ask=None):
     """Ask each of an app's ports in turn: the first that answers is the app
-    answering. The result names the port asked last."""
+    answering. The result names the port asked last. All of them together
+    end by target_bound(t): each probe gets at most half the time left (a
+    probe ends within twice its timeout), and none starts once it is spent."""
     ask = ask or probe
+    timeout = t.get("timeout") or TIMEOUT
+    deadline = time.monotonic() + target_bound(t)
     result = None
     for one in t.get("asks") or [t]:
-        single = {**t, **one}
+        left = deadline - time.monotonic()
+        if left <= 0 and result is not None:
+            break
+        single = {**t, **one, "timeout": max(0.01, min(timeout, left / 2))}
         result = {**ask(single), "host": single["host"], "port": single["port"], "scheme": single["scheme"]}
         if result["ok"]:
             break
@@ -307,7 +322,8 @@ def probe(t, timeout=TIMEOUT):
             sock.do_handshake()
         conn = http.client.HTTPConnection(t["host"], t["port"], timeout=timeout)
         conn.sock = sock
-        conn.request("GET", t["path"], headers={"User-Agent": USER_AGENT, "Accept": "*/*", "Connection": "close"})
+        conn.request("GET", t["path"], headers={"Host": _host(t["host"], t["port"], t["scheme"]),
+                                                "User-Agent": USER_AGENT, "Accept": "*/*", "Connection": "close"})
         response = conn.getresponse()
         code = response.status
         response.read(512)
@@ -334,6 +350,12 @@ def probe(t, timeout=TIMEOUT):
             cut.close()
         if conn is not None:
             conn.close()
+
+
+def _host(host, port, scheme):
+    """The Host header: the port only when it is not the scheme's own, as
+    HTTPSConnection would send it (the request goes out on our own socket)."""
+    return host if int(port) == {"http": 80, "https": 443}.get(scheme) else f"{host}:{port}"
 
 
 class _Cut:
@@ -434,8 +456,10 @@ def observe(workloads, now=None, ask=probe, vms=None):
     threads = [threading.Thread(target=run, args=(key, t), daemon=True) for key, t, _ in rows if t]
     for thread in threads:
         thread.start()
-    # One wait for the whole round: N stuck checks used to cost N times it.
-    end = time.monotonic() + TIMEOUT * 2 + 2
+    # One wait for the whole round (N stuck checks used to cost N times it),
+    # as long as its slowest target may take: a target with several ports
+    # asked one after another ends by its own bound, not by one probe's.
+    end = time.monotonic() + max((target_bound(t) for _, t, _ in rows if t), default=0) + ROUND_SLACK
     for thread in threads:
         thread.join(max(0, end - time.monotonic()))
     with _lock:

@@ -461,6 +461,60 @@ class RoundDeadlineTests(Base):
         self.assertEqual({"the check did not finish"},
                          {row["last"]["error"] for row in UP._load().values()})
 
+    def test_a_target_with_several_ports_is_waited_for_to_its_own_bound(self):
+        """The round waited 2 x TIMEOUT + 2 s whatever the target: an app whose
+        first ports were slow landed after it and was recorded down."""
+        w = app(ports=[{"ip": "192.0.2.10", "port": p, "protocol": "TCP"} for p in (8001, 8002, 8003)])
+
+        def ask(t):
+            if t["port"] != 8003:
+                time.sleep(0.18)
+                return MISS
+            return OK
+        with mock.patch.object(UP, "TIMEOUT", 0.1), mock.patch.object(UP, "ROUND_SLACK", 0.05):
+            UP.observe([w], now=1000, ask=ask)
+        rep = UP.report(1000)["lab/sonarr"]
+        self.assertEqual(("up", "http://192.0.2.10:8003/"), (rep["state"], rep["target"]))
+
+    def test_the_ports_of_one_target_share_one_deadline(self):
+        asked = []
+
+        def ask(t):
+            asked.append((t["port"], t["timeout"]))
+            time.sleep(0.35)
+            return MISS
+        t = {"kind": "tcp", "host": "192.0.2.10", "port": 1, "scheme": "http", "path": "/", "timeout": 0.1,
+             "asks": [{"host": "192.0.2.10", "port": p, "scheme": "http"} for p in (1, 2, 3)]}
+        self.assertAlmostEqual(0.6, UP.target_bound(t))
+        result = UP.ask_ports(t, ask)
+        self.assertEqual([1, 2], [port for port, _ in asked], "no port is asked once the time is spent")
+        self.assertTrue(all(timeout <= 0.1 for _, timeout in asked))
+        self.assertEqual((False, 2), (result["ok"], result["port"]))
+
+
+class HostHeaderTests(unittest.TestCase):
+    def test_the_host_header_names_the_port_only_when_it_is_not_the_schemes_own(self):
+        self.assertEqual("192.0.2.10", UP._host("192.0.2.10", 443, "https"))
+        self.assertEqual("192.0.2.10", UP._host("192.0.2.10", 80, "http"))
+        self.assertEqual("192.0.2.10:8443", UP._host("192.0.2.10", 8443, "https"))
+        self.assertEqual("192.0.2.10:443", UP._host("192.0.2.10", 443, "http"))
+
+    def test_a_probe_sends_it(self):
+        seen = []
+
+        class Echo(Handler):
+            def do_GET(self):
+                seen.append(self.headers.get("Host"))
+                super().do_GET()
+        server = http.server.HTTPServer(("127.0.0.1", 0), Echo)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        port = server.server_address[1]
+        self.assertTrue(UP.probe({"kind": "http", "host": "127.0.0.1", "port": port, "scheme": "http",
+                                  "path": "/", "strict": True})["ok"])
+        self.assertEqual([f"127.0.0.1:{port}"], seen)
+
 
 if __name__ == "__main__":
     unittest.main()
