@@ -1200,7 +1200,7 @@ class H(HTTP.LimitedHandler):
                     "duration": round((time.monotonic() - self._diagnostic_started) * 1000)})
             except Exception:
                 pass  # Recording must never change the result of a cluster action.
-        if code >= 400:
+        if HTTP.closes_after(self, code):
             self.close_connection = True
         if isinstance(body, (dict, list)):
             body = json.dumps(body).encode()

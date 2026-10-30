@@ -1026,6 +1026,7 @@ data:
     idle keep-alive connection holds no request slot. When a limit is reached the
     client gets 503 with Retry-After, not a closed socket, and when most of the
     open connections are in use idle ones are let go after BUSY_IDLE_SECONDS."""
+    import heapq
     import selectors
     import socket
     import re
@@ -1044,20 +1045,75 @@ data:
                b"Connection: close\r\n\r\n")
 
 
+    class _Deadlines:
+        """Every request's deadline on one timer thread (#985): a threading.Timer
+        per header and body read started an OS thread for each request."""
+        def __init__(self):
+            self._cv = threading.Condition()
+            self._heap = []
+            self._seq = 0
+            self._thread = None
+
+        def add(self, connection, seconds):
+            entry = [time.monotonic() + seconds, 0, connection, True]
+            with self._cv:
+                self._seq += 1
+                entry[1] = self._seq
+                heapq.heappush(self._heap, entry)
+                if self._thread is None:
+                    self._thread = threading.Thread(target=self._run, name="http-deadlines", daemon=True)
+                    self._thread.start()
+                elif self._heap[0] is entry:
+                    self._cv.notify()
+            return entry
+
+        def cancel(self, entry):
+            with self._cv:
+                entry[3] = False
+                entry[2] = None             # do not keep the socket until its time comes
+
+        def _run(self):
+            while True:
+                with self._cv:
+                    while self._heap and not self._heap[0][3]:
+                        heapq.heappop(self._heap)
+                    if not self._heap:
+                        self._cv.wait()
+                        continue
+                    wait = self._heap[0][0] - time.monotonic()
+                    if wait > 0:
+                        self._cv.wait(wait)
+                        continue
+                    entry = heapq.heappop(self._heap)
+                    connection, entry[3] = entry[2], False
+                try:
+                    connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+
+    _DEADLINES = _Deadlines()
+
+
     @contextmanager
     def deadline(connection, seconds):
-        def expire():
-            try:
-                connection.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-        timer = threading.Timer(seconds, expire)
-        timer.daemon = True
-        timer.start()
+        entry = _DEADLINES.add(connection, seconds)
         try:
             yield
         finally:
-            timer.cancel()
+            _DEADLINES.cancel(entry)
+
+
+    def closes_after(handler, code):
+        """Whether an answer with this status ends the connection. Errors close
+        it, so a body the request still had cannot be read as the next request;
+        an expected 404 or 409 to a request that sent no body keeps it, so a
+        missing icon does not cost the browser a new connection and handshake (#985)."""
+        if code < 400:
+            return False
+        headers = getattr(handler, "headers", None) or {}
+        sent_body = headers.get("Transfer-Encoding") or (headers.get("Content-Length") or "0").strip() not in ("", "0")
+        return code not in (404, 409) or bool(sent_body)
 
 
     class BoundedHTTPServer(ThreadingHTTPServer):
