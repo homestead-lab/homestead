@@ -30,6 +30,7 @@ import homestead_move as MOVE
 import homestead_move_source as MOVE_SOURCE
 import homestead_names as NAMES
 import homestead_nodes as NODES
+import homestead_nodeshell as NODESHELL
 import homestead_onboard as ONBOARD
 import homestead_operations as OPS
 import homestead_os_rollout as OS_ROLLOUT
@@ -207,7 +208,8 @@ def _detached_copies_loop():
     """Every minute on the leader, unless the cluster is shutting down:
     offline rebuilding on by default, and Homestead's stand-in for it on
     Longhorn without one; and the image scans and import clean-up that
-    looking at those pages used to do (#622)."""
+    looking at those pages used to do (#622); and host shell helpers that
+    nobody is connected to any more."""
     while True:
         time.sleep(60)
         try:
@@ -225,6 +227,10 @@ def _detached_copies_loop():
             IMAGES.tick()
         except Exception as error:
             print(f"image scans and import clean-up not done: {str(error)[:160]}", flush=True)
+        try:
+            NODESHELL.sweep()
+        except Exception as error:
+            print(f"host shell helpers not checked: {str(error)[:160]}", flush=True)
 
 
 def allocation_probe_capacity(obj, template):
