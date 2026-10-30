@@ -367,6 +367,9 @@ def health_facts(overview):
     # Longhorn's volumes not read cannot prove that a volume warning cleared (#1002).
     if overview.get("volumes_unread"):
         facts.append({"unknown_prefix": "health:Volume:"})
+    # Backup jobs or the weekly trim's state not read: their warnings stay open.
+    for kind in sorted(overview.get("protection_unread") or {}):
+        facts.append({"unknown_prefix": f"health:{kind}:"})
     # Missing SMART observations cannot prove that a disk warning cleared.
     for node in overview.get("nodes") or []:
         prefix = f"health:Disk:{node.get('name', 'unknown')}/"

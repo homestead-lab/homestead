@@ -429,11 +429,15 @@ ROUTES = {
 }
 
 
-def last_state():
-    """The saved state, for the Dashboard's health; {} when it cannot be read."""
+def last_state(strict=False):
+    """The saved state: {} before the first run. strict, for the Dashboard's
+    health: a file that cannot be read raises SHARED.Unreadable, so a failed
+    trim is not taken for one that worked. Otherwise that is {} too."""
     try:
         return SHARED.read_json(_path(), {})
     except Exception:
+        if strict:
+            raise
         return {}
 
 

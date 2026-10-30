@@ -7,6 +7,7 @@ Split out of homestead_longhorn (#623); what bind() sets, the shared helpers
 and the routes stay there.
 """
 import json
+import homestead_kube as KUBE
 import homestead_longhorn_access as ACCESS
 import homestead_names as NAMES
 import homestead_self as SELF
@@ -28,8 +29,11 @@ def list_jobs(strict=False):
         if strict:
             raise
         return []
-    vols = VOLUMES._volumes()
-    runs = _cron_runs()
+    # strict also for what each job's row is built from: volumes unread would
+    # cover 0 and runs unread would read as not failed (the Dashboard's
+    # Backup health reads strictly, homestead_overview_server._protection).
+    vols = VOLUMES._volumes(strict=strict)
+    runs = _cron_runs(strict=strict)
     out = []
     for j in items:
         sp = j.get("spec", {})
@@ -51,15 +55,18 @@ def list_jobs(strict=False):
     return sorted(out, key=lambda x: x["name"])
 
 
-def _cron_runs():
+def _cron_runs(strict=False):
     """When each job last ran, from the CronJob Longhorn keeps for it.
 
     Longhorn names the CronJob after its recurring job. A run that started
-    after the last success and is no longer active failed."""
+    after the last success and is no longer active failed. strict: a failed
+    read raises, as no runs would read as none failed; otherwise {}."""
     try:
-        crons = LH.kget(f"/apis/batch/v1/namespaces/{LH.LHNS}/cronjobs").get("items", [])
-    except Exception:
-        return {}
+        crons = KUBE.items(f"/apis/batch/v1/namespaces/{LH.LHNS}/cronjobs", read=LH.kget)
+    except Exception as error:
+        if not strict:
+            return {}
+        raise RuntimeError(f"Longhorn's job runs could not be read: {str(error)[:160] or type(error).__name__}") from error
     return {cron["metadata"]["name"]: cron_run_state(cron.get("status")) for cron in crons}
 
 

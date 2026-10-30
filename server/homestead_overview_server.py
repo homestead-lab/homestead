@@ -32,8 +32,10 @@ import homestead_host_access as HOSTACCESS
 import homestead_host_os as HOST_OS
 import homestead_housekeeping as HOUSEKEEPING
 import homestead_leader as LEADER
+import homestead_longhorn as LH
 import homestead_longhorn_target as BACKUP_TARGET
 import homestead_longhorn_jobs as JOBS
+import homestead_kube as KUBE
 import homestead_lhcapacity as LHCAP
 import homestead_lhrebuild as LHREBUILD
 import homestead_logalerts as LOGALERTS
@@ -720,6 +722,39 @@ def guard_self(ns, name, stopping=False, confirmed=False, renaming=False, deleti
 VOLUMES_UNREAD = object()
 
 
+def _jobs_read():
+    """Longhorn's recurring jobs, read strictly; a cluster without Longhorn
+    (a 404 with its API group absent) has none to fail."""
+    try:
+        return LH.list_jobs(strict=True)
+    except urllib.error.HTTPError as error:
+        if error.code == 404 and KUBE.items(f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs",
+                                            optional_group="longhorn.io", read=LH.kget) == []:
+            return []
+        raise
+
+
+def _protection():
+    """The Dashboard's Backup and Trim health issues, and by kind what could
+    not be read: those issues are unknown, not gone, and the alerts keep them
+    open ("health:Backup:" / "health:Trim:" held in ALERTS.health_facts)."""
+    unread, jobs, target, trim = {}, [], None, {}
+    try:
+        jobs = cached("lhjobs-health", 60, _jobs_read)
+        target = cached("lhtarget-health", 60, LH.backup_target)
+    except Exception as error:
+        jobs, unread["Backup"] = [], f"Backup protection could not be checked: {str(error)[:200]}"
+    try:
+        trim = cached("trim-health", 60, lambda: WEEKLY_TRIM.last_state(strict=True))
+    except Exception as error:
+        trim, unread["Trim"] = {}, f"The weekly trim could not be checked: {str(error)[:200]}"
+    try:
+        return protection_issues(jobs, target, trim), unread
+    except Exception as error:
+        why = f"Data protection could not be checked: {str(error)[:200]}"
+        return [], {"Backup": unread.get("Backup", why), "Trim": unread.get("Trim", why)}
+
+
 def get_overview(nodes=None, wl=None, vols=None, pods=None):
     """The Dashboard's summary. The leader's page snapshot passes in what its
     cycle has read already; each one left out is read here."""
@@ -739,12 +774,7 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
     usrp = [p for p in pods if p["metadata"]["namespace"] not in SYS_NS]
     deg = [v for v in vols if v["robustness"] == "degraded"]
     flt = [v for v in vols if v["robustness"] == "faulted"]
-    try:
-        protection = protection_issues(cached("lhjobs-health", 60, JOBS.list_jobs),
-                                       cached("lhtarget-health", 60, BACKUP_TARGET.backup_target),
-                                       cached("trim-health", 60, WEEKLY_TRIM.last_state))
-    except Exception:
-        protection = []
+    protection, protection_unread = _protection()
     # On one host, the degraded volumes Match copies to hosts offers to lower
     # (#841) say why; read only then, and a failed read says nothing new.
     short = set()
@@ -763,7 +793,8 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
     health = CLUSTER.HOLD.apply(CLUSTER.classify_cluster_health(
         nodes, wl, vols, protection=protection, maintenance=in_maintenance, overran=overran, short_of_hosts=short))
     health = CLUSTER.unknown_when_unread(
-        health, ["Longhorn's volumes could not be read, so their health is not known"] if volumes_unread else [])
+        health, [*(["Longhorn's volumes could not be read, so their health is not known"] if volumes_unread else []),
+                 *protection_unread.values()])
     tcap = sum(n["cpu_cap"] for n in nodes) or 1
     tuse = sum(n["cpu_used"] for n in nodes)
     mcap = sum(n["mem_cap_gb"] for n in nodes) or 1
@@ -779,6 +810,7 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
         "volumes": len(vols), "vol_degraded": len(deg), "vol_faulted": len(flt),
         "vol_one_host": sum(1 for issue in health["health_issues"] if issue.get("one_host")),
         "volumes_unread": volumes_unread,
+        "protection_unread": protection_unread,
         "cpu_pct": round(tuse / tcap * 100, 1),
         "mem_pct": round(muse / mcap * 100, 1),
         "cpu_used": round(tuse, 2), "cpu_cap": tcap,
