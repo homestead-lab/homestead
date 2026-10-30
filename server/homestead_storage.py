@@ -375,6 +375,26 @@ def volume_copies():
     return out
 
 
+FILESYSTEMS_KEY = "volume-filesystems"
+
+
+def _filesystems(active_claims):
+    """VOLUME_USAGE.collect for these claims, kept 20 s under one key. A kept
+    reading for another set of claims is read again, never reused."""
+    identity = repr(sorted((k, p.get("metadata", {}).get("uid"), p.get("spec", {}).get("volumeName"))
+                           for k, p in active_claims.items()))
+
+    def read():
+        return {"claims": identity, "samples": VOLUME_USAGE.collect(kget, active_claims)}
+    held = homestead_routes.cached(FILESYSTEMS_KEY, 20, read)
+    if held.get("claims") != identity:
+        homestead_routes.forget(FILESYSTEMS_KEY)
+        held = homestead_routes.cached(FILESYSTEMS_KEY, 20, read)
+        if held.get("claims") != identity:      # another set won the race
+            held = read()
+    return held["samples"]
+
+
 def get_volumes(pods=None):
     try:
         vols = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
@@ -406,10 +426,11 @@ def get_volumes(pods=None):
         claim = pvcs.get(key)
         if status.get("state") == "attached" and claim and claim.get("spec", {}).get("volumeName") == volume["metadata"]["name"]:
             active_claims[key] = claim
-    # Cache only telemetry, keyed by claim identities/bindings; never re-label
-    # an old retained copy with the replacement claim's filesystem usage.
-    usage_key = "volume-filesystems:" + repr(sorted((k, p.get("metadata", {}).get("uid"), p.get("spec", {}).get("volumeName")) for k, p in active_claims.items()))
-    filesystems = homestead_routes.cached(usage_key, 20, lambda: VOLUME_USAGE.collect(kget, active_claims)) if active_claims else {}
+    # Cache only telemetry, for the claim identities/bindings it was read for;
+    # never re-label an old retained copy with the replacement claim's
+    # filesystem usage. One key, whose value names those claims, so attach
+    # sets that come and go do not each leave a key behind (#986).
+    filesystems = _filesystems(active_claims) if active_claims else {}
     # A cached observation must also expire if telemetry stops arriving.
     filesystems = {key: sample for key, sample in filesystems.items()
                    if -5 <= time.time() - sample["sample_at"] <= 120}
