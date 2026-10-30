@@ -92,6 +92,31 @@ class CacheBoundTests(unittest.TestCase):
             self.assertIn("k0", CACHE._cache)
             self.assertNotIn("k1", CACHE._cache)
 
+    def test_a_key_being_computed_survives_the_sweep_and_the_cap(self):
+        """Its last copy is what callers waiting on the flight fall back on."""
+        import threading
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+        CACHE.cached("slow", 5, lambda: "old")
+        self.later(CACHE.IDLE_SECONDS + 10)
+
+        def slow():
+            started.set()
+            release.wait(5)
+            return "new"
+        worker = threading.Thread(target=CACHE.cached, args=("slow", 5, slow), daemon=True)
+        worker.start()
+        self.assertTrue(started.wait(5))
+        self.later(CACHE.IDLE_SECONDS + 10)
+        with CACHE._lock:
+            CACHE._sweep(self.clock.now)
+            CACHE._evict(len(CACHE._cache))
+        self.assertEqual("old", CACHE._cache["slow"][1])
+        self.assertIn("slow", CACHE._used)
+        release.set()
+        worker.join(5)
+        self.assertEqual("new", CACHE._cache["slow"][1])
+
     def test_keep_and_refresh_are_bounded_too(self):
         CACHE.keep("snapshot", {"n": 1}, CACHE.epoch("snapshot"))
         CACHE.refresh("loop", lambda: 1)
