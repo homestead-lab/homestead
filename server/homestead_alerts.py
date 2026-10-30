@@ -127,13 +127,20 @@ def observe(results, now=None):
             seeding = source not in watched
             watched.add(source)
             for fact in facts:
-                if "unknown_prefix" in fact or "unknown_key" in fact:
+                # unknown_key/unknown_prefix: not read, so held and, after
+                # STALE, last known. keep_key: read, and nothing new about
+                # it (a run still going): kept as current.
+                if "unknown_prefix" in fact or "unknown_key" in fact or "keep_key" in fact:
                     for k, row in active.items():
-                        if k == fact.get("unknown_key") or ("unknown_prefix" in fact and k.startswith(fact["unknown_prefix"])):
+                        if k in (fact.get("unknown_key"), fact.get("keep_key")) or (
+                                "unknown_prefix" in fact and k.startswith(fact["unknown_prefix"])):
                             seen.add(k)
                             row["missing"] = 0
                             row.pop("worsening_since", None)
-                            row.setdefault("held_since", now)
+                            if "keep_key" in fact:
+                                row.pop("held_since", None)
+                            else:
+                                row.setdefault("held_since", now)
                             if not row["announced"]:
                                 row["since"] = now
                     continue
