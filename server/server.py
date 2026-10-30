@@ -302,10 +302,7 @@ def _settings_map():
 
 def app_settings_payload():
     settings = json.loads(json.dumps(CACHE.cached(SETTINGS_HELPERS.REVISION_KEY, 15, SETTINGS_HELPERS.app_settings_with_revision)))
-    try:
-        kube = KUBE_HELPERS.kget("/version").get("gitVersion", "")
-    except Exception:
-        kube = ""
+    kube = SETTINGS_HELPERS.kube_version(KUBE_HELPERS.kget)
     settings["info"] = {"version": HOMESTEAD_VERSION, "namespace": DEFAULT_NS,
                         "storage_class": STORAGE_CLASS, "vip": LB_IP,
                         "kubernetes": kube, "node_probe": PROBE.status(),

@@ -37,6 +37,15 @@ class HistoryTests(unittest.TestCase):
         self.assertTrue(all(h["t"] for h in log["history"]))
         self.assertNotIn("history", OPS.list_operations()[0], "the tray's poll stays small")
 
+    def test_reading_a_log_takes_no_operations_lock(self):
+        op = OPS.start("thing", "Build", {}, "/", {}, "Starting 2 VMs")["id"]
+        class Refused:
+            def __enter__(self):
+                raise AssertionError("the log took the operations lock")
+            __exit__ = lambda self, *exc: False
+        with mock.patch.object(OPS, "_lock", Refused()):
+            self.assertEqual("Starting 2 VMs", OPS.log(op)["history"][0]["m"])
+
     def test_a_reader_that_fails_says_so_rather_than_failing_the_log(self):
         op = OPS.start("thing", "Build", {}, "/", {})["id"]
         OPS.LOGGERS["thing"] = lambda item: 1 / 0
