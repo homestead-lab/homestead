@@ -880,6 +880,12 @@ data:
             try:
                 if urlparse(self.path).path == "/healthz":
                     return self.send_json(200, {"ok": True, "node": NODE})
+                # Reading every drive is Homestead's to ask for, like a test: a
+                # read is signed over "GET " and its path.
+                if not signature_ok(b"GET " + self.path.encode("utf-8", "replace"),
+                                    self.headers.get("X-Homestead-Time", ""),
+                                    self.headers.get("X-Homestead-Signature", "")):
+                    return self.send_json(403, {"error": "request signature is invalid"})
                 name = (parse_qs(urlparse(self.path).query).get("disk") or [""])[0]
                 if name:
                     return self.send_json(200, {"node": NODE, "disk": one(name)})

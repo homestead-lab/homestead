@@ -22,6 +22,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 import homestead_names as NAMES
+import homestead_smart as SMART
 
 INTERVAL = 15            # seconds between rounds
 TIMEOUT = 2              # temperatures, devices and drives (9099)
@@ -42,8 +43,10 @@ _round = {"at": 0.0, "read": None, "done": threading.Event(), "thread": None, "s
 _namespace = ["lab"]
 
 
-def _read(ip, port, timeout):
-    with urllib.request.urlopen(f"http://{ip}:{port}/", timeout=timeout) as response:
+def _read(ip, port, timeout, headers=None):
+    url = f"http://{ip}:{port}/"
+    with urllib.request.urlopen(urllib.request.Request(url, headers=headers) if headers else url,
+                                timeout=timeout) as response:
         raw = response.read(LIMIT + 1)
     if len(raw) > LIMIT:
         raise ValueError("node telemetry exceeds the size limit")
@@ -70,7 +73,14 @@ def _probe(pod):
 def _smart(pod):
     """One host's SMART rows by drive name ({} when it has none), or None when the helper didn't answer."""
     try:
-        return {row.get("name"): row for row in _read(pod["status"]["podIP"], 9100, SMART_TIMEOUT).get("disks", [])}
+        # The helper answers only signed reads (homestead_smart.signed); without
+        # the key the read goes unsigned and the helper refuses it.
+        try:
+            headers = SMART.signed(b"GET /")
+        except Exception:
+            headers = None
+        answer = _read(pod["status"]["podIP"], 9100, SMART_TIMEOUT, headers)
+        return {row.get("name"): row for row in answer.get("disks", [])}
     except Exception:
         return None
 
@@ -153,6 +163,8 @@ def _run(now, smart):
                 entry["smart_at"] = now - SMART_EVERY + SMART_RETRY
             else:
                 entry.update(smart=found, smart_at=now, smart_stale=False)
+                # The SMART page answers from this reading until the next one has had time to land.
+                SMART.remember(node, found, keep=SMART_EVERY + SMART_TIMEOUT + INTERVAL)
 
 
 def _with_smart(entry):

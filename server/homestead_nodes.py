@@ -583,9 +583,10 @@ def _ports(request):
 
 def _smart(request):
     node, disk = _one(request.query, "node"), _one(request.query, "disk")
+    # From the host's last reading (SMART.latest), not a fresh read of every drive per view.
     if not disk:
-        return SMART.inventory(node)
-    report = SMART.disk(node, disk)
+        return SMART.latest(node)
+    report = SMART.latest_disk(node, disk)
     # The same verdict the node card shows, so one drive cannot be healthy in
     # the list and something else in its own detail.
     report["health_assessment"] = smart_disk_health(report, get_app_settings().get("smart"))

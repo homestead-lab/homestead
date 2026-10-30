@@ -39,6 +39,7 @@ class Cluster:
         return {"items": self.pods}
 
     def urlopen(self, url, timeout=None):
+        url = getattr(url, "full_url", url)      # the SMART read is a signed Request
         self.calls.append(url)
         ip, port = url.split("//")[1].rstrip("/").split(":")
         if port == "9100":

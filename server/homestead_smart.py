@@ -10,6 +10,7 @@ import homestead_names as NAMES
 import hmac
 import json
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -53,23 +54,27 @@ def _probe(node):
     return pod["status"]["podIP"]
 
 
+def signed(message):
+    """The helper's signature headers for one request. A read signs "GET " and
+    its path, a change signs its body, so neither stands in for the other."""
+    stamp = str(int(time.time()))
+    key = signing_key()
+    if isinstance(key, str):
+        key = key.encode()
+    return {"X-Homestead-Time": stamp,
+            "X-Homestead-Signature": hmac.new(key, stamp.encode() + b"." + message,
+                                              hashlib.sha256).hexdigest()}
+
+
 def _request(node, disk=None, body=None):
     ip = _probe(node)
-    query = "?" + urllib.parse.urlencode({"disk": disk}) if disk else ""
-    url = f"http://{ip}:9100/{query}"
+    path = "/" + ("?" + urllib.parse.urlencode({"disk": disk}) if disk else "")
+    url = f"http://{ip}:9100{path}"
     raw = json.dumps(body, separators=(",", ":")).encode() if body is not None else None
     headers = {"Accept": "application/json"}
     if raw is not None:
-        stamp = str(int(time.time()))
-        key = signing_key()
-        if isinstance(key, str):
-            key = key.encode()
-        headers.update({
-            "Content-Type": "application/json",
-            "X-Homestead-Time": stamp,
-            "X-Homestead-Signature": hmac.new(
-                key, stamp.encode() + b"." + raw, hashlib.sha256).hexdigest(),
-        })
+        headers["Content-Type"] = "application/json"
+    headers.update(signed(raw if raw is not None else b"GET " + path.encode()))
     request = urllib.request.Request(url, data=raw,
                                      method="POST" if raw is not None else "GET",
                                      headers=headers)
@@ -100,6 +105,90 @@ def disk(node, name):
     return row
 
 
+# The Hosts page's SMART view answers from a host's last reading. The probe
+# loop reads every host's SMART every five minutes and hands it over
+# (remember, saying how long it holds), so a page normally reads nothing; a
+# host without one is read once, by one request, and the rest wait for it.
+READING_SECONDS = 300    # a reading the page took itself
+ACTIVE_SECONDS = 15      # while a self-test runs on the host: the page's refresh, so its progress moves
+FAILED_SECONDS = 60      # a failed read is answered from memory this long
+_clock = time.monotonic
+_readings = {}           # node -> {"at", "keep", "rows": {name: row}, "error"}
+_readings_lock = threading.Lock()
+_reading_locks = [threading.Lock() for _ in range(16)]   # one read per host at a time
+
+
+def remember(node, rows, keep=READING_SECONDS):
+    """A fresh reading of every drive on a host ({name: row}), from the probe
+    loop, good for keep seconds."""
+    with _readings_lock:
+        _readings[node] = {"at": _clock(), "keep": keep, "rows": dict(rows), "error": None}
+
+
+def forget(node):
+    with _readings_lock:
+        _readings.pop(node, None)
+
+
+def reset():
+    """Forget every reading (tests)."""
+    with _readings_lock:
+        _readings.clear()
+
+
+def _fresh(node):
+    with _readings_lock:
+        entry = _readings.get(node)
+    if entry is None:
+        return None
+    age = _clock() - entry["at"]
+    if entry["error"]:
+        keep = FAILED_SECONDS
+    elif any((row.get("test") or {}).get("active") for row in entry["rows"].values()):
+        keep = ACTIVE_SECONDS
+    else:
+        keep = entry["keep"]
+    return entry if age < keep else None
+
+
+def _reading(node):
+    node = _name(node, "node")
+    entry = _fresh(node)
+    if entry is None:
+        with _reading_locks[hash(node) % len(_reading_locks)]:
+            entry = _fresh(node)
+            if entry is None:
+                try:
+                    rows = {row.get("name"): row for row in inventory(node)["disks"]}
+                    entry = {"at": _clock(), "keep": READING_SECONDS, "rows": rows, "error": None}
+                except Exception as error:
+                    entry = {"at": _clock(), "keep": FAILED_SECONDS, "rows": {}, "error": error}
+                with _readings_lock:
+                    now = _clock()
+                    for old in [key for key, row in _readings.items()
+                                if now - row["at"] >= max(row["keep"], READING_SECONDS)]:
+                        del _readings[old]
+                    _readings[node] = entry
+    if entry["error"]:
+        raise entry["error"]
+    return entry
+
+
+def latest(node):
+    """Every drive on a host from its last reading, as inventory() answers."""
+    entry = _reading(node)
+    return {"node": node, "disks": [dict(row) for row in entry["rows"].values()]}
+
+
+def latest_disk(node, name):
+    """One drive from its host's last reading, as disk() answers."""
+    name = _name(name, "disk")
+    row = _reading(node)["rows"].get(name)
+    if not isinstance(row, dict):
+        raise ValueError(f"disk {name} was not found on {node}")
+    return dict(row)
+
+
 def start_test(node, name, test_type):
     node, name = _name(node, "node"), _name(name, "disk")
     test_type = str(test_type or "").lower()
@@ -113,6 +202,7 @@ def start_test(node, name, test_type):
     if (current.get("test") or {}).get("active"):
         raise ValueError("a SMART self-test is already running on this disk")
     result = _request(node, body={"node": node, "disk": name, "test": test_type})
+    forget(node)
     expected = max(30, int(result.get("expected_seconds", 0) or 0))
     return {
         "ok": True, "node": node, "disk": name, "test": test_type,
@@ -134,11 +224,19 @@ def abort_test(node, name):
             raise ValueError(f"the SMART helper on {node} is too old to abort a test: update it on the "
                              "node's page, or let the test finish") from error
         raise
+    forget(node)
     return {"ok": True, "node": node, "disk": name,
             "message": str(result.get("message") or "SMART self-test aborted")}
 
 
 def progress(ref):
+    state, percent, message = _progress(ref)
+    if state != "running":
+        forget(ref["node"])      # the drive's page shows the result, not the reading from before
+    return state, percent, message
+
+
+def _progress(ref):
     report = disk(ref["node"], ref["disk"])
     test = report.get("test") or {}
     elapsed = max(0, int(time.time()) - int(ref.get("started_epoch", time.time())))
