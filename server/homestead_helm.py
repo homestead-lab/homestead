@@ -166,7 +166,9 @@ def release(namespace, name, include_sensitive=True):
             "source": ({"repo": (helmchart.get("spec") or {}).get("repo", ""),
                         "chart": (helmchart.get("spec") or {}).get("chart", ""),
                         "version": (helmchart.get("spec") or {}).get("version", ""),
-                        "values": (helmchart.get("spec") or {}).get("valuesContent", "")} if helmchart else None)}
+                        "values": (helmchart.get("spec") or {}).get("valuesContent", ""),
+                        # Sent back with Upgrade, so it never lands on a chart changed since.
+                        "generation": (helmchart.get("metadata") or {}).get("generation", "")} if helmchart else None)}
     if not include_sensitive:
         for key in ("notes", "values", "chart_values_keys"):
             result.pop(key, None)
@@ -272,6 +274,14 @@ def _helmchart(namespace, name):
 def upgrade(cfg):
     namespace, name = str(cfg.get("namespace") or ""), str(cfg.get("name") or "")
     item = _helmchart(namespace, name)
+    # The dialog sends the generation it read, so an upgrade never puts back
+    # a version or values changed since it opened (by another admin, kubectl
+    # or GitOps). Not resourceVersion: the Helm controller's status writes
+    # move that, and would refuse every upgrade while it works.
+    read = cfg.get("generation")
+    now = (item.get("metadata") or {}).get("generation", "")
+    if read is not None and str(read) != str(now):
+        raise ValueError(f"{name} changed since this dialog opened; open it again to see the change, then upgrade")
     spec = item.setdefault("spec", {})
     # What it was, on the chart itself, so cancelling the upgrade can put it
     # back. It holds nothing the chart's own spec does not already show.
