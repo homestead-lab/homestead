@@ -341,6 +341,9 @@ def health_facts(overview):
                       "severity": "critical" if critical else "degraded", "title": title,
                       "resolved": resolved, "body": "; ".join(dict.fromkeys(i.get("reason", "") for i in issues)),
                       "signals": signals, "href": href})
+    # Longhorn's volumes not read cannot prove that a volume warning cleared (#1002).
+    if overview.get("volumes_unread"):
+        facts.append({"unknown_prefix": "health:Volume:"})
     # Missing SMART observations cannot prove that a disk warning cleared.
     for node in overview.get("nodes") or []:
         prefix = f"health:Disk:{node.get('name', 'unknown')}/"

@@ -714,12 +714,25 @@ def guard_self(ns, name, stopping=False, confirmed=False, renaming=False, deleti
         raise ValueError(self_stop_warning())
 
 
+# What the snapshot hands get_overview when its volumes part failed, so the
+# overview neither reads Longhorn again nor takes the failure for no volumes.
+VOLUMES_UNREAD = object()
+
+
 def get_overview(nodes=None, wl=None, vols=None, pods=None):
     """The Dashboard's summary. The leader's page snapshot passes in what its
     cycle has read already; each one left out is read here."""
     nodes = NODES.get_nodes() if nodes is None else nodes
     wl = WORKLOADS.get_workloads() if wl is None else wl
-    vols = STORAGE.get_volumes() if vols is None else vols
+    if vols is None:
+        try:
+            vols = STORAGE.get_volumes()
+        except Exception:
+            vols = VOLUMES_UNREAD
+    # Longhorn that did not answer is not a cluster with no volume issues: the
+    # overview says so, and the alerts keep the volume ones open (#1002).
+    volumes_unread = vols is VOLUMES_UNREAD
+    vols = [] if volumes_unread else vols
     pods = (kget("/api/v1/pods") if pods is None else pods).get("items", [])
     sysp = [p for p in pods if p["metadata"]["namespace"] in SYS_NS]
     usrp = [p for p in pods if p["metadata"]["namespace"] not in SYS_NS]
@@ -762,6 +775,7 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
         "system_pods": len(sysp),
         "volumes": len(vols), "vol_degraded": len(deg), "vol_faulted": len(flt),
         "vol_one_host": sum(1 for issue in health["health_issues"] if issue.get("one_host")),
+        "volumes_unread": volumes_unread,
         "cpu_pct": round(tuse / tcap * 100, 1),
         "mem_pct": round(muse / mcap * 100, 1),
         "cpu_used": round(tuse, 2), "cpu_cap": tcap,
@@ -800,7 +814,8 @@ def page_builders():
         ("wl", lambda got: WORKLOADS.get_workloads(pods=got["pods"])),
         ("stor", lambda got: STORAGE.get_storage(vols=got["vol"])),
         ("lhcap", lambda got: LHCAP.status()),
-        ("ov", lambda got: get_overview(nodes=got["nodes"], wl=got["wl"], vols=got["vol"], pods=got["pods"])),
+        ("ov", lambda got: get_overview(nodes=got["nodes"], wl=got["wl"], vols=got.get("vol", VOLUMES_UNREAD),
+                                        pods=got["pods"])),
     ]
 
 
