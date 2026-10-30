@@ -83,7 +83,8 @@ const editContainerPanel = (container, index, section, mode = "edit") => {
   const count = section === "environment" ? plural(env.length + refs.length, "variable")
     : section === "storage" ? plural(mounts.length, "mount") : section === "address" ? plural(ports.length, "port") : "";
   return `<details class="edit-container card flat" data-index="${index}" data-section="${section}"
-    ${section === "basics" || section === "all" ? `data-original-name="${esc(container.new ? "" : container.original_name || container.name)}" data-new="${container.new ? 1 : 0}"` : ""} ${index === 0 ? "open" : ""}>
+    ${section === "basics" || section === "all" ? `data-original-name="${esc(container.new ? "" : container.original_name || container.name)}" data-new="${container.new ? 1 : 0}"${
+      Array.isArray(container.secret_env) ? ` data-secret-env="${esc(JSON.stringify(container.secret_env))}"` : ""}` : ""} ${index === 0 ? "open" : ""}>
     <summary><span class="edit-container-chevron">›</span><span class="edit-container-title"><b>${esc(container.name)}</b><small class="mono">${esc(container.image)}</small></span>${count ? UI.chip(String(count), "neutral") : ""}</summary>
     <div class="edit-container-body">${section === "basics" || section === "all" ? `<div class="edit-container-remove"><button class="btn sm danger" type="button" data-container-remove onclick="containerRemove(${jsq(mode)},${index})">Remove container</button></div>` : ""}
       ${section === "all" ? Object.entries(fields).map(([key, draw]) => `<div class="subsec">${({ basics: "Container", hardware: "Hardware and access", environment: "Environment", storage: "Storage", address: "Ports" })[key]}</div>${draw()}`).join("") : fields[section]()}</div>
@@ -485,10 +486,10 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
     // The app's own Secret could not be read (#1001): its variables are not in
     // the form, so a save would remove them. Said here, and Save stays off.
     window.__editSecretUnread = !!w.secret_env_unread;
-    $("#mbody").innerHTML = `${UI.notices([["warn", w.secret_env_unread]], "Secret settings not read")}<div id="e_containers">${stepper("e_steps", appFormSections("edit", {
+    $("#mbody").innerHTML = `${editSecretUnreadNotice(w)}<div id="e_containers">${stepper("e_steps", appFormSections("edit", {
       basics, hardware: access, environment, storage, placement: running, address,
       monitoring: monitoringStepHtml({ ...w, ns, name, answer_check: w.answer_check ?? listed?.answer_check ?? "", ports: listed?.ports || [] }) }),
-      `<button class="btn pri" id="e_save" ${w.secret_env_unread ? "disabled" : ""} onclick="editSave(${jsq(ns)},${jsq(name)})">Review changes</button>`, { always: true })}</div>`;
+      editReviewButton(ns, name, w), { always: true })}</div>`;
     containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
     window.__editHadService = !!w.has_service;
@@ -543,6 +544,11 @@ window.editAutostartToggle = () => {
     ? "Runs continuously and comes back after a reboot."
     : "Stays stopped until you switch autostart back on.";
 };
+// The app's own Secret could not be read (#1001): said above the form, and
+// Review changes stays off, since a save would remove what it holds.
+const editSecretUnreadNotice = w => UI.notices([["warn", w.secret_env_unread]], "Secret settings not read");
+const editReviewButton = (ns, name, w) =>
+  `<button class="btn pri" id="e_save" ${w.secret_env_unread ? "disabled" : ""} onclick="editSave(${jsq(ns)},${jsq(name)})">Review changes</button>`;
 function readEditedContainer(panel) {
   const index = panel.dataset.index;
   const env = {};
@@ -555,6 +561,9 @@ function readEditedContainer(panel) {
     image: $("#e_image_" + index).value.trim(), cpu: $("#e_cpu_" + index).value.trim(),
     memory: $("#e_mem_" + index).value.trim(), memory_limit: $("#e_mem_limit_" + index).value.trim(),
     hardware: selectedHardware("e_hw_" + index), env, ports,
+    // The variables it showed from the app's Secret: the server removes only
+    // those that are not sent back, and keeps any other reference (#1001).
+    ...(panel.dataset.secretEnv ? { secret_env: JSON.parse(panel.dataset.secretEnv) } : {}),
     privileges: readPrivileges("e_pv_" + index) || undefined,
     volumes: readVolumeRows($("#e_vols_" + index)) };
 }

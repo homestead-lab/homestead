@@ -185,10 +185,17 @@ def _apply_container_edit(container, change, workload_name, own_secret=""):
             container["image"] = REGISTRY.with_tag(image)
     if "env" in change:
         # References to the workload's own Secret came to the form as plain
-        # values and return in change["env"]; other references are kept.
+        # values (named in change["secret_env"]) and return in change["env"];
+        # other references are kept. One the request neither names there nor
+        # sends is kept too (#1001): a form built while the Secret could not
+        # be read, or an API caller that rebuilt env, never deletes a value.
+        named = change.get("secret_env")
+        shown = {str(key) for key in named} if isinstance(named, list) else set()
+        replaced = shown | set(change.get("env") or {})
         refs = [copy.deepcopy(item) for item in container.get("env", []) or []
                 if item.get("valueFrom") and item.get("name")
-                and not (own_secret and ((item["valueFrom"].get("secretKeyRef") or {}).get("name") == own_secret))]
+                and not (own_secret and ((item["valueFrom"].get("secretKeyRef") or {}).get("name") == own_secret)
+                         and item["name"] in replaced)]
         protected = {item["name"] for item in refs}
         # A value masked in the form (ENVSEC.MASK: shown to someone who may
         # not see it) and sent back unchanged keeps what the Secret holds.

@@ -95,7 +95,10 @@ def _ours(secret, dep):
 
 def held(ns, dep, read):
     """The data its own Secret holds now ({} when none or unreadable): for the
-    YAML for git, which must decide as a save would."""
+    YAML for git, which must decide as a save would. Unlike values(), an
+    unread Secret may answer {} here: only that preview uses it, and the save
+    itself reads the Secret again (externalize refuses a failed read) and
+    keeps every reference the form did not name (#1001)."""
     if not own(dep):
         return {}
     try:

@@ -57,11 +57,12 @@ class Fixture(unittest.TestCase):
         return WORKLOADS.workload_edit_payload("lab", "tunnel", self.kube.object(DEP), [], services=[])
 
     def save(self, form, **change):
-        """What Edit's Save sends for this form, with change applied."""
+        """What Edit's Save sends for this form, with change applied: the
+        variables it showed from the Secret (secret_env) go back with it."""
         container = form["containers"][0]
         cfg = {"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared", "image": change.get("image", container["image"]),
-             "env": dict(container["env"])}]}
+             "env": change.get("env", dict(container["env"])), "secret_env": list(container["secret_env"])}]}
         if form.get("secret_env_unread"):
             cfg["secret_env_unread"] = True
         return cfg
@@ -75,6 +76,7 @@ class UnreadSecretTests(Fixture):
         container = form["containers"][0]
         self.assertNotIn("TUNNEL_TOKEN", container["env"])
         self.assertEqual([], container["secret_env"])
+        self.assertIn("TUNNEL_TOKEN", [ref["name"] for ref in container["env_refs"]])
 
     def test_a_save_from_that_form_is_refused_and_writes_nothing(self):
         self.kube.fail(SECRET, 500, method="GET")
@@ -96,6 +98,55 @@ class UnreadSecretTests(Fixture):
         self.assertEqual({"cloudflared": {"TUNNEL_TOKEN": "first"}}, ENVSEC.values("lab", dep, K.kget))
         self.kube("DELETE", SECRET)
         self.assertEqual({}, ENVSEC.values("lab", dep, K.kget), "no Secret at all is known: nothing held")
+
+
+class WithoutTheFormTests(Fixture):
+    """The server does not rely on the browser: a save that does not name a
+    variable as shown from the Secret (secret_env) keeps it - an MCP or API
+    caller rebuilding env from get_container_settings, or a stale form."""
+
+    def saved(self):
+        container = self.kube.object(DEP)["spec"]["template"]["spec"]["containers"][0]
+        return {item["name"]: item for item in container.get("env") or []}, self.kube.object(SECRET)["data"]
+
+    def agent_save(self, env):
+        LC.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+            {"original_name": "cloudflared", "name": "cloudflared", "image": "cloudflare/cloudflared:2026.2.0",
+             "env": env}]})
+
+    def test_a_save_without_secret_env_keeps_the_secret_variable(self):
+        self.agent_save({"TZ": "UTC"})
+        env, data = self.saved()
+        self.assertEqual({"secretKeyRef": {"name": "tunnel-env", "key": KEY}}, env["TUNNEL_TOKEN"]["valueFrom"])
+        self.assertEqual({KEY: b64("first")}, data)
+
+    def test_an_unread_form_saved_without_its_marker_keeps_it_too(self):
+        self.kube.fail(SECRET, 500, method="GET")
+        cfg = self.save(self.open_form(), image="cloudflare/cloudflared:2026.2.0")
+        cfg.pop("secret_env_unread")
+        LC.edit_workload(cfg)
+        env, data = self.saved()
+        self.assertIn("TUNNEL_TOKEN", env)
+        self.assertEqual({KEY: b64("first")}, data)
+
+    def test_a_new_value_without_secret_env_still_replaces_it(self):
+        self.agent_save({"TUNNEL_TOKEN": "second", "TZ": "UTC"})
+        env, data = self.saved()
+        self.assertEqual(KEY, env["TUNNEL_TOKEN"]["valueFrom"]["secretKeyRef"]["key"])
+        self.assertEqual({KEY: b64("second")}, data)
+
+    def test_a_form_save_that_deletes_the_row_removes_it(self):
+        LC.edit_workload(self.save(self.open_form(), env={"TZ": "UTC"}))
+        env, data = self.saved()
+        self.assertNotIn("TUNNEL_TOKEN", env)
+        self.assertEqual({}, data)
+
+    def test_a_rename_in_the_form_moves_the_value(self):
+        LC.edit_workload(self.save(self.open_form(), env={"TUNNEL_TOKEN_V2": "first", "TZ": "UTC"}))
+        env, data = self.saved()
+        self.assertNotIn("TUNNEL_TOKEN", env)
+        self.assertEqual("cloudflared.TUNNEL_TOKEN_V2", env["TUNNEL_TOKEN_V2"]["valueFrom"]["secretKeyRef"]["key"])
+        self.assertEqual({"cloudflared.TUNNEL_TOKEN_V2": b64("first")}, data)
 
 
 class ReadSecretTests(Fixture):

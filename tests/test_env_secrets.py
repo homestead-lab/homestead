@@ -176,7 +176,8 @@ class EditRoundTripTests(unittest.TestCase):
         credential URL under a plain name."""
         WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared",
-             "env": {"LOGIN": "first", "DATABASE_URL": "postgres://u:pw-5c@db.example.com/x", "TZ": "UTC"}}]})
+             "env": {"LOGIN": "first", "DATABASE_URL": "postgres://u:pw-5c@db.example.com/x", "TZ": "UTC"},
+             "secret_env": ["TUNNEL_TOKEN"]}]})
         method, path, saved = self.store.sent[-1]
         self.assertEqual(("PUT", "/apis/apps/v1/namespaces/lab/deployments/tunnel"), (method, path))
         self.assertNotIn("first", json.dumps(saved))
@@ -191,7 +192,8 @@ class EditRoundTripTests(unittest.TestCase):
 
     def test_removing_the_variable_in_the_form_removes_it(self):
         WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
-            {"original_name": "cloudflared", "name": "cloudflared", "env": {"TZ": "UTC"}}]})
+            {"original_name": "cloudflared", "name": "cloudflared", "env": {"TZ": "UTC"},
+             "secret_env": ["TUNNEL_TOKEN"]}]})
         env = self.store.sent[-1][2]["spec"]["template"]["spec"]["containers"][0]["env"]
         self.assertEqual([{"name": "TZ", "value": "UTC"}], env)
         self.assertEqual({}, self.store.objects[SECRET]["data"])
