@@ -72,6 +72,36 @@ class IpamTests(unittest.TestCase):
             with self.subTest(rows=rows), self.assertRaises(ValueError):
                 IPAM.save_subnets(rows)
 
+    def test_the_number_of_subnets_is_capped_before_any_row_is_read(self):
+        """An 8 MB body held about 150k /30 rows: each was parsed, then compared
+        with every other on the request thread (hours of CPU)."""
+        from unittest import mock
+        IPAM.save_subnets([{"cidr": f"10.0.{i}.0/30"} for i in range(IPAM.MAX_SUBNETS)])
+        self.assertEqual(IPAM.MAX_SUBNETS, len(IPAM.load()[0]["subnets"]))
+        with mock.patch.object(IPAM, "_clean_subnet", side_effect=AssertionError("read a row")), \
+                self.assertRaises(ValueError) as caught:
+            IPAM.save_subnets([{"cidr": "nonsense"}] * 150_000)
+        self.assertIn(f"at most {IPAM.MAX_SUBNETS} subnets", str(caught.exception))
+        self.assertEqual(IPAM.MAX_SUBNETS, len(IPAM.load()[0]["subnets"]))
+
+    def test_overlaps_are_found_in_any_order_without_comparing_every_pair(self):
+        from unittest import mock
+        cases = (
+            (["192.0.2.0/24", "198.51.100.0/24", "192.0.2.128/25"], "192.0.2.0/24 and 192.0.2.128/25 overlap"),
+            (["198.51.100.64/26", "10.0.0.0/24", "198.51.100.0/24"], "198.51.100.0/24 and 198.51.100.64/26 overlap"),
+            (["192.0.2.4/30", "192.0.2.0/30", "192.0.2.8/30"], None),       # touching is not overlapping
+        )
+        for cidrs, message in cases:
+            with self.subTest(cidrs=cidrs), \
+                    mock.patch("ipaddress.IPv4Network.overlaps", side_effect=AssertionError("pairwise")):
+                if message is None:
+                    IPAM.save_subnets([{"cidr": c} for c in cidrs])
+                    self.assertEqual(cidrs, [s["cidr"] for s in IPAM.load()[0]["subnets"]])
+                else:
+                    with self.assertRaises(ValueError) as caught:
+                        IPAM.save_subnets([{"cidr": c} for c in cidrs])
+                    self.assertEqual(message, str(caught.exception))
+
     def test_the_cluster_is_merged_in_and_clashes_are_flagged(self):
         s = self.subnet()
         self.assertEqual("node", self.row("192.0.2.21")["cluster"])
