@@ -74,18 +74,11 @@ def _last(key):
 
 
 def _compute(key, fn, epoch):
-    # A request's reads cut short by its deadline (#984) leave an answer that
-    # may be partial even when fn() returned: never kept, never passed on to
-    # those waiting. The last complete one is served instead, or Spent.
-    cuts = DEADLINE.cuts()
     try:
         v = fn()
-        if DEADLINE.cuts() > cuts:
-            raise DEADLINE.Spent(DEADLINE.MESSAGE)
     except Exception:
         e = _last(key)
         if e:
-            DEADLINE.forgive(cuts)
             return e[1]
         raise
     _keep(key, epoch, v)
@@ -103,24 +96,41 @@ def cached(key, ttl, fn):
             flight = _running[key] = _Flight(_epoch.get(key, 0))
     if not mine and flight.owner == threading.get_ident():
         return _compute(key, fn, flight.epoch)  # the computation asks for its own key: no waiting on itself
+    if mine and DEADLINE.remaining() is not None:
+        # A request's computation runs without its deadline (#984), on a
+        # thread of its own: it ends and is kept for the next caller, and a
+        # loop waiting on it gets the whole answer. The request waits only
+        # for what it has left.
+        flight.owner = None
+        threading.Thread(target=_fly, args=(key, fn, flight), daemon=True, name=f"cache {key}"[:60]).start()
+        mine = False
     if not mine:
-        wait = DEADLINE.remaining()
-        if not flight.done.wait(WAIT_SECONDS if wait is None else max(0, min(WAIT_SECONDS, wait))):
+        left = DEADLINE.remaining()
+        if not DEADLINE.wait(flight.done, WAIT_SECONDS):
             e = _last(key)
             if e:
                 return e[1]
-            if wait is not None and wait < WAIT_SECONDS:
+            if left is not None and left < WAIT_SECONDS:
                 raise DEADLINE.spent()
             raise TimeoutError(f"{key} is still being read")
         if flight.error is not None:
+            if isinstance(flight.error, DEADLINE.Spent) and left is not None:
+                DEADLINE.spent()     # this request's answer is cut too
             raise flight.error
         return flight.value
+    _fly(key, fn, flight)
+    if flight.error is not None:
+        raise flight.error
+    return flight.value
+
+
+def _fly(key, fn, flight):
+    """Compute key for everyone waiting on flight."""
+    flight.owner = threading.get_ident()
     try:
         flight.value = _compute(key, fn, flight.epoch)
-        return flight.value
     except BaseException as ex:
         flight.error = ex
-        raise
     finally:
         with _lock:
             if _running.get(key) is flight:

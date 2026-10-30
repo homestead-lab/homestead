@@ -4,10 +4,12 @@ Each read was allowed its own 10 s and a cold page makes dozens to hundreds
 of them in turn, so a hung API server held a page for minutes. A GET request
 now has homestead_read_deadline.SECONDS for all its reads: each read is given what is
 left, none starts after it, and a 429 is not retried past it. A page some of
-whose reads were cut short answers 504 (or the last complete copy kept in
+whose reads were cut short answers 503 (or the last complete copy kept in
 the cache), never a partial page as if it were complete. Background loops
 set no deadline and keep their own timeouts."""
 import sys
+import threading
+import types
 import unittest
 import urllib.error
 from pathlib import Path
@@ -148,18 +150,23 @@ class TrickleTests(DeadlineCase):
     answer: an API server sending a byte a second never times out. The body
     is read in pieces with the deadline checked between them."""
 
-    def connection(self, pieces, seconds_each):
+    def connection(self, pieces, seconds_each, will_close=True, pooled=False, sock_on_response=False):
         clock, test = self.clock, self
+        sock = mock.Mock()
 
         class Response:
-            status, reason, headers, will_close = 200, "OK", {}, True
+            status, reason, headers = 200, "OK", {}
 
             def __init__(self):
                 self.left = pieces
+                self.will_close = will_close
+                # An answer that ends the connection: http.client has taken the
+                # socket from the connection, and only the response holds it.
+                self.fp = types.SimpleNamespace(raw=types.SimpleNamespace(_sock=sock)) if sock_on_response else None
 
             def read1(self, n=-1):
                 if self.left is None:       # hangs: the socket's timeout passes
-                    clock.advance(test.opened.sock.settimeout.call_args.args[0])
+                    clock.advance(sock.settimeout.call_args.args[0])
                     raise TimeoutError("timed out")
                 if not self.left:
                     return b""
@@ -177,7 +184,7 @@ class TrickleTests(DeadlineCase):
             timeout = 10
 
             def __init__(self):
-                self.sock = mock.Mock()
+                self.sock = None if sock_on_response else sock
                 self.closed = False
 
             def request(self, *args, **kwargs):
@@ -188,9 +195,12 @@ class TrickleTests(DeadlineCase):
 
             def close(self):
                 self.closed = True
-        self.opened = Connection()
-        test.enterContext(mock.patch.object(K, "_take", lambda timeout: None))
+        self.opened, self.sock = Connection(), sock
+        test.enterContext(mock.patch.object(K, "_take", lambda timeout: self.opened if pooled else None))
         test.enterContext(mock.patch.object(K, "_open", lambda timeout: self.opened))
+        idle = mock.Mock()                 # another connection, idle in the pool
+        test.enterContext(mock.patch.object(K, "_idle", [((K.API, id(K.CTX)), idle, 0)]))
+        self.idle = idle
 
     def test_a_trickling_answer_is_cut_at_the_deadline(self):
         self.connection(pieces=100, seconds_each=1)    # 100 s in all, each piece well within 10 s
@@ -209,6 +219,37 @@ class TrickleTests(DeadlineCase):
         waits = [c.args[0] for c in self.opened.sock.settimeout.call_args_list]
         self.assertEqual([4, 3, 2, 1], waits)
 
+    def test_the_socket_of_an_answer_that_ends_the_connection_is_bounded_too(self):
+        self.connection(pieces=3, seconds_each=1, sock_on_response=True)
+        DEADLINE.begin(15)
+        self.clock.advance(11)
+        self.assertEqual(b"   ", K._request("GET", "/api/v1/pods", None, {}, 10))
+        self.assertEqual([4, 3, 2, 1], [c.args[0] for c in self.sock.settimeout.call_args_list])
+
+    def test_a_cut_read_closes_its_connection_only(self):
+        self.connection(pieces=100, seconds_each=1)
+        DEADLINE.begin(15)
+        with self.assertRaises(DEADLINE.Spent):
+            K.kget("/api/v1/pods")
+        self.assertTrue(self.opened.closed)
+        self.assertEqual([self.idle], [c for _, c, _ in K._idle])   # the others stay in the pool
+        self.idle.close.assert_not_called()
+
+    def test_a_cut_read_on_a_kept_open_connection_is_not_given_back(self):
+        self.connection(pieces=100, seconds_each=1, will_close=False, pooled=True)
+        DEADLINE.begin(15)
+        with self.assertRaises(DEADLINE.Spent):
+            K.kget("/api/v1/pods")
+        self.assertTrue(self.opened.closed)
+        self.assertNotIn(self.opened, [c for _, c, _ in K._idle])
+
+    def test_a_kept_open_connection_read_in_time_goes_back_to_the_pool(self):
+        self.connection(pieces=3, seconds_each=1, will_close=False, pooled=True)
+        DEADLINE.begin(15)
+        self.assertEqual(b"   ", K._request("GET", "/api/v1/pods", None, {}, 10))
+        self.assertFalse(self.opened.closed)
+        self.assertIn(self.opened, [c for _, c, _ in K._idle])
+
     def test_a_body_that_stops_coming_is_cut_at_the_deadline(self):
         self.connection(pieces=None, seconds_each=0)
         DEADLINE.begin(15)
@@ -222,60 +263,118 @@ class TrickleTests(DeadlineCase):
         self.assertEqual(b" " * 100, K._request("GET", "/api/v1/pods", None, {}, 10))
 
 
+def settle():
+    """Wait (real time) for every computation the cache runs to end."""
+    for _ in range(2000):
+        if not CACHE._running:
+            return
+        threading.Event().wait(0.005)
+    raise AssertionError("a computation is still running")
+
+
 class CacheTests(DeadlineCase):
+    """A computation a request starts runs without the request's deadline:
+    the request waits only for what it has left, and the computation ends and
+    is kept for the next caller, and for a loop waiting on it."""
+
     def setUp(self):
         super().setUp()
+        self.go = threading.Event()
+        self.addCleanup(settle)
+        self.addCleanup(self.go.set)
         CACHE.forget_where(lambda key: key.startswith("deadline-test"))
         self.addCleanup(CACHE.forget_where, lambda key: key.startswith("deadline-test"))
 
-    def partial(self):
-        """A computation that swallows a read error, as many pages do."""
-        try:
-            K.kget("/api/v1/nodes")
-        except Exception:
-            pass
-        return {"nodes": []}
+    def slow_read(self):
+        """Blocks until the test lets it go, then reads the node, as a page does."""
+        self.go.wait(10)
+        self.seen.append(DEADLINE.remaining())
+        return K.kget("/api/v1/nodes/node-a")["metadata"]["name"]
 
-    def test_an_answer_some_of_whose_reads_were_cut_is_not_kept(self):
+    def test_a_request_out_of_time_answers_spent_and_the_computation_is_kept(self):
+        self.seen = []
         DEADLINE.begin(15)
-        self.clock.advance(15)
+        self.clock.advance(14)
         with Kube(NODE):
             with self.assertRaises(DEADLINE.Spent):
-                CACHE.cached("deadline-test-a", 20, self.partial)
-        self.assertIsNone(CACHE._last("deadline-test-a"))
-        self.assertTrue(DEADLINE.cuts())
-
-    def test_the_last_complete_answer_is_served_and_the_cut_forgiven(self):
-        CACHE.keep("deadline-test-b", {"nodes": ["node-a"]}, CACHE.epoch("deadline-test-b"), at=0)
+                CACHE.cached("deadline-test-a", 20, self.slow_read)
+            self.assertEqual(1, DEADLINE.cuts())
+            self.go.set()
+            settle()
+        self.assertEqual([None], self.seen)        # computed without the request's deadline
+        self.assertEqual("node-a", CACHE._last("deadline-test-a")[1])
         DEADLINE.begin(15)
-        self.clock.advance(15)
+        self.assertEqual("node-a", CACHE.cached("deadline-test-a", 20, self.slow_read))
+
+    def test_a_loop_waiting_on_a_request_s_computation_gets_the_whole_answer(self):
+        self.seen, got = [], []
+        DEADLINE.begin(15)
+        self.clock.advance(14)
         with Kube(NODE):
-            self.assertEqual({"nodes": ["node-a"]}, CACHE.cached("deadline-test-b", 20, self.partial))
+            with self.assertRaises(DEADLINE.Spent):
+                CACHE.cached("deadline-test-b", 20, self.slow_read)
+            loop = threading.Thread(target=lambda: got.append(CACHE.cached("deadline-test-b", 20, dict)))
+            loop.start()
+            self.go.set()
+            loop.join(10)
+        self.assertEqual(["node-a"], got)
+
+    def test_the_last_complete_answer_is_served_while_it_computes(self):
+        self.seen = []
+        CACHE.keep("deadline-test-c", "old", CACHE.epoch("deadline-test-c"), at=0)
+        DEADLINE.begin(15)
+        self.clock.advance(14)
+        with Kube(NODE):
+            self.assertEqual("old", CACHE.cached("deadline-test-c", 20, self.slow_read))
+            self.assertEqual(0, DEADLINE.cuts())
+            self.go.set()
+            settle()
+        self.assertEqual("node-a", CACHE._last("deadline-test-c")[1])
+
+    def test_a_computation_in_time_answers_the_request(self):
+        self.seen = []
+        self.go.set()
+        DEADLINE.begin(15)
+        with Kube(NODE):
+            self.assertEqual("node-a", CACHE.cached("deadline-test-d", 20, self.slow_read))
         self.assertEqual(0, DEADLINE.cuts())
+
+    def flight(self, key, error=None):
+        flight = CACHE._Flight(0)
+        flight.owner = -1
+        if error is not None:
+            flight.error = error
+            flight.done.set()
+        CACHE._running[key] = flight
+        self.addCleanup(CACHE._running.pop, key, None)
+        return flight
 
     def test_a_waiter_waits_only_for_what_is_left(self):
         DEADLINE.begin(15)
         self.clock.advance(11)
-        flight = CACHE._Flight(0)
-        flight.owner = -1
-        CACHE._running["deadline-test-c"] = flight
-        self.addCleanup(CACHE._running.pop, "deadline-test-c", None)
+        self.flight("deadline-test-e")
         waited = []
-        with mock.patch.object(flight.done, "wait", lambda seconds: waited.append(seconds) or False):
+        with mock.patch.object(DEADLINE, "event_wait", lambda event, seconds: waited.append(seconds) or False):
             with self.assertRaises(DEADLINE.Spent):
-                CACHE.cached("deadline-test-c", 20, dict)
+                CACHE.cached("deadline-test-e", 20, dict)
         self.assertEqual([4], waited)
+        self.assertEqual(1, DEADLINE.cuts())
 
     def test_a_waiter_without_a_deadline_waits_as_before(self):
-        flight = CACHE._Flight(0)
-        flight.owner = -1
-        CACHE._running["deadline-test-d"] = flight
-        self.addCleanup(CACHE._running.pop, "deadline-test-d", None)
+        self.flight("deadline-test-f")
         waited = []
-        with mock.patch.object(flight.done, "wait", lambda seconds: waited.append(seconds) or False):
-            with self.assertRaises(TimeoutError):
-                CACHE.cached("deadline-test-d", 20, dict)
+        with mock.patch.object(DEADLINE, "event_wait", lambda event, seconds: waited.append(seconds) or False):
+            with self.assertRaises(TimeoutError) as caught:
+                CACHE.cached("deadline-test-f", 20, dict)
+        self.assertNotIsInstance(caught.exception, DEADLINE.Spent)
         self.assertEqual([CACHE.WAIT_SECONDS], waited)
+
+    def test_a_waiter_handed_spent_counts_it_as_its_own_cut(self):
+        self.flight("deadline-test-g", error=DEADLINE.Spent(DEADLINE.MESSAGE))
+        DEADLINE.begin(15)
+        with self.assertRaises(DEADLINE.Spent):
+            CACHE.cached("deadline-test-g", 20, dict)
+        self.assertEqual(1, DEADLINE.cuts())
 
 
 class AnswerTests(DeadlineCase):
@@ -284,7 +383,7 @@ class AnswerTests(DeadlineCase):
     def call(self, handler):
         return MODULE_ROUTES.call(self.route._replace(handler=handler), None)
 
-    def test_a_route_whose_reads_were_cut_answers_504(self):
+    def test_a_route_whose_reads_were_cut_answers_503(self):
         DEADLINE.begin(15)
         self.clock.advance(15)
 
@@ -295,14 +394,32 @@ class AnswerTests(DeadlineCase):
                 return {"nodes": []}  # looks complete, is not
         with Kube(NODE):
             answer = self.call(page)
-        self.assertEqual(504, answer.code)
+        self.assertEqual(503, answer.code)
         self.assertIn("did not answer in time", answer.body["error"])
         self.assertTrue(answer.body["unavailable"])
 
-    def test_a_route_that_raises_spent_answers_504(self):
+    def test_a_route_that_raises_spent_answers_503(self):
         def page(request):
             raise DEADLINE.Spent("out of time")
-        self.assertEqual(504, self.call(page).code)
+        self.assertEqual(503, self.call(page).code)
+
+    def test_a_route_that_swallows_a_cut_and_then_fails_answers_503(self):
+        DEADLINE.begin(15)
+        self.clock.advance(15)
+
+        def page(request):
+            try:
+                K.kget("/api/v1/nodes")
+            except OSError:
+                pass
+            raise ValueError("no nodes")       # would be a 400
+        with Kube(NODE):
+            self.assertEqual(503, self.call(page).code)
+
+    def test_a_route_that_fails_in_time_raises_as_before(self):
+        DEADLINE.begin(15)
+        with self.assertRaises(ValueError):
+            self.call(lambda request: (_ for _ in ()).throw(ValueError("bad")))
 
     def test_a_route_in_time_answers_as_before(self):
         DEADLINE.begin(15)
@@ -352,8 +469,11 @@ def handler(path, method="GET"):
 
 
 class HungApiServerTests(DeadlineCase):
-    """/api/overview, cold on a standby, through the real handler, against
-    the shared fake with every call delayed on a fake clock."""
+    """Cold pages on a standby, through the real handler, against the shared
+    fake with every call delayed on a fake clock. A page's computation runs
+    on in the background (without the request's deadline); the request waits
+    for it on the fake clock: it is done in time when the calls it made took
+    no longer than the request had left."""
 
     def setUp(self):
         super().setUp()
@@ -361,47 +481,97 @@ class HungApiServerTests(DeadlineCase):
         self.enterContext(mock.patch.object(server, "_self_data_boot_pending", False))
         self.enterContext(mock.patch.object(RESTARTS, "observe_later", lambda pods: True))
         self.enterContext(mock.patch.object(K.time, "sleep", lambda seconds: self.clock.advance(seconds)))
+        self.enterContext(mock.patch.object(DEADLINE, "event_wait", self.wait))
         for name, value in (("kget", K.kget), ("ksend", K.ksend),
                             ("v2_status", server.STORAGE_CLASSES.v2_engine_status)):
             self.enterContext(mock.patch.object(server.LHCAP, name, value))
         clean_snapshot(self)
         clean_cache(self)
         self.calls = 0
+        self.waits = []
 
-    def overview(self, delay):
-        """(code, seconds taken, body) with every call taking delay seconds,
-        or hanging until its timeout when delay is None."""
+    def wait(self, event, seconds):
+        """The request waiting on the computation. The computation runs at
+        once in real time, advancing the shared fake clock, and stops (blocked)
+        before a call that would end past the request's deadline: the request
+        then gives up at its deadline, and lets it go on."""
+        self.waits.append(seconds)
+        while not event.wait(0.002):
+            if self.blocked.is_set():
+                self.answered = self.until
+                self.released.set()
+                return False
+        return True
+
+    def page(self, path, delay, then=()):
+        """[(code, seconds the request took, body)] for path and then each of
+        then, every call taking delay seconds (or hanging until its timeout
+        when delay is None)."""
+        answers = []
         with Kube(*objects()) as kube:
             def slow(method, path, body=None, ctype=None, timeout=15):
                 self.calls += 1
-                if delay is None or delay > timeout:
-                    self.clock.advance(timeout)
+                takes = timeout if delay is None or delay > timeout else delay
+                if threading.current_thread() is not threading.main_thread() and \
+                        self.clock.now + takes > self.until and not self.released.is_set():
+                    self.blocked.set()
+                    self.released.wait(10)
+                self.clock.advance(takes)
+                if takes != delay:
                     raise TimeoutError("timed out")
-                self.clock.advance(delay)
                 return kube(method, path, body, ctype, timeout)
             with mock.patch.object(K, "transport", slow):
-                h = handler("/api/overview")
-                started = self.clock.now
-                h.do_GET()
-                return h._send.call_args.args[0], self.clock.now - started, h._send.call_args.args[1]
+                for each in (path, *then):
+                    h = handler(each)
+                    self.blocked, self.released = threading.Event(), threading.Event()
+                    started, self.answered = self.clock.now, None
+                    self.until = started + DEADLINE.SECONDS
+                    h.do_GET()
+                    took = (self.answered or self.clock.now) - started
+                    answers.append((h._send.call_args.args[0], took, h._send.call_args.args[1]))
+                    self.released.set()
+                    settle()                # the computation it started ends before the next
+        return answers
 
     def test_a_hung_api_server_answers_an_error_within_the_budget(self):
-        code, took, body = self.overview(None)
+        [(code, took, body)] = self.page("/api/overview", None)
         self.assertGreaterEqual(code, 500, body)
         self.assertLessEqual(took, DEADLINE.SECONDS)
 
-    def test_a_crawling_api_server_answers_504_at_the_budget(self):
+    def test_a_crawling_api_server_answers_503_at_the_budget(self):
         # 2 s a call: each within its own 10 s, all of them far past 15 s.
-        code, took, body = self.overview(2)
-        self.assertEqual(504, code, body)
-        self.assertEqual(DEADLINE.MESSAGE, body["error"])
+        [(code, took, body)] = self.page("/api/overview", 2)
+        self.assertEqual(503, code, body)
+        self.assertEqual({"error": DEADLINE.MESSAGE, "unavailable": True}, body)
         self.assertLessEqual(took, DEADLINE.SECONDS)
+        self.assertTrue(all(w <= DEADLINE.SECONDS for w in self.waits))
 
     def test_a_slow_api_server_still_answers_the_page(self):
-        code, took, body = self.overview(0.03)
+        [(code, took, body)] = self.page("/api/overview", 0.03)
         self.assertEqual(200, code, body)
         self.assertLess(took, DEADLINE.SECONDS)
         self.assertGreater(self.calls, 5)
+
+    def test_a_cold_page_too_slow_once_is_answered_on_the_next_refresh(self):
+        # Each call well inside its own 10 s, yet the cold overview takes
+        # about 1.5 times the budget (about 80 calls on this fake at 0.3 s;
+        # what other tests left cached changes the count, so it is counted
+        # first). The first request answers 503 at its deadline; the
+        # computation ends in the background and the refresh is answered
+        # from it, so a slow API server does not leave the page at 503.
+        for _ in range(2):
+            clean_cache(self)
+            self.calls = 0
+            self.page("/api/overview", 0)
+        delay = 1.5 * DEADLINE.SECONDS / self.calls
+        self.assertLess(delay, 1)
+        clean_cache(self)
+        [(code, took, body), (again, again_took, again_body)] = self.page(
+            "/api/overview", delay, then=("/api/overview",))
+        self.assertEqual(503, code, body)
+        self.assertLessEqual(took, DEADLINE.SECONDS)
+        self.assertEqual(200, again, again_body)
+        self.assertEqual(0, again_took)
 
 
 if __name__ == "__main__":

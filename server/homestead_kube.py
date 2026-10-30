@@ -543,6 +543,10 @@ def _request(method, path, data, headers, timeout):
     is a URLError wrapping it. Every caller catches OSError or Exception, or
     URLError, TimeoutError and ConnectionError, which cover both."""
     headers = {**headers, "Authorization": f"Bearer {TOKEN}"}
+    # A timeout the request's deadline set (#984) says nothing about the
+    # other connections: only this one is dropped when it passes.
+    left = DEADLINE.remaining()
+    at_deadline = left is not None and timeout >= left
     pooled = _take(timeout) if method in _READS else None
     connection = pooled or _open(timeout)
     try:
@@ -560,7 +564,8 @@ def _request(method, path, data, headers, timeout):
         payload = _body(connection, response)
     except BaseException as error:
         connection.close()
-        close_connections()
+        if not (isinstance(error, DEADLINE.Spent) or isinstance(error, TimeoutError) and at_deadline):
+            close_connections()
         if isinstance(error, http.client.HTTPException):
             raise urllib.error.URLError(error) from error
         raise

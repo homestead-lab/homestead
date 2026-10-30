@@ -372,17 +372,23 @@ def _owned(cookie, module, owned):
 
 
 def call(route, request):
-    """What route answers request; a 504 when any of the request's Kubernetes
+    """What route answers request; a 503 when any of the request's Kubernetes
     reads ran out of its time (homestead_read_deadline, #984), even if the
-    route caught the error: a page read in part is not shown as complete."""
-    cuts, spent = DEADLINE.cuts(), False
+    route caught the error, or failed after it: a page read in part is not
+    shown as complete. 503 as the account store's own (auth.js): Cloudflare
+    puts its own page in place of an origin's 502 or 504."""
+    cuts = DEADLINE.cuts()
     try:
         answer = route.handler(request)
-    except DEADLINE.Spent:
-        spent = True
-    if spent or DEADLINE.cuts() > cuts:
-        return Reply(504, {"error": DEADLINE.MESSAGE, "unavailable": True})
-    return answer
+    except Exception as error:
+        if not isinstance(error, DEADLINE.Spent) and DEADLINE.cuts() == cuts:
+            raise
+        return _out_of_time()
+    return _out_of_time() if DEADLINE.cuts() > cuts else answer
+
+
+def _out_of_time():
+    return Reply(503, {"error": DEADLINE.MESSAGE, "unavailable": True})
 
 
 def answer(handler, answer, module):

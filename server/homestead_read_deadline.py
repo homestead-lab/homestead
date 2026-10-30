@@ -8,10 +8,12 @@ A GET request now has SECONDS for all its reads together (begin(), from
 homestead_request_scope when the request starts; end() when it ends). Each
 read is given what is left of it, or its own timeout when that is shorter;
 none starts once it has run out, and a 429 is not retried past it. A read
-refused or cut short that way is counted (cuts()), so a page whose
-computation swallowed the error is not shown as complete: the route answers
-504 (homestead_routes.call), or the cache serves its last complete copy
-(homestead_cache).
+refused or cut short that way is counted (cuts()), so a page whose code
+swallowed the error is not shown as complete: the route answers 503
+(homestead_routes.call). A cached computation a request starts runs on
+without the deadline and is kept for the next caller (homestead_cache);
+the request waits only for what it has left, then answers the last
+complete copy or 503.
 
 The deadline is the request thread's own. Background loops, POST and DELETE
 requests (whose writes and waits keep their own timeouts), the console and
@@ -20,8 +22,11 @@ with none keeps its own timeout, as before."""
 import threading
 import time
 
-# Longer than a cold page against a slow API server takes (6.7 s for the
-# setup page at 30 ms a call, #984); about one UI refresh (15 s).
+# The UI refreshes every 15 s: an answer later than that is overtaken by the
+# next refresh, so waiting longer only holds a connection slot. It is well
+# above a cold page against a slow API server (6.7 s for the setup page at
+# 30 ms a call, #984), and a page slower still is computed on in the
+# background, so its next refresh is answered.
 SECONDS = 15
 clock = time.monotonic   # tests put a fake clock here
 MESSAGE = ("The cluster's API server did not answer in time (it is slow or not answering), "
@@ -63,11 +68,6 @@ def cuts():
     return getattr(_local, "cut", 0)
 
 
-def forgive(count):
-    """Back to count cuts: what was cut was answered with a complete copy."""
-    _local.cut = count
-
-
 def spent():
     """Count a read the deadline refused or cut short, and the error for it."""
     _local.cut = cuts() + 1
@@ -97,6 +97,17 @@ def read(wanted, fn):
         if allowed < wanted:
             raise spent() from error
         raise
+
+
+def event_wait(event, seconds):
+    return event.wait(seconds)   # tests wait on their fake clock here
+
+
+def wait(event, seconds):
+    """Wait for event up to seconds, or only for what is left of the
+    request's time when that is less; whether it was set."""
+    left = remaining()
+    return event_wait(event, seconds if left is None else max(0, min(seconds, left)))
 
 
 def allows(seconds):
