@@ -475,6 +475,7 @@ import homestead_objectstore as OBJECTS
 import homestead_move as MOVE
 import homestead_fleet as FLEET
 import homestead_host_access as HOSTACCESS
+import homestead_request_scope as REQUEST_SCOPE
 HOSTACCESS.bind_targets(SYS_NS)
 import homestead_signins as SIGNINS
 import homestead_config_backup as CONFIG
@@ -1505,7 +1506,7 @@ class H(HTTP.LimitedHandler):
 
     def _begin(self):
         """Per request: a connection can carry several, and the handler stays."""
-        CHANGES.REQUEST.user = None
+        REQUEST_SCOPE.unbind()
         self.api_key = None
         self._extra_headers = []
         self._raw = None
@@ -1513,7 +1514,6 @@ class H(HTTP.LimitedHandler):
         self._fleet_from = self._access = None    # who the guard finds, this request's alone
         self._diagnostic_authorized = False
         self._diagnostic_started = time.monotonic()
-        HOSTACCESS.set_role(None)
 
     def _raw_body(self):
         """The request body, read once: a signature covers it before it is parsed."""
@@ -1596,7 +1596,7 @@ class H(HTTP.LimitedHandler):
                                   "text/html; charset=utf-8")
             return self._send(502, {"error": str(error), "cluster": known.get("name", ""), "unreachable": True})
 
-    @self_data_request
+    @REQUEST_SCOPE.unbinds_after(self_data_request)
     def do_GET(self):
         self._begin()
         u = urllib.parse.urlparse(self.path)
@@ -1671,7 +1671,7 @@ class H(HTTP.LimitedHandler):
         except Exception as e:
             return self._send(500, {"error": str(e)})
 
-    @self_data_request
+    @REQUEST_SCOPE.unbinds_after(self_data_request)
     def do_POST(self):
         self._begin()
         u = urllib.parse.urlparse(self.path)
@@ -1710,7 +1710,7 @@ class H(HTTP.LimitedHandler):
         except Exception as e:
             return self._send(500, {"error": str(e)})
 
-    @self_data_request
+    @REQUEST_SCOPE.unbinds_after(self_data_request)
     def do_DELETE(self):
         self._begin()
         u = urllib.parse.urlparse(self.path)
