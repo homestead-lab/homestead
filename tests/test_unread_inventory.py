@@ -13,11 +13,15 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_container_import as CONTAINER_IMPORT
 import homestead_impact as IMPACT
+import homestead_imports as IMP
 import homestead_kube as K
 import homestead_network_inventory as INV
 import homestead_uptime as UP
 import homestead_vip_registry as REG
+import homestead_vm_create as VM_CREATE
+from fakes.kube import Kube
 from test_page_snapshot import Cluster, clean_cache, clean_snapshot, setUpModule  # noqa: F401 (restart record off)
 
 RAW_VMS = "/apis/kubevirt.io/v1/virtualmachines"
@@ -198,6 +202,62 @@ class UptimeWithServicesUnreadTests(unittest.TestCase):
         UP.observe([{**app, "ports": None}], now=1_000_000 + 60 * UP.DOWN_AFTER, ask=miss)
         self.assertEqual("down", UP.report()["lab/web"]["state"])
         self.assertEqual(1, len(UP.alert_facts(UP.report())))
+
+
+
+DATAVOLUMES = "/apis/cdi.kubevirt.io/v1beta1/datavolumes"
+JOBS = "/apis/batch/v1/jobs"
+
+
+def datavolume(name="disk1"):
+    return {"apiVersion": "cdi.kubevirt.io/v1beta1", "kind": "DataVolume",
+            "metadata": {"namespace": "lab", "name": name, "labels": {IMP.VM_DISK_LABEL: "true"}},
+            "spec": {"storage": {"resources": {"requests": {"storage": "10Gi"}}}},
+            "status": {"phase": "Succeeded", "progress": "100.0%"}}
+
+
+def vm_using(disk):
+    return {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
+            "metadata": {"namespace": "lab", "name": "vm1"},
+            "spec": {"template": {"spec": {"volumes": [{"name": "d", "dataVolume": {"name": disk}}]}}}}
+
+
+class VmDisksAndImportsTests(unittest.TestCase):
+    """The VM disks list (/api/vm-disks) and recent imports (/api/imports):
+    the pages already say "could not read" for a call that fails."""
+    def setUp(self):
+        self.kube = self.enterContext(Kube(datavolume(), vm_using("disk1")))
+        self.enterContext(mock.patch.object(IMP, "kget", K.kget))
+        self.enterContext(mock.patch.object(IMP, "NS", "lab"))
+
+    def test_read_disks_are_listed_with_the_vm_using_them(self):
+        rows = VM_CREATE.list_vm_disks()
+        self.assertEqual([("disk1", True, ["vm1"])], [(r["name"], r["in_use"], r["used_by"]) for r in rows])
+
+    def test_no_cdi_installed_is_no_disks(self):
+        with Kube(groups=("apps",), absent_groups={"cdi.kubevirt.io", "kubevirt.io"}):
+            self.assertEqual([], VM_CREATE.list_vm_disks())
+
+    def test_unread_disks_raise_never_an_empty_list(self):
+        self.kube.fail(DATAVOLUMES, 500, times=999)
+        with self.assertRaisesRegex(Exception, "500"):
+            VM_CREATE.list_vm_disks()
+
+    def test_unread_vms_raise_never_a_disk_shown_as_free(self):
+        self.kube.fail(RAW_VMS, 500, times=999)
+        with self.assertRaisesRegex(Exception, "500"):
+            VM_CREATE.list_vm_disks()
+        # A new VM may not take a disk another VM might hold.
+        with self.assertRaisesRegex(Exception, "500"):
+            VM_CREATE._disk_consumers()
+
+    def test_no_imports_is_an_empty_list(self):
+        self.assertEqual([], CONTAINER_IMPORT.import_status())
+
+    def test_unread_imports_raise_never_an_empty_list(self):
+        self.kube.fail(JOBS, 500, times=999)
+        with self.assertRaisesRegex(Exception, "500"):
+            CONTAINER_IMPORT.import_status()
 
 
 if __name__ == "__main__":

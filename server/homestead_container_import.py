@@ -996,13 +996,12 @@ def _job_pod(job, ns=None):
 
 
 def import_status():
-    try:
-        # Every namespace: an import can be put in any of them.
-        jobs = [job for job in
-                NAMES.find("/apis/batch/v1/jobs", "task")
-                if NAMES.label_of(job["metadata"], "task") in ("import", "chown")]
-    except Exception:
-        return []
+    """Recent imports. Jobs that cannot be read raise: the page says it
+    could not read them, never that there were none."""
+    # Every namespace: an import can be put in any of them.
+    jobs = [job for job in
+            KUBE.items(f"/apis/batch/v1/jobs?labelSelector={urllib.parse.quote(NAMES.key('task'))}", read=I.kget)
+            if NAMES.label_of(job["metadata"], "task") in ("import", "chown")]
     out = []
     for j in jobs:
         st = j.get("status", {})

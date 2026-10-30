@@ -131,11 +131,13 @@ def import_vm_disk(cfg, ops=OPS):
 
 
 def _disk_consumers():
+    """(namespace, disk) -> the VMs using it. VMs that cannot be read raise:
+    unread is not "no VM uses it" (a new VM would take a disk another holds)."""
     consumers = {}
     try:
-        vms = I.kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
-    except Exception:
-        return consumers
+        vms = KUBE.items("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io", read=I.kget)
+    except Exception as error:
+        raise ValueError(f"VM disk ownership inventory is incomplete: the VMs could not be read ({str(error)[:120]})") from error
     for vm in vms:
         meta = vm.get("metadata", {}) or {}
         ns, vm_name = meta.get("namespace", ""), meta.get("name", "")
@@ -148,11 +150,9 @@ def _disk_consumers():
 
 
 def list_vm_disks():
-    """Return managed imports with status only; source URLs remain cluster-private."""
-    try:
-        items = I.kget("/apis/cdi.kubevirt.io/v1beta1/datavolumes").get("items", [])
-    except Exception:
-        return []
+    """Return managed imports with status only; source URLs remain cluster-private.
+    A list that cannot be read raises (the page says so); [] is no CDI or no disk."""
+    items = KUBE.items("/apis/cdi.kubevirt.io/v1beta1/datavolumes", optional_group="cdi.kubevirt.io", read=I.kget)
     consumers = _disk_consumers()
     out = []
     for item in items:
