@@ -436,7 +436,7 @@ def _ksend(method, path, body=None, ctype="application/json", timeout=15, *, shu
 # writes drop it at once. A read that fails is never kept: the write is refused.
 FENCE_TTL = 1.5
 fence_clock = time.monotonic
-_fence = {"until": float("-inf"), "state": None, "source": None}
+_fence = {"until": float("-inf"), "state": None, "source": None, "generation": 0}
 _fence_lock = threading.Lock()
 
 
@@ -445,15 +445,19 @@ def _fence_state():
     with _fence_lock:
         if _fence["source"] is source and fence_clock() < _fence["until"]:
             return _fence["state"]
+        generation = _fence["generation"]
     state = source().state()
     with _fence_lock:
-        _fence.update(until=fence_clock() + FENCE_TTL, state=state, source=source)
+        # A forget while this read ran (the coordinator wrote the journal):
+        # the reading may predate that write, so it answers this write only.
+        if _fence["generation"] == generation:
+            _fence.update(until=fence_clock() + FENCE_TTL, state=state, source=source)
     return state
 
 
 def forget_fence():
     with _fence_lock:
-        _fence.update(until=float("-inf"), state=None, source=None)
+        _fence.update(until=float("-inf"), state=None, source=None, generation=_fence["generation"] + 1)
 
 
 def _journal_write(path, body):

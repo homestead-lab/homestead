@@ -25,6 +25,11 @@ ALLOWED = {
     ("homestead_macvtap", "upgrade"), ("homestead_os_rollout", "start"), ("homestead_promote", "plan"),
 }
 
+# Forced refreshes a viewer asks for ("Check now", ?force=1): each is shared
+# and rate-limited by homestead_forced (#991), so it may force detection.
+# Listed here before #991 merges, so the stale-row check leaves them out.
+ASKED = {("homestead_platform", "_platform_route")}
+
 
 def forced_calls():
     """(module, function) of every call that forces platform detection."""
@@ -48,7 +53,7 @@ def forced_calls():
 
 class ForcedDetectionTests(unittest.TestCase):
     def test_only_write_paths_force_a_detection(self):
-        extra = forced_calls() - ALLOWED
+        extra = forced_calls() - ALLOWED - ASKED
         self.assertEqual(set(), extra, "a page or background check forces platform detection: use the "
                          "cached detect(), or platform(RECENT) on a page that must show a change soon")
 

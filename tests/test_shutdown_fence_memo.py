@@ -24,11 +24,15 @@ class FenceMemoTests(unittest.TestCase):
         self.now = [1000.0]
         self.state = [None]
         self.reads = []
+        self.during_read = []
         def state():
             self.reads.append(1)
             if isinstance(self.state[0], Exception):
                 raise self.state[0]
-            return self.state[0]
+            seen = self.state[0]
+            while self.during_read:
+                self.during_read.pop()()
+            return seen
         shutdown = type("Shutdown", (), {"state": staticmethod(state)})
         for patch in (mock.patch.object(K, "cluster_shutdown", lambda: shutdown, create=True),
                       mock.patch.object(K, "FENCE_READY", True),
@@ -75,6 +79,18 @@ class FenceMemoTests(unittest.TestCase):
             self.renew()
 
 
+    def test_a_reading_begun_before_a_forget_is_not_kept(self):
+        # The read sees the journal before the coordinator's write lands; the
+        # coordinator then forgets the fence; the old reading must not be stored.
+        def coordinator_writes_during_the_read():
+            K.forget_fence()
+            self.state[0] = {"phase": "draining"}
+        self.during_read.append(coordinator_writes_during_the_read)
+        self.renew()                    # the reading it began with lets this one write through
+        with self.assertRaisesRegex(ValueError, "Cluster shutdown is active"):
+            self.renew()
+
+
 class LegacyJournalTests(unittest.TestCase):
     def test_a_missing_legacy_configmap_is_not_asked_for_on_every_read(self):
         with Kube() as kube:
@@ -83,8 +99,9 @@ class LegacyJournalTests(unittest.TestCase):
             clock = [5000.0]
             with mock.patch.object(CS, "legacy_clock", lambda: clock[0]):
                 CS.Shutdown._legacy_absent.clear()
-                for _ in range(5):
-                    self.assertIsNone(CS.Shutdown(K.kget, K.ksend, "lab", "pod-a", "").state())
+                for _ in range(5):          # a fresh reader each time, as the helper pod's lambda is
+                    self.assertIsNone(CS.Shutdown(lambda path: K.kget(path), K.ksend, "lab", "pod-a", "").state())
+                self.assertEqual(1, len(CS.Shutdown._legacy_absent), "one entry per namespace")
                 self.assertEqual(1, len(gets))
                 clock[0] += CS.LEGACY_RECHECK
                 CS.Shutdown(K.kget, K.ksend, "lab", "pod-a", "").state()

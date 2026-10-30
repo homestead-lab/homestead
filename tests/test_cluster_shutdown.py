@@ -177,7 +177,9 @@ class Fake:
 
 
 class ShutdownTests(unittest.TestCase):
-    def setUp(self): self.f = Fake()
+    def setUp(self):
+        self.f = Fake()
+        S.Shutdown._legacy_absent.clear()      # each test's cluster is its own (#985)
 
     def test_configmap_writer_cannot_replace_the_approved_image_or_release_the_fence(self):
         c = self.f.start()
