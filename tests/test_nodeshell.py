@@ -10,6 +10,7 @@ import homestead_console as CONSOLE
 from fakes.kube import Kube
 
 HELPER = "/api/v1/namespaces/lab/pods/homestead-shell-node-1"
+BEATS = "/api/v1/namespaces/lab/configmaps/homestead-shell-sessions"
 
 
 class NodeShellTests(unittest.TestCase):
@@ -28,7 +29,10 @@ class NodeShellTests(unittest.TestCase):
         self.addCleanup(SHELL._sessions.clear)
         self.now = 1_000_000.0
         for patch in (mock.patch.object(SHELL, "clock", lambda: self.now),
-                      mock.patch.object(SHELL, "_start_beater", lambda: None)):
+                      mock.patch.object(SHELL, "_start_beater", lambda: None),
+                      mock.patch.object(SHELL, "REPLICA", "replica-a"),
+                      # Up for a while: the first minutes after a start are their own test.
+                      mock.patch.object(SHELL, "_started", self.now - 10 * SHELL.LEGACY_SECONDS)):
             patch.start()
             self.addCleanup(patch.stop)
         return kube
@@ -46,7 +50,8 @@ class NodeShellTests(unittest.TestCase):
         self.assertEqual(("lab", "homestead-shell-node-1", "shell"), (target["namespace"], target["pod"], target["container"]))
         self.assertEqual(["nsenter", "-t", "1"], target["command"][:3])
         SHELL.open_shell("node-1", sleep=lambda s: None)
-        self.assertEqual(1, sum(1 for w in kube.writes if w[0] == "POST"), "one helper serves every session")
+        self.assertEqual(1, sum(1 for w in kube.writes if w[0] == "POST" and w[1].endswith("/pods")),
+                         "one helper serves every session")
 
     def test_a_node_that_is_not_ready_is_refused(self):
         self.cluster(ready=False)
@@ -62,6 +67,7 @@ class NodeShellTests(unittest.TestCase):
         self.assertIsNotNone(kube.object(HELPER))
         SHELL.session_ended("node-1")
         self.assertIsNone(kube.object(HELPER))
+        self.assertEqual({}, self.records(kube), "its records go with it")
 
     def opened(self):
         """A helper that prepare() made, as the browser is about to connect."""
@@ -70,15 +76,22 @@ class NodeShellTests(unittest.TestCase):
         self.assertIsNotNone(kube.object(HELPER))
         return kube
 
+    def records(self, kube):
+        return (kube.object(BEATS) or {}).get("data") or {}
+
+    def as_replica(self, name, sessions):
+        """Run as another Homestead process, with its own open sessions."""
+        return mock.patch.multiple(SHELL, REPLICA=name, _sessions=dict(sessions))
+
     def test_a_helper_nobody_connects_to_ends_after_the_connect_deadline(self):
         kube = self.opened()
-        self.now += SHELL.CONNECT_SECONDS - 1
+        self.now += SHELL.CONNECT_SECONDS + SHELL.SKEW_SECONDS - 1
         self.assertEqual([], SHELL.sweep())
         self.assertIsNotNone(kube.object(HELPER))
         self.now += 1
         self.assertEqual(["homestead-shell-node-1"], SHELL.sweep())
         self.assertIsNone(kube.object(HELPER))
-        self.assertLessEqual(SHELL.CONNECT_SECONDS, 60, "a minute at most, not hours")
+        self.assertLessEqual(SHELL.CONNECT_SECONDS + SHELL.SKEW_SECONDS, 120, "a couple of minutes, not hours")
 
     def test_after_a_restart_a_helper_whose_sessions_stopped_beating_ends(self):
         kube = self.opened()
@@ -86,11 +99,22 @@ class NodeShellTests(unittest.TestCase):
         self.now += 600
         SHELL.beat()                      # a live session keeps it
         SHELL._sessions.clear()           # Homestead restarts: nobody counts it any more
-        self.now += SHELL.IDLE_SECONDS - 1
+        self.now += SHELL.IDLE_SECONDS + SHELL.SKEW_SECONDS - 1
         self.assertEqual([], SHELL.sweep())
         self.now += 1
         self.assertEqual(["homestead-shell-node-1"], SHELL.sweep())
         self.assertIsNone(kube.object(HELPER))
+        self.assertEqual({}, self.records(kube))
+
+    def test_the_beat_is_kept_beside_the_helper_never_on_it(self):
+        kube = self.opened()
+        SHELL.session_started("node-1")
+        self.now += SHELL.BEAT_SECONDS
+        SHELL.beat()
+        self.assertEqual([], [w for w in kube.writes if w[0] == "PATCH" and "/pods/" in w[1]],
+                         "Homestead's role does not patch pods")
+        self.assertEqual({"homestead-shell-node-1.replica-a": str(int(self.now + SHELL.IDLE_SECONDS))},
+                         self.records(kube))
 
     def test_a_session_on_another_replica_keeps_its_helper_while_it_beats(self):
         kube = self.opened()
@@ -98,15 +122,34 @@ class NodeShellTests(unittest.TestCase):
         for _ in range(10):
             self.now += SHELL.BEAT_SECONDS
             SHELL.beat()
-            with mock.patch.dict(SHELL._sessions, clear=True):   # the leader is another process
+            with self.as_replica("replica-b", {}):       # the leader is another process
                 self.assertEqual([], SHELL.sweep())
         self.assertIsNotNone(kube.object(HELPER))
+
+    def test_closing_the_last_session_here_keeps_a_helper_another_replica_serves(self):
+        kube = self.opened()
+        SHELL.session_started("node-1")
+        with self.as_replica("replica-b", {}):
+            SHELL.session_started("node-1")
+            SHELL.session_ended("node-1")
+        self.assertIsNotNone(kube.object(HELPER), "replica-a's terminal is still open")
+        self.assertEqual(["homestead-shell-node-1.replica-a"], list(self.records(kube)))
+        SHELL.session_ended("node-1")
+        self.assertIsNone(kube.object(HELPER))
 
     def test_the_sweeping_process_never_removes_a_helper_it_is_serving(self):
         kube = self.opened()
         SHELL.session_started("node-1")
         self.now += SHELL.IDLE_SECONDS * 10
         self.assertEqual([], SHELL.sweep())
+        self.assertIsNotNone(kube.object(HELPER))
+
+    def test_a_clock_a_little_ahead_does_not_end_a_live_shell(self):
+        kube = self.opened()
+        SHELL.session_started("node-1")
+        with self.as_replica("replica-b", {}):
+            self.now += SHELL.IDLE_SECONDS + SHELL.SKEW_SECONDS - 1   # the leader's clock runs ahead
+            self.assertEqual([], SHELL.sweep())
         self.assertIsNotNone(kube.object(HELPER))
 
     def test_a_helper_that_ran_its_time_does_not_stay_behind(self):
@@ -126,17 +169,41 @@ class NodeShellTests(unittest.TestCase):
         self.assertEqual(["homestead-shell-node-1"], SHELL.sweep())
         self.assertIsNotNone(kube.object(path))
 
-    def test_a_helper_from_before_there_was_a_deadline_ends_too(self):
-        kube = self.cluster()
+    def old_helper(self, kube, annotated=False):
+        """A helper made by the release before, which neither stamps nor beats."""
         old = SHELL.body("node-1")
-        old["metadata"].pop("annotations")
+        if not annotated:
+            old["metadata"].pop("annotations")
         old["metadata"]["creationTimestamp"] = "2026-01-01T00:00:00Z"
         old["status"] = {"phase": "Running"}
         kube.add(old)
-        self.now = 1767225600.0 + SHELL.CONNECT_SECONDS - 1   # 2026-01-01T00:00:00Z
-        self.assertEqual([], SHELL.sweep())
+        self.now = 1767225600.0             # 2026-01-01T00:00:00Z
+
+    def test_during_a_rolling_upgrade_a_helper_from_the_old_release_is_given_time(self):
+        kube = self.cluster()
+        self.old_helper(kube)
+        self.now += SHELL.LEGACY_SECONDS + SHELL.SKEW_SECONDS - 1
+        self.assertEqual([], SHELL.sweep(), "an old replica may still serve a terminal on it")
         self.now += 1
         self.assertEqual(["homestead-shell-node-1"], SHELL.sweep())
+
+    def test_just_after_a_start_a_helper_nobody_here_beats_is_given_time(self):
+        # A new helper whose terminal an old replica serves: the old replica does not beat.
+        kube = self.cluster()
+        self.old_helper(kube, annotated=True)
+        with mock.patch.object(SHELL, "_started", self.now):
+            self.now += SHELL.CONNECT_SECONDS + SHELL.SKEW_SECONDS
+            self.assertEqual([], SHELL.sweep())
+            self.now = SHELL._started + SHELL.LEGACY_SECONDS + SHELL.SKEW_SECONDS
+            self.assertEqual(["homestead-shell-node-1"], SHELL.sweep())
+
+    def test_records_of_helpers_that_have_gone_are_dropped(self):
+        kube = self.opened()
+        SHELL.session_started("node-1")
+        K.ksend("DELETE", HELPER)
+        SHELL._sessions.clear()
+        SHELL.sweep()
+        self.assertEqual({}, self.records(kube))
 
     def test_reusing_a_running_helper_gives_the_browser_time_to_connect(self):
         kube = self.opened()
@@ -145,6 +212,14 @@ class NodeShellTests(unittest.TestCase):
         self.now += SHELL.CONNECT_SECONDS - 1
         self.assertEqual([], SHELL.sweep())
         self.assertIsNotNone(kube.object(HELPER))
+
+    def test_a_beat_that_cannot_be_written_says_so(self):
+        kube = self.opened()
+        SHELL.session_started("node-1")
+        kube.fail(BEATS, 503, times=5)
+        with mock.patch("builtins.print") as said:
+            SHELL.beat()
+        self.assertIn("node-1", " ".join(str(c) for c in said.call_args_list))
 
     def test_the_first_session_starts_the_beat_and_the_beat_stops_with_the_last(self):
         self.cluster()
@@ -168,12 +243,6 @@ class NodeShellTests(unittest.TestCase):
         self.assertEqual(SHELL.HOST_SHELL, query["command"])
         self.assertEqual(["/bin/sh"], urllib.parse.parse_qs(
             urllib.parse.urlparse(CONSOLE.exec_path("lab", "p", "c", "/bin/sh")).query)["command"])
-
-    def test_homestead_may_mark_its_helper_in_use(self):
-        # The beat is a pod patch; refused, a live shell would end at IDLE_SECONDS.
-        lines = (Path(__file__).resolve().parents[1] / "deploy" / "rbac.yaml").read_text().splitlines()
-        at = lines.index("    resources: [pods, pods/log, pods/status]")
-        self.assertIn("patch", lines[at + 1].split("[", 1)[1])
 
     def test_only_an_admin_opens_one(self):
         import server

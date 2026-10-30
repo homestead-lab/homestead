@@ -13,12 +13,18 @@ the node's name.
 
 It also ends when nobody is connected, even if no session ever closed in
 this process: the browser left before the terminal connected, or Homestead
-restarted with a terminal open. The helper carries the time it may run
-until (UNTIL): CONNECT_SECONDS from when it is prepared, and IDLE_SECONDS
-from each beat of a process that serves a session on it. The leader's
-sweep() removes a helper past that time, and one that has ended.
+restarted with a terminal open. A new helper carries the time it may run
+until (UNTIL): CONNECT_SECONDS after it was prepared. Each Homestead process
+that serves a session on it, or is about to, keeps its own "until" in one
+ConfigMap beside it (BEATS: a key per helper and process), IDLE_SECONDS
+ahead at each beat. The leader's sweep() removes a helper whose latest
+"until" has passed, by more than SKEW_SECONDS for clocks that differ, and
+one that has ended. A helper made by the release before, which nobody
+here beats, is given LEGACY_SECONDS, so a rolling upgrade does not cut a
+terminal an old replica still serves.
 """
 import calendar
+import os
 import threading
 import time
 import urllib.error
@@ -38,9 +44,13 @@ TASK = "node-shell"
 CONNECT_SECONDS = 60
 BEAT_SECONDS = 20
 IDLE_SECONDS = 60
+SKEW_SECONDS = 30
+LEGACY_SECONDS = 600
 UNTIL = NAMES.key("shell-until")
 PREFIX = "homestead-shell-"
+REPLICA = os.environ.get("HOSTNAME") or "homestead"
 clock = time.time
+_started = time.time()
 _sessions, _lock = {}, threading.Lock()
 _beater = None
 # Into the host's namespaces, then its own login shell: bash where there is
@@ -104,9 +114,11 @@ def open_shell(node, wait=60, sleep=time.sleep):
         pod = None
     if not pod:
         ksend("POST", f"/api/v1/namespaces/{NS}/pods", body(node))
-    elif _until(pod) < clock() + CONNECT_SECONDS:
+    else:
         # Kept for the browser that is about to connect to it.
-        _extend(node, clock() + CONNECT_SECONDS)
+        mine = ((_records() or {}).get(pod_name(node)) or {}).get(REPLICA, 0)
+        if mine < clock() + CONNECT_SECONDS:
+            _extend(node, clock() + CONNECT_SECONDS)
     for _ in range(int(wait * 2)):
         pod = KUBE.get_optional(path, read=kget) or {}
         status = pod.get("status") or {}
@@ -120,27 +132,97 @@ def open_shell(node, wait=60, sleep=time.sleep):
     raise ValueError(f"the shell helper on {node} did not start within {wait} seconds")
 
 
-def _until(pod):
-    """The time a helper may run until: its UNTIL, or for one made before
-    there was one, CONNECT_SECONDS after it was made. Unreadable is now."""
-    meta = pod.get("metadata") or {}
+def _beats_path():
+    return f"/api/v1/namespaces/{NS}/configmaps/{NAMES.object_name('shell-sessions')}"
+
+
+def _key(node, replica=None):
+    return f"{pod_name(node)}.{replica or REPLICA}"
+
+
+def _records():
+    """Every process's "until" for each helper: {pod: {replica: until}}.
+    None when there is no ConfigMap yet."""
+    found = KUBE.get_optional(_beats_path(), read=kget)
+    if found is None:
+        return None
+    out = {}
+    for key, value in ((found.get("data") or {}).items()):
+        pod, _, replica = key.partition(".")   # helper names have no dot
+        try:
+            out.setdefault(pod, {})[replica] = float(value)
+        except (TypeError, ValueError):
+            out.setdefault(pod, {})[replica] = 0
+    return out
+
+
+def _write(changes):
+    """Merge changes ({key: until, or None to drop it}) into the ConfigMap."""
+    path = _beats_path()
+    patch = {"data": {key: (None if value is None else str(int(value))) for key, value in changes.items()}}
     try:
-        return float((meta.get("annotations") or {})[UNTIL])
-    except (KeyError, TypeError, ValueError):
-        pass
+        ksend("PATCH", path, patch, ctype="application/merge-patch+json")
+        return
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise
+    kept = {key: value for key, value in patch["data"].items() if value is not None}
+    if not kept:
+        return
     try:
-        return calendar.timegm(time.strptime(meta["creationTimestamp"], "%Y-%m-%dT%H:%M:%SZ")) + CONNECT_SECONDS
-    except (KeyError, TypeError, ValueError, OverflowError):
-        return 0
+        ksend("POST", path.rsplit("/", 1)[0], {
+            "apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": path.rsplit("/", 1)[1], "namespace": NS, "labels": NAMES.labels(TASK)},
+            "data": kept})
+    except urllib.error.HTTPError as error:
+        if error.code != 409:
+            raise
+        ksend("PATCH", path, patch, ctype="application/merge-patch+json")   # another process made it first
 
 
 def _extend(node, until):
     try:
-        ksend("PATCH", f"/api/v1/namespaces/{NS}/pods/{pod_name(node)}",
-              {"metadata": {"annotations": {UNTIL: str(int(until))}}}, ctype="application/merge-patch+json")
+        _write({_key(node): until})
         return True
-    except Exception:
-        return False   # the next beat tries again; IDLE_SECONDS allows for it
+    except Exception as error:
+        # The next beat tries again; IDLE_SECONDS allows for one that is missed.
+        print(f"host shell on {node}: still in use, but that could not be recorded: {str(error)[:160]}", flush=True)
+        return False
+
+
+def _created(pod):
+    try:
+        return calendar.timegm(time.strptime((pod.get("metadata") or {})["creationTimestamp"], "%Y-%m-%dT%H:%M:%SZ"))
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+
+def _until(pod, records):
+    """The time a helper may run until: the latest any process recorded for
+    it, else its own UNTIL. A helper nobody here records - made by the
+    release before, or served by an old replica in a rolling upgrade, which
+    does not beat - is given LEGACY_SECONDS from when it was made: always
+    when it has no UNTIL, and in this process's first LEGACY_SECONDS when
+    it has one."""
+    meta = pod.get("metadata") or {}
+    beats = (records or {}).get(meta.get("name") or "")
+    if beats:
+        return max(beats.values())
+    try:
+        own = float((meta.get("annotations") or {})[UNTIL])
+    except (KeyError, TypeError, ValueError):
+        own = None
+    created = _created(pod)
+    legacy = None if created is None else created + LEGACY_SECONDS
+    if own is None:
+        return legacy if legacy is not None else 0
+    if legacy is not None and clock() - _started < LEGACY_SECONDS:
+        return max(own, legacy)
+    return own
+
+
+def _past(until):
+    return clock() >= until + SKEW_SECONDS
 
 
 def beat():
@@ -173,37 +255,52 @@ def _start_beater():
         _beater.start()
 
 
+def _delete(pod):
+    """Delete the helper as it was read; False when it is gone or changed."""
+    meta = pod.get("metadata") or {}
+    preconditions = {"uid": meta["uid"]}
+    if meta.get("resourceVersion"):
+        preconditions["resourceVersion"] = meta["resourceVersion"]
+    try:
+        ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{meta['name']}",
+              {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0,
+               "preconditions": preconditions})
+    except urllib.error.HTTPError as error:
+        if error.code in (404, 409):   # gone, or replaced since it was read
+            return False
+        raise
+    return True
+
+
 def sweep():
     """On the leader: remove each helper that has ended, or whose time is up
     because nobody is connected - one prepared for a browser that never came,
-    or one whose sessions were in a process that has gone. A helper this
-    process serves a session on stays. Deletes are fenced to the pod seen."""
+    or one whose sessions were in a process that has gone - and the records
+    of helpers that are gone. A helper this process serves a session on
+    stays. Deletes are fenced to the pod seen."""
     selector = urllib.parse.quote(f"{NAMES.key('task')}={TASK}")
-    pods = kget(f"/api/v1/namespaces/{NS}/pods?labelSelector={selector}").get("items") or []
+    pods = KUBE.items(f"/api/v1/namespaces/{NS}/pods?labelSelector={selector}", read=kget)
+    records = _records() or {}
     with _lock:
         serving = {node for node, count in _sessions.items() if count > 0}
-    removed = []
+    removed, present = [], set()
     for pod in pods:
         meta, spec = pod.get("metadata") or {}, pod.get("spec") or {}
         name = meta.get("name") or ""
-        if (not name.startswith(PREFIX) or not meta.get("uid") or meta.get("deletionTimestamp")
-                or NAMES.label_of(meta, "task") != TASK or spec.get("nodeName") in serving):
+        if not name.startswith(PREFIX) or NAMES.label_of(meta, "task") != TASK:
+            continue
+        present.add(name)
+        if not meta.get("uid") or meta.get("deletionTimestamp") or spec.get("nodeName") in serving:
             continue
         ended = (pod.get("status") or {}).get("phase") in ("Succeeded", "Failed")
-        if not ended and clock() < _until(pod):
+        if not ended and not _past(_until(pod, records)):
             continue
-        preconditions = {"uid": meta["uid"]}
-        if meta.get("resourceVersion"):
-            preconditions["resourceVersion"] = meta["resourceVersion"]
-        try:
-            ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{name}",
-                  {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0,
-                   "preconditions": preconditions})
-        except urllib.error.HTTPError as error:
-            if error.code in (404, 409):   # gone, or beaten or replaced since it was read
-                continue
-            raise
-        removed.append(name)
+        if _delete(pod):
+            removed.append(name)
+            present.discard(name)
+    stale = {f"{pod}.{replica}": None for pod, beats in records.items() if pod not in present for replica in beats}
+    if stale:
+        _write(stale)
     return removed
 
 
@@ -215,22 +312,29 @@ def session_started(node):
 
 
 def session_ended(node):
-    """The last session on a node closed: its helper goes."""
+    """The last session on a node closed here: its helper goes, unless
+    another process still records a session on it."""
     with _lock:
         _sessions[node] = max(0, _sessions.get(node, 0) - 1)
         last = _sessions[node] == 0
-    if last:
-        try:
-            pod = KUBE.get_optional(f"/api/v1/namespaces/{NS}/pods/{pod_name(node)}", read=kget)
-        except Exception:
-            return   # its deadline still ends it
+    if not last:
+        return
+    try:
+        pod = KUBE.get_optional(f"/api/v1/namespaces/{NS}/pods/{pod_name(node)}", read=kget)
         if not pod or (pod.get("spec") or {}).get("nodeName") != node:
-            return
-        try:
-            ksend("DELETE", f"/api/v1/namespaces/{NS}/pods/{pod_name(node)}",
-                  {"apiVersion": "v1", "kind": "DeleteOptions", "gracePeriodSeconds": 0})
-        except urllib.error.HTTPError:
-            pass
+            return   # gone: the sweep drops its records
+        _write({_key(node): None})
+        records = _records() or {}
+    except Exception:
+        return   # the sweep, or its deadline, still ends it
+    others = records.get(pod_name(node)) or {}
+    if any(not _past(until) for until in others.values()):
+        return   # another replica serves a terminal on it
+    try:
+        if _delete(pod):
+            _write({_key(node, replica): None for replica in others})
+    except urllib.error.HTTPError:
+        pass
 
 
 def prepare(node):

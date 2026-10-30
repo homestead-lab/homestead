@@ -35,12 +35,10 @@ rules:
   - apiGroups: [""]
     resources: [nodes/proxy, nodes/stats, nodes/metrics]
     verbs: [get]
-  # drain deletes pods; the node-power helper creates a privileged pod.
-  # patch marks a helper still in use (host shell, volume files), so the
-  # leader's sweep removes only the ones nobody is connected to.
+  # drain deletes pods; the node-power helper creates a privileged pod
   - apiGroups: [""]
     resources: [pods, pods/log, pods/status]
-    verbs: [get, list, watch, create, patch, delete]
+    verbs: [get, list, watch, create, delete]
   - apiGroups: [""]
     resources: [pods/eviction]
     verbs: [create]
