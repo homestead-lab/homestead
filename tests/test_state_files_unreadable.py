@@ -229,8 +229,10 @@ class LoopsDoNothingAndSaveNothingOver(Base):
 
     def test_setup_guide_and_host_console_say_unreadable_rather_than_start_over(self):
         setup = self.corrupt("setup.json")
-        with self.assertRaises(SHARED.Unreadable):
+        with self.assertRaises(SHARED.Unreadable) as raised:
             SETUP.skips("ann")
+        self.assertIn("remove setup.json in the data volume to start the guide over", str(raised.exception))
+        self.assertNotIn("changed nothing", str(raised.exception), "a read changes nothing anyway")
         self.assertUntouched(setup)
         console = self.corrupt("host-consoles.json")
         with self.assertRaises(SHARED.Unreadable):
