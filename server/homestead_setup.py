@@ -59,12 +59,7 @@ def _path():
 
 
 def load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            found = json.load(handle)
-        return found if isinstance(found, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_path(), {})
 
 
 def stamp():
