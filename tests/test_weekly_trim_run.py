@@ -410,12 +410,14 @@ class RouteTests(StateCase):
         last = {"slot": SAT, "at": SAT + 120, "trimmed": ["pvc-a", "pvc-c"], "unconfirmed": [], "failed": [],
                 "skipped": [{"volume": "pvc-b", "pvc": "apps/data-pvc-b", "why": "detached"}]}
         self.save({"enabled": True, "retired": True, "last": last})
-        self.assertEqual({"enabled": True, "next": "2026-10-31T04:00:00Z", "last": last, "running": False, "theirs": ""},
+        self.assertEqual({"enabled": True, "next": "2026-10-31T04:00:00Z", "last": last, "running": False, "theirs": "",
+                          "weekday": 5, "hour": 4},
                          self.view())
         self.assertTrue(self.view([{"kind": WT.KIND, "status": "running"}])["running"])
         self.assertEqual("weekly-trim", self.view(jobs=[recurring("weekly-trim", labels={})])["theirs"])
         self.save({"enabled": False})
-        self.assertEqual({"enabled": False, "next": "", "last": None, "running": False, "theirs": ""}, self.view())
+        self.assertEqual({"enabled": False, "next": "", "last": None, "running": False, "theirs": "",
+                          "weekday": 5, "hour": 4}, self.view())
 
     def test_run_now_refuses_a_second_run(self):
         with mock.patch.object(OPS, "snapshot", return_value=[{"kind": WT.KIND, "status": "queued"}]), \

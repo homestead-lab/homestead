@@ -27,6 +27,8 @@ const HealthInsights = (() => {
     }
     const p=data.protection;
     if (p) {
+      // Jobs that could not be read leave coverage, failed jobs and clashes unknown, not clear (#927).
+      if (p.jobs_unread) rows.push(item("unknown:protection-jobs","low","Backup job checks unavailable",`${p.jobs_unread}. Backup coverage, failed backup jobs and schedule clashes cannot be checked until they are read.`,"retry"));
       const unprotected=(p.volumes || []).filter(v=>v.backed_up === false);
       if (unprotected.length) rows.push(item("backup-coverage","medium",`${unprotected.length} volume${unprotected.length===1?"":"s"} without scheduled backups`,"Assign a recurring external backup. Replicas and local snapshots do not replace a backup.","protect"));
       if (p.total > 0 && p.target?.configured === false) rows.push(item("backup-target","medium","Configure a backup destination","Choose a separate backup destination, then schedule backups.","protect"));

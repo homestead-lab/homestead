@@ -43,10 +43,11 @@ def volumes():
     return _volumes()
 
 
-def groups():
-    """Every group referenced by a job or worn by a volume."""
+def groups(jobs=None):
+    """Every group referenced by a job or worn by a volume; jobs as
+    list_jobs() answers them, read here when not given."""
     g = set()
-    for j in JOBS.list_jobs():
+    for j in JOBS.list_jobs() if jobs is None else jobs:
         g.update(j["groups"])
     for v in _volumes():
         g.update(v["groups"])
