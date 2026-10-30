@@ -316,7 +316,7 @@ def _alert_sources():
     take("rootguard", ROOT_GUARD.alert_facts)
     take("audit", AUDIT_LOG.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
-        ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
+        cached(CLUSTER.VERSION_KEY, 15, CLUSTER.harvester_version))))
     # Twice a day whether or not anyone is looking - the Containers header and
     # the update notifications both read the result.
     if time.time() - _last_update_scan[0] > UPDATE_SCAN_EVERY:

@@ -240,6 +240,31 @@ def build_report(kubernetes_version, raw_nodes, node_summaries, pods, events, cs
     }
 
 
+VERSION_KEY = "harvester-version"
+
+
+def _version_setting():
+    # Harvester exposes this setting on supported releases. Older releases may
+    # omit it, in which case the node OS image remains an equally useful source.
+    try:
+        setting = kget("/apis/harvesterhci.io/v1beta1/settings/server-version")
+    except Exception:
+        setting = {}
+    return setting.get("value") or (setting.get("status") or {}).get("value") or ""
+
+
+def harvester_version():
+    """The Harvester version inventory() reports, read alone: the setting,
+    else the hosts' OS image. For the upgrade alert and the Upgrades page,
+    which need nothing else of the inventory (#978)."""
+    explicit = _version_setting()
+    if explicit:
+        return _harvester_version(explicit, [])
+    nodes = kget("/api/v1/nodes").get("items", [])
+    return _harvester_version("", [{"os": ((n.get("status") or {}).get("nodeInfo") or {}).get("osImage", "")}
+                                   for n in nodes])
+
+
 def inventory():
     unavailable = []
 
@@ -257,13 +282,7 @@ def inventory():
     events = read("Cluster warnings", "/api/v1/events", {"items": []}).get("items", [])
     csrs = read("Certificate requests", "/apis/certificates.k8s.io/v1/certificatesigningrequests",
                 {"items": []}).get("items", [])
-    # Harvester exposes this setting on supported releases. Older releases may
-    # omit it, in which case the node OS image remains an equally useful source.
-    try:
-        setting = kget("/apis/harvesterhci.io/v1beta1/settings/server-version")
-    except Exception:
-        setting = {}
-    harvester = setting.get("value") or (setting.get("status") or {}).get("value") or ""
+    harvester = _version_setting()
     try:
         summaries = nodes_provider()
     except Exception as error:

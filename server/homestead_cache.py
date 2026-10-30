@@ -38,6 +38,15 @@ _running = {}
 # Each key's generation. forget_where() moves it on, so a computation that
 # started before a write is not kept as the answer after it.
 _epoch = {}
+# Keys a page keeps for a set time, refreshed by the leader's page snapshot
+# on its own cycle (#978): key -> the least time any reader keeps it. A loop,
+# /metrics or a dialog that asks for less would read the cluster again on
+# almost every turn for numbers its page shows that old anyway. Set by
+# homestead_routes (at_least); a write still forgets them at once.
+_at_least = {}
+# The leader's page snapshot: fresh(key) -> (as_of, value) while its part for
+# key is served to the pages, else None (homestead_page_snapshot.read).
+_parts = [lambda key: None]
 # When each key was last forgotten, and who wants to hear of it: the leader's
 # page snapshot (homestead_page_snapshot) serves a part only if it was read
 # after the last forget of its key, and runs again when one is forgotten.
@@ -82,7 +91,24 @@ def _compute(key, fn, epoch):
     return v
 
 
+def at_least(seconds, *keys):
+    """Keep each of keys at least seconds, whatever a reader asks for, and
+    serve the page snapshot's part for it while the pages are served it."""
+    for key in keys:
+        _at_least[key] = seconds
+
+
+def use_parts(fresh):
+    """The leader's page snapshot, for the keys at_least() names."""
+    _parts[0] = fresh
+
+
 def cached(key, ttl, fn):
+    if key in _at_least:
+        part = _parts[0](key)
+        if part is not None:
+            return part[1]
+        ttl = max(ttl, _at_least[key])
     with _lock:
         e = _cache.get(key)
         if e and time.time() - e[0] < ttl:
