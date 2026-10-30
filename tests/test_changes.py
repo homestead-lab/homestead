@@ -124,6 +124,154 @@ class UndoTests(Base):
             CH.kept_before("lab", "sonarr", "nope")
 
 
+
+def helm_dep(name, version):
+    """An app as a Helm chart writes it: about 3 KB of pod template."""
+    env = [{"name": f"SETTING_{i}", "value": f"value-{i}-{'x' * 20}"} for i in range(25)]
+    probe = {"httpGet": {"path": "/health", "port": 8080}, "periodSeconds": 10, "failureThreshold": 3}
+    return {"metadata": {"namespace": "apps", "name": name},
+            "spec": {"replicas": 1, "template": {
+                "metadata": {"labels": {"app.kubernetes.io/name": name}, "annotations": {"checksum/config": "0" * 64}},
+                "spec": {"containers": [{"name": name, "image": f"example/{name}:1.{version}.0", "env": env,
+                                         "ports": [{"containerPort": 8080}], "livenessProbe": probe, "readinessProbe": probe,
+                                         "resources": {"requests": {"cpu": "100m", "memory": "256Mi"}},
+                                         "volumeMounts": [{"name": "config", "mountPath": "/config"}]}],
+                         "volumes": [{"name": "config", "persistentVolumeClaim": {"claimName": f"{name}-config"}}]}}}}
+
+
+def old_format(apps, entries):
+    """change-history.json as it was written before #981: a whole template in every entry."""
+    data = {"apps": {}}
+    for a in range(apps):
+        name = f"app-{a}"
+        rows = [{"id": f"{a:04x}{v:08x}", "at": 10_000_000 - v * 3600, "source": "homestead", "by": "james",
+                 "changes": CH.diff(CH.summary(helm_dep(name, v)), CH.summary(helm_dep(name, v + 1))),
+                 "before": CH._template(helm_dep(name, v))} for v in range(entries, 0, -1)]
+        data["apps"][f"apps/{name}"] = {"last": CH.summary(helm_dep(name, entries + 1)),
+                                        "kept": CH._template(helm_dep(name, entries + 1)), "entries": rows, "seen": 10_000_000}
+    return data
+
+
+class CompactHistoryTests(Base):
+    """#981: the index keeps each change's rows and only a digest of the
+    template from before it; templates are kept once each, beside it."""
+
+    def index(self):
+        import json
+        return json.loads(Path(self.dir.name, "change-history.json").read_text())
+
+    def write_old(self, data):
+        import json
+        Path(self.dir.name, "change-history.json").write_text(json.dumps(data, sort_keys=True))
+
+    def test_the_index_holds_no_templates(self):
+        CH.observe([dep()], now=1000)
+        CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+        CH.observe([dep(image="example/sonarr:6.0")], now=1120)
+        app = self.index()["apps"]["lab/sonarr"]
+        self.assertIsInstance(app["kept"], str)
+        self.assertTrue(all(isinstance(e["before"], str) for e in app["entries"]))
+        self.assertFalse("containers" in Path(self.dir.name, "change-history.json").read_text(), "no template in the index")
+        self.assertEqual(3, len(list(Path(self.dir.name, CH.TEMPLATES).iterdir())), "4.0, 5.0 and 6.0, once each")
+
+    def test_thirty_apps_of_fifty_changes_keep_the_index_small(self):
+        self.write_old(old_format(30, CH.KEEP))
+        before = Path(self.dir.name, "change-history.json").stat().st_size
+        CH.observe([helm_dep(f"app-{a}", CH.KEEP + 1) for a in range(30)], now=10_000_100)
+        after = Path(self.dir.name, "change-history.json").stat().st_size
+        self.assertGreater(before, 3_000_000)
+        self.assertLess(after, 500_000, f"{after} bytes, from {before}")
+        self.assertEqual(30 * CH.KEEP, len(CH.history(limit=None)))
+
+    def test_history_opens_no_template(self):
+        CH.observe([dep()], now=1000)
+        CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+        real = open
+
+        def guarded(path, *args, **kwargs):
+            if CH.TEMPLATES in str(path):
+                raise AssertionError(f"history opened {path}")
+            return real(path, *args, **kwargs)
+        CH._memo.clear()                                   # a copy that has not read the index yet
+        with mock.patch("builtins.open", guarded):
+            self.assertTrue(CH.history("lab", "sonarr")[0]["can_undo"])
+
+    def test_entries_from_before_are_undone_before_and_after_they_move(self):
+        data = old_format(1, 3)
+        self.write_old(data)
+        old = data["apps"]["apps/app-0"]["entries"][1]
+        listed = CH.history("apps", "app-0")
+        self.assertEqual(old["before"], CH.kept_before("apps", "app-0", old["id"])["before"], "read as it is")
+        CH.observe([helm_dep("app-0", 4)], now=10_000_100)
+        self.assertFalse("containers" in Path(self.dir.name, "change-history.json").read_text(), "moved out on the first look")
+        self.assertEqual(listed, CH.history("apps", "app-0"))
+        entry = CH.kept_before("apps", "app-0", old["id"])
+        self.assertEqual(old["before"], entry["before"])
+        proposed, rows = CH.undo_plan(helm_dep("app-0", 4), entry)
+        self.assertEqual("example/app-0:1.2.0", proposed["spec"]["template"]["spec"]["containers"][0]["image"])
+        CH.observe([helm_dep("app-0", 5)], now=10_000_200)
+        self.assertEqual(old["before"], CH.kept_before("apps", "app-0", old["id"])["before"])
+        newest = CH.history("apps", "app-0")[0]
+        self.assertEqual("example/app-0:1.4.0", CH.kept_before("apps", "app-0", newest["id"])["before"]["template"]["spec"]["containers"][0]["image"],
+                         "the template kept before the move is the one the next change undoes to")
+
+    def test_a_template_no_entry_needs_is_removed(self):
+        CH.observe([dep()], now=1000)
+        for i in range(CH.KEEP + 5):
+            CH.observe([dep(image=f"example/sonarr:{i}")], now=1060 + i * 60)
+        self.assertEqual(CH.KEEP, len(CH.history("lab", "sonarr")))
+        self.assertEqual(CH.KEEP + 1, len(list(Path(self.dir.name, CH.TEMPLATES).iterdir())), "the 50 entries' and the app's own")
+        for e in CH.history("lab", "sonarr"):
+            CH.kept_before("lab", "sonarr", e["id"])
+
+    def test_a_missing_template_is_no_longer_in_the_history(self):
+        CH.observe([dep()], now=1000)
+        CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+        for f in Path(self.dir.name, CH.TEMPLATES).iterdir():
+            f.unlink()
+        with self.assertRaisesRegex(ValueError, "no longer in the history"):
+            CH.kept_before("lab", "sonarr", CH.history("lab", "sonarr")[0]["id"])
+
+    def test_an_unchanged_index_is_not_read_again(self):
+        import homestead_shared as SHARED
+        CH.observe([dep()], now=1000)
+        with mock.patch.object(SHARED, "read_json", wraps=SHARED.read_json) as read:
+            for i in range(3):
+                CH.observe([dep()], now=1060 + i * 60)
+                CH.history("lab", "sonarr")
+            self.assertEqual(0, read.call_count, "the minute's look and the page answer from what was read")
+            CH.observe([dep(image="example/sonarr:5.0")], now=1300)
+            CH.history("lab", "sonarr")
+            self.assertEqual(0, read.call_count, "nor after its own write")
+            other = self.index()                          # another copy of Homestead leads now, and writes
+            other["apps"]["lab/sonarr"]["entries"][0]["by"] = "someone"
+            self.write_old(other)
+            self.assertEqual("someone", CH.history("lab", "sonarr")[0]["by"])
+            self.assertEqual(1, read.call_count)
+
+    def test_a_failed_write_is_not_remembered_as_written(self):
+        CH.observe([dep()], now=1000)
+        real = CH.SHARED.write_json
+
+        def write(path, *args, **kwargs):
+            if path.endswith("change-history.json"):
+                raise OSError("disk full")
+            return real(path, *args, **kwargs)
+        with mock.patch.object(CH.SHARED, "write_json", side_effect=write):
+            with self.assertRaises(OSError):
+                CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+        self.assertEqual([], CH.history("lab", "sonarr"))
+        CH.observe([dep(image="example/sonarr:5.0")], now=1120)
+        self.assertEqual(1, len(CH.history("lab", "sonarr")))
+
+    def test_the_last_sight_is_saved_once_a_day(self):
+        CH.observe([dep()], now=1000)
+        with mock.patch.object(CH, "_save", wraps=CH._save) as save:
+            for minute in range(1, 3 * 1440, 30):
+                CH.observe([dep()], now=1000 + minute * 60)
+            self.assertEqual(2, save.call_count, "a day and two days on")
+        self.assertGreater(self.index()["apps"]["lab/sonarr"]["seen"], 1000 + 2 * 86400)
+
 class RouteTests(Base):
     def setUp(self):
         # Importing server binds the history to /data the first time; bind it

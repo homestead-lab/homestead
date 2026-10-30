@@ -41,7 +41,7 @@ _last = {"at": 0, "result": None}
 STORES = [
     ("Monitoring history", ["uptime.json"], "hour by hour for 30 days"),
     ("Long-term stats", ["history.json", "history-live.json"], "live for an hour, five-minutely for 2 days, hourly for 90 days"),
-    ("Change history", ["change-history.json"], "50 changes per app, for 180 days"),
+    ("Change history", ["change-history.json", "change-templates/*"], "50 changes per app, for 180 days"),
     ("Storage forecast", ["storage-forecast.json"], "a figure a day for 90 days"),
     ("Hosts coming back", ["recovery.json"], "which hosts returned in the last week, and whether that was dealt with"),
     ("App usage", ["usage.json"], "a summary a day of each container's CPU and memory, for 14 days"),
