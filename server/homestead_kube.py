@@ -237,7 +237,9 @@ def _never_started(pod):
 
 def raw_get(path, timeout=20, max_bytes=None):
     """Plain-text GET against the API (pod logs and similar); with max_bytes,
-    at most max_bytes + 1 bytes of it, so a caller can tell it was cut."""
+    at most max_bytes + 1 bytes of it, so a caller can tell it was cut. The
+    path is checked as kget's is (api_path)."""
+    path = api_path(path)
     return DEADLINE.read(timeout, lambda allowed: _request("GET", path, None, {}, allowed, max_bytes)).decode(
         "utf-8", "replace")
 

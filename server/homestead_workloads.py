@@ -117,13 +117,14 @@ def _tail(ns, pod, container, lines):
     lines: an answer that reaches it is asked for again with half the lines,
     a few times at most, so the newest are kept. A cut says so."""
     wanted = lines
+    path = f"/api/v1/namespaces/{urllib.parse.quote(ns, safe='')}/pods/{urllib.parse.quote(pod, safe='')}/log"
     for _ in range(TAIL_RETRIES + 1):
         query = f"tailLines={lines}&timestamps=true&limitBytes={LOG_BYTES}" + (
             f"&container={urllib.parse.quote(container)}" if container else "")
         # On a pooled connection (#984), like every other read, and under
         # the request's read deadline. Encoded again, the text is at least as
         # long as the bytes read, so an answer that reached LOG_BYTES counts.
-        text = raw_get(f"/api/v1/namespaces/{ns}/pods/{pod}/log?{query}", timeout=15, max_bytes=LOG_BYTES)
+        text = raw_get(f"{path}?{query}", timeout=15, max_bytes=LOG_BYTES)
         if len(text.encode("utf-8")) < LOG_BYTES:
             if lines == wanted:
                 return text
@@ -144,7 +145,8 @@ def logs(request):
     container = _arg(request, "container")
     # Each goes into an API path as it is: "kube-system/secrets?x=" as a
     # namespace would read another list as Homestead.
-    if any(value and not LOG_NAME.fullmatch(value) for value in (ns, pod, job, container)) or not ns:
+    if not ns or any(value and (not LOG_NAME.fullmatch(value) or ".." in value)
+                     for value in (ns, pod, job, container)):
         return ROUTER.Reply(400, {"error": "That is not a valid namespace, pod, job or container name."})
     if job and not pod:
         matches = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=job-name%3D{urllib.parse.quote(job)}").get("items", [])

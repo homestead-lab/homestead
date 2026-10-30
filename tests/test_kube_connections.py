@@ -314,6 +314,21 @@ class ConnectionReuseTests(unittest.TestCase):
         self.assertEqual("/api/v1/namespaces/lab/pods/web-1/log?tailLines=50&timestamps=true&container=web",
                          self.api.requests[0][1])
 
+    def test_the_logs_view_refuses_a_name_that_would_change_the_request(self):
+        import homestead_workloads as WORKLOADS
+        from types import SimpleNamespace
+        for ns, pod in (("kube-system/secrets?x=", "web-1"), ("lab", "web-1/../../secrets"),
+                        ("lab", "web-1?limitBytes=1"), ("lab", "Web 1"), ("", "web-1"), ("lab/x", "")):
+            reply = WORKLOADS.logs(SimpleNamespace(query={"ns": [ns], "pod": [pod], "container": ["web"]}))
+            self.assertEqual(400, reply.code, (ns, pod))
+        self.assertEqual([], self.api.requests)
+
+    def test_a_plain_read_refuses_a_path_that_steps_out_of_its_object(self):
+        for path in ("/api/v1/namespaces/lab/pods/../secrets/log", "/api/v1/namespaces/lab/pods/a%2fb/log"):
+            with self.assertRaises(ValueError):
+                KUBE.raw_get(path)
+        self.assertEqual([], self.api.requests)
+
     def test_a_large_list_answered_slowly_but_steadily_is_not_cut(self):
         # A socket timeout bounds each read from the socket, not the whole
         # answer: a big list arriving steadily takes as long as it needs.
