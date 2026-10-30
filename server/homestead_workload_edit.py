@@ -576,6 +576,7 @@ def _apply_tier(dep, choice):
 def prepare_edit(cfg, current=None):
     """Read-only edit construction; all validation precedes side effects."""
     ns, name = cfg["ns"], cfg["name"]
+    ENVSEC.refuse_unread(cfg)
     dep = copy.deepcopy(current if current is not None else L.kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"))
     # What the pods were made from: an edit that leaves it alone (a logo, a
     # group, how it is monitored) changes the Deployment, never its pods.

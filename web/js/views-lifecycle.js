@@ -482,10 +482,13 @@ window.wlEdit = async (ns, name, fromRoute = false) => {
         portsHtml: `<div class="note" id="e_address_note" hidden>With its own LAN address or the host's network, clients connect to it directly: its LAN ports and VIP are not used.</div>
           ${panels("address")}<div class="note" id="e_ports_note" hidden></div>`})}
       ${UI.more("What saving does", "<p>Saving restarts the pods only when something they run with changes: the image, ports, environment, storage, hardware or placement. A logo, its group or how it is monitored is saved without a restart. Renaming is a separate, reviewed action with a short outage; volumes and service addresses are kept. If it stops part-way, inspect the job before restarting either app.</p>")}`;
-    $("#mbody").innerHTML = `<div id="e_containers">${stepper("e_steps", appFormSections("edit", {
+    // The app's own Secret could not be read (#1001): its variables are not in
+    // the form, so a save would remove them. Said here, and Save stays off.
+    window.__editSecretUnread = !!w.secret_env_unread;
+    $("#mbody").innerHTML = `${UI.notices([["warn", w.secret_env_unread]], "Secret settings not read")}<div id="e_containers">${stepper("e_steps", appFormSections("edit", {
       basics, hardware: access, environment, storage, placement: running, address,
       monitoring: monitoringStepHtml({ ...w, ns, name, answer_check: w.answer_check ?? listed?.answer_check ?? "", ports: listed?.ports || [] }) }),
-      `<button class="btn pri" id="e_save" onclick="editSave(${jsq(ns)},${jsq(name)})">Review changes</button>`, { always: true })}</div>`;
+      `<button class="btn pri" id="e_save" ${w.secret_env_unread ? "disabled" : ""} onclick="editSave(${jsq(ns)},${jsq(name)})">Review changes</button>`, { always: true })}</div>`;
     containers.forEach((container, index) => renderVolumeRows(editVolumePicker(index),
       (container.volumes || []).filter(volume => !volume.managed).map(editVolumeRow)));
     window.__editHadService = !!w.has_service;
@@ -625,7 +628,9 @@ window.editSave = async (ns, name) => {
     icon: $("#e_icon").value.trim(), replicas: Math.max(1, +$("#e_rep").value || 1),
     autostart: $("#e_autostart").checked, manage_ports: true, containers, seed_configs, remove_containers: [...EDIT_REMOVED_CONTAINERS],
     placement: readPlacement(), failover: $("#e_failover")?.value || "", monitoring: monitoringFieldValue("e"),
-    ...($("#e_priority") ? { priority: $("#e_priority").value } : {}) };
+    ...($("#e_priority") ? { priority: $("#e_priority").value } : {}),
+    // The server refuses a save from a form built without the Secret's values.
+    ...(window.__editSecretUnread ? { secret_env_unread: true } : {}) };
   const access = $("#e_net")?.value;
   if (["loadbalancer", "internal", "lan"].includes(access)) {
     body.address = { network_mode: access, vip_mode: $("#e_vip_mode")?.value || "shared", lb_ip: ($("#e_lb_ip")?.value || "").trim() };
