@@ -414,7 +414,10 @@ class Writes(WithCluster):
     def test_turning_it_on_keeps_the_per_engine_format_and_is_marked_for_on(self):
         cluster = self.use(Cluster(value='{"v1":"false"}'))
         result = F.save(True)
-        self.assertEqual(cluster.sent, [("PATCH", SETTING_PATH, {"value": '{"v1":"true"}'}, F.MERGE)])
+        self.assertEqual([(m, p, b["value"], c) for m, p, b, c in cluster.sent], [("PATCH", SETTING_PATH, '{"v1":"true"}', F.MERGE)])
+        # Besides the value, at most the resourceVersion it read (ConcurrentWrites).
+        self.assertLessEqual(set(cluster.sent[0][2]) - {"value"}, {"metadata"})
+        self.assertLessEqual(set(cluster.sent[0][2].get("metadata") or {}), {"resourceVersion"})
         self.assertEqual(cluster.marking, ["on"])
         self.assertIsNone(getattr(CH.REQUEST, "object_value", None))
         self.assertTrue(result["ok"])

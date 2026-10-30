@@ -241,17 +241,21 @@ class StoppedRestoreTests(unittest.TestCase):
 
     def test_a_job_keeps_the_snapshot_its_restore_made(self):
         import homestead_longhorn as LONGHORN
-        result = {"name": "example-data", "namespace": "lab", "backup": "backup-a", "created": True,
-                  "snapshot": self.name, "source_size_bytes": 1, "message": "Restore started"}
-        with patch.object(LONGHORN.RESTORE, "restore_plan", return_value={}), \
-                patch.object(LONGHORN.RESTORE, "restore_backup", return_value=dict(result)), \
+        import homestead_longhorn_restore as RESTORE
+        request = {"backup": "backup-a", "namespace": "lab", "name": "example-data"}
+        result = {**request, "created": True, "snapshot": self.name, "source_size_bytes": 1, "message": "Restore started"}
+        with patch.object(RESTORE, "restore_plan", return_value={}), \
+                patch.object(RESTORE, "restore_backup", return_value=dict(result)), \
                 patch.object(LONGHORN.OPS, "start", side_effect=lambda *args: args[4]) as start:
-            LONGHORN.restore_reviewed({"backup": "backup-a", "namespace": "lab", "name": "example-data"})
+            LONGHORN.restore_reviewed(dict(request))
         self.assertEqual(self.name, start.call_args.args[4]["snapshot"])
         item = {"status": "running", "ref": {"namespace": "lab", "name": "example-data",
-                                             "restore_config": {"restore_id": "x"}, "restore_started": False}}
-        with patch.object(server.LH, "restore_backup", return_value=dict(result)), \
-                patch.object(server.LH, "restore_problem", return_value=""):
+                                             "restore_config": {**request, "restore_id": "x"}, "restore_started": False}}
+        # Where the job looks the restore up: its own import of the defining
+        # module once it has one, else homestead_longhorn's re-export.
+        lookup = getattr(server.STORAGE_ROUTES, "RESTORE", None) or server.LH
+        with patch.object(lookup, "restore_backup", return_value=dict(result)), \
+                patch.object(lookup, "restore_problem", return_value=""):
             server.STORAGE_ROUTES._restore_then_tidy(item, lambda work: ("running", 30, "Restoring data"))
         self.assertEqual(self.name, item["ref"]["snapshot"])
 
