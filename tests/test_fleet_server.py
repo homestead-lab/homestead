@@ -21,6 +21,13 @@ def handler(path="/api/nodes", method="GET", headers=None, body=b""):
     return h
 
 
+def tearDownModule():
+    # handler() starts a request's scope (its role and Kubernetes read deadline,
+    # #984) on this thread and no request ends it: end it, so a later module's
+    # reads are not cut by a deadline left from here.
+    server.REQUEST_SCOPE.unbind()
+
+
 class TargetTests(unittest.TestCase):
     def setUp(self):
         patch = mock.patch.object(server.FLEET, "self_id", return_value="me")
