@@ -128,10 +128,10 @@ def _reviewed_vm_power(body):
     # an API conflict by fetching and writing a new run policy.
     current = kget(f"{VMS.API}/namespaces/{ns}/virtualmachines/{name}")
     observations = context["observations"]
-    if VM_CAPACITY.VMRES.identity(current) != observations["vm"]:
+    if CAPACITY_REVIEW.review_identity(current) != observations["vm"]:
         raise CAPACITY_REVIEW.Rejected("The VM changed during admission; review it again", plan)
     vmi = VM_CAPACITY._optional(kget, f"{VMS.API}/namespaces/{ns}/virtualmachineinstances/{name}")
-    if (VM_CAPACITY.VMRES.identity(vmi) if vmi else None) != observations.get("vmi"):
+    if (CAPACITY_REVIEW.review_identity(vmi) if vmi else None) != observations.get("vmi"):
         raise CAPACITY_REVIEW.Rejected("The running VM instance changed during admission; review it again", plan)
     def before_send():
         fresh, fresh_context = vm_power_capacity_plan(body)

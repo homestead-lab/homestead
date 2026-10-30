@@ -156,6 +156,8 @@ class VMPowerAdmissionTests(unittest.TestCase):
         for key in ("uid", "resourceVersion"):
             signed = self.reviewed()
             self.vm["metadata"][key] += "-changed"
+            # A real edit: a status-only write moves the version too, and keeps the review.
+            self.vm["metadata"]["labels"] = {"example.com/edited": key}
             result, writes = self.call("/api/vm/power", signed)
             self.assertEqual(409, result[0])
             writes.assert_not_called()
