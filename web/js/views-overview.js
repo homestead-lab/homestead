@@ -160,7 +160,7 @@ async function viewDash() {
   };
 
   paint(`
-  ${UI.pageHeader(`Cluster overview`, dashboardScope(o), `
+  ${UI.pageHeader(`Cluster overview`, dashboardScope(o) + dashboardAge(o), `
       <button class="btn hide-sm" onclick="Dashboard.start()">${icon("edit")}Edit dashboard</button>
       <button class="btn pri hide-sm" onclick="go('deploy')">＋ Deploy</button>
     `, {mobileSummary:"omit",actionsClass:"hide-sm"})}
@@ -180,6 +180,18 @@ async function viewDash() {
   Dashboard.loadMonitoring();
   Dashboard.loadTimeline();
   HealthInsights.load();
+}
+
+/* How old the overview's numbers are (#705 step 8). age_s comes from the
+   server, so a browser clock that is off does not skew it. The numbers are
+   normally at most one snapshot cycle old; a minute or more means the cluster
+   has not answered since, and the page shows the last numbers it had. */
+function dashboardAge(o) {
+  const age = o.age_s;
+  if (typeof age !== "number") return "";
+  if (age < 10) return ` · <span class="dim">updated just now</span>`;
+  if (age < 60) return ` · <span class="dim">updated ${age}s ago</span>`;
+  return ` · ${UI.chip(`updated ${fmtAgo(age)}`, "warn", { tip: "The cluster has not answered since: these are the last numbers Homestead read" })}`;
 }
 
 /* Dense host summaries respond to widget width, rather than viewport width. */

@@ -121,6 +121,11 @@ def kept_at(key):
         return e[0] if e else None
 
 
+def kept(key):
+    """(when it was read, value) of key's kept answer, or None."""
+    return _last(key)
+
+
 def forgotten_at(key):
     """When key was last forgotten (time.time()), or 0.0."""
     with _lock:

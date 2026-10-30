@@ -237,7 +237,10 @@ class LeaderCycleTests(unittest.TestCase):
         self.PAGES.reset()
         CACHE._cache.clear()
         for key in ROUTES:
-            self.assertEqual(self.cluster.route(key), from_cycle[key], key)
+            answer = self.cluster.route(key)
+            if key == "ov":     # the overview also says when it was read (#705 step 8)
+                answer = {k: v for k, v in answer.items() if k not in ("as_of", "age_s")}
+            self.assertEqual(answer, from_cycle[key], key)
 
     def test_a_standby_runs_no_cycle_and_its_routes_compute_as_today(self):
         self.assertIsNone(self.PAGES.tick(lambda: False, self.OV.page_inputs(), self.OV.page_builders()))
