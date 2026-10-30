@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -51,6 +52,13 @@ class Response(io.BytesIO):
 
     def __exit__(self, *args):
         return False
+
+
+def reset_feed():
+    """Forget the kept feed, for a test of its own."""
+    with APPSTORE._feed_lock:
+        APPSTORE._feed.update(source=None, apps=None, at=0.0, error=None, failed_at=0.0,
+                              thread=None, done=None, reading=None)
 
 
 def answer(feed=FEED, piece=1 << 16):
@@ -111,15 +119,15 @@ class FeedTests(unittest.TestCase):
         self.assertEqual("example/plain:latest", page["deploy"]["image"])
         self.assertNotIn("config", page)
 
-    clear = staticmethod(lambda: APPSTORE.forget_feed())
+    clear = staticmethod(lambda: reset_feed())
 
 
 class StreamTests(unittest.TestCase):
     """The feed is turned into apps as it arrives, never held whole."""
 
     def setUp(self):
-        APPSTORE.forget_feed()
-        self.addCleanup(APPSTORE.forget_feed)
+        reset_feed()
+        self.addCleanup(reset_feed)
 
     def load(self, feed, piece=1 << 16):
         with mock.patch.object(server.urllib.request, "urlopen", lambda *a, **k: answer(feed, piece)):
@@ -175,8 +183,8 @@ class BackgroundTests(unittest.TestCase):
     """A page never reads the feed itself: one background read at a time does."""
 
     def setUp(self):
-        APPSTORE.forget_feed()
-        self.addCleanup(APPSTORE.forget_feed)
+        reset_feed()
+        self.addCleanup(reset_feed)
         self.addCleanup(self.settle)
         patch = mock.patch.object(APPSTORE, "catalog_source", return_value="https://feed.example.com/a.json")
         self.source = patch.start()
@@ -259,6 +267,78 @@ class BackgroundTests(unittest.TestCase):
         with self.assertRaises(APPSTORE.FeedLoading):
             APPSTORE.fetch_appstore(wait=0)
         self.assertIsNone(APPSTORE._feed.get("apps"), "the other address's apps are not kept")
+
+    def test_a_settings_save_during_a_read_starts_no_second_one(self):
+        gate = Gate(self)
+        self.open(gate)
+        with self.assertRaises(APPSTORE.FeedLoading):
+            APPSTORE.fetch_appstore(wait=0)
+        self.assertTrue(gate.opened.wait(5))
+        missing = urllib.error.HTTPError("/api/v1", 404, "Not Found", {}, io.BytesIO(b"{}"))
+        with mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=missing), \
+             mock.patch.object(server.KUBE_HELPERS, "ksend"), \
+             mock.patch.object(server.SETTINGS_HELPERS.CHECKS, "invalidate"), \
+             mock.patch.object(server.SETTINGS_HELPERS, "_fleet_rename"):
+            for name in ("Barn", "Shed", "Loft"):
+                server.SETTINGS_HELPERS.save_app_settings({"site_name": name, "revision": ""})
+                with self.assertRaises(APPSTORE.FeedLoading):
+                    APPSTORE.fetch_appstore(wait=0)
+        self.assertEqual(1, len(gate.threads), "one read at a time, whatever is saved meanwhile")
+        gate.release.set()
+        self.settle()
+        self.assertEqual(4, len(APPSTORE.fetch_appstore(wait=0)), "and the read's apps are kept")
+
+    def test_an_old_feed_whose_refresh_failed_is_not_read_again_on_every_page(self):
+        self.open(lambda *a, **k: answer())
+        old = APPSTORE.fetch_appstore(wait=5)
+        APPSTORE._feed["at"] -= APPSTORE.FEED_TTL + 1
+        calls = []
+
+        def offline(*args, **kwargs):
+            calls.append(1)
+            raise OSError("offline")
+
+        self.open(offline)
+        self.assertIs(old, APPSTORE.fetch_appstore(wait=0))
+        self.settle()
+        for _ in range(10):
+            self.assertIs(old, APPSTORE.fetch_appstore(wait=0), "the old feed is still answered")
+            self.settle()
+        self.assertEqual(1, len(calls))
+        APPSTORE._feed["failed_at"] -= APPSTORE.FEED_RETRY + 1
+        APPSTORE.fetch_appstore(wait=0)
+        self.settle()
+        self.assertEqual(2, len(calls), "asked again once the pause is over")
+
+    def test_a_new_address_reads_at_once_and_the_old_addresss_read_is_dropped(self):
+        first = Gate(self)
+        self.open(first)
+        with self.assertRaises(APPSTORE.FeedLoading):
+            APPSTORE.fetch_appstore(wait=0)
+        self.assertTrue(first.opened.wait(5))
+        old_thread = APPSTORE._feed["thread"]
+        self.source.return_value = "https://feed.example.com/b.json"
+        second = Gate(self, {"applist": [template("Other")]})
+        self.open(second)
+        with self.assertRaises(APPSTORE.FeedLoading):
+            APPSTORE.fetch_appstore(wait=0)
+        self.assertTrue(second.opened.wait(5), "the new address does not wait for the old one")
+        first.release.set()
+        old_thread.join(5)
+        self.assertIsNone(APPSTORE._feed["apps"], "the old address's apps are not kept")
+        second.release.set()
+        self.settle()
+        self.assertEqual(["Other"], [a["name"] for a in APPSTORE.fetch_appstore(wait=0)])
+
+    def test_each_page_gets_an_error_of_its_own(self):
+        self.open(mock.Mock(side_effect=OSError("offline")))
+        errors = []
+        for _ in range(2):
+            with self.assertRaises(Exception) as caught:
+                APPSTORE.fetch_appstore(wait=5)
+            errors.append(caught.exception)
+        self.assertIsNot(errors[0], errors[1])
+        self.assertIn("offline", str(errors[1]))
 
     def test_the_logo_picker_says_loading_too(self):
         with mock.patch.object(APPSTORE, "fetch_appstore", side_effect=APPSTORE.FeedLoading("still loading")):

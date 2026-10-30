@@ -13,7 +13,6 @@ import urllib.request, urllib.parse, urllib.error
 import homestead_app_settings as APP_SETTINGS
 import homestead_auth as AUTH
 import homestead_config_backup as CONFIG
-import homestead_deploy_appstore as APPSTORE
 import homestead_fleet as FLEET
 import homestead_hardware as HW
 import homestead_imports as IMP
@@ -71,8 +70,8 @@ def save_app_settings(value):
     _forget()
     CHECKS.invalidate()
     PLACEMODE.saved(settings["placement"])
-    # A different catalogue source is a different catalogue.
-    APPSTORE.forget_feed()
+    # A different catalogue address is a different catalogue: the App Store's
+    # next read sees the new one (homestead_deploy_appstore._start_refresh).
     # A renamed site is carried to the linked clusters, for their switches.
     threading.Thread(target=_fleet_rename, daemon=True).start()
     return settings

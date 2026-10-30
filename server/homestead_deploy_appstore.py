@@ -243,7 +243,7 @@ FEED_DEADLINE = 180          # the whole download, however slowly it trickles
 FEED_RETRY = 60              # after a failed read, pages get its error this long
 FEED_WAIT = 5                # a page waits this long for a first read under way
 _feed = {"source": None, "at": 0.0, "apps": None, "error": None, "failed_at": 0.0,
-         "thread": None, "done": None}
+         "thread": None, "done": None, "reading": None}
 _feed_lock = threading.Lock()
 
 
@@ -439,12 +439,16 @@ def load_feed_now(source=None):
     return out
 
 
+class FeedUnavailable(Exception):
+    """The last read of the feed failed (its message is kept, not the error)."""
+
+
 def _refresh(source, done):
     try:
         apps, error = load_feed_now(source), None
     except Exception as e:
-        apps, error = None, e
-        print(f"appstore: the feed could not be read: {str(e)[:200]}", flush=True)
+        apps, error = None, str(e)[:300] or type(e).__name__
+        print(f"appstore: the feed could not be read: {error[:200]}", flush=True)
     with _feed_lock:
         if _feed["source"] == source:
             if apps is not None:
@@ -452,51 +456,51 @@ def _refresh(source, done):
             else:
                 _feed.update(error=error, failed_at=time.time())
         if _feed["done"] is done:
-            _feed.update(thread=None, done=None)
+            _feed.update(thread=None, done=None, reading=None)
     done.set()
 
 
 def _start_refresh(source):
-    """The read under way for source, started if there is none (lock held)."""
+    """The read under way for source, started if there is none (lock held).
+    A read for another address is left to finish; what it finds is dropped."""
     if _feed["source"] != source:
         # Another address: its apps are let go now, not kept beside the new ones.
         _feed.update(source=source, apps=None, at=0.0, error=None, failed_at=0.0)
-    if _feed["done"] is None:
+    if _feed["done"] is None or _feed["reading"] != source:
         done = threading.Event()
         thread = threading.Thread(target=_refresh, args=(source, done), name="appstore-feed", daemon=True)
-        _feed.update(thread=thread, done=done)
+        _feed.update(thread=thread, done=done, reading=source)
         thread.start()
     return _feed["done"]
+
+
+def _held_back():
+    """The last read failed less than FEED_RETRY ago (lock held)."""
+    return _feed["error"] is not None and time.time() - _feed["failed_at"] < FEED_RETRY
 
 
 def fetch_appstore(wait=None):
     """The catalogue's apps. A fresh copy is answered at once, an old one too
     (while one background read replaces it). With none yet, the page waits up
-    to FEED_WAIT for the read under way, then FeedLoading; a read that failed
-    in the last FEED_RETRY seconds is its error."""
+    to FEED_WAIT for the read under way, then FeedLoading. After a failed read
+    nothing is read again for FEED_RETRY seconds: pages get the old feed, or
+    FeedUnavailable when there is none."""
     source = catalog_source()
     with _feed_lock:
         if _feed["source"] == source and _feed["apps"] is not None:
-            if time.time() - _feed["at"] >= FEED_TTL:
+            if time.time() - _feed["at"] >= FEED_TTL and not _held_back():
                 _start_refresh(source)
             return _feed["apps"]
-        if _feed["source"] == source and _feed["error"] is not None \
-                and time.time() - _feed["failed_at"] < FEED_RETRY and _feed["done"] is None:
-            raise _feed["error"]
+        if _feed["source"] == source and _held_back() and _feed["done"] is None:
+            raise FeedUnavailable(_feed["error"])
         done = _start_refresh(source)
     done.wait(FEED_WAIT if wait is None else wait)
     with _feed_lock:
         if _feed["source"] == source and _feed["apps"] is not None:
             return _feed["apps"]
         if _feed["source"] == source and _feed["error"] is not None and _feed["done"] is None:
-            raise _feed["error"]
+            raise FeedUnavailable(_feed["error"])
     raise FeedLoading("the App Store catalogue is still loading; try again in a few seconds")
-
-
-def forget_feed():
-    """Let the kept feed go (tests, and a changed catalogue address)."""
-    with _feed_lock:
-        _feed.update(source=None, apps=None, at=0.0, error=None, failed_at=0.0, thread=None, done=None)
 
 
 def appdata_folders(vols):
