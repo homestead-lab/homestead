@@ -105,3 +105,9 @@ test("a schedule clash this week is a medium finding that opens the week; close 
  s.protection.clashes.push(clash("clash","a","b"));assert.equal(H.advice(s).find(r=>r.id==="schedule-clash").title,"2 schedule clashes this week");
  s.protection.clashes=[clash("close","offsite","weekly-trim")];assert.equal(H.advice(s).some(r=>r.id==="schedule-clash"),false);
 });
+test("Longhorn's jobs that could not be read are an unknown check, not a cluster without backup gaps (#927)",()=>{
+ const s=base();s.protection={jobs:[],jobs_unread:"Longhorn's recurring jobs could not be read: forbidden",volumes:[{name:"pvc-a",backed_up:null,snapshotted:null,protected_by:null}],clashes:[]};
+ const rows=H.advice(s);
+ assert.deepEqual(rows.map(r=>[r.id,r.severity,r.route]),[["unknown:protection-jobs","low","retry"]]);
+ assert.match(rows[0].detail,/could not be read: forbidden/);
+});

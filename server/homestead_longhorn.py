@@ -123,7 +123,14 @@ PROTECTING = ("snapshot", "snapshot-force-create", "backup", "backup-force-creat
 
 
 def overview():
-    jobs, vols, tgt = JOBS.list_jobs(), VOLUMES._volumes(), BACKUP_TARGET.backup_target()
+    """Data protection's answer. Jobs that could not be read are named in
+    jobs_unread, and what depends on them (coverage, clashes) is unknown, not
+    none (#620, #927)."""
+    vols, tgt = VOLUMES._volumes(), BACKUP_TARGET.backup_target()
+    try:
+        jobs, unread = JOBS.list_jobs(strict=True), ""
+    except Exception as error:
+        jobs, unread = [], f"Longhorn's recurring jobs could not be read: {str(error)[:200]}"
     by_volume = {}
     for j in jobs:
         if j["task"] in PROTECTING:
@@ -131,10 +138,15 @@ def overview():
                 by_volume.setdefault(name, []).append(j)
     for v in vols:
         mine = by_volume.get(v["name"], [])
-        v["protected_by"] = [j["name"] for j in mine]
-        v["snapshotted"] = any(j["task"].startswith("snapshot") for j in mine)
-        v["backed_up"] = any(j["task"].startswith("backup") for j in mine)
-    names = VOLUMES.groups()
+        v["protected_by"] = None if unread else [j["name"] for j in mine]
+        v["snapshotted"] = None if unread else any(j["task"].startswith("snapshot") for j in mine)
+        v["backed_up"] = None if unread else any(j["task"].startswith("backup") for j in mine)
+    names = VOLUMES.groups(jobs)
+    if unread:
+        return {"jobs": [], "jobs_unread": unread, "volumes": vols, "groups": names, "target": tgt, "tasks": TASKS,
+                "group_rows": [{"name": g, "volumes": [v["name"] for v in vols if g in v["groups"]], "jobs": []}
+                               for g in names],
+                "protected": None, "backed_up": None, "unprotected": [], "total": len(vols), "clashes": []}
     return {
         "jobs": jobs, "volumes": vols, "groups": names, "target": tgt,
         "tasks": TASKS,

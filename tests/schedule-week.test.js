@@ -189,6 +189,15 @@ test("with every source read and nothing clashing, the page says so", async () =
   assert.doesNotMatch(out.html, /Could not read/);
 });
 
+test("Longhorn's jobs that could not be read are named, never a quiet week with no clashes (#927)", async () => {
+  const { ctx, out } = setup({ "/api/lh/overview": { jobs: [], clashes: [], volumes: [], jobs_unread: "Longhorn's recurring jobs could not be read: forbidden" },
+    "/api/schedules": [], "/api/power-schedules": { items: [] },
+    "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });
+  await ctx.viewScheduleWeek();
+  assert.match(out.html, /Could not read Longhorn's recurring jobs/);
+  assert.doesNotMatch(out.html, /No clashes this week/);
+});
+
 test("without Longhorn, clashes are not checked and nothing is said to be unread", async () => {
   const { ctx, out } = setup({ "/api/schedules": [], "/api/power-schedules": { items: [] },
     "/api/os-updates": { applies: false }, "/api/settings": { updates: { policy: "notify_only" }, placement: {} }, "/api/workloads": [] });

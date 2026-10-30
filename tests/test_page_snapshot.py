@@ -115,7 +115,14 @@ class Cluster:
 
 
 def clean_snapshot(test):
+    """A fresh snapshot, sharing its parts (#906) in a folder of the test's own."""
+    import tempfile
     import homestead_page_snapshot as PAGES
+    import homestead_shared as SHARED
+    folder = tempfile.TemporaryDirectory()
+    test.addCleanup(folder.cleanup)
+    test.addCleanup(SHARED.bind, SHARED.DIR)
+    SHARED.bind(folder.name)
     PAGES.reset()
     test.addCleanup(PAGES.reset)
     return PAGES
@@ -237,7 +244,10 @@ class LeaderCycleTests(unittest.TestCase):
         self.PAGES.reset()
         CACHE._cache.clear()
         for key in ROUTES:
-            self.assertEqual(self.cluster.route(key), from_cycle[key], key)
+            answer = self.cluster.route(key)
+            if key == "ov":     # the overview also says when it was read (#705 step 8)
+                answer = {k: v for k, v in answer.items() if k not in ("as_of", "age_s")}
+            self.assertEqual(answer, from_cycle[key], key)
 
     def test_a_standby_runs_no_cycle_and_its_routes_compute_as_today(self):
         self.assertIsNone(self.PAGES.tick(lambda: False, self.OV.page_inputs(), self.OV.page_builders()))

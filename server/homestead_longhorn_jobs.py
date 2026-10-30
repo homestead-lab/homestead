@@ -17,10 +17,16 @@ import urllib.request
 import homestead_routes
 
 
-def list_jobs():
+def list_jobs(strict=False):
+    """Every recurring job, with the volumes it covers and when it last ran.
+    strict: a failed read raises, for a page that lists the jobs and must say
+    it could not read them (#620, #927). Otherwise it answers [], for the
+    Dashboard's health, where a cluster without Longhorn has no jobs to fail."""
     try:
         items = LH.kget(f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs").get("items", [])
     except Exception:
+        if strict:
+            raise
         return []
     vols = VOLUMES._volumes()
     runs = _cron_runs()

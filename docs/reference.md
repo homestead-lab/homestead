@@ -1250,7 +1250,8 @@ its last run took, or 30 minutes. These never reach the Dashboard.
 
 **Plans** set up a policy in one go - snapshots (hourly kept for a day, daily
 kept for a week), snapshots and backups (adding daily and weekly backups to
-the backup target), or housekeeping (weekly trim and snapshot cleanup) - for
+the backup target), or housekeeping (a weekly snapshot cleanup; no trim job,
+since Homestead trims attached volumes itself) - for
 whichever group you pick. The jobs a plan makes are ordinary jobs afterwards.
 
 Any volume's snapshots and backups are also a click away on Volumes: take one

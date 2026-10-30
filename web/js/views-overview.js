@@ -160,7 +160,7 @@ async function viewDash() {
   };
 
   paint(`
-  ${UI.pageHeader(`Cluster overview`, dashboardScope(o), `
+  ${UI.pageHeader(`Cluster overview`, dashboardScope(o) + dashboardAge(o), `
       <button class="btn hide-sm" onclick="Dashboard.start()">${icon("edit")}Edit dashboard</button>
       <button class="btn pri hide-sm" onclick="go('deploy')">＋ Deploy</button>
     `, {mobileSummary:"omit",actionsClass:"hide-sm"})}
@@ -180,6 +180,34 @@ async function viewDash() {
   Dashboard.loadMonitoring();
   Dashboard.loadTimeline();
   HealthInsights.load();
+}
+
+/* How old the overview's numbers are (#705 step 8). age_s comes from the
+   server, so a browser clock that is off does not skew it. The numbers are
+   normally at most one snapshot cycle old; a minute or more means the cluster
+   has not answered since, and the page shows the last numbers it had. */
+function dashboardAge(o) {
+  const age = o.age_s;
+  if (typeof age !== "number") return "";
+  if (age < 10) return ` · <span class="dim">updated just now</span>`;
+  if (age < 60) return ` · <span class="dim">updated ${age}s ago</span>`;
+  return ` · ${UI.chip(`updated ${fmtAgo(age)}`, "warn", { tip: "The cluster has not answered since: these are the last numbers Homestead read" })}`;
+}
+
+/* Whether metrics-server's CPU and memory figures on Hosts and Containers are
+   current (#906). The server reads it in the background and gives every row
+   the reading's state; old or missing figures are said, not shown as zeros. */
+function metricsNotice(rows) {
+  const m = (Array.isArray(rows) ? rows : []).find(r => r?.metrics)?.metrics;
+  if (!m) return "";
+  const why = m.detail ? ` (${m.detail})` : "";
+  if (m.state === "stale")
+    return ` · ${UI.chip(`CPU and memory from ${fmtAgo(m.age_s)}`, "warn", { tip: `metrics-server has not answered since then${why}: these are its last figures` })}`;
+  if (m.state === "unavailable")
+    return ` · ${UI.chip("no CPU or memory figures", "warn", { tip: `metrics-server is not answering${why}${m.age_s ? `; it last answered ${fmtAgo(m.age_s)}` : ""}` })}`;
+  if (m.state === "absent")
+    return ` · <span class="dim" data-tip="metrics-server is not installed in this cluster, so there are no CPU or memory figures to show">no CPU or memory figures</span>`;
+  return "";
 }
 
 /* Dense host summaries respond to widget width, rather than viewport width. */
@@ -1104,7 +1132,7 @@ async function viewNodes() {
   STATE.data.nodes = n;
   noteNodeUptime(up);
   const layout = viewLayout("nodes");
-  paint(`${UI.pageHeader(`Hosts`, `${n.length} host${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}`, `${layoutSwitch("nodes", "viewNodes", { phone: true })}
+  paint(`${UI.pageHeader(`Hosts`, `${n.length} host${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}${metricsNotice(n)}`, `${layoutSwitch("nodes", "viewNodes", { phone: true })}
       ${moreMenu([
         {label:"Add a host…",run:"clusterOnboarding()",need:"admin"},
         STATE.platform && !STATE.platform.harvester && {label:"OS updates",run:"osUpdates()"},

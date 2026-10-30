@@ -21,6 +21,8 @@
   const isUtc = tz => !tz || /^(Etc\/)?(UTC|GMT)$/.test(tz);
   // An answer, as opposed to a read that failed or came back as an error.
   const answered = value => !!value && typeof value === "object" && !value.failed && !value.error;
+  // Longhorn's overview with its jobs read: jobs_unread says they could not be (#927).
+  const lhRead = value => answered(value) && Array.isArray(value.jobs) && !value.jobs_unread;
 
   /* Minutes a zone is ahead of UTC at ms, or null for a zone this browser does not know. */
   function offsetMin(tz, ms) {
@@ -129,7 +131,7 @@
     const apps = lazy("workloads", Array.isArray), copies = lazy("copies", Array.isArray);
     let clashes = [], restarts = true;
     const backups = [], stops = [], windows = [], volumeOf = new Map();
-    read("lh", v => answered(v) && Array.isArray(v.jobs), lh => {
+    read("lh", lhRead, lh => {
       clashes = Array.isArray(lh.clashes) ? lh.clashes : [];
       (lh.volumes || []).forEach(v => volumeOf.set(`${v.namespace}/${v.pvc}`, v.name));
       lh.jobs.forEach(j => {
@@ -193,7 +195,7 @@
       f.clash = named.some(c => c.severity === "clash") ? "clash" : named.length || overlaps.some(o => o.backup === f.name) ? "close" : "";
     }
     items.sort((a, b) => a.at - b.at || a.name.localeCompare(b.name));
-    return { items, frequent, unread, unreadable, clashes, overlaps, until, checked: answered(sources.lh) && Array.isArray(sources.lh.jobs) };
+    return { items, frequent, unread, unreadable, clashes, overlaps, until, checked: lhRead(sources.lh) };
   }
 
   /* Andreas, 2026-10-23: a host OS update window, or an app's power stop, while

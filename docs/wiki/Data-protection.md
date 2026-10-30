@@ -81,7 +81,9 @@ Have both.
 2. **Pick a plan.** **Plans** set up a policy in one go:
    - *Snapshots*: hourly, kept for a day; daily, kept for a week;
    - *Snapshots and backups*: those, plus daily and weekly backups;
-   - *Housekeeping*: weekly trim and snapshot cleanup.
+   - *Housekeeping*: a weekly snapshot cleanup. It makes no trim job:
+     Homestead trims attached volumes itself (see below), and a Longhorn trim
+     job for `default` would switch that off.
 
    The jobs a plan makes are ordinary jobs afterwards, to change as you like.
    A plan for `default` makes jobs with plain names (`daily-snapshot`); a plan
@@ -153,7 +155,8 @@ job tray.
   every attached volume now) and the switch that turns the weekly trim off.
 - A single volume's snapshot panel has **Trim now**.
 - If you have a trim job of your own for the default group, Homestead's
-  doesn't run as well.
+  doesn't run as well. Housekeeping names it; delete it to hand the trim back
+  to Homestead. Earlier releases' *Housekeeping* plan made one, `weekly-trim`.
 
 Earlier releases made a Longhorn recurring job, **homestead-weekly-trim**,
 for this. Homestead removes it once, if it is as Homestead left it. If you
@@ -183,7 +186,10 @@ CronJobs, power schedules, the host OS update window, and the maintenance
 window when an app updates itself in it - with the clashes first. A job that
 runs more than six times a day is one "runs all day" line. Anything Homestead
 could not read, a schedule included, is named at the top, so a quiet week is
-never one it did not see. To fix a clash, move one of the two jobs here.
+never one it did not see. When Longhorn's recurring jobs cannot be read,
+This week says so instead of "No clashes this week", and Data protection says
+so above its coverage, which it leaves unknown. To fix a clash, move one of
+the two jobs here.
 
 A snapshot or backup job whose last run failed, or backup jobs with no
 backup target (or one that cannot be reached), make the cluster

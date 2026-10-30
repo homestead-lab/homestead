@@ -17,9 +17,10 @@ const PROTECT_PLANS = [
     jobs: [{ name: "daily-snapshot", task: "snapshot", cron: "0 2 * * *", retain: 7, concurrency: 2 },
       { name: "daily-backup", task: "backup", cron: "30 2 * * *", retain: 14, concurrency: 1 },
       { name: "weekly-backup", task: "backup", cron: "0 3 * * 0", retain: 8, concurrency: 1 }] },
-  { id: "tidy", title: "Housekeeping", blurb: "A weekly trim, so space an app has freed is given back to the disks, and a weekly purge of the system snapshots Longhorn takes during rebuilds.",
-    jobs: [{ name: "weekly-trim", task: "filesystem-trim", cron: "0 4 * * 6", retain: 0, concurrency: 1 },
-      { name: "weekly-cleanup", task: "snapshot-cleanup", cron: "30 4 * * 6", retain: 0, concurrency: 1 }] },
+  // No trim job (#927): Longhorn's tries every volume in its groups and fails on
+  // detached ones and VM disks, and one in default switches Homestead's own off.
+  { id: "tidy", title: "Housekeeping", blurb: "A weekly purge of the system snapshots Longhorn takes during rebuilds. Space an app has freed is given back by the weekly trim under Housekeeping on this page: Homestead trims every attached volume itself.",
+    jobs: [{ name: "weekly-cleanup", task: "snapshot-cleanup", cron: "30 4 * * 6", retain: 0, concurrency: 1 }] },
 ];
 
 /* where: what says why a run failed - Longhorn's own jobs by default. */
@@ -120,19 +121,48 @@ window.objectStoreRemove = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+/* The page is drawn when Longhorn's overview answers, not once every read has
+   (#705). Backup storage and the list of backups fill their own places when
+   their reads return, morphed in as Restore tests are. A refresh keeps their
+   last answers on screen until the new ones arrive; another visit starts
+   afresh; a load overtaken by a newer one fills nothing. */
+let protectLoad = { id: 0, token: null, parts: {} };
+
 async function viewProtect() {
   if (platformLacks("longhorn", "Data protection")) return;
-  const [d, objects, backupVolumes] = await Promise.all([
-    api("/api/lh/overview"),
+  const token = window.NAV_TOKEN;
+  const kept = protectLoad.token === token ? protectLoad.parts : {};
+  const load = protectLoad = { id: protectLoad.id + 1, token, parts: { ...kept } };
+  const current = () => protectLoad === load;
+  let drawn = null;
+  const fill = (id, html) => {
+    const host = document.getElementById(id);
+    if (!host) return;
+    const next = host.cloneNode(false);
+    next.innerHTML = html;
+    enhanceActions(next);
+    morph(host, next);
+    loadAppIcons(host);
+    if (window.applyRole) window.applyRole();
+  };
+  const part = (key, read, show) => read.then(answer => {
+    load.parts[key] = answer;
+    if (!current()) return;
+    STATE.data[key === "objects" ? "objectStore" : "lhBackupVolumes"] = answer;
+    if (drawn) show(drawn);
+  });
+  const parts = [
     // Unread is not "not deployed": that would offer to set it up again (#620).
-    api("/api/objectstore").catch(e => ({ unread: e.message })),
+    part("objects", api("/api/objectstore").catch(e => ({ unread: e.message })),
+      ({ d, tgt, cover }) => fill("protect-top", protectTop(d, load.parts.objects, tgt, cover))),
     // Unread is not "no backups on the target yet" (#620).
-    api("/api/lh/backupvolumes").catch(e => ({ unread: e.message })),
-  ]);
+    part("backups", api("/api/lh/backupvolumes").catch(e => ({ unread: e.message })),
+      ({ tgt }) => fill("protect-backups", protectBackups(load.parts.backups, tgt))),
+  ];
+  const d = await api("/api/lh/overview");
+  if (!current()) return;
   STATE.data.lh = d;
   protectFilterRead();
-  STATE.data.objectStore = objects;
-  STATE.data.lhBackupVolumes = backupVolumes;
   const tgt = d.target || {};
   const cover = d.total ? Math.round(d.protected / d.total * 100) : 0;
 
@@ -141,23 +171,47 @@ async function viewProtect() {
         <button class="btn pri" data-need="operator" onclick="lhJob()">＋ New job</button>
       `)}
 
-  ${objects.deployed || objects.unread ? "" : objectStoreCard(objects, tgt)}
+  <div id="protect-top">${protectTop(d, load.parts.objects, tgt, cover)}</div>
+${protectBody(d, tgt, load.parts.backups)}`);
+  drawn = { d, tgt, cover };
+  loadWeeklyTrim();
+  protectVolumesPaint();
+  loadRestoreTests();
+  loadPreviousVolumes();
+  window.loadFsFreeze?.();
+  // Settled when every part is on the page, as before, for whoever waits on it.
+  await Promise.all(parts);
+}
+
+/* Backup storage, the summary line and the three cards behind it. `objects`
+   is undefined while backup storage is still being read. */
+function protectTop(d, objects, tgt, cover) {
+  const reading = objects === undefined;
+  objects = objects || {};
+  // Jobs that could not be read leave coverage unknown, not 0% (#620, #927).
+  const unread = d.jobs_unread;
+  return `${unread ? UI.callout("warn", "Longhorn's recurring jobs could not be read", `<p>${esc(unread)}</p>
+    <p>Coverage, the recurring jobs and This week's clashes are missing until they are read. Reload to try again.</p>`) : ""}
+  ${reading || objects.deployed || objects.unread ? "" : objectStoreCard(objects, tgt)}
   ${summaryLine("protect", [
-      `${UI.chip(`${cover}% covered`, cover === 100 ? "ok" : cover ? "warn" : "bad")} ${d.protected} of ${d.total} volumes`,
-      objects.deployed ? `Backup storage ${UI.chip(objects.ready ? "serving" : "starting", objects.ready ? "ok" : "warn")}`
+      unread ? `${UI.chip("coverage unknown", "warn")} ${d.total} volumes`
+        : `${UI.chip(`${cover}% covered`, cover === 100 ? "ok" : cover ? "warn" : "bad")} ${d.protected} of ${d.total} volumes`,
+      reading ? `Backup storage <span class="dim small">reading…</span>`
+        : objects.deployed ? `Backup storage ${UI.chip(objects.ready ? "serving" : "starting", objects.ready ? "ok" : "warn")}`
         : objects.unread ? `Backup storage ${UI.chip("unknown", "warn", { tip: "Could not read it: " + objects.unread })}` : "",
       tgt.configured ? `Target ${UI.chip(tgt.available ? "reachable" : "unavailable", tgt.available ? "ok" : "bad")}` : UI.chip("no backup target", "warn"),
-      `${d.backed_up ?? 0} backed up off the cluster`],
+      unread ? "" : `${d.backed_up ?? 0} backed up off the cluster`],
     `${objects.deployed ? objectStoreCard(objects, tgt) : ""}
   <div class="grid g3" style="margin-bottom:18px">
     <div class="card flat">
       <div class="ctitle">Coverage</div><div class="csub">Volumes a snapshot or backup job keeps copies of</div>
+      ${unread ? `<div class="ui-help" style="margin-top:12px">Not known: the recurring jobs could not be read.</div>` : `
       <div class="row" style="margin-top:12px;gap:18px;align-items:flex-end">
         <div class="bignum">${cover}<span class="unit">%</span></div>
         <div class="csub" style="padding-bottom:6px">${d.protected} of ${d.total} protected ·
           ${d.backed_up ?? 0} backed up off the cluster</div>
       </div>
-      ${meter(cover, 'style="margin-top:12px"')}
+      ${meter(cover, 'style="margin-top:12px"')}`}
       ${d.unprotected.length ? `<div style="margin-top:12px">
         <button type="button" class="linkish dim xs pf-jump" onclick="protectFilter({show:'uncovered'},true)">NOT COVERED · show all ${d.unprotected.length}</button>
         <div class="pf-chips">${d.unprotected.slice(0, 6).map(name => {
@@ -196,14 +250,18 @@ async function viewProtect() {
         <span class="mono">default</span>. Give some volumes a plan of their own with a group.</div>
     </div>
   </div>
-`)}
+`)}`;
+}
 
+function protectBody(d, tgt, backupVolumes) {
+  return `
   <div id="restore-tests" class="restore-tests">${restoreTestsSection()}</div>
   <div id="previous-volumes" class="restore-tests"></div>
   <div id="fs-freeze" class="restore-tests"></div>
 
   <div class="sec">Recurring jobs</div>
-  ${d.jobs.length ? `<div class="cardlist">${d.jobs.map(j => `<div class="card flat wcard">
+  ${d.jobs_unread ? `<div class="ui-help">The recurring jobs could not be read, so none are listed. Reload to try again.</div>`
+  : d.jobs.length ? `<div class="cardlist">${d.jobs.map(j => `<div class="card flat wcard">
     <div class="between">
       <div class="row" style="gap:10px;min-width:0">
         <div class="av n3" style="font-size:15px">${TASK_ICON[j.task] || "◷"}</div>
@@ -242,7 +300,13 @@ async function viewProtect() {
   <div id="housekeeping" class="housekeeping">${UI.section("Housekeeping", '<div class="empty small"><span class="spin2"></span> Reading the weekly trim…</div>')}</div>
 
   <div class="sec">Backups</div>
-  ${backupVolumes.unread ? UI.callout("warn", "Could not read the backups", esc(backupVolumes.unread))
+  <div id="protect-backups">${protectBackups(backupVolumes, tgt)}</div>`;
+}
+
+/* The backups on the target. `backupVolumes` is undefined while they are still being read. */
+function protectBackups(backupVolumes, tgt) {
+  if (backupVolumes === undefined) return '<div class="empty small"><span class="spin2"></span> Reading the backups…</div>';
+  return `${backupVolumes.unread ? UI.callout("warn", "Could not read the backups", esc(backupVolumes.unread))
   : backupVolumes.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="backupvols" class="tbl stack"><thead><tr>
     <th>Volume</th><th>Backups</th><th data-nosort>Last backup</th><th>Size</th><th></th></tr></thead><tbody>
     ${backupVolumes.map(b => `<tr>
@@ -253,12 +317,7 @@ async function viewProtect() {
       <td class="mono">${b.size_mb ? bytesText(b.size_mb * 1024 ** 2) : "—"}</td>
       <td data-actions>${actionBar([{ label: "Backups", run: `lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})` }])}</td></tr>`).join("")}
   </tbody></table></div></div>`
-  : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`);
-  loadWeeklyTrim();
-  protectVolumesPaint();
-  loadRestoreTests();
-  loadPreviousVolumes();
-  window.loadFsFreeze?.();
+  : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`;
 }
 
 /* ---------------- the Volumes list, filtered (#345) ----------------
@@ -267,7 +326,8 @@ async function viewProtect() {
 const PROTECT_FILTER = { show: "all", group: "", q: "" };
 const PROTECT_SHOWS = [
   ["all", "All", () => true],
-  ["uncovered", "Not covered", v => !(v.protected_by || []).length],
+  // protected_by is null when the jobs could not be read (#927): neither covered nor not.
+  ["uncovered", "Not covered", v => Array.isArray(v.protected_by) && !v.protected_by.length],
   ["protected", "Protected", v => (v.protected_by || []).length > 0],
   ["never", "Never backed up", v => !v.last_backup_at],
   ["unhealthy", "Unhealthy", v => v.robustness !== "healthy"],
@@ -303,7 +363,8 @@ function protectVolumeRow(v) {
     <td class="mono">${v.size_gb} GiB</td>
     <td>${UI.chip(v.robustness || "?", v.robustness === "healthy" ? "ok" : v.robustness === "degraded" ? "warn" : "bad")}</td>
     <td>${v.groups.map(g => UI.chip(g, g === "default" ? "info" : "neutral")).join(" ") || '<span class="dim">—</span>'}</td>
-    <td>${(v.protected_by || []).map(j => UI.chip(j, "ok")).join(" ")
+    <td>${v.protected_by === null ? UI.chip("unknown", "neutral", { tip: "Longhorn's recurring jobs could not be read" })
+      : (v.protected_by || []).map(j => UI.chip(j, "ok")).join(" ")
       || UI.chip("nothing", "warn", { tip: "No snapshot or backup job covers it" })}</td>
     <td class="small dim">${v.last_backup_at ? fmtWhen(v.last_backup_at)
       : (v.protected_by || []).length ? UI.chip("never", "warn", { tip: "A job covers it, but no backup of it has been made yet" }) : "never"}</td>
@@ -375,7 +436,10 @@ function groupCount(name) {
 // refuses to save over a job whose settings were changed, or that was deleted
 // or made, since; the job running moves no generation (#621).
 let LJ_GENERATION = null;
+/* With the jobs unread, a new job or a plan could replace one of the same
+   name unseen (#927): say so instead of opening the dialog. */
 window.lhJob = (j) => {
+  if (STATE.data?.lh?.jobs_unread) return toast("Longhorn's recurring jobs could not be read, so a new job could replace one unseen. Reload to try again.", "warn");
   const d = STATE.data.lh || { groups: ["default"], tasks: {} };
   LJ_GENERATION = !j ? "" : (j.generation ?? null);
   j = j || { name: "", task: "snapshot", cron: "0 2 * * *", retain: 7, concurrency: 1, groups: ["default"] };
@@ -441,6 +505,7 @@ function planList(group, chosen) {
         <div class="plan-jobs">${plan.jobs.map(j => { const name = planJobName(group, j); return UI.chip(`${name} · ${CRON.describe(j.cron)}${j.retain ? ` · keeps ${j.retain}` : ""}`, existing.has(name) ? "warn" : "neutral", { tip: existing.has(name) ? "replaces the job of this name" : "new job" }); }).join(" ")}</div></div></label>`).join("");
 }
 window.lhPlans = (group = "default") => {
+  if (STATE.data?.lh?.jobs_unread) return toast("Longhorn's recurring jobs could not be read, so a plan could replace a job unseen. Reload to try again.", "warn");
   const d = STATE.data.lh || { groups: ["default"], jobs: [] };
   modal("Protection plans", `${UI.lead("A plan makes the jobs a sensible policy needs. They are ordinary jobs afterwards: edit or delete any of them.")}
     <div class="f"><label>Volumes it protects</label><select id="lp_group" onchange="lhPlanGroup()">${(d.groups || ["default"]).map(g =>
@@ -470,7 +535,7 @@ window.lhPlanApply = async () => {
   const group = $("#lp_group").value || "default";
   try {
     await planApply(plan, group);
-    toast(`${plan.title}: ${plan.jobs.length} jobs set up for ${group}`, "ok"); closeModal(); resetPaint(); viewProtect();
+    toast(`${plan.title}: ${plan.jobs.length} job${plan.jobs.length === 1 ? "" : "s"} set up for ${group}`, "ok"); closeModal(); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -1000,7 +1065,7 @@ function weeklyTrimCard(d) {
         <div class="csub">Every attached volume, Saturdays at 04:00 UTC${d.enabled && d.next ? ` · next ${esc(fmtAt(d.next))}` : ""}</div></div>
         <div class="row" style="gap:8px">${status}${d.running ? "" : '<button class="btn sm" data-need="operator" onclick="weeklyTrimRun()">Run now</button>'}</div></div>
       <div style="margin-top:10px">${lines}</div>
-      ${d.theirs ? `<div class="dim xs wt-line">Your trim job <span class="mono">${esc(d.theirs)}</span> already trims the default group, so this one does not run as well.</div>` : ""}
+      ${d.theirs ? `<div class="dim xs wt-line">Your trim job <span class="mono">${esc(d.theirs)}</span> already trims the default group, so this one does not run as well. Delete it under Recurring jobs to let Homestead trim attached volumes instead: Longhorn's fails on detached volumes and VM disks.</div>` : ""}
       <div class="between wt-foot"><label class="switch" data-need="admin"><input type="checkbox" id="wt_on" ${d.enabled ? "checked" : ""} onchange="weeklyTrimSwitch(this.checked)"> Trim weekly</label>
         <div class="dim xs" id="wt_off"${d.enabled ? " hidden" : ""}>Off · Run now still trims every attached volume</div></div>
       ${UI.guide("How the weekly trim works", "<p>Files deleted inside a volume keep their space in Longhorn until the filesystem is trimmed. Each week Homestead trims every attached volume, one at a time. A detached volume cannot be trimmed, and a VM disk has no filesystem Longhorn can trim, so both are skipped and named. A volume that fails is named with Longhorn's answer.</p>")}
