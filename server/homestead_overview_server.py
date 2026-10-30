@@ -686,7 +686,14 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
                                        cached("trim-health", 60, WEEKLY_TRIM.last_state))
     except Exception:
         protection = []
-    health = CLUSTER.classify_cluster_health(nodes, wl, vols, protection=protection)
+    try:
+        in_maintenance, overran = HISTORY.maintenance_view()
+    except Exception:
+        in_maintenance, overran = set(), set()   # with no way to tell, every host counts, as in alerts
+    # Routine things are activities, and an issue counts once it has lasted
+    # the alerts' hold (#941).
+    health = CLUSTER.HOLD.apply(CLUSTER.classify_cluster_health(
+        nodes, wl, vols, protection=protection, maintenance=in_maintenance, overran=overran))
     tcap = sum(n["cpu_cap"] for n in nodes) or 1
     tuse = sum(n["cpu_used"] for n in nodes)
     mcap = sum(n["mem_cap_gb"] for n in nodes) or 1

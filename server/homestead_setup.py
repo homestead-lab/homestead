@@ -242,8 +242,13 @@ def state(user, role):
     if role == "admin":
         def health():
             ov = cached("ov", 5, _bound["overview"])
-            issues = ov.get("health_issues") or []
-            return {"done": not issues, "applies": True, "summary": ov.get("health_summary", ""),
+            # This cycle's issues: a checklist, not the pill, so a fault the
+            # verdict still holds (#941) is not called done.
+            issues = (ov.get("health_issues") if ov.get("current_issues") is None
+                      else ov.get("current_issues")) or []
+            summary = "; ".join(f"{x.get('kind', '')} {x.get('name', '')}: {x.get('reason', '')}"
+                                for x in issues[:4]) or ov.get("health_summary", "")
+            return {"done": not issues, "applies": True, "summary": summary,
                     "issues": [{k: x.get(k, "") for k in ("severity", "kind", "name", "reason")} for x in issues[:6]]}
         step("health", health)
 

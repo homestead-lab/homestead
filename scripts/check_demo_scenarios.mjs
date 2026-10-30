@@ -12,9 +12,21 @@ try {
     page.on("pageerror", error => errors.push(error.message));
     await page.goto(`${base}/?demo=1${scenario === "healthy" ? "" : `&demo-scenario=${scenario}`}`, { waitUntil: "networkidle" });
     await page.locator("#views .phead").waitFor({state:"attached"});
-    await page.waitForFunction(() => document.querySelector("#healthPill")?.textContent?.trim());
+    await page.waitForFunction(() => document.querySelector("#healthPill")?.dataset.state !== "checking");
     const expected = scenario === "incidents" ? "DEGRADED" : scenario.toUpperCase();
     assert.equal((await page.locator("#healthPill").innerText()).trim(), expected);
+    // Opened straight on Containers, the pill shows the verdict too, from the
+    // alerts read every page makes (#940): it was "···" until the Dashboard.
+    if (width !== 768) {
+      const direct = await browser.newPage({ viewport: { width, height: 900 } });
+      direct.on("pageerror", error => errors.push(error.message));
+      await direct.goto(`${base}/containers?demo=1${scenario === "healthy" ? "" : `&demo-scenario=${scenario}`}`, { waitUntil: "networkidle" });
+      await direct.locator("#views h2").filter({ hasText: /^Containers$/ }).waitFor();
+      await direct.waitForFunction(() => document.querySelector("#healthPill")?.dataset.state !== "checking", null, { timeout: 10000 });
+      assert.equal((await direct.locator("#healthPill").textContent()).trim(), expected, `the pill on Containers (${scenario}, ${width}px)`);
+      assert.equal(await direct.locator("#healthPill").getAttribute("role"), "status");
+      await direct.close();
+    }
     assert.equal(await page.locator("#views .dash-alert[data-health]").count(), scenario === "healthy" ? 0 : 1);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: `release-assets/scenarios/${scenario}-${width}.png`, fullPage: true });
