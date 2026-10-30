@@ -496,7 +496,7 @@ def _impact_sources():
     try:
         raw_vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
     except Exception:
-        raw_vms = []
+        raw_vms = None          # the preview says the VMs couldn't be checked, never that none has a device
     return {"deployments": deployments, "raw_vms": raw_vms, "sets": _statefulsets(), "pvs": _pinned_volumes(),
             "node_down": LHCAP.node_down(kget)}
 
@@ -514,7 +514,7 @@ def node_impact(node, sources=None):
         places = (cached("network", 5, INV.inventory) or {}).get("addresses") or {}
         addresses = (places.get("addresses") or []) if isinstance(places, dict) else list(places)
     except Exception:
-        addresses = []
+        addresses = None        # the preview says the addresses are unknown, never that none moves
     try:
         placement = cached("impact:" + node, 5, lambda: PLACE.impact(node))
     except Exception:
