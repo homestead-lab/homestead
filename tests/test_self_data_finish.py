@@ -129,11 +129,17 @@ class CleanupTests(unittest.TestCase):
         self.assertTrue(self.finish()["done"])
         self.assertEqual(1, sum(m == "DELETE" and p == first for m, p, _ in self.c.sent))
 
-    def test_request_lost_before_delete_is_not_replayed(self):
+    def test_request_lost_before_delete_is_sent_again_only_to_the_same_uid(self):
+        # The object is unchanged, with no deletionTimestamp, so the DELETE
+        # never took effect; the next pass sends it again, pinned to its uid
+        # (test_self_data_holds covers the receipts). A replacement is refused.
         self.c.reject = lambda method, path, body: method == "DELETE"
         with self.assertRaises(TimeoutError): self.finish()
-        count = len(self.c.sent); self.c.reject = None
-        with self.assertRaisesRegex(Held, "Nothing was retried"): self.finish()
+        path = [p for m, p, _ in self.c.sent if m == "DELETE"][-1]
+        self.c.reject = None
+        self.c.objects[path]["metadata"]["uid"] = "replacement"
+        count = len(self.c.sent)
+        with self.assertRaisesRegex(Held, "replacement"): self.finish()
         self.assertEqual(count, len(self.c.sent))
         self.assertTrue(self.fence.inspect()["writable"])
 
