@@ -158,7 +158,8 @@ function networkSectionLine(key) {
   const said = {
     overview: () => networkAttentionAll().length ? "" : data ? "Nothing needs attention" : "Status and attention",
     services: () => data && plural(data.summary.app_services, "app Service"),
-    vips: () => data && `${plural((data.registered_vips || []).length, "VIP")}${data.shared_vip?.ip ? ` · default ${data.shared_vip.ip}` : ""}`,
+    vips: () => data && (data.registered_vips === null ? "Couldn't read Your VIPs"
+      : `${plural(data.registered_vips.length, "VIP")}${data.shared_vip?.ip ? ` · default ${data.shared_vip.ip}` : ""}`),
     addresses: () => data && `${plural((data.addresses?.nodes || []).length, "host")} · ${data.summary.listeners} listening`,
     ip: () => STATE.data.ipam ? plural((STATE.data.ipam.subnets || []).length, "subnet") : "Subnets, DHCP and reservations",
     lan: () => window.__vmCreateOptions ? plural((window.__vmCreateOptions.network_details || []).length, "network") : "VLANs and bridges",
@@ -262,7 +263,7 @@ function networkOverviewHtml(data, baseline) {
     ${UI.guide("How addresses work here", `
       <p><b>${esc(controller.name)}</b> handles service addresses. Multus adds separate LAN interfaces; it does not provide VIP failover.
       ${STATE.platform?.servicelb ? "ServiceLB also exposes unclassified Services on host IPs, not a movable VIP." : ""}</p>
-      <p><b>Default workload VIP:</b> ${esc(data.shared_vip?.ip || "not configured")}. Choose a default under Workload VIPs, then select <b>Default workload VIP</b> or <b>Specific VIP</b> when deploying.
+      <p><b>Default workload VIP:</b> ${esc(networkDefaultVip(data))}. Choose a default under Workload VIPs, then select <b>Default workload VIP</b> or <b>Specific VIP</b> when deploying.
       VMs on the pod network can be exposed through a Service; bridged VMs use their own DHCP/static address, not a service VIP.</p>
       <p>VIP failover is not full-cluster HA: multiple eligible hosts, a surviving control-plane quorum, portable storage with healthy replicas, and workload restart policies are also needed.
       ${Object.keys(data.node_names || {}).length < 2 ? "This is a single-node cluster: there is no second host to take over." : "Test host failure before relying on recovery."}</p>`)}`;
@@ -303,10 +304,21 @@ function networkServicesHtml(data) {
     ${data.ingresses.length ? UI.section("Ingress routes", `<div class="card flat pad0"><div class="tblwrap"><table data-sort="ingresses" class="tbl stack dense"><thead><tr><th>Ingress</th><th>Address</th><th>Route</th><th>Backend</th></tr></thead><tbody>${data.ingresses.filter(x => showSystem || !x.system).flatMap(row => row.rules.map(rule => `<tr><td>${esc(row.namespace)}/${esc(row.name)}</td><td class="mono">${esc(row.addresses.join(", ") || "pending")}</td><td>${esc(rule.host)}${esc(rule.path)}</td><td>${esc(rule.service)}:${esc(rule.port)}</td></tr>`)).join("")}</tbody></table></div></div>`) : ""}`;
 }
 
+/* The default workload VIP in words. Your VIPs unread (registered_vips
+   null) is not "not configured": the default is not known. */
+function networkDefaultVip(data) {
+  return data.registered_vips === null ? "unknown: Your VIPs couldn't be read" : data.shared_vip?.ip || "not configured";
+}
+
 function networkVipsHtml(data) {
+  if (data.registered_vips === null) return `${networkProblemsHtml(data)}
+    <section class="vip-section" aria-label="Workload VIPs">
+    ${UI.callout("warn", "Couldn't read Your VIPs", `${esc(data.vips_unread || "")} · the saved VIPs and the default workload VIP are not known, so no address is offered as free until they can be read.`)}
+    </section>
+    <div id="selfAddress">${STATE.data.selfAddress ? selfAddressHtml(STATE.data.selfAddress, data) : ""}</div>`;
   return `${networkProblemsHtml(data)}
     <section class="vip-section" aria-label="Workload VIPs">
-    <div class="vip-section-heading"><p class="dim small">A saved VIP is advertised once a workload's Service requests it. <b>Default:</b> <span class="mono">${esc(data.shared_vip?.ip || "not configured")}</span> · several workloads can share it on different ports; changing it does not move existing services.</p>
+    <div class="vip-section-heading"><p class="dim small">A saved VIP is advertised once a workload's Service requests it. <b>Default:</b> <span class="mono">${esc(networkDefaultVip(data))}</span> · several workloads can share it on different ports; changing it does not move existing services.</p>
 </div>
     ${(data.registered_vips || []).length ? "" : `<ol class="vip-steps"><li><b>1 · Add an address</b><span>Reserve an unused address outside DHCP, then save it here.</span></li>
       <li><b>2 · Choose a default</b><span>Use <b>Make default</b> for the address suggested to new workloads.</span></li>

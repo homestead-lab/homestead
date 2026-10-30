@@ -13,6 +13,9 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_impact as IMPACT
+import homestead_kube as K
+import homestead_network_inventory as INV
+import homestead_vip_registry as REG
 from test_page_snapshot import Cluster, clean_cache, clean_snapshot, setUpModule  # noqa: F401 (restart record off)
 
 RAW_VMS = "/apis/kubevirt.io/v1/virtualmachines"
@@ -66,6 +69,69 @@ class NodeImpactTests(unittest.TestCase):
         p = self.NODES.node_impact("node-a")
         self.assertIsNone(p["counts"]["addresses"])
         self.assertIn(IMPACT.ADDRESSES_UNREAD, p["unread"])
+
+
+
+class YourVipsTests(unittest.TestCase):
+    """Network > Your VIPs, the default workload VIP and what may be offered as
+    free all come from the VIP registry ConfigMap."""
+    def setUp(self):
+        clean_cache(self)
+        clean_snapshot(self)
+        self.cluster = Cluster(self)
+        self.NETWORK = self.cluster.server.NETWORK
+        # Other test files bind the networking modules to fakes of their own
+        # and leave them so: read through this cluster.
+        import homestead_network_state as STATE
+        for name, value in (("kget", K.kget), ("ksend", K.ksend)):
+            self.enterContext(mock.patch.object(STATE, name, value))
+
+    def break_registry(self, how="timeout"):
+        """A registry read that times out (it used to read as no VIPs) or
+        answers 500 (it used to fail the whole Network page and Dashboard)."""
+        if how == "500":
+            self.cluster.kube.fail(REG._vip_map_path(), 500, times=999)
+            return
+
+        def timeout(method, path, body):
+            raise TimeoutError("timed out")
+        self.cluster.kube.react("GET", REG._vip_map_path(), timeout)
+
+    def test_no_registry_at_all_is_no_vips(self):
+        self.assertEqual([], REG.registered())
+        self.assertEqual([], self.NETWORK.inventory()["registered_vips"])
+
+    def test_a_registry_that_cannot_be_read_raises_never_empty(self):
+        self.break_registry()
+        with self.assertRaisesRegex(RuntimeError, "Your VIPs could not be read"):
+            REG.registered()
+
+    def test_the_default_vip_is_not_the_shared_fallback_when_the_registry_is_unread(self):
+        self.break_registry()
+        with self.assertRaisesRegex(RuntimeError, "Your VIPs could not be read"):
+            REG.shared_vip()
+
+    def test_the_inventory_names_the_registry_unread_and_offers_no_default(self):
+        for how in ("timeout", "500"):
+            with self.subTest(how=how):
+                clean_cache(self)
+                self.cluster.kube._failures.clear()
+                self.cluster.kube._reactions.clear()
+                self.break_registry(how)
+                inv = self.NETWORK.inventory()
+                self.assertIsNone(inv["registered_vips"])
+                self.assertIsNone(inv["shared_vip"]["ip"])
+                self.assertIn(REG.UNREAD, inv["unread"])
+                self.assertIn("Your VIPs could not be read", inv["vips_unread"])
+
+    def test_an_address_is_not_offered_or_accepted_while_the_registry_is_unread(self):
+        self.break_registry()
+        inv = self.NETWORK.inventory()
+        self.assertIn("could not read", INV.address_problem("192.0.2.200", inv))
+
+    def test_the_overview_still_answers_without_a_vip_when_the_registry_is_unread(self):
+        self.break_registry()
+        self.assertIsNone(self.cluster.route("ov")["lb_ip"])
 
 
 if __name__ == "__main__":

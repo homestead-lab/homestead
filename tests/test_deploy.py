@@ -11,6 +11,9 @@ import server
 import homestead_deploy_manifests as MANIFESTS
 import homestead_deploy_appstore as APPSTORE
 
+# No VIP registry saved: these build manifests without a cluster to read it from.
+NO_REGISTRY = lambda: mock.patch("homestead_vip_registry.registered", return_value=[])
+
 
 class AppStoreTemplateTests(unittest.TestCase):
     def test_category_shapes_are_normalized(self):
@@ -306,6 +309,7 @@ class SidecarDeploymentTests(unittest.TestCase):
         self.features = mock.patch.object(server.HW, "features", return_value=[])
         self.features.start()
         self.addCleanup(self.features.stop)
+        self.enterContext(NO_REGISTRY())
         self.current = {
             "apiVersion": "apps/v1", "kind": "Deployment",
             "metadata": {"name": "media", "namespace": "lab", "resourceVersion": "7"},
@@ -408,7 +412,7 @@ class NewWorkloadNamingTests(unittest.TestCase):
         cfg = {"name": "legacy", "workload_name": "camera-stack", "container_name": "frigate",
                "image": "example/frigate", "namespace": "lab", "ports": [{"container": 5000,
                "host": 5000, "protocol": "TCP", "expose": True}], "volumes": [], "hardware": []}
-        with mock.patch.object(server.HW, "features", return_value=[]):
+        with mock.patch.object(server.HW, "features", return_value=[]), NO_REGISTRY():
             deployment, service = MANIFESTS.build_deployment(cfg)
         self.assertEqual("camera-stack", deployment["metadata"]["name"])
         self.assertEqual("frigate", deployment["spec"]["template"]["spec"]["containers"][0]["name"])
