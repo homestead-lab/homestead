@@ -57,16 +57,28 @@ ALLOWED = {
     ("outage", "*"): "the outage loop's state file in the data dir",
     ("rootguard", "*"): "the root-disk guard's state file in the data dir",
     ("schedules", "*"): "scheduled stop/start results, from the data dir",
-    ("updates", "*"): "the last update report, in memory; registries, not the cluster",
+    ("updates", "*"): "the last update report, in memory, which here lists no update. Its scan reads the "
+                      "cluster's Deployments, but a failed read raises and the last report is kept, so "
+                      "a failed read clears nothing",
     ("uptime", "*"): "the uptime monitors' state, in memory",
     # A read that fails but that the source's alerts do not use.
     ("platform", "Longhorn"): "the cluster inventory reads Longhorn, but only its Harvester version is "
                               "used, and the upgrades are read from Harvester, which still works",
     ("platform", "KubeVirt"): "as for Longhorn: the inventory's VM reads are not used",
     # Still clears on a failed read: what fixes it.
-    ("platform", "every read"): "no issue yet (sweep unknown-as-fine row 16): homestead_upgrades.upgrades() "
-                                "answers [] when Harvester's upgrades can't be read, so its upgrade events "
-                                "leave the bell and fire again once the read works",
+    ("platform", "every read"): "#TBD-upgrades-unread: homestead_upgrades.upgrades() and offered() answer [] "
+                                "on any failed read, so upgrade_facts drops the platform:* events and they "
+                                "fire again once the read works",
+}
+
+# Sources that answer None on the healthy fake cluster too, and why. Such a
+# source holds its test alert whatever its code does, so it is not tested
+# here. A ratchet: only remove entries.
+NO_HEALTHY_ANSWER = {
+    # Log alerts are read on their own thread (LOGALERTS.run, started by the
+    # loop and stopped here: it reads pod logs on a real clock); the loop only
+    # takes its last round, None until there is a recent one.
+    "logs": "its last round, from its own thread, which this test does not run",
 }
 
 FAILURES = {
@@ -115,6 +127,9 @@ class UnreadNeverClearsTests(unittest.TestCase):
             for attr, value in (("kget", K.kget), ("ksend", K.ksend)):
                 if callable(getattr(module, attr, None)) and getattr(module, attr) is not value:
                     self.enterContext(mock.patch.object(module, attr, value))
+        # Modules that keep their reader in a _bound table.
+        for module in (self.cluster.server.HOUSEKEEPING, self.cluster.server.OUTAGE):
+            self.enterContext(mock.patch.dict(module._bound, {"kget": K.kget}))
         # Nothing reaches a real API server, whatever goes round transport.
         self.enterContext(mock.patch.object(K, "_request", side_effect=OSError("no API server in the tests")))
         directory = tempfile.TemporaryDirectory()
@@ -140,7 +155,14 @@ class UnreadNeverClearsTests(unittest.TestCase):
         self.enterContext(mock.patch.object(K, "transport", transport))
 
     def _source_reading(self):
-        """The alert source whose take() this read is under."""
+        """The alert source whose take() this read is under.
+
+        Limits: it looks at this thread's stack only, so a read on another
+        thread counts for no source; a value another source already put in
+        the cache under the same key (cached("network", ...)) is read once, by
+        whichever source asks first; and the cache runs on real time, so
+        within one loop run a cached answer is served again and only its
+        first read is seen. break_reads() empties the caches for that."""
         frame = sys._getframe(2)
         while frame and not (frame.f_code.co_name == "take" and frame.f_globals is vars(self.OV)):
             frame = frame.f_back
@@ -172,10 +194,20 @@ class UnreadNeverClearsTests(unittest.TestCase):
         node["status"]["diskStatus"]["d1"]["conditions"] = [{"type": "Ready", "status": "False", "message": "gone"}]
         kube.add(node)
 
+    def check_healthy_answers(self):
+        """Every source answers on the healthy cluster, or is named in
+        NO_HEALTHY_ANSWER: one that answers None holds its alerts anyway."""
+        with mock.patch("builtins.print"):
+            answers = self.OV._alert_sources()
+        self.assertEqual(sorted(NO_HEALTHY_ANSWER), sorted(s for s, facts in answers.items() if facts is None),
+                         "sources that answer None on the healthy cluster (take one that answers now off "
+                         "NO_HEALTHY_ANSWER)")
+
     def cleared_while_unread(self, which):
         """{source: open alerts that cleared}, and the sources that tried a read."""
         self.add_problems()
         self.run_loop(ALERTS.HOLD // 20 + 2)
+        self.check_healthy_answers()
         self.break_reads(which)
         with mock.patch("builtins.print"):
             answers = self.OV._alert_sources()
@@ -212,7 +244,7 @@ class UnreadNeverClearsTests(unittest.TestCase):
     def test_the_loop_has_its_sources(self):
         sources = set(self.OV._alert_sources())
         self.assertGreater(len(sources), 20)
-        for name, _ in ALLOWED:
+        for name in (*(n for n, _ in ALLOWED), *NO_HEALTHY_ANSWER):
             self.assertIn(name, sources, f"{name} is no longer an alert source: take it off the list")
 
     def check(self, label):
