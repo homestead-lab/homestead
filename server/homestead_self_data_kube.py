@@ -7,6 +7,7 @@ also indirectly access namespace credentials. Do not describe this as isolation
 from a malicious coordinator. Setup/cleanup still belongs to the reviewed app.
 """
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -25,6 +26,13 @@ ORIGIN = (f"https://[{_HOST}]:{_PORT}" if ":" in _HOST else f"https://{_HOST}:{_
 TOKEN = "/var/run/homestead-handoff/token"
 CA = "/var/run/homestead-handoff/ca.crt"
 NAME = r"[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?"
+
+
+class Unavailable(Held):
+    """The API did not answer (timeout, refused or reset connection, TLS
+    failure). Still a hold for every caller; the worker alone retries the
+    next tick from its durable record, for a bounded time."""
+    transient = True
 
 
 class Scope:
@@ -174,6 +182,8 @@ class Client:
             raise urllib.error.HTTPError(path, code, "Kubernetes request returned an error", {}, None) from None
         except Held:
             raise
+        except (OSError, http.client.HTTPException):
+            raise Unavailable("The Kubernetes API did not answer. No request was retried") from None
         except Exception:
             raise Held("The Kubernetes reply could not be verified. No request was retried") from None
 

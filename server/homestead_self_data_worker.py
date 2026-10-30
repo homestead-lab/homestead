@@ -7,10 +7,12 @@ the final review, writer drain and durable local publication.
 """
 import hashlib
 import hmac
+import http.client
 import json
 import re
 import threading
 import time
+import urllib.error
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -34,6 +36,27 @@ DESCRIPTIONS = {
     "start": "Waiting for every Homestead replica to start on the new volume.",
     "done": "Homestead is ready on the new volume. The original volume is retained.",
 }
+
+# How long the Kubernetes API may stay unreachable before the move holds. An
+# API restart or a timeout is retried on the next tick from the durable record;
+# a write whose outcome is unknown still holds at once (its journal says so).
+OUTAGE_LIMIT = 300
+TRANSIENT_CODES = (429, 500, 502, 503, 504)
+
+
+def transient(error):
+    """Whether error, or what it was raised from, is the API not answering:
+    a timeout, a refused or reset connection, or a 429/5xx reply. A refusal
+    (403, 404, 409, 422) and every safety check's own Held are not."""
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error, urllib.error.HTTPError):
+            return error.code in TRANSIENT_CODES
+        if getattr(error, "transient", False) is True or isinstance(error, (OSError, http.client.HTTPException)):
+            return True
+        error = error.__cause__ or error.__context__
+    return False
 
 
 def unavailable_status(operation):
@@ -107,6 +130,7 @@ class Runner:
         self.lock = threading.Lock()
         self.hold = None
         self.held_recovery = None
+        self.outage_since = None
         self._maintenance_active = False
 
     def maintenance_ready(self):
@@ -129,6 +153,8 @@ class Runner:
             view = progress(self._load(), self.clock())
             if self.hold:
                 view.update(status="held", message=self.hold, requires_review=True)
+            elif self.outage_since is not None and view["status"] != "done":
+                view.update(message="The Kubernetes API is not answering; the move retries it and repeats no request. " + view["message"])
             return view
         except Exception:
             return unavailable_status(self.operation)
@@ -190,15 +216,43 @@ class Runner:
                 result = engine.step()
                 anchor.report(self.worker_uid, int(self.clock()),
                               "done" if result["phase"] == "done" else "running", result["message"])
+                self.outage_since = None
             except Held as error:
-                self.hold = str(error) if 0 < len(str(error)) <= 512 and all(ord(c) >= 32 for c in str(error)) else "The data move needs a recovery review before continuing."
-                self._save_hold()
-            except Exception:
-                self.hold = "The data move worker could not verify its next step. Both volumes are retained; review before continuing."
-                self._save_hold()
+                if not self._retry_later(error):
+                    self.hold = str(error) if 0 < len(str(error)) <= 512 and all(ord(c) >= 32 for c in str(error)) else "The data move needs a recovery review before continuing."
+                    self._save_hold()
+            except Exception as error:
+                if not self._retry_later(error):
+                    self.hold = "The data move worker could not verify its next step. Both volumes are retained; review before continuing."
+                    self._save_hold()
             return self.snapshot()
         finally:
             self.lock.release()
+
+    def _retry_later(self, error):
+        """True when this tick failed only because the API did not answer.
+
+        The next tick starts again from the durable record, as every tick
+        does, so nothing is repeated: a write the API may have applied is in
+        the journal as uncertain, and that holds at once. An outage longer
+        than OUTAGE_LIMIT holds too, saying so."""
+        if not transient(error):
+            return False
+        try:
+            writes = self._load().state["journal"]["ref"]["storage_writes"]
+            if any(e["state"] != "accepted" for e in writes):
+                return False
+        except Exception:
+            pass  # still unreachable; the journal is read again next tick
+        now = self.clock()
+        if self.outage_since is None:
+            self.outage_since = now
+        if now - self.outage_since < OUTAGE_LIMIT:
+            return True
+        self.hold = (f"The Kubernetes API did not answer for {OUTAGE_LIMIT // 60} minutes, so the move stopped here. "
+                     "Both volumes are retained; review the move before continuing.")
+        self._save_hold()
+        return True
 
     def run(self, stop, interval=5):
         """Bounded ticks; Event.wait allows immediate worker shutdown."""
