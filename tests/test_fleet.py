@@ -631,3 +631,56 @@ class MemberAnswerBoundTests(unittest.TestCase):
             view = a.fleet.summary()
         self.assertLess(time.monotonic() - started, 0.55, "joined one after another")
         self.assertEqual(3, len(view["members"]))
+
+
+class SummaryStragglerTests(unittest.TestCase):
+    """Members checked after a newer list was brought in were asked one by one
+    on the request thread; a member whose check still runs was asked again."""
+
+    def setUp(self):
+        self.a = Cluster("loft", "https://10.0.0.1:8088", {})
+        self.b = Cluster("shed", "https://10.0.0.2:8088", {})
+        self.c = Cluster("garage", "https://10.0.0.3:8088", {})
+        wire([self.a, self.b, self.c])
+        self.release = threading.Event()
+        self.addCleanup(self.release.set)
+
+    def slow_for(self, fleet, slow_ids):
+        real, asked = fleet.check, []
+
+        def check(target):
+            asked.append(target["id"])
+            if target["id"] in slow_ids:
+                self.release.wait(5)
+                return {"at": time.time(), "reachable": True, "version": "late", "name": target.get("name"),
+                        "revision": 0, "protocol": 0, "error": ""}
+            return real(target)
+        return check, asked
+
+    def test_members_brought_in_by_a_newer_list_share_the_same_wait(self):
+        self.a.fleet.join(self.b.url, "admin", "secret")
+        self.b.down = True
+        self.a.fleet.join(self.c.url, "admin", "secret")
+        self.b.down = False
+        self.b.fleet._status.clear()
+        garage = self.c.fleet.self_id()
+        check, _ = self.slow_for(self.b.fleet, {garage})
+        started = time.monotonic()
+        with mock.patch.object(self.b.fleet, "check", check), mock.patch.object(self.b.fleet, "SUMMARY_WAIT", 0.3):
+            view = self.b.fleet.summary()
+        self.assertLess(time.monotonic() - started, 1.5, "the newcomer was asked on the request thread")
+        row = next(m for m in view["members"] if m["id"] == garage)
+        self.assertEqual((True, "still checking"), (row["checking"], row["error"]))
+
+    def test_a_check_still_running_is_not_started_again(self):
+        self.a.fleet.join(self.b.url, "admin", "secret")
+        shed = self.b.fleet.self_id()
+        check, asked = self.slow_for(self.a.fleet, {shed})
+        with mock.patch.object(self.a.fleet, "check", check), mock.patch.object(self.a.fleet, "SUMMARY_WAIT", 0.1):
+            first = self.a.fleet.summary()
+            second = self.a.fleet.summary()
+        self.assertEqual(1, asked.count(shed))
+        for view in (first, second):
+            row = next(m for m in view["members"] if m["id"] == shed)
+            self.assertTrue(row["checking"])
+        self.release.set()
