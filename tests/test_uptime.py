@@ -280,6 +280,117 @@ class StateTests(Base):
         self.assertEqual(1, len(UP._state["apps"]["lab/sonarr"]["hours"]))
 
 
+
+def _reference_summary(app, now):
+    """summary() as it was before #979: thirty passes over the hours, one a day."""
+    hours = app.get("hours", {})
+    this = UP._hour(now)
+    strip = []
+    for i in range(UP.STRIP_HOURS - 1, -1, -1):
+        row = hours.get(str(this - i * 3600))
+        strip.append(None if not row or not row[0] else "down" if row[1] else "slow" if row[2] * 2 >= row[0] else "up")
+
+    def share(rows):
+        checks = sum(r[0] for r in rows)
+        return None if not checks else round(100 * (checks - sum(r[1] for r in rows)) / checks, 2)
+
+    today = int(now // 86400 * 86400)
+    days = []
+    for i in range(29, -1, -1):
+        start = today - i * 86400
+        rows = [v for h, v in hours.items() if start <= int(h) < start + 86400]
+        checks, misses, slow = (sum(r[k] for r in rows) for k in range(3))
+        days.append(None if not checks else "down" if misses * 10 >= checks else "slow" if slow * 2 >= checks
+                    else "dip" if misses else "up")
+    recent = [v for h, v in hours.items() if int(h) > this - UP.STRIP_HOURS * 3600]
+    state = app.get("state", "unknown")
+    last = app.get("last") or {}
+    if state == "up" and last.get("ms") and last["ms"] > UP.SLOW_MS:
+        state = "slow"
+    return {"state": state, "since": app.get("since"), "why": app.get("why", ""), "target": app.get("target", ""),
+            "port": app.get("port"),
+            "last": last, "strip": strip, "days": days, "uptime_24h": share(recent), "uptime_30d": share(list(hours.values()))}
+
+
+def _random_hours(rnd, now):
+    """A month and more of hours: gaps, misses, slow answers, empty rows, an
+    hour from the future, and now and then a key or count no check writes."""
+    this = UP._hour(now)
+    hours = {}
+    for back in range(rnd.choice((24, 400, 760)), -3, -1):
+        if rnd.random() < 0.15 or (back < 0 and rnd.random() < 0.7):
+            continue
+        checks = rnd.choice((60, 60, 60, 12, 1, 0))
+        hours[str(this - back * 3600)] = [checks, rnd.choice((0, 0, 0, 1, 6, checks)) if checks else 0,
+                                          rnd.choice((0, 0, 1, 40)) if checks else 0]
+    if rnd.random() < 0.2:
+        hours[str(this - rnd.randint(0, 40 * 86400))] = [3, 1, 0]          # not on the hour
+    if rnd.random() < 0.2:
+        hours[str(this - 5 * 86400)] = [7.0, 0.5, 0]                        # counts as floats
+    return dict(rnd.sample(sorted(hours.items()), len(hours)))
+
+
+class ReportTests(Base):
+    """#979: closed days are kept, so a report adds up only today; what it says
+    is exactly what adding up every hour said."""
+
+    def test_summary_matches_the_full_computation_on_varied_histories(self):
+        import random
+        rnd = random.Random(979)
+        for case in range(300):
+            now = 1_790_000_000 + rnd.randint(0, 86400 * 3) + rnd.random()
+            app = {"state": rnd.choice(("up", "down", "off")), "hours": _random_hours(rnd, now),
+                   "last": {"ms": rnd.choice((40, 3000))}}
+            with self.subTest(case=case):
+                self.assertEqual(_reference_summary(app, now), UP.summary(app, now))
+
+    def test_report_matches_through_days_prunes_reloads_and_a_clock_set_back(self):
+        import random
+        rnd = random.Random(981)
+        start = 1_790_000_000 - 1_790_000_000 % 86400 + 22 * 3600     # two hours before midnight
+        names = [f"app-{i}" for i in range(4)]
+        loaded = {f"lab/{n}": {"state": "up", "since": start - 86400, "hours": _random_hours(rnd, start)}
+                  for n in names[:3]}
+        Path(self.dir.name, "uptime.json").write_text(__import__("json").dumps({"format": 1, "apps": loaded}))
+        now = peak = start
+        # Past midnight, hour by hour to the next, then the clock set back over
+        # midnight (a round writes into a closed day), then two days ahead.
+        steps = [60] * 15 + [3600] * 28 + [-4 * 3600] + [60] * 5 + [86400 * 2] + [60] * 3
+        for i, step in enumerate(steps):
+            now += step
+            peak = max(peak, now)
+            UP.observe([app(n, port=8000 + k) for k, n in enumerate(names)], now=now,
+                       ask=lambda t: rnd.choice((OK, OK, OK, MISS, SLOW)))
+            if i == 10:
+                saved = Path(self.dir.name, "uptime.json").read_text()
+                UP.bind(self.dir.name)                     # another replica's view of the file
+                Path(self.dir.name, "uptime.json").write_text(saved)
+            for at in (now, now + 30, now - 4000, peak):
+                got = UP.report(at)
+                with self.subTest(step=i, at=at):
+                    self.assertEqual({k: _reference_summary(a, at) for k, a in UP._state["apps"].items()}, got)
+
+    def test_reports_between_rounds_are_several_times_quicker(self):
+        import random, time
+        rnd = random.Random(7)
+        now = 1_790_000_000 + 13 * 3600
+        this = UP._hour(now)
+        apps = {f"lab/app-{i}": {"state": "up", "hours": {str(this - h * 3600): [60, 0 if rnd.random() > 0.03 else 5, 0]
+                                                          for h in range(720)}} for i in range(100)}
+        UP._state.update(loaded=True, apps=apps, observed_at=time.time())
+        UP.report(now)
+        started = time.process_time()
+        want = {k: _reference_summary(a, now) for k, a in apps.items()}
+        before = time.process_time() - started
+        started = time.process_time()
+        for _ in range(3):
+            got = UP.report(now + 20)
+        after = (time.process_time() - started) / 3
+        self.assertEqual(want, got)
+        # Relative, so a busy machine slows both alike: 200 apps took 481 ms before #979.
+        # A generous ratio: about 100 times, so a loaded runner never trips it.
+        self.assertLess(after * 5, before, f"{after:.4f} s a report against {before:.4f} s before #979")
+
 class WriteTests(Base):
     def test_quiet_minutes_write_at_most_every_five_minutes(self):
         start = 7200 + 60

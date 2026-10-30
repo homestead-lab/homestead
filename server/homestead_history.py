@@ -15,6 +15,7 @@ Deliberately small - a few hundred kilobytes at most. It answers "was it busy
 last week?" and "has node2 been dropping out?"; anything deeper is what
 Harvester's own monitoring (Prometheus and Grafana) is for.
 """
+import bisect
 import os
 import time
 
@@ -357,20 +358,77 @@ def series(range_name="24h", now=None):
 WINDOWS = (("24h", 86400), ("7d", 7 * 86400), ("30d", 30 * 86400), ("90d", 90 * 86400))
 
 
-def _ready_rows(data, name):
-    """(start, seconds, share of it Ready) for the node, oldest first: hours
-    before the fine samples begin, then the fine samples."""
-    fine = [(r["t"], STEP, r["nodes"][name][2]) for r in data["fine"] if name in (r.get("nodes") or {})]
-    first_fine = fine[0][0] if fine else float("inf")
-    coarse = [(r["t"], 3600, r["nodes"][name][2]) for r in data["coarse"]
-              if name in (r.get("nodes") or {}) and r["t"] + 3600 <= first_fine]
-    return coarse + fine
+def _ready_rows(data):
+    """Per node, (start, seconds, share of it Ready), oldest first: hours
+    before the fine samples begin, then the fine samples. One walk over the
+    samples for every node, not one each (#979)."""
+    fine, coarse = {}, {}
+    for r in data["fine"]:
+        for name, row in (r.get("nodes") or {}).items():
+            fine.setdefault(name, []).append((r["t"], STEP, row[2]))
+    for r in data["coarse"]:
+        for name, row in (r.get("nodes") or {}).items():
+            coarse.setdefault(name, []).append((r["t"], row))
+    out = {}
+    for name in set(fine) | set(coarse):
+        first_fine = fine[name][0][0] if name in fine else float("inf")
+        out[name] = [(t, 3600, row[2]) for t, row in coarse.get(name, ()) if t + 3600 <= first_fine] + fine.get(name, [])
+    return out
 
 
 def _share(rows, since):
-    rows = [(row[0], row[1], row[2]) for row in rows if row[0] + row[1] > since]
-    total = sum(span for _, span, _ in rows)
-    return round(100 * sum(span * up for _, span, up in rows) / total, 3) if total else None
+    # Lists, not generators, into sum(): the same values in the same order, so
+    # the same total, for less work (#979).
+    rows = [row for row in rows if row[0] + row[1] > since]
+    total = sum([row[1] for row in rows])
+    return round(100 * sum([row[1] * row[2] for row in rows]) / total, 3) if total else None
+
+
+DAY = 86400
+
+
+def _in_order(rows):
+    """The rows' starts, ends, lengths and seconds up, when the starts and ends
+    both ascend, as recorded rows do; otherwise None."""
+    starts, ends = [row[0] for row in rows], [row[0] + row[1] for row in rows]
+    if starts != sorted(starts) or ends != sorted(ends):
+        return None
+    return starts, ends, [row[1] for row in rows], [row[1] * row[2] for row in rows]
+
+
+def _tail(order, lo, hi):
+    """_share of rows[lo:hi] from their lengths and seconds up: the same values
+    in the same order into sum(), so the same figure."""
+    total = sum(order[2][lo:hi])
+    return round(100 * sum(order[3][lo:hi]) / total, 3) if total else None
+
+
+def _windows(rows, now, order):
+    """_share of each window. Rows in order make each window a tail of them,
+    found by bisection (#979)."""
+    if order is None:
+        return {label: _share(rows, now - span) for label, span in WINDOWS}
+    return {label: _tail(order, bisect.bisect_right(order[1], now - span), len(rows)) for label, span in WINDOWS}
+
+
+def _days(rows, first, order, count=90):
+    """_share for each of count days from first (#979). A row counts in every
+    day it overlaps, in its order, so each day says exactly what filtering
+    every row for it said. Rows in order make a day a slice of them, found by
+    bisection; others are sorted into their days one by one."""
+    if order is not None:
+        starts, ends = order[0], order[1]
+        return [_tail(order, bisect.bisect_right(ends, first + k * DAY), bisect.bisect_left(starts, first + (k + 1) * DAY))
+                for k in range(count)]
+    days = [[] for _ in range(count)]
+    for row in rows:
+        t, span = row[0], row[1]
+        k = max(0, int((t - first) // DAY) - 1)
+        while k < count and first + k * DAY < t + span:
+            if t < first + (k + 1) * DAY:
+                days[k].append(row)
+            k += 1
+    return [_share(days[k], first + k * DAY) for k in range(count)]
 
 
 def _spans(events, now):
@@ -392,7 +450,13 @@ def _pieces(rows, spans):
     and an hour's row only how long, so a row's downtime goes to the
     maintenance it overlaps first, with one sample's slack at each edge."""
     out = []
+    ends = [b for _, b, _ in spans]     # merged spans: their ends ascend
     for t, span, up in rows:
+        i = bisect.bisect_right(ends, t)
+        if span and not (i < len(spans) and spans[i][0] < t + span):
+            down = span * (1 - up)     # outside maintenance: the row as it is (#979)
+            out.append((t, span, down * span / span, None, span))
+            continue
         cuts = {t, t + span}
         for a, b, _ in spans:
             if a < t + span and b > t:
@@ -441,25 +505,24 @@ def uptime(now=None):
     """Per node: time up in each window, its days, its outages and reboots."""
     now = int(now or time.time())
     data = _read()
-    names = sorted({n for r in data["fine"] + data["coarse"] for n in (r.get("nodes") or {})})
     out = {}
     maintenance = _expire(data["maintenance"], now)
-    for name in names:
-        rows = _ready_rows(data, name)
+    ready = _ready_rows(data)
+    first = now - now % DAY - 89 * DAY
+    for name in sorted(ready):
+        rows = ready[name]
         events = [e for e in maintenance if e["node"] == name]
         spans = _spans(events, now)
         pieces = _pieces(rows, spans)
         outside = [(t, length, 1 - down / length) for t, length, down, reason, _ in pieces if reason is None and length]
-        days = []
-        for back in range(89, -1, -1):
-            start = now - now % 86400 - back * 86400
-            share = _share([(t, span, up) for t, span, up in rows if t < start + 86400], start)
-            days.append({"day": start, "up": share,
-                         "up_excluding_maintenance": _share([p for p in outside if p[0] < start + 86400], start),
-                         "maintenance": any(a < start + 86400 and b > start for a, b, _ in spans)})
+        order, order_outside = _in_order(rows), _in_order(outside)
+        up, excluding = _days(rows, first, order), _days(outside, first, order_outside)
+        days = [{"day": first + k * DAY, "up": up[k], "up_excluding_maintenance": excluding[k],
+                 "maintenance": any(a < first + (k + 1) * DAY and b > first + k * DAY for a, b, _ in spans)}
+                for k in range(90)]
         planned = lambda t: any(a <= t <= b + STEP for a, b, _ in spans)
-        out[name] = {"windows": {label: _share(rows, now - span) for label, span in WINDOWS},
-                     "windows_excluding_maintenance": {label: _share(outside, now - span) for label, span in WINDOWS},
+        out[name] = {"windows": _windows(rows, now, order),
+                     "windows_excluding_maintenance": _windows(outside, now, order_outside),
                      "maintenance_s": {label: _covered(spans, now - span, now) for label, span in WINDOWS},
                      "days": days, "outages": _outages(pieces, now)[-50:],
                      "reboots": [{"t": e["t"], "planned": planned(e["t"])} for e in data.get("events") or []
