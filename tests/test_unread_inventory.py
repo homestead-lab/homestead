@@ -211,6 +211,11 @@ class ServicesTests(unittest.TestCase):
         port = form["containers"][0]["ports"][0]
         self.assertEqual((True, 80), (port["expose"], port["host"]))
 
+    def test_a_namespace_listing_no_services_404_is_none_not_unread(self):
+        self.cluster.kube.fail("/api/v1/namespaces/lab/services", 404, times=999)
+        form = self.WL.edit_form(type("R", (), {"query": {"ns": ["lab"], "name": ["web"]}, "role": "admin"})())
+        self.assertFalse(form["containers"][0]["ports"][0]["expose"])
+
     def test_edit_refuses_to_open_when_services_are_unread(self):
         # Opened with every port unexposed, its save would delete the Service
         # (sync_workload_ports removes one with no exposed port left).
@@ -310,6 +315,10 @@ class MoveSourceServicesTests(unittest.TestCase):
 
     def test_read_services_are_found(self):
         self.assertEqual(["web"], [s["metadata"]["name"] for s in MOVE_SOURCE._services_for({"app": "web"})])
+
+    def test_a_404_listing_the_services_is_none(self):
+        self.kube.fail("/api/v1/namespaces/lab/services", 404, times=999)
+        self.assertEqual([], MOVE_SOURCE._services_for({"app": "web"}))
 
     def test_unread_services_refuse_never_none(self):
         self.kube.fail("/api/v1/namespaces/lab/services", 500, times=999)

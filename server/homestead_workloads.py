@@ -361,6 +361,10 @@ def get_workloads(pods=None):
     pm = {(m["metadata"]["namespace"], m["metadata"]["name"]): m for m in usage}
     try:
         svcs = kget("/api/v1/services").get("items", [])
+    except urllib.error.HTTPError as error:
+        svcs = [] if error.code == 404 else None
+        if svcs is None:
+            print(f"Apps: could not read the Services: {str(error)[:160]}", flush=True)
     except Exception as error:
         # Unread is not "no listeners": each app's ports are then None.
         print(f"Apps: could not read the Services: {str(error)[:160]}", flush=True)
@@ -753,6 +757,11 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
     if services is None:
         try:
             services = kget(f"/api/v1/namespaces/{ns}/services").get("items", [])
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise ValueError(f"{name}'s Services could not be read, so which ports it exposes is not known; "
+                                 f"try again in a moment ({str(error)[:120]})") from error
+            services = []       # a 404 listing a namespace's Services: there are none
         except Exception as error:
             # Opened with no Service, every port would show unexposed, and
             # saving would remove the Service and release its address.

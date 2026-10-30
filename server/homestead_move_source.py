@@ -208,6 +208,11 @@ def _services_for(pod_labels):
     """Services whose selector picks out this workload's pods."""
     try:
         services = KUBE.items(f"/api/v1/namespaces/{_namespace()}/services", read=kget)
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            raise ValueError(f"The Services in {_namespace()} could not be read, so which ones belong to it "
+                             f"is not known; nothing was changed. Try again in a moment ({str(error)[:120]})") from error
+        services = []           # a 404 listing a namespace's Services: there are none
     except Exception as error:
         # Unread is not "no Service": the move would arrive without one, and
         # the source cleanup would leave its Service behind.
