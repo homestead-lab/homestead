@@ -1,6 +1,7 @@
 """Moving containers so hosts carry similar CPU and memory - the fewest moves
 worth a restart, each one vetoable, one at a time. On the shared fake API
 (tests/fakes/kube.py)."""
+import copy
 import sys
 import tempfile
 import time
@@ -400,6 +401,24 @@ class JobTests(unittest.TestCase):
             clear.assert_called_once_with(["pull-1"])
             C.status(self.item)
         self.assertEqual([("frigate", "k1")], self.c.moved)
+
+    def test_cancel_while_pulling_stops_the_pulls(self):
+        """The pulls are cleared when their stage ends; a cancel ends it too,
+        or the pre-pull DaemonSets would pull on for ever."""
+        import homestead_host_move as HOST_MOVE
+        for stop_on_failure in (False, True):
+            with self.subTest(stop_on_failure=stop_on_failure):
+                item = copy.deepcopy(self.item)
+                item["ref"]["stop_on_failure"] = stop_on_failure
+                with mock.patch.object(C, "_pull_first", return_value=(["pull-1"], ["example/frigate:stable"])), \
+                        mock.patch.object(HOST_MOVE, "_pulled", return_value=False), \
+                        mock.patch.object(HOST_MOVE, "_clear") as clear:
+                    C.status(item)
+                    self.assertEqual("pulling", item["ref"]["stage"])
+                    C.cancel_run(item, {})
+                    clear.assert_called_once_with(["pull-1"])
+                self.assertNotIn("pulls", item["ref"])
+                self.assertEqual([], self.c.moved)
 
     def test_one_that_restarts_on_its_old_host_says_so(self):
         C.status(self.item)

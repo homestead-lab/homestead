@@ -877,6 +877,11 @@ def cancel_plan(item):
 
 def cancel_run(work, chosen):
     ref = work.get("ref") or {}
+    if ref.get("pulls"):
+        # The pulls are cleared when their stage ends; a cancel ends it too,
+        # or the pre-pull DaemonSets would go on pulling for good.
+        import homestead_host_move as HOST_MOVE
+        HOST_MOVE._clear(ref.pop("pulls"))
     if ref.get("stop_on_failure"):
         # The one moving now finishes its restart; the rest are not reached.
         first = ref.get("index", 0) + (1 if ref.get("stage") == "starting" else 0)
