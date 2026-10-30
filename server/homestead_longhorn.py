@@ -210,7 +210,8 @@ def restore_reviewed(b):
             "/volumes?" + urllib.parse.urlencode({"find": result["name"]}),
             {"namespace": result["namespace"], "name": result["name"],
              "backup": result["backup"], "restore_config": b,
-             "restore_started": result["created"]}, result["message"])
+             "restore_started": result["created"],
+             **({"snapshot": result["snapshot"]} if result.get("snapshot") else {})}, result["message"])
     return result
 
 

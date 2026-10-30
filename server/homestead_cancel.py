@@ -301,14 +301,19 @@ def restore_cancel(item, _options):
     made_by = (((claim or {}).get("metadata") or {}).get("annotations") or {}).get("homestead.io/restored-from-backup")
     if claim and ref.get("backup") and made_by != ref["backup"]:
         return f"Restore stopped; {ref['name']} is no longer the claim it made, so it is kept"
+    # This restore's own snapshot only: another restore into the same claim
+    # name may have made its pair and not yet its claim. A job from before
+    # the job kept it names it in the claim it made.
+    snapshot = ref.get("snapshot") or (((claim or {}).get("spec") or {}).get("dataSource") or {}).get("name")
     gone = _delete(path)
     # Its snapshot is removed only once a claim binds: with the claim gone,
-    # this restore's own is removed here (a backup is never touched).
-    try:
-        import homestead_csi_restore as CSI_RESTORE
-        CSI_RESTORE.discard(ref["namespace"], ref["name"])
-    except Exception as error:
-        print(f"Restore metadata cleanup deferred: {error}", flush=True)
+    # it is removed here (a backup is never touched).
+    if snapshot:
+        try:
+            import homestead_csi_restore as CSI_RESTORE
+            CSI_RESTORE.discard(ref["namespace"], ref["name"], snapshot)
+        except Exception as error:
+            print(f"Restore metadata cleanup deferred: {error}", flush=True)
     if tidy_restore:
         try:
             tidy_restore()

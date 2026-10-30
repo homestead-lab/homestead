@@ -195,6 +195,8 @@ def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
             created = RESTORE.restore_backup(cfg)
             if not created["created"]:
                 return "running", 2, created["message"]
+            if created.get("snapshot"):
+                ref["snapshot"] = created["snapshot"]    # what a cancel removes
             ref["restore_started"] = True
     pvc = KUBE.get_optional(f"/api/v1/namespaces/{ref['namespace']}/persistentvolumeclaims/{ref['name']}", read=LH.kget)
     if pvc:

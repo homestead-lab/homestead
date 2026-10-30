@@ -220,10 +220,40 @@ class StoppedRestoreTests(unittest.TestCase):
         import homestead_cancel as CANCEL
         self.add_claim()
         self.enterContext(patch.multiple(CANCEL, kget=KUBE.kget, ksend=KUBE.ksend, tidy_restore=None))
-        item = {"ref": {"namespace": "lab", "name": "example-data", "backup": "backup-a"}}
+        item = {"ref": {"namespace": "lab", "name": "example-data", "backup": "backup-a", "snapshot": self.name}}
         self.assertIn("being deleted", CANCEL.restore_cancel(item, {}))
         self.assertIsNone(self.kube.object(self.claim))
         self.assertTrue(self.gone())
+
+    def test_cancelling_one_restore_keeps_another_restore_of_the_same_claim_name(self):
+        """Restore B made its pair and has not made its claim yet: cancelling
+        restore A removes only A's own pair."""
+        import homestead_cancel as CANCEL
+        other = CSI.import_backup("lab", "example-data", "backup-b", "disk-a", "s3://example/backup-b", "Filesystem",
+                                  "attempt-b")
+        self.add_claim()
+        self.enterContext(patch.multiple(CANCEL, kget=KUBE.kget, ksend=KUBE.ksend, tidy_restore=None))
+        item = {"ref": {"namespace": "lab", "name": "example-data", "backup": "backup-a", "snapshot": self.name}}
+        CANCEL.restore_cancel(item, {})
+        self.assertTrue(self.gone())
+        self.assertIsNotNone(self.kube.object(CSI.API + "/volumesnapshotcontents/" + other))
+        self.assertIsNotNone(self.kube.object(CSI.API + "/namespaces/lab/volumesnapshots/" + other))
+
+    def test_a_job_keeps_the_snapshot_its_restore_made(self):
+        import homestead_longhorn as LONGHORN
+        result = {"name": "example-data", "namespace": "lab", "backup": "backup-a", "created": True,
+                  "snapshot": self.name, "source_size_bytes": 1, "message": "Restore started"}
+        with patch.object(LONGHORN.RESTORE, "restore_plan", return_value={}), \
+                patch.object(LONGHORN.RESTORE, "restore_backup", return_value=dict(result)), \
+                patch.object(LONGHORN.OPS, "start", side_effect=lambda *args: args[4]) as start:
+            LONGHORN.restore_reviewed({"backup": "backup-a", "namespace": "lab", "name": "example-data"})
+        self.assertEqual(self.name, start.call_args.args[4]["snapshot"])
+        item = {"status": "running", "ref": {"namespace": "lab", "name": "example-data",
+                                             "restore_config": {"restore_id": "x"}, "restore_started": False}}
+        with patch.object(server.LH, "restore_backup", return_value=dict(result)), \
+                patch.object(server.LH, "restore_problem", return_value=""):
+            server.STORAGE_ROUTES._restore_then_tidy(item, lambda work: ("running", 30, "Restoring data"))
+        self.assertEqual(self.name, item["ref"]["snapshot"])
 
     def test_cancel_keeps_a_claim_it_did_not_make_and_its_snapshot(self):
         import homestead_cancel as CANCEL
