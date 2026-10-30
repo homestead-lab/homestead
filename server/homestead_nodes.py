@@ -567,8 +567,21 @@ def _one(q, name):
     return (q.get(name) or [""])[0]
 
 
+def _is_host(name):
+    """True when name is a host in the cluster's node list. A route that keeps
+    a read per host checks this first, so a name that is not one keeps
+    nothing and reads nothing."""
+    return bool(name) and any(n.get("name") == name for n in cached("nodes", 5, get_nodes) or [])
+
+
+def _no_host():
+    return ROUTER.Reply(404, {"error": "there is no host by that name"})
+
+
 def _node(request):
     name = _one(request.query, "name")
+    if not _is_host(name):
+        return _no_host()
     return cached("node:" + name, 5, lambda: next((n for n in get_nodes() if n["name"] == name), {}))
 
 
@@ -596,6 +609,8 @@ def _impact(request):
     node = _one(request.query, "node")
     if not node:
         raise ValueError("node is required")
+    if not _is_host(node):
+        return _no_host()
     return cached("impact:" + node, 5, lambda: PLACE.impact(node))
 
 
