@@ -42,7 +42,9 @@ DEVICE_HINTS = {
 
 def bind(_kget, _ksend, _get_nodes, _cache_ref, _hardware_features=None):
     global kget, ksend, get_nodes, _cache, hardware_features
-    kget, ksend, get_nodes, _cache = _kget, _ksend, _get_nodes, _cache_ref
+    # Every read of the hosts here admits or refuses a start, a scale or a
+    # maintenance window: the hosts as they are, not the page's snapshot (#978).
+    kget, ksend, get_nodes, _cache = _kget, _ksend, CACHE.fresh(_get_nodes), _cache_ref
     if _hardware_features:
         hardware_features = _hardware_features
 

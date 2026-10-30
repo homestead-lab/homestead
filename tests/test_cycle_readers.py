@@ -67,12 +67,57 @@ class ShortReadersTests(unittest.TestCase):
         for key in SNAPSHOT_KEYS:
             self.assertIs(self.PAGES.read(key)[1], CACHE.cached(key, 5, boom), key)
 
-    def test_a_part_late_for_its_next_cycle_is_served_as_the_page_serves_it(self):
+    def test_a_part_is_served_to_a_reader_only_within_its_own_bound(self):
         self.cycle()
-        self.clock.now += 25      # the next cycle is late: past PAGE_SECONDS, still fresh
+        part = self.PAGES.read("wl")[1]
+        self.clock.now += 15
+        self.assertIs(part, CACHE.cached("wl", 5, boom), "within PAGE_SECONDS")
+        # Three missed cycles' worth late: the page still shows the part (it
+        # says how old), a reader that keeps 20 s reads for itself.
+        self.clock.now += 10
         self.assertIsNotNone(self.PAGES.read("wl"))
-        self.assertIs(self.PAGES.read("wl")[1], CACHE.cached("wl", 5, boom))
-        self.assertIs(ROUTER.page("wl", boom), CACHE.cached("wl", 5, boom))
+        self.assertIs(part, ROUTER.page("wl", boom))
+        computed = []
+        CACHE.cached("wl", 5, lambda: computed.append(1) or [])
+        self.assertEqual([1], computed)
+
+    def test_a_capacity_check_sees_a_host_that_went_not_ready_since_the_cycle(self):
+        # A start, scale or maintenance preflight (homestead_place) decides
+        # on the hosts as they are, not the snapshot's: its own 5 s.
+        self.cycle()
+        shown = {row["name"]: row["status"] for row in self.PAGES.read("nodes")[1]}
+        node = copy.deepcopy(self.cluster.kube.object("/api/v1/nodes/node-a"))
+        node["status"]["conditions"] = [{"type": "Ready", "status": "False"}]
+        self.cluster.kube.add(node)       # changed outside Homestead: nothing forgets
+        self.clock.now += 6
+        status = {row["name"]: row["status"] for row in self.cluster.server.PLACE.get_nodes()}
+        self.assertNotEqual("Ready", status["node-a"])
+        self.assertEqual("Ready", shown["node-a"], "the snapshot had it Ready")
+
+    def test_a_host_s_impact_preview_reads_the_hosts_fresh(self):
+        NODES = self.cluster.server.NODES
+        self.cycle()
+        self.clock.now += 6
+        built = []
+        real = NODES.get_nodes
+        # The placement half reads its hosts through PLACE (fresh too): left
+        # out, so this counts the preview's own read.
+        with mock.patch.object(NODES, "get_nodes", lambda *a, **k: built.append(1) or real(*a, **k)), \
+                mock.patch.object(NODES.PLACE, "impact", lambda node: None):
+            try:
+                NODES.node_impact("node-a")
+            except Exception:
+                pass                      # only what it read matters here
+        self.assertTrue(built, "the hosts are built for the preview, not taken from the snapshot")
+
+    def test_within_fresh_a_page_key_keeps_only_the_reader_s_time(self):
+        self.cycle()
+        self.clock.now += 6
+        computed = []
+        CACHE.fresh(lambda: CACHE.cached("wl", 5, lambda: computed.append(1) or []))()
+        self.assertEqual([1], computed)
+        # Its read is newer than the part, so it is what the next readers get.
+        self.assertEqual([], CACHE.cached("wl", 5, boom))
 
     def test_with_no_part_a_page_key_is_kept_as_long_as_its_page_keeps_it(self):
         # A standby (no cycle), or vms, which is no part: the VMs page keeps
@@ -193,6 +238,20 @@ class ClusterPageReadsTests(unittest.TestCase):
         self.clock.now += 10
         self.assertEqual(before, self.CLUSTER.inventory()["services"])
         self.assertEqual([], self.cluster.gets("/api/v1/pods"))
+
+    def test_an_unread_pod_list_says_so_and_shows_no_old_services(self):
+        self.PAGES.cycle(self.OV.page_inputs(), self.OV.page_builders())
+        self.clock.now += self.CLUSTER.PODS_SECONDS + 1
+        inner = K.transport
+
+        def no_pods(method, path, *args, **kwargs):
+            if path.split("?", 1)[0] == "/api/v1/pods":
+                raise OSError("connection refused")
+            return inner(method, path, *args, **kwargs)
+        with mock.patch.object(K, "transport", no_pods):
+            report = self.CLUSTER.inventory()
+        self.assertIn("System services", [row["section"] for row in report["unavailable"]])
+        self.assertEqual([0], [row["pods"] for row in report["services"] if row["id"] == "dns"])
 
     def test_a_pod_write_makes_the_cluster_page_list_pods_again(self):
         self.PAGES.cycle(self.OV.page_inputs(), self.OV.page_builders())

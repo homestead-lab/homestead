@@ -16,7 +16,7 @@ UID_PREFIX = {"ReplicaSet": "rs", "StatefulSet": "sts", "DaemonSet": "ds", "Depl
 
 def pod(name="game-6d4f-abcde", uid="pod-1", ns="apps", rs="game-6d4f", hash_="6d4f", restarts=0, last=None,
         images=None, ann=None, node="node-a", created="2026-10-22T08:00:00Z", phase="Running", reason="",
-        limit="512Mi", owner_kind="ReplicaSet"):
+        limit="512Mi", owner_kind="ReplicaSet", rs_uid=None):
     images = images or {"server": "example/server:1"}
     status = {"phase": phase, "containerStatuses": [
         {"name": c, "restartCount": restarts, "image": img, "state": {"running": {}},
@@ -26,7 +26,7 @@ def pod(name="game-6d4f-abcde", uid="pod-1", ns="apps", rs="game-6d4f", hash_="6
     return {"metadata": {"name": name, "uid": uid, "namespace": ns, "creationTimestamp": created,
                          "labels": {"pod-template-hash": hash_}, "annotations": ann or {},
                          "ownerReferences": [{"kind": owner_kind, "name": rs, "controller": True,
-                                              "uid": f"{UID_PREFIX[owner_kind]}-{rs}"}]},
+                                              "uid": rs_uid or f"{UID_PREFIX[owner_kind]}-{rs}"}]},
             "spec": {"nodeName": node, "containers": [
                 {"name": c, "image": img, "resources": {"limits": {"memory": limit}} if limit else {}}
                 for c, img in images.items()]},
@@ -71,11 +71,11 @@ class RestartRecordTests(unittest.TestCase):
 
     def look(self, *pods, now=T0, outage=None):
         self.clock[0] = now
-        names = {(p["metadata"]["namespace"], r["name"]) for p in pods for r in p["metadata"]["ownerReferences"]
+        names = {(p["metadata"]["namespace"], r["name"], r["uid"]) for p in pods for r in p["metadata"]["ownerReferences"]
                  if r["kind"] == "ReplicaSet"}
-        self.rs_items = [{"metadata": {"name": rs, "namespace": ns, "uid": f"rs-{rs}", "ownerReferences": [] if rs in self.bare else [
+        self.rs_items = [{"metadata": {"name": rs, "namespace": ns, "uid": uid, "ownerReferences": [] if rs in self.bare else [
             {"kind": "Deployment", "name": rs.rsplit("-", 1)[0], "controller": True,
-             "uid": self.dep_uids.get(rs.rsplit("-", 1)[0], f"dep-{rs.rsplit('-', 1)[0]}")}]}} for ns, rs in names]
+             "uid": self.dep_uids.get(rs.rsplit("-", 1)[0], f"dep-{rs.rsplit('-', 1)[0]}")}]}} for ns, rs, uid in names]
         return R.observe({"items": [copy.deepcopy(p) for p in pods]}, now=now, read=self.read, tail=self.tail,
                          outage=outage or (lambda: self.outage), sys_ns=frozenset({"kube-system"}))
 
@@ -404,8 +404,9 @@ class RestartRecordTests(unittest.TestCase):
         self.look(pod(restarts=1, last=oom()), now=T0 + 20)
         self.assertEqual(1, len(self.records()))
         self.dep_uids["game"] = "dep-game-2"
-        # The new Deployment makes a ReplicaSet of its own (a new uid).
-        self.look(pod(name="game-7a1b-new", uid="pod-9", rs="game-7a1b", hash_="7a1b",
+        # The new Deployment makes a ReplicaSet of its own: the same name
+        # (the same template hash), a new uid.
+        self.look(pod(name="game-6d4f-new", uid="pod-9", rs_uid="rs-game-6d4f-2",
                       images={"server": "example/server:9"}), now=T0 + 40)
         self.assertEqual([], self.records())
         self.assertEqual(1, len(self.records(uid="dep-game")), "the old app's record ages out")

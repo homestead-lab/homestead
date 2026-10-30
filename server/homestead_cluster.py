@@ -284,8 +284,13 @@ def inventory():
     raw_nodes = read("Nodes", "/api/v1/nodes", {"items": []}).get("items", [])
     try:
         # The leader's page snapshot lists every pod each cycle and keeps
-        # the list (#980): the system services are read from it.
+        # the list (#980): the system services are read from it. A list
+        # older than PODS_SECONDS is the last one kept after a read that
+        # failed: unread, as before, not old services shown as now.
         pods = homestead_routes.cached(PODS_KEY, PODS_SECONDS, lambda: kget("/api/v1/pods")).get("items", [])
+        at = homestead_routes.CACHE.kept_at(PODS_KEY)
+        if at is not None and time.time() - at >= PODS_SECONDS:
+            raise RuntimeError("the pod list could not be read; the last one is too old to show")
     except Exception as error:
         unavailable.append({"section": "System services", "reason": str(error)[:180]})
         pods = []
