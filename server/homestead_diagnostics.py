@@ -70,23 +70,46 @@ def _load(report_id, owner):
     return record
 
 
+# What cleanup and the listing need of each report - its owner, expiry and
+# summary - kept for the version of its file it was read from (#986): a report
+# can hold megabytes of events and logs, and cleanup runs every 5 minutes on
+# every copy and before every listing. Every save replaces the file whole.
+_heads = {}
+
+
+def _head(path):
+    st = os.stat(path)
+    version = (st.st_ino, st.st_mtime_ns, st.st_size)
+    held = _heads.get(path)
+    if held and held[0] == version:
+        return held[1]
+    with open(path, encoding="utf-8") as handle:
+        record = json.load(handle)
+    head = {"owner": record["owner"], "expires": record["expires"], "summary": _summary(record)}
+    _heads[path] = (version, head)
+    return head
+
+
 def cleanup():
     with LOCK:
         if not os.path.isdir(DIRECTORY):
             return
+        present = set()
         for name in os.listdir(DIRECTORY):
             if not re.fullmatch(r"[a-f0-9]{32}\.json", name):
                 continue
             path = os.path.join(DIRECTORY, name)
+            present.add(path)
             try:
-                with open(path, encoding="utf-8") as handle:
-                    expired = json.load(handle)["expires"] <= time.time()
+                expired = _head(path)["expires"] <= time.time()
                 if expired:
                     os.remove(path)
-            except (ValueError, KeyError):
+            except (ValueError, KeyError, TypeError):
                 # A corrupt record must not retain private diagnostics forever.
                 if os.path.getmtime(path) + TTL <= time.time():
                     os.remove(path)
+        for path in [path for path in _heads if path not in present or not os.path.exists(path)]:
+            _heads.pop(path, None)
 
 
 def run():
@@ -110,9 +133,15 @@ def listing(owner):
         for name in os.listdir(DIRECTORY):
             if re.fullmatch(r"[a-f0-9]{32}\.json", name):
                 try:
-                    rows.append(_summary(_load(name[:-5], owner)))
-                except (PermissionError, ValueError):
+                    head = _head(_path(name[:-5]))
+                except (FileNotFoundError, ValueError, KeyError, TypeError):
                     continue
+                if head["owner"] != owner or time.time() >= head["expires"]:
+                    continue
+                row = copy.deepcopy(head["summary"])
+                if row["status"] == "recording" and time.time() - row["updated"] > 90:
+                    row["status"] = "interrupted"
+                rows.append(row)
         return sorted(rows, key=lambda row: row["created"], reverse=True)
 
 

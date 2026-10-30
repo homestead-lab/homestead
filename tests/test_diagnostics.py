@@ -104,6 +104,22 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertNotIn("secret", text)
         self.assertIn("/api/nodes", text)
 
+    def test_cleanup_and_listing_parse_an_unchanged_report_once(self):
+        # #986: cleanup runs every 5 minutes on every copy and before every
+        # listing; a report can hold megabytes of events and logs.
+        D.create("alice")
+        D.listing("alice")
+        with patch.object(D.json, "load", wraps=json.load) as load:
+            D.cleanup()
+            rows = D.listing("alice")
+        self.assertEqual(0, load.call_count)
+        self.assertEqual(2, len(rows))
+        D.append(self.id, "alice", 1, [{"kind": "click", "at": 10}])
+        with patch.object(D.json, "load", wraps=json.load) as load:
+            rows = D.listing("alice")
+        self.assertEqual(1, load.call_count)
+        self.assertEqual(1, next(r for r in rows if r["id"] == self.id)["events"])
+
     def test_interrupted_recording_is_recoverable_after_server_restart(self):
         with patch.object(D.time, "time", return_value=time.time() + 120):
             self.assertEqual("interrupted", D.listing("alice")[0]["status"])
