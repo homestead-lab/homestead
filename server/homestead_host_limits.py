@@ -56,7 +56,7 @@ echo "RAISED $I $W $NI $NW"
 
 def tick():
     """Each Ready node not done yet. Returns {node: "from -> to"} for those raised now."""
-    p = platform(True) or {}
+    p = platform() or {}
     if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
         return {}
     state = _load()

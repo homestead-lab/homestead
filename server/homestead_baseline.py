@@ -130,7 +130,7 @@ def vip_tick():
     vip = str(_request().get("vip") or "").strip()
     if not vip or vip_setup is None:
         return None
-    p = platform(True) or {}
+    p = platform() or {}
     if p.get("harvester") or p.get("load_balancer") not in ("kube-vip", "metallb"):
         return None
     with _lock:
@@ -172,7 +172,7 @@ def probe_tick():
 
 
 def report():
-    p = platform(True) or {}
+    p = platform(30) or {}
     state = _load()
     if not applies(p):
         return {"applies": False, "parts": [], "missing": [], "distribution": p.get("distribution", ""),
@@ -229,7 +229,7 @@ def tick():
     wanted = requested()
     if not wanted:
         return []
-    p = platform(True) or {}
+    p = platform() or {}
     if not applies(p):
         return []
     done = _load().get("done", {})

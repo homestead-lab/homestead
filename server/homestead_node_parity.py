@@ -520,7 +520,7 @@ def _copies_note(raised, storing):
 
 def tick():
     """Returns [(node or "", what changed)] for the log."""
-    p = platform(True) or {}
+    p = platform() or {}
     if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
         return []
     state = _load()
