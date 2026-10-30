@@ -66,8 +66,9 @@ LOCAL = {"/api/fleet/switch", "/api/fleet/home", "/api/auth/login", "/api/auth/l
          "/api/alerts/pending", "/api/alerts/delivered", "/healthz", "/readyz", "/metrics"}
 ROLES = ("viewer", "operator", "admin")
 # Not passed on: they describe one connection, or who is asking, which the
-# signature says instead.
-HOP = {"connection", "keep-alive", "proxy-connection", "proxy-authorization", "te", "trailer",
+# signature says instead. The caller's own Authorization (an API key) is
+# for this Homestead only; the member trusts the signature, never a key.
+HOP = {"connection", "keep-alive", "proxy-connection", "authorization", "proxy-authorization", "te", "trailer",
        "transfer-encoding", "upgrade", "host", "cookie", "content-length"}
 
 _site = lambda: ""

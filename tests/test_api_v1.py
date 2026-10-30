@@ -171,6 +171,15 @@ class DoorTests(unittest.TestCase):
         with mock.patch.object(server.FLEET, "self_id", return_value="me"):
             self.assertEqual("", h._fleet_target("/api/v1/status"))
 
+    def test_metrics_answer_for_this_cluster_and_are_never_relayed(self):
+        for target, headers in (("/metrics", {"X-Homestead-Cluster": "shed1", "Authorization": "Bearer hsk_x"}),
+                                ("/metrics?hs_cluster=shed1", {"Authorization": "Bearer hsk_x"})):
+            with self.subTest(target=target):
+                h, server = self.handler(target, headers=headers)
+                with mock.patch.object(server.FLEET, "self_id", return_value="me"), \
+                        mock.patch.object(server.FLEET, "member", return_value=True):
+                    self.assertEqual("", h._fleet_target("/metrics"))
+
 
 if __name__ == "__main__":
     unittest.main()
