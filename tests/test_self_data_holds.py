@@ -288,5 +288,83 @@ class HeldMoveRecoveryTests(unittest.TestCase):
         self.assertIsNone(runner.hold)
 
 
+class FailedPreparationTests(unittest.TestCase):
+    """C6: a failed preparation can be closed once what it made is gone."""
+
+    def setUp(self):
+        import homestead_capacity_review as SIGN
+        import homestead_kube as K
+        import homestead_operations as OPS
+        import homestead_self_data_prepare as P
+        from fakes.job_store import put
+        from fakes.kube import Kube
+        self.K, self.OPS, self.P = K, OPS, P
+        directory = tempfile.TemporaryDirectory(); self.addCleanup(directory.cleanup)
+        for patch in (mock.patch.object(OPS, "DATA_DIR", directory.name), mock.patch.object(OPS, "WRITE_GUARD", None),
+                      mock.patch.object(SIGN, "_key", lambda: b"close-fixture")):
+            patch.start(); self.addCleanup(patch.stop)
+        op = "d" * 24
+        self.ref = {"operation": op, "namespace": "lab", "destination": "homestead-data-" + op, "storage_class": "local",
+                    "access_mode": "ReadWriteOnce", "size": "1Gi", "node": "node-a", "image": "example.com/homestead@sha256:" + "e" * 64,
+                    "source": {"name": "homestead-data", "uid": "source-uid", "shape": "x"},
+                    "deployment": {"name": "homestead", "uid": "dep-uid", "shape": "y"},
+                    "storage_writes": [{"step": "destination", "method": "POST", "state": "uncertain",
+                                        "target": {"path": "/api/v1/namespaces/lab/persistentvolumeclaims/homestead-data-" + op}}],
+                    "retain_resources": True}
+        self.job = {"id": "prep-job", "kind": P.KIND, "title": "Prepare Homestead data volume", "status": "failed", "progress": 15,
+                    "href": "/settings", "message": "Destination preparation could not verify its next step", "ref": self.ref}
+        put(OPS, [self.job])
+        pvc, pod = P.manifests(self.ref)
+        self.kube = self.enterContext(Kube(pvc, pod))
+        self.pvc, self.pod = self.kube.path_of(pvc), self.kube.path_of(pod)
+
+    def close(self, body=None, *, start=False):
+        return self.P.close_recovery(body or {"id": "prep-job"}, "admin", "lab", "homestead", self.OPS,
+                                     lambda: ("homestead-data", True), start=start, read=self.K.kget)
+
+    def remove(self, path):
+        self.kube("DELETE", path)  # the fake itself: write guards other tests install are not under test here
+
+    def test_failed_preparation_blocks_until_its_claim_and_pod_are_gone(self):
+        self.assertEqual(["prep-job"], [j["id"] for j in self.P.blocking_jobs(self.OPS)])
+        self.assertTrue(self.P.blocking_jobs(self.OPS)[0]["closable"])
+        with self.assertRaisesRegex(Held, "still exists"): self.close()
+        self.remove(self.pvc)
+        with self.assertRaisesRegex(Held, "still exists"): self.close()
+        self.remove(self.pod)
+        before = self.OPS.stored()
+        review = self.close()
+        self.assertEqual(before, self.OPS.stored(), "the review writes nothing")
+        self.assertIn(("Removed", self.ref["destination"]), [tuple(f) for f in review["facts"]])
+        writes = len(self.kube.writes)
+        self.close({"id": "prep-job", "capacity_token": review["capacity_token"], "confirm_close": True}, start=True)
+        self.assertEqual(writes, len(self.kube.writes), "closing writes nothing to the cluster")
+        self.assertEqual([], self.P.blocking_jobs(self.OPS))
+        saved = self.OPS.stored()[0]
+        self.assertFalse(saved["ref"]["retain_resources"])
+        self.assertEqual("failed", saved["status"])
+        self.assertIn("Recovery closed", saved["history"][-1]["m"])
+
+    def test_a_claim_made_again_after_review_refuses_the_close(self):
+        self.remove(self.pvc); self.remove(self.pod)
+        review = self.close()
+        pvc, _ = self.P.manifests(self.ref)
+        self.kube.add(pvc)
+        with self.assertRaisesRegex(Held, "still exists"):
+            self.close({"id": "prep-job", "capacity_token": review["capacity_token"], "confirm_close": True}, start=True)
+        self.assertEqual(1, len(self.P.blocking_jobs(self.OPS)))
+
+    def test_an_unreadable_cluster_refuses_the_close(self):
+        self.remove(self.pvc); self.remove(self.pod)
+        self.kube.fail(self.pvc, 503, times=5)
+        with self.assertRaises(Held): self.close()
+
+    def test_a_running_or_succeeded_preparation_is_not_closable(self):
+        from fakes.job_store import put
+        for status in ("running", "succeeded"):
+            put(self.OPS, [{**self.job, "status": status}])
+            self.assertFalse(self.P.can_close_recovery(self.OPS.stored()[0]))
+
+
 if __name__ == "__main__":
     unittest.main()

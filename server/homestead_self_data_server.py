@@ -293,7 +293,7 @@ def _move_preview(request):
 def _handoff_close(request):
     return _held_for_review(lambda: SELF_DATA_PREPARE.close_recovery(
         request.body, request.user, SELF.NS, NAMES.BRAND, OPS, homestead_running_on,
-        start=request.path == "/api/self/data/handoff/close"))
+        start=request.path == "/api/self/data/handoff/close", read=kget))
 
 
 def _archive(request):
