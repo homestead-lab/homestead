@@ -29,6 +29,11 @@ MANIFEST_ACCEPT = ", ".join((
 ))
 _CACHE = {}
 _CACHE_LOCK = threading.Lock()
+# A key per image base:tag seen, so every new version an update check meets
+# adds one: past _CACHE_MAX the expired go, then the oldest. 512 covers a few
+# hundred images; a tag list is tens of KiB at most.
+_CACHE_MAX = 512
+_CACHE_SECONDS = {"manifest:": 300, "tags:": 900}
 def parse_image(ref):
     """Normalize a Docker/OCI reference without accepting URL syntax."""
     ref = (ref or "").strip()
@@ -190,6 +195,17 @@ def _registry_json(parsed, path, auths, accept="application/json", limit=None, d
             if error.code != 429 or attempt == len(RATE_LIMIT_WAITS) or time.monotonic() + pause >= deadline:
                 raise
             time.sleep(pause)
+def _remember(key, value):
+    now = time.time()
+    with _CACHE_LOCK:
+        _CACHE.pop(key, None)                  # re-added last: the dict stays oldest first
+        if len(_CACHE) >= _CACHE_MAX:
+            for old in [k for k, (at, _) in _CACHE.items()
+                        if now - at >= next((s for p, s in _CACHE_SECONDS.items() if k.startswith(p)), 0)]:
+                del _CACHE[old]
+        while len(_CACHE) >= _CACHE_MAX:
+            _CACHE.pop(next(iter(_CACHE)))
+        _CACHE[key] = (now, value)
 def manifest_info(ref, auths=None, force=False):
     parsed = parse_image(ref)
     if parsed["digest"]:
@@ -209,8 +225,7 @@ def manifest_info(ref, auths=None, force=False):
     except (UnicodeDecodeError, json.JSONDecodeError):
         pass
     info = {"digest": digest, "children": children}
-    with _CACHE_LOCK:
-        _CACHE[key] = (time.time(), info)
+    _remember(key, info)
     return info
 def image_layers(ref, arch="amd64", auths=None):
     """The layers an image is pulled as on this architecture, with their
@@ -238,8 +253,7 @@ def registry_tags(ref, auths=None, force=False):
         return cached[1]
     body, _ = _registry_json(parsed, "tags/list?n=1000", auths or {})
     tags = json.loads(body.decode()).get("tags") or []
-    with _CACHE_LOCK:
-        _CACHE[key] = (time.time(), tags)
+    _remember(key, tags)
     return tags
 def semver(tag):
     match = re.fullmatch(r"(v?)(\d+)\.(\d+)\.(\d+)", tag or "")

@@ -35,6 +35,7 @@ BUDGET_BYTES = 400 * 2**20
 REGISTRY_SECONDS = 30
 CONFIG_MAX_BYTES = 1 << 20
 _cache = {}
+_CACHE_MAX = 256      # a key per (image, paths): each new image version adds one
 _lock = threading.Lock()
 
 
@@ -181,6 +182,8 @@ def image_owners(image, paths):
         # Not remembered: the registry may answer next time.
         return {}
     with _lock:
+        while len(_cache) >= _CACHE_MAX:
+            _cache.pop(next(iter(_cache)))
         _cache[key] = dict(out)
     return out
 

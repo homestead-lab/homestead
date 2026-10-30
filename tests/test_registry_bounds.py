@@ -142,5 +142,51 @@ class VolumeOwnerRegistryTests(unittest.TestCase):
         self.assertIsNotNone(deadlines.pop())
 
 
+class CacheBoundTests(unittest.TestCase):
+    """A key per image base:tag (registry) and per (image, paths) (volowner)
+    grew for ever: every new version an update check saw added one."""
+
+    def setUp(self):
+        REGISTRY._CACHE.clear()
+        VOLOWNER._cache.clear()
+        self.addCleanup(REGISTRY._CACHE.clear)
+        self.addCleanup(VOLOWNER._cache.clear)
+        self.clock = Clock()
+        patch = mock.patch.object(REGISTRY.time, "time", self.clock)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_the_registry_cache_keeps_at_most_its_cap_newest_first(self):
+        with mock.patch.object(REGISTRY, "_CACHE_MAX", 4), \
+                mock.patch.object(REGISTRY, "_registry_json",
+                                  return_value=(json.dumps({"tags": ["1"]}).encode(), {})):
+            for n in range(10):
+                REGISTRY.registry_tags(f"example.com/team/app{n}:1.0.0")
+                self.clock.now += 1
+            self.assertEqual(4, len(REGISTRY._CACHE))
+            self.assertIn("tags:example.com/team/app9", REGISTRY._CACHE)
+            self.assertNotIn("tags:example.com/team/app5", REGISTRY._CACHE)
+
+    def test_expired_registry_answers_go_first(self):
+        with mock.patch.object(REGISTRY, "_CACHE_MAX", 4), \
+                mock.patch.object(REGISTRY, "_registry_json",
+                                  return_value=(json.dumps({"tags": ["1"]}).encode(), {"Docker-Content-Digest": "sha256:d"})):
+            REGISTRY.registry_tags("example.com/team/kept:1.0.0")
+            for n in range(3):
+                REGISTRY.manifest_info(f"example.com/team/old{n}:1.0.0")
+            self.clock.now += 400                      # the manifests are past their 300 s, the tags not
+            REGISTRY.manifest_info("example.com/team/new:1.0.0")
+            self.assertEqual({"tags:example.com/team/kept", "manifest:example.com/team/new:1.0.0"},
+                             set(REGISTRY._CACHE))
+
+    def test_image_owners_are_capped(self):
+        with mock.patch.object(VOLOWNER, "_CACHE_MAX", 3), \
+                mock.patch.object(VOLOWNER, "_registry", return_value=({}, {"layers": []}, {"config": {}})):
+            for n in range(6):
+                VOLOWNER.image_owners(f"example.com/app:{n}", ["/data"])
+        self.assertEqual(3, len(VOLOWNER._cache))
+        self.assertIn(("example.com/app:5", ("/data",)), VOLOWNER._cache)
+
+
 if __name__ == "__main__":
     unittest.main()
