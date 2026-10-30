@@ -85,6 +85,20 @@ test("explicit incident and critical scenarios retain unhealthy evaluation cases
   }
 });
 
+test("the demo's alerts carry the overview's health verdict for the sidebar pill (#940)", async () => {
+  for (const scenario of ["", "incidents", "critical"]) {
+    const api = await fixture(scenario);
+    const [overview, alerts] = await Promise.all(["/api/overview", "/api/alerts"].map(path => api(path)));
+    const issues = overview.health_issues;
+    assert.deepEqual({ ...alerts.health, as_of: 0 }, {
+      state: overview.health_state, summary: overview.health_summary,
+      critical: issues.filter(i => i.severity === "critical").length,
+      degraded: issues.filter(i => i.severity !== "critical").length,
+      as_of: 0, age_s: overview.age_s }, scenario || "healthy");
+    assert.ok(Math.abs(alerts.health.as_of - (Date.now() / 1000 - overview.age_s)) < 5);
+  }
+});
+
 test("disk preparation demo mutations return concrete saved tasks without contacting a cluster", async () => {
   const api = await fixture("", true);
   const plan = await api("/api/disks/v2/plan", {node:"node-1",disk:"data"});

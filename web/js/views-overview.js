@@ -60,6 +60,43 @@ function dashboardAlert(items) {
   return `<div class="dash-alert"${lead.health ? " data-health" : ""}>${UI.callout(tone, lead.title, body)}</div>`;
 }
 
+/* The sidebar's health pill, on every page (#940). The Dashboard paints it
+   from its overview; every page from each /api/alerts read (pwa.js), which
+   carries the same verdict. Colour is the verdict; starting and updating are
+   not faults, so they stay neutral with a pulsing dot. Dashed is "not there
+   yet": CHECKING before the first answer, UNKNOWN when there is no verdict
+   (null, or the server's "unknown"), and the last verdict once it is a
+   minute old. h undefined (a server without the field) leaves the pill be. */
+function paintHealthPill(h) {
+  const pill = $("#healthPill");
+  if (!pill || h === undefined) return;
+  const state = h?.state ? String(h.state).toLowerCase() : "unknown";
+  const unread = state === "unknown";
+  const tone = { healthy: "ok", degraded: "warn", critical: "bad" }[state] || "neutral";
+  const busy = state === "starting" || state === "updating";
+  const age = unread || typeof h.age_s !== "number" ? null : h.age_s;
+  const extra = unread ? " pending" : busy ? " busy" : "";
+  pill.className = `ui-chip ${tone}${extra}${age !== null && age >= 60 ? " stale" : ""}`;
+  // role="status": a rewritten text is read out again, so only when it changes.
+  if (pill.textContent !== state.toUpperCase()) pill.textContent = state.toUpperCase();
+  pill.dataset.state = state;
+  const checked = age === null ? "" : age < 10 ? "checked just now" : age < 60 ? `checked ${age}s ago` : `checked ${fmtAgo(age)}`;
+  pill.title = unread ? "Homestead could not read the cluster's health just now"
+    : [h.summary, checked].filter(Boolean).join(" · ");
+}
+/* The pill as index.html draws it, before any answer: on sign-out, so the
+   next session does not start from this one's verdict. */
+function healthPillChecking() {
+  const pill = $("#healthPill");
+  if (!pill) return;
+  pill.className = "ui-chip neutral pending";
+  pill.textContent = "CHECKING";
+  pill.dataset.state = "checking";
+  pill.title = "Reading the cluster's health";
+}
+window.paintHealthPill = paintHealthPill;
+window.healthPillChecking = healthPillChecking;
+
 async function viewDash() {
   if (Dashboard.editing()) return;
   const requestedNavigation = window.NAV_TOKEN;
@@ -82,12 +119,7 @@ async function viewDash() {
   // A node near its allocation limit takes no new replicas: said before it bites.
   const tight = (cap?.nodes || []).filter(n => n.level !== "ok");
   window.refreshPwaAlerts?.();
-  const hp = $("#healthPill");
-  const healthState = o.health_state || o.health;
-  hp.className = "ui-chip " + (healthState === "healthy" ? "ok" :
-    healthState === "critical" ? "bad" : healthState === "degraded" ? "warn" : "neutral");
-  hp.textContent = healthState.toUpperCase();
-  hp.title = o.health_summary || "";
+  paintHealthPill({ state: o.health_state || o.health, summary: o.health_summary, age_s: o.age_s });
   $("#lbinfo").textContent = o.lb_ip ? "VIP " + o.lb_ip : "";
   const sv = $("#setVip"), sn = $("#setNodes");
   if (sv) sv.textContent = o.lb_ip || "—";
@@ -160,7 +192,7 @@ async function viewDash() {
   };
 
   paint(`
-  ${UI.pageHeader(`Cluster overview`, dashboardScope(o), `
+  ${UI.pageHeader(`Cluster overview`, dashboardScope(o) + dashboardAge(o), `
       <button class="btn hide-sm" onclick="Dashboard.start()">${icon("edit")}Edit dashboard</button>
       <button class="btn pri hide-sm" onclick="go('deploy')">＋ Deploy</button>
     `, {mobileSummary:"omit",actionsClass:"hide-sm"})}
@@ -180,6 +212,34 @@ async function viewDash() {
   Dashboard.loadMonitoring();
   Dashboard.loadTimeline();
   HealthInsights.load();
+}
+
+/* How old the overview's numbers are (#705 step 8). age_s comes from the
+   server, so a browser clock that is off does not skew it. The numbers are
+   normally at most one snapshot cycle old; a minute or more means the cluster
+   has not answered since, and the page shows the last numbers it had. */
+function dashboardAge(o) {
+  const age = o.age_s;
+  if (typeof age !== "number") return "";
+  if (age < 10) return ` · <span class="dim">updated just now</span>`;
+  if (age < 60) return ` · <span class="dim">updated ${age}s ago</span>`;
+  return ` · ${UI.chip(`updated ${fmtAgo(age)}`, "warn", { tip: "The cluster has not answered since: these are the last numbers Homestead read" })}`;
+}
+
+/* Whether metrics-server's CPU and memory figures on Hosts and Containers are
+   current (#906). The server reads it in the background and gives every row
+   the reading's state; old or missing figures are said, not shown as zeros. */
+function metricsNotice(rows) {
+  const m = (Array.isArray(rows) ? rows : []).find(r => r?.metrics)?.metrics;
+  if (!m) return "";
+  const why = m.detail ? ` (${m.detail})` : "";
+  if (m.state === "stale")
+    return ` · ${UI.chip(`CPU and memory from ${fmtAgo(m.age_s)}`, "warn", { tip: `metrics-server has not answered since then${why}: these are its last figures` })}`;
+  if (m.state === "unavailable")
+    return ` · ${UI.chip("no CPU or memory figures", "warn", { tip: `metrics-server is not answering${why}${m.age_s ? `; it last answered ${fmtAgo(m.age_s)}` : ""}` })}`;
+  if (m.state === "absent")
+    return ` · <span class="dim" data-tip="metrics-server is not installed in this cluster, so there are no CPU or memory figures to show">no CPU or memory figures</span>`;
+  return "";
 }
 
 /* Dense host summaries respond to widget width, rather than viewport width. */
@@ -1104,7 +1164,7 @@ async function viewNodes() {
   STATE.data.nodes = n;
   noteNodeUptime(up);
   const layout = viewLayout("nodes");
-  paint(`${UI.pageHeader(`Hosts`, `${n.length} host${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}`, `${layoutSwitch("nodes", "viewNodes", { phone: true })}
+  paint(`${UI.pageHeader(`Hosts`, `${n.length} host${n.length === 1 ? "" : "s"} · ${n.length > 1 && layout === "rows" ? "compare health and capacity" : "health and capacity by host"}${metricsNotice(n)}`, `${layoutSwitch("nodes", "viewNodes", { phone: true })}
       ${moreMenu([
         {label:"Add a host…",run:"clusterOnboarding()",need:"admin"},
         STATE.platform && !STATE.platform.harvester && {label:"OS updates",run:"osUpdates()"},
