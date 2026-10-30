@@ -40,6 +40,13 @@ import homestead_storage_guard as STORAGE_GUARD
 ROUTE_NEEDS = ("cluster_shutdown", "require_self_data_write", "self_data_activity")
 VALUES = ("API", "CTX", "TOKEN")
 KGET_RETRY = (0.5, 1.0, 2.0)  # a busy API server (priority and fairness) answers reads 429 for a moment
+# A read of one object is a few kilobytes: an API server that has not answered
+# it in OBJECT_TIMEOUT is slow or hung, and waiting longer only holds the page
+# (#984). A list, a subresource or discovery is not known to be small and keeps
+# LIST_TIMEOUT. Either bounds each wait on the socket, not the whole answer, so
+# a big list arriving steadily is never cut; the request's deadline bounds all.
+OBJECT_TIMEOUT = 5
+LIST_TIMEOUT = 10
 # Set once server.py has imported what the cluster shutdown fence reads: a
 # write before then (while server.py is still importing) is not fenced.
 FENCE_READY = False
@@ -240,9 +247,28 @@ def ktable(path, timeout=20):
         "Accept": "application/json;as=Table;v=v1;g=meta.k8s.io,application/json"}, allowed)).decode())
 
 
-def kget(path, timeout=10):
-    """A read, given at most what is left of the request's time for reads
-    (homestead_read_deadline), and a 429 asked again only while it lasts."""
+def _one_object(path):
+    """Whether path names one object (no list, subresource or discovery):
+    /api/v1/[namespaces/NS/]KIND/NAME, /apis/GROUP/VERSION/[namespaces/NS/]KIND/NAME
+    or /api/v1/namespaces/NS."""
+    parts = [part for part in str(path).split("?", 1)[0].split("/") if part]
+    if parts[:1] == ["api"]:
+        rest = parts[2:]
+    elif parts[:1] == ["apis"]:
+        rest = parts[3:]
+    else:
+        return False
+    if len(rest) >= 3 and rest[0] == "namespaces":
+        rest = rest[2:]
+    return len(rest) == 2
+
+
+def kget(path, timeout=None):
+    """A read, given OBJECT_TIMEOUT for one object and LIST_TIMEOUT otherwise
+    unless the caller says, at most what is left of the request's time for
+    reads (homestead_read_deadline), and a 429 asked again only while it lasts."""
+    if timeout is None:
+        timeout = OBJECT_TIMEOUT if _one_object(path) else LIST_TIMEOUT
     for attempt in range(len(KGET_RETRY) + 1):
         try:
             return DEADLINE.read(timeout, lambda allowed: transport("GET", api_path(path), timeout=allowed))
