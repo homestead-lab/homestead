@@ -278,37 +278,48 @@ def _why(error):
 
 
 def probe(t, timeout=TIMEOUT):
-    """Ask once. {ok, ms, code, error}."""
+    """Ask once. {ok, ms, code, error}. The whole check, connection
+    included, ends by started + 2 x timeout."""
     timeout = t.get("timeout") or timeout
     if t["kind"] == "tcp":
         return _tcp(t["host"], t["port"], timeout)
     started = time.monotonic()
-    conn = None
+    deadline = started + 2 * timeout
+    conn = cut = None
     connected = None
     try:
+        try:
+            # The connection on its own first: refused or unreachable is down.
+            raw = socket.create_connection((t["host"], t["port"]), timeout=timeout)
+        except OSError as e:
+            return {"ok": False, "ms": None, "code": None, "error": _why(e)}
+        connected = int((time.monotonic() - started) * 1000)
+        cut = _Cut(raw, deadline)
+        sock = raw
         if t["scheme"] == "https":
             context = ssl.create_default_context()
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
-            conn = http.client.HTTPSConnection(t["host"], t["port"], timeout=timeout, context=context)
-        else:
-            conn = http.client.HTTPConnection(t["host"], t["port"], timeout=timeout)
-        try:
-            # The connection on its own first: refused or unreachable is down.
-            sock = socket.create_connection((t["host"], t["port"]), timeout=timeout)
-            sock.close()
-        except OSError as e:
-            return {"ok": False, "ms": None, "code": None, "error": _why(e)}
-        connected = int((time.monotonic() - started) * 1000)
+            # The handshake after the TLS socket is in the watchdog's hands:
+            # wrapping takes the descriptor over from raw.
+            sock = context.wrap_socket(raw, server_hostname=t["host"], do_handshake_on_connect=False)
+            cut.use(sock)
+            sock.do_handshake()
+        conn = http.client.HTTPConnection(t["host"], t["port"], timeout=timeout)
+        conn.sock = sock
         conn.request("GET", t["path"], headers={"User-Agent": USER_AGENT, "Accept": "*/*", "Connection": "close"})
         response = conn.getresponse()
         code = response.status
         response.read(512)
+        if cut.fired.is_set():          # cut short: what was read is not an answer
+            raise socket.timeout("timed out")
         ms = int((time.monotonic() - started) * 1000)
         if code >= 500:
             return {"ok": False, "ms": ms, "code": code, "error": f"HTTP {code}"}
         return {"ok": True, "ms": ms, "code": code, "error": ""}
     except (http.client.HTTPException, ssl.SSLError, OSError) as e:
+        if cut is not None and cut.fired.is_set():
+            e = socket.timeout("timed out")
         # It took the connection but gave no HTTP answer: a database, MQTT, a
         # game server, which close, reset or wait. Unless HTTP was asked for,
         # an accepted connection is an app that answers.
@@ -318,8 +329,57 @@ def probe(t, timeout=TIMEOUT):
             return {"ok": False, "ms": None, "code": None, "error": f"no HTTP answer ({_why(e)})"}
         return {"ok": False, "ms": None, "code": None, "error": _why(e)}
     finally:
+        if cut is not None:
+            cut.cancel()
+            cut.close()
         if conn is not None:
             conn.close()
+
+
+class _Cut:
+    """Shuts the probe's socket at deadline (time.monotonic()), whatever it
+    is waiting for: http.client's timeout is per wait on the socket, so an
+    answer that trickles in (a TLS handshake, a status line, then up to 100
+    headers of 64 KB) kept a probe, and its thread, going for as long as the
+    far end liked. It holds the socket itself, not conn.sock, which is set
+    late; under TLS, use() hands it the wrapping socket, which owns the
+    descriptor from then on."""
+
+    def __init__(self, sock, deadline):
+        self.fired = threading.Event()
+        self._lock = threading.Lock()
+        self._sock = sock
+        self._timer = threading.Timer(max(0.0, deadline - time.monotonic()), self._fire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _shut(self):
+        try:
+            # The plain socket's own shutdown: under TLS it ends the read too.
+            socket.socket.shutdown(self._sock, socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def _fire(self):
+        with self._lock:
+            self.fired.set()
+            self._shut()
+
+    def use(self, sock):
+        with self._lock:
+            self._sock = sock
+            if self.fired.is_set():     # it fired while the socket changed hands
+                self._shut()
+
+    def cancel(self):
+        self._timer.cancel()
+
+    def close(self):
+        with self._lock:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
 
 
 def _hour(now):
@@ -374,8 +434,10 @@ def observe(workloads, now=None, ask=probe, vms=None):
     threads = [threading.Thread(target=run, args=(key, t), daemon=True) for key, t, _ in rows if t]
     for thread in threads:
         thread.start()
+    # One wait for the whole round: N stuck checks used to cost N times it.
+    end = time.monotonic() + TIMEOUT * 2 + 2
     for thread in threads:
-        thread.join(TIMEOUT * 2 + 2)
+        thread.join(max(0, end - time.monotonic()))
     with _lock:
         apps = _load()
         _state["observed_at"] = now

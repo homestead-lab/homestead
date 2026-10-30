@@ -4,6 +4,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -365,6 +366,100 @@ class ProbeTests(unittest.TestCase):
         result = UP.probe(self.t(port=port), timeout=2)
         self.assertFalse(result["ok"])
         self.assertTrue(result["error"])
+
+    def far_end(self, speak):
+        """A port whose every connection is handed to speak(conn, stop)."""
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(5)
+        stop = threading.Event()
+        self.addCleanup(stop.set)
+        self.addCleanup(listener.close)
+
+        def run(conn):
+            try:
+                speak(conn, stop)
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+        def accept():
+            while not stop.is_set():
+                try:
+                    conn, _ = listener.accept()
+                except OSError:
+                    return
+                threading.Thread(target=run, args=(conn,), daemon=True).start()
+        threading.Thread(target=accept, daemon=True).start()
+        return listener.getsockname()[1]
+
+    def ends_by_the_deadline(self, speak, scheme="http"):
+        """http.client's timeout is per wait: a byte every 0.1 s kept a probe
+        going for as long as the far end liked (one thread per round)."""
+        port = self.far_end(speak)
+        for strict in (False, True):
+            with self.subTest(strict=strict):
+                results = []
+                started = time.monotonic()
+                worker = threading.Thread(target=lambda: results.append(
+                    UP.probe({**self.t(port=port, strict=strict), "scheme": scheme}, timeout=0.5)), daemon=True)
+                worker.start()
+                worker.join(5)
+                self.assertFalse(worker.is_alive(), "the probe is still reading")
+                self.assertLess(time.monotonic() - started, 2.0, "the deadline is 2 x 0.5 s")
+                if strict:
+                    self.assertEqual({"ok": False, "error": "no HTTP answer (no answer in time)"},
+                                     {k: results[0][k] for k in ("ok", "error")})
+                else:
+                    self.assertTrue(results[0]["ok"], "it took the connection: an app that answers")
+
+    def test_a_target_that_accepts_and_never_answers_ends_by_the_deadline(self):
+        self.ends_by_the_deadline(lambda conn, stop: stop.wait(10))
+
+    def test_a_target_that_trickles_its_status_line_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            for byte in b"HTTP/1.1 200 OK\r\n" * 50:
+                if stop.wait(0.1):
+                    return
+                conn.sendall(bytes([byte]))
+        self.ends_by_the_deadline(speak)
+
+    def test_a_target_that_trickles_its_headers_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            conn.sendall(b"HTTP/1.1 200 OK\r\n")
+            while not stop.wait(0.1):
+                conn.sendall(b"X")
+        self.ends_by_the_deadline(speak)
+
+    def test_a_tls_target_that_trickles_its_handshake_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)                       # the ClientHello
+            # A 16 KiB handshake record opening a ServerHello, then a byte at a time.
+            conn.sendall(b"\x16\x03\x03\x40\x00" + b"\x02\x00\x3f\xfc")
+            while not stop.wait(0.1):
+                conn.sendall(b"\x00")
+        self.ends_by_the_deadline(speak, scheme="https")
+
+
+class RoundDeadlineTests(Base):
+    def test_a_round_waits_once_for_all_its_stuck_checks_not_once_each(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def stuck(t):
+            release.wait(30)
+            return OK
+        apps = [app(name=f"app{n}", port=8000 + n) for n in range(4)]
+        started = time.monotonic()
+        with mock.patch.object(UP, "TIMEOUT", 0.05):
+            UP.observe(apps, now=1000, ask=stuck)
+        took = time.monotonic() - started
+        self.assertLess(took, 2 * (0.05 * 2 + 2), "joined one after another")
+        self.assertEqual({"the check did not finish"},
+                         {row["last"]["error"] for row in UP._load().values()})
 
 
 if __name__ == "__main__":
