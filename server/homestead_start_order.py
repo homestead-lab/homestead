@@ -476,6 +476,7 @@ def save(body):
     the lines to commit, and nothing is written. With "lines": true it only
     answers {"git"}, the lines for that setting, and never writes."""
     import homestead_lifecycle as LC
+    import homestead_workload_edit as WORKLOAD_EDIT
     import homestead_routes as ROUTER
     ns, name = LC.dns_label(body.get("ns"), "namespace"), LC.dns_label(body.get("name"), "app name")
     # The checks Edit's save makes first (homestead_workloads.edit): never
@@ -499,10 +500,10 @@ def save(body):
     if owner:
         return ROUTER.Reply(409, {"error": managed_message(name, owner), "git": git_lines(dep, setting)})
     cfg = {"ns": ns, "name": name, "starts_after": value}
-    prepared = LC.prepare_edit(cfg, dep)
-    restarts = LC.restarts(dep, prepared["deployment"])
+    prepared = WORKLOAD_EDIT.prepare_edit(cfg, dep)
+    restarts = WORKLOAD_EDIT.restarts(dep, prepared["deployment"])
     if prepared["deployment"] != dep:
-        LC.edit_workload(cfg, prepared=prepared)
+        WORKLOAD_EDIT.edit_workload(cfg, prepared=prepared)
     note = ensure_image(deployments, LC.kget) if setting else None
     return {"ok": True, "restarts": restarts, **({"note": note} if note else {})}
 

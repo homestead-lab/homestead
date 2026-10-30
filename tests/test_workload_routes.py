@@ -7,6 +7,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
+import homestead_deploy_appstore as APPSTORE  # noqa: E402
 
 
 class ThroughTheServer(unittest.TestCase):
@@ -32,7 +33,7 @@ class ThroughTheServer(unittest.TestCase):
 
     def test_the_app_store_without_its_feed_is_a_502(self):
         server, handler = self.handler("GET", "/api/appstore")
-        with mock.patch.object(server.DEPLOY, "fetch_appstore", side_effect=OSError("offline")):
+        with mock.patch.object(APPSTORE, "fetch_appstore", side_effect=OSError("offline")):
             handler.do_GET()
         code, body = handler._send.call_args.args[:2]
         self.assertEqual(502, code)

@@ -275,8 +275,7 @@ function outageSectionHtml(kind, row) {
         : ""}Never while a job is working on it: an automatic update watches it itself and rolls the image back if it stays down.</p></div>
     <label class="switch"><input type="checkbox" id="oa_hook"${a.webhook ? " checked" : ""} onchange="outageToggle()"> Call a webhook</label>
     <div class="outage-hook"${a.webhook ? "" : " hidden"}>
-      ${UI.field("Format", `<select id="oa_format" aria-label="Webhook format">${OUTAGE_FORMATS.map(([v, label]) =>
-        `<option value="${v}"${(a.format || "generic") === v ? " selected" : ""}>${label}</option>`).join("")}</select>`)}
+      ${UI.field("Format", webhookFormatSelect("oa_format", a.format))}
       <div class="outage-url"><input id="oa_url" type="url" inputmode="url" placeholder="https://hooks.example.com/…" value="${esc(a.webhook || "")}" aria-label="Webhook address">
         ${UI.button("Send a test", `outageTest(${jsArg(kind)},${jsArg(row.ns)},${jsArg(row.name)})`, { attrs: 'data-need="admin"' })}</div>
       <label class="switch" data-need="admin"><input type="checkbox" id="oa_lan"${a.lan ? " checked" : ""}> Allow a LAN address (a self-hosted ntfy or Gotify, say)</label>
@@ -286,6 +285,12 @@ function outageSectionHtml(kind, row) {
 }
 
 const OUTAGE_FORMATS = [["generic", "Generic JSON"], ["ntfy", "ntfy"], ["gotify", "Gotify"]];
+/* The Format control, shared by the outage webhook and the alert webhook (Settings > Connections). */
+function webhookFormatSelect(id, value) {
+  return `<select id="${id}" aria-label="Webhook format">${OUTAGE_FORMATS.map(([v, label]) =>
+    `<option value="${v}"${(value || "generic") === v ? " selected" : ""}>${label}</option>`).join("")}</select>`;
+}
+window.webhookFormatSelect = webhookFormatSelect;
 
 window.outageToggle = () => {
   const restart = $("#mbody .outage-restart"), hook = $("#mbody .outage-hook");

@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
-import homestead_lifecycle as lifecycle
+import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_priority as priority
 import homestead_usage as usage
 import server
@@ -244,18 +244,18 @@ class PriorityTests(unittest.TestCase):
 
     def test_edit_sets_and_clears_a_tier_and_leaves_a_foreign_class(self):
         spec = {}
-        lifecycle._apply_priority(spec, "critical")
+        WORKLOAD_EDIT._apply_priority(spec, "critical")
         self.assertEqual("homestead-critical", spec["priorityClassName"])
-        lifecycle._apply_priority(spec, "normal")
+        WORKLOAD_EDIT._apply_priority(spec, "normal")
         self.assertNotIn("priorityClassName", spec)
         foreign = {"priorityClassName": "unifi-high"}
-        lifecycle._apply_priority(foreign, "low")
+        WORKLOAD_EDIT._apply_priority(foreign, "low")
         self.assertEqual("unifi-high", foreign["priorityClassName"])
         copied = {"priority": 0, "preemptionPolicy": "PreemptLowerPriority"}
-        lifecycle._apply_priority(copied, "low")
+        WORKLOAD_EDIT._apply_priority(copied, "low")
         self.assertEqual({"priorityClassName": "homestead-low"}, copied)
         with self.assertRaisesRegex(ValueError, "critical, normal or low"):
-            lifecycle._apply_priority({}, "urgent")
+            WORKLOAD_EDIT._apply_priority({}, "urgent")
 
     def test_rows_stay_in_the_order_of_the_tier_each_has_now(self):
         before = [a["id"] for a in priority.plan()["apps"]]
@@ -511,7 +511,7 @@ class PriorityTests(unittest.TestCase):
 
     def test_the_edit_dialog_reads_the_tier_back(self):
         dep = deployment("vault", cls="homestead-critical")
-        with mock.patch.object(server.LC, "seed_configs", return_value=[]):
+        with mock.patch.object(WORKLOAD_EDIT, "seed_configs", return_value=[]):
             payload = server.WORKLOADS.workload_edit_payload("lab", "vault", dep, hardware_definitions=[], services=[])
         self.assertEqual(("critical", "homestead-critical"), (payload["priority"], payload["priority_class"]))
 
@@ -698,12 +698,11 @@ class LadderWriteTests(unittest.TestCase):
         self.assertEqual([], self.posted)
 
     def test_edit_leaves_a_system_or_missing_class_alone(self):
-        import homestead_lifecycle as LC
         for cls in ("system-node-critical", "gone"):
             self.items = X + [pc("system-node-critical", 2_000_001_000)]
             P._LADDER.update(at=0, value=None)
             spec = {"priorityClassName": cls}
-            LC._apply_priority(spec, "critical")
+            WORKLOAD_EDIT._apply_priority(spec, "critical")
             self.assertEqual(cls, spec["priorityClassName"])
 
     def test_the_list_warns_about_a_stale_homestead_class_still_in_use(self):
@@ -824,7 +823,7 @@ class OwnershipTests(unittest.TestCase):
     def test_the_edit_payload_names_who_owns_the_tier(self):
         dep = deployment("paperless")
         dep["metadata"].setdefault("labels", {})["kustomize.toolkit.fluxcd.io/name"] = "apps"
-        with mock.patch.object(server.LC, "seed_configs", return_value=[]):
+        with mock.patch.object(WORKLOAD_EDIT, "seed_configs", return_value=[]):
             payload = server.WORKLOADS.workload_edit_payload("lab", "paperless", dep, hardware_definitions=[], services=[])
         self.assertEqual("Flux", payload["priority_owner"])
 

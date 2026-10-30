@@ -178,3 +178,34 @@ Known limits of the carry-over:
 says how the service answered. Only an admin can send one, because it makes a
 request from inside the cluster to the address typed; it may reach a LAN
 address, and at most five a minute go out.
+
+## Alert webhook
+
+Alerts - a host not ready, a drive failing, a backup that failed, an app out
+of restarts, and the rest above - can also go to one webhook of your own, such
+as ntfy or Gotify: **Settings → Connections → Alert webhook** (admins only).
+It is off until set, so nothing changes for anyone who does not set it.
+
+Each alert is sent once, as it is raised, worsens or clears, under the same
+trigger rules as push: an unchanged condition is not sent again. Unlike push,
+it has no categories to choose and no acknowledgement: an alert someone
+acknowledged in Homestead is still sent. **Send** chooses the alerts: critical
+only, warnings and critical (the default), or everything, information too.
+An alert that was sent is always followed by its clear, even if it eased below
+that level first. Device tests are never sent. When more than 10 alerts arrive
+at once, the first 10 are sent and one more call says how many were left out.
+Calls go out one after another, in order, with `User-Agent: Homestead alerts`.
+
+| Format | What is sent |
+| --- | --- |
+| Generic JSON (the default) | A POST of JSON: `event` (`alert`), `phase` (raised, worsened or resolved), `severity`, `category`, `key`, `title`, `body`, `href`, `at`, and `title: body` as `text`, `content` and `message` |
+| ntfy | The alert's body as the message (its title when it has none), its title as `Title`, `Priority` high for a critical alert, default for a warning or a cleared alert and low for information, and a tag |
+| Gotify | JSON `title`, `message` and `priority` (8 critical, 5 a warning or a cleared alert, 2 information) |
+
+The address works as an outage webhook's does (above): it is shown only up to
+its host once saved, it never reaches this host, link-local or metadata
+addresses, a LAN address needs **Allow a LAN address**, and no redirect is
+followed. It is checked again at every call. **Send a test** shares the outage
+webhooks' limit of five a minute. The setting is kept in `alert-webhook.json`
+on Homestead's data volume, readable only by Homestead, and the last call's
+result shows on the card.

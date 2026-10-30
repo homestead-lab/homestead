@@ -7,11 +7,13 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_lifecycle as lifecycle
+import homestead_node_actions as NODE_ACTIONS
 import homestead_maintenance as maintenance
 import homestead_names as names
 import homestead_pullwatch as pull
 import homestead_runtime as runtime
 import homestead_imports as imports
+import homestead_image_cache as IMAGES
 from fakes.platform import plain_platform
 from test_cluster_shutdown import Fake
 import test_node_power_plan as power_fixtures
@@ -55,7 +57,7 @@ class PullWatchDrainTests(unittest.TestCase):
                 live.clear()
             with mock.patch.object(lifecycle, "kget", side_effect=lambda _: {"items": copy.deepcopy(live)}), \
                     mock.patch.object(lifecycle, "ksend", side_effect=send) as evict:
-                result = lifecycle.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
+                result = NODE_ACTIONS.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
             evict.assert_called_once()
             self.assertEqual(["lab/" + pod["metadata"]["name"]], result["evicted"])
 
@@ -99,7 +101,7 @@ class PullWatchDrainTests(unittest.TestCase):
         with mock.patch.object(lifecycle, "kget", return_value={"items": [pod]}), \
                 mock.patch.object(lifecycle, "ksend") as send:
             with self.assertRaisesRegex(ValueError, "changed after review"):
-                lifecycle.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
+                NODE_ACTIONS.drain("node1", include_system=True, reviewed_pods=snapshot, wait=True)
         send.assert_not_called()
 
 
@@ -192,9 +194,9 @@ class AllMaintenanceHelpersTests(unittest.TestCase):
                  {"metadata": {"name": "closed"}, "spec": {"unschedulable": True},
                   "status": {"conditions": [{"type": "Ready", "status": "True"}]}}]
         with mock.patch.object(imports, "kget", return_value={"items": nodes}), \
-                mock.patch.object(imports, "ksend") as send, mock.patch.object(imports, "_save_scans"), \
-                mock.patch.object(imports, "_bust"), mock.patch.object(imports, "_SCAN_STARTED", [0]):
-            self.assertEqual(["open"], imports.start_image_scan()["nodes"])
+                mock.patch.object(imports, "ksend") as send, mock.patch.object(IMAGES, "_save_scans"), \
+                mock.patch.object(imports, "_bust"), mock.patch.object(IMAGES, "_SCAN_STARTED", [0]):
+            self.assertEqual(["open"], IMAGES.start_image_scan()["nodes"])
         send.assert_called_once()
         self.assertIs(False, send.call_args.args[2]["spec"]["automountServiceAccountToken"])
 

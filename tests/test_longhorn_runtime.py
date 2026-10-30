@@ -5,12 +5,14 @@ import json
 import os
 from pathlib import Path
 import socket
+import time
 import shlex
 import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
@@ -246,6 +248,26 @@ class RuntimeReviewTests(unittest.TestCase):
             'runtime_bytes':1024,'available_bytes':10*1024**3,'retained':'/mnt/homestead-retired-'+'a'*24,
             'original_disk':{'path':'/var/lib/longhorn','allowScheduling':True},'disk_uuid':'disk-uuid'}
         p=patch.object(R,'_plan',side_effect=lambda n,d,r:{**copy.deepcopy(self.plan),'request_id':r});p.start();self.addCleanup(p.stop)
+
+    def test_a_look_between_the_retirement_review_and_retire_keeps_the_review(self):
+        """#975: the jobs loop looking at the host while a person reads the
+        retirement review must not change what the review was given for."""
+        import homestead_job_cadence as CADENCE
+        plan = R.review({'node': 'host-1', 'disk': 'store-1'}); op = R.start({**plan, 'confirm_capacity': True})
+        item = self.store.items[0]; item['ref']['phase'] = 'relocated'
+        def call(node, expr, write=False):
+            if 'state.json' in expr: return {'phase': 'relocated'}
+            if 'retirement(' in expr: return {'files': 1}
+            return True
+        with mock.patch.object(R, '_recheck', return_value={'spec': R._disabled(item['ref'], True)}), \
+             mock.patch.object(R, '_call', side_effect=call), \
+             mock.patch.object(R.V2, '_ready', return_value=True), mock.patch.object(R.V2, '_get', return_value={}):
+            R.progress(item)
+            review = R.retirement_review(op['id'])
+            later = time.time() + CADENCE.INTERVALS['longhorn-runtime'] + 1
+            with mock.patch.object(CADENCE.time, 'time', return_value=later):
+                R.progress(item)
+            R.retire({**review, 'confirm_capacity': True, 'confirm_device': '/dev/dm-1'})
 
     def test_expired_or_changed_review_dispatches_nothing(self):
         plan = R.review({'node':'host-1','disk':'store-1'})

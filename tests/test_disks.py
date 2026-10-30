@@ -1,7 +1,7 @@
 import copy
 import sys
+import tempfile
 import unittest
-import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -9,15 +9,20 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 sys.path.insert(0, str(ROOT / "server" / "probe"))
 import homestead_disks as DISKS
+import homestead_kube as K
+import homestead_operations as OPS
+from fakes.kube import Kube
 
 GiB = 1024 ** 3
+LONGHORN, HARVESTER = "longhorn.io/v1beta2", "harvesterhci.io/v1beta1"
 
 
 def lh_node(disks, status):
-    return {"metadata": {"name": "node1"}, "spec": {"disks": disks}, "status": {"diskStatus": status}}
+    return {"apiVersion": LONGHORN, "kind": "Node", "metadata": {"namespace": "longhorn-system", "name": "node1"},
+            "spec": {"disks": disks}, "status": {"diskStatus": status}}
 
 
-BD_SDB = {"metadata": {"name": "bd-sdb"},
+BD_SDB = {"apiVersion": HARVESTER, "kind": "BlockDevice", "metadata": {"namespace": "longhorn-system", "name": "bd-sdb"},
           "spec": {"nodeName": "node1", "devPath": "/dev/sdb", "provision": False, "fileSystem": {}},
           "status": {"state": "Active", "provisionPhase": "Unprovisioned",
                      "deviceStatus": {"devPath": "/dev/sdb", "capacity": {"sizeBytes": 2000 * GiB},
@@ -30,39 +35,42 @@ PROBE = {"node1": {"disks": [{"name": "nvme0n1", "size_gb": 465.8, "model": "Sam
 LH_NODE = lh_node({"default-disk": {"path": "/var/lib/harvester/defaultdisk", "allowScheduling": True}},
                   {"default-disk": {"storageMaximum": 117 * GiB, "storageAvailable": 90 * GiB,
                                     "storageScheduled": 99 * GiB, "scheduledReplica": {"r1": 1, "r2": 1}}})
+BD_PATH = f"{DISKS.BD}/bd-sdb"
+NODE_PATH = f"{DISKS.LH}/nodes/node1"
 
 
-class Cluster:
-    def __init__(self, harvester=True, lh=None):
-        self.bds = [copy.deepcopy(BD_SDB)] if harvester else None
-        self.lh = copy.deepcopy(lh or LH_NODE)
-        self.replicas = []
-        self.sent = []
-        DISKS.bind(self.get, self.send, lambda: PROBE)
+def replica(name, **spec):
+    return {"apiVersion": LONGHORN, "kind": "Replica", "metadata": {"namespace": "longhorn-system", "name": name}, "spec": spec}
 
-    def get(self, path):
-        if path == DISKS.BD:
-            if self.bds is None:
-                raise urllib.error.HTTPError(path, 404, "no", None, None)
-            return {"items": self.bds}
-        if path.startswith(DISKS.BD + "/"):
-            return next(b for b in self.bds if b["metadata"]["name"] == path.rsplit("/", 1)[1])
-        if path.endswith("/nodes"):
-            return {"items": [self.lh]}
-        if path.endswith("/nodes/node1"):
-            return self.lh
-        if path.endswith("/replicas"):
-            return {"items": self.replicas}
-        raise AssertionError(path)
 
-    def send(self, method, path, body=None, **kw):
-        self.sent.append((method, path, body))
-        return body
+def cluster(test, harvester=True, lh=None, *objects):
+    """Longhorn's node, and Harvester's block device where there is Harvester,
+    on the shared fake API (tests/fakes/kube.py)."""
+    kube = test.enterContext(Kube(copy.deepcopy(lh or LH_NODE), *objects, *([copy.deepcopy(BD_SDB)] if harvester else []),
+                                  absent_groups=() if harvester else ("harvesterhci.io",)))
+    # The shared fake runs the real write guards; the storage guard takes the job
+    # store's lock, which lives under its DATA_DIR.
+    test.enterContext(mock.patch.object(OPS, "DATA_DIR", test.enterContext(tempfile.TemporaryDirectory())))
+    saved = (DISKS.kget, DISKS.ksend, DISKS.temps, DISKS.mutation_scope, DISKS.v2_tasks)
+    test.addCleanup(lambda: (DISKS.bind(*saved[:3]), setattr(DISKS, "mutation_scope", saved[3]), setattr(DISKS, "v2_tasks", saved[4])))
+    DISKS.bind(K.kget, K.ksend, lambda: PROBE)
+    return kube
+
+
+def sent(kube):
+    return [(method, path, body) for method, path, body, _ in kube.writes]
+
+
+def edited(kube, path, change):
+    """The stored object at path after change(obj), as someone else saved it."""
+    obj = kube.object(path)
+    change(obj)
+    kube.add(obj)
 
 
 class DiskTests(unittest.TestCase):
     def test_every_disk_is_listed_with_what_it_is_for(self):
-        Cluster()
+        cluster(self)
         inv = DISKS.inventory()
         system, spare = inv["nodes"]["node1"]
         self.assertEqual(("nvme0n1", True, "longhorn"), (system["device"], system["system"], system["role"]))
@@ -84,7 +92,7 @@ class DiskTests(unittest.TestCase):
                        {name: {"storageMaximum": 100 * GiB, "storageAvailable": 60 * GiB,
                                "scheduledReplica": {replica: 1}}
                         for name, replica in [("disk-a", "replica-a"), ("disk-b", "replica-b")]})
-        Cluster(harvester=False, lh=node)
+        cluster(self, harvester=False, lh=node)
         with mock.patch.object(DISKS, "_replica_sizes", return_value={"replica-a": 4 * GiB, "replica-b": 6 * GiB}):
             disk = DISKS.summary()["node1"][0]
         self.assertTrue(disk["root_fs"])
@@ -93,13 +101,13 @@ class DiskTests(unittest.TestCase):
         self.assertEqual((70.0, 10.0), (disk["lh_size_gb"], disk["lh_root_used_gb"]))
 
     def test_kubelet_filesystem_is_identified_when_it_is_on_another_disk(self):
-        c = Cluster(harvester=False, lh=lh_node({"disk-a": {"path": "/var/lib/kubelet/longhorn"}},
+        cluster(self, harvester=False, lh=lh_node({"disk-a": {"path": "/var/lib/kubelet/longhorn"}},
             {"disk-a": {"storageMaximum": 200 * GiB, "storageAvailable": 150 * GiB,
                         "scheduledReplica": {"replica-a": 1}}}))
         probe = copy.deepcopy(PROBE)
         probe["node1"]["mounts"] = [{"disk": "nvme0n1", "device": "nvme0n1p2", "mountpoint": "/"},
                                     {"disk": "sdb", "device": "sdb1", "mountpoint": "/var/lib/kubelet"}]
-        DISKS.bind(c.get, c.send, lambda: probe)
+        DISKS.bind(K.kget, K.ksend, lambda: probe)
         with mock.patch.object(DISKS, "_replica_sizes", return_value={"replica-a": 10 * GiB}):
             disks = DISKS.summary()["node1"]
         self.assertTrue(disks[0]["root_fs"])
@@ -112,26 +120,28 @@ class DiskTests(unittest.TestCase):
         self.assertEqual(10.0, usage["data_gb"], "replica data is also separated on a non-root kubelet filesystem")
 
     def test_harvester_adds_a_disk_by_provisioning_its_blockdevice(self):
-        c = Cluster()
+        c = cluster(self)
         with self.assertRaisesRegex(ValueError, "tick erase"):
             DISKS.add({"node": "node1", "blockdevice": "bd-sdb"})
         DISKS.add({"node": "node1", "blockdevice": "bd-sdb", "wipe": True})
-        method, path, body = c.sent[-1]
+        method, path, body = sent(c)[-1]
         self.assertEqual(("PATCH", DISKS.BD + "/bd-sdb"), (method, path))
         self.assertEqual({"spec": {"provision": True, "provisioner": {"longhorn": {"engineVersion": "LonghornV1"}},
                                    "fileSystem": {"forceFormatted": True}}}, body)
 
     def test_an_older_harvester_uses_its_older_field(self):
-        c = Cluster()
-        c.bds[0]["spec"] = {"nodeName": "node1", "devPath": "/dev/sdb", "fileSystem": {"provisioned": False}}
-        c.bds[0]["status"]["deviceStatus"]["fileSystem"] = {}
+        c = cluster(self)
+        def older(bd):
+            bd["spec"] = {"nodeName": "node1", "devPath": "/dev/sdb", "fileSystem": {"provisioned": False}}
+            bd["status"]["deviceStatus"]["fileSystem"] = {}
+        edited(c, BD_PATH, older)
         DISKS.add({"node": "node1", "blockdevice": "bd-sdb"})
-        self.assertEqual({"spec": {"fileSystem": {"provisioned": True, "forceFormatted": False}}}, c.sent[-1][2])
+        self.assertEqual({"spec": {"fileSystem": {"provisioned": True, "forceFormatted": False}}}, sent(c)[-1][2])
 
     def test_elsewhere_a_mounted_folder_or_a_raw_device_is_added(self):
-        c = Cluster(harvester=False)
+        c = cluster(self, harvester=False)
         DISKS.add({"node": "node1", "path": "/mnt/disk2"})
-        disks = c.sent[-1][2]["spec"]["disks"]
+        disks = sent(c)[-1][2]["spec"]["disks"]
         self.assertEqual({"disk-mnt-disk2": {"path": "/mnt/disk2", "allowScheduling": True, "diskType": "filesystem",
                                              "storageReserved": 0, "tags": []}}, disks)
         with self.assertRaisesRegex(ValueError, "raw device"):
@@ -140,22 +150,23 @@ class DiskTests(unittest.TestCase):
             DISKS.add({"node": "node1", "path": "/var/lib/harvester/defaultdisk"})
 
     def test_a_disk_is_removed_only_once_it_is_empty_and_closed(self):
-        c = Cluster(harvester=False)
+        c = cluster(self, harvester=False)
         with self.assertRaisesRegex(ValueError, "evict it first"):
             DISKS.remove("node1", "default-disk")
         DISKS.evict("node1", "default-disk")
         self.assertEqual({"evictionRequested": True, "allowScheduling": False},
-                         c.sent[-1][2]["spec"]["disks"]["default-disk"])
-        c.lh["status"]["diskStatus"]["default-disk"]["scheduledReplica"] = {}
-        c.lh["spec"]["disks"]["default-disk"]["allowScheduling"] = False
+                         sent(c)[-1][2]["spec"]["disks"]["default-disk"])
+        def drained(node):
+            node["status"]["diskStatus"]["default-disk"]["scheduledReplica"] = {}
+            node["spec"]["disks"]["default-disk"]["allowScheduling"] = False
+        edited(c, NODE_PATH, drained)
         # A disk whose status forgot its replicas still has them: they say so.
-        c.replicas = [{"metadata": {"name": "r3"}, "spec": {"nodeID": "node1", "diskPath": "/var/lib/harvester/defaultdisk",
-                                                            "volumeName": "pvc-1"}}]
+        c.add(replica("r3", nodeID="node1", diskPath="/var/lib/harvester/defaultdisk", volumeName="pvc-1"))
         with self.assertRaisesRegex(ValueError, "1 replica"):
             DISKS.remove("node1", "default-disk")
-        c.replicas = []
+        c.discard(f"{DISKS.LH}/replicas/r3")
         DISKS.remove("node1", "default-disk")
-        self.assertEqual({"spec": {"disks": {"default-disk": None}}}, c.sent[-1][2])
+        self.assertEqual({"spec": {"disks": {"default-disk": None}}}, sent(c)[-1][2])
 
 
 class ProbeMountTests(unittest.TestCase):
@@ -209,30 +220,17 @@ class SystemDriveTests(unittest.TestCase):
                      {"default-disk": {"storageMaximum": 68 * GiB, "storageAvailable": 44 * GiB,
                                        "scheduledReplica": {"vol-a-r-1": 1, "vol-b-r-1": 1}},
                       "disk-mnt-sda": {"storageMaximum": 2750 * GiB, "storageAvailable": 2700 * GiB}})
-        self.node = {"metadata": {"name": "node1", "annotations": {}}}
-        self.sent = []
+        self.kube = cluster(
+            self, False, lh,
+            {"apiVersion": "v1", "kind": "Node", "metadata": {"name": "node1", "annotations": {}}},
+            *[replica(f"vol-{v}-r-1", volumeName=f"vol-{v}") for v in "ab"],
+            *[{"apiVersion": LONGHORN, "kind": "Volume", "metadata": {"namespace": "longhorn-system", "name": f"vol-{v}"},
+               "status": {"actualSize": size * GiB}} for v, size in (("a", 3), ("b", 2))])
+        DISKS.bind(K.kget, K.ksend, lambda: self.probe)
 
-        def get(path):
-            if path == DISKS.BD:
-                raise urllib.error.HTTPError(path, 404, "no", None, None)
-            if path.endswith("longhorn-system/nodes"):
-                return {"items": [lh]}
-            if path == "/api/v1/nodes":
-                return {"items": [self.node]}
-            if path == "/api/v1/nodes/node1":
-                return self.node
-            if path.endswith("/replicas"):
-                return {"items": [{"metadata": {"name": f"vol-{v}-r-1"}, "spec": {"volumeName": f"vol-{v}"}} for v in "ab"]}
-            if path.endswith("/volumes"):
-                return {"items": [{"metadata": {"name": "vol-a"}, "status": {"actualSize": 3 * GiB}},
-                                  {"metadata": {"name": "vol-b"}, "status": {"actualSize": 2 * GiB}}]}
-            raise AssertionError(path)
-
-        def send(method, path, body=None, **kw):
-            self.sent.append((method, path, body))
-            self.node["metadata"]["annotations"].update(body["metadata"]["annotations"])
-            return body
-        DISKS.bind(get, send, lambda: self.probe)
+    @property
+    def sent(self):
+        return sent(self.kube)
 
     def test_longhorns_folder_on_the_lvm_root_shows_on_the_nvme_it_is_on(self):
         lines = DISKS.summary()["node1"]
@@ -257,6 +255,7 @@ class SystemDriveTests(unittest.TestCase):
         self.assertIsNone(self.sent[-1][2]["metadata"]["annotations"]["homestead.io/disk-names"])
         with self.assertRaisesRegex(ValueError, "no disk sdz"):
             DISKS.set_disk_name("node1", "sdz", "x")
+
 
 if __name__ == "__main__":
     unittest.main()

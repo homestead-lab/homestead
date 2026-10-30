@@ -7,6 +7,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import server
+import homestead_deploy_manifests as MANIFESTS
+import homestead_deploy_appstore as APPSTORE
+import homestead_network_services as SVC
 import homestead_capacity_review as review
 import homestead_place as place
 
@@ -141,7 +144,7 @@ class DeployCapacityTests(unittest.TestCase):
     def test_rejected_guard_never_reaches_side_effects_even_with_ack(self):
         self.cfg["memory"] = "10Gi"
         self.cfg["memory_limit"] = "12Gi"
-        cfg = server.DEPLOY.analyze_deploy_intent(self.cfg)
+        cfg = MANIFESTS.analyze_deploy_intent(self.cfg)
         cfg.update(capacity_token=review.issue(cfg), confirm_capacity=True)
         with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
             with self.assertRaises(review.Rejected):
@@ -156,12 +159,12 @@ class DeployCapacityTests(unittest.TestCase):
                 with self.assertRaises(review.Rejected):
                     server.DEPLOY_ROUTES.reviewed_deploy(cfg)
             deploy.assert_not_called()
-            cfg = server.DEPLOY.analyze_deploy_intent(self.cfg)
+            cfg = MANIFESTS.analyze_deploy_intent(self.cfg)
             cfg.update(capacity_token=review.issue(cfg), confirm_capacity=True)
             self.assertTrue(server.DEPLOY_ROUTES.reviewed_deploy(cfg)["ok"])
 
     def test_fresh_recheck_blocks_previously_reviewed_capacity(self):
-        cfg = server.DEPLOY.analyze_deploy_intent(self.cfg)
+        cfg = MANIFESTS.analyze_deploy_intent(self.cfg)
         cfg.update(capacity_token=review.issue(cfg), confirm_capacity=True)
         self.objects["/api/v1/pods"]["items"] = [{"metadata": {"namespace": "other"},
             "spec": {"nodeName": "a", "containers": [{"resources": {"requests": {"memory": "8Gi"}}}]}}]
@@ -205,7 +208,7 @@ class DeployCapacityTests(unittest.TestCase):
         handler._body = lambda: copy.deepcopy(self.cfg)
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
-        with mock.patch.object(server.NETWORK, "prepare_deploy", side_effect=lambda cfg: cfg):
+        with mock.patch.object(SVC, "prepare_deploy", side_effect=lambda cfg: cfg):
             handler.do_POST()
         code, body = handler._send.call_args.args
         self.assertEqual(200, code)
@@ -222,7 +225,7 @@ class DeployCapacityTests(unittest.TestCase):
         handler._body = lambda: {"app": "example-template", **body}
         handler._client_ip = lambda: "127.0.0.1"
         handler._send = mock.Mock()
-        with mock.patch.object(server.DEPLOY, "template_to_cfg", return_value=copy.deepcopy(self.cfg)), \
+        with mock.patch.object(APPSTORE, "template_to_cfg", return_value=copy.deepcopy(self.cfg)), \
                 mock.patch.object(server.DEPLOY, "run_deploy", return_value={"ok": True, "name": "demo", "reused_volumes": ["data"]}) as deploy:
             handler.do_POST()
         self.send.assert_not_called()
@@ -241,7 +244,7 @@ class DeployCapacityTests(unittest.TestCase):
 
     def test_legacy_appstore_accepts_reviewed_resolved_template(self):
         self.nodes[0]["mem_metrics_available"] = False
-        token = review.issue(server.DEPLOY.analyze_deploy_intent(self.cfg))
+        token = review.issue(MANIFESTS.analyze_deploy_intent(self.cfg))
         result, deploy = self.legacy_install({"confirm_capacity": True, "capacity_token": token})
         self.assertEqual(200, result[0])
         self.assertEqual(["data"], result[1]["reused_volumes"])
@@ -249,7 +252,7 @@ class DeployCapacityTests(unittest.TestCase):
 
     def test_legacy_appstore_changed_override_invalidates_review(self):
         self.nodes[0]["mem_metrics_available"] = False
-        token = review.issue(server.DEPLOY.analyze_deploy_intent(self.cfg))
+        token = review.issue(MANIFESTS.analyze_deploy_intent(self.cfg))
         result, deploy = self.legacy_install({"confirm_capacity": True, "capacity_token": token,
                                                "overrides": {"image": "different:2"}})
         self.assertEqual(409, result[0])

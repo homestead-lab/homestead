@@ -332,6 +332,9 @@ class OperationTests(unittest.TestCase):
         self.assertIn("insufficient storage", failed["message"])
 
     def test_smart_test_progress_is_persisted_through_shared_resolver(self):
+        # The resolver's answers, asked back to back; the cadence between real
+        # looks at the host is tested in test_job_cadence.
+        self.enterContext(mock.patch.dict(operations.CADENCE.INTERVALS, {"smart-test": 0}))
         states = [("running", 55, "Self-test in progress"),
                   ("succeeded", 100, "Completed without error")]
         operations.bind(lambda path: self.objects[path], self.tmp.name,

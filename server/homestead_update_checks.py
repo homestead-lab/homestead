@@ -2,9 +2,9 @@
 
 One workload's check (_check_deployment), the scan of every workload with its
 progress, and the shared report with its refresh, reconcile and freshness
-rules. Moved unchanged from homestead_updates (#623); import that module,
-which re-exports these names. Names server.py or the tests replace on
-homestead_updates are read through it (U.x), so those replacements still apply.
+rules. Moved unchanged from homestead_updates (#623): read and replace
+these names here. Names server.py binds on homestead_updates are read
+through it (U.x), so a replacement there still applies.
 """
 import concurrent.futures
 import json
@@ -35,7 +35,7 @@ def _last_known(ns, name, container):
     """What the last scan found for this container, kept while the registry
     asks Homestead to slow down."""
     with _SCAN_LOCK:
-        report = U._LATEST.get("report") or {}
+        report = _LATEST.get("report") or {}
     workload = next((w for w in report.get("workloads") or [] if (w.get("ns"), w.get("name")) == (ns, name)), {})
     image = next((i for i in workload.get("images") or [] if i.get("container") == container), {})
     if not image or image.get("rate_limited") or image.get("error"):
@@ -73,7 +73,7 @@ def _check_deployment(dep, pods, force=False, persist=True, channel=None):
     tracked = U._annotation_json(dep, U.TRACKED)
     ran = U._annotation_json(dep, U.RAN)
     ran_now = dict(ran)
-    auths = U._secret_credentials(ns, dep)
+    auths = REGISTRY._secret_credentials(ns, dep)
     mine = [p for p in _matching_pods(dep, pods) if (p.get("status") or {}).get("phase") == "Running"]
     # A stopped workload has no running digest to compare, which is expected
     # rather than a failed check: imports land scaled to zero on purpose.
@@ -107,12 +107,12 @@ def _check_deployment(dep, pods, force=False, persist=True, channel=None):
                 # comparing with it offered releases older than the one running.
                 known = [v for v in (parsed["tag"], U.VERSION()) if release_key(v)]
                 version = max(known, key=release_key) if known else parsed["tag"]
-                tags = U.registry_tags(source, auths, force)
+                tags = REGISTRY.registry_tags(source, auths, force)
                 candidate_tag = channel_release(version, tags, channel)
                 item["channel_behind"] = channel_behind(version, tags, channel)
             else:
                 try:
-                    candidate_tag = newer_semver(parsed["tag"], U.registry_tags(source, auths, force))
+                    candidate_tag = newer_semver(parsed["tag"], REGISTRY.registry_tags(source, auths, force))
                 except Exception:
                     candidate_tag = None
             if candidate_tag:
@@ -125,7 +125,7 @@ def _check_deployment(dep, pods, force=False, persist=True, channel=None):
                 candidate = source.split("@", 1)[0]
             else:
                 candidate = source
-            manifest = U.manifest_info(candidate, auths, force)
+            manifest = REGISTRY.manifest_info(candidate, auths, force)
             remote = manifest["digest"]
             matches_remote = current in ([remote] + manifest["children"])
             item.update({"current_digest": current, "remote_digest": remote,
@@ -205,7 +205,7 @@ def scan(force=False, homestead_only=False):
     workloads = []
     try:
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, max(1, len(deps)))) as pool:
-            pending = {pool.submit(U._check_deployment, dep, pods, force, channel=channel): dep for dep in deps}
+            pending = {pool.submit(_check_deployment, dep, pods, force, channel=channel): dep for dep in deps}
             for future in concurrent.futures.as_completed(pending):
                 dep = pending[future]
                 try:
@@ -255,28 +255,28 @@ def _fresh_for(report):
 def invalidate():
     """Something changed an image: the next quiet request scans again."""
     with _SCAN_LOCK:
-        U._LATEST.update(report=None, number=0, finished=0.0)
+        _LATEST.update(report=None, number=0, finished=0.0)
 def refresh_one(ns, name):
     """After an update or a rollback: ask again about this one app and put the
     answer in the last report, rather than throwing the whole report away -
     which left the page showing the update as waiting until every registry
     had been asked again."""
     with _SCAN_LOCK:
-        latest = U._LATEST.get("report")
+        latest = _LATEST.get("report")
     if not latest:
         return None
     dep = U.kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     pods = U.kget(f"/api/v1/namespaces/{ns}/pods").get("items", [])
     # It records what now runs, as a full scan does, so the record never
     # lags a rollout this replica saw (#380).
-    item = U._check_deployment(dep, pods, True, persist=True, channel=latest.get("channel"))
+    item = _check_deployment(dep, pods, True, persist=True, channel=latest.get("channel"))
     item["homestead"] = U.PART(ns, name)
     with _SCAN_LOCK:
-        latest = U._LATEST.get("report")
+        latest = _LATEST.get("report")
         if not latest:
             return None
         rows = [w for w in latest.get("workloads") or [] if (w.get("ns"), w.get("name")) != (ns, name)] + [item]
-        U._LATEST["report"] = _summary(rows, checked_at=latest.get("checked_at"), channel=latest.get("channel"))
+        _LATEST["report"] = _summary(rows, checked_at=latest.get("checked_at"), channel=latest.get("channel"))
     return item
 RECONCILE_EVERY = 10
 _RECONCILED = [0.0]
@@ -292,7 +292,7 @@ def reconcile(now=None):
     list of Deployments, at most every RECONCILE_EVERY seconds."""
     now = now or time.time()
     with _SCAN_LOCK:
-        latest = U._LATEST.get("report")
+        latest = _LATEST.get("report")
         if not latest or now - _RECONCILED[0] < RECONCILE_EVERY:
             return []
         _RECONCILED[0] = now
@@ -325,13 +325,13 @@ def reconcile(now=None):
                     break
     if gone:
         with _SCAN_LOCK:
-            latest = U._LATEST.get("report")
+            latest = _LATEST.get("report")
             if latest:
                 rows = [w for w in latest.get("workloads") or [] if (w.get("ns"), w.get("name")) not in gone]
-                U._LATEST["report"] = _summary(rows, checked_at=latest.get("checked_at"), channel=latest.get("channel"))
+                _LATEST["report"] = _summary(rows, checked_at=latest.get("checked_at"), channel=latest.get("channel"))
     for ns, name in stale:
         try:
-            U.refresh_one(ns, name)
+            refresh_one(ns, name)
         except Exception:
             pass                    # the line stays as it was; the next scan settles it
     return stale
@@ -339,7 +339,7 @@ def refresh_soon(ns, name):
     """refresh_one in the background; if it cannot, the next request scans again."""
     def run():
         try:
-            U.refresh_one(ns, name)
+            refresh_one(ns, name)
         except Exception:
             invalidate()
     threading.Thread(target=run, name=f"update-refresh-{name}", daemon=True).start()
@@ -349,15 +349,15 @@ def homestead_report():
     Homestead's Check now asks about Homestead, not every app. With no report
     yet, the answer has Homestead's parts alone, and is not kept."""
     with _RUN_LOCK:
-        fresh = U.scan(True, homestead_only=True)
+        fresh = scan(True, homestead_only=True)
         with _SCAN_LOCK:
-            latest = U._LATEST["report"]
+            latest = _LATEST["report"]
             if not latest:
                 return dict(fresh, partial=True)
             merged = _summary([w for w in latest["workloads"] if not w.get("homestead")] + fresh["workloads"],
                               latest["checked_at"], channel=fresh["channel"])
             merged["homestead_checked_at"] = fresh["checked_at"]
-            U._LATEST["report"] = merged
+            _LATEST["report"] = merged
             return merged
 def report(force=False):
     """The update report: one scan at a time, and the newest wins for everyone.
@@ -373,12 +373,12 @@ def report(force=False):
         except Exception:
             pass                    # a report a little behind beats none
     with _SCAN_LOCK:
-        latest, begun = dict(U._LATEST), _STARTED[0]
+        latest, begun = dict(_LATEST), _STARTED[0]
     if not force and latest["report"] and latest["report"].get("channel", "prod") == U.CHANNEL() and time.time() - latest["finished"] < _fresh_for(latest["report"]):
         return latest["report"]
     with _RUN_LOCK:
         with _SCAN_LOCK:
-            latest = dict(U._LATEST)
+            latest = dict(_LATEST)
         if latest["report"] and latest["report"].get("channel", "prod") == U.CHANNEL():
             if force and latest["number"] > begun:
                 return latest["report"]
@@ -388,13 +388,13 @@ def report(force=False):
             _STARTED[0] += 1
             number = _STARTED[0]
         try:
-            found = U.scan(force)
+            found = scan(force)
         except Exception:
             if latest["report"] and not force and latest["report"].get("channel", "prod") == U.CHANNEL():
                 return latest["report"]
             raise
         with _SCAN_LOCK:
-            U._LATEST.update(report=found, number=number, finished=time.time())
+            _LATEST.update(report=found, number=number, finished=time.time())
         return found
 
 
@@ -402,4 +402,5 @@ def report(force=False):
 # both only look these names up when a function runs.
 from homestead_update_registry import channel_behind, channel_release, newer_semver, parse_image, release_key, semver  # noqa: E402
 import homestead_updates as U  # noqa: E402
+import homestead_update_registry as REGISTRY  # noqa: E402
 import homestead_gitops as GITOPS  # noqa: E402

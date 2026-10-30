@@ -13,6 +13,8 @@ import homestead_capacity_review as SIGN
 import homestead_changes as CHANGES
 import homestead_self_data_prepare as P
 import homestead_updates as UPDATES
+import homestead_update_registry as REGISTRY
+import homestead_update_checks as CHECKS
 import server  # Bind the app before test fixtures install their signing key.
 from homestead_storage_journal import Held
 import test_self_data_coordinator as coordinator_fixture
@@ -245,10 +247,10 @@ class PreparationTests(unittest.TestCase):
              mock.patch.object(UPDATES, "PART", lambda ns, name: "self"), \
              mock.patch.object(UPDATES, "CHANNEL", lambda: "prod"), \
              mock.patch.object(UPDATES, "VERSION", lambda: ""), \
-             mock.patch.object(UPDATES, "registry_tags", lambda *a, **k: []), \
-             mock.patch.object(UPDATES, "manifest_info", lambda *a, **k: {"digest": IMAGE.split("@")[1], "children": []}), \
-             mock.patch.object(UPDATES, "_secret_credentials", lambda *a: {}):
-            UPDATES._check_deployment(dep, [pod])
+             mock.patch.object(REGISTRY, "registry_tags", lambda *a, **k: []), \
+             mock.patch.object(REGISTRY, "manifest_info", lambda *a, **k: {"digest": IMAGE.split("@")[1], "children": []}), \
+             mock.patch.object(REGISTRY, "_secret_credentials", lambda *a: {}):
+            CHECKS._check_deployment(dep, [pod])
 
     def test_an_image_scan_during_preparation_is_not_a_change_to_homestead(self):
         # #680 put the change-history mark on every Deployment write, so the

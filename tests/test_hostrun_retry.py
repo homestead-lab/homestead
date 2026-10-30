@@ -4,26 +4,28 @@ on RKE2 in the release suite, after a host failed and came back."""
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_files as FILES
 import homestead_hostrun as HOSTRUN
+import homestead_kube as K
+from fakes.kube import Kube
 
 
 class Cluster:
+    """The exec answers. The API is the shared fake (tests/fakes/kube.py), where a
+    helper pod that is made starts Running, as it does once its node is up."""
+
     def __init__(self, answers):
-        self.answers, self.calls, self.pods = list(answers), 0, {}
+        self.answers, self.calls = list(answers), 0
 
-    def get(self, path):
-        return self.pods.get(path)
-
-    def send(self, method, path, body=None, **_):
-        if method == "POST":
-            name = body["metadata"]["name"]
-            self.pods[f"{path}/{name}"] = {"status": {"phase": "Running"}}
-        elif method == "DELETE":
-            self.pods.pop(path, None)
-        return {}
+    def send(self, method, path, body=None, **kw):
+        result = K.ksend(method, path, body, **kw)
+        if method == "POST" and path.endswith("/pods"):
+            K.ksend("PATCH", f"{path}/{body['metadata']['name']}/status", {"status": {"phase": "Running"}},
+                    ctype="application/merge-patch+json")
+        return result
 
     def exec_in(self, *args, **kwargs):
         self.calls += 1
@@ -36,7 +38,10 @@ class Cluster:
 class RetryTests(unittest.TestCase):
     def run_with(self, *answers):
         cluster = Cluster(answers)
-        HOSTRUN.bind(cluster.get, cluster.send, cluster.exec_in, "lab")
+        self.enterContext(Kube())
+        self.enterContext(mock.patch.multiple(HOSTRUN, kget=HOSTRUN.kget, ksend=HOSTRUN.ksend,
+                                              exec_in=HOSTRUN.exec_in, NS=HOSTRUN.NS))
+        HOSTRUN.bind(K.kget, cluster.send, cluster.exec_in, "lab")
         paused = []
         try:
             return HOSTRUN.run("node-2", "echo ok", sleep=paused.append), cluster, paused
@@ -49,7 +54,7 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(("ok\n", ""), result)
         self.assertEqual(3, cluster.calls)
         self.assertEqual([HOSTRUN.EXEC_PAUSE] * 2, paused)
-        self.assertEqual({}, cluster.pods, "the helper is removed after the run")
+        self.assertEqual([], K.kget("/api/v1/namespaces/lab/pods")["items"], "the helper is removed after the run")
 
     def test_it_gives_up_with_the_api_servers_answer(self):
         refused = FILES.ExecRefused("Kubernetes refused to run a command in homestead-host-node-2 (HTTP/1.1 500)")

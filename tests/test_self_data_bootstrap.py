@@ -11,8 +11,53 @@ import homestead_self_data_anchor as A
 import homestead_self_data_bootstrap as B
 import homestead_self_data_kube as K
 from homestead_storage_journal import Held, shape, identity
-from test_self_data_anchor import Cluster, OP
+from test_self_data_anchor import OP
 from test_self_data_coordinator import IMAGE
+
+
+# test_self_data_anchor moved onto the shared fake API; this file still reads and writes the
+# control object and the setup's resources through the stand-in it was written against.
+class Cluster:
+    def __init__(self):
+        self.objects = {}
+        self.sent = []
+        self.lose_at = None
+        self.reject_at = None
+        self.uid = 0
+        self.pvc = "/api/v1/namespaces/lab/persistentvolumeclaims/data"
+        self.objects[self.pvc] = {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+            "metadata": {"namespace": "lab", "name": "data", "uid": "pvc-old", "resourceVersion": "1"},
+            "spec": {"volumeName": "old-pv"}}
+
+    def read(self, path):
+        if path not in self.objects:
+            raise urllib.error.HTTPError(path, 404, "absent", {}, None)
+        return copy.deepcopy(self.objects[path])
+
+    def send(self, method, path, body, **kwargs):
+        self.sent.append((method, path, copy.deepcopy(body)))
+        if len(self.sent) == self.reject_at:
+            raise OSError("secret API diagnostic")
+        if method == "POST":
+            path += "/" + body["metadata"]["name"]
+            if path in self.objects:
+                raise urllib.error.HTTPError(path, 409, "already exists", {}, None)
+            obj = copy.deepcopy(body)
+            self.uid += 1
+            obj["metadata"].update(uid=f"created-{self.uid}", resourceVersion="1")
+        else:
+            old = self.objects[path]
+            for key in ("uid", "resourceVersion"):
+                if old["metadata"][key] != body["metadata"][key]:
+                    raise urllib.error.HTTPError(path, 409, "changed", {}, None)
+            obj = copy.deepcopy(body) if method == "PUT" else copy.deepcopy(old)
+            if method == "PATCH":
+                obj["spec"].update(body.get("spec", {}))
+            obj["metadata"]["resourceVersion"] = str(int(old["metadata"]["resourceVersion"]) + 1)
+        self.objects[path] = obj
+        if len(self.sent) == self.lose_at:
+            raise TimeoutError("secret response diagnostic")
+        return copy.deepcopy(obj)
 
 
 def with_preview(send):

@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_power_hold as HOLD
 import homestead_power as POWER
 import homestead_lifecycle as LC
+import homestead_node_actions as NODE_ACTIONS
 
 
 def pod(ns, name, node, owner_kind="ReplicaSet", owner="app-7d9f", phase="Running", labels=None):
@@ -169,12 +170,12 @@ class OrderTests(unittest.TestCase):
     def run_power(self, planned_outage):
         calls = []
         with mock.patch.object(LC, "NODE_POWER_ENABLED", True), \
-             mock.patch.object(LC, "quorum_report", return_value={}), \
-             mock.patch.object(LC, "node_action_check", return_value=(True, "", {})), \
-             mock.patch.object(LC, "set_cordon", side_effect=lambda *a: calls.append("cordon")), \
-             mock.patch.object(LC, "drain", side_effect=lambda *a, **k: calls.append(("drain", k["resumed"])) or {"evicted": [], "skipped": []}), \
-             mock.patch.object(LC, "_send_power", side_effect=lambda *a: calls.append("send") or {}):
-            LC.node_power("k1", "reboot", True, before_send=lambda: calls.append("recheck"), reviewed_pods=[],
+             mock.patch.object(NODE_ACTIONS, "quorum_report", return_value={}), \
+             mock.patch.object(NODE_ACTIONS, "node_action_check", return_value=(True, "", {})), \
+             mock.patch.object(NODE_ACTIONS, "set_cordon", side_effect=lambda *a: calls.append("cordon")), \
+             mock.patch.object(NODE_ACTIONS, "drain", side_effect=lambda *a, **k: calls.append(("drain", k["resumed"])) or {"evicted": [], "skipped": []}), \
+             mock.patch.object(NODE_ACTIONS, "_send_power", side_effect=lambda *a: calls.append("send") or {}):
+            NODE_ACTIONS.node_power("k1", "reboot", True, before_send=lambda: calls.append("recheck"), reviewed_pods=[],
                           planned_outage=planned_outage, hold=lambda: calls.append("hold") or True)
         return calls
 

@@ -8,10 +8,10 @@ function load() {
     $: () => null, esc: s => String(s ?? "").replaceAll("<", "&lt;"), STATE: { data: {} }, tip: t => t };
   vm.createContext(c);
   c.jsArg = s => JSON.stringify(String(s ?? "")); c.jsq = s => (c.esc || String)(c.jsArg(s));
-  for (const f of ["web/js/ui.js", "web/js/views-workloads.js", "web/js/views-lifecycle.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
+  for (const f of ["web/js/ui.js", "web/js/app-form.js", "web/js/views-workloads.js", "web/js/views-lifecycle.js"]) vm.runInContext(fs.readFileSync(f, "utf8"), c);
   return c;
 }
-const field = (c, w) => c.placementSection({ apart: [], together: [] }, { failover: "default", ...w }, [], []);
+const field = (c, w) => c.appFormPlacement("e", { apart: [], together: [] }, { failover: "default", ...w }, [], []);
 
 test("a tier Homestead may set is a choice", () => {
   assert.match(field(load(), { priority: "critical" }), /id="e_priority"/);
