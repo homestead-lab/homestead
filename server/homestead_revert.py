@@ -12,6 +12,16 @@ API. So, step by step, each advanced by the operations poll:
   4. the volume is reverted to the chosen snapshot;
   5. it is detached, and everything is started again the way it was.
 
+What is started again is checked first, each time (_start_again): the same
+object as was stopped (its UID, recorded with how it ran before the stop),
+still mounting the same claim, bound to the same volume; no pod still on the
+claim, terminating ones included; no copy or import holding it; and, for a
+Deployment or StatefulSet, room for it. The write is conditional on the
+object read. Any doubt leaves it stopped: the step waits a while, then the
+job ends saying which app was not started, why, and how to start it from
+Homestead. Something already gone when it was to be stopped (a 404, not a
+read that failed) is left gone, and never started again.
+
 A failure before the revert puts things back: the volume is detached and
 everything started again, unchanged. So does a failure of Longhorn's API up
 to the revert: a connection that fails is tried again a few times, then the
@@ -35,6 +45,7 @@ import urllib.request
 
 import homestead_kube as KUBE
 import homestead_longhorn_access as ACCESS
+import homestead_import_guard as IMPORT
 import homestead_operations as OPS
 import homestead_self as SELF
 import homestead_storage_guard as STORAGE_GUARD
@@ -43,7 +54,7 @@ LHNS = "longhorn-system"
 API = f"/apis/longhorn.io/v1beta2/namespaces/{LHNS}"
 BACKEND = ACCESS.URL
 ATTACHMENT = "homestead-revert"
-WAIT = {"stopping": 600, "attaching": 300, "confirming": 300, "detaching": 300, "starting": 600}
+WAIT = {"stopping": 600, "attaching": 300, "confirming": 300, "detaching": 300, "restarting": 300, "starting": 600}
 # A step whose connection failed (refused, reset, timed out) is tried again on
 # a later round, this far apart, this many times in all; longhorn-backend
 # spreads requests over the manager pods, so one can blip.
@@ -136,36 +147,71 @@ def plan(volume, snapshot):
             "ready": not blockers and bool(status.get("readyToUse", True))}
 
 
+def _path(ns, c):
+    kind = c["kind"]
+    if kind in ("Deployment", "StatefulSet"):
+        return f"/apis/apps/v1/namespaces/{ns}/{'deployments' if kind == 'Deployment' else 'statefulsets'}/{c['name']}"
+    if kind == "CronJob":
+        return f"/apis/batch/v1/namespaces/{ns}/cronjobs/{c['name']}"
+    return f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{c['name']}"
+
+
+def _claim_path(ns, claim):
+    return f"/api/v1/namespaces/{ns}/persistentvolumeclaims/{claim}"
+
+
+def _record(ns, claim, consumers):
+    """Which objects are about to be stopped, and which claim: saved with the
+    job before anything is changed, so only these are ever started again."""
+    for c in consumers:
+        obj = KUBE.get_optional(_path(ns, c), read=kget)
+        uid = ((obj or {}).get("metadata") or {}).get("uid")
+        if not uid:
+            raise ValueError(f"{c['name']} is no longer there; open the rollback again. Nothing was changed")
+        c["uid"] = uid
+    pvc = KUBE.get_optional(_claim_path(ns, claim), read=kget)
+    uid = ((pvc or {}).get("metadata") or {}).get("uid")
+    if not uid:
+        raise ValueError(f"the claim {claim} is no longer there; open the rollback again. Nothing was changed")
+    return uid
+
+
 def start(volume, snapshot, ops):
     p = plan(volume, snapshot)
     if p["blockers"]:
         raise ValueError(p["blockers"][0])
     # Before anything is stopped: every later step goes through Longhorn's API.
     ACCESS.require(kget, ksend, SELF.NS, f"Rolling {p['claim'] or volume} back")
+    claim_uid = _record(p["namespace"], p["claim"], p["consumers"]) if p["namespace"] and p["claim"] else ""
     ref = {"volume": volume, "snapshot": snapshot, "namespace": p["namespace"], "claim": p["claim"],
-           "consumers": p["consumers"], "phase": "stopping", "since": time.time()}
+           "claim_uid": claim_uid, "consumers": p["consumers"], "phase": "stopping", "since": time.time()}
     label = p["claim"] or volume
     return ops.start("snapshot-revert", f"Roll {label} back to a snapshot",
                      {"kind": "Volume", "name": label, "namespace": p["namespace"]}, "/data-protection", ref,
                      f"Stopping what uses {label}")
 
 
+STOPPED = {"Deployment": {"replicas": 0}, "StatefulSet": {"replicas": 0}, "CronJob": {"suspend": True},
+           "VirtualMachine": {"runStrategy": "Halted", "running": None}}
+
+
 def _stop(ns, ref):
+    """Stop what is not stopped yet: "" once all are, else why one is not.
+    One Kubernetes no longer has (a 404) is gone, not stopped: it is never
+    started again. Any other failure is tried again on a later round."""
     for c in ref["consumers"]:
         if c.get("stopped"):
             continue
-        name = c["name"]
-        if c["kind"] in ("Deployment", "StatefulSet"):
-            plural = "deployments" if c["kind"] == "Deployment" else "statefulsets"
-            ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/{plural}/{name}", {"spec": {"replicas": 0}},
-                  ctype="application/merge-patch+json")
-        elif c["kind"] == "CronJob":
-            ksend("PATCH", f"/apis/batch/v1/namespaces/{ns}/cronjobs/{name}", {"spec": {"suspend": True}},
-                  ctype="application/merge-patch+json")
-        elif c["kind"] == "VirtualMachine":
-            ksend("PATCH", f"/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachines/{name}",
-                  {"spec": {"runStrategy": "Halted", "running": None}}, ctype="application/merge-patch+json")
+        try:
+            ksend("PATCH", _path(ns, c), {"spec": STOPPED[c["kind"]]}, ctype="application/merge-patch+json")
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                return f"{c['name']} could not be stopped ({_why(error)})"
+            c["gone"] = True
+        except Exception as error:
+            return f"{c['name']} could not be stopped ({_why(error)})"
         c["stopped"] = True
+    return ""
 
 
 def _phase(ref, phase):
@@ -249,19 +295,255 @@ def _names(ref):
     return ", ".join(c["name"] for c in ref.get("consumers") or []) or "what used it"
 
 
-def _put_back(ref, why, stuck=""):
+def _count(n):
+    return f"{n} replica" + ("" if n == 1 else "s")
+
+
+def _how(c):
+    """Where, in Homestead, a person starts it again."""
+    if c["kind"] in ("Deployment", "StatefulSet"):
+        return f"Containers → {c['name']} → Start with {_count(c.get('replicas', 1))}"
+    if c["kind"] == "VirtualMachine":
+        return f"Virtual machines → {c['name']} → Start"
+    # Homestead shows a paused schedule but has no control to resume one.
+    return (f"Scheduled jobs shows {c['name']} as paused; resume it by setting its spec.suspend back to false "
+            f"(kubectl, or the Git source it comes from)")
+
+
+def _admission(obj):
+    """The capacity check a start from Homestead gets: a dict whose "blocked"
+    is False when it fits. Bound in the deploy routes, so imported late."""
+    import homestead_deploy_server as DEPLOY
+    return DEPLOY.copy_admission(obj)
+
+
+def _claims(spec):
+    return {(v.get("persistentVolumeClaim") or {}).get("claimName") or (v.get("dataVolume") or {}).get("name")
+            for v in (spec or {}).get("volumes") or []} - {None, ""}
+
+
+def _mounts(c, obj, claim):
+    spec = obj.get("spec") or {}
+    if c["kind"] == "CronJob":
+        pod = ((((spec.get("jobTemplate") or {}).get("spec") or {}).get("template") or {}).get("spec"))
+    else:
+        pod = (spec.get("template") or {}).get("spec")
+    if claim in _claims(pod):
+        return True
+    return c["kind"] == "StatefulSet" and any(
+        claim.startswith(f"{(t.get('metadata') or {}).get('name')}-{c['name']}-")
+        for t in spec.get("volumeClaimTemplates") or [])
+
+
+def _as_before(c, spec):
+    if c["kind"] in ("Deployment", "StatefulSet"):
+        return spec.get("replicas", 1) == c.get("replicas", 1)
+    if c["kind"] == "CronJob":
+        return bool(spec.get("suspend")) == bool(c.get("suspend"))
+    return spec.get("runStrategy") == c.get("run_strategy")
+
+
+def _as_left(c, spec):
+    if c["kind"] in ("Deployment", "StatefulSet"):
+        return spec.get("replicas") == 0
+    if c["kind"] == "CronJob":
+        return spec.get("suspend") is True
+    return spec.get("runStrategy") == "Halted"
+
+
+def _running(c):
+    if c["kind"] in ("Deployment", "StatefulSet"):
+        return {"replicas": c.get("replicas", 1)}
+    if c["kind"] == "CronJob":
+        return {"suspend": bool(c.get("suspend"))}
+    return {"runStrategy": c.get("run_strategy")}
+
+
+def _claim_doubt(ns, ref, rolled_back):
+    """Why the claim is not safe to start anything on, or ""."""
+    claim, volume = ref.get("claim", ""), ref["volume"]
+    try:
+        pvc = KUBE.get_optional(_claim_path(ns, claim), read=kget)
+    except Exception as error:
+        return f"Homestead could not read the claim {claim} ({_why(error)})"
+    meta = (pvc or {}).get("metadata") or {}
+    if pvc is None or meta.get("deletionTimestamp"):
+        return f"the claim {claim} is gone or being removed"
+    if ref.get("claim_uid") and meta.get("uid") != ref["claim_uid"]:
+        return f"the claim {claim} was replaced"
+    bound = (pvc.get("spec") or {}).get("volumeName")
+    if bound != volume:
+        return f"the claim {claim} is now bound to {bound or 'nothing'}, not {volume}"
+    if rolled_back and not ref.get("stuck"):
+        # The rollback's own ticket, if it could not be removed, is named in
+        # the message; anything else holding the volume is not this job's.
+        try:
+            state = _state(volume)
+        except Exception as error:
+            return f"Homestead could not read {volume} ({_why(error)})"
+        if state != "detached":
+            return f"{volume} is {state or 'in an unknown state'}, not detached"
+    return ""
+
+
+OWNERS = ("/apis/apps/v1/namespaces/{ns}/replicasets", "/apis/batch/v1/namespaces/{ns}/jobs",
+          "/apis/kubevirt.io/v1/namespaces/{ns}/virtualmachineinstances")
+
+
+def _ancestors(ns, pods):
+    """Each pod's owners and their owners, by UID: a Deployment's pod through
+    its ReplicaSet, a CronJob's through its Job, a VM's through its instance.
+    Raises when they cannot be read: then whose a pod is, is unknown."""
+    up = {}
+    for path in OWNERS:
+        listing = KUBE.get_optional(path.format(ns=ns), read=kget)
+        if listing is None:                         # not installed (KubeVirt): nothing owned through it
+            continue
+        if not isinstance(listing.get("items"), list) or (listing.get("metadata") or {}).get("continue"):
+            raise ValueError("the list of what owns the pods is incomplete")
+        for row in listing["items"]:
+            meta = row.get("metadata") or {}
+            up[meta.get("uid")] = {o.get("uid") for o in meta.get("ownerReferences") or [] if o.get("uid")}
+    found = {}
+    for pod in pods:
+        meta = pod.get("metadata") or {}
+        direct = {o.get("uid") for o in meta.get("ownerReferences") or [] if o.get("uid")}
+        found[meta.get("name", "")] = direct.union(*(up.get(uid, set()) for uid in direct))
+    return found
+
+
+def _no_room(name, check):
+    reasons = []
+    for row in check.get("candidates") or [] if isinstance(check, dict) else []:
+        for why in row.get("reasons") or []:
+            if why not in reasons:
+                reasons.append(str(why))
+    return f"{name} no longer fits on the hosts" + (f" ({'; '.join(reasons[:2])})" if reasons else "")
+
+
+def _start_again(ns, ref, rolled_back=True):
+    """Start again what this job stopped, each only once it checks out (see
+    the top of this file). Returns {(kind, name): why} for what is left
+    stopped; empty once everything that can start has been asked to. Never raises."""
+    left = {}
+    consumers = ref.get("consumers") or []
+    todo = [c for c in consumers if c.get("stopped") and not c.get("gone") and not c.get("started")]
+    if not todo or not ns:
+        return left
+    doubt = _claim_doubt(ns, ref, rolled_back)
+    pods, owners = [], {}
+    try:
+        pods = reclass._using_pods(ns, ref["claim"], helpers=True) if ref.get("claim") else []
+        owners = _ancestors(ns, pods) if pods else {}
+    except Exception as error:
+        doubt = doubt or f"Homestead could not tell what still uses {ref.get('claim')} ({_why(error)})"
+    for c in todo:
+        name, key = c["name"], (c["kind"], c["name"])
+        try:
+            obj = KUBE.get_optional(_path(ns, c), read=kget)
+        except Exception as error:
+            left[key] = f"Homestead could not read {name} ({_why(error)})"
+            continue
+        if obj is None:
+            c["gone"] = True                # removed while stopped: nothing to start
+            continue
+        meta, spec = obj.get("metadata") or {}, obj.get("spec") or {}
+        if c.get("uid") and meta.get("uid") != c["uid"]:
+            left[key] = f"{name} was replaced by another object while it was stopped"
+            continue
+        if meta.get("deletionTimestamp"):
+            left[key] = f"{name} is being removed"
+            continue
+        if not _mounts(c, obj, ref["claim"]):
+            left[key] = f"{name} no longer uses {ref['claim']}"
+            continue
+        if _as_before(c, spec):
+            # Running as before already, or a start whose reply was lost went
+            # through: its own new pods are not old writers.
+            c.update(started=True, seen_uid=meta.get("uid"))
+            continue
+        if not _as_left(c, spec):
+            left[key] = f"{name} was changed while it was stopped"
+            continue
+        if doubt:
+            left[key] = doubt
+            continue
+        # Never beside a pod still on the volume, terminating ones included:
+        # two writers on the same data. After a revert that is any pod but
+        # those of what this job has started again; before one (nothing was
+        # changed) only the app's own.
+        mine = {meta.get("uid")}
+        started = {x.get("seen_uid") or x.get("uid") for x in consumers if x.get("started")} - {None}
+        # A pod whose owner cannot be told belongs to no one: it blocks too.
+        blocking = [p for p, up in owners.items() if not up or (not up & started if rolled_back else up & mine)]
+        if blocking:
+            left[key] = f"{blocking[0]} still uses {ref['claim']}"
+            continue
+        hold = IMPORT.pending(obj, ns, kget)
+        if hold:
+            left[key] = f"{name}: {hold}"
+            continue
+        if c["kind"] in ("Deployment", "StatefulSet") and c.get("replicas"):
+            proposed = {**obj, "spec": {**spec, "replicas": c["replicas"]}}
+            try:
+                check = _admission(proposed)
+            except Exception as error:
+                left[key] = f"Homestead could not check that {name} fits ({_why(error)})"
+                continue
+            if not isinstance(check, dict) or check.get("blocked") is not False:
+                left[key] = _no_room(name, check)
+                continue
+        try:
+            ksend("PATCH", _path(ns, c), {"metadata": {"resourceVersion": meta.get("resourceVersion")},
+                                          "spec": _running(c)}, ctype="application/merge-patch+json")
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                c["gone"] = True
+            else:
+                left[key] = f"Homestead could not start {name} ({_why(error)})"
+            continue
+        except Exception as error:
+            # Its answer was lost: the next round reads whether it went through.
+            left[key] = f"Homestead could not start {name} ({_why(error)})"
+            continue
+        c.update(started=True, seen_uid=meta.get("uid"))
+    return left
+
+
+def _left(ref, left):
+    """What a person reads about apps left stopped: each, why, and how to start it."""
+    rows = {(c["kind"], c["name"]): c for c in ref.get("consumers") or []}
+    return "; ".join(f"{key[1]} was left stopped: {why}. Once that is resolved: {_how(rows[key])}"
+                     for key, why in left.items())
+
+
+def _gone(ref):
+    gone = [c["name"] for c in ref.get("consumers") or [] if c.get("gone")]
+    return f"; {', '.join(gone)} {'was' if len(gone) == 1 else 'were'} no longer there, and {'is' if len(gone) == 1 else 'are'} not made again" if gone else ""
+
+
+def _put_back(ref, why, stuck="", final=False):
     """Before the revert, or once it is known not to have happened: let go of
-    the volume, start everything again, and say why - and what may have changed."""
-    started = "everything that was running is starting again"
+    the volume, start everything again, and say why - and what may have changed.
+    A start that does not check out is tried again on a few later rounds
+    ("putting-back"), unless final (a cancel ends the job at once)."""
     try:
         if ref.get("attached"):
             stuck = _let_go(ref)[0]
     finally:
-        try:
-            if ref.get("namespace"):
-                reclass._start(ref["namespace"], ref)
-        except Exception as error:
-            started = f"Homestead could not start {_names(ref)} again ({_why(error)}): start them yourself"
+        # Nothing was changed on the volume, so a ticket still on it is no
+        # reason to keep the apps off it - the checks still apply.
+        left = _start_again(ref.get("namespace", ""), ref, rolled_back=False)
+    ref["put_back"] = {"why": why, "stuck": stuck}
+    if left and not final and _again(ref, "put back"):
+        _phase(ref, "putting-back")
+        return "running", 95, f"{why}. Putting things back; {next(iter(left.values()))}"
+    return _put_back_end(ref, left)
+
+
+def _put_back_end(ref, left):
+    why, stuck = ref["put_back"]["why"], ref["put_back"]["stuck"]
+    started = (_left(ref, left) if left else "everything that was running is starting again") + _gone(ref)
     if ref.get("reverting"):
         changed = (f"Longhorn may have rolled it back before failing: the state before is kept as snapshot "
                    f"{ref.get('kept', '')}, to roll back to if needed")
@@ -317,16 +599,27 @@ def resolve(item):
     ref = item["ref"]
     ns, volume = ref.get("namespace", ""), ref["volume"]
     phase = ref.get("phase")
-    if ref.get("revert_sent") and not ref.get("reverted") and phase != "confirming":
+    if ref.get("revert_sent") and not ref.get("reverted") and phase not in ("confirming", "putting-back"):
+        # (A put-back runs only once the revert is known not to have happened.)
         # A leader before this one may have sent the revert: confirm it, never
         # send it again - and before any step's own checks, which could put
         # things back while Longhorn may still be reverting.
         ref.setdefault("revert_error", "Homestead restarted before Longhorn answered")
         _phase(ref, "confirming")
         return "running", 60, f"Checking whether Longhorn rolled {volume} back"
+    if phase == "putting-back":
+        if _pausing(ref):
+            return "running", 95, "Putting things back"
+        left = _start_again(ns, ref, rolled_back=False)
+        if left and _again(ref, "put back"):
+            return "running", 95, f"Putting things back; {next(iter(left.values()))}"
+        return _put_back_end(ref, left)
     if phase == "stopping":
-        if ns:
-            _stop(ns, ref)
+        unstopped = _stop(ns, ref) if ns else ""
+        if unstopped:
+            if _late(ref):
+                return _put_back(ref, unstopped)
+            return "running", 10, f"Stopping what uses {ref['claim'] or volume}: {unstopped}; trying again"
         using = reclass._using_pods(ns, ref["claim"], helpers=True) if ns and ref.get("claim") else []
         if using or _state(volume) != "detached":
             if _late(ref):
@@ -424,18 +717,27 @@ def resolve(item):
             ref["stuck"] = stuck
         if _state(volume) != "detached" and not _late(ref):
             return "running", 80, f"Detaching {volume}"
-        if ns:
-            reclass._start(ns, ref)
-        _phase(ref, "starting")
-        return "running", 85, "Starting everything again"
+        _phase(ref, "restarting")
+        phase = "restarting"
+    if phase == "restarting":
+        left = _start_again(ns, ref)
+        if not left:
+            _phase(ref, "starting")
+            return "running", 85, "Starting everything again"
+        if not _late(ref):
+            (_, name), why = next(iter(left.items()))
+            return "running", 82, f"Waiting to start {name} again: {why}"
+        return ("failed", 100, f"Rolled back to {ref['snapshot']}; the state before is kept as snapshot "
+                               f"{ref.get('kept', '')}. {_left(ref, left)}{_gone(ref)}{_held(ref, ref.get('stuck', ''))}")
     if phase == "starting":
-        waiting = reclass._started(ns, ref) if ns else []
+        running = [c for c in ref.get("consumers") or [] if not c.get("gone")]
+        waiting = reclass._started(ns, {**ref, "consumers": running}) if ns else []
         if waiting and not _late(ref):
             return "running", 90, f"Waiting for {', '.join(waiting[:3])} to be ready"
         tail = f"; {', '.join(waiting)} not ready yet" if waiting else ""
         return ("succeeded", 100, f"{ref['claim'] or volume} is back to {ref['snapshot']}. The state before is kept "
                                   f"as snapshot {ref.get('kept', '')}, to roll forward again if needed{tail}"
-                                  f"{_held(ref, ref.get('stuck', ''))}")
+                                  f"{_gone(ref)}{_held(ref, ref.get('stuck', ''))}")
     return "failed", 100, f"unknown step {phase}"
 
 
@@ -443,6 +745,8 @@ CONFIRMING = "The rollback is being confirmed; Homestead will finish or stop it 
 
 
 def _uncancellable(ref):
+    if ref.get("phase") == "putting-back":
+        return "Homestead is putting everything back already"
     if ref.get("reverted"):
         return "The volume is rolled back already; what is left is starting things again"
     if ref.get("reverting") or ref.get("revert_sent") or ref.get("phase") == "confirming":
@@ -462,7 +766,7 @@ def cancel_run(item, _options):
     why = _uncancellable(item["ref"])
     if why:
         raise ValueError(why)
-    return _put_back(item["ref"], "Cancelled")[2]
+    return _put_back(item["ref"], "Cancelled", final=True)[2]
 
 
 def start_guarded(b):
