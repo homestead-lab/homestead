@@ -166,7 +166,7 @@ class UsageTests(unittest.TestCase):
         listed = {"/apis/metrics.k8s.io/v1beta1/pods": {"items": [metric("web-5c6b7-a", web=("100m", "256Mi")),
                                                                    metric("files-1", files=("500m", "1Gi"))]},
                   "/api/v1/pods": {"items": [pod("web-5c6b7-a"), pod("files-1", labels={"task": "files"})]}}
-        usage.sample(listed.__getitem__, server.FLOW._flow_owner, server.SYS_NS,
+        usage.sample(lambda path, **_: listed[path], server.FLOW._flow_owner, server.SYS_NS,
                      skip=lambda p: (p["metadata"].get("labels") or {}).get("task"))
         series = json.loads((self.folder / usage.FILE).read_text())["series"]
         self.assertEqual(["lab/web/web"], sorted(series))
@@ -208,7 +208,7 @@ class LoopTests(unittest.TestCase):
     def test_a_failed_round_waits_a_whole_step_before_the_next(self):
         calls = []
 
-        def read(path):
+        def read(path, **_):
             calls.append(path)
             raise RuntimeError("API down")
         beats = self.run_rounds(read, rounds=5)
@@ -216,7 +216,7 @@ class LoopTests(unittest.TestCase):
         self.assertEqual("usage", beats[0][0])
 
     def test_a_cluster_without_metrics_server_is_told_so_plainly(self):
-        def read(path):
+        def read(path, **_):
             raise urllib.error.HTTPError(path, 404, "not found", {}, io.BytesIO())
         beats = self.run_rounds(read, rounds=1)
         self.assertIn("metrics-server is not installed", str(beats[0][2]))

@@ -1266,6 +1266,20 @@ const balanceTick = (kind, id, i, off) => `<label class="rb-app"><input type="ch
 const balanceSkipped = rows => rows.length ? UI.more(`Not moved · ${rows.length}`,
   `<ul class="ui-list">${rows.map(([id, why]) => `<li><span class="mono">${esc(id)}</span>: ${esc(why)}</li>`).join("")}</ul>`) : "";
 
+/* The plan works from metrics-server's figures as Homestead last read them
+   (#928): say when they are missing, still being read after a start, or
+   old. One callout. */
+function balanceMetrics(plan) {
+  const m = plan.metrics_state;
+  if (plan.metrics === false && m?.state === "waiting")
+    return UI.callout("warn", "Still reading CPU and memory", "Homestead has just started and has not had metrics-server's first figures yet, so the plan may be off. Open it again in a few seconds.");
+  if (plan.metrics === false)
+    return UI.callout("warn", "Usage is partly unknown", esc(`A host or its apps report no live CPU and memory${m?.detail ? ` (${m.detail})` : ""}, so the plan may be off. Check metrics-server.`));
+  if (m?.state === "stale")
+    return UI.callout("warn", `CPU and memory from ${fmtAgo(m.age_s)}`, esc(`metrics-server has not answered since then${m.detail ? ` (${m.detail})` : ""}, so the plan uses its last figures and may be off.`));
+  return "";
+}
+
 function balanceContainersHtml(b) {
   const plan = b.plan, moves = plan.moves || [];
   const meter = (before, after, label) => `${UI.meter({ now: before, after: after !== before ? after : null, warnAt: 80, label })}
@@ -1285,7 +1299,7 @@ function balanceContainersHtml(b) {
       : plan.quiet === "even" ? "The hosts already carry similar CPU and memory; nothing is worth a restart."
       : plan.quiet === "nothing-movable" ? "Nothing here can move: each container is pinned, left out, only an admin can move it, or it has no other host it may run on. See Not moved below."
       : "No single move evens the hosts out by enough to be worth a restart: the containers that could move are too small to shift CPU or memory much."),
-    plan.metrics === false ? UI.callout("warn", "Usage is partly unknown", "A host reports no live CPU and memory, so the plan may be off. Check metrics-server.") : "",
+    balanceMetrics(plan),
     UI.section("Hosts", hosts),
     b.on && rows.length ? UI.section(`Containers · ${rows.length}`, '<p class="ui-help">Untick a container to leave it where it is; the moves are worked out again without it.</p>'
       + UI.table([{ label: "Container" }, { label: "Moves", className: "grow" }], rows)) : "",

@@ -18,9 +18,8 @@ function notice(rows) {
 
 const row = metrics => ({ name: "node-a", metrics });
 
-test("figures that are current, or still being read, say nothing", () => {
+test("current figures say nothing", () => {
   assert.equal(notice([row({ state: "ok", age_s: 3 })]), "");
-  assert.equal(notice([row({ state: "waiting" })]), "");
   assert.equal(notice([row(undefined)]), "");
   assert.equal(notice([]), "");
   assert.equal(notice(undefined), "");
@@ -49,7 +48,39 @@ test("a cluster without metrics-server says so quietly", () => {
   assert.match(html, /metrics-server is not installed/);
 });
 
+test("figures still being read after a start say so quietly (#928)", () => {
+  const html = notice([row({ state: "waiting" })]);
+  assert.doesNotMatch(html, /warn/);
+  assert.match(html, /class="dim"/);
+  assert.match(html, /reading CPU and memory…/);
+  assert.match(html, /Homestead has just started/);
+});
+
 test("Hosts and Containers carry it in their subtitles", () => {
   assert.match(between(overview, "async function viewNodes", "\n}\n"), /metricsNotice\(n\)/);
   assert.match(between(workloads, "function renderWorkloads", "\n}\n"), /metricsNotice\(STATE\.data\.wl\)/);
+});
+
+test("Architecture and Virtual machines carry it in their subtitles (#928)", () => {
+  const storage = fs.readFileSync("web/js/views-storage.js", "utf8");
+  const vms = fs.readFileSync("web/js/views-vms.js", "utf8");
+  assert.match(between(storage, "async function viewFlow", "\n}\n"), /metricsNotice\(\[answer\]\)/);
+  assert.match(between(vms, "Virtual machines`, `${vms.length}", "\n"), /metricsNotice\(vms\)/);
+});
+
+test("the balance plan says when it works from old figures (#928)", () => {
+  const ctx = { esc: s => String(s), fmtAgo: sec => `${Math.floor(sec / 60)}m ago`, document: {} };
+  ctx.window = ctx; vm.createContext(ctx); require("./helpers/load-ui")(ctx);
+  vm.runInContext(`${between(workloads, "function balanceMetrics(", "\n}\n", { through: true })}; this.balanceMetrics = balanceMetrics;`, ctx);
+  assert.equal(ctx.balanceMetrics({ metrics: true, metrics_state: { state: "ok" } }), "");
+  const stale = ctx.balanceMetrics({ metrics: true, metrics_state: { state: "stale", age_s: 240, detail: "HTTP 503" } });
+  assert.match(stale, /ui-callout/);
+  assert.match(stale, /CPU and memory from 4m ago/);
+  assert.match(stale, /HTTP 503/);
+  assert.match(ctx.balanceMetrics({ metrics: false }), /Usage is partly unknown/);
+  assert.match(ctx.balanceMetrics({ metrics: false, metrics_state: { state: "unavailable", detail: "HTTP 503" } }), /Usage is partly unknown[\s\S]*HTTP 503/);
+  const waiting = ctx.balanceMetrics({ metrics: false, metrics_state: { state: "waiting" } });
+  assert.match(waiting, /Still reading CPU and memory/);
+  assert.doesNotMatch(waiting, /Check metrics-server/);
+  assert.match(between(workloads, "function balanceContainersHtml", "\n}\n"), /balanceMetrics\(plan\)/);
 });

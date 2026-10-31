@@ -1,7 +1,9 @@
 """What each running VM is using: CPU, memory and disk traffic.
 
 A VM runs inside its virt-launcher pod, so the metrics API's figures for that
-pod are the VM's CPU and memory, QEMU's own small share included. Disk
+pod are the VM's CPU and memory, QEMU's own small share included. They are
+taken from homestead_kube_metrics' background reading when the list is
+asked for, with that reading's state, so neither lags behind it (#928). Disk
 traffic is not in the metrics API: KubeVirt's virt-handler on each node
 counts every VM's reads and writes, and publishes the counts on its metrics
 endpoint. A count becomes a rate between two readings, so readings are taken
@@ -19,6 +21,8 @@ import time
 import urllib.parse
 import urllib.request
 
+import homestead_kube_metrics as KUBE_METRICS
+
 kget = None
 PORT = 8443
 TIMEOUT = 4
@@ -28,7 +32,6 @@ WRITE = "kubevirt_vmi_storage_write_traffic_bytes_total"
 STALE = 180
 _lock = threading.Lock()
 _readings = []        # the last two: {"at": time, "io": {(ns, vm): [read, write]}}
-_usage = {}           # (ns, vm) -> {"cpu": cores, "mem": bytes}
 _note = {"io": ""}
 LINE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)\{([^}]*)\}\s+([-+0-9.eE]+|NaN)')
 LABEL = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
@@ -90,13 +93,11 @@ def _handlers():
             if (p.get("status") or {}).get("phase") == "Running" and (p.get("status") or {}).get("podIP")]
 
 
-def sample(fetch=None, now=None):
-    """Take one reading of every running VM."""
-    fetch = fetch or _fetch
-    now = now or time.time()
+def _cpu_and_memory(items):
+    """Per VM, from metrics-server's pod figures: CPU cores and memory bytes."""
     usage = {}
     try:
-        for m in kget("/apis/metrics.k8s.io/v1beta1/pods").get("items", []):
+        for m in items:
             meta = m.get("metadata") or {}
             vm = (meta.get("labels") or {}).get("vm.kubevirt.io/name") or ""
             if not vm and str(meta.get("name", "")).startswith("virt-launcher-"):
@@ -109,6 +110,13 @@ def sample(fetch=None, now=None):
                 "mem": sum(_bytes((c.get("usage") or {}).get("memory")) for c in containers)}
     except Exception:
         pass
+    return usage
+
+
+def sample(fetch=None, now=None):
+    """Take one reading of every running VM's disk counters."""
+    fetch = fetch or _fetch
+    now = now or time.time()
     io, failed = {}, []
     try:
         handlers = _handlers()
@@ -120,8 +128,6 @@ def sample(fetch=None, now=None):
         except Exception:
             failed.append((pod.get("spec") or {}).get("nodeName") or pod["status"]["podIP"])
     with _lock:
-        _usage.clear()
-        _usage.update(usage)
         if io or not failed:
             _readings.append({"at": now, "io": io})
             del _readings[:-2]
@@ -130,8 +136,19 @@ def sample(fetch=None, now=None):
 
 
 def usage(now=None):
-    """Per VM: CPU cores, memory bytes, and disk read and write bytes/s."""
+    """Per VM: CPU cores, memory bytes, and disk read and write bytes/s; and
+    the note on disk traffic."""
+    return measured(now)[:2]
+
+
+def measured(now=None):
+    """usage(), with the state of its CPU and memory figures
+    (homestead_kube_metrics): both from the background reading now, not
+    the last sample (#928); once that loop runs, metrics-server is not
+    asked here."""
     now = now or time.time()
+    items, metrics = KUBE_METRICS.read("pods", kget, now=now)
+    figures = _cpu_and_memory(items)
     with _lock:
         rates = {}
         if len(_readings) == 2 and now - _readings[1]["at"] < STALE:
@@ -143,9 +160,9 @@ def usage(now=None):
                     rates[key] = [max(0.0, read - before["io"][key][0]) / span,
                                   max(0.0, write - before["io"][key][1]) / span]
         out = {}
-        for key in set(_usage) | set(rates):
-            row = dict(_usage.get(key) or {})
+        for key in set(figures) | set(rates):
+            row = dict(figures.get(key) or {})
             if key in rates:
                 row["read_bps"], row["write_bps"] = (round(x) for x in rates[key])
             out[key] = row
-        return out, _note["io"]
+        return out, _note["io"], metrics

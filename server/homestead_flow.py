@@ -1,6 +1,7 @@
 """The Architecture page's picture: which nodes hold each volume's copies,
 which workloads and VMs use those volumes, and the ports and VIPs that reach
 them - read from the cluster as it is now."""
+import homestead_kube_metrics as KUBE_METRICS
 import homestead_hardware as HW
 import homestead_longhorn_jobs as JOBS
 import homestead_names as NAMES
@@ -205,10 +206,12 @@ def get_flow2():
                     vips.setdefault(vip, []).append({"port": prt.get("port"), "app": name})
         return out
 
-    # --- per-pod live metrics for the architecture cards
+    # --- per-pod live metrics for the architecture cards: the background
+    # reading, with its state, never metrics-server itself (#906, #928)
+    metric_items, metrics_state = KUBE_METRICS.read("pods", kget)
     try:
         pmet = {}
-        for m in kget("/apis/metrics.k8s.io/v1beta1/pods").get("items", []):
+        for m in metric_items:
             c = sum(parse_cpu(x.get("usage", {}).get("cpu")) for x in m.get("containers", []))
             mm = sum(parse_mem(x.get("usage", {}).get("memory")) for x in m.get("containers", []))
             pmet[(m["metadata"]["namespace"], m["metadata"]["name"])] = (c, mm)
@@ -316,6 +319,7 @@ def get_flow2():
                  for ip, p in sorted(vips.items(), key=lambda item: (
                      (place.get(item[0]) or {}).get("kind") != "node",
                      tuple(int(x) if x.isdigit() else 999 for x in item[0].split("."))))],
+        "metrics": metrics_state,
     }
 
 

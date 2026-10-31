@@ -21,7 +21,30 @@ in is kept in this replica's cache under its as_of and served by the same
 rules as the leader's own: not after STALE_AFTER, not after a write here
 forgets or pops its key, and not over a newer read of this replica's own.
 When the leader stops writing, its parts age out and each replica computes
-for itself again, as before."""
+for itself again, as before.
+
+A write on one replica is told to the others (#928): a forget or pop of a
+part's key is noted, and the replica's loop, woken by it, records the key and
+when in FORGETS on the shared volume (tell()). Every replica's loop looks at
+that file each turn and forgets the key itself, dated when the write was
+made (hear()): its own read and any leader part read before the write are no
+longer served, and the leader, woken by the forget, reads the part again
+within MIN_GAP. So the others usually serve a part from before a write for
+a turn of the loop (LEADER_CHECK), not until the leader's next cycle. It is
+best effort, as the volume is NFS: its attribute caching can delay a
+replica's look at the file by a few seconds, and a write is dated by its
+replica's clock, so the replicas' clocks are assumed in step (NTP). Missed,
+it is no worse than before: the leader's next cycle.
+
+Every replica changes FORGETS, so it is read, merged and replaced as one step
+under a SharedLock, as the other shared files are. On NFS a replica can still
+merge from a copy read before another's write and so write that key away.
+Each replica checks the file on each look (hear()): a key of its own, told
+in the last STALE_AFTER and now missing there, or older by over CLOCK_SKEW,
+is told again on its next turn. The lock is waited on for LOCK_WAIT at
+most, so a replica stuck holding it never holds this loop: the write is
+tried again next turn. A lock NFS refuses outright (ENOLCK) also fails the
+write, said once, rather than writing unlocked."""
 import hashlib
 import json
 import os
@@ -65,6 +88,23 @@ _shared = {"seen": None, "failing": False,   # the file last taken in; whether w
            "ask_seen": None, "ask_changed": None,   # the leader's last look at WANTED; when it changed (monotonic)
            "digest": None, "written": 0.0}
 _floor = {}             # key -> no leader part read before this is taken in (a pop here)
+# Writes told between the replicas: every replica reads and changes this
+# file, so under a lock they all hold.
+FORGETS = "page-forgets.json"
+# Seconds the loop waits for that lock before trying again next turn.
+LOCK_WAIT = 1
+# A write of this replica's held in FORGETS up to this much earlier counts as
+# held: another replica's clock may be that far behind (tell() never writes a
+# time ahead of its own clock), and telling it again would only undo that.
+CLOCK_SKEW = 5
+_forgets_lock = SHARED.SharedLock("page-forgets", strict=True, timeout=LOCK_WAIT)
+_told_lock = threading.Lock()
+# pending: key -> when, written here and not yet told; known: key -> the
+# latest forget told or heard, so neither is applied or told twice; mine:
+# key -> the latest write told from here, checked on each look at the file;
+# again: those another replica's merge wrote away, to tell again; seen: the
+# file last read; failing: whether telling fails.
+_told = {"pending": {}, "known": {}, "mine": {}, "again": {}, "seen": None, "failing": False}
 
 
 def cadence():
@@ -82,6 +122,9 @@ def reset():
     _shared.update(seen=None, failing=False, asked=None, ask_failing=False, ask_seen=None,
                    ask_changed=None, digest=None, written=0.0)
     _floor.clear()
+    with _told_lock:
+        _told.update(pending={}, known={}, mine={}, again={}, seen=None, failing=False)
+    _wake.clear()
 
 
 def wake():
@@ -90,12 +133,37 @@ def wake():
     _wake.set()
 
 
+def _note(key, when):
+    """A write here dropped key: tell the other replicas (tell()), and on
+    the leader run a cycle soon. Never blocks: it runs on the writer's
+    thread."""
+    with _told_lock:
+        _told["pending"][key] = max(_told["pending"].get(key, 0.0), when)
+    wake()
+
+
 def _forgotten(keys):
-    if set(keys) & set(PARTS):
-        wake()
+    for key in set(keys) & set(PARTS):
+        _note(key, CACHE.forgotten_at(key))
+
+
+def _popped(key, when):
+    if key in PARTS:
+        _note(key, when)
 
 
 CACHE.on_forget(_forgotten)
+CACHE.on_pop(_popped)
+
+
+def _register():
+    """Each part's key known to the cache, so a forget_where() of it is heard
+    though this replica never read it."""
+    for key in PARTS:
+        CACHE.epoch(key)
+
+
+_register()
 
 
 def read(key, now=None):
@@ -152,6 +220,10 @@ def tick(is_leader, inputs, builders, now=None):
     """One turn of the loop: on the leader, a cycle when one is due (every
     cadence(), at once on boot and on becoming the leader, and soon after a
     wake). Returns what cycle() returned, or None when none ran."""
+    # Writes first: this replica's to the others, theirs here, so a cycle
+    # due below never builds a part a write has already overtaken.
+    tell()
+    hear()
     leader = bool(is_leader())
     now = time.monotonic() if now is None else now
     became = leader and not _state["leader"]
@@ -318,6 +390,127 @@ def take_in(now=None, mono=None):
                 continue
             if CACHE.keep(key, part[1], epoch, at=as_of):
                 _parts[key] = (as_of, part[1])
+
+
+def _forgets_path():
+    return os.path.join(SHARED.DIR, FORGETS)
+
+
+def _told_forgets():
+    try:
+        forgets = _load(_forgets_path()).get("forgets")
+    except (OSError, ValueError, AttributeError):
+        return {}
+    return forgets if isinstance(forgets, dict) else {}
+
+
+def tell():
+    """Record this replica's writes (forgets and pops of a part's key) in
+    FORGETS for the other replicas, each key with its latest write. Never
+    raises: a write that fails, held during a move of Homestead's own data,
+    is tried again next turn and said once, as is one whose lock is held
+    longer than LOCK_WAIT."""
+    with _told_lock:
+        known, again = _told["known"], _told["again"]
+        pending = {key: when for key, when in _told["pending"].items() if when > known.get(key, 0.0)}
+        _told["pending"] = dict(pending)    # what was heard, or already told, is dropped
+        now = time.time()
+        for key, when in list(again.items()):    # written away by another replica's merge
+            if now - when >= STALE_AFTER:
+                again.pop(key)                   # no part read before it is still served
+                continue
+            pending[key] = max(pending.get(key, 0.0), when)
+        if not pending:
+            return
+    try:
+        with _forgets_lock:
+            forgets = _told_forgets()
+            for key, when in pending.items():
+                try:
+                    # A clock ahead of this one does not hold the key past now.
+                    held = min(float(forgets.get(key) or 0.0), time.time())
+                except (TypeError, ValueError):
+                    held = 0.0
+                forgets[key] = max(held, when)
+            SHARED.write_json(_forgets_path(), {"forgets": forgets}, separators=(",", ":"))
+    except Exception as error:
+        if not _told["failing"]:
+            _told["failing"] = True
+            reason = (f"{FORGETS} is locked elsewhere for over {LOCK_WAIT} s" if isinstance(error, TimeoutError)
+                      else str(error)[:160])
+            print(f"page snapshot: a write not told to the other replicas: {reason}", flush=True)
+        return
+    _told["failing"] = False
+    with _told_lock:
+        for key, when in pending.items():
+            known[key] = max(known.get(key, 0.0), when)
+            _told["mine"][key] = max(_told["mine"].get(key, 0.0), when)
+            if _told["pending"].get(key, 0.0) <= when:
+                _told["pending"].pop(key, None)
+            if again.get(key, 0.0) <= when:
+                again.pop(key, None)
+
+
+def _check_mine(forgets, now):
+    """Tell again, next turn, each write of this replica's from the last
+    STALE_AFTER that forgets no longer holds: another replica merged from a
+    copy of the file read before it, and wrote it away (NFS)."""
+    with _told_lock:
+        mine, again = _told["mine"], _told["again"]
+        for key, when in list(mine.items()):
+            if now - when >= STALE_AFTER:
+                mine.pop(key)            # no part read before it is still served
+                again.pop(key, None)
+                continue
+            try:
+                held = float(forgets.get(key) or 0.0)
+            except (TypeError, ValueError):
+                held = 0.0
+            if held < when - CLOCK_SKEW:
+                again[key] = max(again.get(key, 0.0), when)
+        missing = bool(again)
+    if missing:
+        _wake.set()     # tell it on the next turn, at once; no cycle is wanted for it
+
+
+def hear(now=None):
+    """Forget here each part's key another replica has written since this
+    one last looked, dated when that write was made (never later than now).
+    A write older than STALE_AFTER changes nothing: no part read before it
+    is still served. This replica's own writes are checked as well
+    (_check_mine())."""
+    path = _forgets_path()
+    try:
+        status = os.stat(path)
+    except OSError:
+        return
+    seen = (path, status.st_ino, status.st_mtime_ns, status.st_size)
+    if seen == _told["seen"]:
+        return
+    _told["seen"] = seen
+    now = time.time() if now is None else now
+    forgets = _told_forgets()
+    _check_mine(forgets, now)
+    for key, when in forgets.items():
+        if key not in PARTS:
+            continue
+        try:
+            when = min(float(when), now)
+        except (TypeError, ValueError):
+            continue
+        with _told_lock:
+            if when <= _told["known"].get(key, 0.0):
+                continue
+            _told["known"][key] = when
+        if now - when >= STALE_AFTER or when <= CACHE.forgotten_at(key):
+            continue
+        CACHE.epoch(key)     # so the key is forgotten here though nothing read it yet
+        CACHE.forget_where(lambda k, key=key: k == key, at=when)
+        # The forget is dated; the held part goes with it, so take_in() does
+        # not read its missing cache entry as an undated pop and hold off a
+        # leader part read after the write but before this turn.
+        with _lock:
+            _parts.pop(key, None)
 
 
 def sleep(seconds):

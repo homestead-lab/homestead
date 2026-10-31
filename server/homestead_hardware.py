@@ -6,6 +6,7 @@ path and optional USB VID:PID matches.  That lets the UI support accelerators,
 capture cards, serial adapters and future hardware without another code change.
 """
 import json
+import homestead_cache as CACHE
 import homestead_names as NAMES
 import hashlib
 import re
@@ -51,9 +52,7 @@ def bind(_kget, _ksend, _ns, _cache_ref):
 
 
 def _bust():
-    for key in list(_cache):
-        if key.startswith(("hardware", "nodes", "ov", "wl", "flow", "impact:")):
-            _cache.pop(key, None)
+    CACHE.drop_where(_cache, lambda key: key.startswith(("hardware", "nodes", "ov", "wl", "flow", "impact:")))
 
 
 def _normalise(raw, existing=None):

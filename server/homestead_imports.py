@@ -35,6 +35,7 @@ import homestead_hvimage as HVIMAGE
 import homestead_runtime as RUNTIME
 import homestead_pod_resources as RESOURCES
 import homestead_import_job as IMPORT_JOB
+import homestead_cache as CACHE
 import homestead_operations as OPS
 import homestead_source_ssh as SOURCE_SSH
 import homestead_capacity_review as SOURCE_REVIEW
@@ -66,9 +67,7 @@ def bind(_kget, _ksend, _create_pvc, _build_dep, _ns, _cache_ref, _hardware_feat
 
 
 def _bust(*keys):
-    for k in list(_cache):
-        if not keys or any(k.startswith(x) for x in keys):
-            _cache.pop(k, None)
+    CACHE.drop_where(_cache, lambda k: not keys or k.startswith(keys))
 
 
 SAFE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$")

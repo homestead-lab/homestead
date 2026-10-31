@@ -114,7 +114,7 @@ async function viewFlow() {
     </div></div>`;
   };
   const graphs=answer.clusters?.map(cluster=>({site:cluster.site,...Object.fromEntries(["workloads","volumes","nodes","vips","jobs"].map(key=>[key,f[key].filter(row=>row.site.id===cluster.site.id)]))}));
-  paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · point at, tap or Tab to anything to trace it`, `
+  paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · point at, tap or Tab to anything to trace it${metricsNotice([answer])}`, `
         ${disconnectedVolumes.length ? `<button class="btn sm ${STATE.archDisconnected ? "pri" : ""}" onclick="STATE.archDisconnected=!STATE.archDisconnected;viewFlow()"
           data-tip="Volumes no container, VM or scheduled job is defined to mount. They stay hidden so old and retained data does not obscure the live paths.">${STATE.archDisconnected ? "Hide" : "Show"} ${disconnectedVolumes.length} disconnected</button>` : ""}
         <div class="row hide-sm arch-legend">
