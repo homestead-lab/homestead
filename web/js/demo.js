@@ -2939,11 +2939,14 @@ ssh_pwauth: true
       let slot = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - (today.getUTCDay() + 1) % 7, 4) / 1000;
       if (slot > now) slot -= 7 * 86400;
       const { weekday, hour } = demoTrimSlot();
+      // A camera's recordings, left out by an admin (they are rewritten all the time).
+      const leftOut = Object.entries(demoState.trimLeftOut || { "pvc-demo-recordings": "lab/frigate-recordings" }).map(([volume, pvc]) => ({ volume, pvc }));
       return { enabled: demoState.weeklyTrimOn !== false, next: new Date(demoTrimNext() * 1000).toISOString(), running: false, theirs: "",
-        weekday, hour, last: { slot, at: slot + 95, why: "weekly", trimmed: ["pvc-demo-paperless", ...(scenario === "healthy" ? ["pvc-demo-frigate"] : [])], unconfirmed: [],
+        weekday, hour, left_out: leftOut, last: { slot, at: slot + 95, why: "weekly", trimmed: ["pvc-demo-paperless", ...(scenario === "healthy" ? ["pvc-demo-frigate"] : [])], unconfirmed: [],
           // The incidents and critical scenarios: one attached volume failed to trim (#749).
           failed: scenario === "healthy" ? [] : [{ volume: "pvc-demo-frigate", pvc: "lab/frigate-config", message: DEMO_TRIM_FAILURE }],
-          skipped: [{ volume: "pvc-demo-oldapp", pvc: "lab/oldapp-data", why: "detached" }] } };
+          skipped: [{ volume: "pvc-demo-oldapp", pvc: "lab/oldapp-data", why: "detached" },
+            ...leftOut.map(row => ({ ...row, why: "left out" }))] } };
     },
     // On or off, or the slot moved (#927), as homestead_weekly_trim.settings.
     "/api/weekly-trim/settings": (url, init) => {
@@ -2953,6 +2956,15 @@ ssh_pwauth: true
       const on = demoState.weeklyTrimOn !== false, { weekday, hour } = demoTrimSlot();
       return { ok: true, enabled: on, weekday, hour,
         detail: on ? `Attached volumes are trimmed every ${DEMO_TRIM_DAYS[weekday]} at ${String(hour).padStart(2, "0")}:00 UTC` : "The weekly trim is off; Run now still trims every attached volume" };
+    },
+    // One volume left out of the weekly trim, or put back, as homestead_weekly_trim.leave_out.
+    "/api/weekly-trim/leave-out": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      demoState.trimLeftOut = { ...(demoState.trimLeftOut || { "pvc-demo-recordings": "lab/frigate-recordings" }) };
+      const name = demoState.trimLeftOut[body.volume] || body.volume;
+      if (body.left_out) demoState.trimLeftOut[body.volume] = body.volume; else delete demoState.trimLeftOut[body.volume];
+      return { ok: true, volume: body.volume, left_out: !!body.left_out,
+        detail: body.left_out ? `${name} is left out of the weekly trim; Trim now still trims it` : `${name} is trimmed weekly again` };
     },
     "/api/weekly-trim/run": () => ({ ok: true, operation: { id: "demo-weekly-trim", kind: "weekly-trim", status: "queued" } }),
     // Restore tests (views-protect.js): one passed, one failed, one never tested.

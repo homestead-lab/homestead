@@ -146,6 +146,15 @@ as a job in the job tray.
   attached trims it.
 - A VM disk has no filesystem Longhorn can trim, so it is skipped and named
   too.
+- A volume already short of a copy (degraded, often rebuilding one) or
+  faulted is skipped and named, and tried the next week: a trim's I/O on top
+  of a rebuild can push over the copy that is still good.
+- An admin can leave a volume out: **Leave out of the weekly trim** on its
+  snapshot panel. It suits a volume an app keeps rewriting, such as camera
+  recordings, where the space is reused anyway and a long trim on a spinning
+  disk can make a copy stop answering. Housekeeping lists what is left out,
+  each with **Trim weekly again**; **Trim now** still trims it. A failed trim
+  of a volume left out since is no longer raised.
 - The job ends with what it did: "Trimmed 12 volumes, skipped 4 (3 detached,
   1 VM disk)", then which volume failed and Longhorn's answer, if any.
 - If an attached volume fails to trim, the Dashboard says so, naming the

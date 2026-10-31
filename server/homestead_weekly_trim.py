@@ -11,12 +11,20 @@ and said nothing useful. Homestead now picks the volumes itself: attached
 ones with a filesystem are trimmed, one per step of the job; the others are
 skipped and named. The result is kept in DATA_DIR/weekly-trim.json under
 "last".
+
+Two more are skipped. A volume an admin left out ("left_out" in the same
+file, by Longhorn volume name): Frigate's recordings, say, which the app
+reuses as it writes, so a trim of hundreds of gigabytes on a spinning disk
+gains little and can make a copy stop answering. And a volume already short
+of a copy (degraded) or faulted: a trim's I/O on top of a rebuild can push
+over the copy that is still good. Trim now still trims either.
 """
 import os
 import socket
 import time
 import urllib.error
 
+import homestead_kube as KUBE
 import homestead_longhorn as LH
 import homestead_longhorn_jobs as LH_JOBS
 import homestead_names as NAMES
@@ -34,6 +42,8 @@ DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday",
 SCHEDULE_NAME = "Homestead weekly trim"
 WEEK = 7 * 86400
 VM_DISK = "no filesystem (VM disk)"
+LEFT_OUT = "left out"
+DEGRADED = "degraded: a copy is missing or rebuilding"
 DETACHED_ANSWER = "Action [trimFilesystem] not available"
 BLOCK_ANSWER = "with Block VolumeMode"
 DATA_DIR = None
@@ -99,19 +109,25 @@ def _row(volume, why):
     return {"volume": volume["metadata"]["name"], "pvc": _claim(volume), "why": why}
 
 
-def plan(volumes, pvs):
+def plan(volumes, pvs, left_out=()):
     """Which volumes a run trims, and which it skips and why. volumes are
-    Longhorn's volume items; pvs maps a PV's name to its volumeMode. A volume
-    with no PV (no claim) counts as a filesystem."""
+    Longhorn's volume items; pvs maps a PV's name to its volumeMode; left_out
+    names the volumes an admin left out. A volume with no PV (no claim)
+    counts as a filesystem."""
     trim, skipped = [], []
     for volume in sorted(volumes, key=lambda v: v["metadata"]["name"]):
         status = volume.get("status") or {}
         state = status.get("state") or ""
+        robustness = status.get("robustness") or ""
         pv = (status.get("kubernetesStatus") or {}).get("pvName") or volume["metadata"]["name"]
-        if state != "attached":
+        if volume["metadata"]["name"] in left_out:
+            skipped.append(_row(volume, LEFT_OUT))
+        elif state != "attached":
             skipped.append(_row(volume, state or "not attached"))
         elif pvs.get(pv) == "Block":
             skipped.append(_row(volume, VM_DISK))
+        elif robustness in ("degraded", "faulted"):
+            skipped.append(_row(volume, DEGRADED if robustness == "degraded" else "faulted"))
         else:
             trim.append(volume["metadata"]["name"])
     return {"trim": trim, "skipped": skipped}
@@ -198,7 +214,7 @@ def resolve(item, checkpoint):
             volumes, modes = _volumes_and_modes()
         except Exception as error:
             return "failed", 0, f"Longhorn's volumes could not be read: {str(error)[:200]}"
-        chosen = plan(volumes, modes)
+        chosen = plan(volumes, modes, left_out(last_state()))
         pvcs = {v["metadata"]["name"]: _claim(v) for v in volumes}
         ref.update(phase="trim", todo=chosen["trim"], done=[], skipped=chosen["skipped"],
                    pvcs={name: pvc for name, pvc in pvcs.items() if pvc})
@@ -333,6 +349,46 @@ def tick(now, operations):
     return "; ".join(s for s in said if s)
 
 
+def left_out(state):
+    """The volumes an admin left out of the weekly trim, by Longhorn name."""
+    rows = state.get("left_out")
+    return {name for name in rows} if isinstance(rows, dict) else set()
+
+
+def leave_out(body, user=""):
+    """Leave one volume out of the weekly trim, or put it back: {"volume":
+    its Longhorn name, "left_out": true or false}. Trim now still trims it."""
+    body = body if isinstance(body, dict) else {}
+    volume, leave = body.get("volume"), body.get("left_out")
+    if not isinstance(volume, str) or not volume:
+        raise ValueError("volume is required: the Longhorn volume's name")
+    if not isinstance(leave, bool):
+        raise ValueError("left_out must be true or false")
+    KUBE.request_name(volume, "volume")
+    pvc = ""
+    if leave:
+        # Only a volume Longhorn has: a name of one that is gone would sit here for ever.
+        try:
+            pvc = _claim(LH.kget(f"{LH.API}/namespaces/{LH.LHNS}/volumes/{volume}"))
+        except urllib.error.HTTPError as error:
+            if error.code == 404:
+                raise ValueError(f"Longhorn has no volume {volume}") from None
+            raise
+
+    def change(state):
+        rows = state.get("left_out") if isinstance(state.get("left_out"), dict) else {}
+        if leave:
+            rows[volume] = {"pvc": pvc, "by": user or "", "at": round(time.time())}
+        else:
+            rows.pop(volume, None)
+        state["left_out"] = rows
+    _update(change)
+    name = pvc or volume
+    return {"ok": True, "volume": volume, "left_out": leave,
+            "detail": f"{name} is left out of the weekly trim; Trim now still trims it" if leave
+            else f"{name} is trimmed weekly again"}
+
+
 def _running():
     return any(o.get("kind") == KIND and o.get("status") in ("queued", "running") for o in OPS.snapshot())
 
@@ -351,8 +407,10 @@ def view():
     ran = (state.get("last") or {}).get("slot")
     if isinstance(ran, (int, float)) and _week(ran) == _week(upcoming):
         upcoming += WEEK                    # that week has had its run (due())
+    rows = state.get("left_out") if isinstance(state.get("left_out"), dict) else {}
     return {"enabled": enabled, "next": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(upcoming)) if enabled else "",
-            "last": state.get("last"), "running": _running(), "theirs": mine, "weekday": weekday, "hour": hour}
+            "last": state.get("last"), "running": _running(), "theirs": mine, "weekday": weekday, "hour": hour,
+            "left_out": [{"volume": name, "pvc": (row or {}).get("pvc", "")} for name, row in sorted(rows.items())]}
 
 
 def run_now():
@@ -415,7 +473,7 @@ def schedule(volumes, jobs):
         pvs = LH.kget("/api/v1/persistentvolumes").get("items", [])
     except Exception:
         pvs = []
-    block = {p["metadata"]["name"] for p in pvs if (p.get("spec") or {}).get("volumeMode") == "Block"}
+    block = {p["metadata"]["name"] for p in pvs if (p.get("spec") or {}).get("volumeMode") == "Block"} | left_out(state)
     return {"name": SCHEDULE_NAME, "task": "filesystem-trim", "cron": cron(state), "homestead": True,
             "volumes": sorted(v["name"] for v in volumes if v.get("state") == "attached" and v["name"] not in block)}
 
@@ -426,6 +484,7 @@ ROUTES = {
     ("GET", "/api/weekly-trim"): ("viewer", lambda request: view()),
     ("POST", "/api/weekly-trim/run"): ("operator", lambda request: run_now()),
     ("POST", "/api/weekly-trim/settings"): ("admin", lambda request: settings(request.body)),
+    ("POST", "/api/weekly-trim/leave-out"): ("admin", lambda request: leave_out(request.body, request.user)),
 }
 
 
@@ -448,8 +507,10 @@ def issues(state):
     clears it."""
     if state.get("enabled") is False:
         return []
-    out = []
+    out, skip = [], left_out(state)
     for failed in (state.get("last") or {}).get("failed") or []:
+        if failed.get("volume") in skip:
+            continue                    # left out since: an admin's choice, not a fault
         name = failed.get("pvc") or failed.get("volume") or "a volume"
         out.append({"severity": "degraded", "kind": "Trim", "name": name,
                     "reason": f"The weekly trim of {name} failed: {failed.get('message') or 'no reason given'}. "

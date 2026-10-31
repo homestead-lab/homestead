@@ -28,11 +28,11 @@ PVS = "/api/v1/persistentvolumes"
 DETACHED = ValueError("Longhorn refused the trim: Action [trimFilesystem] not available on [&{pvc-c volume map[]")
 
 
-def vol(name, state, pvc=None):
+def vol(name, state, pvc=None, robustness="healthy"):
     return {"apiVersion": "longhorn.io/v1beta2", "kind": "Volume",
             "metadata": {"namespace": LH.LHNS, "name": name, "labels": {}},
-            "status": {"state": state, "kubernetesStatus": {"pvName": name, "pvcName": pvc or f"data-{name}",
-                                                            "namespace": "apps"}}}
+            "status": {"state": state, "robustness": robustness,
+                       "kubernetesStatus": {"pvName": name, "pvcName": pvc or f"data-{name}", "namespace": "apps"}}}
 
 
 SAT = calendar.timegm((2026, 10, 24, 4, 0, 0))
@@ -58,6 +58,16 @@ class PlanTests(unittest.TestCase):
         self.assertEqual([("pvc-b", "apps/data-pvc-b", "detached"), ("pvc-c", "apps/data-pvc-c", "no filesystem (VM disk)"),
                           ("pvc-d", "apps/data-pvc-d", "attaching")],
                          [(s["volume"], s["pvc"], s["why"]) for s in got["skipped"]])
+
+    def test_a_volume_left_out_or_short_of_a_copy_is_skipped_with_why(self):
+        # Seen on a real cluster: a 500 GiB recordings volume lost a copy
+        # minutes into the weekly trim, and the rebuild took a day.
+        vols = [vol("pvc-a", "attached"), vol("pvc-r", "attached"), vol("pvc-d", "attached", robustness="degraded"),
+                vol("pvc-f", "attached", robustness="faulted"), vol("pvc-o", "detached")]
+        got = WT.plan(vols, {}, left_out={"pvc-r", "pvc-o"})
+        self.assertEqual(["pvc-a"], got["trim"])
+        self.assertEqual({"pvc-r": "left out", "pvc-o": "left out", "pvc-d": "degraded: a copy is missing or rebuilding",
+                          "pvc-f": "faulted"}, {s["volume"]: s["why"] for s in got["skipped"]})
 
     def test_a_volume_with_no_claim_counts_as_a_filesystem(self):
         bare = {"metadata": {"name": "pvc-e"}, "status": {"state": "attached"}}
@@ -164,6 +174,13 @@ class JobTests(StateCase):
         self.assertEqual((SAT, ["pvc-a", "pvc-c"], [], []), (last["slot"], last["trimmed"], last["failed"], last["unconfirmed"]))
         self.assertEqual([{"volume": "pvc-b", "pvc": "apps/data-pvc-b", "why": "detached"}], last["skipped"])
         self.assertTrue(self.checkpoints, "each step is checkpointed")
+
+    def test_a_run_leaves_out_what_an_admin_left_out(self):
+        self.save({"left_out": {"pvc-c": {"pvc": "apps/data-pvc-c", "by": "admin", "at": SAT}}})
+        lh = Cluster([vol("pvc-a", "attached"), vol("pvc-c", "attached")])
+        self.assertEqual(("succeeded", 100, "Trimmed 1 volume, skipped 1 (1 left out). Skipped: apps/data-pvc-c"),
+                         self.run_job(lh))
+        self.assertEqual([("POST", "/volumes/pvc-a?action=trimFilesystem", {})], lh.trimmed)
 
     def test_a_volume_that_detaches_mid_run_counts_as_skipped(self):
         lh = Cluster([vol("pvc-a", "attached"), vol("pvc-c", "attached")], answers={"pvc-c": DETACHED})
@@ -424,13 +441,13 @@ class RouteTests(StateCase):
                 "skipped": [{"volume": "pvc-b", "pvc": "apps/data-pvc-b", "why": "detached"}]}
         self.save({"enabled": True, "retired": True, "last": last})
         self.assertEqual({"enabled": True, "next": "2026-10-31T04:00:00Z", "last": last, "running": False, "theirs": "",
-                          "weekday": 5, "hour": 4},
+                          "weekday": 5, "hour": 4, "left_out": []},
                          self.view())
         self.assertTrue(self.view([{"kind": WT.KIND, "status": "running"}])["running"])
         self.assertEqual("weekly-trim", self.view(jobs=[recurring("weekly-trim", labels={})])["theirs"])
         self.save({"enabled": False})
         self.assertEqual({"enabled": False, "next": "", "last": None, "running": False, "theirs": "",
-                          "weekday": 5, "hour": 4}, self.view())
+                          "weekday": 5, "hour": 4, "left_out": []}, self.view())
 
     def test_run_now_refuses_a_second_run(self):
         with mock.patch.object(OPS, "snapshot", return_value=[{"kind": WT.KIND, "status": "queued"}]), \
@@ -450,9 +467,39 @@ class RouteTests(StateCase):
         self.assertEqual({"retired": True, "enabled": False, "last": {"slot": SAT}}, self.state())
         self.assertIn("Saturday", WT.switch(True)["detail"])
 
+    def test_a_volume_is_left_out_and_put_back(self):
+        self.save({"retired": True, "enabled": True, "last": {"slot": SAT, "failed": [
+            {"volume": "pvc-r", "pvc": "apps/data-pvc-r", "message": "cannot find volume"}]}})
+        self.use(Cluster([vol("pvc-r", "attached")]))
+        self.assertEqual(1, len(WT.issues(self.state())), "its failed trim is raised")
+        with mock.patch.object(WT.time, "time", return_value=SAT + 60):
+            out = WT.leave_out({"volume": "pvc-r", "left_out": True}, "admin")
+        self.assertIn("apps/data-pvc-r is left out of the weekly trim", out["detail"])
+        self.assertEqual({"pvc-r": {"pvc": "apps/data-pvc-r", "by": "admin", "at": SAT + 60}}, self.state()["left_out"])
+        self.assertEqual([], WT.issues(self.state()), "left out since: no longer a fault")
+        self.assertEqual([{"volume": "pvc-r", "pvc": "apps/data-pvc-r"}], self.view()["left_out"])
+        self.assertTrue(self.state()["enabled"], "the rest of the state is kept")
+        WT.leave_out({"volume": "pvc-r", "left_out": False}, "admin")
+        self.assertEqual({}, self.state()["left_out"])
+
+    def test_leaving_out_refuses_bad_input_and_a_volume_longhorn_does_not_have(self):
+        self.use(Cluster([vol("pvc-r", "attached")]))
+        for body, why in (({}, "volume is required"), ({"volume": "pvc-r", "left_out": "yes"}, "true or false"),
+                          ({"volume": "../x", "left_out": True}, "not a valid Kubernetes name"),
+                          ({"volume": "pvc-gone", "left_out": True}, "Longhorn has no volume pvc-gone")):
+            with self.subTest(body=body), self.assertRaisesRegex(ValueError, why):
+                WT.leave_out(body)
+        self.assertEqual({}, self.state())
+
+    def test_a_volume_left_out_is_not_in_the_schedule(self):
+        self.save({"left_out": {"pvc-r": {}}})
+        self.use(Cluster([]))
+        rows = [{"name": "pvc-a", "state": "attached"}, {"name": "pvc-r", "state": "attached"}]
+        self.assertEqual(["pvc-a"], WT.schedule(rows, [])["volumes"])
+
     def test_its_routes_and_who_may_use_them(self):
         self.assertEqual({("GET", "/api/weekly-trim"): "viewer", ("POST", "/api/weekly-trim/run"): "operator",
-                          ("POST", "/api/weekly-trim/settings"): "admin"},
+                          ("POST", "/api/weekly-trim/settings"): "admin", ("POST", "/api/weekly-trim/leave-out"): "admin"},
                          {key: role for key, (role, _) in WT.ROUTES.items()})
 
 

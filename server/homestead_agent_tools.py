@@ -578,6 +578,22 @@ def _set_filesystem_freeze(body, ctx):
     return call("POST", path, body=body, **_as(ctx))
 
 
+def _plan_weekly_trim(args, ctx):
+    """Leave one volume out of the weekly trim, or put it back. What the
+    person approves names the volume by its claim when it has one."""
+    volume, leave = args.get("volume"), args.get("left_out")
+    if not isinstance(volume, str) or not volume:
+        raise ToolError("volume is required: the Longhorn volume's name, as list_volumes shows it")
+    if not isinstance(leave, bool):
+        raise ToolError("left_out must be true (leave it out) or false (trim it weekly again)")
+    rows = {row.get("volume"): row for row in call("GET", "/api/weekly-trim", **_as(ctx)).get("left_out") or []}
+    if leave == (volume in rows):
+        raise ToolError(f"{volume} is already {'left out of' if leave else 'in'} the weekly trim")
+    name = (rows.get(volume) or {}).get("pvc") or volume
+    return ({"action": f"Leave {name} out of the weekly trim" if leave else f"Trim {name} weekly again", "target": volume},
+            {"volume": volume, "left_out": leave})
+
+
 def _rebalance_preview(args, ctx):
     """Balance's own plan, or - with picks - the review of moves chosen (#366)."""
     if args.get("picks"):
@@ -969,6 +985,13 @@ TOOLS = [
          role="admin"),
     Tool("trim_volume", "Trim a volume", "storage:manage", CHANGE, "Gives a volume's freed space back to its disks.",
          {"volume": S}, ["volume"], run=_post("/api/lh/trim", {"volume": "volume"})),
+    Tool("set_weekly_trim", "Leave a volume out of the weekly trim", "storage:manage", DESTRUCTIVE,
+         "Asks to leave one volume out of Homestead's weekly trim (left_out true), or to trim it weekly again (false): "
+         "for a volume an app keeps rewriting, such as camera recordings. trim_volume still trims it. volume: its "
+         "Longhorn name. A person must approve it in Homestead.",
+         {"volume": S, "left_out": B}, ["volume", "left_out"],
+         plan=_plan_weekly_trim, execute=lambda body, ctx: call("POST", "/api/weekly-trim/leave-out", body=body, **_as(ctx)),
+         role="admin"),
     Tool("rebuild_volume", "Rebuild a volume's copies", "storage:manage", CHANGE,
          "Rebuilds missing copies of a detached volume now.", {"volume": S}, ["volume"],
          run=_post("/api/longhorn/rebuild", {"volume": "volume"})),
