@@ -777,7 +777,7 @@ UPLINKS.bind(kget, ksend, lambda: NODES.node_temps())
 for _module in (K3SC, POWER, HOST_CONSOLE, HOST_OS, OS_ROLLOUT, HOST_BRIDGE, HOST_BONDS, UPLINKS,
                 VM_POWER_JOB, RENAME, IMPORT_JOB, AUTOUPDATE, RESTORE_TEST, DISK_V2, DISK_ALLOCATION, LH_RUNTIME, DISKS, HELM, ADDONS):
     _module.register(OPS)
-RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume: LH_BACKUPS.backups(volume), LH_RESTORE.restore_backup, OPS._volume_restore,
+RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume=None, strict=False: LH_BACKUPS.backups(volume, strict), LH_RESTORE.restore_backup, OPS._volume_restore,
                   LH_RESTORE.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS,
                   lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads), get_app_settings, save_app_settings, _dns_name)
 
