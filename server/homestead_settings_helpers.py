@@ -32,6 +32,28 @@ DEFAULT_APP_SETTINGS = APP_SETTINGS.DEFAULTS
 REVISION_KEY = "settings-revision"
 
 
+# The API server's version for Settings: it changes only with an upgrade, so
+# it is asked at most every KUBE_VERSION_TTL seconds; a failed read is not kept.
+KUBE_VERSION_TTL = 600
+version_clock = time.monotonic
+_kube_version = {"until": float("-inf"), "value": ""}
+
+
+def kube_version(read):
+    if version_clock() < _kube_version["until"]:
+        return _kube_version["value"]
+    try:
+        value = read("/version").get("gitVersion", "")
+    except Exception:
+        return ""
+    _kube_version.update(until=version_clock() + KUBE_VERSION_TTL, value=value)
+    return value
+
+
+def forget_kube_version():
+    _kube_version.update(until=float("-inf"), value="")
+
+
 def bind_routes(helpers, **values):
     missing = set(ROUTE_NEEDS) - set(helpers)
     if missing:

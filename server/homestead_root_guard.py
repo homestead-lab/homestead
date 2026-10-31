@@ -66,7 +66,7 @@ def floor(total, rule):
 
 def tick():
     """Stop or start each Longhorn disk on a root filesystem. Returns [(node, words)]."""
-    p = platform(True) or {}
+    p = platform() or {}
     if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2") or not p.get("longhorn"):
         return []
     found = probes() or {}

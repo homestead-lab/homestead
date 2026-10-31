@@ -474,7 +474,7 @@ def status(item):
 
 def report():
     state = _load()
-    p = platform(True) or {}
+    p = platform(30) or {}
     return {"applies": not p.get("harvester") and p.get("distribution") in ("k3s", "rke2"),
             "settings": settings(state), "rollout": state.get("rollout"), "last": state.get("last_rollout"),
             **{k: v for k, v in host_os.report().items() if k in ("hosts", "every_s", "checking")}}

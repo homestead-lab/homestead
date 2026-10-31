@@ -463,10 +463,51 @@ def _ksend(method, path, body=None, ctype="application/json", timeout=15, *, shu
     # remain available. The shutdown coordinator and the narrowly scoped AUTH
     # binding bypass this fence; authentication still uses the other guards.
     if not shutdown_bypass and FENCE_READY:
-        shutdown = cluster_shutdown().state()
+        shutdown = _fence_state()
         if shutdown and shutdown["phase"] not in ("released", "failed"):
             raise ValueError("Cluster shutdown is active; open Cluster → Shut down cluster for progress or recovery")
-    return transport(method, path, body, ctype, timeout)
+    try:
+        return transport(method, path, body, ctype, timeout)
+    finally:
+        if shutdown_bypass and _journal_write(path, body):
+            forget_fence()          # the coordinator changed the journal: the next write reads it
+
+
+# The fence's last reading (#985): every write asked the journal Secret, and
+# the legacy ConfigMap when it was absent, so the leader's lease renew every
+# 2 s alone cost two reads. A reading stands FENCE_TTL seconds, so a shutdown
+# another copy begins blocks writes here within that; this copy's own journal
+# writes drop it at once. A read that fails is never kept: the write is refused.
+FENCE_TTL = 1.5
+fence_clock = time.monotonic
+_fence = {"until": float("-inf"), "state": None, "source": None, "generation": 0}
+_fence_lock = threading.Lock()
+
+
+def _fence_state():
+    source = cluster_shutdown
+    with _fence_lock:
+        if _fence["source"] is source and fence_clock() < _fence["until"]:
+            return _fence["state"]
+        generation = _fence["generation"]
+    state = source().state()
+    with _fence_lock:
+        # A forget while this read ran (the coordinator wrote the journal):
+        # the reading may predate that write, so it answers this write only.
+        if _fence["generation"] == generation:
+            _fence.update(until=fence_clock() + FENCE_TTL, state=state, source=source)
+    return state
+
+
+def forget_fence():
+    with _fence_lock:
+        _fence.update(until=float("-inf"), state=None, source=None, generation=_fence["generation"] + 1)
+
+
+def _journal_write(path, body):
+    import homestead_cluster_shutdown as CLUSTER_SHUTDOWN
+    name = ((body or {}).get("metadata") or {}).get("name", "") if isinstance(body, dict) else ""
+    return "/secrets" in path and (path.rstrip("/").endswith("/" + CLUSTER_SHUTDOWN.NAME) or name == CLUSTER_SHUTDOWN.NAME)
 
 
 def transport(method, path, body=None, ctype=None, timeout=15):

@@ -327,7 +327,7 @@ def _row(component, name, installed, kind, how, note="", extra=None):
 
 
 def report(force=False):
-    p = platform(True) or {}
+    p = platform(30) or {}
     if force:
         _releases.clear()
     distribution = p.get("distribution", "")

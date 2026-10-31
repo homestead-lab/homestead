@@ -29,6 +29,8 @@ import homestead_maintenance as M
 
 NAME = "homestead-cluster-shutdown"
 JOURNAL_TYPE = "homestead.io/cluster-shutdown"
+LEGACY_RECHECK = 600
+legacy_clock = time.monotonic
 ANNOTATION = "homestead.io/cluster-shutdown"
 KIND = "cluster-shutdown"
 CONFIRM = "SHUT DOWN CLUSTER"
@@ -149,14 +151,25 @@ class Shutdown:
         self.clock, self.sleep = clock, sleep
         self.path = f"/api/v1/namespaces/{namespace}/secrets/{NAME}"
 
+    # namespace -> when its legacy ConfigMap was last seen absent (#985): the
+    # write fence reads the journal before writes, and asking for a ConfigMap
+    # no current Homestead creates doubled that. It is asked again after
+    # LEGACY_RECHECK seconds.
+    _legacy_absent = {}
+
     def read(self):
         journal = KUBE.get_optional(self.path, read=self.get)
         if journal is None:
             # Never migrate power authority from the old, lower-trust journal.
             # An unfinished preview installation needs manual inspection first.
+            seen = self._legacy_absent.get(self.ns)
+            if seen is not None and 0 <= legacy_clock() - seen < LEGACY_RECHECK:
+                return None
             legacy = KUBE.get_optional(f"/api/v1/namespaces/{self.ns}/configmaps/{NAME}", read=self.get)
             if legacy is not None:
+                self._legacy_absent.pop(self.ns, None)
                 raise ValueError("Legacy shutdown ConfigMap found; inspect and retire its helpers and journal from a cluster console before starting another shutdown")
+            self._legacy_absent[self.ns] = legacy_clock()
             return None
         if journal.get("kind") != "Secret" or journal.get("type") != JOURNAL_TYPE:
             raise ValueError("Unexpected shutdown journal type; power was not authorized")

@@ -1637,9 +1637,10 @@ def diagnostic_summaries(operation_ids):
 def log(operation_id, see_values=True):
     """A job's steps so far and, where it has one, its own output. A Helm
     pod can print the chart's values: unless see_values (the role that may
-    reveal a Secret), its text is left out and a note says why."""
-    with _lock:
-        item = next((row for row in _read() if row.get("id") == operation_id), None)
+    reveal a Secret), its text is left out and a note says why. Read as
+    snapshot() reads, without the operations lock: the dialog asks every 3 s
+    and the saved files are replaced whole (#985)."""
+    item = next((row for row in _read() if row.get("id") == operation_id), None)
     if not item:
         raise ValueError("operation not found")
     sources, reader = [], LOGGERS.get(item.get("kind"))

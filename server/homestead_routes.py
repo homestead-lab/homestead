@@ -554,9 +554,25 @@ def find(method, path):
     route = routes.get((method, path))
     if route is not None or "*" in path:
         return route
-    stems = [p for m, p in routes if m == method and p.endswith("/*") and path.startswith(p[:-1])
+    stems = [p for p in _prefixes(routes).get(method, ()) if path.startswith(p[:-1])
              and _REST.fullmatch(path[len(p) - 1:])]
     return routes[(method, max(stems, key=len))] if stems else None
+
+
+_prefix_index = {"table": None, "size": -1, "index": {}}
+
+
+def _prefixes(routes):
+    """The prefix routes ("/x/*") by method, kept while the table is the same:
+    every static file missed the exact routes and scanned them all (#985)."""
+    cached = _prefix_index
+    if cached["table"] is not routes or cached["size"] != len(routes):
+        index = {}
+        for m, p in routes:
+            if p.endswith("/*"):
+                index.setdefault(m, []).append(p)
+        cached.update(table=routes, size=len(routes), index=index)
+    return cached["index"]
 
 
 def role(path, method):

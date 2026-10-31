@@ -73,7 +73,7 @@ def servers():
 def tick():
     """Each Ready server node not done yet: mark its installer files. Returns
     {node: [files marked]} for the nodes done now."""
-    p = platform(True) or {}
+    p = platform() or {}
     if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
         return {}
     state = _load()
