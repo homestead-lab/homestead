@@ -26,12 +26,12 @@ import concurrent.futures
 import json
 import re
 import threading
-import urllib.parse
 import time
 import urllib.error
 import urllib.request
 import homestead_kube as KUBE
 import homestead_routes
+import homestead_value_masks as MASKS
 
 kget = ksend = None
 NS = "lab"
@@ -329,6 +329,12 @@ def _versions(entry, url, kept, have):
     return sorted(versions, key=lambda v: v.get("added", 0))
 
 
+def _source(image):
+    """Where an image came from, by host and port only: its address can
+    carry a login or a token."""
+    return MASKS.host(image.get("url")) or image.get("source") or "upload"
+
+
 def view(check=False):
     """The catalogue by distribution, each variant with its download size,
     what this cluster has of it and whether a newer build is out; and the VM
@@ -358,7 +364,7 @@ def view(check=False):
     own = [{"image": ref, "display": image.get("display", ""), "ready": bool(image.get("ready")),
             "failed": bool(image.get("failed")), "progress": image.get("progress", 0),
             "size_gb": image.get("size_gb", 0), "created": image.get("created", 0),
-            "from": urllib.parse.urlparse(image.get("url") or "").netloc or (image.get("source") or "upload")}
+            "from": _source(image)}
            for ref, image in sorted(have.items(), key=lambda kv: kv[1].get("display", "").lower()) if ref not in claimed]
     return {"harvester": harvester, "arch": on, "images": rows, "own": own,
             "note": "" if harvester else "CDI fills each VM's disk straight from the publisher, so a new VM always "
@@ -564,7 +570,8 @@ def _fresh(call):
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("POST", "/api/vm/store/auto"): ("admin", lambda request: set_auto(str(request.body.get("id") or ""), bool(request.body.get("auto")))),
-    ("GET", "/api/vm/store"): ("viewer", lambda request: view(check=(request.query.get("check") or [""])[0] == "1")),
+    ("GET", "/api/vm/store"): ("viewer", lambda request: MASKS.for_role(
+        request.role, view(check=(request.query.get("check") or [""])[0] == "1"))),
     ("POST", "/api/vm/store/keep"): ("admin", lambda request: _fresh(
         lambda: keep(str(request.body.get("id") or ""), request.body.get("auto", True) is not False))),
     ("POST", "/api/vm/store/forget"): ("admin", lambda request: _fresh(lambda: forget(str(request.body.get("id") or "")))),

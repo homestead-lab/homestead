@@ -12,6 +12,7 @@ import homestead_vm_power_receipts as POWER_RECEIPTS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
 import homestead_cdi_cleanup as CDI_CLEANUP
 import homestead_storage_journal as STORAGE_JOURNAL
+import homestead_value_masks as MASKS
 import json
 import re
 import contextlib
@@ -1523,8 +1524,10 @@ def diagnostic_summaries(operation_ids):
                 for row in _read() if row.get("id") in operation_ids][:10]
 
 
-def log(operation_id):
-    """A job's steps so far and, where it has one, its own output."""
+def log(operation_id, see_values=True):
+    """A job's steps so far and, where it has one, its own output. A Helm
+    pod can print the chart's values: unless see_values (the role that may
+    reveal a Secret), its text is left out and a note says why."""
     with _lock:
         item = next((row for row in _read() if row.get("id") == operation_id), None)
     if not item:
@@ -1535,6 +1538,10 @@ def log(operation_id):
             sources = reader(item) or []
         except Exception as error:
             sources = [{"title": "Output", "text": "", "note": f"could not be read: {error}"[:300]}]
+    for source in sources:
+        if (source.pop("helm_values", False) or item.get("kind") == "helm") and not see_values and source.get("text"):
+            source.update(text="", note=f"Helm's output can show the chart's values, so it needs the "
+                                        f"{MASKS.reveal_role()} role.")
     return {**_public(item), "history": item.get("history") or [], "sources": sources}
 
 
@@ -1590,7 +1597,8 @@ ROUTES = {
     ("POST", "/api/operations/storage-recovery/preview"): ("admin", _recover("storage", "preview")),
     ("POST", "/api/operations/storage-recovery/act"): ("admin", _recover("storage", "act")),
     ("GET", "/api/operations"): ("viewer", lambda request: snapshot()),
-    ("GET", "/api/operations/log"): ("viewer", lambda request: log((request.query.get("id") or [""])[0])),
+    ("GET", "/api/operations/log"): ("viewer", lambda request: log((request.query.get("id") or [""])[0],
+                                                                 see_values=MASKS.sees_values(request.role))),
     ("POST", "/api/operations/resume"): ("admin", lambda request: resume(request.body.get("id", ""))),
     ("POST", "/api/operations/cancel-plan"): ("operator", lambda request: cancel_plan(request.body.get("id", ""))),
 }

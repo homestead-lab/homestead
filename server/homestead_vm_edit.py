@@ -16,6 +16,7 @@ import homestead_kube as KUBE
 import homestead_vm_hardware as HARDWARE
 import homestead_hvimage as HVIMAGE
 import homestead_vm_network as VMNETWORK
+import homestead_value_masks as MASKS
 import homestead_storage_resize as RESIZE
 
 
@@ -121,6 +122,9 @@ def _disk_volume(vm, ns, claim, size, klass, source, to_create, effects):
     p = V.platform() or {}
     harvester, cdi = bool(p.get("harvester")), p.get("cdi", True)
     url, image = str(source.get("url") or "").strip(), str(source.get("image") or "").strip()
+    if url and MASKS.has_stripped(url):
+        # A copy shown below the reveal role, saved back, would download from the mask.
+        raise ValueError("this disk address is hidden in your copy; type the full address in again")
     if url:
         parsed = urllib.parse.urlparse(url)
         if parsed.scheme not in ("http", "https") or not parsed.netloc:

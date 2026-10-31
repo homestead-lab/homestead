@@ -26,6 +26,7 @@ import urllib.parse
 import urllib.request
 
 import homestead_names as NAMES
+import homestead_value_masks as MASKS
 import homestead_routes
 
 kget = ksend = None
@@ -119,7 +120,9 @@ def releases():
         if (ns, name) not in newest:
             spec = item.get("spec") or {}
             labels = item.get("metadata", {}).get("labels") or {}
-            rows.append({"name": name, "namespace": ns, "chart": spec.get("chart", ""), "chart_version": spec.get("version", ""),
+            # Shared by every role (cached): a private chart address keeps no login.
+            rows.append({"name": name, "namespace": ns, "chart": MASKS.strip_url_secrets(spec.get("chart", "")),
+                         "chart_version": spec.get("version", ""),
                          "app_version": "", "status": "pending-install", "revision": 0, "updated": "",
                          "managed": "homestead" if labels.get(NAMES.key("managed")) == "true" else "helmchart",
                          "helmchart": item["metadata"].get("namespace", ""), "system": _system(ns, name),
@@ -171,6 +174,8 @@ def release(namespace, name, include_sensitive=True):
             item.pop("description", None)
         if result["source"]:
             result["source"].pop("values", None)
+            # A private repository's address can carry its login.
+            MASKS.strip_in_place(result["source"])
         result["sensitive_hidden"] = True
     return result
 

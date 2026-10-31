@@ -13,6 +13,7 @@ import urllib.error
 import urllib.parse
 import homestead_logos as LOGOS
 import homestead_names as NAMES
+import homestead_value_masks as MASKS
 import homestead_schedules as SCHEDULES
 import homestead_outage as OUTAGE
 import homestead_vmusage as VMUSAGE
@@ -98,7 +99,7 @@ def _why_not_filling(ns, dv):
                           "restart the node service, then recreate the failed importer pod. Keep the disk PVC and DataVolume.")
     seen, out = set(), []
     for reason in reasons:
-        text = " ".join(str(reason).split())[:240]
+        text = MASKS.cut(MASKS.squeeze(reason), 240)
         if text not in seen:
             seen.add(text)
             out.append(text)

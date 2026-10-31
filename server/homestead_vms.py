@@ -31,6 +31,7 @@ import homestead_kube as KUBE
 import homestead_hvimage as HVIMAGE  # noqa: F401
 import homestead_lifecycle as LC
 import homestead_operations as OPS
+import homestead_value_masks as MASKS
 
 kget = ksend = None
 events_for = lambda ns, name, uid="": []
@@ -145,7 +146,7 @@ def _problem(vm, vmi, instance_known=True):
     Synchronized are False. A stopped VM's Ready says only that it has no
     instance, which is not a problem."""
     conditions = ((vm.get("status") or {}).get("conditions") or []) + ((vmi.get("status") or {}).get("conditions") or [])
-    text = lambda c: " ".join(str(c.get("message") or c.get("reason") or "").split())[:300]
+    text = lambda c: MASKS.cut(MASKS.squeeze(c.get("message") or c.get("reason") or ""), 300)
     for condition in conditions:
         if condition.get("type") == "Failure" and condition.get("status") == "True" and text(condition):
             message = text(condition)
@@ -210,7 +211,7 @@ def detail(ns, name, include_sensitive=True):
     guest = (vmi.get("status") or {}).get("guestOSInfo") or {}
     row["guest"] = {k: guest.get(k, "") for k in ("prettyName", "kernelRelease", "version", "id")}
     row["conditions"] = [{"type": c.get("type"), "status": c.get("status"), "reason": c.get("reason", ""),
-                          "message": (c.get("message") or "")[:300]}
+                          "message": MASKS.cut(c.get("message"), 300)}
                          for c in ((vm.get("status") or {}).get("conditions") or []) + ((vmi.get("status") or {}).get("conditions") or [])]
     row["events"] = events_for(ns, name, "")[:30]
     claims = _claims(ns)
@@ -437,14 +438,24 @@ def _migrate_route(request):
     return result
 
 
+def _for_role(request, answer):
+    """What a role below the one that may reveal a Secret sees of the VM
+    pages: every address without its credentials (a disk's source, a
+    failed import's message in events, conditions or filling). The list is
+    shared by every role, so it is copied first."""
+    return MASKS.for_role(getattr(request, "role", None), answer)
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("POST", "/api/vm/delete"): ("admin", _delete_route),
     ("POST", "/api/vm/migrate"): ("operator", _migrate_route),
     ("POST", "/api/vms/logo"): ("operator", lambda request: set_logos(request.body)),
     ("POST", "/api/vms/monitoring"): ("operator", lambda request: set_monitoring(request.body)),
-    ("GET", "/api/vms"): ("viewer", lambda request: homestead_routes.cached("vms", homestead_routes.PAGE_SECONDS, list_vms)),
-    ("GET", "/api/vm"): ("viewer", lambda request: detail((request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], include_sensitive=request.role == "admin")),
+    ("GET", "/api/vms"): ("viewer", lambda request: _for_role(request, homestead_routes.cached(
+        "vms", homestead_routes.PAGE_SECONDS, list_vms))),
+    ("GET", "/api/vm"): ("viewer", lambda request: _for_role(request, detail(
+        (request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], include_sensitive=request.role == "admin"))),
 }
 
 

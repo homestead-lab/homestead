@@ -12,6 +12,7 @@ job's own steps are all there is, and it says so.
 import urllib.parse
 
 import homestead_k3scluster as K3SC
+import homestead_value_masks as MASKS
 
 kget = ktext = None
 TAIL = 200
@@ -44,7 +45,11 @@ def _pod_source(ns, pod, title, container="", *, timestamps=False):
         note = "" if text.strip() else f"{name} has printed nothing yet ({phase or 'starting'})"
     except Exception as error:
         text, note = "", f"{name}'s log could not be read ({phase or 'not started'}): {error}"[:300]
-    return {"title": title, "pod": name, "text": text[-60000:], "note": note}
+    source = {"title": title, "pod": name, "text": text[-60000:], "note": note}
+    if MASKS.helm_job_pod(pod):
+        # The job log route gives its text only to the role that may reveal a Secret.
+        source["helm_values"] = True
+    return source
 
 
 def job_output(ns, job, title="Output"):

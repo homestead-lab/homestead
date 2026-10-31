@@ -41,6 +41,7 @@ import homestead_capacity_review as SOURCE_REVIEW
 import homestead_passthrough as PASSTHROUGH
 import homestead_vm_network as VMNETWORK
 import homestead_routes
+import homestead_value_masks as MASKS
 
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
@@ -580,7 +581,8 @@ ROUTES = {
     ("POST", "/api/imports/delete"): ("admin", _delete_import),
     ("POST", "/api/import/preview"): ("admin", lambda request: preview_import(request.body)),
     ("POST", "/api/import"): ("admin", lambda request: reviewed_import(request.body)),
-    ("GET", "/api/vm-disks"): ("viewer", lambda request: list_vm_disks()),
+    # A disk's or image's address can carry its login: stripped below reveal.
+    ("GET", "/api/vm-disks"): ("viewer", lambda request: MASKS.for_role(request.role, list_vm_disks())),
     ("GET", "/api/sources"): ("admin", lambda request: list_sources()),
     ("GET", "/api/imports"): ("viewer", lambda request: import_status()),
     ("POST", "/api/imports/cleanup-plan"): ("admin", lambda request: import_cleanup_plan(request.body.get("name"), request.body.get("namespace"))),
@@ -590,8 +592,10 @@ ROUTES = {
     ("POST", "/api/sources/scan"): ("admin", lambda request: scan_source(request.body.get("name"), request.user)),
     ("POST", "/api/sources/trust"): ("admin", lambda request: trust_source(request.body, request.user)),
     ("POST", "/api/sources/inspect"): ("admin", lambda request: inspect_source_container(request.body["name"], request.body["container"])),
-    ("GET", "/api/images/vm"): ("viewer", lambda request: homestead_routes.cached("vmimages", 15, vm_image_cache)),
-    ("GET", "/api/vmimages"): ("viewer", lambda request: homestead_routes.cached("vmimg", 30, list_vm_images)),
+    ("GET", "/api/images/vm"): ("viewer", lambda request: MASKS.for_role(
+        request.role, homestead_routes.cached("vmimages", 15, vm_image_cache))),
+    ("GET", "/api/vmimages"): ("viewer", lambda request: MASKS.for_role(
+        request.role, homestead_routes.cached("vmimg", 30, list_vm_images))),
     ("GET", "/api/images"): ("viewer", lambda request: homestead_routes.cached("imgcache", 30, image_cache)),
     ("GET", "/api/schedules"): ("viewer", lambda request: homestead_routes.cached("cron", 8, list_jobs)),
     ("POST", "/api/sources/measure"): ("admin", lambda request: measure_source_paths(request.body.get("name"), request.body.get("paths") or [], request.body.get("seconds", 25))),
