@@ -4,6 +4,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -476,6 +477,154 @@ class ProbeTests(unittest.TestCase):
         result = UP.probe(self.t(port=port), timeout=2)
         self.assertFalse(result["ok"])
         self.assertTrue(result["error"])
+
+    def far_end(self, speak):
+        """A port whose every connection is handed to speak(conn, stop)."""
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(5)
+        stop = threading.Event()
+        self.addCleanup(stop.set)
+        self.addCleanup(listener.close)
+
+        def run(conn):
+            try:
+                speak(conn, stop)
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+        def accept():
+            while not stop.is_set():
+                try:
+                    conn, _ = listener.accept()
+                except OSError:
+                    return
+                threading.Thread(target=run, args=(conn,), daemon=True).start()
+        threading.Thread(target=accept, daemon=True).start()
+        return listener.getsockname()[1]
+
+    def ends_by_the_deadline(self, speak, scheme="http"):
+        """http.client's timeout is per wait: a byte every 0.1 s kept a probe
+        going for as long as the far end liked (one thread per round)."""
+        port = self.far_end(speak)
+        for strict in (False, True):
+            with self.subTest(strict=strict):
+                results = []
+                started = time.monotonic()
+                worker = threading.Thread(target=lambda: results.append(
+                    UP.probe({**self.t(port=port, strict=strict), "scheme": scheme}, timeout=0.5)), daemon=True)
+                worker.start()
+                worker.join(5)
+                self.assertFalse(worker.is_alive(), "the probe is still reading")
+                self.assertLess(time.monotonic() - started, 2.0, "the deadline is 2 x 0.5 s")
+                if strict:
+                    self.assertEqual({"ok": False, "error": "no HTTP answer (no answer in time)"},
+                                     {k: results[0][k] for k in ("ok", "error")})
+                else:
+                    self.assertTrue(results[0]["ok"], "it took the connection: an app that answers")
+
+    def test_a_target_that_accepts_and_never_answers_ends_by_the_deadline(self):
+        self.ends_by_the_deadline(lambda conn, stop: stop.wait(10))
+
+    def test_a_target_that_trickles_its_status_line_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            for byte in b"HTTP/1.1 200 OK\r\n" * 50:
+                if stop.wait(0.1):
+                    return
+                conn.sendall(bytes([byte]))
+        self.ends_by_the_deadline(speak)
+
+    def test_a_target_that_trickles_its_headers_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            conn.sendall(b"HTTP/1.1 200 OK\r\n")
+            while not stop.wait(0.1):
+                conn.sendall(b"X")
+        self.ends_by_the_deadline(speak)
+
+    def test_a_tls_target_that_trickles_its_handshake_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)                       # the ClientHello
+            # A 16 KiB handshake record opening a ServerHello, then a byte at a time.
+            conn.sendall(b"\x16\x03\x03\x40\x00" + b"\x02\x00\x3f\xfc")
+            while not stop.wait(0.1):
+                conn.sendall(b"\x00")
+        self.ends_by_the_deadline(speak, scheme="https")
+
+
+class RoundDeadlineTests(Base):
+    def test_a_round_waits_once_for_all_its_stuck_checks_not_once_each(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def stuck(t):
+            release.wait(30)
+            return OK
+        apps = [app(name=f"app{n}", port=8000 + n) for n in range(4)]
+        started = time.monotonic()
+        with mock.patch.object(UP, "TIMEOUT", 0.05):
+            UP.observe(apps, now=1000, ask=stuck)
+        took = time.monotonic() - started
+        self.assertLess(took, 2 * (0.05 * 2 + 2), "joined one after another")
+        self.assertEqual({"the check did not finish"},
+                         {row["last"]["error"] for row in UP._load().values()})
+
+    def test_a_target_with_several_ports_is_waited_for_to_its_own_bound(self):
+        """The round waited 2 x TIMEOUT + 2 s whatever the target: an app whose
+        first ports were slow landed after it and was recorded down."""
+        w = app(ports=[{"ip": "192.0.2.10", "port": p, "protocol": "TCP"} for p in (8001, 8002, 8003)])
+
+        def ask(t):
+            if t["port"] != 8003:
+                time.sleep(0.18)
+                return MISS
+            return OK
+        with mock.patch.object(UP, "TIMEOUT", 0.1), mock.patch.object(UP, "ROUND_SLACK", 0.05):
+            UP.observe([w], now=1000, ask=ask)
+        rep = UP.report(1000)["lab/sonarr"]
+        self.assertEqual(("up", "http://192.0.2.10:8003/"), (rep["state"], rep["target"]))
+
+    def test_the_ports_of_one_target_share_one_deadline(self):
+        asked = []
+
+        def ask(t):
+            asked.append((t["port"], t["timeout"]))
+            time.sleep(0.35)
+            return MISS
+        t = {"kind": "tcp", "host": "192.0.2.10", "port": 1, "scheme": "http", "path": "/", "timeout": 0.1,
+             "asks": [{"host": "192.0.2.10", "port": p, "scheme": "http"} for p in (1, 2, 3)]}
+        self.assertAlmostEqual(0.6, UP.target_bound(t))
+        result = UP.ask_ports(t, ask)
+        self.assertEqual([1, 2], [port for port, _ in asked], "no port is asked once the time is spent")
+        self.assertTrue(all(timeout <= 0.1 for _, timeout in asked))
+        self.assertEqual((False, 2), (result["ok"], result["port"]))
+
+
+class HostHeaderTests(unittest.TestCase):
+    def test_the_host_header_names_the_port_only_when_it_is_not_the_schemes_own(self):
+        self.assertEqual("192.0.2.10", UP._host("192.0.2.10", 443, "https"))
+        self.assertEqual("192.0.2.10", UP._host("192.0.2.10", 80, "http"))
+        self.assertEqual("192.0.2.10:8443", UP._host("192.0.2.10", 8443, "https"))
+        self.assertEqual("192.0.2.10:443", UP._host("192.0.2.10", 443, "http"))
+
+    def test_a_probe_sends_it(self):
+        seen = []
+
+        class Echo(Handler):
+            def do_GET(self):
+                seen.append(self.headers.get("Host"))
+                super().do_GET()
+        server = http.server.HTTPServer(("127.0.0.1", 0), Echo)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        port = server.server_address[1]
+        self.assertTrue(UP.probe({"kind": "http", "host": "127.0.0.1", "port": port, "scheme": "http",
+                                  "path": "/", "strict": True})["ok"])
+        self.assertEqual([f"127.0.0.1:{port}"], seen)
 
 
 if __name__ == "__main__":

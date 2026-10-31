@@ -3172,7 +3172,11 @@ window.storeDetails = async key => {
   modal(summary.name || "App", '<div class="empty"><span class="spin2"></span>reading the template</div>', true, "store");
   let app;
   try { app = Object.assign({}, summary, await api("/api/appstore/app?key=" + encodeURIComponent(key))); }
-  catch (e) { $("#mbody").innerHTML = `<div class="note bad">${esc(e.message)}</div>`; return; }
+  catch (e) {
+    $("#mbody").innerHTML = UI.error(e, { retry: `storeDetails(${jsArg(key)})`, dialog: true,
+      title: e.body?.loading ? "The catalogue is still loading" : "Couldn't read this app" });
+    return;
+  }
   STORE_APPS.set(key, app);
   const jsKey = esc(JSON.stringify(key));
   const profile = app.deploy?.app_profile;

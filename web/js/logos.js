@@ -172,7 +172,12 @@ window.logoFixup = async () => {
   modal("Apps without a logo", '<div class="empty"><span class="spin2"></span> Matching apps with the app store…</div>');
   let found;
   try { found = await api("/api/logos/missing"); }
-  catch (e) { $("#mbody").innerHTML = UI.callout("bad", "The app store could not be read", esc(e.message)) + UI.actions(UI.cancel("Close")); return; }
+  catch (e) {
+    // Still loading (503) right after a restart: Try again shortly, as the App Store's own page offers.
+    $("#mbody").innerHTML = UI.error(e, { retry: "logoFixup()", dialog: true,
+      title: e.body?.loading ? "The app store is still loading" : "The app store could not be read" });
+    return;
+  }
   LOGO.missing = found.apps || [];
   const rows = LOGO.missing;
   if (!rows.length) { $("#mbody").innerHTML = UI.callout("ok", "Every app has a logo") + UI.actions(UI.cancel("Close")); return; }

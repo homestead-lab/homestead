@@ -51,8 +51,15 @@ def _catalogue():
     """The App Store's apps, or the 502 that says its feed did not answer."""
     try:
         return APPSTORE.fetch_appstore(), None
+    except APPSTORE.FeedLoading as e:
+        return None, _loading(e)
     except Exception as e:
         return None, ROUTER.Reply(502, {"error": f"app feed unavailable: {e}"})
+
+
+def _loading(error):
+    """No catalogue yet: one is being read in the background (503, ask again)."""
+    return ROUTER.Reply(503, {"error": str(error), "loading": True}, headers=(("Retry-After", "2"),))
 
 
 def appstore(request):
@@ -87,13 +94,13 @@ def appstore(request):
 
 def appstore_app(request):
     key = _arg(request, "key")
-    try:
-        app = next((a for a in APPSTORE.fetch_appstore() if APPSTORE.appstore_key(a) == key), None)
-    except Exception as e:
-        return ROUTER.Reply(502, {"error": f"app feed unavailable: {e}"})
+    apps, refused = _catalogue()
+    if refused:
+        return refused
+    app = next((a for a in apps if APPSTORE.appstore_key(a) == key), None)
     if not app:
         return ROUTER.Reply(404, {"error": "that app is no longer in the catalogue"})
-    return {k: v for k, v in app.items() if k != "config"}
+    return APPSTORE.appstore_detail(app)
 
 
 def appstore_install(request):

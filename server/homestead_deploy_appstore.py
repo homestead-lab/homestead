@@ -1,18 +1,22 @@
 """Deploy: the App Store catalogue.
 
-The Community Applications feed, read and cached; its text made plain; search,
+The Community Applications feed, read in the background as it arrives and
+kept as compact rows (fetch_appstore); its text made plain; search,
 ranking and the spotlight; and an App Store template turned into a deploy
 config. Moved unchanged from homestead_deploy (#623): read and replace these
 names here. Names server.py binds on homestead_deploy are read through it
 (D.x), so a replacement there still applies.
 """
+import codecs
 import html
 import json
 import os
 import re
+import threading
 import time
 import urllib.request
 
+import homestead_fetch as FETCH
 import homestead_privileges as PRIV
 
 
@@ -119,8 +123,22 @@ def appstore_key(app):
 APPSTORE_HEAVY = ("overview", "config", "screenshots", "readme", "comment", "requires")
 
 
+def _with_deploy(row):
+    """A kept app keeps its deploy form as compact JSON (_deploy): each answer
+    gets a dict of its own, and the feed's thousands of forms stay small."""
+    packed = row.pop("_deploy", None)
+    if packed is not None:
+        row["deploy"] = json.loads(packed)
+    return row
+
+
 def appstore_summary(app):
-    return {k: v for k, v in app.items() if k not in APPSTORE_HEAVY}
+    return _with_deploy({k: v for k, v in app.items() if k not in APPSTORE_HEAVY})
+
+
+def appstore_detail(app):
+    """One app in full, for its page: everything but the raw template."""
+    return _with_deploy({k: v for k, v in app.items() if k != "config"})
 
 
 def search_appstore(apps, term):
@@ -215,79 +233,274 @@ def catalog_source():
     return custom or CA_FEED
 
 
-def fetch_appstore():
-    source = catalog_source()
+# The feed is read off the request path, one read at a time, and kept here as
+# compact rows; a page with no feed yet is told it is loading. The public feed
+# is about 20 MB of JSON: read whole and parsed on a page's thread it cost a
+# replica about 130 MB more at its peak and kept about 77 MB.
+FEED_TTL = 21600
+FEED_MAX_BYTES = 64 << 20
+FEED_DEADLINE = 180          # the whole download, however slowly it trickles
+FEED_RETRY = 60              # after a failed read, pages get its error this long
+FEED_WAIT = 5                # a page waits this long for a first read under way
+_feed = {"source": None, "at": 0.0, "apps": None, "error": None, "failed_at": 0.0,
+         "thread": None, "done": None, "reading": None}
+_feed_lock = threading.Lock()
 
-    def go():
-        req = urllib.request.Request(source, headers={
-            "User-Agent": f"Homestead/{D.HOMESTEAD_VERSION} (+https://github.com/homestead-lab/homestead)",
-            "Accept": "application/json",
-        })
-        with urllib.request.urlopen(req, timeout=60) as r:
-            data = json.loads(r.read().decode("utf-8", "replace"))
-        apps = data.get("applist", data if isinstance(data, list) else [])
+
+class FeedLoading(Exception):
+    """The catalogue has not been read yet; a read of it is under way."""
+
+
+def _row(a):
+    """One template as the App Store keeps it, or None when it is not offered."""
+    if not isinstance(a, dict):
+        return None
+    repo = a.get("Repository") or ""
+    if not repo or not a.get("Name"):
+        return None
+    # Containers only, as Community Applications shows them: a plugin
+    # or language pack is Unraid's own software, and blacklisted,
+    # deprecated or hidden templates are not offered there either.
+    if (a.get("Plugin") or a.get("PluginURL") or a.get("Language") or a.get("LanguagePack")
+            or a.get("Blacklist") or a.get("Deprecated") or a.get("hideFromCA")
+            or str(repo).lower().endswith(".plg")):
+        return None
+    spotlight = None
+    if appstore_number(a.get("RecommendedDate")):
+        stamp = int(appstore_number(a.get("RecommendedDate")))
+        spotlight = {"date": stamp, "month": time.strftime("%b %Y", time.gmtime(stamp)),
+                     "reason": catalog_reason(a.get("RecommendedReason")),
+                     "who": catalog_text(a.get("RecommendedWho") or "")}
+    maintainer = a.get("Maintainer") or a.get("Author") or ""
+    if isinstance(maintainer, dict):
+        maintainer = maintainer.get("Name") or next((v for v in maintainer.values() if isinstance(v, str)), "")
+    maintainer = str(maintainer or re.sub(r"'s Repository$", "", str(a.get("Repo") or ""))).strip()
+    categories = category_values(a.get("CategoryList") or a.get("Category") or "")
+    item = {
+        "name": a.get("Name"),
+        "repo": repo,
+        "icon": a.get("Icon") or "",
+        "desc": catalog_text(a.get("Overview") or a.get("Description") or "", 300),
+        "cat": categories[0] if categories else "",
+        "categories": categories,
+        "web": a.get("Project") or a.get("Support") or "",
+        "network": a.get("Network") or "bridge",
+        "webui": a.get("WebUI") or "",
+        "config": a.get("Config") or [],
+        "downloads": int(appstore_number(a.get("downloads"))),
+        "stars": int(appstore_number(a.get("stars"))),
+        "trending": appstore_number(a.get("trending")),
+        "top_trending": appstore_number(a.get("topTrending")),
+        "top_performing": appstore_number(a.get("topPerforming")),
+        "first_seen": int(appstore_number(a.get("FirstSeen"))),
+        "last_update": int(appstore_number(a.get("LastUpdate"))),
+        "spotlight": spotlight,
+        "maintainer": catalog_text(maintainer, 80),
+        "official": bool(a.get("Official") or a.get("LTOfficial")),
+        "beta": str(a.get("Beta") or "").lower() in ("true", "1", "yes"),
+        "privileged": str(a.get("Privileged") or "").lower() == "true",
+        "extra_params": catalog_text(a.get("ExtraParams") or "", 600),
+        "links": {k: v for k, v in {
+            "project": a.get("Project"), "support": a.get("Support"), "registry": a.get("Registry"),
+            "readme": a.get("ReadMe") or a.get("Readme"), "video": a.get("Video"),
+            "discord": a.get("Discord"), "github": a.get("GitHub"), "web": a.get("WebPage"),
+        }.items() if isinstance(v, str) and v.startswith(("http://", "https://"))},
+        "overview": catalog_paragraphs(a.get("Overview") or a.get("Description") or ""),
+        "screenshots": catalog_links(a.get("Screenshot")),
+        "requires": catalog_text(a.get("Requires") or "", 600),
+        "comment": catalog_text(a.get("CAComment") or a.get("ModeratorComment") or "", 600),
+        "license": catalog_text(a.get("License") or a.get("Licence") or "", 80),
+    }
+    item["_deploy"] = json.dumps(template_to_cfg(item), separators=(",", ":"))
+    item.pop("config", None)
+    return item
+
+
+def _decoded(pieces):
+    """The feed's text, decoded as it arrives."""
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    for piece in pieces:
+        text = decoder.decode(piece)
+        if text:
+            yield text
+    tail = decoder.decode(b"", final=True)
+    if tail:
+        yield tail
+
+
+class _Stream:
+    """Reads JSON values one after another from text that arrives in pieces,
+    holding only the part not yet read."""
+
+    def __init__(self, texts):
+        self.texts, self.buf, self.pos, self.ended = texts, "", 0, False
+        self.decoder = json.JSONDecoder()
+
+    def _more(self, at_least=1):
+        """Add at least at_least more characters, if the feed has them: True
+        when anything was added."""
+        if self.pos > (1 << 20):
+            self.buf, self.pos = self.buf[self.pos:], 0
+        before = len(self.buf)
+        parts, got = [], 0
+        while not self.ended and got < at_least:
+            text = next(self.texts, None)
+            if text is None:
+                self.ended = True
+            else:
+                parts.append(text)
+                got += len(text)
+        if parts:
+            self.buf += "".join(parts)
+        return len(self.buf) > before
+
+    def peek(self):
+        """The next character that is not white space, or "" at the end."""
+        while True:
+            while self.pos < len(self.buf) and self.buf[self.pos] in " \t\r\n":
+                self.pos += 1
+            if self.pos < len(self.buf):
+                return self.buf[self.pos]
+            if not self._more():
+                return ""
+
+    def expect(self, chars):
+        found = self.peek()
+        if not found or found not in chars:
+            raise ValueError(f"the feed is not valid JSON: expected {chars!r} at {found!r}")
+        self.pos += 1
+        return found
+
+    def value(self):
+        """The next whole value. One cut short by the end of what has arrived
+        so far is read again with more: twice as much each time, so a long
+        value costs no more than reading it twice."""
+        self.peek()
+        while True:
+            try:
+                value, end = self.decoder.raw_decode(self.buf, self.pos)
+            except json.JSONDecodeError as error:
+                if self._more(max(1 << 16, len(self.buf) - self.pos)):
+                    continue
+                raise ValueError(f"the feed is not valid JSON: {error.msg}") from None
+            # A number that ends where the text so far ends may go on.
+            if end == len(self.buf) and self._more():
+                continue
+            self.pos = end
+            return value
+
+    def items(self):
+        """The values of the array that starts here."""
+        self.expect("[")
+        if self.peek() == "]":
+            self.pos += 1
+            return
+        while True:
+            yield self.value()
+            if self.expect(",]") == "]":
+                return
+
+
+def _templates(stream):
+    """The feed's templates: its "applist", or the feed itself when it is a list."""
+    if stream.peek() == "[":
+        yield from stream.items()
+        return
+    stream.expect("{")
+    if stream.peek() == "}":
+        return
+    while True:
+        key = stream.value()
+        stream.expect(":")
+        if key == "applist" and stream.peek() == "[":
+            yield from stream.items()
+        else:
+            stream.value()
+        if stream.expect(",}") == "}":
+            return
+
+
+def load_feed_now(source=None):
+    """Read the feed and turn it into apps, here and now: what the background
+    read runs. Never on a page's thread."""
+    source = source or catalog_source()
+    req = urllib.request.Request(source, headers={
+        "User-Agent": f"Homestead/{D.HOMESTEAD_VERSION} (+https://github.com/homestead-lab/homestead)",
+        "Accept": "application/json",
+    })
+    deadline = time.monotonic() + FEED_DEADLINE
+    with urllib.request.urlopen(req, timeout=60) as r:
+        pieces = FETCH.chunks(r, FEED_MAX_BYTES, deadline, "the app feed")
         out = []
-        for a in apps:
-            repo = a.get("Repository") or ""
-            if not repo or not a.get("Name"):
-                continue
-            # Containers only, as Community Applications shows them: a plugin
-            # or language pack is Unraid's own software, and blacklisted,
-            # deprecated or hidden templates are not offered there either.
-            if (a.get("Plugin") or a.get("PluginURL") or a.get("Language") or a.get("LanguagePack")
-                    or a.get("Blacklist") or a.get("Deprecated") or a.get("hideFromCA")
-                    or str(repo).lower().endswith(".plg")):
-                continue
-            spotlight = None
-            if appstore_number(a.get("RecommendedDate")):
-                stamp = int(appstore_number(a.get("RecommendedDate")))
-                spotlight = {"date": stamp, "month": time.strftime("%b %Y", time.gmtime(stamp)),
-                             "reason": catalog_reason(a.get("RecommendedReason")),
-                             "who": catalog_text(a.get("RecommendedWho") or "")}
-            maintainer = a.get("Maintainer") or a.get("Author") or ""
-            if isinstance(maintainer, dict):
-                maintainer = maintainer.get("Name") or next((v for v in maintainer.values() if isinstance(v, str)), "")
-            maintainer = str(maintainer or re.sub(r"'s Repository$", "", str(a.get("Repo") or ""))).strip()
-            categories = category_values(a.get("CategoryList") or a.get("Category") or "")
-            item = {
-                "name": a.get("Name"),
-                "repo": repo,
-                "icon": a.get("Icon") or "",
-                "desc": catalog_text(a.get("Overview") or a.get("Description") or "", 300),
-                "cat": categories[0] if categories else "",
-                "categories": categories,
-                "web": a.get("Project") or a.get("Support") or "",
-                "network": a.get("Network") or "bridge",
-                "webui": a.get("WebUI") or "",
-                "config": a.get("Config") or [],
-                "downloads": int(appstore_number(a.get("downloads"))),
-                "stars": int(appstore_number(a.get("stars"))),
-                "trending": appstore_number(a.get("trending")),
-                "top_trending": appstore_number(a.get("topTrending")),
-                "top_performing": appstore_number(a.get("topPerforming")),
-                "first_seen": int(appstore_number(a.get("FirstSeen"))),
-                "last_update": int(appstore_number(a.get("LastUpdate"))),
-                "spotlight": spotlight,
-                "maintainer": catalog_text(maintainer, 80),
-                "official": bool(a.get("Official") or a.get("LTOfficial")),
-                "beta": str(a.get("Beta") or "").lower() in ("true", "1", "yes"),
-                "privileged": str(a.get("Privileged") or "").lower() == "true",
-                "extra_params": catalog_text(a.get("ExtraParams") or "", 600),
-                "links": {k: v for k, v in {
-                    "project": a.get("Project"), "support": a.get("Support"), "registry": a.get("Registry"),
-                    "readme": a.get("ReadMe") or a.get("Readme"), "video": a.get("Video"),
-                    "discord": a.get("Discord"), "github": a.get("GitHub"), "web": a.get("WebPage"),
-                }.items() if isinstance(v, str) and v.startswith(("http://", "https://"))},
-                "overview": catalog_paragraphs(a.get("Overview") or a.get("Description") or ""),
-                "screenshots": catalog_links(a.get("Screenshot")),
-                "requires": catalog_text(a.get("Requires") or "", 600),
-                "comment": catalog_text(a.get("CAComment") or a.get("ModeratorComment") or "", 600),
-                "license": catalog_text(a.get("License") or a.get("Licence") or "", 80),
-            }
-            item["deploy"] = template_to_cfg(item)
-            out.append(item)
-        return out
-    return D.cached(f"appstore:{source}", 21600, go)
+        for template in _templates(_Stream(_decoded(pieces))):
+            item = _row(template)
+            if item is not None:
+                out.append(item)
+    return out
+
+
+class FeedUnavailable(Exception):
+    """The last read of the feed failed (its message is kept, not the error)."""
+
+
+def _refresh(source, done):
+    try:
+        apps, error = load_feed_now(source), None
+    except Exception as e:
+        apps, error = None, str(e)[:300] or type(e).__name__
+        print(f"appstore: the feed could not be read: {error[:200]}", flush=True)
+    with _feed_lock:
+        if _feed["source"] == source:
+            if apps is not None:
+                _feed.update(apps=apps, at=time.time(), error=None)
+            else:
+                _feed.update(error=error, failed_at=time.time())
+        if _feed["done"] is done:
+            _feed.update(thread=None, done=None, reading=None)
+    done.set()
+
+
+def _start_refresh(source):
+    """The read under way for source, started if there is none (lock held).
+    A read for another address is left to finish; what it finds is dropped."""
+    if _feed["source"] != source:
+        # Another address: its apps are let go now, not kept beside the new ones.
+        _feed.update(source=source, apps=None, at=0.0, error=None, failed_at=0.0)
+    if _feed["done"] is None or _feed["reading"] != source:
+        done = threading.Event()
+        thread = threading.Thread(target=_refresh, args=(source, done), name="appstore-feed", daemon=True)
+        _feed.update(thread=thread, done=done, reading=source)
+        thread.start()
+    return _feed["done"]
+
+
+def _held_back():
+    """The last read failed less than FEED_RETRY ago (lock held)."""
+    return _feed["error"] is not None and time.time() - _feed["failed_at"] < FEED_RETRY
+
+
+def fetch_appstore(wait=None):
+    """The catalogue's apps. A fresh copy is answered at once, an old one too
+    (while one background read replaces it). With none yet, the page waits up
+    to FEED_WAIT for the read under way, then FeedLoading. After a failed read
+    nothing is read again for FEED_RETRY seconds: pages get the old feed, or
+    FeedUnavailable when there is none."""
+    source = catalog_source()
+    with _feed_lock:
+        if _feed["source"] == source and _feed["apps"] is not None:
+            if time.time() - _feed["at"] >= FEED_TTL and not _held_back():
+                _start_refresh(source)
+            return _feed["apps"]
+        if _feed["source"] == source and _held_back() and _feed["done"] is None:
+            raise FeedUnavailable(_feed["error"])
+        done = _start_refresh(source)
+    done.wait(FEED_WAIT if wait is None else wait)
+    with _feed_lock:
+        if _feed["source"] == source and _feed["apps"] is not None:
+            return _feed["apps"]
+        if _feed["source"] == source and _feed["error"] is not None and _feed["done"] is None:
+            raise FeedUnavailable(_feed["error"])
+    raise FeedLoading("the App Store catalogue is still loading; try again in a few seconds")
 
 
 def appdata_folders(vols):

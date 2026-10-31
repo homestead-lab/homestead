@@ -42,3 +42,15 @@ test("only apps that can carry a logo and have none are counted", () => {
     { homestead: "self" }, { managed_smb: true }, { managed_nfs: true }, { site: { handle: "b" } }])
     assert.equal(can({ name: "a", ...extra }), false, JSON.stringify(extra));
 });
+
+test("while the app store is still loading, the logo fixup says so and offers Try again", async () => {
+  const body = { innerHTML: "" };
+  Object.assign(ctx, {
+    modal() {}, icon: () => "", $: selector => (selector === "#mbody" ? body : null),
+    api: async () => { throw Object.assign(new Error("the App Store catalogue is still loading"), { status: 503, body: { loading: true } }); },
+  });
+  await vm.runInContext("window.logoFixup()", ctx);
+  assert.match(body.innerHTML, /still loading/);
+  assert.match(body.innerHTML, /Try again/);
+  assert.match(body.innerHTML, /logoFixup\(\)/);
+});

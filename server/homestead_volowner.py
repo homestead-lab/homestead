@@ -31,7 +31,11 @@ IMAGE = "alpine:3.24"
 INIT = "homestead-owner"
 BUDGET_SECONDS = 40
 BUDGET_BYTES = 400 * 2**20
+# The manifest and config reads before the layers, which have their own budget.
+REGISTRY_SECONDS = 30
+CONFIG_MAX_BYTES = 1 << 20
 _cache = {}
+_CACHE_MAX = 256      # a key per (image, paths): each new image version adds one
 _lock = threading.Lock()
 
 
@@ -118,19 +122,28 @@ def scan_layers(layers, paths, budget=None):
 
 
 def _registry(image):
+    """The image's manifest and config: at most three reads, under one deadline,
+    the config read no further than the size its manifest gives."""
     parsed = REGISTRY.parse_image(REGISTRY.with_tag(image))
     reference = parsed["digest"] or parsed["tag"]
+    deadline = time.monotonic() + REGISTRY_SECONDS
     body, _ = REGISTRY._registry_json(parsed, "manifests/" + urllib.parse.quote(reference, safe=":"), {},
-                                     REGISTRY.MANIFEST_ACCEPT)
+                                     REGISTRY.MANIFEST_ACCEPT, deadline=deadline)
     manifest = json.loads(body.decode())
     if manifest.get("manifests"):
         child = next((m for m in manifest["manifests"]
                       if (m.get("platform") or {}).get("os", "linux") == "linux"
                       and (m.get("platform") or {}).get("architecture") == "amd64"), None) or manifest["manifests"][0]
-        body, _ = REGISTRY._registry_json(parsed, "manifests/" + child["digest"], {}, REGISTRY.MANIFEST_ACCEPT)
+        body, _ = REGISTRY._registry_json(parsed, "manifests/" + child["digest"], {}, REGISTRY.MANIFEST_ACCEPT,
+                                         deadline=deadline)
         manifest = json.loads(body.decode())
-    config_digest = (manifest.get("config") or {}).get("digest")
-    config = json.loads(REGISTRY._registry_json(parsed, "blobs/" + config_digest, {})[0].decode()) if config_digest else {}
+    descriptor = manifest.get("config") or {}
+    config_digest = descriptor.get("digest")
+    size = descriptor.get("size")
+    limit = size if isinstance(size, int) and not isinstance(size, bool) and 0 < size <= CONFIG_MAX_BYTES \
+        else CONFIG_MAX_BYTES
+    config = json.loads(REGISTRY._registry_json(parsed, "blobs/" + config_digest, {}, limit=limit,
+                                                deadline=deadline)[0].decode()) if config_digest else {}
     return parsed, manifest, config
 
 
@@ -169,6 +182,8 @@ def image_owners(image, paths):
         # Not remembered: the registry may answer next time.
         return {}
     with _lock:
+        while len(_cache) >= _CACHE_MAX:
+            _cache.pop(next(iter(_cache)))
         _cache[key] = dict(out)
     return out
 
