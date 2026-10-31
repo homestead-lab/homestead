@@ -261,11 +261,7 @@ def plan(node, req, facts, busy=None, servers_ready=None):
     reason = _host_problem(facts, shape)
     if reason:
         refusals.append(reason)
-    if busy:
-        refusals.append(f"another host's network is changing ({busy}): one host at a time")
-    if servers_ready and servers_ready[1] and servers_ready[0] < servers_ready[1]:
-        refusals.append(f"{servers_ready[1] - servers_ready[0]} of the other servers is not Ready: if {node} went quiet too, "
-                        "the cluster could lose its quorum. Wait until they are Ready")
+    refusals += guard_refusals(node, busy, servers_ready)
     nics = {n["name"]: n for n in facts.get("nics") or []}
     bond = shape["bond"] or BOND
     current = list(shape["members"])
@@ -721,6 +717,19 @@ def _step(item, now=None):
             return "failed", 100, _not_back(ref, ref["carries_on"])
         return "running", 92, f"Waiting for {node} to be Ready again"
     return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
+
+
+def guard_refusals(node, busy, servers_ready):
+    """Why network_guard holds a change on node back: the same words for a
+    bond and a bridge (homestead_host_bridge), since both go quiet for a
+    moment and restart k3s or RKE2 there."""
+    refusals = []
+    if busy:
+        refusals.append(f"another host's network is changing ({busy}): one host at a time")
+    if servers_ready and servers_ready[1] and servers_ready[0] < servers_ready[1]:
+        refusals.append(f"{servers_ready[1] - servers_ready[0]} of the other servers is not Ready: if {node} went quiet too, "
+                        "the cluster could lose its quorum. Wait until they are Ready")
+    return refusals
 
 
 def network_guard(node):

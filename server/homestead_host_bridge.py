@@ -226,11 +226,26 @@ echo END"""
 CONFIRM_SCRIPT = "systemctl stop homestead-bridge-rollback.timer && echo CONFIRMED"
 
 
-def start(node, ops):
-    """Look again, convert, and hand the rest to a job. Admin only."""
+def look(node):
+    """What the dialog shows: the host's network, and what refuses the move -
+    the host itself first, then the network guard bond changes wait for too."""
     facts = inspect(node)
-    if facts["problem"]:
-        raise ValueError(f"{node}: {facts['problem']}")
+    if not facts["problem"]:
+        facts["problem"] = next(iter(HOST_BONDS.guard_refusals(node, *HOST_BONDS.network_guard(node))), "")
+    return facts
+
+
+def start(node, ops, busy=None, servers_ready=None):
+    """Look again, convert, and hand the rest to a job. Admin only.
+
+    busy, servers_ready: homestead_host_bonds.network_guard's answer. Moving
+    the host's interface into br0 drops it off the network for a moment and
+    restarts k3s or RKE2 there, as a bond does, so it waits for the same:
+    one host at a time, and the other servers Ready."""
+    facts = inspect(node)
+    reason = facts["problem"] or next(iter(HOST_BONDS.guard_refusals(node, busy, servers_ready)), "")
+    if reason:
+        raise ValueError(f"{node}: {reason}")
     stamp = time.strftime("%Y%m%d-%H%M%S")
     what = f"Move {node}'s {facts['interface']} into {BRIDGE}"
     # The host is held until the job ends: netplan applies after this run,
@@ -354,14 +369,14 @@ def convert(body):
     node = str(body.get("node") or "")
     if not node or str(body.get("confirm") or "").strip() != node:
         raise ValueError(f"type the host's name, {node}, to confirm")
-    op = start(node, OPS)
+    op = start(node, OPS, *HOST_BONDS.network_guard(node))
     ROUTER.forget("network")
     return {"ok": True, "operation": op, "detail": f"{node} is moving to {BRIDGE}; follow it under Jobs"}
 
 
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
-    ("POST", "/api/node/bridge/inspect"): ("admin", lambda request: inspect(str(request.body.get("node") or ""))),
+    ("POST", "/api/node/bridge/inspect"): ("admin", lambda request: look(str(request.body.get("node") or ""))),
     ("POST", "/api/node/bridge"): ("admin", lambda request: convert(request.body)),
 }
 
