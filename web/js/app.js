@@ -138,6 +138,10 @@ async function applyDeepLink(v, params) {
     // A log alert's link: the list of log alerts, with their last hour.
     detail = "Log alerts";
     open = () => logAlerts();
+  } else if (v === "workloads" && params.panel === "rebalance") {
+    // A "host is back" alert's link: the suggested moves, not the page.
+    detail = "Balance hosts";
+    open = () => containerRebalance();
   } else if (v === "storage" && params.panel === "edit" && params.ns && params.volume) {
     const volume = (STATE.data.vols || []).find(x =>
       (x.namespace || "lab") === params.ns && (x.pvc_name || x.name) === params.volume);

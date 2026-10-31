@@ -154,7 +154,7 @@ class AlertTests(TempData):
     def test_a_host_back_with_containers_to_move_raises_an_info_alert(self):
         self.back(3)
         fact = recovery.alert_facts("suggest")[0]
-        self.assertEqual(("joins", "info", "/containers"), (fact["category"], fact["severity"], fact["href"]))
+        self.assertEqual(("joins", "info", "/containers?panel=rebalance"), (fact["category"], fact["severity"], fact["href"]))
         self.assertIn("b is back: 3 containers", fact["title"])
         self.assertIn("Nothing moves until you review it", fact["body"])
 

@@ -74,6 +74,7 @@ case "${1:-}" in
     node scripts/check_launch_import_logs.mjs
     node scripts/check_mobile_pwa.mjs
     node tests/integration/setup-reach-late-focus.mjs
+    node scripts/check_alert_links.mjs
     ;;
   pages-live)
     node scripts/check_dashboard_stream.mjs
