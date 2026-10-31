@@ -126,11 +126,29 @@ saved, the address is only ever shown as its scheme, host and port, with the
 rest as `(hidden)` - in the dialog, the app and VM lists, the Resources page,
 errors and the record of the last call. Save or test the address as shown and
 the kept address is used, but only while the scheme, host and port are
-unchanged: change any of them and type the whole address again. An admin's
-**Reveal** on the Resources page shows it all.
+unchanged: change any of them and type the whole address again.
+
+The whole address is kept in a Secret in the app's or VM's namespace,
+`homestead-outage-app-<app>` (`homestead-outage-vm-<vm>` for a VM), not on the app
+or VM itself, so someone who can read Deployments or VMs in Kubernetes - a
+viewer on the Resources page too - never sees a token. The
+`homestead.io/outage-actions` annotation keeps only the scheme, host and port,
+and the Secret's name. An address with nothing after its host has nothing to
+hide and stays on the annotation. Homestead reads the Secret only when it made
+it for that webhook, and only while its scheme, host and port match the
+annotation's; it is deleted with the app or VM. When the app or VM is deleted
+outside Homestead, the leader deletes its Secret once it has been missing
+for an hour, with no job on it (each delete is in the pod log and the audit
+log). A webhook saved before this
+release is moved into its Secret by Homestead after its next monitoring
+round, and on its next save. An admin can **Reveal** the Secret on the
+Resources page.
 
 **Where a webhook may go.** Homestead looks up every address the host name
-resolves to and calls the one it checked. It never calls this host
+resolves to, checks them all, and calls them in turn until one answers - a
+host with an IPv6 and an IPv4 address still gets the call when one of them
+cannot be reached. All the tries share the ten-second limit, and an address
+that answered is never called again for the same message. It never calls this host
 (loopback), link-local or cloud metadata addresses. An IPv6 address that
 carries an IPv4 one (NAT64, 6to4) is checked as the IPv4 address inside. A LAN or cluster address
 (the RFC 1918 private ranges, 100.64.x, IPv6 unique local) - a self-hosted
@@ -169,6 +187,11 @@ Known limits of the carry-over:
   address if it needs one).
 - GitOps that manages the `homestead.io/outage-actions` annotation can undo
   the `lan` it set; put `"lan":true` in the annotation kept in git.
+- GitOps that keeps a whole webhook address, token and all, in that
+  annotation puts it back after Homestead moves it into its Secret, and
+  Homestead moves it again each time. Keep the annotation in git as Homestead
+  writes it (the address up to its host, then `/(hidden)`, and `"secret"`)
+  and the Secret wherever your other secrets live.
 - A webhook whose name does not resolve when it is saved is saved as it is:
   it is checked again at each call, and a LAN address is then refused
   without the allowance. Saving it clears the warning above, so tick Allow a

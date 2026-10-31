@@ -335,6 +335,11 @@ took. Opening a console or a host shell writes one line when it ends.
 {"v":1,"at":"2026-10-21T09:14:03.512Z","replica":"homestead-6d9f-abcde","via":"browser","user":"ada","role":"operator","addr":"192.0.2.10","method":"POST","path":"/api/workload/scale","target":{"ns":"lab","kind":"Deployment","name":"app-1"},"status":200,"ms":142}
 ```
 
+- **What Homestead deletes on its own** writes a line too, with `"via":"leader"`,
+  `"user":"homestead"` and an `event`, but no `addr`, `target`, `status` or `ms`:
+  `outage-secret-swept` when the Secret of an outage webhook is deleted because
+  its app or VM was deleted outside Homestead an hour before (`"for"` names it,
+  `"detail"` says for how long it was missing).
 - **The pod log always has every line**, for Loki, Vector or anything else that
   reads pod logs.
 - **`audit.jsonl` on Homestead's data volume** keeps them across restarts: two

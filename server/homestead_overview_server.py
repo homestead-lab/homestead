@@ -45,6 +45,7 @@ import homestead_nodes as NODES
 import homestead_operations as OPS
 import homestead_outage as OUTAGE
 import homestead_outage_carry as OUTAGE_CARRY
+import homestead_outage_sweep as OUTAGE_SWEEP
 import homestead_page_snapshot as PAGES
 import homestead_place as PLACE
 import homestead_portal as PORTAL
@@ -386,6 +387,24 @@ def set_schedule(b):
             "detail": f"{name}: {SCHEDULES.describe(schedule).lower()}" if schedule else f"{name} is no longer on a schedule"}
 
 
+def _busy_owners():
+    """busy(ns, name): whether an app or VM of that name has a job not over:
+    queued, running, cancelling, or ended but still to be recovered (not yet
+    dismissible). When the jobs cannot be read, it raises: nothing is swept."""
+    try:
+        operations, error = OPS.snapshot(), None
+    except Exception as failed:
+        operations, error = [], failed
+    working = {((o.get("resource") or {}).get("namespace"), (o.get("resource") or {}).get("name"))
+               for o in operations if o.get("status") not in OPS.TERMINAL or not o.get("dismissible", True)}
+
+    def busy(ns, name):
+        if error is not None:
+            raise error
+        return (ns, name) in working
+    return busy
+
+
 def outage_tick():
     """After a monitoring round, on the leader: any outage action that is due,
     then the carry-over of webhooks saved before #741 - after, and guarded, so
@@ -405,6 +424,14 @@ def outage_tick():
             _cache.pop("wl" if item["kind"] == "app" else "vms", None)
 
         did = OUTAGE.tick(found, UPTIME.report(), restart, lambda item: (item["ns"], item["name"]) in working, operations)
+    try:
+        OUTAGE.migrate(found)       # webhook addresses still on an annotation go into their Secret (#931)
+    except Exception as error:
+        print(f"outage actions: move into Secrets: {type(error).__name__}", flush=True)
+    try:
+        OUTAGE_SWEEP.sweep(_busy_owners())  # Secrets of apps and VMs deleted outside Homestead (#931)
+    except Exception as error:
+        print(f"outage actions: sweep of webhook Secrets: {type(error).__name__}", flush=True)
     try:
         OUTAGE_CARRY.carry_lan()    # reads its own lists: these cached ones cannot tell a failed VM list from none
     except Exception as error:
