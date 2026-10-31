@@ -126,5 +126,42 @@ class CacheBoundTests(unittest.TestCase):
         self.assertIn("snapshot", CACHE._epoch)     # a forget is still recorded for a held epoch
 
 
+class LocalDropTests(CacheBoundTests):
+    """A drop for size or age is this copy's own housekeeping. A pop or del on
+    the kept answers may be told to the other copies of Homestead as a write
+    (#928), so the bounds drop without either: another copy keeps its answer."""
+
+    def setUp(self):
+        super().setUp()
+        told = self.told = []
+
+        class Recording(type(CACHE._cache)):
+            def pop(self, key, *default):
+                told.append(key)
+                return super().pop(key, *default)
+
+            def __delitem__(self, key):
+                told.append(key)
+                super().__delitem__(key)
+        patcher = mock.patch.object(CACHE, "_cache", Recording())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_sweep_drops_without_telling(self):
+        CACHE.cached("appstore:feed", 60, lambda: "feed")
+        self.later(60 + CACHE.IDLE_SECONDS + 1)
+        CACHE.cached("wl", 5, lambda: [])
+        self.assertEqual({"wl"}, set(CACHE._cache))
+        self.assertEqual([], self.told)
+
+    def test_the_cap_drops_without_telling(self):
+        with mock.patch.object(CACHE, "CACHE_MAX", 4):
+            for n in range(6):
+                CACHE.cached(f"k{n}", 60, lambda n=n: n)
+                self.later(1)
+        self.assertNotIn("k0", CACHE._cache)
+        self.assertEqual([], self.told)
+
+
 if __name__ == "__main__":
     unittest.main()

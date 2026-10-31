@@ -107,7 +107,7 @@ def _sweep(now):
         if key in _running:
             continue
         if now - _used.get(key, entry[0]) > IDLE_SECONDS and now - entry[0] >= _ttl.get(key, 0):
-            del _cache[key]
+            _drop(key)
     for store in (_used, _ttl):
         for key in [key for key in store if key not in _cache and key not in _running]:
             del store[key]
@@ -115,10 +115,18 @@ def _sweep(now):
 
 def _evict(count):
     """Drop the count least recently used answers (the caller holds _lock)."""
-    idle = sorted((k for k in _cache if k not in _running), key=lambda k: _used.get(k, _cache[k][0]))
+    idle = sorted((key for key, entry in _cache.items() if key not in _running),
+                  key=lambda key: _used.get(key, _cache[key][0]))
     for key in idle[:count]:
-        del _cache[key]
+        _drop(key)
         _used.pop(key, None)
+
+
+def _drop(key):
+    """Drop key's kept answer here only. A pop or del on _cache may be told to
+    the other copies as a write (#928); a drop for age or size is not one, so
+    it goes past whatever _cache's own pop does."""
+    dict.pop(_cache, key, None)
 
 
 def _last(key):
