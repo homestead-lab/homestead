@@ -57,6 +57,7 @@ import urllib.parse
 import homestead_agent_audit as AUDIT
 import homestead_cache as CACHE
 import homestead_http as HTTP
+import homestead_read_deadline as DEADLINE
 import homestead_self_data_cookie as MOVE_COOKIE
 
 MODULES = (
@@ -370,12 +371,34 @@ def _owned(cookie, module, owned):
     return cookie
 
 
+def call(route, request):
+    """What route answers request; a 503 when any of the request's Kubernetes
+    reads ran out of its time (homestead_read_deadline, #984), even if the
+    route caught the error, or failed after it: a page read in part is not
+    shown as complete. 503 as the account store's own (auth.js): Cloudflare
+    puts its own page in place of an origin's 502 or 504."""
+    cuts = DEADLINE.cuts()
+    try:
+        answer = route.handler(request)
+    except Exception as error:
+        if not isinstance(error, DEADLINE.Spent) and DEADLINE.cuts() == cuts:
+            raise
+        return _out_of_time()
+    return _out_of_time() if DEADLINE.cuts() > cuts else answer
+
+
+def _out_of_time():
+    return Reply(503, {"error": DEADLINE.MESSAGE, "unavailable": True})
+
+
 def answer(handler, answer, module):
     """Send what the route in module returned. A Reply's cookies and headers are
     all checked before any is added, after what the guard already set (a
-    refreshed session): each cookie must be one module owns (OWN_COOKIES)."""
+    refreshed session): each cookie must be one module owns (OWN_COOKIES).
+    A download is streamed without the request's read deadline."""
     if isinstance(answer, Stream):
         check_answer(200, answer.ctype)
+        DEADLINE.lift()
         handler._send_stream(answer)
     elif isinstance(answer, Raw):
         check_answer(200, answer.ctype)

@@ -3,8 +3,12 @@ seconds under a key, so a page and its refresh, or two pages at once, ask
 the API server once. server.py keeps the same dict and lock as _cache and
 _lock, and hands them to the modules that read or clear entries.
 Tests patch cached here."""
+import contextlib
 import threading
 import time
+
+import homestead_read_deadline as DEADLINE
+
 
 class _Answers(dict):
     """The kept answers. Many writes drop their page's key with a plain
@@ -49,6 +53,12 @@ _listeners = []
 _pop_listeners = []
 # How long a caller waits on another's computation before giving up on it.
 WAIT_SECONDS = 60
+# At most this many computations run on in the background for requests out
+# of time (#984), across all keys: they outlive the request, so a request
+# rate (a key per name asked for) must not become a thread and API load
+# rate. Past it a request answers the last copy or 503 and starts nothing.
+BACKGROUND_MAX = 4
+_background = threading.BoundedSemaphore(BACKGROUND_MAX)
 
 
 class _Flight:
@@ -57,6 +67,7 @@ class _Flight:
         self.owner = threading.get_ident()
         self.epoch = epoch
         self.value = self.error = None
+        self.waiting = 0   # callers waiting on it now
 
 
 def _keep(key, epoch, value):
@@ -93,26 +104,92 @@ def cached(key, ttl, fn):
             flight = _running[key] = _Flight(_epoch.get(key, 0))
     if not mine and flight.owner == threading.get_ident():
         return _compute(key, fn, flight.epoch)  # the computation asks for its own key: no waiting on itself
-    if not mine:
-        if not flight.done.wait(WAIT_SECONDS):
+    if mine and DEADLINE.remaining() is not None:
+        # A request's computation runs without its deadline (#984), on a
+        # thread of its own: it ends and is kept for the next caller, and a
+        # loop waiting on it gets the whole answer. The request waits only
+        # for what it has left.
+        flight.owner = None
+        if not _start(key, fn, flight):
             e = _last(key)
             if e:
                 return e[1]
+            raise DEADLINE.spent()
+        mine = False
+    if not mine:
+        left = DEADLINE.remaining()
+        with _lock:
+            flight.waiting += 1
+        try:
+            done = DEADLINE.wait(flight.done, WAIT_SECONDS)
+        finally:
+            with _lock:
+                flight.waiting -= 1
+        if not done:
+            e = _last(key)
+            if e:
+                return e[1]
+            if left is not None and left < WAIT_SECONDS:
+                raise DEADLINE.spent()
             raise TimeoutError(f"{key} is still being read")
         if flight.error is not None:
+            if isinstance(flight.error, DEADLINE.Spent) and left is not None:
+                DEADLINE.spent()     # this request's answer is cut too
             raise flight.error
         return flight.value
+    _fly(key, fn, flight)
+    if flight.error is not None:
+        raise flight.error
+    return flight.value
+
+
+def _start(key, fn, flight):
+    """Run flight on in the background; False (and flight ended, so no one
+    waits on it) when the cap is reached or no thread can be started."""
+    if _background.acquire(blocking=False):
+        try:
+            threading.Thread(target=_fly, args=(key, fn, flight, True), daemon=True,
+                             name=f"cache {key}"[:60]).start()
+            return True
+        except RuntimeError as error:   # can't start new thread
+            _background.release()
+            flight.error = error
+    else:
+        flight.error = DEADLINE.Spent(DEADLINE.MESSAGE)
+    _land(key, flight)
+    return False
+
+
+def _land(key, flight):
+    with _lock:
+        if _running.get(key) is flight:
+            del _running[key]
+    flight.done.set()
+
+
+def _fly(key, fn, flight, background=False):
+    """Compute key for everyone waiting on flight. In the background it is
+    data activity of its own, as the request was (a computation may write
+    under /data, the overview's live history): a data move's freeze waits
+    for it, and while one holds it does not run."""
+    flight.owner = threading.get_ident()
     try:
-        flight.value = _compute(key, fn, flight.epoch)
-        return flight.value
+        if background:
+            import homestead_kube as KUBE   # it imports this module
+            with getattr(KUBE, "self_data_activity", contextlib.nullcontext)():
+                flight.value = _compute(key, fn, flight.epoch)
+        else:
+            flight.value = _compute(key, fn, flight.epoch)
     except BaseException as ex:
         flight.error = ex
-        raise
     finally:
-        with _lock:
-            if _running.get(key) is flight:
-                del _running[key]
-        flight.done.set()
+        _land(key, flight)
+        if background:
+            _background.release()
+            with _lock:
+                unheard = flight.error is not None and not flight.waiting
+            if unheard:
+                print(f"cache: {key} not read in the background: {str(flight.error)[:160]}", flush=True)
 
 
 def refresh(key, fn):
