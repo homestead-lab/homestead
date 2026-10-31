@@ -14,6 +14,7 @@ case "${1:-}" in
     ;;
   dialog-flows)
     node tests/integration/audit-ready.mjs
+    node tests/integration/edit-after-first-page.mjs
     node tests/integration/operator-enable.mjs
     node tests/integration/ha-update-reload.mjs
     DIALOG_STANDARD_SCREENSHOTS=release-assets/dialogs/section-rail node tests/integration/dialog-section-rail.mjs
@@ -60,6 +61,7 @@ case "${1:-}" in
     ARCHITECTURE_SCREENSHOTS=release-assets/pages/architecture node tests/integration/combined-architecture.mjs
     NOTIFICATION_SCREENSHOTS=release-assets/pages/notifications node tests/integration/mobile-notifications.mjs
     ALERT_SCREENSHOTS=release-assets/pages/alerts node tests/integration/notification-alerts.mjs
+    node tests/integration/evaluate-survives-gc.mjs
     node scripts/check_dashboard_storage.mjs
     node scripts/check_collection_layouts.mjs
     SEARCH_SCREENSHOTS=release-assets/pages/global-search node scripts/check_global_search.mjs

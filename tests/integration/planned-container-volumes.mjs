@@ -6,6 +6,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { openAuditPage } from "../../scripts/audit_ready.mjs";
 
 const web = fileURLToPath(new URL("../../web/", import.meta.url));
 const output = process.env.VOLUME_SCREENSHOTS || "release-assets/planned-volumes";
@@ -30,8 +31,7 @@ try {
     const page = await context.newPage(), errors = [];
     page.on("pageerror", error => errors.push(error.message));
     await page.route("**/*", route => route.request().url().startsWith(base) ? route.continue() : route.abort());
-    await page.goto(`${base}/?demo=1`);
-    await page.waitForFunction(() => typeof viewDeploy === "function" && ME && document.querySelector("#gate").classList.contains("hidden"));
+    await openAuditPage(page, `${base}/?demo=1`);
     await page.evaluate(async ({ theme, kind }) => {
       document.documentElement.dataset.theme = theme;
       const original = window.api;

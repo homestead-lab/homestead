@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { openAuditPage } from "../../scripts/audit_ready.mjs";
 
 const web = fileURLToPath(new URL("../../web/", import.meta.url));
 const output = process.env.VM_ISOLATION_SCREENSHOTS || "release-assets/vm-isolation";
@@ -29,8 +30,7 @@ try {
     const page = await context.newPage(), errors=[];
     page.on('pageerror',error=>errors.push(error.message));
     await page.route('**/*',route=>route.request().url().startsWith(base)?route.continue():route.abort());
-    await page.goto(`${base}/?demo=1`);
-    await page.waitForFunction(()=>typeof vmNew==='function' && ME && document.querySelector('#gate').classList.contains('hidden'));
+    await openAuditPage(page, `${base}/?demo=1`);
     await page.evaluate(async()=>{await vmNew();stepGo('v_steps',4);});
     await page.locator('#v_isolated').check();
     assert.equal(await page.locator('#v_net').isDisabled(),true);

@@ -3,13 +3,13 @@
 // keeps Start off until the set's name is typed, and the run follows its job.
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
+import {openAuditPage} from '../../scripts/audit_ready.mjs';
 import {mkdir} from 'node:fs/promises';
 const base=process.env.HOMESTEAD_URL || 'http://127.0.0.1:4173',out=process.env.SET_RESTART_SCREENSHOTS || 'release-assets/set-restart';
 await mkdir(out,{recursive:true});const browser=await chromium.launch({headless:true});
 try{for(const width of [1440,390])for(const theme of ['dark','light']){
  const page=await browser.newPage({viewport:{width,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(`${base}/?demo=1&demo-scenario=critical&platform=k3s`);
- await page.waitForFunction(()=>typeof nodeIfDown==='function'&&typeof ME!=='undefined'&&ME&&document.querySelector('#gate')?.classList.contains('hidden'));
+ await openAuditPage(page, `${base}/?demo=1&demo-scenario=critical&platform=k3s`);
  await page.evaluate(()=>go('nodes'));await page.waitForFunction(()=>STATE.data.nodes?.some(n=>n.status==='NotReady'));
  const button=page.getByRole('button',{name:'Start on another host…'});
  await page.evaluate(t=>{document.documentElement.dataset.theme=t;STATE.platform.harvester=false;return nodeIfDown('harvester-node2');},theme);
