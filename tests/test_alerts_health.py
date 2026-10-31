@@ -110,7 +110,10 @@ class AlertsHealthRouteTests(unittest.TestCase):
             ROUTER.cached("ov", 20, lambda: {"health": "degraded", "health_state": "degraded",
                                              "health_summary": "Volume lab/data: rebuilding",
                                              "health_issues": [{"severity": "degraded"}]})
-        with mock.patch.object(ALERTS, "HEALTH", [lambda: None]):
+        # One clock throughout: on the real one the kept read would look
+        # unread for decades, and the cache's sweep drops such an answer.
+        with mock.patch.object(ALERTS, "HEALTH", [lambda: None]), \
+                mock.patch.object(ROUTER.time, "time", lambda: 5045.0):
             self.alerts()
         self.cluster.calls.clear()
         with mock.patch.object(ROUTER.time, "time", lambda: 5045.0):
