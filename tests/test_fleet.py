@@ -294,6 +294,18 @@ class RelayTests(unittest.TestCase):
         self.assertIn("Content-Length: 2", head)
         self.assertIn("X-Homestead-Fleet-User: robin", head)
 
+    def test_the_callers_own_credentials_are_not_passed_on(self):
+        head = self.a.fleet.request_head(
+            "GET", "/api/overview", "10.0.0.2:8088",
+            {"Authorization": "Bearer hsk_secret", "authorization": "Basic dXNlcjpwdw==",
+             "Proxy-Authorization": "Basic x", "Accept": "application/json"},
+            b"", self.a.fleet.sign("GET", "/api/overview", b"", "robin", "viewer")).decode()
+        self.assertNotIn("hsk_secret", head)
+        self.assertNotIn("dXNlcjpwdw", head)
+        self.assertNotIn("uthorization:", head)
+        self.assertIn("Accept: application/json", head)
+        self.assertIn("X-Homestead-Fleet-User: robin", head, "the signature says who is asking instead")
+
     def test_a_console_keeps_its_upgrade(self):
         head = self.a.fleet.request_head("GET", "/api/console?pod=x", "h", {"Upgrade": "websocket",
                                          "Sec-WebSocket-Key": "k"}, b"", {}, websocket=True).decode()
