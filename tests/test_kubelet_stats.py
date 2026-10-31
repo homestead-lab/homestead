@@ -9,18 +9,21 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
+sys.path.insert(0, str(ROOT / "tests"))
 
+import homestead_kube as K
 import homestead_kubelet_stats as KSTATS
 import homestead_nodes as NODES
 import homestead_node_probes as PROBES
 import homestead_volume_usage as USAGE
+from fakes.kube import Kube
 
 NAMES = ("node-a", "node-b", "node-c")
 GIB = 1024 ** 3
 
 
 def node(name):
-    return {"metadata": {"name": name, "labels": {}, "annotations": {}},
+    return {"apiVersion": "v1", "kind": "Node", "metadata": {"name": name, "labels": {}, "annotations": {}},
             "status": {"capacity": {"cpu": "4", "memory": "8Gi"}, "conditions": [{"type": "Ready", "status": "True"}],
                        "nodeInfo": {}, "addresses": [], "allocatable": {}}}
 
@@ -32,28 +35,31 @@ def summary(rx=0):
 
 
 class Cluster:
-    """Nodes, and a kubelet summary per node that takes `delay` seconds."""
+    """The shared fake API (tests/fakes/kube.py) holding the nodes, with a
+    kubelet summary per node that takes `delay` seconds. Enter `kube` (Base.cluster
+    does) so kget reads through homestead_kube as the app does."""
 
     def __init__(self, delay=0.0):
         self.delay, self.down, self.rx, self.calls = delay, set(), 1000, []
         self.release = threading.Event()
         self._lock = threading.Lock()
+        self.kube = Kube(*(node(name) for name in NAMES))
+        for name in NAMES:
+            self.kube.react("GET", f"/api/v1/nodes/{name}/proxy/stats/summary", self._summary)
+
+    def _summary(self, method, path, body):
+        if path.split("/")[4] in self.down:
+            raise OSError("kubelet did not answer")
+        return summary(self.rx)
 
     def kget(self, path, timeout=None):
-        if path == "/api/v1/nodes":
-            return {"items": [node(name) for name in NAMES]}
         if path.endswith("/proxy/stats/summary"):
             name = path.split("/")[4]
             with self._lock:
                 self.calls.append((name, timeout))
-            if self.delay:
+            if self.delay:   # here, not in the fake, which answers one request at a time
                 self.release.wait(self.delay)
-            if name in self.down:
-                raise OSError("kubelet did not answer")
-            return summary(self.rx)
-        if path == "/api/v1/pods":
-            return {"items": []}
-        return {"items": []}
+        return K.kget(path) if timeout is None else K.kget(path, timeout=timeout)
 
 
 class Base(unittest.TestCase):
@@ -62,6 +68,11 @@ class Base(unittest.TestCase):
         PROBES.reset()
         self.addCleanup(KSTATS.reset)
         self.addCleanup(PROBES.reset)
+
+    def cluster(self, delay=0.0):
+        cluster = Cluster(delay)
+        self.enterContext(cluster.kube)
+        return cluster
 
     def get_nodes(self, cluster):
         with mock.patch.multiple(NODES, kget=cluster.kget, get_app_settings=lambda *args, **kwargs: {},
@@ -86,7 +97,7 @@ class InPlaceTests(Base):
     """Before the loop runs, a build reads every host at once."""
 
     def test_hosts_are_read_at_the_same_time_with_a_short_timeout(self):
-        cluster = Cluster(delay=0.4)
+        cluster = self.cluster(delay=0.4)
         started = time.monotonic()
         nodes = self.get_nodes(cluster)
         took = time.monotonic() - started
@@ -102,7 +113,7 @@ class BackgroundTests(Base):
     """With the loop running, a build never waits on a kubelet."""
 
     def test_a_build_does_not_wait_on_slow_kubelets(self):
-        cluster = Cluster(delay=5.0)
+        cluster = self.cluster(delay=5.0)
         self.addCleanup(cluster.release.set)
         with self.loop_running():
             started = time.monotonic()
@@ -114,7 +125,7 @@ class BackgroundTests(Base):
         self.assertEqual(set(NAMES), set(KSTATS._wanted), "the loop reads the hosts asked about")
 
     def test_the_loop_reading_is_used_and_unknown_once_a_kubelet_stops(self):
-        cluster = Cluster()
+        cluster = self.cluster()
         with self.loop_running():
             self.get_nodes(cluster)
             KSTATS.run_round(cluster.kget, now=time.time() - 20)
@@ -134,7 +145,7 @@ class BackgroundTests(Base):
         self.assertEqual(10.0, nodes["node-a"]["fs_pct"])
 
     def test_a_reading_two_rounds_old_is_unknown(self):
-        cluster = Cluster()
+        cluster = self.cluster()
         with self.loop_running():
             self.get_nodes(cluster)
             KSTATS.run_round(cluster.kget, now=time.time() - 2 * KSTATS.INTERVAL - 1)
@@ -142,7 +153,7 @@ class BackgroundTests(Base):
         self.assertNotIn("fs_pct", nodes["node-a"])
 
     def test_the_first_rate_after_a_restart_is_unknown(self):
-        cluster = Cluster()
+        cluster = self.cluster()
         with self.loop_running():
             self.get_nodes(cluster)
             cluster.rx = 10 ** 9
@@ -154,7 +165,7 @@ class BackgroundTests(Base):
         self.assertIsNone(nodes["node-a"]["tx_mbps"])
 
     def test_a_reading_too_old_is_dropped(self):
-        cluster = Cluster()
+        cluster = self.cluster()
         with self.loop_running():
             self.get_nodes(cluster)
             KSTATS.run_round(cluster.kget, now=time.time() - KSTATS.DROP_AFTER - 1)
@@ -162,7 +173,7 @@ class BackgroundTests(Base):
         self.assertNotIn("fs_pct", nodes["node-a"])
 
     def test_hosts_nobody_asks_about_are_not_read(self):
-        cluster = Cluster()
+        cluster = self.cluster()
         with self.loop_running():
             self.get_nodes(cluster)
         cluster.calls.clear()
@@ -174,7 +185,7 @@ class SharedReadingTests(Base):
     """The volume list uses the Hosts page's reading instead of its own."""
 
     def test_one_summary_read_per_host_for_both(self):
-        cluster = Cluster()
+        cluster = self.cluster()
         claims = {}
         with self.loop_running():
             self.get_nodes(cluster)
@@ -190,7 +201,7 @@ class SharedReadingTests(Base):
 
 
     def test_a_kubelet_that_missed_its_last_read_says_nothing_about_volumes(self):
-        cluster = Cluster()
+        cluster = self.cluster()
         pods = {"items": [{"metadata": {"uid": "pod-a", "namespace": "lab"},
                            "spec": {"nodeName": "node-a", "volumes": [{"persistentVolumeClaim": {"claimName": "data"}}]},
                            "status": {"phase": "Running"}}]}
