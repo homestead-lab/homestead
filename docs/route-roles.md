@@ -701,6 +701,7 @@ Also public, and not listed one by one: every path `needs_no_session` in `server
 | POST | `/api/volumes/reclass/start` | admin |  | homestead_storage |
 | POST | `/api/volumes/repair-class` | admin |  | homestead_storage_classes |
 | GET | `/api/weekly-trim` | viewer |  | homestead_weekly_trim |
+| POST | `/api/weekly-trim/leave-out` | admin |  | homestead_weekly_trim |
 | POST | `/api/weekly-trim/run` | operator |  | homestead_weekly_trim |
 | POST | `/api/weekly-trim/settings` | admin |  | homestead_weekly_trim |
 | GET | `/api/welcome` | viewer |  | homestead_setup |
@@ -887,6 +888,7 @@ Needs is the role the tool's scope stands for. A destructive tool waits for a pe
 | `set_uptime_check` | operator | containers:manage | change |  |
 | `set_vm_logos` | operator | vms:manage | change |  |
 | `set_vm_monitoring` | operator | vms:manage | change |  |
+| `set_weekly_trim` | operator | storage:manage | destructive | admin |
 | `snapshot_volume` | operator | storage:manage | change |  |
 | `stop_prepull` | operator | storage:manage | change |  |
 | `storage_forecast` | viewer | read | read |  |

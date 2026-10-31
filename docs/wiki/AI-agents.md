@@ -235,6 +235,7 @@ Tools come in three classes:
 | `delete_backup_job` | Asks to delete a recurring backup or snapshot job | `storage:manage` | destructive |
 | `set_filesystem_freeze` | Asks to turn the freeze for snapshots on or off, for the cluster or one volume | `storage:manage` | destructive |
 | `trim_volume` | Gives a volume's freed space back to its disks | `storage:manage` | change |
+| `set_weekly_trim` | Asks to leave one volume out of the weekly trim, or to trim it weekly again | `storage:manage` | destructive |
 | `rebuild_volume` | Rebuilds missing copies of a detached volume now | `storage:manage` | change |
 | `preview_storage_rebalance` | Which volume copies would move to even out the disks; exclude: volumes to leave alone | `read` | read |
 | `rebalance_storage` | Moves volume copies as preview_storage_rebalance planned: settings {moves, review_token, exclude} | `storage:manage` | change |

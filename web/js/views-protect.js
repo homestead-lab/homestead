@@ -771,11 +771,14 @@ window.lhSnaps = async (vol, label) => {
   modal("Snapshots · " + label, `<div class="empty"><span class="spin2"></span>loading</div>`, true, 'snapshot-files');
   $(".modalbox").scrollTop = 0;
   try {
-    const [snaps, bks] = await Promise.all([
+    const [snaps, bks, trim] = await Promise.all([
       api("/api/lh/snapshots?volume=" + encodeURIComponent(vol)),
       // Unread is not "no backups" (#620): the snapshots still show.
       api("/api/lh/backups?volume=" + encodeURIComponent(vol)).catch(e => ({ unread: e.message })),
+      // Only for the weekly trim's leave-out action: unread, it is not offered.
+      api("/api/weekly-trim").catch(() => null),
     ]);
+    const leftOut = trim ? (trim.left_out || []).some(row => row.volume === vol) : null;
     if (token !== SNAPSHOT_REFRESH || $("#mtitle").textContent !== "Snapshots · " + label || $("#modal").classList.contains("hidden")) return;
     // One lead, then the timeline; the volume's actions sit in the footer,
     // the main one on the right and the rest in its ⋯ (#501).
@@ -788,6 +791,10 @@ window.lhSnaps = async (vol, label) => {
         { label: "Take snapshot now", run: `lhSnapNow(${jsq(vol)},${jsq(label)})`, need: "operator", pri: true },
         { label: "Back up now", run: `lhBackupNow(${jsq(vol)},${jsq(label)})`, need: "operator" },
         { label: "Trim now", run: `lhTrimNow(${jsq(vol)})`, need: "operator", tip: "Give Longhorn back the space deleted files still hold. Every volume is also trimmed weekly." },
+        ...(leftOut === null ? [] : [leftOut
+          ? { label: "Trim weekly again", run: `weeklyTrimLeaveOut(${jsq(vol)},false,${jsq(label)})`, need: "admin", tip: "Put this volume back in the weekly trim." }
+          : { label: "Leave out of the weekly trim", run: `weeklyTrimLeaveOut(${jsq(vol)},true,${jsq(label)})`, need: "admin",
+              tip: "For a volume an app keeps rewriting, such as camera recordings: the space is reused anyway, and a long trim on a spinning disk can make a copy stop answering. Trim now still trims it." }]),
         { label: "Refresh", icon: "refresh", run: `lhSnaps(${jsq(vol)},${jsq(label)})` }], { shown: 1, label: `More for ${label}` }), UI.cancel("Close"))}`;
     if (window.applyRole) window.applyRole();
     refreshSnapshotDialog(token, vol, label);
@@ -1069,16 +1076,18 @@ function weeklyTrimCard(d) {
       ${failed.length ? `<div class="small wt-line">Failed: ${failed.map(f => `<b>${esc(trimName(f))}</b>: ${esc(f.message)}`).join("; ")}</div>` : ""}
       ${unconfirmed.length ? `<div class="dim xs wt-line">Not confirmed: ${esc(unconfirmed.map(u => `${trimName(u)} (${u.why})`).join(", "))}</div>` : ""}
       ${skipped.length ? `<div class="dim xs wt-line">Skipped: ${esc(skipped.map(s => `${trimName(s)} (${s.why})`).join(", "))}</div>` : ""}`;
+  const leftOut = d.left_out || [];
   return `<div id="housekeeping" class="housekeeping">${UI.section("Housekeeping", `
     <div class="card flat">
       <div class="between wt-head"><div><div class="ctitle">Weekly trim</div>
         <div class="csub">Every attached volume, ${TRIM_DAYS[slot.weekday]}s at ${trimHour(slot.hour)} UTC${d.enabled && d.next ? ` · next ${esc(fmtAt(d.next))}` : ""}</div></div>
         <div class="row" style="gap:8px">${status}${d.running ? "" : '<button class="btn sm" data-need="operator" onclick="weeklyTrimRun()">Run now</button>'}${d.theirs ? "" : '<button class="btn sm" data-need="admin" onclick="weeklyTrimTime()">Change time</button>'}</div></div>
       <div style="margin-top:10px">${lines}</div>
+      ${leftOut.length ? `<div class="small wt-line">Left out: ${leftOut.map(row => `<b>${esc(trimName(row))}</b> <button class="btn xs" data-need="admin" onclick="weeklyTrimLeaveOut(${jsq(row.volume)},false,${jsq(trimName(row))})">Trim weekly again</button>`).join(" ")}</div>` : ""}
       ${d.theirs ? `<div class="dim xs wt-line">Your trim job <span class="mono">${esc(d.theirs)}</span> already trims the default group, so this one does not run as well. Delete it under Recurring jobs to let Homestead trim attached volumes instead: Longhorn's fails on detached volumes and VM disks.</div>` : ""}
       <div class="between wt-foot"><label class="switch" data-need="admin"><input type="checkbox" id="wt_on" ${d.enabled ? "checked" : ""} onchange="weeklyTrimSwitch(this.checked)"> Trim weekly</label>
         <div class="dim xs" id="wt_off"${d.enabled ? " hidden" : ""}>Off · Run now still trims every attached volume</div></div>
-      ${UI.guide("How the weekly trim works", "<p>Files deleted inside a volume keep their space in Longhorn until the filesystem is trimmed. Each week Homestead trims every attached volume, one at a time. A detached volume cannot be trimmed, and a VM disk has no filesystem Longhorn can trim, so both are skipped and named. A volume that fails is named with Longhorn's answer.</p>")}
+      ${UI.guide("How the weekly trim works", "<p>Files deleted inside a volume keep their space in Longhorn until the filesystem is trimmed. Each week Homestead trims every attached volume, one at a time. A detached volume cannot be trimmed, and a VM disk has no filesystem Longhorn can trim, so both are skipped and named. So is a volume already short of a copy: a trim on top of its rebuild can push over the copy that is still good. An admin can leave a volume out from its snapshot panel, for one an app keeps rewriting, such as camera recordings. A volume that fails is named with Longhorn's answer.</p>")}
     </div>`)}</div>`;
 }
 
@@ -1088,6 +1097,17 @@ async function loadWeeklyTrim() {
   try { const d = await api("/api/weekly-trim"); STATE.data.weeklyTrim = d; host.outerHTML = weeklyTrimCard(d); }
   catch (e) { host.innerHTML = UI.section("Housekeeping", UI.callout("warn", "The weekly trim could not be read", esc(e.message))); }
 }
+
+/* Leave one volume out of the weekly trim, or put it back; Trim now still trims it. */
+window.weeklyTrimLeaveOut = async (vol, leave, label) => {
+  try {
+    const r = await api("/api/weekly-trim/leave-out", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ volume: vol, left_out: leave }) });
+    toast(r.detail, "ok");
+    loadWeeklyTrim();
+    if ($("#mtitle")?.textContent === "Snapshots · " + label) lhSnaps(vol, label);
+  } catch (e) { toast(e.message, "bad"); }
+};
 
 window.weeklyTrimSwitch = async on => {
   try { const r = await api("/api/weekly-trim/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) }); toast(r.detail, "ok"); loadWeeklyTrim(); }

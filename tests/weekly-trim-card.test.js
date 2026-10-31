@@ -31,11 +31,14 @@ test("the card says what the last weekly trim trimmed and skipped, from the demo
   const d = await demo("/api/weekly-trim");
   const html = view().weeklyTrimCard(d);
   assert.match(html, /id="housekeeping"/);
-  assert.match(html, /Trimmed 2 volumes, skipped 1 \(1 detached\)/);
+  assert.match(html, /Trimmed 2 volumes, skipped 2 \(1 detached, 1 left out\)/);
   assert.match(html, /ui-chip ok/);
   assert.match(html, /Run now/);
   assert.match(html, /data-need="admin"[^>]*>[^<]*<input type="checkbox" id="wt_on" checked/);
   assert.match(html, /Skipped:.*detached/);
+  // The demo's recordings volume, left out by an admin, with the way back.
+  assert.match(html, /Left out: <b>lab\/frigate-recordings<\/b>/);
+  assert.match(html, /data-need="admin" onclick="weeklyTrimLeaveOut\("pvc-demo-recordings",false/);
 });
 
 test("a failed volume is named with Longhorn's message, and escaped", () => {
