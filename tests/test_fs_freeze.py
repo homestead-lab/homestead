@@ -7,6 +7,7 @@ cluster setting and each volume's override on Data protection, lets an admin
 change them, and marks each write with who made it."""
 import json
 import sys
+import tempfile
 import unittest
 import urllib.error
 from pathlib import Path
@@ -14,6 +15,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_changes as CH
+import homestead_kube as K
+import homestead_operations as OPS
+from fakes.kube import Kube
 
 AUTHOR = CH.AUTHOR
 
@@ -144,60 +148,78 @@ def lh_volume(name, mode="ignored", engine="v1", access="rwo", frontend="blockde
     status = {"kubernetesStatus": {"namespace": "lab", "pvcName": claim, "pvName": pv or name}}
     if state:
         status["state"] = state
-    return {"metadata": {"name": name, "namespace": "longhorn-system"}, "spec": spec, "status": status}
+    return {"apiVersion": "longhorn.io/v1beta2", "kind": "Volume", "metadata": {"name": name, "namespace": "longhorn-system"},
+            "spec": spec, "status": status}
 
 
 def pv(name, mode="Filesystem"):
-    return {"metadata": {"name": name}, "spec": {"volumeMode": mode, "csi": {"driver": "driver.longhorn.io"}}}
+    return {"apiVersion": "v1", "kind": "PersistentVolume", "metadata": {"name": name},
+            "spec": {"volumeMode": mode, "csi": {"driver": "driver.longhorn.io"}}}
 
 
 def node(name, kernel):
-    return {"metadata": {"name": name}, "status": {"nodeInfo": {"kernelVersion": kernel}}}
+    return {"apiVersion": "v1", "kind": "Node", "metadata": {"name": name}, "status": {"nodeInfo": {"kernelVersion": kernel}}}
+
+
+def lh_node(name):
+    return {"apiVersion": "longhorn.io/v1beta2", "kind": "Node", "metadata": {"name": name, "namespace": "longhorn-system"}}
+
+
+def chart_settings(data):
+    return {"apiVersion": "v1", "kind": "ConfigMap",
+            "metadata": {"name": "longhorn-default-setting", "namespace": "longhorn-system"},
+            "data": {"default-setting.yaml": data}}
 
 
 class Cluster:
-    """What Homestead reads, by path; a missing path is a 404, a path set to an
-    int is that HTTP error."""
+    """What Homestead reads, on the shared fake API (tests/fakes/kube.py): a
+    missing object is a 404, and fail() makes a path answer that HTTP error. A
+    test passes it to use(), which puts it in force."""
 
     def __init__(self, value='{"v1":"false"}', annotations=None, version="v1.13.0"):
-        self.objects = {
-            f"{LH}/volumes": {"items": []},
-            f"{LH}/nodes": {"items": [{"metadata": {"name": "node-1"}}, {"metadata": {"name": "node-2"}}]},
-            "/api/v1/nodes": {"items": [node("node-1", "6.8.0-45-generic"), node("node-2", "6.8.0-45-generic")]},
-            "/api/v1/persistentvolumes": {"items": []},
-            f"{LH}/settings/current-longhorn-version": {"value": version},
-        }
+        objects = [lh_node("node-1"), lh_node("node-2"), node("node-1", "6.8.0-45-generic"), node("node-2", "6.8.0-45-generic"),
+                   {"apiVersion": "longhorn.io/v1beta2", "kind": "Setting",
+                    "metadata": {"name": "current-longhorn-version", "namespace": "longhorn-system"}, "value": version}]
         if value is not None:
-            self.objects[SETTING_PATH] = {"metadata": {"name": F.SETTING, "annotations": annotations or {}}, "value": value}
-        self.sent, self.marking = [], []
+            objects.append({"apiVersion": "longhorn.io/v1beta2", "kind": "Setting",
+                            "metadata": {"name": F.SETTING, "namespace": "longhorn-system", "annotations": annotations or {}},
+                            "value": value})
+        self.kube = Kube(*objects)
+        self.marking = []
+        self.watch(SETTING_PATH)
+
+    def watch(self, path):
+        """Note what the request is marked as each time path is written."""
+        self.kube.react("PATCH", path, self.noted)
+
+    def noted(self, method, path, body):
+        self.marking.append(getattr(CH.REQUEST, "object_value", None))
+
+    @property
+    def sent(self):
+        return list(self.kube.writes)
 
     def volumes(self, *rows):
-        self.objects[f"{LH}/volumes"] = {"items": list(rows)}
+        for row in rows:
+            self.kube.add(row)
+            self.watch(self.kube.path_of(row))
         return self
 
     def pvs(self, *rows):
-        self.objects["/api/v1/persistentvolumes"] = {"items": list(rows)}
+        for row in rows:
+            self.kube.add(row)
         return self
-
-    def get(self, path, **options):
-        found = self.objects.get(path)
-        if found is None or isinstance(found, int):
-            raise urllib.error.HTTPError(path, found or 404, "error", {}, None)
-        return json.loads(json.dumps(found))
-
-    def send(self, method, path, body=None, ctype=None, **options):
-        self.sent.append((method, path, body, ctype))
-        self.marking.append(getattr(CH.REQUEST, "object_value", None))
-        return {}
-
 
 
 class WithCluster(unittest.TestCase):
     def use(self, cluster):
-        for name, value in (("kget", cluster.get), ("ksend", cluster.send)):
-            patcher = mock.patch.object(F, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
+        self.enterContext(cluster.kube)
+        # The shared fake runs the real write guards; the storage guard takes the job store's lock under DATA_DIR.
+        self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+        # With no signing key a write is left unmarked, whichever guards another test left bound.
+        self.enterContext(mock.patch.object(CH, "_author_key", mock.Mock(side_effect=LookupError("no key yet"))))
+        for name, value in (("kget", K.kget), ("ksend", K.ksend)):
+            self.enterContext(mock.patch.object(F, name, value))
         return cluster
 
 
@@ -238,7 +260,7 @@ class Status(WithCluster):
 
     def test_a_setting_that_cannot_be_read_is_an_error_not_unsupported(self):
         cluster = Cluster()
-        cluster.objects[SETTING_PATH] = 403
+        cluster.kube.fail(SETTING_PATH, 403, times=10)
         self.use(cluster)
         with self.assertRaises(urllib.error.HTTPError):
             F.status()
@@ -330,7 +352,8 @@ class Status(WithCluster):
         self.assertEqual((row["freezes"], row["why"]), ("no", "Set to never freeze"))
 
     def test_a_volume_without_a_pv_or_kubernetes_status_is_still_listed(self):
-        bare = {"metadata": {"name": "pvc-bare"}, "spec": {"freezeFilesystemForSnapshot": "ignored"}}
+        bare = {"apiVersion": "longhorn.io/v1beta2", "kind": "Volume",
+                "metadata": {"name": "pvc-bare", "namespace": "longhorn-system"}, "spec": {"freezeFilesystemForSnapshot": "ignored"}}
         self.use(Cluster(value="true").volumes(bare, lh_volume("pvc-x", pv="pv-gone")))
         rows = {v["name"]: v for v in F.status()["volumes"]}
         self.assertEqual(rows["pvc-bare"]["claim"], "")
@@ -347,8 +370,8 @@ class Status(WithCluster):
 
     def test_old_kernels_on_longhorn_hosts_are_named(self):
         cluster = Cluster()
-        cluster.objects["/api/v1/nodes"]["items"] = [node("node-1", "5.15.0-91-generic"), node("node-2", "6.8.0"),
-                                                      node("not-storage", "5.4.0")]
+        for row in (node("node-1", "5.15.0-91-generic"), node("node-2", "6.8.0"), node("not-storage", "5.4.0")):
+            cluster.kube.add(row)
         self.use(cluster)
         self.assertEqual(F.status()["old_kernels"], [{"host": "node-1", "kernel": "5.15.0-91-generic"}])
 
@@ -356,11 +379,9 @@ class Status(WithCluster):
         cluster = Cluster()
         self.use(cluster)
         self.assertFalse(F.status()["from_chart"])
-        cluster.objects["/api/v1/namespaces/longhorn-system/configmaps/longhorn-default-setting"] = {
-            "data": {"default-setting.yaml": 'default-replica-count: "2"\nfreeze-filesystem-for-snapshot: "true"\n'}}
+        cluster.kube.add(chart_settings('default-replica-count: "2"\nfreeze-filesystem-for-snapshot: "true"\n'))
         self.assertTrue(F.status()["from_chart"])
-        cluster.objects["/api/v1/namespaces/longhorn-system/configmaps/longhorn-default-setting"] = {
-            "data": {"default-setting.yaml": 'default-replica-count: "2"\n'}}
+        cluster.kube.add(chart_settings('default-replica-count: "2"\n'))
         self.assertFalse(F.status()["from_chart"])
 
     def test_who_changed_it_when_the_mark_checks_out_for_the_value_it_holds(self):
@@ -403,11 +424,12 @@ class Writes(WithCluster):
         cluster = self.use(Cluster(value="true"))
         self.assertFalse(F.save(False)["enabled"])
         self.assertEqual(cluster.sent[0][2]["value"], "false")
+        self.assertEqual(1, len(cluster.sent), "the one write, which is the one marked")
         self.assertEqual(cluster.marking, ["off"])
 
     def test_the_change_is_said_to_last_only_until_the_chart_when_the_chart_sets_it(self):
         cluster = Cluster(value="false")
-        cluster.objects[F.CHART_SETTINGS] = {"data": {"default-setting.yaml": "freeze-filesystem-for-snapshot: false\n"}}
+        cluster.kube.add(chart_settings("freeze-filesystem-for-snapshot: false\n"))
         self.use(cluster)
         self.assertIn("chart", F.save(True)["detail"])
 

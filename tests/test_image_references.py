@@ -737,5 +737,97 @@ class OtherRecordsTests(RemovalFixture):
         self.assertEqual([], self.posted())
 
 
+
+class KeptReasonTests(RemovalFixture):
+    """#937: each image kept for a record Homestead reads says why in plain
+    words (a label, a sentence and the kind of record), not only the coarse
+    "stopped" or "scheduled" cleanup sorts by."""
+    DISK = OtherRecordsTests.DISK
+    NODE_PULL = OtherRecordsTests.NODE_PULL
+    job = staticmethod(WaitingWorkloadTests.job)
+    daemonset = staticmethod(WaitingWorkloadTests.daemonset)
+
+    def why(self, path=None, item=None):
+        """(kind, label) of each row keeping the unused image."""
+        if path:
+            self.objects[path]["items"].append(item)
+        rows = self.image(IMAGES.image_cache(), "unused")["retained_by"]
+        return [(r["kind"], r["label"]) for r in rows]
+
+    def test_a_suspended_job_and_a_waiting_job_read_differently(self):
+        self.assertEqual([("Job", "Job paused")], self.why("/apis/batch/v1/jobs", self.job({"suspend": True})))
+        self.objects["/apis/batch/v1/jobs"]["items"] = []
+        self.assertEqual([("Job", "Job waiting")], self.why("/apis/batch/v1/jobs", self.job(status={"failed": 1})))
+
+    def test_a_workload_without_pods_says_so(self):
+        self.assertEqual([("DaemonSet", "no pods yet")],
+                         self.why("/apis/apps/v1/daemonsets", self.daemonset({"desiredNumberScheduled": 0})))
+        web = self.objects["/apis/apps/v1/deployments"]["items"][1]
+        self.objects["/apis/apps/v1/daemonsets"]["items"] = []
+        web["status"] = {}
+        self.assertEqual([("Deployment", "no pods yet")], self.why())
+        web["spec"]["replicas"] = 0
+        self.assertEqual([("Deployment", "scaled to zero")], self.why())
+
+    def test_a_cronjob_is_a_scheduled_job(self):
+        cron = {"metadata": {"name": "nightly", "namespace": "lab"}, "spec": {"jobTemplate": {"spec": {"template": {
+            "spec": {"containers": [{"name": "run", "image": "docker.io/library/unused:1"}]}}}}}}
+        self.assertEqual([("CronJob", "scheduled job")], self.why("/apis/batch/v1/cronjobs", cron))
+
+    def test_templates_snapshots_and_imports_say_what_they_are(self):
+        template = {"metadata": {"name": "t-v1", "namespace": "lab"}, "spec": {"vm": {"spec": {
+            "template": {"spec": {"volumes": [self.DISK]}}}}}}
+        self.assertEqual([("VirtualMachineTemplateVersion", "VM template")], self.why(TEMPLATES, template))
+        self.objects[TEMPLATES]["items"] = []
+        snapshot = {"metadata": {"name": "snap-1", "namespace": "lab"}, "spec": {"source": {"virtualMachine": {
+            "spec": {"template": {"spec": {"volumes": [self.DISK]}}}}}}}
+        self.assertEqual([("VirtualMachineSnapshotContent", "VM snapshot")], self.why(CONTENTS, snapshot))
+        self.objects[CONTENTS]["items"] = []
+        dv = {"metadata": {"name": "root", "namespace": "lab"}, "spec": {"source": self.NODE_PULL}}
+        self.assertEqual([("DataVolume", "disk import")], self.why(DVS, dv))
+        self.objects[DVS]["items"] = []
+        cron = {"metadata": {"name": "daily", "namespace": "lab"}, "spec": {"template": {"spec": {"source": self.NODE_PULL}}}}
+        self.assertEqual([("DataImportCron", "scheduled import")], self.why(CRONS, cron))
+
+    def test_a_template_versions_disk_import_is_the_templates(self):
+        template = {"metadata": {"name": "t-v1", "namespace": "lab"}, "spec": {"vm": {"spec": {
+            "template": {"spec": {}}, "dataVolumeTemplates": [{"metadata": {"name": "root"}, "spec": {"source": self.NODE_PULL}}]}}}}
+        self.assertEqual([("VirtualMachineTemplateVersion", "VM template")], self.why(TEMPLATES, template))
+
+    def test_every_row_has_a_label_and_a_sentence(self):
+        rows = IMAGES.image_retention_inventory()
+        self.assertTrue(rows)
+        for row in rows:
+            with self.subTest(row=row):
+                self.assertTrue(row["label"] and row["detail"] and "kind" in row)
+
+    def test_an_image_stream_import_is_named_and_still_keeps_every_image(self):
+        # OpenShift only: its image stream is not read, so which image it means is unknown.
+        stream = {"registry": {"imageStream": "fedora", "pullMethod": "node"}}
+        dv = {"metadata": {"name": "root", "namespace": "lab"}, "spec": {"source": stream}}
+        self.assertEqual([("DataVolume", "image stream not read")], self.why(DVS, dv))
+        with self.assertRaisesRegex(PermissionError, "unreadable:lab/root"):
+            IMAGES.cleanup_image(self.UNUSED, ["node1"])
+        self.assertEqual([], self.posted())
+
+    def test_a_dataimportcron_image_stream_is_named_too(self):
+        cron = {"metadata": {"name": "daily", "namespace": "lab"},
+                "spec": {"template": {"spec": {"source": {"registry": {"imageStream": "fedora", "pullMethod": "node"}}}}}}
+        self.assertEqual([("DataImportCron", "image stream not read")], self.why(CRONS, cron))
+
+    def test_a_pod_pulled_image_stream_import_keeps_nothing(self):
+        # No pullMethod node: containerd never holds the image, so nothing is kept.
+        dv = {"metadata": {"name": "root", "namespace": "lab"}, "spec": {"source": {"registry": {"imageStream": "fedora"}}}}
+        self.assertEqual([], self.why(DVS, dv))
+
+    def test_two_keepers_with_one_name_both_show(self):
+        # A Deployment and a StatefulSet of one name keep the image for the same reason; neither hides the other.
+        web = self.objects["/apis/apps/v1/deployments"]["items"][1]
+        web["status"] = {}
+        sts = json.loads(json.dumps(web))
+        self.assertEqual([("Deployment", "no pods yet"), ("StatefulSet", "no pods yet")],
+                         self.why("/apis/apps/v1/statefulsets", sts))
+
+
 if __name__ == "__main__":
     unittest.main()

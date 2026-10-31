@@ -2,7 +2,6 @@ import json
 import sys
 import tempfile
 import unittest
-import urllib.error
 from pathlib import Path
 from unittest import mock
 
@@ -10,49 +9,55 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_addons as ADDONS
 import homestead_baseline as BASELINE
+import homestead_kube as K
 import homestead_macvtap as MACVTAP
 import homestead_network_vms as VMNET
 import homestead_vms as VMS
 import homestead_vm_edit as VM_EDIT
 import test_vm_network_create as network_fixture
+from fakes.kube import Kube
 
 KV = "/apis/kubevirt.io/v1/namespaces/kubevirt/kubevirts/kubevirt"
+CHART_PATH = f"/apis/helm.cattle.io/v1/namespaces/{MACVTAP.NS}/helmcharts/{MACVTAP.CHART}"
 
 
-def missing(path):
-    raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+class Scene:
+    """KubeVirt at a version, and macvtap's DaemonSet if there, on the shared
+    fake API (tests/fakes/kube.py)."""
 
-
-class Cluster:
-    """KubeVirt at a version, and macvtap's DaemonSet if there."""
-
-    def __init__(self, kubevirt="v1.9.0", daemonset=None, binding=False, platform=None):
-        self.sent, self.charts = [], []
-        self.kv = {"metadata": {"name": "kubevirt", "namespace": "kubevirt"}, "status": {"observedKubeVirtVersion": kubevirt},
+    def __init__(self, test, kubevirt="v1.9.0", daemonset=None, binding=False, platform=None):
+        self.charts = []
+        self.kv = {"apiVersion": "kubevirt.io/v1", "kind": "KubeVirt", "metadata": {"name": "kubevirt", "namespace": "kubevirt"},
+                   "status": {"observedKubeVirtVersion": kubevirt},
                    "spec": {"configuration": {"network": {"binding": dict(MACVTAP.BINDING)}} if binding else {}}}
-        self.daemonset = daemonset
         self.platform = platform or {"distribution": "k3s", "kubevirt": True, "helm_controller": True}
+        self.kube = test.enterContext(Kube(self.kv, *([daemonset] if daemonset else [])))
+        # The shared client's guards and the module's own binding, put back after.
+        for name in ("kget", "ksend", "addons", "platform"):
+            test.addCleanup(setattr, MACVTAP, name, getattr(MACVTAP, name))
+        self.bind(lambda name, version, manifests, extra: {"version": version, "manifests": manifests})
 
+    def bind(self, chart_archive):
         class Addons:
-            chart_archive = staticmethod(lambda name, version, manifests, extra: {"version": version, "manifests": manifests})
-            _post_chart = staticmethod(lambda name, spec: self.charts.append((name, spec)))
-            preemption_hold = staticmethod(lambda what: None)
-        MACVTAP.bind(self.get, self.send, Addons, lambda force=False: self.platform)
+            pass
+        Addons.chart_archive = staticmethod(chart_archive)
+        Addons._post_chart = staticmethod(lambda name, spec: self.charts.append((name, spec)))
+        Addons.preemption_hold = staticmethod(lambda what: None)
+        MACVTAP.bind(K.kget, K.ksend, Addons, lambda force=False: self.platform)
 
-    def get(self, path):
-        if path == MACVTAP.KUBEVIRTS:
-            return {"items": [self.kv]}
-        if path == MACVTAP.DAEMONSET and self.daemonset:
-            return self.daemonset
-        return missing(path)
+    @property
+    def sent(self):
+        return [(method, path, body) for method, path, body, _ in self.kube.writes]
 
-    def send(self, method, path, body=None, **kwargs):
-        self.sent.append((method, path, body))
+    def save_kv(self):
+        """KubeVirt's settings as someone left them: the stored object replaced."""
+        self.kube.add(self.kv)
 
 
 def daemonset(ready=True, image="quay.io/kubevirt/macvtap-cni:v0.13.2"):
     n = 1 if ready else 0
-    return {"metadata": {"generation": 1}, "spec": {"template": {"spec": {"containers": [{"image": image}]}}},
+    return {"apiVersion": "apps/v1", "kind": "DaemonSet", "metadata": {"namespace": MACVTAP.NS, "name": "macvtap-cni", "generation": 1},
+            "spec": {"template": {"spec": {"containers": [{"image": image}]}}},
             "status": {"observedGeneration": 1, "desiredNumberScheduled": 1, "updatedNumberScheduled": 1, "numberAvailable": n}}
 
 
@@ -71,7 +76,7 @@ class ManifestTests(unittest.TestCase):
 
 class InstallTests(unittest.TestCase):
     def test_install_wraps_the_manifests_as_a_chart_and_registers_the_binding(self):
-        cluster = Cluster()
+        cluster = Scene(self)
         result = MACVTAP.install()
         self.assertEqual("homestead-macvtap", cluster.charts[0][0])
         self.assertIn("/var/lib/rancher/k3s/data/cni", cluster.charts[0][1]["chartContent"]["manifests"])
@@ -86,7 +91,7 @@ class InstallTests(unittest.TestCase):
         """KubeVirt reports no version until it has finished deploying, and
         Add-ons installs 1.8 or later: a network added in that window must
         still switch the gate off, or its VMs never get their device (#551)."""
-        cluster = Cluster(kubevirt="")
+        cluster = Scene(self, kubevirt="")
         MACVTAP.register_binding()
         developer = cluster.sent[-1][2]["spec"]["configuration"]["developerConfiguration"]
         self.assertEqual({"disabledFeatureGates": ["ExternalNetResourceInjection"]}, developer,
@@ -94,50 +99,52 @@ class InstallTests(unittest.TestCase):
         self.assertFalse(MACVTAP.nad_lookup(cluster.kv), "an unknown version with the gate on is not ready")
         cluster.kv["spec"]["configuration"]["developerConfiguration"] = {"disabledFeatureGates": ["ExternalNetResourceInjection"]}
         self.assertTrue(MACVTAP.nad_lookup(cluster.kv))
-        cluster = Cluster(kubevirt="", daemonset=daemonset(), binding=True)
+        cluster = Scene(self, kubevirt="", daemonset=daemonset(), binding=True)
         self.assertFalse(MACVTAP.inspect()["ready"])
         MACVTAP.install()
         self.assertEqual([], cluster.charts, "installed already: only the binding is registered")
         self.assertIn("ExternalNetResourceInjection", cluster.sent[-1][2]["spec"]["configuration"]["developerConfiguration"]["disabledFeatureGates"])
 
     def test_older_kubevirt_also_gets_the_binding_plugins_gate(self):
-        cluster = Cluster(kubevirt="v1.4.2")
+        cluster = Scene(self, kubevirt="v1.4.2")
         MACVTAP.register_binding()
         self.assertEqual(["NetworkBindingPlugins"], cluster.sent[-1][2]["spec"]["configuration"]["developerConfiguration"]["featureGates"])
 
     def test_ready_needs_kubevirt_to_read_the_networks_device(self):
-        cluster = Cluster(daemonset=daemonset(), binding=True)
+        cluster = Scene(self, daemonset=daemonset(), binding=True)
         self.assertFalse(MACVTAP.inspect()["ready"], "1.9 with ExternalNetResourceInjection on by default")
         cluster.kv["spec"]["configuration"]["developerConfiguration"] = {"disabledFeatureGates": ["ExternalNetResourceInjection"]}
+        cluster.save_kv()
         self.assertTrue(MACVTAP.inspect()["ready"])
         cluster.kv["status"]["observedKubeVirtVersion"] = "v1.7.2"
         cluster.kv["spec"]["configuration"]["developerConfiguration"] = {}
+        cluster.save_kv()
         self.assertTrue(MACVTAP.inspect()["ready"], "before 1.8 KubeVirt reads it anyway")
         self.assertIn("ExternalNetResourceInjection", ADDONS.kubevirt_cr(False, None, ["ExternalNetResourceInjection"]),
                       "a KubeVirt upgrade keeps the gate off")
 
     def test_where_it_is_not_for(self):
-        Cluster(platform={"harvester": True, "kubevirt": True, "helm_controller": True})
+        Scene(self, platform={"harvester": True, "kubevirt": True, "helm_controller": True})
         with self.assertRaisesRegex(ValueError, "Harvester"):
             MACVTAP.install()
-        Cluster(platform={"distribution": "k3s", "kubevirt": False, "helm_controller": True})
+        Scene(self, platform={"distribution": "k3s", "kubevirt": False, "helm_controller": True})
         with self.assertRaisesRegex(ValueError, "install KubeVirt first"):
             MACVTAP.install()
 
     def test_ready_needs_every_node_and_the_binding(self):
-        Cluster(daemonset=daemonset(), binding=False)
+        Scene(self, daemonset=daemonset(), binding=False)
         state = MACVTAP.inspect()
         self.assertEqual((True, False, "v0.13.2"), (state["installed"], state["ready"], state["version"]))
         self.assertIn("not set up for it yet", state["detail"])
-        Cluster(daemonset=daemonset(ready=False), binding=True)
+        Scene(self, daemonset=daemonset(ready=False), binding=True)
         self.assertFalse(MACVTAP.inspect()["ready"])
-        Cluster(daemonset=daemonset(), binding=True, kubevirt="v1.7.0")
+        Scene(self, daemonset=daemonset(), binding=True, kubevirt="v1.7.0")
         self.assertTrue(MACVTAP.inspect()["ready"])
-        Cluster()
+        Scene(self)
         self.assertEqual((False, "absent"), (MACVTAP.inspect()["installed"], MACVTAP.inspect()["state"]))
 
     def test_installed_without_the_binding_only_registers_it(self):
-        cluster = Cluster(daemonset=daemonset())
+        cluster = Scene(self, daemonset=daemonset())
         MACVTAP.install()
         self.assertEqual([], cluster.charts)
         self.assertEqual("PATCH", cluster.sent[-1][0])
@@ -191,16 +198,14 @@ class ChartTests(unittest.TestCase):
         self.assertIn("kubevirt/crds/crds.yaml", names(ADDONS.chart_archive("kubevirt", "v1.9.0", crd + "---\n" + MACVTAP.manifests("k3s"), "kind: KubeVirt\n")))
 
     def test_a_failed_install_is_replaced_not_refused(self):
-        cluster = Cluster()
-        chart = {"metadata": {"name": MACVTAP.CHART}, "spec": {"chartContent": "old"}}
-        original = cluster.get
-        cluster.get = lambda path: chart if path.endswith("/helmcharts/" + MACVTAP.CHART) else original(path)
-        MACVTAP.bind(cluster.get, cluster.send, type("A", (), {"chart_archive": staticmethod(lambda *a: "new"),
-                     "_post_chart": staticmethod(lambda *a: cluster.charts.append(a)),
-                     "preemption_hold": staticmethod(lambda what: None)}), lambda force=False: cluster.platform)
+        cluster = Scene(self)
+        cluster.kube.add({"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
+                          "metadata": {"namespace": MACVTAP.NS, "name": MACVTAP.CHART}, "spec": {"chartContent": "old"}})
+        cluster.bind(lambda *a: "new")
         MACVTAP.install()
         put = next(body for method, path, body in cluster.sent if method == "PUT")
         self.assertEqual("new", put["spec"]["chartContent"])
+        self.assertEqual("new", cluster.kube.object(CHART_PATH)["spec"]["chartContent"])
         self.assertEqual([], cluster.charts)
 
 

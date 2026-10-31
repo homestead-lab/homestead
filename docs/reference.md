@@ -1217,7 +1217,15 @@ DataImportCron that pulls a registry image through the node
 (`pullMethod: node`), or the immediate managed-update rollback. A record that
 says which images are in use but cannot be read - a malformed rollback note or
 template, or one of the optional lists the role may not read - keeps every
-image, labelled *unreadable* with the record it names, until it is fixed. That
+image, labelled *not readable* with the record it names, until it is fixed. Each
+kept image's row also carries `kind` (the record's kind), `label` and `detail`
+(the reason in plain words: *running*, *roll back*, *Job paused*, *Job waiting*, *scaled to zero*, *no
+pods yet*, *scheduled job*, *stopped VM*, *VM pool at zero*, *VM template*, *VM snapshot*, *disk
+import*, *scheduled import*); `reason` keeps the coarse word clean-up uses. A
+disk import from an OpenShift image stream (`registry.imageStream` with
+`pullMethod: node` and no `url`) is not read - Homestead asks for no
+`image.openshift.io` permission, as it does not target OpenShift - so it keeps
+every image, labelled *image stream not read*, until the import is gone. That
 read is read-only `get` and `list` on `pool.kubevirt.io` `virtualmachinepools`,
 `kubevirt.io` `virtualmachineinstancereplicasets`, `harvesterhci.io`
 `virtualmachinetemplateversions`, `snapshot.kubevirt.io`

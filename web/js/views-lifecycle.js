@@ -1485,6 +1485,28 @@ const IMAGE_REASONS = {
   scheduled: { tone: "neutral", tip: "a scheduled job that runs this image" },
   unreadable: { tone: "warn", tip: "Kept: a record that says which images are in use couldn't be read" },
 };
+/* Why one image is kept, as the server words it (label and detail), with the
+   page that searches for the thing keeping it where there is one. A Job,
+   scheduled job, pool, template, snapshot or import has no page that finds it
+   by name, so it is named, not linked. */
+const IMAGE_KEEPER_PAGES = { Deployment: "workloads", StatefulSet: "workloads", DaemonSet: "workloads", VirtualMachine: "vms" };
+function imageKeeper(r) {
+  const known = IMAGE_REASONS[r.reason] || {};
+  const where = `${r.namespace} · ${r.workload} · ${r.container}`;
+  const chip = UI.chip(r.label || r.reason, known.tone ?? "ok", { size: "slim", tip: `${where} - ${r.detail || known.tip || ""}` });
+  const page = r.reason === "unreadable" ? null : IMAGE_KEEPER_PAGES[r.kind];
+  const name = page && r.workload
+    ? `<button type="button" class="linkish xs" aria-label="Open ${esc(r.workload)}" onclick="imageKeeperOpen(${jsq(page)},${jsq(r.workload)})">${esc(r.workload)}</button>`
+    : `<span class="dim xs">${esc(r.workload)}</span>`;
+  return `<span class="image-keeper">${chip} ${name}</span>`;
+}
+window.imageKeeperOpen = (page, name) => {
+  closeModal(false);
+  STATE.q = name;
+  const search = $("#globalSearch");
+  if (search) search.value = name;
+  go(page, { keepSearch: true });
+};
 async function viewImages() {
   // VM images that could not be read are said, not left out of the page (#620).
   const [d, vm, auto] = await Promise.all([api("/api/images"), api("/api/images/vm").catch(e => ({ unread: e.message })),
@@ -1504,7 +1526,8 @@ async function viewImages() {
   paint(`${UI.pageHeader(`Image cache`, `${imgs.length} app images across ${d.nodes.length} hosts · ${d.protected || 0} kept (running, stopped or for rollback) · ${hidden && !STATE.showCoreImages ? `${hidden} Harvester/system images hidden` : `${d.distinct} total`} ${tip("Each host's containerd is asked for every image it holds every 15 minutes or so; images pulled since are added from what Kubernetes reports.")}`, `<label class="switch"><input type="checkbox" ${STATE.showCoreImages ? "checked" : ""} onchange="STATE.showCoreImages=this.checked;viewImages()"> Show Harvester/system images</label>`)}
     ${imageCleanupRow(d, auto)}
     ${UI.guide("How images are kept", `<p><b>Clean up</b> removes an image nothing uses from the hosts that hold it.
-      <b>active</b> images are what running containers use, and <b>stopped</b> ones what a container scaled to zero starts from; both stay.
+      <b>running</b> images are what running containers use. An image also stays while something that is not running yet will start from it:
+      a paused or waiting Job, an app scaled to zero or without pods yet, a scheduled job, a stopped VM, a VM template or snapshot, or a disk import. Each says which, and the app or VM is a link where it has a page.
       <b>rollback</b> copies are the image a container had before its last update, kept so <b>Roll back</b> can return to it. <b>Forget</b> one and it becomes unused, to clean up like the rest.</p>`)}
     <div class="grid g3 statgrid" style="margin-bottom:18px">
       ${d.nodes.map(n => `<div class="card flat"><div class="ctitle" title="${esc(n.node)}">${esc(n.node)}</div>
@@ -1525,8 +1548,7 @@ async function viewImages() {
       ${imgs.map(i => {
         const missing = d.node_names.filter(n => !i.nodes.includes(n));
         const retained = i.retained_by || [];
-        const retention = retained.length ? retained.slice(0, 3).map(r => UI.chip(`${r.reason} · ${r.workload}`, IMAGE_REASONS[r.reason]?.tone ?? "ok",
-          { tip: `${r.namespace} · ${r.workload} · ${r.container}${IMAGE_REASONS[r.reason]?.tip ? " - " + IMAGE_REASONS[r.reason].tip : ""}` })).join(" ") +
+        const retention = retained.length ? retained.slice(0, 3).map(imageKeeper).join(" ") +
           (retained.length > 3 ? ` ${UI.chip(`+${retained.length - 3}`, "neutral")}` : "") : UI.chip("unreferenced", "neutral");
         return `<tr><td class="mono small imgname">${esc(i.name)}</td>
         <td class="mono">${bytesText(i.size_mb * 1024 ** 2)}</td>

@@ -5,12 +5,12 @@ import sys
 import tempfile
 import time
 import unittest
-import urllib.error
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_cancel as CANCEL
+import homestead_kube as K
 import homestead_disks as DISKS
 import homestead_helm as HELM
 import homestead_container_import as CONTAINER_IMPORT
@@ -22,46 +22,29 @@ import homestead_restructure as RESTRUCTURE
 import homestead_smart as SMART
 import homestead_vms as VMS
 from fakes.job_store import put, store_writes
+from fakes.kube import Kube
 
 
-def missing(path):
-    return urllib.error.HTTPError(path, 404, "not found", {}, None)
-
-
-class Cluster:
-    """Objects by path; lists answer at their path with the query attached."""
-
-    def __init__(self):
-        self.objects, self.calls = {}, []
-
-    def get(self, path):
-        value = self.objects.get(path, self.objects.get(path.split("?")[0]))
-        if value is None:
-            raise missing(path)
-        return copy.deepcopy(value)
-
-    def send(self, method, path, body=None, ctype=None):
-        base = path.split("?")[0]
-        self.calls.append((method, base, copy.deepcopy(body)))
-        if method == "DELETE":
-            if base not in self.objects:
-                raise missing(path)
-            self.objects.pop(base)
-        elif method == "PUT":
-            self.objects[base] = copy.deepcopy(body)
-        return body or {}
-
-    def sent(self, method):
-        return [(path, body) for verb, path, body in self.calls if verb == method]
+def vm(name, labels=None, **meta):
+    return {"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine",
+            "metadata": {"namespace": "lab", "name": name, "labels": labels or {}, **meta}}
 
 
 class Store(unittest.TestCase):
+    """The job store in a folder of its own, over the shared fake API
+    (tests/fakes/kube.py): self.kube starts empty, and a test adds its objects."""
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.saved = OPS.DATA_DIR, dict(OPS.RESOLVERS), dict(OPS.CANCELLERS), set(OPS.CLEANUPS)
         OPS.DATA_DIR = self.tmp.name
-        self.cluster = Cluster()
-        CANCEL.bind(self.cluster.get, self.cluster.send)
+        self.kube = self.enterContext(Kube())
+        self.addCleanup(CANCEL.bind, *(getattr(CANCEL, name, None) for name in (
+            "kget", "ksend", "remove_workload", "tidy_restore")))
+        CANCEL.bind(K.kget, K.ksend)
+
+    def sent(self, method):
+        """The bodies written with method, by path."""
+        return [(path.split("?")[0], body) for verb, path, body, _ in self.kube.writes if verb == method]
 
     def tearDown(self):
         OPS.DATA_DIR = self.saved[0]
@@ -193,8 +176,7 @@ class K3sClusterTests(Store):
         super().setUp()
         CANCEL.register(OPS)
         for node in self.NODES:
-            self.cluster.objects[f"/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/{node['name']}"] = {
-                "metadata": {"name": node["name"], "labels": {K3SC.LABEL: "k3s-lab"}}}
+            self.kube.add(vm(node["name"], {K3SC.LABEL: "k3s-lab"}))
         self.records = {"192.0.2.60": {"name": "k3s-lab-server-1"},
                         "192.0.2.61": {"name": "printer"}}
         self.deleted = []
@@ -228,14 +210,13 @@ class K3sClusterTests(Store):
             OPS.cancel(op, confirm="k3s-lab")
         self.assertEqual([], self.deleted)
         self.assertEqual(before, self.records)
-        self.assertEqual([], self.cluster.calls)
+        self.assertEqual([], self.kube.writes)
         self.assertEqual("cancelled", self.stored(op)["status"])
         self.assertTrue(self.stored(op)["tracking_stopped"])
         self.assertTrue(self.stored(op)["ref"]["retain_resources"])
 
     def test_a_vm_that_only_shares_a_name_is_never_deleted(self):
-        self.cluster.objects["/apis/kubevirt.io/v1/namespaces/lab/virtualmachines/k3s-lab-agent-1"]["metadata"][
-            "labels"] = {}
+        self.kube.add(vm("k3s-lab-agent-1"))
         a, b = self.patches()
         with a, b:
             OPS.cancel(self.op(), confirm="k3s-lab")
@@ -278,15 +259,15 @@ class K3sClusterTests(Store):
 
     def test_same_name_and_label_replacement_is_retained_without_any_cluster_call(self):
         op = self.op()
-        for obj in self.cluster.objects.values():
-            obj["metadata"]["uid"] = "replacement-never-created-by-job"
+        for node in self.NODES:
+            self.kube.add(vm(node["name"], {K3SC.LABEL: "k3s-lab"}, uid="replacement-never-created-by-job"))
         with mock.patch.object(CANCEL, "kget", side_effect=AssertionError("no ownership lookup needed")), \
              mock.patch.object(VMS, "delete") as delete, mock.patch.object(IPAM, "update") as addresses:
             OPS.cancel_plan(op)
             OPS.cancel(op, confirm="k3s-lab")
         delete.assert_not_called()
         addresses.assert_not_called()
-        self.assertEqual([], self.cluster.calls)
+        self.assertEqual([], self.kube.writes)
 
     def test_failed_new_and_legacy_recovery_records_survive_clear_and_pruning(self):
         for retained in (False, True):
@@ -365,25 +346,26 @@ class DeploymentTests(Store):
         CANCEL.register(OPS)
 
     def replicasets(self, *sets):
-        self.cluster.objects["/apis/apps/v1/namespaces/lab/replicasets"] = {"items": [
-            {"metadata": {"name": f"frigate-{rev}", "creationTimestamp": made,
-                          "annotations": {CANCEL.REVISION: str(rev)}, "ownerReferences": [{"uid": "d1"}]},
-             "spec": {"template": {"metadata": {"labels": {"app": "frigate", "pod-template-hash": f"h{rev}"}},
-                                   "spec": {"containers": [{"name": "frigate", "image": image}]}}}}
-            for rev, made, image in sets]}
+        for rev, made, image in sets:
+            self.kube.add({"apiVersion": "apps/v1", "kind": "ReplicaSet",
+                           "metadata": {"namespace": "lab", "name": f"frigate-{rev}", "creationTimestamp": made,
+                                        "labels": {"app": "frigate", "pod-template-hash": f"h{rev}"},
+                                        "annotations": {CANCEL.REVISION: str(rev)}, "ownerReferences": [{"uid": "d1"}]},
+                           "spec": {"template": {"metadata": {"labels": {"app": "frigate", "pod-template-hash": f"h{rev}"}},
+                                                 "spec": {"containers": [{"name": "frigate", "image": image}]}}}})
 
-    def deployment(self, revision):
-        self.cluster.objects[self.DEP] = {
-            "metadata": {"name": "frigate", "uid": "d1", "annotations": {CANCEL.REVISION: str(revision)}},
+    def deployment(self, revision, volumes=None):
+        self.kube.add({
+            "apiVersion": "apps/v1", "kind": "Deployment",
+            "metadata": {"namespace": "lab", "name": "frigate", "uid": "d1", "annotations": {CANCEL.REVISION: str(revision)}},
             "spec": {"replicas": 1, "selector": {"matchLabels": {"app": "frigate"}},
-                     "template": {"spec": {"containers": [{"name": "frigate", "image": "frigate:0.15"}]}}}}
+                     "template": {"spec": {"containers": [{"name": "frigate", "image": "frigate:0.15"}],
+                                           **({"volumes": volumes} if volumes else {})}}}})
 
     def test_a_new_deploy_is_removed_and_its_volumes_kept(self):
-        self.deployment(1)
-        self.cluster.objects[self.DEP]["spec"]["template"]["spec"]["volumes"] = [
-            {"name": "c", "persistentVolumeClaim": {"claimName": "frigate-config"}}]
+        self.deployment(1, volumes=[{"name": "c", "persistentVolumeClaim": {"claimName": "frigate-config"}}])
         removed = []
-        CANCEL.bind(self.cluster.get, self.cluster.send, lambda ns, name: removed.append((ns, name)))
+        CANCEL.bind(K.kget, K.ksend, lambda ns, name: removed.append((ns, name)))
         op = self.job("deployment", {"namespace": "lab", "name": "frigate", "undo": "delete"}, "Deploy frigate")
         plan = OPS.cancel_plan(op)
         self.assertIn("frigate-config is kept", plan["keeps"][0])
@@ -399,7 +381,7 @@ class DeploymentTests(Store):
         plan = OPS.cancel_plan(op)
         self.assertIn("revision 2: frigate:0.14", plan["undo"][0])
         OPS.cancel(op)
-        template = self.cluster.objects[self.DEP]["spec"]["template"]
+        template = self.kube.object(self.DEP)["spec"]["template"]
         self.assertEqual("frigate:0.14", template["spec"]["containers"][0]["image"])
         self.assertNotIn("pod-template-hash", template["metadata"]["labels"])
 
@@ -410,7 +392,7 @@ class DeploymentTests(Store):
         plan = OPS.cancel_plan(op)
         self.assertEqual("forget", plan["mode"])
         OPS.cancel(op)
-        self.assertEqual([], self.cluster.sent("PUT"))
+        self.assertEqual([], self.sent("PUT"))
 
     def test_a_share_change_is_saved_already_and_only_stops_being_followed(self):
         op = self.job("deployment", {"namespace": "samba", "name": "samba"}, "Create share media")
@@ -427,17 +409,19 @@ class RestructureTests(Store):
     def test_legacy_copy_recovery_never_deletes_or_rolls_back_or_restarts(self):
         op = self.job("restructure", {"namespace": "lab", "name": "app", "moves": [], "replicas": 2,
                                       "phase": "copying", "job": "app-restructure-abc"})
-        self.cluster.objects[self.DEP] = {"metadata": {"name": "app", "uid": "u"},
-                                         "spec": {"replicas": 0, "template": {"spec": {"volumes": ["new"]}}}}
-        self.cluster.objects["/apis/batch/v1/namespaces/lab/jobs/app-restructure-abc"] = {}
-        before = copy.deepcopy(self.cluster.objects)
+        self.kube.add({"apiVersion": "apps/v1", "kind": "Deployment",
+                       "metadata": {"namespace": "lab", "name": "app", "uid": "u"},
+                       "spec": {"replicas": 0, "template": {"spec": {"volumes": ["new"]}}}})
+        copier = self.kube.add({"apiVersion": "batch/v1", "kind": "Job",
+                                "metadata": {"namespace": "lab", "name": "app-restructure-abc"}})
+        before = [self.kube.object(path) for path in (self.DEP, copier)]
         plan = OPS.cancel_plan(op)
         self.assertEqual("forget", plan["mode"])
         with self.assertRaises(ValueError):
             OPS.cancel(op, confirm="app")
         OPS.cancel(op, {"ack": True}, confirm="app")
-        self.assertEqual(before, self.cluster.objects)
-        self.assertEqual([], self.cluster.calls)
+        self.assertEqual(before, [self.kube.object(path) for path in (self.DEP, copier)])
+        self.assertEqual([], self.kube.writes)
         self.assertTrue(self.stored(op)["tracking_stopped"])
 
 
@@ -481,11 +465,12 @@ class OtherKindTests(Store):
         self.assertFalse(OPS.cancel_plan(self.job("disk-retire", {"node": "n1", "disk": "d1", "phase": "remove"}))["can"])
 
     def test_an_import_cancelled_removes_its_workload_and_only_the_volumes_it_made(self):
-        CANCEL.bind(self.cluster.get, self.cluster.send, lambda ns, name: None)
+        CANCEL.bind(K.kget, K.ksend, lambda ns, name: None)
         plan = {"job": "homestead-import-frigate", "namespace": "lab", "workload": "frigate",
                 "volumes": [{"name": "frigate-appdata", "created": True}, {"name": "media", "created": False}]}
         for claim in ("frigate-appdata", "media"):
-            self.cluster.objects[f"/api/v1/namespaces/lab/persistentvolumeclaims/{claim}"] = {}
+            self.kube.add({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                           "metadata": {"namespace": "lab", "name": claim}})
         op = self.job("import", {"namespace": "lab", "name": "homestead-import-frigate"})
         with mock.patch.object(CONTAINER_IMPORT, "import_cleanup_plan", lambda name, ns=None: plan), \
                 mock.patch.object(CONTAINER_IMPORT, "delete_import", lambda name, ns=None: {}), \
@@ -493,34 +478,33 @@ class OtherKindTests(Store):
             shown = OPS.cancel_plan(op)
             self.assertIn("frigate-appdata", shown["options"][0]["label"])
             OPS.cancel(op, {"volumes": True})
-        self.assertNotIn("/api/v1/namespaces/lab/persistentvolumeclaims/frigate-appdata", self.cluster.objects)
-        self.assertIn("/api/v1/namespaces/lab/persistentvolumeclaims/media", self.cluster.objects)
+        self.assertIsNone(self.kube.object("/api/v1/namespaces/lab/persistentvolumeclaims/frigate-appdata"))
+        self.assertIsNotNone(self.kube.object("/api/v1/namespaces/lab/persistentvolumeclaims/media"))
 
     def test_a_helm_upgrade_cancelled_puts_the_chart_back_as_it_was(self):
         path = f"/apis/helm.cattle.io/v1/namespaces/{HELM.CONTROLLER_NS}/helmcharts/grafana"
-        chart = {"metadata": {"name": "grafana", "namespace": HELM.CONTROLLER_NS},
-                 "spec": {"targetNamespace": "mon", "version": "7.0.0", "valuesContent": "a: 1"}}
-        sent = []
-        HELM.bind(lambda p: {"items": [copy.deepcopy(chart)]},
-                  lambda method, p, body=None, **kw: sent.append(copy.deepcopy(body)))
+        self.kube.add({"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
+                       "metadata": {"name": "grafana", "namespace": HELM.CONTROLLER_NS},
+                       "spec": {"targetNamespace": "mon", "version": "7.0.0", "valuesContent": "a: 1"}})
+        self.addCleanup(HELM.bind, *(getattr(HELM, name, None) for name in ("kget", "ksend")))
+        HELM.bind(K.kget, K.ksend)
         HELM.upgrade({"namespace": "mon", "name": "grafana", "version": "8.0.0", "values": "a: 2"})
-        self.cluster.objects[path] = sent[-1]
         op = self.job("helm", {"namespace": HELM.CONTROLLER_NS, "name": "helm-install-grafana", "action": "upgrade"},
                       "Helm upgrade grafana", {"kind": "HelmChart", "name": "grafana", "namespace": HELM.CONTROLLER_NS})
-        HELM.bind(self.cluster.get, self.cluster.send)
         self.assertEqual("rollback", OPS.cancel_plan(op)["mode"])
         OPS.cancel(op)
-        spec = self.cluster.objects[path]["spec"]
-        self.assertEqual(("7.0.0", "a: 1"), (spec["version"], spec["valuesContent"]))
-        self.assertNotIn(HELM.PREVIOUS_SPEC, self.cluster.objects[path]["metadata"]["annotations"])
+        chart = self.kube.object(path)
+        self.assertEqual(("7.0.0", "a: 1"), (chart["spec"]["version"], chart["spec"]["valuesContent"]))
+        self.assertNotIn(HELM.PREVIOUS_SPEC, chart["metadata"]["annotations"])
 
     def test_a_helm_install_cancelled_deletes_the_chart_so_the_controller_uninstalls_it(self):
         path = f"/apis/helm.cattle.io/v1/namespaces/{HELM.CONTROLLER_NS}/helmcharts/grafana"
-        self.cluster.objects[path] = {"metadata": {"name": "grafana"}, "spec": {}}
+        self.kube.add({"apiVersion": "helm.cattle.io/v1", "kind": "HelmChart",
+                       "metadata": {"namespace": HELM.CONTROLLER_NS, "name": "grafana"}, "spec": {}})
         op = self.job("helm", {"namespace": HELM.CONTROLLER_NS, "name": "helm-install-grafana", "action": "install"},
                       "Helm install grafana", {"kind": "HelmChart", "name": "grafana", "namespace": HELM.CONTROLLER_NS})
         OPS.cancel(op)
-        self.assertNotIn(path, self.cluster.objects)
+        self.assertIsNone(self.kube.object(path))
 
     def test_a_smart_test_is_aborted_on_its_node(self):
         op = self.job("smart-test", {"node": "n1", "disk": "sda", "test": "long"})
@@ -534,8 +518,9 @@ class OtherKindTests(Store):
                 SMART.abort_test("n1", "sda")
 
     def test_homestead_switching_onto_its_moved_data_cannot_be_stopped(self):
-        self.cluster.objects["/apis/apps/v1/namespaces/hs/deployments/homestead"] = {"spec": {"template": {"spec": {
-            "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "homestead-data-shared"}}]}}}}
+        self.kube.add({"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"namespace": "hs", "name": "homestead"},
+                       "spec": {"template": {"spec": {
+                           "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "homestead-data-shared"}}]}}}})
         op = self.job("self-data-move", {"namespace": "hs", "job": "j", "old": "homestead-data",
                                          "new": "homestead-data-shared"})
         self.assertFalse(OPS.cancel_plan(op)["can"])

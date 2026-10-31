@@ -77,7 +77,7 @@ class UsageTests(unittest.TestCase):
                             {"at": 1030, "io": {("default", "win11"): [30_000, 3_000]}}])
         for running, expect in ((True, True), (False, False)):
             with self.subTest(running=running):
-                cluster = Cluster(running=running)
+                cluster = Cluster(self, running=running)
                 VMS.bind(cluster.get, cluster.send, lambda *a, **k: [])
                 with unittest.mock.patch.object(U.time, "time", lambda: 1031):
                     row = VM_LIST.list_vms()[0]

@@ -19,6 +19,7 @@ import homestead_capacity_review as REVIEW
 import homestead_hostrun as HOST
 import homestead_disk_setup as SETUP
 import homestead_disk_region as REGION
+import homestead_job_cadence as CADENCE
 import homestead_kube as KUBE
 
 KIND = 'disk-v2-convert'
@@ -729,10 +730,13 @@ def progress(item):
                     _patch_disk(inv, wanted)
                 ref['eviction_started'] = True
                 return 'running', 10, 'Longhorn is moving replicas to other V1 disks; no erase is authorized'
-            ready, reason = _evacuated(inv, ref)
-            ref['phase'] = 'awaiting-erase' if ready else 'evacuating'
-            count = len(ref['volumes'])
-            return 'running', 70 if ready else 10 + int(55 * max(0, count - ref['remaining']) / max(1, count)), reason
+            def evacuation():
+                ready, reason = _evacuated(inv, ref)
+                ref['phase'] = 'awaiting-erase' if ready else 'evacuating'
+                count = len(ref['volumes'])
+                return 'running', 70 if ready else 10 + int(55 * max(0, count - ref['remaining']) / max(1, count)), reason
+            # Hours at the erase review: the host is looked at every CADENCE interval, not every round (#975).
+            return CADENCE.look(item, 'disk-v2-convert', evacuation)
         if ref['phase'] == 'removing':
             host = _get('/api/v1/nodes/' + ref['node'])
             lh = _get(LH + '/nodes/' + ref['node'])

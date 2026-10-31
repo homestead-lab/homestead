@@ -5,29 +5,38 @@ one, so every app volume reads degraded. #809 lowered Homestead's own data
 volume by itself; app volumes are people's own, so homestead_app_copies only
 offers: it lists the volumes that cannot be placed (by #809's tests), and an
 admin's reviewed click lowers them, recording the count they asked for. Once
-a second host can hold copies, it offers to put them back."""
+a second host can hold copies, it offers to put them back.
+
+On the shared fake API (tests/fakes/kube.py)."""
 import sys
 import tempfile
 import unittest
-import urllib.error
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import homestead_kube as K
 import homestead_node_parity as PARITY
+import homestead_operations as OPS
 import homestead_app_copies as APP_COPIES
+from fakes.kube import Kube
 
 LH_NODES = PARITY.LH_NODES
 VOLUMES = PARITY.LH_VOLUMES
 KEY = "homestead.io/one-host-copies"
 GiB = 1024 ** 3
+LH_VERSION = "longhorn.io/v1beta2"
 
 
 def node(name, ready=True):
-    return {"metadata": {"name": name}, "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
+    return {"apiVersion": "v1", "kind": "Node", "metadata": {"name": name},
+            "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
 
 
 def lh_node(name, ready=True):
-    return {"metadata": {"name": name}, "spec": {"allowScheduling": True, "disks": {"d": {"allowScheduling": True}}},
+    return {"apiVersion": LH_VERSION, "kind": "Node", "metadata": {"namespace": "longhorn-system", "name": name},
+            "spec": {"allowScheduling": True, "disks": {"d": {"allowScheduling": True}}},
             "status": {"conditions": [{"type": "Ready", "status": "True" if ready else "False"}]}}
 
 
@@ -36,11 +45,12 @@ def volume(name, copies=3, robustness="degraded", unschedulable=True, claim="", 
     scheduled = ({"type": "Scheduled", "status": "False", "reason": "ReplicaSchedulingFailure",
                   "message": "replica scheduling failed"} if unschedulable else
                  {"type": "Scheduled", "status": "True", "reason": ""})
-    meta = {"name": name}
+    meta = {"namespace": "longhorn-system", "name": name}
     if lowered_from is not None:
         meta["annotations"] = {KEY: str(lowered_from)}
     workloads = [{"workloadName": workload, "workloadType": "Deployment"}] if workload else []
-    return {"metadata": meta, "spec": {"numberOfReplicas": copies, "size": str(2 * GiB)},
+    return {"apiVersion": LH_VERSION, "kind": "Volume", "metadata": meta,
+            "spec": {"numberOfReplicas": copies, "size": str(2 * GiB)},
             "status": {"robustness": robustness, "conditions": [scheduled],
                        "kubernetesStatus": {"namespace": ns, "pvcName": claim or name + "-claim",
                                             "workloadsStatus": workloads}}}
@@ -50,48 +60,44 @@ ENGINES = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/engines"
 
 
 def engine(pv, *modes):
-    return {"spec": {"volumeName": pv},
+    return {"apiVersion": LH_VERSION, "kind": "Engine", "metadata": {"namespace": "longhorn-system", "name": f"{pv}-e"},
+            "spec": {"volumeName": pv},
             "status": {"replicaModeMap": {f"{pv}-r-{i}": mode for i, mode in enumerate(modes)}}}
 
 
 class Cluster:
     """Homestead's own data volume is pvc-own; the app volumes are the rest.
-    Every engine is read in one list; modes[pv] sets a volume's copies."""
+    Every engine is read in one list; modes[pv] sets a volume's copies. The
+    fake API starts when a test binds the cluster, so modes and fail can be
+    set first: a path in fail is refused with a 500, and the PATCH of
+    failing_patch with a 409 that changes nothing."""
     def __init__(self, nodes, lh_nodes, volumes, failing_patch=None):
-        deployment = {"spec": {"template": {"spec": {"volumes": [
-            {"name": "data", "persistentVolumeClaim": {"claimName": "homestead-data"}}]}}}}
-        self.objects = {
-            "/api/v1/nodes": {"items": nodes},
-            LH_NODES: {"items": lh_nodes},
-            VOLUMES: {"items": volumes},
-            "/apis/apps/v1/namespaces/lab/deployments/homestead": deployment,
-            "/api/v1/namespaces/lab/persistentvolumeclaims/homestead-data": {
-                "spec": {"volumeName": "pvc-own", "storageClassName": "longhorn"}},
-        }
-        self.modes = {}
-        for v in volumes:
-            name = v["metadata"]["name"]
-            self.objects[f"{VOLUMES}/{name}"] = v
-            self.modes[name] = ("RW",)
-        self.sent = []
+        self.nodes, self.lh_nodes, self.volumes = nodes, lh_nodes, volumes
+        self.modes = {v["metadata"]["name"]: ("RW",) for v in volumes}
         self.read = []
         self.fail = set()
         self.failing_patch = failing_patch
 
-    def kget(self, path):
-        self.read.append(path)
-        if path in self.fail:
-            raise KeyError(path)
-        if path == ENGINES:
-            return {"items": [engine(pv, *modes) for pv, modes in self.modes.items()]}
-        if path not in self.objects:
-            raise urllib.error.HTTPError(path, 404, "not found", {}, None)
-        return self.objects[path]
+    def start(self, test):
+        deployment = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"namespace": "lab", "name": "homestead"},
+                      "spec": {"template": {"spec": {"volumes": [
+                          {"name": "data", "persistentVolumeClaim": {"claimName": "homestead-data"}}]}}}}
+        claim = {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                 "metadata": {"namespace": "lab", "name": "homestead-data"},
+                 "spec": {"volumeName": "pvc-own", "storageClassName": "longhorn"}}
+        self.kube = test.enterContext(Kube(*self.nodes, *self.lh_nodes, *self.volumes, deployment, claim,
+                                           *(engine(pv, *modes) for pv, modes in self.modes.items())))
+        for path in self.fail:
+            self.kube.fail(path, 500, times=99, method="GET")
+        if self.failing_patch:
+            self.kube.fail(self.failing_patch, 409, times=99, method="PATCH")
+        self.kube.react("GET", ENGINES, lambda method, path, body: self.read.append(path))   # counts; the fake answers
+        return self
 
-    def ksend(self, method, path, body=None, ctype=""):
-        if path == self.failing_patch:
-            raise urllib.error.HTTPError(path, 409, "conflict", {}, None)
-        self.sent.append((method, path, body))
+    @property
+    def sent(self):
+        """The writes that went through: a refused PATCH changed nothing."""
+        return [(method, path, body) for method, path, body, _ in self.kube.writes if path != self.failing_patch]
 
 
 ONE = ([node("node-1")], [lh_node("node-1")])
@@ -104,8 +110,14 @@ class Base(unittest.TestCase):
         self.data = tempfile.mkdtemp()
 
     def bind(self, cluster, distribution="k3s", longhorn=True, harvester=False):
+        cluster.start(self)
+        # The shared fake runs the real write guards; the storage guard takes the
+        # job store's lock, which lives under its DATA_DIR.
+        self.enterContext(mock.patch.object(OPS, "DATA_DIR", self.data))
+        self.addCleanup(PARITY.bind, *(getattr(PARITY, name, None) for name in (
+            "kget", "ksend", "hostrun", "platform", "probes", "DATA_DIR", "OWN")))
         hostrun = type("H", (), {"run": staticmethod(lambda *a, **k: ("", ""))})
-        PARITY.bind(cluster.kget, cluster.ksend, hostrun,
+        PARITY.bind(K.kget, K.ksend, hostrun,
                     lambda force=False: {"distribution": distribution, "longhorn": longhorn, "harvester": harvester},
                     lambda: {}, self.data, ("lab", "homestead"))
         return cluster

@@ -6,6 +6,7 @@ restart cannot lose an in-flight image pull, rollout, import, migration, or
 backup. Only identifiers and status are stored; request bodies and credentials
 are deliberately excluded.
 """
+import homestead_job_cadence as CADENCE
 import homestead_kube as KUBE
 import homestead_shared as SHARED
 import homestead_vm_power_receipts as POWER_RECEIPTS
@@ -379,7 +380,8 @@ def checkpoint(item):
 
 def _public(item):
     out = {key: value for key, value in item.items()
-           if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store", "cancel_request")}
+           if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store", "cancel_request",
+                          CADENCE.KEY)}
     # Every job still going can be cancelled unless its kind refuses (the same
     # refusals _plan_for gives; they read only the job). What cancelling does
     # is asked for separately, as it reads Kubernetes and the tray is polled often.
@@ -834,7 +836,8 @@ def _volume_delete(item):
 def _smart_test(item):
     if smart_progress is None:
         raise RuntimeError("SMART progress provider is not configured")
-    return smart_progress(item["ref"])
+    # A self-test runs for hours: smartctl is asked every CADENCE interval (#975).
+    return CADENCE.look(item, "smart-test", lambda: smart_progress(item["ref"]))
 
 
 def _network_service(item):

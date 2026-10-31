@@ -39,6 +39,31 @@ def _image_digest(ref):
     return match.group(0).lower() if match else ""
 
 
+# Why an image is kept, in words for a person: the short label on the Image
+# Cache page and a sentence for its tooltip. A row's "why" picks one; its
+# "reason" stays the coarse word (active, rollback, stopped, scheduled,
+# unreadable) that clean-up and its messages already use.
+WHY = {
+    "running": ("running", "A running container uses it."),
+    "rollback": ("roll back", "Kept so Roll back can return to it."),
+    "job-paused": ("Job paused", "A suspended Job starts from it when it is resumed."),
+    "job-waiting": ("Job waiting", "A Job that has no pod running yet, or is between retries, starts from it."),
+    "scheduled-job": ("scheduled job", "A scheduled job runs it the next time it is due."),
+    "scaled-to-zero": ("scaled to zero", "The app is scaled to zero and starts from it."),
+    "no-pods": ("no pods yet", "It wants pods that Kubernetes does not show yet, so they would start from it."),
+    "vm-stopped": ("stopped VM", "A stopped virtual machine boots from it."),
+    "vm-pool": ("VM pool at zero", "A virtual machine pool with no machines starts new ones from it."),
+    "vm-template": ("VM template", "A VM template starts new machines from it."),
+    "vm-snapshot": ("VM snapshot", "A VM snapshot restores a machine that boots from it."),
+    "disk-import": ("disk import", "A disk import pulls it through the host's container runtime."),
+    "scheduled-import": ("scheduled import", "A scheduled disk import pulls it through the host's container runtime."),
+    "image-stream": ("image stream not read", "This import takes its image from an OpenShift image stream, which "
+                     "Homestead does not read, so every image is kept until the import is gone."),
+    "unreadable": ("not readable", "A record that says which images are in use could not be read, "
+                   "so every image is kept until it can be."),
+}
+
+
 def _system_image(ref):
     return bool(re.search(
         r"(^|/)(rancher|harvester|longhornio|kubevirt|cdi-|cilium|kube-|metrics-server|"
@@ -112,19 +137,19 @@ def image_retention_inventory():
             image_id = (statuses.get(container.get("name")) or {}).get("imageID", "")
             retained.append({
                 "ref": _canonical_image(ref), "digest": _image_digest(image_id) or _image_digest(ref),
-                "reason": "active", "namespace": meta.get("namespace", ""),
+                "reason": "active", "kind": "Pod", "why": "running", "namespace": meta.get("namespace", ""),
                 "workload": workload, "container": container.get("name", ""),
             })
     for dep in _needed_list("/apis/apps/v1/deployments"):
         meta = dep.get("metadata", {})
         previous = _rollback_note(meta)
         if previous is None:
-            retained.append(_unreadable(meta, "update-previous"))
+            retained.append(_unreadable(meta, "update-previous", "Deployment"))
             continue
         for container, ref in previous["images"].items():
             retained.append({
                 "ref": _canonical_image(ref), "digest": _image_digest(ref),
-                "reason": "rollback", "namespace": meta.get("namespace", ""),
+                "reason": "rollback", "kind": "Deployment", "why": "rollback", "namespace": meta.get("namespace", ""),
                 "workload": meta.get("name", ""), "container": container,
                 "retained_at": previous.get("at", ""),
             })
@@ -133,10 +158,10 @@ def image_retention_inventory():
     # rollback and active reasons distinct.
     unique = {}
     for row in retained:
-        key = (row["reason"], row["namespace"], row["workload"], row["container"],
+        key = (row["reason"], row.get("kind"), row["namespace"], row["workload"], row["container"],
                row["digest"] or row["ref"])
         unique[key] = row
-    return list(unique.values())
+    return [{**row, **dict(zip(("label", "detail"), WHY[row["why"]]))} for row in unique.values()]
 
 
 def _stopped_references():
@@ -166,16 +191,17 @@ def _stopped_references():
             ("CronJob", "/apis/batch/v1/cronjobs", lambda o: o["spec"]["jobTemplate"]["spec"]["template"]["spec"])):
         for obj in _needed_list(path):
             meta = obj.get("metadata") or {}
-            reason = _waiting(kind, obj)
-            if reason is None:
+            waiting = _waiting(kind, obj)
+            if waiting is None:
                 continue          # its pods name its images, or it will not run again
+            reason, why = waiting
             try:
                 podspec = spec_of(obj)
             except (KeyError, TypeError):
                 podspec = None
             containers = _rows(podspec, "initContainers", "containers")
             if containers is None:
-                out.append(_unreadable(meta, "template"))
+                out.append(_unreadable(meta, "template", kind))
                 continue
             try:
                 ran = json.loads(NAMES.annotation_of(meta, "ran-digests", "{}") or "{}")
@@ -188,58 +214,63 @@ def _stopped_references():
                     continue
                 out.append({"ref": _canonical_image(ref),
                             "digest": _image_digest(ref) or _image_digest(ran.get(container.get("name"), "")),
-                            "reason": reason, "by_name": True,
+                            "reason": reason, "kind": kind, "why": why, "by_name": True,
                             "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""),
                             "container": container.get("name", "")})
     stopped = [vm for vm in _needed_list("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io")
                if not ((vm.get("status") or {}).get("ready") is True
                        or (vm.get("status") or {}).get("printableStatus") == "Running")]
-    vms = [(vm, ("spec", "template", "spec")) for vm in stopped]
+    vms = [(vm, ("spec", "template", "spec"), "VirtualMachine", "vm-stopped") for vm in stopped]
     # A VM pool or VM replica set scaled to zero has no VM or pod left to name
     # its template's disks; one with replicas has, so it is left to them.
     pools, unread = _optional_list("VirtualMachinePools", "pool.kubevirt.io", "virtualmachinepools")
     out += unread
-    vms += [(row, ("spec", "virtualMachineTemplate", "spec", "template", "spec"))
+    vms += [(row, ("spec", "virtualMachineTemplate", "spec", "template", "spec"), "VirtualMachinePool", "vm-pool")
             for row in pools if _scaled_to_zero(row.get("spec") or {})]
     sets = _needed_list("/apis/kubevirt.io/v1/virtualmachineinstancereplicasets",
                         optional_group="kubevirt.io", forbidden_none=True)
     if sets is None:      # a role from before these were named may not grant them
-        out.append(_unreadable({"name": "VirtualMachineInstanceReplicaSets"}, "no permission to list"))
-    vms += [(row, ("spec", "template", "spec")) for row in sets or [] if _scaled_to_zero(row.get("spec") or {})]
+        out.append(_unreadable({"name": "VirtualMachineInstanceReplicaSets"}, "no permission to list", "VirtualMachineInstanceReplicaSet"))
+    vms += [(row, ("spec", "template", "spec"), "VirtualMachineInstanceReplicaSet", "vm-pool") for row in sets or [] if _scaled_to_zero(row.get("spec") or {})]
     # A Harvester VM template's versions start new VMs, and a VM snapshot
     # restores one: both boot from the container disks they name.
     versions, unread = _optional_list("VirtualMachineTemplateVersions", "harvesterhci.io", "virtualmachinetemplateversions")
     out += unread
-    vms += [(row, ("spec", "vm", "spec", "template", "spec")) for row in versions]
+    vms += [(row, ("spec", "vm", "spec", "template", "spec"), "VirtualMachineTemplateVersion", "vm-template")
+            for row in versions]
     contents, unread = _optional_list("VirtualMachineSnapshotContents", "snapshot.kubevirt.io", "virtualmachinesnapshotcontents")
     out += unread
-    vms += [(row, ("spec", "source", "virtualMachine", "spec", "template", "spec")) for row in contents]
-    for vm, template in vms:          # a running VM's pod names its container disks
+    vms += [(row, ("spec", "source", "virtualMachine", "spec", "template", "spec"), "VirtualMachineSnapshotContent",
+             "vm-snapshot") for row in contents]
+    for vm, template, kind, why in vms:          # a running VM's pod names its container disks
         meta = vm.get("metadata") or {}
         disks = _disk_images(_dig(vm, template))
         if disks is None:
-            out.append(_unreadable(meta, "template"))
+            out.append(_unreadable(meta, "template", kind))
             continue
-        out += [_kept(meta, ref, "stopped", name) for name, ref in disks]
+        out += [_kept(meta, ref, "stopped", name, kind, why) for name, ref in disks]
     # ...and the disks a stopped VM or a template's VMs import from a registry
     # (a running VM's disks are imported already).
-    for row, vmspec in [(vm, ("spec",)) for vm in stopped] + [(row, ("spec", "vm", "spec")) for row in versions]:
+    for row, vmspec, kind, why in ([(vm, ("spec",), "VirtualMachine", "vm-stopped") for vm in stopped]
+                                   + [(row, ("spec", "vm", "spec"), "VirtualMachineTemplateVersion", "vm-template")
+                                      for row in versions]):
         templates = _rows(_dig(row, vmspec), "dataVolumeTemplates")
         if templates is None:
-            out.append(_unreadable(row.get("metadata") or {}, "template"))
+            out.append(_unreadable(row.get("metadata") or {}, "template", kind))
             continue
         out += _cdi_rows(row, [(_dig(t, ("metadata",)) or {}).get("name", "") or "registry"
-                               for t in templates], [_dig(t, ("spec",)) for t in templates], "stopped")
+                               for t in templates], [_dig(t, ("spec",)) for t in templates], "stopped", kind, why)
     # CDI imports that pull a registry image through the node's runtime
     # (pullMethod: node) leave it in containerd, and need it again to import.
-    for kind, resource, spec_path, reason in (
-            ("DataVolumes", "datavolumes", ("spec",), "stopped"),
-            ("DataImportCrons", "dataimportcrons", ("spec", "template", "spec"), "scheduled")):
-        rows, unread = _optional_list(kind, "cdi.kubevirt.io", resource)
+    for plural, resource, spec_path, reason, kind, why in (
+            ("DataVolumes", "datavolumes", ("spec",), "stopped", "DataVolume", "disk-import"),
+            ("DataImportCrons", "dataimportcrons", ("spec", "template", "spec"), "scheduled", "DataImportCron",
+             "scheduled-import")):
+        rows, unread = _optional_list(plural, "cdi.kubevirt.io", resource)
         out += unread
         for row in rows:
-            out += _cdi_rows(row, ["registry"], [_dig(row, spec_path)], reason)
-            if kind == "DataImportCrons" and _node_pull(_dig(row, spec_path)):
+            out += _cdi_rows(row, ["registry"], [_dig(row, spec_path)], reason, kind, why)
+            if kind == "DataImportCron" and _node_pull(_dig(row, spec_path)):
                 out += _imported_digests(row)
     return out
 
@@ -252,15 +283,17 @@ def _imported_digests(cron):
     if imports is None:
         return []
     if not isinstance(imports, list) or not all(isinstance(row, dict) for row in imports):
-        return [_unreadable(meta, "source")]
+        return [_unreadable(meta, "source", "DataImportCron")]
     return [{"ref": "", "digest": _image_digest(row.get("digest")), "reason": "scheduled",
+             "kind": "DataImportCron", "why": "scheduled-import",
              "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""), "container": "registry"}
             for row in imports if _image_digest(row.get("digest"))]
 
 
-def _kept(meta, ref, reason, container):
+def _kept(meta, ref, reason, container, kind, why):
     """A retention row for an image a record names, matched by name too."""
-    return {"ref": _canonical_image(ref), "digest": _image_digest(ref), "reason": reason, "by_name": True,
+    return {"ref": _canonical_image(ref), "digest": _image_digest(ref), "reason": reason, "kind": kind, "why": why,
+            "by_name": True,
             "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""), "container": container}
 
 
@@ -277,7 +310,7 @@ def _disk_images(tspec):
     return [(name, ref) for name, ref in disks if ref]
 
 
-def _cdi_rows(obj, names, specs, reason):
+def _cdi_rows(obj, names, specs, reason, kind, why):
     """Retention rows for the CDI import specs of one record (a DataVolume
     spec, or a DataImportCron's or VM template's DataVolume template spec):
     the image each pulls through the node, or an unreadable row."""
@@ -285,10 +318,21 @@ def _cdi_rows(obj, names, specs, reason):
     for name, spec in zip(names, specs):
         ref = _node_pull(spec)
         if ref is None:
-            return [_unreadable(meta, "source")]
+            return [_unreadable(meta, "image stream" if _image_stream(spec) else "source", kind)]
         if ref:
-            out.append(_kept(meta, ref, reason, name))
+            out.append(_kept(meta, ref, reason, name, kind, why))
     return out
+
+
+def _image_stream(spec):
+    """Whether a CDI DataVolume spec imports through the node from an OpenShift
+    image stream: it names a stream, not a url, and the stream is not read
+    (no permission is asked for it), so what it holds is unknown."""
+    source = spec.get("source") if isinstance(spec, dict) else None
+    registry = source.get("registry") if isinstance(source, dict) else None
+    return (isinstance(registry, dict) and registry.get("pullMethod") == "node"
+            and isinstance(registry.get("imageStream"), str) and bool(registry["imageStream"])
+            and not registry.get("url"))
 
 
 def _node_pull(spec):
@@ -395,10 +439,12 @@ def _rollback_note(meta):
     return {**previous, "images": images}
 
 
-def _unreadable(meta, what):
+def _unreadable(meta, what, kind=""):
     """A retention row for a record that could not be read. It holds every
-    image (see _holds), and names the record so it can be fixed."""
-    return {"ref": "", "digest": "", "reason": "unreadable", "holds_all": True,
+    image (see _holds), and names the record so it can be fixed. An import
+    from an OpenShift image stream is one: Homestead does not read the stream."""
+    return {"ref": "", "digest": "", "reason": "unreadable", "kind": kind,
+            "why": "image-stream" if what == "image stream" else "unreadable", "holds_all": True,
             "namespace": meta.get("namespace", ""), "workload": meta.get("name", ""), "container": what}
 
 
@@ -419,13 +465,14 @@ def _count(value):
 
 def _waiting(kind, obj):
     """Why a workload's template images are kept when no pod may name them:
-    "stopped" or "scheduled", or None when its pods name them (its status
-    shows every pod it wants is there) or a Job has finished for good.
+    ("stopped" or "scheduled", the words for a person in WHY), or None when its
+    pods name them (its status shows every pod it wants is there) or a Job has
+    finished for good.
     A status that is missing, old or unclear proves nothing, so it keeps."""
     meta, spec = obj.get("metadata") or {}, obj.get("spec") or {}
     status = obj.get("status") if isinstance(obj.get("status"), dict) else {}
     if kind == "CronJob":
-        return "scheduled"
+        return "scheduled", "scheduled-job"
     if kind == "Job":
         conditions = status.get("conditions")
         if isinstance(conditions, list) and any(
@@ -433,23 +480,23 @@ def _waiting(kind, obj):
                 for c in conditions):
             return None       # finished: it makes no more pods
         if spec.get("suspend") is True:
-            return "stopped"
+            return "stopped", "job-paused"
         active = _count(status.get("active"))
-        return None if active and active > 0 else "scheduled"     # between retries, or not started
+        return None if active and active > 0 else ("scheduled", "job-waiting")     # between retries, or not started
     generation, observed = _count(meta.get("generation")), _count(status.get("observedGeneration"))
     if generation is not None and (observed is None or observed < generation):
-        return "stopped"      # the status is from before the last change
+        return "stopped", "no-pods"      # the status is from before the last change
     if kind == "DaemonSet":
         wanted, updated = _count(status.get("desiredNumberScheduled")), _count(status.get("updatedNumberScheduled"))
     else:
         if _scaled_to_zero(spec):
-            return "stopped"
+            return "stopped", "scaled-to-zero"
         wanted = _count(spec.get("replicas"))
         wanted = 1 if spec.get("replicas") is None else wanted
         updated = _count(status.get("updatedReplicas"))
     if wanted and wanted > 0 and updated is not None and updated >= wanted:
         return None
-    return "stopped"
+    return "stopped", "no-pods"
 
 
 def _dig(obj, keys):

@@ -9,9 +9,10 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_container_rebalance as C
+import homestead_kube as K
 import homestead_placement_mode as mode
 import server
-from test_container_rebalance import Cluster, bind
+from test_container_rebalance import APPS, Hosts, bind
 
 
 def node(name, ready=True, taints=None):
@@ -142,74 +143,64 @@ class SummaryTests(unittest.TestCase):
 class StandbyRebalanceTests(unittest.TestCase):
     def test_the_review_route_plans_around_the_standby_hosts(self):
         import homestead_routes as ROUTES
-        c = Cluster()
-        C.bind(c.get, lambda dep: {}, lambda n, r: (True, []), c.apply, ("lab", "homestead"), lambda: True,
+        c = Hosts(self)
+        C.bind(K.kget, lambda dep: {}, lambda n, r: (True, []), c.apply, ("lab", "homestead"), lambda: True,
                None, None, None, lambda: ["k3"])
-        try:
-            found = C.ROUTES[("GET", "/api/workloads/rebalance/plan")][1](
-                ROUTES.Request("GET", "/api/workloads/rebalance/plan", {}, None, "ada", "admin"))
-        finally:
-            bind(Cluster())
+        found = C.ROUTES[("GET", "/api/workloads/rebalance/plan")][1](
+            ROUTES.Request("GET", "/api/workloads/rebalance/plan", {}, None, "ada", "admin"))
         self.assertTrue(found["moves"])
         self.assertNotIn("k3", {m["to"] for m in found["moves"]})
 
     def test_apps_on_a_standby_host_move_off_it_and_nothing_moves_onto_one(self):
-        c = Cluster()
+        c = Hosts(self)
         bind(c)
         moves = C.plan(avoid=["k3"])["moves"]
         self.assertTrue(moves)
         self.assertNotIn("k3", [m["to"] for m in moves])
 
     def test_a_standby_host_is_emptied_even_when_it_is_not_the_busiest(self):
-        c = Cluster()
+        c = Hosts(self)
         # Everything runs on k1, which is quiet; k2 and k3 have room.
-        for p in c.pods:
-            p["spec"]["nodeName"] = "k1"
+        for app in APPS:
+            c.edit_pod(app, lambda p: p["spec"].update(nodeName="k1"))
         bind(c)
         moved = C.plan(avoid=["k1"])["moves"]
         self.assertTrue(moved)
         self.assertEqual({"k1"}, {m["from"] for m in moved})
 
     def test_nothing_moves_off_a_standby_host_onto_one_that_would_be_too_full(self):
-        c = Cluster()
+        c = Hosts(self)
         # The spare k3 runs the apps; k1 and k2 are past SPARE_ROOM already.
-        for p in c.pods:
-            p["spec"]["nodeName"] = "k3"
-        usage = {"k1": "15Gi", "k2": "15Gi", "k3": "11Gi"}
-        for row in c.objects["/apis/metrics.k8s.io/v1beta1/nodes"]["items"]:
-            row["usage"]["memory"] = usage[row["metadata"]["name"]]
+        for app in APPS:
+            c.edit_pod(app, lambda p: p["spec"].update(nodeName="k3"))
+        for name, memory in {"k1": "15Gi", "k2": "15Gi", "k3": "11Gi"}.items():
+            c.edit_node_metrics(name, lambda m: m["usage"].update(memory=memory))
         bind(c)
         self.assertEqual([], C.plan(avoid=["k3"])["moves"])
 
     def test_an_empty_spare_does_not_change_how_even_the_main_hosts_are(self):
-        with_spare, without = Cluster(), Cluster()
-        without.objects["/api/v1/nodes"]["items"] = [n for n in without.objects["/api/v1/nodes"]["items"] if n["metadata"]["name"] != "k3"]
-        without.objects["/apis/metrics.k8s.io/v1beta1/nodes"]["items"] = [
-            m for m in without.objects["/apis/metrics.k8s.io/v1beta1/nodes"]["items"] if m["metadata"]["name"] != "k3"]
-        for row in with_spare.objects["/apis/metrics.k8s.io/v1beta1/nodes"]["items"]:
-            if row["metadata"]["name"] == "k3":
-                row["usage"] = {"cpu": "0", "memory": "0"}
+        without = Hosts(self)
+        without.kube.discard("/api/v1/nodes/k3")
+        without.kube.discard("/apis/metrics.k8s.io/v1beta1/nodes/k3")
         bind(without)
         alone = C.plan()
+        with_spare = Hosts(self)    # the shared fake serves one cluster at a time: this one, from here
+        with_spare.edit_node_metrics("k3", lambda m: m.update(usage={"cpu": "0", "memory": "0"}))
         bind(with_spare)
         spared = C.plan(avoid=["k3"])
-        bind(Cluster())
         self.assertEqual(alone["spread_before"], spared["spread_before"])
         self.assertEqual([(m["id"], m["to"]) for m in alone["moves"]], [(m["id"], m["to"]) for m in spared["moves"]])
 
     def test_an_operators_plan_leaves_admin_only_apps_on_a_standby_host(self):
-        c = Cluster()
-        for p in c.pods:
-            p["spec"]["nodeName"] = "k1"
+        c = Hosts(self)
+        for app in APPS:
+            c.edit_pod(app, lambda p: p["spec"].update(nodeName="k1"))
 
         def guard(dep, ns, role):
             if role == "operator" and dep["metadata"]["name"] == "frigate":
                 raise PermissionError("admin only")
-        C.bind(c.get, lambda dep: {}, lambda n, r: (True, []), c.apply, ("lab", "homestead"), lambda: True, None, guard)
-        try:
-            found = C.plan(avoid=["k1"], role="operator")
-        finally:
-            bind(Cluster())
+        C.bind(K.kget, lambda dep: {}, lambda n, r: (True, []), c.apply, ("lab", "homestead"), lambda: True, None, guard)
+        found = C.plan(avoid=["k1"], role="operator")
         self.assertTrue(found["moves"])
         self.assertNotIn("lab/frigate", [m["id"] for m in found["moves"]])
         self.assertIn({"id": "lab/frigate", "why": C.ADMIN_ONLY}, found["skipped"])

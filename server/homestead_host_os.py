@@ -28,6 +28,7 @@ import threading
 import time
 import urllib.error
 
+import homestead_job_cadence as CADENCE
 import homestead_operations as OPS
 import homestead_shared as SHARED
 
@@ -508,7 +509,9 @@ def _step(item, now=None):
     node = ref["node"]
     if now - ref.get("since", now) < 20:
         return "running", 10, f"Installing updates on {node}"
-    now_state = upgrade_state(node)
+    # Past the 2 h limit, look again before calling it failed (never on an old answer).
+    now_state = CADENCE.look(item, "host-os", lambda: (upgrade_state(node),), now=now,
+                             force=now - ref.get("since", now) > 7200)[0]
     code = now_state["code"]
     if code is None:
         if now - ref.get("since", now) > 7200:

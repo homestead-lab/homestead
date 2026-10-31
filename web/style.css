@@ -1611,6 +1611,7 @@ th.sortable[aria-sort="descending"]::after{content:" ↓";color:var(--tx)}
    unbroken image name pushed its button out of the box. */
 .imgtable td.imgname{min-width:220px;max-width:420px;word-break:break-all}
 .imgtable td:nth-child(3),.imgtable td:nth-child(4){white-space:nowrap}
+.image-keeper{display:inline-flex;align-items:center;gap:2px;max-width:100%}.image-keeper .dim,.image-keeper .linkish{min-width:0;overflow-wrap:anywhere;text-align:left}
 .prepull-note{gap:12px;align-items:center}.prepull-note>span{min-width:0;overflow-wrap:anywhere}.prepull-note>.btn{flex:0 0 auto}
 /* Docker Compose import: the file on the left, what it becomes on the right. */
 .modalbox[data-context="compose"]{width:min(1240px,100%)}

@@ -17,7 +17,7 @@ def node(name="app-1", args=None, labels=None, ip="192.0.2.11", roles=(), uid="u
     import json
     meta = {"name": name, "uid": uid, "labels": {**{f"node-role.kubernetes.io/{r}": "true" for r in roles}, **(labels or {})},
             "annotations": {"k3s.io/node-args": json.dumps(args)} if args is not None else {}}
-    return {"metadata": meta, "status": {"addresses": [{"type": "InternalIP", "address": ip}],
+    return {"apiVersion": "v1", "kind": "Node", "metadata": meta, "status": {"addresses": [{"type": "InternalIP", "address": ip}],
                                          "conditions": [{"type": "Ready", "status": "True" if ready else "False"}],
                                          "nodeInfo": {"kubeletVersion": "v1.37.1+k3s1"}}}
 
@@ -128,14 +128,15 @@ class ScriptTests(unittest.TestCase):
 
 
 from unittest import mock
-import urllib.error
 
 import homestead_capacity as CAPACITY
+import homestead_kube as K
 import homestead_node_actions as NODE_ACTIONS
 import homestead_maintenance as MAINTENANCE
 import homestead_hostrun as HOSTRUN
 import homestead_operations as OPS
 import homestead_platform as PLATFORM
+from fakes.kube import Kube
 
 
 class Hostrun:
@@ -156,42 +157,41 @@ class Hostrun:
         return (self.out(node, script) if callable(self.out) else self.out), ""
 
 
-class Cluster:
-    """A k3s cluster: server-1 and server-2 (etcd), app-1 an agent."""
-    def __init__(self):
-        server_args = ["server", "--cluster-cidr", "10.42.0.0/16"]
-        self.nodes = [node("server-1", server_args, roles=("control-plane", "etcd", "master"), ip="192.0.2.5", uid="s1"),
-                      node("server-2", server_args, roles=("control-plane", "etcd", "master"), ip="192.0.2.6", uid="s2"),
-                      node("app-1", ["agent", "--node-ip", "192.0.2.11"], labels={"homelab/zone": "a"})]
-        self.secrets = {"app-1.node-password.k3s"}
-        self.pods = []
+class Scene:
+    """A k3s cluster on the shared fake API (tests/fakes/kube.py): server-1
+    and server-2 (etcd), app-1 an agent. Promotion reads it and changes
+    nothing itself; the host and the node actions are stand-ins."""
+    SECRET = "/api/v1/namespaces/kube-system/secrets/app-1.node-password.k3s"
+    LONGHORN_NODE = "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes/app-1"
 
-    def kget(self, path):
-        if path == "/api/v1/nodes":
-            return {"items": self.nodes, "metadata": {}}
-        if path.startswith("/api/v1/nodes/"):
-            name = path.rsplit("/", 1)[1]
-            found = next((n for n in self.nodes if n["metadata"]["name"] == name), None)
-            if found is None:
-                raise urllib.error.HTTPError(path, 404, "not found", {}, None)
-            return found
-        if path == "/api/v1/pods":
-            return {"items": self.pods, "metadata": {}}
-        if path.startswith("/api/v1/namespaces/kube-system/secrets/"):
-            if path.rsplit("/", 1)[1] in self.secrets:
-                return {"metadata": {"name": path.rsplit("/", 1)[1]}}
-            raise urllib.error.HTTPError(path, 404, "not found", {}, None)
-        if "longhorn.io" in path:
-            if path.endswith("/replicas"):
-                return {"items": [{"spec": {"nodeID": "app-1"}}], "metadata": {}}
-            return {"spec": {"allowScheduling": True}}
-        raise AssertionError(path)
+    def __init__(self, test):
+        server_args = ["server", "--cluster-cidr", "10.42.0.0/16"]
+        self.kube = test.enterContext(Kube(
+            node("server-1", server_args, roles=("control-plane", "etcd", "master"), ip="192.0.2.5", uid="s1"),
+            node("server-2", server_args, roles=("control-plane", "etcd", "master"), ip="192.0.2.6", uid="s2"),
+            node("app-1", ["agent", "--node-ip", "192.0.2.11"], labels={"homelab/zone": "a"}),
+            {"apiVersion": "v1", "kind": "Secret", "metadata": {"namespace": "kube-system", "name": "app-1.node-password.k3s"}},
+            {"apiVersion": "longhorn.io/v1beta2", "kind": "Replica", "metadata": {"namespace": "longhorn-system", "name": "r1"},
+             "spec": {"nodeID": "app-1"}},
+            {"apiVersion": "longhorn.io/v1beta2", "kind": "Node", "metadata": {"namespace": "longhorn-system", "name": "app-1"},
+             "spec": {"allowScheduling": True}}))
+        saved = (PROMOTE.kget, PROMOTE.ksend, PROMOTE.hostrun, PROMOTE.own_node)
+        test.addCleanup(lambda: PROMOTE.bind(*saved))
+
+    def edit(self, name, change):
+        """Someone else changes the node name; change(node) edits a copy."""
+        obj = self.kube.object(f"/api/v1/nodes/{name}")
+        change(obj)
+        self.kube.add(obj)
+
+    def label(self, name, **labels):
+        self.edit(name, lambda n: n["metadata"]["labels"].update(labels))
 
 
 class PlanBase(unittest.TestCase):
     def setUp(self):
-        self.cluster, self.host = Cluster(), Hostrun()
-        PROMOTE.bind(self.cluster.kget, lambda *a, **k: {}, self.host, lambda: "server-1")
+        self.cluster, self.host = Scene(self), Hostrun()
+        PROMOTE.bind(K.kget, K.ksend, self.host, lambda: "server-1")
         self.patches = [
             mock.patch.object(PLATFORM, "detect", lambda force=False: {"distribution": "k3s", "harvester": False,
                                                                         "control_plane": ["192.0.2.5"], "version": "1.37.1+k3s1"}),
@@ -232,24 +232,24 @@ class PlanTests(PlanBase):
         self.assertTrue(any("server already" in b for b in PROMOTE.plan("server-2")["blockers"]))
 
     def test_blocks_a_tiebreaker(self):
-        self.cluster.nodes[2]["metadata"]["labels"]["node-role/tiebreaker"] = "true"
+        self.cluster.label("app-1", **{"node-role/tiebreaker": "true"})
         self.blocked("tiebreaker")
 
     def test_blocks_a_host_not_ready(self):
-        self.cluster.nodes[2]["status"]["conditions"][0]["status"] = "False"
+        self.cluster.edit("app-1", lambda n: n["status"]["conditions"][0].update(status="False"))
         self.blocked("not Ready")
 
     def test_blocks_homestead_on_the_host(self):
-        PROMOTE.bind(self.cluster.kget, lambda *a, **k: {}, self.host, lambda: "app-1")
+        PROMOTE.bind(K.kget, K.ksend, self.host, lambda: "app-1")
         self.blocked("Homestead runs on app-1")
 
     def test_blocks_unknown_shared_settings(self):
-        for n in self.cluster.nodes[:2]:
-            n["metadata"]["annotations"] = {}
+        for name in ("server-1", "server-2"):
+            self.cluster.edit(name, lambda n: n["metadata"].update(annotations={}))
         self.blocked("settings")
 
     def test_blocks_version_mismatch(self):
-        self.cluster.nodes[2]["status"]["nodeInfo"]["kubeletVersion"] = "v1.36.0+k3s1"
+        self.cluster.edit("app-1", lambda n: n["status"]["nodeInfo"].update(kubeletVersion="v1.36.0+k3s1"))
         self.blocked("version")
 
     def test_blocks_missing_node_password_file(self):
@@ -257,7 +257,7 @@ class PlanTests(PlanBase):
         self.blocked("node password")
 
     def test_blocks_missing_node_password_secret(self):
-        self.cluster.secrets.clear()
+        self.cluster.kube.discard(self.cluster.SECRET)
         self.blocked("node-password")
 
     def test_blocks_missing_uninstall_script(self):
@@ -290,7 +290,7 @@ class PlanTests(PlanBase):
             self.assertTrue(any("1 → 2" in w and "both" in w for w in PROMOTE.plan("app-1")["warnings"]))
 
     def test_dropped_flags_and_local_storage_warn(self):
-        self.cluster.nodes[2]["metadata"]["annotations"]["k3s.io/node-args"] = '["agent", "--data-dir", "/srv/k3s"]'
+        self.cluster.edit("app-1", lambda n: n["metadata"]["annotations"].update({"k3s.io/node-args": '["agent", "--data-dir", "/srv/k3s"]'}))
         with mock.patch.object(MAINTENANCE, "inventory", lambda get, pods, **k: {"local_storage": [{"pod": "lab/db-0"}], "blockers": []}):
             warnings = " ".join(PROMOTE.plan("app-1")["warnings"])
         self.assertIn("--data-dir", warnings)
@@ -299,7 +299,7 @@ class PlanTests(PlanBase):
     def test_review_token_follows_the_cluster(self):
         before = PROMOTE.plan("app-1")["review_token"]
         self.assertEqual(before, PROMOTE.plan("app-1")["review_token"])
-        self.cluster.nodes[0]["metadata"]["annotations"]["k3s.io/node-args"] = '["server", "--cluster-cidr", "10.52.0.0/16"]'
+        self.cluster.edit("server-1", lambda n: n["metadata"]["annotations"].update({"k3s.io/node-args": '["server", "--cluster-cidr", "10.52.0.0/16"]'}))
         self.assertNotEqual(before, PROMOTE.plan("app-1")["review_token"])
 
     def test_plan_never_reads_the_token(self):
@@ -309,7 +309,7 @@ class PlanTests(PlanBase):
     def test_flags_that_name_the_node_are_kept_or_block(self):
         flags, _ = PROMOTE.node_flags(node(args=["agent", "--node-name", "box-1"]))
         self.assertIn("--node-name", flags)
-        self.cluster.nodes[2]["metadata"]["annotations"]["k3s.io/node-args"] = '["agent", "--with-node-id"]'
+        self.cluster.edit("app-1", lambda n: n["metadata"]["annotations"].update({"k3s.io/node-args": '["agent", "--with-node-id"]'}))
         self.assertTrue(any("--with-node-id" in b for b in PROMOTE.plan("app-1")["blockers"]))
     def test_blocks_while_a_host_job_runs(self):
         for kind in ("node-power", "host-os", "os-rollout", "cluster-shutdown"):
@@ -386,7 +386,7 @@ class JobTests(PlanBase):
 
     def test_blocked_plan_is_refused(self):
         token = PROMOTE.plan("app-1")["review_token"]
-        self.cluster.secrets.clear()
+        self.cluster.kube.discard(self.cluster.SECRET)
         with self.assertRaises(ValueError):
             PROMOTE.start("app-1", token)
 
@@ -412,7 +412,7 @@ class JobTests(PlanBase):
         self.assertFalse(any(self.token in m for _, m in self.ops.phases))
 
     def test_token_read_prefers_a_server_that_is_not_a_tiebreaker(self):
-        self.cluster.nodes[0]["metadata"]["labels"]["node-role/tiebreaker"] = "true"
+        self.cluster.label("server-1", **{"node-role/tiebreaker": "true"})
         self.started()
         self.assertEqual(["server-2"], [n for n, s in self.host.calls if PROMOTE.TOKEN_FILE in s])
 
@@ -490,8 +490,7 @@ class JobTests(PlanBase):
 
     def joined_item(self):
         item, _ = self.run_with("CODE 0\n")
-        n = self.cluster.nodes[2]
-        n["metadata"]["labels"].update({"node-role.kubernetes.io/control-plane": "true", "node-role.kubernetes.io/etcd": "true"})
+        self.cluster.label("app-1", **{"node-role.kubernetes.io/control-plane": "true", "node-role.kubernetes.io/etcd": "true"})
         return item
 
     def test_joining_waits_for_etcd(self):
@@ -511,12 +510,12 @@ class JobTests(PlanBase):
 
     def test_joining_new_uid_fails(self):
         item = self.joined_item()
-        self.cluster.nodes[2]["metadata"]["uid"] = "uid-new"
+        self.cluster.edit("app-1", lambda n: n["metadata"].update(uid="uid-new"))
         self.assertEqual("failed", PROMOTE.status(item, now=item["ref"]["joining_since"] + 5)[0])
 
     def test_joining_reports_a_lost_label(self):
         item = self.joined_item()
-        del self.cluster.nodes[2]["metadata"]["labels"]["homelab/zone"]
+        self.cluster.edit("app-1", lambda n: n["metadata"]["labels"].pop("homelab/zone"))
         with mock.patch.object(NODE_ACTIONS, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
                                                                    "ready": ["server-1", "server-2", "app-1"], "total": 3,
                                                                    "quorum_needs": 2, "can_lose": 1}):
@@ -631,8 +630,7 @@ class FixTests(JobTests):
     def test_installer_error_after_joining_carries_on(self):
         item, _ = self.run_with("CODE 1\n", now=None) if False else (None, None)
         item = self.started()
-        self.cluster.nodes[2]["metadata"]["labels"].update({"node-role.kubernetes.io/control-plane": "true",
-                                                            "node-role.kubernetes.io/etcd": "true"})
+        self.cluster.label("app-1", **{"node-role.kubernetes.io/control-plane": "true", "node-role.kubernetes.io/etcd": "true"})
         with mock.patch.object(NODE_ACTIONS, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
                                                                    "ready": ["server-1", "server-2", "app-1"], "total": 3,
                                                                    "quorum_needs": 2, "can_lose": 1}):
@@ -654,12 +652,7 @@ class FixTests(JobTests):
 
     def test_a_missing_longhorn_node_is_reported(self):
         item = self.joined_item()
-        real = self.cluster.kget
-        def kget(path):
-            if "/longhorn-system/nodes/" in path:
-                raise urllib.error.HTTPError(path, 404, "not found", {}, None)
-            return real(path)
-        PROMOTE.bind(kget, lambda *a, **k: {}, self.host, lambda: "server-1")
+        self.cluster.kube.discard(self.cluster.LONGHORN_NODE)
         with mock.patch.object(NODE_ACTIONS, "quorum_report", lambda: {"members": ["server-1", "server-2", "app-1"],
                                                                    "ready": ["server-1", "server-2", "app-1"], "total": 3,
                                                                    "quorum_needs": 2, "can_lose": 1}):

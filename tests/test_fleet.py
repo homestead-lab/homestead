@@ -1,5 +1,4 @@
 """Linked clusters: signing, linking, unlinking, and relaying a request."""
-import base64
 import importlib.util
 import io
 import json
@@ -8,13 +7,13 @@ import sys
 import threading
 import time
 import unittest
-import urllib.error
 import urllib.parse
 from unittest import mock
 from pathlib import Path
 
 SERVER = Path(__file__).resolve().parents[1] / "server"
 sys.path.insert(0, str(SERVER))
+from fakes.kube import Kube
 
 
 def fresh_module(name):
@@ -25,33 +24,33 @@ def fresh_module(name):
     return module
 
 
-class Kube:
-    """Just enough of a Kubernetes API for ConfigMaps and Secrets."""
+class Api:
+    """One pretend cluster's Kubernetes API: its own fake (tests/fakes/kube.py).
+    The modules are bound straight to that fake's transport, as there are
+    several clusters side by side and the shared fake's context patches the one
+    client the app has."""
 
     def __init__(self):
-        self.objects = {}
+        self.kube = Kube()
 
-    def get(self, path):
-        if path not in self.objects:
-            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
-        return json.loads(json.dumps(self.objects[path]))
+    def get(self, path, **_):
+        return self.kube("GET", path)
 
-    def send(self, method, path, body=None, **_):
-        if method == "DELETE":
-            self.objects.pop(path, None)
-            return {}
-        if method == "POST":
-            path = f"{path}/{body['metadata']['name']}"
-        body = json.loads(json.dumps(body))
-        if "stringData" in body:
-            body["data"] = {k: base64.b64encode(v.encode()).decode() for k, v in body.pop("stringData").items()}
-        self.objects[path] = body
-        return body
+    def send(self, method, path, body=None, ctype="application/json", **_):
+        return self.kube(method, path, body, ctype)
+
+    def object(self, path):
+        return self.kube.object(path)
+
+    def stored(self):
+        """Everything written to it, of any kind, and what it keeps, as text."""
+        return json.dumps(self.kube.writes) + "".join(
+            json.dumps(self.get(f"/api/v1/namespaces/lab/{kind}")) for kind in ("configmaps", "secrets"))
 
 
 class Cluster:
     def __init__(self, name, url, network):
-        self.name, self.url, self.kube = name, url, Kube()
+        self.name, self.url, self.kube = name, url, Api()
         self.fleet = fresh_module(f"fleet_{name}")
         self.fleet.bind(self.kube.get, self.kube.send, "lab", "2.8.300",
                         site=lambda: name.title(), address=lambda: url)
@@ -177,7 +176,7 @@ class LinkingTests(unittest.TestCase):
 
     def test_the_password_is_not_kept(self):
         self.a.fleet.join(self.b.url, "admin", "secret")
-        stored = json.dumps(self.a.kube.objects) + json.dumps(self.b.kube.objects)
+        stored = self.a.kube.stored() + self.b.kube.stored()
         self.assertNotIn("secret", stored.replace("secrets", ""))
 
     def test_a_wrong_password_links_nothing(self):
@@ -463,7 +462,7 @@ class MoveClientTests(unittest.TestCase):
             self.assertTrue(rows[0]["fleet"])
             with self.assertRaises(ValueError):
                 move.remove_cluster("shed")
-            self.assertNotIn(f"/api/v1/namespaces/lab/configmaps/homestead-clusters", a.kube.objects)
+            self.assertIsNone(a.kube.object("/api/v1/namespaces/lab/configmaps/homestead-clusters"))
         finally:
             move.FLEET = None
 
@@ -495,7 +494,7 @@ class LegacyClusterTests(unittest.TestCase):
         result = self.move.link_legacy("oldshed")
         self.assertEqual("shed", result["member"]["handle"])
         self.assertEqual(2, len(self.b.fleet.members()))
-        self.assertNotIn("/api/v1/namespaces/lab/secrets/homestead-cluster-oldshed", self.a.kube.objects)
+        self.assertIsNone(self.a.kube.object("/api/v1/namespaces/lab/secrets/homestead-cluster-oldshed"))
         self.assertEqual([], self.move.legacy_clusters())
         # Listed once, as linked; the old name still reaches it for moves that recorded it.
         self.assertEqual(["shed"], [row["name"] for row in self.move.list_clusters()])
