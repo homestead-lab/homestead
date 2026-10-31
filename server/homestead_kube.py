@@ -163,17 +163,29 @@ def _auth_ksend(method, path, body=None, ctype="application/json", timeout=15):
     return _guarded_ksend(method, path, body, ctype, timeout, shutdown_bypass=True)
 
 
+# Subresources whose writes carry no pod spec: nothing to apply and check.
+_PLAIN_SUBRESOURCES = ("scale", "status")
+
+
 def authorize_workload_write(method, path, body):
     if HOSTACCESS.role() in (None, "admin"):
         return
-    match = re.fullmatch(r"(/(?:api/v1|apis/apps/v1|apis/batch/v1)/namespaces/([^/]+)/(deployments|statefulsets|daemonsets|pods|jobs))(?:/([^/?]+)(?:/[^?]+)?)?", path.split("?", 1)[0])
+    match = re.fullmatch(r"(/(?:api/v1|apis/apps/v1|apis/batch/v1)/namespaces/([^/]+)/(deployments|statefulsets|daemonsets|replicasets|pods|jobs|cronjobs))(?:/([^/?]+)(?:/([^?]+))?)?", path.split("?", 1)[0])
     if not match:
         return
-    base, ns, _, name = match.groups()
+    base, ns, resource, name, sub = match.groups()
+    kind = HOSTACCESS.KINDS[resource]
     if name:
-        HOSTACCESS.require_target(kget(base + "/" + name), ns)
-    if isinstance(body, dict) and (body.get("spec", {}).get("template") or method == "POST"):
-        HOSTACCESS.require_target(body, ns)
+        current = kget(base + "/" + name)
+        HOSTACCESS.require_target(current, ns, kind)
+        # A PATCH is checked on the object it would leave, whatever its format.
+        if method == "PATCH" and sub not in _PLAIN_SUBRESOURCES:
+            HOSTACCESS.require_target(HOSTACCESS.patched(current, body), ns, kind)
+    body_kind = None if sub else kind
+    spec = body.get("spec") if isinstance(body, dict) else None
+    if isinstance(body, dict) and (method in ("POST", "PUT") or isinstance(spec, dict) and (
+            "template" in spec or "jobTemplate" in spec)):
+        HOSTACCESS.require_target(body, ns, body_kind)
 
 
 def age_secs(ts):
