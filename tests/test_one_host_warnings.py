@@ -101,7 +101,10 @@ class OverviewTests(unittest.TestCase):
             return facts
         saved = {name: getattr(OV, name, None) for name in ("cached", "NETWORK")}
         saved_offer = OV.APP_COPIES.cached_facts
+        saved_hold = OV.CLUSTER.HOLD
         try:
+            # Counted at once: what is counted, not the verdict's hold (#941), is under test.
+            OV.CLUSTER.HOLD = OV.CLUSTER.HealthHold(hold=0)
             OV.cached = lambda key, ttl, fn: []
             OV.NETWORK = type("N", (), {"shared_vip": staticmethod(lambda: "")})
             OV.APP_COPIES.cached_facts = offer
@@ -111,6 +114,7 @@ class OverviewTests(unittest.TestCase):
             for name, value in saved.items():
                 setattr(OV, name, value)
             OV.APP_COPIES.cached_facts = saved_offer
+            OV.CLUSTER.HOLD = saved_hold
         return out, asked
 
     def test_the_overview_counts_the_volumes_the_offer_lists(self):
