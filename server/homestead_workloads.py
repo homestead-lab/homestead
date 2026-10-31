@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 
 import homestead_affinity as AFFINITY
+import homestead_auth as AUTH
 import homestead_autoupdate as AUTOUPDATE
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_copy_job as COPY_JOB
@@ -21,15 +22,19 @@ import homestead_failover as FAILOVER
 import homestead_gitops as GITOPS
 import homestead_group_tiers as GROUPS
 import homestead_hardware as HW
+import homestead_kube_metrics as KUBE_METRICS
 import homestead_host_access as HOSTACCESS
 import homestead_icons as ICONS
 import homestead_lan as LAN
 import homestead_lifecycle as LC
+import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_logsearch as LOGSEARCH
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_network_services as SVC
+import homestead_network_inventory as INV
 import homestead_operations as OPS
 import homestead_outage as OUTAGE
+import homestead_value_masks as MASKS
 import homestead_place as PLACE
 import homestead_priority as PRIORITY
 import homestead_privileges as PRIV
@@ -41,6 +46,7 @@ import homestead_routes as ROUTER
 import homestead_schedules as SCHEDULES
 import homestead_start_order as START_ORDER
 import homestead_updates as UPDATES
+import homestead_update_rollouts as ROLLOUTS
 import homestead_usage as USAGE
 
 # server.py's helpers this module calls, bound by name at start.
@@ -78,6 +84,11 @@ def _arg(request, key, default=""):
     return (request.query.get(key) or [default])[0]
 
 
+# A namespace, pod, job or container name as Kubernetes allows it (DNS
+# subdomain characters), so it cannot add a path or query to a request.
+LOG_NAME = re.compile(r"[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?")
+
+
 def logs_refusal(error, pod, container):
     """What Kubernetes' refusal to give logs means, in words rather than its JSON."""
     try:
@@ -94,35 +105,76 @@ def logs_refusal(error, pod, container):
     return f"Kubernetes could not return the logs for {who}" + (f": {message}" if message else ".")
 
 
+# The most a log read asks Kubernetes for (#986): the kubelet splits lines at
+# 16 KB, so 1,000 lines can be 16 MB. Log search reads 2 MB too.
+LOG_BYTES = 2 * 1024 * 1024
+TAIL_RETRIES = 4      # halvings of the lines asked for when an answer reaches LOG_BYTES
+
+
+def _tail(ns, pod, container, lines):
+    """The pod's last lines, at most LOG_BYTES. limitBytes keeps the oldest
+    of the lines asked for, so a live Logs view (Follow) would sit on old
+    lines: an answer that reaches it is asked for again with half the lines,
+    a few times at most, so the newest are kept. A cut says so."""
+    wanted = lines
+    for _ in range(TAIL_RETRIES + 1):
+        query = f"tailLines={lines}&timestamps=true&limitBytes={LOG_BYTES}" + (
+            f"&container={urllib.parse.quote(container)}" if container else "")
+        req = urllib.request.Request(f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?{query}",
+                                     headers={"Authorization": f"Bearer {TOKEN}"})
+        with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
+            raw = r.read(LOG_BYTES + 1)
+        text = raw.decode("utf-8", "replace")
+        if len(raw) < LOG_BYTES:
+            if lines == wanted:
+                return text
+            return text + f"\n(Log cut: its lines are long, so Homestead is showing the last {lines} lines.)\n"
+        if lines <= 1:
+            break
+        lines = max(1, lines // 2)
+    return text + (f"\n(Log cut at {LOG_BYTES // (1024 * 1024)} MiB of its oldest lines asked for: "
+                   "the newest lines may be missing.)\n")
+
+
 def logs(request):
     """A pod's last lines, as text. A job's logs are its pod's."""
     q = request.query
     ns = q["ns"][0]
     pod = _arg(request, "pod")
     job = _arg(request, "job")
+    container = _arg(request, "container")
+    # Each goes into an API path as it is: "kube-system/secrets?x=" as a
+    # namespace would read another list as Homestead.
+    if any(value and not LOG_NAME.fullmatch(value) for value in (ns, pod, job, container)) or not ns:
+        return ROUTER.Reply(400, {"error": "That is not a valid namespace, pod, job or container name."})
     if job and not pod:
         matches = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=job-name%3D{urllib.parse.quote(job)}").get("items", [])
         pod = matches[0]["metadata"]["name"] if matches else ""
     if not pod:
         return ROUTER.Reply(404, {"error": "Logs are not available yet because no pod exists."})
     tail = max(20, min(1000, int((q.get("tail") or [300])[0])))
-    container = _arg(request, "container")
+    try:
+        found = kget(f"/api/v1/namespaces/{ns}/pods/{pod}")
+    except Exception:
+        found = None
+    # The Helm controller's pods run helm with the chart's values, and a
+    # chart can print them: those logs need the role that may reveal a
+    # Secret. A pod that cannot be read cannot be told apart, so it is
+    # refused too below that role.
+    if not MASKS.sees_values(request.role) and (found is None or MASKS.helm_job_pod(found)):
+        if found is None:
+            return ROUTER.Reply(409, {"error": f"{pod} could not be read (it may have gone), so its log is not shown."})
+        need = MASKS.reveal_role()
+        return ROUTER.Reply(403, {"error": f"Helm's install logs can show a chart's values, so they need the {need} role.",
+                                  "role": need})
     if not container:
         # A pod with more than one container has to be told which;
         # asking without a name is a 400 from Kubernetes.
-        try:
-            spec = kget(f"/api/v1/namespaces/{ns}/pods/{pod}").get("spec", {}) or {}
-            names = [c.get("name") for c in spec.get("containers", []) or []]
-            container = names[0] if names else ""
-        except Exception:
-            container = ""
-    query = f"tailLines={tail}&timestamps=true" + (
-        f"&container={urllib.parse.quote(container)}" if container else "")
-    req = urllib.request.Request(f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?{query}",
-                                 headers={"Authorization": f"Bearer {TOKEN}"})
+        spec = (found or {}).get("spec", {}) or {}
+        names = [c.get("name") for c in spec.get("containers", []) or []]
+        container = names[0] if names else ""
     try:
-        with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
-            return ROUTER.Reply(200, r.read().decode("utf-8", "replace"), "text/plain; charset=utf-8")
+        return ROUTER.Reply(200, _tail(ns, pod, container, tail), "text/plain; charset=utf-8")
     except urllib.error.HTTPError as error:
         return ROUTER.Reply(409 if error.code in (400, 404) else error.code,
                             {"error": logs_refusal(error, pod, container)})
@@ -139,7 +191,21 @@ def search_logs(request):
 def edit_form(request):
     ns, name = request.query["ns"][0], request.query["name"][0]
     deployment = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    return workload_edit_payload(ns, name, deployment)
+    payload = workload_edit_payload(ns, name, deployment)
+    return payload if may_see_secret_values(request.role, deployment, ns) else ENVSEC.mask(payload)
+
+
+def may_see_secret_values(role, deployment, ns):
+    """Values the app keeps in its own Secret go only to someone who could
+    save the form (POST /api/edit) for this workload. Revealing a Secret
+    anywhere else is admin-only; everyone else gets the names, masked."""
+    if not AUTH.allows(role, ROUTES[("POST", "/api/edit")][0]):
+        return False
+    try:
+        HOSTACCESS.require_target_as(deployment, ns, role)
+    except PermissionError:
+        return False
+    return True
 
 
 def scale(request):
@@ -290,16 +356,15 @@ def get_workloads(pods=None):
     read it already (the leader's page snapshot)."""
     deps = kget("/apis/apps/v1/deployments").get("items", [])
     pods = (kget("/api/v1/pods") if pods is None else pods).get("items", [])
-    try:
-        pm = {(m["metadata"]["namespace"], m["metadata"]["name"]): m
-              for m in kget("/apis/metrics.k8s.io/v1beta1/pods").get("items", [])}
-    except Exception:
-        pm = {}
+    # The loop's last reading, with its state: never waits on metrics-server (#906).
+    usage, metrics = KUBE_METRICS.read("pods", kget)
+    pm = {(m["metadata"]["namespace"], m["metadata"]["name"]): m for m in usage}
     try:
         svcs = kget("/api/v1/services").get("items", [])
     except Exception:
         svcs = []
     tiers = GROUPS.stored(kget)    # each group's tier (#430); None when it can't be read
+    hardware_definitions = HW.features()    # one read for every app, not one each (#977)
 
     out = []
     for d in deps:
@@ -350,7 +415,7 @@ def get_workloads(pods=None):
             ports.sort(key=lambda row: row.get("port") != primary)
             for row in ports:
                 row["primary"] = row.get("port") == primary
-        hardware = HW.workload_features(pspec, annotations)
+        hardware = HW.workload_features(pspec, annotations, hardware_definitions)
         pod_rows = []
         transition_ages = []
         fatal_waits = []
@@ -365,22 +430,25 @@ def get_workloads(pods=None):
                 if waiting:
                     reason = waiting.get("reason", "Waiting")
                     waits.append({"container": cs.get("name", ""), "reason": reason,
-                                  "message": (UPDATES.explain_pull(waiting.get("message")) or waiting.get("message") or "")[:400]})
+                                  "message": (ROLLOUTS.explain_pull(waiting.get("message")) or waiting.get("message") or "")[:400]})
                     if reason in fatal_reasons:
-                        why = UPDATES.explain_pull(waiting.get("message"))
+                        why = ROLLOUTS.explain_pull(waiting.get("message"))
                         fatal_waits.append(f"{p['metadata']['name']}: {reason}" + (f" - {why}" if why else ""))
             if not ready:
-                transition_ages.append(age_secs(p["metadata"].get("creationTimestamp")))
+                # Not ready since its Ready condition last changed: a restart
+                # in a days-old pod is seconds old, not days (#941).
+                transition_ages.append(age_secs(conditions.get("Ready", {}).get("lastTransitionTime")
+                                                or p["metadata"].get("creationTimestamp")))
             # Pending and unscheduled says nothing; the scheduler said why.
             unplaced = ""
             placed = conditions.get("PodScheduled") or {}
             if placed.get("status") == "False" and not p["metadata"].get("deletionTimestamp"):
                 own = []
-                if pspec.get("hostNetwork") and NETWORK.servicelb_present():
+                if pspec.get("hostNetwork") and INV.servicelb_present():
                     wanted = {cp.get("containerPort") for c in pspec.get("containers", []) or []
                               for cp in c.get("ports", []) or []}
                     own = sorted({row["port"] for row in ports if row.get("port") in wanted})
-                unplaced = UPDATES.explain_unplaced(placed.get("message", ""), own)
+                unplaced = ROLLOUTS.explain_unplaced(placed.get("message", ""), own)
                 if age_secs(p["metadata"].get("creationTimestamp")) > 60:
                     fatal_waits.append(f"{p['metadata']['name']} cannot be placed: {unplaced}")
             containers = pod_container_rows(p)
@@ -390,7 +458,7 @@ def get_workloads(pods=None):
             if not ready and not p["metadata"].get("deletionTimestamp") and any(
                     w["reason"] in ("ContainerCreating", "PodInitializing") for w in waits):
                 try:
-                    pull = UPDATES.pull_state(ns, p["metadata"]["name"]) or {}
+                    pull = ROLLOUTS.pull_state(ns, p["metadata"]["name"]) or {}
                     if pull.get("state") == "pulling":
                         pull.update(_pull_progress(p["spec"].get("nodeName", ""), pull.get("image", "")))
                     else:
@@ -440,7 +508,7 @@ def get_workloads(pods=None):
             "pods": pod_rows,
             "pod_count": len(pod_rows),
             "container_count": sum(p["container_count"] for p in pod_rows),
-            "cpu": round(cpu, 3), "mem_mb": round(mem / 1024**2, 1),
+            "cpu": round(cpu, 3), "mem_mb": round(mem / 1024**2, 1), "metrics": metrics,
             "ports": ports,
             "gpu": "igpu" in hardware,
             "hardware": hardware,
@@ -611,7 +679,7 @@ def edit_capacity_plan(config):
         if (config["ns"], config["name"], config["workload_name"]) != (ns, name, new_name):
             raise ValueError("Use exact lowercase Kubernetes names for the rename")
         guard_self(ns, name, renaming=True)
-        proposed, context = RENAME.prepare(config, current, LC._renamed_deployment, kget)
+        proposed, context = RENAME.prepare(config, current, WORKLOAD_EDIT._renamed_deployment, kget)
         post_stop = copy.deepcopy(proposed)
         post_stop["spec"]["strategy"] = {"type": "Recreate"}  # rename orchestration, not a saved strategy change
         plan = ROLLOUT_CAPACITY.plan(current, post_stop, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
@@ -622,7 +690,7 @@ def edit_capacity_plan(config):
         return {"deployment": proposed, "name": new_name, "claims": [], "seeds": []}, context, plan
     if config.get("remove_containers") and is_self(ns, name):
         raise ValueError("Homestead cannot remove its own containers from this page")
-    prepared = LC.prepare_edit(config, current=current)
+    prepared = WORKLOAD_EDIT.prepare_edit(config, current=current)
     context = {"action": "edit", **rollout_review_context(current),
                "seeds": [(path, cm.get("metadata", {}).get("resourceVersion")) for path, cm in prepared["seeds"]]}
     proposed = copy.deepcopy(prepared["deployment"])
@@ -631,7 +699,7 @@ def edit_capacity_plan(config):
         raise ValueError("Increasing replicas of a paused Deployment needs a separate capacity review; resume it before editing replicas")
     if prepared["name"] != name:
         count = proposed["spec"].get("replicas", 1)
-        proposed = LC._renamed_deployment(proposed, ns, prepared["name"])
+        proposed = WORKLOAD_EDIT._renamed_deployment(proposed, ns, prepared["name"])
         proposed["spec"].update(replicas=count, strategy={"type": "Recreate"})
     moves = RESTRUCTURE.copies(config)
     if moves:
@@ -666,7 +734,7 @@ def edit_capacity_plan(config):
         exposed = [port for container in config.get("containers") or []
                    for port in container.get("ports") or [] if port.get("expose")]
         if exposed and config.get("manage_ports"):
-            NETWORK._ports({"ports": [{"name": port.get("name"), "port": port.get("host") or port.get("container"),
+            SVC._ports({"ports": [{"name": port.get("name"), "port": port.get("host") or port.get("container"),
                                       "target_port": port.get("container"), "protocol": port.get("protocol") or "TCP"}
                                      for port in exposed]})
         plan["container_changes"] = {"added": additions, "removed": removals}
@@ -829,7 +897,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         # Starts after (#746): the setting, and whether its gate is in the template.
         "starts_after": START_ORDER.read(deployment), "start_gate": START_ORDER.gate_state(deployment),
         "has_service": bool(listeners),
-        "seed_configs": LC.seed_configs(ns, deployment),
+        "seed_configs": WORKLOAD_EDIT.seed_configs(ns, deployment),
         "container_name": first["name"], "image": first["image"], "cpu": first["cpu"], "memory": first["memory"],
         "memory_limit": first["memory_limit"],
         "env": first["env"], "ports": first["ports"], "volumes": first["volumes"], "gpu": "igpu" in detected,

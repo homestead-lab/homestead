@@ -46,6 +46,7 @@ STORES = [
     ("Hosts coming back", ["recovery.json"], "which hosts returned in the last week, and whether that was dealt with"),
     ("App usage", ["usage.json"], "a summary a day of each container's CPU and memory, for 14 days"),
     ("Alerts", ["alerts.json"], "what is active, and recent alerts"),
+    ("Alert webhook", ["alert-webhook.json"], "the address, until it is turned off"),
     ("Schedules", ["schedules.json"], "the last stop or start of each schedule"),
     ("Log alerts", ["logalerts.json"], "the saved log alerts, and an hour of counts for each"),
     ("Outage actions", ["outage-actions.json"], "restarts done during the current outage of each app"),
@@ -56,7 +57,7 @@ STORES = [
     ("First-admin setup code", ["setup-code.json"], "the code's hash, until the first account exists"),
     ("Logos", ["icons/*"], f"while something uses them, then {ICON_DAYS} days"),
     ("Bug reports", ["diagnostics/*"], "until they expire"),
-    ("Host ports and monitoring state", ["host-ports.json", "host-os.json", "node-parity.json", "root-guard.json"], "current state only"),
+    ("Host ports and monitoring state", ["host-ports.json", "host-os.json", "node-parity.json", "root-guard.json", "smart-readings.json"], "current state only"),
 ]
 LOGS = ("image-update-history.jsonl", "console-audit.jsonl")
 # What an interrupted write leaves: homestead_shared's <file>.<pid>.<thread>.tmp,

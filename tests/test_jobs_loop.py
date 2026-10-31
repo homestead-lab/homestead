@@ -303,7 +303,7 @@ class JobLockTidyTests(unittest.TestCase):
         self.enterContext(mock.patch.dict(OPS._tidied, {"at": 0}))
         order = []
         with mock.patch.object(OPS, "tidy_job_locks", lambda: order.append("tidy") or 0), \
-                mock.patch.object(OPS, "list_operations", lambda: order.append("jobs") or []):
+                mock.patch.object(OPS, "list_operations", lambda wait=True: order.append("jobs") or []):
             OPS.tick(lambda: True)
         self.assertEqual(["jobs", "tidy"], order, "a new leader's first round moves jobs on first")
 

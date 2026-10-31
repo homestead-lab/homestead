@@ -18,6 +18,7 @@ from unittest import mock
 
 sys.path.insert(0, "/repo/server")
 import homestead_imports as imports
+import homestead_container_import as CONTAINER_IMPORT
 import homestead_source_ssh as ssh
 from unraid_vm_copy import exercise as exercise_vm_copy
 
@@ -88,7 +89,7 @@ with tempfile.TemporaryDirectory(prefix="source-copy-") as directory:
                "pvc": "fixture-data", "size_gb": 1, "mount_path": "/config",
                "mappings": [{"remote_path": str(source_dir), "mount_path": "/config", "bytes": 9 * 1024 ** 2}]}
         with mock.patch.object(imports, "_source", return_value=src):
-            prepared = imports.prepare_import(cfg)
+            prepared = CONTAINER_IMPORT.prepare_import(cfg)
         job = prepared["job"]
         assert job["spec"]["backoffLimit"] == 0
         assert job["spec"]["template"]["spec"]["restartPolicy"] == "Never"
@@ -104,7 +105,7 @@ with tempfile.TemporaryDirectory(prefix="source-copy-") as directory:
         low_space = "df() { printf 'Filesystem blocks used available capacity mounted\\nfixture 100 100 0 100%% /\\n'; };\n"
         result = subprocess.run(["sh", "-c", low_space + script], env=env, capture_output=True, text=True)
         assert result.returncode != 0 and not (destination / "a-small").exists()
-        assert "insufficient destination free space" in imports.import_progress(result.stdout)["error_detail"]
+        assert "insufficient destination free space" in CONTAINER_IMPORT.import_progress(result.stdout)["error_detail"]
         assert (destination / "borrowed-file").exists()
         print("PASS: mounted destination free-space check refuses copy with an actionable error", flush=True)
 
@@ -162,7 +163,7 @@ with tempfile.TemporaryDirectory(prefix="source-copy-") as directory:
         def real_probe(tag, script, src, **kwargs):
             return run("sh", "-c", ssh.setup(src) + script, env=env).stdout.splitlines()
         with mock.patch.object(imports, "_source", return_value=src), mock.patch.object(imports, "run_probe", side_effect=real_probe):
-            measured = imports.measure_source_paths("fixture", [str(source_dir), str(root / "missing")])
+            measured = CONTAINER_IMPORT.measure_source_paths("fixture", [str(source_dir), str(root / "missing")])
             assert measured["paths"][0]["measured"] and not measured["paths"][1]["exists"]
             try:
                 imports.browse_source("fixture", str(root / "missing"))

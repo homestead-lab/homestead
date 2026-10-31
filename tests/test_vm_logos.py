@@ -108,8 +108,8 @@ class VmRowTests(unittest.TestCase):
                 "spec": {"template": {"spec": {"domain": {"devices": {}}}}}, "status": {}}
 
     def row(self, vm, vmi=None):
-        import homestead_vms as VMS
-        return VMS._row(vm, vmi or {})
+        import homestead_vm_list as VM_LIST
+        return VM_LIST._row(vm, vmi or {})
 
     def test_the_os_comes_from_the_agent_or_harvesters_label(self):
         self.assertEqual("ubuntu", self.row(self.vm(labels={"harvesterhci.io/os": "ubuntu"}))["os_logo"])

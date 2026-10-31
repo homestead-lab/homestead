@@ -1,13 +1,15 @@
 """The Architecture page's picture: which nodes hold each volume's copies,
 which workloads and VMs use those volumes, and the ports and VIPs that reach
 them - read from the cluster as it is now."""
+import homestead_kube_metrics as KUBE_METRICS
 import homestead_hardware as HW
-import homestead_longhorn as LH
+import homestead_longhorn_jobs as JOBS
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_network_inventory as INV
 import homestead_routes
 import homestead_start_order as START_ORDER
 import homestead_vms as VMS
+import homestead_vm_edit as VM_EDIT
 
 # server.py's: the Kubernetes read, the namespaces that are the platform's
 # own, a workload's logo, the copy count of a volume part-way through a move,
@@ -74,7 +76,7 @@ def _flow_jobs(vol_by_pvc=None):
         out.append({
             "id": f"j:{meta['namespace']}/{meta['name']}", "name": meta["name"], "ns": meta["namespace"],
             "schedule": spec.get("schedule", ""), "time_zone": spec.get("timeZone") or "",
-            "suspended": bool(spec.get("suspend")), **LH.cron_run_state(status),
+            "suspended": bool(spec.get("suspend")), **JOBS.cron_run_state(status),
             "claims": [{"pvc": c, "vid": ((vol_by_pvc or {}).get(c) or {}).get("id", "")} for c in claims],
         })
     return sorted(out, key=lambda j: (j["ns"], j["name"]))
@@ -156,7 +158,7 @@ def get_flow2():
     # one it carries: a VIP kube-vip answers for but never recorded is where
     # the app is meant to be, and the page says why it is not reachable there.
     try:
-        network = homestead_routes.cached("network", 5, NETWORK.inventory)
+        network = homestead_routes.cached("network", 5, INV.inventory)
     except Exception:
         network = {}
     places = network.get("addresses") or {"nodes": [], "addresses": []}
@@ -204,10 +206,12 @@ def get_flow2():
                     vips.setdefault(vip, []).append({"port": prt.get("port"), "app": name})
         return out
 
-    # --- per-pod live metrics for the architecture cards
+    # --- per-pod live metrics for the architecture cards: the background
+    # reading, with its state, never metrics-server itself (#906, #928)
+    metric_items, metrics_state = KUBE_METRICS.read("pods", kget)
     try:
         pmet = {}
-        for m in kget("/apis/metrics.k8s.io/v1beta1/pods").get("items", []):
+        for m in metric_items:
             c = sum(parse_cpu(x.get("usage", {}).get("cpu")) for x in m.get("containers", []))
             mm = sum(parse_mem(x.get("usage", {}).get("memory")) for x in m.get("containers", []))
             pmet[(m["metadata"]["namespace"], m["metadata"]["name"])] = (c, mm)
@@ -219,6 +223,7 @@ def get_flow2():
     # longer part of what the cluster runs; scheduled jobs are listed apart.
     # Running pods come first so a card shows where its app runs now.
     seen, wls, launchers = set(), [], {}
+    hardware_definitions = HW.features()    # one read for every pod, not one each (#977)
     for p in sorted(pods, key=lambda p: p["status"].get("phase") != "Running"):
         labels = p["metadata"].get("labels", {}) or {}
         # A VM runs in a virt-launcher pod; it is shown as the VM, below, not
@@ -252,7 +257,7 @@ def get_flow2():
             "ns": ns,
             "image": (p["spec"].get("containers") or [{}])[0].get("image", ""),
             "icon": display_icon(dep_meta.get((ns, name), {})),
-            "hardware": HW.workload_features(p["spec"], dep_meta.get((ns, name), {})),
+            "hardware": HW.workload_features(p["spec"], dep_meta.get((ns, name), {}), hardware_definitions),
             "gpu": any("dri" in (m.get("mountPath") or "")
                        for c in p["spec"].get("containers", []) for m in (c.get("volumeMounts") or [])),
             "claims": claims, "ports": app_ports(ns, labels),
@@ -276,7 +281,7 @@ def get_flow2():
                    or (((vm.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or [])
         addresses = [a for i in (vmi.get("status") or {}).get("interfaces") or []
                      for a in (i.get("ipAddresses") or [i.get("ipAddress")]) if a and ":" not in a]
-        row = {"disks": [{"claim": VMS._volume_claim(v)} for v in volumes], "ip": addresses[0] if addresses else "",
+        row = {"disks": [{"claim": VM_EDIT._volume_claim(v)} for v in volumes], "ip": addresses[0] if addresses else "",
                "status": VMS._status(vm, vmi), "node": (vmi.get("status") or {}).get("nodeName", ""),
                "running": (vmi.get("status") or {}).get("phase") == "Running"}
         launcher = launchers.get((ns, nm))
@@ -315,6 +320,7 @@ def get_flow2():
                  for ip, p in sorted(vips.items(), key=lambda item: (
                      (place.get(item[0]) or {}).get("kind") != "node",
                      tuple(int(x) if x.isdigit() else 999 for x in item[0].split("."))))],
+        "metrics": metrics_state,
     }
 
 

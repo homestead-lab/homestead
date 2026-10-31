@@ -13,6 +13,7 @@ import urllib.parse
 
 import homestead_components as COMPONENTS
 import homestead_disks as DISKS
+import homestead_cache as CACHE
 import homestead_names as NAMES
 import homestead_platform as PLATFORM
 import homestead_shared as SHARED
@@ -65,9 +66,7 @@ def cleanup_restore_classes():
                 removed.append(name)
             except Exception:
                 pass
-    for key in list(_cache):
-        if key.startswith(("stor", "sc")):
-            _cache.pop(key, None)
+    CACHE.drop_where(_cache, lambda key: key.startswith(("stor", "sc")))
     return removed
 
 
@@ -415,9 +414,7 @@ def repair_restore_classes():
         except (ValueError, urllib.error.HTTPError) as error:
             print(f"restore class {name} not repaired: {str(error)[:160]}", flush=True)
     if repaired:
-        for key in list(_cache):
-            if key.startswith(("stor", "sc", "vol")):
-                _cache.pop(key, None)
+        CACHE.drop_where(_cache, lambda key: key.startswith(("stor", "sc", "vol")))
     return repaired
 
 
@@ -436,9 +433,7 @@ def repair_volume_class(cfg):
         raise ValueError("The StorageClass already exists; reopen the volume editor")
     body = _restore_class_repair(pvc)
     ksend("POST", "/apis/storage.k8s.io/v1/storageclasses", body)
-    for key in list(_cache):
-        if key.startswith(("stor", "sc", "vol")):
-            _cache.pop(key, None)
+    CACHE.drop_where(_cache, lambda key: key.startswith(("stor", "sc", "vol")))
     return {"ok": True, "detail": "Resize support repaired. You can now enlarge the volume."}
 
 

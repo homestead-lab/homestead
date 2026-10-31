@@ -90,6 +90,14 @@ server tests that name a module or web file your branch changes (against
 `origin/dev`, or the base you give it), plus every test that scans the whole
 tree. It is a quick check, not a substitute for the full run.
 
+The four CI shares are balanced by how long each test file takes, from
+`tests/durations.json`; a new test file is weighed by its size until then.
+When the shares drift apart (a file got much slower or faster, or many new
+ones), refresh it with `python scripts/run_tests.py --record-durations`,
+which runs every test file once in one process and rewrites the file. A file
+that fails keeps its last recorded time, and a file that does not read is
+ignored: the shares are then balanced by file size.
+
 On Windows, run the full suite as `python -X utf8 -m unittest discover -s tests`:
 sources are UTF-8, and Windows otherwise reads text in its own code page.
 `run_tests.py` turns that mode on by itself.
@@ -131,7 +139,7 @@ CI also opens every page and dialog in Chromium, at a desktop and a phone
 width, against the demo. They need Playwright:
 
 ```bash
-npm install --no-save --no-package-lock playwright@1.55.0
+npm install --no-save --no-package-lock playwright@1.64.1
 npx playwright install chromium
 PORT=4173 WEBROOT=web DATA_DIR=/tmp/homestead-demo-data python server/server.py &
 sh scripts/ci_ui_checks.sh pages

@@ -210,10 +210,11 @@ def parse_mem(s):
     except: return 0
 
 
-def logsearch_read(ns, pod, container, since, limit):
-    """One container's log lines of the last since seconds, with timestamps."""
+def logsearch_read(ns, pod, container, since, limit, previous=False):
+    """One container's log lines of the last since seconds, with timestamps;
+    with previous, those of the container before its last restart."""
     query = f"sinceSeconds={int(since)}&limitBytes={int(limit)}&timestamps=true" + (
-        f"&container={urllib.parse.quote(container)}" if container else "")
+        f"&container={urllib.parse.quote(container)}" if container else "") + ("&previous=true" if previous else "")
     req = urllib.request.Request(f"{API}/api/v1/namespaces/{urllib.parse.quote(ns)}/pods/{urllib.parse.quote(pod)}/log?{query}",
                                  headers={"Authorization": f"Bearer {TOKEN}"})
     with urllib.request.urlopen(req, context=CTX, timeout=20) as r:
@@ -272,19 +273,25 @@ class Incomplete(ValueError):
     module can put them in its words and leave every other ValueError be."""
 
 
-def get_optional(path, read=_CLIENT, **options):
-    """The object, or None when it is not there (404). Any other failure
-    raises: a read that failed is not an object that is missing. A module
-    bound to its own reader passes it as read, so it keeps reading through it;
-    one whose bind() never ran passes None and fails, rather than reading
-    through the real client."""
+# What get_optional answers for a 404 when a module passes missing=GONE: a
+# 404 then reads apart from a null answer.
+GONE = object()
+
+
+def get_optional(path, read=_CLIENT, missing=None, **options):
+    """The object, or missing (None) when it is not there (404). Any other
+    failure raises: a read that failed is not an object that is missing. A
+    module bound to its own reader passes it as read, so it keeps reading
+    through it; one whose bind() never ran passes None and fails, rather than
+    reading through the real client. A module that must tell a 404 from a
+    null answer passes a marker of its own as missing."""
     try:
         return (kget if read is _CLIENT else read)(path, **options)
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
         error.close()
-        return None
+        return missing
 
 
 def items(path, optional_group=None, read=_CLIENT):

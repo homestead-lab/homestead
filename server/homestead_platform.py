@@ -12,6 +12,7 @@ import re
 import shlex
 import time
 import urllib.error
+import homestead_forced as FORCED
 import homestead_kube as KUBE
 import homestead_multus as MULTUS
 import homestead_roles as ROLES
@@ -335,8 +336,14 @@ def metallb_pools():
     return pools
 
 
+def _platform_route(request):
+    if (request.query.get("force") or [""])[0] == "1":
+        return FORCED.run("platform", lambda: detect(force=True))
+    return detect()
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/platform/join"): ("viewer", lambda request: join_guide()),
-    ("GET", "/api/platform"): ("viewer", lambda request: detect(force=(request.query.get("force") or [""])[0] == "1")),
+    ("GET", "/api/platform"): ("viewer", lambda request: _platform_route(request)),
 }

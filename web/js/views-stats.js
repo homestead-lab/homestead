@@ -1,5 +1,5 @@
-/* Stats beyond the browser: MQTT publishing and power control (Settings > Connections) and the
-   long-term history card on the Dashboard. */
+/* Stats beyond the browser: MQTT publishing and power control and the alert webhook
+   (Settings > Connections), and the long-term history card on the Dashboard. */
 
 /* ---------------- MQTT ---------------- */
 async function mqttPaint() {
@@ -129,6 +129,70 @@ window.mqttControlOff = async () => {
   try { await mqttControlPost({ control: false, controlled: m.controlled || [] }); toast("Power control is off", "ok"); }
   catch (e) { toast(e.message, "bad"); }
   setTimeout(mqttPaint, 800);
+};
+
+/* ---------------- alert webhook (homestead_alert_webhook.py, #741) ----------------
+   Alerts to one webhook in Generic JSON, ntfy or Gotify, with the outage
+   webhook's Format control (webhookFormatSelect, uptime.js). Off until set. */
+const ALERT_HOOK_LEAST = [["critical", "Critical only"], ["degraded", "Warnings and critical"], ["info", "Everything, information too"]];
+
+async function alertHookPaint() {
+  const host = $("#alertHookCard");
+  if (!host) return;
+  let h;
+  try { h = await api("/api/alerts/webhook"); } catch (e) { host.innerHTML = UI.callout("bad", "Could not read the alert webhook", esc(e.message)); return; }
+  STATE.data.alertHook = h;
+  host.innerHTML = alertHookCardHtml(h);
+}
+window.alertHookPaint = alertHookPaint;
+
+function alertHookCardHtml(h, now = Date.now() / 1000) {
+  const set = !!h.webhook, last = h.last;
+  const format = (OUTAGE_FORMATS.find(([v]) => v === h.format) || OUTAGE_FORMATS[0])[1];
+  const least = (ALERT_HOOK_LEAST.find(([v]) => v === h.min_severity) || ALERT_HOOK_LEAST[1])[1];
+  const lastText = !last ? "" : last.ok ? `Last call ${esc(fmtAgo(now - last.at))}: taken`
+    : `Last call ${esc(fmtAgo(now - last.at))}: failed - ${esc(last.error || "")}`;
+  return `${UI.moduleHeader("Alert webhook", "Alerts to ntfy, Gotify or any webhook, as push sends them to devices", "")}
+    ${serviceRow(set ? "Alert webhook" : "No alert webhook", UI.chip(set ? "on" : "off", set ? "ok" : "neutral"),
+      set ? `${esc(format)} · <span class="mono">${esc(h.webhook)}</span> · ${esc(least)}${lastText ? `<br><span class="dim xs">${lastText}</span>` : ""}`
+        : "Optional: each alert once as it is raised, worsens or clears",
+      actionBar([{ label: set ? "Edit" : "Set up", run: "alertHookConfigure()", need: "admin", pri: !set }]))}`;
+}
+window.alertHookCardHtml = alertHookCardHtml;
+
+window.alertHookConfigure = () => {
+  const h = STATE.data.alertHook || {};
+  modal("Alert webhook", UI.lead("Sends each alert once as it is raised, worsens or clears, from the alerts at or above the level chosen.") +
+    UI.fields(UI.field("Format", webhookFormatSelect("ah_format", h.format)),
+      UI.field("Send", `<select id="ah_least" aria-label="Alerts to send">${ALERT_HOOK_LEAST.map(([v, label]) =>
+        `<option value="${v}"${(h.min_severity || "degraded") === v ? " selected" : ""}>${label}</option>`).join("")}</select>`)) + `
+    <div class="outage-url"><input id="ah_url" type="url" inputmode="url" placeholder="https://ntfy.example.com/homestead" value="${esc(h.webhook || "")}" aria-label="Webhook address">
+      ${UI.button("Send a test", "alertHookTest()")}</div>
+    <label class="switch"><input type="checkbox" id="ah_lan"${h.lan ? " checked" : ""}> Allow a LAN address (a self-hosted ntfy or Gotify, say)</label>
+    ${UI.more("How it is sent", `<p class="dim xs">Generic JSON carries the alert's fields and a sentence as text, content and message; ntfy gets the alert's title, priority and a tag, Gotify its title, message and priority. Once saved, the address shows only up to its host. It never reaches this host, link-local or metadata addresses, and a LAN address only when allowed here.</p>`, false)}` +
+    UI.actions(UI.cancel() + UI.button("Save", "alertHookSave()", { kind: "pri" }),
+      h.webhook ? UI.button("Turn off", "alertHookOff()", { kind: "danger" }) : ""));
+};
+
+const alertHookInit = body => ({ method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+const alertHookSend = async body => {
+  try { const r = await api("/api/alerts/webhook", alertHookInit(body)); toast(r.detail || "Saved", "ok"); closeModal(); setTimeout(alertHookPaint, 300); }
+  catch (e) { toast(e.message, "bad"); }
+};
+window.alertHookSave = () => {
+  const webhook = ($("#ah_url")?.value || "").trim();
+  if (!webhook) return toast("Type the webhook address, or Turn off", "bad");
+  return alertHookSend({ webhook, format: $("#ah_format")?.value || "generic", min_severity: $("#ah_least")?.value || "degraded",
+    lan: !!$("#ah_lan")?.checked });
+};
+window.alertHookOff = () => alertHookSend({ webhook: "" });
+window.alertHookTest = async () => {
+  const webhook = ($("#ah_url")?.value || "").trim();
+  if (!webhook) return toast("Type the webhook address first", "bad");
+  try {
+    const r = await api("/api/alerts/webhook/test", alertHookInit({ webhook, format: $("#ah_format")?.value || "generic" }));
+    toast(r.detail, r.ok ? "ok" : "bad");
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 /* ---------------- long-term history ---------------- */

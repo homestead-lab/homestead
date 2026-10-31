@@ -5,6 +5,7 @@
 // Health (#620).
 import assert from "node:assert/strict";
 import { chromium } from "playwright";
+import { openAuditPage } from "../../scripts/audit_ready.mjs";
 const base = process.env.HOMESTEAD_URL || "http://127.0.0.1:4173";
 const browser = await chromium.launch({ headless: true });
 
@@ -12,8 +13,7 @@ async function open(flag) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } }), errors = [];
   page.on("pageerror", e => errors.push(e.message));
   if (flag !== undefined) await page.addInitScript(f => { window.__demoDataCopies = f; }, flag);
-  await page.goto(`${base}/settings?demo=1`);
-  await page.waitForFunction(() => typeof settingsTab === "function" && document.querySelector("#gate")?.classList.contains("hidden"));
+  await openAuditPage(page, `${base}/settings?demo=1`);
   await page.evaluate(() => { settingsTab("about"); go("settings"); });
   const card = page.locator("#replicaCard");
   await card.getByText("Its data:").waitFor();

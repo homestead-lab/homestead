@@ -186,7 +186,11 @@ class HistoryTests(unittest.TestCase):
         import homestead_changes as CHANGES
         self.C, self.dir = CHANGES, tempfile.TemporaryDirectory()
         CHANGES.bind(self.dir.name)
-        CHANGES._notes.clear()
+        for name, value in (("_author_key", lambda: b"test-key"),
+                            ("_authors", lambda: {"users": ["admin"], "api_keys": []})):
+            patcher = mock.patch.object(CHANGES, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def tearDown(self):
         self.C.REQUEST.user = None
@@ -196,25 +200,28 @@ class HistoryTests(unittest.TestCase):
         return {"metadata": {"namespace": "lab", "name": "paperless"},
                 "spec": {"replicas": replicas, "template": {"spec": {"containers": [{"name": "app", "image": image}]}}}}
 
+    def written(self, who, now, replicas, image="app:1"):
+        """The app as stored after Homestead wrote it for who: the write carries who (#621)."""
+        self.C.REQUEST.user = who
+        patch = {"spec": {"replicas": replicas}}
+        self.C.note_write("PATCH", "/apis/apps/v1/namespaces/lab/deployments/paperless", patch, now=now)
+        stored = self.dep(replicas, image)
+        stored["metadata"]["annotations"] = patch["metadata"]["annotations"]
+        return stored
+
     def test_a_scheduled_stop_is_not_a_change_but_an_edit_still_is(self):
         C = self.C
         C.observe([self.dep(1)], now=1000)
-        C.REQUEST.user = C.BY_SCHEDULE
-        C.note_write("PATCH", "/apis/apps/v1/namespaces/lab/deployments/paperless/scale", now=1030)
-        C.observe([self.dep(0)], now=1060)
+        C.observe([self.written(C.BY_SCHEDULE, 1030, 0)], now=1060, since=1000)
         self.assertEqual([], C.history("lab", "paperless"))
-        C.REQUEST.user = "admin"
-        C.note_write("PATCH", "/apis/apps/v1/namespaces/lab/deployments/paperless", now=1090)
-        C.observe([self.dep(1, "app:2")], now=1120)
+        C.observe([self.written("admin", 1090, 1, "app:2")], now=1120, since=1060)
         rows = C.history("lab", "paperless")[0]["changes"]
         self.assertEqual({"Copies", "app: image"}, {r["field"] for r in rows}, "a person's change is recorded in full")
 
     def test_stop_and_start_from_homestead_are_homesteads(self):
         C = self.C
         C.observe([self.dep(1)], now=1000)
-        C.REQUEST.user = "admin"
-        C.note_write("PATCH", "/apis/apps/v1/namespaces/lab/deployments/paperless/scale", now=1030)
-        C.observe([self.dep(0)], now=1060)
+        C.observe([self.written("admin", 1030, 0)], now=1060, since=1000)
         entry = C.history("lab", "paperless")[0]
         self.assertEqual(("homestead", "admin"), (entry["source"], entry["by"]), "not outside Homestead")
 
@@ -240,7 +247,6 @@ class HistoryTests(unittest.TestCase):
                     C.REQUEST.user = C.BY_SCHEDULE
                     OV.schedule_act({"kind": "app", "ns": "lab", "name": "web"}, action)
                     C.REQUEST.user = None
-                    C._notes.clear()                # the leader is another copy
                     C.observe([kube.object(path)], now=time.time() + 1, since=start)
                     self.assertEqual([], C.history("lab", "web"))
 

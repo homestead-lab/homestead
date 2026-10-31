@@ -3,8 +3,8 @@ Editing a workload: what an edit would change and whether it restarts the app,
 applying it (containers, volumes, hardware, tier, seed configs), and renaming.
 
 Split by feature from homestead_lifecycle (#623), moved unchanged. Names that
-server.py binds there, or that tests replace there, are read through it (L.name);
-homestead_lifecycle re-exports everything here.
+server.py binds there are read through it (L.name), so a replacement there
+still applies; read and replace the names defined here, here.
 """
 import hashlib
 import copy
@@ -67,7 +67,7 @@ def _prepare_seed_configs(ns, dep, requested):
         return []
     allowed = {
         (x["init_container"], x["config_map"], x["key"])
-        for x in L.seed_configs(ns, dep)
+        for x in seed_configs(ns, dep)
     }
     updates = {}
     for item in requested:
@@ -181,8 +181,8 @@ def _apply_container_edit(container, change, workload_name, own_secret=""):
         if image != container.get("image"):
             # A changed image says its tag; an unchanged one is left exactly as
             # it is, so an edit elsewhere does not roll the workload.
-            import homestead_updates as UPDATES
-            container["image"] = UPDATES.with_tag(image)
+            import homestead_update_registry as REGISTRY
+            container["image"] = REGISTRY.with_tag(image)
     if "env" in change:
         # References to the workload's own Secret came to the form as plain
         # values and return in change["env"]; other references are kept.
@@ -190,9 +190,21 @@ def _apply_container_edit(container, change, workload_name, own_secret=""):
                 if item.get("valueFrom") and item.get("name")
                 and not (own_secret and ((item["valueFrom"].get("secretKeyRef") or {}).get("name") == own_secret))]
         protected = {item["name"] for item in refs}
-        literals = [{"name": str(key), "value": str(value)}
-                    for key, value in (change.get("env") or {}).items()
-                    if key not in protected]
+        # A value masked in the form (ENVSEC.MASK: shown to someone who may
+        # not see it) and sent back unchanged keeps what the Secret holds.
+        held = {item["name"]: item for item in container.get("env", []) or []
+                if own_secret and item.get("name")
+                and ((item.get("valueFrom") or {}).get("secretKeyRef") or {}).get("name") == own_secret}
+        literals = []
+        for key, value in (change.get("env") or {}).items():
+            if key in protected:
+                continue
+            if str(value) == ENVSEC.MASK:
+                if key not in held:
+                    raise ValueError(f"{container.get('name')}: {key}'s value is hidden; type it in again")
+                literals.append(copy.deepcopy(held[key]))
+            else:
+                literals.append({"name": str(key), "value": str(value)})
         env = refs + literals
         if env:
             container["env"] = env
@@ -489,6 +501,16 @@ def _apply_container_hardware(spec, dep, requested):
         annotations.pop(NAMES.key("hardware"), None)
 
 
+def apply_placement(dep, cfg):
+    """Which apps it runs beside or apart from, how its copies spread, and its
+    preferred host: one path for Edit and Deploy (#844), so both write the
+    same affinity and refuse the same rules."""
+    if "placement" in cfg:
+        AFFINITY.apply(dep, cfg.get("placement") or {})
+    if "node" in cfg:
+        PLACE.apply_node_placement(dep, cfg["node"], pin=False)
+
+
 def _pod_template(dep):
     """A Deployment's pod template without Homestead's own edit stamp: what,
     if it changes, makes Kubernetes replace the pods."""
@@ -697,9 +719,7 @@ def prepare_edit(cfg, current=None):
             ann.pop(NAMES.key("uptime"), None)
     if "placement" in cfg:
         dep["metadata"].setdefault("namespace", ns)
-        AFFINITY.apply(dep, cfg.get("placement") or {})
-    if "node" in cfg:
-        PLACE.apply_node_placement(dep, cfg["node"], pin=False)
+    apply_placement(dep, cfg)
     # Stamped only when the pods change anyway, so the stamp never causes a restart of its own.
     if _pod_template(dep) != template_before:
         dep["spec"]["template"].setdefault("metadata", {}).setdefault("annotations", {})[
@@ -725,5 +745,5 @@ def edit_workload(cfg, hold=False, prepared=None):
     return {"ok": True, "name": name, **({"held_replicas": held, "_held_receipt": saved} if hold else {})}
 
 
-# homestead_lifecycle holds the bound state and re-exports this module, so it is imported last.
+# homestead_lifecycle holds the bound state, so it is imported last.
 import homestead_lifecycle as L  # noqa: E402

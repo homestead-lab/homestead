@@ -12,8 +12,8 @@ Step 2 is the part that takes real time, so it runs as a Job we can poll.
 Split by feature (#623): importing a container lives in
 homestead_container_import, the image cache in homestead_image_cache,
 schedules in homestead_scheduled_jobs and VM disks, images and creation in
-homestead_vm_create. Every name they define is re-exported here, so other
-modules, server.py and tests that use or replace a name here keep working.
+homestead_vm_create: read and replace their names there. This module offers only
+the few the Unraid VM import reads through it (see the end of this file).
 """
 import base64
 import copy
@@ -35,12 +35,14 @@ import homestead_hvimage as HVIMAGE
 import homestead_runtime as RUNTIME
 import homestead_pod_resources as RESOURCES
 import homestead_import_job as IMPORT_JOB
+import homestead_cache as CACHE
 import homestead_operations as OPS
 import homestead_source_ssh as SOURCE_SSH
 import homestead_capacity_review as SOURCE_REVIEW
 import homestead_passthrough as PASSTHROUGH
 import homestead_vm_network as VMNETWORK
 import homestead_routes
+import homestead_value_masks as MASKS
 
 kget = ksend = create_pvc = build_deployment = None
 NS = "lab"
@@ -66,9 +68,7 @@ def bind(_kget, _ksend, _create_pvc, _build_dep, _ns, _cache_ref, _hardware_feat
 
 
 def _bust(*keys):
-    for k in list(_cache):
-        if not keys or any(k.startswith(x) for x in keys):
-            _cache.pop(k, None)
+    CACHE.drop_where(_cache, lambda k: not keys or k.startswith(keys))
 
 
 SAFE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$")
@@ -425,35 +425,16 @@ def _pod_logs(pod, ns=None):
     return raw_get(f"/api/v1/namespaces/{ns or NS}/pods/{pod}/log?tailLines=400")
 
 
-# Moved by feature (#623). Re-exported, so other modules, server.py and tests
-# that use or replace these names here keep working.
+# The parts (#623), imported last: each imports this module for what bind() sets.
+import homestead_container_import as CONTAINER_IMPORT  # noqa: E402
+import homestead_image_cache as IMAGES  # noqa: E402
+import homestead_scheduled_jobs as SCHEDULED_JOBS  # noqa: E402
+import homestead_vm_create as VM_CREATE  # noqa: E402
+# What the Unraid VM import reads through this module, which server.py hands it
+# in bind() (its tests hand in a fake). Everything else is read, and replaced in
+# tests, where it is defined.
 from homestead_vm_create import (  # noqa: E402,F401
-    VM_DISK_LABEL, _required_name, _get_or_none, vm_disk_import_plan, _http_disk_source,
-    import_vm_disk, _disk_consumers, list_vm_disks, _epoch, list_vm_images, LH_API, _items_or_empty,
-    vm_image_cache, delete_vm_image, _harvester_image, _modes_for_cdi, _vm_mac, static_network,
-    prepare_vm, _recheck_vm_creation, commit_vm, create_vm,
-)
-from homestead_scheduled_jobs import (  # noqa: E402,F401
-    CRONJOB_NAME, _job_managed, _job_managed_by, list_jobs, cronjob_alert_facts, _managed_job, save_job, del_job,
-    run_job_now,
-)
-from homestead_image_cache import (  # noqa: E402,F401
-    _canonical_image, _image_digest, _system_image, _needed_list, _group_absent,
-    image_retention_inventory, _stopped_references, _rollback_note, _unreadable, _scaled_to_zero, _dig,
-    _count, _waiting, _kept, _disk_images, _cdi_rows, _node_pull, _optional_list, _served_path,
-    _unread_message, _discovery, _imported_digests, _rows, _holds, image_cache, SCAN_TASK, SCAN_FRESH,
-    SCAN_RETRY, SCAN_STORE, _SCANS, _SCAN_FAILED, _SCAN_STARTED, _scan_lock, _scan_path,
-    _load_scans, _save_scans, _merged, tick, _scannable, _rescan_if_stale, start_image_scan,
-    _collect_scans, _scanned_images, PREPULL_NAMES, _pullable_nodes, prepull, prepull_status,
-    stop_prepull, forget_rollback, cleanup_image,
-)
-from homestead_container_import import (  # noqa: E402,F401
-    MEASURE_LINE, measure_source_paths, _deduct_nested, _ownership, _numeric, ownership_hint,
-    chown_claim, _folder_name, import_volumes, import_mappings, _excludes, _claim_capacity_gb,
-    prepare_import, commit_import, import_container, import_inventory, STEP, TOTAL, TROUBLE, RSYNC,
-    import_progress, _job_ns, import_cleanup_plan, _names, _plan_volumes, delete_import,
-    _daemonset_exists, wait_for_pods_gone, _stop_job_pods, _drop_source_copy, _drop_finished_copies,
-    _job_pod, import_status,
+    VM_DISK_LABEL, _get_or_none, _recheck_vm_creation, _required_name, commit_vm, prepare_vm, vm_disk_import_plan,
 )
 
 
@@ -471,7 +452,7 @@ def bind_routes(helpers):
 
 def _prepull(request):
     b = request.body
-    result = prepull(b["image"], b.get("nodes"))
+    result = IMAGES.prepull(b["image"], b.get("nodes"))
     result["operation"] = OPS.start(
         "image-pull", f"Pull {b['image']}",
         {"kind": "Image", "name": b["image"], "namespace": NS},
@@ -481,7 +462,7 @@ def _prepull(request):
 
 def _cleanup_image(request):
     b = request.body
-    result = cleanup_image(b.get("digest"), b.get("nodes"))
+    result = IMAGES.cleanup_image(b.get("digest"), b.get("nodes"))
     result["operation"] = OPS.start(
         "image-cleanup", f"Clean cached image {result['digest'][:19]}…",
         {"kind": "Image", "name": result["image"], "namespace": NS},
@@ -492,13 +473,13 @@ def _cleanup_image(request):
 def _delete_vm_image(request):
     homestead_routes.forget("vmimages")
     b = request.body
-    return delete_vm_image(b.get("namespace", ""), b.get("name", ""), b.get("confirm", ""))
+    return VM_CREATE.delete_vm_image(b.get("namespace", ""), b.get("name", ""), b.get("confirm", ""))
 
 
 def _delete_import(request):
     """An import's record, and what it made that the request also names."""
     b = request.body
-    plan = import_cleanup_plan(b.get("name"), b.get("namespace"))
+    plan = CONTAINER_IMPORT.import_cleanup_plan(b.get("name"), b.get("namespace"))
     if plan.get("journalled") and any(b.get(key) for key in ("remove_workload", "remove_volume", "remove_volumes")):
         raise ValueError("This import retains workloads and volumes. Manage them separately after inspecting the copy.")
     made = {row["name"] for row in plan["volumes"] if row["created"]}
@@ -513,7 +494,7 @@ def _delete_import(request):
                          "without creating it, so it will not delete it")
     if b.get("remove_workload") and plan["workload"]:
         guard_managed_smb(plan["namespace"], plan["workload"])
-    result = delete_import(b.get("name"), b.get("namespace"))
+    result = CONTAINER_IMPORT.delete_import(b.get("name"), b.get("namespace"))
     if result.get("journalled"):
         return {**result, "removed": [], "releasing": []}
     removed = []
@@ -530,7 +511,7 @@ def _delete_import(request):
         # Its pod holds the same claims the caller may be deleting
         # next, so wait for it to go rather than leaving them
         # Terminating behind the pvc-protection finaliser.
-        wait_for_pods_gone(ns, f"app={name}")
+        CONTAINER_IMPORT.wait_for_pods_gone(ns, f"app={name}")
         homestead_routes.forget("wl", "ov", "network")
     for claim in wanted:
         ksend("DELETE", f"/api/v1/namespaces/{plan['namespace']}/"
@@ -560,12 +541,12 @@ def _delete_import(request):
 
 # Its routes and who may use them (homestead_routes.py).
 def _schedule_saved(request):
-    save_job(request.body)
+    SCHEDULED_JOBS.save_job(request.body)
     return {"ok": True}
 
 
 def _schedule_run(request):
-    run_job_now(request.body["name"])
+    SCHEDULED_JOBS.run_job_now(request.body["name"])
     return {"ok": True}
 
 
@@ -575,35 +556,38 @@ ROUTES = {
     ("POST", "/api/images/prepull"): ("operator", _prepull),
     ("POST", "/api/images/cleanup"): ("admin", _cleanup_image),
     ("POST", "/api/images/vm/delete"): ("admin", _delete_vm_image),
-    ("POST", "/api/images/forget-rollback"): ("admin", lambda request: forget_rollback(
+    ("POST", "/api/images/forget-rollback"): ("admin", lambda request: IMAGES.forget_rollback(
         request.body.get("namespace") or NS, request.body.get("name", ""))),
     ("POST", "/api/imports/delete"): ("admin", _delete_import),
     ("POST", "/api/import/preview"): ("admin", lambda request: preview_import(request.body)),
     ("POST", "/api/import"): ("admin", lambda request: reviewed_import(request.body)),
-    ("GET", "/api/vm-disks"): ("viewer", lambda request: list_vm_disks()),
+    # A disk's or image's address can carry its login: stripped below reveal.
+    ("GET", "/api/vm-disks"): ("viewer", lambda request: MASKS.for_role(request.role, VM_CREATE.list_vm_disks())),
     ("GET", "/api/sources"): ("admin", lambda request: list_sources()),
-    ("GET", "/api/imports"): ("viewer", lambda request: import_status()),
-    ("POST", "/api/imports/cleanup-plan"): ("admin", lambda request: import_cleanup_plan(request.body.get("name"), request.body.get("namespace"))),
-    ("POST", "/api/images/prepull/stop"): ("operator", lambda request: stop_prepull(request.body.get("name"))),
-    ("POST", "/api/images/scan"): ("admin", lambda request: start_image_scan()),
-    ("POST", "/api/schedules/delete"): ("operator", lambda request: del_job(request.body["name"])),
+    ("GET", "/api/imports"): ("viewer", lambda request: CONTAINER_IMPORT.import_status()),
+    ("POST", "/api/imports/cleanup-plan"): ("admin", lambda request: CONTAINER_IMPORT.import_cleanup_plan(request.body.get("name"), request.body.get("namespace"))),
+    ("POST", "/api/images/prepull/stop"): ("operator", lambda request: IMAGES.stop_prepull(request.body.get("name"))),
+    ("POST", "/api/images/scan"): ("admin", lambda request: IMAGES.start_image_scan()),
+    ("POST", "/api/schedules/delete"): ("operator", lambda request: SCHEDULED_JOBS.del_job(request.body["name"])),
     ("POST", "/api/sources/scan"): ("admin", lambda request: scan_source(request.body.get("name"), request.user)),
     ("POST", "/api/sources/trust"): ("admin", lambda request: trust_source(request.body, request.user)),
     ("POST", "/api/sources/inspect"): ("admin", lambda request: inspect_source_container(request.body["name"], request.body["container"])),
-    ("GET", "/api/images/vm"): ("viewer", lambda request: homestead_routes.cached("vmimages", 15, vm_image_cache)),
-    ("GET", "/api/vmimages"): ("viewer", lambda request: homestead_routes.cached("vmimg", 30, list_vm_images)),
-    ("GET", "/api/images"): ("viewer", lambda request: homestead_routes.cached("imgcache", 30, image_cache)),
-    ("GET", "/api/schedules"): ("viewer", lambda request: homestead_routes.cached("cron", 8, list_jobs)),
-    ("POST", "/api/sources/measure"): ("admin", lambda request: measure_source_paths(request.body.get("name"), request.body.get("paths") or [], request.body.get("seconds", 25))),
+    ("GET", "/api/images/vm"): ("viewer", lambda request: MASKS.for_role(
+        request.role, homestead_routes.cached("vmimages", 15, VM_CREATE.vm_image_cache))),
+    ("GET", "/api/vmimages"): ("viewer", lambda request: MASKS.for_role(
+        request.role, homestead_routes.cached("vmimg", 30, VM_CREATE.list_vm_images))),
+    ("GET", "/api/images"): ("viewer", lambda request: homestead_routes.cached("imgcache", 30, IMAGES.image_cache)),
+    ("GET", "/api/schedules"): ("viewer", lambda request: homestead_routes.cached("cron", 8, SCHEDULED_JOBS.list_jobs)),
+    ("POST", "/api/sources/measure"): ("admin", lambda request: CONTAINER_IMPORT.measure_source_paths(request.body.get("name"), request.body.get("paths") or [], request.body.get("seconds", 25))),
     ("POST", "/api/sources"): ("admin", lambda request: {"ok": True, "sources": add_source(request.body["name"], request.body["host"], request.body["user"], request.body.get("password"), request.body.get("kind", "unraid"), request.body.get("base_path", "/mnt/user/appdata"), request.body.get("port", 22))}),
     ("POST", "/api/sources/delete"): ("admin", lambda request: {"ok": True, "sources": del_source(request.body["name"])}),
     ("POST", "/api/sources/browse"): ("admin", lambda request: {"entries": browse_source(request.body["name"], request.body.get("path"))}),
     ("POST", "/api/sources/containers"): ("admin", lambda request: {"containers": source_containers(request.body["name"])}),
-    ("GET", "/api/volumes/ownership"): ("viewer", lambda request: ownership_hint(
+    ("GET", "/api/volumes/ownership"): ("viewer", lambda request: CONTAINER_IMPORT.ownership_hint(
         (request.query.get("namespace") or [NS])[0], (request.query.get("name") or [""])[0])),
-    ("GET", "/api/vm-disks/import-plan"): ("viewer", lambda request: vm_disk_import_plan(
+    ("GET", "/api/vm-disks/import-plan"): ("viewer", lambda request: VM_CREATE.vm_disk_import_plan(
         (request.query.get("ns") or [NS])[0], (request.query.get("name") or [""])[0])),
-    ("POST", "/api/volumes/chown"): ("admin", lambda request: chown_claim(
+    ("POST", "/api/volumes/chown"): ("admin", lambda request: CONTAINER_IMPORT.chown_claim(
         request.body.get("namespace") or NS, request.body.get("name"), request.body.get("uid"), request.body.get("gid"))),
-    ("POST", "/api/vm-disks/import"): ("admin", lambda request: import_vm_disk(request.body, ops=OPS)),
+    ("POST", "/api/vm-disks/import"): ("admin", lambda request: VM_CREATE.import_vm_disk(request.body, ops=OPS)),
 }

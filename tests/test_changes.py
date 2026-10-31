@@ -26,7 +26,6 @@ class Base(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(CH.bind, CH.DATA_DIR)  # leave the history where it was found
         CH.bind(self.dir.name)
-        CH._notes.clear()
 
     def tearDown(self):
         self.dir.cleanup()
@@ -61,10 +60,13 @@ class ObserveTests(Base):
 
     def test_a_change_through_homestead_is_attributed_to_the_person(self):
         CH.observe([dep()], now=1000)
-        CH.REQUEST.user = "james"
-        CH.note_write("PUT", "/apis/apps/v1/namespaces/lab/deployments/sonarr", now=1030)
-        CH.REQUEST.user = None
-        CH.observe([dep(image="example/sonarr:4.1", memory="1Gi")], now=1060, since=1000)
+        written = dep(image="example/sonarr:4.1", memory="1Gi")
+        with mock.patch.object(CH, "_author_key", lambda: b"test-key"), \
+                mock.patch.object(CH, "_authors", lambda: {"users": ["james"], "api_keys": []}):
+            CH.REQUEST.user = "james"
+            CH.note_write("PUT", "/apis/apps/v1/namespaces/lab/deployments/sonarr", written, now=1030)
+            CH.REQUEST.user = None
+            CH.observe([written], now=1060, since=1000)    # the write itself says who
         entry = CH.history("lab", "sonarr")[0]
         self.assertEqual(("homestead", "james"), (entry["source"], entry["by"]))
         self.assertEqual({"app: image", "app: memory reserved"}, {r["field"] for r in entry["changes"]})
@@ -148,14 +150,20 @@ class RouteTests(Base):
             with self.assertRaisesRegex(ValueError, "sonarr-config, which no longer exists"):
                 server.OVERVIEW_ROUTES.change_undo_plan({"ns": "lab", "name": "sonarr", "id": entry_id})
 
-    def test_writes_to_deployments_are_noted_with_the_requester(self):
-        CH.REQUEST.user = "james"
-        CH.note_write("PATCH", "/apis/apps/v1/namespaces/lab/deployments/sonarr", now=500)
-        CH.note_write("GET", "/apis/apps/v1/namespaces/lab/deployments/sonarr", now=501)
-        CH.note_write("PUT", "/api/v1/namespaces/lab/configmaps/x", now=502)
-        CH.REQUEST.user = None
-        CH.note_write("POST", "/apis/apps/v1/namespaces/lab/deployments", {"metadata": {"name": "new"}}, now=503)
-        self.assertEqual([(500, "lab", "sonarr", "james"), (503, "lab", "new", "")], CH._notes)
+    def test_writes_to_deployments_carry_the_requester(self):
+        self.addCleanup(setattr, CH.REQUEST, "user", None)
+        written = {"patch": {}, "get": {}, "configmap": {}, "post": {"metadata": {"name": "new"}}}
+        with mock.patch.object(CH, "_author_key", lambda: b"test-key"), \
+                mock.patch.object(CH, "_authors", lambda: {"users": ["james"], "api_keys": []}):
+            CH.REQUEST.user = "james"
+            CH.note_write("PATCH", "/apis/apps/v1/namespaces/lab/deployments/sonarr", written["patch"], now=500)
+            CH.note_write("GET", "/apis/apps/v1/namespaces/lab/deployments/sonarr", written["get"], now=501)
+            CH.note_write("PUT", "/api/v1/namespaces/lab/configmaps/x", written["configmap"], now=502)
+            CH.REQUEST.user = None
+            CH.note_write("POST", "/apis/apps/v1/namespaces/lab/deployments", written["post"], now=503)
+            self.assertEqual("james", CH._marked_by(written["patch"], "lab", "sonarr", 500, 560))
+            self.assertEqual("", CH._marked_by(written["post"], "lab", "new", 503, 560), "a job of Homestead's own")
+        self.assertEqual(({}, {}), (written["get"], written["configmap"]), "a read, or another object, is not marked")
 
 
 

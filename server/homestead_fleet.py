@@ -18,6 +18,7 @@ used for that one sign-in and not kept. Unlinking a member changes the key,
 so the one that left can no longer speak for the rest.
 """
 import base64
+import copy
 import hashlib
 import hmac
 import json
@@ -122,37 +123,129 @@ def _read():
         if error.code != 404:
             raise
         state = {}
-    try:
-        secret = kget(f"/api/v1/namespaces/{NS}/secrets/{SECRET}")
-        key = base64.b64decode((secret.get("data") or {}).get("key", "") or "")
-    except urllib.error.HTTPError as error:
-        if error.code != 404:
-            raise
-        key = b""
+    key, _ = _read_key()
     return (state if isinstance(state, dict) else {}), key
 
 
-def _put(path, collection, body):
+def _read_key():
+    """The clusters' key as stored, and the Secret it was read from (None when there is none)."""
     try:
-        kget(path)
-        ksend("PUT", path, body)
+        secret = kget(f"/api/v1/namespaces/{NS}/secrets/{SECRET}")
     except urllib.error.HTTPError as error:
         if error.code != 404:
             raise
-        ksend("POST", collection, body)
+        error.close()
+        return b"", None
+    return base64.b64decode((secret.get("data") or {}).get("key", "") or ""), secret
 
 
-def _write(state, key=None):
-    _put(f"/api/v1/namespaces/{NS}/configmaps/{CONFIG}", f"/api/v1/namespaces/{NS}/configmaps",
-         {"apiVersion": "v1", "kind": "ConfigMap",
-          "metadata": {"name": CONFIG, "namespace": NS, "labels": {NAMES.key("managed"): "true"}},
-          "data": {"fleet.json": json.dumps(state, indent=2)}})
-    if key is not None:
-        _put(f"/api/v1/namespaces/{NS}/secrets/{SECRET}", f"/api/v1/namespaces/{NS}/secrets",
-             {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
-              "metadata": {"name": SECRET, "namespace": NS},
-              "data": {"key": base64.b64encode(key).decode()}})
-    _cache.update(at=time.time(), state=state, key=key if key is not None else _cache["key"])
+# In fleet.json: which key the list was saved with, so a key write that comes
+# late cannot put an older list's key beside a newer list.
+KEY_ID = "keyId"
+
+
+def _key_id(key):
+    """Names a key without giving it away."""
+    return hmac.new(key, b"homestead-fleet-key-id", hashlib.sha256).hexdigest()[:16]
+
+
+class _Unchanged(Exception):
+    """The change has nothing to save."""
+
+
+def _change(fn):
+    """Change the links on what is stored when they are saved (#621).
+
+    fn(state, key) gets the list and key as stored now and returns the
+    (state, key) to save - key None keeps the stored one - or None when there
+    is nothing to save. The list is written with the version read, so a change
+    another copy of Homestead saved meanwhile makes this one read again and
+    call fn again on that. A list or key that cannot be read stops the change:
+    nothing is ever saved over them. A new key is written after the list,
+    and only while the list stored is still the one saved with it.
+    Returns the (state, key) stored."""
+    import homestead_kube as KUBE
+    with _lock:
+        made = {}
+
+        def apply(stored):
+            if stored is not None and not isinstance(stored, dict):
+                raise ValueError("the linked clusters' list is not a JSON object; nothing was changed")
+            state = stored or {}
+            key, _ = _read_key()
+            result = fn(copy.deepcopy(state), key)
+            if result is None:
+                made.update(state=state, key=key, new=None)
+                raise _Unchanged
+            new_state, new_key = result
+            new_state = {k: v for k, v in new_state.items() if k != KEY_ID}
+            mark = _key_id(new_key) if new_key is not None else state.get(KEY_ID)
+            if mark:
+                new_state[KEY_ID] = mark
+            made.update(state=new_state, key=key if new_key is None else new_key, new=new_key)
+            return new_state
+        try:
+            try:
+                KUBE.update_json(f"/api/v1/namespaces/{NS}/configmaps/{CONFIG}", "fleet.json", apply,
+                                 read=kget, write=ksend, indent=2)
+            except _Unchanged:
+                pass
+            if made["new"] is not None and not _store_key(made["new"]):
+                # A list saved since with another key won: this copy uses those.
+                made["state"], made["key"] = _read()
+        except BaseException:
+            _cache.update(at=0.0)       # whatever was saved, the next look reads it
+            raise
+        _cache.update(at=time.time(), state=made["state"], key=made["key"])
+        return made["state"], made["key"]
+
+
+def _store_key(key, attempts=4):
+    """Write the key a list was just saved with. The Secret is written with the
+    version read; a list saved since with another key wins, and its own
+    writer stores that key."""
+    path = f"/api/v1/namespaces/{NS}/secrets/{SECRET}"
+    encoded = base64.b64encode(key).decode()
+    for _ in range(attempts):
+        stored_key, current = _read_key()
+        try:
+            listed = json.loads((kget(f"/api/v1/namespaces/{NS}/configmaps/{CONFIG}").get("data") or {})
+                                .get("fleet.json") or "{}")
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise
+            error.close()
+            listed = {}
+        except ValueError:
+            listed = None               # not a list this copy saved
+        # The list was just saved naming this key. Any other list now - one
+        # with another key, one an older Homestead saved with none, or none
+        # at all - has its own writer, whose key this must not replace.
+        if not isinstance(listed, dict) or listed.get(KEY_ID) != _key_id(key):
+            return False
+        if current is not None and stored_key == key:
+            return True
+        try:
+            if current is None:
+                ksend("POST", path.rsplit("/", 1)[0], {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+                                                     "metadata": {"name": SECRET, "namespace": NS},
+                                                     "data": {"key": encoded}})
+            else:
+                ksend("PUT", path, dict(current, data={**(current.get("data") or {}), "key": encoded}))
+            return True
+        except urllib.error.HTTPError as error:
+            # 409: written or created meanwhile; 404 on the update: deleted meanwhile.
+            if error.code != 409 and not (error.code == 404 and current is not None):
+                raise
+            error.close()
+    raise RuntimeError("the linked clusters' key kept changing while it was being saved; try again")
+
+
+def _settled(state):
+    """The list a change is made on has this Homestead's own id."""
+    if not state.get("self"):
+        raise ValueError("the linked clusters' list was removed meanwhile; nothing was changed, try again")
+    return state
 
 
 def _load(fresh=False):
@@ -181,10 +274,10 @@ def _self_record(state=None, url=None):
 
 
 def _ensure():
-    """The links as stored, created alone on first use: an id and a key."""
-    with _lock:
-        state, key = _load(fresh=True)
-        changed = False
+    """The links as stored, created alone on first use: an id and a key.
+    Only when they are not there: a list or key that cannot be read stops it."""
+    def fn(state, key):
+        changed, new_key = False, None
         if not state.get("self"):
             state = {"self": secrets.token_hex(6), "revision": 1, "updated": time.time(), "members": []}
             changed = True
@@ -192,11 +285,10 @@ def _ensure():
             state.setdefault("members", []).insert(0, _self_record(state))
             changed = True
         if not key:
-            key = secrets.token_bytes(32)
+            new_key = secrets.token_bytes(32)
             changed = True
-        if changed:
-            _write(state, key)
-        return state, key
+        return (state, new_key) if changed else None
+    return _change(fn)
 
 
 def self_id():
@@ -271,9 +363,12 @@ def _digest(sender, stamp, nonce, method, target, user, role, body):
                       hashlib.sha256(body or b"").hexdigest()]).encode()
 
 
-def sign(method, target, body=b"", user="", role="admin"):
-    """Headers that let another member know this request is from here, for whom."""
-    state, key = _load()
+def sign(method, target, body=b"", user="", role="admin", key=None):
+    """Headers that let another member know this request is from here, for whom.
+    key: sign with this one, not the one stored - the key the members still
+    hold while a new one is on its way to them."""
+    state, stored = _load()
+    key = key or stored
     if not key or not state.get("self"):
         return {}
     stamp, nonce = str(int(time.time())), secrets.token_hex(12)
@@ -411,14 +506,14 @@ def _json(url, method, path, body=None, token="", headers=None, timeout=TIMEOUT)
         raise Unreachable(f"no answer from {url}: {str(error)[:120]}") from error
 
 
-def call(ref, method, path, body=None, timeout=TIMEOUT, user="", role="admin"):
+def call(ref, method, path, body=None, timeout=TIMEOUT, user="", role="admin", signing_key=None):
     """Ask another member, signed. Returns its JSON answer."""
     target = member(ref) if isinstance(ref, str) else ref
     if not target:
         raise ValueError(f"no linked cluster called {ref}")
     data = json.dumps(body).encode() if body is not None else b""
     full = urllib.parse.urlparse(target["url"].rstrip("/") + path)
-    signature = sign(method, full.path + (f"?{full.query}" if full.query else ""), data, user, role)
+    signature = sign(method, full.path + (f"?{full.query}" if full.query else ""), data, user, role, key=signing_key)
     try:
         payload, _ = _json(target["url"], method, path, body, headers=signature, timeout=timeout)
     except ValueError as error:
@@ -478,12 +573,14 @@ def follow_address(previous=()):
     state, _ = _load()
     mine = next((m for m in state.get("members", []) if m.get("id") == state.get("self")), None)
     now = _address()
-    if not mine or not now or mine.get("url") == now:
+    given = set(_earlier() or ()) | set(previous)
+
+    def movable(mine):
+        return bool(mine and now and mine.get("url") != now and (not mine.get("url") or mine["url"] in given))
+    if not movable(mine):
         return ""
-    if mine.get("url") and mine["url"] not in set(_earlier() or ()) | set(previous):
-        return ""
-    set_address(now)
-    return now
+    # Checked again on the list as saved: an address typed meanwhile on another copy stays.
+    return now if set_address(now, only_if=movable).get("saved", True) else ""
 
 
 def summary(via=None):
@@ -535,27 +632,36 @@ def adopt(incoming, sender=None):
     The newer list wins. A list without this Homestead in it means it was
     unlinked: it goes back to standing alone, with a key of its own.
     """
-    with _lock:
-        state, key = _ensure()
-        revision = int(incoming.get("revision") or 0)
+    revision = int(incoming.get("revision") or 0)
+    rows = _plain_handles([m for m in incoming.get("members") or [] if isinstance(m, dict) and m.get("id")])
+    outcome = {}
+
+    def fn(state, key):
+        _settled(state)
         ours = int(state.get("revision") or 0)
-        rows = _plain_handles([m for m in incoming.get("members") or [] if isinstance(m, dict) and m.get("id")])
         if revision < ours or (revision == ours and rows == state.get("members")):
-            return {"changed": False, "revision": ours}
+            outcome.clear()
+            outcome.update(changed=False, revision=ours)
+            return None
         if not any(m["id"] == state["self"] for m in rows):
-            mine = _self_record(state)
-            fresh = {"self": state["self"], "revision": revision + 1, "updated": time.time(), "members": [mine]}
-            _write(fresh, secrets.token_bytes(32))
+            fresh = {"self": state["self"], "revision": revision + 1, "updated": time.time(),
+                     "members": [_self_record(state)]}
+            outcome.clear()
+            outcome.update(changed=True, left=True, revision=fresh["revision"])
+            return fresh, secrets.token_bytes(32)
+        outcome.clear()
+        outcome.update(changed=True, revision=revision)
+        return {"self": state["self"], "revision": revision, "updated": incoming.get("updated") or time.time(),
+                "members": rows}, (base64.b64decode(incoming["key"]) if incoming.get("key") else None)
+    with _lock:
+        _ensure()
+        _change(fn)
+        if outcome.get("left"):
             _status.clear()
-            return {"changed": True, "left": True, "revision": fresh["revision"]}
-        state = {"self": state["self"], "revision": revision, "updated": incoming.get("updated") or time.time(),
-                 "members": rows}
-        new_key = incoming.get("key")
-        _write(state, base64.b64decode(new_key) if new_key else None)
-        return {"changed": True, "revision": revision}
+        return dict(outcome)
 
 
-def _broadcast(state, skip=(), key=None):
+def _broadcast(state, skip=(), key=None, signing_key=None):
     """Tell every other member about a change. Returns who could not be told."""
     payload = {"revision": state["revision"], "updated": state["updated"], "members": state["members"]}
     if key:
@@ -565,7 +671,7 @@ def _broadcast(state, skip=(), key=None):
         if m["id"] == state["self"] or m["id"] in skip:
             continue
         try:
-            call(m, "POST", "/api/fleet/sync", payload, timeout=8)
+            call(m, "POST", "/api/fleet/sync", payload, timeout=8, signing_key=signing_key)
         except Exception as error:
             missed.append(f"{m.get('name')}: {str(error)[:160]}")
     return missed
@@ -639,15 +745,40 @@ def join(url, username, password, own_url="", plain_ok=False):
             raise ValueError("that Homestead did not say who it is")
         record = _plain_handles([{k: record.get(k, "") for k in ("id", "handle", "name", "added")}])[0]
         record["url"] = url
-        state = {"self": state["self"], "revision": revision, "updated": time.time(), "members": rows + [record]}
-        _write(state)
+        sent = rows + [record]
+
+        def fn(state, _key):
+            # Made on the list stored now: a change another copy saved while
+            # the other Homestead was asked stays, under a newer revision.
+            _settled(state)
+            now = [dict(m, url=own) if m["id"] == state["self"] else m
+                   for m in state.get("members", []) if m["id"] != record["id"]]
+            return {"self": state["self"], "revision": max(int(state.get("revision") or 0) + 1, revision),
+                    "updated": time.time(), "members": now + [record]}, None
+        state, _ = _change(fn)
     _status.pop(record["id"], None)
-    missed = _broadcast(state, skip=(record["id"],))
+    # The new member already has the list it was sent - unless another copy
+    # changed the list meanwhile: then it hears the list as saved too.
+    fresh = state["revision"] == revision and state["members"] == sent
+    missed = _broadcast(state, skip=(record["id"],) if fresh else ())
     return {"ok": True, "member": record, "missed": missed}
 
 
 def accept(body):
     """Be linked by another Homestead: take its key and its members."""
+    taken = {}
+
+    def fn(state, _key):
+        # Checked again on the list stored now: a link saved meanwhile by
+        # another copy is refused the same way.
+        _settled(state)
+        if len(state.get("members", [])) > 1:
+            raise ValueError("this Homestead is already linked; unlink it first")
+        mine = _self_record(state, url=url)
+        mine["handle"] = handle(mine["name"], {m.get("handle") for m in rows})
+        taken["mine"] = mine
+        return {"self": state["self"], "revision": int(body.get("revision") or 1), "updated": time.time(),
+                "members": rows + [mine]}, base64.b64decode(body["key"])
     with _lock:
         state, _ = _ensure()
         if len(state.get("members", [])) > 1:
@@ -655,13 +786,10 @@ def accept(body):
         rows = _plain_handles([m for m in body.get("members") or [] if isinstance(m, dict) and m.get("id")])
         if not rows or not body.get("key"):
             raise ValueError("nothing to link to")
-        mine = _self_record(state, url=_clean_url(body.get("url") or ""))
-        mine["handle"] = handle(mine["name"], {m.get("handle") for m in rows})
-        state = {"self": state["self"], "revision": int(body.get("revision") or 1), "updated": time.time(),
-                 "members": rows + [mine]}
-        _write(state, base64.b64decode(body["key"]))
+        url = _clean_url(body.get("url") or "")
+        _change(fn)
         _status.clear()
-        return mine
+        return taken["mine"]
 
 
 def remove(ref, plain_ok=False):
@@ -682,10 +810,22 @@ def remove(ref, plain_ok=False):
         told = True
     except Exception:
         told = False
-    fresh = secrets.token_bytes(32)
-    missed = _broadcast(state, key=fresh)
-    with _lock:
-        _write(state, fresh)
+    fresh, told_revision, held = secrets.token_bytes(32), state["revision"], {}
+
+    def fn(state, key):
+        # On the list stored now: a change another copy saved meanwhile stays,
+        # and the new key goes to exactly the members of the list saved.
+        _settled(state)
+        rows = [m for m in state.get("members", []) if m["id"] != target["id"]]
+        _refuse_plain([m for m in rows if m["id"] != state["self"]], "the clusters' new key", plain_ok)
+        held["key"] = key
+        return {"self": state["self"], "revision": max(int(state.get("revision") or 0) + 1, told_revision),
+                "updated": time.time(), "members": rows}, fresh
+    saved, in_force = _change(fn)
+    # Saved first, then sent, signed with the key the members still hold: the
+    # key never reaches a member another copy unlinked meanwhile. When a list
+    # saved since with another key won, that list's own writer sends its key.
+    missed = _broadcast(saved, key=fresh, signing_key=held["key"]) if in_force == fresh else []
     _status.pop(target["id"], None)
     forget_answers(target["id"])
     return {"ok": True, "told": told, "missed": missed}
@@ -698,43 +838,80 @@ def leave(plain_ok=False):
     if not rows:
         return {"ok": True, "missed": []}
     _refuse_plain(rows, "the clusters' new key", plain_ok)
-    revision = int(state.get("revision") or 0) + 1
-    # The rest get a key this one forgets, so it cannot speak for them after.
-    missed = _broadcast({"self": state["self"], "revision": revision, "updated": time.time(), "members": rows},
-                        key=secrets.token_bytes(32))
-    with _lock:
-        _write({"self": state["self"], "revision": revision + 1, "updated": time.time(),
-                "members": [_self_record(state)]}, secrets.token_bytes(32))
+    rest = {}
+
+    def fn(state, key):
+        # The rest are the members of the list as saved: one another copy
+        # unlinked meanwhile is not sent their new key.
+        _settled(state)
+        others = [m for m in state.get("members", []) if m["id"] != state["self"]]
+        _refuse_plain(others, "the clusters' new key", plain_ok)
+        revision = int(state.get("revision") or 0) + 1
+        rest.update(held=key, group={"self": state["self"], "revision": revision, "updated": time.time(),
+                                     "members": others})
+        return {"self": state["self"], "revision": revision + 1, "updated": time.time(),
+                "members": [_self_record(state)]}, secrets.token_bytes(32)
+    _change(fn)
+    # The rest get a key this one forgets, so it cannot speak for them after;
+    # signed with the key they still hold, as this one now has its own.
+    missed = _broadcast(rest["group"], key=secrets.token_bytes(32), signing_key=rest["held"]) \
+        if rest["group"]["members"] else []
     _status.clear()
     forget_answers()
     return {"ok": True, "missed": missed}
 
 
-def set_address(url):
-    """Where the other members reach this Homestead."""
+def set_address(url, only_if=None):
+    """Where the other members reach this Homestead. only_if(record) is checked
+    on this Homestead's record as stored when it is saved; when it says no,
+    nothing is saved or told and the answer says "saved": False."""
     url = _clean_url(url)
+    saved = []
+
+    def fn(state, _key):
+        _settled(state)
+        saved.clear()
+        if only_if is not None and not only_if(next((m for m in state.get("members", [])
+                                                      if m.get("id") == state["self"]), None)):
+            return None
+        saved.append(1)
+        rows = [dict(m, url=url) if m["id"] == state["self"] else m for m in state.get("members", [])]
+        return {"self": state["self"], "revision": int(state.get("revision") or 0) + 1,
+                "updated": time.time(), "members": rows}, None
     with _lock:
-        state, _ = _ensure()
-        rows = [dict(m, url=url) if m["id"] == state["self"] else m for m in state["members"]]
-        state = {"self": state["self"], "revision": int(state.get("revision") or 0) + 1,
-                 "updated": time.time(), "members": rows}
-        _write(state)
+        _ensure()
+        state, _ = _change(fn)
+    if not saved:
+        return {"ok": True, "missed": [], "saved": False}
     return {"ok": True, "missed": _broadcast(state)}
+
+
+def _renamed(state, name):
+    """This Homestead's record, when the other members still have another name for it."""
+    mine = next((m for m in state.get("members", []) if m.get("id") == state.get("self")), None)
+    if not mine or not name or mine.get("name") == name or len(state.get("members", [])) < 2:
+        return None
+    return mine
 
 
 def refresh_name():
     """Carry a renamed site to the other members, so the switch says it."""
-    state, _ = _load()
-    mine = next((m for m in state.get("members", []) if m.get("id") == state.get("self")), None)
     name = str(_site() or "").strip()
-    if not mine or not name or mine.get("name") == name or len(state["members"]) < 2:
+    if not _renamed(_load()[0], name):
         return
-    with _lock:
+    renamed = []
+
+    def fn(state, _key):
+        renamed.clear()
+        if not _renamed(state, name):
+            return None
+        renamed.append(1)
         rows = [dict(m, name=name) if m["id"] == state["self"] else m for m in state["members"]]
-        state = {"self": state["self"], "revision": int(state.get("revision") or 0) + 1,
-                 "updated": time.time(), "members": rows}
-        _write(state)
-    _broadcast(state)
+        return {"self": state["self"], "revision": int(state.get("revision") or 0) + 1,
+                "updated": time.time(), "members": rows}, None
+    state, _ = _change(fn)
+    if renamed:
+        _broadcast(state)
 
 
 # ------------------------------------------------------------------ relaying

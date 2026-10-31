@@ -62,7 +62,7 @@ def install_kinds(root=ROOT):
     found = {}
     for pattern in INSTALL_FILES:
         for path in sorted(root.glob(pattern)):
-            for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for number, line in enumerate(SS.text(path).splitlines(), 1):
                 match = re.match(r"kind: ([A-Za-z0-9]+)\s*$", line)
                 if match:
                     found.setdefault(match.group(1), []).append(f"{path.relative_to(root)}:{number}")
@@ -75,7 +75,7 @@ def install_names(root=ROOT):
     found = {}
     for pattern in INSTALL_FILES[:2]:
         for path in sorted(root.glob(pattern)):
-            lines = path.read_text(encoding="utf-8").splitlines()
+            lines = SS.text(path).splitlines()
             for number, line in enumerate(lines, 1):
                 if line.rstrip() != "metadata:":
                     continue
@@ -189,7 +189,7 @@ def made_kinds(root=ROOT):
 
 def unlisted(root=ROOT):
     """The kinds Homestead makes that the page does not name in backticks."""
-    page = (root / PAGE.relative_to(ROOT)).read_text(encoding="utf-8")
+    page = SS.text(root / PAGE.relative_to(ROOT))
     return {kind: where for kind, where in made_kinds(root).items() if f"`{kind}`" not in page}
 
 
@@ -212,7 +212,7 @@ class WhatHomesteadChanges(unittest.TestCase):
         found = install_names()
         for name in ("homestead", "homestead-data", "homestead-console", "homestead-nodeprobe"):
             self.assertIn(name, found, "the name scan found nothing it should")
-        page = PAGE.read_text(encoding="utf-8")
+        page = SS.text(PAGE)
         missing = {name: where for name, where in found.items() if f"`{name}`" not in page}
         self.assertEqual(missing, {}, "Name these installed objects on the page, in backticks:\n" + "\n".join(
             f"  {name}: {', '.join(where[:3])}" for name, where in sorted(missing.items())))
@@ -220,13 +220,31 @@ class WhatHomesteadChanges(unittest.TestCase):
     def test_the_sidebar_and_install_pages_link_to_it(self):
         for name in LINKED_FROM:
             with self.subTest(page=name):
-                self.assertTrue(LINK.search((WIKI / name).read_text(encoding="utf-8")),
+                self.assertTrue(LINK.search(SS.text(WIKI / name)),
                                 f"{name} has no link to What-Homestead-changes")
 
     def test_the_kinds_the_scan_cannot_see_are_on_the_page(self):
-        page = PAGE.read_text(encoding="utf-8")
+        page = SS.text(PAGE)
         missing = sorted(kind for kind in HAND_LISTED if f"`{kind}`" not in page)
         self.assertEqual(missing, [], "Name these hand-listed kinds on the page: " + ", ".join(missing))
+
+    def test_the_marks_a_restore_into_an_app_leaves_are_on_the_page(self):
+        # Restore into an app (#743) marks the claims it moves an app between,
+        # and swaps back or deletes on its own (#935): every key it writes,
+        # and the default time a previous volume is kept, must be on the page.
+        source = (ROOT / "server" / "homestead_restore_swap.py").read_text(encoding="utf-8")
+        keys = sorted(set(re.findall(r'NAMES\.key\("([a-z-]+)"\)', source)))
+        for key in ("previous-volume", "previous-of", "replaced-by", "restored-into", "keep-previous"):
+            self.assertIn(key, keys, "the scan found nothing it should")
+        page = PAGE.read_text(encoding="utf-8")
+        missing = [key for key in keys if f"homestead.io/{key}" not in page and f"`{key}`" not in page]
+        self.assertEqual(missing, [], "Name these restore-swap marks on the page: " + ", ".join(missing))
+        days = re.search(r"^DEFAULT_KEEP_DAYS = (\d+)", source, re.M).group(1)
+        flat = " ".join(page.split())
+        self.assertRegex(flat, re.compile(rf"previous volumes?[^|]*\b{days} days", re.I),
+                         "the page must say how long a previous volume is kept")
+        self.assertRegex(flat, re.compile(r"restore into an app[^|]*swapped back", re.I),
+                         "the page must say a restore into an app swaps back on its own")
 
     def test_the_label_check_catches_every_form_of_the_advice(self):
         # Each of these would delete apps; each must be caught.
@@ -280,12 +298,12 @@ class WhatHomesteadChanges(unittest.TestCase):
         # Apps deployed through Homestead carry the label as well, so deleting
         # by it would delete them (homestead_deploy_manifests: the app's
         # Deployment and Service).
-        apps = (ROOT / "server" / "homestead_deploy_manifests.py").read_text(encoding="utf-8")
+        apps = SS.text(SS.SERVER / "homestead_deploy_manifests.py")
         self.assertIn('NAMES.key("managed")', apps, "apps no longer carry the label: revisit this test")
         for path in DOC_PAGES():
             with self.subTest(page=str(path.relative_to(ROOT))):
-                self.assertEqual(deletes_by_managed_label(path.read_text(encoding="utf-8")), [])
-        page = " ".join(PAGE.read_text(encoding="utf-8").split())
+                self.assertEqual(deletes_by_managed_label(SS.text(path)), [])
+        page = " ".join(SS.text(PAGE).split())
         self.assertIn("apps you deployed through Homestead carry it too", page,
                       "the page must warn that the managed label also marks the reader's apps")
 

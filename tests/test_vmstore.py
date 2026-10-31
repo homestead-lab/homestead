@@ -1,7 +1,11 @@
-import json, sys, unittest, urllib.error
+import json, sys, tempfile, unittest
+from unittest import mock
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_kube as K
+import homestead_operations as OPS
 import homestead_vmstore as STORE
+from fakes.kube import Kube
 
 FEDORA = [
     {"version": "44", "arch": "x86_64", "variant": "Cloud", "subvariant": "Cloud_Base",
@@ -17,24 +21,23 @@ UBUNTU = STORE.BY_ID["ubuntu-24.04"]["urls"]["amd64"]
 
 
 class Cluster:
-    def __init__(self, harvester=True):
-        self.cm, self.images, self.deleted, self.downloads = None, [], [], []
+    """The store's record is a ConfigMap on the shared fake API (tests/fakes/kube.py);
+    the Harvester image calls are this test's own."""
+
+    def __init__(self, case, harvester=True):
+        self.images, self.deleted, self.downloads = [], [], []
+        # The shared fake runs the real write guards; the storage guard takes the
+        # job store's lock, which lives under its DATA_DIR.
+        case.enterContext(mock.patch.object(OPS, "DATA_DIR", case.enterContext(tempfile.TemporaryDirectory())))
+        self.kube = case.enterContext(Kube())
         self.builds = {UBUNTU: {"etag": "aaa", "modified": "Sat, 26 Sep 2026 13:13:58 GMT", "size": 600}}
         self.disks = {}
         self.harvester = harvester
         STORE._heads.clear()
         STORE._fedora.update(at=0.0, value={})
-        STORE.bind(self.get, self.send, "lab", lambda force=False: {"harvester": self.harvester, "arch": ["amd64"]},
+        STORE.bind(K.kget, K.ksend, "lab", lambda force=False: {"harvester": self.harvester, "arch": ["amd64"]},
                    self.download, lambda: list(self.images), lambda: self.disks, self.delete,
                    lambda url: FEDORA, lambda url: dict(self.builds[url]))
-
-    def get(self, path):
-        if self.cm is None:
-            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
-        return json.loads(json.dumps(self.cm))
-
-    def send(self, method, path, body=None, **kw):
-        self.cm = dict(body, metadata=dict(body["metadata"], resourceVersion="1"))
 
     def download(self, url, display, reuse):
         name = f"image-{len(self.images) + 1}"
@@ -53,7 +56,7 @@ ALPINE_INDEX = ('<a href="alpine-3.24.1-x86_64-cloudinit-r0.qcow2">x</a><a href=
 
 class StoreTests(unittest.TestCase):
     def test_variants_minimal_among_them_and_alpine_resolved(self):
-        c = Cluster()
+        c = Cluster(self)
         STORE.fetch_text = lambda url: ALPINE_INDEX
         STORE._alpine.update(at=0.0, value={})
         ids = [e["id"] for e in STORE.CATALOG]
@@ -63,7 +66,7 @@ class StoreTests(unittest.TestCase):
 
     def test_images_already_here_are_in_the_store(self):
         """Images made before the store, or in Harvester's dashboard, did not show."""
-        c = Cluster()
+        c = Cluster(self)
         c.images = [{"namespace": "default", "name": "image-old", "display": "noble-server-cloudimg-amd64.img",
                      "url": UBUNTU, "ready": True, "created": 1758800000},
                     {"namespace": "default", "name": "image-win", "display": "win2022.qcow2",
@@ -80,13 +83,15 @@ class StoreTests(unittest.TestCase):
         self.assertEqual([], c.downloads)
 
     def test_fedora_is_its_newest_release_not_a_beta_or_uki(self):
-        Cluster()
+        Cluster(self)
         self.assertIn("Fedora-Cloud-Base-Generic-44-1.7.x86_64", STORE.url_for(STORE.BY_ID["fedora"]))
 
     def test_keeping_downloads_once_and_a_new_vm_waits_for_it_to_be_ready(self):
-        c = Cluster()
+        c = Cluster(self)
         STORE.keep("ubuntu-24.04")
         self.assertEqual([(UBUNTU, "Ubuntu 24.04 LTS · 2026-09-26", True)], c.downloads)
+        record = json.loads(c.kube.object(f"/api/v1/namespaces/lab/configmaps/{STORE.CONFIGMAP}")["data"]["store.json"])
+        self.assertIn("ubuntu-24.04", record["kept"], "the record is saved in its ConfigMap")
         self.assertEqual({"image_url": UBUNTU, "min_gb": 10, "user": "ubuntu"}, STORE.source_for("ubuntu-24.04"),
                          "until the copy is ready, a VM downloads from the publisher")
         c.images[0]["ready"] = True
@@ -94,7 +99,7 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(next(r for r in STORE.choices() if r["id"] == "ubuntu-24.04")["ready"])
 
     def test_a_new_build_downloads_beside_the_old_which_goes_once_nothing_uses_it(self):
-        c = Cluster()
+        c = Cluster(self)
         STORE.keep("ubuntu-24.04")
         c.images[0]["ready"] = True
         self.assertEqual([], STORE.refresh(force=True)["updated"], "the same build is not fetched again")
@@ -111,7 +116,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual("lab/image-2", STORE.source_for("ubuntu-24.04")["image_id"])
 
     def test_elsewhere_a_vm_always_starts_from_the_publisher(self):
-        c = Cluster(harvester=False)
+        c = Cluster(self, harvester=False)
         STORE.keep("debian-12")
         self.assertEqual([], c.downloads)
         self.assertIn("debian-12-genericcloud-amd64", STORE.source_for("debian-12")["image_url"])

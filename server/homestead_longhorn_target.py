@@ -274,6 +274,6 @@ def set_backup_target(url, secret="", poll="5m", keys=None):
 
 
 # Last, so that importing any of these modules first works: homestead_longhorn
-# imports this one and re-exports its names.
+# imports this one.
 import homestead_longhorn_restore as RESTORE  # noqa: E402
 import homestead_longhorn as LH  # noqa: E402

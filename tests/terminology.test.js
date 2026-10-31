@@ -23,7 +23,7 @@ test("no screen says workload, except a networking feature that serves VMs too",
   assert.deepEqual(left, [], "say app, or apps and VMs");
 });
 
-const NODE_TERMS = /node (labels?|selectors?|objects|agents?|probes?|password|tags?|disks)|Node (filesystem|probe|role|tags)|Longhorn nodes?|Harvester nodes?|management nodes|Management nodes|nodes? tagged|nodes with (a|every) tag|No node has a tag|(?:on|to|across) (?:one|many|several) nodes?(?= at a time| through|\.|,| using| but)|RWO · one node|RWX · many nodes|single-node \(RWO\)|pods of a node|failed node's volumes|node-down/g;
+const NODE_TERMS = /node (labels?|selectors?|objects|agents?|probes?|password|tags?|disks)|Node (filesystem|probe|role|tags)|Longhorn nodes?|Harvester nodes?|management nodes|Management nodes|nodes? tagged|nodes with (a|every) tag|No node has a tag|(?:on|to|across) (?:one|many|several) nodes?(?= at a time| through|\.|,| using| but)|RWO · one node|RWX · many nodes|single-node \(RWO\)|pods of a node|failed node's volumes|node-down|iscsiadm -m node/g;
 const NODE = /(?<![\w$/-])[Nn]odes?(?![\w(/-])/;
 
 test("a machine in the cluster is a host on screen; node only for Kubernetes' and Longhorn's own terms", () => {

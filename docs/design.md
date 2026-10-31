@@ -352,8 +352,10 @@ not mean its fields are valid and must never give it a completion tick.
 Render each field once and hide inactive panes. Switching sections must preserve
 values, added items and staged removals. Container edit groups Basics, Hardware
 and access, Environment values, Storage, Placement, Address and Monitoring by container.
-The full-page container deploy form also uses `UI.sectionForm`: Basics, Hardware
-and access, Environment values, Storage, Address, Additional containers and Summary.
+The full-page container deploy form also uses `UI.sectionForm`, with the same
+sections from `web/js/app-form.js` and Summary last. Placement is one section in
+both forms (`appFormPlacement`, by id prefix): copies, spread, preferred host,
+other apps, failover and tier, never greyed in Deploy.
 Use Back/Next and one final Review deployment action; the review still checks capacity
 and any restart acknowledgement. Page forms use `page: true` for an in-flow footer and supply `cancelHtml` to return to their
 collection, while dialogs keep their dismiss action. Keep the live summary in its
@@ -658,7 +660,9 @@ also holds the verbosity budget: too many visible words, more than one notice,
 or a dialog that says the same thing twice.
 `node scripts/dialog_sheets.mjs mobile 4 4 pages` lays captures side by side
 for review, and reading them is part of the check: the scripts catch what
-can be measured, not clutter.
+can be measured, not clutter. A dialog capture is drawn on an opaque fill
+without backdrop blur, which in software rendering made a long dialog take
+seconds to draw, so judge the glass effect in the app, not from the captures.
 
 A new page is added to `scripts/audit_pages.mjs` and a new dialog to
 `scripts/audit_dialogs.mjs`, with demo data in `web/js/demo.js` if it needs

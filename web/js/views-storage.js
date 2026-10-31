@@ -114,7 +114,7 @@ async function viewFlow() {
     </div></div>`;
   };
   const graphs=answer.clusters?.map(cluster=>({site:cluster.site,...Object.fromEntries(["workloads","volumes","nodes","vips","jobs"].map(key=>[key,f[key].filter(row=>row.site.id===cluster.site.id)]))}));
-  paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · point at, tap or Tab to anything to trace it`, `
+  paint(`${UI.pageHeader(`Architecture`, `How each app is reached, where its data lives, and which hosts hold the copies · point at, tap or Tab to anything to trace it${metricsNotice([answer])}`, `
         ${disconnectedVolumes.length ? `<button class="btn sm ${STATE.archDisconnected ? "pri" : ""}" onclick="STATE.archDisconnected=!STATE.archDisconnected;viewFlow()"
           data-tip="Volumes no container, VM or scheduled job is defined to mount. They stay hidden so old and retained data does not obscure the live paths.">${STATE.archDisconnected ? "Hide" : "Show"} ${disconnectedVolumes.length} disconnected</button>` : ""}
         <div class="row hide-sm arch-legend">
@@ -499,21 +499,65 @@ function otherVolumesHtml(rows) {
         need: "admin", danger: true, tip: "Review what uses it and what would be lost before deleting" }], { shown: 0, label: `Actions for ${r.name}` })}</td></tr>`).join("")}</tbody></table></div></div>`;
 }
 
+/* The page is drawn as its reads return, not once all of them have (#705).
+   Every read starts at once; the page is drawn when the volumes answer, and
+   each other part - the totals, the forecast, old copies, other volumes - fills
+   in when its own read does. Until then it says it is being read. A refresh
+   keeps each part's last answer on screen until the new one arrives; another
+   visit to the page starts afresh. Parts that answer together are drawn in one
+   paint, and a load overtaken by a newer one draws nothing. */
+let storageLoad = { id: 0, token: null, parts: {}, missed: {} };
+const partReading = what => `<div class="empty small"><span class="spin2"></span> Reading ${what}…</div>`;
+
 async function viewStorage() {
   if (platformLacks("longhorn", "Volumes")) return;
+  const token = window.NAV_TOKEN;
+  // Same visit: last answers stay until replaced. Another visit: nothing kept.
+  const same = storageLoad.token === token;
+  const load = storageLoad = { id: storageLoad.id + 1, token,
+    parts: { ...(same ? storageLoad.parts : {}) }, missed: { ...(same ? storageLoad.missed : {}) } };
+  const current = () => storageLoad === load;
   // A part of the page that could not be read is named above the page, not
-  // silently left out (#620): no old copies listed is not no old copies.
-  const missed = [];
-  const part = (path, label, fallback) => api(path).catch(e => { missed.push(`${label}: ${e.message}`); return fallback; });
-  const [v, st, classes, v2, cap, forecast] = await Promise.all([api("/api/volumes"), part("/api/storage", "totals", null),
-    part("/api/storage/classes", "storage classes", []), part("/api/storage/v2", "the V2 engine", null),
-    part("/api/longhorn/capacity", "capacity", null), part("/api/storage/forecast", "the forecast", null)]);
-  STATE.data.forecast = forecast;
-  const [allOldCopies, allOthers] = await Promise.all([part("/api/volumes/old-copies", "old copies", []),
-    part("/api/volumes/other", "other volumes", [])]);
+  // silently left out (#620): no old copies listed is not no old copies. A
+  // failure is kept like an answer, so it is still named while it is read again.
+  let volumes = null, queued = null, broken = null;
+  const draw = () => {
+    if (queued || !current() || !volumes) return;
+    queued = new Promise(resolve => setTimeout(() => {
+      queued = null;
+      try { if (current()) storagePaint(volumes, load.parts, Object.values(load.missed)); }
+      catch (e) { broken = broken || e; }
+      resolve();
+    }, 0));
+  };
+  // A paint that throws fails the load, as before, rather than leaving it unsettled.
+  const drawn = async () => { while (queued) await queued; if (broken) throw broken; };
+  // The path comes first and is written out, so the API contract test reads it.
+  const part = (path, key, label, fallback) => api(path)
+    .then(answer => { delete load.missed[key]; return answer; },
+      e => { load.missed[key] = `${label}: ${e.message}`; return fallback; })
+    .then(answer => { load.parts[key] = answer; draw(); });
+  const parts = [part("/api/storage", "st", "totals", null), part("/api/storage/classes", "classes", "storage classes", []),
+    part("/api/storage/v2", "v2", "the V2 engine", null), part("/api/longhorn/capacity", "cap", "capacity", null),
+    part("/api/storage/forecast", "forecast", "the forecast", null), part("/api/volumes/old-copies", "oldCopies", "old copies", []),
+    part("/api/volumes/other", "others", "other volumes", [])];
+  volumes = await api("/api/volumes");
+  if (!current()) return;
+  draw();
+  await drawn();
+  // Settled when the whole page is drawn, as before, for whoever waits on it.
+  await Promise.all(parts);
+  await drawn();
+}
+
+function storagePaint(v, parts, missed) {
+  const has = key => key in parts;
+  const { st, classes, v2, cap, forecast } = parts;
+  const allOldCopies = parts.oldCopies || [], allOthers = parts.others || [];
+  if (has("forecast")) STATE.data.forecast = forecast;
   STATE.data.lhcap = cap || STATE.data.lhcap;
-  STATE.data.storageClasses = classes;
-  STATE.data.v2 = v2;
+  if (has("classes")) STATE.data.storageClasses = classes;
+  if (has("v2")) STATE.data.v2 = v2;
   STATE.data.vols = v;
   const q = STATE.q.toLowerCase();
   // A search narrows every list on the page, not only Longhorn's.
@@ -531,7 +575,8 @@ async function viewStorage() {
         { label: "Storage classes", icon: "disk", run: "settingsTab('hardware');go('settings')", tip: "What new volumes are made from: in Settings › Hardware and storage" }])}
       <button class="btn pri" data-need="operator" onclick="volumeCreate()">＋ Create volume</button>`)}
   ${UI.notices(missed.map(text => ["warn", text]), "Parts of this page could not be read")}
-  ${st ? summaryLine("volumes", [
+  ${!has("st") ? summaryLine("volumes", [`<span class="dim small"><span class="spin2"></span> Reading the totals…</span>`])
+  : st ? summaryLine("volumes", [
       `<b>${st.avail_gb} GiB</b> free of ${st.cap_gb}`, `<b>${st.provisioned_gb} GiB</b> provisioned`,
       `${UI.chip(`${st.healthy} healthy`, "ok")}${st.degraded ? ` ${UI.chip(`${st.degraded} degraded`, "warn")}` : ""}${st.faulted ? ` ${UI.chip(`${st.faulted} faulted`, "bad")}` : ""}`,
       `${st.attached} of ${st.volumes} attached`],
@@ -552,7 +597,7 @@ async function viewStorage() {
       <div class="csub" style="margin-top:10px">${st.attached} attached of ${st.volumes}</div></div>
     ${lhCapacityCard(cap, st)}
   </div>`, "Per host") : ""}
-  ${forecastCard(forecast)}
+  ${has("forecast") ? forecastCard(forecast) : `<div class="card flat forecast-card"><div class="ctitle">Filling up</div>${partReading("the forecast")}</div>`}
   <div class="card flat pad0"><div class="tblwrap voltable"><table data-sort="volumes" class="tbl dense"><thead><tr>
    <th>Volume</th><th>Attached to</th><th>Health</th><th>Mode</th><th>Usage</th><th data-nosort>Last used</th><th></th>
    </tr></thead><tbody>${rows.map(x => `<tr data-vol="${esc(x.name)}"${clusterAttr(x)}>
@@ -652,19 +697,38 @@ function volumeDeleteConfirmationValid(name, value) {
 }
 window.volumeDeleteConfirmationValid = volumeDeleteConfirmationValid;
 
+/* A Released volume whose claim name is in use again (#932), beside the
+   volume that claim uses now: another PV, another UID, another Longhorn
+   volume. The delete is of the left column only. */
+function releasedBesideCurrent(p) {
+  const pv = p.pv || {}, now = p.current || {}, mono = v => `<span class="mono">${esc(v || "—")}</span>`;
+  const users = (now.consumers || []).map(c => `${esc(c.kind)} · ${esc(c.name)}`).join("<br>") || '<span class="dim">nothing</span>';
+  return UI.section(`${esc(p.namespace)}/${esc(p.name)} is in use again`, UI.table(
+    [{ label: "" }, { label: "Released" }, { label: "In use now" }], [
+      ["Persistent volume", mono(pv.name), mono(now.pv)],
+      ["Its UID", mono(pv.uid), mono(now.pv_uid)],
+      ["Phase", esc(pv.phase || "?"), esc(now.phase || "?")],
+      ["Claim UID", mono(pv.claim_uid), mono(now.claim_uid)],
+      ["Longhorn volume", mono(pv.longhorn), mono(now.longhorn)],
+      ["Used by", p.longhorn?.state === "detached" && !p.longhorn?.attached_node ? '<span class="dim">nothing: detached</span>' : `Longhorn: ${esc(p.longhorn?.state || "unknown")}`, users],
+    ]) + UI.more("How the delete is pinned", "<p>Only the Released volume is deleted, pinned by its name, UID and version. The volume the claim uses now is not the one deleted, and is never changed.</p>"));
+}
+
 let volumeDeleteTarget = null, volumeDeleteRequest = 0;
 window.volumeDeleteRefresh = () => volumeDeleteTarget && volumeDelete(volumeDeleteTarget);
 window.volumeDelete = async x => {
   const request = ++volumeDeleteRequest;
-  volumeDeleteTarget = {name: x.name, pvc_name: x.pvc_name, namespace: x.namespace};
+  volumeDeleteTarget = {name: x.name, pvc_name: x.pvc_name, namespace: x.namespace, ...(x.pv ? {pv: x.pv} : {})};
   window.__volumeDeletePlan = null;
   const namespace = x.namespace || "lab", name = x.pvc_name || x.name;
-  modal("Delete volume · " + name,
+  // A Released volume is asked for by its PV (#932): its claim name may be
+  // another volume's now, and only the server can say which is which.
+  modal(x.pv ? "Delete Released volume · " + x.pv : "Delete volume · " + name,
     '<div id="volumeDeleteReview" class="empty"><span class="spin2"></span> checking mounts, snapshots, backups and reclaim policy…</div>', true);
   const waiting = $("#volumeDeleteReview");
   let p;
   try {
-    p = await api(`/api/volumes/delete-plan?ns=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}&volume=${encodeURIComponent(x.name)}`);
+    p = await api(`/api/volumes/delete-plan?ns=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}&volume=${encodeURIComponent(x.name)}${x.pv ? `&pv=${encodeURIComponent(x.pv)}` : ""}`);
   } catch (e) {
     if (request !== volumeDeleteRequest || $("#volumeDeleteReview") !== waiting) return;
     return void ($("#mbody").innerHTML = UI.callout("bad", "Impact check failed.", esc(e.message)) +
@@ -690,8 +754,10 @@ window.volumeDelete = async x => {
     blocked
       ? UI.callout("bad", "Deletion is blocked.", `<ul class="ui-list">${p.blocking_reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>${incomplete}`)
       : incomplete ? UI.callout("warn", "Impact check passed, with gaps.", incomplete)
-      : UI.callout("ok", "Impact check passed.", p.orphan ? "The PVC is already gone. This retained backing volume is detached; deleting it permanently removes its remaining data."
+      : UI.callout("ok", "Impact check passed.", p.released ? `This is not the volume ${esc(p.name)} uses now; that one is not changed.`
+        : p.orphan ? "The PVC is already gone. This retained backing volume is detached; deleting it permanently removes its remaining data."
         : "This claim is detached and has no active app or VM references. Choose what should happen to its backing data."),
+    p.released ? releasedBesideCurrent(p) : "",
     UI.facts([
       ["Longhorn footprint", `${esc(lh.actual_gb ?? "?")} GiB`],
       ["Replicas", esc(lh.replicas ?? "?")],
@@ -718,7 +784,7 @@ window.volumeDelete = async x => {
       ["Persistent volume", `<span class="mono">${esc(pv.name || "not bound")}</span> · reclaim policy ${esc(pv.reclaim_policy || "unknown")}`],
       ["Longhorn volume", `<span class="mono">${esc(lh.name || "not found")}</span> · ${esc(lh.state || "unknown")}${lh.attached_node ? ` on ${esc(lh.attached_node)}` : ""}`],
     ])),
-    UI.section("3. Confirm", UI.typedConfirm({ id: "vd_confirm", expect: name, oninput: "volumeDeleteGate()" })),
+    UI.section("3. Confirm", UI.typedConfirm({ id: "vd_confirm", expect: p.confirm || name, oninput: "volumeDeleteGate()" })),
     UI.actions(UI.cancel() + (blocked || p.inventory_complete === false ? UI.button("Refresh review", "volumeDeleteRefresh()") : "") +
       UI.button("Delete selected", `volumeDeleteNow(${jsArg(namespace)},${jsArg(name)},${jsArg(p.uid)})`,
       { kind: "danger", id: "vd_go", disabled: true, attrs: 'data-need="admin"' })),
@@ -731,23 +797,24 @@ window.volumeDeleteGate = () => {
   const input = $("#vd_confirm"), button = $("#vd_go");
   if (!p || !input || !button) return;
   const allowed = action && !p.blocked && p.actions?.[action]?.enabled;
-  button.disabled = !allowed || !volumeDeleteConfirmationValid(p.name, input.value);
+  button.disabled = !allowed || !volumeDeleteConfirmationValid(p.confirm || p.name, input.value);
   button.textContent = action === "delete_claim" ? "Delete claim · keep data" : action === "delete_data" ? "Permanently delete data" : "Delete selected";
 };
 
 window.volumeDeleteNow = async (namespace, name, uid) => {
   const action = document.querySelector('input[name="vd_action"]:checked')?.value || "";
-  const confirmation = $("#vd_confirm").value.trim();
-  if (!volumeDeleteConfirmationValid(name, confirmation)) return;
+  const confirmation = $("#vd_confirm").value.trim(), plan = window.__volumeDeletePlan;
+  if (!volumeDeleteConfirmationValid(plan?.confirm || name, confirmation)) return;
   if (!action) return toast("Choose whether to retain or permanently delete the backing data", "bad");
   const button = $("#vd_go"); button.disabled = true; button.textContent = "Requesting deletion…";
   try {
     const result = await api("/api/volumes/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ namespace, name, uid, action, confirmation,
-        volume: window.__volumeDeletePlan?.longhorn?.name || "", pv_uid: window.__volumeDeletePlan?.pv?.uid || "" }) });
+        volume: plan?.longhorn?.name || "", pv_uid: plan?.pv?.uid || "", pv: volumeDeleteTarget?.pv || "" }) });
     toast(result.message || `${name} deletion started`, "ok"); closeModal();
     if (window.noteOperation) noteOperation(result.operation);
-    resetPaint(); viewStorage();
+    // From an app's old-volume row (#932), stay on the Containers page.
+    resetPaint(); if (typeof STATE !== "undefined" && STATE.view === "workloads" && window.viewWorkloads) viewWorkloads(); else viewStorage();
   } catch (e) {
     button.disabled = false; volumeDeleteGate(); toast(e.message, "bad");
   }
@@ -1475,7 +1542,7 @@ const SIGNIN_GROUPS = {
 };
 const EVENT_SINCE = { "1h": 3600, "24h": 86400, "7d": 604800 };
 
-const eventTab = () => (STATE.eventsTab === "signins" && can("admin") ? "signins" : "cluster");
+const eventTab = () => (["signins", "audit"].includes(STATE.eventsTab) && can("admin") ? STATE.eventsTab : "cluster");
 const eventFilter = () => (eventTab() === "signins"
   ? (STATE.signinFilter ||= { what: "", user: "", since: "" })
   : (STATE.eventFilter ||= { type: STATE.eventWarnings ? "Warning" : "", kind: "", ns: "", since: "" }));
@@ -1485,7 +1552,7 @@ function eventTabs(tab) {
   if (!can("admin")) return "";
   const button = (id, label) => `<button type="button" class="${tab === id ? "on" : ""}" aria-pressed="${tab === id}"
     onclick="STATE.eventsTab=${jsq(id)};viewEvents()">${label}</button>`;
-  return `<div class="seg event-tabs" role="group" aria-label="Which events">${button("cluster", "Cluster")}${button("signins", "Sign-ins")}</div>`;
+  return `<div class="seg event-tabs" role="group" aria-label="Which events">${button("cluster", "Cluster")}${button("signins", "Sign-ins")}${button("audit", "Audit")}</div>`;
 }
 
 function eventSelect(key, label, options, value) {
@@ -1570,8 +1637,98 @@ window.eventFiltersClear = () => {
   viewEvents();
 };
 
+/* ---------------- audit log ----------------
+   Events › Audit (#738), admins only: Homestead's two records of what was
+   done - each change request (audit.jsonl) and each call an API key made
+   (agent-audit.jsonl) - read together, newest first. The files stay apart;
+   the server merges, filters and pages them, so a large log stays cheap. */
+const AUDIT_PAGE = 100;
+const AUDIT_RESULTS = {
+  ok: ["Done", "neutral"], refused: ["Refused", "warn"], error: ["Failed", "bad"], unknown: ["No answer", "warn"],
+  pending: ["Waiting", "neutral"], approved: ["Approved", "neutral"], denied: ["Denied", "warn"], note: ["Note", "neutral"],
+};
+const AUDIT_SOURCES = { "": "both logs", changes: "changes", agents: "agent calls" };
+const auditFilter = () => (STATE.auditFilter ||= { source: "", person: "", offset: 0 });
+
+function auditParams(f = auditFilter()) {
+  const query = new URLSearchParams({ limit: String(AUDIT_PAGE) });
+  if (f.source) query.set("source", f.source);
+  if (f.person) query.set("person", f.person);
+  if (f.offset) query.set("offset", String(f.offset));
+  return String(query);
+}
+
+function auditCount(answer) {
+  const rows = answer.rows || [], from = (answer.offset || 0) + 1, which = AUDIT_SOURCES[auditFilter().source];
+  const range = answer.offset || answer.more ? `${from}–${from + rows.length - 1} · ${which}`
+    : `${rows.length} entr${rows.length === 1 ? "y" : "ies"} from ${which}`;
+  return `${range} · newest first${answer.partial ? " · only the newest lines of each log were searched" : ""}`;
+}
+
+function auditRowHtml(x) {
+  const ago = fmtAgo(Math.max(0, Date.now() / 1000 - (x.at || 0)));
+  const [word, tone] = AUDIT_RESULTS[x.result] || [x.result || "—", "neutral"];
+  const log = x.source === "agents" ? "Agent log" : "Change log";
+  const how = x.source === "agents" ? [x.key, x.via && x.via.toUpperCase()].filter(Boolean).join(" · ") : x.via && `via ${x.via}`;
+  // One run of text with its separators: a phone's compact row lays the cell out inline.
+  const detail = [x.target, x.detail, x.addr].filter(Boolean).join(" · ");
+  return `<tr><td><b>${esc(x.who || "—")}</b><div class="dim xs">${esc([log, how].filter(Boolean).join(" · "))}<span class="ev-when-sm"> · ${esc(ago)}</span></div></td>
+    <td data-status>${UI.chip(x.code >= 400 ? `${word} · ${x.code}` : word, tone, { size: "slim" })}</td>
+    <td class="small ev-msg"><span class="mono">${esc(x.what || "—")}</span>${detail ? `<span class="dim xs"> · ${esc(detail)}</span>` : ""}</td>
+    <td class="dim xs mono nowrap" data-sm-hide title="${esc(fmtAt(new Date((x.at || 0) * 1000)))}">${esc(ago)}</td></tr>`;
+}
+
+function auditFilterBar(rows) {
+  const f = auditFilter();
+  const people = [...new Set([f.person, ...rows.map(x => x.who)].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const options = [["", "Both logs"], ["changes", "Changes"], ["agents", "Agent calls"]];
+  return `<div class="evfilters" role="group" aria-label="Filters">
+    <select class="evf" aria-label="Which log" onchange="auditFilterSet('source', this.value)">
+      ${options.map(([v, text]) => `<option value="${esc(v)}" ${v === f.source ? "selected" : ""}>${esc(text)}</option>`).join("")}</select>
+    <input class="evf evf-text" type="search" placeholder="Person…" aria-label="Person" list="auditPeople" value="${esc(f.person)}"
+      onchange="auditFilterSet('person', this.value)">
+    <datalist id="auditPeople">${people.map(p => `<option value="${esc(p)}"></option>`).join("")}</datalist>
+    ${f.source || f.person ? `<button type="button" class="btn sm evf-clear" onclick="auditFilterSet('clear')">Clear</button>` : ""}</div>`;
+}
+
+function auditPager(answer) {
+  const newer = (answer.offset || 0) > 0, older = !!answer.more;
+  if (!newer && !older) return "";
+  return `<div class="row gap audit-pager">
+    <button type="button" class="btn sm" ${newer ? "" : "disabled"} onclick="auditPage(-1)">Newer</button>
+    <button type="button" class="btn sm" ${older ? "" : "disabled"} onclick="auditPage(1)">Older</button></div>`;
+}
+
+window.auditFilterSet = (key, value) => {
+  const f = auditFilter();
+  if (key === "clear") Object.assign(f, { source: "", person: "" });
+  else f[key] = String(value || "").trim();
+  f.offset = 0;
+  return viewEvents();
+};
+window.auditPage = step => {
+  const f = auditFilter();
+  f.offset = Math.max(0, (f.offset || 0) + step * AUDIT_PAGE);
+  return viewEvents();
+};
+
+async function viewAudit() {
+  const answer = await api(`/api/audit/log?${auditParams()}`);
+  auditFilter().offset = answer.offset || 0;     // the server clamps it: Older never runs past its cap
+  const rows = answer.rows || [];
+  STATE.data.eventRows = rows;
+  const filtered = auditFilter().source || auditFilter().person;
+  paint(`${UI.pageHeader(`Events`, esc(auditCount(answer)), `${eventTabs("audit")}`, {descriptionAttrs:`id="evCount"`})}
+  ${auditFilterBar(rows)}
+  <div class="card flat pad0 eventtable"><div class="tblwrap"><table class="tbl stack compact evtable"><thead><tr>
+    <th>Who</th><th>Result</th><th>What</th><th data-nosort>When</th></tr></thead><tbody id="evRows">
+    ${rows.map(auditRowHtml).join("") || `<tr><td colspan=4 class="empty">${filtered ? "Nothing matches these filters." : "Nothing recorded yet."}</td></tr>`}
+  </tbody></table></div></div>${auditPager(answer)}`);
+}
+
 async function viewEvents() {
   const tab = eventTab();
+  if (tab === "audit") return viewAudit();
   const rows = await api(tab === "signins" ? "/api/auth/history" : "/api/events");
   STATE.data.eventRows = rows;
   const heads = tab === "signins" ? ["Who", "What", "From", "When"] : ["Object", "Reason", "Message", "When"];

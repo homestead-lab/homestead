@@ -2,6 +2,7 @@
 // up when picked, and Move selected opens one review for them.
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
+import {openAuditPage} from '../../scripts/audit_ready.mjs';
 import {mkdir} from 'node:fs/promises';
 const base=process.env.HOMESTEAD_URL || 'http://127.0.0.1:4173',out=process.env.HOST_SELECT_SCREENSHOTS || 'release-assets/host-select';
 await mkdir(out,{recursive:true});const browser=await chromium.launch({headless:true});
@@ -10,8 +11,7 @@ const contrast=(a,b)=>{const lum=c=>{const [r,g,bl]=c.match(/[\d.]+/g).slice(0,3
   const [x,y]=[lum(a),lum(b)].sort((p,q)=>q-p);return (x+.05)/(y+.05);};
 try{for(const width of [1440,390])for(const theme of ['dark','light']){
  const page=await browser.newPage({viewport:{width,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(`${base}/?demo=1`);
- await page.waitForFunction(()=>typeof nodeWorkloadChips==='function'&&typeof ME!=='undefined'&&ME&&document.querySelector('#gate')?.classList.contains('hidden'));
+ await openAuditPage(page, `${base}/?demo=1`);
  await page.evaluate(t=>{document.documentElement.dataset.theme=t;go('nodes',{params:{node:'harvester-node1'}});},theme);
  await page.getByRole('tab',{name:/Apps and VMs/}).first().click();
  const card=page.locator('#nodeChipsCard');await card.waitFor();

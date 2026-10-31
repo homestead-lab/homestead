@@ -3,13 +3,13 @@
 // folder after a review of what it replaces.
 import assert from 'node:assert/strict';
 import {chromium} from 'playwright';
+import {openAuditPage} from '../../scripts/audit_ready.mjs';
 import {mkdir} from 'node:fs/promises';
 const base=process.env.HOMESTEAD_URL || 'http://127.0.0.1:4173',out=process.env.SNAPSHOT_RESTORE_SCREENSHOTS || 'release-assets/snapshot-restore';
 await mkdir(out,{recursive:true});const browser=await chromium.launch({headless:true});
 try{for(const width of [1440,390])for(const theme of ['dark','light']){
  const page=await browser.newPage({viewport:{width,height:1000}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
- await page.goto(`${base}/?demo=1`);
- await page.waitForFunction(()=>typeof snapshotFiles==='function'&&typeof ME!=='undefined'&&ME&&document.querySelector('#gate')?.classList.contains('hidden'));
+ await openAuditPage(page, `${base}/?demo=1`);
  await page.evaluate(t=>{document.documentElement.dataset.theme=t;window.__demoSnapshotV2=false;window.__demoSnapshotWaiting=false;go('storage');return snapshotFiles('pvc-demo-frigate','daily-snapshot');},theme);
  await page.getByRole('button',{name:'Prepare browser'}).click();
  const title=page.locator('#fm_pane0 .fm-snaptitle');await title.waitFor({timeout:15000});

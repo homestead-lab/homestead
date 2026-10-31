@@ -70,9 +70,26 @@ test("a rule that could not be counted says so, never quiet", () => {
   assert.match(run(`logAlertStatus({ state: "slow", detail: "the expression took more than 2 seconds" })`), /more than 2 seconds/);
 });
 
+test("a rule can be paused and resumed, and a paused one says so, never quiet (#929)", () => {
+  const run = load();
+  run(`globalThis.R = ${JSON.stringify(RULE)}`);
+  assert.match(run(`logAlertRow(R, false)`), /<button onclick="logAlertPause\(&quot;la-0123456789ab&quot;,true\)">Pause<\/button>/);
+  const note = "Homestead paused it: its expression ran out of time 10 minutes in a row.";
+  run(`globalThis.P = ${JSON.stringify({ ...RULE, paused: true, status: { state: "paused", detail: note } })}`);
+  const html = run(`logAlertRow(P, false)`);
+  assert.match(html, /<chip neutral>Paused<\/chip>/);
+  assert.doesNotMatch(html, /Watching|Could not count/);
+  assert.match(html, /ran out of time 10 minutes in a row/);
+  assert.match(html, /logAlertPause\(&quot;la-0123456789ab&quot;,false\)">Resume</);
+  assert.match(run(`logAlertStatus({ state: "paused", detail: "" })`), /Not counted while paused/);
+  const viewer = load("viewer");
+  viewer(`globalThis.P = ${JSON.stringify({ ...RULE, paused: true, status: { state: "paused", detail: "" } })}`);
+  assert.doesNotMatch(viewer(`logAlertRow(P, false)`), /logAlertPause/);
+});
+
 test("the demo answers like the server: its own ids, names without the query, an hour of preview", () => {
   const src = fs.readFileSync("web/js/demo.js", "utf8");
-  for (const path of ["/api/logalerts", "/api/logalerts/delete", "/api/logalerts/preview"]) {
+  for (const path of ["/api/logalerts", "/api/logalerts/delete", "/api/logalerts/pause", "/api/logalerts/preview"]) {
     assert.ok(src.includes(`responses["${path}"]`), path);
   }
   const block = between(src, "// Log alerts (logalerts.js)", "// End of log alerts.");

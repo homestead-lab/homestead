@@ -31,6 +31,8 @@ import homestead_kube as KUBE
 import homestead_hvimage as HVIMAGE  # noqa: F401
 import homestead_lifecycle as LC
 import homestead_operations as OPS
+import homestead_outage as OUTAGE
+import homestead_value_masks as MASKS
 
 kget = ksend = None
 events_for = lambda ns, name, uid="": []
@@ -145,7 +147,7 @@ def _problem(vm, vmi, instance_known=True):
     Synchronized are False. A stopped VM's Ready says only that it has no
     instance, which is not a problem."""
     conditions = ((vm.get("status") or {}).get("conditions") or []) + ((vmi.get("status") or {}).get("conditions") or [])
-    text = lambda c: " ".join(str(c.get("message") or c.get("reason") or "").split())[:300]
+    text = lambda c: MASKS.cut(MASKS.squeeze(c.get("message") or c.get("reason") or ""), 300)
     for condition in conditions:
         if condition.get("type") == "Failure" and condition.get("status") == "True" and text(condition):
             message = text(condition)
@@ -194,7 +196,7 @@ def detail(ns, name, include_sensitive=True):
     except urllib.error.HTTPError:
         vmi, instance_known = None, False
     vmi = vmi or {}
-    row = _row(vm, vmi, _claims(ns), _datavolumes(ns), instance_known)
+    row = VM_LIST._row(vm, vmi, VM_LIST._claims(ns), VM_LIST._datavolumes(ns), instance_known)
     row["resource_profile"] = copy.deepcopy(vm["spec"].get("instancetype") or {})
     row["preference_profile"] = copy.deepcopy(vm["spec"].get("preference") or {})
     row["profile_error"] = ""
@@ -206,18 +208,18 @@ def detail(ns, name, include_sensitive=True):
             row["cores"], row["memory"] = None, ""
             row["profile_error"] = "Profile resources could not be resolved. They are left unchanged; check KubeVirt and Homestead RBAC before changing hardware."
     # The VM's own page always explains a disk that is still filling.
-    row["filling"] = _filling(vm, _datavolumes(ns), explain=True)
+    row["filling"] = VM_LIST._filling(vm, VM_LIST._datavolumes(ns), explain=True)
     guest = (vmi.get("status") or {}).get("guestOSInfo") or {}
     row["guest"] = {k: guest.get(k, "") for k in ("prettyName", "kernelRelease", "version", "id")}
     row["conditions"] = [{"type": c.get("type"), "status": c.get("status"), "reason": c.get("reason", ""),
-                          "message": (c.get("message") or "")[:300]}
+                          "message": MASKS.cut(c.get("message"), 300)}
                          for c in ((vm.get("status") or {}).get("conditions") or []) + ((vmi.get("status") or {}).get("conditions") or [])]
     row["events"] = events_for(ns, name, "")[:30]
-    claims = _claims(ns)
+    claims = VM_LIST._claims(ns)
     for disk in row["disks"]:
-        disk.update(_disk_source(vm, ns, disk["claim"], claims))
+        disk.update(VM_EDIT._disk_source(vm, ns, disk["claim"], claims))
     if include_sensitive:
-        row["cloud_init"] = _read_cloud_init(vm, ns)
+        row["cloud_init"] = VM_EDIT._read_cloud_init(vm, ns)
     else:
         row["sensitive_hidden"] = True
     import homestead_passthrough as PASSTHROUGH
@@ -240,7 +242,7 @@ def _halt_crash_retries(ns, name):
     if (vm.get("status") or {}).get("printableStatus") != "CrashLoopBackOff" or _strategy(vm) != "RerunOnFailure":
         return None
     meta, status = vm.get("metadata") or {}, vm.get("status") or {}
-    identity = _identity(vm)
+    identity = VM_EDIT._identity(vm)
     if (meta.get("namespace"), meta.get("name")) != (ns, name) or meta.get("deletionTimestamp"):
         raise ValueError("The VM identity changed or is deleting; refresh before stopping it")
     if status.get("stateChangeRequests"):
@@ -348,7 +350,7 @@ def delete(ns, name, with_disks=False):
     The delete runs in the foreground, so the VM is listed as Deleting until
     its instance and the disks it owns are gone."""
     vm = _get(ns, name)
-    every = [d["claim"] for d in _row(vm, {})["disks"] if d["claim"] and d["kind"] in ("disk", "cd-rom")]
+    every = [d["claim"] for d in VM_LIST._row(vm, {})["disks"] if d["claim"] and d["kind"] in ("disk", "cd-rom")]
     if with_disks:
         # Never a disk that is not this VM's alone: an ISO from the library (or
         # the drivers CD) other VMs share, or any claim another VM also uses.
@@ -360,16 +362,16 @@ def delete(ns, name, with_disks=False):
         except Exception:
             raise ValueError("the other VMs could not be read, so no disk is deleted with it; "
                              "delete the VM alone, or try again") from None
-        shared = {_volume_claim(v) for other in others["items"] if other["metadata"]["name"] != name
+        shared = {VM_EDIT._volume_claim(v) for other in others["items"] if other["metadata"]["name"] != name
                   for v in ((other.get("spec") or {}).get("template") or {}).get("spec", {}).get("volumes") or []}
-        claims_now = _claims(ns, strict=True)
+        claims_now = VM_LIST._claims(ns, strict=True)
         library = {c for c in every if ((claims_now.get(c) or {}).get("metadata", {}).get("labels") or {})
                    .get("homestead.io/iso") == "true"}
         spared = sorted((shared | library) & set(every))
         every = [c for c in every if c not in spared]
     else:
         spared = []
-    dvs = _datavolumes(ns)
+    dvs = VM_LIST._datavolumes(ns)
     unfinished = [c for c in every if ((dvs.get((ns, c)) or {}).get("status") or {}).get("phase") not in (None, "", "Succeeded")
                   and (ns, c) in dvs]
     claims = every if with_disks else unfinished
@@ -389,6 +391,7 @@ def delete(ns, name, with_disks=False):
               {"kind": "DeleteOptions", "apiVersion": "v1", "propagationPolicy": "Foreground"})
     except urllib.error.HTTPError as error:
         raise ValueError(f"KubeVirt refused to delete {name}: {_refusal(error)}")
+    OUTAGE.forget("vm", ns, vm)     # its outage webhook's Secret goes with it (#931)
     removed = []
     for claim in claims:
         # The DataVolume first: deleting it stops CDI's importer; the claim
@@ -437,26 +440,27 @@ def _migrate_route(request):
     return result
 
 
+def _for_role(request, answer):
+    """What a role below the one that may reveal a Secret sees of the VM
+    pages: every address without its credentials (a disk's source, a
+    failed import's message in events, conditions or filling). The list is
+    shared by every role, so it is copied first."""
+    return MASKS.for_role(getattr(request, "role", None), answer)
+
+
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("POST", "/api/vm/delete"): ("admin", _delete_route),
     ("POST", "/api/vm/migrate"): ("operator", _migrate_route),
     ("POST", "/api/vms/logo"): ("operator", lambda request: set_logos(request.body)),
     ("POST", "/api/vms/monitoring"): ("operator", lambda request: set_monitoring(request.body)),
-    ("GET", "/api/vms"): ("viewer", lambda request: homestead_routes.cached("vms", homestead_routes.PAGE_SECONDS, list_vms)),
-    ("GET", "/api/vm"): ("viewer", lambda request: detail((request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], include_sensitive=request.role == "admin")),
+    ("GET", "/api/vms"): ("viewer", lambda request: _for_role(request, homestead_routes.cached(
+        "vms", homestead_routes.PAGE_SECONDS, VM_LIST.list_vms))),
+    ("GET", "/api/vm"): ("viewer", lambda request: _for_role(request, detail(
+        (request.query.get("ns") or [""])[0], (request.query.get("name") or [""])[0], include_sensitive=request.role == "admin"))),
 }
 
 
-# Moved by feature (#623). Re-exported for one release, so other modules,
-# server.py and tests that use or replace these names here keep working.
-from homestead_vm_list import (  # noqa: E402,F401
-    _claims, _datavolumes, STUCK_AFTER, WAITING_PHASES, _age, _why_not_filling, _image_filling,
-    _stuck_problem, _filling, _display, _row, list_vms,
-)
-from homestead_vm_edit import (  # noqa: E402,F401
-    _claim_templates, _set_claim_templates, _dv_templates, _forget_templates, _template_size,
-    _disk_source, _size, _bytes, _image, _disk_volume, _volume_claim, _edit_disks, _set_network,
-    _network_kind, _edit_nics, _cloud_volume, _secret_values, _read_cloud_init, _identity,
-    _queue_secret, _edit_cloud_init, prepare_edit, _recheck_edit, commit_edit, edit,
-)
+# The parts (#623), imported last: each imports this module for what bind() sets.
+import homestead_vm_edit as VM_EDIT  # noqa: E402
+import homestead_vm_list as VM_LIST  # noqa: E402

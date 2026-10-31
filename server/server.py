@@ -442,16 +442,16 @@ _shim = _types.ModuleType("homestead_shim")
 _shim.raw_get = raw_get
 sys.modules["homestead_shim"] = _shim
 
-import homestead_lifecycle as LC
+import homestead_lifecycle as LC, homestead_node_actions as NODE_ACTIONS
 import homestead_stale_mount as STALE_MOUNT
-import homestead_imports as IMP
+import homestead_imports as IMP, homestead_vm_create as VM_CREATE
 import homestead_auth as AUTH
-import homestead_longhorn as LH
+import homestead_longhorn as LH, homestead_longhorn_backups as LH_BACKUPS, homestead_longhorn_volumes as LH_VOLUMES, homestead_longhorn_restore as LH_RESTORE
 import homestead_place as PLACE
 import homestead_hardware as HW
 import homestead_nodes as NODES
 import homestead_power_jobs as POWER_JOBS
-import homestead_updates as UPDATES
+import homestead_updates as UPDATES, homestead_update_rollouts as UPDATE_ROLLOUTS, homestead_update_registry as UPDATE_REGISTRY
 import homestead_vmusage as VMUSAGE
 import homestead_cancel as CANCEL
 import homestead_joblogs as JOBLOGS
@@ -464,7 +464,7 @@ ICONS.bind(DATA_DIR)
 import homestead_volumes as VOLUMES
 import homestead_smart as SMART
 import homestead_shares as SHARES
-import homestead_networking as NETWORK
+import homestead_networking as NETWORK, homestead_vip_registry as VIP_REGISTRY, homestead_network_inventory as NET_INVENTORY, homestead_network_services as NET_SERVICES
 import homestead_flow as FLOW
 import homestead_firewall as FIREWALL
 import homestead_routes as MODULE_ROUTES
@@ -475,12 +475,13 @@ import homestead_objectstore as OBJECTS
 import homestead_move as MOVE
 import homestead_fleet as FLEET
 import homestead_host_access as HOSTACCESS
+import homestead_request_scope as REQUEST_SCOPE
 HOSTACCESS.bind_targets(SYS_NS)
 import homestead_signins as SIGNINS
 import homestead_config_backup as CONFIG
 import homestead_move_source as MOVE_SOURCE
 import homestead_move_engine as MOVE_ENGINE
-import homestead_deploy as DEPLOY
+import homestead_deploy as DEPLOY, homestead_deploy_manifests as DEPLOY_MANIFESTS
 import homestead_workloads as WORKLOADS
 import homestead_onboard as ONBOARD
 import homestead_cfaccess as CFACCESS
@@ -512,7 +513,7 @@ import homestead_baseline as BASELINE
 import homestead_components as COMPONENTS
 import homestead_macvtap as MACVTAP
 import homestead_resources as RESOURCES
-import homestead_vms as VMS
+import homestead_vms as VMS, homestead_vm_list as VM_LIST
 import homestead_vm_review as VM_REVIEW
 import homestead_isos as ISOS
 import homestead_lhcapacity as LHCAP
@@ -550,13 +551,13 @@ def _resolve_storage_class():
 
 STORAGE_CLASS = _resolve_storage_class()
 LC.bind(kget, ksend, SYS_NS, _cache, HW.features, create_pvc, STORAGE_CLASS)
-IMP.bind(kget, ksend, create_pvc, DEPLOY.build_deployment, DEFAULT_NS, _cache, HW.features)
+IMP.bind(kget, ksend, create_pvc, DEPLOY_MANIFESTS.build_deployment, DEFAULT_NS, _cache, HW.features)
 IMP.SCAN_DIR = DATA_DIR       # each node's full image list, kept for every replica
 AUTH.bind(kget, _auth_ksend, DEFAULT_NS)
 CAPACITY_REVIEW.bind(AUTH.review_signing_key)
 LH.bind(kget, ksend, _cache, STORAGE_CLASS, DEFAULT_NS)
 PLACE.bind(kget, ksend, lambda: CACHE.cached("nodes", 5, NODES.get_nodes), _cache, HW.features)
-POWER.bind(kget, PLACE.impact, LC.quorum_report, lambda: LC.NODE_POWER_ENABLED)
+POWER.bind(kget, PLACE.impact, NODE_ACTIONS.quorum_report, lambda: LC.NODE_POWER_ENABLED)
 HOLD.bind(kget, ksend, (SELF.NS, NAMES.BRAND), POD_NAME)
 # The helper image is read from Homestead's own pod, defined further down.
 POWER_JOBS.bind(kget, ksend, lambda read, ns: SELF_DATA_ROUTES._self_data_helper_image(read, ns), homestead_running_on, POD_NAME)
@@ -572,13 +573,13 @@ UPDATES.bind(kget, ksend, DEFAULT_NS, DATA_DIR, SYS_NS, SMB_NAMESPACE,
 UPDATES.PART = homestead_part
 UPDATES.VERSION = lambda: HOMESTEAD_VERSION
 SMART.bind(kget, DEFAULT_NS, AUTH.smart_signing_key)
-OPS.bind(kget, DATA_DIR, UPDATES.progress, SMART.progress)
+OPS.bind(kget, DATA_DIR, UPDATE_ROLLOUTS.progress, SMART.progress)
 OPS.cdi_send = ksend
 RESTRUCTURE.bind(kget, ksend, raw_get)
 AFFINITY.bind(kget)
 FAILOVER.bind(kget, ksend)
 LAN.bind(kget, ksend)
-PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATES.image_layers(image, arch), DEFAULT_NS, DATA_DIR)
+PULLWATCH.bind(kget, ksend, raw_get, lambda image, arch: UPDATE_REGISTRY.image_layers(image, arch), DEFAULT_NS, DATA_DIR)
 
 
 UPDATES.pull_progress = _pull_progress
@@ -659,7 +660,7 @@ GROUPS.bind(_late(*GROUPS.NEEDS), namespace=DEFAULT_NS, own_group=OWN_GROUP, man
 DEPLOY.bind(_late(*DEPLOY.NEEDS), default_ns=DEFAULT_NS, version=HOMESTEAD_VERSION)
 UPDATES.bind_routes(_late(*UPDATES.ROUTE_NEEDS))
 IMP.bind_routes({**_late("guard_managed_smb", "preview_import", "reviewed_import"),
-                 "workload_service_names": lambda ns, name: NETWORK.workload_service_names(ns, name)})
+                 "workload_service_names": lambda ns, name: NET_SERVICES.workload_service_names(ns, name)})
 ONBOARD.bind(kget, ksend, DEFAULT_NS, OPS)
 # Published through a Cloudflare Tunnel behind Access: name the Access team and
 # application, and a request that came through Cloudflare without Access's
@@ -682,7 +683,7 @@ SELF.bind(kget, ksend, _own_namespace(), HOMESTEAD_VERSION, DATA_DIR)
 DIAGNOSTICS.bind(DATA_DIR, _diagnostic_read, OPS, HOMESTEAD_VERSION, _own_namespace(), os.environ.get("HOSTNAME", ""))
 SHARED.bind(DATA_DIR)
 LEADER.bind(kget, ksend, _own_namespace())
-IPAM.bind(kget, ksend, DEFAULT_NS, lambda: CACHE.cached("network", 5, NETWORK.inventory))
+IPAM.bind(kget, ksend, DEFAULT_NS, lambda: CACHE.cached("network", 5, NET_INVENTORY.inventory))
 HELM.bind(kget, ksend)
 MQTT.bind(kget, ksend, DEFAULT_NS, lambda: mqtt_snapshot(), LEADER.is_leader)
 HISTORY.bind(DATA_DIR)
@@ -706,7 +707,7 @@ VM_REVIEW.bind(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a, **k: KUBE_
                lambda: SETTINGS_HELPERS.get_app_settings(), lambda *a: VM_ROUTES.vm_default_class(*a), lambda ip: VM_ROUTES.vm_address_problem(ip),
                lambda: vm_create_options())
 VMUSAGE.bind(kget)
-VMS.platform, VMS.images = PLATFORM.detect, IMP.list_vm_images
+VMS.platform, VMS.images = PLATFORM.detect, VM_CREATE.list_vm_images
 STORAGE_CLASSES.bind(kget, ksend, storage_classes, _dns_name, lambda: NODES.node_temps(), _cache, DATA_DIR, DEFAULT_NS,
                      selectable_storage_classes, shared_storage_classes, storage_class_facts)
 STORAGE.bind(kget, ksend, storage_classes, create_pvc, age_secs, _cache, SYS_NS, DEFAULT_NS, storage_runtime_check)
@@ -740,7 +741,7 @@ OUTAGE.bind(DATA_DIR, kget=lambda path: KUBE_HELPERS.kget(path), ksend=lambda *a
 CHANGES.bind(DATA_DIR, plan=lambda b: change_undo_plan(b), ksend=lambda *a, **k: KUBE_HELPERS.ksend(*a, **k), is_leader=LEADER.is_leader, beat=beat,
              deployments=lambda: [d for d in KUBE_HELPERS.kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS])
 FORECAST.bind(DATA_DIR, lambda: (CACHE.cached("vol", 8, STORAGE.get_volumes), LHCAP.status()), LEADER.is_leader, beat)
-USAGE.bind(DATA_DIR, parse_cpu, parse_mem, lambda path: KUBE_HELPERS.kget(path), FLOW._flow_owner, SYS_NS, LEADER.is_leader, beat)
+USAGE.bind(DATA_DIR, parse_cpu, parse_mem, lambda path, **options: KUBE_HELPERS.kget(path, **options), FLOW._flow_owner, SYS_NS, LEADER.is_leader, beat)
 RESERVE.bind(kget, ksend, USAGE.summary, UPDATES.managed_by, (SELF.NS, NAMES.BRAND), SYS_NS, lambda: LEADER.is_leader(),
              HOSTACCESS.require_target_as, OPS)
 PLACEMODE.bind(kget, ksend, lambda: CACHE.cached("settings", 15, SETTINGS_HELPERS.get_app_settings), SYS_NS)
@@ -762,7 +763,7 @@ SELF_ADDRESS.bind(kget, NETWORK, OBJECTS, SELF.NS, os.environ.get("PORT", "8080"
                   follow_fleet=lambda: _follow_fleet_address())
 
 BASELINE.vip_setup = installer_vip
-OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, POWER_JOBS.rollout_reboot, operation_item, LC.set_cordon, own_node, DATA_DIR,
+OS_ROLLOUT.bind(kget, PLATFORM.detect, HOST_OS, POWER_JOBS.rollout_reboot, operation_item, NODE_ACTIONS.set_cordon, own_node, DATA_DIR,
                 lambda rollout: OPS.start("os-rollout", f"Update every host's OS ({len(rollout['nodes'])} hosts)",
                                           {"kind": "Node", "name": ", ".join(rollout["nodes"])[:200]}, "/nodes",
                                           {"rollout": rollout["id"]},
@@ -777,13 +778,13 @@ UPLINKS.bind(kget, ksend, lambda: NODES.node_temps())
 for _module in (K3SC, POWER, HOST_CONSOLE, HOST_OS, OS_ROLLOUT, HOST_BRIDGE, HOST_BONDS, UPLINKS,
                 VM_POWER_JOB, RENAME, IMPORT_JOB, AUTOUPDATE, RESTORE_TEST, DISK_V2, DISK_ALLOCATION, LH_RUNTIME, DISKS, HELM, ADDONS):
     _module.register(OPS)
-RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume: LH.backups(volume), LH.restore_backup, OPS._volume_restore,
-                  LH.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS,
+RESTORE_TEST.bind(kget, ksend, NAMES, lambda volume=None, strict=False: LH_BACKUPS.backups(volume, strict), LH_RESTORE.restore_backup, OPS._volume_restore,
+                  LH_RESTORE.cleanup_restore_snapshots, LHCAP.status, lambda target: UPTIME.ask_ports(target), lambda: SELF.NS,
                   lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads), get_app_settings, save_app_settings, _dns_name)
 
 AUTOUPDATE.bind(kget, ksend, UPDATES, lambda: UPTIME.report(),
-                lambda volume, name, annotations: LH.create_snapshot(volume, name, annotations),
-                lambda volume: LH.snapshots(volume), _prune_snapshot, NAMES)
+                lambda volume, name, annotations: LH_VOLUMES.create_snapshot(volume, name, annotations),
+                lambda volume: LH_VOLUMES.snapshots(volume), _prune_snapshot, NAMES)
 
 
 DISKS.setup_module = DISK_SETUP
@@ -794,7 +795,7 @@ DISKS.autotag_state = lambda: os.path.join(DATA_DIR, "disk-autotags.json")
 
 VMSTORE.bind(kget, ksend, DEFAULT_NS, PLATFORM.detect,
              lambda url, display, reuse: HVIMAGE.download(KUBE_HELPERS.kget, KUBE_HELPERS.ksend, DEFAULT_NS, url, "", None, display, reuse),
-             IMP.list_vm_images, _vm_image_disks,
+             lambda: VM_CREATE.list_vm_images(raw=True), _vm_image_disks,
              lambda ns, name: KUBE_HELPERS.ksend("DELETE", f"/apis/harvesterhci.io/v1beta1/namespaces/{ns}/virtualmachineimages/{name}"))
 SNAPSHOT_DELETE.bind(kget, ksend)
 DISKS.bind(kget, ksend, NODES.node_temps)
@@ -949,13 +950,13 @@ def start_self_data_move(body, actor):
 SELF_HEALTH.bind(lambda *a, **k: KUBE_HELPERS.kget(*a, **k), lambda *a, **k: KUBE_HELPERS.ksend(*a, **k),
                  lambda dep=None: SELF_DATA_ROUTES.homestead_data_volume(dep), _heartbeats,
                  lambda: NODES.node_temps(), lambda: SHARE_SERVERS.samba_state(), DEFAULT_NS, LB_IP, HOMESTEAD_VERSION)
-VOLUMES.bind(kget, ksend, LH.snapshots, LH.backups, _cache, SYS_NS, DEFAULT_NS)
+VOLUMES.bind(kget, ksend, LH_VOLUMES.snapshots, LH_BACKUPS.backups, _cache, SYS_NS, DEFAULT_NS)
 SHARES.bind(kget, ksend, create_pvc, SMB_NAMESPACE, _cache)
 SHARES.install = SHARE_SERVERS.install_samba
-SHARE_SERVERS.bind(kget, ksend, lambda cfg: DEPLOY.build_deployment(cfg), SMB_NAMESPACE, _cache,
+SHARE_SERVERS.bind(kget, ksend, lambda cfg: DEPLOY_MANIFESTS.build_deployment(cfg), SMB_NAMESPACE, _cache,
                    shared_storage_classes, lambda: STORAGE_CLASS, share_storage_options)
 NETWORK.bind(kget, ksend, SYS_NS, DEFAULT_NS, LB_IP, lambda ns, name: OVERVIEW_ROUTES.guard_managed_smb(ns, name), lambda: NODES.node_temps())
-FLOW.bind(lambda path: KUBE_HELPERS.kget(path), SYS_NS, lambda annotations: display_icon(annotations), STORAGE._moving_copy,
+FLOW.bind(lambda path, **options: KUBE_HELPERS.kget(path, **options), SYS_NS, lambda annotations: display_icon(annotations), STORAGE._moving_copy,
           parse_cpu, parse_mem, age_secs)
 FIREWALL.bind(kget, ksend, PLATFORM.detect, _own_namespace())
 VIPS.bind(kget, ksend)
@@ -975,7 +976,7 @@ SETUP.bind(DATA_DIR, overview=lambda: OVERVIEW_ROUTES.get_overview(), nodes=lamb
            vm_networks=lambda: vm_network_details(strict=True), storage_classes=lambda: storage_classes(),
            samba=lambda: SHARE_SERVERS.samba_state())
 API_V1.bind(nodes=lambda: CACHE.cached("nodes", 5, NODES.get_nodes), workloads=lambda: CACHE.cached("wl", 5, WORKLOADS.get_workloads),
-            vms=lambda: CACHE.cached("vms", 5, VMS.list_vms),
+            vms=lambda: CACHE.cached("vms", 5, VM_LIST.list_vms),
             alerts=lambda: [a for a in ALERTS.active() if a.get("announced", 0) > 0],
             jobs=OPS.snapshot, scale=api_scale, restart=restart_workload, vm_power=api_vm_power,
             version=lambda: HOMESTEAD_VERSION)
@@ -992,7 +993,7 @@ CONFIG.bind(kget, ksend, HOMESTEAD_VERSION, [
     {"id": "hardware", "label": "Hardware features", "detail": "Device mappings: iGPU, Coral, USB and the rest",
      "objects": [("configmaps", DEFAULT_NS, HW._hardware_map())]},
     {"id": "vips", "label": "VIPs", "detail": "Your saved VIPs, their labels and the default workload VIP",
-     "objects": [("configmaps", DEFAULT_NS, NETWORK.VIP_MAP)]},
+     "objects": [("configmaps", DEFAULT_NS, VIP_REGISTRY.VIP_MAP)]},
     {"id": "ipam", "label": "IP addresses", "detail": "Subnets, documented addresses, and the UniFi connection",
      "objects": [("configmaps", DEFAULT_NS, IPAM._map()), ("secrets", DEFAULT_NS, IPAM._secret())]},
     {"id": "mqtt", "label": "MQTT", "detail": "The broker, its credentials and what is published",
@@ -1480,7 +1481,7 @@ class H(HTTP.LimitedHandler):
         if route is not None:
             MODULE_ROUTES.answer(self, route.handler(MODULE_ROUTES.Request(
                 method, path, query, body, getattr(self, "user", None), getattr(self, "role", None),
-                self._client_ip() if getattr(self, "client_address", None) else "", MODULE_ROUTES.connection(self))))
+                self._client_ip() if getattr(self, "client_address", None) else "", MODULE_ROUTES.connection(self))), route.module)
         return route is not None
 
     def _send_stream(self, stream):
@@ -1505,7 +1506,7 @@ class H(HTTP.LimitedHandler):
 
     def _begin(self):
         """Per request: a connection can carry several, and the handler stays."""
-        CHANGES.REQUEST.user = None
+        REQUEST_SCOPE.unbind()
         self.api_key = None
         self._extra_headers = []
         self._raw = None
@@ -1513,7 +1514,6 @@ class H(HTTP.LimitedHandler):
         self._fleet_from = self._access = None    # who the guard finds, this request's alone
         self._diagnostic_authorized = False
         self._diagnostic_started = time.monotonic()
-        HOSTACCESS.set_role(None)
 
     def _raw_body(self):
         """The request body, read once: a signature covers it before it is parsed."""
@@ -1596,7 +1596,7 @@ class H(HTTP.LimitedHandler):
                                   "text/html; charset=utf-8")
             return self._send(502, {"error": str(error), "cluster": known.get("name", ""), "unreachable": True})
 
-    @self_data_request
+    @REQUEST_SCOPE.unbinds_after(self_data_request)
     def do_GET(self):
         self._begin()
         u = urllib.parse.urlparse(self.path)
@@ -1671,7 +1671,7 @@ class H(HTTP.LimitedHandler):
         except Exception as e:
             return self._send(500, {"error": str(e)})
 
-    @self_data_request
+    @REQUEST_SCOPE.unbinds_after(self_data_request)
     def do_POST(self):
         self._begin()
         u = urllib.parse.urlparse(self.path)
@@ -1710,7 +1710,7 @@ class H(HTTP.LimitedHandler):
         except Exception as e:
             return self._send(500, {"error": str(e)})
 
-    @self_data_request
+    @REQUEST_SCOPE.unbinds_after(self_data_request)
     def do_DELETE(self):
         self._begin()
         u = urllib.parse.urlparse(self.path)

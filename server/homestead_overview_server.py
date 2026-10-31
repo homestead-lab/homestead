@@ -14,7 +14,9 @@ import copy
 import json
 import time
 import urllib.request, urllib.parse, urllib.error
+import homestead_alert_webhook as ALERT_WEBHOOK
 import homestead_alerts as ALERTS
+import homestead_app_copies as APP_COPIES
 import homestead_api_v1 as API_V1
 import homestead_audit as AUDIT_LOG
 import homestead_auth as AUTH
@@ -30,22 +32,26 @@ import homestead_host_access as HOSTACCESS
 import homestead_host_os as HOST_OS
 import homestead_housekeeping as HOUSEKEEPING
 import homestead_leader as LEADER
-import homestead_longhorn as LH
+import homestead_longhorn_target as BACKUP_TARGET
+import homestead_longhorn_jobs as JOBS
 import homestead_lhcapacity as LHCAP
 import homestead_lhrebuild as LHREBUILD
 import homestead_logalerts as LOGALERTS
 import homestead_mcp as MCP
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_network_inventory as INV
+import homestead_vip_registry as REG
 import homestead_nodes as NODES
 import homestead_operations as OPS
 import homestead_outage as OUTAGE
 import homestead_outage_carry as OUTAGE_CARRY
+import homestead_outage_sweep as OUTAGE_SWEEP
 import homestead_page_snapshot as PAGES
 import homestead_place as PLACE
 import homestead_portal as PORTAL
 import homestead_ports as PORTS
 import homestead_push as PUSH
+import homestead_timeline_summary as SUMMARY
 import homestead_recovery as RECOVERY
 import homestead_resources as RESOURCES
 import homestead_restarts as RESTARTS
@@ -58,12 +64,12 @@ import homestead_scheduled_jobs as CRONJOBS
 import homestead_start_order as START_ORDER
 import homestead_self as SELF
 import homestead_storage as STORAGE
-import homestead_updates as UPDATES
+import homestead_update_checks as CHECKS
 import homestead_weekly_trim as WEEKLY_TRIM
 import homestead_upgrades as UPGRADES
 import homestead_uptime as UPTIME
 import homestead_vips as VIPS
-import homestead_vms as VMS
+import homestead_vm_list as VM_LIST
 import homestead_vmusage as VMUSAGE
 import homestead_workloads as WORKLOADS
 
@@ -137,7 +143,7 @@ def _uptime_loop():
         if LEADER.is_leader():
             try:
                 try:
-                    vms = cached("vms", 5, VMS.list_vms)
+                    vms = cached("vms", 5, VM_LIST.list_vms)
                 except Exception as error:
                     # Unread VMs sit this round out; their records are left as they were, not checked as gone.
                     vms = None
@@ -269,7 +275,7 @@ def _diagnostic_read(path, timeout=5):
 
 
 # ------------------------------------------------------------- alerts
-UPDATE_SCAN_EVERY = UPDATES.FRESH_FOR
+UPDATE_SCAN_EVERY = CHECKS.FRESH_FOR
 _last_update_scan = [0.0]
 
 
@@ -286,7 +292,7 @@ def _alert_sources():
     take("health", lambda: ALERTS.health_facts(MODULE_ROUTES.page("ov", get_overview)))
     take("jobs", lambda: ALERTS.job_facts(OPS.snapshot()))
     take("joins", lambda: ALERTS.join_facts(kget("/api/v1/nodes").get("items", [])))
-    take("addresses", lambda: VIPS.alert_facts(cached("network", 5, NETWORK.inventory).get("addresses")))
+    take("addresses", lambda: VIPS.alert_facts(cached("network", 5, INV.inventory).get("addresses")))
     take("capacity", lambda: LHCAP.alert_facts(MODULE_ROUTES.page("lhcap", LHCAP.status, 15)))
     take("detached-copies", lambda: LHREBUILD.alert_facts(cached("lhrebuild", 30, LHREBUILD.status)))
     take("disks", lambda: DISKS.alert_facts(cached("disks", 15, DISKS.inventory)))
@@ -316,18 +322,23 @@ def _alert_sources():
     if time.time() - _last_update_scan[0] > UPDATE_SCAN_EVERY:
         _last_update_scan[0] = time.time()
         try:
-            UPDATES.report()
+            CHECKS.report()
         except Exception:
             pass
-    latest = UPDATES._LATEST.get("report")
+    latest = CHECKS._LATEST.get("report")
     results["updates"] = ALERTS.update_facts(latest) if latest else None
     return results
 
 
 def push_alerts(fresh):
-    """Wakes every device that wants one of these alerts, and belongs to a user still here."""
+    """Wakes every device that wants one of these alerts, and belongs to a user
+    still here; and sends them to the alert webhook, if one is set (#741)."""
     if not fresh:
         return None
+    try:
+        ALERT_WEBHOOK.deliver(fresh)
+    except Exception as error:
+        print(f"alert webhook: {str(error)[:160]}", flush=True)
     users = {u["name"] for u in AUTH.list_users()}
     urgent = any(e["severity"] == "critical" and e["phase"] in ("raised", "worsened") for e in fresh)
     visible = {user: ALERTS.for_user(fresh, user) for user in users}
@@ -338,6 +349,8 @@ def push_alerts(fresh):
 
 def _alerts_loop():
     LOGALERTS.start()
+    # The summary push (#921) has its own thread: building one reads the Timeline.
+    SUMMARY.start()
     while True:
         # One replica raises alerts, or every notification arrives twice.
         if LEADER.is_leader():
@@ -377,11 +390,29 @@ def set_schedule(b):
             "detail": f"{name}: {SCHEDULES.describe(schedule).lower()}" if schedule else f"{name} is no longer on a schedule"}
 
 
+def _busy_owners():
+    """busy(ns, name): whether an app or VM of that name has a job not over:
+    queued, running, cancelling, or ended but still to be recovered (not yet
+    dismissible). When the jobs cannot be read, it raises: nothing is swept."""
+    try:
+        operations, error = OPS.snapshot(), None
+    except Exception as failed:
+        operations, error = [], failed
+    working = {((o.get("resource") or {}).get("namespace"), (o.get("resource") or {}).get("name"))
+               for o in operations if o.get("status") not in OPS.TERMINAL or not o.get("dismissible", True)}
+
+    def busy(ns, name):
+        if error is not None:
+            raise error
+        return (ns, name) in working
+    return busy
+
+
 def outage_tick():
     """After a monitoring round, on the leader: any outage action that is due,
     then the carry-over of webhooks saved before #741 - after, and guarded, so
     nothing in it can hold up or stop an outage action."""
-    found = OUTAGE.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VMS.list_vms))
+    found = OUTAGE.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VM_LIST.list_vms))
     did = []
     if found:
         operations = OPS.snapshot()
@@ -397,6 +428,14 @@ def outage_tick():
 
         did = OUTAGE.tick(found, UPTIME.report(), restart, lambda item: (item["ns"], item["name"]) in working, operations)
     try:
+        OUTAGE.migrate(found)       # webhook addresses still on an annotation go into their Secret (#931)
+    except Exception as error:
+        print(f"outage actions: move into Secrets: {type(error).__name__}", flush=True)
+    try:
+        OUTAGE_SWEEP.sweep(_busy_owners())  # Secrets of apps and VMs deleted outside Homestead (#931)
+    except Exception as error:
+        print(f"outage actions: sweep of webhook Secrets: {type(error).__name__}", flush=True)
+    try:
         OUTAGE_CARRY.carry_lan()    # reads its own lists: these cached ones cannot tell a failed VM list from none
     except Exception as error:
         print(f"outage actions: carry-over: {type(error).__name__}", flush=True)
@@ -404,7 +443,7 @@ def outage_tick():
 
 
 def scheduled_items():
-    return SCHEDULES.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VMS.list_vms))
+    return SCHEDULES.items(cached("wl", 5, WORKLOADS.get_workloads), cached("vms", 5, VM_LIST.list_vms))
 
 
 def schedule_act(item, action):
@@ -495,10 +534,16 @@ def _portal_status(request):
 def _resource(request):
     q, p = request.query, request.path
     arg = lambda key: (q.get(key) or [""])[0]
+    # Secret-bearing fields (Helm values, cloud-init, any custom resource's
+    # spec, an address's credentials) go only to the role that may reveal a
+    # Secret; everyone else gets each field's name.
+    need = ROUTES[("GET", "/api/resources/reveal")][0]
     if p == "/api/resources/list":
-        return RESOURCES.list_objects(arg("group"), arg("version"), arg("resource"), arg("ns"))
-    return RESOURCES.get_object(arg("group"), arg("version"), arg("resource"), arg("ns"),
-                                arg("name"), reveal=p.endswith("reveal"))
+        return RESOURCES.list_objects(arg("group"), arg("version"), arg("resource"), arg("ns"),
+                                      see_values=AUTH.allows(request.role, need))
+    return RESOURCES.get_object(arg("group"), arg("version"), arg("resource"), arg("ns"), arg("name"),
+                                reveal=p.endswith("reveal"), see_values=AUTH.allows(request.role, need),
+                                reveal_role=need)
 
 
 def _push_test(request):
@@ -681,12 +726,28 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
     deg = [v for v in vols if v["robustness"] == "degraded"]
     flt = [v for v in vols if v["robustness"] == "faulted"]
     try:
-        protection = protection_issues(cached("lhjobs-health", 60, LH.list_jobs),
-                                       cached("lhtarget-health", 60, LH.backup_target),
+        protection = protection_issues(cached("lhjobs-health", 60, JOBS.list_jobs),
+                                       cached("lhtarget-health", 60, BACKUP_TARGET.backup_target),
                                        cached("trim-health", 60, WEEKLY_TRIM.last_state))
     except Exception:
         protection = []
-    health = CLUSTER.classify_cluster_health(nodes, wl, vols, protection=protection)
+    # On one host, the degraded volumes Match copies to hosts offers to lower
+    # (#841) say why; read only then, and a failed read says nothing new.
+    short = set()
+    if len(nodes) == 1 and deg:
+        try:
+            offer = APP_COPIES.cached_facts()
+            short = {row["volume"] for row in offer["volumes"]} if offer.get("state") == "lower" else set()
+        except Exception:
+            short = set()
+    try:
+        in_maintenance, overran = HISTORY.maintenance_view()
+    except Exception:
+        in_maintenance, overran = set(), set()   # with no way to tell, every host counts, as in alerts
+    # Routine things are activities, and an issue counts once it has lasted
+    # the alerts' hold (#941).
+    health = CLUSTER.HOLD.apply(CLUSTER.classify_cluster_health(
+        nodes, wl, vols, protection=protection, maintenance=in_maintenance, overran=overran, short_of_hosts=short))
     tcap = sum(n["cpu_cap"] for n in nodes) or 1
     tuse = sum(n["cpu_used"] for n in nodes)
     mcap = sum(n["mem_cap_gb"] for n in nodes) or 1
@@ -700,13 +761,14 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
         "workload_pods": len(usrp),
         "system_pods": len(sysp),
         "volumes": len(vols), "vol_degraded": len(deg), "vol_faulted": len(flt),
+        "vol_one_host": sum(1 for issue in health["health_issues"] if issue.get("one_host")),
         "cpu_pct": round(tuse / tcap * 100, 1),
         "mem_pct": round(muse / mcap * 100, 1),
         "cpu_used": round(tuse, 2), "cpu_cap": tcap,
         "mem_used_gb": round(muse, 1), "mem_cap_gb": round(mcap, 1),
         "top_cpu": sorted(wl, key=lambda x: -x["cpu"])[:6],
         "top_mem": sorted(wl, key=lambda x: -x["mem_mb"])[:6],
-        "lb_ip": NETWORK.shared_vip(),
+        "lb_ip": REG.shared_vip(),
     }
 
 

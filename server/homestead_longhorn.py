@@ -23,8 +23,9 @@ homestead_longhorn_restore. This module keeps what bind() sets (kget, ksend,
 _cache, STORAGE_CLASS, DEFAULT_NS: server.py sets STORAGE_CLASS here as it
 finds the cluster's default class, and other modules read kget and
 STORAGE_CLASS here), the helpers the parts share, the overview, the routes
-and their handlers, and re-exports every moved name for one release. Replace
-a moved name in the module that defines it.
+and their handlers. Read and replace a moved name in the module that defines
+it; this module offers only the few the move source and the move engine read
+through the LH their bind() is given (see the end of this file).
 """
 import json
 import homestead_csi_restore as CSI_RESTORE
@@ -34,6 +35,7 @@ import urllib.error
 import urllib.parse
 import homestead_operations as OPS
 import homestead_routes
+import homestead_cache as CACHE
 import homestead_longhorn_jobs as JOBS
 import homestead_longhorn_volumes as VOLUMES
 import homestead_longhorn_target as BACKUP_TARGET
@@ -72,9 +74,7 @@ def bind(_kget, _ksend, _cache_ref, storage_class="longhorn-r2", default_namespa
 
 
 def _bust(*keys):
-    for k in list(_cache):
-        if not keys or any(k.startswith(x) for x in keys):
-            _cache.pop(k, None)
+    CACHE.drop_where(_cache, lambda k: not keys or k.startswith(keys))
 
 
 JOB_CHANGED = "This job was changed or deleted elsewhere since you opened it; open it again to see it"
@@ -123,7 +123,14 @@ PROTECTING = ("snapshot", "snapshot-force-create", "backup", "backup-force-creat
 
 
 def overview():
-    jobs, vols, tgt = JOBS.list_jobs(), VOLUMES._volumes(), BACKUP_TARGET.backup_target()
+    """Data protection's answer. Jobs that could not be read are named in
+    jobs_unread, and what depends on them (coverage, clashes) is unknown, not
+    none (#620, #927)."""
+    vols, tgt = VOLUMES._volumes(), BACKUP_TARGET.backup_target()
+    try:
+        jobs, unread = JOBS.list_jobs(strict=True), ""
+    except Exception as error:
+        jobs, unread = [], f"Longhorn's recurring jobs could not be read: {str(error)[:200]}"
     by_volume = {}
     for j in jobs:
         if j["task"] in PROTECTING:
@@ -131,10 +138,22 @@ def overview():
                 by_volume.setdefault(name, []).append(j)
     for v in vols:
         mine = by_volume.get(v["name"], [])
-        v["protected_by"] = [j["name"] for j in mine]
-        v["snapshotted"] = any(j["task"].startswith("snapshot") for j in mine)
-        v["backed_up"] = any(j["task"].startswith("backup") for j in mine)
-    names = VOLUMES.groups()
+        v["protected_by"] = None if unread else [j["name"] for j in mine]
+        v["snapshotted"] = None if unread else any(j["task"].startswith("snapshot") for j in mine)
+        v["backed_up"] = None if unread else any(j["task"].startswith("backup") for j in mine)
+    names = VOLUMES.groups(jobs)
+    if unread:
+        return {"jobs": [], "jobs_unread": unread, "volumes": vols, "groups": names, "target": tgt, "tasks": TASKS,
+                "group_rows": [{"name": g, "volumes": [v["name"] for v in vols if g in v["groups"]], "jobs": []}
+                               for g in names],
+                "protected": None, "backed_up": None, "unprotected": [], "total": len(vols), "clashes": [],
+                "homestead_jobs": []}
+    # Homestead's own weekly trim is no RecurringJob since #591, so it joins
+    # the clashes and This week as a job of its own (#927). Imported here:
+    # homestead_weekly_trim imports this module.
+    import homestead_weekly_trim as WEEKLY_TRIM
+    trim = WEEKLY_TRIM.schedule(vols, jobs)
+    homestead_jobs = [trim] if trim else []
     return {
         "jobs": jobs, "volumes": vols, "groups": names, "target": tgt,
         "tasks": TASKS,
@@ -145,8 +164,10 @@ def overview():
         "backed_up": sum(1 for v in vols if v["backed_up"]),
         "unprotected": [v["pvc"] or v["name"] for v in vols if not v["protected_by"]],
         "total": len(vols),
+        # Homestead's own scheduled work on the volumes: its weekly trim.
+        "homestead_jobs": homestead_jobs,
         # A trim or backup starting with a backup on a shared volume this week.
-        "clashes": CLASHES.clashes(jobs),
+        "clashes": CLASHES.clashes(jobs + homestead_jobs),
     }
 
 
@@ -221,27 +242,13 @@ def register(ops):
     ops.RESOLVERS["protect-run"] = JOBS.run_status
 
 
-# Every moved name, for one release (#623).
-from homestead_longhorn_jobs import (  # noqa: E402,F401
-    list_jobs, _cron_runs, cron_run_state, run_job, run_status, save_job, delete_job, TRIM_JOB,
-    TRIM_CRON, BACKEND, _backend, trim_volume,
-)
-from homestead_longhorn_volumes import (  # noqa: E402,F401
-    _volumes, volumes, groups, SOURCE_LABEL, _patch_labels, assign, bulk_assign, _job_objects,
-    _set_job_groups, _only_default, save_group, delete_group, snapshots, create_snapshot,
-)
+# What the move source and the move engine read through this module, which
+# server.py hands them in bind() (their tests hand in a fake). Everything else
+# is read, and replaced in tests, where it is defined (#623).
 from homestead_longhorn_target import (  # noqa: E402,F401
-    backup_target, TARGET_SECRET, SCHEMES, _target_secret, HARVESTER_TARGET, _harvester_setting,
-    _seconds, harvester_target_value, _set_harvester_target, _secret_keys, on_harvester,
-    _backup_target_object, _backup_target_state, backup_target_state, transfer_target_state,
-    replace_backup_target_state, set_backup_target,
+    backup_target, backup_target_state, transfer_target_state, replace_backup_target_state,
 )
-from homestead_longhorn_backups import (  # noqa: E402,F401
-    backups, create_backup, move_snapshot_error, ensure_move_backup, backup_volumes, _pvc_of_backup,
-    delete_backup,
-)
+from homestead_longhorn_backups import backups, ensure_move_backup  # noqa: E402,F401
 from homestead_longhorn_restore import (  # noqa: E402,F401
-    K8S_LABEL, _valid_k8s_name, _backup, _restore_source, restore_plan, restore_backup,
-    validate_restore_class, restore_support, ensure_restore_support, restore_problem,
-    cleanup_restore_snapshots, finish_restore_resize,
+    restore_backup, validate_restore_class, restore_support, ensure_restore_support, restore_problem,
 )

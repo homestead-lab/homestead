@@ -4,13 +4,14 @@
    protection shows the cluster setting and each volume's choice; an admin
    changes them after a review. */
 const FS_FREEZE_MODES = [["ignored", "Follow the cluster"], ["enabled", "Always freeze"], ["disabled", "Never freeze"]];
-const FS_FREEZE_SHOWN = { yes: ["freezes", "ok"], sync: ["syncs instead", "info"], no: ["not frozen", ""] };
+const FS_FREEZE_SHOWN = { yes: ["freezes", "ok"], later: ["freezes once attached", "info"], sync: ["syncs instead", "info"], no: ["not frozen", ""] };
 const fsFreezeWhen = at => (typeof answerSince === "function" ? answerSince(at) : fmtAt(at));
 
 /* What a snapshot of v does with the cluster switch at on. */
 function fsFreezeWould(v, on) {
   if (v.engine === "v2") return "no";
-  return v.mode === "enabled" || (v.mode !== "disabled" && on) ? v.when_on : "no";
+  const would = v.mode === "enabled" || (v.mode !== "disabled" && on) ? v.when_on : "no";
+  return would === "yes" && v.attached === false ? "later" : would;
 }
 
 function fsFreezeSummary(d) {
@@ -74,7 +75,7 @@ window.fsFreezeReview = on => {
   modal(on ? "Freeze filesystems for snapshots" : "Stop freezing filesystems", `${UI.lead(on
     ? "For each snapshot, Longhorn freezes the volume's filesystem, takes it, then thaws it. Writes wait, usually under a second, and snapshots and backups hold the files as they were at one instant."
     : "Snapshots go back to crash-consistent: Longhorn syncs each volume first, but a write can land between the sync and the snapshot.")}
-    ${UI.facts([["Frozen for each snapshot", String(count("yes"))], ["Synced instead", String(count("sync"))], ["Not frozen", String(count("no"))]])}
+    ${UI.facts([["Frozen for each snapshot", String(count("yes"))], ["Synced instead", String(count("sync"))], ...(count("later") ? [["Frozen once attached", String(count("later"))]] : []), ["Not frozen", String(count("no"))]])}
     ${UI.notices([
       d.unknown_value ? ["warn", `Longhorn's setting holds "${d.value}", which this replaces.`] : null,
       old ? ["warn", `Kernel 5.17 or older on ${d.old_kernels.map(k => k.host).join(", ")}: if a volume fails mid-freeze, its filesystem can stay stuck until that host restarts.`] : null,

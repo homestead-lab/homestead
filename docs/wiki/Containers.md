@@ -494,11 +494,13 @@ the registry gives. Kubernetes itself reports no more than "Pulling".
 node's largest ones, so Homestead asks each node's containerd for all of them
 (a short scan, again whenever the last is over fifteen minutes old) and keeps
 the answer, adding anything pulled since. **Clean up** removes an image nothing
-uses. *Active* images are what running containers use; *stopped* ones are what
-a container scaled to zero starts from, and *scheduled* ones a scheduled job's,
-so neither reads as unused. *Rollback* copies are
-the image a container had before its last update, kept so **Roll back** can
-return to it; **Forget** one and it becomes unused, to clean up like the rest.
+uses. A *running* image is what running containers use. An image also stays
+while something not running yet will start from it, and the Retention column
+says which: *Job paused* or *Job waiting*, *scaled to zero* or *no pods yet*
+for an app, *scheduled job*, *stopped VM*, *VM pool at zero*, *VM template*, *VM snapshot*, *disk
+import* or *scheduled import*. An app or VM is a link to its page. An import from an OpenShift image stream is\nnot read, so it keeps every image and says *image stream not read*. *Roll back* copies are the image a container had before its last
+update, kept so **Roll back** can return to it; **Forget** one and it becomes
+unused, to clean up like the rest.
 
 An update keeps one previous image per container for Roll back; the one before
 it becomes unused. Unused images stay on every host that ran them until they
@@ -624,13 +626,16 @@ an error, a request ID, a user - or, from a container's menu, in that app's
 alone. Choose how far back (15 minutes to 24 hours); matches come newest first,
 with what matched marked, and each opens that app's live logs. **Match case**
 and **Regular expression** are options (an expression that repeats a repeating
-group is refused, as it can take ages to run).
+group is refused, as it can take ages to run, and any expression gets 10
+seconds of matching per search: when they run out, the newest lines already
+checked are shown and the search names the apps it searched only in part).
 
 It asks Kubernetes for each running pod's logs, so it reaches back only as far
 as each pod still holds them; lines from pods since replaced are not searched.
 It reads up to 60 containers, 2 MB from each, and shows up to 500 matches - and
 says when it reached any of those, or could not read a pod. One search runs at a
-time.
+time. To be told when a search matches too often, save it as a
+[log alert](Log-alerts).
 
 ## Schedules
 

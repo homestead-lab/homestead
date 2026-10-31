@@ -11,7 +11,10 @@ from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import homestead_kube as K
+import homestead_operations as OPS
 import homestead_passthrough as PASS
+from fakes.kube import Kube
 
 HOST = """CMDLINE BOOT_IMAGE=/vmlinuz root=/dev/mapper/vg-root ro intel_iommu=on iommu=pt
 GROUPS 18
@@ -42,44 +45,57 @@ class Host:
         return (self.out if script.startswith('echo "CMDLINE') else self.action_out), ""
 
 
-class Cluster:
-    def __init__(self, kv=None, harvester=False):
-        self.kv = kv or {"metadata": {"name": "kubevirt", "namespace": "kubevirt"},
-                         "spec": {"configuration": {"developerConfiguration": {"featureGates": []}}}}
-        self.harvester, self.sent, self.objects = harvester, [], {}
+KV_PATH = "/apis/kubevirt.io/v1/namespaces/kubevirt/kubevirts/kubevirt"
 
-    def kget(self, path):
-        if path == PASS.KUBEVIRTS:
-            return {"items": [self.kv]}
-        if path == "/api/v1/nodes":
-            return {"items": [{"metadata": {"name": "node-1"},
-                               "status": {"allocatable": {"homestead.io/pci-10de-1e87": "1", "cpu": "8"}}}]}
-        if path in self.objects:
-            return self.objects[path]
-        raise KeyError(path)
 
-    def ksend(self, method, path, body=None, ctype=""):
-        self.sent.append((method, path, body))
-        if path.endswith("/kubevirts/kubevirt") and method == "PATCH":
-            conf = self.kv["spec"]["configuration"]
-            patch = body["spec"]["configuration"]
-            if "permittedHostDevices" in patch:
-                conf["permittedHostDevices"] = patch["permittedHostDevices"]
-            if "developerConfiguration" in patch:
-                conf["developerConfiguration"].update(patch["developerConfiguration"])
+class Scene:
+    """KubeVirt and one host, on the shared fake API (tests/fakes/kube.py).
+    Its writes go round the real write guards, and KubeVirt's settings are
+    patched the way the API server patches them."""
+
+    def __init__(self, test, kv=None, harvester=False):
+        kv = kv or {"metadata": {"name": "kubevirt", "namespace": "kubevirt"},
+                    "spec": {"configuration": {"developerConfiguration": {"featureGates": []}}}}
+        # The storage guard takes the job store's lock, which lives under its DATA_DIR.
+        test.enterContext(mock.patch.object(OPS, "DATA_DIR", test.enterContext(tempfile.TemporaryDirectory())))
+        self.kube = test.enterContext(Kube(
+            {"apiVersion": "kubevirt.io/v1", "kind": "KubeVirt", **kv},
+            {"apiVersion": "v1", "kind": "Node", "metadata": {"name": "node-1"},
+             "status": {"allocatable": {"homestead.io/pci-10de-1e87": "1", "cpu": "8"}}}))
+        self.harvester = harvester
+
+    @property
+    def kv(self):
+        return self.kube.object(KV_PATH)
+
+    @property
+    def sent(self):
+        return [(method, path, body) for method, path, body, _ in self.kube.writes]
+
+    def edit(self, path, change):
+        """Someone else changes the object at path; change(obj) edits a copy."""
+        obj = self.kube.object(path)
+        change(obj)
+        self.kube.add(obj)
+
+    def permit(self, devices):
+        """The devices KubeVirt may hand out, as somebody saved them."""
+        self.edit(KV_PATH, lambda kv: kv["spec"]["configuration"].update(permittedHostDevices=devices))
 
 
 class PassthroughTests(unittest.TestCase):
     def setUp(self):
         self.data = tempfile.mkdtemp()
-        self.cluster, self.host = Cluster(), Host()
+        self.cluster, self.host = Scene(self), Host()
         storage = mock.patch.object(PASS, "longhorn_block_paths", return_value=[])
         storage.start()
         self.addCleanup(storage.stop)
         self.bind()
 
     def bind(self, harvester=False):
-        PASS.bind(self.cluster.kget, self.cluster.ksend, self.host,
+        saved = (PASS.kget, PASS.ksend, PASS.hostrun, PASS.platform, PASS.DATA_DIR)
+        self.addCleanup(lambda: PASS.bind(*saved))
+        PASS.bind(K.kget, K.ksend, self.host,
                   lambda force=False: {"harvester": harvester, "distribution": "rke2" if harvester else "k3s"}, self.data)
 
     def test_a_host_is_read_with_its_iommu_groups_and_what_it_cannot_give_away(self):
@@ -97,19 +113,22 @@ class PassthroughTests(unittest.TestCase):
                          "root hubs are left out")
 
     def test_resource_usage_distinguishes_saved_configurations_and_active_instances(self):
-        self.cluster.kv["spec"]["configuration"]["permittedHostDevices"] = {"pciHostDevices": [
-            {"resourceName": "example/gpu", "pciVendorSelector": "10DE:1E87"}]}
+        self.cluster.permit({"pciHostDevices": [
+            {"resourceName": "example/gpu", "pciVendorSelector": "10DE:1E87"}]})
         spec = {"domain": {"devices": {"hostDevices": [{"deviceName": "example/gpu"}]}}}
-        self.cluster.objects["/apis/kubevirt.io/v1/virtualmachines"] = {"items": [
-            {"metadata": {"namespace": "lab", "name": name}, "spec": {"template": {"spec": spec}}}
-            for name in ("running", "stopped")]}
-        self.cluster.objects["/apis/kubevirt.io/v1/virtualmachineinstances"] = {"items": [
-            {"metadata": {"namespace": "lab", "name": name}, "spec": spec, "status": {"phase": phase}}
-            for name, phase in (("running", "Running"), ("pending", "Pending"), ("stopped", "Failed"))]}
+        for name in ("running", "stopped"):
+            self.cluster.kube.add({"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachine", "metadata": {"namespace": "lab", "name": name},
+                                   "spec": {"template": {"spec": spec}}})
+        vmis = [{"apiVersion": "kubevirt.io/v1", "kind": "VirtualMachineInstance", "metadata": {"namespace": "lab", "name": name},
+                 "spec": spec, "status": {"phase": phase}}
+                for name, phase in (("running", "Running"), ("pending", "Pending"), ("stopped", "Failed"))]
+        for vmi in vmis:
+            self.cluster.kube.add(vmi)
         row = PASS.resources(with_usage=True)["resources"][0]
         self.assertEqual(["lab/running", "lab/stopped"], row["configured_vms"])
         self.assertEqual(["lab/pending", "lab/running"], row["active_vms"])
-        self.cluster.objects["/apis/kubevirt.io/v1/virtualmachineinstances"]["metadata"] = {"continue": "more"}
+        self.cluster.kube.react("GET", "/apis/kubevirt.io/v1/virtualmachineinstances",   # a list cut short
+                                lambda method, path, body: {"items": vmis, "metadata": {"continue": "more"}})
         self.assertIn("usage_error", PASS.resources(with_usage=True))
 
     def test_a_gpu_goes_to_vfio_with_its_group_but_not_the_bridge_and_kubevirt_is_told(self):
@@ -175,9 +194,9 @@ class PassthroughTests(unittest.TestCase):
         scripts = len(self.host.scripts)
         self.assertEqual(facts, PASS.inventory("node-1")["facts"])
         self.assertIsNone(PASS.inventory("missing")["facts"])
-        self.cluster.kv["spec"]["configuration"]["permittedHostDevices"] = {
+        self.cluster.permit({
             "pciHostDevices": [{"pciVendorSelector": "10DE:1E87", "resourceName": "other.test/gpu"}],
-            "usb": [{"resourceName": "homestead.io/usb-1a6e-089a", "selectors": [{"vendor": "1a6e", "product": "089a"}]}]}
+            "usb": [{"resourceName": "homestead.io/usb-1a6e-089a", "selectors": [{"vendor": "1a6e", "product": "089a"}]}]})
         gpu, usb = PASS.resources()["resources"]
         self.assertEqual("NVIDIA Corporation TU104 [GeForce RTX 2080]", gpu["label"])
         self.assertEqual("10DE:1E87", gpu["selector"])
@@ -213,8 +232,8 @@ class PassthroughTests(unittest.TestCase):
 
     def test_refresh_replaces_removed_devices_and_dead_nodes_do_not_label_resources(self):
         PASS.inspect("node-1")
-        self.cluster.kv["spec"]["configuration"]["permittedHostDevices"] = {
-            "pciHostDevices": [{"pciVendorSelector": "10DE:1E87", "resourceName": "homestead.io/pci-10de-1e87"}]}
+        self.cluster.permit({
+            "pciHostDevices": [{"pciVendorSelector": "10DE:1E87", "resourceName": "homestead.io/pci-10de-1e87"}]})
         self.host.out = "\n".join(line for line in HOST.splitlines() if "0000:01:00.0" not in line) + "\n"
         PASS.inspect("node-1")
         self.assertEqual("10DE:1E87", PASS.resources()["resources"][0]["label"])
@@ -224,21 +243,23 @@ class PassthroughTests(unittest.TestCase):
 
     def test_harvester_names_and_group_zero_come_from_current_inventory_crs(self):
         self.bind(harvester=True)
-        self.cluster.kv["spec"]["configuration"]["permittedHostDevices"] = {
-            "pciHostDevices": [{"resourceName": "homestead.io/pci-10de-1e87"}]}
+        self.cluster.permit({
+            "pciHostDevices": [{"resourceName": "homestead.io/pci-10de-1e87"}]})
         path = f"{PASS.HV}/pcidevices"
-        self.cluster.objects[path] = {"items": [
-            {"metadata": {"name": "gpu"}, "status": {"nodeName": "node-1", "address": "0000:01:00.0", "classId": "0300",
+        for device in [
+            {"metadata": {"name": "node-1-0000010000"}, "status": {"nodeName": "node-1", "address": "0000:01:00.0", "classId": "0300",
                 "iommuGroup": 0, "description": "Named GPU", "resourceName": "homestead.io/pci-10de-1e87"}},
-            {"metadata": {"name": "audio"}, "status": {"nodeName": "node-1", "address": "0000:01:00.1", "classId": "0403",
-                "iommuGroup": 0, "description": "Named audio"}}]}
+            {"metadata": {"name": "node-1-0000010001"}, "status": {"nodeName": "node-1", "address": "0000:01:00.1", "classId": "0403",
+                "iommuGroup": 0, "description": "Named audio"}}]:
+            self.cluster.kube.add({"apiVersion": "devices.harvesterhci.io/v1beta1", "kind": "PCIDevice", **device})
         facts = PASS.inspect("node-1")
         self.assertEqual(["0000:01:00.1"], facts["pci"][0]["group_members"])
         gpu = PASS.resources()["resources"][0]
         self.assertEqual("Named GPU", gpu["label"])
         self.assertTrue(gpu["gpu"])
         self.assertEqual(0, gpu["devices"][0]["group"])
-        self.cluster.objects[path]["items"] = []
+        for name in ("node-1-0000010000", "node-1-0000010001"):
+            self.cluster.kube.discard(f"{path}/{name}")
         self.assertEqual([], PASS.resources()["resources"][0]["devices"], "old Harvester snapshots do not override live CRs")
         self.assertEqual([], self.host.scripts)
 
@@ -377,11 +398,13 @@ cat "$GPU_TEST_ROM" > "$output"
 
 class VmTests(unittest.TestCase):
     def setUp(self):
-        self.cluster = Cluster({"metadata": {"name": "kubevirt", "namespace": "kubevirt"},
+        self.cluster = Scene(self, {"metadata": {"name": "kubevirt", "namespace": "kubevirt"},
                                 "spec": {"configuration": {"developerConfiguration": {"featureGates": []},
                                                            "permittedHostDevices": {"pciHostDevices": [
                                                                {"pciVendorSelector": "10DE:1E87", "resourceName": "homestead.io/pci-10de-1e87"}]}}}})
-        PASS.bind(self.cluster.kget, self.cluster.ksend, Host(), lambda force=False: {"distribution": "k3s"}, tempfile.mkdtemp())
+        saved = (PASS.kget, PASS.ksend, PASS.hostrun, PASS.platform, PASS.DATA_DIR)
+        self.addCleanup(lambda: PASS.bind(*saved))
+        PASS.bind(K.kget, K.ksend, Host(), lambda force=False: {"distribution": "k3s"}, tempfile.mkdtemp())
 
     def vm(self):
         return {"metadata": {"name": "gaming"}, "spec": {"template": {"metadata": {}, "spec": {"domain": {"devices": {}}}}}}
@@ -406,7 +429,7 @@ class VmTests(unittest.TestCase):
         self.assertIn("gaming-vbios", configmap["path"])
         self.assertIn({"kind": "kubevirt-gates", "gates": ["Sidecar"]}, effects)
         # Saved, the ROM is read back from its ConfigMap for the next edit.
-        self.cluster.objects[configmap["path"]] = configmap["body"]
+        self.cluster.kube.add(configmap["body"])
         self.assertEqual({"hostdev-0": ROM}, PASS.current_roms(vm, "lab"))
 
     def test_the_hook_names_the_rom_on_the_right_device_and_never_breaks_the_vm(self):

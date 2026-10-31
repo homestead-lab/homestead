@@ -1,7 +1,8 @@
 """homestead_updates split by feature (#623): the work lives in
 homestead_update_registry, homestead_update_checks and homestead_update_rollouts,
-and homestead_updates keeps the bound state, the routes and a re-export of
-every name, so other modules, server.py and tests keep working."""
+and homestead_updates keeps the bound state and the routes. Other modules,
+server.py and tests read and replace each name where it is defined
+(test_split_reexports)."""
 import subprocess
 import sys
 import unittest
@@ -21,19 +22,11 @@ PARTS = (REGISTRY, CHECKS, ROLLOUTS)
 
 
 class UpdateModuleTests(unittest.TestCase):
-    def test_every_moved_name_is_the_same_object_on_homestead_updates(self):
-        for part in PARTS:
-            moved = [name for name in vars(part) if not name.startswith("__")
-                     and getattr(vars(part)[name], "__module__", part.__name__) == part.__name__
-                     and name not in ("U",) and not isinstance(vars(part)[name], type(sys))]
-            self.assertTrue(moved, part.__name__)
-            for name in moved:
-                self.assertIs(getattr(UPDATES, name), getattr(part, name), f"{part.__name__}.{name}")
-
     def test_each_module_can_be_imported_first(self):
         for name in ("homestead_update_registry", "homestead_update_checks", "homestead_update_rollouts",
                      "homestead_updates"):
-            done = subprocess.run([sys.executable, "-c", f"import {name}, homestead_updates as U; U.report; U.progress"],
+            done = subprocess.run([sys.executable, "-c", f"import {name}, homestead_updates as U, homestead_update_checks as C, "
+                                   "homestead_update_rollouts as R; C.report; R.progress; U.ROUTES"],
                                   cwd=SERVER, capture_output=True, text=True)
             self.assertEqual(0, done.returncode, f"importing {name} first: {done.stderr}")
 
@@ -51,7 +44,7 @@ class UpdateModuleTests(unittest.TestCase):
         # server.py binds kget on homestead_updates, and tests replace it there.
         asked = []
         with mock.patch.object(UPDATES, "kget", side_effect=lambda path: asked.append(path) or {"items": []}):
-            UPDATES.pull_state("lab", "app-1")
+            ROLLOUTS.pull_state("lab", "app-1")
         self.assertEqual(1, len(asked))
         self.assertIn("/api/v1/namespaces/lab/events", asked[0])
 

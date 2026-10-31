@@ -12,10 +12,10 @@ Settings has ten sections: nine that change the cluster for everyone, and
 | **Monitoring** | when bars and node cards turn amber or red; drive health |
 | **Hardware and storage** | hardware features (a Coral, an iGPU, a Zigbee stick) and **Rescan**; add-ons - the node probe, SMB and NFS shares, and Longhorn, KubeVirt, Multus and kube-vip where the cluster lacks them; Longhorn over-provisioning, minimum free space, replica rebuilds and the V2 engine; storage classes; namespaces |
 | **Linked clusters** | other Homesteads managed from this one, and moving workloads between them |
-| **Connections** | UniFi Network; MQTT and Home Assistant - stats, and power control for the containers and VMs you pick; the App Store catalogue |
+| **Connections** | UniFi Network; MQTT and Home Assistant - stats, and power control for the containers and VMs you pick; the alert webhook (alerts to ntfy, Gotify or any webhook, see [Alerts and PWA notifications](https://github.com/homestead-lab/homestead/blob/main/docs/notifications.md#alert-webhook)); the App Store catalogue |
 | **Users and access** | users and their roles, and [API keys](API) |
 | **Troubleshooting** | bug reports and logs |
-| **You** | appearance, notifications on this device, refresh rate, your password and signing out |
+| **You** | appearance, notifications on this device, your summary push, refresh rate, your password and signing out |
 
 A section saves once: change what you like and a bar at its foot offers
 **Save** and **Discard**. Leaving the section or the page with changes not
@@ -335,6 +335,11 @@ took. Opening a console or a host shell writes one line when it ends.
 {"v":1,"at":"2026-10-21T09:14:03.512Z","replica":"homestead-6d9f-abcde","via":"browser","user":"ada","role":"operator","addr":"192.0.2.10","method":"POST","path":"/api/workload/scale","target":{"ns":"lab","kind":"Deployment","name":"app-1"},"status":200,"ms":142}
 ```
 
+- **What Homestead deletes on its own** writes a line too, with `"via":"leader"`,
+  `"user":"homestead"` and an `event`, but no `addr`, `target`, `status` or `ms`:
+  `outage-secret-swept` when the Secret of an outage webhook is deleted because
+  its app or VM was deleted outside Homestead an hour before (`"for"` names it,
+  `"detail"` says for how long it was missing).
 - **The pod log always has every line**, for Loki, Vector or anything else that
   reads pod logs.
 - **`audit.jsonl` on Homestead's data volume** keeps them across restarts: two
@@ -365,6 +370,16 @@ took. Opening a console or a host shell writes one line when it ends.
   (only the target's namespace, kind and name) and query strings.
 - Sign-ins are in the [sign-in history](#sign-in-history), and what AI agents
   asked for, with their arguments, in the agent audit.
+
+Admins read it under **Events → Audit**, together with the agent audit (every
+call an API key made, on `/api/v1` and `/mcp`): one list, newest first, each
+row saying which log it came from, who, what and how it ended. Filter it by log
+or by person; **Older** and **Newer** move 100 rows at a time. The two files
+stay apart: an agent's arguments are shown only under **Settings → AI agent requests**.
+Each page reads the logs from their newest end, so a full log stays quick; when
+a filter matches little, only the newest 20,000 lines of each log are searched,
+and the page says so. A change an AI agent made through `/mcp` appears in both
+logs, once as the request and once as the agent's call.
 
 ## Sign-in history
 
@@ -482,6 +497,20 @@ notifications - outages, degraded storage and workloads, failed jobs, hosts
 joining, image updates - even while closed. **This device → Turn on
 notifications**. Pushes carry nothing: the app fetches what happened over its own
 signed-in connection. On iPhone, add Homestead to the Home Screen first.
+
+A push tells you when something starts. To hear how a quiet day or week went
+as well, set **You → Summary push**: Off (the default), Daily, or Weekly on a
+day you choose, at an hour of your time zone. At that time each of your
+devices with notifications on gets one push counting what the Timeline
+recorded, such as "Past week: 3 changes, 1 restart, nothing failed", and
+tapping it opens the Timeline from there. It is yours alone: everyone sets
+their own, and it counts what your role can see. How it is sent:
+[Summary push](https://github.com/homestead-lab/homestead/blob/main/docs/notifications.md#summary-push).
+
+To get the same alerts in ntfy, Gotify or any webhook, an admin sets
+**Connections → Alert webhook**: its format, the address, which alerts
+(critical only, warnings and critical, or everything) and, for a self-hosted
+service on the home network, **Allow a LAN address**.
 
 Browsers allow neither on a plain-HTTP address; see
 [Installing Homestead](Installing-Homestead#reaching-it-from-outside).

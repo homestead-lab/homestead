@@ -13,20 +13,21 @@ import urllib.parse
 
 import homestead_disks as DISKS
 import homestead_hardware as HW
+import homestead_kube_metrics as KUBE_METRICS
 import homestead_host_os as HOST_OS
 import homestead_impact as IMPACT
 import homestead_lhcapacity as LHCAP
-import homestead_lifecycle as LC
+import homestead_node_actions as NODE_ACTIONS
 import homestead_names as NAMES
 import homestead_node_probes as PROBES
-import homestead_networking as NETWORK
+import homestead_network_inventory as INV
 import homestead_nfs as NFS
 import homestead_operations as OPS
 import homestead_place as PLACE
 import homestead_ports as PORTS
 import homestead_routes as ROUTER
 import homestead_smart as SMART
-import homestead_vms as VMS
+import homestead_vm_list as VM_LIST
 
 kget = ksend = None
 DEFAULT_NS, SYS_NS = "lab", set()
@@ -72,8 +73,10 @@ def node_temps(wait=True, unreachable=False):
 
 
 def start_probes():
-    """This replica's background probe loop (#705)."""
+    """This replica's background loops: the node probes (#705) and
+    metrics-server (#906)."""
     PROBES.start(DEFAULT_NS)
+    KUBE_METRICS.start(lambda path, **options: kget(path, **options))
 
 
 def reconcile_hardware(fresh=False):
@@ -89,6 +92,7 @@ def reconcile_hardware(fresh=False):
             pass             # the probe pods could not be listed: use what is known
     temps = node_temps()
     found = {}
+    definitions = None               # read once, at the first host with a probe (#977)
     for n in kget("/api/v1/nodes").get("items", []):
         name = n["metadata"]["name"]
         nfs_facts = (temps.get(name) or {}).get("nfs") or {}
@@ -100,9 +104,11 @@ def reconcile_hardware(fresh=False):
         devices = (temps.get(name) or {}).get("devices")
         if devices is None:
             continue                 # no probe here: nothing to say either way
+        if definitions is None:
+            definitions = HW.features()
         labels, auto = HW.reconcile_node(name, n["metadata"].get("labels", {}) or {},
-                                         n["metadata"].get("annotations", {}) or {}, devices)
-        found[name] = sorted(x["id"] for x in HW.inventory(labels, devices, auto) if x["detected"])
+                                         n["metadata"].get("annotations", {}) or {}, devices, definitions)
+        found[name] = sorted(x["id"] for x in HW.inventory(labels, devices, auto, definitions) if x["detected"])
     if fresh:
         ROUTER.forget("nodes", "ov")
     return found
@@ -210,7 +216,14 @@ def smart_disk_health(report, settings=None):
             summary = "passed, with no reported defects"
     else:
         summary = "; ".join(x["reason"] for x in issues)
+    if report.get("asleep") and not issues:
+        # Left asleep by the regular read (#974): its last reading taken awake
+        # (read_at) says nothing is wrong, which is not the same as healthy now.
+        state = "asleep"
+        summary = ("asleep; no reported defects when last read awake" if report.get("read_at")
+                   else "asleep; Homestead has not read it awake yet")
     return {"state": state, "issues": issues, "summary": summary,
+            "read_at": report.get("read_at"),
             "life_pct": None if life is None else int(life),
             "life_basis": wear.get("basis", ""),
             "stale_probe": stale_probe,
@@ -240,7 +253,7 @@ def node_duties(pods, vols=None):
     except Exception:
         leases = []
     try:
-        network = cached("network", 5, NETWORK.inventory)
+        network = cached("network", 5, INV.inventory)
     except Exception:
         network = {}
     platform = network.get("platform_addresses") or {}
@@ -311,10 +324,9 @@ def get_nodes(pods=None, vols=None):
     (get_volumes()): when the caller has read them already (the leader's
     page snapshot)."""
     nodes = kget("/api/v1/nodes")
-    try:
-        metrics = {m["metadata"]["name"]: m for m in kget("/apis/metrics.k8s.io/v1beta1/nodes").get("items", [])}
-    except Exception:
-        metrics = {}
+    # The loop's last reading, with its state: never waits on metrics-server (#906).
+    usage, metrics_state = KUBE_METRICS.read("nodes", kget)
+    metrics = {m["metadata"]["name"]: m for m in usage}
     pods = kget("/api/v1/pods") if pods is None else pods
     try:
         vmis = kget("/apis/kubevirt.io/v1/virtualmachineinstances").get("items", [])
@@ -340,6 +352,7 @@ def get_nodes(pods=None, vols=None):
     except Exception:
         host_os = {}
     out = []
+    hardware_definitions = HW.features()    # one read for every host, not two each (#977)
     for n in nodes.get("items", []):
         name = n["metadata"]["name"]
         labels = n["metadata"].get("labels", {})
@@ -356,10 +369,10 @@ def get_nodes(pods=None, vols=None):
         probed = (temps.get(name) or {}).get("devices") or {}
         annotations = n["metadata"].get("annotations", {}) or {}
         try:
-            labels, auto_hardware = HW.reconcile_node(name, labels, annotations, probed)
+            labels, auto_hardware = HW.reconcile_node(name, labels, annotations, probed, hardware_definitions)
         except Exception:
             auto_hardware = {x for x in NAMES.read(annotations, "auto-hardware").split(",") if x}
-        hardware_inventory = HW.inventory(labels, probed, auto_hardware)
+        hardware_inventory = HW.inventory(labels, probed, auto_hardware, hardware_definitions)
         hardware = {x["id"]: x["available"] for x in hardware_inventory}
         temp_payload = temps.get(name)
         disk_issues = []
@@ -379,6 +392,7 @@ def get_nodes(pods=None, vols=None):
             "mem_pct": round(umem / cmem * 100, 1) if cmem else 0,
             "mem_used_gb": round(umem / 1024**3, 1), "mem_cap_gb": round(cmem / 1024**3, 1),
             "mem_metrics_available": bool((m.get("usage") or {}).get("memory")),
+            "metrics": metrics_state,
             "pods": len(npods),
             "pods_sys": len([p for p in npods if p["metadata"]["namespace"] in SYS_NS]),
             "pods_wl": len([p for p in npods if p["metadata"]["namespace"] not in SYS_NS]),
@@ -497,7 +511,7 @@ def node_impact(node, sources=None):
     src = sources or _impact_sources()
     try:
         # inventory()["addresses"] is VIPS.address_map(): {"nodes": [...], "addresses": [...]} (#372).
-        places = (cached("network", 5, NETWORK.inventory) or {}).get("addresses") or {}
+        places = (cached("network", 5, INV.inventory) or {}).get("addresses") or {}
         addresses = (places.get("addresses") or []) if isinstance(places, dict) else list(places)
     except Exception:
         addresses = []
@@ -505,7 +519,7 @@ def node_impact(node, sources=None):
         placement = cached("impact:" + node, 5, lambda: PLACE.impact(node))
     except Exception:
         placement = None
-    return IMPACT.preview(node, cached("wl", 5, get_workloads), src["deployments"], cached("vms", 5, VMS.list_vms), src["raw_vms"],
+    return IMPACT.preview(node, cached("wl", 5, get_workloads), src["deployments"], cached("vms", 5, VM_LIST.list_vms), src["raw_vms"],
                           cached("vol", 8, get_volumes), addresses, nodes, placement,
                           sets=src["sets"], pvs=src["pvs"], node_down=src["node_down"])
 
@@ -567,8 +581,21 @@ def _one(q, name):
     return (q.get(name) or [""])[0]
 
 
+def _is_host(name):
+    """True when name is a host in the cluster's node list. A route that keeps
+    a read per host checks this first, so a name that is not one keeps
+    nothing and reads nothing."""
+    return bool(name) and any(n.get("name") == name for n in cached("nodes", 5, get_nodes) or [])
+
+
+def _no_host():
+    return ROUTER.Reply(404, {"error": "there is no host by that name"})
+
+
 def _node(request):
     name = _one(request.query, "name")
+    if not _is_host(name):
+        return _no_host()
     return cached("node:" + name, 5, lambda: next((n for n in get_nodes() if n["name"] == name), {}))
 
 
@@ -583,9 +610,10 @@ def _ports(request):
 
 def _smart(request):
     node, disk = _one(request.query, "node"), _one(request.query, "disk")
+    # From the host's last reading (SMART.latest), not a fresh read of every drive per view.
     if not disk:
-        return SMART.inventory(node)
-    report = SMART.disk(node, disk)
+        return SMART.latest(node)
+    report = SMART.latest_disk(node, disk)
     # The same verdict the node card shows, so one drive cannot be healthy in
     # the list and something else in its own detail.
     report["health_assessment"] = smart_disk_health(report, get_app_settings().get("smart"))
@@ -596,6 +624,8 @@ def _impact(request):
     node = _one(request.query, "node")
     if not node:
         raise ValueError("node is required")
+    if not _is_host(node):
+        return _no_host()
     return cached("impact:" + node, 5, lambda: PLACE.impact(node))
 
 
@@ -620,7 +650,7 @@ def _drain(request):
     impact = PLACE.impact(b["node"])
     if impact["stranded"] and not b.get("allow_stranded"):
         return ROUTER.Reply(409, {"error": "some workloads have no eligible failover host", "impact": impact})
-    return LC.drain(b["node"], b.get("grace", 30), b.get("system", False))
+    return NODE_ACTIONS.drain(b["node"], b.get("grace", 30), b.get("system", False))
 
 
 ROUTES = {

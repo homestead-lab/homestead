@@ -12,6 +12,7 @@ import time
 import urllib.request, urllib.parse, urllib.error
 import homestead_app_settings as APP_SETTINGS
 import homestead_auth as AUTH
+import homestead_cache as CACHE
 import homestead_config_backup as CONFIG
 import homestead_fleet as FLEET
 import homestead_hardware as HW
@@ -21,7 +22,7 @@ import homestead_placement_mode as PLACEMODE
 import homestead_recovery as RECOVERY
 import homestead_routes as MODULE_ROUTES
 import homestead_setup as SETUP
-import homestead_updates as UPDATES
+import homestead_update_checks as CHECKS
 
 ROUTE_NEEDS = ("kget", "ksend", "_settings_map")
 VALUES = ("DEFAULT_NS", "_cache")
@@ -68,11 +69,10 @@ def save_app_settings(value):
             raise
         _stale()
     _forget()
-    UPDATES.invalidate()
+    CHECKS.invalidate()
     PLACEMODE.saved(settings["placement"])
     # A different catalogue source is a different catalogue.
-    for key in [k for k in _cache if k.startswith("appstore")]:
-        _cache.pop(key, None)
+    CACHE.drop_where(_cache, lambda key: key.startswith("appstore"))
     # A renamed site is carried to the linked clusters, for their switches.
     threading.Thread(target=_fleet_rename, daemon=True).start()
     return settings

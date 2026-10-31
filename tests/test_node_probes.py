@@ -3,6 +3,7 @@ one (#705)."""
 import io
 import json
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -12,33 +13,49 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 
+import homestead_kube as K
+import homestead_names as NAMES
 import homestead_node_probes as PROBES
 import homestead_nodes as NODES
 import homestead_ports as PORTS
+from fakes.kube import Kube
 
 
 def pod(node, ip, phase="Running"):
-    return {"metadata": {"namespace": "lab", "name": f"probe-{node}", "uid": f"uid-{node}"},
+    return {"apiVersion": "v1", "kind": "Pod",
+            "metadata": {"namespace": "lab", "name": f"probe-{node}", "uid": f"uid-{node}",
+                         "labels": {"app": NAMES.NODEPROBE}},
             "spec": {"nodeName": node}, "status": {"phase": phase, "podIP": ip}}
 
 
 PODS = [pod("node1", "192.0.2.1"), pod("node2", "192.0.2.2"), pod("node3", "192.0.2.3")]
+PROBE_PODS = "/api/v1/namespaces/lab/pods"
 
 
 class Cluster:
-    """A fake for the probe pod listing and every host's probe."""
+    """The probe pods on the shared fake API (tests/fakes/kube.py), and every
+    host's probe."""
 
-    def __init__(self, delay=0.0):
-        self.pods, self.list_error = list(PODS), None
+    def __init__(self, test, delay=0.0):
+        self.kube = test.enterContext(Kube(*PODS))
+        self.list_error = None
+        self.kube.react("GET", PROBE_PODS, self.listing)
         self.delay, self.smart_delay, self.down, self.smart_down, self.calls = delay, 0.0, set(), set(), []
         self.smart_rows = [{"name": "sda", "passed": True}]
 
-    def kget(self, path):
+    def listing(self, method, path, body):
         if self.list_error:
             raise self.list_error
-        return {"items": self.pods}
+
+    def use_pods(self, *pods):
+        """These are the probe pods from now on."""
+        for row in K.kget(PROBE_PODS)["items"]:
+            self.kube.discard(f"{PROBE_PODS}/{row['metadata']['name']}")
+        for item in pods:
+            self.kube.add(item)
 
     def urlopen(self, url, timeout=None):
+        url = getattr(url, "full_url", url)      # the SMART read is a signed Request
         self.calls.append(url)
         ip, port = url.split("//")[1].rstrip("/").split(":")
         if port == "9100":
@@ -58,9 +75,16 @@ class Base(unittest.TestCase):
         PROBES.reset()
         self.addCleanup(PROBES.stop)
         self.addCleanup(PROBES.reset)
-        self.cluster = Cluster()
-        for patch in (mock.patch.object(PROBES.NAMES, "kget", self.cluster.kget, create=True),
-                      mock.patch.object(PROBES.urllib.request, "urlopen", self.cluster.urlopen)):
+        # start_probes() starts the metrics-server loop too (#906).
+        import homestead_kube_metrics as KUBE_METRICS
+        self.addCleanup(KUBE_METRICS.reset)
+        self.addCleanup(KUBE_METRICS.stop)
+        self.cluster = Cluster(self)
+        store = tempfile.TemporaryDirectory()          # the SMART readings kept on the data volume
+        self.addCleanup(store.cleanup)
+        for patch in (mock.patch.object(PROBES.NAMES, "kget", K.kget, create=True),
+                      mock.patch.object(PROBES.urllib.request, "urlopen", self.cluster.urlopen),
+                      mock.patch.object(PROBES.SMART.SHARED, "DIR", store.name)):
             patch.start()
             self.addCleanup(patch.stop)
 
@@ -141,10 +165,10 @@ class ProbeTests(Base):
 
     def test_a_probe_pod_being_replaced_keeps_its_hosts_reading(self):
         PROBES.run_round(now=1000)
-        self.cluster.pods = [PODS[0], pod("node2", "", phase="Pending"), PODS[2]]
+        self.cluster.use_pods(PODS[0], pod("node2", "", phase="Pending"), PODS[2])
         PROBES.run_round(now=1015)
         self.assertEqual(("ok", 0), (PROBES.status()["node2"]["state"], self.misses("node2")))
-        self.cluster.pods = [PODS[0], PODS[2]]
+        self.cluster.use_pods(PODS[0], PODS[2])
         for now in (1030, 1045, 1060):
             PROBES.run_round(now=now)
         self.assertIn("node2", PROBES.status(), "kept while its pod is replaced")
@@ -213,6 +237,14 @@ class ProbeTests(Base):
 class NodesTests(Base):
     """The nodes module answers from the background state."""
 
+    def test_the_metrics_loop_start_probes_starts_is_stopped_after_the_test(self):
+        # start_probes() also starts the metrics-server loop (#906); left
+        # running, it would answer get_nodes() in every later test of the shard.
+        import homestead_kube_metrics as KUBE_METRICS
+        inner = NodesTests("test_node_temps_with_three_slow_probes_answers_at_once_once_the_loop_runs")
+        self.assertTrue(inner.run().wasSuccessful())
+        self.assertFalse(KUBE_METRICS.running())
+
     def test_node_temps_with_three_slow_probes_answers_at_once_once_the_loop_runs(self):
         self.cluster.delay = 1.0
         NODES.start_probes()
@@ -227,8 +259,9 @@ class NodesTests(Base):
         self.unreachable("192.0.2.2")
         PROBES._round["read"] = time.monotonic()           # answer from the state, as with the loop
         seen = {}
-        nodes = {"items": [{"metadata": {"name": name}} for name in ("node1", "node2", "node3")]}
-        with mock.patch.object(NODES, "kget", lambda path: nodes), \
+        for name in ("node1", "node2", "node3"):    # on the same fake, so the probe pods stay readable
+            self.cluster.kube.add({"apiVersion": "v1", "kind": "Node", "metadata": {"name": name}})
+        with mock.patch.object(NODES, "kget", K.kget), \
                 mock.patch.object(PORTS, "report", lambda probes, contexts: seen.update(probes) or {}):
             NODES.ports_report()
         self.assertIsNone(seen["node2"], "not answering is unknown, not quietly well")
@@ -236,7 +269,7 @@ class NodesTests(Base):
 
 
 def node(name):
-    return {"metadata": {"name": name, "labels": {}, "annotations": {}}, "spec": {},
+    return {"apiVersion": "v1", "kind": "Node", "metadata": {"name": name, "labels": {}, "annotations": {}}, "spec": {},
             "status": {"capacity": {"cpu": "4", "memory": "8Gi"}, "conditions": [{"type": "Ready", "status": "True"}],
                        "nodeInfo": {}, "addresses": [], "allocatable": {}}}
 
@@ -245,19 +278,17 @@ class GetNodesTests(Base):
     """Each host in /api/nodes says what its probe last did."""
 
     def answer(self, names):
-        def kget(path):
-            if path == "/api/v1/nodes":
-                return {"items": [node(name) for name in names]}
-            return {"items": []}
-        with mock.patch.multiple(NODES, kget=kget, get_app_settings=lambda: {}, DEFAULT_APP_SETTINGS={"smart": {}},
+        for name in names:    # on the same fake, so the probe pods stay readable
+            self.cluster.kube.add(node(name))
+        with mock.patch.multiple(NODES, kget=K.kget, get_app_settings=lambda: {}, DEFAULT_APP_SETTINGS={"smart": {}},
                                  parse_cpu=lambda value: 0.0, parse_mem=lambda value: 1.0, SYS_NS=set(),
                                  node_duties=lambda pods: {}, node_stats=lambda name: {},
                                  workload_names=lambda pods, system: ([], [])), \
                 mock.patch.object(NODES.DISKS, "summary", lambda: {}), \
                 mock.patch.object(NODES.HOST_OS, "report", lambda: {"hosts": {}}), \
-                mock.patch.object(NODES.HW, "reconcile_node", lambda name, labels, notes, found: (labels, set())), \
+                mock.patch.object(NODES.HW, "reconcile_node", lambda name, labels, notes, found, definitions=None: (labels, set())), \
                 mock.patch.object(NODES.HW, "inventory",
-                                  lambda labels, found, auto: [{"id": "igpu", "available": False, "detected": False}]):
+                                  lambda labels, found, auto, definitions=None: [{"id": "igpu", "available": False, "detected": False}]):
             PROBES._round["read"] = time.monotonic()       # answer from the state, as with the loop
             return {n["name"]: n for n in NODES.get_nodes()}
 
@@ -278,7 +309,7 @@ class GetNodesTests(Base):
         self.assertIsNone(nodes["node4"]["temps"])
 
     def test_no_probe_pods_at_all(self):
-        self.cluster.pods = []
+        self.cluster.use_pods()
         PROBES.run_round()
         nodes = self.answer(("node1",))
         self.assertEqual({"state": "absent"}, nodes["node1"]["probe"])
@@ -293,15 +324,15 @@ class FirstReadTests(unittest.TestCase):
         PROBES.stop()
         PROBES.reset()
         self.addCleanup(PROBES.reset)
-        cluster = Cluster(delay=0.4)
+        cluster = Cluster(self, delay=0.4)
         cluster.smart_delay = 0.4
-        with mock.patch.object(NODES.NAMES, "nodeprobe_pods", lambda namespace: PODS), \
-                mock.patch.object(NODES.NAMES, "kget", cluster.kget, create=True), \
+        with mock.patch.object(NODES.NAMES, "kget", K.kget, create=True), \
                 mock.patch("urllib.request.urlopen", cluster.urlopen):
             started = time.monotonic()
             NODES.node_temps()
             took = time.monotonic() - started
         self.assertLess(took, 1.5, f"took {took:.1f} s; one host after another, both reads, is 2.4 s")
+        self.assertEqual(3, len([url for url in cluster.calls if ":9099/" in url]), "all three probe pods were found and read")
 
 
 if __name__ == "__main__":

@@ -6,7 +6,31 @@ Tests patch cached here."""
 import threading
 import time
 
-_cache = {}
+class _Answers(dict):
+    """The kept answers. Many writes drop their page's key with a plain
+    _cache.pop(key) rather than forget_where(); a pop is told to the
+    on_pop() listeners, so the other replicas hear of that write too (#928)."""
+
+    def pop(self, key, *default):
+        try:
+            return super().pop(key, *default)
+        finally:
+            _popped(key)
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        _popped(key)
+
+    def clear(self):
+        """Drop every answer (a config restore) as a forget of every key this
+        replica knows of, held or not: a read started before it is not kept,
+        and the other replicas hear of it, as one never read here may be
+        served by them."""
+        forget_where(lambda key: True)
+        super().clear()
+
+
+_cache = _Answers()
 _lock = threading.Lock()
 # The computation now running for each key (#705): a caller that misses
 # while one runs waits for its answer instead of asking the API server again.
@@ -19,6 +43,10 @@ _epoch = {}
 # after the last forget of its key, and runs again when one is forgotten.
 _forgot = {}
 _listeners = []
+# Who wants to hear of a key popped from _cache: fn(key, when). Called on the
+# popping thread, maybe under its caller's locks, so it must not block or
+# take this module's _lock.
+_pop_listeners = []
 # How long a caller waits on another's computation before giving up on it.
 WAIT_SECONDS = 60
 
@@ -121,6 +149,11 @@ def kept_at(key):
         return e[0] if e else None
 
 
+def kept(key):
+    """(when it was read, value) of key's kept answer, or None."""
+    return _last(key)
+
+
 def forgotten_at(key):
     """When key was last forgotten (time.time()), or 0.0."""
     with _lock:
@@ -132,20 +165,52 @@ def on_forget(fn):
     _listeners.append(fn)
 
 
-def forget_where(match):
+def on_pop(fn):
+    """Call fn(key, when) after each pop of key from _cache."""
+    _pop_listeners.append(fn)
+
+
+def _popped(key):
+    when = time.time()
+    for fn in list(_pop_listeners):
+        try:
+            fn(key, when)
+        except Exception as error:   # the write has happened: never fail it here
+            print(f"cache: a pop listener failed: {str(error)[:160]}", flush=True)
+
+
+def forget_where(match, at=None):
     """Drop every kept or running answer whose key matches, so the next
-    caller reads again and nothing computed before now is kept after it."""
+    caller reads again and nothing computed before now is kept after it.
+    at, when given, dates the forget: a write another replica made then
+    (#928), never later than now. Only keys this replica has kept, is
+    reading, or has asked epoch() of are dropped."""
     with _lock:
         now = time.time()
         dropped = {key for key in {*_cache, *_running, *_epoch} if match(key)}
         for key in dropped:
-            _cache.pop(key, None)
+            dict.pop(_cache, key, None)
             _running.pop(key, None)
             _epoch[key] = _epoch.get(key, 0) + 1
-            _forgot[key] = now
+            _forgot[key] = now if at is None else max(_forgot.get(key, 0.0), min(at, now))
     if dropped:
         for fn in list(_listeners):
             try:
                 fn(dropped)
             except Exception as error:   # the write has happened: never fail it here
                 print(f"cache: a forget listener failed: {str(error)[:160]}", flush=True)
+
+
+def drop_where(cache, match):
+    """A write's bust: drop every answer in cache whose key matches. On the
+    kept answers that is forget_where(), which also reaches the keys this
+    replica knows of but does not hold, so the other replicas hear of the
+    write though this one never read the page (#928). Walking the keys held
+    here would miss those. Another dict (a test's own, or a module not yet
+    bound to the kept answers) has its matching keys popped, and tells
+    nothing."""
+    if cache is _cache:
+        forget_where(lambda key: isinstance(key, str) and match(key))
+        return
+    for key in [key for key in cache if match(key)]:
+        cache.pop(key, None)

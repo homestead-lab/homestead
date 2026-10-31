@@ -55,6 +55,64 @@ test("off, never run, running, and a trim job of the user's each say so", () => 
   assert.doesNotMatch(running, /weeklyTrimRun\(\)/, "no second Run now while one runs");
   assert.match(ctx.weeklyTrimCard({ enabled: true, next: "x", last: null, running: false, theirs: "my-trim" }),
     /my-trim.*already trims the default group/);
+  assert.doesNotMatch(ctx.weeklyTrimCard({ enabled: true, next: "x", last: null, running: false, theirs: "my-trim" }), /Change time/,
+    "moving a trim that does not run would change nothing");
+  // #927: a job an older Housekeeping plan made is the usual one; the card says how to hand the trim back.
+  assert.match(ctx.weeklyTrimCard({ enabled: true, next: "x", last: null, running: false, theirs: "weekly-trim" }),
+    /Delete it under Recurring jobs to let Homestead trim attached volumes instead/);
+});
+
+// #927: the trim's weekday and hour (UTC) can be moved.
+test("the card names the trim's slot and offers an admin the dialog that moves it", () => {
+  const ctx = view();
+  const moved = ctx.weeklyTrimCard({ enabled: true, next: "x", last: null, running: false, theirs: "", weekday: 2, hour: 22 });
+  assert.match(moved, /Wednesdays at 22:00 UTC/);
+  assert.match(moved, /data-need="admin"[^>]*onclick="weeklyTrimTime\(\)"[^>]*>Change time/);
+  assert.match(ctx.weeklyTrimCard({ enabled: true, next: "x", last: null, running: false, theirs: "" }), /Saturdays at 04:00 UTC/,
+    "an older server's answer, with no slot, is the default");
+});
+
+test("the dialog picks a weekday and an hour and saves them, then reads the card again", async () => {
+  const ctx = view();
+  require("./helpers/load-ui")(ctx);     // the dialog's fields are the real ones
+  ctx.document.getElementById = () => null;
+  const sent = [], shown = {};
+  const values = { "#wt_day": { value: "2" }, "#wt_hour": { value: "22" } };
+  Object.assign(ctx, { modal: (title, html) => Object.assign(shown, { title, html }), closeModal: () => { shown.closed = true; },
+    toast: (text, tone) => { shown.toast = [text, tone]; }, $: selector => values[selector] || null,
+    api: async (path, init) => { sent.push([path, init && JSON.parse(init.body)]); return path.endsWith("/settings")
+      ? { ok: true, detail: "Attached volumes are trimmed every Wednesday at 22:00 UTC" } : {}; } });
+  ctx.STATE.data.weeklyTrim = { weekday: 2, hour: 4 };
+  ctx.weeklyTrimTime();
+  assert.equal(shown.title, "Weekly trim time");
+  assert.match(shown.html, /<option value="2" selected>Wednesday<\/option>/);
+  assert.match(shown.html, /<option value="4" selected>04:00<\/option>/);
+  assert.match(shown.html, /UTC/);
+  await ctx.weeklyTrimTimeSave();
+  assert.deepEqual(JSON.parse(JSON.stringify(sent[0])), ["/api/weekly-trim/settings", { weekday: 2, hour: 22 }]);
+  assert.ok(shown.closed);
+  assert.equal(shown.toast[1], "ok");
+});
+
+test("the demo keeps a moved slot and the dialog is in the dialog audit", async () => {
+  const ctx = { URL, URLSearchParams, Response, Date, console, location: { search: "?demo=1", origin: "https://demo.example.com" },
+    HOMESTEAD_DEMO: false, document: { body: null, addEventListener() {} },
+    fetch: async () => { throw new Error("demo must never reach a real cluster"); } };
+  ctx.window = ctx;
+  vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync("web/js/demo.js", "utf8"), ctx);
+  const call = async (path, body) => (await ctx.fetch(path, body ? { method: "POST", body: JSON.stringify(body) } : undefined)).json();
+  const before = await call("/api/weekly-trim");
+  assert.deepEqual([before.weekday, before.hour], [5, 4]);
+  const saved = await call("/api/weekly-trim/settings", { weekday: 2, hour: 22 });
+  assert.match(saved.detail, /Wednesday at 22:00 UTC/);
+  const after = await call("/api/weekly-trim");
+  assert.deepEqual([after.weekday, after.hour], [2, 22]);
+  assert.equal(new Date(after.next).getUTCDay(), 3);
+  assert.equal(new Date(after.next).getUTCHours(), 22);
+  const trim = (await call("/api/lh/overview")).homestead_jobs[0];
+  assert.equal(trim.cron, "0 22 * * 3");
+  assert.match(fs.readFileSync("scripts/audit_dialogs.mjs", "utf8"), /\["weekly-trim-time", "protect", "weeklyTrimTime\(\)"\]/);
 });
 
 // #749: a weekly trim that failed on one volume, in the demo's incidents scenario only.

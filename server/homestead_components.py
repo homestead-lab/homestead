@@ -32,6 +32,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import homestead_cache as CACHE
+import homestead_forced as FORCED
 import homestead_helm as HELM
 import homestead_operations as OPS
 import homestead_storage_conflicts as STORAGE_CONFLICTS
@@ -807,9 +809,17 @@ def start_harvester(version, offered):
 
 def _report_route(request):
     if (request.query.get("force") or [""])[0] == "1":
-        homestead_routes.forget("components")
-        return report(force=True)
+        return FORCED.run("components", _forced_report)
     return homestead_routes.cached("components", 60, report)
+
+
+def _forced_report():
+    """A report with the releases fetched again, kept as the answer quiet
+    reads get too (unless an upgrade forgot it meanwhile)."""
+    epoch = CACHE.epoch("components")
+    value = report(force=True)
+    CACHE.keep("components", value, epoch)
+    return value
 
 
 def _upgrade_route(request):

@@ -6,9 +6,10 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_compose as compose
-import homestead_lifecycle as lifecycle
 import homestead_memory as memory
 import server
+import homestead_workload_edit as WORKLOAD_EDIT
+import homestead_deploy_manifests as MANIFESTS
 
 
 class MemoryLimitTests(unittest.TestCase):
@@ -24,15 +25,15 @@ class MemoryLimitTests(unittest.TestCase):
     def test_new_deployment_has_optional_memory_limit(self):
         cfg = {"name": "app", "image": "nginx:alpine", "memory": "128Mi", "memory_limit": "512Mi"}
         with mock.patch.object(server.HW, "features", return_value=[]):
-            deployment, _ = server.DEPLOY.build_deployment(cfg)
-            unbounded, _ = server.DEPLOY.build_deployment({**cfg, "memory_limit": ""})
+            deployment, _ = MANIFESTS.build_deployment(cfg)
+            unbounded, _ = MANIFESTS.build_deployment({**cfg, "memory_limit": ""})
         self.assertEqual("512Mi", deployment["spec"]["template"]["spec"]["containers"][0]
                          ["resources"]["limits"]["memory"])
         self.assertNotIn("limits", unbounded["spec"]["template"]["spec"]["containers"][0]["resources"])
         with mock.patch.object(server.HW, "features", return_value=[]):
             with self.assertRaisesRegex(ValueError, "at least"):
-                server.DEPLOY.build_deployment({**cfg, "memory_limit": "64Mi"})
-        with mock.patch.object(server.LC, "seed_configs", return_value=[]):
+                MANIFESTS.build_deployment({**cfg, "memory_limit": "64Mi"})
+        with mock.patch.object(WORKLOAD_EDIT, "seed_configs", return_value=[]):
             reopened = server.WORKLOADS.workload_edit_payload("lab", "app", deployment, hardware_definitions=[], services=[])
         self.assertEqual("512Mi", reopened["containers"][0]["memory_limit"])
 
@@ -43,7 +44,7 @@ class MemoryLimitTests(unittest.TestCase):
         cfg = {"name": "helper", "container_name": "helper", "target_workload": "app",
                "image": "busybox", "memory": "64Mi", "memory_limit": "128Mi"}
         with mock.patch.object(server.HW, "features", return_value=[]):
-            updated, _ = server.DEPLOY.build_sidecar_deployment(cfg, current)
+            updated, _ = MANIFESTS.build_sidecar_deployment(cfg, current)
         containers = updated["spec"]["template"]["spec"]["containers"]
         self.assertNotIn("limits", containers[0]["resources"])
         self.assertEqual("128Mi", containers[1]["resources"]["limits"]["memory"])
@@ -52,11 +53,11 @@ class MemoryLimitTests(unittest.TestCase):
         container = {"name": "app", "image": "nginx", "resources": {
             "requests": {"memory": "128Mi", "cpu": "50m"},
             "limits": {"memory": "1Gi", "cpu": "1"}}}
-        lifecycle._apply_container_edit(container, {"memory": "256Mi", "memory_limit": "2Gi"}, "app")
+        WORKLOAD_EDIT._apply_container_edit(container, {"memory": "256Mi", "memory_limit": "2Gi"}, "app")
         self.assertEqual("2Gi", container["resources"]["limits"]["memory"])
         with self.assertRaisesRegex(ValueError, "at least"):
-            lifecycle._apply_container_edit(copy.deepcopy(container), {"memory_limit": "64Mi"}, "app")
-        lifecycle._apply_container_edit(container, {"memory_limit": ""}, "app")
+            WORKLOAD_EDIT._apply_container_edit(copy.deepcopy(container), {"memory_limit": "64Mi"}, "app")
+        WORKLOAD_EDIT._apply_container_edit(container, {"memory_limit": ""}, "app")
         self.assertEqual({"cpu": "1"}, container["resources"]["limits"])
 
     def test_compose_memory_limit_maps_to_container_ceiling(self):

@@ -111,3 +111,71 @@ test("an attached volume still asks the user to stop and unmount it", async () =
   assert.match(r.html(), /Stop and unmount this claim first/);
   assert.doesNotMatch(r.html(), /Longhorn reports detached/);
 });
+
+// #932 follow-up: a Released volume whose claim name an app uses again. The
+// review is asked for by the PV, sets it beside the volume the app uses now,
+// and is confirmed by the Released volume's own name.
+const released = {namespace: "lab", pvc_name: "notes-data", name: "pvc-old", pv: "pvc-old"};
+function releasedPlan(blocked = false) {
+  return {namespace: "lab", name: "notes-data", uid: "lh-uid", orphan: true, released: true, confirm: "pvc-old",
+    phase: "Claim name in use again", inventory_complete: true, blocked,
+    blocking_reasons: blocked ? ["This is the volume the claim uses now"] : [], warnings: [], consumers: [],
+    current: {claim_uid: "claim-new", phase: "Bound", pv: "pvc-new", pv_uid: "pv-new-uid", longhorn: "pvc-new",
+      consumers: [{kind: "Pod", name: "notes-7d8f", namespace: "lab", active: true, mounts: []}]},
+    longhorn: {name: "pvc-old", state: "detached", attached_node: "", replicas: 2},
+    pv: {name: "pvc-old", uid: "pv-old-uid", phase: "Released", claim_uid: "claim-old", longhorn: "pvc-old", reclaim_policy: "Retain"},
+    actions: {detach: {complete: !blocked}, delete_claim: {enabled: false}, delete_data: {enabled: !blocked}}};
+}
+
+test("a reused claim name: the review asks for that PV and sets it beside the volume the app uses now", async () => {
+  const calls = [];
+  const r = review(async path => {calls.push(path); return releasedPlan();});
+  await r.context.volumeDelete(released);
+  assert.match(calls[0], /ns=lab&name=notes-data&volume=pvc-old&pv=pvc-old$/);
+  const html = r.html();
+  for (const text of ["pvc-old", "pv-old-uid", "Released", "pvc-new", "pv-new-uid", "Bound", "notes-7d8f"]) assert.ok(html.includes(text), text);
+  assert.match(html, /not the one/);
+  assert.match(html, /data-need="admin"/);
+});
+
+test("a reused claim name is confirmed by the Released volume's name, and the delete names that PV", async () => {
+  const sent = [];
+  const r = review(async (path, init) => {if (init) {sent.push(JSON.parse(init.body)); return {message: "ok"};} return releasedPlan();});
+  Object.assign(r.context, {closeModal: () => {}, resetPaint: () => {}, viewStorage: () => {}});
+  await r.context.volumeDelete(released);
+  r.confirm();
+  assert.equal(r.elements["#vd_go"].disabled, true, "the claim name does not confirm it");
+  r.elements["#vd_confirm"].value = "pvc-old";
+  r.context.volumeDeleteGate();
+  assert.equal(r.elements["#vd_go"].disabled, false);
+  await r.context.volumeDeleteNow("lab", "notes-data", "lh-uid");
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].pv, "pvc-old");
+  assert.equal(sent[0].confirmation, "pvc-old");
+  assert.equal(sent[0].volume, "pvc-old");
+  assert.equal(sent[0].pv_uid, "pv-old-uid");
+});
+
+test("a reused claim name the server refuses keeps the delete off", async () => {
+  const r = review(async () => releasedPlan(true));
+  await r.context.volumeDelete(released);
+  assert.match(r.html(), /This is the volume the claim uses now/);
+  r.confirm();
+  r.elements["#vd_confirm"].value = "pvc-old";
+  r.context.volumeDeleteGate();
+  assert.equal(r.elements["#vd_go"].disabled, true);
+});
+
+test("a delete started from an app's old-volume row stays on the Containers page", async () => {
+  const shown = [];
+  const r = review(async (path, init) => init ? {message: "ok"} : releasedPlan());
+  Object.assign(r.context, {closeModal: () => {}, resetPaint: () => {}, STATE: {view: "workloads"},
+    viewWorkloads: () => shown.push("workloads"), viewStorage: () => shown.push("storage")});
+  vm.runInContext("var STATE = window.STATE;", r.context);
+  await r.context.volumeDelete(released);
+  r.confirm();
+  r.elements["#vd_confirm"].value = "pvc-old";
+  r.context.volumeDeleteGate();
+  await r.context.volumeDeleteNow("lab", "notes-data", "lh-uid");
+  assert.deepEqual(shown, ["workloads"]);
+});

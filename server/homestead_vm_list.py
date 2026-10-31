@@ -3,8 +3,8 @@ Listing virtual machines: one row per VM, with its status, its disks and
 whether a disk is still being filled (and why not, when it is stuck).
 
 Split by feature from homestead_vms (#623), moved unchanged. Names that stay
-there, that server.py binds there, or that tests replace there, are read
-through it (V.name); homestead_vms re-exports everything here.
+there, or that server.py binds there, are read through it (V.name), so a
+replacement there still applies; read and replace the names defined here, here.
 """
 import concurrent.futures
 import re
@@ -13,6 +13,7 @@ import urllib.error
 import urllib.parse
 import homestead_logos as LOGOS
 import homestead_names as NAMES
+import homestead_value_masks as MASKS
 import homestead_schedules as SCHEDULES
 import homestead_outage as OUTAGE
 import homestead_vmusage as VMUSAGE
@@ -98,7 +99,7 @@ def _why_not_filling(ns, dv):
                           "restart the node service, then recreate the failed importer pod. Keep the disk PVC and DataVolume.")
     seen, out = set(), []
     for reason in reasons:
-        text = " ".join(str(reason).split())[:240]
+        text = MASKS.cut(MASKS.squeeze(reason), 240)
         if text not in seen:
             seen.add(text)
             out.append(text)
@@ -109,7 +110,7 @@ def _image_filling(vm):
     """Disks waiting on a Harvester image still downloading: made from the
     VM's claim templates, which name the image they start from."""
     wanted = {}
-    for t in V._claim_templates(vm):
+    for t in VM_EDIT._claim_templates(vm):
         ref = ((t.get("metadata") or {}).get("annotations") or {}).get("harvesterhci.io/imageId", "")
         if ref:
             wanted[ref] = (t.get("metadata") or {}).get("name", "")
@@ -142,7 +143,7 @@ def _filling(vm, dvs, explain=False):
     ns = (vm.get("metadata") or {}).get("namespace", "")
     out = []
     for v in ((vm.get("spec") or {}).get("template") or {}).get("spec", {}).get("volumes") or []:
-        dv = dvs.get((ns, V._volume_claim(v)))
+        dv = dvs.get((ns, VM_EDIT._volume_claim(v)))
         status = dict((dv or {}).get("status") or {})
         # A DataVolume CDI refused outright - ErrClaimNotValid, a class it
         # cannot read - never gets a phase at all; it is waiting, and why.
@@ -209,7 +210,7 @@ def _row(vm, vmi, claims=None, dvs=None, instance_known=True):
     labels, annotations = meta.get("labels") or {}, meta.get("annotations") or {}
     restart_required = any(c.get("type") == "RestartRequired" and c.get("status") == "True"
                            for c in (vm.get("status") or {}).get("conditions") or [])
-    filling = V._filling(vm, dvs or {})
+    filling = _filling(vm, dvs or {})
     status_word = ((vm.get("status") or {}).get("printableStatus") or "")
     if status_word not in ("Running", "Paused", "Migrating"):
         filling += _image_filling(vm)
@@ -262,21 +263,25 @@ def list_vms():
     # read at the same time (#705). Each read keeps its own way of failing.
     namespaces = sorted({v["metadata"]["namespace"] for v in vms})
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(namespaces) + 1)) as pool:
-        dv_read = pool.submit(V._datavolumes)
+        dv_read = pool.submit(_datavolumes)
         claims = {}
-        for found in pool.map(V._claims, namespaces):
+        for found in pool.map(_claims, namespaces):
             claims.update(found)
         dvs = dv_read.result()
-    rows = sorted((V._row(v, vmis.get((v["metadata"]["namespace"], v["metadata"]["name"]), {}), claims, dvs, instance_known) for v in vms),
+    rows = sorted((_row(v, vmis.get((v["metadata"]["namespace"], v["metadata"]["name"]), {}), claims, dvs, instance_known) for v in vms),
                   key=lambda r: (r["ns"], r["name"]))
+    # Each running VM's use, and on every row the state of the CPU and memory
+    # figures, so the page can say when they are old or missing (#928).
     try:
-        measured, note = VMUSAGE.usage()
+        measured, note, metrics = VMUSAGE.measured()
     except Exception:
-        measured, note = {}, ""
+        measured, note, metrics = {}, "", None
     for row in rows:
+        if metrics:
+            row["metrics"] = metrics
         got = measured.get((row["ns"], row["name"])) if row["running"] else None
         if got:
-            cpus, memory = max(1, int(row["cores"] or 1)), V._bytes(row["memory"])
+            cpus, memory = max(1, int(row["cores"] or 1)), VM_EDIT._bytes(row["memory"])
             row["usage"] = {**got,
                             "cpu_pct": round(100 * got["cpu"] / cpus, 1) if "cpu" in got else None,
                             "mem_pct": round(100 * got["mem"] / memory, 1) if "mem" in got and memory else None,
@@ -284,5 +289,6 @@ def list_vms():
     return rows
 
 
-# homestead_vms holds the bound state and re-exports this module, so it is imported last.
+# homestead_vms holds the bound state and imports this module, so it is imported last.
 import homestead_vms as V  # noqa: E402
+import homestead_vm_edit as VM_EDIT  # noqa: E402

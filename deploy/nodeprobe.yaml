@@ -242,6 +242,39 @@ data:
             del disk["write_sectors"]
         return sorted(disks, key=lambda d: d["name"])
 
+    def _listdir(path):
+        try:
+            return sorted(os.listdir(path))
+        except OSError:
+            return []
+
+    def iscsi_sessions():
+        """The host's iSCSI sessions, from the kernel's transport class in its
+        /sys: id, target, state, the address and port it logged in to, and the
+        disks it gives (#932). A host lost while a Longhorn engine ran on it can
+        keep a session to an instance-manager address that is gone; Homestead
+        compares these with the instance-managers there are now. No iSCSI on the
+        host is no sessions."""
+        base = os.path.join(SYS, "class/iscsi_session")
+        out = []
+        for name in _listdir(base):
+            sid = name[len("session"):]
+            if not name.startswith("session") or not sid.isdigit():
+                continue
+            conn = os.path.join(SYS, "class/iscsi_connection", f"connection{sid}:0")
+            address = _read(os.path.join(conn, "persistent_address")) or _read(os.path.join(conn, "address")) or ""
+            port = _read(os.path.join(conn, "persistent_port")) or _read(os.path.join(conn, "port")) or ""
+            device, disks = os.path.join(base, name, "device"), []
+            for target in _listdir(device):
+                if target.startswith("target"):
+                    for lun in _listdir(os.path.join(device, target)):
+                        disks += _listdir(os.path.join(device, target, lun, "block"))
+            out.append({"sid": int(sid), "target": _read(os.path.join(base, name, "targetname")) or "",
+                        "state": _read(os.path.join(base, name, "state")) or "",
+                        "address": address, "port": int(port) if port.isdigit() else None,
+                        "disks": sorted(disks)})
+        return sorted(out, key=lambda s: s["sid"])
+
     def physical_disk(device, depth=0):
         """The first physical disk under a stacked block device (dm-*, md*),
         following /sys/class/block/<dev>/slaves; "" when there is none."""
@@ -590,7 +623,9 @@ data:
                 "kvm": os.path.exists(f"{DEV}/kvm"),
                 "interfaces": interfaces(),
                 "default_interface": default_interface(),
-                "v2": v2_facts(), "nfs": nfs_facts(), "numa": numa_facts()}
+                "v2": v2_facts(), "nfs": nfs_facts(), "numa": numa_facts(),
+                # Sessions to iSCSI targets: a stale one keeps a volume from attaching (#932).
+                "iscsi": iscsi_sessions()}
 
     class H(LimitedHandler):
         protocol_version = "HTTP/1.1"
@@ -758,8 +793,43 @@ data:
                         "lifetime_hours": hours, "signature": signature})
         return out
 
-    def report(name, path):
-        code, data, message = run(["-d", device_type(name), "-a", "-j", path])
+    # A drive the host has spun down stays down for the regular read: smartctl
+    # checks the power mode first and, with "-n standby", leaves a drive in
+    # standby or sleep alone and exits with STANDBY_EXIT instead of reading it.
+    # Only a read a person asks for by name (one drive, as before a self-test)
+    # wakes it.
+    STANDBY_EXIT = 3
+
+    def asleep(name, path, message):
+        """A drive left asleep: SMART is there, just not read now."""
+        return {
+            "name": name, "path": "/dev/" + name, "available": True, "asleep": True,
+            "unavailable_reason": "", "protocol": "", "model": "", "serial": "", "firmware": "",
+            "capacity_gb": 0, "smart_enabled": None, "health": "unknown",
+            "temperature_c": None, "power_on_hours": None, "reallocated": None, "pending": None,
+            "uncorrectable": None, "error_count": None, "media_errors": None,
+            "wear": {"life_pct": None, "basis": "", "spare_pct": None, "spare_floor_pct": None},
+            "nvme": None, "supported_tests": [],
+            "test": {"active": False, "status": "Drive asleep; not woken to read SMART",
+                     "remaining_percent": None},
+            "self_tests": [], "expected_seconds": {"short": 120, "long": 600},
+            "smartctl_messages": message,
+        }
+
+    def in_standby(data, message):
+        """Whether smartctl said it left the drive alone for its power mode:
+        exit code 3 alone could also be two error bits."""
+        said = [str(row.get("string") or "") for row in
+                ((data.get("smartctl") or {}).get("messages") or [])] + [message]
+        return any(re.search(r"\b(STANDBY|SLEEP) mode\b", text) for text in said)
+
+    def report(name, path, wake=True):
+        args = ["-d", device_type(name), "-a", "-j", path]
+        if not wake:
+            args = ["-n", f"standby,{STANDBY_EXIT}", *args]
+        code, data, message = run(args)
+        if not wake and code == STANDBY_EXIT and in_standby(data, message):
+            return asleep(name, path, message)
         device = data.get("device") or {}
         protocol = str(device.get("protocol") or "")
         nvme = data.get("nvme_smart_health_information_log") or {}
@@ -880,11 +950,19 @@ data:
             try:
                 if urlparse(self.path).path == "/healthz":
                     return self.send_json(200, {"ok": True, "node": NODE})
+                # Reading every drive is Homestead's to ask for, like a test: a
+                # read is signed over "GET " and its path.
+                if not signature_ok(b"GET " + self.path.encode("utf-8", "replace"),
+                                    self.headers.get("X-Homestead-Time", ""),
+                                    self.headers.get("X-Homestead-Signature", "")):
+                    return self.send_json(403, {"error": "request signature is invalid"})
                 name = (parse_qs(urlparse(self.path).query).get("disk") or [""])[0]
                 if name:
                     return self.send_json(200, {"node": NODE, "disk": one(name)})
+                # Every drive in turn is the regular read (the probe loop, a
+                # page): it leaves sleeping drives asleep.
                 return self.send_json(200, {"node": NODE,
-                    "disks": [report(name, path) for name, path in disks()]})
+                    "disks": [report(name, path, wake=False) for name, path in disks()]})
             except Exception as error:
                 return self.send_json(400, {"error": str(error)[:500]})
         def do_POST(self):

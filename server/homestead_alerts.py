@@ -14,8 +14,12 @@ import homestead_shared as SHARED
 DATA_DIR = "/data"
 HOLD = 60
 LOG_SIZE = 300
+WITHDRAWN_KEEP = 600            # seconds a withdrawn key outranks facts taken before it
 _lock = SHARED.SharedLock("alerts")
 SEVERITY = {"info": 0, "degraded": 1, "critical": 2}
+# Log lines meant for one device (a test) or one person (their summary, #921):
+# never in the shared list, the Timeline or the alert webhook.
+PRIVATE = ("test", "summary")
 
 
 def bind(data_dir):
@@ -123,6 +127,10 @@ def observe(results, now=None):
                             if not row["announced"]:
                                 row["since"] = now
                     continue
+                fact = dict(fact)
+                collected = fact.pop("collected", None)
+                if collected is not None and collected <= state.get("withdrawn", {}).get(fact["key"], -1):
+                    continue   # taken before its source withdrew it (homestead_alerts.withdraw)
                 key = fact["key"]
                 seen.add(key)
                 row = active.get(key)
@@ -188,6 +196,30 @@ def observe(results, now=None):
         return fresh
 
 
+def withdraw(key, title, body, now=None):
+    """A condition its source stopped watching on someone's say-so (a log
+    alert deleted or paused): its row goes now, and one that was raised ends
+    with this title and body rather than reading, a minute later, as if it
+    had cleared. The entry, or None when nothing was raised.
+    The alert loop may already hold a fact taken before this: observe skips
+    a fact whose "collected" time is not after the withdraw."""
+    now = now or time.time()
+    with _lock:
+        state = _load()
+        row = state["active"].pop(key, None)
+        entry = None
+        if row and row.get("announced", 0) > 0 and not row.get("event"):
+            entry = _append(state, {**row, "resolved": title}, "resolved", now)
+            entry["body"] = body
+        for account in state["acknowledgements"].values():
+            account.pop(key, None)
+        withdrawn = state.setdefault("withdrawn", {})
+        withdrawn[key] = now
+        state["withdrawn"] = {k: at for k, at in withdrawn.items() if now - at < WITHDRAWN_KEEP}
+        _save(state)
+        return entry
+
+
 class AlertChanged(ValueError):
     pass
 
@@ -219,9 +251,15 @@ def forget_user(user):
 def note(fact, now=None):
     with _lock:
         state = _load()
+        if fact.get("category") == "summary":
+            # A person's newer summary replaces their older one, so summaries
+            # never push real alerts out of the log's LOG_SIZE lines (#921).
+            state["log"] = [e for e in state["log"] if e.get("category") != "summary" or e.get("for") != fact.get("for")]
         entry = _append(state, fact, "raised", now or time.time())
         if fact.get("to"):
             entry["to"] = fact["to"]
+        if fact.get("for"):
+            entry["for"] = fact["for"]
         _save(state)
         return entry
 
@@ -259,7 +297,10 @@ def health_facts(overview):
     # One condition per resource, with every finding retained. The old loop
     # emitted duplicate disk keys, allowing the last finding to hide severity.
     grouped = {}
-    for issue in overview.get("health_issues") or []:
+    # This cycle's issues, not the verdict's held ones (#941): alerts hold
+    # them themselves, and holding twice would raise them after two holds.
+    current = overview.get("current_issues")
+    for issue in (overview.get("health_issues") if current is None else current) or []:
         kind, name = issue.get("kind", ""), issue.get("name", "")
         key = f"health:{kind}:{name}"
         row = grouped.setdefault(key, {"kind": kind, "name": name, "issues": []})
@@ -274,6 +315,9 @@ def health_facts(overview):
         critical = any(i.get("severity") == "critical" for i in issues)
         href = {"Node": "/nodes", "Disk": "/nodes", "Volume": "/volumes", "Backup": "/data-protection",
                 "Trim": "/data-protection#housekeeping"}.get(kind, "/containers")
+        if all(i.get("one_host") for i in issues):
+            # Short of hosts, not broken (#841): the offer is in Cluster Health.
+            href = "/system/cluster?section=health"
         title = {"Node": f"Host {name} is not ready", "Disk": f"Drive {name} needs attention",
                  "Volume": f"Volume {name} is {'faulted' if critical else 'degraded'}",
                  "Workload": f"{name.split('/')[-1]} is not ready",
@@ -305,7 +349,9 @@ def health_facts(overview):
             facts.append({"unknown_prefix": prefix})
         else:
             for disk in temps["disks"]:
-                if not (disk.get("smart") or {}).get("available"):
+                smart = disk.get("smart") or {}
+                # A drive left asleep with no reading kept (after a restart, #974) proves nothing either.
+                if not smart.get("available") or (smart.get("asleep") and not smart.get("read_at")):
                     facts.append({"unknown_key": prefix + disk.get("name", "unknown")})
     return facts
 
@@ -389,6 +435,9 @@ DEVICES = [lambda user: []]
 # AI agents' requests waiting for a person, and whether agents may connect -
 # homestead_mcp sets it - so the bell and the sidebar can lead to /agents.
 AGENTS = [lambda: {"enabled": False, "pending": 0}]
+# The cluster's verdict for the sidebar's health pill, which every page reads
+# from here (#940) - homestead_cluster sets it (health_brief).
+HEALTH = [lambda: None]
 
 def _unknown(read, *args):
     """The bell still answers when a store it shows could not be read: that part is unknown (None), not empty."""
@@ -398,9 +447,19 @@ def _unknown(read, *args):
         return None
 
 
+def _health():
+    """The pill's verdict, or None when it could not be read: the alerts it
+    rides with are answered whatever went wrong reading it."""
+    try:
+        return HEALTH[0]()
+    except Exception:
+        return None
+
+
 ROUTES = {
     ("GET", "/api/alerts"): ("viewer", lambda request: {
         "active": [a for a in active(user=request.user) if a.get("announced", 0) > 0],
-        "log": [a for a in log(limit=30)["alerts"] if a["category"] != "test"],
-        "devices": _unknown(DEVICES[0], request.user), "agents": _unknown(AGENTS[0])}),
+        "log": [a for a in log(limit=30)["alerts"] if a["category"] not in PRIVATE],
+        "devices": _unknown(DEVICES[0], request.user), "agents": _unknown(AGENTS[0]),
+        "health": _health()}),
 }

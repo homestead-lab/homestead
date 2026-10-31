@@ -19,11 +19,12 @@ import urllib.request, urllib.parse, urllib.error
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_kube as KUBE
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_network_inventory as INV
 import homestead_operations as OPS
 import homestead_routes as MODULE_ROUTES
 import homestead_self as SELF
 import homestead_self_address as SELF_ADDRESS
+import homestead_self_data_cookie as SELF_DATA_COOKIE
 import homestead_self_data_execute as SELF_DATA_EXECUTE
 import homestead_self_data_fence as SELF_DATA_FENCE
 import homestead_self_data_prepare as SELF_DATA_PREPARE
@@ -32,7 +33,7 @@ import homestead_self_data_route as SELF_DATA_ROUTE
 import homestead_self_data_worker as SELF_DATA_WORKER
 import homestead_self_health as SELF_HEALTH
 import homestead_storage_runtime as STORAGE_RUNTIME
-import homestead_updates as UPDATES
+import homestead_update_rollouts as ROLLOUTS
 
 ROUTE_NEEDS = ("abandon_self_data_preparation", "cached", "class_selectable", "_dns_name",
                "get_app_settings", "kget", "_ksend", "ksend", "require_self_data_write",
@@ -100,7 +101,7 @@ def fleet_address():
     """Homestead's web page on its VIP where it has one; else the address
     it started with (on k3s, a node's own)."""
     try:
-        url = SELF_ADDRESS.report(cached("network", 5, NETWORK.inventory)).get("url") or ""
+        url = SELF_ADDRESS.report(cached("network", 5, INV.inventory)).get("url") or ""
     except Exception:
         url = ""
     return url or (f"http://{LB_IP}:8088" if LB_IP else "")
@@ -313,7 +314,7 @@ def _move(request):
     except SELF_DATA_FENCE.Held as error:
         return MODULE_ROUTES.Reply(409, {"error": str(error), "review_required": True})
     return MODULE_ROUTES.Reply(202, result, cookies=(MODULE_ROUTES.Cookie(
-        "homestead-data-move", token, path="/api/self/data/handoff/", max_age=86400),))
+        SELF_DATA_COOKIE.NAME, token, path=SELF_DATA_COOKIE.PATH, max_age=86400),))
 
 
 def _handoff(request):
@@ -329,6 +330,8 @@ def _handoff(request):
     return MODULE_ROUTES.Reply(503 if status["status"] == "unknown" else 200, status)
 
 
+# The cookie only these routes set (homestead_routes.answer refuses it from any other).
+OWN_COOKIES = (SELF_DATA_COOKIE.NAME,)
 ROUTES = {
     ("GET", "/api/self/data/prepare"): ("viewer", _preparation_state),
     ("GET", "/api/self/data/handoff/*"): ("viewer", _handoff),
@@ -404,7 +407,7 @@ def _self_data_helper_image(read, ns):
     digest_match = re.search(r"(?:^|@|://)(sha256:[a-f0-9]{64})$", statuses[0].get("imageID", ""))
     if not digest_match:
         raise SELF_DATA_FENCE.Held("The running Homestead image digest is unavailable; wait for it before reviewing")
-    return pod, UPDATES._immutable(containers[0]["image"], digest_match.group(1))
+    return pod, ROLLOUTS._immutable(containers[0]["image"], digest_match.group(1))
 
 
 def _require_no_data_handoff(read, ns):

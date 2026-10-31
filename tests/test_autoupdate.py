@@ -281,5 +281,16 @@ class TidyTests(unittest.TestCase):
         self.assertEqual(["pvc-1"], asked, "Longhorn is asked once, not every minute")
 
 
+class RealUpdatesTests(unittest.TestCase):
+    def test_after_an_update_containers_is_refreshed_through_the_real_updates_module(self):
+        # server.py hands homestead_updates to bind(); _refresh asks it for
+        # refresh_soon by name, so the module must still offer it.
+        import homestead_updates as UPDATES
+        from unittest import mock
+        with mock.patch.object(AU, "updates", UPDATES), mock.patch.object(UPDATES, "refresh_soon") as refresh:
+            AU._refresh("lab", "app")
+        refresh.assert_called_once_with("lab", "app")
+
+
 if __name__ == "__main__":
     unittest.main()

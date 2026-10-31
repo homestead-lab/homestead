@@ -10,11 +10,18 @@ import homestead_kube as KUBE
 import homestead_names as NAMES
 import math
 import urllib.error
+import urllib.parse
 
 
 def backups(volume=None, strict=False):
+    """Longhorn backups, newest first: one volume's, or every one. One volume's
+    are asked for by Longhorn's backup-volume label, so the API server sends
+    only those rather than the whole list."""
+    path = f"{LH.API}/namespaces/{LH.LHNS}/backups"
+    if volume:
+        path += "?labelSelector=" + urllib.parse.quote(f"backup-volume={volume}", safe="")
     try:
-        listing = LH.kget(f"{LH.API}/namespaces/{LH.LHNS}/backups")
+        listing = LH.kget(path)
         if strict and (not isinstance(listing, dict) or not isinstance(listing.get("items"), list)):
             raise ValueError("backup inventory is incomplete; retry after Longhorn responds")
         items = listing.get("items", [])
@@ -171,7 +178,7 @@ def delete_backup(name):
 
 
 # Last, so that importing any of these modules first works: homestead_longhorn
-# imports this one and re-exports its names.
+# imports this one.
 import homestead_longhorn_volumes as VOLUMES  # noqa: E402
 import homestead_longhorn_target as BACKUP_TARGET  # noqa: E402
 import homestead_longhorn_restore as RESTORE  # noqa: E402

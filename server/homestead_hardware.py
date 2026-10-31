@@ -6,6 +6,7 @@ path and optional USB VID:PID matches.  That lets the UI support accelerators,
 capture cards, serial adapters and future hardware without another code change.
 """
 import json
+import homestead_cache as CACHE
 import homestead_names as NAMES
 import hashlib
 import re
@@ -51,9 +52,7 @@ def bind(_kget, _ksend, _ns, _cache_ref):
 
 
 def _bust():
-    for key in list(_cache):
-        if key.startswith(("hardware", "nodes", "ov", "wl", "flow", "impact:")):
-            _cache.pop(key, None)
+    CACHE.drop_where(_cache, lambda key: key.startswith(("hardware", "nodes", "ov", "wl", "flow", "impact:")))
 
 
 def _normalise(raw, existing=None):
@@ -157,17 +156,18 @@ def _detected(feature, devices):
     return bool(usb.intersection(feature["usb_ids"])) if feature["usb_ids"] else _path_present(feature["host_path"], devices)
 
 
-def reconcile_node(name, labels, annotations, devices):
+def reconcile_node(name, labels, annotations, devices, definitions=None):
     """Keep scheduler labels in sync with probe detection.
 
     Auto-managed labels are recorded separately so an administrator's explicit
     true/false choice always wins and the UI can still say "automatic".
+    definitions: features(), when the caller read them once for every node.
     """
     before_labels = dict(labels or {})
     labels = dict(before_labels)
     before_auto = {x for x in NAMES.read(annotations, "auto-hardware").split(",") if x}
     auto = set(before_auto)
-    defs = features()
+    defs = features() if definitions is None else definitions
     for feature in defs:
         fid, label = feature["id"], feature["label"]
         detected = _detected(feature, devices)
@@ -190,11 +190,11 @@ def reconcile_node(name, labels, annotations, devices):
     return labels, auto
 
 
-def inventory(labels, devices, auto_ids=None):
+def inventory(labels, devices, auto_ids=None, definitions=None):
     """Resolve explicit node labels plus probe detection into feature state."""
     out = []
     auto_ids = set(auto_ids or [])
-    for f in features():
+    for f in features() if definitions is None else definitions:
         val = labels.get(f["label"])
         explicit = None if f["id"] in auto_ids else True if val == "true" else False if val == "false" else None
         detected = _detected(f, devices)

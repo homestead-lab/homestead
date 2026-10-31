@@ -32,6 +32,7 @@ The leader evaluates sources every 20 seconds. Persistent conditions, worsening
 and recovery require 60 seconds of observations. An unavailable source does not
 resolve its conditions or count toward that confirmation period. Missing SMART
 readings retain the last warning. Unchanged conditions do not repeat on a timer.
+The one timed push is the [summary push](#summary-push), which a person asks for.
 
 | Source | Initial condition or event | Worsening |
 | --- | --- | --- |
@@ -104,6 +105,39 @@ are unavailable; neither invents a cluster incident. Recovery wording describes
 what is no longer reported, rather than claiming that a host restarted, a drive
 was repaired, or an update was installed without evidence.
 
+## Summary push
+
+Push says when something starts, so a quiet week sends nothing. Each person
+can ask for a summary as well: **Settings → You → Summary push**, Off (the
+default), Daily, or Weekly on a chosen day, at a chosen hour of their time
+zone (the browser's, unless they pick another). It is the one push sent on a
+timer.
+
+At that hour the leader sends one push to each of that person's devices with
+notifications on, whatever categories the device has chosen. It counts what the
+Timeline recorded since the last summary, by kind, for that person's role (the
+audit log only for admins): "Past day: 3 changes, 1 restart, nothing failed",
+or "Past week: nothing happened". Tapping it opens the Timeline from where the
+summary starts. It adds no record of its own. A source that could not be read
+is named in it ("App restarts could not be read."), never counted as nothing,
+and "nothing failed" is only said when every source was read. "Failed" counts
+failed jobs and requests; alerts are counted as alerts. Each summary starts
+where the last one ended, so nothing is counted twice. A summary is kept out
+of the bell's list, the Timeline and the alert webhook, and the alert log
+keeps only each person's latest one, so summaries never push alerts out of it.
+Removing an account removes its setting.
+
+It is sent once. The setting and the last time sent are kept per person in
+`timeline-summary.json` on Homestead's data volume. The leader marks the
+summary sent before it pushes, so a restart or another copy taking the lead
+never sends it twice; a copy that stops between the two loses that one
+summary instead. Times missed while Homestead was down send one late summary,
+covering everything since the last, never one for each. Turning it on, or
+changing it, starts from the next time, not at once. The hour follows the
+person's time zone through daylight saving changes: an hour the clocks skip or
+repeat still sends once that day. A person with no device set up for
+notifications is sent nothing, and the card says so.
+
 ## Outage webhooks
 
 Push notifications reach the browsers and phones that subscribed. An app or VM
@@ -126,11 +160,29 @@ saved, the address is only ever shown as its scheme, host and port, with the
 rest as `(hidden)` - in the dialog, the app and VM lists, the Resources page,
 errors and the record of the last call. Save or test the address as shown and
 the kept address is used, but only while the scheme, host and port are
-unchanged: change any of them and type the whole address again. An admin's
-**Reveal** on the Resources page shows it all.
+unchanged: change any of them and type the whole address again.
+
+The whole address is kept in a Secret in the app's or VM's namespace,
+`homestead-outage-app-<app>` (`homestead-outage-vm-<vm>` for a VM), not on the app
+or VM itself, so someone who can read Deployments or VMs in Kubernetes - a
+viewer on the Resources page too - never sees a token. The
+`homestead.io/outage-actions` annotation keeps only the scheme, host and port,
+and the Secret's name. An address with nothing after its host has nothing to
+hide and stays on the annotation. Homestead reads the Secret only when it made
+it for that webhook, and only while its scheme, host and port match the
+annotation's; it is deleted with the app or VM. When the app or VM is deleted
+outside Homestead, the leader deletes its Secret once it has been missing
+for an hour, with no job on it (each delete is in the pod log and the audit
+log). A webhook saved before this
+release is moved into its Secret by Homestead after its next monitoring
+round, and on its next save. An admin can **Reveal** the Secret on the
+Resources page.
 
 **Where a webhook may go.** Homestead looks up every address the host name
-resolves to and calls the one it checked. It never calls this host
+resolves to, checks them all, and calls them in turn until one answers - a
+host with an IPv6 and an IPv4 address still gets the call when one of them
+cannot be reached. All the tries share the ten-second limit, and an address
+that answered is never called again for the same message. It never calls this host
 (loopback), link-local or cloud metadata addresses. An IPv6 address that
 carries an IPv4 one (NAT64, 6to4) is checked as the IPv4 address inside. A LAN or cluster address
 (the RFC 1918 private ranges, 100.64.x, IPv6 unique local) - a self-hosted
@@ -169,6 +221,11 @@ Known limits of the carry-over:
   address if it needs one).
 - GitOps that manages the `homestead.io/outage-actions` annotation can undo
   the `lan` it set; put `"lan":true` in the annotation kept in git.
+- GitOps that keeps a whole webhook address, token and all, in that
+  annotation puts it back after Homestead moves it into its Secret, and
+  Homestead moves it again each time. Keep the annotation in git as Homestead
+  writes it (the address up to its host, then `/(hidden)`, and `"secret"`)
+  and the Secret wherever your other secrets live.
 - A webhook whose name does not resolve when it is saved is saved as it is:
   it is checked again at each call, and a LAN address is then refused
   without the allowance. Saving it clears the warning above, so tick Allow a
@@ -178,3 +235,34 @@ Known limits of the carry-over:
 says how the service answered. Only an admin can send one, because it makes a
 request from inside the cluster to the address typed; it may reach a LAN
 address, and at most five a minute go out.
+
+## Alert webhook
+
+Alerts - a host not ready, a drive failing, a backup that failed, an app out
+of restarts, and the rest above - can also go to one webhook of your own, such
+as ntfy or Gotify: **Settings → Connections → Alert webhook** (admins only).
+It is off until set, so nothing changes for anyone who does not set it.
+
+Each alert is sent once, as it is raised, worsens or clears, under the same
+trigger rules as push: an unchanged condition is not sent again. Unlike push,
+it has no categories to choose and no acknowledgement: an alert someone
+acknowledged in Homestead is still sent. **Send** chooses the alerts: critical
+only, warnings and critical (the default), or everything, information too.
+An alert that was sent is always followed by its clear, even if it eased below
+that level first. Device tests are never sent. When more than 10 alerts arrive
+at once, the first 10 are sent and one more call says how many were left out.
+Calls go out one after another, in order, with `User-Agent: Homestead alerts`.
+
+| Format | What is sent |
+| --- | --- |
+| Generic JSON (the default) | A POST of JSON: `event` (`alert`), `phase` (raised, worsened or resolved), `severity`, `category`, `key`, `title`, `body`, `href`, `at`, and `title: body` as `text`, `content` and `message` |
+| ntfy | The alert's body as the message (its title when it has none), its title as `Title`, `Priority` high for a critical alert, default for a warning or a cleared alert and low for information, and a tag |
+| Gotify | JSON `title`, `message` and `priority` (8 critical, 5 a warning or a cleared alert, 2 information) |
+
+The address works as an outage webhook's does (above): it is shown only up to
+its host once saved, it never reaches this host, link-local or metadata
+addresses, a LAN address needs **Allow a LAN address**, and no redirect is
+followed. It is checked again at every call. **Send a test** shares the outage
+webhooks' limit of five a minute. The setting is kept in `alert-webhook.json`
+on Homestead's data volume, readable only by Homestead, and the last call's
+result shows on the card.

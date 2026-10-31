@@ -15,6 +15,7 @@ import homestead_fleet as FLEET
 import homestead_routes as MODULE_ROUTES
 import homestead_setup_code as SETUP_CODE
 import homestead_signins as SIGNINS
+import homestead_timeline_summary as SUMMARY
 
 Reply, Cookie, connected = MODULE_ROUTES.Reply, MODULE_ROUTES.Cookie, MODULE_ROUTES.connected
 _default_ns = [None]
@@ -147,10 +148,13 @@ def remove_user(request):
     b = request.body
     AUTH.delete_user(b.get("username"), request.user)
     ALERTS.forget_user(str(b.get("username") or "").strip().lower())
+    SUMMARY.forget_user(str(b.get("username") or "").strip().lower())
     signin(request, "user-removed", b.get("username"), detail=f"by {FLEET.words(request.user)}")
     return {"ok": True, "users": AUTH.list_users()}
 
 
+# The cookie only these routes set (homestead_routes.answer refuses it from any other).
+OWN_COOKIES = (AUTH.COOKIE,)
 # Its routes and who may use them (homestead_routes.py). Setup and sign-in are
 # public paths: the guard lets them through before it reads a session.
 ROUTES = {

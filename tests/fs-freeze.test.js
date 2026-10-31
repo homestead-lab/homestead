@@ -217,3 +217,23 @@ test("the review says an odd value is replaced", async () => {
   ctx.fsFreezeReview(true);
   assert.match(body.innerHTML, /holds &quot;maybe&quot;, which this replaces/);
 });
+
+test("a volume that is not attached says it freezes once attached, not that it freezes", async () => {
+  const later = { name: "pvc-idle", claim: "lab/idle", mode: "ignored", freezes: "later", attached: false, when_on: "yes", engine: "v1", access: "rwo",
+    volume_mode: "Filesystem", why: "Not attached: Longhorn only syncs it until an app uses it, then freezes it" };
+  const { ctx, host } = load({ ...STATUS, enabled: true, volumes: [...VOLUMES, later], counts: { total: 5, freezing: 0 } });
+  await ctx.loadFsFreeze();
+  const row = between(host.innerHTML, "lab/idle", "</tr>");
+  assert.match(row, /freezes once attached/);
+  assert.doesNotMatch(row, />freezes</);
+  assert.match(row, /Not attached: Longhorn only syncs it/);
+});
+
+test("the review counts a volume that is not attached apart from those frozen now", async () => {
+  const idle = { name: "pvc-idle", claim: "lab/idle", mode: "ignored", freezes: "no", attached: false, when_on: "yes", engine: "v1", access: "rwo", volume_mode: "Filesystem", why: "" };
+  const { ctx, body } = load({ ...STATUS, volumes: [VOLUMES[0], idle] });
+  await ctx.loadFsFreeze();
+  ctx.fsFreezeReview(true);
+  assert.match(body.innerHTML, /Frozen for each snapshot<\/dt><dd[^>]*>1</);
+  assert.match(body.innerHTML, /Frozen once attached<\/dt><dd[^>]*>1</);
+});

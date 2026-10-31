@@ -190,7 +190,8 @@ TUNNEL_IMAGES = ("cloudflare/cloudflared", "tailscale/tailscale")
 def welcome(role="admin"):
     """The first-run checklist: the few settings a new cluster wants, each
     with whether it is done. Shown to an admin until one says it is done."""
-    import homestead_longhorn as LH, homestead_networking as NETWORK, homestead_os_rollout as OS_ROLLOUT
+    import homestead_longhorn_target as BACKUP_TARGET, homestead_network_inventory as INV, homestead_os_rollout as OS_ROLLOUT
+    import homestead_vip_registry as REG
     import homestead_platform as PLATFORM, homestead_probe as PROBE, homestead_self_address as SELF_ADDRESS
     try:
         with open(os.path.join(DATA_DIR, "welcome.json"), encoding="utf-8") as handle:
@@ -200,14 +201,14 @@ def welcome(role="admin"):
     p = PLATFORM.detect() or {}
     steps = {}
     try:
-        address = SELF_ADDRESS.report(homestead_routes.cached("network", 5, NETWORK.inventory))
+        address = SELF_ADDRESS.report(homestead_routes.cached("network", 5, INV.inventory))
         steps["address"] = {"done": address["on_vip"], "url": address["url"], "shared_vip": address["shared_vip"],
-                            "vips": len(NETWORK.registered())}
+                            "vips": len(REG.registered())}
     except Exception as error:
         steps["address"] = {"done": False, "error": str(error)[:160]}
     steps["probe"] = {"done": bool(PROBE.installed())}
     try:
-        steps["backups"] = {"done": bool(LH.backup_target().get("configured"))}
+        steps["backups"] = {"done": bool(BACKUP_TARGET.backup_target().get("configured"))}
     except Exception:
         steps["backups"] = {"done": False}
     steps["updates"] = {"applies": not p.get("harvester") and p.get("distribution") in ("k3s", "rke2"),
@@ -224,8 +225,9 @@ def state(user, role):
     an admin gets their own steps alone."""
     import homestead_api_keys as API_KEYS, homestead_auth as AUTH, homestead_disks as DISKS
     import homestead_fleet as FLEET, homestead_host_console as HOST_CONSOLE, homestead_host_os as HOST_OS
-    import homestead_imports as IMP, homestead_ipam as IPAM, homestead_lifecycle as LC, homestead_longhorn as LH
-    import homestead_networking as NETWORK, homestead_os_rollout as OS_ROLLOUT, homestead_platform as PLATFORM
+    import homestead_imports as IMP, homestead_ipam as IPAM, homestead_node_actions as NODE_ACTIONS, homestead_longhorn_target as BACKUP_TARGET
+    import homestead_network_inventory as INV, homestead_os_rollout as OS_ROLLOUT, homestead_platform as PLATFORM
+    import homestead_vip_registry as REG
     import homestead_push as PUSH, homestead_self_address as SELF_ADDRESS
     cached = homestead_routes.cached
     p = PLATFORM.detect() or {}
@@ -242,14 +244,19 @@ def state(user, role):
     if role == "admin":
         def health():
             ov = cached("ov", 5, _bound["overview"])
-            issues = ov.get("health_issues") or []
-            return {"done": not issues, "applies": True, "summary": ov.get("health_summary", ""),
+            # This cycle's issues: a checklist, not the pill, so a fault the
+            # verdict still holds (#941) is not called done.
+            issues = (ov.get("health_issues") if ov.get("current_issues") is None
+                      else ov.get("current_issues")) or []
+            summary = "; ".join(f"{x.get('kind', '')} {x.get('name', '')}: {x.get('reason', '')}"
+                                for x in issues[:4]) or ov.get("health_summary", "")
+            return {"done": not issues, "applies": True, "summary": summary,
                     "issues": [{k: x.get(k, "") for k in ("severity", "kind", "name", "reason")} for x in issues[:6]]}
         step("health", health)
 
         def quorum():
             import homestead_roles as ROLES
-            q = LC.quorum_report()
+            q = NODE_ACTIONS.quorum_report()
             raw_nodes = cached("nodes", 5, _bound["nodes"])
             nodes = [{"name": n["name"], "ready": n.get("status") == "Ready", "roles": n.get("roles") or []}
                      for n in raw_nodes]
@@ -276,9 +283,9 @@ def state(user, role):
         step("clocks", clocks)
 
         def address():
-            report = SELF_ADDRESS.report(cached("network", 5, NETWORK.inventory))
+            report = SELF_ADDRESS.report(cached("network", 5, INV.inventory))
             return {"done": bool(report["on_vip"]), "applies": True, "url": report["url"], "service_url": report.get("service_url", ""),
-                    "shared_vip": report.get("shared_vip"), "vips": len(NETWORK.registered()),
+                    "shared_vip": report.get("shared_vip"), "vips": len(REG.registered()),
                     "load_balancer": p.get("load_balancer", ""), "harvester": bool(p.get("harvester"))}
         step("address", address)
 
@@ -322,7 +329,7 @@ def state(user, role):
                     "address": report.get("address", ""), "shares": report.get("shares", 0),
                     **({"error": report["error"]} if report.get("error") else {})}
         step("smb", smb)
-        step("backups", lambda: {"done": bool(LH.backup_target().get("configured")), "applies": True})
+        step("backups", lambda: {"done": bool(BACKUP_TARGET.backup_target().get("configured")), "applies": True})
         step("config", lambda: {"done": bool(store.get("config_backup_at")), "applies": True, "at": store.get("config_backup_at")})
         step("osupdates", lambda: {"done": bool((OS_ROLLOUT.settings().get("schedule") or {}).get("enabled")), "applies": kube})
         step("people", lambda: {"done": sum(1 for u in AUTH.list_users() if u["role"] == "admin") >= 2, "applies": True,

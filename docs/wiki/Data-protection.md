@@ -81,7 +81,9 @@ Have both.
 2. **Pick a plan.** **Plans** set up a policy in one go:
    - *Snapshots*: hourly, kept for a day; daily, kept for a week;
    - *Snapshots and backups*: those, plus daily and weekly backups;
-   - *Housekeeping*: weekly trim and snapshot cleanup.
+   - *Housekeeping*: a weekly snapshot cleanup. It makes no trim job:
+     Homestead trims attached volumes itself (see below), and a Longhorn trim
+     job for `default` would switch that off.
 
    The jobs a plan makes are ordinary jobs afterwards, to change as you like.
    A plan for `default` makes jobs with plain names (`daily-snapshot`); a plan
@@ -136,8 +138,8 @@ still be going ([Settings](Settings#when-a-host-comes-back)).
 Files deleted inside a volume leave their space allocated in Longhorn until
 the filesystem is trimmed. Media, databases and VM disks can hold far more
 than their files use. So Homestead trims **every attached volume** itself,
-once a week: Saturdays at 04:00 UTC, one volume at a time, as a job in the
-job tray.
+once a week: Saturdays at 04:00 UTC unless you move it, one volume at a time,
+as a job in the job tray.
 
 - Longhorn trims a volume only while it's attached. A detached volume (a
   stopped app's) is skipped and named; the first weekly run that finds it
@@ -151,9 +153,14 @@ job tray.
   never raise anything.
 - **Data protection › Housekeeping** shows the last run, **Run now** (trims
   every attached volume now) and the switch that turns the weekly trim off.
+- **Change time** there moves the trim to another weekday and hour (UTC), for
+  a cluster whose backups run on Saturday mornings. A time that has already
+  passed this week takes effect next week. **This week** lists the trim as
+  Homestead's, and a backup starting with it on a volume is a clash.
 - A single volume's snapshot panel has **Trim now**.
 - If you have a trim job of your own for the default group, Homestead's
-  doesn't run as well.
+  doesn't run as well. Housekeeping names it; delete it to hand the trim back
+  to Homestead. Earlier releases' *Housekeeping* plan made one, `weekly-trim`.
 
 Earlier releases made a Longhorn recurring job, **homestead-weekly-trim**,
 for this. Homestead removes it once, if it is as Homestead left it. If you
@@ -161,7 +168,7 @@ changed its schedule or groups, it is yours: it stays, and Homestead's own
 weekly trim is off; to use Homestead's instead, delete that job and turn the
 weekly trim on under Housekeeping. If you had deleted it, Homestead's weekly
 trim starts off; turn it on there. After the update, Homestead's first run is
-the next Saturday's.
+the next one on its slot.
 
 ### Clashes, and the week ahead
 
@@ -183,7 +190,10 @@ CronJobs, power schedules, the host OS update window, and the maintenance
 window when an app updates itself in it - with the clashes first. A job that
 runs more than six times a day is one "runs all day" line. Anything Homestead
 could not read, a schedule included, is named at the top, so a quiet week is
-never one it did not see. To fix a clash, move one of the two jobs here.
+never one it did not see. When Longhorn's recurring jobs cannot be read,
+This week says so instead of "No clashes this week", and Data protection says
+so above its coverage, which it leaves unknown. To fix a clash, move one of
+the two jobs here.
 
 A snapshot or backup job whose last run failed, or backup jobs with no
 backup target (or one that cannot be reached), make the cluster
@@ -218,6 +228,13 @@ what each volume does:
 - Some volumes are never frozen. Block volumes, such as VM disks, and shared
   (RWX) volumes have no filesystem on the host to freeze, so Longhorn syncs
   them instead. V2 volumes are never frozen.
+- A volume that isn't attached shows **freezes once attached**: while nothing
+  mounts it, Longhorn only syncs it, and it freezes once an app uses it. A
+  volume still being created, attaching or detaching counts as not attached.
+- An agent can read all of this with `get_filesystem_freeze`. It can ask for
+  a change with `set_filesystem_freeze`, but the change waits for an admin to
+  approve it in Homestead, and the request names any host on kernel 5.17 or
+  older ([AI agents](AI-agents)).
 
 The trade-offs:
 

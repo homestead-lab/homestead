@@ -294,6 +294,17 @@
   ];
   // Switches the demo remembers while the page is open.
   const demoState = {};
+  // The weekly trim's slot (#927): Saturday 04:00 UTC unless moved; Monday is 0.
+  const DEMO_TRIM_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const demoTrimSlot = () => demoState.weeklyTrimSlot || { weekday: 5, hour: 4 };
+  const demoTrimNext = () => {
+    const { weekday, hour } = demoTrimSlot(), now = Date.now(), today = Math.floor(now / 86400000) * 86400000;
+    for (let day = 0; day < 8; day++) {
+      const at = today + day * 86400000 + hour * 3600000;
+      if ((new Date(at).getUTCDay() + 6) % 7 === weekday && at > now) return at / 1000;
+    }
+    return 0;
+  };
   // A logo the demo can show without fetching anything: the app's initial on a colour.
   const demoLogo = (letter, hue) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="hsl(${hue} 52% 42%)"/><text x="32" y="43" font-family="sans-serif" font-size="30" font-weight="700" fill="#fff" text-anchor="middle">${letter}</text></svg>`)}`;
   const demoLogoCatalogue = () => workloads.filter(w => !w.platform && (w.images || [])[0]).flatMap((w, i) => [
@@ -590,7 +601,19 @@
       storage_classes: ["longhorn-r2", "longhorn-fast"] };
   };
   const volumeDeletePlan = url => {
-    const name = url.searchParams.get("name") || "scratch-test";
+    const name = url.searchParams.get("name") || "scratch-test", released = url.searchParams.get("pv");
+    // A Released volume whose claim name an app uses again (#932): its review
+    // sets it beside the volume the claim uses now.
+    if (released) return {
+      orphan: true, released: true, namespace: "lab", name, confirm: released, uid: `demo-${released}`, resource_version: "42",
+      phase: "Claim name in use again", requested_storage: "10Gi", consumers: [], warnings: [], inventory_complete: true,
+      current: { claim_uid: "demo-claim-now", phase: "Bound", pv: `pvc-demo-${name}`, pv_uid: "demo-pv-now", longhorn: `pvc-demo-${name}`,
+        consumers: [{ kind: "Deployment", name: "frigate", namespace: "lab", active: true, mounts: [] }] },
+      pv: { name: released, uid: "demo-pv-released", phase: "Released", claim_uid: "demo-claim-before", longhorn: released, reclaim_policy: "Retain" },
+      longhorn: { name: released, state: "detached", attached_node: "", replicas: 2, actual_gb: 6.4 },
+      snapshots: { count: 0 }, backups: { count: 1 }, blocked: false, blocking_reasons: [],
+      actions: { detach: { complete: true }, delete_claim: { enabled: false }, delete_data: { enabled: true } },
+    };
     const attached = name === "frigate-config";
     return {
       namespace: "lab", name, uid: `demo-${name}`, resource_version: "42", phase: "Bound",
@@ -710,7 +733,7 @@
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
-    "/api/overview": { health: "healthy", health_state: "healthy", health_summary: "All cluster services are healthy", health_issues: [],
+    "/api/overview": { age_s: 4, health: "healthy", health_state: "healthy", health_summary: "All cluster services are healthy", health_issues: [],
       cpu_pct: 27.2, cpu_used: 5.4, cpu_cap: 20, mem_pct: 54.0, mem_used_gb: 25.2, mem_cap_gb: 46.8,
       nodes_ready: 3, nodes_total: 3, workload_pods: 16, system_pods: 116, lb_ip: "192.0.2.242", nodes,
       top_cpu: [{ name: "frigate", ns: "lab", nodes: ["harvester-node2"], cpu: .84 }, { name: "home-assistant", ns: "lab", nodes: ["harvester-node1"], cpu: .31 }, { name: "paperless", ns: "lab", nodes: ["harvester-node3"], cpu: .18 }],
@@ -865,16 +888,33 @@
       const joining = body.target_mode === "existing";
       const workloadName = body.workload_name || body.name;
       const containerName = body.container_name || body.name;
+      // Placement chosen in Deploy (#844), as the server writes it: a preferred
+      // host, and a pod (anti-)affinity term for each rule.
+      const place = joining ? {} : body.placement || {}, host = joining ? "" : body.node || "";
+      const term = (mode, app) => {
+        const rule = { labelSelector: { matchLabels: { app: app.name } }, namespaces: [app.ns || body.namespace], topologyKey: "kubernetes.io/hostname" };
+        return mode === "require" ? ["requiredDuringSchedulingIgnoredDuringExecution", rule] : ["preferredDuringSchedulingIgnoredDuringExecution", { weight: 100, podAffinityTerm: rule }];
+      };
+      const affinity = {};
+      const add = (kind, mode, app) => { const [slot, item] = term(mode, app); ((affinity[kind] ||= {})[slot] ||= []).push(item); };
+      if (place.spread) add("podAntiAffinity", place.spread, { name: workloadName });
+      (place.with || []).forEach(row => add("podAffinity", row.mode, row));
+      (place.apart || []).forEach(row => add("podAntiAffinity", row.mode, row));
+      if (host) affinity.nodeAffinity = { preferredDuringSchedulingIgnoredDuringExecution: [{ weight: 100,
+        preference: { matchExpressions: [{ key: "kubernetes.io/hostname", operator: "In", values: [host] }] } }] };
+      const candidate = name => ({ name, eligible: true, metrics_available: true, used_gb: 6,
+        projected_gb: 6.5, capacity_gb: 16, projected_percent: 40.6, reservations_known: true, reserved_gb: 4, request_slots: 1 });
       return { deployment: { apiVersion: "apps/v1", kind: "Deployment",
           metadata: { name: joining ? body.target_workload : workloadName, namespace: body.namespace },
           spec: { template: { spec: { containers: [{ name: containerName, image: body.image }],
+            ...(Object.keys(affinity).length ? { affinity } : {}),
             ...(!joining && ["critical", "low"].includes(body.priority) ? { priorityClassName: "homestead-" + body.priority } : {}) } } } },
         service: null, capacity: { additional: 1, pod_request_gb: 0.25, pod_memory_gb: 0.5,
           pod_cpu_request_percent: 10, blocked: false, requires_confirmation: joining,
           ...(joining ? { rollout: { strategy: "Recreate", replicas: 1, ownership_known: true, owned_pods: ["demo-pod"], release_request_gb: 0.25 } } : {}),
+          ...(host ? { placement: { pinned: null, preferred: host, resident: null } } : {}),
           warnings: joining ? ["Recreate stops old pods before replacements start; every container will be unavailable during the restart"] : [],
-          candidates: [{ name: "harvester-node1", eligible: true, metrics_available: true, used_gb: 6,
-            projected_gb: 6.5, capacity_gb: 16, projected_percent: 40.6, reservations_known: true, reserved_gb: 4, request_slots: 1 }] },
+          candidates: [...new Set(["harvester-node1", ...(host ? [host] : [])])].map(candidate) },
         capacity_token: "demo-review", impact: { mode: joining ? "existing" : "new", workload: joining ? body.target_workload : workloadName,
           message: joining ? "Saving updates the Deployment template and restarts every container in its pods." : "Creates a new independently managed Deployment." } };
     },
@@ -936,7 +976,7 @@
       return { ok: true, operation: { id: "demo-uvm", kind: "unraid-vm-import", title: `Import ${body.vm} from ${body.source}`,
         status: "running", progress: 3, message: `Copying from ${body.source}`, href: "/vms/import" } };
     },
-    "/api/images": () => ({ distinct: 4, protected: 3, retained: 3, complete: true, scanning: [],
+    "/api/images": () => ({ distinct: 6, protected: 5, retained: 5, complete: true, scanning: [],
       node_names: ["harvester-node1", "harvester-node2", "harvester-node3"],
       nodes: [{ node: "harvester-node1", total_gb: 14.2, count: 38, scanned_at: Date.now() / 1000 - 240 },
         { node: "harvester-node2", total_gb: 11.9, count: 31, scanned_at: Date.now() / 1000 - 240 },
@@ -947,14 +987,28 @@
       images: [
         { name: "ghcr.io/blakeblackshear/frigate:stable", names: [], digest: "sha256:" + "a".repeat(64),
           size_mb: 2480, nodes: ["harvester-node2"], system: false, protected: true,
-          retained_by: [{ reason: "active", namespace: "lab", workload: "frigate", container: "frigate" }] },
+          retained_by: [{ reason: "active", kind: "Pod", why: "running", label: "running", detail: "A running container uses it.",
+            namespace: "lab", workload: "frigate", container: "frigate" }] },
         { name: "ghcr.io/home-assistant/home-assistant:stable", names: [], digest: "sha256:" + "b".repeat(64),
           size_mb: 1720, nodes: ["harvester-node1", "harvester-node3"], system: false, protected: true,
-          retained_by: [{ reason: "rollback", namespace: "lab", workload: "home-assistant", container: "home-assistant" }] },
+          retained_by: [{ reason: "rollback", kind: "Deployment", why: "rollback", label: "roll back",
+            detail: "Kept so Roll back can return to it.", namespace: "lab", workload: "home-assistant", container: "home-assistant" }] },
         // A container scaled to zero still starts from its image.
         { name: "ghcr.io/esphome/esphome:2025.9.0", names: [], digest: "sha256:" + "e".repeat(64),
           size_mb: 612, nodes: ["harvester-node1"], system: false, protected: true,
-          retained_by: [{ reason: "stopped", namespace: "lab", workload: "esphome", container: "esphome" }] },
+          retained_by: [{ reason: "stopped", kind: "Deployment", why: "scaled-to-zero", label: "scaled to zero",
+            detail: "The app is scaled to zero and starts from it.", namespace: "lab", workload: "esphome", container: "esphome" }] },
+        // A paused Job, a VM template and a disk import keep images too; each says which.
+        { name: "registry.example.com/tools/db-migrate:4", names: [], digest: "sha256:" + "d".repeat(64),
+          size_mb: 188, nodes: ["harvester-node2"], system: false, protected: true,
+          retained_by: [{ reason: "stopped", kind: "Job", why: "job-paused", label: "Job paused",
+            detail: "A suspended Job starts from it when it is resumed.", namespace: "lab", workload: "db-migrate", container: "migrate" }] },
+        { name: "quay.io/containerdisks/fedora:41", names: [], digest: "sha256:" + "f".repeat(64),
+          size_mb: 520, nodes: ["harvester-node1", "harvester-node3"], system: false, protected: true,
+          retained_by: [{ reason: "stopped", kind: "VirtualMachineTemplateVersion", why: "vm-template", label: "VM template",
+              detail: "A VM template starts new machines from it.", namespace: "lab", workload: "fedora-template-v1", container: "rootdisk" },
+            { reason: "stopped", kind: "DataVolume", why: "disk-import", label: "disk import",
+              detail: "A disk import pulls it through the host's container runtime.", namespace: "lab", workload: "fedora-root", container: "registry" }] },
         { name: "docker.io/library/redis:7.2", names: [], digest: "sha256:" + "c".repeat(64),
           size_mb: 41, nodes: ["harvester-node1", "harvester-node2", "harvester-node3"],
           system: false, protected: false, retained_by: [] }] }),
@@ -1475,7 +1529,10 @@ ssh_pwauth: true
       { name: "homestead-import-krusader", app: "binhex-krusader", state: "done", percent: 100,
         start: "2026-09-21T08:12:00Z", end: "2026-09-21T08:19:00Z", active: 0, succeeded: 1, failed: 0 },
     ],
-    "/api/lh/overview": lhOverview,
+    // Homestead's weekly trim among the schedules, on its slot (#927).
+    "/api/lh/overview": () => ({ ...lhOverview, homestead_jobs: demoState.weeklyTrimOn === false ? [] : [{
+      name: "Homestead weekly trim", task: "filesystem-trim", homestead: true,
+      cron: `0 ${demoTrimSlot().hour} * * ${(demoTrimSlot().weekday + 1) % 7}`, volumes: ["pvc-demo-frigate", "pvc-demo-hass"] }] }),
     "/api/lh/job/run": (url, init) => ({ ok: true, job: `${JSON.parse(init?.body || "{}").name}-now-000001`, namespace: "longhorn-system" }),
     "/api/lh/snapshot-progress": {known: true, active: false, percent: null, replicas: [], errors: []},
     "/api/lh/snapshots": [{ name: "homestead-1758765600-a1b2c3", volume: "pvc-demo", created: new Date(Date.now() - 86400000).toISOString(),
@@ -2086,6 +2143,11 @@ ssh_pwauth: true
       sensors: { cluster: 15, node: 9 },
       status: { state: "publishing", detail: "publishing to 192.0.2.177:1883 every 60s", last_publish: Math.floor(Date.now() / 1000) - 20, published: 3120, error: "" } },
     "/api/mqtt/test": { ok: true, detail: "192.0.2.177:1883 accepted the connection" },
+    "/api/alerts/webhook": (url, init) => init?.method === "POST"
+      ? { ok: true, detail: "Not saved in the demo", webhook: "", format: "generic", min_severity: "degraded", lan: false, last: null }
+      : { webhook: "https://ntfy.example.com/(hidden)", format: "ntfy", min_severity: "degraded", lan: false,
+          last: { at: Math.floor(Date.now() / 1000) - 3600, ok: true, sent: 1 } },
+    "/api/alerts/webhook/test": { ok: true, detail: "ntfy took the test" },
     "/api/mqtt/control": (url, init) => init?.method === "POST" ? { ok: true } : {
       control: true, controlled: ["vm:vms/win11", "app:lab/frigate"], base: "harvester", items: [
         { id: "vm:vms/win11", kind: "vm", ns: "vms", name: "win11", on: true, refused: "" },
@@ -2302,10 +2364,12 @@ ssh_pwauth: true
         const mode = modes[name] || "ignored", effective = mode === "enabled" || (mode === "ignored" && on);
         const whenOn = engine === "v2" ? "no" : volumeMode === "Block" || access === "rwx" ? "sync" : "yes";
         const whyOn = engine === "v2" ? "A V2 volume: Longhorn never freezes these" : syncWhy[volumeMode] || syncWhy[access] || "";
+        const attached = name !== "pvc-demo-frigate";   // the demo has one volume nothing mounts
         const shown = effective || engine === "v2";
-        return { name, claim, mode, engine, access, volume_mode: volumeMode, when_on: whenOn, freezes: shown ? whenOn : "no",
+        const later = shown && whenOn === "yes" && !attached;
+        return { name, claim, mode, engine, access, volume_mode: volumeMode, when_on: whenOn, attached, freezes: later ? "later" : shown ? whenOn : "no",
           changed: mode === "ignored" ? null : { who: "admin", at: Math.floor(Date.now() / 1000) - 3 * 86400 },
-          why: shown ? whyOn : mode === "disabled" ? "Set to never freeze" : "Follows the cluster, which is off" };
+          why: later ? "Not attached: Longhorn only syncs it until an app uses it, then freezes it" : shown ? whyOn : mode === "disabled" ? "Set to never freeze" : "Follows the cluster, which is off" };
       });
       return { supported: true, version: "v1.13.0", enabled: on, value: JSON.stringify({ v1: String(on) }), unknown_value: false,
         from_chart: false, changed: demoState.fsFreezeChanged ? { who: "admin", at: demoState.fsFreezeChanged } : null,
@@ -2534,6 +2598,47 @@ ssh_pwauth: true
           reason: "homestead-data is on longhorn-r2, a migratable class: Longhorn gives it a VM-disk volume that only one node can mount, so a copy on a second node would never start",
           candidates: ["longhorn"], classes: [{ name: "longhorn", shareable: true }] },
         data_copies: demoDataCopies() },
+    // Match copies to hosts (#841): the demo has two hosts, so nothing is
+    // offered unless a check asks for the one-host ("lower") or "raise" offer.
+    "/api/longhorn/one-host-copies": (url, init) => {
+      const offer = window.__demoOneHostCopies;
+      if (init?.method === "POST") {
+        const { action, volumes = [] } = JSON.parse(init.body || "{}");
+        window.__demoOneHostCopies = "";
+        return { ok: true, changed: volumes.map(v => v.volume), message: action === "raise"
+          ? `${volumes.length} volumes have copies back; Longhorn is making them`
+          : `${volumes.length} volumes now keep one copy, as this host can hold. The count each asked for is kept on it` };
+      }
+      const rows = [{ volume: "pvc-demo-frigate", claim: "frigate-config", namespace: "lab", app: "lab/frigate" },
+        { volume: "pvc-demo-paperless", claim: "paperless-data", namespace: "lab", app: "lab/paperless" },
+        { volume: "pvc-demo-immich", claim: "immich-library-with-a-long-descriptive-name", namespace: "media", app: "media/immich" }];
+      if (offer === "lower") return { state: "lower", hosts: 1, volumes: rows.map(r => ({ ...r, from: 3, to: 1 })) };
+      if (offer === "raise") return { state: "raise", hosts: 2, volumes: rows.map(r => ({ ...r, from: 1, to: 2 })) };
+      return { state: "none", hosts: 2, volumes: [] };
+    },
+    // What storage leaves behind (#932): none in the demo unless a check asks
+    // for Released volumes ("released") or a stale session ("iscsi"), or both.
+    "/api/storage/leftovers": () => {
+      const ask = String(window.__demoLeftovers || ""), GiB = 1024 ** 3;
+      const kept = (pv, namespace, claim, size, hosts, extra = {}) => ({ pv, namespace, claim, class: "longhorn-migratable", policy: "Retain",
+        size: `${size}Gi`, size_bytes: size * GiB, released_at: new Date(Date.now() - 12 * 86400000).toISOString(),
+        driver: "driver.longhorn.io", longhorn: pv, hosts, allocated_bytes: size * GiB * hosts.length, old_copy: false, ...extra });
+      return {
+        released: { state: "ok", volumes: (ask.includes("released") ? [
+          kept("pvc-demo-scratch-1", "vm-imports", "prime-demo-disk-with-a-long-descriptive-name-scratch", 42, ["node-1", "node-2"]),
+          kept("pvc-demo-scratch-2", "vm-imports", "prime-demo-disk-2-scratch", 20, ["node-2"]),
+          kept("pvc-demo-old-notes", "lab", "notes-data", 5, ["node-1"], { class: "longhorn", old_copy: true }),
+          kept("pv-demo-nfs", "media", "archive", 100, [], { class: "nfs", driver: "nfs.csi.k8s.io", longhorn: "", allocated_bytes: 100 * GiB })] : [])
+          // An app deployed again with its old claim name ("reused"): the old volume shows on its card.
+          .concat(ask.includes("reused") ? [kept("pvc-demo-frigate-before", "lab", "frigate-config", 10, ["node-1", "node-2"],
+            { class: "longhorn-r2", claim_reused: true })] : []) },
+        iscsi: { state: "ok", hosts: ask.includes("iscsi") ? [{ node: "node-2", sessions: [
+          { sid: 67, target: "iqn.2019-10.io.longhorn:pvc-demo-notes", volume: "pvc-demo-notes", namespace: "lab", claim: "notes-data",
+            state: "FAILED", address: "192.0.2.40", port: 3260, disks: ["sdj"] },
+          { sid: 71, target: "iqn.2019-10.io.longhorn:pvc-demo-spool", volume: "pvc-demo-spool", namespace: "lab", claim: "spool-data",
+            state: "LOGGED_IN", address: "192.0.2.40", port: 3260, disks: ["sds"] }] }] : [] },
+      };
+    },
     "/api/self/data/two-copies": () => {
       const created = !window.__demoTwoCopiesMade;
       window.__demoTwoCopiesMade = true;
@@ -2796,6 +2901,24 @@ ssh_pwauth: true
         entries: all, counts, more: 0, unread };
     },
     "/api/timeline/seen": () => ({ ok: true, since: Math.round(Date.now() / 1000 - 2.6 * 86400) }),
+    // The summary push (#921): the demo person gets one on Sunday evenings; a
+    // change lasts until the page reloads. Next is worked out in this browser's
+    // own time, near enough for a demo (the server uses the chosen zone).
+    "/api/timeline/summary": (url, init) => {
+      const nextOf = s => {
+        const at = new Date(); at.setMinutes(0, 0, 0); at.setHours(s.hour);
+        while (at <= new Date() || (s.every === "weekly" && (at.getDay() + 6) % 7 !== s.day)) at.setDate(at.getDate() + 1);
+        return Math.round(at / 1000);
+      };
+      if (init?.method === "POST") {
+        const body = JSON.parse(init.body || "{}");
+        demoState.summary = body.every === "off" ? { every: "off" } : { ...body, day: body.day ?? 0 };
+      }
+      const s = demoState.summary || { every: "weekly", day: 6, hour: 18, tz: "Europe/London", result: "sent to 2 devices" };
+      if (s.every === "off") return s;
+      const next = nextOf(s);
+      return { ...s, next, sent_at: s.result ? next - 7 * 86400 + 40 : undefined };
+    },
     "/api/changes/undo": (url, init) => ({ ok: true, detail: `${JSON.parse(init?.body || "{}").name} is back to its settings from before that change; its pods are being replaced` }),
     // The storage forecast (homestead_forecast.py): frigate's config filling in
     // eleven days, a disk in six weeks, the pool steady.
@@ -2812,16 +2935,21 @@ ssh_pwauth: true
       const now = Date.now() / 1000, today = new Date();
       let slot = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - (today.getUTCDay() + 1) % 7, 4) / 1000;
       if (slot > now) slot -= 7 * 86400;
-      return { enabled: demoState.weeklyTrimOn !== false, next: new Date((slot + 7 * 86400) * 1000).toISOString(), running: false, theirs: "",
-        last: { slot, at: slot + 95, why: "weekly", trimmed: ["pvc-demo-paperless", ...(scenario === "healthy" ? ["pvc-demo-frigate"] : [])], unconfirmed: [],
+      const { weekday, hour } = demoTrimSlot();
+      return { enabled: demoState.weeklyTrimOn !== false, next: new Date(demoTrimNext() * 1000).toISOString(), running: false, theirs: "",
+        weekday, hour, last: { slot, at: slot + 95, why: "weekly", trimmed: ["pvc-demo-paperless", ...(scenario === "healthy" ? ["pvc-demo-frigate"] : [])], unconfirmed: [],
           // The incidents and critical scenarios: one attached volume failed to trim (#749).
           failed: scenario === "healthy" ? [] : [{ volume: "pvc-demo-frigate", pvc: "lab/frigate-config", message: DEMO_TRIM_FAILURE }],
           skipped: [{ volume: "pvc-demo-oldapp", pvc: "lab/oldapp-data", why: "detached" }] } };
     },
+    // On or off, or the slot moved (#927), as homestead_weekly_trim.settings.
     "/api/weekly-trim/settings": (url, init) => {
-      const on = !!JSON.parse(init?.body || "{}").enabled;
-      demoState.weeklyTrimOn = on;
-      return { ok: true, enabled: on, detail: on ? "Attached volumes are trimmed every Saturday at 04:00 UTC" : "The weekly trim is off; Run now still trims every attached volume" };
+      const body = JSON.parse(init?.body || "{}");
+      if ("enabled" in body) demoState.weeklyTrimOn = !!body.enabled;
+      if ("weekday" in body || "hour" in body) demoState.weeklyTrimSlot = { weekday: body.weekday, hour: body.hour };
+      const on = demoState.weeklyTrimOn !== false, { weekday, hour } = demoTrimSlot();
+      return { ok: true, enabled: on, weekday, hour,
+        detail: on ? `Attached volumes are trimmed every ${DEMO_TRIM_DAYS[weekday]} at ${String(hour).padStart(2, "0")}:00 UTC` : "The weekly trim is off; Run now still trims every attached volume" };
     },
     "/api/weekly-trim/run": () => ({ ok: true, operation: { id: "demo-weekly-trim", kind: "weekly-trim", status: "queued" } }),
     // Restore tests (views-protect.js): one passed, one failed, one never tested.
@@ -3399,6 +3527,27 @@ ssh_pwauth: true
     { at: ago(130), key: "3f9a1c0b7d2e", name: "Home Assistant", owner: "demo", via: "api", action: "GET /api/v1/status", args: {}, outcome: "ok", detail: "", addr: "192.0.2.20" },
     { at: ago(300), key: "8c41e07a9b55", name: "Ops agent", owner: "demo", via: "mcp", action: "restore_backup", args: { backup: "backup-7f3a91" }, outcome: "error", detail: "the cluster changed since you reviewed this", addr: "198.51.100.7" },
     { at: ago(310), key: "8c41e07a9b55", name: "Ops agent", owner: "demo", via: "mcp", action: "scale_container", args: {}, outcome: "refused", detail: "the key lacks containers:manage", addr: "198.51.100.7" }] };
+  // Events › Audit (#738): the change log and the agent log together, filtered
+  // and paged as homestead_audit_view does it.
+  const demoChanges = [
+    { at: ago(1), who: "demo", via: "browser", addr: "192.0.2.20", what: "POST /api/workload/scale", target: "lab/Deployment/frigate", result: "ok", code: 200 },
+    { at: ago(15), who: "alex", via: "browser", addr: "198.51.100.18", what: "POST /api/workload/restart", target: "media/Deployment/jellyfin", result: "ok", code: 200 },
+    { at: ago(22), who: "alex", via: "browser", addr: "198.51.100.18", what: "POST /api/settings", result: "refused", code: 403 },
+    { at: ago(95), who: "demo", via: "browser", addr: "192.0.2.20", what: "POST /api/snapshots/delete", target: "lab/snap-0412", result: "ok", code: 200 },
+    { at: ago(140), who: "demo", via: "key", addr: "192.0.2.20", what: "POST /api/v1/workloads/restart", target: "home/Deployment/home-assistant", result: "ok", code: 200 },
+    { at: ago(305), who: "demo", via: "mcp", addr: "198.51.100.7", what: "restore_backup", result: "error", code: 200 },
+    { at: ago(720), who: "", via: "none", addr: "203.0.113.7", what: "audit-suppressed", result: "note", detail: "27 more refused requests from 203.0.113.7 in the 60 s since 07:12:03: on stdout, not kept here" },
+  ].map(row => ({ source: "changes", ...row }));
+  responses["/api/audit/log"] = url => {
+    const query = new URL(url, location.origin).searchParams;
+    const source = query.get("source") || "", person = (query.get("person") || "").trim().toLowerCase();
+    const limit = Math.max(1, Math.min(500, Number(query.get("limit")) || 100)), offset = Math.max(0, Number(query.get("offset")) || 0);
+    const agents = responses["/api/agents/audit"].calls.map(c => ({ source: "agents", at: c.at, who: c.owner, via: c.via, addr: c.addr,
+      what: c.action, key: c.name, result: c.outcome, detail: c.detail }));
+    const rows = [...(source === "agents" ? [] : demoChanges), ...(source === "changes" ? [] : agents)]
+      .filter(row => !person || row.who.toLowerCase() === person).sort((a, b) => b.at - a.at);
+    return { rows: rows.slice(offset, offset + limit), offset, limit, more: rows.length > offset + limit, partial: false };
+  };
   responses["/api/auth/keys"] = (url, init) => {
     if (init?.method !== "POST") return demoKeys;
     const body = JSON.parse(init.body || "{}");
@@ -3414,7 +3563,7 @@ ssh_pwauth: true
   // The setup guide, part way through, as a cluster a few weeks in would be.
   const demoSetup = { skips: [], hidden: false, opened: true, admin: true, personal: ["appearance", "phone", "notifications"], steps: {
     health: { done: false, applies: true, summary: "One workload is not ready",
-      issues: [{ severity: "degraded", kind: "Workload", name: "lab/doublecommander", reason: "only 0/1 replicas ready after 12m" }] },
+      issues: [{ severity: "degraded", kind: "Workload", name: "lab/doublecommander", reason: "only 0/1 replicas ready, not ready for 12m" }] },
     placement: { done: false, applies: true, mode: "", unreserved: 4, notes: [], hosts: [{ name: "harvester-node1", standby: false, tainted: false, takes_work: true }, { name: "harvester-node2", standby: false, tainted: false, takes_work: true }, { name: "harvester-node3", standby: false, tainted: false, takes_work: true }] },
     quorum: { done: true, applies: true, servers: 3, members: ["harvester-node1", "harvester-node2", "harvester-node3"],
       ready: ["harvester-node1", "harvester-node2", "harvester-node3"], can_lose: 1, nodes: [], tiebreakers: [] },
@@ -3553,6 +3702,12 @@ ssh_pwauth: true
     {key:"health:Node:harvester-node3",version:"demo-node-down",severity:"critical",category:"outage",title:"Host harvester-node3 is not ready",body:"Kubernetes reports NotReady. Review this host.",href:"/nodes",acknowledged:false},
     {key:"audit:filling-fast",version:"demo-audit-fast",severity:"degraded",category:"degraded",title:"The audit log is filling fast",body:"audit.jsonl filled 10 MiB in 12 minutes: something may be flooding Homestead with requests, and older lines on the data volume are being replaced. The pod log keeps every line.",href:"/settings?tab=about",acknowledged:false}
   ]};
+  // The sidebar pill's verdict rides on the alerts (#940): the overview's, as read.
+  Object.defineProperty(responses["/api/alerts"], "health", {enumerable:true, get() {
+    const ov = responses["/api/overview"], issues = ov.health_issues || [], critical = issues.filter(i => i.severity === "critical").length;
+    return {state: ov.health_state || ov.health, summary: ov.health_summary || "", critical, degraded: issues.length - critical,
+      as_of: Math.round(Date.now() - ov.age_s * 1000) / 1000, age_s: ov.age_s};
+  }});
   responses["/api/alerts/acknowledge"] = (url,opts) => {const body=JSON.parse(opts.body || "{}");const row=responses["/api/alerts"].active.find(a=>a.key===body.key && a.version===body.version);if(!row)throw new Error("This alert changed. Refresh and review its current state.");row.acknowledged=!body.undo;return {ok:true};};
   // Log alerts (logalerts.js): counts per minute for the last hour. Front
   // door's rule is over its threshold now; Paperless's is quiet; Jellyfin's
@@ -3600,6 +3755,14 @@ ssh_pwauth: true
       if (at < 0) refuse("that log alert no longer exists; refresh and try again");
       rules.splice(at, 1);
       return { ok: true };
+    };
+    responses["/api/logalerts/pause"] = (url, init) => {
+      const body = JSON.parse(init.body || "{}");
+      const rule = rules.find(r => r.id === body.id) || refuse("that log alert no longer exists; refresh and try again");
+      if (typeof body.paused !== "boolean") refuse("say whether to pause the log alert or resume it");
+      rule.paused = body.paused;
+      rule.status = body.paused ? { state: "paused", detail: "" } : { state: "waiting", detail: "" };
+      return { ok: true, paused: body.paused };
     };
     responses["/api/logalerts/preview"] = (url, init) => {
       const body = JSON.parse(init.body || "{}"), rule = check(body), app = rule.apps[0];

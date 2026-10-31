@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { openAuditPage } from "../../scripts/audit_ready.mjs";
 
 const web = fileURLToPath(new URL("../../web/", import.meta.url));
 const output = process.env.PASSTHROUGH_SCREENSHOTS || "release-assets/passthrough";
@@ -29,8 +30,7 @@ try {
     const page = await context.newPage(), errors = [];
     page.on("pageerror", error => errors.push(error.message));
     await page.route("**/*", route => route.request().url().startsWith(base) ? route.continue() : route.abort());
-    await page.goto(`${base}/?demo=1`);
-    await page.waitForFunction(() => typeof nodeDevicesPaint === "function" && ME && document.querySelector("#gate").classList.contains("hidden"));
+    await openAuditPage(page, `${base}/?demo=1`);
     await page.evaluate(async theme => {
       document.documentElement.dataset.theme = theme;
       window.deviceReads = 0;
@@ -57,8 +57,7 @@ try {
     await page.locator('#nodeDevices').getByText('IOMMU group 12 · 2 devices', {exact: true}).waitFor();
     assert.equal(await page.evaluate(() => deviceReads), 1, 'returning does not run another host helper');
     assert.equal(await page.getByRole('button', {name: 'Look at its devices', exact: true}).count(), 0);
-    await page.goto(`${base}/?demo=1`);
-    await page.waitForFunction(() => typeof nodeDevicesPaint === 'function' && ME && document.querySelector('#gate').classList.contains('hidden'));
+    await openAuditPage(page, `${base}/?demo=1`);
     await page.evaluate(async ({saved, theme}) => {
       document.documentElement.dataset.theme = theme;
       const original = window.api;

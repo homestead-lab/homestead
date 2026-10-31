@@ -4,8 +4,8 @@ DataVolume, the disks and images Homestead shows, and preparing and committing
 a new VM.
 
 Split by feature from homestead_imports (#623), moved unchanged. Names that
-homestead_imports owns, that server.py binds there, or that tests replace there,
-are read through it (I.name); homestead_imports re-exports everything here.
+homestead_imports owns or that server.py binds there are read through it (I.name),
+so a replacement there still applies; read and replace the names defined here, here.
 """
 import base64
 import copy
@@ -16,6 +16,7 @@ import urllib.error
 import urllib.parse
 import homestead_kube as KUBE
 import homestead_names as NAMES
+import homestead_value_masks as MASKS
 import homestead_hvimage as HVIMAGE
 import homestead_pod_resources as RESOURCES
 import homestead_operations as OPS
@@ -36,7 +37,7 @@ def _required_name(value, label="name"):
 
 def _get_or_none(path):
     """The object, or None when it is not there (404); kept by name because
-    homestead_imports re-exports it."""
+    the Unraid VM import reads it through homestead_imports."""
     return KUBE.get_optional(path, read=I.kget)
 
 
@@ -171,7 +172,7 @@ def list_vm_disks():
                     "capacity": request.get("storage", ""),
                     "storage_class": (spec.get("storage", {}) or {}).get("storageClassName", ""),
                     "access_modes": (spec.get("storage", {}) or {}).get("accessModes", []),
-                    "message": str(messages[0])[:300] if messages else "",
+                    "message": MASKS.strip_url_secrets(MASKS.cut(messages[0], 300)) if messages else "",
                     "in_use": bool(used_by), "used_by": used_by})
     return sorted(out, key=lambda row: (row["namespace"], row["name"]))
 
@@ -183,7 +184,7 @@ def _epoch(stamp):
         return 0
 
 
-def list_vm_images():
+def list_vm_images(raw=False):
     """Harvester's images. Each is a Longhorn backing image with a storage
     class of its own; a disk made on that class starts as a copy of it."""
     try:
@@ -198,10 +199,12 @@ def list_vm_images():
                          "progress": status.get("progress", 0),
                          "ready": imported.get("status") == "True",
                          "failed": imported.get("status") == "False" and imported.get("reason") == "ImportFailed",
-                         "message": " ".join(str(imported.get("message") or "").split())[:240],
+                         "message": MASKS.strip_url_secrets(MASKS.cut(MASKS.squeeze(imported.get("message") or ""), 240)),
                          # Where it came from and when, so the image store
                          # knows one of its own when it finds it.
-                         "url": str(i["spec"].get("url") or ""), "source": i["spec"].get("sourceType", ""),
+                         # Its address keeps no credential (raw: the image store, matching its own).
+                         "url": str(i["spec"].get("url") or "") if raw else MASKS.strip_url_secrets(str(i["spec"].get("url") or "")),
+                         "source": i["spec"].get("sourceType", ""),
                          "created": _epoch(i["metadata"].get("creationTimestamp"))})
         return rows
     except Exception:
@@ -278,12 +281,12 @@ def vm_image_cache():
                 used_by.update(f"{cmeta.get('namespace')}/{vm}" for vm in mounted.get((cmeta.get("namespace"), cmeta.get("name")), []))
         size = int(status.get("size", 0) or 0)
         rows.append({"name": name, "namespace": ns, "display": spec.get("displayName") or name,
-                     "source": urllib.parse.urlparse(str(spec.get("url") or "")).netloc
+                     "source": MASKS.host(spec.get("url"))
                                or str(spec.get("sourceType") or ""),
                      "size_mb": round(size / 1024 ** 2, 1),
                      "virtual_size_gb": round(int(status.get("virtualSize", 0) or 0) / 1024 ** 3, 1),
                      "state": state, "progress": int(status.get("progress", 0) or 0),
-                     "message": " ".join(str(imported.get("message") or "").split())[:240],
+                     "message": MASKS.strip_url_secrets(MASKS.cut(MASKS.squeeze(imported.get("message") or ""), 240)),
                      "storage_class": klass, "nodes": nodes, "copies": len(nodes),
                      "disks": sorted(disks), "used_by": sorted(used_by),
                      "deleting": bool(meta.get("deletionTimestamp"))})
@@ -512,7 +515,7 @@ def prepare_vm(cfg, platform=None, default_class=""):
     interface = net = None
     network_data = address = mac = ""
     if not network_isolated:
-        mac = str(cfg.get("mac") or I._vm_mac()).lower()
+        mac = str(cfg.get("mac") or _vm_mac()).lower()
         if not re.fullmatch(r"([0-9a-f]{2}:){5}[0-9a-f]{2}", mac) or int(mac.split(":")[0], 16) & 1:
             raise ValueError("MAC must be a unicast hardware address like 52:54:00:12:34:56")
         # The card the guest sees: VirtIO unless asked, but a Windows guest has
@@ -763,7 +766,7 @@ def commit_vm(prepared, before_save=None, send=None):
 
 
 def create_vm(cfg, platform=None, default_class=""):
-    return I.commit_vm(I.prepare_vm(cfg, platform, default_class))
+    return commit_vm(prepare_vm(cfg, platform, default_class))
 
 
-import homestead_imports as I  # noqa: E402  (imports at the bottom: homestead_imports re-exports this module)
+import homestead_imports as I  # noqa: E402  (imports at the bottom: homestead_imports imports this module)

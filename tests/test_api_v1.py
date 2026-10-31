@@ -129,6 +129,7 @@ class DoorTests(unittest.TestCase):
     def handler(self, path, method="GET", headers=None, body=b""):
         import server
         h = object.__new__(server.H)
+        self.addCleanup(server.REQUEST_SCOPE.unbind)   # the guard binds the role; no request ends here
         h.path, h.command = path, method
         h.headers = {**(headers or {}), "Content-Length": str(len(body))}
         h.rfile, h.wfile = io.BytesIO(body), io.BytesIO()

@@ -21,22 +21,25 @@ import urllib.request, urllib.parse, urllib.error
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_compose as COMPOSE
 import homestead_deploy as DEPLOY
+import homestead_deploy_manifests as MANIFESTS
 import homestead_env_secrets as ENVSEC
 import homestead_hardware as HW
 import homestead_helm as HELM
 import homestead_host_access as HOSTACCESS
 import homestead_icons as ICONS
 import homestead_import_job as IMPORT_JOB
-import homestead_imports as IMP
+import homestead_container_import as CONTAINER_IMPORT
 import homestead_lan as LAN
 import homestead_leader as LEADER
-import homestead_lifecycle as LC
+import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_move_phases as MOVE_PHASES
 import homestead_move_state as MOVE_STATE
 import homestead_names as NAMES
 import homestead_namespaces as NSMOD
-import homestead_networking as NETWORK
+import homestead_network_services as SVC
+import homestead_network_inventory as INV
 import homestead_operations as OPS
+import homestead_outage as OUTAGE
 import homestead_place as PLACE
 import homestead_pullwatch as PULLWATCH
 import homestead_rollout_capacity as ROLLOUT_CAPACITY
@@ -81,7 +84,7 @@ def additional_container_configs(cfg):
         if not isinstance(privileges, dict) or set(privileges) - {"privileged", "cap_add", "tun"}:
             raise ValueError("invalid additional container privileges")
         item.update(privileges)
-        item = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(item))
+        item = ensure_profile_compatible(MANIFESTS.analyze_deploy_intent(item))
         result.append(item)
     return result
 
@@ -94,9 +97,9 @@ def deployment_volumes(cfg):
 def prepare_deploy_network(cfg):
     extras = additional_container_configs(cfg)
     if not extras:
-        return NETWORK.prepare_deploy(cfg)
+        return SVC.prepare_deploy(cfg)
     combined = dict(cfg, ports=[port for item in [cfg, *extras] for port in item.get("ports") or []])
-    planned = NETWORK.prepare_deploy(combined)
+    planned = SVC.prepare_deploy(combined)
     return dict(planned, ports=cfg.get("ports") or [])
 
 
@@ -116,11 +119,11 @@ def import_capacity_plan(body):
     cfg = copy.deepcopy(body)
     ns = cfg["namespace"] = import_namespace(body.get("namespace"))
     guard_managed_smb(ns, cfg.get("name"))
-    cfg = NETWORK.prepare_deploy(cfg)  # read-only VIP selection and validation
-    prepared = IMP.prepare_import(cfg)
+    cfg = SVC.prepare_deploy(cfg)  # read-only VIP selection and validation
+    prepared = CONTAINER_IMPORT.prepare_import(cfg)
     if prepared["job"] and cfg.get("source_consistency") not in ("stopped", "snapshot"):
         raise ValueError("Choose whether the source writers are stopped or the copied paths are a consistent snapshot")
-    inventory, pods = IMP.import_inventory(prepared, kget)
+    inventory, pods = CONTAINER_IMPORT.import_inventory(prepared, kget)
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
     claims = {row["name"]: row for row in prepared["volumes"] if row["create"]}
     nodes = PLACE.get_nodes()
@@ -144,7 +147,7 @@ def import_capacity_plan(body):
 
 def capacity_manifest(config, existing=None):
     """Construct a read-only manifest and planned claims without provisioning."""
-    cfg = DEPLOY.analyze_deploy_intent(copy.deepcopy(config))
+    cfg = MANIFESTS.analyze_deploy_intent(copy.deepcopy(config))
     ns = _dns_name(cfg.get("namespace") or DEFAULT_NS, "namespace")
     cfg["namespace"] = ns
     joining = cfg.get("target_mode") == "existing"
@@ -152,9 +155,9 @@ def capacity_manifest(config, existing=None):
         target = _dns_name(cfg.get("target_workload"), "existing workload")
         if existing is None:
             existing = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{target}")
-        dep, _ = DEPLOY.build_sidecar_deployment(cfg, existing)
+        dep, _ = MANIFESTS.build_sidecar_deployment(cfg, existing)
     elif cfg.get("target_mode", "new") == "new":
-        dep, _ = DEPLOY.build_deployment(cfg)
+        dep, _ = MANIFESTS.build_deployment(cfg)
     else:
         raise ValueError("deployment target must be new or existing")
     claims = {row["name"]: row for row in new_claims(deployment_volumes(cfg))}
@@ -180,13 +183,20 @@ def deploy_capacity_plan(config, existing=None):
     if cfg.get("target_mode") == "existing":
         return ROLLOUT_CAPACITY.plan(existing, dep, ns, kget, PLACE.get_nodes, PLACE.manifest_plan,
                                      threshold, planned_claims=claims)
-    return PLACE.manifest_plan(dep, ns, dep["metadata"]["name"], dep["spec"]["replicas"],
+    plan = PLACE.manifest_plan(dep, ns, dep["metadata"]["name"], dep["spec"]["replicas"],
                                threshold, planned_claims=claims)
+    # The host chosen in Deploy is a preference (#844): say so when it can't take the app.
+    host = cfg.get("node")
+    # With no copies to start, nothing is placed, so there is nothing to warn of.
+    if host and plan.get("additional") and not any(row.get("name") == host and row.get("eligible") for row in plan.get("candidates") or []):
+        plan["warnings"] = [*plan.get("warnings", []), f"the chosen host {host} cannot take this app now, so it starts on another host"]
+        plan["requires_confirmation"] = True
+    return plan
 
 
 def reviewed_deploy(b):
     """Deploy/App Store endpoint guard; Compose needs a whole-batch review."""
-    b = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(copy.deepcopy(b)))
+    b = ensure_profile_compatible(MANIFESTS.analyze_deploy_intent(copy.deepcopy(b)))
     HOSTACCESS.require_cfg([b, *additional_container_configs(b)])
     if b.get("target_mode", "new") not in ("new", "existing"):
         raise ValueError("deployment target must be new or existing")
@@ -216,7 +226,7 @@ def compose_report(b):
     claims = {c["metadata"]["name"] for c in
               ROLLOUT_CAPACITY.items(kget, f"/api/v1/namespaces/{ns}/persistentvolumeclaims")}
     vip_mode = b.get("vip_mode") if b.get("vip_mode") in ("shared", "auto", "nodes") else "shared"
-    if NETWORK.node_addresses_only():
+    if INV.node_addresses_only():
         # On k3s every service shares the nodes' addresses, so ports must differ.
         vip_mode = "shared"
     return COMPOSE.convert(text, b.get("variables") or "", ns, workloads, claims,
@@ -242,7 +252,7 @@ def compose_preparation(b):
     for name in report["order"]:
         if name not in rows:
             continue
-        cfg = ensure_profile_compatible(DEPLOY.analyze_deploy_intent(copy.deepcopy(rows[name]["config"])))
+        cfg = ensure_profile_compatible(MANIFESTS.analyze_deploy_intent(copy.deepcopy(rows[name]["config"])))
         guard_managed_smb(cfg.get("namespace") or DEFAULT_NS, cfg.get("workload_name") or cfg.get("name"))
         cfg, dep, pending, _ = capacity_manifest(cfg)
         for claim, descriptor in pending.items():
@@ -389,7 +399,7 @@ def delete_workload(ns, name):
     # Every Service selecting these pods, not just the one sharing the
     # workload's name: a sidecar or a hand-made listener is named
     # differently and would otherwise keep its VIP port forever.
-    services = set(NETWORK.workload_service_names(ns, name)) | {name}
+    services = set(SVC.workload_service_names(ns, name)) | {name}
     try:
         current = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     except Exception:
@@ -400,6 +410,7 @@ def delete_workload(ns, name):
             ENVSEC.remove(ns, current, kget, ksend)  # its variables' Secret goes with it
         except Exception:
             pass
+        OUTAGE.forget("app", ns, current)           # and its outage webhook's (#931)
     removed = []
     for service in sorted(services):
         try:
@@ -472,7 +483,7 @@ def apply_reviewed_edit(b, prepared, hold=False):
         if b["icon"]:
             ann[NAMES.key("icon")] = b["icon"]
             ann[NAMES.key("icon-source")] = b.get("icon_source", b["icon"])
-    result = LC.edit_workload(b, hold=hold, prepared=prepared)
+    result = WORKLOAD_EDIT.edit_workload(b, hold=hold, prepared=prepared)
     if "lan" in b:
         lan_message = edit_lan(b["ns"], result.get("name") or b["name"], b.get("lan"))
         if lan_message:
@@ -484,7 +495,7 @@ def apply_reviewed_edit(b, prepared, hold=False):
     address = b.get("address") if isinstance(b.get("address"), dict) else {}
     vip_mode = address.get("vip_mode") or "shared"
     if b.get("manage_ports") or any("expose" in port for port in ports):
-        message = NETWORK.sync_workload_ports(b["ns"], result.get("name") or b["name"], ports,
+        message = SVC.sync_workload_ports(b["ns"], result.get("name") or b["name"], ports,
                                               network_mode=address.get("network_mode") or b.get("network_mode"),
                                               vip_mode={"auto": "automatic"}.get(vip_mode, vip_mode),
                                               vip=address.get("lb_ip", "") if vip_mode == "manual" else "")
@@ -492,7 +503,7 @@ def apply_reviewed_edit(b, prepared, hold=False):
             result["network"] = message
             _cache.pop("network", None)
     if address.get("network_mode") in ("loadbalancer", "internal"):
-        message = NETWORK.set_workload_address(b["ns"], result.get("name") or b["name"], address["network_mode"],
+        message = SVC.set_workload_address(b["ns"], result.get("name") or b["name"], address["network_mode"],
                                                vip_mode, address.get("lb_ip", ""))
         if message:
             result["network"] = "; ".join(filter(None, [result.get("network"), message]))

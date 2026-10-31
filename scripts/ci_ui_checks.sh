@@ -14,6 +14,7 @@ case "${1:-}" in
     ;;
   dialog-flows)
     node tests/integration/audit-ready.mjs
+    node tests/integration/edit-after-first-page.mjs
     node tests/integration/operator-enable.mjs
     node tests/integration/ha-update-reload.mjs
     DIALOG_STANDARD_SCREENSHOTS=release-assets/dialogs/section-rail node tests/integration/dialog-section-rail.mjs
@@ -33,6 +34,7 @@ case "${1:-}" in
     SNAPSHOT_RESTORE_SCREENSHOTS=release-assets/dialogs/snapshot-restore node tests/integration/snapshot-restore.mjs
     HOST_SELECT_SCREENSHOTS=release-assets/dialogs/host-select node tests/integration/host-select-chips.mjs
     node tests/integration/data-copies.mjs
+    node tests/integration/audit-capture.mjs
     ;;
   pages)
     node scripts/audit_pages.mjs
@@ -60,6 +62,7 @@ case "${1:-}" in
     ARCHITECTURE_SCREENSHOTS=release-assets/pages/architecture node tests/integration/combined-architecture.mjs
     NOTIFICATION_SCREENSHOTS=release-assets/pages/notifications node tests/integration/mobile-notifications.mjs
     ALERT_SCREENSHOTS=release-assets/pages/alerts node tests/integration/notification-alerts.mjs
+    node tests/integration/evaluate-survives-gc.mjs
     node scripts/check_dashboard_storage.mjs
     node scripts/check_collection_layouts.mjs
     SEARCH_SCREENSHOTS=release-assets/pages/global-search node scripts/check_global_search.mjs
@@ -70,6 +73,7 @@ case "${1:-}" in
     node scripts/check_demo_scenarios.mjs
     node scripts/check_launch_import_logs.mjs
     node scripts/check_mobile_pwa.mjs
+    node tests/integration/setup-reach-late-focus.mjs
     ;;
   pages-live)
     node scripts/check_dashboard_stream.mjs

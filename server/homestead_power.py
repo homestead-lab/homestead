@@ -4,6 +4,7 @@ import json
 import time
 import urllib.error
 import homestead_history as HISTORY
+import homestead_kube as KUBE
 import homestead_maintenance as MAINTENANCE
 import homestead_power_hold as HOLD
 
@@ -18,12 +19,10 @@ def bind(_kget, _impact, _quorum, _power_enabled):
 
 
 def _items(path, absent_ok=False):
-    try:
+    """The rows of a whole list; None when absent_ok and it isn't there (404)."""
+    if not absent_ok:
         return MAINTENANCE.items(kget, path)
-    except urllib.error.HTTPError as error:
-        if absent_ok and error.code == 404:
-            return None
-        raise
+    return KUBE.get_optional(path, read=lambda where: MAINTENANCE.items(kget, where))
 
 
 def _ready(node):

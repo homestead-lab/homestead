@@ -6,6 +6,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_vms as VMS
+import homestead_vm_list as VM_LIST
+import homestead_vm_edit as VM_EDIT
 import homestead_vmusage as U
 
 METRICS = """# HELP kubevirt_vmi_storage_read_traffic_bytes_total Total number of bytes read from storage.
@@ -29,14 +31,14 @@ class UsageTests(unittest.TestCase):
                             {"usage": {"cpu": "250000000n", "memory": "0"}}]},
             {"metadata": {"name": "frigate-7d9", "namespace": "lab"}, "containers": [{"usage": {"cpu": "1", "memory": "1Gi"}}]}]}
 
-        def get(path):
+        def get(path, **_):
             if path.startswith("/apis/metrics.k8s.io"):
                 return self.pod_metrics
             if "virt-handler" in path:
                 return {"items": [{"spec": {"nodeName": "n1"}, "status": {"phase": "Running", "podIP": "10.0.0.5"}}]}
             raise AssertionError(path)
         U.bind(get)
-        U._readings.clear(); U._usage.clear()
+        U._readings.clear()
 
     def test_drives_are_summed_per_vm(self):
         self.assertEqual({("lab", "pihole"): [300.0, 50.0]}, U.parse_io(metrics(100, 200, 50)))
@@ -67,21 +69,23 @@ class UsageTests(unittest.TestCase):
 
     def test_the_vm_list_gives_a_running_vm_its_usage_as_shares_of_its_size(self):
         from test_vms import Cluster
-        U._readings.clear(); U._usage.clear()
-        U._usage[("default", "win11")] = {"cpu": 1.0, "mem": 4 * 2**30}
+        U._readings.clear()
+        self.pod_metrics = {"items": [{"metadata": {"name": "virt-launcher-win11-abcde", "namespace": "default",
+                                                    "labels": {"vm.kubevirt.io/name": "win11"}},
+                                       "containers": [{"usage": {"cpu": "1", "memory": "4Gi"}}]}]}
         U._readings.extend([{"at": 1000, "io": {("default", "win11"): [0, 0]}},
                             {"at": 1030, "io": {("default", "win11"): [30_000, 3_000]}}])
         for running, expect in ((True, True), (False, False)):
             with self.subTest(running=running):
-                cluster = Cluster(running=running)
+                cluster = Cluster(self, running=running)
                 VMS.bind(cluster.get, cluster.send, lambda *a, **k: [])
                 with unittest.mock.patch.object(U.time, "time", lambda: 1031):
-                    row = VMS.list_vms()[0]
+                    row = VM_LIST.list_vms()[0]
                 self.assertEqual(expect, "usage" in row)
                 if expect:
                     u = row["usage"]
                     self.assertEqual((25.0, 1000, 100), (u["cpu_pct"], u["read_bps"], u["write_bps"]))
-                    self.assertEqual(round(100 * 4 * 2**30 / VMS._bytes(row["memory"]), 1), u["mem_pct"])
+                    self.assertEqual(round(100 * 4 * 2**30 / VM_EDIT._bytes(row["memory"]), 1), u["mem_pct"])
                     self.assertEqual(["192.0.2.50"], row["ips"])
 
 

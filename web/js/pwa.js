@@ -224,7 +224,7 @@ function pwaCard() {
     <div id="pwaAlerts"></div>
   `, {tab:`device`, id:`pwaCard`})}`;
 }
-const PWA_ALERTS={report:null,at:0,request:null,user:null,timer:null,epoch:0,unread:""};
+const PWA_ALERTS={report:null,at:0,request:null,user:null,timer:null,epoch:0,unread:"",health:null};
 function pwaAlertsHtml(report) {
   const active=report?.active || [], pending=active.filter(a=>!a.acknowledged), acknowledged=active.filter(a=>a.acknowledged);
   const rows=items=>UI.insightList(items.map(a=>({title:a.title,detail:a.body,
@@ -235,8 +235,23 @@ function pwaAlertsHtml(report) {
     (pending.length?rows(pending):'<div class="empty small">No unacknowledged conditions.</div>')+
     (acknowledged.length?UI.more(`Acknowledged · ${acknowledged.length}`,rows(acknowledged)):"");
 }
+/* The sidebar pill's verdict (#940): the last one an alerts read carried,
+   aged by the time since that read, so a repaint from a kept read, an answer
+   with no verdict (null) or a failed read (report null) shows it as old as it
+   is - dashed after a minute - or null (UNKNOWN) when there never was one.
+   undefined: a server without the field, which leaves the pill alone. */
+function pwaHealth(report) {
+  const h=report?.health;
+  if(report && h===undefined)return undefined;
+  if(h)PWA_ALERTS.health={h,at:PWA_ALERTS.at};
+  const last=PWA_ALERTS.health;
+  if(!last)return null;
+  if(typeof last.h.age_s!=="number")return last.h;
+  return {...last.h,age_s:last.h.age_s+Math.max(0,Math.floor((Date.now()-last.at)/1000))};
+}
 function paintPwaAlerts(report) {
       pwaBadge((report.active || []).filter(a=>!a.acknowledged).length);
+      window.paintHealthPill?.(pwaHealth(report));
       window.paintBell?.();
       pwaAlertsLine(report);
       const dialog=$("#pwaAlertsDialog");if(dialog){const expanded=!!dialog.querySelector("details[open]");dialog.innerHTML=pwaAlertsHtml(report);if(expanded && dialog.querySelector("details"))dialog.querySelector("details").open=true;}
@@ -251,7 +266,7 @@ function pwaAlertsLine(report) {
 }
 async function refreshPwaAlerts(force=false) {
   if(typeof ME==="undefined" || !ME)return;
-  if(PWA_ALERTS.user!==ME){PWA_ALERTS.report=null;PWA_ALERTS.at=0;PWA_ALERTS.user=ME;PWA_ALERTS.unread="";}
+  if(PWA_ALERTS.user!==ME){PWA_ALERTS.report=null;PWA_ALERTS.at=0;PWA_ALERTS.user=ME;PWA_ALERTS.unread="";PWA_ALERTS.health=null;}
   if(PWA_ALERTS.request)return PWA_ALERTS.request;
   if(!force && Date.now()-PWA_ALERTS.at<15000){paintPwaAlerts(PWA_ALERTS.report);return;}
   const user=ME, epoch=PWA_ALERTS.epoch;
@@ -261,6 +276,7 @@ async function refreshPwaAlerts(force=false) {
       PWA_ALERTS.report=report;PWA_ALERTS.at=Date.now();PWA_ALERTS.unread="";
       paintPwaAlerts(report);
     }catch(error){if(user!==ME || epoch!==PWA_ALERTS.epoch)return;PWA_ALERTS.unread=error.message;pwaAlertsLine(PWA_ALERTS.report);window.paintBell?.();
+      window.paintHealthPill?.(pwaHealth(null));
       if($("#pwaAlertsDialog"))$("#pwaAlertsDialog").innerHTML=UI.callout("warn","Alerts could not be refreshed",esc(error.message))+UI.button("Retry","refreshPwaAlerts(true)");}
     finally{if(epoch===PWA_ALERTS.epoch)PWA_ALERTS.request=null;}
   })();return PWA_ALERTS.request;
@@ -274,11 +290,13 @@ window.pwaAcknowledge=async(key,version,undo=false)=>{
   catch(error){toast(error.message,"bad");}
   await refreshPwaAlerts(true);
 };
-window.stopAlertChecks=()=>{clearInterval(PWA_ALERTS.timer);PWA_ALERTS.epoch++;PWA_ALERTS.report=null;PWA_ALERTS.request=null;PWA_ALERTS.at=0;PWA_ALERTS.user=null;PWA_ALERTS.unread="";};
+window.stopAlertChecks=()=>{clearInterval(PWA_ALERTS.timer);PWA_ALERTS.timer=null;PWA_ALERTS.epoch++;PWA_ALERTS.report=null;PWA_ALERTS.request=null;PWA_ALERTS.at=0;PWA_ALERTS.user=null;PWA_ALERTS.unread="";PWA_ALERTS.health=null;window.healthPillChecking?.();};
 window.startAlertChecks=()=>{
   clearInterval(PWA_ALERTS.timer);refreshPwaAlerts(true);
   PWA_ALERTS.timer=setInterval(()=>{if(!document.hidden)refreshPwaAlerts();},20000);
 };
+// A tab coming back is not up to 20 s behind on the bell and the health pill (#940).
+document.addEventListener("visibilitychange",()=>{if(!document.hidden && PWA_ALERTS.timer)refreshPwaAlerts();});
 window.refreshPwaAlerts=refreshPwaAlerts;
 window.PWA_ALERTS=PWA_ALERTS;
 window.pwaCard = pwaCard;

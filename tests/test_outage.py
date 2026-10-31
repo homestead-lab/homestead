@@ -140,6 +140,7 @@ class ServerTests(unittest.TestCase):
         import server
         sent = []
         with mock.patch.object(server.KUBE_HELPERS, "ksend", side_effect=lambda *a, **k: sent.append(a)), \
+             mock.patch.object(server.KUBE_HELPERS, "kget", return_value={"metadata": {"annotations": {}}}), \
              mock.patch.object(server.OVERVIEW_ROUTES, "guard_managed_smb"):
             r = server.OUTAGE.set_actions({"kind": "app", "ns": "lab", "name": "frigate",
                                            "actions": {"restart": {"after_min": 5, "max": 3}}})

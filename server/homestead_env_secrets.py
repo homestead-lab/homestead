@@ -189,7 +189,9 @@ def values(ns, dep, read):
     if not name:
         return {}
     try:
-        data = read(f"/api/v1/namespaces/{ns}/secrets/{name}").get("data") or {}
+        # Only the Secret Homestead keeps for the app (its label), as held()
+        # and externalize() check: never one the annotation was pointed at.
+        data = _ours(read(f"/api/v1/namespaces/{ns}/secrets/{name}"), dep)
     except Exception:
         return {}
     out = {}
@@ -200,6 +202,25 @@ def values(ns, dep, read):
                 out.setdefault(container["name"], {})[item["name"]] = \
                     base64.b64decode(data[ref["key"]]).decode("utf-8", "replace")
     return out
+
+
+# What the Edit form shows for a Secret-held value to someone who may not
+# save the form (a viewer, or an operator on a workload only an admin may
+# edit): the variable's name stays, and that it has a value.
+MASK = "••••••"
+
+
+def mask(payload):
+    """The Edit form (workload_edit_payload) with every Secret-held value
+    replaced by MASK, in place; returns it."""
+    for container in payload.get("containers") or []:
+        held = set(container.get("secret_env") or [])
+        container["env"] = {key: MASK if key in held and value not in (None, "") else value
+                            for key, value in (container.get("env") or {}).items()}
+        container["secret_env_hidden"] = bool(held)
+    if payload.get("containers") and "env" in payload:
+        payload["env"] = payload["containers"][0]["env"]
+    return payload
 
 
 def own(dep):

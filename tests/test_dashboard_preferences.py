@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
+import source_scan as SS
 import homestead_auth as AUTH
 import homestead_route_policy as POLICY
 import server
@@ -196,7 +197,7 @@ class DashboardPreferencesTests(unittest.TestCase):
     def test_routes_are_personal_and_available_to_viewers(self):
         for method in ("GET", "POST"):
             self.assertEqual("viewer", POLICY.role("/api/auth/preferences/dashboard", method))
-        tree = ast.parse((Path(__file__).resolve().parents[1] / "server/homestead_auth_routes.py").read_text(encoding="utf-8"))
+        tree = SS.tree("server/homestead_auth_routes.py")
         calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                  and node.func.attr in ("dashboard_preferences", "save_dashboard_preferences")]
         self.assertEqual(2, len(calls))

@@ -143,6 +143,58 @@ class Calls(unittest.TestCase):
         self.assertTrue(SS.calls(SS.SERVER_PY, "threading.Thread"))
 
 
+IMPORTS = SS.code('''\
+import homestead_x as X, os
+import homestead_x
+from pkg import homestead_x as Y
+from homestead_longhorn import (a,
+                                b as c)
+from homestead_longhorn import d
+import homestead_x.sub
+# import homestead_x as Z
+note = "import homestead_x as W"
+
+
+def go():
+    import homestead_x as Q
+    return X.kget, X.ksend(1), STATE.LH.snap, LH.snap, a.X.hidden, "X.in_a_string"  # X.in_a_comment
+''')
+
+
+class Imports(unittest.TestCase):
+    def test_a_module_is_found_under_every_name_a_file_binds_it_to(self):
+        self.assertEqual({"X", "homestead_x", "Y", "Q"}, SS.import_aliases(IMPORTS, "homestead_x"))
+
+    def test_a_package_or_an_import_in_a_comment_or_a_string_is_not_the_module(self):
+        self.assertEqual({"os"}, SS.import_aliases(IMPORTS, "os"))
+        self.assertEqual(set(), SS.import_aliases(IMPORTS, "homestead_x.sub"))
+        self.assertEqual(set(), SS.import_aliases(IMPORTS, "homestead_y"))
+
+    def test_the_names_imported_from_a_module_are_found_as_written_there(self):
+        self.assertEqual({"a", "b", "d"}, SS.from_imports(IMPORTS, "homestead_longhorn"))
+        self.assertEqual(set(), SS.from_imports(IMPORTS, "homestead_x"))
+
+    def test_attributes_are_read_off_a_name_or_a_dotted_name(self):
+        self.assertEqual({"kget", "ksend"}, SS.attribute_reads(IMPORTS, "X"))
+        self.assertEqual({"snap"}, SS.attribute_reads(IMPORTS, "LH"))
+        self.assertEqual({"snap"}, SS.attribute_reads(IMPORTS, "STATE.LH"))
+        self.assertEqual({"hidden"}, SS.attribute_reads(IMPORTS, "a.X"))
+
+    def test_names_are_counted_where_they_are_defined_and_used(self):
+        counts = SS.name_counts(SS.code(
+            "LIMIT = 3\n\n\ndef grow(by, *, LIMIT=1):\n    # LIMIT in a comment\n"
+            "    return LIMIT + by.LIMIT + obj.grow(\"LIMIT\", by=2)\n\n\nclass Grow:\n    pass\n"))
+        self.assertEqual({"LIMIT": 4, "grow": 2, "by": 2, "Grow": 1}, {k: counts[k] for k in ("LIMIT", "grow", "by", "Grow")})
+        self.assertEqual(0, counts["missing"])
+
+    def test_the_file_lists_come_from_the_repository(self):
+        self.assertIn(SS.SERVER_PY, SS.server_files())
+        self.assertIn(SS.SERVER / "homestead_kube.py", SS.server_files())
+        self.assertNotIn(SS.SERVER_PY, SS.server_modules())
+        self.assertIn(Path(__file__).resolve(), SS.test_files())
+        self.assertNotIn(SS.ROOT / "tests" / "source_scan.py", SS.test_files())
+
+
 JS = SS.code("""\
 async function api(path, opts) {
   return fetch(path, opts);

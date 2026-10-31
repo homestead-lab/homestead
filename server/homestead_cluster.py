@@ -1,8 +1,10 @@
 """Read-only Harvester/Kubernetes platform health and node-onboarding guidance."""
 import math
 import re
+import threading
 import time
 from datetime import datetime, timezone
+import homestead_alerts as ALERTS
 import homestead_roles as ROLES
 import homestead_routes
 
@@ -271,14 +273,42 @@ def inventory():
                         csrs, harvester, unavailable=unavailable)
 
 
-def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protection=None):
-    """Separate real availability faults from normal workload transitions."""
+# How long a degraded volume rebuilding a copy with no error is "repairing",
+# not a fault (#941): a host reboot (a nightly OS update) rebuilds each copy
+# that was on it, which takes minutes. Past this it is degraded again.
+REPAIR_GRACE = 30 * 60
+# Busiest first: the one activity the pill names when there are several.
+ACTIVITY_ORDER = ("maintenance", "repairing", "updating", "starting")
+
+
+def _span(seconds):
+    seconds = max(0, int(seconds))
+    return f"{seconds}s" if seconds < 60 else f"{seconds // 60}m"
+
+
+def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protection=None,
+                            maintenance=(), overran=(), now=None, short_of_hosts=()):
+    """Separate real availability faults from normal transitions.
+
+    maintenance: hosts Homestead put in maintenance, which are an activity,
+    not a fault, as alerts leave them out (#535); overran: hosts whose
+    maintenance ended at its job's limit, which alerts raise at once (urgent).
+    now: the clock a volume's rebuild is timed by (#941).
+    short_of_hosts: the Longhorn volumes Match copies to hosts offers to
+    lower (homestead_app_copies, #841); their warning says why they are
+    degraded and points to the offer, so the two never disagree."""
+    now = time.time() if now is None else now
     issues, activities = list(protection or []), []
     for node in nodes:
-        if node.get("status") != "Ready":
-            issues.append({"severity": "critical", "kind": "Node",
-                           "name": node.get("name", "unknown"),
-                           "reason": f"Kubernetes reports {node.get('status') or 'not ready'}. Review this host."})
+        name = node.get("name", "unknown")
+        if name in maintenance:
+            # Ready or not: a drain says so too, not only the reboot.
+            activities.append({"state": "maintenance", "kind": "Node", "name": name,
+                               "reason": "in maintenance: Homestead is working on this host"})
+        elif node.get("status") != "Ready":
+            issues.append({"severity": "critical", "kind": "Node", "name": name,
+                           "reason": f"Kubernetes reports {node.get('status') or 'not ready'}. Review this host.",
+                           **({"urgent": True} if name in overran else {})})
         for disk in (node.get("disk_issues") or []) if node.get("smart_notify", True) else []:
             issues.append({"severity": disk.get("severity", "degraded"), "kind": "Disk",
                            "name": f"{node.get('name', 'unknown')}/{disk.get('disk', 'unknown')}",
@@ -291,9 +321,27 @@ def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protec
         if robustness == "faulted":
             issues.append({"severity": "critical", "kind": "Volume", "name": label,
                            "reason": "Longhorn reports the volume faulted"})
+        elif robustness == "degraded" and volume.get("name") in short_of_hosts:
+            copies = int(volume.get("replicas") or 0)
+            issues.append({"severity": "degraded", "kind": "Volume", "name": label, "one_host": True,
+                           "reason": f"This cluster has one host, so Longhorn keeps 1 of the {copies} copies this "
+                                     "volume asks for. An admin can match its copies to hosts: Cluster Health, "
+                                     "Match copies to hosts"})
         elif robustness == "degraded":
-            issues.append({"severity": "degraded", "kind": "Volume", "name": label,
-                           "reason": "Longhorn is rebuilding or missing a replica"})
+            rebuild = volume.get("rebuild") or {}
+            since = volume.get("degraded_since")
+            repairing = bool(rebuild) and not rebuild.get("error") and since is not None
+            if repairing and now - since <= REPAIR_GRACE:
+                activities.append({"state": "repairing", "kind": "Volume", "name": label,
+                                   "reason": f"rebuilding a copy, {int(rebuild.get('pct') or 0)}% done"})
+            elif repairing:
+                issues.append({"severity": "degraded", "kind": "Volume", "name": label,
+                               "reason": f"still rebuilding a copy after {_span(now - since)} "
+                                         f"({int(rebuild.get('pct') or 0)}% done)",
+                               "for_s": int(now - since - REPAIR_GRACE)})
+            else:
+                issues.append({"severity": "degraded", "kind": "Volume", "name": label,
+                               "reason": "Longhorn is rebuilding or missing a replica"})
     for workload in workloads:
         desired = int(workload.get("desired", 0) or 0)
         ready = int(workload.get("ready", 0) or 0)
@@ -321,11 +369,16 @@ def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protec
                                "reason": f"{ready}/{desired} replicas ready"})
         else:
             issues.append({"severity": "degraded", "kind": "Workload", "name": resource,
-                           "reason": f"only {ready}/{desired} replicas ready after {age // 60}m"})
+                           "reason": f"only {ready}/{desired} replicas ready, not ready for {_span(age)}",
+                           "for_s": age - startup_grace})
+    return verdict(issues, activities)
+
+
+def verdict(issues, activities):
+    """The verdict from the issues and activities that count."""
     health = "critical" if any(x["severity"] == "critical" for x in issues) else (
         "degraded" if issues else "healthy")
-    activity = "updating" if any(x["state"] == "updating" for x in activities) else (
-        "starting" if activities else "idle")
+    activity = next((state for state in ACTIVITY_ORDER if any(x["state"] == state for x in activities)), "idle")
     state = health if health != "healthy" else (activity if activity != "idle" else "healthy")
     if issues:
         summary = "; ".join(f"{x['kind']} {x['name']}: {x['reason']}" for x in issues[:4])
@@ -335,6 +388,81 @@ def classify_cluster_health(nodes, workloads, volumes, startup_grace=300, protec
         summary = "All nodes, workloads, and attached volumes are healthy"
     return {"health": health, "health_state": state, "health_summary": summary,
             "health_issues": issues, "activities": activities}
+
+
+class HealthHold:
+    """The verdict's hold (#941), the one alerts use (ALERTS.HOLD, 60 s): an
+    issue counts once it has lasted the hold, and keeps counting for the hold
+    after it is gone, so a 30 s blip never turns the pill and a fault that
+    flickers does not flicker it. One that goes before it counts starts over
+    when it comes back, as an alert does, so one that keeps coming and going
+    faster than the hold is not counted, as it is not alerted. An urgent
+    issue (a host whose maintenance overran) counts at once, as its alert is
+    raised at once. Critical is held too: alerts hold a host not ready for
+    60 s as well.
+
+    An issue that carries its own clock (for_s: a workload past its start-up
+    grace, a rebuild past REPAIR_GRACE) has lasted that long already, so it is
+    not held again. The others are timed here, on the replica that builds the
+    overview (the leader's page snapshot): after a leader change, or on a
+    replica that builds it rarely, they are held one hold from when it first
+    sees them. When it has not looked for longer than the hold, every row
+    starts over, as nothing says what happened in between."""
+
+    def __init__(self, hold=None):
+        self.hold = ALERTS.HOLD if hold is None else hold
+        self.rows = {}
+        self.last = None   # when it last looked
+        self.lock = threading.Lock()
+
+    def apply(self, report, now=None):
+        """report with the verdict from the issues that count; current_issues
+        is this cycle's own, which alerts read, as they hold them themselves."""
+        current = report.get("health_issues") or []
+        with self.lock:
+            now = time.time() if now is None else now
+            if self.last is not None and now - self.last > self.hold:
+                self.rows.clear()
+            self.last = now
+            seen = {}
+            for issue in current:
+                seen.setdefault(f"{issue.get('kind', '')}:{issue.get('name', '')}", []).append(issue)
+            for key, rows in seen.items():
+                row = self.rows.setdefault(key, {"since": now})
+                own = max((x["for_s"] for x in rows if isinstance(x.get("for_s"), (int, float))), default=0)
+                row.update(issues=rows, gone=None, since=min(row["since"], now - max(0, own)))
+                if now - row["since"] >= self.hold or any(x.get("urgent") for x in rows):
+                    row["counted"] = True
+            for key in [key for key in self.rows if key not in seen]:
+                row = self.rows[key]
+                row["gone"] = now if row["gone"] is None else row["gone"]
+                if not row.get("counted") or now - row["gone"] >= self.hold:
+                    del self.rows[key]
+            counted = [issue for row in self.rows.values() if row.get("counted") for issue in row["issues"]]
+        return {**report, **verdict(counted, report.get("activities") or []), "current_issues": current}
+
+
+HOLD = HealthHold()
+
+
+def health_brief():
+    """The sidebar pill's verdict on every page (#940), from the overview the
+    Dashboard reads: the leader's snapshot part while it is fresh, else the
+    kept read, else None. It never builds the overview, so the alerts it rides
+    with never wait on the cluster. as_of and age_s say when it was read."""
+    dated = homestead_routes.page_kept("ov")
+    if dated is None:
+        return None
+    as_of, value = dated
+    issues = value.get("health_issues") or []
+    critical = sum(1 for issue in issues if issue.get("severity") == "critical")
+    return {"state": value.get("health_state") or value.get("health") or "unknown",
+            "summary": value.get("health_summary") or "",
+            "critical": critical, "degraded": len(issues) - critical,
+            "as_of": round(as_of, 3), "age_s": max(0, int(time.time() - as_of))}
+
+
+ALERTS.HEALTH[0] = lambda: health_brief()
 
 
 def events():
@@ -359,6 +487,6 @@ def events():
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
     ("GET", "/api/cluster"): ("viewer", lambda request: homestead_routes.cached("cluster", 15, inventory)),
-    ("GET", "/api/overview"): ("viewer", lambda request: homestead_routes.page("ov", overview)),
+    ("GET", "/api/overview"): ("viewer", lambda request: homestead_routes.page_aged("ov", overview)),
     ("GET", "/api/events"): ("viewer", lambda request: homestead_routes.cached("ev", 10, events)),
 }

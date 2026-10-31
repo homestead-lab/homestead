@@ -26,6 +26,7 @@ import homestead_isos as ISOS
 import homestead_kube as KUBE
 import homestead_leader as LEADER
 import homestead_longhorn as LH
+import homestead_longhorn_restore as RESTORE
 import homestead_longhorn_access as LH_ACCESS
 import homestead_manifests as MANIFESTS
 import homestead_names as NAMES
@@ -191,7 +192,7 @@ def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
                 raise ValueError("The destination PVC was created by another operation")
             ref["restore_started"] = True
         else:
-            created = LH.restore_backup(cfg)
+            created = RESTORE.restore_backup(cfg)
             if not created["created"]:
                 return "running", 2, created["message"]
             ref["restore_started"] = True
@@ -199,12 +200,12 @@ def _restore_then_tidy(item, _resolve=OPS.RESOLVERS["volume-restore"]):
     if pvc:
         if cfg and (pvc.get("metadata", {}).get("annotations") or {}).get("homestead.io/restore-id") != cfg["restore_id"]:
             raise ValueError("The destination PVC was replaced by another operation")
-        problem = LH.restore_problem(pvc)
+        problem = RESTORE.restore_problem(pvc)
         if problem:
             return "failed", 8, f"CSI restore snapshot failed: {problem}"
     result = _resolve(item)
     if result and result[0] == "succeeded" and cfg and pvc:
-        result = LH.finish_restore_resize(pvc, cfg) or result
+        result = RESTORE.finish_restore_resize(pvc, cfg) or result
     if result and result[0] in ("succeeded", "failed"):
         cleanup_restores()
     return result
@@ -628,7 +629,7 @@ def ensure_claim(ns, name, size_gb, sc=None, access_mode="ReadWriteOnce"):
 
 
 def cleanup_restores():
-    for cleanup in (STORAGE_CLASSES.cleanup_restore_classes, LH.cleanup_restore_snapshots):
+    for cleanup in (STORAGE_CLASSES.cleanup_restore_classes, RESTORE.cleanup_restore_snapshots):
         try:
             cleanup()
         except Exception as error:

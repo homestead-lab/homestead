@@ -12,6 +12,7 @@ sys.path.insert(0, str(ROOT / "server"))
 import homestead_route_policy as POLICY
 import homestead_routes as ROUTES
 import homestead_web_paths as WEB_PATHS
+import homestead_node_actions as NODE_ACTIONS
 import source_scan as SS
 
 SERVER = SS.text(SS.SERVER_PY)
@@ -117,8 +118,8 @@ class DeclaredRoutes(unittest.TestCase):
     def test_no_module_reads_forwarding_headers(self):
         """Who sent a request, and over what, is decided once in server.py
         (_client_ip, _over_tls, _via_cloudflare); a module reads request.conn."""
-        for module in sorted((ROOT / "server").glob("homestead_*.py")):
-            text = module.read_text(encoding="utf-8").lower()
+        for module in SS.server_modules():
+            text = SS.text(module).lower()
             for header in ("cf-connecting-ip", "x-forwarded-for", "x-forwarded-proto", "cf-ray"):
                 self.assertNotIn(header, text, f"{module.name} reads {header}: use request.conn")
 
@@ -201,6 +202,50 @@ class ModuleList(unittest.TestCase):
                                  ("class C:\n    ROUTES = {}", False)):
             with self.subTest(source=source):
                 self.assertIs(declares, declares_routes(SS.code(source)))
+
+
+def cookie_calls(source):
+    """The names a module calls that make or write one of Homestead's cookies:
+    Cookie(...) or cookie_header(...), bare or through a module."""
+    return sorted({node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+                   for node in ast.walk(SS.tree(source)) if isinstance(node, ast.Call)
+                   and (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) in ("Cookie", "cookie_header")})
+
+
+class CookieOwnersInSource(unittest.TestCase):
+    """Every cookie a module sets is one it owns (#936): the module that makes
+    a Cookie declares OWN_COOKIES and is in MODULES, where table() reads it, and
+    only server.py writes a Set-Cookie line itself (cookie_header)."""
+
+    def test_every_module_that_sets_a_cookie_owns_one(self):
+        setters = {path.stem for path in SS.server_modules()
+                   if path.stem != "homestead_routes" and "Cookie" in cookie_calls(path)}
+        self.assertTrue(setters, "no module makes a Cookie: the scan has stopped seeing them")
+        self.assertEqual(setters, set(ROUTES.owners().values()),
+                         "a module that makes a Cookie must own it (OWN_COOKIES), and an owner must set it")
+        self.assertEqual([], sorted(setters - set(ROUTES.MODULES)), "a module that sets a cookie must be in MODULES")
+
+    def test_only_server_py_writes_a_set_cookie_line_itself(self):
+        writers = [path.stem for path in SS.server_modules()
+                   if path.stem != "homestead_routes" and "cookie_header" in cookie_calls(path)]
+        self.assertEqual([], writers, "a module returns a Reply with cookies=(Cookie(...),); answer() checks its owner")
+
+    def test_the_data_move_cookie_is_named_once(self):
+        """Its name is written only in homestead_self_data_cookie; the route that
+        sets it, the status server that reads it and the route table take it from there."""
+        import homestead_self_data_cookie as MOVE
+        holders = sorted(p.stem for p in [*SS.server_modules(), SS.SERVER_PY]
+                         if p.stem != "homestead_self_data_cookie" and MOVE.NAME in p.read_text(encoding="utf-8"))
+        self.assertEqual([], holders, "take the cookie's name from homestead_self_data_cookie")
+        self.assertEqual(MOVE.PATH, ROUTES.COOKIES[MOVE.NAME])
+        self.assertEqual("homestead_self_data_server", ROUTES.owners()[MOVE.NAME])
+
+    def test_the_scan_sees_each_written_form(self):
+        for source, found in (("Cookie(A, b)", ["Cookie"]), ("ROUTES.Cookie(A, b)", ["Cookie"]),
+                              ("X.cookie_header(c, tls)", ["cookie_header"]), ("SimpleCookie()", []),
+                              ("# Cookie(a)", []), ("'Cookie(a)'", [])):
+            with self.subTest(source=source):
+                self.assertEqual(found, cookie_calls(SS.code(source)))
 
 
 class ServedMethods(unittest.TestCase):
@@ -333,7 +378,7 @@ class ThroughTheServer(unittest.TestCase):
         server, handler = self.handler("POST", "/api/node/drain", {"node": "node1"})
         impact = {"stranded": [{"ns": "lab", "name": "web"}]}
         with mock.patch.object(server.PLACE, "impact", return_value=impact), \
-                mock.patch.object(server.LC, "drain") as drain:
+                mock.patch.object(NODE_ACTIONS, "drain") as drain:
             handler.do_POST()
         code, body = handler._send.call_args.args[:2]
         self.assertEqual((409, impact), (code, body["impact"]))
@@ -491,7 +536,7 @@ class ServerStaysRouting(unittest.TestCase):
             for name in re.findall(r"\w+", names):
                 imported[name] = module
         offenders = []
-        for path in sorted((ROOT / "tests").glob("test_*.py")):
+        for path in SS.test_files():
             text = SS.text(path)
             patched = set(re.findall(r'patch\.object\(server, "(\w+)"', text)) | set(re.findall(r"^\s*server\.(\w+) = ", text, re.M))
             offenders += [f"{path.name} patches server.{name}, which server.py imports from {imported[name]}: "

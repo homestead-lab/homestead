@@ -1,17 +1,17 @@
-import copy
-import io
 import json
 import re
 import sys
 import unittest
-import urllib.error
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
+sys.path.insert(0, str(ROOT / "tests"))
 
+import homestead_kube as K
 import homestead_resources as RES
 import homestead_yaml as YAML
+from fakes.kube import Kube
 
 
 class YamlDumpTests(unittest.TestCase):
@@ -29,43 +29,41 @@ class YamlDumpTests(unittest.TestCase):
         self.assertEqual(data, json.loads(json.dumps(YAML.loads(YAML.dump(data)))))
 
 
+CM = {"apiVersion": "v1", "kind": "ConfigMap",
+      "metadata": {"name": "cfg", "namespace": "lab", "resourceVersion": "5", "uid": "u1",
+                   "managedFields": [{"manager": "kubectl"}],
+                   "annotations": {"kubectl.kubernetes.io/last-applied-configuration": "{}"}},
+      "data": {"app.yaml": "port: 80\n"}}
+SECRET = {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "pw", "namespace": "lab", "resourceVersion": "2"},
+          "data": {"password": "aHVudGVyMg=="}}
+EVENT = {"apiVersion": "v1", "kind": "Event", "metadata": {"name": "cfg.1", "namespace": "lab"},
+         "involvedObject": {"name": "cfg", "uid": "u1"},
+         "type": "Warning", "reason": "Failed", "message": "x", "lastTimestamp": "2026-09-24T10:00:00Z"}
+
+
 class Cluster:
-    def __init__(self):
-        self.cm = {"apiVersion": "v1", "kind": "ConfigMap",
-                   "metadata": {"name": "cfg", "namespace": "lab", "resourceVersion": "5", "uid": "u1",
-                                "managedFields": [{"manager": "kubectl"}],
-                                "annotations": {"kubectl.kubernetes.io/last-applied-configuration": "{}"}},
-                   "data": {"app.yaml": "port: 80\n"}}
-        self.secret = {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "pw", "namespace": "lab", "resourceVersion": "2"},
-                       "data": {"password": "aHVudGVyMg=="}}
-        self.sent = []
+    """Objects on the shared fake API (tests/fakes/kube.py). What it does not
+    model is answered here: the discovery documents, which say which verbs a
+    kind allows, and the server's own table of columns for a list."""
+    def __init__(self, test):
+        self.kube = test.enterContext(Kube(CM, SECRET, EVENT))
+        self.kube.react("GET", "/api/v1", lambda *_: {"resources": [
+            {"name": "configmaps", "kind": "ConfigMap", "namespaced": True, "verbs": ["get", "list", "update", "create", "delete"]},
+            {"name": "secrets", "kind": "Secret", "namespaced": True, "verbs": ["get", "list"]},
+            {"name": "pods/log", "kind": "Pod", "namespaced": True, "verbs": ["get"]},
+            {"name": "nodes", "kind": "Node", "namespaced": False, "verbs": ["get", "list"]}]})
+        self.kube.react("GET", "/apis", lambda *_: {"groups": [
+            {"name": "longhorn.io", "preferredVersion": {"version": "v1beta2"}},
+            {"name": "broken.example", "preferredVersion": {"version": "v1"}}]})
+        self.kube.react("GET", "/apis/longhorn.io/v1beta2", lambda *_: {"resources": [
+            {"name": "volumes", "kind": "Volume", "namespaced": True, "verbs": ["get", "list"]}]})
+        self.kube.fail("/apis/broken.example/v1", 503, times=99)
+        test.addCleanup(RES.bind, *(getattr(RES, name, None) for name in ("kget", "ksend", "table_get")))
+        RES.bind(K.kget, K.ksend, self.table)
 
-    def get(self, path):
-        if path == "/api/v1":
-            return {"resources": [{"name": "configmaps", "kind": "ConfigMap", "namespaced": True, "verbs": ["get", "list", "update", "create", "delete"]},
-                                  {"name": "secrets", "kind": "Secret", "namespaced": True, "verbs": ["get", "list"]},
-                                  {"name": "pods/log", "kind": "Pod", "namespaced": True, "verbs": ["get"]},
-                                  {"name": "nodes", "kind": "Node", "namespaced": False, "verbs": ["get", "list"]}]}
-        if path == "/apis":
-            return {"groups": [{"name": "longhorn.io", "preferredVersion": {"version": "v1beta2"}},
-                               {"name": "broken.example", "preferredVersion": {"version": "v1"}}]}
-        if path == "/apis/longhorn.io/v1beta2":
-            return {"resources": [{"name": "volumes", "kind": "Volume", "namespaced": True, "verbs": ["get", "list"]}]}
-        if path == "/apis/broken.example/v1":
-            raise urllib.error.HTTPError(path, 503, "down", None, None)
-        if path.endswith("/configmaps/cfg"):
-            return copy.deepcopy(self.cm)
-        if path.endswith("/secrets/pw"):
-            return copy.deepcopy(self.secret)
-        if "/events" in path:
-            return {"items": [{"type": "Warning", "reason": "Failed", "message": "x", "lastTimestamp": "2026-09-24T10:00:00Z"}]}
-        raise AssertionError(path)
-
-    def send(self, method, path, body=None, **kw):
-        self.sent.append((method, path, body))
-        if method == "PUT" and body["metadata"].get("resourceVersion") != "5":
-            raise urllib.error.HTTPError(path, 409, "conflict", None, io.BytesIO(b'{"message":"the object has been modified"}'))
-        return body
+    @property
+    def sent(self):
+        return [(method, path, body) for method, path, body, _ in self.kube.writes]
 
     def table(self, path):
         return {"columnDefinitions": [{"name": "Name", "priority": 0}, {"name": "Data", "priority": 0}, {"name": "Extra", "priority": 1},
@@ -75,8 +73,7 @@ class Cluster:
 
 class ResourceTests(unittest.TestCase):
     def setUp(self):
-        self.c = Cluster()
-        RES.bind(self.c.get, self.c.send, self.c.table)
+        self.c = Cluster(self)
         RES._discovery.update(at=0.0, value=None)
 
     def test_every_listable_kind_is_found_and_grouped(self):

@@ -13,6 +13,7 @@ import homestead_disk_v2 as V2
 import homestead_disk_region as REGION
 import homestead_disk_allocation as ALLOCATION
 import homestead_hostrun as HOST
+import homestead_job_cadence as CADENCE
 import homestead_storage_conflicts as CONFLICTS
 
 KIND = 'longhorn-runtime'
@@ -222,16 +223,19 @@ def progress(item):
             raise ValueError('Staging was interrupted. Recheck this job; no helper is repeated automatically.')
         if not V2._ready(V2._get('/api/v1/nodes/' + ref['node'])):
             return 'running', item.get('progress', 20), 'Waiting for the host to return from runtime maintenance; the original LV remains retained'
-        state = _call(ref['node'], 'read(' + _folder(ref) + ' / "state.json")')
-        phase = state['phase']
-        if phase in ('relocated','retired'):
-            inv = _recheck(ref)
-            if inv['spec'] != _disabled(ref, True): raise ValueError('Retained store registration changed')
-            _call(ref['node'], '(runtime_check(read(' + _folder(ref) + ' / "plan.json"), ' + _folder(ref) + '), True)[1]')
-        ref['phase'] = phase
-        if phase == 'retired': return 'succeeded', 100, 'Runtime moved and its archived originals retired. Review Prepare for V2 separately.'
-        if phase == 'relocated': return 'running', 70, 'Runtime moved. Original LV and archive retained; review retirement to continue.'
-        return 'running', 20 if phase == 'staged' else 85, 'Reboot through host maintenance to ' + ('move runtime' if phase == 'staged' else 'retire the archived original runtime')
+        def on_host():
+            state = _call(ref['node'], 'read(' + _folder(ref) + ' / "state.json")')
+            phase = state['phase']
+            if phase in ('relocated','retired'):
+                inv = _recheck(ref)
+                if inv['spec'] != _disabled(ref, True): raise ValueError('Retained store registration changed')
+                _call(ref['node'], '(runtime_check(read(' + _folder(ref) + ' / "plan.json"), ' + _folder(ref) + '), True)[1]')
+            ref['phase'] = phase
+            if phase == 'retired': return 'succeeded', 100, 'Runtime moved and its archived originals retired. Review Prepare for V2 separately.'
+            if phase == 'relocated': return 'running', 70, 'Runtime moved. Original LV and archive retained; review retirement to continue.'
+            return 'running', 20 if phase == 'staged' else 85, 'Reboot through host maintenance to ' + ('move runtime' if phase == 'staged' else 'retire the archived original runtime')
+        # Waiting for a reboot can take days: the host is looked at every CADENCE interval (#975).
+        return CADENCE.look(item, 'longhorn-runtime', on_host)
     except (ValueError, urllib.error.HTTPError) as error:
         return 'failed', item.get('progress', 0), str(error)
 

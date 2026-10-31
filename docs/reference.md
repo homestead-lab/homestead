@@ -184,6 +184,44 @@ onto: **Settings > About > Redundancy** offers **Keep two copies**, which
 makes it and opens the move. On k3s and RKE2 Homestead raises its own
 volume's copies in place as hosts join.
 
+App volumes on that one host read degraded for the same reason, and are
+yours, so Homestead only offers: **Cluster > Health** lists them ("N volumes
+ask for more copies than this cluster has hosts"), and an admin's
+**Match copies to hosts** review lowers each listed volume to one copy. The
+count each asked for is kept on it as `homestead.io/one-host-copies`, and
+once a second host can hold copies the same row offers to put them back.
+Neither changes a class or a Longhorn setting, so volumes made later ask for
+their class's count and appear in the offer too. The dashboard banner, the
+alert, the MQTT sensor **Volumes Short of Hosts** and the installer's doctor
+say why such a volume is degraded.
+
+**Cluster > Health** also names what storage leaves behind (it changes
+nothing by itself):
+
+- **Released volumes:** a volume whose claim was deleted while its class keeps
+  the data (reclaim policy Retain), CDI's import scratch for one. Longhorn keeps
+  its whole size allocated on each host with a copy until it is deleted. The
+  row says how many there are, what they hold and on which hosts; its list
+  gives each one's last claim, class, size and when it was released, and opens
+  the reviewed delete for a Longhorn volume (admin), or **Remove old copy** for
+  the original a storage-class change kept. Volumes of other drivers are named
+  only: delete them with that storage's own tools. The delete is asked for by
+  the volume's PV. When an app was deployed again with the same claim name, its
+  review sets the Released volume beside the one the claim uses now (PV name and
+  UID, phase, claim UID, Longhorn volume, what uses it), refuses unless they are
+  plainly different volumes, and is confirmed by the Released volume's name; the
+  delete is pinned to that PV's name, UID and version and never changes the
+  current one. Such an app's card and details say how many old volumes of its
+  claims still hold space, and how much, with the reviewed delete.
+- **Stale iSCSI sessions:** when a host is lost while a Longhorn engine runs on
+  it, the instance-manager is replaced, and the host keeps its iSCSI session to
+  the old address once it comes back. A later attach of that volume on the host
+  can fail in a loop (iscsiadm exit 32 on logout). The node probe lists each
+  host's sessions from its read-only `/sys`, and a session to a Longhorn target
+  whose address no instance-manager pod has now is named on its host, with the
+  commands that end it there (`iscsiadm` logout, or removing the stale disk and
+  record) or a restart of that host. Homestead runs nothing on the host for this.
+
 A claim's class cannot change. On a cluster installed from an older manifest
 that said `longhorn-r2`, check the claim first:
 
@@ -1179,7 +1217,15 @@ DataImportCron that pulls a registry image through the node
 (`pullMethod: node`), or the immediate managed-update rollback. A record that
 says which images are in use but cannot be read - a malformed rollback note or
 template, or one of the optional lists the role may not read - keeps every
-image, labelled *unreadable* with the record it names, until it is fixed. That
+image, labelled *not readable* with the record it names, until it is fixed. Each
+kept image's row also carries `kind` (the record's kind), `label` and `detail`
+(the reason in plain words: *running*, *roll back*, *Job paused*, *Job waiting*, *scaled to zero*, *no
+pods yet*, *scheduled job*, *stopped VM*, *VM pool at zero*, *VM template*, *VM snapshot*, *disk
+import*, *scheduled import*); `reason` keeps the coarse word clean-up uses. A
+disk import from an OpenShift image stream (`registry.imageStream` with
+`pullMethod: node` and no `url`) is not read - Homestead asks for no
+`image.openshift.io` permission, as it does not target OpenShift - so it keeps
+every image, labelled *image stream not read*, until the import is gone. That
 read is read-only `get` and `list` on `pool.kubevirt.io` `virtualmachinepools`,
 `kubevirt.io` `virtualmachineinstancereplicasets`, `harvesterhci.io`
 `virtualmachinetemplateversions`, `snapshot.kubevirt.io`
@@ -1250,18 +1296,22 @@ its last run took, or 30 minutes. These never reach the Dashboard.
 
 **Plans** set up a policy in one go - snapshots (hourly kept for a day, daily
 kept for a week), snapshots and backups (adding daily and weekly backups to
-the backup target), or housekeeping (weekly trim and snapshot cleanup) - for
+the backup target), or housekeeping (a weekly snapshot cleanup; no trim job,
+since Homestead trims attached volumes itself) - for
 whichever group you pick. The jobs a plan makes are ordinary jobs afterwards.
 
 Any volume's snapshots and backups are also a click away on Volumes: take one
 now, back up now, or restore.
 
-The weekly trim is Homestead's own: each Saturday at 04:00 UTC a `weekly-trim`
-job trims every attached Longhorn volume through Longhorn's `trimFilesystem`
-action, one at a time, and skips detached volumes and VM disks (Block volumes),
-naming them. **Housekeeping** shows the last result, **Run now** and the
-switch (`GET /api/weekly-trim`, `POST /api/weekly-trim/run` for operators,
-`POST /api/weekly-trim/settings` for admins). The Longhorn `RecurringJob`
+The weekly trim is Homestead's own: once a week, Saturday at 04:00 UTC unless
+moved, a `weekly-trim` job trims every attached Longhorn volume through
+Longhorn's `trimFilesystem` action, one at a time, and skips detached volumes
+and VM disks (Block volumes), naming them. **Housekeeping** shows the last
+result, **Run now**, **Change time** and the switch (`GET /api/weekly-trim`,
+`POST /api/weekly-trim/run` for operators, `POST /api/weekly-trim/settings`
+with `enabled`, or `weekday` 0-6 from Monday and `hour` 0-23 in UTC, for
+admins). `/api/lh/overview` lists the trim under `homestead_jobs`, and its
+clashes count it; This week shows it as Homestead's. The Longhorn `RecurringJob`
 `homestead-weekly-trim` earlier releases made is removed once if unchanged; a
 changed one is kept as yours and Homestead's own trim stays off.
 

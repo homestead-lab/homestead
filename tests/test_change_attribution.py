@@ -35,8 +35,6 @@ class AttributionTests(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
         CH.bind(self.dir.name)
-        CH._notes.clear()
-        self.addCleanup(CH._notes.clear)
         CH._known.clear()
         self.addCleanup(CH._known.clear)
         self.addCleanup(setattr, CH.REQUEST, "user", None)
@@ -51,11 +49,10 @@ class AttributionTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def write_through_another_copy(self, kube, user, body, method="PUT", ctype=None):
-        """A write this copy serves, then the leader's own memory of notes, which is empty."""
+        """A write served by another copy: all the leader has of it is the object as stored."""
         CH.REQUEST.user = user
         K.send(method, PATH, body, **({"ctype": ctype or "application/merge-patch+json"} if method == "PATCH" else {}))
         CH.REQUEST.user = None
-        CH._notes.clear()
         return kube.object(PATH)
 
     def test_a_change_made_through_another_copy_is_credited_to_the_person(self):
@@ -66,6 +63,28 @@ class AttributionTests(unittest.TestCase):
             CH.observe([stored], now=time.time() + 1, since=start)
         entry = CH.history("lab", "sonarr")[0]
         self.assertEqual(("homestead", "james"), (entry["source"], entry["by"]))
+
+    def test_the_copy_that_served_a_write_credits_it_as_any_other_copy_would(self):
+        # The write alone says who made it (#621): the leader credits it the
+        # same whether it served the write or another copy did, so a write that
+        # could not be marked is "outside" on every copy, not only on the others.
+        credited = []
+        for served_here in (True, False):
+            with Kube(dep()) as kube, mock.patch.object(CH, "_author_key", side_effect=LookupError("no key")):
+                start = time.time() - 30
+                CH.observe([kube.object(PATH)], now=start)
+                if served_here:
+                    CH.REQUEST.user = "james"
+                    K.send("PUT", PATH, dep(image="example/sonarr:4.1"))
+                    CH.REQUEST.user = None
+                    stored = kube.object(PATH)
+                else:
+                    stored = self.write_through_another_copy(kube, "james", dep(image="example/sonarr:4.1"))
+                CH.observe([stored], now=time.time() + 1, since=start)
+            entry = CH.history("lab", "sonarr")[0]
+            credited.append((entry["source"], entry["by"]))
+            CH.bind(self.enterContext(tempfile.TemporaryDirectory()))   # a fresh history for the next
+        self.assertEqual([("outside", ""), ("outside", "")], credited)
 
     def test_the_mark_is_on_the_app_not_its_pods_and_does_not_name_the_person(self):
         with Kube(dep()) as kube:
@@ -178,7 +197,6 @@ class AttributionTests(unittest.TestCase):
         before = copy.deepcopy(scale)
         CH.note_write("PUT", PATH + "/scale", scale)
         self.assertEqual(before, scale, "a Scale has no app metadata to mark")
-        self.assertEqual(1, len(CH._notes), "it is still noted on this copy, as before")
 
     # Stop, Start, /api/scale and schedules write the app itself (#621), so
     # they carry the mark like any other write.
@@ -193,7 +211,6 @@ class AttributionTests(unittest.TestCase):
             CH.REQUEST.user = "james"
             server.OVERVIEW_ROUTES.scale_workload("lab", "sonarr", 0)
             CH.REQUEST.user = None
-            CH._notes.clear()                       # the leader is another copy
             CH.observe([kube.object(PATH)], now=time.time() + 1, since=start)
         entry = CH.history("lab", "sonarr")[0]
         self.assertEqual(("homestead", "james"), (entry["source"], entry["by"]))
@@ -269,7 +286,6 @@ class AttributionTests(unittest.TestCase):
     def test_a_delete_is_neither_noted_nor_an_entry(self):
         CH.REQUEST.user = "james"
         CH.note_write("DELETE", PATH, None)
-        self.assertEqual([], CH._notes)
         CH.observe([dep()], now=1000)
         apps = CH.observe([], now=1060, since=1000)
         self.assertEqual([], apps["lab/sonarr"]["entries"], "an app that goes is not a change in its history")
@@ -339,7 +355,6 @@ class AttributionTests(unittest.TestCase):
             self.assertNotIn(CH.AUTHOR, body["metadata"]["annotations"], "no key yet: the write goes unmarked")
             start = time.time() - 30
             CH.observe([dep()], now=start)
-            CH._notes.clear()
             marked = dep(image="example/sonarr:4.2")
             marked["metadata"]["annotations"][CH.AUTHOR] = json.dumps({"at": int(time.time()), "by": "0" * 32})
             CH.observe([marked], now=time.time() + 1, since=start)
@@ -381,8 +396,6 @@ class KeyCacheTests(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         self.addCleanup(self.dir.cleanup)
         CH.bind(self.dir.name)
-        CH._notes.clear()
-        self.addCleanup(CH._notes.clear)
         CH._known.clear()
         self.addCleanup(CH._known.clear)
         self.addCleanup(setattr, CH.REQUEST, "user", None)
@@ -403,7 +416,6 @@ class KeyCacheTests(unittest.TestCase):
             self.assertTrue(self.marked(), "marked with the key read before")
             start = time.time() - 30
             CH.observe([dep()], now=start)
-            CH._notes.clear()
             stored = dep(image="example/sonarr:4.1")
             stored["metadata"]["annotations"][CH.AUTHOR] = first
             CH.observe([stored], now=time.time() + 1, since=start)

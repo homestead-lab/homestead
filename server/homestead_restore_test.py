@@ -30,6 +30,7 @@ import json
 import time
 import urllib.error
 
+import homestead_cache as CACHE
 import homestead_kube as KUBE
 import homestead_operations as OPS
 
@@ -39,12 +40,18 @@ READY_WAIT = 600            # the copy has this long to become ready
 ANSWER_WAIT = 180           # then this long to answer on a port
 RESULT = "restore-tested"   # annotation suffix on the app
 LABEL = "restore-test"      # label suffix on everything a test makes
+# What the Data protection list would restore for each app, kept a little longer
+# than the page's 15 s refresh. The key starts with "lhbackups", so a backup
+# made or deleted here forgets it (homestead_longhorn._bust); a test starting or
+# finishing forgets it too.
+PLANS = "lhbackups-restore-test-plans"
+PLANS_SECONDS = 30
 KEEP_VOLUMES = ("configMap", "secret", "downwardAPI", "projected", "emptyDir", "serviceAccountToken")
 
 # Bound by server.py.
 kget = ksend = None
 names = None
-backups = lambda volume: []                 # Longhorn backups of a volume, newest first
+backups = lambda volume=None, strict=False: []   # Longhorn backups of a volume (None: every one), newest first
 restore = lambda cfg: {}                    # homestead_longhorn.restore_backup
 restore_status = lambda item: ("running", 0, "")   # homestead_operations' volume-restore resolver
 csi_cleanup = lambda: []
@@ -83,8 +90,10 @@ def last_result(annotations):
         return None
 
 
-def plan(ns, dep):
-    """What a test of this app restores: [{claim, volume, backup, ...}], and what it cannot."""
+def plan(ns, dep, backups_of=None):
+    """What a test of this app restores: [{claim, volume, backup, ...}], and what it cannot.
+    backups_of(volume) gives a volume's backups, newest first (default: backups)."""
+    backups_of = backups_of or backups
     claims = sorted({(v.get("persistentVolumeClaim") or {}).get("claimName")
                      for v in dep["spec"]["template"]["spec"].get("volumes") or []} - {None, ""})
     rows, without = [], []
@@ -96,7 +105,7 @@ def plan(ns, dep):
         if csi.get("driver") != "driver.longhorn.io":
             without.append({"claim": claim, "why": "not a Longhorn volume"})
             continue
-        found = [b for b in backups(csi.get("volumeHandle") or pv_name) if b.get("restorable")]
+        found = [b for b in backups_of(csi.get("volumeHandle") or pv_name) if b.get("restorable")]
         if not found:
             without.append({"claim": claim, "why": "no completed backup"})
             continue
@@ -346,6 +355,7 @@ def _finish(item, to, ok, why):
             _send("DELETE", path)
         except Exception as error:
             left.append(f"{path.rsplit('/', 1)[-1]} ({str(error)[:60]})")
+    forget_plans()
     took = int(now - ref.get("started", now))
     said = ", ".join(f"{r['claim']} from {r['backup']}" for r in ref.get("rows") or [])
     skipped = ref.get("without") or []
@@ -365,12 +375,43 @@ def _finish(item, to, ok, why):
     return ("succeeded" if ok and not left else "failed"), 100, message
 
 
+def forget_plans():
+    CACHE.forget_where(lambda key: key == PLANS)
+
+
 def start_test(ns, name, why="Test now"):
     """Start one restore test as a job."""
+    forget_plans()
     return OPS.start(KIND, f"Restore test of {name}",
                      {"kind": "Deployment", "name": name, "namespace": ns},
                      "/data-protection#restore-tests", {"namespace": ns, "name": name, "phase": "plan", "why": why},
                      "Finding each volume's newest backup")
+
+
+def _listed(w):
+    return w.get("claims") and not (w.get("platform") or w.get("self") or w.get("homestead") or w.get("managed_smb")
+                                    or w.get("managed_nfs") or w.get("site"))
+
+
+def _plans(apps):
+    """{"ns/name": (rows, without)} for these apps, reading the backups list
+    once for all their claims rather than once per claim."""
+    by_volume = None
+
+    def backups_of(volume):
+        nonlocal by_volume
+        if by_volume is None:
+            by_volume = {}
+            # strict: a failed read raises, so it is never kept as "no backups"; the
+            # cache then serves the last good answer, or the route its error.
+            for b in backups(None, strict=True):     # newest first, so each volume's stay so
+                by_volume.setdefault(b.get("volume", ""), []).append(b)
+        return by_volume.get(volume, [])
+    out = {}
+    for w in apps:
+        dep = kget(f"/apis/apps/v1/namespaces/{w['ns']}/deployments/{w['name']}")
+        out[f"{w['ns']}/{w['name']}"] = plan(w["ns"], dep, backups_of)
+    return out
 
 
 def view():
@@ -378,12 +419,13 @@ def view():
     out = []
     running = {(o.get("resource") or {}).get("namespace", "") + "/" + (o.get("resource") or {}).get("name", "")
                for o in OPS.snapshot() if o.get("kind") == KIND and o.get("status") in ("queued", "running")}
-    for w in workloads():
-        if not w.get("claims") or w.get("platform") or w.get("self") or w.get("homestead") or w.get("managed_smb") \
-                or w.get("managed_nfs") or w.get("site"):
-            continue
-        dep = kget(f"/apis/apps/v1/namespaces/{w['ns']}/deployments/{w['name']}")
-        rows, without = plan(w["ns"], dep)
+    apps = [w for w in workloads() if _listed(w)]
+    plans = CACHE.cached(PLANS, PLANS_SECONDS, lambda: _plans(apps))
+    if any(f"{w['ns']}/{w['name']}" not in plans for w in apps):     # an app new since: read again
+        forget_plans()
+        plans = CACHE.cached(PLANS, PLANS_SECONDS, lambda: _plans(apps))
+    for w in apps:
+        rows, without = plans.get(f"{w['ns']}/{w['name']}", ([], []))
         if not rows and not without:
             continue
         out.append({"ns": w["ns"], "name": w["name"], "icon": w.get("icon", ""), "restores": rows, "without": without,
