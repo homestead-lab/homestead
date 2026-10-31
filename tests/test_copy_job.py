@@ -1,3 +1,4 @@
+import base64
 import copy
 import json
 import sys
@@ -11,8 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_copy_job as flow
 import homestead_operations as ops
 from fakes.job_store import put
+from fakes.kube import Kube
+import homestead_kube as K
 import homestead_capacity_review as review
 import homestead_import_guard as guard
+import homestead_resources as RES
 import homestead_restructure as restructure
 import homestead_vm_power_job as locks
 
@@ -37,6 +41,7 @@ class CopyJobTests(unittest.TestCase):
         self.prepared = {"deployment": copy.deepcopy(self.dep), "claims": [], "seeds": [], "name": "app"}
         self.prepared["deployment"]["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] = "new"
         self.jobs, self.pods, self.sets, self.hpas, self.sent = {}, [], [], [], []
+        self.secrets = {}  # the copy's record of before; its writes are not in self.sent
         self.after_send = lambda *args: None
         self.admission = mock.Mock(return_value={"blocked": False, "warnings": []})
         for patch in (mock.patch.object(review, "_key", return_value=b"copy-tests"),
@@ -67,6 +72,8 @@ class CopyJobTests(unittest.TestCase):
             return copy.deepcopy(self.pvcs[name])
         if "/persistentvolumes/" in path and name in self.pvs:
             return copy.deepcopy(self.pvs[name])
+        if "/secrets/" in path and name in self.secrets:
+            return copy.deepcopy(self.secrets[name])
         if "/jobs/" in path and name in self.jobs:
             return copy.deepcopy(self.jobs[name])
         raise urllib.error.HTTPError(path, 404, "private API body", {}, None)
@@ -81,6 +88,11 @@ class CopyJobTests(unittest.TestCase):
         return {"ok": True, "name": "app", "held_replicas": count, "_held_receipt": copy.deepcopy(self.dep)}
 
     def send(self, method, path, body, **kwargs):
+        if "/secrets" in path:
+            if method == "POST":
+                self.secrets[body["metadata"]["name"]] = obj = {**copy.deepcopy(body), "metadata": {**body["metadata"], "uid": "record-uid", "resourceVersion": "1"}}
+                return copy.deepcopy(obj)
+            return self.secrets.pop(path.rsplit("/", 1)[-1])
         self.sent.append((method, path, copy.deepcopy(body)))
         if method == "POST":
             self.assertEqual("copy_intent", ops.stored()[0]["ref"]["phase"])
@@ -111,13 +123,19 @@ class CopyJobTests(unittest.TestCase):
         return copy.deepcopy(obj)
 
     def start(self, apply=None):
-        return flow.start(self.body, self.context, self.prepared, restructure.copies(self.body), self.read, ops, apply or self.apply)
+        return flow.start(self.body, self.context, self.prepared, restructure.copies(self.body), self.read, ops, apply or self.apply,
+                          send=self.send)
 
     def poll(self):
         return ops.list_operations()[0]
 
     def complete(self, failed=False):
         next(iter(self.jobs.values()))["status"] = {"conditions": [{"type": "Failed" if failed else "Complete", "status": "True"}]}
+
+    def fail_kept_stopped(self):
+        """A failed copy whose edit can't be undone (no record of before): the hold stays for recovery."""
+        self.secrets.clear()
+        self.complete(failed=True)
 
     def test_success_has_durable_intents_fresh_checks_and_waits_for_readiness(self):
         result = self.start()
@@ -164,7 +182,7 @@ class CopyJobTests(unittest.TestCase):
 
     def test_releasing_the_hold_carries_the_change_mark(self):
         CH = self.guarded()
-        result = self.start(); self.poll(); self.complete(failed=True); self.poll()
+        result = self.start(); self.poll(); self.fail_kept_stopped(); self.poll()
         ops.cancel(result["operation"]["id"], {"ack": True}, "app", by="ada")
         CH.REQUEST.user = None   # the jobs loop's thread serves no request
         self.addCleanup(setattr, CH.REQUEST, "user", None)
@@ -383,7 +401,7 @@ class CopyJobTests(unittest.TestCase):
         self.assertEqual(["PUT", "POST"], [row[0] for row in self.sent])
 
     def test_failed_copy_recovery_removes_hold_only_after_explicit_inspection(self):
-        result = self.start(); self.poll(); self.complete(failed=True); self.poll()
+        result = self.start(); self.poll(); self.fail_kept_stopped(); self.poll()
         ident = result["operation"]["id"]
         # Cancels of copy jobs are applied by the jobs loop (#622): a refusal
         # shows on the job, which is left as it was.
@@ -418,6 +436,253 @@ class CopyJobTests(unittest.TestCase):
         item = ops.stored()[0]
         with locks.worker_lock(item["id"], ops):
             self.assertFalse(flow.recovery_plan(item, self.read, ops)["can"])
+
+
+class Crash(BaseException):
+    """Homestead stopping mid-step: nothing after it runs, the journal stays as it was."""
+
+
+class CopyDeadlineTests(unittest.TestCase):
+    """A copy that never runs or never ends: the Job has a deadline, and its
+    failure undoes the edit and starts the app again (on the shared fake)."""
+    DEP = "/apis/apps/v1/namespaces/lab/deployments/app"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        claim = lambda name, size: {"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+            "metadata": {"name": name, "namespace": "lab"},
+            "spec": {"volumeName": "pv-" + name, **({"resources": {"requests": {"storage": size}}} if size else {})},
+            **({"status": {"capacity": {"storage": size}}} if size else {})}
+        volume = lambda name: {"apiVersion": "v1", "kind": "PersistentVolume", "metadata": {"name": "pv-" + name}}
+        dep = {"apiVersion": "apps/v1", "kind": "Deployment", "metadata": {"name": "app", "namespace": "lab", "generation": 1},
+               "spec": {"replicas": 2, "selector": {"matchLabels": {"app": "app"}}, "template": {
+                   "metadata": {"labels": {"app": "app"}}, "spec": {
+                       "volumes": [{"name": "data", "persistentVolumeClaim": {"claimName": "old"}}],
+                       "containers": [{"name": "main", "image": "example/app", "env": [{"name": "DB_PASSWORD", "value": "secret-not-in-journal"}],
+                                       "volumeMounts": [{"name": "data", "mountPath": "/data", "subPath": "app"}]}]}}},
+               "status": CopyJobTests.state(2, 1)}
+        self.kube = Kube(dep, claim("old", "20Gi"), claim("new", "50Gi"), claim("unsized", ""),
+                         volume("old"), volume("new"), volume("unsized"))
+        self.kube.__enter__()
+        self.addCleanup(self.kube.__exit__)
+        self.admission = mock.Mock(return_value={"blocked": False, "warnings": []})
+        for patch in (mock.patch.object(review, "_key", return_value=b"copy-tests"),
+                      mock.patch.object(ops, "DATA_DIR", self.tmp.name),
+                      mock.patch.dict(ops.RESOLVERS, {flow.KIND: lambda item: flow.resolve(item, K.kget, K.ksend, ops, self.admission)}),
+                      mock.patch.dict(ops.CANCELLERS, {flow.KIND: (lambda item: flow.recovery_plan(item, K.kget, ops),
+                          lambda item, options: flow.recovery_run(item, options, K.kget, K.ksend, ops))})):
+            patch.start()
+            self.addCleanup(patch.stop)
+        ops.CLEANUPS.add(flow.KIND)
+        self.edit("new", "")
+
+    def edit(self, target, folder, source="old"):
+        """The reviewed edit: /data moves to target/folder, with a new image and 3 replicas."""
+        current = K.kget(self.DEP)
+        self.body = {"ns": "lab", "name": "app", "containers": [{"original_name": "main", "name": "main", "volumes": [
+            {"path": "/data", "kind": "existing", "source": target, "sub_path": folder, "copy_from": {"claim": source, "sub_path": "app"}}]}]}
+        self.context = {"action": "edit", "uid": current["metadata"]["uid"], "resourceVersion": current["metadata"]["resourceVersion"]}
+        self.body.update(capacity_token=review.issue(self.body, self.context), confirm_capacity=True)
+        edited = copy.deepcopy(current)
+        edited.pop("status")
+        spec = edited["spec"]["template"]["spec"]
+        spec["volumes"][0]["persistentVolumeClaim"]["claimName"] = target
+        spec["containers"][0]["volumeMounts"][0]["subPath"] = folder
+        spec["containers"][0]["image"] = "example/app:2"
+        # Saving moved the password into the app's Secret, so the edited spec holds none.
+        spec["containers"][0]["env"] = [{"name": "DB_PASSWORD", "valueFrom": {"secretKeyRef": {"name": "app-env", "key": "app.DB_PASSWORD"}}}]
+        edited["spec"]["replicas"] = 3
+        self.prepared = {"deployment": edited, "claims": [], "seeds": [], "name": "app"}
+
+    def controller(self):
+        """What the Deployment controller would report once it caught up."""
+        dep = self.kube.object(self.DEP)
+        dep["status"] = CopyJobTests.state(dep["spec"]["replicas"], dep["metadata"]["generation"])
+        self.kube.add(dep)
+
+    def apply(self):
+        count = restructure.hold(self.prepared["deployment"])
+        K.ksend("PUT", self.DEP, self.prepared["deployment"])
+        self.controller()
+        return {"ok": True, "name": "app", "held_replicas": count, "_held_receipt": K.kget(self.DEP)}
+
+    def poll(self):
+        self.controller()
+        return ops.list_operations()[0]
+
+    def job(self):
+        jobs = K.kget("/apis/batch/v1/namespaces/lab/jobs")["items"]
+        self.assertEqual(1, len(jobs))
+        return jobs[0]
+
+    def started(self):
+        flow.start(self.body, self.context, self.prepared, restructure.copies(self.body), K.kget, ops, self.apply, send=K.ksend)
+        self.assertEqual("running", self.poll()["status"])  # stopping -> copy Job submitted
+        return self.job()
+
+    def finish(self, job, condition, reason=""):
+        job["status"] = {"conditions": [{"type": condition, "status": "True", "reason": reason}]}
+        self.kube.add(job)
+
+    def assert_undone(self, replicas):
+        dep = self.kube.object(self.DEP)
+        self.assertEqual(replicas, dep["spec"]["replicas"])
+        spec = dep["spec"]["template"]["spec"]
+        self.assertEqual("old", spec["volumes"][0]["persistentVolumeClaim"]["claimName"])
+        self.assertEqual("app", spec["containers"][0]["volumeMounts"][0]["subPath"])
+        self.assertEqual("example/app", spec["containers"][0]["image"])  # the whole edit is undone
+        for key in (flow.MARKER, restructure.HELD):
+            self.assertNotIn(key, dep["metadata"].get("annotations", {}))
+        self.assertIsNone(self.kube.object(self.record_path()))  # the record goes once the undo is done
+        self.assertEqual("", guard.pending(dep, "lab", K.kget))
+
+    def assert_kept_stopped(self, result, *words):
+        self.assertEqual("failed", result["status"])
+        self.assertIn("app stays stopped", result["message"])
+        self.assertNotIn("no rollback was attempted", result["message"])
+        for word in words:
+            self.assertIn(word, result["message"])
+        self.assertEqual(0, self.kube.object(self.DEP)["spec"]["replicas"])
+
+    def test_deadline_grows_with_the_data_between_a_floor_and_a_ceiling(self):
+        self.assertEqual(flow.DEADLINE_FLOOR, flow.deadline(0))
+        self.assertEqual(flow.DEADLINE_FLOOR + 20 * flow.SECONDS_PER_GIB, flow.deadline(20))
+        self.assertEqual(48 * 3600, flow.DEADLINE_CEILING)
+        self.assertEqual(flow.DEADLINE_CEILING, flow.deadline(100000))
+        self.assertEqual(flow.DEADLINE_CEILING, flow.deadline(None))  # size unknown
+
+    def test_the_copy_job_carries_a_deadline_sized_from_the_source_data(self):
+        job = self.started()
+        self.assertEqual(flow.deadline(20), job["spec"]["activeDeadlineSeconds"])
+        self.assertNotIn("secret-not-in-journal", json.dumps(ops.stored()))
+
+    def test_a_source_of_unknown_size_gets_the_ceiling_and_says_so(self):
+        dep = self.kube.object(self.DEP)
+        dep["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"] = "unsized"
+        self.kube.add(dep)
+        self.edit("new", "", source="unsized")
+        job = self.started()
+        self.assertEqual(flow.DEADLINE_CEILING, job["spec"]["activeDeadlineSeconds"])
+        self.finish(job, "Failed", "DeadlineExceeded")
+        self.assertIn("Copying data of unknown size did not finish within 48 hours", self.poll()["message"])
+
+    def test_a_copy_pod_that_never_schedules_fails_after_the_deadline_and_the_edit_is_undone(self):
+        job = self.started()
+        self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "copy-pod", "namespace": "lab",
+            "ownerReferences": [{"apiVersion": "batch/v1", "kind": "Job", "name": job["metadata"]["name"],
+                                 "uid": job["metadata"]["uid"], "controller": True}]},
+            "spec": {"volumes": [{"name": "v0", "persistentVolumeClaim": {"claimName": "new"}}]},
+            "status": {"phase": "Pending", "conditions": [{"type": "PodScheduled", "status": "False", "reason": "Unschedulable"}]}})
+        self.assertEqual("running", self.poll()["status"])
+        self.assertEqual(0, self.kube.object(self.DEP)["spec"]["replicas"])
+        # The deadline passes: the Job controller fails the Job and removes its pod.
+        self.finish(job, "Failed", "DeadlineExceeded")
+        self.kube.discard("/api/v1/namespaces/lab/pods/copy-pod")
+        result = self.poll()
+        self.assertEqual("failed", result["status"])
+        self.assertIn("Copying 20 GiB did not finish within 1.2 hours", result["message"])
+        self.assertIn("started again with 2 replicas", result["message"])
+        self.assert_undone(2)
+        # Nothing is replayed on a later poll, and the new volume is kept.
+        writes = len(self.kube.writes)
+        self.assertEqual("failed", self.poll()["status"])
+        self.assertEqual(writes, len(self.kube.writes))
+        self.assertIsNotNone(self.kube.object("/api/v1/namespaces/lab/persistentvolumeclaims/new"))
+
+    def test_a_failed_copy_puts_a_stopped_app_back_stopped_and_says_so(self):
+        dep = self.kube.object(self.DEP)
+        dep["spec"]["replicas"] = 0
+        self.kube.add(dep)
+        self.edit("new", "")
+        job = self.started()
+        self.finish(job, "Failed", "BackoffLimitExceeded")
+        result = self.poll()
+        self.assertEqual("failed", result["status"])
+        self.assertIn("stays stopped, as it was before", result["message"])
+        self.assert_undone(0)
+
+    def test_no_restart_on_a_volume_the_copy_also_wrote_to(self):
+        self.edit("old", "moved")  # a folder move inside the same volume
+        job = self.started()
+        self.finish(job, "Failed", "BackoffLimitExceeded")
+        self.assert_kept_stopped(self.poll(), "old", "also wrote")
+
+    def test_no_restart_when_the_recorded_configuration_was_changed(self):
+        job = self.started()
+        record = self.kube.object(self.record_path())
+        text = base64.b64decode(record["data"]["earlier"]).decode().replace("example/app", "example/other")
+        record["data"]["earlier"] = base64.b64encode(text.encode()).decode()
+        self.kube.add(record)
+        self.finish(job, "Failed", "BackoffLimitExceeded")
+        self.assert_kept_stopped(self.poll(), "edit it back")
+
+    def resume_after_crash(self, applied):
+        job = self.started()
+        self.finish(job, "Failed", "BackoffLimitExceeded")
+
+        def crash(who, write):
+            if applied:
+                write()
+            raise Crash()
+        with mock.patch.object(flow, "_as", crash), self.assertRaises(Crash):
+            self.poll()
+        self.assertEqual("restore_intent", ops.stored()[0]["ref"]["phase"])
+        patches = lambda: [w for w in self.kube.writes if w[0] == "PATCH" and w[1] == self.DEP]
+        sent = len(patches())
+        result = self.poll()
+        self.assertEqual(sent, len(patches()))  # the undo is never sent again
+        return result
+
+    def test_a_crash_after_the_undo_was_applied_finishes_as_undone(self):
+        result = self.resume_after_crash(applied=True)
+        self.assertEqual("failed", result["status"])
+        self.assertIn("started again with 2 replicas", result["message"])
+        self.assert_undone(2)
+
+    def test_a_crash_before_the_undo_was_applied_fails_and_names_what_to_check(self):
+        result = self.resume_after_crash(applied=False)
+        self.assertEqual("failed", result["status"])
+        self.assertIn("may not have been applied", result["message"])
+        self.assertIn("pod template", result["message"])
+        self.assertEqual(0, self.kube.object(self.DEP)["spec"]["replicas"])
+
+    def test_a_normal_copy_still_starts_the_app_on_its_new_storage(self):
+        job = self.started()
+        self.finish(job, "Complete")
+        self.assertEqual("running", self.poll()["status"])
+        self.assertEqual("succeeded", self.poll()["status"])
+        dep = self.kube.object(self.DEP)
+        self.assertEqual(3, dep["spec"]["replicas"])
+        self.assertEqual("new", dep["spec"]["template"]["spec"]["volumes"][0]["persistentVolumeClaim"]["claimName"])
+        self.assertEqual("example/app:2", dep["spec"]["template"]["spec"]["containers"][0]["image"])
+        self.assertIsNone(self.kube.object(self.record_path()))  # the record goes once the app is back
+
+    def record_path(self):
+        uid = self.kube.object(self.DEP)["metadata"]["uid"]
+        return f"/api/v1/namespaces/lab/secrets/{flow.earlier_name(uid)}"
+
+    def test_the_record_of_before_is_a_secret_owned_by_the_app_and_never_in_its_view(self):
+        self.started()
+        record = self.kube.object(self.record_path())
+        dep = self.kube.object(self.DEP)
+        self.assertEqual([dep["metadata"]["uid"]], [o["uid"] for o in record["metadata"]["ownerReferences"]])
+        self.assertEqual("app", record["metadata"]["labels"][flow.EARLIER_LABEL])
+        self.assertIn("secret-not-in-journal", base64.b64decode(record["data"]["earlier"]).decode())
+        self.assertNotIn("secret-not-in-journal", json.dumps(ops.stored()))
+        RES.hide_sensitive(dep, "apps")
+        self.assertNotIn("secret-not-in-journal", json.dumps(dep))  # what a viewer of the Deployment sees
+
+    def test_no_copy_starts_when_the_record_of_before_cannot_be_written(self):
+        self.kube.fail("/api/v1/namespaces/lab/secrets", 403, method="POST")
+        with self.assertRaises(ValueError) as caught:
+            flow.start(self.body, self.context, self.prepared, restructure.copies(self.body), K.kget, ops, self.apply, send=K.ksend)
+        self.assertIn("still running", str(caught.exception))
+        dep = self.kube.object(self.DEP)
+        self.assertEqual(2, dep["spec"]["replicas"])
+        self.assertEqual("example/app", dep["spec"]["template"]["spec"]["containers"][0]["image"])
+        self.assertNotIn(flow.MARKER, dep["metadata"].get("annotations", {}))
+        self.assertEqual("failed", ops.stored()[0]["status"])
 
 
 if __name__ == "__main__":
