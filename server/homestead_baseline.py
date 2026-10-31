@@ -20,7 +20,6 @@ The node probe is installed by default, including on existing clusters and
 Harvester. It needs no Helm controller. An explicit installer opt-out or a
 probe removed after successful installation stays removed.
 """
-import json
 import os
 import threading
 import time
@@ -63,12 +62,7 @@ def _path():
 
 
 def _load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            state = json.load(handle)
-        return state if isinstance(state, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_path(), {})
 
 
 def _save(state):

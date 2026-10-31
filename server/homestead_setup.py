@@ -59,12 +59,13 @@ def _path():
 
 
 def load():
+    """The guide's memory. Raises SHARED.Unreadable, saying how to start over."""
     try:
-        with open(_path(), encoding="utf-8") as handle:
-            found = json.load(handle)
-        return found if isinstance(found, dict) else {}
-    except (OSError, ValueError):
-        return {}
+        return SHARED.read_json(_path(), {})
+    except SHARED.Unreadable as error:
+        why = getattr(error.__cause__, "strerror", None) or "it is not what Homestead saved there"
+        raise SHARED.Unreadable(f"Homestead could not read setup.json on its data volume ({why}); "
+                                "remove setup.json in the data volume to start the guide over") from error
 
 
 def stamp():

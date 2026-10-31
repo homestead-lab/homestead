@@ -254,7 +254,10 @@ def alert_facts(rep):
     """The volume is filling: name what is using it."""
     vol = (rep or {}).get("volume") or {}
     pct = vol.get("pct")
-    if pct is None or pct < PRESSURE_PCT:
+    if pct is None:
+        # The volume could not be measured: not "has room again".
+        return [{"unknown_key": "housekeeping:volume"}]
+    if pct < PRESSURE_PCT:
         return []
     biggest = ", ".join(f"{s['label']} ({s['size'] / 1024**2:.0f} MiB)" for s in (rep.get("stores") or [])[:3])
     return [{"key": "housekeeping:volume", "category": "outage" if pct >= CRIT_PCT else "degraded",

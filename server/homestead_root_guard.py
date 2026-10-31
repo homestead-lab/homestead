@@ -16,7 +16,6 @@ someone stopped by hand is theirs. Copies already on it stay; moving them is
 Move replicas off, which copies data and is a person's decision. What is
 stopped is an alert, and says so.
 """
-import json
 import os
 import time
 
@@ -40,12 +39,7 @@ def _path():
 
 
 def _load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            state = json.load(handle)
-        return state if isinstance(state, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_path(), {})
 
 
 def mount_of(path, mounts):
@@ -70,7 +64,12 @@ def tick():
     if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2") or not p.get("longhorn"):
         return []
     found = probes() or {}
-    state = _load()
+    try:
+        state = _load()
+    except SHARED.Unreadable as error:
+        # Nothing done from a record that cannot be read, nor saved over it.
+        print(f"root filesystem guard: {error}", flush=True)
+        return []
     stopped = state.setdefault("stopped", {})
     changes = []
     for lh in (kget(f"{LH}/nodes") or {}).get("items", []):

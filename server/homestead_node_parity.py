@@ -109,12 +109,7 @@ def _path():
 
 
 def _load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            state = json.load(handle)
-        return state if isinstance(state, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_path(), {})
 
 
 def _get(path):
@@ -538,7 +533,12 @@ def tick():
     p = platform() or {}
     if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
         return []
-    state = _load()
+    try:
+        state = _load()
+    except SHARED.Unreadable as error:
+        # Nothing done from a record that cannot be read, nor saved over it.
+        print(f"node parity: {error}", flush=True)
+        return []
     ready = _ready_nodes()
     out = []
     try:

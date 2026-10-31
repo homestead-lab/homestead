@@ -9,7 +9,6 @@ setting is off. Harvester hosts keep their native console. A host that fails
 is tried again after an hour, not every pass."""
 import base64
 import hashlib
-import json
 from pathlib import Path
 import re
 import shlex
@@ -43,11 +42,7 @@ def _path():
 
 
 def _read():
-    try:
-        state = json.loads(Path(_path()).read_text())
-        return state if isinstance(state, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_path(), {})
 
 
 def _expected():

@@ -21,7 +21,6 @@ manager, started detached on the host (systemd-run) so a helper pod ending
 cannot cut it off, and followed as a job. A kernel update then says the host
 needs a restart, which Host actions does with its drain review.
 """
-import json
 import os
 import re
 import threading
@@ -132,12 +131,7 @@ def _path():
 
 
 def _load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            state = json.load(handle)
-        return state if isinstance(state, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_path(), {})
 
 
 def _save(state):
@@ -407,7 +401,12 @@ def tick(now=None):
     if not applies():
         return []
     now = now or time.time()
-    state = _load()
+    try:
+        state = _load()
+    except SHARED.Unreadable as error:
+        # Nothing done from a record that cannot be read, nor saved over it.
+        print(f"host OS: {error}", flush=True)
+        return []
     due = []
     for item in (kget("/api/v1/nodes") or {}).get("items", []):
         name = item["metadata"]["name"]

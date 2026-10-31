@@ -102,17 +102,15 @@ def bind(data_dir="/data", kget=None, ksend=None, dns_name=None, guard=None, ns=
             _bound[key] = value
 
 
+FILE = "outage-actions.json"
+
+
 def _path():
-    return os.path.join(DATA_DIR, "outage-actions.json")
+    return os.path.join(DATA_DIR, FILE)
 
 
 def _load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            data = json.load(handle)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_path(), {})
 
 
 def webhook_url(value):
@@ -762,8 +760,16 @@ def report():
 def alert_facts(scheduled_report=None):
     """Out of restarts and still down, or a restart refused."""
     facts = []
-    with _lock:
-        data = _load().get("items") or {}
+    try:
+        with _lock:
+            data = _load().get("items") or {}
+    except SHARED.Unreadable as error:
+        # Its alerts kept as they were, and one saying no outage action runs.
+        return [{"unknown_prefix": "outage:"},
+                {"key": "outage-actions:unreadable", "category": "outage", "severity": "critical",
+                 "title": f"Outage actions are not running: {FILE} can't be read",
+                 "body": f"{error}. No app or VM is restarted, and no down or up webhook is sent, until it can be read.",
+                 "resolved": "Outage actions are running again", "href": "/settings?tab=about"}]
     for key, s in sorted(data.items()):
         kind, ref = key.split(":", 1)
         ns, name = ref.split("/", 1)

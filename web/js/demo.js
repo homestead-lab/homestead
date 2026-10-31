@@ -2073,7 +2073,7 @@ ssh_pwauth: true
     "/api/cluster/upgrades": { current: "1.8.2", error: "", offered: [{ version: "v1.9.0", released: "20260812", tags: [] }],
       stable: { tag: "v1.9.0", name: "Harvester v1.9.0", channel: "stable", published: "2026-08-12T09:00:00Z", url: "https://github.com/harvester/harvester/releases", offered: true },
       test: { tag: "v1.9.1-rc2", name: "Harvester v1.9.1-rc2", channel: "rc", published: "2026-09-18T09:00:00Z", url: "https://github.com/harvester/harvester/releases", offered: false },
-      active: null, history: [], recent: [],
+      active: null, history: [], recent: [], unread: "",
       last: { name: "hvst-upgrade-demo", version: "v1.8.2", previous: "v1.8.1", started: "2026-06-02T08:00:00Z", latest: true,
         state: "succeeded", message: "", progress: 100, nodes: [],
         steps: [["ImageReady", "Upgrade image"], ["RepoReady", "Package repository"], ["NodesPrepared", "Nodes prepared"],
