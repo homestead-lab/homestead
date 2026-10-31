@@ -36,6 +36,7 @@ import urllib.parse
 import homestead_api_v1 as API_V1
 import homestead_auth as AUTH
 import homestead_changes as CHANGES
+import homestead_env_secrets as ENVSEC
 import homestead_host_access as HOSTACCESS
 import homestead_routes as ROUTER
 
@@ -201,8 +202,14 @@ def _as(ctx):
 
 # --- reads beyond /api/v1
 def _settings(args, ctx):
-    return call("GET", "/api/workload", {"ns": _name(args.get("namespace"), "namespace"),
-                                         "name": _name(args.get("name"), "name")}, **_as(ctx))
+    answer = call("GET", "/api/workload", {"ns": _name(args.get("namespace"), "namespace"),
+                                           "name": _name(args.get("name"), "name")}, **_as(ctx))
+    # The route masks Secret-held values for a role that cannot save the
+    # form; a key must also be able to save them here (edit_container).
+    key = ctx.get("auth")
+    if key is not None and "containers:manage" not in (key.get("scopes") or ()) and isinstance(answer, dict):
+        ENVSEC.mask(answer)
+    return answer
 
 
 def _events(args, ctx):
@@ -537,7 +544,9 @@ TOOLS = [
     Tool("get_container_settings", "Container settings", "read", READ,
          "A container's settings as Edit shows them. To change it, send them back to preview_edit_container "
          "with ns and name kept and what you need changed: containers (each one's image, env, ports, volumes, "
-         "cpu, memory), replicas, placement, node, failover, priority (critical, normal or low, or group to follow its group's tier), monitoring.",
+         "cpu, memory), replicas, placement, node, failover, priority (critical, normal or low, or group to follow its group's tier), monitoring. "
+         "Values the app keeps in its Secret (secret_env) are masked unless this key can edit containers; "
+         "a masked value sent back unchanged keeps what the Secret holds.",
          {"namespace": NS, "name": NAME_ARG}, ["namespace", "name"], run=_settings),
     Tool("list_events", "Events", "read", READ, "Kubernetes' recent events for a container or VM, newest first.",
          {"namespace": NS, "name": NAME_ARG}, ["namespace", "name"], run=_events),

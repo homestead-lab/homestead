@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 
 import homestead_affinity as AFFINITY
+import homestead_auth as AUTH
 import homestead_autoupdate as AUTOUPDATE
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_copy_job as COPY_JOB
@@ -142,7 +143,21 @@ def search_logs(request):
 def edit_form(request):
     ns, name = request.query["ns"][0], request.query["name"][0]
     deployment = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
-    return workload_edit_payload(ns, name, deployment)
+    payload = workload_edit_payload(ns, name, deployment)
+    return payload if may_see_secret_values(request.role, deployment, ns) else ENVSEC.mask(payload)
+
+
+def may_see_secret_values(role, deployment, ns):
+    """Values the app keeps in its own Secret go only to someone who could
+    save the form (POST /api/edit) for this workload. Revealing a Secret
+    anywhere else is admin-only; everyone else gets the names, masked."""
+    if not AUTH.allows(role, ROUTES[("POST", "/api/edit")][0]):
+        return False
+    try:
+        HOSTACCESS.require_target_as(deployment, ns, role)
+    except PermissionError:
+        return False
+    return True
 
 
 def scale(request):
