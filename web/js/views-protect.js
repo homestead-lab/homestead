@@ -776,9 +776,9 @@ window.lhSnaps = async (vol, label) => {
       // Unread is not "no backups" (#620): the snapshots still show.
       api("/api/lh/backups?volume=" + encodeURIComponent(vol)).catch(e => ({ unread: e.message })),
       // Only for the weekly trim's leave-out action: unread, it is not offered.
-      api("/api/weekly-trim").catch(() => null),
+      api("/api/weekly-trim").catch(e => ({ unread: e.message })),
     ]);
-    const leftOut = trim ? (trim.left_out || []).some(row => row.volume === vol) : null;
+    const leftOut = trim.unread ? null : (trim.left_out || []).some(row => row.volume === vol);
     if (token !== SNAPSHOT_REFRESH || $("#mtitle").textContent !== "Snapshots · " + label || $("#modal").classList.contains("hidden")) return;
     // One lead, then the timeline; the volume's actions sit in the footer,
     // the main one on the right and the rest in its ⋯ (#501).
