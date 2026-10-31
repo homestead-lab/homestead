@@ -169,5 +169,40 @@ class ReaderTests(unittest.TestCase):
         self.assertEqual("systemctl output", out[1]["text"])
 
 
+class RemovedHelperTests(unittest.TestCase):
+    """A helper the leader removed a while after its job ended (homestead_helper_sweep)
+    is said to be removed, not missing or unreadable."""
+    LONG_AGO, LATELY = "2026-01-01T00:00:00Z", None
+
+    def setUp(self):
+        def gone(path, *args, **kwargs):
+            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+        self.addCleanup(JL.bind, JL.kget, JL.ktext)
+        JL.bind(gone, gone)
+
+    def item(self, ref, finished):
+        import time
+        return {"status": "succeeded", "ref": ref,
+                "finished_at": finished or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+    def test_a_power_helper_removed_after_its_bound_says_so(self):
+        ref = {"helper_pod": "homestead-reboot-node-a-1", "helper_uid": "uid", "helper_namespace": "lab"}
+        out = JL.node_power(self.item(ref, self.LONG_AGO))
+        self.assertIn("removed automatically 7 days after it finished; the steps above are the record", out[0]["note"])
+        self.assertNotIn("does not confirm shutdown", out[0]["note"])
+        recent = JL.node_power(self.item(ref, self.LATELY))
+        self.assertIn("does not confirm shutdown", recent[0]["note"], "a helper missing early still warns")
+
+    def test_a_copy_job_removed_after_its_bound_says_so(self):
+        ref = {"namespace": "apps", "job": "app-restructure-a1b2c3", "job_uid": "uid"}
+        out = JL.copy_job(self.item(ref, self.LONG_AGO))
+        self.assertIn("removed automatically 7 days after it finished; the steps above are the record", out[0]["note"])
+        with self.assertRaises(urllib.error.HTTPError):
+            JL.copy_job(self.item(ref, self.LATELY))
+        running = dict(self.item(ref, self.LONG_AGO), status="running")
+        with self.assertRaises(urllib.error.HTTPError):
+            JL.copy_job(running)
+
+
 if __name__ == "__main__":
     unittest.main()

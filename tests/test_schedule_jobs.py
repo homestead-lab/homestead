@@ -219,6 +219,25 @@ class ScheduleJobTests(unittest.TestCase):
         self.assertEqual(("POST", "/apis/batch/v1/namespaces/lab/jobs"), (method, path))
         self.assertEqual("backup", body["spec"]["template"]["spec"]["serviceAccountName"])
 
+    def test_a_run_now_job_goes_a_day_after_it_ends_and_with_its_cronjob(self):
+        import homestead_scheduled_jobs
+        self.existing["backup"] = self.backup_job(labels={})
+        homestead_scheduled_jobs.run_job_now("backup")
+        body = self.sent[-1][2]
+        self.assertEqual(86400, body["spec"]["ttlSecondsAfterFinished"])
+        self.assertEqual([{"apiVersion": "batch/v1", "kind": "CronJob", "name": "backup", "uid": "uid-backup",
+                           "blockOwnerDeletion": False}], body["metadata"]["ownerReferences"],
+                         "not its controller: concurrencyPolicy and the history limits stay the CronJob's own runs'")
+        self.assertNotIn("ttlSecondsAfterFinished", self.existing["backup"]["spec"]["jobTemplate"]["spec"],
+                         "the CronJob itself is not changed")
+
+    def test_run_now_keeps_the_cronjobs_own_ttl(self):
+        import homestead_scheduled_jobs
+        self.existing["backup"] = self.backup_job(labels={})
+        self.existing["backup"]["spec"]["jobTemplate"]["spec"]["ttlSecondsAfterFinished"] = 600
+        homestead_scheduled_jobs.run_job_now("backup")
+        self.assertEqual(600, self.sent[-1][2]["spec"]["ttlSecondsAfterFinished"])
+
     def test_the_list_holds_cronjobs_from_every_namespace(self):
         self.existing["nightly"] = self.cronjob("nightly")
         backup = self.backup_job(labels={"kustomize.toolkit.fluxcd.io/name": "apps"})
