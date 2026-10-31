@@ -349,28 +349,30 @@ class ConnectionReuseTests(unittest.TestCase):
         import homestead_workloads as WORKLOADS
         from types import SimpleNamespace
         self.api.payload = b"2026-01-01T00:00:00Z a line\n"
-        request = SimpleNamespace(query={"ns": ["lab"], "pod": ["web-1"], "container": ["web"], "tail": ["50"]})
+        request = SimpleNamespace(query={"ns": ["lab"], "pod": ["web-1"], "container": ["web"], "tail": ["50"]},
+                                  role="admin")
         for _ in range(3):
             reply = WORKLOADS.logs(request)
             self.assertEqual(200, reply.code)
         self.assertIn("a line", reply.body if isinstance(reply.body, str) else reply.body.decode())
-        self.assertEqual(1, self.api.connections)
-        self.assertEqual("/api/v1/namespaces/lab/pods/web-1/log?tailLines=50&timestamps=true&container=web",
-                         self.api.requests[0][1])
+        self.assertEqual(1, self.api.connections)    # the pod reads and the log reads alike
+        self.assertEqual(f"/api/v1/namespaces/lab/pods/web-1/log?tailLines=50&timestamps=true"
+                         f"&limitBytes={WORKLOADS.LOG_BYTES}&container=web",
+                         [r[1] for r in self.api.requests if "/log?" in r[1]][0])
 
     def test_the_logs_view_refuses_a_name_that_would_change_the_request(self):
         import homestead_workloads as WORKLOADS
         from types import SimpleNamespace
         for ns, pod in (("kube-system/secrets?x=", "web-1"), ("lab", "web-1/../../secrets"),
                         ("lab", "web-1?limitBytes=1"), ("lab", "Web 1"), ("", "web-1"), ("lab/x", "")):
-            reply = WORKLOADS.logs(SimpleNamespace(query={"ns": [ns], "pod": [pod], "container": ["web"]}))
+            reply = WORKLOADS.logs(SimpleNamespace(query={"ns": [ns], "pod": [pod], "container": ["web"]}, role="admin"))
             self.assertEqual(400, reply.code, (ns, pod))
         self.assertEqual([], self.api.requests)
 
     def test_the_logs_view_answers_a_read_out_of_time_as_unavailable(self):
         import homestead_workloads as WORKLOADS
         from types import SimpleNamespace
-        request = SimpleNamespace(query={"ns": ["lab"], "pod": ["web-1"], "container": ["web"]})
+        request = SimpleNamespace(query={"ns": ["lab"], "pod": ["web-1"], "container": ["web"]}, role="admin")
         for error in (TimeoutError("timed out"), DEADLINE.Spent(DEADLINE.MESSAGE)):
             def late(*args, **kwargs):
                 raise error
