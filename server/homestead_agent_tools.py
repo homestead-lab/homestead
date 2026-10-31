@@ -508,6 +508,76 @@ def _route(method, path):
     return execute
 
 
+FREEZE_FIELDS = ("name", "claim", "mode", "freezes", "why", "when_on", "attached", "engine", "access", "changed")
+
+
+def _filesystem_freeze(args, ctx):
+    """The freeze setting for the cluster and each volume's choice, as Data
+    protection shows them (#930); volume names one, by Longhorn name or claim."""
+    answer = call("GET", "/api/longhorn/fs-freeze", **_as(ctx))
+    if not isinstance(answer, dict) or not answer.get("supported"):
+        return answer
+    wanted = args.get("volume")
+    rows = [{k: v.get(k) for k in FREEZE_FIELDS if v.get(k) not in (None, "")} for v in answer.get("volumes") or []
+            if not wanted or wanted in (v.get("name"), v.get("claim"))]
+    return {**{k: answer.get(k) for k in ("supported", "version", "enabled", "unknown_value", "from_chart", "changed",
+                                          "old_kernels", "counts") if k in answer}, "volumes": rows}
+
+
+def _plan_filesystem_freeze(args, ctx):
+    """Turn the freeze on or off for the cluster, or set one volume's choice.
+    What the person approves carries the kernel warning Data protection's
+    review shows, for turning it on."""
+    volume, mode, enabled = args.get("volume"), args.get("mode"), args.get("enabled")
+    if volume and enabled is not None:
+        raise ToolError("give enabled for the cluster setting, or volume and mode for one volume, not both")
+    if ctx.get("fresh"):    # approving: read the cluster now, not the page's 30-second answer
+        ROUTER.forget("fsfreeze")
+    status = call("GET", "/api/longhorn/fs-freeze", **_as(ctx))
+    if not status.get("supported"):
+        raise ToolError(status.get("why") or "this Longhorn cannot freeze filesystems for snapshots")
+    old = [f"{k['host']} ({k['kernel']})" for k in status.get("old_kernels") or []]
+    warning = ("Kernel 5.17 or older on " + ", ".join(old) + ": if a volume fails mid-freeze, its filesystem can stay stuck "
+               "until that host restarts.") if old else ""
+    if volume:
+        if not isinstance(volume, str):
+            raise ToolError("volume must be a Longhorn volume name or its claim")
+        if mode not in ("ignored", "enabled", "disabled"):
+            raise ToolError("mode must be ignored (follow the cluster), enabled (always freeze) or disabled (never freeze)")
+        row = next((v for v in status.get("volumes") or [] if volume in (v.get("name"), v.get("claim"))), None)
+        if row is None:
+            raise ToolError(f"there is no Longhorn volume {volume}; list_volumes names them")
+        if mode == "enabled" and row.get("engine") == "v2":
+            raise ToolError(f"{volume} is a V2 volume: Longhorn never freezes these")
+        if row.get("mode") == mode:
+            raise ToolError(f"{volume} is already set to {mode}")
+        said = {"ignored": "follow the cluster setting", "enabled": "always freeze", "disabled": "never freeze"}[mode]
+        summary = {"action": f"Set {row.get('claim') or row['name']} to {said} for snapshots", "target": row["name"]}
+        if mode == "enabled" and warning:
+            summary["warning"] = warning
+        return summary, {"volume": row["name"], "mode": mode}
+    if enabled is None:
+        raise ToolError("give enabled (true or false) for the cluster setting, or volume and mode for one volume")
+    if not isinstance(enabled, bool):
+        raise ToolError("enabled must be true or false")
+    if mode is not None:
+        raise ToolError("mode is for one volume: give volume too, or enabled alone for the cluster")
+    if bool(status.get("enabled")) == enabled and not status.get("unknown_value"):
+        raise ToolError(f"the cluster setting is already {'on' if enabled else 'off'}")
+    summary = {"action": "Turn on freezing filesystems for snapshots" if enabled else "Turn off freezing filesystems for snapshots",
+               "target": "every volume that follows the cluster setting"}
+    if enabled and warning:
+        summary["warning"] = warning
+    if status.get("from_chart"):
+        summary["note"] = "Longhorn's chart sets this too: applying the chart again puts its value back."
+    return summary, {"enabled": enabled}
+
+
+def _set_filesystem_freeze(body, ctx):
+    path = "/api/longhorn/fs-freeze/volume" if "volume" in body else "/api/longhorn/fs-freeze"
+    return call("POST", path, body=body, **_as(ctx))
+
+
 def _rebalance_preview(args, ctx):
     """Balance's own plan, or - with picks - the review of moves chosen (#366)."""
     if args.get("picks"):
@@ -900,6 +970,17 @@ TOOLS = [
     Tool("rebuild_volume", "Rebuild a volume's copies", "storage:manage", CHANGE,
          "Rebuilds missing copies of a detached volume now.", {"volume": S}, ["volume"],
          run=_post("/api/longhorn/rebuild", {"volume": "volume"})),
+    Tool("get_filesystem_freeze", "Filesystem freeze for snapshots", "read", READ,
+         "Whether Longhorn freezes a volume's filesystem for each snapshot: the cluster setting, hosts with an old kernel, "
+         "and each volume's choice and what a snapshot of it does now (freezes, freezes later - once attached - syncs "
+         "instead, or not frozen). volume: one, by Longhorn name or claim.",
+         {"volume": S}, run=_filesystem_freeze),
+    Tool("set_filesystem_freeze", "Set the filesystem freeze", "storage:manage", DESTRUCTIVE,
+         "Asks to turn the freeze for snapshots on or off for the cluster (enabled), or to set one volume (volume and mode: "
+         "ignored follows the cluster, enabled always freezes, disabled never does). Writes wait about a second while a "
+         "volume is frozen. A person must approve it in Homestead; the request names hosts with a kernel 5.17 or older.",
+         {"enabled": B, "volume": S, "mode": {"type": "string", "enum": ["ignored", "enabled", "disabled"]}},
+         plan=_plan_filesystem_freeze, execute=_set_filesystem_freeze, role="admin"),
     Tool("preview_storage_rebalance", "Preview balancing storage", "read", READ,
          "Which volume copies would move to even out the disks; exclude: volumes to leave alone; "
          "follow: container moves to take a copy of their volumes along, as app:host,app:host.",

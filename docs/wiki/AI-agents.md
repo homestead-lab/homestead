@@ -215,6 +215,7 @@ Tools come in three classes:
 | `list_volumes` | Every volume in a line each: size, use, health, copies and what uses it | `read` | read |
 | `list_snapshots` | A volume's snapshots | `read` | read |
 | `list_backups` | Backups, of one volume or all | `read` | read |
+| `get_filesystem_freeze` | Whether Longhorn freezes filesystems for snapshots: the cluster setting, old-kernel hosts and each volume's choice | `read` | read |
 | `create_volume` | Creates an empty volume | `storage:manage` | change |
 | `edit_volume` | Grows a volume, or changes how many copies Longhorn keeps | `storage:manage` | change |
 | `snapshot_volume` | Takes a snapshot of a volume now | `storage:manage` | change |
@@ -232,6 +233,7 @@ Tools come in three classes:
 | `assign_backups` | Adds volumes to (or, with enabled false, takes them out of) a group or a job | `storage:manage` | change |
 | `delete_backup_group` | Asks to delete a backup group; its volumes stop being backed up by its jobs | `storage:manage` | destructive |
 | `delete_backup_job` | Asks to delete a recurring backup or snapshot job | `storage:manage` | destructive |
+| `set_filesystem_freeze` | Asks to turn the freeze for snapshots on or off, for the cluster or one volume | `storage:manage` | destructive |
 | `trim_volume` | Gives a volume's freed space back to its disks | `storage:manage` | change |
 | `rebuild_volume` | Rebuilds missing copies of a detached volume now | `storage:manage` | change |
 | `preview_storage_rebalance` | Which volume copies would move to even out the disks; exclude: volumes to leave alone | `read` | read |
