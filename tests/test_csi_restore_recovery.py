@@ -168,5 +168,105 @@ class CleanupControllerRaceTests(unittest.TestCase):
         self.assertEqual("replacement", self.kube.object(self.content)["metadata"]["uid"])
 
 
+class StoppedRestoreTests(unittest.TestCase):
+    """A restore's VolumeSnapshot and VolumeSnapshotContent (Retain) were
+    removed only once its claim bound: a restore whose claim was never made,
+    or that was cancelled and its claim deleted, kept both for good."""
+    def setUp(self):
+        self.enterContext(patch.object(OPS, "DATA_DIR", self.enterContext(tempfile.TemporaryDirectory())))
+        self.kube = self.enterContext(Kube(groups=("snapshot.storage.k8s.io",)))
+        self.kube.react("GET", CSI.API, lambda *_: {"kind": "APIResourceList", "groupVersion": "snapshot.storage.k8s.io/v1"})
+        self.enterContext(patch.multiple(CSI, kget=KUBE.kget, ksend=KUBE.ksend))
+        self.name = CSI.import_backup("lab", "example-data", "backup-a", "disk-a", "s3://example/backup-a", "Filesystem")
+        self.snapshot = CSI.API + "/namespaces/lab/volumesnapshots/" + self.name
+        self.content = CSI.API + "/volumesnapshotcontents/" + self.name
+        self.claim = "/api/v1/namespaces/lab/persistentvolumeclaims/example-data"
+
+    def add_claim(self, snapshot=None, **meta):
+        self.kube.add({"apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                       "metadata": {"name": "example-data", "namespace": "lab",
+                                    "annotations": {"homestead.io/restored-from-backup": "backup-a"}, **meta},
+                       "spec": {"dataSource": {"name": snapshot or self.name, "kind": "VolumeSnapshot",
+                                               "apiGroup": "snapshot.storage.k8s.io"}},
+                       "status": {"phase": "Pending"}})
+
+    def gone(self):
+        return self.kube.object(self.snapshot) is None and self.kube.object(self.content) is None
+
+    def test_a_restore_whose_claim_was_never_made_is_tidied(self):
+        self.assertEqual([self.name], CSI.discard("lab", "example-data", self.name))
+        self.assertTrue(self.gone())
+
+    def test_a_live_claim_restoring_from_it_keeps_it(self):
+        self.add_claim()
+        self.assertEqual([], CSI.discard("lab", "example-data", self.name))
+        self.assertEqual([], CSI.discard("lab", "example-data"))
+        self.assertFalse(self.gone())
+
+    def test_a_claim_restoring_from_another_snapshot_or_being_deleted_does_not(self):
+        self.add_claim(snapshot="homestead-restore-other")
+        self.assertEqual([self.name], CSI.discard("lab", "example-data"))
+        self.assertTrue(self.gone())
+
+    def test_other_claims_and_moves_are_left_alone(self):
+        self.assertEqual([], CSI.discard("lab", "other-data"))
+        self.assertEqual([], CSI.discard("other", "example-data"))
+        moved = CSI.import_backup("lab", "example-data", "backup-a", "disk-a", "s3://example/backup-a", "Filesystem",
+                                  "0123456789ab")
+        self.assertEqual([self.name], CSI.discard("lab", "example-data"))
+        self.assertIsNotNone(self.kube.object(CSI.API + "/volumesnapshotcontents/" + moved))
+
+    def test_cancelling_a_restore_removes_its_snapshot_with_its_claim(self):
+        import homestead_cancel as CANCEL
+        self.add_claim()
+        self.enterContext(patch.multiple(CANCEL, kget=KUBE.kget, ksend=KUBE.ksend, tidy_restore=None))
+        item = {"ref": {"namespace": "lab", "name": "example-data", "backup": "backup-a", "snapshot": self.name}}
+        self.assertIn("being deleted", CANCEL.restore_cancel(item, {}))
+        self.assertIsNone(self.kube.object(self.claim))
+        self.assertTrue(self.gone())
+
+    def test_cancelling_one_restore_keeps_another_restore_of_the_same_claim_name(self):
+        """Restore B made its pair and has not made its claim yet: cancelling
+        restore A removes only A's own pair."""
+        import homestead_cancel as CANCEL
+        other = CSI.import_backup("lab", "example-data", "backup-b", "disk-a", "s3://example/backup-b", "Filesystem",
+                                  "attempt-b")
+        self.add_claim()
+        self.enterContext(patch.multiple(CANCEL, kget=KUBE.kget, ksend=KUBE.ksend, tidy_restore=None))
+        item = {"ref": {"namespace": "lab", "name": "example-data", "backup": "backup-a", "snapshot": self.name}}
+        CANCEL.restore_cancel(item, {})
+        self.assertTrue(self.gone())
+        self.assertIsNotNone(self.kube.object(CSI.API + "/volumesnapshotcontents/" + other))
+        self.assertIsNotNone(self.kube.object(CSI.API + "/namespaces/lab/volumesnapshots/" + other))
+
+    def test_a_job_keeps_the_snapshot_its_restore_made(self):
+        import homestead_longhorn as LONGHORN
+        import homestead_longhorn_restore as RESTORE
+        request = {"backup": "backup-a", "namespace": "lab", "name": "example-data"}
+        result = {**request, "created": True, "snapshot": self.name, "source_size_bytes": 1, "message": "Restore started"}
+        with patch.object(RESTORE, "restore_plan", return_value={}), \
+                patch.object(RESTORE, "restore_backup", return_value=dict(result)), \
+                patch.object(LONGHORN.OPS, "start", side_effect=lambda *args: args[4]) as start:
+            LONGHORN.restore_reviewed(dict(request))
+        self.assertEqual(self.name, start.call_args.args[4]["snapshot"])
+        item = {"status": "running", "ref": {"namespace": "lab", "name": "example-data",
+                                             "restore_config": {**request, "restore_id": "x"}, "restore_started": False}}
+        # Where the job looks the restore up: its own import of the defining
+        # module once it has one, else homestead_longhorn's re-export.
+        lookup = getattr(server.STORAGE_ROUTES, "RESTORE", None) or server.LH
+        with patch.object(lookup, "restore_backup", return_value=dict(result)), \
+                patch.object(lookup, "restore_problem", return_value=""):
+            server.STORAGE_ROUTES._restore_then_tidy(item, lambda work: ("running", 30, "Restoring data"))
+        self.assertEqual(self.name, item["ref"]["snapshot"])
+
+    def test_cancel_keeps_a_claim_it_did_not_make_and_its_snapshot(self):
+        import homestead_cancel as CANCEL
+        self.add_claim(annotations={})
+        self.enterContext(patch.multiple(CANCEL, kget=KUBE.kget, ksend=KUBE.ksend, tidy_restore=None))
+        item = {"ref": {"namespace": "lab", "name": "example-data", "backup": "backup-a"}}
+        self.assertIn("kept", CANCEL.restore_cancel(item, {}))
+        self.assertFalse(self.gone())
+
+
 if __name__ == "__main__":
     unittest.main()

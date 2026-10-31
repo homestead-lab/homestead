@@ -414,7 +414,10 @@ class Writes(WithCluster):
     def test_turning_it_on_keeps_the_per_engine_format_and_is_marked_for_on(self):
         cluster = self.use(Cluster(value='{"v1":"false"}'))
         result = F.save(True)
-        self.assertEqual(cluster.sent, [("PATCH", SETTING_PATH, {"value": '{"v1":"true"}'}, F.MERGE)])
+        self.assertEqual([(m, p, b["value"], c) for m, p, b, c in cluster.sent], [("PATCH", SETTING_PATH, '{"v1":"true"}', F.MERGE)])
+        # Besides the value, at most the resourceVersion it read (ConcurrentWrites).
+        self.assertLessEqual(set(cluster.sent[0][2]) - {"value"}, {"metadata"})
+        self.assertLessEqual(set(cluster.sent[0][2].get("metadata") or {}), {"resourceVersion"})
         self.assertEqual(cluster.marking, ["on"])
         self.assertIsNone(getattr(CH.REQUEST, "object_value", None))
         self.assertTrue(result["ok"])
@@ -510,6 +513,39 @@ class OnlyHereIsItChanged(unittest.TestCase):
 
 
 SETTINGS_NAME = "freeze-filesystem-for-snapshot"
+
+
+class ConcurrentWrites(unittest.TestCase):
+    """The setting holds every data engine's value in one string: a write
+    rebuilt from a stale read would put the other engine's half back. It
+    names the resourceVersion it read, and reads once more on a conflict."""
+
+    def setting(self, value):
+        return {"apiVersion": "longhorn.io/v1beta2", "kind": "Setting",
+                "metadata": {"name": F.SETTING, "namespace": "longhorn-system"}, "value": value}
+
+    def test_a_change_to_the_other_engine_made_meanwhile_is_kept(self):
+        with Kube(self.setting('{"v1":"false","v2":"false"}')) as kube:
+            changed = []
+
+            def other_writer(method, path, body):
+                if not changed:    # between Homestead's read and its write
+                    changed.append(True)
+                    kube.add(self.setting('{"v1":"false","v2":"true"}'))
+            kube.react("PATCH", SETTING_PATH, other_writer)
+            self.assertTrue(F.save(True)["enabled"])
+            self.assertEqual(json.loads(kube.object(SETTING_PATH)["value"]), {"v1": "true", "v2": "true"})
+            patches = [w for w in kube.writes if w[0] == "PATCH"]
+            self.assertEqual(len(patches), 2)
+            self.assertTrue(all(w[2]["metadata"]["resourceVersion"] for w in patches))
+
+    def test_a_second_conflict_is_an_error_and_says_to_try_again(self):
+        with Kube(self.setting('{"v1":"false"}')) as kube:
+            kube.fail(SETTING_PATH, 409, times=2, method="PATCH")
+            with self.assertRaises(RuntimeError) as said:
+                F.save(True)
+            self.assertIn("try again", str(said.exception))
+            self.assertEqual(kube.object(SETTING_PATH)["value"], '{"v1":"false"}')
 
 
 if __name__ == "__main__":

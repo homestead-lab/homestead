@@ -200,7 +200,8 @@ def restore_reviewed(b):
             return homestead_routes.Reply(409, {"error": plan["conflict"]["message"], "plan": plan})
         b["restore_id"] = secrets.token_hex(12)
         b["annotations"] = {"homestead.io/restore-id": b["restore_id"]}
-        result = RESTORE.restore_backup(b)
+        # No job follows a failed first create, so its snapshot is removed again.
+        result = RESTORE.restore_backup(b, discard_on_failure=True)
         b["source_size_bytes"] = result["source_size_bytes"]
         result["operation"] = OPS.start(
             "volume-restore", f"Restore {result['name']}",
@@ -209,7 +210,8 @@ def restore_reviewed(b):
             "/volumes?" + urllib.parse.urlencode({"find": result["name"]}),
             {"namespace": result["namespace"], "name": result["name"],
              "backup": result["backup"], "restore_config": b,
-             "restore_started": result["created"]}, result["message"])
+             "restore_started": result["created"],
+             **({"snapshot": result["snapshot"]} if result.get("snapshot") else {})}, result["message"])
     return result
 
 

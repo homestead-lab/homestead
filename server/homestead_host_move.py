@@ -78,7 +78,7 @@ def start(body, proposed, capacity, apply, settled=None):
     pulls = []
     for image in need:
         try:
-            pulls.append(IMAGES.prepull(image, [node])["daemonset"])
+            pulls.append(IMAGES.prepull(image, [node], own=True)["daemonset"])
         except Exception as error:      # a pull that cannot start: move now, as before
             ref["pull_note"] = f"its image could not be pulled onto {node} first: {str(error)[:160]}"
             pulls = []

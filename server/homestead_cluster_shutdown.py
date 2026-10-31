@@ -361,19 +361,30 @@ class Shutdown:
                         if a.get("status", {}).get("attached") is not False)
         return attached
 
-    def restore(self, plan, run):
+    def restore(self, plan, run, attempts=3):
         for n in plan["nodes"]:
-            obj = self.get("/api/v1/nodes/" + n["name"])
-            current = node_row(obj)
-            if current["uid"] != n["uid"]:
-                raise ValueError("Host identity changed; inspect scheduling on " + n["name"])
-            if obj["metadata"].get("annotations", {}).get(ANNOTATION) != run:
-                continue
-            changes = [{"op": "test", "path": "/metadata/resourceVersion", "value": obj["metadata"]["resourceVersion"]},
-                       {"op": "remove", "path": "/metadata/annotations/homestead.io~1cluster-shutdown"}]
-            if not n["cordoned"]:
-                changes.append({"op": "add", "path": "/spec/unschedulable", "value": False})
-            self.send("PATCH", "/api/v1/nodes/" + n["name"], changes, ctype="application/json-patch+json")
+            for attempt in range(attempts):
+                obj = self.get("/api/v1/nodes/" + n["name"])
+                current = node_row(obj)
+                if current["uid"] != n["uid"]:
+                    raise ValueError("Host identity changed; inspect scheduling on " + n["name"])
+                if obj["metadata"].get("annotations", {}).get(ANNOTATION) != run:
+                    break
+                changes = [{"op": "test", "path": "/metadata/resourceVersion", "value": obj["metadata"]["resourceVersion"]},
+                           {"op": "remove", "path": "/metadata/annotations/homestead.io~1cluster-shutdown"}]
+                if not n["cordoned"]:
+                    changes.append({"op": "add", "path": "/spec/unschedulable", "value": False})
+                try:
+                    self.send("PATCH", "/api/v1/nodes/" + n["name"], changes, ctype="application/json-patch+json")
+                    break
+                except urllib.error.HTTPError as error:
+                    # A node moves every minute or so (kubelet status, leases):
+                    # one that moved since the read fails the resourceVersion
+                    # test (422; 409 on a conflict). Read it again: the uid and
+                    # run checks above run again on what is there now.
+                    if error.code not in (409, 422) or attempt == attempts - 1:
+                        raise
+                    error.close()
 
     def recover(self, run):
         journal = self.read()
