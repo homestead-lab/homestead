@@ -414,7 +414,17 @@ step is offered once that one is done.
 - **k3s and RKE2** are upgraded by Rancher's system-upgrade-controller.
   Homestead installs it the first time. The servers are cordoned and upgraded
   one at a time, then the agents. The job tray shows how many nodes are done.
-  Cancelling stops any further node being upgraded.
+  Cancelling stops any further node being upgraded. However the upgrade ends -
+  done, cancelled, failed, or with no further node done in 45 minutes - its
+  Plans are removed, so nothing carries it on unseen, and each host its own
+  upgrade jobs cordoned is uncordoned. Homestead marks a host
+  (`homestead.io/upgrade-cordon`) only when its cordon was made while that
+  host's upgrade job ran, and uncordons only a host that still carries the
+  mark, is Ready, and has no other host job on it. A host cordoned before
+  the upgrade, or by anyone else, stays as it is; **Cordon** or **Uncordon**
+  on the Hosts page makes the cordon yours and clears the mark. A host not yet safe is waited
+  for up to 15 minutes; then the job ends, naming each host left cordoned and
+  why. Inspect it and use **Uncordon** once it is safe.
 - **Longhorn, KubeVirt and CDI** that Homestead installed (Settings > Hardware and storage >
   Add-ons) move on through their HelmChart. Installed another way, they are
   shown with their notes: upgrade them the way they were installed.

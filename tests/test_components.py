@@ -1,4 +1,5 @@
-import sys, time, unittest
+import json, sys, time, unittest
+from unittest import mock
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -70,12 +71,21 @@ class VersionTests(unittest.TestCase):
         self.assertEqual((1, 31, 4, 2), C.parse("v1.31.4+rke2r2"))
 
 
+def json_copy(value):
+    return json.loads(json.dumps(value))
+
+
 class Cluster:
     """The cluster on the shared fake API (tests/fakes/kube.py). The upgrade
     controller's API is there only after upgrade_api()."""
     def __init__(self, test, platform, *objects):
         self.platform, self.helm_calls = platform, []
         self.kube = test.enterContext(Kube(*objects))
+        # The job store: no other job, and saving the job before a write is recorded.
+        self.jobs, self.saved = [], []
+        test.enterContext(mock.patch.object(C.OPS, "stored", lambda: list(self.jobs)))
+        test.enterContext(mock.patch.object(C, "_save", lambda item: self.saved.append(
+            (json_copy(item["ref"]), len(self.kube.writes)))))
         C._releases.clear()
         test.addCleanup(C.bind, *(getattr(C, name, None) for name in (
             "kget", "ksend", "platform", "helm_upgrade", "addons", "fetch_json", "ktext")))
@@ -111,20 +121,47 @@ class Addons:
     cdi_cr = staticmethod(lambda: "cdi")
 
 
-def node(name, version="v1.31.12+k3s1", labels=None, unschedulable=False):
+def stamp(ago=0):
+    """An API timestamp this many seconds ago."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - ago))
+
+
+def cordon(cordoned_ago=300):
+    """A node's spec when cordoned: Kubernetes adds the cordon's taint, with when."""
+    return {"unschedulable": True, "taints": [
+        {"key": "node.kubernetes.io/unschedulable", "effect": "NoSchedule", "timeAdded": stamp(cordoned_ago)}]}
+
+
+def node(name, version="v1.31.12+k3s1", labels=None, unschedulable=False, ready=True, annotations=None,
+         cordoned_ago=300):
     obj = {"apiVersion": "v1", "kind": "Node", "metadata": {"name": name},
-           "status": {"nodeInfo": {"kubeletVersion": version}}}
+           "status": {"nodeInfo": {"kubeletVersion": version},
+                      "conditions": [{"type": "Ready", "status": "True" if ready else "Unknown"}]}}
+    if annotations:
+        obj["metadata"]["annotations"] = annotations
     if labels:
         obj["metadata"]["labels"] = labels
     if unschedulable:
-        obj["spec"] = {"unschedulable": True}
+        obj["spec"] = cordon(cordoned_ago)
     return obj
 
 
 def job(name, plan, node_name=None, **status):
     labels = {"upgrade.cattle.io/plan": plan, **({"upgrade.cattle.io/node": node_name} if node_name else {})}
+    # The controller makes each job owned by its Plan: removing the Plan removes it.
+    owner = [{"apiVersion": "upgrade.cattle.io/v1", "kind": "Plan", "name": plan, "uid": f"uid-plan-{plan}"}]
+    # Started before the node's cordon (300 s ago); a finished one ended after it.
+    status = {"startTime": stamp(600), **({"completionTime": stamp(60)} if status.get("succeeded") or status.get("failed") else {}),
+              **status}
     return {"apiVersion": "batch/v1", "kind": "Job",
-            "metadata": {"namespace": C.SUC_NS, "name": name, "labels": labels}, "status": status}
+            "metadata": {"namespace": C.SUC_NS, "name": name, "labels": labels, "ownerReferences": owner},
+            "status": status}
+
+
+def plan(name):
+    return {"apiVersion": "upgrade.cattle.io/v1", "kind": "Plan",
+            "metadata": {"namespace": C.SUC_NS, "name": name, "uid": f"uid-plan-{name}",
+                         "labels": {"homestead.io/managed": "true"}}}
 
 
 def helmchart(name, **meta):
@@ -198,17 +235,17 @@ class K3sTests(unittest.TestCase):
         self.cluster([node("node-1", "v1.32.8+k3s1", labels, True), node("node-2", "v1.32.8+k3s1", labels, True)])
         running = job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1)
         self.c.kube.add(running)
-        item = {"ref": {"component": "cluster", "to": "v1.32.8+k3s1", "phase": "nodes", "held": ["node-2"]}}
+        item = {"id": "op-1", "ref": {"component": "cluster", "to": "v1.32.8+k3s1", "phase": "nodes", "held": ["node-2"]}}
         status, _, message = C.status(item)
         self.assertEqual("running", status)
         self.assertIn("job on node-1", message)
         self.assertFalse(self.c.sent)
-        running["status"] = {"succeeded": 1}
+        running["status"] = {"startTime": running["status"]["startTime"], "succeeded": 1, "completionTime": stamp(0)}
         self.c.kube.add(running)
         status, _, message = C.status(item)
         self.assertEqual("succeeded", status)
-        patched = [p for m, p, _ in self.c.sent if m == "PATCH"]
-        self.assertEqual(["/api/v1/nodes/node-1"], patched, "node-2 was cordoned before the upgrade and stays so")
+        patched = {p for m, p, _ in self.c.sent if m == "PATCH"}
+        self.assertEqual({"/api/v1/nodes/node-1"}, patched, "node-2 was cordoned before the upgrade and stays so")
         self.assertIn("uncordoned node-1", message)
 
     def test_a_job_that_never_ends_does_not_hold_the_upgrade_forever(self):
@@ -271,6 +308,286 @@ class K3sTests(unittest.TestCase):
         self.assertFalse(self.c.sent, "ownership of both Plans must be checked before writing either")
         C.remove_plans()
         self.assertFalse(self.c.sent)
+
+
+class ClusterUpgradeEndTests(unittest.TestCase):
+    """A cluster upgrade that is cancelled, fails or runs out of time removes
+    its Plans and uncordons the hosts its own upgrade jobs cordoned - only
+    those, and only once a fresh read shows it is safe."""
+    TARGET = "v1.32.8+k3s1"
+    MARK = "homestead.io/upgrade-cordon"
+
+    def cluster(self, nodes, *objects, jobs=()):
+        self.c = Cluster(self, {"distribution": "k3s", "longhorn": True, "version": "1.31.12+k3s1"},
+                         *nodes, LH_VERSION_SETTING, helmchart("longhorn"), helmchart(C.SUC_CHART),
+                         plan("homestead-server"), plan("homestead-agent"), *objects)
+        self.c.upgrade_api()
+        self.c.jobs[:] = jobs  # the other Homestead jobs, as stored
+        self.saved = self.c.saved
+        return self.c
+
+    def item(self, **ref):
+        return {"id": "op-7", "ref": {"component": "cluster", "to": self.TARGET, "phase": "nodes",
+                                      "started": time.time(), **ref}}
+
+    def node(self, name):
+        return self.c.kube.object(f"/api/v1/nodes/{name}")
+
+    def cordoned(self, name):
+        return bool((self.node(name).get("spec") or {}).get("unschedulable"))
+
+    def plans_left(self):
+        return [name for name in C.PLAN_NAMES if self.c.kube.object(f"{C.PLANS}/{name}")]
+
+    def test_cancel_uncordons_the_host_its_upgrade_cordoned_and_no_other(self):
+        self.cluster([node("node-1", unschedulable=True), node("node-2", unschedulable=True),
+                      node("node-3", unschedulable=True)],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1))
+        # node-2 was cordoned before the upgrade; node-3 by someone, with no upgrade job there.
+        item = self.item(held=["node-2"])
+        message = C.cancel_run(item, {})
+        self.assertEqual([], self.plans_left())
+        self.assertFalse(self.cordoned("node-1"))
+        self.assertNotIn(self.MARK, self.node("node-1")["metadata"].get("annotations") or {})
+        self.assertTrue(self.cordoned("node-2"))
+        self.assertTrue(self.cordoned("node-3"))
+        self.assertIn("uncordoned node-1", message)
+
+    def test_the_cordon_is_marked_and_recorded_before_any_node_write(self):
+        self.cluster([node("node-1", unschedulable=True)],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1",
+                         failed=6, conditions=[{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]))
+        before = len(self.c.kube.writes)
+        C.status(self.item())
+        node_writes = [i for i, (m, p, _, _) in enumerate(self.c.kube.writes) if p == "/api/v1/nodes/node-1"]
+        self.assertTrue(node_writes)
+        first = node_writes[0]
+        recorded = [ref for ref, at in self.saved if at <= first and at >= before]
+        self.assertTrue(any("node-1" in (ref.get("cordoned") or {}) for ref in recorded),
+                        "the job records which host it marks before it marks it")
+        mark = self.c.kube.writes[first][2]
+        self.assertIn({"op": "test", "path": "/spec/unschedulable", "value": True}, mark)
+        self.assertTrue(any(op["op"] == "test" and op["path"] == "/metadata/uid" for op in mark))
+        self.assertTrue(any(op["op"] == "test" and op["path"] == "/metadata/resourceVersion" for op in mark))
+
+    def test_a_failed_upgrade_removes_its_plans_and_uncordons_its_host(self):
+        self.cluster([node("node-1", unschedulable=True), node("node-2")],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1",
+                         failed=6, conditions=[{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]))
+        status, _, message = C.status(self.item())
+        self.assertEqual("failed", status)
+        self.assertIn("node-1 failed", message)
+        self.assertIn("uncordoned node-1", message)
+        self.assertEqual([], self.plans_left(), "no Plan is left to resume the upgrade with no job following it")
+        self.assertFalse(self.cordoned("node-1"))
+
+    def test_the_node_wait_has_a_deadline(self):
+        self.cluster([node("node-1", self.TARGET), node("node-2", unschedulable=True)],
+                     job("apply-homestead-agent-on-node-2", "homestead-agent", "node-2", active=1))
+        item = self.item()
+        self.assertEqual("running", C.status(item)[0])
+        item["ref"]["done_at"] = time.time() - C.NODE_WAIT - 1
+        status, _, message = C.status(item)
+        self.assertEqual("failed", status)
+        self.assertIn("node-2", message)
+        self.assertEqual([], self.plans_left())
+        self.assertFalse(self.cordoned("node-2"))
+
+    def test_a_host_still_restarting_stays_cordoned_until_a_fresh_read_shows_it_ready(self):
+        self.cluster([node("node-1", unschedulable=True, ready=False)],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1",
+                         failed=6, conditions=[{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]))
+        item = self.item()
+        status, _, message = C.status(item)
+        self.assertEqual("running", status, "it waits for the host instead of ending with it cordoned")
+        self.assertIn("node-1", message)
+        self.assertIn("not Ready", message)
+        self.assertTrue(self.cordoned("node-1"))
+        self.assertEqual([], self.plans_left())
+        # The host comes back: the mark on it, not the deleted job, says it is ours.
+        self.c.kube.add({**self.node("node-1"), "status": {"conditions": [{"type": "Ready", "status": "True"}]}})
+        status, _, message = C.status(item)
+        self.assertEqual("failed", status)
+        self.assertIn("uncordoned node-1", message)
+        self.assertFalse(self.cordoned("node-1"))
+
+    def test_a_host_that_never_comes_back_ends_the_job_and_says_what_to_do(self):
+        self.cluster([node("node-1", unschedulable=True, ready=False)],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1",
+                         failed=6, conditions=[{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]))
+        item = self.item()
+        self.assertEqual("running", C.status(item)[0])
+        item["ref"]["released_at"] = time.time() - C.RELEASE_WAIT - 1
+        status, _, message = C.status(item)
+        self.assertEqual("failed", status)
+        self.assertIn("node-1 stays cordoned", message)
+        self.assertIn("Uncordon", message)
+        self.assertTrue(self.cordoned("node-1"))
+
+    def test_cancel_leaves_a_restarting_host_cordoned_and_says_so(self):
+        self.cluster([node("node-1", unschedulable=True, ready=False)],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1))
+        message = C.cancel_run(self.item(), {})
+        self.assertTrue(self.cordoned("node-1"))
+        self.assertIn("node-1 stays cordoned", message)
+        self.assertIn("not Ready", message)
+        self.assertIn("Uncordon", message)
+
+    def test_a_host_another_maintenance_job_is_working_on_stays_cordoned(self):
+        self.cluster([node("node-1", unschedulable=True)],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1),
+                     jobs=[{"id": "op-9", "kind": "host-os", "status": "running", "title": "Update node-1",
+                            "ref": {"node": "node-1"}}])
+        message = C.cancel_run(self.item(), {})
+        self.assertTrue(self.cordoned("node-1"))
+        self.assertIn("node-1 stays cordoned", message)
+        self.assertIn("Update node-1", message)
+
+    def test_a_conflict_is_retried_from_a_fresh_read(self):
+        self.cluster([node("node-1", unschedulable=True)],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1))
+        self.c.kube.fail("/api/v1/nodes/node-1", 409, times=2, method="PATCH")
+        message = C.cancel_run(self.item(), {})
+        self.assertFalse(self.cordoned("node-1"))
+        self.assertIn("uncordoned node-1", message)
+
+    def test_a_cordon_changed_between_read_and_write_is_not_undone(self):
+        self.cluster([node("node-1", unschedulable=True)],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1))
+        item = self.item()
+        C.cancel_run(item, {})  # marks and releases node-1
+        # Someone cordons it again and another job marks it: ours no longer.
+        self.c.kube.add({**self.node("node-1"), "spec": cordon(5)})
+        current = self.node("node-1")
+        current["metadata"]["annotations"] = {self.MARK: "op-8"}
+        self.c.kube.add(current)
+        C.cancel_run(item, {})
+        self.assertTrue(self.cordoned("node-1"))
+
+    def test_a_node_that_no_longer_exists_counts_as_released(self):
+        self.cluster([node("node-1")])
+        item = self.item(phase="releasing", outcome=["failed", 40, "the upgrade job on node-9 failed"],
+                         released_at=time.time(), cordoned={"node-9": "uid-gone"})
+        status, _, message = C.status(item)
+        self.assertEqual("failed", status)
+        self.assertNotIn("stays cordoned", message)
+
+    def test_a_mark_left_by_an_ended_job_is_stale_and_taken_over(self):
+        self.cluster([node("node-1", unschedulable=True, annotations={self.MARK: "op-3"})],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1),
+                     jobs=[{"id": "op-3", "kind": "platform-upgrade", "status": "cancelled",
+                            "ref": {"component": "cluster"}}])
+        message = C.cancel_run(self.item(), {})
+        self.assertFalse(self.cordoned("node-1"), "op-3 has ended: its mark holds nothing")
+        self.assertIn("uncordoned node-1", message)
+
+    def test_a_mark_of_a_job_still_running_is_not_taken(self):
+        self.cluster([node("node-1", unschedulable=True, annotations={self.MARK: "op-3"})],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1),
+                     jobs=[{"id": "op-3", "kind": "platform-upgrade", "status": "running",
+                            "ref": {"component": "kubevirt"}}])
+        C.cancel_run(self.item(), {})
+        self.assertTrue(self.cordoned("node-1"))
+
+    def test_a_host_cordoned_after_the_first_claim_is_marked_and_released(self):
+        # The controller cordons in its job's pod; that pod can outlive the Plan.
+        pod = {"apiVersion": "v1", "kind": "Pod", "metadata": {
+            "namespace": C.SUC_NS, "name": "apply-node-1-x",
+            "labels": {"upgrade.cattle.io/plan": "homestead-server", "upgrade.cattle.io/node": "node-1"}},
+            "spec": {"nodeName": "node-1"}, "status": {"phase": "Running", "startTime": stamp(60)}}
+        self.cluster([node("node-1"), node("node-2", unschedulable=True)],
+                     job("apply-homestead-agent-on-node-2", "homestead-agent", "node-2",
+                         failed=6, conditions=[{"type": "Failed", "status": "True", "reason": "BackoffLimitExceeded"}]),
+                     pod)
+        item = self.item()
+        status, _, message = C.status(item)
+        self.assertEqual("running", status, "an upgrade pod is still going: the job waits for it")
+        self.assertIn("node-1", message)
+        self.c.kube.add({**self.node("node-1"), "spec": cordon(5)})
+        self.assertEqual("running", C.status(item)[0])
+        self.assertEqual("op-7", self.node("node-1")["metadata"]["annotations"][self.MARK])
+        self.c.kube.discard(f"/api/v1/namespaces/{C.SUC_NS}/pods/apply-node-1-x")
+        status, _, message = C.status(item)
+        self.assertEqual("failed", status)
+        self.assertFalse(self.cordoned("node-1"))
+        self.assertFalse(self.cordoned("node-2"))
+
+    def test_a_recently_started_upgrade_pod_counts_as_progress(self):
+        self.cluster([node("node-1", self.TARGET), node("node-2", unschedulable=True)],
+                     job("apply-homestead-agent-on-node-2", "homestead-agent", "node-2", active=1),
+                     {"apiVersion": "v1", "kind": "Pod", "metadata": {
+                         "namespace": C.SUC_NS, "name": "apply-node-2-y",
+                         "labels": {"upgrade.cattle.io/plan": "homestead-agent", "upgrade.cattle.io/node": "node-2"}},
+                      "spec": {"nodeName": "node-2"}, "status": {"phase": "Running"}})
+        item = self.item(done=1, done_at=time.time() - C.NODE_WAIT - 1)
+        self.assertEqual("running", C.status(item)[0], "a pod started just now is progress")
+        self.assertEqual("nodes", item["ref"]["phase"])
+        self.assertEqual(["homestead-server", "homestead-agent"], self.plans_left())
+
+    def test_the_stall_names_the_host_mid_upgrade(self):
+        self.cluster([node("node-1", self.TARGET), node("node-2", unschedulable=True)],
+                     job("apply-homestead-agent-on-node-2", "homestead-agent", "node-2", active=1))
+        item = self.item(done=1, done_at=time.time() - C.NODE_WAIT - 1)
+        status, _, message = C.status(item)
+        self.assertEqual("failed", status)
+        self.assertIn("node-2 was mid-upgrade", message)
+
+    def test_a_host_cordoned_before_the_upgrade_pod_started_is_never_claimed(self):
+        # A person or another job cordoned it an hour ago; the upgrade job came later.
+        self.cluster([node("node-1", unschedulable=True, cordoned_ago=3600)],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1))
+        message = C.cancel_run(self.item(), {})
+        self.assertTrue(self.cordoned("node-1"))
+        self.assertNotIn(self.MARK, self.node("node-1")["metadata"].get("annotations") or {})
+        self.assertIn("node-1 stays cordoned", message)
+
+    def test_a_cordon_with_no_time_to_go_by_is_not_claimed(self):
+        bare = node("node-1")
+        bare["spec"] = {"unschedulable": True}
+        self.cluster([bare], job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1))
+        C.cancel_run(self.item(), {})
+        self.assertTrue(self.cordoned("node-1"))
+
+    def test_a_finished_job_justifies_only_a_cordon_made_while_it_ran(self):
+        late = job("apply-homestead-server-on-node-1", "homestead-server", "node-1", succeeded=1)
+        late["status"]["completionTime"] = stamp(900)  # ended before the cordon (300 s ago)
+        late["status"]["startTime"] = stamp(1200)
+        self.cluster([node("node-1", unschedulable=True)], late)
+        C.cancel_run(self.item(), {})
+        self.assertTrue(self.cordoned("node-1"))
+
+    def test_a_v2_clean_up_on_the_host_blocks_its_release(self):
+        self.cluster([node("node-1", unschedulable=True)],
+                     job("apply-homestead-server-on-node-1", "homestead-server", "node-1", active=1))
+        item = self.item()
+        C._claim(item, lambda _item: None)  # marked while the upgrade ran
+        self.c.jobs[:] = [{"id": "op-5", "kind": "longhorn-v2-cleanup", "status": "running",
+                           "title": "Clean up Longhorn V2", "ref": {}}]
+        message = C.cancel_run(item, {})
+        self.assertTrue(self.cordoned("node-1"))
+        self.assertIn("Clean up Longhorn V2", message)
+
+    def test_every_module_that_cordons_a_host_has_its_kind_listed(self):
+        import re
+        server = Path(__file__).resolve().parents[1] / "server"
+        cordons = re.compile(r"""set_cordon\([^)]*,\s*True\)|unschedulable['"],\s*['"]value['"]:\s*True""")
+        # Modules with no KIND of their own: the kind whose job runs the cordon.
+        kinds = {"homestead_node_actions.py": "node-power", "homestead_components.py": "platform-upgrade"}
+        # The Hosts page's Cordon is a person's own; it clears any upgrade's mark.
+        people = {"homestead_lifecycle.py"}
+        for path in sorted(server.glob("homestead_*.py")):
+            text = path.read_text()
+            if path.name in people or not cordons.search(text):
+                continue
+            found = re.search(r"""^KIND = ['"]([^'"]+)['"]""", text, re.M)
+            kind = kinds.get(path.name) or (found and found.group(1))
+            self.assertTrue(kind, f"{path.name} cordons a host: name its job kind here")
+            self.assertIn(kind, C.HOST_CORDON_KINDS, f"{path.name} cordons hosts as {kind}")
+
+    def test_cancel_says_it_uncordons(self):
+        self.cluster([node("node-1")])
+        plan_ = C.cancel_plan(self.item())
+        self.assertTrue(any("uncordon" in line.lower() for line in plan_["undo"]))
 
 
 class UpgradeCheckWiringTests(unittest.TestCase):
