@@ -378,7 +378,9 @@ class CleanupRecoveryTests(unittest.TestCase):
         self.remote.assert_not_called()
         self.assertTrue(self.move["flags"]["resource_cleanup_pending"])
 
-    def test_restart_during_cancellation_recovers_source_before_deleting_resources(self):
+    def test_restart_during_cancellation_deletes_resources_here_before_recovering_source(self):
+        # Never two copies at once, nor one address on both clusters (#1064):
+        # what the move made here goes first, then the source starts again.
         self.move.update(status="cancelled", flags={"quiesced": True, "cancelling": True, "resource_cleanup_pending": True})
         STATE._store(self.move)
         actions = []
@@ -386,7 +388,7 @@ class CleanupRecoveryTests(unittest.TestCase):
                 mock.patch.object(PHASE, "_remove_created", side_effect=lambda *a: actions.append("remove") or []):
             PHASE.tick_all()
             PHASE.tick_all()
-        self.assertEqual(["release", "remove", "remove"], actions)
+        self.assertEqual(["remove", "release", "remove"], actions)
         done = STATE._find(ID)
         self.assertEqual("cancelled", done["status"])
         self.assertTrue(done["flags"]["source_released"])

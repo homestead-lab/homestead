@@ -442,6 +442,23 @@ def _starting(move):
         return _finish(move, "succeeded", f"{name} is here, stopped as it was on {move['cluster']}")
     flags = move.setdefault("flags", {})
     if not flags.get("started"):
+        # Never two copies at once: start here only while the source is still
+        # stopped for this move, by a fresh read. A read that fails stops the start.
+        there = STATE._source_status(move)
+        # The fence Cancel uses too: the same workload, held by no other transfer.
+        replaced = bool(move.get("source_uid")) and there.get("source_uid") != move["source_uid"]
+        if (there.get("running") or not there.get("stopped_for_move") or replaced
+                or there.get("transfer_owner") not in ("", None, move["id"])):
+            raise ValueError(f"{name} is not stopped for this move on {move['cluster']}, so it is not started "
+                             f"here. Cancel this move, or stop it there and retry")
+    if not flags.get("start_requested"):
+        # Stored before the request and kept for good, through retries too: a
+        # start whose reply was lost may still have happened, and a give-up must
+        # then not start the source as well (_start_source_again).
+        flags["start_requested"] = time.time()
+        STATE._store(move)
+    if not flags.get("started"):
+        # started times START_GRACE; a retry clears it to send the start again.
         STATE.ksend("PATCH", path, {"spec": dict(origin)}, ctype="application/merge-patch+json")
         flags["started"] = time.time()
     if move["kind"] == "vm":
@@ -533,6 +550,41 @@ def _cleanup_resources(move):
             cleanup_message=move["cleanup_message"])
 
 
+def _service_addresses(service):
+    """The addresses a Service asks for or holds, as the network page reads them."""
+    meta, spec = service.get("metadata") or {}, service.get("spec") or {}
+    annotations = meta.get("annotations") or {}
+    asked = ",".join(str(annotations.get(key) or "") for key in
+                     (STATE.VIP_ANNOTATION, "metallb.universe.tf/loadBalancerIPs", "metallb.io/loadBalancerIPs"))
+    held = [row.get("ip") for row in ((service.get("status") or {}).get("loadBalancer") or {}).get("ingress") or []]
+    return {a.strip() for a in [*asked.split(","), *held, spec.get("loadBalancerIP"), *(spec.get("externalIPs") or [])]
+            if a and str(a).strip()}
+
+
+def _address_claimed_here(move):
+    """An address that a LoadBalancer Service this move made here and the
+    source's cluster would both announce, by fresh reads of both (a reply to
+    the Service's creation may have been lost). A read that fails on either
+    side counts as a clash; with no such Service the source is not asked."""
+    try:
+        ours = [item for item in CLEANUP.items(STATE.kget, f"/api/v1/namespaces/{move['namespace']}/services")
+                if STATE._ours(item, move["id"]) and (item.get("spec") or {}).get("type") == "LoadBalancer"]
+        if not ours:
+            return ""
+        waiting = sorted(item["metadata"].get("name", "") for item in ours if not _service_addresses(item))
+        if waiting:
+            # An address not given yet may still be the source's, once it is.
+            return ", ".join(f"Service {name} has no address yet" for name in waiting)
+        here = set().union(*(_service_addresses(item) for item in ours))
+        rows = (STATE.CLIENT.remote(move["cluster"], "/api/network") or {}).get("services")
+        if not isinstance(rows, list):
+            raise ValueError("no Service list")
+        there = {str(ip) for row in rows for ip in (row.get("external_ips") or [])}
+    except Exception:
+        return "the addresses could not be compared"
+    return ", ".join(sorted(here & there))
+
+
 def _kubernetes_reason(error):
     """What the API server (or a webhook behind it) said, from its Status body."""
     try:
@@ -553,11 +605,7 @@ def _tick(move):
         handler(move)
         move["failures"] = 0
     except STATE.CLIENT.Unreachable as error:
-        move["failures"] = int(move.get("failures", 0)) + 1
-        if move["failures"] > STATE.MAX_TRANSIENT:
-            _finish(move, "failed", f"gave up waiting: {error}")
-        else:
-            move["message"] = f"Waiting: {error}"
+        _wait_or_give_up(move, str(error))
     except (ValueError, PermissionError) as error:
         _finish(move, "failed", str(error)[:400])
     except urllib.error.HTTPError as error:
@@ -568,12 +616,51 @@ def _tick(move):
         if error.code in (400, 403, 404, 422):
             return _finish(move, "failed", f"Kubernetes refused it (HTTP {error.code}): {reason}"[:400]) \
                 if reason else _finish(move, "failed", f"Kubernetes refused it (HTTP {error.code})")
-        move["failures"] = int(move.get("failures", 0)) + 1
-        move["message"] = f"Waiting: Kubernetes returned HTTP {error.code}{f': {reason}' if reason else ''}"[:400]
+        _wait_or_give_up(move, f"Kubernetes returned HTTP {error.code}{f': {reason}' if reason else ''}"[:400])
     except Exception as error:
-        move["failures"] = int(move.get("failures", 0)) + 1
-        move["message"] = f"Waiting: {str(error)[:200]}"
+        _wait_or_give_up(move, str(error)[:200])
     move["updated_at"] = STATE._now()
+
+
+def _wait_or_give_up(move, said):
+    """Every error that may clear counts: MAX_TRANSIENT of them in a row and the
+    move fails with the last one, rather than waiting for ever while its source
+    stays stopped on the other cluster."""
+    move["failures"] = int(move.get("failures", 0)) + 1
+    if move["failures"] <= STATE.MAX_TRANSIENT:
+        move["message"] = f"Waiting: {said}"
+        return
+    _finish(move, "failed", f"Gave up after {move['failures']} attempts: {said}{_start_source_again(move)}"[:600])
+
+
+def _start_source_again(move):
+    """Put the source back at the replicas it had - but only before anything
+    may have started the app here. Fails closed: once a start was asked for
+    (its reply may have been lost) or the move reached "starting", the source
+    stays stopped, as two copies, one on each cluster, would both serve and
+    both write. A move whose source runs again is not resumed from its backups."""
+    flags = move.setdefault("flags", {})
+    if not STATE._source_held(move):
+        return ""
+    name, cluster = move["name"], move["cluster"]
+    if flags.get("start_requested") or flags.get("started") or move.get("phase") in ("starting", "done"):
+        return (f". {name} may already be running here, so it stays stopped on {cluster}; check it here, "
+                f"then Cancel puts it back there")
+    clash = _address_claimed_here(move)
+    if clash:
+        return (f". {name} stays stopped on {cluster}: its address may be announced by both clusters ({clash}). "
+                f"Cancel removes it here, then puts {name} back there")
+    # Stored before the request, as quiesce_requested is: a release whose reply
+    # is lost may have started the source, and Retry must then refuse.
+    flags["release_requested"] = time.time()
+    STATE._store(move)
+    try:
+        STATE._source_action(move, "release")
+    except Exception as error:
+        return (f". {name} may still be stopped on {cluster}: starting it again there got no clear answer "
+                f"({str(error)[:160]}). Cancel puts it back there")
+    flags["source_released"] = flags["released_on_give_up"] = True
+    return f". {name} runs again on {cluster}; Cancel tidies what this move made here"
 
 
 def tick_all():

@@ -96,10 +96,26 @@ intended target if that store is no longer available; a cluster's UI address
 and its backup storage address can differ.
 
 A move that fails says why - the reason Kubernetes gave, or that this cluster
-cannot reach the source's backup storage. **Retry** carries on from the step
-that failed. **Cancel**, offered while nothing has stopped on the source yet,
-drops the move and anything it set up here; once the source has stopped,
-the same button is **Put back**, and starts it again there.
+cannot reach the source's backup storage. An error that may clear (a conflict,
+a rate limit, the API server or the other cluster not answering) is waited
+out for about 10 minutes of failed attempts in a row; then the move fails with
+the last error. If nothing can have started the app here yet, Homestead also
+starts it again on the source, as it ran before. It leaves the source stopped
+when the app may already be running here (a start was sent, even with no
+answer), or when a Service this move made here holds an address the source's
+cluster also announces, whichever address you chose: two copies, or two
+clusters announcing one address, would clash. If either cluster can't be
+asked, it counts as a clash. The message says which.
+
+**Retry** carries on from the step that failed; from the last step it sends
+the start again, but only while the source is still stopped for the move. After
+a failure that started the source again (or may have: its answer was lost),
+Retry is refused, because the move's backups are older than the running app:
+Cancel it, then start a new move. **Cancel**, offered while nothing has stopped
+on the source yet, drops the move and anything it set up here; once the source
+has stopped, the same button is **Put back**. It removes what the move made
+here first and starts the source again there only once that is gone; until
+then the source stays stopped, and Homestead keeps trying.
 
 ### Choosing what each volume brings
 
