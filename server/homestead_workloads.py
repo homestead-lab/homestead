@@ -769,6 +769,8 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
     definitions = hardware_definitions if hardware_definitions is not None else HW.features()
     # Variables kept in the workload's own Secret are edited like any other.
     kept, own_secret = ENVSEC.values(ns, deployment, kget), ENVSEC.own(deployment)
+    # A Secret that could not be read is said, never shown as "no values" (#1001).
+    unread, kept = kept is None, kept or {}
     volumes = {volume.get("name"): volume for volume in pspec.get("volumes", []) or []}
 
     def source_label(volume):
@@ -889,6 +891,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "service_links": pspec.get("enableServiceLinks") is not False,
         "replicas": replicas, "autostart": replicas > 0,
         "start_replicas": replicas or parked or 1, "containers": containers,
+        **({"secret_env_unread": ENVSEC.UNREAD} if unread else {}),
         "pod_volumes": reusable,
         "hardware": detected, "icon": NAMES.read(annotations, "icon-source") or NAMES.read(annotations, "icon"),
         # How it is monitored, so Edit shows it rather than Automatic - and

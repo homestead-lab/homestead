@@ -95,7 +95,10 @@ def _ours(secret, dep):
 
 def held(ns, dep, read):
     """The data its own Secret holds now ({} when none or unreadable): for the
-    YAML for git, which must decide as a save would."""
+    YAML for git, which must decide as a save would. Unlike values(), an
+    unread Secret may answer {} here: only that preview uses it, and the save
+    itself reads the Secret again (externalize refuses a failed read) and
+    keeps every reference the form did not name (#1001)."""
     if not own(dep):
         return {}
     try:
@@ -184,16 +187,18 @@ def externalize(ns, dep, read, send, masked=()):
 
 def values(ns, dep, read):
     """{container: {variable: value}} for the variables kept in the
-    workload's own Secret, so editing shows them like any other."""
+    workload's own Secret, so editing shows them like any other; None when
+    the Secret could not be read (#1001), which is not "no values": a save
+    from a form without them would delete them. No Secret at all is {}."""
     name = (dep.get("metadata", {}).get("annotations") or {}).get(ANNOTATION)
     if not name:
         return {}
     try:
         # Only the Secret Homestead keeps for the app (its label), as held()
         # and externalize() check: never one the annotation was pointed at.
-        data = _ours(read(f"/api/v1/namespaces/{ns}/secrets/{name}"), dep)
+        data = _ours(_read(f"/api/v1/namespaces/{ns}/secrets/{name}", read), dep)
     except Exception:
-        return {}
+        return None
     out = {}
     for container in _containers(dep):
         for item in container.get("env") or []:
@@ -221,6 +226,19 @@ def mask(payload):
     if payload.get("containers") and "env" in payload:
         payload["env"] = payload["containers"][0]["env"]
     return payload
+
+
+# What Edit says when the app's own Secret could not be read as it opened;
+# the form sends "secret_env_unread" back and the save is refused (#1001).
+UNREAD = ("This app's secret settings could not be read, so Edit cannot show them. "
+          "Saving is turned off: it would remove them. Close Edit and open it again.")
+
+
+def refuse_unread(cfg):
+    """Refuse a save whose form was built while the Secret could not be read."""
+    if cfg.get("secret_env_unread"):
+        raise ValueError("This app's secret settings could not be read when Edit opened, "
+                         "so saving would remove them. Nothing was changed: close Edit and open it again.")
 
 
 def own(dep):
