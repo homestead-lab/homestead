@@ -294,6 +294,17 @@
   ];
   // Switches the demo remembers while the page is open.
   const demoState = {};
+  // The weekly trim's slot (#927): Saturday 04:00 UTC unless moved; Monday is 0.
+  const DEMO_TRIM_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+  const demoTrimSlot = () => demoState.weeklyTrimSlot || { weekday: 5, hour: 4 };
+  const demoTrimNext = () => {
+    const { weekday, hour } = demoTrimSlot(), now = Date.now(), today = Math.floor(now / 86400000) * 86400000;
+    for (let day = 0; day < 8; day++) {
+      const at = today + day * 86400000 + hour * 3600000;
+      if ((new Date(at).getUTCDay() + 6) % 7 === weekday && at > now) return at / 1000;
+    }
+    return 0;
+  };
   // A logo the demo can show without fetching anything: the app's initial on a colour.
   const demoLogo = (letter, hue) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="hsl(${hue} 52% 42%)"/><text x="32" y="43" font-family="sans-serif" font-size="30" font-weight="700" fill="#fff" text-anchor="middle">${letter}</text></svg>`)}`;
   const demoLogoCatalogue = () => workloads.filter(w => !w.platform && (w.images || [])[0]).flatMap((w, i) => [
@@ -1492,7 +1503,10 @@ ssh_pwauth: true
       { name: "homestead-import-krusader", app: "binhex-krusader", state: "done", percent: 100,
         start: "2026-09-21T08:12:00Z", end: "2026-09-21T08:19:00Z", active: 0, succeeded: 1, failed: 0 },
     ],
-    "/api/lh/overview": lhOverview,
+    // Homestead's weekly trim among the schedules, on its slot (#927).
+    "/api/lh/overview": () => ({ ...lhOverview, homestead_jobs: demoState.weeklyTrimOn === false ? [] : [{
+      name: "Homestead weekly trim", task: "filesystem-trim", homestead: true,
+      cron: `0 ${demoTrimSlot().hour} * * ${(demoTrimSlot().weekday + 1) % 7}`, volumes: ["pvc-demo-frigate", "pvc-demo-hass"] }] }),
     "/api/lh/job/run": (url, init) => ({ ok: true, job: `${JSON.parse(init?.body || "{}").name}-now-000001`, namespace: "longhorn-system" }),
     "/api/lh/snapshot-progress": {known: true, active: false, percent: null, replicas: [], errors: []},
     "/api/lh/snapshots": [{ name: "homestead-1758765600-a1b2c3", volume: "pvc-demo", created: new Date(Date.now() - 86400000).toISOString(),
@@ -2852,16 +2866,21 @@ ssh_pwauth: true
       const now = Date.now() / 1000, today = new Date();
       let slot = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() - (today.getUTCDay() + 1) % 7, 4) / 1000;
       if (slot > now) slot -= 7 * 86400;
-      return { enabled: demoState.weeklyTrimOn !== false, next: new Date((slot + 7 * 86400) * 1000).toISOString(), running: false, theirs: "",
-        last: { slot, at: slot + 95, why: "weekly", trimmed: ["pvc-demo-paperless", ...(scenario === "healthy" ? ["pvc-demo-frigate"] : [])], unconfirmed: [],
+      const { weekday, hour } = demoTrimSlot();
+      return { enabled: demoState.weeklyTrimOn !== false, next: new Date(demoTrimNext() * 1000).toISOString(), running: false, theirs: "",
+        weekday, hour, last: { slot, at: slot + 95, why: "weekly", trimmed: ["pvc-demo-paperless", ...(scenario === "healthy" ? ["pvc-demo-frigate"] : [])], unconfirmed: [],
           // The incidents and critical scenarios: one attached volume failed to trim (#749).
           failed: scenario === "healthy" ? [] : [{ volume: "pvc-demo-frigate", pvc: "lab/frigate-config", message: DEMO_TRIM_FAILURE }],
           skipped: [{ volume: "pvc-demo-oldapp", pvc: "lab/oldapp-data", why: "detached" }] } };
     },
+    // On or off, or the slot moved (#927), as homestead_weekly_trim.settings.
     "/api/weekly-trim/settings": (url, init) => {
-      const on = !!JSON.parse(init?.body || "{}").enabled;
-      demoState.weeklyTrimOn = on;
-      return { ok: true, enabled: on, detail: on ? "Attached volumes are trimmed every Saturday at 04:00 UTC" : "The weekly trim is off; Run now still trims every attached volume" };
+      const body = JSON.parse(init?.body || "{}");
+      if ("enabled" in body) demoState.weeklyTrimOn = !!body.enabled;
+      if ("weekday" in body || "hour" in body) demoState.weeklyTrimSlot = { weekday: body.weekday, hour: body.hour };
+      const on = demoState.weeklyTrimOn !== false, { weekday, hour } = demoTrimSlot();
+      return { ok: true, enabled: on, weekday, hour,
+        detail: on ? `Attached volumes are trimmed every ${DEMO_TRIM_DAYS[weekday]} at ${String(hour).padStart(2, "0")}:00 UTC` : "The weekly trim is off; Run now still trims every attached volume" };
     },
     "/api/weekly-trim/run": () => ({ ok: true, operation: { id: "demo-weekly-trim", kind: "weekly-trim", status: "queued" } }),
     // Restore tests (views-protect.js): one passed, one failed, one never tested.

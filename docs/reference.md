@@ -1261,18 +1261,22 @@ its last run took, or 30 minutes. These never reach the Dashboard.
 
 **Plans** set up a policy in one go - snapshots (hourly kept for a day, daily
 kept for a week), snapshots and backups (adding daily and weekly backups to
-the backup target), or housekeeping (weekly trim and snapshot cleanup) - for
+the backup target), or housekeeping (a weekly snapshot cleanup; no trim job,
+since Homestead trims attached volumes itself) - for
 whichever group you pick. The jobs a plan makes are ordinary jobs afterwards.
 
 Any volume's snapshots and backups are also a click away on Volumes: take one
 now, back up now, or restore.
 
-The weekly trim is Homestead's own: each Saturday at 04:00 UTC a `weekly-trim`
-job trims every attached Longhorn volume through Longhorn's `trimFilesystem`
-action, one at a time, and skips detached volumes and VM disks (Block volumes),
-naming them. **Housekeeping** shows the last result, **Run now** and the
-switch (`GET /api/weekly-trim`, `POST /api/weekly-trim/run` for operators,
-`POST /api/weekly-trim/settings` for admins). The Longhorn `RecurringJob`
+The weekly trim is Homestead's own: once a week, Saturday at 04:00 UTC unless
+moved, a `weekly-trim` job trims every attached Longhorn volume through
+Longhorn's `trimFilesystem` action, one at a time, and skips detached volumes
+and VM disks (Block volumes), naming them. **Housekeeping** shows the last
+result, **Run now**, **Change time** and the switch (`GET /api/weekly-trim`,
+`POST /api/weekly-trim/run` for operators, `POST /api/weekly-trim/settings`
+with `enabled`, or `weekday` 0-6 from Monday and `hour` 0-23 in UTC, for
+admins). `/api/lh/overview` lists the trim under `homestead_jobs`, and its
+clashes count it; This week shows it as Homestead's. The Longhorn `RecurringJob`
 `homestead-weekly-trim` earlier releases made is removed once if unchanged; a
 changed one is kept as yours and Homestead's own trim stays off.
 

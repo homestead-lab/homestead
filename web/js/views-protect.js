@@ -17,9 +17,10 @@ const PROTECT_PLANS = [
     jobs: [{ name: "daily-snapshot", task: "snapshot", cron: "0 2 * * *", retain: 7, concurrency: 2 },
       { name: "daily-backup", task: "backup", cron: "30 2 * * *", retain: 14, concurrency: 1 },
       { name: "weekly-backup", task: "backup", cron: "0 3 * * 0", retain: 8, concurrency: 1 }] },
-  { id: "tidy", title: "Housekeeping", blurb: "A weekly trim, so space an app has freed is given back to the disks, and a weekly purge of the system snapshots Longhorn takes during rebuilds.",
-    jobs: [{ name: "weekly-trim", task: "filesystem-trim", cron: "0 4 * * 6", retain: 0, concurrency: 1 },
-      { name: "weekly-cleanup", task: "snapshot-cleanup", cron: "30 4 * * 6", retain: 0, concurrency: 1 }] },
+  // No trim job (#927): Longhorn's tries every volume in its groups and fails on
+  // detached ones and VM disks, and one in default switches Homestead's own off.
+  { id: "tidy", title: "Housekeeping", blurb: "A weekly purge of the system snapshots Longhorn takes during rebuilds. Space an app has freed is given back by the weekly trim under Housekeeping on this page: Homestead trims every attached volume itself.",
+    jobs: [{ name: "weekly-cleanup", task: "snapshot-cleanup", cron: "30 4 * * 6", retain: 0, concurrency: 1 }] },
 ];
 
 /* where: what says why a run failed - Longhorn's own jobs by default. */
@@ -187,24 +188,30 @@ ${protectBody(d, tgt, load.parts.backups)}`);
 function protectTop(d, objects, tgt, cover) {
   const reading = objects === undefined;
   objects = objects || {};
-  return `${reading || objects.deployed || objects.unread ? "" : objectStoreCard(objects, tgt)}
+  // Jobs that could not be read leave coverage unknown, not 0% (#620, #927).
+  const unread = d.jobs_unread;
+  return `${unread ? UI.callout("warn", "Longhorn's recurring jobs could not be read", `<p>${esc(unread)}</p>
+    <p>Coverage, the recurring jobs and This week's clashes are missing until they are read. Reload to try again.</p>`) : ""}
+  ${reading || objects.deployed || objects.unread ? "" : objectStoreCard(objects, tgt)}
   ${summaryLine("protect", [
-      `${UI.chip(`${cover}% covered`, cover === 100 ? "ok" : cover ? "warn" : "bad")} ${d.protected} of ${d.total} volumes`,
+      unread ? `${UI.chip("coverage unknown", "warn")} ${d.total} volumes`
+        : `${UI.chip(`${cover}% covered`, cover === 100 ? "ok" : cover ? "warn" : "bad")} ${d.protected} of ${d.total} volumes`,
       reading ? `Backup storage <span class="dim small">reading…</span>`
         : objects.deployed ? `Backup storage ${UI.chip(objects.ready ? "serving" : "starting", objects.ready ? "ok" : "warn")}`
         : objects.unread ? `Backup storage ${UI.chip("unknown", "warn", { tip: "Could not read it: " + objects.unread })}` : "",
       tgt.configured ? `Target ${UI.chip(tgt.available ? "reachable" : "unavailable", tgt.available ? "ok" : "bad")}` : UI.chip("no backup target", "warn"),
-      `${d.backed_up ?? 0} backed up off the cluster`],
+      unread ? "" : `${d.backed_up ?? 0} backed up off the cluster`],
     `${objects.deployed ? objectStoreCard(objects, tgt) : ""}
   <div class="grid g3" style="margin-bottom:18px">
     <div class="card flat">
       <div class="ctitle">Coverage</div><div class="csub">Volumes a snapshot or backup job keeps copies of</div>
+      ${unread ? `<div class="ui-help" style="margin-top:12px">Not known: the recurring jobs could not be read.</div>` : `
       <div class="row" style="margin-top:12px;gap:18px;align-items:flex-end">
         <div class="bignum">${cover}<span class="unit">%</span></div>
         <div class="csub" style="padding-bottom:6px">${d.protected} of ${d.total} protected ·
           ${d.backed_up ?? 0} backed up off the cluster</div>
       </div>
-      ${meter(cover, 'style="margin-top:12px"')}
+      ${meter(cover, 'style="margin-top:12px"')}`}
       ${d.unprotected.length ? `<div style="margin-top:12px">
         <button type="button" class="linkish dim xs pf-jump" onclick="protectFilter({show:'uncovered'},true)">NOT COVERED · show all ${d.unprotected.length}</button>
         <div class="pf-chips">${d.unprotected.slice(0, 6).map(name => {
@@ -253,7 +260,8 @@ function protectBody(d, tgt, backupVolumes) {
   <div id="fs-freeze" class="restore-tests"></div>
 
   <div class="sec">Recurring jobs</div>
-  ${d.jobs.length ? `<div class="cardlist">${d.jobs.map(j => `<div class="card flat wcard">
+  ${d.jobs_unread ? `<div class="ui-help">The recurring jobs could not be read, so none are listed. Reload to try again.</div>`
+  : d.jobs.length ? `<div class="cardlist">${d.jobs.map(j => `<div class="card flat wcard">
     <div class="between">
       <div class="row" style="gap:10px;min-width:0">
         <div class="av n3" style="font-size:15px">${TASK_ICON[j.task] || "◷"}</div>
@@ -318,7 +326,8 @@ function protectBackups(backupVolumes, tgt) {
 const PROTECT_FILTER = { show: "all", group: "", q: "" };
 const PROTECT_SHOWS = [
   ["all", "All", () => true],
-  ["uncovered", "Not covered", v => !(v.protected_by || []).length],
+  // protected_by is null when the jobs could not be read (#927): neither covered nor not.
+  ["uncovered", "Not covered", v => Array.isArray(v.protected_by) && !v.protected_by.length],
   ["protected", "Protected", v => (v.protected_by || []).length > 0],
   ["never", "Never backed up", v => !v.last_backup_at],
   ["unhealthy", "Unhealthy", v => v.robustness !== "healthy"],
@@ -354,7 +363,8 @@ function protectVolumeRow(v) {
     <td class="mono">${v.size_gb} GiB</td>
     <td>${UI.chip(v.robustness || "?", v.robustness === "healthy" ? "ok" : v.robustness === "degraded" ? "warn" : "bad")}</td>
     <td>${v.groups.map(g => UI.chip(g, g === "default" ? "info" : "neutral")).join(" ") || '<span class="dim">—</span>'}</td>
-    <td>${(v.protected_by || []).map(j => UI.chip(j, "ok")).join(" ")
+    <td>${v.protected_by === null ? UI.chip("unknown", "neutral", { tip: "Longhorn's recurring jobs could not be read" })
+      : (v.protected_by || []).map(j => UI.chip(j, "ok")).join(" ")
       || UI.chip("nothing", "warn", { tip: "No snapshot or backup job covers it" })}</td>
     <td class="small dim">${v.last_backup_at ? fmtWhen(v.last_backup_at)
       : (v.protected_by || []).length ? UI.chip("never", "warn", { tip: "A job covers it, but no backup of it has been made yet" }) : "never"}</td>
@@ -426,7 +436,10 @@ function groupCount(name) {
 // refuses to save over a job whose settings were changed, or that was deleted
 // or made, since; the job running moves no generation (#621).
 let LJ_GENERATION = null;
+/* With the jobs unread, a new job or a plan could replace one of the same
+   name unseen (#927): say so instead of opening the dialog. */
 window.lhJob = (j) => {
+  if (STATE.data?.lh?.jobs_unread) return toast("Longhorn's recurring jobs could not be read, so a new job could replace one unseen. Reload to try again.", "warn");
   const d = STATE.data.lh || { groups: ["default"], tasks: {} };
   LJ_GENERATION = !j ? "" : (j.generation ?? null);
   j = j || { name: "", task: "snapshot", cron: "0 2 * * *", retain: 7, concurrency: 1, groups: ["default"] };
@@ -492,6 +505,7 @@ function planList(group, chosen) {
         <div class="plan-jobs">${plan.jobs.map(j => { const name = planJobName(group, j); return UI.chip(`${name} · ${CRON.describe(j.cron)}${j.retain ? ` · keeps ${j.retain}` : ""}`, existing.has(name) ? "warn" : "neutral", { tip: existing.has(name) ? "replaces the job of this name" : "new job" }); }).join(" ")}</div></div></label>`).join("");
 }
 window.lhPlans = (group = "default") => {
+  if (STATE.data?.lh?.jobs_unread) return toast("Longhorn's recurring jobs could not be read, so a plan could replace a job unseen. Reload to try again.", "warn");
   const d = STATE.data.lh || { groups: ["default"], jobs: [] };
   modal("Protection plans", `${UI.lead("A plan makes the jobs a sensible policy needs. They are ordinary jobs afterwards: edit or delete any of them.")}
     <div class="f"><label>Volumes it protects</label><select id="lp_group" onchange="lhPlanGroup()">${(d.groups || ["default"]).map(g =>
@@ -521,7 +535,7 @@ window.lhPlanApply = async () => {
   const group = $("#lp_group").value || "default";
   try {
     await planApply(plan, group);
-    toast(`${plan.title}: ${plan.jobs.length} jobs set up for ${group}`, "ok"); closeModal(); resetPaint(); viewProtect();
+    toast(`${plan.title}: ${plan.jobs.length} job${plan.jobs.length === 1 ? "" : "s"} set up for ${group}`, "ok"); closeModal(); resetPaint(); viewProtect();
   } catch (e) { toast(e.message, "bad"); }
 };
 
@@ -1036,7 +1050,17 @@ function trimSummary(last) {
   return `Trimmed ${trimPlural((last.trimmed || []).length, "volume")}, skipped ${(last.skipped || []).length}${said ? ` (${said})` : ""}`;
 }
 
+/* The trim's slot (#927): weekday, Monday 0, and hour, both UTC; Saturday
+   04:00 when the answer has none (homestead_weekly_trim.slot_of). */
+const TRIM_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const trimHour = h => `${String(h).padStart(2, "0")}:00`;
+function trimSlot(d) {
+  const whole = (v, top) => Number.isInteger(v) && v >= 0 && v <= top;
+  return whole(d?.weekday, 6) && whole(d?.hour, 23) ? { weekday: d.weekday, hour: d.hour } : { weekday: 5, hour: 4 };
+}
+
 function weeklyTrimCard(d) {
+  const slot = trimSlot(d);
   const last = d.last, failed = last?.failed || [], unconfirmed = last?.unconfirmed || [], skipped = last?.skipped || [];
   const status = d.running ? UI.chip("trimming now", "info") : !last ? UI.chip("not run yet", "neutral")
     : failed.length ? UI.chip("failed", "bad") : UI.chip("trimmed", "ok");
@@ -1048,10 +1072,10 @@ function weeklyTrimCard(d) {
   return `<div id="housekeeping" class="housekeeping">${UI.section("Housekeeping", `
     <div class="card flat">
       <div class="between wt-head"><div><div class="ctitle">Weekly trim</div>
-        <div class="csub">Every attached volume, Saturdays at 04:00 UTC${d.enabled && d.next ? ` · next ${esc(fmtAt(d.next))}` : ""}</div></div>
-        <div class="row" style="gap:8px">${status}${d.running ? "" : '<button class="btn sm" data-need="operator" onclick="weeklyTrimRun()">Run now</button>'}</div></div>
+        <div class="csub">Every attached volume, ${TRIM_DAYS[slot.weekday]}s at ${trimHour(slot.hour)} UTC${d.enabled && d.next ? ` · next ${esc(fmtAt(d.next))}` : ""}</div></div>
+        <div class="row" style="gap:8px">${status}${d.running ? "" : '<button class="btn sm" data-need="operator" onclick="weeklyTrimRun()">Run now</button>'}${d.theirs ? "" : '<button class="btn sm" data-need="admin" onclick="weeklyTrimTime()">Change time</button>'}</div></div>
       <div style="margin-top:10px">${lines}</div>
-      ${d.theirs ? `<div class="dim xs wt-line">Your trim job <span class="mono">${esc(d.theirs)}</span> already trims the default group, so this one does not run as well.</div>` : ""}
+      ${d.theirs ? `<div class="dim xs wt-line">Your trim job <span class="mono">${esc(d.theirs)}</span> already trims the default group, so this one does not run as well. Delete it under Recurring jobs to let Homestead trim attached volumes instead: Longhorn's fails on detached volumes and VM disks.</div>` : ""}
       <div class="between wt-foot"><label class="switch" data-need="admin"><input type="checkbox" id="wt_on" ${d.enabled ? "checked" : ""} onchange="weeklyTrimSwitch(this.checked)"> Trim weekly</label>
         <div class="dim xs" id="wt_off"${d.enabled ? " hidden" : ""}>Off · Run now still trims every attached volume</div></div>
       ${UI.guide("How the weekly trim works", "<p>Files deleted inside a volume keep their space in Longhorn until the filesystem is trimmed. Each week Homestead trims every attached volume, one at a time. A detached volume cannot be trimmed, and a VM disk has no filesystem Longhorn can trim, so both are skipped and named. A volume that fails is named with Longhorn's answer.</p>")}
@@ -1061,13 +1085,32 @@ function weeklyTrimCard(d) {
 async function loadWeeklyTrim() {
   const host = document.getElementById("housekeeping");
   if (!host) return;
-  try { host.outerHTML = weeklyTrimCard(await api("/api/weekly-trim")); }
+  try { const d = await api("/api/weekly-trim"); STATE.data.weeklyTrim = d; host.outerHTML = weeklyTrimCard(d); }
   catch (e) { host.innerHTML = UI.section("Housekeeping", UI.callout("warn", "The weekly trim could not be read", esc(e.message))); }
 }
 
 window.weeklyTrimSwitch = async on => {
   try { const r = await api("/api/weekly-trim/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: on }) }); toast(r.detail, "ok"); loadWeeklyTrim(); }
   catch (e) { toast(e.message, "bad"); const box = $("#wt_on"); if (box) box.checked = !on; }
+};
+
+/* Move the trim to a weekday and hour of the cluster's choosing (#927): one
+   when no backup runs, so the two don't read the same volume at once. */
+window.weeklyTrimTime = () => {
+  const slot = trimSlot(STATE.data.weeklyTrim);
+  const days = TRIM_DAYS.map((name, i) => `<option value="${i}"${i === slot.weekday ? " selected" : ""}>${name}</option>`).join("");
+  const hours = [...Array(24).keys()].map(h => `<option value="${h}"${h === slot.hour ? " selected" : ""}>${trimHour(h)}</option>`).join("");
+  modal("Weekly trim time", `${UI.lead("Homestead trims every attached volume once a week, one at a time. Pick a time when no backup runs: a trim while a volume is backed up slows both down. The time is the cluster's clock, UTC.")}
+    ${UI.fields(UI.field("Day", `<select id="wt_day">${days}</select>`), UI.field("Hour (UTC)", `<select id="wt_hour">${hours}</select>`))}
+    <div class="ui-help">This week, under Schedules, shows the trim among the other jobs and marks a clash.</div>
+    ${UI.actions(`<button class="btn pri" onclick="weeklyTrimTimeSave()">Save</button><button data-dialog-dismiss="true" class="btn" onclick="closeModal()">Cancel</button>`)}`);
+};
+window.weeklyTrimTimeSave = async () => {
+  const weekday = Number($("#wt_day")?.value), hour = Number($("#wt_hour")?.value);
+  try {
+    const r = await api("/api/weekly-trim/settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ weekday, hour }) });
+    toast(r.detail, "ok"); closeModal(); loadWeeklyTrim();
+  } catch (e) { toast(e.message, "bad"); }
 };
 
 window.weeklyTrimRun = async () => {

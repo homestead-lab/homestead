@@ -188,6 +188,7 @@ const DIALOGS = [
   ["protect-job-new", "protect", "lhJob()"],
   ["protect-job-edit", "protect", "click:lhJob({"],
   ["protection-plans", "protect", "lhPlans()"],
+  ["weekly-trim-time", "protect", "weeklyTrimTime()"],
   ["protect-group", "protect", "lhGroup()"],
   ["protect-covered", "protect", "click:lhCovered"],
   ["protect-assign", "protect", "click:lhAssign"],

@@ -25,9 +25,13 @@ import homestead_shared as SHARED
 
 KIND = "weekly-trim"
 STATE = "weekly-trim.json"
-# Saturdays 04:00 UTC: Longhorn's TRIM_CRON ("0 4 * * 6"), which the
-# RecurringJob Homestead used to make ran on.
+# The default slot, Saturdays 04:00 UTC: Longhorn's TRIM_CRON ("0 4 * * 6"),
+# which the RecurringJob Homestead used to make ran on. The weekday (Monday 0)
+# and hour can be moved under Housekeeping, saved as "weekday" and "hour" (#927).
 SLOT_WEEKDAY, SLOT_HOUR = 5, 4
+DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+# How the trim is named among the schedules (This week, the clashes).
+SCHEDULE_NAME = "Homestead weekly trim"
 WEEK = 7 * 86400
 VM_DISK = "no filesystem (VM disk)"
 DETACHED_ANSWER = "Action [trimFilesystem] not available"
@@ -35,21 +39,53 @@ BLOCK_ANSWER = "with Block VolumeMode"
 DATA_DIR = None
 
 
-def last_slot(now):
-    """The most recent Saturday 04:00 UTC at or before now."""
+def _whole(value, top):
+    return isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= top
+
+
+def slot_of(state):
+    """(weekday, hour) the trim runs on: the saved ones, else Saturday 04:00."""
+    weekday, hour = state.get("weekday"), state.get("hour")
+    return (weekday, hour) if _whole(weekday, 6) and _whole(hour, 23) else (SLOT_WEEKDAY, SLOT_HOUR)
+
+
+def slot_words(state):
+    weekday, hour = slot_of(state)
+    return f"{DAY_NAMES[weekday]} at {hour:02d}:00 UTC"
+
+
+def cron(state):
+    """The slot as a five-field cron (UTC), for the schedule clashes."""
+    weekday, hour = slot_of(state)
+    return f"0 {hour} * * {(weekday + 1) % 7}"
+
+
+def last_slot(now, weekday=SLOT_WEEKDAY, hour=SLOT_HOUR):
+    """The most recent slot (weekday, Monday 0, at hour UTC) at or before now."""
     day = int(now) // 86400
-    weekday = (day + 3) % 7                 # 1 January 1970 was a Thursday
-    slot = (day - (weekday - SLOT_WEEKDAY) % 7) * 86400 + SLOT_HOUR * 3600
+    today = (day + 3) % 7                   # 1 January 1970 was a Thursday
+    slot = (day - (today - weekday) % 7) * 86400 + hour * 3600
     return slot if slot <= now else slot - WEEK
+
+
+def _week(moment):
+    """The Monday-to-Sunday week (UTC) a moment falls in, counted from 1970."""
+    return (int(moment) // 86400 + 3) // 7
 
 
 def due(state, now):
     """Switched on and not yet run, nor tried, for this week's slot. A slot
-    missed while Homestead was down runs once, late."""
+    missed while Homestead was down runs once, late. At most one run a week:
+    when the last run's slot fell in the same Monday-to-Sunday week (UTC) as
+    this slot, the trim has had its week, so moving it to a later day does not
+    run it twice. Moving it earlier, or any gap of a week or more, still runs."""
     if state.get("enabled") is False:
         return False
-    slot = last_slot(now)
-    return (state.get("last") or {}).get("slot") != slot and state.get("tried") != slot
+    slot = last_slot(now, *slot_of(state))
+    ran = (state.get("last") or {}).get("slot")
+    if isinstance(ran, (int, float)) and _week(ran) == _week(slot):
+        return False
+    return state.get("tried") != slot
 
 
 def _claim(volume):
@@ -126,7 +162,7 @@ def _update(change):
 
 def start(why="weekly"):
     """Start one weekly trim as a job; one runs at a time."""
-    slot = last_slot(time.time())
+    slot = last_slot(time.time(), *slot_of(last_state()))
     operation = OPS.start(KIND, "Weekly trim", {"kind": "Longhorn", "name": "weekly trim"},
                           "/data-protection#housekeeping", {"phase": "plan", "why": why, "slot": slot},
                           "Finding attached volumes", unless=(KIND,))
@@ -282,8 +318,8 @@ def tick(now, operations):
         if not state.get("retired"):
             change, removed = _retire(jobs, state)
             state.pop("retiring", None)
-            # The first run is the next Saturday's, not one on the day of the update.
-            state.setdefault("tried", last_slot(now))
+            # The first run is the next slot's, not one on the day of the update.
+            state.setdefault("tried", last_slot(now, *slot_of(state)))
             SHARED.write_json(_path(), state, durable=True)
             said.append(change)
             if removed:
@@ -310,9 +346,13 @@ def view():
         mine = theirs(LH.kget(f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs").get("items", []))
     except Exception:
         mine = ""
-    upcoming = last_slot(time.time()) + WEEK
+    weekday, hour = slot_of(state)
+    upcoming = last_slot(time.time(), weekday, hour) + WEEK
+    ran = (state.get("last") or {}).get("slot")
+    if isinstance(ran, (int, float)) and _week(ran) == _week(upcoming):
+        upcoming += WEEK                    # that week has had its run (due())
     return {"enabled": enabled, "next": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(upcoming)) if enabled else "",
-            "last": state.get("last"), "running": _running(), "theirs": mine}
+            "last": state.get("last"), "running": _running(), "theirs": mine, "weekday": weekday, "hour": hour}
 
 
 def run_now():
@@ -322,22 +362,70 @@ def run_now():
     return {"ok": True, "operation": start("Run now")}
 
 
+def settings(body):
+    """Homestead's weekly trim on or off ("enabled"), and its slot moved
+    ("weekday", Monday 0 to Sunday 6, with "hour", 0 to 23, both UTC). A
+    moved slot that has already passed this week runs next week, not at once."""
+    body = body if isinstance(body, dict) else {}
+    moving = "weekday" in body or "hour" in body
+    if not moving and "enabled" not in body:
+        raise ValueError("nothing to change: send enabled, or weekday and hour")
+    if "enabled" in body and not isinstance(body["enabled"], bool):
+        raise ValueError("enabled must be true or false")
+    weekday, hour = body.get("weekday"), body.get("hour")
+    if moving and not (_whole(weekday, 6) and _whole(hour, 23)):
+        raise ValueError("weekday must be 0 (Monday) to 6 (Sunday) and hour 0 to 23, both in UTC")
+
+    def change(state):
+        if "enabled" in body:
+            state["enabled"] = body["enabled"]
+        if moving:
+            if (weekday, hour) != slot_of(state):
+                state["tried"] = last_slot(time.time(), weekday, hour)
+            state.update(weekday=weekday, hour=hour)
+    state = _update(change)
+    enabled = state.get("enabled", True) is not False
+    weekday, hour = slot_of(state)
+    return {"ok": True, "enabled": enabled, "weekday": weekday, "hour": hour,
+            "detail": f"Attached volumes are trimmed every {slot_words(state)}" if enabled
+            else "The weekly trim is off; Run now still trims every attached volume"}
+
+
 def switch(enabled):
     """Homestead's weekly trim on or off."""
     if not isinstance(enabled, bool):
         raise ValueError("enabled must be true or false")
-    _update(lambda state: state.update(enabled=enabled))
-    return {"ok": True, "enabled": enabled,
-            "detail": "Attached volumes are trimmed every Saturday at 04:00 UTC" if enabled
-            else "The weekly trim is off; Run now still trims every attached volume"}
+    return settings({"enabled": enabled})
+
+
+def schedule(volumes, jobs):
+    """The weekly trim as a job among the schedules (This week, the clashes,
+    #927), or None while it does not run: switched off, or a trim job of the
+    user's covers the default group. volumes are Longhorn's volume rows,
+    jobs its recurring job rows. It trims the volumes attached now that have
+    a filesystem (a PV is matched by the volume's name, as Longhorn names the
+    PVs it provisions); PVs that cannot be read count every attached one, as a
+    run does. A state file that cannot be read reads as the default: on, at
+    Saturday 04:00, as last_state() answers for the Dashboard."""
+    state = last_state()
+    if state.get("enabled") is False or any(j.get("task") == "filesystem-trim" and "default" in (j.get("groups") or [])
+                                            for j in jobs):
+        return None
+    try:
+        pvs = LH.kget("/api/v1/persistentvolumes").get("items", [])
+    except Exception:
+        pvs = []
+    block = {p["metadata"]["name"] for p in pvs if (p.get("spec") or {}).get("volumeMode") == "Block"}
+    return {"name": SCHEDULE_NAME, "task": "filesystem-trim", "cron": cron(state), "homestead": True,
+            "volumes": sorted(v["name"] for v in volumes if v.get("state") == "attached" and v["name"] not in block)}
 
 
 # Its routes and who may use them (homestead_routes.py): trimming is an
-# operator's, as Trim now is; switching it off is an admin's.
+# operator's, as Trim now is; switching it off or moving it is an admin's.
 ROUTES = {
     ("GET", "/api/weekly-trim"): ("viewer", lambda request: view()),
     ("POST", "/api/weekly-trim/run"): ("operator", lambda request: run_now()),
-    ("POST", "/api/weekly-trim/settings"): ("admin", lambda request: switch(request.body.get("enabled"))),
+    ("POST", "/api/weekly-trim/settings"): ("admin", lambda request: settings(request.body)),
 }
 
 
@@ -361,7 +449,8 @@ def issues(state):
         name = failed.get("pvc") or failed.get("volume") or "a volume"
         out.append({"severity": "degraded", "kind": "Trim", "name": name,
                     "reason": f"The weekly trim of {name} failed: {failed.get('message') or 'no reason given'}. "
-                              "It is tried again next Saturday; Trim now on its snapshot panel tries it now."})
+                              f"It is tried again next {DAY_NAMES[slot_of(state)[0]]}; "
+                              "Trim now on its snapshot panel tries it now."})
     return out
 
 
