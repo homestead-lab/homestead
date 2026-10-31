@@ -349,12 +349,15 @@ function upgradeNewer(version, current) {
 
 function upgradesCard(r) {
   const behind = r.stable && r.current;
+  // What Harvester could not be asked is unknown: never "up to date" then.
+  const unknown = [r.history === null && "whether an upgrade is under way", r.offered === null && "what Harvester offers"].filter(Boolean);
   const status = !r.current ? "Harvester did not report its version"
     : behind ? `${r.stable.tag} is out; this cluster runs v${r.current}` : `v${r.current} is the newest stable release`;
   return `<section class="card flat cluster-wide upgrades-card" style="margin-top:14px">
-    ${UI.moduleHeader(`Harvester releases`, `${esc(status)}. An upgrade Harvester offers can be started here or from its own dashboard; either way it is followed here.`, `${clusterPill(r.active ? "attention" : behind ? "attention" : "healthy", r.active ? "upgrading" : behind ? "update available" : "up to date")}
+    ${UI.moduleHeader(`Harvester releases`, `${esc(status)}. An upgrade Harvester offers can be started here or from its own dashboard; either way it is followed here.`, `${clusterPill(r.active || behind ? "attention" : unknown.length ? "unknown" : "healthy", r.active ? "upgrading" : behind ? "update available" : unknown.length ? "not read" : "up to date")}
         <button class="btn sm" onclick="clusterUpgradesPaint(true)">${icon("refresh")}Check now</button>`)}
     ${r.last ? upgradeProgress(r.last) : ""}
+    ${r.unread ? UI.callout("warn", "Upgrades not read", `${esc(r.unread)}, so ${esc(unknown.join(" and ") || "this")} is not known. Check now tries again.`) : ""}
     <div class="release-list">
       ${releaseRow("NEWEST STABLE", r.stable, "stable")}
       ${releaseRow("NEWEST TEST BUILD", r.test, "test")}
@@ -364,7 +367,7 @@ function upgradesCard(r) {
       ${r.offered.filter(o => !r.current || upgradeNewer(o.version, r.current)).map(o => `${UI.chip(o.version, "neutral")}${r.active ? "" :
         `<button class="btn sm pri" data-need="admin" onclick="harvesterUpgradeStart(${jsq(o.version)})">Upgrade to ${esc(o.version)}</button>`}`).join("")
         || r.offered.map(o => UI.chip(o.version, "neutral")).join("")}</div>` : ""}
-    ${r.stable && !r.stable.offered ? `<div class="note" style="margin-top:10px">Harvester shows an Upgrade button once it lists a version, which its upgrade checker does for supported upgrade paths - sometimes a few days after release. A test build is never offered: installing one means creating its Version by hand, as Harvester's upgrade guide describes.</div>` : ""}
+    ${r.stable && r.stable.offered === false ? `<div class="note" style="margin-top:10px">Harvester shows an Upgrade button once it lists a version, which its upgrade checker does for supported upgrade paths - sometimes a few days after release. A test build is never offered: installing one means creating its Version by hand, as Harvester's upgrade guide describes.</div>` : ""}
   </section>`;
 }
 

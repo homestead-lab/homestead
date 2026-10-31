@@ -421,7 +421,10 @@ def join_facts(nodes):
 
 def upgrade_facts(report):
     """A Harvester upgrade starting, finishing or failing, and a new stable
-    release to upgrade to. Each is said once."""
+    release to upgrade to. Each is said once. None when Harvester's upgrades
+    could not be read: the source could not look, so its events are kept."""
+    if report is not None and report.get("history") is None:
+        return None
     facts = []
     for up in (report or {}).get("history") or []:
         name, version = up.get("name", ""), up.get("version", "")

@@ -79,16 +79,11 @@ def _path():
 
 
 def _load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            data = json.load(handle)
-        if isinstance(data, dict):
-            return {"hosts": data.get("hosts") or {}, "worked": data.get("worked") or [],
-                    "returned": data.get("returned") or {}, "suggestion": data.get("suggestion") or {},
-                    "ran": data.get("ran") or ""}
-    except (OSError, ValueError):
-        pass
-    return {"hosts": {}, "worked": [], "returned": {}, "suggestion": {}, "ran": ""}
+    """Raises SHARED.Unreadable for a file that is there but cannot be read."""
+    data = SHARED.read_json(_path(), {})
+    return {"hosts": data.get("hosts") or {}, "worked": data.get("worked") or [],
+            "returned": data.get("returned") or {}, "suggestion": data.get("suggestion") or {},
+            "ran": data.get("ran") or ""}
 
 
 def _save(data):

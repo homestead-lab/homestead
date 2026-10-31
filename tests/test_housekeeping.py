@@ -114,6 +114,23 @@ class AlertTests(Base):
         self.assertEqual("critical", HK.alert_facts({"volume": {"pct": 96.0}, "stores": []})[0]["severity"])
         self.assertEqual([], HK.alert_facts({"volume": {"pct": 50.0}, "stores": []}))
 
+    def test_a_volume_it_cannot_measure_keeps_the_alert_open(self):
+        """statvfs failing (the volume fenced or stale during a data move) is not "has room again"."""
+        import homestead_alerts as ALERTS
+        with mock.patch.object(HK.os, "statvfs", side_effect=OSError(5, "Input/output error")):
+            rep = {"volume": HK.volume(), "stores": []}
+        self.assertIsNone(rep["volume"]["pct"])
+        self.assertEqual([{"unknown_key": "housekeeping:volume"}], HK.alert_facts(rep))
+        before = ALERTS.DATA_DIR
+        self.addCleanup(ALERTS.bind, before)
+        ALERTS.bind(tempfile.mkdtemp())
+        full = {"housekeeping": HK.alert_facts({"volume": {"pct": 92.0}, "stores": []})}
+        ALERTS.observe(full, now=1000)
+        self.assertEqual(["raised"], [e["phase"] for e in ALERTS.observe(full, now=1100)])
+        for later in (1200, 5000, 90000):
+            self.assertEqual([], ALERTS.observe({"housekeeping": HK.alert_facts(rep)}, now=later), "nothing is pushed as cleared")
+        self.assertIn("housekeeping:volume", ALERTS._load()["active"])
+
 
 class ServerTests(Base):
     def test_unknown_references_keep_every_logo(self):

@@ -427,7 +427,16 @@ def outage_tick():
                 api_vm_power(item["ns"], item["name"], "restart")
             _cache.pop("wl" if item["kind"] == "app" else "vms", None)
 
-        did = OUTAGE.tick(found, UPTIME.report(), restart, lambda item: (item["ns"], item["name"]) in working, operations)
+        try:
+            did = OUTAGE.tick(found, UPTIME.report(), restart, lambda item: (item["ns"], item["name"]) in working, operations)
+        except Exception as error:
+            # Its own beat, so Homestead's health shows outage actions failing;
+            # the carry-over below still runs.
+            beat("outage-actions", UPTIME.CHECK_EVERY, error, leader_only=True)
+            print(f"outage actions: {str(error)[:160]}", flush=True)
+            did = None
+    if did is not None:
+        beat("outage-actions", UPTIME.CHECK_EVERY, leader_only=True)
     try:
         OUTAGE.migrate(found)       # webhook addresses still on an annotation go into their Secret (#931)
     except Exception as error:
@@ -440,7 +449,7 @@ def outage_tick():
         OUTAGE_CARRY.carry_lan()    # reads its own lists: these cached ones cannot tell a failed VM list from none
     except Exception as error:
         print(f"outage actions: carry-over: {type(error).__name__}", flush=True)
-    return did
+    return did or []
 
 
 def scheduled_items():
