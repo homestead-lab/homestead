@@ -84,7 +84,7 @@ class UnreadSecretTests(Fixture):
         # The Secret reads again by the time Save is pressed: the form is still
         # missing its values, so the save must not go ahead.
         before = (self.kube.object(DEP), self.kube.object(SECRET))
-        for attempt in (lambda: WEDIT.prepare_edit(dict(cfg)), lambda: LC.edit_workload(dict(cfg))):
+        for attempt in (lambda: WEDIT.prepare_edit(dict(cfg)), lambda: WEDIT.edit_workload(dict(cfg))):
             with self.assertRaises(ValueError) as caught:
                 attempt()
             self.assertIn("could not be read", str(caught.exception))
@@ -110,7 +110,7 @@ class WithoutTheFormTests(Fixture):
         return {item["name"]: item for item in container.get("env") or []}, self.kube.object(SECRET)["data"]
 
     def agent_save(self, env):
-        LC.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
+        WEDIT.edit_workload({"ns": "lab", "name": "tunnel", "containers": [
             {"original_name": "cloudflared", "name": "cloudflared", "image": "cloudflare/cloudflared:2026.2.0",
              "env": env}]})
 
@@ -124,7 +124,7 @@ class WithoutTheFormTests(Fixture):
         self.kube.fail(SECRET, 500, method="GET")
         cfg = self.save(self.open_form(), image="cloudflare/cloudflared:2026.2.0")
         cfg.pop("secret_env_unread")
-        LC.edit_workload(cfg)
+        WEDIT.edit_workload(cfg)
         env, data = self.saved()
         self.assertIn("TUNNEL_TOKEN", env)
         self.assertEqual({KEY: b64("first")}, data)
@@ -136,13 +136,13 @@ class WithoutTheFormTests(Fixture):
         self.assertEqual({KEY: b64("second")}, data)
 
     def test_a_form_save_that_deletes_the_row_removes_it(self):
-        LC.edit_workload(self.save(self.open_form(), env={"TZ": "UTC"}))
+        WEDIT.edit_workload(self.save(self.open_form(), env={"TZ": "UTC"}))
         env, data = self.saved()
         self.assertNotIn("TUNNEL_TOKEN", env)
         self.assertEqual({}, data)
 
     def test_a_rename_in_the_form_moves_the_value(self):
-        LC.edit_workload(self.save(self.open_form(), env={"TUNNEL_TOKEN_V2": "first", "TZ": "UTC"}))
+        WEDIT.edit_workload(self.save(self.open_form(), env={"TUNNEL_TOKEN_V2": "first", "TZ": "UTC"}))
         env, data = self.saved()
         self.assertNotIn("TUNNEL_TOKEN", env)
         self.assertEqual("cloudflared.TUNNEL_TOKEN_V2", env["TUNNEL_TOKEN_V2"]["valueFrom"]["secretKeyRef"]["key"])
@@ -156,7 +156,7 @@ class ReadSecretTests(Fixture):
         container = form["containers"][0]
         self.assertEqual({"TUNNEL_TOKEN": "first", "TZ": "UTC"}, container["env"])
         self.assertEqual(["TUNNEL_TOKEN"], container["secret_env"])
-        LC.edit_workload(self.save(form, image="cloudflare/cloudflared:2026.2.0"))
+        WEDIT.edit_workload(self.save(form, image="cloudflare/cloudflared:2026.2.0"))
         saved = self.kube.object(DEP)["spec"]["template"]["spec"]["containers"][0]
         self.assertEqual("cloudflare/cloudflared:2026.2.0", saved["image"])
         self.assertIn({"name": "TUNNEL_TOKEN", "valueFrom": {"secretKeyRef": {"name": "tunnel-env", "key": KEY}}},
