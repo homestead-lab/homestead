@@ -58,15 +58,41 @@ def bind_routes(helpers, **values):
 _DOT_SEGMENT = re.compile(r"(^|/)(\.|%2e){1,2}(/|$)", re.I)
 
 
+# A query parameter's name, as Kubernetes' own are (labelSelector, limit...).
+_QUERY_KEY = re.compile(r"[A-Za-z][A-Za-z0-9_.-]*")
+_NAMESPACE = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
+_OBJECT_NAME = re.compile(r"[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?")
+
+
 def api_path(path):
     """A Kubernetes API path, refused if a name in it could step out of the
     object it names. Names come from requests - ?name=, a body - and the API
-    server is asked as Homestead, so "../" in one must never reach it."""
-    head = str(path).split("?", 1)[0]
-    if (_DOT_SEGMENT.search(head) or "%2f" in head.lower() or "%5c" in head.lower()
+    server is asked as Homestead, so "../" in one must never reach it, nor a
+    "?" or "#" (plain or encoded) that cuts the path short. A backstop on
+    structure only: one "?", no "#", and query parameters with plain names;
+    names are checked where they enter (request_name)."""
+    head, cut, query = str(path).partition("?")
+    if (_DOT_SEGMENT.search(head) or any(code in head.lower() for code in ("%2f", "%5c", "%3f", "%23"))
             or any(c in head for c in ("\\", " ", "\t", "\r", "\n", "#"))):
         raise ValueError("that is not a valid Kubernetes name")
+    if cut and ("?" in query or "#" in query or not all(_query_part(part) for part in query.split("&") if part)):
+        raise ValueError("that is not a valid Kubernetes name")
     return path
+
+
+def _query_part(part):
+    """A query parameter with a plain name. Its value - a selector, a
+    token - is Kubernetes' to read: names are checked where they enter."""
+    return bool(_QUERY_KEY.fullmatch(part.partition("=")[0]))
+
+
+def request_name(value, label="name", namespace=False):
+    """A name from a request, refused unless it is a Kubernetes name (a
+    namespace: a DNS label; an object: a DNS subdomain), before it is put
+    into an API path."""
+    if not isinstance(value, str) or not (_NAMESPACE if namespace else _OBJECT_NAME).fullmatch(value):
+        raise ValueError(f"{label} is not a valid Kubernetes name")
+    return value
 
 
 # Each write guard is guard(method, path, body, proceed): it checks or records
@@ -420,6 +446,12 @@ def update_json(path, key, fn, *, replace=False, attempts=4, labels=None, read=N
 
 
 def require_workload_target(ns, name):
+    # An admin's request with no name is let through as before; one that
+    # names a workload names a valid one.
+    if HOSTACCESS.role() in (None, "admin") and not name:
+        return
+    request_name(ns, "namespace", namespace=True)
+    request_name(name, "workload name")
     if HOSTACCESS.role() not in (None, "admin"):
         HOSTACCESS.require_target(kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"), ns)
 

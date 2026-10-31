@@ -31,6 +31,7 @@ import homestead_history as HISTORY
 import homestead_host_access as HOSTACCESS
 import homestead_host_os as HOST_OS
 import homestead_housekeeping as HOUSEKEEPING
+import homestead_kube as KUBE
 import homestead_leader as LEADER
 import homestead_longhorn_target as BACKUP_TARGET
 import homestead_longhorn_jobs as JOBS
@@ -638,6 +639,7 @@ def guard_managed_smb(ns, name):
 
 
 def workload_start_plan(ns, name, replicas=1):
+    _path_names(ns, name)
     ns, name = _dns_name(ns, "namespace"), _dns_name(name, "workload name")
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
     plan = PLACE.start_plan(ns, name, replicas, threshold)
@@ -656,6 +658,7 @@ def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
     """A Deployment to n replicas, after the checks the app makes: never the
     SMB server's, never Homestead's own unless confirmed, and a start only
     where the capacity check allows it."""
+    _path_names(ns, name)
     if n < 0 or n > 100:
         raise ValueError("replicas must be between 0 and 100")
     guard_managed_smb(ns, name)
@@ -680,7 +683,15 @@ def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
     return {"ok": True, "plan": plan}
 
 
+def _path_names(ns, name):
+    """The namespace and workload a request names, checked before either
+    goes into an API path."""
+    KUBE.request_name(ns, "namespace", namespace=True)
+    KUBE.request_name(name, "workload name")
+
+
 def restart_workload(ns, name):
+    _path_names(ns, name)
     guard_managed_smb(ns, name)
     require_workload_target(ns, name)
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
