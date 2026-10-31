@@ -15,6 +15,7 @@ import homestead_hardware as HW
 import homestead_kube_metrics as KUBE_METRICS
 import homestead_host_os as HOST_OS
 import homestead_impact as IMPACT
+import homestead_kube as KUBE
 import homestead_kubelet_stats as KSTATS
 import homestead_lhcapacity as LHCAP
 import homestead_node_actions as NODE_ACTIONS
@@ -507,9 +508,10 @@ def _impact_sources():
     A read that fails is None, never empty or a default."""
     deployments = [d for d in kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS]
     try:
-        raw_vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
+        # No KubeVirt installed is no VMs; any other failure is unread.
+        raw_vms = KUBE.items("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io", read=kget)
     except Exception:
-        raw_vms = []
+        raw_vms = None          # the preview says the VMs couldn't be checked, never that none has a device
     return {"deployments": deployments, "raw_vms": raw_vms, "sets": _statefulsets(), "pvs": _pinned_volumes(),
             "node_down": LHCAP.node_down(kget)}
 
@@ -528,7 +530,7 @@ def node_impact(node, sources=None):
         places = (cached("network", 5, INV.inventory) or {}).get("addresses") or {}
         addresses = (places.get("addresses") or []) if isinstance(places, dict) else list(places)
     except Exception:
-        addresses = []
+        addresses = None        # the preview says the addresses are unknown, never that none moves
     try:
         placement = cached("impact:" + node, 5, lambda: PLACE.impact(node))
     except Exception:

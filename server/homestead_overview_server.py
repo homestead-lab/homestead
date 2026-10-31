@@ -811,6 +811,10 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
     tuse = sum(n["cpu_used"] for n in nodes)
     mcap = sum(n["mem_cap_gb"] for n in nodes) or 1
     muse = sum(n["mem_used_gb"] for n in nodes)
+    try:
+        lb_ip = REG.shared_vip()
+    except Exception:
+        lb_ip = None    # Your VIPs unread: no address, never the shared fallback
     return {
         **health,
         "nodes": nodes,
@@ -829,7 +833,7 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
         "mem_used_gb": round(muse, 1), "mem_cap_gb": round(mcap, 1),
         "top_cpu": sorted(wl, key=lambda x: -x["cpu"])[:6],
         "top_mem": sorted(wl, key=lambda x: -x["mem_mb"])[:6],
-        "lb_ip": REG.shared_vip(),
+        "lb_ip": lb_ip,
     }
 
 

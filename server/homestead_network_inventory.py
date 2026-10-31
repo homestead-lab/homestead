@@ -385,9 +385,16 @@ def inventory(leaving=None):
                for ip in row["external_ips"] if ip in platform]
     pools, candidates = _pool_inventory(pools_raw, reserved)
     # Addresses reserved here come first: they are the ones someone chose.
-    own = REG.registered()
-    default_vip = next((row["ip"] for row in own if row.get("default")), STATE.SHARED_VIP)
-    own_free = [row["ip"] for row in own if row["ip"] not in reserved]
+    try:
+        own, vips_unread = REG.registered(), ""
+    except Exception as error:
+        # Unread is not "no VIPs": nothing is offered as free, and there is
+        # no default rather than the shared fallback.
+        own, vips_unread = None, str(error)
+        unread.append(REG.UNREAD)
+        print(f"Networking: {vips_unread}", flush=True)
+    default_vip = None if own is None else next((row["ip"] for row in own if row.get("default")), STATE.SHARED_VIP)
+    own_free = [row["ip"] for row in own or [] if row["ip"] not in reserved]
     candidates = own_free + [ip for ip in candidates if ip not in set(own_free)]
 
     vip_rows = []
@@ -442,8 +449,10 @@ def inventory(leaving=None):
                                      blocked=address_problem(row["ip"], {"platform_addresses": platform,
                                                                          "foreign_addresses": foreign}),
                                      used_by=sorted({f"{l['namespace']}/{l['service']}" for v in vip_rows if v["ip"] == row["ip"]
-                                                     for l in v["listeners"]})) for row in own],
-            "vip_labels": {row["ip"]: row.get("label", "") for row in own},
+                                                     for l in v["listeners"]})) for row in own]
+                               if own is not None else None,
+            "vips_unread": vips_unread,
+            "vip_labels": {row["ip"]: row.get("label", "") for row in own or []},
             "available_vips": candidates[:128], "available_vip_count": len(candidates),
             "node_ips": sorted(node_ips), "node_names": node_names, "controller": controller,
             "workloads": sorted(deployment_rows, key=lambda row: (row["namespace"], row["name"])),

@@ -1064,6 +1064,8 @@ window.workloadToggleDetails = (key, button) => {
 
 
 function accessPorts(ports) {
+  // null: the Services couldn't be read, which is not "no listeners".
+  if (ports === null) return `<span class="dim" data-tip="Its Services couldn't be read just now, so where it listens is not known.">couldn't read</span>`;
   const rows = ports || [];
   if (!rows.length) return '<span class="dim">—</span>';
   const shown = rows.slice(0, 2);

@@ -378,8 +378,14 @@ def get_workloads(pods=None):
     pm = {(m["metadata"]["namespace"], m["metadata"]["name"]): m for m in usage}
     try:
         svcs = kget("/api/v1/services").get("items", [])
-    except Exception:
-        svcs = []
+    except urllib.error.HTTPError as error:
+        svcs = [] if error.code == 404 else None
+        if svcs is None:
+            print(f"Apps: could not read the Services: {str(error)[:160]}", flush=True)
+    except Exception as error:
+        # Unread is not "no listeners": each app's ports are then None.
+        print(f"Apps: could not read the Services: {str(error)[:160]}", flush=True)
+        svcs = None
     tiers = GROUPS.stored(kget)    # each group's tier (#430); None when it can't be read
     hardware_definitions = HW.features()    # one read for every app, not one each (#977)
 
@@ -398,8 +404,8 @@ def get_workloads(pods=None):
                 for c in m.get("containers", []):
                     cpu += parse_cpu(c.get("usage", {}).get("cpu"))
                     mem += parse_mem(c.get("usage", {}).get("memory"))
-        ports = []
-        for s in svcs:
+        ports = [] if svcs is not None else None
+        for s in svcs or []:
             if s["metadata"]["namespace"] != ns: continue
             ssel = s["spec"].get("selector") or {}
             if ssel and all(sel.get(k) == v for k, v in ssel.items()):
@@ -428,7 +434,7 @@ def get_workloads(pods=None):
             primary = int(NAMES.read(annotations, "primary-port") or 0)
         except ValueError:
             primary = 0
-        if primary:
+        if primary and ports:
             ports.sort(key=lambda row: row.get("port") != primary)
             for row in ports:
                 row["primary"] = row.get("port") == primary
@@ -768,8 +774,16 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
     if services is None:
         try:
             services = kget(f"/api/v1/namespaces/{ns}/services").get("items", [])
-        except Exception:
-            services = []
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise ValueError(f"{name}'s Services could not be read, so which ports it exposes is not known; "
+                                 f"try again in a moment ({str(error)[:120]})") from error
+            services = []       # a 404 listing a namespace's Services: there are none
+        except Exception as error:
+            # Opened with no Service, every port would show unexposed, and
+            # saving would remove the Service and release its address.
+            raise ValueError(f"{name}'s Services could not be read, so which ports it exposes is not known; "
+                             f"try again in a moment ({str(error)[:120]})") from error
     listeners = _service_listeners(deployment, services)
     annotations = deployment["metadata"].get("annotations", {}) or {}
     definitions = hardware_definitions if hardware_definitions is not None else HW.features()

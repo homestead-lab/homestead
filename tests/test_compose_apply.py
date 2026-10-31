@@ -12,6 +12,9 @@ import server
 import homestead_deploy_manifests as MANIFESTS
 from fakes.platform import plain_platform
 
+# No VIP registry saved: these build manifests without a cluster to read it from.
+NO_REGISTRY = lambda: mock.patch("homestead_vip_registry.registered", return_value=[])
+
 STACK = """services:
   web:
     image: web
@@ -33,6 +36,7 @@ class ComposeApplyTests(unittest.TestCase):
         self.sets = []
         get = mock.patch.object(server.KUBE_HELPERS, "kget", side_effect=self.get)
         features = mock.patch.object(server.HW, "features", return_value=[])
+        self.enterContext(NO_REGISTRY())
         deploy = mock.patch.object(server.DEPLOY, "run_deploy", side_effect=self._deploy)
         nodes = [{"name": "host", "status": "Ready", "schedulable": True, "hardware": {},
                   "labels": {"kubernetes.io/hostname": "host"}, "allocatable": {"cpu": "8", "memory": "16Gi", "pods": "100"},

@@ -211,6 +211,11 @@ def vm_target(vm, learned=None):
             "asks": asks, "discover": True, "timeout": DISCOVER_TIMEOUT}, ""
 
 
+# Why an app whose Services could not be read is not asked this round: its
+# record stays as it was (a down app stays down), never "off".
+PORTS_UNREAD = "its Services couldn't be read, so where to ask it is not known"
+
+
 def target(w):
     """Where and how to ask one app, or None with the reason it is not checked."""
     if w.get("platform") or w.get("self") or w.get("homestead") or w.get("site"):
@@ -220,6 +225,8 @@ def target(w):
         return None, "checks are off for this app"
     if not w.get("desired"):
         return None, "stopped"
+    if w.get("ports") is None and "ports" in w:
+        return None, PORTS_UNREAD
     ports = [p for p in w.get("ports") or [] if p.get("ip") and p.get("port") and (p.get("protocol") or "TCP") == "TCP"]
     if not ports:
         return None, "no address to ask"
@@ -469,6 +476,8 @@ def observe(workloads, now=None, ask=probe, vms=None):
         for key, t, why in rows:
             app = apps.setdefault(key, {"state": "unknown", "hours": {}})
             app["seen"] = round(now) if not app.get("seen") or now - app["seen"] > 3600 else app["seen"]
+            if not t and why == PORTS_UNREAD:
+                continue
             if not t:
                 if app.get("state") not in ("off", None) or app.get("why") != why:
                     changed = changed or app.get("state") in ("down",)

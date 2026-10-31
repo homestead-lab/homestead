@@ -69,7 +69,7 @@ test("rows that couldn't be checked have their own chip and section; unread Stat
   // Titles and reasons go through esc, which turns ' into &#39;.
   assert.match(html, /Couldn(?:'|&#39;)t be checked<\/h4>[^]*couldn&#39;t be checked: where its volumes are stored/);
   assert.match(html, /ui-chip neutral slim">unknown</);
-  assert.match(html, /Couldn't read StatefulSets, so none of them is listed\./);
+  assert.match(html, /Couldn't read StatefulSets, so this may not be all of it\./);
 });
 
 test("copies Longhorn couldn't read make the volume risk unknown, never nothing at risk (#1002)", async () => {
@@ -81,6 +81,17 @@ test("copies Longhorn couldn't read make the volume risk unknown, never nothing 
   assert.match(html, /<span class="ui-chip neutral">volume risk unknown<\/span>/);
   assert.doesNotMatch(html, /no volume keeps a copy here/);
   assert.match(html, /Couldn(?:'|&#39;)t read Longhorn(?:'|&#39;)s volume copies/);
+});
+
+test("addresses that couldn't be read are said, and the page never says nothing is here (fix/unread-inventory)", async () => {
+  const t = setup({ node: "node2", others_ready: ["node1"], at_risk: [], fewer_copies: [], addresses: [],
+    unread: ["service addresses"], apps: [],
+    counts: { stops: 0, waits: 0, unknown: 0, moves: 0, at_risk: 0, fewer_copies: 0, addresses: null } });
+  await t.ctx.nodeIfDown("node2");
+  const html = t.fields["#mbody"].innerHTML;
+  assert.match(html, /Couldn't read service addresses, so this may not be all of it\./);
+  assert.doesNotMatch(html, /Nothing of yours runs here/);
+  assert.doesNotMatch(html, /none of them is listed/);
 });
 
 test("one heading fits apps waiting for their host and StatefulSets waiting for their pod to be deleted", async () => {

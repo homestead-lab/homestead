@@ -435,8 +435,11 @@ def set_workload_address(namespace, workload, network_mode, vip_mode="shared", v
         return ""
     current_ip = (row.get("requested_ips") or [""])[0]
     current_mode = row.get("vip_mode") or ""
-    shared = (INV.inventory()["shared_vip"] or {}).get("ip", "")
-    unchanged = (mode == "manual" and vip == current_ip
+    state = INV.inventory()
+    shared = (state["shared_vip"] or {}).get("ip", "")
+    # With anything unread (the VIP registry included) nothing counts as
+    # unchanged: create_service's plan refuses and says what.
+    unchanged = not STATE._unread(state) and (mode == "manual" and vip == current_ip
                  or mode == "shared" and (current_mode == "shared" or (shared and current_ip == shared))
                  or mode == "automatic" and current_ip and current_ip != shared and current_mode != "nodes"
                  or mode == "nodes" and current_mode == "nodes")

@@ -13,6 +13,9 @@ import homestead_lifecycle as lifecycle
 import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_host_access as host_access
 
+# No VIP registry saved: these build manifests without a cluster to read it from.
+NO_REGISTRY = lambda: mock.patch("homestead_vip_registry.registered", return_value=[])
+
 
 class ContainerSetTests(unittest.TestCase):
     def setUp(self):
@@ -28,7 +31,7 @@ class ContainerSetTests(unittest.TestCase):
         self.read = mock.Mock(side_effect=urllib.error.HTTPError("fixture", 404, "missing", {}, None))
         for patch in (mock.patch.object(lifecycle, "kget", self.read),
                       mock.patch.object(lifecycle, "hardware_features", return_value=[]),
-                      mock.patch.object(server.HW, "features", return_value=[])):
+                      mock.patch.object(server.HW, "features", return_value=[]), NO_REGISTRY()):
             patch.start(); self.addCleanup(patch.stop)
 
     def prepare(self, **changes):
