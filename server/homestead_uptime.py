@@ -65,7 +65,7 @@ DISCOVER_TIMEOUT = 1.2
 PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,199}$")
 USER_AGENT = "Homestead-uptime/1"
 _lock = threading.Lock()
-_state = {"loaded": False, "apps": {}, "saved_at": 0.0, "observed_at": 0.0, "mtime": None}
+_state = {"loaded": False, "apps": {}, "saved_at": 0.0, "observed_at": 0.0, "mtime": None, "closed": {}}
 
 
 # How an app's own check is saved - an annotation on its Deployment, which
@@ -79,7 +79,7 @@ def bind(data_dir="/data", setting=None):
     if setting is not None:
         save_setting = setting
     with _lock:
-        _state.update(loaded=False, apps={}, saved_at=0.0, observed_at=0.0, mtime=None)
+        _state.update(loaded=False, apps={}, saved_at=0.0, observed_at=0.0, mtime=None, closed={})
 
 
 def _path():
@@ -105,7 +105,7 @@ def _load(fresh=False):
         _state["apps"] = data.get("apps", {}) if isinstance(data, dict) else {}
     except (OSError, ValueError):
         _state["apps"] = {}
-    _state["loaded"] = True
+    _state["loaded"], _state["closed"] = True, {}
     return _state["apps"]
 
 
@@ -407,18 +407,43 @@ def observe(workloads, now=None, ask=probe, vms=None):
             result = {k: v for k, v in result.items() if k not in ("host", "port", "scheme")}
             closing = str(_hour(now)) not in app.get("hours", {})
             changed = _record(app, result, now) or closing or changed
+            kept = _state["closed"].get(key)
+            if kept and not kept["today"] <= _hour(now) < kept["today"] + 86400:
+                _state["closed"].pop(key)       # the clock went back into a day kept as closed
         oldest = _hour(now) - KEEP_HOURS * 3600
         for key in list(apps):
-            apps[key]["hours"] = {h: v for h, v in apps[key].get("hours", {}).items() if int(h) >= oldest}
+            # In place, so what report() keeps of the closed days stays tied to
+            # these hours; forgetting one changes the thirty days' figure.
+            hours = apps[key].setdefault("hours", {})
+            gone = [h for h in hours if int(h) < oldest]
+            for h in gone:
+                del hours[h]
+            if gone:
+                _state["closed"].pop(key, None)
             if now - apps[key].get("seen", now) > FORGET_AFTER:
                 apps.pop(key)
+                _state["closed"].pop(key, None)
         if changed or now - _state["saved_at"] >= SAVE_EVERY:
             _save(now)
         return apps
 
 
-def summary(app, now=None):
-    """What a card shows: state, the last answer, a 24-hour strip, uptime over 24 h and 30 days."""
+def _day_mark(checks, misses, slow):
+    """One day of the strip: down if any check that day missed enough to count
+    (a tenth of them), slow if most were slow."""
+    return None if not checks else "down" if misses * 10 >= checks else "slow" if slow * 2 >= checks \
+        else "dip" if misses else "up"
+
+
+def _share(checks, misses):
+    return None if not checks else round(100 * (checks - misses) / checks, 2)
+
+
+def summary(app, now=None, closed=None):
+    """What a card shows: state, the last answer, a 24-hour strip, uptime over 24 h and 30 days.
+
+    closed is what _closed() kept of the days before today, so only today's
+    hours are added up; without it every hour is, once (#979)."""
     now = now or time.time()
     hours = app.get("hours", {})
     this = _hour(now)
@@ -426,35 +451,82 @@ def summary(app, now=None):
     for i in range(STRIP_HOURS - 1, -1, -1):
         row = hours.get(str(this - i * 3600))
         strip.append(None if not row or not row[0] else "down" if row[1] else "slow" if row[2] * 2 >= row[0] else "up")
-
-    def share(rows):
-        checks = sum(r[0] for r in rows)
-        return None if not checks else round(100 * (checks - sum(r[1] for r in rows)) / checks, 2)
-
-    # The last 30 days, one mark a day: down if any check that day missed
-    # enough to count (a tenth of them), slow if most were slow.
+    # The last 30 days, one mark a day.
     today = int(now // 86400 * 86400)
-    days = []
-    for i in range(29, -1, -1):
-        start = today - i * 86400
-        rows = [v for h, v in hours.items() if start <= int(h) < start + 86400]
+    if closed is not None:
+        rows = [row for row in (hours.get(str(today + i * 3600)) for i in range(24)) if row]
         checks, misses, slow = (sum(r[k] for r in rows) for k in range(3))
-        days.append(None if not checks else "down" if misses * 10 >= checks else "slow" if slow * 2 >= checks
-                    else "dip" if misses else "up")
-    recent = [v for h, v in hours.items() if int(h) > this - STRIP_HOURS * 3600]
+        days = closed["days"] + [_day_mark(checks, misses, slow)]
+        recent = rows + [row for row in (hours.get(str(t)) for t in range(this - (STRIP_HOURS - 1) * 3600, today, 3600)) if row]
+        uptime_24h = _share(sum(r[0] for r in recent), sum(r[1] for r in recent))
+        uptime_30d = _share(closed["checks"] + checks, closed["misses"] + misses)
+    else:
+        first = today - 29 * 86400
+        by_day = [[] for _ in range(30)]
+        recent = []
+        for h, v in hours.items():
+            t = int(h)
+            if first <= t < today + 86400:
+                by_day[(t - first) // 86400].append(v)
+            if t > this - STRIP_HOURS * 3600:
+                recent.append(v)
+        days = [_day_mark(*(sum(r[k] for r in rows) for k in range(3))) for rows in by_day]
+        uptime_24h = _share(sum(r[0] for r in recent), sum(r[1] for r in recent))
+        uptime_30d = _share(sum(r[0] for r in hours.values()), sum(r[1] for r in hours.values()))
     state = app.get("state", "unknown")
     last = app.get("last") or {}
     if state == "up" and last.get("ms") and last["ms"] > SLOW_MS:
         state = "slow"
     return {"state": state, "since": app.get("since"), "why": app.get("why", ""), "target": app.get("target", ""),
             "port": app.get("port"),
-            "last": last, "strip": strip, "days": days, "uptime_24h": share(recent), "uptime_30d": share(list(hours.values()))}
+            "last": last, "strip": strip, "days": days, "uptime_24h": uptime_24h, "uptime_30d": uptime_30d}
+
+
+def _closed(hours, today):
+    """The days before today, which no check adds to any more: their marks and
+    their checks and misses, or None when the hours are not all ones a check
+    writes - a count on the hour, in whole numbers, none after today - and so
+    are added up in full each time."""
+    first = today - 29 * 86400
+    days = [[0, 0, 0] for _ in range(29)]
+    checks = misses = 0
+    for h, v in hours.items():
+        try:
+            t = int(h)
+        except ValueError:
+            return None
+        if (str(t) != h or t % 3600 or t >= today + 86400 or type(v) is not list or len(v) != 3
+                or not all(type(n) is int for n in v)):
+            return None
+        if t < today:
+            checks, misses = checks + v[0], misses + v[1]
+            if t >= first:
+                day = days[(t - first) // 86400]
+                day[0], day[1], day[2] = day[0] + v[0], day[1] + v[1], day[2] + v[2]
+    return {"hours": hours, "today": today, "days": [_day_mark(*day) for day in days],
+            "checks": checks, "misses": misses}
 
 
 def report(now=None):
+    """Every app's summary. What the closed days add up to is kept per app until
+    midnight, until an hour is forgotten, or until the file is read again, so
+    each call adds up only today (#979)."""
     with _lock:
         apps = _load(fresh=time.time() - _state["observed_at"] > 3 * CHECK_EVERY)
-        return {key: summary(app, now) for key, app in apps.items()}
+        at = now or time.time()
+        today = int(at // 86400 * 86400)
+        out = {}
+        for key, app in apps.items():
+            hours = app.get("hours", {})
+            kept = _state["closed"].get(key)
+            if not kept or kept["hours"] is not hours or kept["today"] != today:
+                kept = _closed(hours, today)
+                if kept is None:
+                    _state["closed"].pop(key, None)
+                else:
+                    _state["closed"][key] = kept
+            out[key] = summary(app, at, kept)
+        return out
 
 
 def alert_facts(rep):
