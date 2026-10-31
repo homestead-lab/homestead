@@ -57,7 +57,7 @@ STORES = [
     ("First-admin setup code", ["setup-code.json"], "the code's hash, until the first account exists"),
     ("Logos", ["icons/*"], f"while something uses them, then {ICON_DAYS} days"),
     ("Bug reports", ["diagnostics/*"], "until they expire"),
-    ("Host ports and monitoring state", ["host-ports.json", "host-os.json", "node-parity.json", "root-guard.json"], "current state only"),
+    ("Host ports and monitoring state", ["host-ports.json", "host-os.json", "node-parity.json", "root-guard.json", "smart-readings.json"], "current state only"),
 ]
 LOGS = ("image-update-history.jsonl", "console-audit.jsonl")
 # What an interrupted write leaves: homestead_shared's <file>.<pid>.<thread>.tmp,

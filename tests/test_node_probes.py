@@ -3,6 +3,7 @@ one (#705)."""
 import io
 import json
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -54,6 +55,7 @@ class Cluster:
             self.kube.add(item)
 
     def urlopen(self, url, timeout=None):
+        url = getattr(url, "full_url", url)      # the SMART read is a signed Request
         self.calls.append(url)
         ip, port = url.split("//")[1].rstrip("/").split(":")
         if port == "9100":
@@ -78,8 +80,11 @@ class Base(unittest.TestCase):
         self.addCleanup(KUBE_METRICS.reset)
         self.addCleanup(KUBE_METRICS.stop)
         self.cluster = Cluster(self)
+        store = tempfile.TemporaryDirectory()          # the SMART readings kept on the data volume
+        self.addCleanup(store.cleanup)
         for patch in (mock.patch.object(PROBES.NAMES, "kget", K.kget, create=True),
-                      mock.patch.object(PROBES.urllib.request, "urlopen", self.cluster.urlopen)):
+                      mock.patch.object(PROBES.urllib.request, "urlopen", self.cluster.urlopen),
+                      mock.patch.object(PROBES.SMART.SHARED, "DIR", store.name)):
             patch.start()
             self.addCleanup(patch.stop)
 

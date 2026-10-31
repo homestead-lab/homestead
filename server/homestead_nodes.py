@@ -216,7 +216,14 @@ def smart_disk_health(report, settings=None):
             summary = "passed, with no reported defects"
     else:
         summary = "; ".join(x["reason"] for x in issues)
+    if report.get("asleep") and not issues:
+        # Left asleep by the regular read (#974): its last reading taken awake
+        # (read_at) says nothing is wrong, which is not the same as healthy now.
+        state = "asleep"
+        summary = ("asleep; no reported defects when last read awake" if report.get("read_at")
+                   else "asleep; Homestead has not read it awake yet")
     return {"state": state, "issues": issues, "summary": summary,
+            "read_at": report.get("read_at"),
             "life_pct": None if life is None else int(life),
             "life_basis": wear.get("basis", ""),
             "stale_probe": stale_probe,
@@ -603,9 +610,10 @@ def _ports(request):
 
 def _smart(request):
     node, disk = _one(request.query, "node"), _one(request.query, "disk")
+    # From the host's last reading (SMART.latest), not a fresh read of every drive per view.
     if not disk:
-        return SMART.inventory(node)
-    report = SMART.disk(node, disk)
+        return SMART.latest(node)
+    report = SMART.latest_disk(node, disk)
     # The same verdict the node card shows, so one drive cannot be healthy in
     # the list and something else in its own detail.
     report["health_assessment"] = smart_disk_health(report, get_app_settings().get("smart"))

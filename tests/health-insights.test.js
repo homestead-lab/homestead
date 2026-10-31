@@ -111,3 +111,9 @@ test("Longhorn's jobs that could not be read are an unknown check, not a cluster
  assert.deepEqual(rows.map(r=>[r.id,r.severity,r.route]),[["unknown:protection-jobs","low","retry"]]);
  assert.match(rows[0].detail,/could not be read: forbidden/);
 });
+test("a drive asleep with no reading yet is health unknown; one asleep on a clean reading is not listed",()=>{
+ const s=base();s.nodes=[{name:"host",temps:{disks:[{name:"sda",health:{state:"asleep"}},{name:"sdb",health:{state:"asleep",read_at:1700000000}}]}}];
+ const rows=H.advice(s);
+ assert.match(rows.find(r=>r.id==="disk:host:sda")?.title || "",/drive health unknown/);
+ assert.equal(rows.find(r=>r.id==="disk:host:sdb"),undefined);
+});
