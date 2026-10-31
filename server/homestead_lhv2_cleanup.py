@@ -124,14 +124,146 @@ def status(identity):
     return public(item)
 
 
+class Refusal(ValueError):
+    """A check that waiting can't clear: the job ends with it. Busy hosts, failed
+    reads and host runs that didn't answer stay ordinary errors and are retried."""
+
+
+STAGED = ('staging', 'restart-required')   # a host's RAM release may be on its next boot
+# Set with this job's cordon, so a give-up only undoes a cordon that is still ours.
+CORDONED_BY = 'homestead.io/cordoned-by'
+_MARK = '/metadata/annotations/' + CORDONED_BY.replace('/', '~1')
+
+
 def progress(item):
+    if item.get('status') == 'failed': return 'failed', item.get('progress', 0), item.get('message', '')
     ref = item['ref']
+    if ref.get('refused'): return _end_refused(item)
     setting, nodes, pods, active = inventory(cleaning=True)
-    if setting['metadata']['uid'] != ref['setting_uid']: raise ValueError('V2 setting identity changed')
+    try:
+        return _progress(item, setting, nodes, pods, active)
+    except Refusal as error:
+        # Retrying these kept V2 locked and the hosts cordoned for good.
+        ref['refused'] = str(error); SETUP.ops.checkpoint(item)
+        return _end_refused(item)
+
+
+def _released(obj, memory):
+    """The host restarted with the reviewed pool released, as kubelet reports it."""
+    if not obj or obj.get('status', {}).get('nodeInfo', {}).get('bootID') != memory['boot']: return False
+    capacity = RESOURCES.quantity(obj.get('status', {}).get('capacity', {}).get('hugepages-2Mi'), 'storage')
+    return capacity == memory['baseline'] * 2097152
+
+
+def _maintenance(node):
+    return any(i.get('status') not in SETUP.ops.TERMINAL and (i.get('kind') == 'platform-upgrade' or
+               i.get('kind') in ('host-os', 'node-power') and (i.get('ref') or {}).get('node') == node)
+               for i in SETUP.ops.stored())
+
+
+def _node(name):
+    """The host's Node as it is now, or None when it no longer exists."""
+    return next((n for n in items('/api/v1/nodes') if n['metadata']['name'] == name), None)
+
+
+def _uncordon(item, row):
+    """Undo this job's cordon on row's host, from a fresh read. None when that is
+    settled (done, or the cordon is no longer ours); else why it is retried."""
+    obj = _node(row['node'])
+    meta = (obj or {}).get('metadata', {})
+    if not obj or (meta.get('annotations') or {}).get(CORDONED_BY) != item['id']:
+        row['cordoned'] = False
+        if obj and obj.get('spec', {}).get('unschedulable'): row['left'] = 'cordoned again by something else'
+        return None
+    if obj.get('spec', {}).get('unschedulable') and _maintenance(row['node']):
+        return 'host maintenance is active on it'
+    try:
+        SETUP.ksend('PATCH', '/api/v1/nodes/' + row['node'], [
+            {'op': 'test', 'path': '/metadata/uid', 'value': row['uid']},
+            {'op': 'test', 'path': '/metadata/resourceVersion', 'value': meta['resourceVersion']},
+            {'op': 'test', 'path': _MARK, 'value': item['id']},
+            {'op': 'remove', 'path': _MARK},
+            {'op': 'replace', 'path': '/spec/unschedulable', 'value': False}], ctype='application/json-patch+json')
+    except (ValueError, OSError) as error:
+        return 'allowing scheduling failed (' + str(error)[:120] + ')'
+    row['cordoned'] = False
+    return None
+
+
+def _unmark(item, row):
+    """After success the hosts stay cordoned for the person; only the mark goes."""
+    try:
+        obj = _node(row['node'])
+        if obj and (obj['metadata'].get('annotations') or {}).get(CORDONED_BY) == item['id']:
+            SETUP.ksend('PATCH', '/api/v1/nodes/' + row['node'], [
+                {'op': 'test', 'path': '/metadata/uid', 'value': row['uid']},
+                {'op': 'test', 'path': _MARK, 'value': item['id']},
+                {'op': 'remove', 'path': _MARK}], ctype='application/json-patch+json')
+    except (ValueError, OSError):
+        pass   # a stale mark changes nothing: only this job reads its own mark
+
+
+def _staged_note(row, obj, memory):
+    """Why a staged host is still waited for, in words, or ''."""
+    if memory['phase'] != 'complete': return ''
+    boot = obj.get('status', {}).get('nodeInfo', {}).get('bootID')
+    if boot != memory['boot']: return row['node'] + ': restarted, waiting for kubelet to report the new boot'
+    pool = obj.get('status', {}).get('capacity', {}).get('hugepages-2Mi') or '0'
+    return (row['node'] + ': restarted, but kubelet reports a different hugepage pool (' + pool + ') than reviewed ('
+            + str(memory['baseline'] * 2) + 'Mi). Check the host\'s memory policy, restart it again, '
+            'or allow scheduling on it yourself')
+
+
+def _end_refused(item):
+    """After a refusal: allow scheduling again on each host this job cordoned. A
+    host whose RAM release is (or may be) staged keeps its cordon until an
+    inspection shows it restarted and released, or that nothing was staged. The
+    job fails with the refusal, letting go of V2, only once no host is staged
+    and every cordon of its own is settled; until then it says what it waits for."""
+    ref = item['ref']
+    nodes = {n['metadata']['name']: n for n in items('/api/v1/nodes')}
+    notes = []
+    for row in ref['nodes']:
+        if row.get('phase') not in STAGED: continue
+        obj = nodes.get(row['node'])
+        if obj is None:
+            row.update(phase='complete', cordoned=False, left='no longer in the cluster; nothing to release')
+            continue
+        try:
+            memory = host(row)
+        except (ValueError, OSError) as error:
+            notes.append(row['node'] + ': ' + str(error)[:200]); continue   # no receipt: it stays staged
+        if memory['phase'] != 'complete' or _released(obj, memory):
+            row.update(memory)
+        else:
+            notes.append(_staged_note(row, obj, memory))
+    staged = [r['node'] for r in ref['nodes'] if r.get('phase') in STAGED]
+    retried = []
+    for row in ref['nodes']:
+        if not row.get('cordoned') or row['node'] in staged: continue
+        why = _uncordon(item, row)
+        if why: retried.append(row['node'] + ' (' + why + ')')
+    reason = ref['refused']
+    if staged or retried:
+        SETUP.ops.checkpoint(item)
+        message = reason + '. Cleanup stopped'
+        if staged: message += '. RAM release waits for a restart of ' + ', '.join(staged) + ', which stays cordoned until then'
+        if notes: message += '. ' + '. '.join(n for n in notes if n)
+        if retried: message += '. Allowing scheduling again is retried on ' + '; '.join(retried)
+        return 'running', item.get('progress', 0), message
+    ref['phase'] = 'complete'; SETUP.ops.checkpoint(item)
+    left = [r['node'] + ' (' + r['left'] + ')' for r in ref['nodes'] if r.get('left')]
+    if left: reason += '. ' + '; '.join(left)
+    return 'failed', item.get('progress', 0), reason
+
+
+def _progress(item, setting, nodes, pods, active):
+    ref = item['ref']
+    if setting['metadata']['uid'] != ref['setting_uid']: raise Refusal('V2 setting identity changed')
     if {(r['node'],r['uid']) for r in node_rows(nodes)} != {(r['node'],r['uid']) for r in ref['nodes']}:
-        raise ValueError('Cluster hosts changed; cleanup requires a new inspection')
+        raise Refusal('Cluster hosts changed; cleanup requires a new inspection')
     if setting['value'] == 'true':
-        if ref['phase'] != 'stopping': raise ValueError('V2 was re-enabled; host cleanup is stopped')
+        if ref['phase'] != 'stopping': raise Refusal('V2 was re-enabled; host cleanup is stopped')
         ref['phase'] = 'waiting'; SETUP.ops.checkpoint(item)
         CAP.ksend('PATCH', CAP.LH + '/settings/v2-data-engine', [
             {'op': 'test', 'path': '/metadata/uid', 'value': setting['metadata']['uid']},
@@ -150,7 +282,7 @@ def progress(item):
     for row in ref['nodes']:
         if row.get('phase') in ('retained', 'complete') or not row.get('owned_pages'): continue
         node = current.get(row['node'])
-        if not node or node['uid'] != row['uid']: raise ValueError('Host identity changed; memory is retained')
+        if not node or node['uid'] != row['uid']: raise Refusal('Host identity changed; memory is retained')
         if not node['ready']:
             waiting = True; continue
         memory = host(row)
@@ -163,24 +295,29 @@ def progress(item):
         if memory['phase'] == 'restart-required':
             row.update(memory); waiting = True; continue
         if memory.get('proof') != row.get('proof') or memory['boot'] != row['boot']:
-            raise ValueError('Host memory changed since review; reservation is retained')
+            raise Refusal('Host memory changed since review; reservation is retained')
         requested = sum(RESOURCES.pod_request(p.get('spec', {}), 'hugepages-2Mi') for p in pods
                         if p.get('spec', {}).get('nodeName') == row['node'] and p.get('status', {}).get('phase') not in ('Succeeded', 'Failed'))
         if requested > row['baseline'] * 2097152:
-            raise ValueError('Other workloads request this host’s hugepages; its reservation is retained')
+            raise Refusal('Other workloads request this host’s hugepages; its reservation is retained')
         obj = next(n for n in nodes if n['metadata']['name'] == row['node'])
         # Prevent new placements while kubelet still advertises the old pool.
         if not obj.get('spec', {}).get('unschedulable'):
+            row['cordoned'] = True; SETUP.ops.checkpoint(item)   # before the write: its answer can be lost
             SETUP.ksend('PATCH', '/api/v1/nodes/' + row['node'], [
                 {'op': 'test', 'path': '/metadata/uid', 'value': row['uid']},
                 {'op': 'test', 'path': '/metadata/resourceVersion', 'value': obj['metadata']['resourceVersion']},
+                *([] if 'annotations' in obj['metadata'] else [{'op': 'add', 'path': '/metadata/annotations', 'value': {}}]),
+                {'op': 'add', 'path': _MARK, 'value': item['id']},
                 {'op': 'add', 'path': '/spec/unschedulable', 'value': True}], ctype='application/json-patch+json')
         # A workload can bind while the initial inventory is being read. Take
         # another complete read after cordoning, before changing boot policy.
         fresh = items('/api/v1/pods')
         if sum(RESOURCES.pod_request(p.get('spec', {}), 'hugepages-2Mi') for p in fresh
                if p.get('spec', {}).get('nodeName') == row['node'] and p.get('status', {}).get('phase') not in ('Succeeded', 'Failed')) > row['baseline'] * 2097152:
-            raise ValueError('A workload claimed hugepages during review; memory is unchanged and the host remains cordoned')
+            raise Refusal('A workload claimed hugepages during review; memory is unchanged')
+        # An error from the stage run is no proof that nothing was staged.
+        row['phase'] = 'staging'; SETUP.ops.checkpoint(item)
         row.update(host(row, 'stage', proof=row['proof'], boot=row['boot'])); waiting = True
         SETUP.ops.checkpoint(item)
         break
@@ -188,6 +325,8 @@ def progress(item):
         ref['phase'] = 'restart-required'; SETUP.ops.checkpoint(item)
         return 'running', 60, 'V2 stopped. Review a restart for each prepared host to release RAM; hosts remain cordoned until you allow scheduling'
     ref['phase'] = 'complete'; SETUP.ops.checkpoint(item)
+    for row in ref['nodes']:
+        if row.get('cordoned'): _unmark(item, row)
     retained = any(r.get('phase') == 'retained' or not r.get('owned_pages') for r in ref['nodes'])
     return 'succeeded', 100, 'V2 stopped; owned RAM released' + ('; unowned reservations retained (see host details)' if retained else '')
 

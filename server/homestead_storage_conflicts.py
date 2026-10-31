@@ -87,7 +87,7 @@ def require_clear(items, kind, ref, resource=None):
     for item in items:
         if item.get('kind') != 'longhorn-v2-cleanup' or not unresolved(item): continue
         row = next((r for r in item['ref'].get('nodes', []) if r['node'] == ref.get('node')), None)
-        restart = kind == 'node-power' and ref.get('action') == 'reboot' and row and row.get('phase') == 'restart-required'
+        restart = kind == 'node-power' and ref.get('action') == 'reboot' and row and row.get('phase') in ('restart-required', 'staging')
         if kind == 'longhorn-v2-prepare' or _holds_v2(kind, ref) or row and kind in ('node-power', 'host-os', 'disk-v2-convert', 'disk-allocation', 'longhorn-runtime') and not restart:
             raise ValueError('Finish V2 resource cleanup before changing this host or upgrading Longhorn')
     runtime = [i for i in items if i.get('kind') == 'longhorn-runtime' and unresolved(i)]
