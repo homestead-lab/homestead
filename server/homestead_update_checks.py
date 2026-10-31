@@ -13,6 +13,8 @@ import threading
 import time
 import urllib.error
 
+import homestead_forced as FORCED
+
 
 def _pod_digest(pods, container):
     """The digest a container is running on: only from a container that is
@@ -254,6 +256,7 @@ def _fresh_for(report):
     return RETRY_RATE_LIMITED if (report or {}).get("rate_limited") else FRESH_FOR
 def invalidate():
     """Something changed an image: the next quiet request scans again."""
+    FORCED.forget(*U.FORCED_KEYS)
     with _SCAN_LOCK:
         _LATEST.update(report=None, number=0, finished=0.0)
 def refresh_one(ns, name):
@@ -261,6 +264,7 @@ def refresh_one(ns, name):
     answer in the last report, rather than throwing the whole report away -
     which left the page showing the update as waiting until every registry
     had been asked again."""
+    FORCED.forget(*U.FORCED_KEYS)
     with _SCAN_LOCK:
         latest = _LATEST.get("report")
     if not latest:

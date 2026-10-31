@@ -15,6 +15,10 @@ import time
 import urllib.parse
 import homestead_operations as OPS
 import homestead_routes as ROUTER
+import homestead_forced as FORCED
+
+# The forced checks' answers (homestead_forced): forgotten when an image or the channel changes.
+FORCED_KEYS = ("image-updates", "image-updates:homestead")
 
 
 kget = ksend = None
@@ -143,7 +147,13 @@ def _report(request):
     force = (request.query.get("force") or ["0"])[0].lower() in ("1", "true", "yes")
     # Settings › Homestead checks Homestead's own parts, not every app.
     only = (request.query.get("only") or [""])[0] == "homestead"
-    answer = json.loads(json.dumps(CHECKS.homestead_report() if force and only else CHECKS.report(force)))
+    if not force:
+        answer = CHECKS.report(False)
+    elif only:
+        answer = FORCED.run(FORCED_KEYS[1], CHECKS.homestead_report)
+    else:
+        answer = FORCED.run(FORCED_KEYS[0], lambda: CHECKS.report(True))
+    answer = json.loads(json.dumps(answer))      # a copy: the forced answer is shared
     answer["policy"] = update_policy_status()
     return answer
 
@@ -151,7 +161,9 @@ def _report(request):
 def _set_channel(request):
     settings = get_app_settings()
     settings["updates"]["channel"] = request.body.get("channel")
-    return save_app_settings(settings)
+    saved = save_app_settings(settings)
+    FORCED.forget(*FORCED_KEYS)
+    return saved
 
 
 def _set_managed(request):
@@ -176,6 +188,7 @@ def _apply(request, action):
         "/containers?" + urllib.parse.urlencode({"find": b["name"]}),
         {"namespace": b["ns"], "name": b["name"]})
     ROUTER.forget("wl", "ov"); CHECKS.refresh_soon(b["ns"], b["name"])
+    FORCED.forget(*FORCED_KEYS)
     return result
 
 

@@ -20,6 +20,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_forced as FORCED
 import homestead_names as NAMES
 import homestead_outage as OUTAGE
 import homestead_value_masks as MASKS
@@ -74,6 +75,10 @@ def discover(force=False):
     """Every listable kind the API server serves, newest version of each group."""
     if not force and _discovery["value"] is not None and time.time() - _discovery["at"] < TTL:
         return _discovery["value"]
+    return FORCED.run("resource-kinds", _discover) if force else _discover()
+
+
+def _discover():
     lists = [("", "v1", kget("/api/v1"))]
     for group in kget("/apis").get("groups", []):
         version = (group.get("preferredVersion") or {}).get("version") or (group.get("versions") or [{}])[0].get("version")
