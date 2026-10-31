@@ -241,7 +241,8 @@ class RolloutCapacityTests(unittest.TestCase):
 
     def test_stale_resource_version_requires_new_review_before_mutations(self):
         cfg = self.reviewed()
-        self.current["metadata"]["resourceVersion"] = "11"
+        # An edit since the review; a status-only write would keep it (test_review_status_writes).
+        self.current["metadata"].update(resourceVersion="11", annotations={"example.com/edited": "yes"})
         with mock.patch.object(server.DEPLOY, "run_deploy") as deploy:
             with self.assertRaises(review.Rejected):
                 server.DEPLOY_ROUTES.reviewed_deploy(cfg)

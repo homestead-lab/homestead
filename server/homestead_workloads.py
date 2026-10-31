@@ -357,7 +357,7 @@ def move_to_host(request):
         # never be silently overwritten by a second, unreviewed fetch-and-move.
         ksend("PUT", f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}", proposed)
         PLACE._bust("wl", "ov", "flow", "nodes", "impact:")
-    operation = HOST_MOVE.start(b, proposed, capacity, apply)
+    operation = HOST_MOVE.start(b, proposed, capacity, apply, settled=context.get("settled"))
     return {"ok": True, "moved": meta["name"], "to": capacity["move"]["node"] or "any node",
             "mode": capacity["move"]["mode"], "operation": operation}
 

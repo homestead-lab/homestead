@@ -64,10 +64,12 @@ def missing(dep, node):
     return [image for image in _images(dep) if not _on_node(image, held)]
 
 
-def start(body, proposed, capacity, apply):
+def start(body, proposed, capacity, apply, settled=None):
     """Start the move: when the host lacks any of the app's images, pull them
     there first and apply the reviewed placement once they are in; else apply
-    it now. apply() writes it (the caller's reviewed write)."""
+    it now. apply() writes it (the caller's reviewed write). settled: the
+    review's digest of the app as read (CAPACITY_REVIEW.review_identity), so
+    a status write during the pull does not end the move."""
     import homestead_image_cache as IMAGES
     meta = proposed["metadata"]
     node, mode = capacity["move"]["node"] or "", capacity["move"]["mode"]
@@ -84,6 +86,8 @@ def start(body, proposed, capacity, apply):
     title = f"Move {meta['name']}" + (f" to {node}" if node else "")
     if pulls:
         ref.update(stage="pulling", pulls=pulls, images=need, since=time.time(), proposed=proposed)
+        if settled:
+            ref["settled"] = settled
         return OPS.start(KIND, title, {"kind": "Deployment", "name": meta["name"], "namespace": meta["namespace"]},
                          "/containers", ref, f"Pulling its image onto {node} first, so it lands there")
     apply()
@@ -122,6 +126,32 @@ def _clear(names):
             pass
 
 
+def _put_reviewed(proposed, settled, retries=3):
+    """PUT the reviewed manifest, resourceVersion and all: an edit made since
+    the review conflicts rather than being overwritten. A 409 from a status
+    write alone (same uid, and the app as read apart from its status and the
+    server's bookkeeping, #826) sends it again on the new version, up to
+    retries times; anything else that changed raises the 409."""
+    import homestead_storage_journal as JOURNAL
+    kget, ksend = _api()
+    meta = proposed["metadata"]
+    path = f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}"
+    for attempt in range(retries + 1):
+        try:
+            return ksend("PUT", path, proposed)
+        except urllib.error.HTTPError as error:
+            if error.code != 409 or not settled or attempt == retries:
+                raise
+            fresh = kget(path)
+            now = fresh.get("metadata") or {}
+            if (now.get("uid") != meta.get("uid") or now.get("deletionTimestamp")
+                    or now.get("resourceVersion") == meta.get("resourceVersion") or JOURNAL.settled(fresh) != settled):
+                raise
+            meta["resourceVersion"] = now["resourceVersion"]
+            # One copied from the older read would roll back what controllers recorded since.
+            meta.pop("managedFields", None)
+
+
 def status(item):
     ref = item["ref"]
     ns, name, node = ref["namespace"], ref["name"], ref.get("node", "")
@@ -132,13 +162,9 @@ def status(item):
         if waited >= PULL_WAIT:
             ref["pull_note"] = f"its image was still being pulled onto {node} after {PULL_WAIT // 60} minutes"
         _clear(ref.get("pulls") or [])
-        _, ksend = _api()
         proposed = ref.pop("proposed")
-        meta = proposed["metadata"]
         try:
-            # The reviewed manifest, resourceVersion and all: an edit made since
-            # the review conflicts rather than being overwritten.
-            ksend("PUT", f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}", proposed)
+            _put_reviewed(proposed, ref.pop("settled", None))
         except urllib.error.HTTPError as error:
             if error.code == 409:
                 return "failed", 100, f"{name} changed while its image was being pulled; nothing was moved. Review the move again"

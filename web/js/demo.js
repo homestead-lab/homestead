@@ -2126,7 +2126,7 @@ ssh_pwauth: true
         app_version: "11.3.0", updated: new Date(Date.now() - 86400000 * (5 - revision)).toISOString(), description: revision === 1 ? "Install complete" : "Upgrade complete" })),
       objects: [["ServiceAccount", "grafana"], ["Secret", "grafana"], ["ConfigMap", "grafana"], ["PersistentVolumeClaim", "grafana"],
         ["Service", "grafana"], ["Deployment", "grafana"]].map(([kind, name]) => ({ kind, name, namespace: "monitoring" })),
-      source: { repo: "https://grafana.github.io/helm-charts", chart: "grafana", version: "8.5.2",
+      source: { repo: "https://grafana.github.io/helm-charts", chart: "grafana", version: "8.5.2", generation: 3,
         values: "persistence:\n  enabled: true\n  size: 10Gi\nservice:\n  type: LoadBalancer\n" } }),
     "/api/helm/search": [
       { name: "grafana", version: "8.5.2", app_version: "11.3.0", description: "The leading tool for querying and visualizing time series and metrics.",

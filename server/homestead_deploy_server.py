@@ -438,7 +438,9 @@ def rollout_review_context(current):
     meta = current.get("metadata") or {}
     if not meta.get("uid") or not meta.get("resourceVersion"):
         raise ValueError("workload identity/version is unavailable; refresh before changing its pod")
-    return {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"]}
+    # settled, not resourceVersion, is what the token binds (CAPACITY_REVIEW.review_form):
+    # a rollout's status writes do not void the review, a spec or metadata change does.
+    return {"uid": meta["uid"], "resourceVersion": meta["resourceVersion"], "settled": CAPACITY_REVIEW.review_identity(current)["settled"]}
 
 
 def preview_import(body):

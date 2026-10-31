@@ -6,6 +6,7 @@ This module never sends power, changes policy or provisions a dependency.
 import copy
 from urllib.parse import quote
 
+import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_kube as KUBE
 import homestead_place as PLACE
 import homestead_vm_resources as VMRES
@@ -126,7 +127,10 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
         raise ValueError("unsupported VM admission action")
     namespace, name = vm["metadata"]["namespace"], vm["metadata"]["name"]
     blockers, warnings = [], []
-    context = {"action": action, "vm": VMRES.identity(current or vm)}
+    # The VM, its instance and its launchers carry "settled" (CAPACITY_REVIEW.review_identity):
+    # KubeVirt and the kubelet keep writing their status, which must not void a review.
+    # Disks, claims and the KubeVirt CR keep their resourceVersion: their status is evidence here.
+    context = {"action": action, "vm": CAPACITY_REVIEW.review_identity(current or vm)}
     if ((current or vm).get("metadata") or {}).get("deletionTimestamp"):
         blockers.append("VM is being deleted")
     kubevirt_version = None
@@ -136,6 +140,8 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
             raise ValueError("KubeVirt configuration is ambiguous")
         configuration = (configs[0].get("spec") or {}).get("configuration") or {}
         kubevirt_version = VMRES.CPU.observed_version(configs[0])
+        # Its status names the renderer version the estimate rests on, so this
+        # one keeps its resourceVersion in the token (no "settled").
         context["kubevirt"] = VMRES.identity(configs[0])
         if not all(context["kubevirt"].values()):
             raise ValueError("KubeVirt configuration identity unavailable")
@@ -152,7 +158,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
     if (current or vm).get("metadata", {}).get("uid"):
         try:
             vmi = _optional(read, f"/apis/kubevirt.io/v1/namespaces/{quote(namespace, safe='')}/virtualmachineinstances/{quote(name, safe='')}")
-            context["vmi"] = VMRES.identity(vmi) if vmi else None
+            context["vmi"] = CAPACITY_REVIEW.review_identity(vmi) if vmi else None
             owned, ownership_known = VMRES.launchers(current or vm, vmi, pods)
             if vmi:
                 if not ownership_known:
@@ -166,7 +172,7 @@ def plan(vm, read, nodes, *, action="start", current=None, warning_percent=88,
                     blockers.append("current VMI is migrating; wait for migration to finish")
         except Exception:
             blockers.append("current VMI state is unavailable; power/placement cannot be checked")
-    context["launchers"] = [VMRES.identity(pod) for pod in owned]
+    context["launchers"] = [CAPACITY_REVIEW.review_identity(pod) for pod in owned]
     manifest = model["manifest"]
     resident_node = None
     edit_launcher = None
