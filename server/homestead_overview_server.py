@@ -51,6 +51,7 @@ import homestead_place as PLACE
 import homestead_portal as PORTAL
 import homestead_ports as PORTS
 import homestead_push as PUSH
+import homestead_timeline_summary as SUMMARY
 import homestead_recovery as RECOVERY
 import homestead_resources as RESOURCES
 import homestead_restarts as RESTARTS
@@ -348,6 +349,8 @@ def push_alerts(fresh):
 
 def _alerts_loop():
     LOGALERTS.start()
+    # The summary push (#921) has its own thread: building one reads the Timeline.
+    SUMMARY.start()
     while True:
         # One replica raises alerts, or every notification arrives twice.
         if LEADER.is_leader():

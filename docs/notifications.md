@@ -32,6 +32,7 @@ The leader evaluates sources every 20 seconds. Persistent conditions, worsening
 and recovery require 60 seconds of observations. An unavailable source does not
 resolve its conditions or count toward that confirmation period. Missing SMART
 readings retain the last warning. Unchanged conditions do not repeat on a timer.
+The one timed push is the [summary push](#summary-push), which a person asks for.
 
 | Source | Initial condition or event | Worsening |
 | --- | --- | --- |
@@ -103,6 +104,39 @@ A session failure asks the user to sign in. A connectivity failure says details
 are unavailable; neither invents a cluster incident. Recovery wording describes
 what is no longer reported, rather than claiming that a host restarted, a drive
 was repaired, or an update was installed without evidence.
+
+## Summary push
+
+Push says when something starts, so a quiet week sends nothing. Each person
+can ask for a summary as well: **Settings → You → Summary push**, Off (the
+default), Daily, or Weekly on a chosen day, at a chosen hour of their time
+zone (the browser's, unless they pick another). It is the one push sent on a
+timer.
+
+At that hour the leader sends one push to each of that person's devices with
+notifications on, whatever categories the device has chosen. It counts what the
+Timeline recorded since the last summary, by kind, for that person's role (the
+audit log only for admins): "Past day: 3 changes, 1 restart, nothing failed",
+or "Past week: nothing happened". Tapping it opens the Timeline from where the
+summary starts. It adds no record of its own. A source that could not be read
+is named in it ("App restarts could not be read."), never counted as nothing,
+and "nothing failed" is only said when every source was read. "Failed" counts
+failed jobs and requests; alerts are counted as alerts. Each summary starts
+where the last one ended, so nothing is counted twice. A summary is kept out
+of the bell's list, the Timeline and the alert webhook, and the alert log
+keeps only each person's latest one, so summaries never push alerts out of it.
+Removing an account removes its setting.
+
+It is sent once. The setting and the last time sent are kept per person in
+`timeline-summary.json` on Homestead's data volume. The leader marks the
+summary sent before it pushes, so a restart or another copy taking the lead
+never sends it twice; a copy that stops between the two loses that one
+summary instead. Times missed while Homestead was down send one late summary,
+covering everything since the last, never one for each. Turning it on, or
+changing it, starts from the next time, not at once. The hour follows the
+person's time zone through daylight saving changes: an hour the clocks skip or
+repeat still sends once that day. A person with no device set up for
+notifications is sent nothing, and the card says so.
 
 ## Outage webhooks
 

@@ -140,7 +140,7 @@ def body(entry):
 
 
 def _wanted(entry, least):
-    return entry.get("category") != "test" and \
+    return entry.get("category") not in ALERTS.PRIVATE and \
         SEVERITIES.index(entry.get("severity") if entry.get("severity") in SEVERITIES else "info") >= SEVERITIES.index(least)
 
 

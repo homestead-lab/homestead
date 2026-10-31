@@ -284,6 +284,7 @@ async function viewSettings() {
       ${can("admin") ? UI.settingsCard('<div class="empty small"><span class="spin2"></span>reading agent settings</div>', {tab:"access",id:"mcpCard",wide:false}) : ""}
 
       ${pwaCard()}
+      ${Timeline.summaryCard()}
 
       ${ipamUnifiCard()}
 
@@ -366,7 +367,7 @@ const SETTINGS_LOADERS = {
     () => unifiCardLoad()],
   access: [() => window.apiKeysPaint?.(), () => window.mcpCardPaint?.()],
   troubleshooting: [() => window.troubleshootingPaint?.()],
-  you: [() => pwaPaint()],
+  you: [() => pwaPaint(), () => Timeline.summaryPaint()],
 };
 /* Read the section's cards once per painted page: a section shown again
    without a repaint keeps what it read. */

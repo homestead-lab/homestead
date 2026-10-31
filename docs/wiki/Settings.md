@@ -15,7 +15,7 @@ Settings has ten sections: nine that change the cluster for everyone, and
 | **Connections** | UniFi Network; MQTT and Home Assistant - stats, and power control for the containers and VMs you pick; the alert webhook (alerts to ntfy, Gotify or any webhook, see [Alerts and PWA notifications](https://github.com/homestead-lab/homestead/blob/main/docs/notifications.md#alert-webhook)); the App Store catalogue |
 | **Users and access** | users and their roles, and [API keys](API) |
 | **Troubleshooting** | bug reports and logs |
-| **You** | appearance, notifications on this device, refresh rate, your password and signing out |
+| **You** | appearance, notifications on this device, your summary push, refresh rate, your password and signing out |
 
 A section saves once: change what you like and a bar at its foot offers
 **Save** and **Discard**. Leaving the section or the page with changes not
@@ -497,6 +497,15 @@ notifications - outages, degraded storage and workloads, failed jobs, hosts
 joining, image updates - even while closed. **This device → Turn on
 notifications**. Pushes carry nothing: the app fetches what happened over its own
 signed-in connection. On iPhone, add Homestead to the Home Screen first.
+
+A push tells you when something starts. To hear how a quiet day or week went
+as well, set **You → Summary push**: Off (the default), Daily, or Weekly on a
+day you choose, at an hour of your time zone. At that time each of your
+devices with notifications on gets one push counting what the Timeline
+recorded, such as "Past week: 3 changes, 1 restart, nothing failed", and
+tapping it opens the Timeline from there. It is yours alone: everyone sets
+their own, and it counts what your role can see. How it is sent:
+[Summary push](https://github.com/homestead-lab/homestead/blob/main/docs/notifications.md#summary-push).
 
 To get the same alerts in ntfy, Gotify or any webhook, an admin sets
 **Connections → Alert webhook**: its format, the address, which alerts

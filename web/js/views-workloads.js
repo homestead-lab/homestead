@@ -10,7 +10,14 @@ async function viewWorkloads() {
   gitopsLoad().then(report => {
     if (Object.keys(report?.apps || {}).length && STATE.view === "workloads" && $("#modal").classList.contains("hidden")) renderWorkloads();
   });
+  // Old Released volumes of each app's claims (#932): shown once read.
+  if (typeof releasedVolumesLoad === "function") releasedVolumesLoad().then(rows => {
+    if (rows.length && STATE.view === "workloads" && $("#modal").classList.contains("hidden")) renderWorkloads();
+  });
 }
+
+/* An app's old Released volumes and the space they hold (storage-leftovers.js). */
+const workloadReleasedRow = (w, detail = false) => !remoteRow(w) && typeof appReleasedRow === "function" ? appReleasedRow(w, detail) : "";
 
 const updateKey = (ns, name) => `${ns}/${name}`;
 const workloadUpdate = (ns, name) => (STATE.data.imageUpdateMap || {})[updateKey(ns, name)];
@@ -951,6 +958,7 @@ function workloadCard(w) {
         <div class="dim xs mono wimg"><span class="wimage-name" title="${imageTitle(w.images)}">${imageShort(w.images)}</span>
           <span class="wimage-hardware">${hardwareTags(w.hardware || (w.gpu ? ["igpu"] : []))}</span></div>
         ${answerCardRow(w)}
+        ${workloadReleasedRow(w)}
         ${workloadPull(w) ? pullBar(workloadPull(w)) : ""}
         ${workloadBlocked(w) ? `<div class="wblocked" title="${esc(workloadBlocked(w))}">${esc(workloadBlocked(w))}</div>` : ""}
         <div class="wfoot">
@@ -1035,6 +1043,7 @@ function workloadTableRows(rows) {
           <div class="wl-detail-access"><span>Access</span><b class="waccess">${accessPorts(w.ports)}</b></div>
           ${(w.claims || []).length && !remoteRow(w) ? `<div class="wl-detail-volumes"><span>Volumes</span><b class="row">${w.claims.map(claim =>
             `<button type="button" class="tag info linkish" title="Open ${esc(claim)} in Volumes" onclick="openWorkloadVolume(${jsq(claim)})">${esc(claim)}</button>`).join("")}</b></div>` : ""}
+          ${(released => released ? `<div class="wl-detail-released"><span>Old volumes</span>${released}</div>` : "")(workloadReleasedRow(w, true))}
           ${gitopsDetail(w)}
           ${startsAfterFact(w)}
         </div>

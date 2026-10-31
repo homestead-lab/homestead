@@ -601,7 +601,19 @@
       storage_classes: ["longhorn-r2", "longhorn-fast"] };
   };
   const volumeDeletePlan = url => {
-    const name = url.searchParams.get("name") || "scratch-test";
+    const name = url.searchParams.get("name") || "scratch-test", released = url.searchParams.get("pv");
+    // A Released volume whose claim name an app uses again (#932): its review
+    // sets it beside the volume the claim uses now.
+    if (released) return {
+      orphan: true, released: true, namespace: "lab", name, confirm: released, uid: `demo-${released}`, resource_version: "42",
+      phase: "Claim name in use again", requested_storage: "10Gi", consumers: [], warnings: [], inventory_complete: true,
+      current: { claim_uid: "demo-claim-now", phase: "Bound", pv: `pvc-demo-${name}`, pv_uid: "demo-pv-now", longhorn: `pvc-demo-${name}`,
+        consumers: [{ kind: "Deployment", name: "frigate", namespace: "lab", active: true, mounts: [] }] },
+      pv: { name: released, uid: "demo-pv-released", phase: "Released", claim_uid: "demo-claim-before", longhorn: released, reclaim_policy: "Retain" },
+      longhorn: { name: released, state: "detached", attached_node: "", replicas: 2, actual_gb: 6.4 },
+      snapshots: { count: 0 }, backups: { count: 1 }, blocked: false, blocking_reasons: [],
+      actions: { detach: { complete: true }, delete_claim: { enabled: false }, delete_data: { enabled: true } },
+    };
     const attached = name === "frigate-config";
     return {
       namespace: "lab", name, uid: `demo-${name}`, resource_version: "42", phase: "Bound",
@@ -2590,6 +2602,29 @@ ssh_pwauth: true
       if (offer === "raise") return { state: "raise", hosts: 2, volumes: rows.map(r => ({ ...r, from: 1, to: 2 })) };
       return { state: "none", hosts: 2, volumes: [] };
     },
+    // What storage leaves behind (#932): none in the demo unless a check asks
+    // for Released volumes ("released") or a stale session ("iscsi"), or both.
+    "/api/storage/leftovers": () => {
+      const ask = String(window.__demoLeftovers || ""), GiB = 1024 ** 3;
+      const kept = (pv, namespace, claim, size, hosts, extra = {}) => ({ pv, namespace, claim, class: "longhorn-migratable", policy: "Retain",
+        size: `${size}Gi`, size_bytes: size * GiB, released_at: new Date(Date.now() - 12 * 86400000).toISOString(),
+        driver: "driver.longhorn.io", longhorn: pv, hosts, allocated_bytes: size * GiB * hosts.length, old_copy: false, ...extra });
+      return {
+        released: { state: "ok", volumes: (ask.includes("released") ? [
+          kept("pvc-demo-scratch-1", "vm-imports", "prime-demo-disk-with-a-long-descriptive-name-scratch", 42, ["node-1", "node-2"]),
+          kept("pvc-demo-scratch-2", "vm-imports", "prime-demo-disk-2-scratch", 20, ["node-2"]),
+          kept("pvc-demo-old-notes", "lab", "notes-data", 5, ["node-1"], { class: "longhorn", old_copy: true }),
+          kept("pv-demo-nfs", "media", "archive", 100, [], { class: "nfs", driver: "nfs.csi.k8s.io", longhorn: "", allocated_bytes: 100 * GiB })] : [])
+          // An app deployed again with its old claim name ("reused"): the old volume shows on its card.
+          .concat(ask.includes("reused") ? [kept("pvc-demo-frigate-before", "lab", "frigate-config", 10, ["node-1", "node-2"],
+            { class: "longhorn-r2", claim_reused: true })] : []) },
+        iscsi: { state: "ok", hosts: ask.includes("iscsi") ? [{ node: "node-2", sessions: [
+          { sid: 67, target: "iqn.2019-10.io.longhorn:pvc-demo-notes", volume: "pvc-demo-notes", namespace: "lab", claim: "notes-data",
+            state: "FAILED", address: "192.0.2.40", port: 3260, disks: ["sdj"] },
+          { sid: 71, target: "iqn.2019-10.io.longhorn:pvc-demo-spool", volume: "pvc-demo-spool", namespace: "lab", claim: "spool-data",
+            state: "LOGGED_IN", address: "192.0.2.40", port: 3260, disks: ["sds"] }] }] : [] },
+      };
+    },
     "/api/self/data/two-copies": () => {
       const created = !window.__demoTwoCopiesMade;
       window.__demoTwoCopiesMade = true;
@@ -2852,6 +2887,24 @@ ssh_pwauth: true
         entries: all, counts, more: 0, unread };
     },
     "/api/timeline/seen": () => ({ ok: true, since: Math.round(Date.now() / 1000 - 2.6 * 86400) }),
+    // The summary push (#921): the demo person gets one on Sunday evenings; a
+    // change lasts until the page reloads. Next is worked out in this browser's
+    // own time, near enough for a demo (the server uses the chosen zone).
+    "/api/timeline/summary": (url, init) => {
+      const nextOf = s => {
+        const at = new Date(); at.setMinutes(0, 0, 0); at.setHours(s.hour);
+        while (at <= new Date() || (s.every === "weekly" && (at.getDay() + 6) % 7 !== s.day)) at.setDate(at.getDate() + 1);
+        return Math.round(at / 1000);
+      };
+      if (init?.method === "POST") {
+        const body = JSON.parse(init.body || "{}");
+        demoState.summary = body.every === "off" ? { every: "off" } : { ...body, day: body.day ?? 0 };
+      }
+      const s = demoState.summary || { every: "weekly", day: 6, hour: 18, tz: "Europe/London", result: "sent to 2 devices" };
+      if (s.every === "off") return s;
+      const next = nextOf(s);
+      return { ...s, next, sent_at: s.result ? next - 7 * 86400 + 40 : undefined };
+    },
     "/api/changes/undo": (url, init) => ({ ok: true, detail: `${JSON.parse(init?.body || "{}").name} is back to its settings from before that change; its pods are being replaced` }),
     // The storage forecast (homestead_forecast.py): frigate's config filling in
     // eleven days, a disk in six weeks, the pool steady.

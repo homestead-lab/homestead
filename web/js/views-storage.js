@@ -697,19 +697,38 @@ function volumeDeleteConfirmationValid(name, value) {
 }
 window.volumeDeleteConfirmationValid = volumeDeleteConfirmationValid;
 
+/* A Released volume whose claim name is in use again (#932), beside the
+   volume that claim uses now: another PV, another UID, another Longhorn
+   volume. The delete is of the left column only. */
+function releasedBesideCurrent(p) {
+  const pv = p.pv || {}, now = p.current || {}, mono = v => `<span class="mono">${esc(v || "—")}</span>`;
+  const users = (now.consumers || []).map(c => `${esc(c.kind)} · ${esc(c.name)}`).join("<br>") || '<span class="dim">nothing</span>';
+  return UI.section(`${esc(p.namespace)}/${esc(p.name)} is in use again`, UI.table(
+    [{ label: "" }, { label: "Released" }, { label: "In use now" }], [
+      ["Persistent volume", mono(pv.name), mono(now.pv)],
+      ["Its UID", mono(pv.uid), mono(now.pv_uid)],
+      ["Phase", esc(pv.phase || "?"), esc(now.phase || "?")],
+      ["Claim UID", mono(pv.claim_uid), mono(now.claim_uid)],
+      ["Longhorn volume", mono(pv.longhorn), mono(now.longhorn)],
+      ["Used by", p.longhorn?.state === "detached" && !p.longhorn?.attached_node ? '<span class="dim">nothing: detached</span>' : `Longhorn: ${esc(p.longhorn?.state || "unknown")}`, users],
+    ]) + UI.more("How the delete is pinned", "<p>Only the Released volume is deleted, pinned by its name, UID and version. The volume the claim uses now is not the one deleted, and is never changed.</p>"));
+}
+
 let volumeDeleteTarget = null, volumeDeleteRequest = 0;
 window.volumeDeleteRefresh = () => volumeDeleteTarget && volumeDelete(volumeDeleteTarget);
 window.volumeDelete = async x => {
   const request = ++volumeDeleteRequest;
-  volumeDeleteTarget = {name: x.name, pvc_name: x.pvc_name, namespace: x.namespace};
+  volumeDeleteTarget = {name: x.name, pvc_name: x.pvc_name, namespace: x.namespace, ...(x.pv ? {pv: x.pv} : {})};
   window.__volumeDeletePlan = null;
   const namespace = x.namespace || "lab", name = x.pvc_name || x.name;
-  modal("Delete volume · " + name,
+  // A Released volume is asked for by its PV (#932): its claim name may be
+  // another volume's now, and only the server can say which is which.
+  modal(x.pv ? "Delete Released volume · " + x.pv : "Delete volume · " + name,
     '<div id="volumeDeleteReview" class="empty"><span class="spin2"></span> checking mounts, snapshots, backups and reclaim policy…</div>', true);
   const waiting = $("#volumeDeleteReview");
   let p;
   try {
-    p = await api(`/api/volumes/delete-plan?ns=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}&volume=${encodeURIComponent(x.name)}`);
+    p = await api(`/api/volumes/delete-plan?ns=${encodeURIComponent(namespace)}&name=${encodeURIComponent(name)}&volume=${encodeURIComponent(x.name)}${x.pv ? `&pv=${encodeURIComponent(x.pv)}` : ""}`);
   } catch (e) {
     if (request !== volumeDeleteRequest || $("#volumeDeleteReview") !== waiting) return;
     return void ($("#mbody").innerHTML = UI.callout("bad", "Impact check failed.", esc(e.message)) +
@@ -735,8 +754,10 @@ window.volumeDelete = async x => {
     blocked
       ? UI.callout("bad", "Deletion is blocked.", `<ul class="ui-list">${p.blocking_reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>${incomplete}`)
       : incomplete ? UI.callout("warn", "Impact check passed, with gaps.", incomplete)
-      : UI.callout("ok", "Impact check passed.", p.orphan ? "The PVC is already gone. This retained backing volume is detached; deleting it permanently removes its remaining data."
+      : UI.callout("ok", "Impact check passed.", p.released ? `This is not the volume ${esc(p.name)} uses now; that one is not changed.`
+        : p.orphan ? "The PVC is already gone. This retained backing volume is detached; deleting it permanently removes its remaining data."
         : "This claim is detached and has no active app or VM references. Choose what should happen to its backing data."),
+    p.released ? releasedBesideCurrent(p) : "",
     UI.facts([
       ["Longhorn footprint", `${esc(lh.actual_gb ?? "?")} GiB`],
       ["Replicas", esc(lh.replicas ?? "?")],
@@ -763,7 +784,7 @@ window.volumeDelete = async x => {
       ["Persistent volume", `<span class="mono">${esc(pv.name || "not bound")}</span> · reclaim policy ${esc(pv.reclaim_policy || "unknown")}`],
       ["Longhorn volume", `<span class="mono">${esc(lh.name || "not found")}</span> · ${esc(lh.state || "unknown")}${lh.attached_node ? ` on ${esc(lh.attached_node)}` : ""}`],
     ])),
-    UI.section("3. Confirm", UI.typedConfirm({ id: "vd_confirm", expect: name, oninput: "volumeDeleteGate()" })),
+    UI.section("3. Confirm", UI.typedConfirm({ id: "vd_confirm", expect: p.confirm || name, oninput: "volumeDeleteGate()" })),
     UI.actions(UI.cancel() + (blocked || p.inventory_complete === false ? UI.button("Refresh review", "volumeDeleteRefresh()") : "") +
       UI.button("Delete selected", `volumeDeleteNow(${jsArg(namespace)},${jsArg(name)},${jsArg(p.uid)})`,
       { kind: "danger", id: "vd_go", disabled: true, attrs: 'data-need="admin"' })),
@@ -776,23 +797,24 @@ window.volumeDeleteGate = () => {
   const input = $("#vd_confirm"), button = $("#vd_go");
   if (!p || !input || !button) return;
   const allowed = action && !p.blocked && p.actions?.[action]?.enabled;
-  button.disabled = !allowed || !volumeDeleteConfirmationValid(p.name, input.value);
+  button.disabled = !allowed || !volumeDeleteConfirmationValid(p.confirm || p.name, input.value);
   button.textContent = action === "delete_claim" ? "Delete claim · keep data" : action === "delete_data" ? "Permanently delete data" : "Delete selected";
 };
 
 window.volumeDeleteNow = async (namespace, name, uid) => {
   const action = document.querySelector('input[name="vd_action"]:checked')?.value || "";
-  const confirmation = $("#vd_confirm").value.trim();
-  if (!volumeDeleteConfirmationValid(name, confirmation)) return;
+  const confirmation = $("#vd_confirm").value.trim(), plan = window.__volumeDeletePlan;
+  if (!volumeDeleteConfirmationValid(plan?.confirm || name, confirmation)) return;
   if (!action) return toast("Choose whether to retain or permanently delete the backing data", "bad");
   const button = $("#vd_go"); button.disabled = true; button.textContent = "Requesting deletion…";
   try {
     const result = await api("/api/volumes/delete", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ namespace, name, uid, action, confirmation,
-        volume: window.__volumeDeletePlan?.longhorn?.name || "", pv_uid: window.__volumeDeletePlan?.pv?.uid || "" }) });
+        volume: plan?.longhorn?.name || "", pv_uid: plan?.pv?.uid || "", pv: volumeDeleteTarget?.pv || "" }) });
     toast(result.message || `${name} deletion started`, "ok"); closeModal();
     if (window.noteOperation) noteOperation(result.operation);
-    resetPaint(); viewStorage();
+    // From an app's old-volume row (#932), stay on the Containers page.
+    resetPaint(); if (typeof STATE !== "undefined" && STATE.view === "workloads" && window.viewWorkloads) viewWorkloads(); else viewStorage();
   } catch (e) {
     button.disabled = false; volumeDeleteGate(); toast(e.message, "bad");
   }

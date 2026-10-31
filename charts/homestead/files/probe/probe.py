@@ -224,6 +224,39 @@ def disk_activity():
         del disk["write_sectors"]
     return sorted(disks, key=lambda d: d["name"])
 
+def _listdir(path):
+    try:
+        return sorted(os.listdir(path))
+    except OSError:
+        return []
+
+def iscsi_sessions():
+    """The host's iSCSI sessions, from the kernel's transport class in its
+    /sys: id, target, state, the address and port it logged in to, and the
+    disks it gives (#932). A host lost while a Longhorn engine ran on it can
+    keep a session to an instance-manager address that is gone; Homestead
+    compares these with the instance-managers there are now. No iSCSI on the
+    host is no sessions."""
+    base = os.path.join(SYS, "class/iscsi_session")
+    out = []
+    for name in _listdir(base):
+        sid = name[len("session"):]
+        if not name.startswith("session") or not sid.isdigit():
+            continue
+        conn = os.path.join(SYS, "class/iscsi_connection", f"connection{sid}:0")
+        address = _read(os.path.join(conn, "persistent_address")) or _read(os.path.join(conn, "address")) or ""
+        port = _read(os.path.join(conn, "persistent_port")) or _read(os.path.join(conn, "port")) or ""
+        device, disks = os.path.join(base, name, "device"), []
+        for target in _listdir(device):
+            if target.startswith("target"):
+                for lun in _listdir(os.path.join(device, target)):
+                    disks += _listdir(os.path.join(device, target, lun, "block"))
+        out.append({"sid": int(sid), "target": _read(os.path.join(base, name, "targetname")) or "",
+                    "state": _read(os.path.join(base, name, "state")) or "",
+                    "address": address, "port": int(port) if port.isdigit() else None,
+                    "disks": sorted(disks)})
+    return sorted(out, key=lambda s: s["sid"])
+
 def physical_disk(device, depth=0):
     """The first physical disk under a stacked block device (dm-*, md*),
     following /sys/class/block/<dev>/slaves; "" when there is none."""
@@ -572,7 +605,9 @@ def payload():
             "kvm": os.path.exists(f"{DEV}/kvm"),
             "interfaces": interfaces(),
             "default_interface": default_interface(),
-            "v2": v2_facts(), "nfs": nfs_facts(), "numa": numa_facts()}
+            "v2": v2_facts(), "nfs": nfs_facts(), "numa": numa_facts(),
+            # Sessions to iSCSI targets: a stale one keeps a volume from attaching (#932).
+            "iscsi": iscsi_sessions()}
 
 class H(LimitedHandler):
     protocol_version = "HTTP/1.1"
