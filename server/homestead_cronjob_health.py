@@ -272,7 +272,7 @@ def health(cj, jobs, now, error="", detail=True, judge=True):
         out.pop("claims")
     if jobs is None:
         # The API's own words (an address, a path) only on Homestead's own rows.
-        out["result_reason"] = (f"Its runs could not be read: {error}" if detail else "Its runs could not be read")[:300]
+        out["result_reason"] = (f"{UNREAD}: {error}" if detail else UNREAD)[:300]
         return out
     # Only the CronJob's own Jobs: its namespace, and an owner reference to it
     # by kind, name and uid. A Job made elsewhere cannot speak for it.
@@ -306,6 +306,10 @@ def health(cj, jobs, now, error="", detail=True, judge=True):
     return out
 
 
+# Why a result is unknown when the Jobs could not be read (alert_facts tells it apart by this).
+UNREAD = "Its runs could not be read"
+
+
 def alert_facts(rows, now):
     """Alerts from Schedules rows: a failed last run (cleared by a success),
     and a run that was due and did not start (cleared by a run)."""
@@ -315,10 +319,13 @@ def alert_facts(rows, now):
             continue
         ns, name = row.get("ns", ""), row.get("name", "")
         key, href = f"cronjob:{ns}/{name}", f"/schedules?find={ns}/{name}"
-        if row.get("result") not in ("ok", "failed"):
-            # Unread, gone (a Job's TTL), running or never run: nothing says the
-            # failure ended, so a failure already raised is kept, not cleared.
+        if row.get("result") == "unknown" and row.get("result_reason", "").startswith(UNREAD):
+            # Unread: a failure already raised is held, and after a while says it is last known.
             facts.append({"unknown_key": key + ":failed"})
+        elif row.get("result") not in ("ok", "failed"):
+            # Gone (a Job's TTL), running or never run: read, and nothing says
+            # the failure ended, so a failure already raised is kept, not cleared.
+            facts.append({"keep_key": key + ":failed"})
         elif row.get("result") == "failed":
             since = _at(row.get("last_success")) or _at(row.get("created")) or 0
             if not row.get("frequent") or now - since >= FREQUENT_FAILS_FOR:

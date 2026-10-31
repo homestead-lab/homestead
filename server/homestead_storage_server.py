@@ -378,6 +378,16 @@ def _longhorn_copies_loop():
         time.sleep(60)
 
 
+def _auto_tag():
+    """Tags new Longhorn disks; Longhorn not answering skips it this round,
+    not the host fixes after it (#1002)."""
+    try:
+        for node, disk, tags in DISKS.auto_tag():
+            print(f"storage: {node} {disk} tagged {', '.join(tags)}", flush=True)
+    except Exception as error:
+        print(f"storage: disks not tagged: {str(error)[:160]}", flush=True)
+
+
 def _host_fix_loop():
     """On the leader, what k3s and RKE2 hosts need or undo at each start: inotify
     limits a busy node outgrows (homestead_host_limits.py), what a node that
@@ -430,8 +440,7 @@ def _host_fix_loop():
                     for node, marked in MANIFESTS.tick().items():
                         print(f"platform: {node}: k3s no longer re-applies "
                               f"{', '.join(marked) or 'no installer files (none left)'} at start", flush=True)
-                    for node, disk, tags in DISKS.auto_tag():
-                        print(f"storage: {node} {disk} tagged {', '.join(tags)}", flush=True)
+                    _auto_tag()
                     # VMs made before 2.8.228 hold their ISO read-only and cannot start.
                     for name in ISOS.unlock():
                         print(f"ISO library: {name} no longer holds its ISO read-only", flush=True)

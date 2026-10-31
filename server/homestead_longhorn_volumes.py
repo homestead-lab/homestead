@@ -6,6 +6,7 @@ volume's snapshots.
 Split out of homestead_longhorn (#623); what bind() sets, the shared helpers
 and the routes stay there.
 """
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_snapshot_delete as SNAPSHOT_DELETE
 import secrets
@@ -13,11 +14,18 @@ import time
 import urllib.error
 
 
-def _volumes():
+def _volumes(strict=False):
+    """Longhorn's volumes with their job and group labels. No Longhorn is
+    none. strict: a read that failed raises, for a change that must not act
+    on volumes it never saw (Delete group would take a group out of every
+    job and leave its volumes with the label of a group no job has), as
+    list_jobs(strict=True) does (#620, #927). Otherwise it answers []."""
     try:
-        items = LH.kget(f"{LH.API}/namespaces/{LH.LHNS}/volumes").get("items", [])
-    except Exception:
-        return []
+        items = KUBE.items(f"{LH.API}/namespaces/{LH.LHNS}/volumes", optional_group="longhorn.io", read=LH.kget)
+    except Exception as error:
+        if not strict:
+            return []
+        raise RuntimeError(f"Longhorn's volumes could not be read: {str(error)[:160] or type(error).__name__}") from error
     out = []
     for v in items:
         md, st = v["metadata"], v.get("status", {}) or {}
@@ -99,11 +107,14 @@ def bulk_assign(volumes_list, name, kind="group", enabled=True):
     return {"ok": True, "updated": done, "failed": failed}
 
 
-def _job_objects():
+def _job_objects(strict=False):
+    """Longhorn's recurring jobs as stored; strict as for _volumes()."""
     try:
-        return LH.kget(f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs").get("items", [])
-    except Exception:
-        return []
+        return KUBE.items(f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs", optional_group="longhorn.io", read=LH.kget)
+    except Exception as error:
+        if not strict:
+            return []
+        raise RuntimeError(f"Longhorn's recurring jobs could not be read: {str(error)[:160] or type(error).__name__}") from error
 
 
 def _set_job_groups(name, regroup):
@@ -205,14 +216,18 @@ def delete_group(name):
 
     Snapshots and backups already taken are kept. A volume left with no
     group or job goes back to default, as Longhorn does; a job left with no
-    group protects nothing until it is given one - both are said by name."""
+    group protects nothing until it is given one - both are said by name.
+    The volumes and the jobs are both read before anything changes: with
+    either unread it raises and changes nothing, rather than taking the group
+    out of every job while its volumes keep its label."""
     if name == "default":
         raise ValueError("default is Longhorn's own group; every volume without another comes back to it")
     if not LH.SAFE.match(str(name or "")):
         raise ValueError("unknown group")
     key = LH.GROUP_LABEL + name
     back, idle = [], []
-    for v in _volumes():
+    volumes, jobs = _volumes(strict=True), _job_objects(strict=True)
+    for v in volumes:
         if v["labels"].get(key) != "enabled":
             continue
         rest = [k for k, value in v["labels"].items() if value == "enabled"
@@ -220,7 +235,7 @@ def delete_group(name):
         _patch_labels(v["name"], {key: None})
         if not rest:
             back.append(v["pvc"] or v["name"])
-    for job in _job_objects():
+    for job in jobs:
         current = list((job.get("spec") or {}).get("groups") or [])
         if name in current:
             left = _set_job_groups(job["metadata"]["name"], lambda groups: [g for g in groups if g != name])

@@ -20,6 +20,7 @@ import hashlib
 import re
 import urllib.error
 
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_operations as OPS
 import homestead_routes
@@ -68,10 +69,13 @@ def longhorn_block_paths(node):
 
 
 def _lh_nodes():
+    """Longhorn's nodes by name. No Longhorn is none; a read that failed
+    raises, so no drive is shown as unused and no disk alert clears because
+    Longhorn did not answer (#1002)."""
     try:
-        return {n["metadata"]["name"]: n for n in kget(f"{LH}/nodes").get("items", [])}
-    except Exception:
-        return {}
+        return {n["metadata"]["name"]: n for n in KUBE.items(f"{LH}/nodes", optional_group="longhorn.io", read=kget)}
+    except Exception as error:
+        raise RuntimeError(f"Longhorn's disks could not be read: {str(error)[:160] or type(error).__name__}") from error
 
 
 def _bd_row(bd):

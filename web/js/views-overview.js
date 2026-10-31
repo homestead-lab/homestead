@@ -86,7 +86,8 @@ function paintHealthPill(h) {
   if (pill.textContent !== state.toUpperCase()) pill.textContent = state.toUpperCase();
   pill.dataset.state = state;
   const checked = age === null ? "" : age < 10 ? "checked just now" : age < 60 ? `checked ${age}s ago` : `checked ${fmtAgo(age)}`;
-  pill.title = unread ? "Homestead could not read the cluster's health just now"
+  // An "unknown" verdict that says why (a part not read, #1002) says so.
+  pill.title = unread ? h?.summary || "Homestead could not read the cluster's health just now"
     : [h.summary, checked].filter(Boolean).join(" · ");
 }
 /* The pill as index.html draws it, before any answer: on sign-out, so the

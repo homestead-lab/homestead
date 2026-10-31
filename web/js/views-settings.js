@@ -1151,8 +1151,9 @@ async function selfHealthPaint() {
       ${h.loops.map(l => row(l.label, HEALTH_TONE[l.state] || "", l.state === "ok" ? "running" : l.state,
         l.state === "standby" ? "Runs on the leader copy." : `Last done ${esc(agoText(l.last_ok))}` + (l.error ? ` · <span class="badtext">${esc(l.error)}</span>` : ""))).join("")}
       ${row("Node probe", !probe.installed ? "neutral" : probe.ready < probe.desired || probe.reporting < probe.desired ? "warn" : "ok",
-        !probe.installed ? "not installed" : `${probe.ready}/${probe.desired} hosts`,
-        !probe.installed ? "Temperatures, host devices, every disk and drive health come from it."
+        probe.installed == null && probe.error ? "unknown" : !probe.installed ? "not installed" : `${probe.ready}/${probe.desired} hosts`,
+        probe.installed == null && probe.error ? esc(probe.error)
+          : !probe.installed ? "Temperatures, host devices, every disk and drive health come from it."
           : `${probe.reporting} reporting · drive health on ${probe.smart} · ${esc(probe.detail || "")}`,
         "")}
       ${row("Samba (network shares)", !samba.installed || !samba.enabled ? "neutral" : samba.ready < samba.desired ? "warn" : "ok",
@@ -1174,7 +1175,8 @@ async function selfHealthPaint() {
               ${h.addresses.clashes.length === 1 ? "is" : "are"} on ${esc(h.addresses.clashes[0].ip)}, the cluster's own address (${esc(h.addresses.clashes[0].owner)}).
               Hosts join through it, so give ${h.addresses.clashes.length === 1 ? "it an address" : "them addresses"} of their own: Edit → Network.</span>`
           : `Apps are kept off the cluster's own address${(h.addresses.platform || []).length ? ` (<span class="mono">${esc(h.addresses.platform.join(", "))}</span>)` : ""}.`) : ""}
-      ${row("Backup storage", h.backups?.ready ? "ok" : h.backups?.deployed ? "warn" : "neutral",
+      ${h.backups?.error ? row("Backup storage", "neutral", "unknown", esc(h.backups.error))
+        : row("Backup storage", h.backups?.ready ? "ok" : h.backups?.deployed ? "warn" : "neutral",
         h.backups?.ready ? "ready" : h.backups?.deployed ? "starting" : "none", h.backups?.endpoint ? `<span class="mono">${esc(h.backups.endpoint)}</span>` : "Set up under Data protection.")}
       ${h.mqtt?.state && h.mqtt.state !== "off" ? row("MQTT", h.mqtt.state === "publishing" ? "ok" : "warn", h.mqtt.state,
         h.mqtt.error ? `<span class="badtext">${esc(h.mqtt.error)}</span>` : esc(h.mqtt.detail || "")) : ""}

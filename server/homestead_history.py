@@ -117,7 +117,9 @@ def sample_from(overview, now=None):
             "rx": round(sum(n.get("rx_mbps", 0) or 0 for n in nodes), 2),
             "tx": round(sum(n.get("tx_mbps", 0) or 0 for n in nodes), 2),
             "pods": overview.get("workload_pods", 0),
-            "vol_bad": overview.get("vol_degraded", 0) + overview.get("vol_faulted", 0),
+            # None for a cycle that could not read Longhorn's volumes (#1002).
+            "vol_bad": None if overview.get("volumes_unread")
+            else overview.get("vol_degraded", 0) + overview.get("vol_faulted", 0),
             "nodes_ready": overview.get("nodes_ready", 0), "nodes_total": overview.get("nodes_total", 0),
             "nodes": {n["name"]: [n.get("cpu_pct", 0), n.get("mem_pct", 0), 1 if n.get("status") == "Ready" else 0]
                       for n in nodes}}
@@ -127,10 +129,11 @@ def _rollup(samples, hour):
     """An hour of samples as one: averages, the peaks, and node availability."""
     out = {"t": hour, "n": len(samples)}
     for field in FIELDS:
-        values = [s.get(field, 0) or 0 for s in samples]
-        out[field] = round(sum(values) / len(values), 2)
+        # A sample that did not read a field (None) is left out, not counted as 0.
+        values = [v or 0 for v in (s.get(field, 0) for s in samples) if v is not None]
+        out[field] = round(sum(values) / len(values), 2) if values else None
         if field in ("cpu", "mem", "rx", "tx", "vol_bad"):
-            out[f"{field}_max"] = max(values)
+            out[f"{field}_max"] = max(values) if values else None
     names = {name for s in samples for name in (s.get("nodes") or {})}
     out["nodes"] = {}
     for name in names:

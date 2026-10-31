@@ -533,8 +533,12 @@ def node_impact(node, sources=None):
         placement = cached("impact:" + node, 5, lambda: PLACE.impact(node))
     except Exception:
         placement = None
+    try:
+        volumes = cached("vol", 8, get_volumes)
+    except Exception:
+        volumes = None          # the preview says the risk is unknown, never none (#1002)
     return IMPACT.preview(node, cached("wl", 5, get_workloads), src["deployments"], cached("vms", 5, VM_LIST.list_vms), src["raw_vms"],
-                          cached("vol", 8, get_volumes), addresses, nodes, placement,
+                          volumes, addresses, nodes, placement,
                           sets=src["sets"], pvs=src["pvs"], node_down=src["node_down"])
 
 

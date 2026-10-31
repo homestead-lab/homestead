@@ -302,6 +302,8 @@ function volumeUse(x) {
 
 /* Where a volume's copies are: host and disk, grouped by host. */
 function volumeCopiesLine(x) {
+  // null: Longhorn's replicas could not be read (#1002).
+  if (x.copies === null) return `<span class="dim xs vol-copies" data-tip="${esc(volumeCopiesTip(x))}">copies unknown</span>`;
   const copies = x.copies || [];
   if (!copies.length) return "";
   const hosts = {};
@@ -310,6 +312,7 @@ function volumeCopiesLine(x) {
     `${esc(node.replace(/^harvester-/, ""))}: ${rows.map(c => `<span class="${c.healthy ? "" : "warn"}">${esc(c.disk)}</span>`).join(" + ")}`).join(" · ")}</span>`;
 }
 function volumeCopiesTip(x) {
+  if (x.copies === null) return "Where its copies are could not be read from Longhorn just now";
   const copies = x.copies || [], want = +x.replicas || 0;
   const where = copies.map(c => `${c.node} · ${c.disk}${c.healthy ? (c.detached ? " (stopped while the volume is detached)" : "") : ` (${c.state || "not running"})`}`).join(", ");
   if (!copies.length) return want === 1 ? "One copy: if its host or disk fails, this volume is gone until they come back" : `${want} copies`;

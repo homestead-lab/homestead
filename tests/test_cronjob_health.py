@@ -341,7 +341,36 @@ class AlertTests(unittest.TestCase):
         cj = cronjob(last="2026-10-22T03:00:00Z", success="2026-10-21T03:00:30Z")
         for jobs in ([], [job(cj, "2026-10-22T11:00:00Z", active=1)]):
             rows = self.rows((cj, jobs))
-            self.assertIn({"unknown_key": "cronjob:media/backup:failed"}, H.alert_facts(rows, NOW), rows[0]["result"])
+            # Known (from the CronJob's status), just not a new result: kept, not held as unread.
+            self.assertIn({"keep_key": "cronjob:media/backup:failed"}, H.alert_facts(rows, NOW), rows[0]["result"])
+
+    def test_a_kept_failure_is_current_not_last_known_after_an_hour(self):
+        """A run still going, or one Kubernetes no longer keeps, is read every
+        cycle: its failure alert must not say it could not be checked."""
+        import tempfile
+        import homestead_alerts as ALERTS
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        old = ALERTS.DATA_DIR
+        ALERTS.bind(directory.name)
+        self.addCleanup(ALERTS.bind, old)
+        cj = cronjob(last="2026-10-22T03:00:00Z", success="2026-10-21T03:00:30Z")
+        failed = H.alert_facts(self.rows((cj, [job(cj, "2026-10-22T03:00:00Z", "failed", "2026-10-22T03:04:00Z")])), NOW)
+        ALERTS.observe({"cronjobs": failed}, now=1000)
+        ALERTS.observe({"cronjobs": failed}, now=1000 + ALERTS.HOLD)
+        running = H.alert_facts(self.rows((cj, [job(cj, "2026-10-22T11:00:00Z", active=1)])), NOW)
+        unread = [{"ns": "media", "name": "backup", "suspend": False, **H.health(cj, None, NOW, error="timed out")}]
+        unread = H.alert_facts(unread, NOW)
+        key = "cronjob:media/backup:failed"
+        row = lambda at: next(r for r in ALERTS.active(now=at) if r["key"] == key)
+        for at in (2000, 2000 + ALERTS.STALE, 2000 + 2 * ALERTS.STALE):
+            ALERTS.observe({"cronjobs": running}, now=at)
+        self.assertEqual((False, failed[0]["body"]), (row(2000 + 2 * ALERTS.STALE)["stale"], row(2000 + 2 * ALERTS.STALE)["body"]))
+        # Its runs not read at all for an hour: that one is last known.
+        start = 3000 + 2 * ALERTS.STALE
+        for at in (start, start + ALERTS.STALE):
+            ALERTS.observe({"cronjobs": unread}, now=at)
+        self.assertTrue(row(start + ALERTS.STALE)["stale"])
 
     def test_an_unknown_missed_state_keeps_that_alert(self):
         rows = self.rows((cronjob(tz=None), []))

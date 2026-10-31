@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_kube as KUBE
 import homestead_lhrebuild as LHREBUILD
 import homestead_operations as OPS
 import homestead_rebalance as REBALANCE
@@ -396,14 +397,18 @@ def _filesystems(active_claims):
 
 
 def get_volumes(pods=None):
+    """Every Longhorn volume, for the Volumes page, the hosts and the overview.
+    No Longhorn is no volumes; a read that failed raises, so nothing reads it
+    as a cluster with none (#1002). A failed replica read leaves each row's
+    copies None: where they are is not known, not that there are none."""
     try:
-        vols = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
-    except Exception:
-        return []
+        vols = KUBE.items("/apis/longhorn.io/v1beta2/volumes", optional_group="longhorn.io", read=kget)
+    except Exception as error:
+        raise RuntimeError(f"Longhorn's volumes could not be read: {str(error)[:160] or type(error).__name__}") from error
     try:
         copies = volume_copies()
     except Exception:
-        copies = {}
+        copies = None
     try:
         refs = claim_references(pods)
     except Exception:
@@ -455,7 +460,9 @@ def get_volumes(pods=None):
         if unclaimed or ks.get("lastPodRefAt"):
             wls = []
         filesystem = filesystems.get((ks.get("namespace", ""), ks.get("pvcName", ""))) if not unclaimed and st.get("state") == "attached" else None
-        moving = _moving_copy(v, len({c["node"] for c in copies.get(v["metadata"]["name"], []) if c.get("whole")}))
+        mine = None if copies is None else copies.get(v["metadata"]["name"], [])
+        whole = None if mine is None else len({c["node"] for c in mine if c.get("whole")})
+        moving = _moving_copy(v, whole)
         if moving:
             health_reason = (f"moving a copy to another host: the new one is built first, and the volume keeps its "
                              f"{moving} whole cop{'y' if moving == 1 else 'ies'} meanwhile")
@@ -478,13 +485,14 @@ def get_volumes(pods=None):
             "node": st.get("currentNodeID", ""),
             "size_gb": round(int(sp.get("size", 0) or 0) / 1024**3, 1),
             "replicas": moving or sp.get("numberOfReplicas", 0),
-            "copies": copies.get(v["metadata"]["name"], []),
+            # None when the replicas could not be read.
+            "copies": mine,
             # Detached with fewer whole copies than it asks for: Longhorn
             # repairs that only offline, or while something uses the volume.
-            "copies_short": (lambda whole: {"whole": whole, "wanted": int(sp.get("numberOfReplicas") or 0),
-                                            "offline": sp.get("offlineRebuilding") or "ignored"}
-                             if st.get("state") == "detached" and whole < int(sp.get("numberOfReplicas") or 0) else None)(
-                len({c["node"] for c in copies.get(v["metadata"]["name"], []) if c.get("whole")})),
+            "copies_short": ({"whole": whole, "wanted": int(sp.get("numberOfReplicas") or 0),
+                              "offline": sp.get("offlineRebuilding") or "ignored"}
+                             if whole is not None and st.get("state") == "detached"
+                             and whole < int(sp.get("numberOfReplicas") or 0) else None),
             "engine": str(sp.get("dataEngine") or "v1").lower(),
             "actual_gb": round(int(st.get("actualSize", 0) or 0) / 1024**3, 2),
             "filesystem": filesystem,
