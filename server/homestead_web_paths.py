@@ -97,3 +97,19 @@ def is_icon_png(path):
 def is_app_identity(path):
     """What a browser reads to install the app: its manifest and icons."""
     return path == "/manifest.webmanifest" or is_icon_png(path)
+
+
+def needs_no_session(path):
+    """Whether server.py's guard lets path through with no session or key: the
+    app's pages and files and the public paths. docs/route-roles.md asks the same."""
+    return (is_spa_route(path) or is_page_path(path) or is_public_path(path) or is_vendor_path(path)
+            or (path.startswith("/js/") and path.endswith(".js")))
+
+
+# Where server.py's _api_key_guard takes an API key instead of a session: the
+# /api/v1/ prefix, then exact paths (homestead_mcp.PATH and the metrics scrape).
+KEY_PATHS = ("/api/v1/", "/mcp", "/metrics")
+
+
+def takes_key(path):
+    return path.startswith(KEY_PATHS[0]) or path in KEY_PATHS[1:]

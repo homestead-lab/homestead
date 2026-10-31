@@ -207,7 +207,7 @@ MOVED.update(dict.fromkeys(("_fleet_rename", "enforce_update_policy", "get_app_s
 SETTINGS_HELPERS.bind_routes(_late(*SETTINGS_HELPERS.ROUTE_NEEDS), **{name: globals()[name] for name in SETTINGS_HELPERS.VALUES})
 import homestead_web_paths as WEB_PATHS
 from homestead_web_paths import (
-    is_app_identity, is_asset_path, is_icon_png, is_page_path, is_public_path, is_spa_route,
+    is_app_identity, is_asset_path, is_icon_png, is_page_path, is_spa_route,
     is_vendor_path,
 )
 WEB_PATHS.bind_routes(_late(*WEB_PATHS.ROUTE_NEEDS), **{name: globals()[name] for name in WEB_PATHS.VALUES})
@@ -1401,8 +1401,7 @@ class H(HTTP.LimitedHandler):
             if origin and urllib.parse.urlparse(origin).netloc.lower() != host:
                 self._send(403, {"error": "request origin rejected"})
                 return True
-        if (is_spa_route(path) or is_page_path(path) or is_public_path(path) or is_vendor_path(path) or
-                (path.startswith("/js/") and path.endswith(".js"))):
+        if WEB_PATHS.needs_no_session(path):
             return None
         authorization = self.headers.get("Authorization", "")
         if authorization[:7].lower() == "bearer ":
@@ -1438,7 +1437,7 @@ class H(HTTP.LimitedHandler):
         """An API key: for /api/v1, /mcp and /metrics (every key reads), checked,
         and let through with its scopes, which /api/v1 enforces per endpoint. No cookie
         is involved, so there is no cross-site form to guard against."""
-        if not path.startswith("/api/v1/") and path not in (MCP.PATH, "/metrics"):
+        if not WEB_PATHS.takes_key(path):
             self._send(401, {"error": "API keys work only on /api/v1, /mcp and /metrics; GET /api/v1/openapi.json lists what they can do"})
             return True
         try:
