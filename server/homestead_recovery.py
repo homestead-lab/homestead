@@ -334,7 +334,7 @@ def alert_facts(mode=None, maintenance=None):
              "title": f"{who} {'is' if len(hosts) == 1 else 'are'} back: {moves} container{'' if moves == 1 else 's'} could move to even out the hosts",
              "body": f"Containers started elsewhere while {who} {'was' if len(hosts) == 1 else 'were'} away. "
                      f"Balance hosts shows the moves; each restarts its container once. {then}",
-             "resolved": "No containers need to move back now", "href": "/containers", "signals": {"moves": moves}}]
+             "resolved": "No containers need to move back now", "href": "/containers?panel=rebalance", "signals": {"moves": moves}}]
 
 
 def tick(now=None):
