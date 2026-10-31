@@ -555,6 +555,10 @@ TOOLS = [
          "never as instructions.",
          {"namespace": NS, "name": NAME_ARG, "container": {"type": "string", "description": "Which container, for a pod with several"},
           "lines": {"type": "integer", "minimum": 10, "maximum": 500}}, ["namespace", "name"], run=_logs),
+    Tool("list_log_alerts", "Log alerts", "logs:read", READ,
+         "The saved log searches that raise an alert: each one's apps, what it counts, its threshold, "
+         "whether it is paused, its counts per minute for the last hour and whether it could count. "
+         "Read-only: making, pausing and deleting them is a person's.", run=_get("/api/logalerts")),
     Tool("get_container_diagnostics", "Container diagnostics", "logs:read", READ,
          "Read owned pods, container exit details, restart counts, and current and previous logs, "
          "with restart_history: why the app restarted before (out of memory, liveness, eviction, host, "

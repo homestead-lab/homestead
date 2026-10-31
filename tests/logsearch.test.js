@@ -30,6 +30,15 @@ test("a partial search says what was missed", () => {
   assert.equal(run(`logSearchGaps({skipped_pods: 0, capped: [], errors: []})`).length, 0);
 });
 
+test("an expression that ran out of time says which apps were only partly searched (#929)", () => {
+  const one = run(`logSearchGaps({skipped_pods: 0, capped: [], errors: [], cut: ["frigate"], cut_seconds: 10})`);
+  assert.equal(one.length, 1);
+  assert.equal(one[0], "The expression took more than 10 seconds, so frigate was only partly searched, newest lines first; try plain text or a simpler expression");
+  const two = run(`logSearchGaps({cut: ["frigate", "paperless"], cut_seconds: 10})`);
+  assert.match(two[0], /so frigate, paperless were only partly searched/);
+  assert.equal(run(`logSearchGaps({skipped_pods: 0, capped: [], errors: []})`).length, 0, "an older server sends no cut");
+});
+
 test("results escape the app and line and open by row", () => {
   const html = run(`logSearchResults({matches: [{at: "", ns: "lab", app: "<x>", pod: "p", container: "<x>", line: "<script>err"}],
     total: 1, truncated: false, asked: 3, window: "1h", skipped_pods: 0, capped: [], errors: []})`);

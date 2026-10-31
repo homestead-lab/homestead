@@ -25,15 +25,18 @@ What shapes it:
   null for that minute and is neither raised nor cleared.
 - **Ids are the server's.** A client id is accepted only when it is
   well-formed and names an existing rule.
+- **Crash loops count.** A container that restarted since the last round
+  wrote lines before it died; its previous log is read too (#929).
+- **Paused, or removed, is said.** A paused rule is not read. Pausing or
+  deleting a rule whose alert is raised ends that alert as "paused" or
+  "removed", not as "back under" a minute later. A rule whose expression
+  runs out of time AUTO_PAUSE rounds in a row is paused by Homestead.
 """
 import calendar
-import json
 import math
 import os
 import re
 import secrets
-import subprocess
-import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
@@ -57,31 +60,50 @@ KEEP = 60                       # minutes of counts kept per rule
 STALE = 180                     # facts older than this: could not look
 WINDOWS = (1, 5, 15)            # minutes a threshold is counted over
 SEVERITIES = ("info", "degraded", "critical")
+AUTO_PAUSE = 10                 # rounds in a row out of time before Homestead pauses a rule
 _ID = re.compile(r"^la-[0-9a-f]{12}$")
 _COUNTED = ("apps", "query", "regex", "case")   # an edit to these starts the counts again
 _lock = SHARED.SharedLock("logalerts")
 _round = threading.Lock()
 _starting = threading.Lock()
 _cursors = {}                   # (ns, pod, container) -> (last stamp read, when); leader memory only
+_restarts = {}                  # (ns, pod, container) -> restarts when last read; leader memory only
 _last = {"at": 0.0, "facts": None}
 _started = []
 _inflight = {"round": 0, "preview": 0}   # reads still running, by who started them
 _inflight_lock = threading.Lock()
-_bound = {"dir": None, "workloads": None, "read": None, "is_leader": None, "beat": None}
+_bound = {"dir": None, "workloads": None, "read": None, "is_leader": None, "beat": None,
+          "withdraw": None, "note": None}
 
 
 class TooSlow(ValueError):
     pass
 
 
-def bind(data_dir=None, workloads=None, read=None, is_leader=None, beat=None):
-    _bound.update(dir=data_dir, workloads=workloads, read=read, is_leader=is_leader, beat=beat)
+def bind(data_dir=None, workloads=None, read=None, is_leader=None, beat=None, withdraw=None, note=None):
+    _bound.update(dir=data_dir, workloads=workloads, read=read, is_leader=is_leader, beat=beat,
+                  withdraw=withdraw, note=note)
 
 
 def reset():
-    """Forget the leader's memory: cursors and the last round."""
+    """Forget the leader's memory: cursors, restarts and the last round."""
     _cursors.clear()
+    _restarts.clear()
     _last.update(at=0.0, facts=None)
+
+
+def _withdraw(key, title, body):
+    if _bound["withdraw"]:
+        return _bound["withdraw"](key, title, body)
+    import homestead_alerts as ALERTS
+    return ALERTS.withdraw(key, title, body)
+
+
+def _note(fact):
+    if _bound["note"]:
+        return _bound["note"](fact)
+    import homestead_alerts as ALERTS
+    return ALERTS.note(fact)
 
 
 def _workloads():
@@ -183,57 +205,87 @@ def save(body, known_apps=None):
         if before and any(before.get(k) != rule[k] for k in _COUNTED):
             state["counts"].pop(rule["id"], None)
             state["status"].pop(rule["id"], None)
+        # An edit keeps a paused rule paused: Resume is its own choice.
+        rule.update({k: before[k] for k in ("paused", "paused_note") if before and k in before})
         state["rules"] = [rule if r["id"] == rule["id"] else r for r in state["rules"]] + ([] if before else [rule])
         _save(state)
+    return rule
+
+
+def _existing(state, rule_id):
+    rule = next((r for r in state["rules"] if r["id"] == rule_id), None) \
+        if isinstance(rule_id, str) and _ID.fullmatch(rule_id) else None
+    if rule is None:
+        raise ValueError("that log alert no longer exists; refresh and try again")
     return rule
 
 
 def delete(rule_id):
     with _lock:
         state = _load()
-        if not (isinstance(rule_id, str) and _ID.fullmatch(rule_id) and any(r["id"] == rule_id for r in state["rules"])):
-            raise ValueError("that log alert no longer exists; refresh and try again")
+        rule = _existing(state, rule_id)
         state["rules"] = [r for r in state["rules"] if r["id"] != rule_id]
         state["counts"].pop(rule_id, None)
         state["status"].pop(rule_id, None)
         _save(state)
+    # Its alert, if raised, ends as removed: not "back under" a minute later.
+    _withdraw(f"logs:{rule_id}", f"{rule['name']}: removed", "This log alert was removed, so it no longer counts.")
     return {"ok": True}
+
+
+def pause(rule_id, paused, note="", now=None):
+    """Stop counting a rule, or start again. A raised alert ends as paused.
+    On resume the paused minutes are kept as not read: a 5- or 15-minute
+    window reaching back into them is never counted as 0 there."""
+    if not isinstance(paused, bool):
+        raise ValueError("say whether to pause the log alert or resume it")
+    minute = int((time.time() if now is None else now) // 60)
+    with _lock:
+        state = _load()
+        rule = _existing(state, rule_id)
+        was = bool(rule.get("paused"))
+        rule["paused"] = paused
+        rule.pop("paused_note", None)
+        if paused and note:
+            rule["paused_note"] = note
+        if paused and not was:
+            rule["paused_at"] = minute
+        if not paused:
+            since = rule.pop("paused_at", minute)
+            history = {m: c for m, c in state["counts"].get(rule_id, []) if m > minute - KEEP}
+            history.update({m: None for m in range(max(since, minute - KEEP + 1), minute + 1)})
+            state["counts"][rule_id] = sorted([m, c] for m, c in history.items())
+            state["status"].pop(rule_id, None)
+        _save(state)
+    if paused and not was:
+        _withdraw(f"logs:{rule_id}", f"{rule['name']}: paused" + (" by Homestead" if note else ""),
+                  note or "This log alert was paused, so it does not count until it is resumed.")
+    return {"ok": True, "paused": paused}
 
 
 def listing():
     with _lock:
         state = _load()
-    return {"rules": [{**r, "counts": state["counts"].get(r["id"], []),
-                       "status": state["status"].get(r["id"], {"state": "waiting", "detail": ""})}
+    return {"rules": [{**r, "paused": bool(r.get("paused")), "counts": state["counts"].get(r["id"], []),
+                       "status": {"state": "paused", "detail": r.get("paused_note", "")} if r.get("paused")
+                       else state["status"].get(r["id"], {"state": "waiting", "detail": ""})}
                       for r in state["rules"]],
             "every": EVERY, "max_rules": MAX_RULES, "max_apps": MAX_APPS,
             # When the leader last counted: a list that stopped moving says so.
             "counted_at": max((s.get("at", 0) for s in state["status"].values()), default=None)}
 
 
-# The child that matches an expression: the query and lines on stdin, the
-# indexes of the matching lines on stdout. Run with -I: no site, no cwd.
-_CHILD = ("import json,re,sys\n"
-          "d=json.load(sys.stdin)\n"
-          "p=re.compile(d['q'],0 if d['c'] else re.I)\n"
-          "sys.stdout.write(json.dumps([i for i,l in enumerate(d['l']) if p.search(l)]))\n")
-
-
 def matching(lines, query, regex, case, limit=REGEX_SECONDS):
     """The indexes of the lines that match. TooSlow when an expression runs
-    out of time: its child process is killed."""
+    out of time: its child process (log search's run_regex) is killed."""
     if not regex:
         needle = query if case else query.lower()
         return [i for i, line in enumerate(lines) if needle in (line if case else line.lower())]
-    payload = json.dumps({"q": query, "c": bool(case), "l": list(lines)})
-    try:
-        done = subprocess.run([sys.executable, "-I", "-c", _CHILD], input=payload, capture_output=True,
-                              text=True, timeout=limit, check=False)
-    except subprocess.TimeoutExpired:
-        raise TooSlow(f"the expression took more than {limit:g} seconds") from None
-    if done.returncode != 0:
-        raise ValueError("the expression could not be run")
-    return json.loads(done.stdout or "[]")
+    lines = list(lines)
+    hits, checked = LOGSEARCH.run_regex(lines, query, case, limit)
+    if checked < len(lines):
+        raise TooSlow(f"the expression took more than {limit:g} seconds")
+    return hits
 
 
 def leftover_reads():
@@ -269,24 +321,37 @@ def _minute(stamp):
     return calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")) // 60
 
 
-def _read_new(target, now):
+def _read_new(target, now, previous=False):
     """What a container wrote since its cursor, as (minute written, line)
-    pairs (an unstamped line counts in this round's minute), and whether the
-    read was cut."""
+    pairs (an unstamped line counts in this round's minute), and the last
+    minute read when a read was cut (None when none was). With previous, the
+    container restarted since the last round: what the one before it wrote
+    is read first."""
     ns, _app, pod, container = target
     key = (ns, pod, container)
     since = _since(key, now)
-    text = _read(ns, pod, container, since, MAX_BYTES)
+    texts = ([_read(ns, pod, container, since, MAX_BYTES, True)] if previous else []) + \
+        [_read(ns, pod, container, since, MAX_BYTES)]
     last = (_cursors.get(key) or ("", 0))[0]
-    out, newest, here = [], last, int(now // 60)
-    for raw in text.splitlines():
-        stamp = LOGSEARCH._STAMP.match(raw)
-        at, line = (stamp.group(1), stamp.group(2)) if stamp else ("", raw)
-        if at and at <= last:
-            continue
-        newest = max(newest, at)
-        out.append((_minute(at) if at else here, line[:LOGSEARCH.MAX_LINE]))
-    return key, newest, out, len(text) >= MAX_BYTES, since
+    out, newest, here, reached = [], last, int(now // 60), None
+    for text in texts:
+        for raw in text.splitlines():
+            stamp = LOGSEARCH._STAMP.match(raw)
+            at, line = (stamp.group(1), stamp.group(2)) if stamp else ("", raw)
+            if at and at <= last:
+                continue
+            newest = max(newest, at)
+            out.append((_minute(at) if at else here, line[:LOGSEARCH.MAX_LINE]))
+        if len(text) >= MAX_BYTES and reached is None:
+            # limitBytes keeps the oldest lines: what came after the last one read was not.
+            reached = _minute(newest) if newest else int((now - since) // 60)
+    return key, newest, out, reached, since
+
+
+def _restart_counts(workloads):
+    """(ns, pod, container) -> how often that container has restarted."""
+    return {(w.get("ns"), pod.get("name"), c.get("name")): int(c.get("restarts") or 0)
+            for w in workloads or [] for pod in w.get("pods") or [] for c in pod.get("containers") or []}
 
 
 def _plan(rules, workloads, turn=0):
@@ -355,12 +420,18 @@ def evaluate(now=None):
     with _round:
         late = bool(_last["at"]) and now - _last["at"] > 90
         with _lock:
-            rules = _load()["rules"]
+            rules = [r for r in _load()["rules"] if not r.get("paused")]
         sig = {r["id"]: [r.get(k) for k in _COUNTED] for r in rules}
         workloads = _workloads()
         targets, skipped = _plan(rules, workloads, minute)
         running = {f"{t[0]}/{t[1]}" for t in LOGSEARCH.targets(workloads, sorted({a for r in rules for a in r["apps"]}))} \
             if rules else set()
+        # A restart seen since the last round: the container before it wrote
+        # lines too (a crash loop's). Restarts from before the first look are not news.
+        counts = _restart_counts(workloads)
+        restarted = {t for t in targets if counts.get((t[0], t[2], t[3]), 0) > _restarts.get((t[0], t[2], t[3]), math.inf)}
+        # Restarts as last seen, kept for containers still here; a read updates its own.
+        seen = {k: v for k, v in _restarts.items() if k in counts}
         read, unread, capped, cursors = {}, set(), set(), {}
         busy = bool(_inflight["round"])
         if busy:
@@ -368,16 +439,21 @@ def evaluate(now=None):
             pairs, finished = [(None, t) for t in targets], set()
         else:
             pool = ThreadPoolExecutor(max_workers=READ_WORKERS)
-            futures = {_submit(pool, "round", _read_new, t, now): t for t in targets}
+            futures = {_submit(pool, "round", _read_new, t, now, t in restarted): t for t in targets}
             finished, _ = wait(futures, timeout=READ_BUDGET)
             pool.shutdown(wait=False, cancel_futures=True)
             pairs = list(futures.items())
         for future, target in pairs:
             app = f"{target[0]}/{target[1]}"
+            # The restart is taken as seen even when the read fails: a previous
+            # log gone for good (a node rebooted) would otherwise hold the rule
+            # unread for ever. The failed round's minutes are not counted
+            # (unread, never 0), and they hold what the old container wrote last.
+            seen[(target[0], target[2], target[3])] = counts.get((target[0], target[2], target[3]), 0)
             try:
                 if future is None or future not in finished:
                     raise TimeoutError("read took too long")
-                key, newest, got, full, since = future.result()
+                key, newest, got, reached, since = future.result()
             except Exception:
                 unread.add(app)
                 continue
@@ -385,20 +461,22 @@ def evaluate(now=None):
             row = read.setdefault(app, {"lines": [], "from": 0, "upto": None})
             row["lines"].extend(got)
             row["from"] = max(row["from"], int((now - since) // 60) + 1)
-            if full:
+            if reached is not None:
                 capped.add(app)
-                # limitBytes keeps the oldest lines: what came after the last one read was not.
-                reached = _minute(newest) if newest else int((now - since) // 60)
                 row["upto"] = reached if row["upto"] is None else min(row["upto"], reached)
         # A container that is gone, or was not read, starts again from a fresh read.
         _cursors.clear()
         _cursors.update(cursors)
+        _restarts.clear()
+        _restarts.update(seen)
         counted = {r["id"]: _count(r, read, unread, skipped, running, busy) for r in rules}
-        facts = []
+        facts, paused = [], []
         with _lock:
             fresh = _load()
             for rule in fresh["rules"]:
                 rid = rule["id"]
+                if rule.get("paused"):
+                    continue   # paused, perhaps during the round: neither raised nor counted
                 if rid not in counted:
                     continue   # new during the round: counted from the next one
                 if sig[rid] != [rule.get(k) for k in _COUNTED]:
@@ -424,7 +502,16 @@ def evaluate(now=None):
                         if m > minute - KEEP and history.get(m, 0) is not None:
                             history[m] = (history.get(m) or 0) + n
                 fresh["counts"][rid] = sorted([m, c] for m, c in history.items())
-                fresh["status"][rid] = {"state": state, "detail": detail, "at": int(now)}
+                slow = (fresh["status"].get(rid, {}).get("slow", 0) + 1) if state == "slow" else 0
+                fresh["status"][rid] = {"state": state, "detail": detail, "at": int(now), "slow": slow}
+                if slow >= AUTO_PAUSE:
+                    # Out of time every minute says nothing new: stop, and say so once.
+                    rule["paused_at"] = minute
+                    rule["paused"], rule["paused_note"] = True, (
+                        f"Homestead paused it: its expression ran out of time {AUTO_PAUSE} minutes in a row. "
+                        "Make the expression simpler, or use plain text, then resume it.")
+                    facts.remove({"unknown_key": f"logs:{rid}"})
+                    paused.append(rule)
                 if per is not None:
                     total = _over(history, rule, minute, late)
                     if total > rule["threshold"]:
@@ -434,6 +521,11 @@ def evaluate(now=None):
             fresh["status"] = {k: v for k, v in fresh["status"].items() if k in ids}
             _save(fresh)
         _last.update(at=now, facts=facts)
+        for rule in paused:
+            title = f"{rule['name']}: paused by Homestead"
+            if _withdraw(f"logs:{rule['id']}", title, rule["paused_note"]) is None:
+                _note({"key": f"logs:{rule['id']}:paused", "category": "logs", "severity": "info", "event": True,
+                       "title": title, "body": rule["paused_note"], "href": "/containers?panel=logalerts"})
         return facts
 
 
@@ -456,11 +548,17 @@ def fact(rule, total, capped=()):
 
 def alert_facts(now=None):
     """The last round's facts for the shared alert loop, which never reads
-    logs itself. None when there is no recent round: could not look."""
+    logs itself. None when there is no recent round: could not look. A rule
+    deleted or paused since that round is left out: its alert has ended."""
     now = time.time() if now is None else now
     if _last["facts"] is None or now - _last["at"] > STALE:
         return None
-    return list(_last["facts"])
+    with _lock:
+        live = {f"logs:{r['id']}" for r in _load()["rules"] if not r.get("paused")}
+    # When it was taken: a withdraw after this wins over it (homestead_alerts.observe).
+    taken = time.time()
+    return [{**f, "collected": taken} if "key" in f else f
+            for f in _last["facts"] if f.get("key", f.get("unknown_key")) in live]
 
 
 def step(now=None):
@@ -550,9 +648,14 @@ def _body(request):
     return request.body if isinstance(request.body, dict) else {}
 
 
+def _pause(body):
+    return pause(body.get("id"), body.get("paused"))
+
+
 ROUTES = {
     ("GET", "/api/logalerts"): ("viewer", lambda request: listing()),
     ("POST", "/api/logalerts"): ("operator", lambda request: save(_body(request))),
     ("POST", "/api/logalerts/delete"): ("operator", lambda request: delete(_body(request).get("id"))),
+    ("POST", "/api/logalerts/pause"): ("operator", lambda request: _pause(_body(request))),
     ("POST", "/api/logalerts/preview"): ("viewer", lambda request: preview(_body(request))),
 }

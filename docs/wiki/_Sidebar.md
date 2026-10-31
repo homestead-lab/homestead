@@ -11,6 +11,7 @@
 **Use**
 - [Dashboard and nodes](Dashboard-and-nodes)
 - [Containers](Containers)
+- [Log alerts](Log-alerts)
 - [App Store](App-Store)
 - [Importing](Importing)
 - [Storage](Storage)
