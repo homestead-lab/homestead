@@ -137,6 +137,8 @@ class OutsideTheLockTests(unittest.TestCase):
         other = self.start(KIND, "node-z")
         quick = self.start("other-kind", "node-y")
         OPS.CANCELLERS["other-kind"] = (lambda item: {"mode": "stop", "needs": "operator"}, lambda item, options: "Stopped")
+        # Its step runs at once now, beside the slow one (#933): it must not end the job.
+        OPS.RESOLVERS["other-kind"] = lambda item: ("running", 1, "y")
         blocked = threading.Event()
         OPS.RESOLVERS[KIND] = lambda item: (blocked.wait(5) if item["id"] == self.op else None, self.entered.set(),
                                             ("running", 1, "x"))[2]
