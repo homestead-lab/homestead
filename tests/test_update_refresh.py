@@ -74,11 +74,11 @@ class ReconcileOffRequestTests(unittest.TestCase):
         # A reconcile another test's report() started finishes first.
         self.assertTrue(UPDATE_CHECKS._RECONCILING.acquire(timeout=10))
         UPDATE_CHECKS._RECONCILING.release()
-        self.saved = dict(UPDATES._LATEST)
-        self.addCleanup(lambda: (UPDATES._LATEST.clear(), UPDATES._LATEST.update(self.saved)))
-        UPDATES._RECONCILED[0] = 0.0
-        self.addCleanup(UPDATES._RECONCILED.__setitem__, 0, 0.0)
-        UPDATES._LATEST.update(report=UPDATES._summary([
+        self.saved = dict(CHECKS._LATEST)
+        self.addCleanup(lambda: (CHECKS._LATEST.clear(), CHECKS._LATEST.update(self.saved)))
+        CHECKS._RECONCILED[0] = 0.0
+        self.addCleanup(CHECKS._RECONCILED.__setitem__, 0, 0.0)
+        CHECKS._LATEST.update(report=CHECKS._summary([
             {"ns": "lab", "name": "sonarr", "available": True, "homestead": "",
              "images": [{"container": "sonarr", "deployed": "lscr.io/linuxserver/sonarr:latest", "available": True}]}],
             checked_at="2026-10-07T02:00:00Z", channel="prod"), number=3, finished=time.time())
@@ -94,8 +94,8 @@ class ReconcileOffRequestTests(unittest.TestCase):
         refreshed = []
         with mock.patch.object(UPDATES, "kget", side_effect=kget), \
                 mock.patch.object(UPDATES, "CHANNEL", lambda: "prod"), \
-                mock.patch.object(UPDATES, "refresh_one", side_effect=lambda ns, name: refreshed.append(name)):
-            answer = UPDATES.report()
+                mock.patch.object(CHECKS, "refresh_one", side_effect=lambda ns, name: refreshed.append(name)):
+            answer = CHECKS.report()
             self.assertEqual("sonarr", answer["workloads"][0]["name"], "the last report, at once")
             release.set()
             UPDATE_CHECKS._RECONCILE_THREAD[0].join(5)
@@ -105,10 +105,10 @@ class ReconcileOffRequestTests(unittest.TestCase):
 
     def test_requests_while_one_runs_start_no_other(self):
         started, release = [], threading.Event()
-        with mock.patch.object(UPDATES, "reconcile", side_effect=lambda: (started.append(1), release.wait(5))), \
+        with mock.patch.object(CHECKS, "reconcile", side_effect=lambda: (started.append(1), release.wait(5))), \
                 mock.patch.object(UPDATES, "CHANNEL", lambda: "prod"):
             for _ in range(20):
-                UPDATES.report()
+                CHECKS.report()
             release.set()
             UPDATE_CHECKS._RECONCILE_THREAD[0].join(5)
         self.assertEqual(1, len(started), "one reconcile at a time")
@@ -117,7 +117,7 @@ class ReconcileOffRequestTests(unittest.TestCase):
         dep = lambda ns: {"metadata": {"namespace": ns, "name": "app"},
                           "spec": {"selector": {"matchLabels": {"app": "app"}},
                                    "template": {"spec": {"containers": [{"name": "app", "image": "x:1"}]}}}}
-        UPDATES._LATEST["report"] = UPDATES._summary(
+        CHECKS._LATEST["report"] = CHECKS._summary(
             [{"ns": ns, "name": "app", "available": False, "homestead": "", "images": [
                 {"container": "app", "deployed": "x:1", "current_digest": "sha256:" + "a" * 64}]}
              for ns in ("one", "two")], checked_at="2026-10-07T02:00:00Z", channel="prod")
@@ -127,8 +127,8 @@ class ReconcileOffRequestTests(unittest.TestCase):
         listed = {"/apis/apps/v1/deployments": {"items": [dep("one"), dep("two")]},
                   "/api/v1/pods": {"items": [pod("one", "a"), pod("two", "b")]}}
         with mock.patch.object(UPDATES, "kget", side_effect=lambda path: listed[path]), \
-                mock.patch.object(UPDATES, "refresh_one"):
-            self.assertEqual([("two", "app")], UPDATES.reconcile(now=100),
+                mock.patch.object(CHECKS, "refresh_one"):
+            self.assertEqual([("two", "app")], CHECKS.reconcile(now=100),
                              "only the app whose own pod runs another build")
 
 

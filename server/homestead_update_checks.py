@@ -351,13 +351,13 @@ def reconcile_soon(now=None):
     with the last report at once instead of waiting for that (#985)."""
     now = now or time.time()
     with _SCAN_LOCK:
-        if not U._LATEST.get("report") or now - _RECONCILED[0] < RECONCILE_EVERY:
+        if not _LATEST.get("report") or now - _RECONCILED[0] < RECONCILE_EVERY:
             return None
     if not _RECONCILING.acquire(blocking=False):
         return None
     def run():
         try:
-            U.reconcile()
+            reconcile()
         except Exception:
             pass                    # a report a little behind beats none
         finally:
