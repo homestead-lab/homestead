@@ -180,14 +180,14 @@ def report(current, force=False):
 
 
 def _report_route(request):
-    current = ((homestead_routes.cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", "")
+    current = homestead_routes.cached(CLUSTER.VERSION_KEY, 15, CLUSTER.harvester_version)
     return report(current, force=(request.query.get("force") or [""])[0] == "1")
 
 
 def _start_route(request):
     version = str(request.body.get("version") or "")
     name = COMPONENTS.start_harvester(version, offered())
-    homestead_routes.forget("cluster")
+    homestead_routes.forget("cluster", CLUSTER.VERSION_KEY)
     operation = OPS.start("harvester-upgrade", f"Upgrade Harvester to {version}",
                           {"kind": "Upgrade", "name": name, "namespace": "harvester-system"},
                           "/system/cluster", {"upgrade": name, "version": version},

@@ -240,6 +240,36 @@ def build_report(kubernetes_version, raw_nodes, node_summaries, pods, events, cs
     }
 
 
+# The whole pod list, kept by the leader's page snapshot each cycle and
+# forgotten by a write to pods (homestead_kube.SHOWN_KEYS); kept no longer
+# than the Cluster page keeps its own answer.
+PODS_KEY = "pods"
+PODS_SECONDS = 15
+VERSION_KEY = "harvester-version"
+
+
+def _version_setting():
+    # Harvester exposes this setting on supported releases. Older releases may
+    # omit it, in which case the node OS image remains an equally useful source.
+    try:
+        setting = kget("/apis/harvesterhci.io/v1beta1/settings/server-version")
+    except Exception:
+        setting = {}
+    return setting.get("value") or (setting.get("status") or {}).get("value") or ""
+
+
+def harvester_version():
+    """The Harvester version inventory() reports, read alone: the setting,
+    else the hosts' OS image. For the upgrade alert and the Upgrades page,
+    which need nothing else of the inventory (#978)."""
+    explicit = _version_setting()
+    if explicit:
+        return _harvester_version(explicit, [])
+    nodes = kget("/api/v1/nodes").get("items", [])
+    return _harvester_version("", [{"os": ((n.get("status") or {}).get("nodeInfo") or {}).get("osImage", "")}
+                                   for n in nodes])
+
+
 def inventory():
     unavailable = []
 
@@ -252,18 +282,25 @@ def inventory():
 
     version = read("Kubernetes version", "/version", {})
     raw_nodes = read("Nodes", "/api/v1/nodes", {"items": []}).get("items", [])
-    pods = read("System services", "/api/v1/pods", {"items": []}).get("items", [])
+    try:
+        # The leader's page snapshot lists every pod each cycle and keeps
+        # the list (#980): the system services are read from it. A list
+        # older than PODS_SECONDS is the last one kept after a read that
+        # failed: unread, as before, not old services shown as now.
+        pods = homestead_routes.cached(PODS_KEY, PODS_SECONDS, lambda: kget("/api/v1/pods")).get("items", [])
+        at = homestead_routes.CACHE.kept_at(PODS_KEY)
+        if at is not None and time.time() - at >= PODS_SECONDS:
+            raise RuntimeError("the pod list could not be read; the last one is too old to show")
+    except Exception as error:
+        unavailable.append({"section": "System services", "reason": str(error)[:180]})
+        pods = []
     pods = [pod for pod in pods if (pod.get("metadata") or {}).get("namespace") in SYS_NS]
-    events = read("Cluster warnings", "/api/v1/events", {"items": []}).get("items", [])
+    # Only Warnings are shown (_warning_rows): the API server filters, so the
+    # list is a small part of every event (#980).
+    events = read("Cluster warnings", "/api/v1/events?fieldSelector=type%3DWarning", {"items": []}).get("items", [])
     csrs = read("Certificate requests", "/apis/certificates.k8s.io/v1/certificatesigningrequests",
                 {"items": []}).get("items", [])
-    # Harvester exposes this setting on supported releases. Older releases may
-    # omit it, in which case the node OS image remains an equally useful source.
-    try:
-        setting = kget("/apis/harvesterhci.io/v1beta1/settings/server-version")
-    except Exception:
-        setting = {}
-    harvester = setting.get("value") or (setting.get("status") or {}).get("value") or ""
+    harvester = _version_setting()
     try:
         summaries = nodes_provider()
     except Exception as error:
