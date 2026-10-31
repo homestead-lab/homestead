@@ -1,5 +1,7 @@
 """Runtime movement cannot authorize erasing replica data or another device."""
+import base64
 import copy
+import errno
 import hashlib
 import json
 import os
@@ -11,6 +13,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'server'))
@@ -108,6 +111,81 @@ class RuntimeContentsTests(unittest.TestCase):
     def test_non_root_managed_parent_is_rejected(self):
         parent=self.root/'writable';parent.mkdir();parent.chmod(0o777)
         with self.assertRaisesRegex(ValueError,'exclusively root-managed'):W.administrative(parent/'plan')
+
+
+class RuntimeAttributePolicyTests(unittest.TestCase):
+    """#973: extended attributes are kept by namespace, and only what differs
+    is written. On an SELinux host every file carries security.selinux and an
+    unprivileged or confined writer cannot set it, even to the same value.
+    The kernel is simulated here, so these run on hosts without SELinux too."""
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
+        self.file = Path(self.temp.name) / 'f'; self.file.write_text('x')
+        self.attrs = {}      # what the simulated file carries
+        self.written = []
+        self.refuse = set()  # names the simulated kernel refuses to set
+        def getxattr(path, name):
+            if name not in self.attrs: raise OSError(errno.ENODATA, 'No data available')
+            return self.attrs[name]
+        def setxattr(path, name, value):
+            if name in self.refuse: raise OSError(errno.EOPNOTSUPP, 'Operation not supported')
+            self.written.append(name); self.attrs[name] = value
+        self.enterContext(mock.patch.object(W.os, 'getxattr', getxattr))
+        self.enterContext(mock.patch.object(W.os, 'setxattr', setxattr))
+        self.enterContext(mock.patch.object(W.os, 'listxattr', lambda path: sorted(self.attrs)))
+
+    @staticmethod
+    def wanted(**values):
+        return {name.replace('__', '.'): base64.b64encode(value).decode() for name, value in values.items()}
+
+    def test_an_equal_label_is_never_written(self):
+        self.attrs['security.selinux'] = b'system_u:object_r:var_lib_t:s0'
+        self.refuse.add('security.selinux')
+        W.keep_attrs(self.file, self.wanted(security__selinux=b'system_u:object_r:var_lib_t:s0'))
+        self.assertEqual([], self.written)
+
+    def test_a_refused_different_label_stops_naming_the_file_and_both_labels(self):
+        self.attrs['security.selinux'] = b'system_u:object_r:tmp_t:s0'
+        self.refuse.add('security.selinux')
+        with self.assertRaises(ValueError) as caught:
+            W.keep_attrs(self.file, self.wanted(security__selinux=b'system_u:object_r:var_lib_t:s0'))
+        message = str(caught.exception)
+        for part in (str(self.file), 'tmp_t', 'var_lib_t', 'context='):
+            self.assertIn(part, message)
+
+    def test_a_different_label_the_kernel_allows_is_kept(self):
+        self.attrs['security.selinux'] = b'system_u:object_r:tmp_t:s0'
+        W.keep_attrs(self.file, self.wanted(security__selinux=b'system_u:object_r:var_lib_t:s0'))
+        self.assertEqual(b'system_u:object_r:var_lib_t:s0', self.attrs['security.selinux'])
+
+    def test_file_capabilities_are_kept_exactly(self):
+        W.keep_attrs(self.file, self.wanted(security__capability=b'\x01\x00\x00\x02'))
+        self.assertEqual(['security.capability'], self.written)
+
+    def test_a_refused_user_attribute_still_stops(self):
+        self.refuse.add('user.example')
+        with self.assertRaises(OSError):
+            W.keep_attrs(self.file, self.wanted(user__example=b'fixture'))
+
+    def test_kernel_managed_integrity_attributes_are_neither_read_nor_written(self):
+        self.attrs.update({'security.ima': b'hash', 'security.evm': b'mac', 'user.example': b'kept'})
+        self.assertEqual(['user.example'], sorted(W.read_attrs(self.file)))
+        W.keep_attrs(self.file, self.wanted(security__ima=b'other', security__evm=b'other'))
+        self.assertEqual([], self.written)
+
+    def test_owner_and_mode_are_set_before_the_attributes(self):
+        """chown clears file capabilities: apply_metadata must set them after it."""
+        self.enterContext(mock.patch.object(W.os, 'chown', lambda path, uid, gid: self.attrs.pop('security.capability', None)))
+        self.enterContext(mock.patch.object(W.os, 'chmod', lambda path, mode: None))
+        W.apply_metadata(self.file, {'uid': 0, 'gid': 0, 'mode': 0o755,
+                                     'attrs': self.wanted(security__capability=b'cap')})
+        self.assertEqual(b'cap', self.attrs.get('security.capability'))
+
+    def test_the_manifest_uses_the_same_rules(self):
+        root = Path(self.temp.name) / 'runtime'; (root / 'engine-binaries').mkdir(parents=True)
+        self.attrs.update({'security.ima': b'hash', 'user.example': b'kept'})
+        entry = W.manifest(root)['engine-binaries']
+        self.assertEqual(['user.example'], sorted(entry['attrs']))
 
 
 @unittest.skipUnless(os.name == 'posix', 'Linux process inventory')
