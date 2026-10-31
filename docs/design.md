@@ -660,7 +660,9 @@ also holds the verbosity budget: too many visible words, more than one notice,
 or a dialog that says the same thing twice.
 `node scripts/dialog_sheets.mjs mobile 4 4 pages` lays captures side by side
 for review, and reading them is part of the check: the scripts catch what
-can be measured, not clutter.
+can be measured, not clutter. A dialog capture is drawn on an opaque fill
+without backdrop blur, which in software rendering made a long dialog take
+seconds to draw, so judge the glass effect in the app, not from the captures.
 
 A new page is added to `scripts/audit_pages.mjs` and a new dialog to
 `scripts/audit_dialogs.mjs`, with demo data in `web/js/demo.js` if it needs

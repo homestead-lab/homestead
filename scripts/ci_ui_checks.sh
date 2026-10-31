@@ -34,6 +34,7 @@ case "${1:-}" in
     SNAPSHOT_RESTORE_SCREENSHOTS=release-assets/dialogs/snapshot-restore node tests/integration/snapshot-restore.mjs
     HOST_SELECT_SCREENSHOTS=release-assets/dialogs/host-select node tests/integration/host-select-chips.mjs
     node tests/integration/data-copies.mjs
+    node tests/integration/audit-capture.mjs
     ;;
   pages)
     node scripts/audit_pages.mjs
