@@ -92,6 +92,7 @@ def reconcile_hardware(fresh=False):
             pass             # the probe pods could not be listed: use what is known
     temps = node_temps()
     found = {}
+    definitions = None               # read once, at the first host with a probe (#977)
     for n in kget("/api/v1/nodes").get("items", []):
         name = n["metadata"]["name"]
         nfs_facts = (temps.get(name) or {}).get("nfs") or {}
@@ -103,9 +104,11 @@ def reconcile_hardware(fresh=False):
         devices = (temps.get(name) or {}).get("devices")
         if devices is None:
             continue                 # no probe here: nothing to say either way
+        if definitions is None:
+            definitions = HW.features()
         labels, auto = HW.reconcile_node(name, n["metadata"].get("labels", {}) or {},
-                                         n["metadata"].get("annotations", {}) or {}, devices)
-        found[name] = sorted(x["id"] for x in HW.inventory(labels, devices, auto) if x["detected"])
+                                         n["metadata"].get("annotations", {}) or {}, devices, definitions)
+        found[name] = sorted(x["id"] for x in HW.inventory(labels, devices, auto, definitions) if x["detected"])
     if fresh:
         ROUTER.forget("nodes", "ov")
     return found
@@ -342,6 +345,7 @@ def get_nodes(pods=None, vols=None):
     except Exception:
         host_os = {}
     out = []
+    hardware_definitions = HW.features()    # one read for every host, not two each (#977)
     for n in nodes.get("items", []):
         name = n["metadata"]["name"]
         labels = n["metadata"].get("labels", {})
@@ -358,10 +362,10 @@ def get_nodes(pods=None, vols=None):
         probed = (temps.get(name) or {}).get("devices") or {}
         annotations = n["metadata"].get("annotations", {}) or {}
         try:
-            labels, auto_hardware = HW.reconcile_node(name, labels, annotations, probed)
+            labels, auto_hardware = HW.reconcile_node(name, labels, annotations, probed, hardware_definitions)
         except Exception:
             auto_hardware = {x for x in NAMES.read(annotations, "auto-hardware").split(",") if x}
-        hardware_inventory = HW.inventory(labels, probed, auto_hardware)
+        hardware_inventory = HW.inventory(labels, probed, auto_hardware, hardware_definitions)
         hardware = {x["id"]: x["available"] for x in hardware_inventory}
         temp_payload = temps.get(name)
         disk_issues = []

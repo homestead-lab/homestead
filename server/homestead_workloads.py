@@ -364,6 +364,7 @@ def get_workloads(pods=None):
     except Exception:
         svcs = []
     tiers = GROUPS.stored(kget)    # each group's tier (#430); None when it can't be read
+    hardware_definitions = HW.features()    # one read for every app, not one each (#977)
 
     out = []
     for d in deps:
@@ -414,7 +415,7 @@ def get_workloads(pods=None):
             ports.sort(key=lambda row: row.get("port") != primary)
             for row in ports:
                 row["primary"] = row.get("port") == primary
-        hardware = HW.workload_features(pspec, annotations)
+        hardware = HW.workload_features(pspec, annotations, hardware_definitions)
         pod_rows = []
         transition_ages = []
         fatal_waits = []

@@ -223,6 +223,7 @@ def get_flow2():
     # longer part of what the cluster runs; scheduled jobs are listed apart.
     # Running pods come first so a card shows where its app runs now.
     seen, wls, launchers = set(), [], {}
+    hardware_definitions = HW.features()    # one read for every pod, not one each (#977)
     for p in sorted(pods, key=lambda p: p["status"].get("phase") != "Running"):
         labels = p["metadata"].get("labels", {}) or {}
         # A VM runs in a virt-launcher pod; it is shown as the VM, below, not
@@ -256,7 +257,7 @@ def get_flow2():
             "ns": ns,
             "image": (p["spec"].get("containers") or [{}])[0].get("image", ""),
             "icon": display_icon(dep_meta.get((ns, name), {})),
-            "hardware": HW.workload_features(p["spec"], dep_meta.get((ns, name), {})),
+            "hardware": HW.workload_features(p["spec"], dep_meta.get((ns, name), {}), hardware_definitions),
             "gpu": any("dri" in (m.get("mountPath") or "")
                        for c in p["spec"].get("containers", []) for m in (c.get("volumeMounts") or [])),
             "claims": claims, "ports": app_ports(ns, labels),
