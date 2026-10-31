@@ -96,6 +96,15 @@ class VolumesListTests(unittest.TestCase):
 
         self.assertIsNone(rows["pvc-dr"]["restore"])
 
+    def test_a_degraded_volume_says_since_when(self):
+        """Longhorn's lastDegradedAt is the repairing grace's clock (#941):
+        it survives a Homestead restart, which a first sighting would not."""
+        rows = self.serve([lh_volume("pvc-a", lastDegradedAt="2026-10-28T03:00:00Z"),
+                           lh_volume("pvc-b", robustness="healthy", lastDegradedAt="")], [])
+
+        self.assertEqual(1793156400, rows["pvc-a"]["degraded_since"])
+        self.assertIsNone(rows["pvc-b"]["degraded_since"])
+
     def test_volumes_are_listed_when_engines_cannot_be_read(self):
         def kget(path):
             if path.endswith("/engines"):

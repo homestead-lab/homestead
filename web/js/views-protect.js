@@ -120,19 +120,48 @@ window.objectStoreRemove = async () => {
   } catch (e) { toast(e.message, "bad"); }
 };
 
+/* The page is drawn when Longhorn's overview answers, not once every read has
+   (#705). Backup storage and the list of backups fill their own places when
+   their reads return, morphed in as Restore tests are. A refresh keeps their
+   last answers on screen until the new ones arrive; another visit starts
+   afresh; a load overtaken by a newer one fills nothing. */
+let protectLoad = { id: 0, token: null, parts: {} };
+
 async function viewProtect() {
   if (platformLacks("longhorn", "Data protection")) return;
-  const [d, objects, backupVolumes] = await Promise.all([
-    api("/api/lh/overview"),
+  const token = window.NAV_TOKEN;
+  const kept = protectLoad.token === token ? protectLoad.parts : {};
+  const load = protectLoad = { id: protectLoad.id + 1, token, parts: { ...kept } };
+  const current = () => protectLoad === load;
+  let drawn = null;
+  const fill = (id, html) => {
+    const host = document.getElementById(id);
+    if (!host) return;
+    const next = host.cloneNode(false);
+    next.innerHTML = html;
+    enhanceActions(next);
+    morph(host, next);
+    loadAppIcons(host);
+    if (window.applyRole) window.applyRole();
+  };
+  const part = (key, read, show) => read.then(answer => {
+    load.parts[key] = answer;
+    if (!current()) return;
+    STATE.data[key === "objects" ? "objectStore" : "lhBackupVolumes"] = answer;
+    if (drawn) show(drawn);
+  });
+  const parts = [
     // Unread is not "not deployed": that would offer to set it up again (#620).
-    api("/api/objectstore").catch(e => ({ unread: e.message })),
+    part("objects", api("/api/objectstore").catch(e => ({ unread: e.message })),
+      ({ d, tgt, cover }) => fill("protect-top", protectTop(d, load.parts.objects, tgt, cover))),
     // Unread is not "no backups on the target yet" (#620).
-    api("/api/lh/backupvolumes").catch(e => ({ unread: e.message })),
-  ]);
+    part("backups", api("/api/lh/backupvolumes").catch(e => ({ unread: e.message })),
+      ({ tgt }) => fill("protect-backups", protectBackups(load.parts.backups, tgt))),
+  ];
+  const d = await api("/api/lh/overview");
+  if (!current()) return;
   STATE.data.lh = d;
   protectFilterRead();
-  STATE.data.objectStore = objects;
-  STATE.data.lhBackupVolumes = backupVolumes;
   const tgt = d.target || {};
   const cover = d.total ? Math.round(d.protected / d.total * 100) : 0;
 
@@ -141,10 +170,28 @@ async function viewProtect() {
         <button class="btn pri" data-need="operator" onclick="lhJob()">＋ New job</button>
       `)}
 
-  ${objects.deployed || objects.unread ? "" : objectStoreCard(objects, tgt)}
+  <div id="protect-top">${protectTop(d, load.parts.objects, tgt, cover)}</div>
+${protectBody(d, tgt, load.parts.backups)}`);
+  drawn = { d, tgt, cover };
+  loadWeeklyTrim();
+  protectVolumesPaint();
+  loadRestoreTests();
+  loadPreviousVolumes();
+  window.loadFsFreeze?.();
+  // Settled when every part is on the page, as before, for whoever waits on it.
+  await Promise.all(parts);
+}
+
+/* Backup storage, the summary line and the three cards behind it. `objects`
+   is undefined while backup storage is still being read. */
+function protectTop(d, objects, tgt, cover) {
+  const reading = objects === undefined;
+  objects = objects || {};
+  return `${reading || objects.deployed || objects.unread ? "" : objectStoreCard(objects, tgt)}
   ${summaryLine("protect", [
       `${UI.chip(`${cover}% covered`, cover === 100 ? "ok" : cover ? "warn" : "bad")} ${d.protected} of ${d.total} volumes`,
-      objects.deployed ? `Backup storage ${UI.chip(objects.ready ? "serving" : "starting", objects.ready ? "ok" : "warn")}`
+      reading ? `Backup storage <span class="dim small">reading…</span>`
+        : objects.deployed ? `Backup storage ${UI.chip(objects.ready ? "serving" : "starting", objects.ready ? "ok" : "warn")}`
         : objects.unread ? `Backup storage ${UI.chip("unknown", "warn", { tip: "Could not read it: " + objects.unread })}` : "",
       tgt.configured ? `Target ${UI.chip(tgt.available ? "reachable" : "unavailable", tgt.available ? "ok" : "bad")}` : UI.chip("no backup target", "warn"),
       `${d.backed_up ?? 0} backed up off the cluster`],
@@ -196,8 +243,11 @@ async function viewProtect() {
         <span class="mono">default</span>. Give some volumes a plan of their own with a group.</div>
     </div>
   </div>
-`)}
+`)}`;
+}
 
+function protectBody(d, tgt, backupVolumes) {
+  return `
   <div id="restore-tests" class="restore-tests">${restoreTestsSection()}</div>
   <div id="previous-volumes" class="restore-tests"></div>
   <div id="fs-freeze" class="restore-tests"></div>
@@ -242,7 +292,13 @@ async function viewProtect() {
   <div id="housekeeping" class="housekeeping">${UI.section("Housekeeping", '<div class="empty small"><span class="spin2"></span> Reading the weekly trim…</div>')}</div>
 
   <div class="sec">Backups</div>
-  ${backupVolumes.unread ? UI.callout("warn", "Could not read the backups", esc(backupVolumes.unread))
+  <div id="protect-backups">${protectBackups(backupVolumes, tgt)}</div>`;
+}
+
+/* The backups on the target. `backupVolumes` is undefined while they are still being read. */
+function protectBackups(backupVolumes, tgt) {
+  if (backupVolumes === undefined) return '<div class="empty small"><span class="spin2"></span> Reading the backups…</div>';
+  return `${backupVolumes.unread ? UI.callout("warn", "Could not read the backups", esc(backupVolumes.unread))
   : backupVolumes.length ? `<div class="card flat pad0"><div class="tblwrap"><table data-sort="backupvols" class="tbl stack"><thead><tr>
     <th>Volume</th><th>Backups</th><th data-nosort>Last backup</th><th>Size</th><th></th></tr></thead><tbody>
     ${backupVolumes.map(b => `<tr>
@@ -253,12 +309,7 @@ async function viewProtect() {
       <td class="mono">${b.size_mb ? bytesText(b.size_mb * 1024 ** 2) : "—"}</td>
       <td data-actions>${actionBar([{ label: "Backups", run: `lhBackupList(${jsq(b.name)},${jsq(b.pvc || b.name)})` }])}</td></tr>`).join("")}
   </tbody></table></div></div>`
-  : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`);
-  loadWeeklyTrim();
-  protectVolumesPaint();
-  loadRestoreTests();
-  loadPreviousVolumes();
-  window.loadFsFreeze?.();
+  : `<div class="empty">${tgt.configured ? "No backups on the target yet." : "No backup target, so no backups."}</div>`}`;
 }
 
 /* ---------------- the Volumes list, filtered (#345) ----------------

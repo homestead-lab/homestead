@@ -710,7 +710,7 @@
         kubernetes: "v1.32.4+rke2r1",
         node_probe: { state: "updated", detail: "homestead-nodeprobe updated to this release's scripts" },
         permissions: { state: "current", detail: "homestead has everything this release uses" } } },
-    "/api/overview": { health: "healthy", health_state: "healthy", health_summary: "All cluster services are healthy", health_issues: [],
+    "/api/overview": { age_s: 4, health: "healthy", health_state: "healthy", health_summary: "All cluster services are healthy", health_issues: [],
       cpu_pct: 27.2, cpu_used: 5.4, cpu_cap: 20, mem_pct: 54.0, mem_used_gb: 25.2, mem_cap_gb: 46.8,
       nodes_ready: 3, nodes_total: 3, workload_pods: 16, system_pods: 116, lb_ip: "192.0.2.242", nodes,
       top_cpu: [{ name: "frigate", ns: "lab", nodes: ["harvester-node2"], cpu: .84 }, { name: "home-assistant", ns: "lab", nodes: ["harvester-node1"], cpu: .31 }, { name: "paperless", ns: "lab", nodes: ["harvester-node3"], cpu: .18 }],
@@ -3475,7 +3475,7 @@ ssh_pwauth: true
   // The setup guide, part way through, as a cluster a few weeks in would be.
   const demoSetup = { skips: [], hidden: false, opened: true, admin: true, personal: ["appearance", "phone", "notifications"], steps: {
     health: { done: false, applies: true, summary: "One workload is not ready",
-      issues: [{ severity: "degraded", kind: "Workload", name: "lab/doublecommander", reason: "only 0/1 replicas ready after 12m" }] },
+      issues: [{ severity: "degraded", kind: "Workload", name: "lab/doublecommander", reason: "only 0/1 replicas ready, not ready for 12m" }] },
     placement: { done: false, applies: true, mode: "", unreserved: 4, notes: [], hosts: [{ name: "harvester-node1", standby: false, tainted: false, takes_work: true }, { name: "harvester-node2", standby: false, tainted: false, takes_work: true }, { name: "harvester-node3", standby: false, tainted: false, takes_work: true }] },
     quorum: { done: true, applies: true, servers: 3, members: ["harvester-node1", "harvester-node2", "harvester-node3"],
       ready: ["harvester-node1", "harvester-node2", "harvester-node3"], can_lose: 1, nodes: [], tiebreakers: [] },
@@ -3614,6 +3614,12 @@ ssh_pwauth: true
     {key:"health:Node:harvester-node3",version:"demo-node-down",severity:"critical",category:"outage",title:"Host harvester-node3 is not ready",body:"Kubernetes reports NotReady. Review this host.",href:"/nodes",acknowledged:false},
     {key:"audit:filling-fast",version:"demo-audit-fast",severity:"degraded",category:"degraded",title:"The audit log is filling fast",body:"audit.jsonl filled 10 MiB in 12 minutes: something may be flooding Homestead with requests, and older lines on the data volume are being replaced. The pod log keeps every line.",href:"/settings?tab=about",acknowledged:false}
   ]};
+  // The sidebar pill's verdict rides on the alerts (#940): the overview's, as read.
+  Object.defineProperty(responses["/api/alerts"], "health", {enumerable:true, get() {
+    const ov = responses["/api/overview"], issues = ov.health_issues || [], critical = issues.filter(i => i.severity === "critical").length;
+    return {state: ov.health_state || ov.health, summary: ov.health_summary || "", critical, degraded: issues.length - critical,
+      as_of: Math.round(Date.now() - ov.age_s * 1000) / 1000, age_s: ov.age_s};
+  }});
   responses["/api/alerts/acknowledge"] = (url,opts) => {const body=JSON.parse(opts.body || "{}");const row=responses["/api/alerts"].active.find(a=>a.key===body.key && a.version===body.version);if(!row)throw new Error("This alert changed. Refresh and review its current state.");row.acknowledged=!body.undo;return {ok:true};};
   // Log alerts (logalerts.js): counts per minute for the last hour. Front
   // door's rule is over its threshold now; Paperless's is quiet; Jellyfin's

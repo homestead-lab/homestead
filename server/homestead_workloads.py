@@ -22,6 +22,7 @@ import homestead_failover as FAILOVER
 import homestead_gitops as GITOPS
 import homestead_group_tiers as GROUPS
 import homestead_hardware as HW
+import homestead_kube_metrics as KUBE_METRICS
 import homestead_host_access as HOSTACCESS
 import homestead_icons as ICONS
 import homestead_lan as LAN
@@ -308,11 +309,9 @@ def get_workloads(pods=None):
     read it already (the leader's page snapshot)."""
     deps = kget("/apis/apps/v1/deployments").get("items", [])
     pods = (kget("/api/v1/pods") if pods is None else pods).get("items", [])
-    try:
-        pm = {(m["metadata"]["namespace"], m["metadata"]["name"]): m
-              for m in kget("/apis/metrics.k8s.io/v1beta1/pods").get("items", [])}
-    except Exception:
-        pm = {}
+    # The loop's last reading, with its state: never waits on metrics-server (#906).
+    usage, metrics = KUBE_METRICS.read("pods", kget)
+    pm = {(m["metadata"]["namespace"], m["metadata"]["name"]): m for m in usage}
     try:
         svcs = kget("/api/v1/services").get("items", [])
     except Exception:
@@ -388,7 +387,10 @@ def get_workloads(pods=None):
                         why = ROLLOUTS.explain_pull(waiting.get("message"))
                         fatal_waits.append(f"{p['metadata']['name']}: {reason}" + (f" - {why}" if why else ""))
             if not ready:
-                transition_ages.append(age_secs(p["metadata"].get("creationTimestamp")))
+                # Not ready since its Ready condition last changed: a restart
+                # in a days-old pod is seconds old, not days (#941).
+                transition_ages.append(age_secs(conditions.get("Ready", {}).get("lastTransitionTime")
+                                                or p["metadata"].get("creationTimestamp")))
             # Pending and unscheduled says nothing; the scheduler said why.
             unplaced = ""
             placed = conditions.get("PodScheduled") or {}
@@ -458,7 +460,7 @@ def get_workloads(pods=None):
             "pods": pod_rows,
             "pod_count": len(pod_rows),
             "container_count": sum(p["container_count"] for p in pod_rows),
-            "cpu": round(cpu, 3), "mem_mb": round(mem / 1024**2, 1),
+            "cpu": round(cpu, 3), "mem_mb": round(mem / 1024**2, 1), "metrics": metrics,
             "ports": ports,
             "gpu": "igpu" in hardware,
             "hardware": hardware,

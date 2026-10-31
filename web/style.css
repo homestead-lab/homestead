@@ -218,6 +218,16 @@ html{scrollbar-color:var(--scroll-thumb) transparent}
   background:var(--med);color:#15100a;font:750 10px/1 "JetBrains Mono",monospace;box-shadow:0 0 0 2px rgba(255,176,32,.12)}
 .navbadge.hidden{display:none}
 .sidefoot{padding:16px 18px;border-top:1px solid var(--line);display:flex;flex-direction:column;gap:9px}
+/* The health pill (#940). Dashed is "not there yet" (design.md): not read yet
+   or unreadable (pending), or a verdict a minute old (stale, in its own tone).
+   Starting, updating, repairing or maintenance is no fault (#941), so
+   neutral, with a dot that pulses so it
+   does not read as "not loaded"; still when motion is off or reduced. */
+#healthPill.pending,#healthPill.stale{border-style:dashed;border-color:currentColor;background:transparent}
+#healthPill.busy::before{content:"";width:7px;height:7px;border-radius:50%;margin-right:7px;background:currentColor;animation:hpPulse 1.6s ease-in-out infinite}
+@keyframes hpPulse{50%{opacity:.25}}
+html[data-motion="off"] #healthPill.busy::before{animation:none}
+@media (prefers-reduced-motion:reduce){#healthPill.busy::before{animation:none}}
 /* The Dashboard's one warning (#506): a UI.callout. Once every health issue
    in it is acknowledged it goes quiet. */
 .dash-alert{margin:-5px 0 18px}
