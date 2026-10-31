@@ -1782,22 +1782,22 @@ def start_background_tasks():
 
 def finish_self_data_helpers():
     if _self_data_fence is None: return
-    while True:
+    failures = 0
+    while failures < SELF_DATA_FINISH.ATTEMPTS:
         try:
             with self_data_activity():
                 result = SELF_DATA_FINISH.finish(_self_data_fence, KUBE_HELPERS.kget, KUBE_HELPERS.ksend)
                 if result["done"]:
                     SELF_DATA_EXECUTE.reconcile_completed(OPS, DATA_DIR, SELF.NS, NAMES.BRAND)
             if result["done"]: return
+            failures = 0  # counted in a row; a pass that answered resets it
         except SELF_DATA_FENCE.Held as error:
             print("Data move helper cleanup needs review: " + str(error), flush=True)
             return
-        except Exception:
-            # The verified destination stays usable. Do not replay a delete or
-            # remove either PVC to make cleanup appear successful.
-            print("Data move helper cleanup needs review; both volumes are retained", flush=True)
-            return
-        time.sleep(2)
+        except Exception:  # an API error: the next pass observes a delete, keeps both PVCs
+            failures += 1
+        time.sleep(2 * failures or 2)
+    print("Data move helper cleanup needs review; both volumes are retained", flush=True)
 
 
 def finish_self_data_boot():

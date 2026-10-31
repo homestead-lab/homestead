@@ -33,7 +33,7 @@ def fact(o):
 
 
 class Cluster:
-    def __init__(self, published=True):
+    def __init__(self, published=True, extra_nodes=()):
         self.objects, self.sent, self.admissions = {}, [], []
         self.lost = None
         self.reject = None
@@ -72,12 +72,20 @@ class Cluster:
         lease = obj("Lease", "node1", {"holderIdentity": "node1", "leaseDurationSeconds": 40,
                     "renewTime": "1970-01-01T00:16:40Z"}, ns="kube-node-lease")
         self.put("/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/node1", lease)
+        pins = [{"name": "node1", "uid": "node1-uid", "boot_id": "boot1"}]
+        for name in extra_nodes:  # hosts in the cluster that the move does not use
+            other = copy.deepcopy(node); other["metadata"].update(name=name, uid=name + "-uid")
+            self.put("/api/v1/nodes/" + name, other)
+            other_lease = copy.deepcopy(lease); other_lease["metadata"].update(name=name, uid=name + "-lease-uid")
+            other_lease["spec"]["holderIdentity"] = name
+            self.put("/apis/coordination.k8s.io/v1/namespaces/kube-node-lease/leases/" + name, other_lease)
+            pins.append({"name": name, "uid": name + "-uid", "boot_id": "boot1"})
         self.anchor = self.fresh()
         self.handle = self.anchor.create(operation=OP, deployment={"name": "homestead", **identity(self.dep)},
             source={"name": "source", **identity(self.source)}, destination="target", replicas=2)
         self.anchor.configure({"deployment_shape": shape(self.dep), "source_pvc_shape": shape(self.source),
             "source_pv": fact(self.oldpv), "destination_pvc": fact(self.target), "destination_pv": fact(self.newpv),
-            "worker": fact(worker), "nodes": [{"name": "node1", "uid": "node1-uid", "boot_id": "boot1"}],
+            "worker": fact(worker), "nodes": pins,
             "data_volume": "data", "target_shareable": True, "copy_image": IMAGE, "copy_node": "node1"})
         if published:
             self.anchor.pointer_published(A.pointer_digest("lab", self.anchor.state, self.handle["uid"]))

@@ -545,8 +545,8 @@ window.selfDataCloseReview = async id => {
     if (review.id !== id || !review.capacity_token) throw Error("The review is incomplete. Check saved jobs again.");
     request.review = review;
     childModal("Close data move recovery", UI.lead(esc(review.detail)) +
-      UI.facts([["Homestead runs on", esc(review.source)], ["Kept, unused", esc(review.destination)]]) +
-      UI.ack("selfDataCloseConsent", "Close this move's record; keep both volumes and its audit", {onchange:"selfDataCloseReady()"}) +
+      UI.facts((review.facts || [["Homestead runs on", review.source], ["Kept, unused", review.destination]]).map(([label, value]) => [label, esc(value)])) +
+      UI.ack("selfDataCloseConsent", review.ack || "Close this move's record; keep both volumes and its audit", {onchange:"selfDataCloseReady()"}) +
       UI.actions(UI.cancel("Back") + UI.button("Close recovery", "selfDataCloseStart()", {kind:"pri",id:"selfDataCloseGo",disabled:true})), true, "operation-review");
   } catch (e) {
     if (selfDataCloseDialog === request) childModal("Close data move recovery", `<p role="alert">${esc(e.message)}</p>` + UI.actions(UI.cancel("Back")), true, "operation-review");

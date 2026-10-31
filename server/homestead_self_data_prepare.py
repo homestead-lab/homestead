@@ -243,17 +243,49 @@ HANDOFF = "self-data-handoff"
 
 
 def can_close_recovery(item):
-    """A data move that was cancelled and kept both volumes: its retained
-    record blocked every later preparation, with nothing that could close it."""
+    """A record that blocked every later preparation with nothing that could
+    close it: a data move that was cancelled and kept both volumes, or a
+    preparation that failed (stuck-jobs C6), whose resources are then
+    checked gone before it closes."""
     ref = item.get("ref") or {}
-    return (item.get("kind") == HANDOFF and item.get("status") == "cancelled"
+    return ((item.get("kind") == HANDOFF and item.get("status") == "cancelled"
+             or item.get("kind") == KIND and item.get("status") == "failed"
+             or _setup_without_record(item))
             and ref.get("retain_resources") is True and not ref.get("recovery_closed"))
 
 
-def close_recovery(body, actor, namespace, deployment, ops, running_on, *, start=False):
+def _setup_without_record(item):
+    """A move whose setup failed before saving its control record's uid
+    (stuck-jobs C7): nothing past that record was created."""
+    ref = item.get("ref") or {}
+    return (item.get("kind") == HANDOFF and item.get("status") == "failed"
+            and bool(ref.get("setup_error")) and not ref.get("anchor_uid"))
+
+
+def _leftovers(read, ref):
+    """What a failed preparation made that still exists, and same-name
+    objects that are not its own, by the fixed names its creations use -
+    whatever its receipts say, since an uncertain creation has no uid. Only
+    an object carrying this preparation's label (manifests() sets it) is its
+    own: a name someone else took, which may be why it failed, may hold
+    their data and is left alone. Read live; unreadable is not "gone"."""
+    if read is None:
+        raise J.Held("The preparation's resources cannot be checked")
+    own, other = [], []
+    for body in manifests(ref):
+        path = f"/api/v1/namespaces/{ref['namespace']}/{'pods' if body['kind'] == 'Pod' else 'persistentvolumeclaims'}/{body['metadata']['name']}"
+        found = _get(read, path)
+        if found is not None:
+            mine = (found.get("metadata", {}).get("labels") or {}).get("homestead.io/data-preparation") == ref["operation"]
+            (own if mine else other).append(f"{body['kind']} {body['metadata']['name']}")
+    return own, other
+
+
+def close_recovery(body, actor, namespace, deployment, ops, running_on, *, start=False, read=None):
     """Close a cancelled move's recovery once Homestead runs on its original
-    volume again. Nothing is deleted: both volumes and the audit stay, and
-    only the record stops blocking another preparation.
+    volume again, or a failed preparation once its claim and binding pod are
+    gone. Nothing is deleted: the volumes and the audit stay, and only the
+    record stops blocking another preparation.
 
     running_on() says which claim Homestead's Deployment mounts now and
     whether it is ready, read live; the review and the close both ask."""
@@ -262,33 +294,56 @@ def close_recovery(body, actor, namespace, deployment, ops, running_on, *, start
         raise J.Held("Choose the cancelled data move to close")
     with ops.transaction() as t:
         items = t.items
-        item = next((i for i in items if i["id"] == body["id"] and i.get("kind") == HANDOFF
+        item = next((i for i in items if i["id"] == body["id"] and i.get("kind") in (HANDOFF, KIND)
                      and i.get("ref", {}).get("namespace") == namespace), None)
         if not item or not can_close_recovery(item):
-            raise J.Held("Only a cancelled data move whose volumes were kept can be closed")
+            raise J.Held("Only a cancelled data move whose volumes were kept, or a failed preparation, can be closed")
         ref = item["ref"]
+        preparation = item["kind"] == KIND
+        source = ref["source"]["name"] if preparation else ref.get("source")
         claim, ready = running_on()
-        if claim != ref.get("source"):
-            raise J.Held(f"Homestead is not running on the move's original volume {ref.get('source')} "
+        if claim != source:
+            raise J.Held(f"Homestead is not running on the move's original volume {source} "
                          f"(it mounts {claim or 'no data volume'}); inspect the move before closing it")
         if not ready:
             raise J.Held("Homestead is not ready on its original volume yet; close the move once it is")
+        if _setup_without_record(item):
+            if read is None:
+                raise J.Held("The move's control record cannot be checked")
+            record = _get(read, f"/api/v1/namespaces/{namespace}/configmaps/{deployment}-data-handoff")
+            if record is not None:
+                raise J.Held("The move's control record still exists; abandon the preparation in Move data first")
+        others = []
+        if preparation:
+            left, others = _leftovers(read, ref)
+            if left:
+                raise J.Held(f"{', '.join(left)} still exists and carries this preparation's label; "
+                             "remove it once you have checked it holds nothing you need, then close the record")
         cfg = {"id": item["id"]}
         context = {"action": "self-data-handoff-close", "actor": actor, "namespace": namespace,
                    "status": item["status"], "ref": J.digest(ref)}
-        detail = (f"Homestead runs on its original volume {ref.get('source')}. Closing this record lets you "
-                  f"prepare another volume. Both {ref.get('source')} and {ref.get('destination')} are kept, "
+        detail = (f"This preparation failed. Its claim {ref.get('destination')} and binding pod are gone, so closing "
+                  f"the record lets you prepare another volume. Homestead stays on {source}; nothing is created or deleted."
+                  + (f" {', '.join(others)} has the same name but is not this preparation's, so it is left alone." if others else "")
+                  if preparation else
+                  f"Homestead runs on its original volume {source}. Closing this record lets you "
+                  f"prepare another volume. Both {source} and {ref.get('destination')} are kept, "
                   "with the move's recovery audit; nothing is copied or deleted.")
         if not start:
-            return {**cfg, "source": ref.get("source"), "destination": ref.get("destination"),
+            facts = [["Homestead runs on", source], ["Removed" if preparation else "Kept, unused", ref.get("destination")]]
+            ack = "Close this failed preparation's record" if preparation else "Close this move's record; keep both volumes and its audit"
+            return {**cfg, "source": source, "destination": ref.get("destination"), "facts": facts, "ack": ack,
                     "capacity_token": SIGN.issue(cfg, context), "detail": detail}
         if body.get("confirm_close") is not True or not SIGN.valid({**cfg, "capacity_token": body.get("capacity_token")}, context):
             raise J.Held("Review this data move again and confirm closing it")
         ops.require_write()
-        ref["recovery_closed"] = {"at": int(time.time()), "actor": actor, "source": ref.get("source")}
+        if preparation:
+            ref["retain_resources"] = False  # checked gone just above
+        ref["recovery_closed"] = {"at": int(time.time()), "actor": actor, "source": source}
         item["updated_at"] = ops._now()
         ops._note(item, item["status"], item.get("progress", 100),
-                  f"Recovery closed: Homestead runs on {ref.get('source')}; both volumes and the recovery audit retained")
+                  f"Recovery closed: Homestead runs on {source}; " + ("its claim and binding pod were checked gone"
+                  if preparation else "both volumes and the recovery audit retained"))
         t.save(items)
         return {"ok": True, "id": item["id"],
                 "detail": f"Closed. {ref.get('destination')} is kept and unused; remove it from Volumes when you no longer need it."}

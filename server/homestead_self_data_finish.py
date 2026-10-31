@@ -17,6 +17,9 @@ import homestead_self_data_bootstrap as B
 from homestead_storage_journal import Held, identity
 
 FILE = ".self-data-completed-v1.json"
+# Cleanup passes server.py's loop makes when the API errors, before it leaves
+# the rest to the next restart (each pass observes; nothing is replayed).
+ATTEMPTS = 5
 
 
 def read(directory, namespace, deployment):
@@ -139,7 +142,12 @@ def finish(fence, read_api, send):
             if row is not None:
                 if row["state"] == "intent" and obj.get("metadata", {}).get("deletionTimestamp"):
                     return {"done": False, "message": "Waiting for temporary helper removal"}
-                raise Held("Helper deletion is still pending or its reply was lost. Nothing was retried; inspect the retained cleanup receipt")
+                if row["state"] != "intent":
+                    raise Held("Helper deletion is still pending or its reply was lost. Nothing was retried; inspect the retained cleanup receipt")
+                # The same object (uid checked above) with no deletionTimestamp:
+                # the DELETE never took effect, since an accepted Foreground
+                # delete marks the object at once. Sending it again is pinned to
+                # this uid, so it can never reach a replacement.
             if fingerprint is not None and B.fingerprint(obj) != fingerprint: raise Held("A helper changed before cleanup; inspect it first")
             if fingerprint is None:
                 state = anchor._decode(obj, anchor.state["operation"], uid)
