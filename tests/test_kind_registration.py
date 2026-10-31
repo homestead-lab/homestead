@@ -39,6 +39,7 @@ import homestead_rename as RENAME
 import homestead_restore_test as RESTORE_TEST
 import homestead_weekly_trim as WEEKLY_TRIM
 import homestead_vm_power_job as VM_POWER_JOB
+import source_scan as SS
 from unittest import mock
 
 # module, the kinds it resolves, the kinds it cancels
@@ -131,7 +132,7 @@ class HostKindTests(unittest.TestCase):
                 self.assertEqual(same(ops.CANCELLERS[kind]), same(server.OPS.CANCELLERS[kind]), kind)
 
     def test_server_py_no_longer_registers_them_itself(self):
-        text = (Path(__file__).resolve().parents[1] / "server" / "server.py").read_text(encoding="utf-8")
+        text = SS.text(SS.SERVER_PY)
         for module, resolves, _ in HOSTS + STORAGE_APPS:
             alias = ALIASES[module.__name__]
             for resolve in set(resolves.values()):
@@ -201,7 +202,7 @@ class RestKindTests(unittest.TestCase):
         self.assertIs(DISKS.retire_resumable, server.OPS.RESUMABLE["disk-retire"])
 
     def test_server_py_no_longer_registers_them_itself(self):
-        lines = (Path(__file__).resolve().parents[1] / "server" / "server.py").read_text(encoding="utf-8").splitlines()
+        lines = SS.text(SS.SERVER_PY).splitlines()
         for module, alias in REST_ALIASES.items():
             self.assertEqual([], [line for line in lines if line.startswith("OPS.") and f"{alias}." in line], alias)
 
@@ -294,7 +295,7 @@ class LastKindTests(unittest.TestCase):
             self.assertEqual(same([ops.RESUMABLE[kind]]), same([s.OPS.RESUMABLE[kind]]), kind)
 
     def test_server_py_registers_no_kind_itself_any_more(self):
-        lines = (Path(__file__).resolve().parents[1] / "server" / "server.py").read_text(encoding="utf-8").splitlines()
+        lines = SS.text(SS.SERVER_PY).splitlines()
         self.assertEqual([], [line for line in lines
                               if line.startswith(("OPS.RESOLVERS", "OPS.CANCELLERS", "OPS.RESUMABLE",
                                                   "OPS.LOGGERS", "OPS.CLEANUPS", "OPS.CDI_CANCELLABLE"))])

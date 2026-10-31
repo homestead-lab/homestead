@@ -2,9 +2,11 @@ import ast
 from pathlib import Path
 import unittest
 
+import source_scan as SS
+
 class SMBUserAuthorizationTests(unittest.TestCase):
     def test_user_inventory_and_mutations_require_admin(self):
-        source = ast.parse((Path(__file__).resolve().parents[1] / 'server/server.py').read_text(encoding='utf-8'))
+        source = SS.tree(SS.SERVER_PY)
         wanted = []
         for node in source.body:
             if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id in ('ADMIN_ROUTES', 'SELF_ROUTES') for t in node.targets):
