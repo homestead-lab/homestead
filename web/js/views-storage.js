@@ -1605,6 +1605,13 @@ function eventRowHtml(x) {
     <td class="dim xs mono nowrap" data-sm-hide title="${esc(fmtAt(x.time))}">${esc(ago)}</td></tr>`;
 }
 
+/* Kubernetes kept more events than the page shows: say so (#988). */
+function eventsCut(all) {
+  const total = STATE.data.eventTotal || 0;
+  if (STATE.data.eventLimited) return ` · the newest ${all.length} of the first ${total} read`;
+  return total > all.length ? ` · the newest ${all.length} of ${total}` : "";
+}
+
 /* The table and the count, from the rows already read. */
 function eventsRender() {
   const all = STATE.data.eventRows || [];
@@ -1614,10 +1621,11 @@ function eventsRender() {
   const body = $("#evRows"), count = $("#evCount"), clear = $("#evClear");
   if (count) count.textContent = eventTab() === "signins"
     ? `${rows.length} of ${all.length} sign-ins and account changes · newest first`
-    : `${rows.length} of ${all.length} recent events · newest first`;
+    : `${rows.length} of ${all.length} recent events · newest first${eventsCut(all)}`;
   if (clear) clear.hidden = !filtered;
   if (body) body.innerHTML = rows.map(eventRowHtml).join("")
-    || `<tr><td colspan=4 class="empty">${filtered ? "Nothing matches these filters." : eventTab() === "signins" ? "No sign-ins recorded yet." : "No events."}</td></tr>`;
+    || `<tr><td colspan=4 class="empty">${filtered ? "Nothing matches these filters." : eventTab() === "signins" ? "No sign-ins recorded yet."
+      : STATE.data.eventError ? `Could not read the cluster's events: ${esc(STATE.data.eventError)}` : "No events."}</td></tr>`;
 }
 
 window.eventFilterSet = (key, value) => { eventFilter()[key] = value; eventsRender(); };
@@ -1730,10 +1738,14 @@ async function viewEvents() {
   const tab = eventTab();
   if (tab === "audit") return viewAudit();
   const rows = await api(tab === "signins" ? "/api/auth/history" : "/api/events");
-  STATE.data.eventRows = rows;
+  // Cluster events come with how many there were: only the newest are sent (#988).
+  STATE.data.eventRows = Array.isArray(rows) ? rows : rows.events || [];
+  STATE.data.eventTotal = Array.isArray(rows) ? STATE.data.eventRows.length : rows.total || 0;
+  STATE.data.eventLimited = !Array.isArray(rows) && !!rows.limited;
+  STATE.data.eventError = Array.isArray(rows) ? "" : rows.error || "";
   const heads = tab === "signins" ? ["Who", "What", "From", "When"] : ["Object", "Reason", "Message", "When"];
   paint(`${UI.pageHeader(`Events`, ``, `${eventTabs(tab)}`, {descriptionAttrs:`id="evCount"`})}
-  ${eventFilterBar(rows)}
+  ${eventFilterBar(STATE.data.eventRows)}
   <div class="card flat pad0 eventtable"><div class="tblwrap"><table data-sort="${tab === "signins" ? "signins" : "events"}" class="tbl stack compact evtable"><thead><tr>
     ${heads.map((h, i) => `<th${i === 3 ? " data-nosort" : ""}>${h}</th>`).join("")}</tr></thead><tbody id="evRows"></tbody></table></div></div>`);
   eventsRender();
