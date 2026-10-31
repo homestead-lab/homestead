@@ -62,6 +62,8 @@ CLUSTER_SENSORS = [
     ("vol_total", "Volumes Total", "vol", "mdi:database"),
     ("vol_degraded", "Volumes Degraded", "vol", "mdi:database-alert"),
     ("vol_faulted", "Volumes Faulted", "vol", "mdi:database-remove"),
+    # Of the degraded: asking for more copies than a one-host cluster holds (#841).
+    ("vol_one_host", "Volumes Short of Hosts", "vol", "mdi:database-arrow-down"),
     ("pods_system", "System Pods", "pods", "mdi:cog-outline"),
     ("pods_workload", "Workload Pods", "pods", "mdi:cube-outline"),
     ("pods_wl_bad", "Workload Pods Bad", "pods", "mdi:cube-off-outline"),

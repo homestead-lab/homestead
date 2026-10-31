@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_image_cleanup as CLEANUP
 import homestead_imports as I
+import homestead_image_cache as IMAGES
 import homestead_leader_state as LEADER_STATE
 import homestead_shared as SHARED
 
@@ -35,8 +36,8 @@ class Base(unittest.TestCase):
                        {**image("e", ["node1"]), "digest": ""}]
         self.removed = []
         self.settings = {"auto": False, "after_days": 14}
-        patches = [mock.patch.object(I, "image_cache", lambda: {"images": self.images, "complete": True}),
-                   mock.patch.object(I, "cleanup_image", self.cleanup),
+        patches = [mock.patch.object(IMAGES, "image_cache", lambda: {"images": self.images, "complete": True}),
+                   mock.patch.object(IMAGES, "cleanup_image", self.cleanup),
                    mock.patch.object(CLEANUP, "_settings", lambda: self.settings)]
         for p in patches:
             p.start()
@@ -80,7 +81,7 @@ class CleanAllUnusedTests(Base):
             if digest.startswith("sha256:a"):
                 raise PermissionError("image is protected by running:lab/web")
             self.removed.append((digest, tuple(nodes)))
-        with mock.patch.object(I, "cleanup_image", refuse):
+        with mock.patch.object(IMAGES, "cleanup_image", refuse):
             result = CLEANUP.clean_unused({"token": CLEANUP.plan()["token"]})
         self.assertEqual((1, "docker.io/library/a:1"), (result["removed"], result["skipped"][0]["name"]))
 

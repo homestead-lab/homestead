@@ -10,7 +10,7 @@ import homestead_heartbeats as HEARTBEATS
 import homestead_leader as LEADER
 import homestead_mqtt as MQTT
 import homestead_names as NAMES
-import homestead_networking as NETWORK
+import homestead_network_inventory as INV
 import homestead_objectstore as OBJECTS
 import homestead_probe as PROBE
 import homestead_routes
@@ -106,7 +106,7 @@ def report():
     # Homestead's shared address, and any app, on the cluster's own address:
     # host joining (RKE2's 9345) and the dashboard answer there.
     try:
-        network = homestead_routes.cached("network", 5, NETWORK.inventory)
+        network = homestead_routes.cached("network", 5, INV.inventory)
         addresses = {"lb_ip": LB_IP, "problem": (network.get("shared_vip") or {}).get("problem", ""),
                      "clashes": network.get("platform_clashes") or [],
                      "platform": sorted(network.get("platform_addresses") or {})}

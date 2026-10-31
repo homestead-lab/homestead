@@ -18,6 +18,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "server"))
 import server
+import homestead_deploy_manifests as MANIFESTS
 import homestead_auth as auth
 import homestead_host_access as host
 import homestead_http as http
@@ -25,9 +26,11 @@ import homestead_icons as icons
 import homestead_sessions as sessions
 import homestead_helm as helm
 import homestead_vms as vms
+import homestead_vm_list as VM_LIST
+import homestead_vm_edit as VM_EDIT
 import homestead_yaml as yaml
 import homestead_compose as compose
-import homestead_updates as updates
+import homestead_update_registry as REGISTRY
 import homestead_files as files
 import homestead_fleet as fleet
 import homestead_config_backup as backup
@@ -192,7 +195,7 @@ class TargetAuthorizationTests(unittest.TestCase):
     def test_operator_sidecar_cannot_keep_a_powerful_service_account(self):
         self.obj["spec"]["template"]["spec"]["serviceAccountName"] = "homestead"
         with self.assertRaises(PermissionError):
-            server.DEPLOY.build_sidecar_deployment({"namespace": "lab", "name": "sidecar", "image": "fixture/app"}, self.obj)
+            MANIFESTS.build_sidecar_deployment({"namespace": "lab", "name": "sidecar", "image": "fixture/app"}, self.obj)
 
     def test_operator_console_cannot_exec_an_alias_of_management(self):
         pod = {"metadata": {"name": "innocent-name"}, "spec": {"serviceAccountName": "homestead", "containers": [{"name": "main"}]}, "status": {"phase": "Running"}}
@@ -200,7 +203,7 @@ class TargetAuthorizationTests(unittest.TestCase):
             server.CONSOLE_PROXY.validate_pod("lab", "innocent-name", "main")
 
     def test_new_workloads_do_not_mount_service_account_tokens(self):
-        obj, _ = server.DEPLOY.build_deployment({"name": "ordinary", "image": "fixture/app"})
+        obj, _ = MANIFESTS.build_deployment({"name": "ordinary", "image": "fixture/app"})
         self.assertFalse(obj["spec"]["template"]["spec"]["automountServiceAccountToken"])
 
 
@@ -220,7 +223,7 @@ class SensitiveResponseTests(unittest.TestCase):
 
     def test_vm_cloud_init_secret_is_not_read_for_a_viewer(self):
         vm = {"metadata": {"name": "vm", "namespace": "lab"}, "spec": {"template": {"spec": {}}}}
-        with mock.patch.object(vms, "_get", return_value=vm), mock.patch.object(vms, "kget", return_value={}), mock.patch.object(vms, "_row", return_value={"disks": []}), mock.patch.object(vms, "_claims", return_value={}), mock.patch.object(vms, "_datavolumes", return_value={}), mock.patch.object(vms, "_filling", return_value=[]), mock.patch.object(vms, "events_for", return_value=[]), mock.patch.object(vms, "_read_cloud_init", return_value={"user_data": "fixture-secret"}) as read:
+        with mock.patch.object(vms, "_get", return_value=vm), mock.patch.object(vms, "kget", return_value={}), mock.patch.object(VM_LIST, "_row", return_value={"disks": []}), mock.patch.object(VM_LIST, "_claims", return_value={}), mock.patch.object(VM_LIST, "_datavolumes", return_value={}), mock.patch.object(VM_LIST, "_filling", return_value=[]), mock.patch.object(vms, "events_for", return_value=[]), mock.patch.object(VM_EDIT, "_read_cloud_init", return_value={"user_data": "fixture-secret"}) as read:
             answer = vms.detail("lab", "vm", include_sensitive=False)
         read.assert_not_called()
         self.assertNotIn("cloud_init", answer)
@@ -249,8 +252,8 @@ class NetworkBoundaryTests(unittest.TestCase):
     def test_registry_credential_realms_are_bounded(self):
         for realm in ("http://registry.example/token", "https://attacker.example/token"):
             with self.assertRaises(PermissionError):
-                updates._auth_realm("https://registry.example/v2/app", realm, ("user", "secret"))
-        updates._auth_realm("https://registry-1.docker.io/v2/app", "https://auth.docker.io/token", ("user", "secret"))
+                REGISTRY._auth_realm("https://registry.example/v2/app", realm, ("user", "secret"))
+        REGISTRY._auth_realm("https://registry-1.docker.io/v2/app", "https://auth.docker.io/token", ("user", "secret"))
 
     def test_revocation_closes_idle_console_sockets(self):
         stopped = threading.Event()

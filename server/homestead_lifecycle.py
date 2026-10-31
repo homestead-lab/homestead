@@ -7,7 +7,8 @@ the raw API calls are three lines each.
 
 Split by feature (#623): editing a workload lives in homestead_workload_edit and
 the node actions in homestead_node_actions. This module keeps the state server.py
-binds, moving apps and VMs, and the routes, and re-exports both.
+binds, moving apps and VMs, and the routes; read and replace a moved name where
+it is defined.
 """
 import os
 import re
@@ -100,20 +101,10 @@ def vm_migrate(ns, name, target=None):
 
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
-    ("POST", "/api/node/cordon"): ("admin", lambda request: set_cordon(request.body["node"], request.body.get("cordon", True))),
-    ("GET", "/api/quorum"): ("viewer", lambda request: {**quorum_report(), "power_enabled": NODE_POWER_ENABLED}),
+    ("POST", "/api/node/cordon"): ("admin", lambda request: NODE_ACTIONS.set_cordon(request.body["node"], request.body.get("cordon", True))),
+    ("GET", "/api/quorum"): ("viewer", lambda request: {**NODE_ACTIONS.quorum_report(), "power_enabled": NODE_POWER_ENABLED}),
 }
 
 
-# Moved by feature (#623). Re-exported for one release, so other modules,
-# server.py and tests that use or replace these names here keep working.
-from homestead_workload_edit import (  # noqa: E402,F401
-    seed_configs, _prepare_seed_configs, _wait_for_replicas, _renamed_deployment, rename_workload,
-    _container_feature_ids, _apply_container_edit, _unique_volume_name, _is_storage_volume,
-    _requested_volume_kind, _device_host_paths, _is_device_mount, _pvc_exists, _apply_container_volumes,
-    _create_pending_pvcs, _apply_container_hardware, _pod_template, restarts, _apply_priority, _apply_tier,
-    prepare_edit, edit_workload,
-)
-from homestead_node_actions import (  # noqa: E402,F401
-    quorum_report, node_action_check, set_cordon, LONGHORN_DRAIN_WAIT, drain, node_power, _send_power,
-)
+# The parts (#623), imported last: each imports this module for what bind() sets.
+import homestead_node_actions as NODE_ACTIONS  # noqa: E402

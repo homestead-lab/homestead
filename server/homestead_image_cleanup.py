@@ -41,6 +41,11 @@ def _imports():
     return I
 
 
+def _images():
+    import homestead_image_cache as IMAGES
+    return IMAGES
+
+
 def _path():
     I = _imports()
     return os.path.join(I.SCAN_DIR, STORE) if I.SCAN_DIR else ""
@@ -113,7 +118,7 @@ def plan(older_than_days=None, now=None):
 
 def _plan(older_than_days=None, now=None):
     now = int(time.time() if now is None else now)
-    report = _imports().image_cache()
+    report = _images().image_cache()
     since = track(report, now)
     images = []
     for image in unused(report):
@@ -133,11 +138,11 @@ def _plan(older_than_days=None, now=None):
 def _remove(images, report):
     """Start each image's removal on every host that holds it; an image that
     became needed meanwhile is refused by cleanup_image and skipped."""
-    I = _imports()
+    IMAGES = _images()
     removed, skipped = [], []
     for image in images:
         try:
-            I.cleanup_image(image["digest"], image["nodes"], report)
+            IMAGES.cleanup_image(image["digest"], image["nodes"], report)
             removed.append(image)
         except (ValueError, PermissionError) as error:
             skipped.append({"name": image["name"], "reason": str(error)[:200]})
@@ -178,7 +183,7 @@ def auto_tick(now=None):
     _auto["at"] = now
     settings = _settings()
     if not settings.get("auto"):
-        track(_imports().image_cache(), now)
+        track(_images().image_cache(), now)
         return None
     days = int(settings.get("after_days") or 14)
     due, report = _plan(older_than_days=days, now=now)

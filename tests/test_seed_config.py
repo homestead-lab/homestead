@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 
 import homestead_lifecycle as lifecycle
+import homestead_workload_edit as WORKLOAD_EDIT
 
 
 DEPLOYMENT = {
@@ -53,14 +54,14 @@ class SeedConfigTests(unittest.TestCase):
         lifecycle.bind(get, send, set(), {}, lambda: [])
 
     def test_discovers_configmap_mounted_by_init_container(self):
-        found = lifecycle.seed_configs("lab", self.deployment)
+        found = WORKLOAD_EDIT.seed_configs("lab", self.deployment)
         self.assertEqual(1, len(found))
         self.assertEqual("frigate-config", found[0]["config_map"])
         self.assertEqual("config.yml", found[0]["key"])
         self.assertIn("openvino", found[0]["value"])
 
     def test_edit_updates_authoritative_configmap_and_rolls_workload(self):
-        lifecycle.edit_workload({
+        WORKLOAD_EDIT.edit_workload({
             "ns": "lab",
             "name": "frigate",
             "seed_configs": [{
@@ -78,7 +79,7 @@ class SeedConfigTests(unittest.TestCase):
 
     def test_rejects_unattached_configmap(self):
         with self.assertRaisesRegex(ValueError, "not attached"):
-            lifecycle.edit_workload({
+            WORKLOAD_EDIT.edit_workload({
                 "ns": "lab",
                 "name": "frigate",
                 "seed_configs": [{
@@ -90,7 +91,7 @@ class SeedConfigTests(unittest.TestCase):
             })
 
     def test_edit_updates_container_name_and_pod_hostname(self):
-        lifecycle.edit_workload({
+        WORKLOAD_EDIT.edit_workload({
             "ns": "lab", "name": "frigate",
             "container_name": "camera-detector", "pod_hostname": "frigate-core",
         })
@@ -103,9 +104,9 @@ class SeedConfigTests(unittest.TestCase):
         self.deployment["spec"]["template"]["spec"]["containers"].append(
             {"name": "sidecar", "image": "example/sidecar"})
         with self.assertRaisesRegex(ValueError, "already exists"):
-            lifecycle.edit_workload({"ns": "lab", "name": "frigate", "container_name": "sidecar"})
+            WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "frigate", "container_name": "sidecar"})
         with self.assertRaisesRegex(ValueError, "lowercase letters"):
-            lifecycle.edit_workload({"ns": "lab", "name": "frigate", "container_name": "Bad Name"})
+            WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "frigate", "container_name": "Bad Name"})
 
     def test_edit_updates_multiple_containers_and_preserves_managed_env(self):
         containers = self.deployment["spec"]["template"]["spec"]["containers"]
@@ -114,7 +115,7 @@ class SeedConfigTests(unittest.TestCase):
             {"name": "TOKEN", "valueFrom": {"secretKeyRef": {"name": "camera", "key": "token"}}},
         ]
         containers.append({"name": "mqtt", "image": "mosquitto:1", "ports": [{"name": "mqtt", "containerPort": 1883}]})
-        lifecycle.edit_workload({
+        WORKLOAD_EDIT.edit_workload({
             "ns": "lab", "name": "frigate", "containers": [
                 {"original_name": "frigate", "name": "detector", "image": "frigate:2", "cpu": "250m",
                  "memory": "512Mi", "env": {"PLAIN": "new", "TOKEN": "must-not-replace"},
@@ -138,7 +139,7 @@ class SeedConfigTests(unittest.TestCase):
         self.deployment["spec"]["template"]["spec"]["containers"].append(
             {"name": "sidecar", "image": "example/sidecar"})
         with self.assertRaisesRegex(ValueError, "must be unique"):
-            lifecycle.edit_workload({"ns": "lab", "name": "frigate", "containers": [
+            WORKLOAD_EDIT.edit_workload({"ns": "lab", "name": "frigate", "containers": [
                 {"original_name": "frigate", "name": "shared"},
                 {"original_name": "sidecar", "name": "shared"},
             ]})
@@ -146,7 +147,7 @@ class SeedConfigTests(unittest.TestCase):
 
     def test_legacy_rename_refuses_before_seed_or_workload_writes(self):
         with self.assertRaisesRegex(ValueError, "reviewed rename"):
-            lifecycle.edit_workload({
+            WORKLOAD_EDIT.edit_workload({
                 "ns": "lab", "name": "frigate", "workload_name": "camera-stack",
                 "seed_configs": [{"init_container": "seed-config", "config_map": "frigate-config",
                                   "key": "config.yml", "value": "must-not-write"}],

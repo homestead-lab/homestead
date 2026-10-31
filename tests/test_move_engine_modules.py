@@ -3,8 +3,8 @@ records and shared helpers live in homestead_move_state, the backup target in
 homestead_move_target, reviewing and starting a move in homestead_move_plan, the
 phases and the tick in homestead_move_phases, and retry, abandon, dismiss and
 finish in homestead_move_actions. homestead_move_engine keeps bind(),
-after_finish, the routes and the Activity tray registration, and re-exports
-every moved name except the bound clients."""
+after_finish, the routes and the Activity tray registration. Its one-release
+re-exports are gone: test_split_reexports checks that."""
 import ast
 import subprocess
 import sys
@@ -34,17 +34,6 @@ NAMES = ("homestead_move_state", "homestead_move_target", "homestead_move_plan",
 BOUND = ("kget", "ksend", "LH", "CLIENT", "NETWORK", "OPS", "DATA_DIR", "NS")
 # What homestead_move_engine defines itself.
 OWN = ("guard_managed_smb", "bind", "after_finish", "_plan_or_start", "ROUTES", "register")
-
-
-# Objects whose class lives elsewhere, so __module__ does not say they were moved.
-# A second copy of one of these locks would split the locking in two.
-LOCKS = {STATE: ("_lock", "_step_locks", "_step_locks_guard"), TARGET: ("_target_lock",)}
-
-
-def moved(part):
-    return [name for name in vars(part) if not name.startswith("__")
-            and getattr(vars(part)[name], "__module__", part.__name__) == part.__name__
-            and name not in BOUND and not isinstance(vars(part)[name], type(sys))] + list(LOCKS.get(part, ()))
 
 
 def engine_holders():
@@ -142,7 +131,8 @@ def _helpers(tree):
 
 
 def replaced(sources, holds):
-    """Each place a test replaces a name on homestead_move_engine other than
+    """sources is {file name: a Path, or source_scan.code(text)}.
+    Each place a test replaces a name on homestead_move_engine other than
     the ones it defines, as "file:line name". Read: what _replacements reads,
     and mock.patch("homestead_move_engine.…") or through a server module that
     imports it (server.MOVE_ENGINE.…); on the engine as a test imported it, as
@@ -154,10 +144,8 @@ def replaced(sources, holds):
     helper from another file, functools.partial, or the module held in a
     local variable inside the helper."""
     found = []
-    trees = {name: ast.parse(text) for name, text in sources.items()}
-    imported = {Path(name).stem: {a.asname or a.name for node in ast.walk(tree) if isinstance(node, ast.Import)
-                                  for a in node.names if a.name == "homestead_move_engine"}
-                for name, tree in trees.items()}
+    trees = {name: SS.tree(source) for name, source in sources.items()}
+    imported = {Path(name).stem: SS.import_aliases(tree, "homestead_move_engine") for name, tree in trees.items()}
     anywhere = set().union(*imported.values(), *holds.values())
     strings = ("homestead_move_engine.",) + tuple(f"{stem}.{alias}." for stem, aliases in holds.items()
                                                   for alias in aliases)
@@ -235,13 +223,6 @@ class Example:
 
 
 class MoveEngineModuleTests(unittest.TestCase):
-    def test_every_moved_name_is_the_same_object_on_homestead_move_engine(self):
-        for part in PARTS:
-            names = moved(part)
-            self.assertTrue(names, part.__name__)
-            for name in names:
-                self.assertIs(getattr(ENGINE, name), getattr(part, name), f"{part.__name__}.{name}")
-
     def test_the_bound_clients_live_only_on_homestead_move_state(self):
         for name in BOUND:
             self.assertTrue(hasattr(STATE, name), name)
@@ -250,8 +231,9 @@ class MoveEngineModuleTests(unittest.TestCase):
     def test_each_module_can_be_imported_first(self):
         # The modules that read the moved names too (wrap-up row 40).
         for name in NAMES + ("homestead_cancel", "homestead_deploy_server", "homestead_names_helpers"):
-            done = subprocess.run([sys.executable, "-c", f"import {name}, homestead_move_engine as E; "
-                                   "E.tick_all; E.carry_icon; E.abandon; E._find; E.ROUTES"],
+            done = subprocess.run([sys.executable, "-c", f"import {name}, homestead_move_engine as E, "
+                                   "homestead_move_phases as P, homestead_move_actions as A, homestead_move_state as S; "
+                                   "P.tick_all; P.carry_icon; A.abandon; S._find; E.ROUTES"],
                                   cwd=SERVER, capture_output=True, text=True)
             self.assertEqual(0, done.returncode, f"importing {name} first: {done.stderr}")
 
@@ -311,13 +293,13 @@ class MoveEngineModuleTests(unittest.TestCase):
     def test_no_test_replaces_a_moved_name_on_homestead_move_engine(self):
         # A replacement there would not reach the moved code, so it must go to the
         # module that defines the name. What replaced() reads is in its docstring.
-        sources = {path.name: path.read_text() for path in sorted((ROOT / "tests").glob("test_*.py"))}
+        sources = {path.name: path for path in SS.test_files()}
         self.assertEqual([], replaced(sources, engine_holders()))
 
     def test_the_guard_sees_a_helper_that_is_handed_the_engine(self):
         # As test_optional_storage_hosts' reading(module, reader) does with kget:
         # the helper replaces the name, the test only hands it the module.
-        found = replaced({"test_example.py": HELPERS}, {"server": {"MOVE_ENGINE"}})
+        found = replaced({"test_example.py": SS.code(HELPERS)}, {"server": {"MOVE_ENGINE"}})
         self.assertEqual(sorted(["abandon (through reading)", "carry_icon (through naming)",
                                  "tick_all (through passing)", "? (through naming)", "_find", "_retry",
                                  "TICK_SECONDS", "dismiss (through keyword)", "?"]),

@@ -17,10 +17,9 @@ live in homestead_move_state, borrowing the backup target in
 homestead_move_target, reviewing and starting a move in homestead_move_plan,
 the phases and the tick in homestead_move_phases, and retry, abandon, dismiss
 and finish in homestead_move_actions. This module keeps bind(), after_finish
-(server.py sets it here), the routes and the Activity tray registration, and
-re-exports every moved name except the bound clients for one release. Replace
-a name in the module that defines it: the bound clients (kget, ksend, LH,
-CLIENT, NETWORK, OPS, DATA_DIR, NS) are only on homestead_move_state.
+(server.py sets it here), the routes and the Activity tray registration. Read
+and replace a name in the module that defines it: the bound clients (kget,
+ksend, LH, CLIENT, NETWORK, OPS, DATA_DIR, NS) are only on homestead_move_state.
 """
 import homestead_move as MOVE
 import homestead_names as NAMES
@@ -78,31 +77,3 @@ ROUTES = {
 def register(ops):
     """A move reads in the Activity tray like every other long job (#622)."""
     ops.RESOLVERS["move"] = PLAN.op_state
-
-
-# Every moved name, for one release (#623).
-from homestead_move_state import (  # noqa: E402,F401
-    STORE, LHNS, LH_API, JOIN_SECRET, VIP_ANNOTATION, HARVESTER_IMAGE_CLASS, MOVE_ID,
-    MOVED_FROM, TICK_SECONDS, MAX_TRANSIENT, START_GRACE, MAX_MOVES, PHASES, VOLUME_PHASES,
-    COPY_PHASES, KINDS, _lock, _step_lock, _step_locks, _step_locks_guard, _serialized, _now,
-    _path, _read, _write, _find, _store, _update, _public, _phases, _source_held, moves, _q,
-    _here_endpoint, _same_target, _definition, _source_status, _source_action, _object_path,
-    _collection_path, _ours, _service_ports, _plan_service, _moving, _note, _advance,
-)
-from homestead_move_target import (  # noqa: E402,F401
-    _target_lock, TARGET_STORE, _target_journal, _borrow_target, _borrow_target_locked,
-    _release_target, _cleanup_target,
-)
-from homestead_move_plan import (  # noqa: E402,F401
-    ACTIONS, _all_classes, _choices, storage_choices, plan, start, _add_operation,
-    _refuse_second, _operation, op_state,
-)
-from homestead_move_phases import (  # noqa: E402,F401
-    _joining, _quiescing, _backing_up, _releasing_source, _request_sync, _syncing,
-    _ensure_namespace, _image_ready, _image_class, _ensure_image, _restore_progress, _restoring,
-    _blank_claim, _post_ours, _stamp, carry_icon, _creating, _starting, HANDLERS, _finish,
-    _cleanup_resources, _kubernetes_reason, _tick, tick_all, _tick_all, _remove_created,
-)
-from homestead_move_actions import (  # noqa: E402,F401
-    retry, _retry, abandon, _abandon, DISMISSABLE, dismiss, finish, _remove_source,
-)

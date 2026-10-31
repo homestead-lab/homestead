@@ -6,9 +6,14 @@ guard does not write its own little parser with its own idea of comments,
 strings and what a function is. Standard library only.
 
 - text(path): a file's text, read once per run.
-- server_modules(): every server/homestead_*.py, in a fixed order.
+- server_modules(): every server/homestead_*.py, in a fixed order;
+  server_files(): every server/*.py; test_files(): every tests/test_*.py.
 - tree(source), functions(source), calls(source, *names): Python, found
   with ast, so a commented-out def or call is never counted.
+- import_aliases(source, module), from_imports(source, module),
+  attribute_reads(source, base): the names a file binds to a module, the
+  names it imports from one, the attributes it reads off a name, and
+  name_counts(source): how often each name appears in the code.
 - js_code(source), js_calls(source, name): JavaScript, read as text with
   comments, strings and regular expressions blanked out, so a call written
   in one of those is never counted.
@@ -23,6 +28,7 @@ Files are read and parsed once per run: don't read a file through here that
 a test writes.
 """
 import ast
+import collections
 import functools
 import re
 from collections import namedtuple
@@ -66,6 +72,16 @@ def text(path):
 def server_modules():
     """Every server/homestead_*.py, sorted by name."""
     return sorted(SERVER.glob("homestead_*.py"))
+
+
+def server_files():
+    """Every server/*.py, sorted by name: the modules and server.py itself."""
+    return sorted(SERVER.glob("*.py"))
+
+
+def test_files():
+    """Every tests/test_*.py, sorted by name."""
+    return sorted((ROOT / "tests").glob("test_*.py"))
 
 
 @functools.lru_cache(maxsize=None)
@@ -141,6 +157,54 @@ def calls(source, *names):
     found = [node for node in ast.walk(tree(source))
              if isinstance(node, ast.Call) and dotted(node.func) in wanted]
     return sorted(found, key=lambda node: (node.lineno, node.col_offset))
+
+
+def import_aliases(source, module):
+    """The names a file binds to a module: `import m` binds "m", `import m as
+    x` and `from pkg import m as x` bind "x". Imports anywhere in the file
+    count, inside a function too. A plain `import m.sub` binds the package, not
+    m.sub, so it is not found; `import m.sub as x` binds "x" to it."""
+    return {alias.asname or alias.name for node in ast.walk(tree(source))
+            if isinstance(node, (ast.Import, ast.ImportFrom)) for alias in node.names
+            if alias.name == module and (alias.asname or "." not in alias.name)}
+
+
+def from_imports(source, module):
+    """The names a file imports with `from module import a, b as c`, as they
+    are called in the module (a, b), in a parenthesised list too."""
+    return {alias.name for node in ast.walk(tree(source))
+            if isinstance(node, ast.ImportFrom) and node.module == module and node.level == 0
+            for alias in node.names}
+
+
+def attribute_reads(source, base):
+    """The attributes a file takes off base, a name or a dotted name:
+    attribute_reads(s, "LH") finds "x" for LH.x, and attribute_reads(s,
+    "STATE.LH") for STATE.LH.x. Assigning to one counts as taking it. In a
+    comment or a string it is not found."""
+    return {node.attr for node in ast.walk(tree(source))
+            if isinstance(node, ast.Attribute) and dotted(node.value) == base}
+
+
+def name_counts(source):
+    """How often each name appears in a file's code, as a Counter: a Name, an
+    attribute (x.NAME), the name a def or class gives, a parameter, a global
+    or nonlocal. Not in a comment, a string or a keyword argument. A name a
+    file defines (def, class, assignment) and never uses has a count of 1; an
+    imported name counts only where it is used."""
+    found = collections.Counter()
+    for node in ast.walk(tree(source)):
+        if isinstance(node, ast.Name):
+            found[node.id] += 1
+        elif isinstance(node, ast.Attribute):
+            found[node.attr] += 1
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            found[node.name] += 1
+        elif isinstance(node, ast.arg):
+            found[node.arg] += 1
+        elif isinstance(node, (ast.Global, ast.Nonlocal)):
+            found.update(node.names)
+    return found
 
 
 _REGEX_AFTER = re.compile(r"(^|[=(,:;!&|?{}\[+\-*%<>~^]|\breturn|\btypeof|\bcase)$")
