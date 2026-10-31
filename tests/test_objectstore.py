@@ -24,7 +24,12 @@ class ObjectStoreTests(unittest.TestCase):
         self.failing = {}  # path: how many reads of it fail before it answers again
         for kind in ("backups", "snapshots", "backupbackingimages", "volumes", "backupvolumes"):
             self.objects[f"/apis/longhorn.io/v1beta2/namespaces/longhorn-system/{kind}"] = {"items": []}
+        # Put back what server.py bound (homestead_names' read included).
+        self.addCleanup(vars(store).update, {name: getattr(store, name) for name in ("kget", "ksend", "create_pvc", "NS")})
+        self.addCleanup(store.NAMES.bind, store.NAMES.kget)
         store.bind(self._get, self._send, self._create_pvc, "lab")
+        saved = (store.LH.kget, store.LH.ksend, store.LH._cache, store.LH.STORAGE_CLASS, store.LH.DEFAULT_NS)
+        self.addCleanup(lambda: store.LH.bind(*saved))   # put back what server.py bound
         store.LH.bind(self._get, self._send, {}, "longhorn-r2")
         # The shared client (homestead_kube) reads through the same fake.
         shared = mock.patch.object(KUBE, "kget", side_effect=lambda path, **kw: self._get(path))

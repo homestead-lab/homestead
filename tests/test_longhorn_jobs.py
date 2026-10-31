@@ -12,6 +12,10 @@ import homestead_longhorn_jobs as JOBS
 
 class RecurringJobRunTests(unittest.TestCase):
     def setUp(self):
+        # Put back what server.py bound: a later test reading Longhorn through
+        # the server would otherwise ask this file's fake for its recurring jobs.
+        saved = (LH.kget, LH.ksend, LH._cache, LH.STORAGE_CLASS, LH.DEFAULT_NS)
+        self.addCleanup(lambda: LH.bind(*saved))
         self.sent = []
         self.crons = [
             {"metadata": {"name": "daily", "uid": "u1"},

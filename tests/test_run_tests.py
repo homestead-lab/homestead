@@ -2,6 +2,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
 import run_tests as RUN
@@ -18,6 +19,34 @@ class ShardTests(unittest.TestCase):
     def test_shares_are_the_same_on_every_run(self):
         files = RUN.test_files()
         self.assertEqual(RUN.shard(files, 2, 4), RUN.shard(list(reversed(files)), 2, 4))
+
+
+class GuardInEveryRunTests(unittest.TestCase):
+    """The leak guard checks what the tests before it left bound, so every
+    share runs it, last; a leak in a share without it went unseen (#1068)."""
+
+    def planned(self, argv):
+        ran = []
+        with mock.patch.object(RUN, "run", lambda files: ran.append(list(files)) or True), \
+                mock.patch.object(RUN, "changed_paths", lambda base: {"server/server.py"}):
+            self.assertEqual(0, RUN.main(argv))
+        return ran[0]
+
+    def test_every_share_ends_with_the_guard_once(self):
+        for count in (1, 4, 8):
+            for k in range(1, count + 1):
+                files = self.planned(["--shard", f"{k}/{count}"])
+                self.assertEqual(RUN.GUARD, files[-1], (k, count))
+                self.assertEqual(1, files.count(RUN.GUARD), (k, count))
+
+    def test_a_changed_run_ends_with_the_guard_once(self):
+        files = self.planned(["--changed", "dev"])
+        self.assertEqual(RUN.GUARD, files[-1])
+        self.assertEqual(1, files.count(RUN.GUARD))
+
+    def test_the_guard_is_a_test_file_and_stays_quick(self):
+        self.assertIn(RUN.GUARD, RUN.test_files())
+        self.assertLess(RUN.load_durations().get(RUN.GUARD.name, 0), 1.0)
 
 
 class TimedShardTests(unittest.TestCase):

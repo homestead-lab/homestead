@@ -34,6 +34,9 @@ SCANS = re.compile(r"rglob\(|os\.walk\(|\.glob\(|listdir\(|iterdir\(|git ls-file
 # Files every test leans on: a change to one (or to any helper module in
 # tests/) runs everything.
 SHARED = {"server/server.py", "requirements-test.txt", "requirements-topology.txt", ".gitattributes"}
+# Checks that no test before it left state bound (#934): it can only see the
+# tests that ran in its own process, so every run ends with it, once.
+GUARD = TESTS / "test_zz_guard_state_clean.py"
 
 
 def test_files():
@@ -140,6 +143,11 @@ def affected(files, changed, known=None):
     return picked
 
 
+def with_guard(files):
+    """The files, then the leak guard last (and only there)."""
+    return [path for path in files if path != GUARD] + [GUARD]
+
+
 def run(files):
     sys.path.insert(0, str(TESTS))
     suite = unittest.defaultTestLoader.loadTestsFromNames([path.stem for path in files])
@@ -177,7 +185,7 @@ def main(argv=None):
             print("A shared file changed: running every test", flush=True)
         else:
             files = picked
-    return 0 if run(files) else 1
+    return 0 if run(with_guard(files)) else 1
 
 
 if __name__ == "__main__":

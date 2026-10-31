@@ -5,8 +5,8 @@ the request role (host_access.set_role), changes._author_key and changes.REQUEST
 local). A test that binds one and does not restore it changes every test after
 it, so a file passes alone and fails in the suite, or the other way round.
 A test that sets them restores them itself (mock.patch, addCleanup); this
-file says so when one does not. CI runs four shards (scripts/run_tests.py), so it
-checks the files of its own shard only.
+file says so when one does not. It sees only the tests of its own process, so
+scripts/run_tests.py ends every share (and every --changed run) with it.
 
 The files are loaded in name order and all of them are imported before any
 test runs, so what is read here at import is the state a fresh run starts
@@ -36,6 +36,21 @@ class GuardState(unittest.TestCase):
         if left.get("request user", UNSET) is None and AT_IMPORT["request user"] is UNSET:
             del left["request user"]
         self.assertEqual(left, {}, "a test bound these and did not put them back")
+
+    def test_no_test_left_longhorn_bound_to_its_own_fake(self):
+        # server.py binds homestead_longhorn once, when it is first imported. A
+        # test that rebinds it and does not put it back makes every later test
+        # that reads Longhorn through the server read its fake instead.
+        server = sys.modules.get("server")
+        if server is None:
+            self.skipTest("no test in this shard imported server")
+        # Everything LH.bind sets, homestead_csi_restore's binding included.
+        LH = sys.modules["homestead_longhorn"]
+        bound = {"kget": LH.kget is server.kget, "ksend": LH.ksend is server.ksend, "cache": LH._cache is server._cache,
+                 "storage class": LH.STORAGE_CLASS == server.STORAGE_CLASS, "namespace": LH.DEFAULT_NS == server.DEFAULT_NS,
+                 "csi kget": LH.CSI_RESTORE.kget is server.kget, "csi ksend": LH.CSI_RESTORE.ksend is server.ksend}
+        self.assertEqual({name: True for name in bound}, bound,
+                         "a test bound homestead_longhorn to its own fake and did not put the server's binding back")
 
 
 if __name__ == "__main__":

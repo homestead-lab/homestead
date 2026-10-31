@@ -56,6 +56,8 @@ class LonghornRestoreTests(unittest.TestCase):
                 self.objects.pop(path, None)
             return body or {}
 
+        saved = (longhorn.kget, longhorn.ksend, longhorn._cache, longhorn.STORAGE_CLASS, longhorn.DEFAULT_NS)
+        self.addCleanup(lambda: longhorn.bind(*saved))   # put back what server.py bound
         longhorn.bind(get, send, {}, "longhorn-r2")
 
     def test_plan_reports_minimum_size_and_existing_pvc_conflict(self):
