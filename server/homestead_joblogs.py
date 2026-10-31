@@ -18,6 +18,12 @@ import homestead_value_masks as MASKS
 
 kget = ktext = None
 TAIL = 200
+# The most one tail read asks for (#986): Kubernetes splits lines at 16 KB, so
+# TAIL lines can be 3 MB, and only the last 60,000 characters are kept.
+# limitBytes keeps the oldest of the lines asked for; this bound is far above
+# what an ordinary log's TAIL lines take.
+LIMIT_BYTES = 512 * 1024
+TAIL_RETRIES = 4      # halvings of the lines asked for when an answer reaches the bound
 
 
 def bind(_kget, _ktext):
@@ -40,8 +46,25 @@ def _pods(ns, selector):
 
 
 def _tail(ns, pod, container="", lines=TAIL, *, timestamps=False):
-    query = f"?tailLines={lines}" + (f"&container={_q(container)}" if container else "") + ("&timestamps=true" if timestamps else "")
-    return str(ktext(f"/api/v1/namespaces/{_q(ns)}/pods/{_q(pod)}/log{query}") or "")
+    """The pod's last lines, at most LIMIT_BYTES. limitBytes keeps the oldest
+    of the lines asked for, so an answer that reaches it is asked for again
+    with half the lines (a few times at most): the newest lines, often the
+    error, are the ones to keep. A cut says so in a last line."""
+    wanted = lines
+    for attempt in range(TAIL_RETRIES + 1):
+        query = f"?tailLines={lines}" + (f"&container={_q(container)}" if container else "") + (
+            "&timestamps=true" if timestamps else "") + f"&limitBytes={LIMIT_BYTES}"
+        text = str(ktext(f"/api/v1/namespaces/{_q(ns)}/pods/{_q(pod)}/log{query}") or "")
+        # A multi-byte character cut at the bound may decode to one replacement.
+        if len(text.encode("utf-8")) < LIMIT_BYTES - 4:
+            if lines == wanted:
+                return text
+            return text + f"\n(Log cut: its lines are long, so Homestead is showing the last {lines} lines.)\n"
+        if lines <= 1:
+            break
+        lines = max(1, lines // 2)
+    return text + (f"\n(Log cut at {LIMIT_BYTES // 1024} KiB of its oldest lines asked for: "
+                   "the newest lines may be missing.)\n")
 
 
 def _pod_source(ns, pod, title, container="", *, timestamps=False):

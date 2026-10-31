@@ -6,23 +6,26 @@ and who made it, what it asked for, how it ended, and from where. The
 newest are shown in Settings beside the keys, where one can be revoked.
 
 Kept as JSON lines on the data volume, for KEEP_DAYS and at most MAX_LINES;
-anything that looks like a password or token in what was asked is written
+every copy of Homestead appends and trims it under one shared lock, so two
+copies on one volume lose no line (#986). Anything that looks like a password or token in what was asked is written
 as "(hidden)", and long text is cut short.
 """
 import json
 import hashlib
 import os
 import re
-import threading
 import time
+
+import homestead_shared as SHARED
 
 DATA_DIR = "/data"
 FILE = "agent-audit.jsonl"
 KEEP_DAYS = 30
 MAX_LINES = 20000
 SHOW = 200
+TRIM_EVERY = 500         # records written by this process between trims
 SECRETISH = re.compile(r"pass|secret|token|key|credential|auth|cookie|private", re.I)
-_lock = threading.Lock()
+_lock = SHARED.SharedLock("agent-audit", directory=lambda: DATA_DIR)
 _written = [0]
 
 
@@ -79,19 +82,32 @@ def record(key, via, action, args=None, outcome="ok", detail="", addr="", approv
             with open(_path(), "a", encoding="utf-8") as handle:
                 handle.write(line + "\n")
             _written[0] += 1
-            if _written[0] % 500 == 0:
-                _trim_locked()
-    except OSError as error:
-        print(f"agent audit: {str(error)[:160]}", flush=True)
+            if _written[0] % TRIM_EVERY == 0:
+                try:
+                    _trim_locked()
+                except Exception as error:      # the line is written; only the trim waits
+                    _not_trimmed(error)
+    except Exception as error:      # full, unwritable, or held by a data move
+        # The pod log keeps the line the data volume did not take.
+        print(f"agent audit: not written to the data volume ({str(error)[:160]}): {line}", flush=True)
     return entry
 
 
+def _unreadable(error):
+    return OSError(error.errno, f"Homestead could not read the AI agents' audit log on its data volume "
+                                f"({error.strerror or error})")
+
+
 def _read():
+    """Every row. No log yet is none; one that cannot be read raises, so the
+    daily trim does not save an empty log over it."""
     try:
         with open(_path(), encoding="utf-8") as handle:
             lines = handle.readlines()
-    except OSError:
+    except FileNotFoundError:
         return []
+    except OSError as error:
+        raise _unreadable(error) from error
     out = []
     for line in lines:
         try:
@@ -105,26 +121,69 @@ def _trim_locked(now=None):
     """Keep KEEP_DAYS, and at most MAX_LINES of them."""
     now = now or time.time()
     rows = [r for r in _read() if r.get("at", 0) >= now - KEEP_DAYS * 86400][-MAX_LINES:]
-    temp = _path() + ".tmp"
-    with open(temp, "w", encoding="utf-8") as handle:
-        handle.writelines(json.dumps(r, separators=(",", ":"), ensure_ascii=False) + "\n" for r in rows)
-    os.replace(temp, _path())
+    temp = SHARED.temporary(_path())
+    try:
+        with open(temp, "w", encoding="utf-8") as handle:
+            handle.writelines(json.dumps(r, separators=(",", ":"), ensure_ascii=False) + "\n" for r in rows)
+            handle.flush()
+            os.fsync(handle.fileno())       # on disk before it replaces the log
+        os.replace(temp, _path())
+    except BaseException:
+        try:
+            os.remove(temp)
+        except OSError:
+            pass
+        raise
     return len(rows)
+
+
+def _not_trimmed(error):
+    print(f"agent audit: not trimmed, the log is kept as it is ({str(error)[:160]})", flush=True)
 
 
 def trim(now=None):
     """Daily, from housekeeping: drop what is older than KEEP_DAYS."""
-    with _lock:
-        try:
+    try:
+        with _lock:
             return _trim_locked(now)
-        except OSError:
-            return 0
+    except Exception as error:
+        _not_trimmed(error)
+        return 0
+
+
+def _newest(keep, limit, chunk=1 << 16):
+    """Up to limit rows that keep() accepts, newest first, read from the end of
+    the file a chunk at a time, so the newest few never parse the whole log."""
+    out = []
+    try:
+        handle = open(_path(), "rb")
+    except FileNotFoundError:
+        return out
+    except OSError as error:
+        raise _unreadable(error) from error     # not "no calls"
+    with handle:
+        end, tail = os.fstat(handle.fileno()).st_size, b""
+        while end > 0 and len(out) < limit:
+            start = max(0, end - chunk)
+            handle.seek(start)
+            lines = (handle.read(end - start) + tail).split(b"\n")
+            end = start
+            tail = lines.pop(0) if start else b""      # may be cut: read with the next chunk
+            for raw in reversed(lines):
+                try:
+                    row = json.loads(raw)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and keep(row):
+                    out.append(row)
+                    if len(out) >= limit:
+                        break
+    return out
 
 
 def recent(key_id="", limit=SHOW):
     """The newest calls first, of one key or of all."""
-    rows = [r for r in _read() if not key_id or r.get("key") == key_id]
-    return list(reversed(rows[-max(1, min(int(limit), 1000)):]))
+    return _newest(lambda r: not key_id or r.get("key") == key_id, max(1, min(int(limit), 1000)))
 
 
 ROUTES = {

@@ -74,6 +74,39 @@ class ReaderTests(unittest.TestCase):
         return {"metadata": {"name": name, "creationTimestamp": "2026-09-25T12:00:00Z"},
                 "spec": {"containers": [{"name": c} for c in containers]}, "status": {"phase": phase}}
 
+    def test_a_tail_read_is_bounded_in_bytes(self):
+        # #986: Kubernetes splits lines at 16 KB, so tailLines alone can
+        # return megabytes; only the last 60,000 characters are kept.
+        asked = []
+        JL.bind(lambda path: {}, lambda path: asked.append(path) or "x")
+        JL._tail("lab", "pod-a", "main")
+        self.assertIn(f"limitBytes={JL.LIMIT_BYTES}", asked[0])
+        self.assertLessEqual(JL.LIMIT_BYTES, 1024 * 1024)
+
+    def test_a_tail_too_long_for_the_bound_is_read_again_with_fewer_lines(self):
+        # limitBytes keeps the oldest of the lines asked for: the newest
+        # (often the error) would be lost without a word.
+        asked = []
+
+        def text(path):
+            lines = int(path.split("tailLines=")[1].split("&")[0])
+            asked.append(lines)
+            body = "".join(f"line {n} " + "x" * 2000 + "\n" for n in range(200 - lines, 200))
+            return body[:JL.LIMIT_BYTES]
+        JL.bind(lambda path: {}, text)
+        with mock.patch.object(JL, "LIMIT_BYTES", 120_000):
+            out = JL._tail("lab", "pod-a", "main")
+        self.assertEqual([200, 100, 50], asked)
+        self.assertIn("line 199 ", out)
+        self.assertIn("showing the last 50 lines", out.splitlines()[-1])
+
+    def test_a_tail_that_never_fits_says_its_newest_lines_may_be_cut(self):
+        asked = []
+        JL.bind(lambda path: {}, lambda path: asked.append(path) or "y" * JL.LIMIT_BYTES)
+        out = JL._tail("lab", "pod-a")
+        self.assertLessEqual(len(asked), 5)
+        self.assertIn("newest", out.splitlines()[-1])
+
     def test_a_k3s_node_shows_its_console_and_a_node_not_running_says_so(self):
         sel = lambda vm: JL._q(f"vm.kubevirt.io/name={vm}")
         self.objects[("/api/v1/namespaces/lab/pods", sel("c-server-1"))] = {"items": [

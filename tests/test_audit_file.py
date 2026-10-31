@@ -214,6 +214,18 @@ class FillingFastAlert(unittest.TestCase):
         Path(self.dir, "audit.jsonl.1").write_text("not json\n", encoding="utf-8")
         self.assertEqual([], self.facts(self.t0))
 
+    def test_a_file_that_cannot_be_read_keeps_the_alert_as_it_was(self):
+        """EIO on the data volume is not "fills at its usual pace again" (sweep unknown-as-fine, row 14)."""
+        self.old_file(self.t0, self.t0 + 600)
+        real = open
+
+        def failing(path, *args, **kwargs):
+            if str(path).endswith("audit.jsonl.1"):
+                raise OSError(5, "Input/output error")
+            return real(path, *args, **kwargs)
+        with mock.patch("builtins.open", failing):
+            self.assertEqual([{"unknown_key": "audit:filling-fast"}], self.facts(self.t0 + 700))
+
     def test_the_leader_asks_for_it_with_the_other_sources(self):
         import homestead_overview_server as OVERVIEW
         source = Path(OVERVIEW.__file__).read_text(encoding="utf-8")

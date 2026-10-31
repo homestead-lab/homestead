@@ -3,7 +3,9 @@
 A line per sign-in, failed attempt, sign-out, password change and change to
 an account, kept in Homestead's data directory beside its console audit.
 Admins read it under Events › Sign-ins. It keeps the most recent entries and
-drops the oldest, so it cannot grow without end. Passwords are never in it -
+drops the oldest, so it cannot grow without end. Every copy of Homestead
+appends and trims it under one shared lock, so two copies on one volume lose
+no line (#986). Passwords are never in it -
 a failed attempt records the name tried, not what was typed for it.
 """
 import json
@@ -12,13 +14,21 @@ import re
 import threading
 import time
 
+import homestead_shared as SHARED
+
 DATA_DIR = "/data"
 FILE = "signins.jsonl"
 KEEP = 5000
+TRIM_EVERY = 200         # records written by this process between trims
 EVENTS = ("signin", "signin-failed", "signin-blocked", "signout", "signout-everywhere", "password",
           "password-failed", "setup", "user-added", "user-removed", "role",
           "key-added", "key-changed", "key-revoked", "key-refused")
-_lock = threading.Lock()
+LOCK_SECONDS = 2        # the longest a sign-in waits for another copy's write
+# Strict, for its timeout: a copy stuck holding the shared lock (a hung NFS
+# server) must not hold anyone's sign-in. Then this copy writes under its own
+# lock, as before #986, and says so.
+_lock = SHARED.SharedLock("signins", strict=True, timeout=LOCK_SECONDS, directory=lambda: DATA_DIR)
+_local = threading.Lock()
 _writes = {"n": 0}
 
 
@@ -57,17 +67,36 @@ def record(event, user, ip="", ok=True, detail="", agent="", via=""):
     line = json.dumps(row, separators=(",", ":")) + "\n"
     try:
         with _lock:
-            os.makedirs(DATA_DIR, exist_ok=True)
-            with open(_path(), "a", encoding="utf-8") as handle:
-                handle.write(line)
+            _append(line)
             _writes["n"] += 1
-            if _writes["n"] % 200 == 0:
+            if _writes["n"] % TRIM_EVERY == 0:
                 _trim()
-    except OSError:
-        pass
+        return
+    except TimeoutError:
+        print("sign-ins: the shared lock is busy, so this copy writes under its own lock", flush=True)
+    except Exception as error:      # full, unwritable, or held by a data move
+        _lost(line, error)
+        return
+    try:
+        with _local, SHARED.write_scope(_path()):
+            _append(line)
+    except Exception as error:
+        _lost(line, error)
+
+
+def _append(line):
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(_path(), "a", encoding="utf-8") as handle:
+        handle.write(line)
+
+
+def _lost(line, error):
+    # The pod log keeps the line the data volume did not take.
+    print(f"sign-ins: not written to the data volume ({str(error)[:160]}): {line.strip()}", flush=True)
 
 
 def _trim():
+    """Keep the newest KEEP lines. Called under _lock."""
     try:
         with open(_path(), encoding="utf-8") as handle:
             lines = handle.readlines()
@@ -75,19 +104,33 @@ def _trim():
         return
     if len(lines) <= KEEP:
         return
-    temp = _path() + ".tmp"
-    with open(temp, "w", encoding="utf-8") as handle:
-        handle.writelines(lines[-KEEP:])
-    os.replace(temp, _path())
+    temp = SHARED.temporary(_path())
+    try:
+        with open(temp, "w", encoding="utf-8") as handle:
+            handle.writelines(lines[-KEEP:])
+            handle.flush()
+            os.fsync(handle.fileno())       # on disk before it replaces the log
+        os.replace(temp, _path())
+    except BaseException:
+        try:
+            os.remove(temp)
+        except OSError:
+            pass
+        raise
 
 
 def history(user="", failures=False, limit=500):
-    """Newest first: everything, or one person's, or only what failed."""
+    """Newest first: everything, or one person's, or only what failed. No
+    file yet is no sign-ins; one that cannot be read raises, so the page says
+    so rather than "No sign-ins recorded yet"."""
     try:
         with open(_path(), encoding="utf-8") as handle:
             lines = handle.readlines()
-    except OSError:
+    except FileNotFoundError:
         return []
+    except OSError as error:
+        raise OSError(error.errno, f"Homestead could not read the sign-in history on its data volume "
+                                   f"({error.strerror or error})") from error
     user = str(user or "").strip().lower()
     out = []
     for line in reversed(lines):
