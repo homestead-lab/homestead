@@ -18,6 +18,7 @@ import homestead_ipam as IPAM
 import homestead_isos as ISOS
 import homestead_k3scluster as K3SC
 import homestead_logos as LOGOS
+import homestead_value_masks as MASKS
 import homestead_operations as OPS
 import homestead_place as PLACE
 import homestead_platform as PLATFORM
@@ -519,7 +520,7 @@ def _changed_vms(call):
 
 # Its routes and who may use them (homestead_routes.py).
 ROUTES = {
-    ("GET", "/api/vm/create-options"): ("viewer", lambda request: create_options()),
+    ("GET", "/api/vm/create-options"): ("viewer", lambda request: MASKS.for_role(request.role, create_options())),
     ("POST", "/api/vm/power/preview"): ("operator", _power_preview_route),
     ("POST", "/api/vm/power"): ("operator", lambda request: _changed_vms(lambda: reviewed_vm_power(request.body))),
     ("POST", "/api/vm/edit/preview"): ("operator", lambda request: preview_vm_edit(request.body)),

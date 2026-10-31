@@ -794,7 +794,7 @@ DISKS.autotag_state = lambda: os.path.join(DATA_DIR, "disk-autotags.json")
 
 VMSTORE.bind(kget, ksend, DEFAULT_NS, PLATFORM.detect,
              lambda url, display, reuse: HVIMAGE.download(KUBE_HELPERS.kget, KUBE_HELPERS.ksend, DEFAULT_NS, url, "", None, display, reuse),
-             VM_CREATE.list_vm_images, _vm_image_disks,
+             lambda: VM_CREATE.list_vm_images(raw=True), _vm_image_disks,
              lambda ns, name: KUBE_HELPERS.ksend("DELETE", f"/apis/harvesterhci.io/v1beta1/namespaces/{ns}/virtualmachineimages/{name}"))
 SNAPSHOT_DELETE.bind(kget, ksend)
 DISKS.bind(kget, ksend, NODES.node_temps)

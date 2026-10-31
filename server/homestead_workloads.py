@@ -34,6 +34,7 @@ import homestead_network_services as SVC
 import homestead_network_inventory as INV
 import homestead_operations as OPS
 import homestead_outage as OUTAGE
+import homestead_value_masks as MASKS
 import homestead_place as PLACE
 import homestead_priority as PRIORITY
 import homestead_privileges as PRIV
@@ -83,6 +84,11 @@ def _arg(request, key, default=""):
     return (request.query.get(key) or [default])[0]
 
 
+# A namespace, pod, job or container name as Kubernetes allows it (DNS
+# subdomain characters), so it cannot add a path or query to a request.
+LOG_NAME = re.compile(r"[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?")
+
+
 def logs_refusal(error, pod, container):
     """What Kubernetes' refusal to give logs means, in words rather than its JSON."""
     try:
@@ -99,35 +105,76 @@ def logs_refusal(error, pod, container):
     return f"Kubernetes could not return the logs for {who}" + (f": {message}" if message else ".")
 
 
+# The most a log read asks Kubernetes for (#986): the kubelet splits lines at
+# 16 KB, so 1,000 lines can be 16 MB. Log search reads 2 MB too.
+LOG_BYTES = 2 * 1024 * 1024
+TAIL_RETRIES = 4      # halvings of the lines asked for when an answer reaches LOG_BYTES
+
+
+def _tail(ns, pod, container, lines):
+    """The pod's last lines, at most LOG_BYTES. limitBytes keeps the oldest
+    of the lines asked for, so a live Logs view (Follow) would sit on old
+    lines: an answer that reaches it is asked for again with half the lines,
+    a few times at most, so the newest are kept. A cut says so."""
+    wanted = lines
+    for _ in range(TAIL_RETRIES + 1):
+        query = f"tailLines={lines}&timestamps=true&limitBytes={LOG_BYTES}" + (
+            f"&container={urllib.parse.quote(container)}" if container else "")
+        req = urllib.request.Request(f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?{query}",
+                                     headers={"Authorization": f"Bearer {TOKEN}"})
+        with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
+            raw = r.read(LOG_BYTES + 1)
+        text = raw.decode("utf-8", "replace")
+        if len(raw) < LOG_BYTES:
+            if lines == wanted:
+                return text
+            return text + f"\n(Log cut: its lines are long, so Homestead is showing the last {lines} lines.)\n"
+        if lines <= 1:
+            break
+        lines = max(1, lines // 2)
+    return text + (f"\n(Log cut at {LOG_BYTES // (1024 * 1024)} MiB of its oldest lines asked for: "
+                   "the newest lines may be missing.)\n")
+
+
 def logs(request):
     """A pod's last lines, as text. A job's logs are its pod's."""
     q = request.query
     ns = q["ns"][0]
     pod = _arg(request, "pod")
     job = _arg(request, "job")
+    container = _arg(request, "container")
+    # Each goes into an API path as it is: "kube-system/secrets?x=" as a
+    # namespace would read another list as Homestead.
+    if any(value and not LOG_NAME.fullmatch(value) for value in (ns, pod, job, container)) or not ns:
+        return ROUTER.Reply(400, {"error": "That is not a valid namespace, pod, job or container name."})
     if job and not pod:
         matches = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=job-name%3D{urllib.parse.quote(job)}").get("items", [])
         pod = matches[0]["metadata"]["name"] if matches else ""
     if not pod:
         return ROUTER.Reply(404, {"error": "Logs are not available yet because no pod exists."})
     tail = max(20, min(1000, int((q.get("tail") or [300])[0])))
-    container = _arg(request, "container")
+    try:
+        found = kget(f"/api/v1/namespaces/{ns}/pods/{pod}")
+    except Exception:
+        found = None
+    # The Helm controller's pods run helm with the chart's values, and a
+    # chart can print them: those logs need the role that may reveal a
+    # Secret. A pod that cannot be read cannot be told apart, so it is
+    # refused too below that role.
+    if not MASKS.sees_values(request.role) and (found is None or MASKS.helm_job_pod(found)):
+        if found is None:
+            return ROUTER.Reply(409, {"error": f"{pod} could not be read (it may have gone), so its log is not shown."})
+        need = MASKS.reveal_role()
+        return ROUTER.Reply(403, {"error": f"Helm's install logs can show a chart's values, so they need the {need} role.",
+                                  "role": need})
     if not container:
         # A pod with more than one container has to be told which;
         # asking without a name is a 400 from Kubernetes.
-        try:
-            spec = kget(f"/api/v1/namespaces/{ns}/pods/{pod}").get("spec", {}) or {}
-            names = [c.get("name") for c in spec.get("containers", []) or []]
-            container = names[0] if names else ""
-        except Exception:
-            container = ""
-    query = f"tailLines={tail}&timestamps=true" + (
-        f"&container={urllib.parse.quote(container)}" if container else "")
-    req = urllib.request.Request(f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?{query}",
-                                 headers={"Authorization": f"Bearer {TOKEN}"})
+        spec = (found or {}).get("spec", {}) or {}
+        names = [c.get("name") for c in spec.get("containers", []) or []]
+        container = names[0] if names else ""
     try:
-        with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
-            return ROUTER.Reply(200, r.read().decode("utf-8", "replace"), "text/plain; charset=utf-8")
+        return ROUTER.Reply(200, _tail(ns, pod, container, tail), "text/plain; charset=utf-8")
     except urllib.error.HTTPError as error:
         return ROUTER.Reply(409 if error.code in (400, 404) else error.code,
                             {"error": logs_refusal(error, pod, container)})
