@@ -231,7 +231,12 @@ def look(node):
     the host itself first, then the network guard bond changes wait for too."""
     facts = inspect(node)
     if not facts["problem"]:
-        facts["problem"] = next(iter(HOST_BONDS.guard_refusals(node, *HOST_BONDS.network_guard(node))), "")
+        try:
+            guard = HOST_BONDS.network_guard(node)
+        except Exception as error:
+            facts["problem"] = f"Homestead could not check the other hosts' network changes: {str(error)[:200]}"
+        else:
+            facts["problem"] = next(iter(HOST_BONDS.guard_refusals(node, *guard)), "")
     return facts
 
 
@@ -369,7 +374,8 @@ def convert(body):
     node = str(body.get("node") or "")
     if not node or str(body.get("confirm") or "").strip() != node:
         raise ValueError(f"type the host's name, {node}, to confirm")
-    op = start(node, OPS, *HOST_BONDS.network_guard(node))
+    with HOST_BONDS.network_change(node, f"Move {node}'s network into {BRIDGE}") as guard:
+        op = start(node, OPS, *guard)
     ROUTER.forget("network")
     return {"ok": True, "operation": op, "detail": f"{node} is moving to {BRIDGE}; follow it under Jobs"}
 
