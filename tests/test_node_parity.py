@@ -2,7 +2,10 @@ import json
 import sys
 import tempfile
 import textwrap
+import threading
+import time
 import unittest
+from unittest import mock
 from pathlib import Path
 from unittest import mock
 
@@ -143,6 +146,52 @@ class NodeParityTests(unittest.TestCase):
         cluster.host_out = "MULTIPATH kept\nISCSI kept\nEND\n"
         PARITY.tick()
         self.assertEqual(["node-1", "node-1"], cluster.ran)
+
+    def test_a_host_that_fails_three_times_waits_for_the_six_hour_cadence(self):
+        # #976: a broken host started a helper pod on every 10-minute round.
+        cluster = Cluster([node("node-1")], host_out="")
+        self.bind(cluster)
+        start = 10 ** 9
+        for round_ in range(5):
+            with mock.patch.object(PARITY.time, "time", return_value=start + round_ * 600):
+                PARITY.tick()
+        self.assertEqual(["node-1"] * 3, cluster.ran, "tried three times, then left")
+        with mock.patch.object(PARITY.time, "time", return_value=start + 2 * 600 + 6 * 3600):
+            PARITY.tick()
+        self.assertEqual(4, len(cluster.ran), "tried again at the six-hour cadence")
+
+    def test_a_busy_host_is_not_a_failure(self):
+        cluster = Cluster([node("node-1")])
+        cluster.held = {"node-1"}
+        self.bind(cluster)
+        for _ in range(4):
+            PARITY.tick()
+        cluster.held = set()
+        PARITY.tick()
+        self.assertEqual(["node-1"], cluster.ran, "four busy rounds are not failures")
+
+    def test_hosts_are_set_up_at_most_three_at_once(self):
+        cluster = Cluster([node(f"node-{i}") for i in range(6)])
+        lock, running, most = threading.Lock(), [0], [0]
+        plain = cluster.run
+
+        def run(name, script, timeout=60, change=""):
+            with lock:
+                running[0] += 1
+                most[0] = max(most[0], running[0])
+            try:
+                time.sleep(0.2)
+                return plain(name, script, timeout, change)
+            finally:
+                with lock:
+                    running[0] -= 1
+        cluster.run = run
+        self.bind(cluster)
+        started = time.monotonic()
+        PARITY.tick()
+        self.assertEqual(3, most[0])
+        self.assertLess(time.monotonic() - started, 0.9, "six hosts at 0.2 s were set up one after another")
+        self.assertEqual(6, len(cluster.ran))
 
     def test_a_host_done_by_an_older_release_gets_the_journal_cap_too(self):
         import json

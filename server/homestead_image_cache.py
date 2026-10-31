@@ -692,13 +692,15 @@ def _rescan_if_stale(nodes):
     if not stale or now - _SCAN_STARTED[0] < SCAN_RETRY:
         return []
     try:
-        return start_image_scan()["nodes"]
+        # Only the stale ones: the others' scans are recent (#976).
+        return start_image_scan(stale)["nodes"]
     except Exception:
         return []
 
 
-def start_image_scan():
-    """One pod per Ready node, printing everything its containerd holds."""
+def start_image_scan(only=None):
+    """One pod per Ready node (only: per node named there), printing
+    everything its containerd holds."""
     started = []
     attempt = format(int(time.time()), "x")[-6:]
     # Counted as started even if a pod cannot be made part way, so the next
@@ -706,7 +708,7 @@ def start_image_scan():
     _SCAN_STARTED[0] = time.time()
     try:
         for node in I.kget("/api/v1/nodes").get("items", []):
-            if not _scannable(node):
+            if not _scannable(node) or (only is not None and node["metadata"]["name"] not in only):
                 continue
             name = node["metadata"]["name"]
             suffix = hashlib.sha256(name.encode()).hexdigest()[:10]
@@ -741,7 +743,11 @@ def _collect_scans(tidy=False):
                 if tidy:
                     _save_scans()
             except Exception:
-                pass
+                # A listing that cannot be read is a failed scan: the host
+                # waits as after any failure, instead of staying stale and
+                # having every host scanned again at each retry (#976).
+                if tidy:
+                    _SCAN_FAILED[node] = time.time()
         if phase in ("Succeeded", "Failed"):
             if not tidy:
                 continue
