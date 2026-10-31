@@ -16,6 +16,7 @@ homestead_vm_create: read and replace their names there. This module offers only
 the few the Unraid VM import reads through it (see the end of this file).
 """
 import base64
+import calendar
 import copy
 import json
 import hashlib
@@ -29,6 +30,7 @@ import homestead_self as SELF
 import urllib.error
 import urllib.parse
 
+import homestead_kube as KUBE
 import homestead_names as NAMES
 import homestead_shared as SHARED
 import homestead_hvimage as HVIMAGE
@@ -131,10 +133,17 @@ def add_source(name, host, user, password, kind="unraid", base_path="/mnt/user/a
         sec = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque", "immutable": True,
                "metadata": {"name": secret, "namespace": NS, "labels": {"homestead.io/import-source": name}},
                "stringData": {"password": password or ""}}
-        ksend("POST", f"/api/v1/namespaces/{NS}/secrets", sec)
+        made = ksend("POST", f"/api/v1/namespaces/{NS}/secrets", sec)
         srcs.append({"name": name, **endpoint, "kind": kind, "base_path": base_path,
                      "credential_secret": secret, "added": time.strftime("%Y-%m-%d %H:%M")})
-        save_sources(srcs, cm)  # failure retains the unused Secret, never adopts it
+        try:
+            save_sources(srcs, cm)  # failure never adopts the new Secret
+        except urllib.error.HTTPError as error:
+            # Refused, so no row names it: take it back now. Any other failure
+            # may have saved the row, so the sweep decides once the list is read.
+            if 400 <= error.code < 500:
+                _remove_secret(secret, ((made or {}).get("metadata") or {}).get("uid"))
+            raise
         return srcs
 
 
@@ -143,11 +152,103 @@ def del_source(name):
         cm, srcs = _sources_state()
         if not any(s["name"] == name for s in srcs):
             raise ValueError("Source no longer exists")
+        gone = next(s for s in srcs if s["name"] == name)
         srcs = [s for s in srcs if s["name"] != name]
         save_sources(srcs, cm)
-        # Existing helpers retain their immutable credential reference. Removing
-        # the directory entry is not credential revocation or Job cancellation.
+        # Its password goes with it, unless a helper still reads it: an import
+        # copy or a probe that is running keeps it, and the sweep removes it
+        # once they have gone. Removing a source does not cancel its Jobs.
+        secret = source_secret(name, gone)
+        if secret.startswith(f"homestead-src-{name}") and secret not in {source_secret(s["name"], s) for s in srcs}:
+            try:
+                found = KUBE.get_optional(f"/api/v1/namespaces/{NS}/secrets/{secret}", read=kget)
+                if found and secret not in _secrets_in_use():
+                    _remove_secret(secret, (found.get("metadata") or {}).get("uid"))
+            except Exception as error:
+                print(f"import source {name}: password left for the sweep: {str(error)[:160]}", flush=True)
         return srcs
+
+
+SOURCE_LABEL = "homestead.io/import-source"
+# A password made in the last ten minutes may belong to an add that is still
+# writing its row, so the sweep leaves it until then.
+SOURCE_SECRET_GRACE = 600
+
+
+def _remove_secret(name, uid=None):
+    body = {"apiVersion": "v1", "kind": "DeleteOptions"}
+    if uid:
+        body["preconditions"] = {"uid": uid}
+    try:
+        ksend("DELETE", f"/api/v1/namespaces/{NS}/secrets/{name}", body)
+    except urllib.error.HTTPError as error:
+        if error.code not in (404, 409):   # gone, or replaced since it was read
+            raise
+        return False
+    return True
+
+
+def _spec_secrets(spec):
+    """The Secrets a pod spec reads: env, envFrom and volumes."""
+    spec = spec or {}
+    names = set()
+    for container in (spec.get("containers") or []) + (spec.get("initContainers") or []):
+        for env in container.get("env") or []:
+            names.add((((env.get("valueFrom") or {}).get("secretKeyRef")) or {}).get("name"))
+        for source in container.get("envFrom") or []:
+            names.add((source.get("secretRef") or {}).get("name"))
+    for volume in spec.get("volumes") or []:
+        names.add((volume.get("secret") or {}).get("secretName"))
+        for projected in (volume.get("projected") or {}).get("sources") or []:
+            names.add((projected.get("secret") or {}).get("name"))
+    return names - {None, ""}
+
+
+def _secrets_in_use():
+    """Every Secret a pod or Job in Homestead's namespace reads. Copies in
+    other namespaces read their own copy (homestead_import_job.source_copy).
+    A list that cannot be read raises: unknown users count as users."""
+    used = set()
+    for pod in KUBE.items(f"/api/v1/namespaces/{NS}/pods", read=kget):
+        used |= _spec_secrets(pod.get("spec"))
+    for job in KUBE.items(f"/apis/batch/v1/namespaces/{NS}/jobs", read=kget):
+        used |= _spec_secrets(((job.get("spec") or {}).get("template") or {}).get("spec"))
+    return used
+
+
+def sweep_source_secrets(now=None):
+    """On the leader: remove each source password no source names any more
+    and no helper reads - left by a source removed while a copy still ran,
+    by an add whose row was never saved, or by an older Homestead."""
+    now = time.time() if now is None else now
+    removed = []
+    with SOURCE_LOCK:
+        cm, srcs = _sources_state()
+        if cm is None:
+            # No list at all is not "no sources": it may be gone or not
+            # restored yet, so nothing is removed until there is one.
+            return removed
+        named = {source_secret(s["name"], s) for s in srcs}
+        selector = urllib.parse.quote(SOURCE_LABEL)
+        unnamed = []
+        for row in KUBE.items(f"/api/v1/namespaces/{NS}/secrets?labelSelector={selector}", read=kget):
+            meta = row.get("metadata") or {}
+            name = meta.get("name") or ""
+            try:
+                made = calendar.timegm(time.strptime(meta["creationTimestamp"], "%Y-%m-%dT%H:%M:%SZ"))
+            except (KeyError, TypeError, ValueError, OverflowError):
+                continue
+            if (name in named or not name.startswith("homestead-src-") or not meta.get("uid")
+                    or meta.get("deletionTimestamp") or now - made < SOURCE_SECRET_GRACE):
+                continue
+            unnamed.append((name, meta["uid"]))
+        if not unnamed:
+            return removed
+        used = _secrets_in_use()
+        for name, uid in unnamed:
+            if name not in used and _remove_secret(name, uid):
+                removed.append(name)
+    return removed
 
 
 def source_secret(name, src=None):

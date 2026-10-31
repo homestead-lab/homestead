@@ -652,13 +652,18 @@ def tick():
     """The leader's minute (#622): what looking at the image cache or the
     imports used to do as it read. Finished scans are saved and their pods
     removed, a host whose scan is old is scanned again, finished pre-pulls are
-    cleared away, and a finished copy gives back the password it borrowed."""
+    cleared away, a finished copy gives back the password it borrowed, and a
+    password no import source names any more is removed."""
     _load_scans()
     if not _collect_scans(tidy=True):
         _rescan_if_stale(I.kget("/api/v1/nodes").get("items", []))
     prepull_status(sweep=True)
     CONTAINER_IMPORT._drop_finished_copies()
     I._bust("imgcache")
+    try:
+        I.sweep_source_secrets()
+    except Exception as error:
+        print(f"unused import source passwords not removed: {str(error)[:160]}", flush=True)
     # Hourly: what is unused, and automatic clean-up when it is on.
     try:
         import homestead_image_cleanup as CLEANUP
