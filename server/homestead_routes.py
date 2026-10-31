@@ -423,6 +423,13 @@ _owned_by = [None, {}]
 # be served from the last one (#705). A write Homestead makes to what they show
 # drops them at once (homestead_kube.fresh_reads).
 PAGE_SECONDS = 20
+# The pages' keys, and how long each page keeps its own: any reader of them
+# (a loop, /metrics, a dialog) is served the snapshot's part, or keeps its
+# read as long as the page would, never less (#978).
+CACHE.at_least(PAGE_SECONDS, "nodes", "wl", "vol", "stor", "ov", "vms")
+CACHE.at_least(15, "lhcap")
+# For a check made just before a write: the cluster as it is (CACHE.fresh).
+fresh = CACHE.fresh
 _cached = [lambda key, seconds, fn: fn()]
 _store = [{}]
 _snapshot = [lambda key: None]

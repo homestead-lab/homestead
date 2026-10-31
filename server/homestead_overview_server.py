@@ -20,6 +20,7 @@ import homestead_app_copies as APP_COPIES
 import homestead_api_v1 as API_V1
 import homestead_audit as AUDIT_LOG
 import homestead_auth as AUTH
+import homestead_cache as CACHE
 import homestead_changes as CHANGES
 import homestead_cluster as CLUSTER
 import homestead_diagnostics as DIAGNOSTICS
@@ -317,7 +318,7 @@ def _alert_sources():
     take("rootguard", ROOT_GUARD.alert_facts)
     take("audit", AUDIT_LOG.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
-        ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
+        cached(CLUSTER.VERSION_KEY, 15, CLUSTER.harvester_version))))
     # Twice a day whether or not anyone is looking - the Containers header and
     # the update notifications both read the result.
     if time.time() - _last_update_scan[0] > UPDATE_SCAN_EVERY:
@@ -793,7 +794,9 @@ def _pods_seen():
     """The cycle's pod list, which the leader also notes restarts from
     (#740), on a thread of its own: the pages never wait for it, and a
     failed note never costs them their pods."""
-    pods = kget("/api/v1/pods")
+    # Kept for the Cluster page's system services (#980), unless a write to
+    # pods came while it was read.
+    pods = CACHE.refresh(CLUSTER.PODS_KEY, lambda: kget("/api/v1/pods"))
     try:
         RESTARTS.observe_later(pods)
     except Exception as error:

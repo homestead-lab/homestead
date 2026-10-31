@@ -138,7 +138,7 @@ _SHOWN = re.compile(r"/(deployments|statefulsets|daemonsets|replicasets|cronjobs
                     r"|services|persistentvolumeclaims|persistentvolumes|volumesnapshots|virtualmachines"
                     r"|virtualmachineinstances|virtualmachineinstancemigrations|datavolumes|volumes|replicas"
                     r"|engines|volumeattachments|snapshots|backups)(/|\?|$)")
-SHOWN_KEYS = ("ov", "nodes", "wl", "vms", "vol", "volmap", "volother", "stor")
+SHOWN_KEYS = ("ov", "nodes", "wl", "vms", "vol", "volmap", "volother", "stor", "pods")
 SHOWN_PREFIXES = ("node:", "impact:")
 
 

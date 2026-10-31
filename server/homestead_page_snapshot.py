@@ -183,6 +183,7 @@ def read(key, now=None):
 
 
 ROUTER.use_snapshot(read)
+CACHE.use_parts(read)
 
 
 def cycle(inputs, builders):

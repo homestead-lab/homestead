@@ -514,6 +514,7 @@ def _impact_sources():
             "node_down": LHCAP.node_down(kget)}
 
 
+@ROUTER.fresh
 def node_impact(node, sources=None):
     """If this host goes down: what stops, moves and is at risk (homestead_impact).
     sources: _impact_sources(), when several hosts are previewed at once."""
