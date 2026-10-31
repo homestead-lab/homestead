@@ -97,6 +97,10 @@ class SharedAdmissionTests(unittest.TestCase):
     def setUp(self):
         self.record = None
         self.version = 0
+        # A fresh replay store: each test's ConfigMap starts absent (#985).
+        patch = mock.patch.object(fleet, "_replay", fleet.ReplayStore())
+        patch.start()
+        self.addCleanup(patch.stop)
         self.methods = []
         self.old_cache = dict(auth._store_cache)
         auth._store_cache.update(at=0, data=None)

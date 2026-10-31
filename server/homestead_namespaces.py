@@ -86,6 +86,29 @@ def _contents(namespace):
     return counts, unread
 
 
+def _all_contents():
+    """_contents for every namespace at once: one cluster-wide list of each
+    kind, grouped by namespace, so the page costs the same eight lists for
+    two namespaces or fifty (#985). Returns (counts by namespace, kinds no
+    namespace could be read for)."""
+    counts, unread = {}, []
+    for key, path, keep, _one, _many in KINDS:
+        try:
+            items = kget(path.replace("/namespaces/{ns}", "")).get("items", [])
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                unread.append(key)
+            items = []
+        except Exception:
+            unread.append(key)
+            items = []
+        for item in items:
+            if keep is None or keep(item):
+                where = counts.setdefault((item.get("metadata") or {}).get("namespace", ""), {})
+                where[key] = where.get(key, 0) + 1
+    return counts, unread
+
+
 def _protected(name):
     if name == DEFAULT_NS:
         return "new workloads go here by default"
@@ -98,19 +121,20 @@ def _protected(name):
 
 def inventory():
     """Your namespaces, what is in each, and whether one can go."""
-    rows = []
-    for n in _all():
+    rows, every = [], _all()
+    held, unread = _all_contents()
+    for n in every:
         if is_system(n):
             continue
         meta = n.get("metadata") or {}
         name = meta["name"]
-        contents, unread = _contents(name)
+        contents = {key: held.get(name, {}).get(key, 0) for key, *_rest in KINDS}
         rows.append({"name": name, "created": meta.get("creationTimestamp", ""),
                      "phase": (n.get("status") or {}).get("phase", ""),
                      "homestead": (meta.get("labels") or {}).get("homestead.io/managed") == "true",
-                     "protected": _protected(name), **contents, "unread": unread,
+                     "protected": _protected(name), **contents, "unread": list(unread),
                      "empty": not unread and not any(contents.values())})
-    hidden = sum(1 for n in _all() if is_system(n))
+    hidden = sum(1 for n in every if is_system(n))
     return {"namespaces": sorted(rows, key=lambda r: r["name"]), "system_hidden": hidden,
             "default": DEFAULT_NS}
 

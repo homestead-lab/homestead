@@ -23,7 +23,6 @@ Whether an image is still needed comes from strict reads (#620): a list that
 fails stops the plan, so nothing is removed on a guess.
 """
 import hashlib
-import json
 import os
 import time
 
@@ -55,12 +54,7 @@ def _load_since():
     path = _path()
     if not path:
         return {}
-    try:
-        with open(path, encoding="utf-8") as handle:
-            value = json.load(handle)
-        return value if isinstance(value, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(path, {})
 
 
 def unused(report):

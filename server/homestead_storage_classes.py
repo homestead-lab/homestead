@@ -146,10 +146,15 @@ def create_storage_class(cfg):
     if disk_tags or node_tags:
         # Every replica needs a node of its own with a disk that fits; fewer
         # than that and a volume runs a copy short, or does not start at all.
-        reach = DISKS.tag_reach(disk_tags, node_tags)
+        try:
+            reach = DISKS.tag_reach(disk_tags, node_tags)
+        except Exception:
+            reach = None        # Longhorn's nodes not read: not "no node has them" (#1002)
         wanted = " and ".join(x for x in (f"a disk tagged {', '.join(disk_tags)}" if disk_tags else "",
                                           f"the node tags {', '.join(node_tags)}" if node_tags else "") if x)
-        if not reach:
+        if reach is None:
+            warning += f"; whether a node has {wanted} could not be read from Longhorn"
+        elif not reach:
             warning += f"; no node has {wanted} yet, so its volumes will not schedule until one does"
         elif len(reach) < replicas:
             warning += (f"; only {', '.join(reach)} ha{'s' if len(reach) == 1 else 've'} {wanted}, fewer than "

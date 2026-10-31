@@ -135,7 +135,7 @@ def diagnostic_command(distribution, chart="multus"):
 
 
 def status():
-    p = platform(True)
+    p = platform(30)
     charts = _helmcharts()
     kvm = _kvm()
     multus = MULTUS.inspect(kget)

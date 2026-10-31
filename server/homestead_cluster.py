@@ -1,8 +1,12 @@
 """Read-only Harvester/Kubernetes platform health and node-onboarding guidance."""
+import heapq
 import math
 import re
+import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
 from datetime import datetime, timezone
 import homestead_alerts as ALERTS
 import homestead_roles as ROLES
@@ -240,6 +244,36 @@ def build_report(kubernetes_version, raw_nodes, node_summaries, pods, events, cs
     }
 
 
+# The whole pod list, kept by the leader's page snapshot each cycle and
+# forgotten by a write to pods (homestead_kube.SHOWN_KEYS); kept no longer
+# than the Cluster page keeps its own answer.
+PODS_KEY = "pods"
+PODS_SECONDS = 15
+VERSION_KEY = "harvester-version"
+
+
+def _version_setting():
+    # Harvester exposes this setting on supported releases. Older releases may
+    # omit it, in which case the node OS image remains an equally useful source.
+    try:
+        setting = kget("/apis/harvesterhci.io/v1beta1/settings/server-version")
+    except Exception:
+        setting = {}
+    return setting.get("value") or (setting.get("status") or {}).get("value") or ""
+
+
+def harvester_version():
+    """The Harvester version inventory() reports, read alone: the setting,
+    else the hosts' OS image. For the upgrade alert and the Upgrades page,
+    which need nothing else of the inventory (#978)."""
+    explicit = _version_setting()
+    if explicit:
+        return _harvester_version(explicit, [])
+    nodes = kget("/api/v1/nodes").get("items", [])
+    return _harvester_version("", [{"os": ((n.get("status") or {}).get("nodeInfo") or {}).get("osImage", "")}
+                                   for n in nodes])
+
+
 def inventory():
     unavailable = []
 
@@ -252,18 +286,25 @@ def inventory():
 
     version = read("Kubernetes version", "/version", {})
     raw_nodes = read("Nodes", "/api/v1/nodes", {"items": []}).get("items", [])
-    pods = read("System services", "/api/v1/pods", {"items": []}).get("items", [])
+    try:
+        # The leader's page snapshot lists every pod each cycle and keeps
+        # the list (#980): the system services are read from it. A list
+        # older than PODS_SECONDS is the last one kept after a read that
+        # failed: unread, as before, not old services shown as now.
+        pods = homestead_routes.cached(PODS_KEY, PODS_SECONDS, lambda: kget("/api/v1/pods")).get("items", [])
+        at = homestead_routes.CACHE.kept_at(PODS_KEY)
+        if at is not None and time.time() - at >= PODS_SECONDS:
+            raise RuntimeError("the pod list could not be read; the last one is too old to show")
+    except Exception as error:
+        unavailable.append({"section": "System services", "reason": str(error)[:180]})
+        pods = []
     pods = [pod for pod in pods if (pod.get("metadata") or {}).get("namespace") in SYS_NS]
-    events = read("Cluster warnings", "/api/v1/events", {"items": []}).get("items", [])
+    # Only Warnings are shown (_warning_rows): the API server filters, so the
+    # list is a small part of every event (#980).
+    events = read("Cluster warnings", "/api/v1/events?fieldSelector=type%3DWarning", {"items": []}).get("items", [])
     csrs = read("Certificate requests", "/apis/certificates.k8s.io/v1/certificatesigningrequests",
                 {"items": []}).get("items", [])
-    # Harvester exposes this setting on supported releases. Older releases may
-    # omit it, in which case the node OS image remains an equally useful source.
-    try:
-        setting = kget("/apis/harvesterhci.io/v1beta1/settings/server-version")
-    except Exception:
-        setting = {}
-    harvester = setting.get("value") or (setting.get("status") or {}).get("value") or ""
+    harvester = _version_setting()
     try:
         summaries = nodes_provider()
     except Exception as error:
@@ -445,6 +486,17 @@ class HealthHold:
 HOLD = HealthHold()
 
 
+def unknown_when_unread(report, unread):
+    """A "healthy" verdict while a part of the cluster could not be read is
+    unknown, with what was not read first: never good news on a guess
+    (#1002). Known bad news and activities stay as they are. Set where the
+    overview is built, so the Dashboard and every page's pill (#949) say it."""
+    if not unread or report.get("health_state") != "healthy":
+        return report
+    why = report.get("health_summary") or ""
+    return {**report, "health_state": "unknown", "health_summary": ". ".join([*unread, *([why] if why else [])])}
+
+
 def health_brief():
     """The sidebar pill's verdict on every page (#940), from the overview the
     Dashboard reads: the leader's snapshot part while it is fresh, else the
@@ -465,23 +517,82 @@ def health_brief():
 ALERTS.HEALTH[0] = lambda: health_brief()
 
 
-def events():
-    try:
-        ev = kget("/api/v1/events?limit=160")
-    except Exception:
-        return []
-    items = ev.get("items", [])
-    items.sort(key=lambda e: e.get("lastTimestamp") or e.get("eventTime") or "", reverse=True)
-    return [{
-        "ns": e["metadata"]["namespace"],
+# The Events page's rows: the newest, from the whole list (#988). The API
+# server lists events by namespace and name, so a limited read kept whichever
+# namespaces sort first. The list is read a page at a time and only the newest
+# EVENT_ROWS are kept as it goes, so a busy cluster costs a page and the rows,
+# never the whole list. A read stops at EVENT_CEILING events or EVENT_SECONDS
+# and says limited, as an expired continue token does.
+EVENT_ROWS = 120
+EVENT_PAGE = 500
+EVENT_CEILING = 20000
+EVENT_SECONDS = 8.0
+_clock = time.monotonic
+
+
+def _event_when(e):
+    """The event's latest time as Kubernetes gives it, and that time in
+    seconds (0 when it has none): lastTimestamp, a series' last sighting,
+    eventTime, then when the object was made."""
+    for stamp in (e.get("lastTimestamp"), (e.get("series") or {}).get("lastObservedTime"),
+                  e.get("eventTime"), (e.get("metadata") or {}).get("creationTimestamp")):
+        if isinstance(stamp, str) and stamp:
+            try:
+                return stamp, datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                continue
+    return "", 0.0
+
+
+def _event_row(e, when):
+    return {
+        "ns": (e.get("metadata") or {}).get("namespace", ""),
         "obj": e.get("involvedObject", {}).get("name", ""),
         "kind": e.get("involvedObject", {}).get("kind", ""),
         "reason": e.get("reason", ""),
         "msg": (e.get("message") or "")[:160],
         "type": e.get("type", "Normal"),
-        "time": e.get("lastTimestamp") or e.get("eventTime") or "",
+        "time": when,
         "count": e.get("count", 1),
-    } for e in items[:120]]
+    }
+
+
+def events():
+    """The newest EVENT_ROWS events, newest first; total: how many were read
+    (above len(events) the list was cut); limited: the read stopped before
+    the end of the list; error: nothing could be read."""
+    kept, total, token, limited, started = [], 0, "", False, _clock()
+    while True:
+        query = {"limit": EVENT_PAGE, **({"continue": token} if token else {})}
+        try:
+            page = kget(f"/api/v1/events?{urllib.parse.urlencode(query)}")
+            items = page.get("items") or []
+        except Exception as error:
+            if not token:
+                print(f"Events read failed: {error}", file=sys.stderr)
+                return {"events": [], "total": 0, "limited": False,
+                        "error": "Kubernetes did not answer the events read; refresh to try again"}
+            # 410: the continue token expired. Either way, keep what was read.
+            if not (isinstance(error, urllib.error.HTTPError) and error.code == 410):
+                print(f"Events read stopped after {total}: {error}", file=sys.stderr)
+            limited = True
+            break
+        for e in items:
+            if not isinstance(e, dict):
+                continue
+            when, seconds = _event_when(e)
+            # Ties keep Kubernetes' order: the earlier-listed one is the larger key.
+            entry = (seconds, -total, _event_row(e, when))
+            total += 1
+            (heapq.heappush if len(kept) < EVENT_ROWS else heapq.heappushpop)(kept, entry)
+        token = (page.get("metadata") or {}).get("continue") or ""
+        if not token:
+            break
+        if total >= EVENT_CEILING or _clock() - started > EVENT_SECONDS:
+            limited = True
+            break
+    kept.sort(key=lambda entry: entry[:2], reverse=True)
+    return {"events": [row for _, _, row in kept], "total": total, "limited": limited}
 
 
 # Its routes and who may use them (homestead_routes.py).

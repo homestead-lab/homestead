@@ -99,12 +99,15 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(1, sum(path == self.c.dep_path for _, path, _ in self.c.sent))
         self.assertNotIn(self.c.job_path, self.c.objects)
 
-    def test_api_outage_latches_hold_then_saves_it_without_resuming(self):
+    def test_api_outage_is_retried_then_held_and_saved_without_resuming(self):
         read = self.runner.read
         self.runner.read = mock.Mock(side_effect=OSError("private URL and token"))
         view = self.runner.tick()
         self.assertEqual("unknown", view["status"])
         self.assertNotIn("private", json.dumps(view))
+        self.assertIsNone(self.runner.hold)  # retried next tick, for a bounded time
+        self.now += W.OUTAGE_LIMIT
+        self.assertEqual("unknown", self.runner.tick()["status"])
         self.runner.read = read
         self.assertEqual("held", self.runner.tick()["status"])
         self.assertEqual(2, self.c.objects[self.c.dep_path]["spec"]["replicas"])
@@ -121,14 +124,15 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual("held", self.fresh(worker_uid="other-pod-uid").tick()["status"])
         self.assertEqual(before, len(self.c.sent))
 
-    def test_lost_status_checkpoint_reply_is_not_success_or_a_retry(self):
+    def test_lost_status_checkpoint_reply_is_not_success_or_a_workload_retry(self):
         self.c.lost = lambda method, path, body: path == self.c.anchor.path and json.loads(body["data"]["state.json"]).get("runtime", {}).get("state") == "running"
         view = self.runner.tick()
-        self.assertEqual("held", view["status"])
+        self.assertNotEqual("done", view["status"])
         self.c.lost = None
-        before = len(self.c.sent)
+        before = [(m, p) for m, p, _ in self.c.sent]
         self.fresh().tick()
-        self.assertEqual(before, len(self.c.sent))
+        # Only the next heartbeat: no stop, copy or switch request is sent again.
+        self.assertEqual([("PUT", self.c.anchor.path)], [(m, p) for m, p, _ in self.c.sent][len(before):])
         self.assertNotIn(self.c.job_path, self.c.objects)
 
     def test_stale_heartbeat_is_not_reported_as_running(self):

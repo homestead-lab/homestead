@@ -18,6 +18,7 @@ import time
 import urllib.request
 import homestead_cluster as CLUSTER
 import homestead_components as COMPONENTS
+import homestead_kube as KUBE
 import homestead_operations as OPS
 import homestead_routes
 
@@ -86,12 +87,16 @@ def releases(force=False):
     return _releases["value"], _releases["error"]
 
 
+def _harvester(kind):
+    """Every Harvester object of a kind: [] where Harvester is not installed,
+    and an error for a read that failed, never "none" (#620)."""
+    return KUBE.items(f"{API}/namespaces/{HNS}/{kind}", optional_group="harvesterhci.io", read=kget)
+
+
 def offered():
-    """The versions this cluster's Harvester has been told it can upgrade to."""
-    try:
-        items = kget(f"{API}/namespaces/{HNS}/versions").get("items", [])
-    except Exception:
-        return []
+    """The versions this cluster's Harvester has been told it can upgrade to.
+    Raises when they cannot be read."""
+    items = _harvester("versions")
     out = []
     for item in items:
         spec = item.get("spec", {}) or {}
@@ -134,11 +139,8 @@ def _upgrade_row(item):
 
 
 def upgrades():
-    try:
-        items = kget(f"{API}/namespaces/{HNS}/upgrades").get("items", [])
-    except Exception:
-        return []
-    rows = [_upgrade_row(item) for item in items]
+    """Harvester's upgrades, newest first. Raises when they cannot be read."""
+    rows = [_upgrade_row(item) for item in _harvester("upgrades")]
     return sorted(rows, key=lambda row: row["started"], reverse=True)
 
 
@@ -152,28 +154,40 @@ def report(current, force=False):
     newest_stable = next((row for row in rows if row["channel"] == "stable"), None)
     test = next((row for row in newer if row["channel"] != "stable"
                  and (not newest_stable or version_key(row["tag"]) > version_key(newest_stable["tag"]))), None)
-    offers = offered()
-    offer_names = {row["version"].lstrip("v") for row in offers}
+    # What Harvester could not be asked is None (unknown), not "none", and
+    # unread says so; the releases from GitHub still show.
+    unread = []
+    try:
+        offers = offered()
+    except Exception as failed:
+        offers = None
+        unread.append(f"the versions it offers ({str(failed)[:120]})")
+    try:
+        history = upgrades()
+    except Exception as failed:
+        history = None
+        unread.append(f"its upgrades ({str(failed)[:120]})")
+    offer_names = {row["version"].lstrip("v") for row in offers or []}
     # Copies: the release list is cached and shared.
-    stable, test = [dict(row, offered=row["tag"].lstrip("v") in offer_names) if row else None
+    stable, test = [dict(row, offered=None if offers is None else row["tag"].lstrip("v") in offer_names) if row else None
                     for row in (stable, test)]
-    history = upgrades()
-    active = next((row for row in history if row["state"] == "running"), None)
+    active = next((row for row in history if row["state"] == "running"), None) if history else None
     return {"current": current, "stable": stable, "test": test, "offered": offers,
             "recent": rows[:12], "error": error, "active": active,
             "last": active or (history[0] if history else None),
-            "history": history[:5]}
+            "history": None if history is None else history[:5],
+            "unread": f"Homestead could not read {' or '.join(unread)} from Harvester" if unread else ""}
 
 
 def _report_route(request):
-    current = ((homestead_routes.cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", "")
+    current = homestead_routes.cached(CLUSTER.VERSION_KEY, 15, CLUSTER.harvester_version)
     return report(current, force=(request.query.get("force") or [""])[0] == "1")
 
 
 def _start_route(request):
     version = str(request.body.get("version") or "")
     name = COMPONENTS.start_harvester(version, offered())
-    homestead_routes.forget("cluster")
+    homestead_routes.forget("cluster", CLUSTER.VERSION_KEY)
     operation = OPS.start("harvester-upgrade", f"Upgrade Harvester to {version}",
                           {"kind": "Upgrade", "name": name, "namespace": "harvester-system"},
                           "/system/cluster", {"upgrade": name, "version": version},

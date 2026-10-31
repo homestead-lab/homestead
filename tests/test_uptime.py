@@ -4,6 +4,7 @@ import socket
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -280,6 +281,117 @@ class StateTests(Base):
         self.assertEqual(1, len(UP._state["apps"]["lab/sonarr"]["hours"]))
 
 
+
+def _reference_summary(app, now):
+    """summary() as it was before #979: thirty passes over the hours, one a day."""
+    hours = app.get("hours", {})
+    this = UP._hour(now)
+    strip = []
+    for i in range(UP.STRIP_HOURS - 1, -1, -1):
+        row = hours.get(str(this - i * 3600))
+        strip.append(None if not row or not row[0] else "down" if row[1] else "slow" if row[2] * 2 >= row[0] else "up")
+
+    def share(rows):
+        checks = sum(r[0] for r in rows)
+        return None if not checks else round(100 * (checks - sum(r[1] for r in rows)) / checks, 2)
+
+    today = int(now // 86400 * 86400)
+    days = []
+    for i in range(29, -1, -1):
+        start = today - i * 86400
+        rows = [v for h, v in hours.items() if start <= int(h) < start + 86400]
+        checks, misses, slow = (sum(r[k] for r in rows) for k in range(3))
+        days.append(None if not checks else "down" if misses * 10 >= checks else "slow" if slow * 2 >= checks
+                    else "dip" if misses else "up")
+    recent = [v for h, v in hours.items() if int(h) > this - UP.STRIP_HOURS * 3600]
+    state = app.get("state", "unknown")
+    last = app.get("last") or {}
+    if state == "up" and last.get("ms") and last["ms"] > UP.SLOW_MS:
+        state = "slow"
+    return {"state": state, "since": app.get("since"), "why": app.get("why", ""), "target": app.get("target", ""),
+            "port": app.get("port"),
+            "last": last, "strip": strip, "days": days, "uptime_24h": share(recent), "uptime_30d": share(list(hours.values()))}
+
+
+def _random_hours(rnd, now):
+    """A month and more of hours: gaps, misses, slow answers, empty rows, an
+    hour from the future, and now and then a key or count no check writes."""
+    this = UP._hour(now)
+    hours = {}
+    for back in range(rnd.choice((24, 400, 760)), -3, -1):
+        if rnd.random() < 0.15 or (back < 0 and rnd.random() < 0.7):
+            continue
+        checks = rnd.choice((60, 60, 60, 12, 1, 0))
+        hours[str(this - back * 3600)] = [checks, rnd.choice((0, 0, 0, 1, 6, checks)) if checks else 0,
+                                          rnd.choice((0, 0, 1, 40)) if checks else 0]
+    if rnd.random() < 0.2:
+        hours[str(this - rnd.randint(0, 40 * 86400))] = [3, 1, 0]          # not on the hour
+    if rnd.random() < 0.2:
+        hours[str(this - 5 * 86400)] = [7.0, 0.5, 0]                        # counts as floats
+    return dict(rnd.sample(sorted(hours.items()), len(hours)))
+
+
+class ReportTests(Base):
+    """#979: closed days are kept, so a report adds up only today; what it says
+    is exactly what adding up every hour said."""
+
+    def test_summary_matches_the_full_computation_on_varied_histories(self):
+        import random
+        rnd = random.Random(979)
+        for case in range(300):
+            now = 1_790_000_000 + rnd.randint(0, 86400 * 3) + rnd.random()
+            app = {"state": rnd.choice(("up", "down", "off")), "hours": _random_hours(rnd, now),
+                   "last": {"ms": rnd.choice((40, 3000))}}
+            with self.subTest(case=case):
+                self.assertEqual(_reference_summary(app, now), UP.summary(app, now))
+
+    def test_report_matches_through_days_prunes_reloads_and_a_clock_set_back(self):
+        import random
+        rnd = random.Random(981)
+        start = 1_790_000_000 - 1_790_000_000 % 86400 + 22 * 3600     # two hours before midnight
+        names = [f"app-{i}" for i in range(4)]
+        loaded = {f"lab/{n}": {"state": "up", "since": start - 86400, "hours": _random_hours(rnd, start)}
+                  for n in names[:3]}
+        Path(self.dir.name, "uptime.json").write_text(__import__("json").dumps({"format": 1, "apps": loaded}))
+        now = peak = start
+        # Past midnight, hour by hour to the next, then the clock set back over
+        # midnight (a round writes into a closed day), then two days ahead.
+        steps = [60] * 15 + [3600] * 28 + [-4 * 3600] + [60] * 5 + [86400 * 2] + [60] * 3
+        for i, step in enumerate(steps):
+            now += step
+            peak = max(peak, now)
+            UP.observe([app(n, port=8000 + k) for k, n in enumerate(names)], now=now,
+                       ask=lambda t: rnd.choice((OK, OK, OK, MISS, SLOW)))
+            if i == 10:
+                saved = Path(self.dir.name, "uptime.json").read_text()
+                UP.bind(self.dir.name)                     # another replica's view of the file
+                Path(self.dir.name, "uptime.json").write_text(saved)
+            for at in (now, now + 30, now - 4000, peak):
+                got = UP.report(at)
+                with self.subTest(step=i, at=at):
+                    self.assertEqual({k: _reference_summary(a, at) for k, a in UP._state["apps"].items()}, got)
+
+    def test_reports_between_rounds_are_several_times_quicker(self):
+        import random, time
+        rnd = random.Random(7)
+        now = 1_790_000_000 + 13 * 3600
+        this = UP._hour(now)
+        apps = {f"lab/app-{i}": {"state": "up", "hours": {str(this - h * 3600): [60, 0 if rnd.random() > 0.03 else 5, 0]
+                                                          for h in range(720)}} for i in range(100)}
+        UP._state.update(loaded=True, apps=apps, observed_at=time.time())
+        UP.report(now)
+        started = time.process_time()
+        want = {k: _reference_summary(a, now) for k, a in apps.items()}
+        before = time.process_time() - started
+        started = time.process_time()
+        for _ in range(3):
+            got = UP.report(now + 20)
+        after = (time.process_time() - started) / 3
+        self.assertEqual(want, got)
+        # Relative, so a busy machine slows both alike: 200 apps took 481 ms before #979.
+        # A generous ratio: about 100 times, so a loaded runner never trips it.
+        self.assertLess(after * 5, before, f"{after:.4f} s a report against {before:.4f} s before #979")
+
 class WriteTests(Base):
     def test_quiet_minutes_write_at_most_every_five_minutes(self):
         start = 7200 + 60
@@ -365,6 +477,154 @@ class ProbeTests(unittest.TestCase):
         result = UP.probe(self.t(port=port), timeout=2)
         self.assertFalse(result["ok"])
         self.assertTrue(result["error"])
+
+    def far_end(self, speak):
+        """A port whose every connection is handed to speak(conn, stop)."""
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(5)
+        stop = threading.Event()
+        self.addCleanup(stop.set)
+        self.addCleanup(listener.close)
+
+        def run(conn):
+            try:
+                speak(conn, stop)
+            except OSError:
+                pass
+            finally:
+                conn.close()
+
+        def accept():
+            while not stop.is_set():
+                try:
+                    conn, _ = listener.accept()
+                except OSError:
+                    return
+                threading.Thread(target=run, args=(conn,), daemon=True).start()
+        threading.Thread(target=accept, daemon=True).start()
+        return listener.getsockname()[1]
+
+    def ends_by_the_deadline(self, speak, scheme="http"):
+        """http.client's timeout is per wait: a byte every 0.1 s kept a probe
+        going for as long as the far end liked (one thread per round)."""
+        port = self.far_end(speak)
+        for strict in (False, True):
+            with self.subTest(strict=strict):
+                results = []
+                started = time.monotonic()
+                worker = threading.Thread(target=lambda: results.append(
+                    UP.probe({**self.t(port=port, strict=strict), "scheme": scheme}, timeout=0.5)), daemon=True)
+                worker.start()
+                worker.join(5)
+                self.assertFalse(worker.is_alive(), "the probe is still reading")
+                self.assertLess(time.monotonic() - started, 2.0, "the deadline is 2 x 0.5 s")
+                if strict:
+                    self.assertEqual({"ok": False, "error": "no HTTP answer (no answer in time)"},
+                                     {k: results[0][k] for k in ("ok", "error")})
+                else:
+                    self.assertTrue(results[0]["ok"], "it took the connection: an app that answers")
+
+    def test_a_target_that_accepts_and_never_answers_ends_by_the_deadline(self):
+        self.ends_by_the_deadline(lambda conn, stop: stop.wait(10))
+
+    def test_a_target_that_trickles_its_status_line_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            for byte in b"HTTP/1.1 200 OK\r\n" * 50:
+                if stop.wait(0.1):
+                    return
+                conn.sendall(bytes([byte]))
+        self.ends_by_the_deadline(speak)
+
+    def test_a_target_that_trickles_its_headers_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)
+            conn.sendall(b"HTTP/1.1 200 OK\r\n")
+            while not stop.wait(0.1):
+                conn.sendall(b"X")
+        self.ends_by_the_deadline(speak)
+
+    def test_a_tls_target_that_trickles_its_handshake_ends_by_the_deadline(self):
+        def speak(conn, stop):
+            conn.recv(4096)                       # the ClientHello
+            # A 16 KiB handshake record opening a ServerHello, then a byte at a time.
+            conn.sendall(b"\x16\x03\x03\x40\x00" + b"\x02\x00\x3f\xfc")
+            while not stop.wait(0.1):
+                conn.sendall(b"\x00")
+        self.ends_by_the_deadline(speak, scheme="https")
+
+
+class RoundDeadlineTests(Base):
+    def test_a_round_waits_once_for_all_its_stuck_checks_not_once_each(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def stuck(t):
+            release.wait(30)
+            return OK
+        apps = [app(name=f"app{n}", port=8000 + n) for n in range(4)]
+        started = time.monotonic()
+        with mock.patch.object(UP, "TIMEOUT", 0.05):
+            UP.observe(apps, now=1000, ask=stuck)
+        took = time.monotonic() - started
+        self.assertLess(took, 2 * (0.05 * 2 + 2), "joined one after another")
+        self.assertEqual({"the check did not finish"},
+                         {row["last"]["error"] for row in UP._load().values()})
+
+    def test_a_target_with_several_ports_is_waited_for_to_its_own_bound(self):
+        """The round waited 2 x TIMEOUT + 2 s whatever the target: an app whose
+        first ports were slow landed after it and was recorded down."""
+        w = app(ports=[{"ip": "192.0.2.10", "port": p, "protocol": "TCP"} for p in (8001, 8002, 8003)])
+
+        def ask(t):
+            if t["port"] != 8003:
+                time.sleep(0.18)
+                return MISS
+            return OK
+        with mock.patch.object(UP, "TIMEOUT", 0.1), mock.patch.object(UP, "ROUND_SLACK", 0.05):
+            UP.observe([w], now=1000, ask=ask)
+        rep = UP.report(1000)["lab/sonarr"]
+        self.assertEqual(("up", "http://192.0.2.10:8003/"), (rep["state"], rep["target"]))
+
+    def test_the_ports_of_one_target_share_one_deadline(self):
+        asked = []
+
+        def ask(t):
+            asked.append((t["port"], t["timeout"]))
+            time.sleep(0.35)
+            return MISS
+        t = {"kind": "tcp", "host": "192.0.2.10", "port": 1, "scheme": "http", "path": "/", "timeout": 0.1,
+             "asks": [{"host": "192.0.2.10", "port": p, "scheme": "http"} for p in (1, 2, 3)]}
+        self.assertAlmostEqual(0.6, UP.target_bound(t))
+        result = UP.ask_ports(t, ask)
+        self.assertEqual([1, 2], [port for port, _ in asked], "no port is asked once the time is spent")
+        self.assertTrue(all(timeout <= 0.1 for _, timeout in asked))
+        self.assertEqual((False, 2), (result["ok"], result["port"]))
+
+
+class HostHeaderTests(unittest.TestCase):
+    def test_the_host_header_names_the_port_only_when_it_is_not_the_schemes_own(self):
+        self.assertEqual("192.0.2.10", UP._host("192.0.2.10", 443, "https"))
+        self.assertEqual("192.0.2.10", UP._host("192.0.2.10", 80, "http"))
+        self.assertEqual("192.0.2.10:8443", UP._host("192.0.2.10", 8443, "https"))
+        self.assertEqual("192.0.2.10:443", UP._host("192.0.2.10", 443, "http"))
+
+    def test_a_probe_sends_it(self):
+        seen = []
+
+        class Echo(Handler):
+            def do_GET(self):
+                seen.append(self.headers.get("Host"))
+                super().do_GET()
+        server = http.server.HTTPServer(("127.0.0.1", 0), Echo)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        port = server.server_address[1]
+        self.assertTrue(UP.probe({"kind": "http", "host": "127.0.0.1", "port": port, "scheme": "http",
+                                  "path": "/", "strict": True})["ok"])
+        self.assertEqual([f"127.0.0.1:{port}"], seen)
 
 
 if __name__ == "__main__":

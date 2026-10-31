@@ -8,6 +8,8 @@ import hmac
 import json
 import time
 
+import homestead_storage_journal as JOURNAL
+
 _key = None
 TTL = 600
 CONTROL_FIELDS = {"capacity_token", "confirm_capacity", "ack_state_initialization", "confirm_state_name",
@@ -20,9 +22,38 @@ def bind(key_provider):
     _key = key_provider
 
 
+def review_identity(obj):
+    """An object's identity for a review context: namespace, name, uid and
+    resourceVersion (the write after the review still sends that), plus
+    "settled", a digest of all but its status and the server's bookkeeping.
+    The token is signed over settled instead of resourceVersion (review_form),
+    so a controller's status write between preview and confirm does not void
+    the review (#826's twin); any other change still does."""
+    meta = (obj or {}).get("metadata") or {}
+    result = {key: meta.get(key) for key in ("namespace", "name", "uid", "resourceVersion")}
+    if meta.get("uid"):
+        result["settled"] = JOURNAL.settled(obj)
+    return result
+
+
+def review_form(value):
+    """What a token is signed over: the context, with each identity that
+    carries "settled" (review_identity) less its resourceVersion. Every other
+    identity keeps its version: for ConfigMaps, Secrets, claims, disks and the
+    KubeVirt CR any write, status included, still needs a fresh review."""
+    if isinstance(value, list):
+        return [review_form(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    out = {key: review_form(item) for key, item in value.items()}
+    if "settled" in value and "uid" in value:
+        out.pop("resourceVersion", None)
+    return out
+
+
 def _signature(config, expires, context=None):
     body = {key: value for key, value in config.items() if key not in CONTROL_FIELDS}
-    payload = json.dumps({"config": body, "context": context}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    payload = json.dumps({"config": body, "context": review_form(context)}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hmac.new(_key(), (str(expires) + ":" + payload).encode(), hashlib.sha256).hexdigest()
 
 

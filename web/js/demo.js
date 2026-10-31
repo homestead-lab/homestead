@@ -981,7 +981,7 @@
       nodes: [{ node: "harvester-node1", total_gb: 14.2, count: 38, scanned_at: Date.now() / 1000 - 240 },
         { node: "harvester-node2", total_gb: 11.9, count: 31, scanned_at: Date.now() / 1000 - 240 },
         { node: "harvester-node3", total_gb: 9.4, count: 27, scanned_at: Date.now() / 1000 - 250 }],
-      pulls: [{ name: "homestead-pull-frigate", image: "ghcr.io/blakeblackshear/frigate:0.18.0-rc1",
+      pulls: [{ name: "homestead-pull-frigate-3f9a1c2e", image: "ghcr.io/blakeblackshear/frigate:0.18.0-rc1",
         desired: 3, ready: 1, complete: false }],
       pulls_finished: [],
       images: [
@@ -1033,10 +1033,10 @@
         size_mb: 0, virtual_size_gb: 0, state: "downloading", progress: 42, message: "", storage_class: "",
         nodes: [], copies: 0, disks: [], used_by: [], deleting: false }] },
     "/api/images/vm/delete": { ok: true, detail: "debian-12-genericcloud-amd64.qcow2 is being deleted, with its copies on 1 node" },
-    "/api/images/prepull": { ok: true, daemonset: "homestead-pull-redis",
+    "/api/images/prepull": { ok: true, daemonset: "homestead-pull-redis-7b0d4e19",
       nodes: ["harvester-node1", "harvester-node3"], skipped: ["harvester-node2"],
       message: "Pulling onto 2 nodes; skipped harvester-node2 (cordoned or not ready)" },
-    "/api/images/prepull/stop": { ok: true, message: "Pre-pull homestead-pull-frigate stopped" },
+    "/api/images/prepull/stop": { ok: true, message: "Pre-pull homestead-pull-frigate-3f9a1c2e stopped" },
     "/api/network/vm-networks": { ok: true, name: "default/lan", detail: "VM network default/lan made, on the untagged LAN of mgmt; VMs and containers can join it now" },
     "/api/node/bridge/inspect": (url, init) => ({ node: JSON.parse(init.body).node, interface: "eth0", mac: "18:60:24:f5:e5:09",
       address: "192.0.2.109/24", dhcp: true, gateway: "192.0.2.1", file: "/etc/netplan/00-installer-config.yaml", netplan_id: "eth0",
@@ -1260,7 +1260,7 @@
         managed: false, managed_by: "", owner: "flux", runnable: false, editable: false,
         result: "ok", result_at: "2026-09-22T02:45:31Z", result_reason: "", last_success: "2026-09-22T02:45:31Z",
         missed: false, next_run: "" }],
-    "/api/events": () => [
+    "/api/events": () => ({ total: 3, limited: false, events: [
       { obj: "frigate-7d9f8c6b5-x2abc", ns: "lab", kind: "Pod", type: "Normal", reason: "Pulled",
         msg: "Successfully pulled image \"ghcr.io/blakeblackshear/frigate:stable\" in 12.4s", count: 1,
         time: new Date(Date.now() - 4 * 60e3).toISOString() },
@@ -1268,7 +1268,7 @@
         msg: "failed to provision volume with StorageClass \"longhorn-r2\": no disk space to create the replicas required: 1 of 2 replicas scheduled on nodes with enough free space",
         count: 14, time: new Date(Date.now() - 11 * 60e3).toISOString() },
       { obj: "home-assistant", ns: "lab", kind: "Deployment", type: "Normal", reason: "ScalingReplicaSet",
-        msg: "Scaled up replica set home-assistant-6c8d9 to 1", count: 1, time: new Date(Date.now() - 20 * 60e3).toISOString() }],
+        msg: "Scaled up replica set home-assistant-6c8d9 to 1", count: 1, time: new Date(Date.now() - 20 * 60e3).toISOString() }] }),
     "/api/move/moves/retry": { ok: true }, "/api/move/moves/abandon": { ok: true },
     "/api/move/moves/finish": { ok: true, message: "mosquitto lives here now; removed workload mosquitto on branch" },
     "/api/move/moves": () => [
@@ -1632,9 +1632,11 @@ ssh_pwauth: true
     "/api/operations/storage-recovery/preview": (url, init) => {
       const id=JSON.parse(init.body).id, state=window.__demoStorageState || "running";
       const held=state==="ready", uncertain=state==="uncertain", running=state==="running";
-      return {tokens:held?{continue:"demo-storage-ready"}:running?{pause:"demo-storage-running"}:{},plan:{
+      return {tokens:held?{continue:"demo-storage-ready",retry:"demo-storage-ready",rollback:"demo-storage-rollback"}:running?{pause:"demo-storage-running"}:{},plan:{
         id,claim:"paperless-data",namespace:"lab",phase:"copy",status:running?"running":"failed",from_class:"longhorn-r2",to_class:"longhorn-r3",
-        can_continue:held,can_pause:running,requires_confirmation:true,
+        can_continue:held,can_retry:held,can_finish:false,can_rollback:held,can_pause:running,requires_confirmation:true,
+        rollback:{next_write:held?{step:"rollback-restart:paperless",method:"PUT",target:{kind:"Deployment",name:"paperless"}}:null,message:"",
+          blockers:held?[]:running?["Pause the move before rolling it back."]:["An API request has no confirmed outcome. Inspect its Kubernetes audit trail and retained resources; this screen cannot safely retry or adopt it."]},
         message:uncertain?"The response to the copy job request was lost.":held?"Copy volume created. Review current capacity before starting the copy.":"Copying and checking data; the original remains protected.",
         blockers:uncertain?["The copy request has no confirmed outcome. Inspect the Kubernetes audit trail and retained resources; this screen cannot safely retry it."]:[],
         warnings:["This review does not delete data. Continuing may restart workloads and never rolls back or repeats an uncertain request.",...(held?["Projected RAM on lab-node-2 is above its configured warning threshold."]:[])],
@@ -1646,10 +1648,11 @@ ssh_pwauth: true
     },
     "/api/operations/storage-recovery/act": (url, init) => {
       const b=JSON.parse(init.body), state=window.__demoStorageState || "running";
-      if(!b.confirm_capacity || (b.action==="continue"?state!=="ready" || b.capacity_token!=="demo-storage-ready":
-          b.action!=="pause" || state!=="running" || b.capacity_token!=="demo-storage-running")) throw new Error("Refresh the storage review first");
-      window.__demoStorageState=b.action==="continue"?"running":"ready";
-      return {ok:true,detail:b.action==="continue"?"Move queued to continue with fresh safety checks":"Move paused; data and running copy jobs retained"};
+      const token={continue:"demo-storage-ready",retry:"demo-storage-ready",rollback:"demo-storage-rollback",pause:"demo-storage-running"}[b.action];
+      if(!b.confirm_capacity || !token || b.capacity_token!==token || state!==(b.action==="pause"?"running":"ready")) throw new Error("Refresh the storage review first");
+      window.__demoStorageState=b.action==="pause"?"ready":"running";
+      return {ok:true,detail:b.action==="pause"?"Move paused; data and running copy jobs retained":
+        b.action==="rollback"?"Move queued to roll back onto the original volume with fresh safety checks":"Move queued to continue with fresh safety checks"};
     },
     "/api/operations/power-recovery/preview": (url, init) => {
       const id=JSON.parse(init.body).id, op=(window.__demoOps || []).find(row=>row.id===id);
@@ -2070,7 +2073,7 @@ ssh_pwauth: true
     "/api/cluster/upgrades": { current: "1.8.2", error: "", offered: [{ version: "v1.9.0", released: "20260812", tags: [] }],
       stable: { tag: "v1.9.0", name: "Harvester v1.9.0", channel: "stable", published: "2026-08-12T09:00:00Z", url: "https://github.com/harvester/harvester/releases", offered: true },
       test: { tag: "v1.9.1-rc2", name: "Harvester v1.9.1-rc2", channel: "rc", published: "2026-09-18T09:00:00Z", url: "https://github.com/harvester/harvester/releases", offered: false },
-      active: null, history: [], recent: [],
+      active: null, history: [], recent: [], unread: "",
       last: { name: "hvst-upgrade-demo", version: "v1.8.2", previous: "v1.8.1", started: "2026-06-02T08:00:00Z", latest: true,
         state: "succeeded", message: "", progress: 100, nodes: [],
         steps: [["ImageReady", "Upgrade image"], ["RepoReady", "Package repository"], ["NodesPrepared", "Nodes prepared"],
@@ -2126,7 +2129,7 @@ ssh_pwauth: true
         app_version: "11.3.0", updated: new Date(Date.now() - 86400000 * (5 - revision)).toISOString(), description: revision === 1 ? "Install complete" : "Upgrade complete" })),
       objects: [["ServiceAccount", "grafana"], ["Secret", "grafana"], ["ConfigMap", "grafana"], ["PersistentVolumeClaim", "grafana"],
         ["Service", "grafana"], ["Deployment", "grafana"]].map(([kind, name]) => ({ kind, name, namespace: "monitoring" })),
-      source: { repo: "https://grafana.github.io/helm-charts", chart: "grafana", version: "8.5.2",
+      source: { repo: "https://grafana.github.io/helm-charts", chart: "grafana", version: "8.5.2", generation: 3,
         values: "persistence:\n  enabled: true\n  size: 10Gi\nservice:\n  type: LoadBalancer\n" } }),
     "/api/helm/search": [
       { name: "grafana", version: "8.5.2", app_version: "11.3.0", description: "The leading tool for querying and visualizing time series and metrics.",
@@ -3665,7 +3668,10 @@ ssh_pwauth: true
       Object.assign(address, { state: "ok", reason: "", unrouted: [] });
     }
     const events = responses["/api/events"];
-    responses["/api/events"] = (...args) => events(...args).filter(row => row.type !== "Warning");
+    responses["/api/events"] = (...args) => {
+      const rows = events(...args).events.filter(row => row.type !== "Warning");
+      return { total: rows.length, limited: false, events: rows };
+    };
     const operations = responses["/api/operations"];
     responses["/api/operations"] = (...args) => operations(...args).map(row => row.id === "op2"
       ? { ...row, status: "succeeded", progress: 100, message: "Image cached" } : row);

@@ -103,14 +103,15 @@ window.helmRelease = async (ns, name) => {
         { key: "notes", title: "Notes", html: `<pre class="helm-values">${esc(r.notes || "The chart left no notes.")}</pre>` },
         { key: "history", title: "History", html: history },
         { key: "objects", title: `Objects · ${r.objects.length}`, html: objects }],
-        editable ? `<button class="btn pri" data-need="admin" onclick="helmUpgrade(${jsq(ns)},${jsq(name)})">Upgrade</button>` : "",
+        editable ? `<button class="btn pri" data-need="admin" onclick="helmUpgrade(${jsq(ns)},${jsq(name)},${jsq(String(r.source.generation ?? ""))})">Upgrade</button>` : "",
         { always: true, cancelHtml: UI.cancel("Close") })}`;
     if (window.applyRole) applyRole();
   } catch (e) { $("#mbody").innerHTML = UI.error(e, { retry: `helmRelease(${jsArg(ns)},${jsArg(name)})`, dialog: true }); }
 };
 const helmPost = (path, body) => api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-window.helmUpgrade = async (namespace, name) => {
-  try { const r = await helmPost("/api/helm/upgrade", { namespace, name, version: $("#hr_version").value.trim(), values: $("#hr_values").value });
+// generation: the HelmChart's, as the dialog read it; a chart changed since is refused, not reverted.
+window.helmUpgrade = async (namespace, name, generation) => {
+  try { const r = await helmPost("/api/helm/upgrade", { namespace, name, generation, version: $("#hr_version").value.trim(), values: $("#hr_values").value });
     toast(r.detail, "ok"); closeModal(); setTimeout(viewHelm, 1500); } catch (e) { toast(e.message, "bad"); }
 };
 window.helmUninstall = async (namespace, name) => {

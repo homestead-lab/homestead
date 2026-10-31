@@ -84,3 +84,17 @@ test("the demo's catalogue answers name the default feed", () => {
   assert.equal(answer.match(/source: demoStoreSource/g)?.length, 2, "both the browse and the search answer carry the source");
   assert.match(demo, /const demoStoreSource = \{ url: "https:\/\/raw\.githubusercontent\.com\/Squidly271\/AppFeed\/master\/applicationFeed\.json", default: true \}/);
 });
+
+test("an app's page opened while the catalogue is still loading offers Try again", async () => {
+  elements = { "#mbody": element() };
+  context.modal = () => {};
+  context.icon = () => "";   // icons.js, which the page loads first
+  context.api = async () => {
+    throw Object.assign(new Error("the App Store catalogue is still loading"), { status: 503, body: { loading: true } });
+  };
+  await vm.runInContext(`storeDetails("Plex|example/plex:latest")`, context);
+  const html = elements["#mbody"].innerHTML;
+  assert.match(html, /still loading/);
+  assert.match(html, /Try again/);
+  assert.match(html, /storeDetails\(/);
+});

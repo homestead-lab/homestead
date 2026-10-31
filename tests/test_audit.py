@@ -23,6 +23,13 @@ def view(method="POST", path="/api/workload/scale", body=None, user="ada", role=
 
 
 class TheLine(unittest.TestCase):
+    def setUp(self):
+        # The replica field is the pod's HOSTNAME. Pinned, so a random container
+        # hostname (hex, so it can hold "abc") never lands in a line a test reads.
+        patch = mock.patch.dict("os.environ", {"HOSTNAME": "homestead-0"})
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def line(self, request, status=200, ms=142, notes=None):
         return AUDIT_LOG.line(request, status, ms, notes or {}, now=1792574043.512)
 

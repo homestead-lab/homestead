@@ -9,18 +9,31 @@ KubeVirt keeps as the log of the guest-console-log container in the VM's
 launcher pod (KubeVirt 1.1 and later). Where there is nothing to read, the
 job's own steps are all there is, and it says so.
 """
+import urllib.error
 import urllib.parse
 
+import homestead_helper_sweep as HELPER_SWEEP
 import homestead_k3scluster as K3SC
 import homestead_value_masks as MASKS
 
 kget = ktext = None
 TAIL = 200
+# The most one tail read asks for (#986): Kubernetes splits lines at 16 KB, so
+# TAIL lines can be 3 MB, and only the last 60,000 characters are kept.
+# limitBytes keeps the oldest of the lines asked for; this bound is far above
+# what an ordinary log's TAIL lines take.
+LIMIT_BYTES = 512 * 1024
+TAIL_RETRIES = 4      # halvings of the lines asked for when an answer reaches the bound
 
 
 def bind(_kget, _ktext):
     global kget, ktext
     kget, ktext = _kget, _ktext
+
+
+def _removed(item, task):
+    """The words for a helper the leader's sweep removed, or None."""
+    return HELPER_SWEEP.removed_note(item, task)
 
 
 def _q(value):
@@ -33,8 +46,25 @@ def _pods(ns, selector):
 
 
 def _tail(ns, pod, container="", lines=TAIL, *, timestamps=False):
-    query = f"?tailLines={lines}" + (f"&container={_q(container)}" if container else "") + ("&timestamps=true" if timestamps else "")
-    return str(ktext(f"/api/v1/namespaces/{_q(ns)}/pods/{_q(pod)}/log{query}") or "")
+    """The pod's last lines, at most LIMIT_BYTES. limitBytes keeps the oldest
+    of the lines asked for, so an answer that reaches it is asked for again
+    with half the lines (a few times at most): the newest lines, often the
+    error, are the ones to keep. A cut says so in a last line."""
+    wanted = lines
+    for attempt in range(TAIL_RETRIES + 1):
+        query = f"?tailLines={lines}" + (f"&container={_q(container)}" if container else "") + (
+            "&timestamps=true" if timestamps else "") + f"&limitBytes={LIMIT_BYTES}"
+        text = str(ktext(f"/api/v1/namespaces/{_q(ns)}/pods/{_q(pod)}/log{query}") or "")
+        # A multi-byte character cut at the bound may decode to one replacement.
+        if len(text.encode("utf-8")) < LIMIT_BYTES - 4:
+            if lines == wanted:
+                return text
+            return text + f"\n(Log cut: its lines are long, so Homestead is showing the last {lines} lines.)\n"
+        if lines <= 1:
+            break
+        lines = max(1, lines // 2)
+    return text + (f"\n(Log cut at {LIMIT_BYTES // 1024} KiB of its oldest lines asked for: "
+                   "the newest lines may be missing.)\n")
 
 
 def _pod_source(ns, pod, title, container="", *, timestamps=False):
@@ -197,7 +227,10 @@ def node_power(item):
         return [{"title": "Power helper", "text": "", "note": f"Creation of {ns}/{name} was not confirmed. Inspect it in Kubernetes before retrying; no same-name pod is assumed to belong to this request."}]
     try:
         pod = kget(f"/api/v1/namespaces/{_q(ns)}/pods/{_q(name)}")
-    except Exception:
+    except Exception as error:
+        removed = isinstance(error, urllib.error.HTTPError) and error.code == 404 and _removed(item, "node-power")
+        if removed:
+            return [{"title": "Power helper", "text": "", "note": f"{ns}/{name} was {removed}."}]
         return [{"title": "Power helper", "text": "", "note": f"{ns}/{name} is unavailable. This does not confirm shutdown; check the host's console or physical power."}]
     if (pod.get("metadata") or {}).get("uid") != uid:
         return [{"title": "Power helper", "text": "", "note": "Helper identity changed; replacement events and logs are not shown."}]
@@ -212,7 +245,13 @@ def copy_job(item):
     ref = item.get("ref") or {}
     if not ref.get("job_uid"):
         return [{"title": "Copy", "text": "", "note": "No confirmed copy Job identity; inspect the durable job steps."}]
-    obj = kget(f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs/{ref['job']}")
+    try:
+        obj = kget(f"/apis/batch/v1/namespaces/{ref['namespace']}/jobs/{ref['job']}")
+    except urllib.error.HTTPError as error:
+        removed = error.code == 404 and _removed(item, "restructure")
+        if not removed:
+            raise
+        return [{"title": "Copy", "text": "", "note": f"The copy Job {ref['namespace']}/{ref['job']} was {removed}."}]
     if obj.get("metadata", {}).get("uid") != ref["job_uid"]:
         return [{"title": "Copy", "text": "", "note": "Copy Job identity changed; replacement logs are not shown."}]
     pods = [p for p in _pods(ref["namespace"], f"job-name={ref['job']}") if any(

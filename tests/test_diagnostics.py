@@ -1,6 +1,7 @@
 """Diagnostic exports preserve evidence without sharing private originals."""
 import io
 import json
+import os
 import sys
 import tempfile
 import time
@@ -103,6 +104,36 @@ class DiagnosticsTests(unittest.TestCase):
         text = json.dumps(D.snapshot(self.id, "alice", "full"))
         self.assertNotIn("secret", text)
         self.assertIn("/api/nodes", text)
+
+    def test_cleanup_and_listing_parse_an_unchanged_report_once(self):
+        # #986: cleanup runs every 5 minutes on every copy and before every
+        # listing; a report can hold megabytes of events and logs.
+        D.create("alice")
+        D.listing("alice")
+        with patch.object(D.json, "load", wraps=json.load) as load:
+            D.cleanup()
+            rows = D.listing("alice")
+        self.assertEqual(0, load.call_count)
+        self.assertEqual(2, len(rows))
+        D.append(self.id, "alice", 1, [{"kind": "click", "at": 10}])
+        with patch.object(D.json, "load", wraps=json.load) as load:
+            rows = D.listing("alice")
+        self.assertEqual(1, load.call_count)
+        self.assertEqual(1, next(r for r in rows if r["id"] == self.id)["events"])
+
+    def test_a_report_rewritten_in_place_is_read_again(self):
+        # An in-place rewrite of the same size can keep the inode and, with
+        # utime, the mtime; its change time still moves.
+        D.listing("alice")
+        path = D._path(self.id)
+        before = os.stat(path)
+        text = Path(path).read_text()
+        changed = text.replace('"Bug report"', '"Bug Report"')
+        time.sleep(0.02)
+        with open(path, "r+", encoding="utf-8") as handle:
+            handle.write(changed)
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        self.assertEqual("Bug Report", D.listing("alice")[0]["title"])
 
     def test_interrupted_recording_is_recoverable_after_server_restart(self):
         with patch.object(D.time, "time", return_value=time.time() + 120):

@@ -82,7 +82,8 @@ class HostMoveCapacityTests(unittest.TestCase):
             with self.subTest(change=change):
                 original = copy.deepcopy(self.current)
                 config = self.reviewed()
-                if change == "version": self.current["metadata"]["resourceVersion"] = "11"
+                if change == "version":     # an edit: a status-only write keeps the review
+                    self.current["metadata"].update(resourceVersion="11", annotations={"example.com/edited": "yes"})
                 elif change == "uid": self.current["metadata"]["uid"] = "replacement"
                 elif change == "node": config["node"] = None
                 else: config["pin"] = True

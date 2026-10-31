@@ -33,6 +33,7 @@ import urllib.parse
 import urllib.request
 
 import homestead_audit as AUDIT_LOG
+import homestead_fetch as FETCH
 import homestead_names as NAMES
 import homestead_sessions as SESSIONS
 
@@ -49,6 +50,16 @@ SECRET = "homestead-fleet-key"
 # stays valid.
 SKEW = 300
 TIMEOUT = 15
+# A member's answer: read to at most this many bytes (the same as the
+# largest request body Homestead takes), and all of it within the call's
+# timeout. It was read whole, and the timeout was per wait on the socket.
+ANSWER_MAX_BYTES = 8 << 20
+REASON_MAX_BYTES = 64 << 10
+# How long the Fleet page waits for all the members' checks together.
+SUMMARY_WAIT = 6
+# member id -> the thread checking it, while it runs (summary()).
+_checking = {}
+_checking_lock = threading.Lock()
 
 H_FROM = "X-Homestead-Fleet"
 H_TIME = "X-Homestead-Fleet-Time"
@@ -66,8 +77,9 @@ LOCAL = {"/api/fleet/switch", "/api/fleet/home", "/api/auth/login", "/api/auth/l
          "/api/alerts/pending", "/api/alerts/delivered", "/healthz", "/readyz", "/metrics"}
 ROLES = ("viewer", "operator", "admin")
 # Not passed on: they describe one connection, or who is asking, which the
-# signature says instead.
-HOP = {"connection", "keep-alive", "proxy-connection", "proxy-authorization", "te", "trailer",
+# signature says instead. The caller's own Authorization (an API key) is
+# for this Homestead only; the member trusts the signature, never a key.
+HOP = {"connection", "keep-alive", "proxy-connection", "authorization", "proxy-authorization", "te", "trailer",
        "transfer-encoding", "upgrade", "host", "cookie", "content-length"}
 
 _site = lambda: ""
@@ -425,37 +437,103 @@ def verify(headers, method, target, body=b""):
     return {"sender": origin, "role": role, "user": (f"{via}:{user}" if user else via) if role else ""}
 
 
+class ReplayStore:
+    """The nonces linked Homesteads have used, shared by every copy of this
+    one through a ConfigMap whose resourceVersion is the replay boundary.
+
+    A claim is durable before it returns, as before, so a nonce one copy
+    took is refused by the other. What changed (#985): claims that arrive
+    while a write is under way wait for it and then go out together in the
+    next write, one GET and one PUT for the batch instead of per request;
+    and the ConfigMap as this copy last wrote it is kept, so a claim reads
+    it again only after another copy changed it (the PUT answers 409)."""
+    LIMIT = 8000
+
+    def __init__(self):
+        self._cv = threading.Condition()
+        self._pending = []          # tickets waiting for the next write
+        self._writing = False
+        self._current = None        # the ConfigMap as this copy last wrote or read it
+
+    def claim(self, sender, nonce):
+        ticket = {"digest": hashlib.sha256((sender + ":" + nonce).encode()).hexdigest(), "done": False, "error": None}
+        with self._cv:
+            self._pending.append(ticket)
+            while not ticket["done"]:
+                if self._writing:
+                    self._cv.wait()
+                    continue
+                self._writing, batch, self._pending = True, self._pending, []
+                self._cv.release()
+                try:
+                    self._write(batch)
+                finally:
+                    self._cv.acquire()
+                    self._writing = False
+                    self._cv.notify_all()
+        if ticket["error"]:
+            raise PermissionError(ticket["error"])
+
+    def _write(self, batch):
+        path = f"/api/v1/namespaces/{NS}/configmaps/{NAMES.BRAND}-fleet-replay"
+        try:
+            for _attempt in range(4):
+                current = self._current
+                if current is None:
+                    try:
+                        current = kget(path)
+                    except urllib.error.HTTPError as error:
+                        if error.code != 404:
+                            raise PermissionError("fleet replay store is unavailable") from error
+                        current = {}
+                now = time.time()
+                records = {k: until for k, until in json.loads((current.get("data") or {}).get("nonces", "{}")).items()
+                           if until > now}
+                for ticket in batch:
+                    ticket["error"] = None
+                    if ticket["digest"] in records:
+                        ticket["error"] = "signed request was already used"
+                    elif len(records) >= self.LIMIT:
+                        ticket["error"] = "fleet request limit reached; try again later"
+                    else:
+                        records[ticket["digest"]] = now + 2 * SKEW
+                if all(ticket["error"] for ticket in batch):
+                    return
+                meta = {"name": NAMES.BRAND + "-fleet-replay", "namespace": NS}
+                if current.get("metadata", {}).get("resourceVersion"):
+                    meta["resourceVersion"] = current["metadata"]["resourceVersion"]
+                body = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": meta,
+                        "data": {"nonces": json.dumps(records, separators=(",", ":"))}}
+                try:
+                    written = ksend("PUT" if current else "POST", path if current else path.rsplit("/", 1)[0], body)
+                except urllib.error.HTTPError as error:
+                    self._current = None        # changed or gone elsewhere: read it again
+                    if error.code not in (404, 409):
+                        raise PermissionError("fleet replay store is unavailable") from error
+                    continue
+                kept = written if isinstance(written, dict) and (written.get("metadata") or {}).get("resourceVersion") else None
+                self._current = kept and {"metadata": kept["metadata"], "data": kept.get("data") or {}}
+                return
+            raise PermissionError("fleet replay store is busy; try again")
+        except PermissionError as error:
+            for ticket in batch:
+                ticket["error"] = ticket["error"] or str(error)
+        except Exception as error:
+            self._current = None
+            for ticket in batch:
+                ticket["error"] = "fleet replay store is unavailable"
+            print(f"Fleet replay store: {str(error)[:200]}", flush=True)
+        finally:
+            for ticket in batch:
+                ticket["done"] = True
+
+
+_replay = ReplayStore()
+
+
 def _claim_nonce(sender, nonce):
     """Kubernetes resourceVersion provides a replay boundary across replicas."""
-    path = f"/api/v1/namespaces/{NS}/configmaps/{NAMES.BRAND}-fleet-replay"
-    digest = hashlib.sha256((sender + ":" + nonce).encode()).hexdigest()
-    with _lock:
-        for attempt in range(4):
-            try:
-                current = kget(path)
-            except urllib.error.HTTPError as error:
-                if error.code != 404:
-                    raise PermissionError("fleet replay store is unavailable") from error
-                current = {}
-            now = time.time()
-            records = {k: until for k, until in json.loads((current.get("data") or {}).get("nonces", "{}")).items() if until > now}
-            if digest in records:
-                raise PermissionError("signed request was already used")
-            if len(records) >= 8000:
-                raise PermissionError("fleet request limit reached; try again later")
-            records[digest] = now + 2 * SKEW
-            meta = {"name": NAMES.BRAND + "-fleet-replay", "namespace": NS}
-            if current.get("metadata", {}).get("resourceVersion"):
-                meta["resourceVersion"] = current["metadata"]["resourceVersion"]
-            body = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": meta,
-                    "data": {"nonces": json.dumps(records, separators=(",", ":"))}}
-            try:
-                ksend("PUT" if current else "POST", path if current else path.rsplit("/", 1)[0], body)
-                return
-            except urllib.error.HTTPError as error:
-                if error.code != 409:
-                    raise PermissionError("fleet replay store is unavailable") from error
-        raise PermissionError("fleet replay store is busy; try again")
+    _replay.claim(sender, nonce)
 
 
 def console_authorizer(sender):
@@ -475,7 +553,7 @@ def _open(request, timeout):
 
 def _reason(error):
     try:
-        return str(json.loads(error.read().decode("utf-8", "replace") or "{}").get("error") or "")[:240]
+        return str(json.loads(error.read(REASON_MAX_BYTES).decode("utf-8", "replace") or "{}").get("error") or "")[:240]
     except Exception:
         return ""
 
@@ -492,9 +570,11 @@ def _json(url, method, path, body=None, token="", headers=None, timeout=TIMEOUT)
         request.add_header("Cookie", f"homestead_session={token}")
     for name, value in (headers or {}).items():
         request.add_header(name, value)
+    deadline = time.monotonic() + timeout
     try:
         with _open(request, timeout) as response:
-            return json.loads(response.read().decode() or "{}"), response
+            body = FETCH.read(response, ANSWER_MAX_BYTES, deadline, "the linked cluster's answer")
+            return json.loads(body.decode() or "{}"), response
     except urllib.error.HTTPError as error:
         reason = _reason(error)
         if error.code >= 500:
@@ -565,6 +645,48 @@ def check(target):
     return row
 
 
+def _check_into(row, checks):
+    try:
+        checks[row["id"]] = check(row)
+    finally:
+        with _checking_lock:
+            if _checking.get(row["id"]) is threading.current_thread():
+                del _checking[row["id"]]
+
+
+def _start_checks(rows, checks):
+    """A thread checking each member into checks, unless one from an earlier
+    page load still runs for it (a member that does not answer would gain a
+    thread per page load): that one is waited for instead."""
+    threads = []
+    for row in rows:
+        with _checking_lock:
+            running = _checking.get(row["id"])
+            if running is not None and running.is_alive():
+                threads.append(running)
+                continue
+            thread = _checking[row["id"]] = threading.Thread(target=_check_into, args=(row, checks), daemon=True)
+        thread.start()
+        threads.append(thread)
+    return threads
+
+
+def _wait(threads, end):
+    for thread in threads:
+        thread.join(max(0, end - time.monotonic()))
+
+
+def _pending(member_id):
+    """A member with no answer in this page load: its last known state, or
+    none, marked as still being checked while its check runs."""
+    last = _status.get(member_id) or {}
+    with _checking_lock:
+        running = member_id in _checking
+    if not running:
+        return last
+    return {**last, "checking": True, "error": last.get("error") or "still checking"}
+
+
 def follow_address(previous=()):
     """Move this Homestead's stored address onto its VIP when the stored one
     is only the address it was given before it had one - the node's own, or
@@ -591,36 +713,34 @@ def summary(via=None):
     me = state["self"]
     rows = [m for m in state.get("members", []) if m.get("id") != me]
     checks = {}
-
-    def run(row):
-        checks[row["id"]] = check(row)
-    threads = [threading.Thread(target=run, args=(row,), daemon=True) for row in rows]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join(6)
+    end = time.monotonic() + SUMMARY_WAIT     # one wait for all of them, not one each
+    _wait(_start_checks(rows, checks), end)
     # A member that has heard of a newer list than this one: bring it here.
-    ahead = max((c for c in checks.values() if c.get("reachable")), key=lambda c: c["revision"], default=None)
+    seen_now = dict(checks)   # a late check may still add to checks
+    ahead = max((c for c in seen_now.values() if c.get("reachable")), key=lambda c: c["revision"], default=None)
     if ahead and ahead["revision"] > int(state.get("revision") or 0):
-        source = next((m for m in rows if checks.get(m["id"]) is ahead), None)
+        source = next((m for m in rows if seen_now.get(m["id"]) is ahead), None)
         try:
             adopt(call(source, "GET", "/api/fleet/state", timeout=4))
             state, _ = _load(fresh=True)
         except Exception:
             pass
-        for row in state.get("members", []):
-            if row.get("id") != me and row["id"] not in checks:
-                checks[row["id"]] = check(row)
+        # The members only the newer list names: checked as the others were,
+        # within what is left of the same wait.
+        newcomers = [row for row in state.get("members", []) if row.get("id") != me and row["id"] not in seen_now]
+        _wait(_start_checks(newcomers, checks), end)
+    seen_now = dict(checks)
     out = []
     for m in state.get("members", []):
         mine = m.get("id") == me
-        seen = {} if mine else checks.get(m["id"]) or {}
+        seen = {} if mine else seen_now.get(m["id"]) or _pending(m["id"])
         out.append({"id": m["id"], "handle": m.get("handle", ""), "url": m.get("url", ""),
                     "name": _self_record(state)["name"] if mine else seen.get("name") or m.get("name", ""),
                     "self": mine, "version": VERSION if mine else seen.get("version", ""),
                     "reachable": True if mine else bool(seen.get("reachable")),
                     "error": "" if mine else seen.get("error", ""),
-                    "compatible": True if mine else (seen.get("protocol") in (0, PROTOCOL) or not seen.get("reachable"))})
+                    "compatible": True if mine else (seen.get("protocol") in (0, PROTOCOL) or not seen.get("reachable")),
+                    "checking": False if mine else bool(seen.get("checking"))})
     return {"self": me, "protocol": PROTOCOL, "linked": len(out) > 1, "members": out,
             "via": (via or {}).get("name", ""), "via_id": (via or {}).get("id", ""),
             "address": _self_record(state)["url"], "suggested_address": _address()}
@@ -1194,7 +1314,9 @@ def gather(what, local, user, role):
     try:
         results[view["self"]] = local()
     except Exception as error:
-        if what != "flow":
+        # The local Volumes read raises when Longhorn could not be read
+        # (#1002): this cluster is named, the others' rows are kept.
+        if what not in ("flow", "volumes"):
             raise
         missing.append({"id": view["self"], "name": tags[view["self"]]["name"], "error": str(error)[:200],
                         "state": "error"})

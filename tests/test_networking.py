@@ -152,7 +152,7 @@ class NetworkingTests(unittest.TestCase):
             self.objects[f"/apis/apps/v1/namespaces/lab/deployments/{meta['name']}"] = deployment
 
         def get(path):
-            return self.objects[path]
+            return self.answer(path)
 
         def send(method, path, body=None, **kwargs):
             self.sent.append((method, path, body))
@@ -304,12 +304,18 @@ class NetworkingTests(unittest.TestCase):
         self.assertEqual("cluster", prepared["vip_mode"])
         self.assertEqual("", prepared["lb_ip"])
 
+    def answer(self, path):
+        """The object at path; a path with none answers 404, as the API server does."""
+        if path not in self.objects:
+            raise urllib.error.HTTPError(path, 404, "not found", {}, None)
+        return self.objects[path]
+
     def failing(self, *paths):
         """A read of these paths times out; every other read answers."""
         def get(path):
             if path in paths:
                 raise TimeoutError("timed out")
-            return self.objects[path]
+            return self.answer(path)
         networking.bind(get, lambda method, path, body=None, **kwargs: self.sent.append((method, path, body)),
                         {"kube-system", "harvester-system"}, "lab", "192.0.2.242")
 
@@ -343,7 +349,7 @@ class NetworkingTests(unittest.TestCase):
             reads.append(path)
             if path == "/apis/apps/v1/deployments" and reads.count(path) > 1:
                 raise TimeoutError("timed out")   # inventory's read worked; create_service's own did not
-            return self.objects[path]
+            return self.answer(path)
         networking.bind(get, lambda method, path, body=None, **kwargs: self.sent.append((method, path, body)),
                         {"kube-system", "harvester-system"}, "lab", "192.0.2.242")
         with self.assertRaisesRegex(ValueError, "could not read the cluster's Deployments"):

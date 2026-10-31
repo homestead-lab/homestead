@@ -757,7 +757,8 @@ class RateLimitTests(unittest.TestCase):
                 raise self.limited()
             class Answer:
                 headers = {}
-                def read(self): return b'{"tags": ["1.0.0"]}'
+                body = [b'{"tags": ["1.0.0"]}']
+                def read(self, size=-1): return self.body.pop() if self.body else b""
                 def __enter__(self): return self
                 def __exit__(self, *a): return False
             return Answer()

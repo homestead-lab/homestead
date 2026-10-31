@@ -57,6 +57,7 @@ import urllib.parse
 import homestead_agent_audit as AUDIT
 import homestead_cache as CACHE
 import homestead_http as HTTP
+import homestead_read_deadline as DEADLINE
 import homestead_self_data_cookie as MOVE_COOKIE
 
 MODULES = (
@@ -370,12 +371,34 @@ def _owned(cookie, module, owned):
     return cookie
 
 
+def call(route, request):
+    """What route answers request; a 503 when any of the request's Kubernetes
+    reads ran out of its time (homestead_read_deadline, #984), even if the
+    route caught the error, or failed after it: a page read in part is not
+    shown as complete. 503 as the account store's own (auth.js): Cloudflare
+    puts its own page in place of an origin's 502 or 504."""
+    cuts = DEADLINE.cuts()
+    try:
+        answer = route.handler(request)
+    except Exception as error:
+        if not isinstance(error, DEADLINE.Spent) and DEADLINE.cuts() == cuts:
+            raise
+        return _out_of_time()
+    return _out_of_time() if DEADLINE.cuts() > cuts else answer
+
+
+def _out_of_time():
+    return Reply(503, {"error": DEADLINE.MESSAGE, "unavailable": True})
+
+
 def answer(handler, answer, module):
     """Send what the route in module returned. A Reply's cookies and headers are
     all checked before any is added, after what the guard already set (a
-    refreshed session): each cookie must be one module owns (OWN_COOKIES)."""
+    refreshed session): each cookie must be one module owns (OWN_COOKIES).
+    A download is streamed without the request's read deadline."""
     if isinstance(answer, Stream):
         check_answer(200, answer.ctype)
+        DEADLINE.lift()
         handler._send_stream(answer)
     elif isinstance(answer, Raw):
         check_answer(200, answer.ctype)
@@ -400,6 +423,13 @@ _owned_by = [None, {}]
 # be served from the last one (#705). A write Homestead makes to what they show
 # drops them at once (homestead_kube.fresh_reads).
 PAGE_SECONDS = 20
+# The pages' keys, and how long each page keeps its own: any reader of them
+# (a loop, /metrics, a dialog) is served the snapshot's part, or keeps its
+# read as long as the page would, never less (#978).
+CACHE.at_least(PAGE_SECONDS, "nodes", "wl", "vol", "stor", "ov", "vms")
+CACHE.at_least(15, "lhcap")
+# For a check made just before a write: the cluster as it is (CACHE.fresh).
+fresh = CACHE.fresh
 _cached = [lambda key, seconds, fn: fn()]
 _store = [{}]
 _snapshot = [lambda key: None]
@@ -554,9 +584,25 @@ def find(method, path):
     route = routes.get((method, path))
     if route is not None or "*" in path:
         return route
-    stems = [p for m, p in routes if m == method and p.endswith("/*") and path.startswith(p[:-1])
+    stems = [p for p in _prefixes(routes).get(method, ()) if path.startswith(p[:-1])
              and _REST.fullmatch(path[len(p) - 1:])]
     return routes[(method, max(stems, key=len))] if stems else None
+
+
+_prefix_index = {"table": None, "size": -1, "index": {}}
+
+
+def _prefixes(routes):
+    """The prefix routes ("/x/*") by method, kept while the table is the same:
+    every static file missed the exact routes and scanned them all (#985)."""
+    cached = _prefix_index
+    if cached["table"] is not routes or cached["size"] != len(routes):
+        index = {}
+        for m, p in routes:
+            if p.endswith("/*"):
+                index.setdefault(m, []).append(p)
+        cached.update(table=routes, size=len(routes), index=index)
+    return cached["index"]
 
 
 def role(path, method):

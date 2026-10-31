@@ -19,6 +19,15 @@ const ROLE_TABLE = [
 ];
 const USERS_FILTER = { role: "" };
 
+
+/* Settings › About's cluster VIP: the default workload VIP, else the
+   platform's own. lb_ip null means Your VIPs couldn't be read: unknown,
+   never the platform address standing in for it. */
+function clusterVipText(overview, info, hostsUnread) {
+  if (!hostsUnread && overview.lb_ip === null) return "unknown";
+  return (hostsUnread ? "" : overview.lb_ip) || info.vip || "—";
+}
+
 function userRow(u, admin, count) {
   const me = u.name === ME;
   const role = !admin ? `<span class="${roleClass(u.role)} rolechip">${esc(ROLE_NAMES[u.role] || u.role)}</span>`
@@ -317,7 +326,7 @@ async function viewSettings() {
           <div><span>Kubernetes</span><b>${esc(info.kubernetes || "—")}</b></div>
           <div><span>Default namespace</span><b class="mono">${esc(info.namespace || "lab")}</b></div>
           <div><span>Storage class</span><b class="mono">${esc(info.storage_class || "—")}</b></div>
-          <div><span>Cluster VIP</span><b class="mono">${esc((hostsUnread ? "" : overview.lb_ip) || info.vip || "—")}</b></div>
+          <div><span>Cluster VIP</span><b class="mono">${esc(clusterVipText(overview, info, hostsUnread))}</b></div>
           <div><span>Hosts ready</span><b>${hostsUnread ? `<span class="dim" title="${esc(hostsUnread)}">not read</span>` : `${overview.nodes_ready}/${overview.nodes_total}`}</b></div>
           <div><span>Node probe ${tip("Homestead keeps the probe's scripts in step with its own release, so an upgrade needs no kubectl. Installation and removal live under Cluster → Add-ons because the SMART sidecar is privileged.")}</span>
             <b>${esc(probeWord(info.node_probe?.state))}</b><small>${esc(info.node_probe?.detail || "")}</small></div>
@@ -545,8 +554,8 @@ window.selfDataCloseReview = async id => {
     if (review.id !== id || !review.capacity_token) throw Error("The review is incomplete. Check saved jobs again.");
     request.review = review;
     childModal("Close data move recovery", UI.lead(esc(review.detail)) +
-      UI.facts([["Homestead runs on", esc(review.source)], ["Kept, unused", esc(review.destination)]]) +
-      UI.ack("selfDataCloseConsent", "Close this move's record; keep both volumes and its audit", {onchange:"selfDataCloseReady()"}) +
+      UI.facts((review.facts || [["Homestead runs on", review.source], ["Kept, unused", review.destination]]).map(([label, value]) => [label, esc(value)])) +
+      UI.ack("selfDataCloseConsent", review.ack || "Close this move's record; keep both volumes and its audit", {onchange:"selfDataCloseReady()"}) +
       UI.actions(UI.cancel("Back") + UI.button("Close recovery", "selfDataCloseStart()", {kind:"pri",id:"selfDataCloseGo",disabled:true})), true, "operation-review");
   } catch (e) {
     if (selfDataCloseDialog === request) childModal("Close data move recovery", `<p role="alert">${esc(e.message)}</p>` + UI.actions(UI.cancel("Back")), true, "operation-review");
@@ -1151,8 +1160,9 @@ async function selfHealthPaint() {
       ${h.loops.map(l => row(l.label, HEALTH_TONE[l.state] || "", l.state === "ok" ? "running" : l.state,
         l.state === "standby" ? "Runs on the leader copy." : `Last done ${esc(agoText(l.last_ok))}` + (l.error ? ` · <span class="badtext">${esc(l.error)}</span>` : ""))).join("")}
       ${row("Node probe", !probe.installed ? "neutral" : probe.ready < probe.desired || probe.reporting < probe.desired ? "warn" : "ok",
-        !probe.installed ? "not installed" : `${probe.ready}/${probe.desired} hosts`,
-        !probe.installed ? "Temperatures, host devices, every disk and drive health come from it."
+        probe.installed == null && probe.error ? "unknown" : !probe.installed ? "not installed" : `${probe.ready}/${probe.desired} hosts`,
+        probe.installed == null && probe.error ? esc(probe.error)
+          : !probe.installed ? "Temperatures, host devices, every disk and drive health come from it."
           : `${probe.reporting} reporting · drive health on ${probe.smart} · ${esc(probe.detail || "")}`,
         "")}
       ${row("Samba (network shares)", !samba.installed || !samba.enabled ? "neutral" : samba.ready < samba.desired ? "warn" : "ok",
@@ -1174,7 +1184,8 @@ async function selfHealthPaint() {
               ${h.addresses.clashes.length === 1 ? "is" : "are"} on ${esc(h.addresses.clashes[0].ip)}, the cluster's own address (${esc(h.addresses.clashes[0].owner)}).
               Hosts join through it, so give ${h.addresses.clashes.length === 1 ? "it an address" : "them addresses"} of their own: Edit → Network.</span>`
           : `Apps are kept off the cluster's own address${(h.addresses.platform || []).length ? ` (<span class="mono">${esc(h.addresses.platform.join(", "))}</span>)` : ""}.`) : ""}
-      ${row("Backup storage", h.backups?.ready ? "ok" : h.backups?.deployed ? "warn" : "neutral",
+      ${h.backups?.error ? row("Backup storage", "neutral", "unknown", esc(h.backups.error))
+        : row("Backup storage", h.backups?.ready ? "ok" : h.backups?.deployed ? "warn" : "neutral",
         h.backups?.ready ? "ready" : h.backups?.deployed ? "starting" : "none", h.backups?.endpoint ? `<span class="mono">${esc(h.backups.endpoint)}</span>` : "Set up under Data protection.")}
       ${h.mqtt?.state && h.mqtt.state !== "off" ? row("MQTT", h.mqtt.state === "publishing" ? "ok" : "warn", h.mqtt.state,
         h.mqtt.error ? `<span class="badtext">${esc(h.mqtt.error)}</span>` : esc(h.mqtt.detail || "")) : ""}

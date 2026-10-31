@@ -60,12 +60,14 @@ SAVE_EVERY = 300
 FORGET_AFTER = 7 * 86400     # an app gone this long is dropped from the history
 HTTPS_PORTS = (443, 8443, 9443, 5001)
 MAX_PORTS = 4
+# What a round waits beyond its slowest target's bound (target_bound).
+ROUND_SLACK = 2
 VM_PORTS = (22, 3389, 443, 80, 8006, 8123, 9443)
 DISCOVER_TIMEOUT = 1.2
 PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,199}$")
 USER_AGENT = "Homestead-uptime/1"
 _lock = threading.Lock()
-_state = {"loaded": False, "apps": {}, "saved_at": 0.0, "observed_at": 0.0, "mtime": None}
+_state = {"loaded": False, "apps": {}, "saved_at": 0.0, "observed_at": 0.0, "mtime": None, "closed": {}}
 
 
 # How an app's own check is saved - an annotation on its Deployment, which
@@ -79,7 +81,7 @@ def bind(data_dir="/data", setting=None):
     if setting is not None:
         save_setting = setting
     with _lock:
-        _state.update(loaded=False, apps={}, saved_at=0.0, observed_at=0.0, mtime=None)
+        _state.update(loaded=False, apps={}, saved_at=0.0, observed_at=0.0, mtime=None, closed={})
 
 
 def _path():
@@ -105,7 +107,7 @@ def _load(fresh=False):
         _state["apps"] = data.get("apps", {}) if isinstance(data, dict) else {}
     except (OSError, ValueError):
         _state["apps"] = {}
-    _state["loaded"] = True
+    _state["loaded"], _state["closed"] = True, {}
     return _state["apps"]
 
 
@@ -209,6 +211,11 @@ def vm_target(vm, learned=None):
             "asks": asks, "discover": True, "timeout": DISCOVER_TIMEOUT}, ""
 
 
+# Why an app whose Services could not be read is not asked this round: its
+# record stays as it was (a down app stays down), never "off".
+PORTS_UNREAD = "its Services couldn't be read, so where to ask it is not known"
+
+
 def target(w):
     """Where and how to ask one app, or None with the reason it is not checked."""
     if w.get("platform") or w.get("self") or w.get("homestead") or w.get("site"):
@@ -218,6 +225,8 @@ def target(w):
         return None, "checks are off for this app"
     if not w.get("desired"):
         return None, "stopped"
+    if w.get("ports") is None and "ports" in w:
+        return None, PORTS_UNREAD
     ports = [p for p in w.get("ports") or [] if p.get("ip") and p.get("port") and (p.get("protocol") or "TCP") == "TCP"]
     if not ports:
         return None, "no address to ask"
@@ -240,13 +249,26 @@ def target(w):
             "path": chosen.get("path", "/"), "strict": chosen["mode"] == "http"}, ""
 
 
+def target_bound(t):
+    """How long asking all of t's ports may take: each probe ends within
+    twice its timeout (probe()), one after another."""
+    return len(t.get("asks") or [t]) * 2 * (t.get("timeout") or TIMEOUT)
+
+
 def ask_ports(t, ask=None):
     """Ask each of an app's ports in turn: the first that answers is the app
-    answering. The result names the port asked last."""
+    answering. The result names the port asked last. All of them together
+    end by target_bound(t): each probe gets at most half the time left (a
+    probe ends within twice its timeout), and none starts once it is spent."""
     ask = ask or probe
+    timeout = t.get("timeout") or TIMEOUT
+    deadline = time.monotonic() + target_bound(t)
     result = None
     for one in t.get("asks") or [t]:
-        single = {**t, **one}
+        left = deadline - time.monotonic()
+        if left <= 0 and result is not None:
+            break
+        single = {**t, **one, "timeout": max(0.01, min(timeout, left / 2))}
         result = {**ask(single), "host": single["host"], "port": single["port"], "scheme": single["scheme"]}
         if result["ok"]:
             break
@@ -278,37 +300,49 @@ def _why(error):
 
 
 def probe(t, timeout=TIMEOUT):
-    """Ask once. {ok, ms, code, error}."""
+    """Ask once. {ok, ms, code, error}. The whole check, connection
+    included, ends by started + 2 x timeout."""
     timeout = t.get("timeout") or timeout
     if t["kind"] == "tcp":
         return _tcp(t["host"], t["port"], timeout)
     started = time.monotonic()
-    conn = None
+    deadline = started + 2 * timeout
+    conn = cut = None
     connected = None
     try:
+        try:
+            # The connection on its own first: refused or unreachable is down.
+            raw = socket.create_connection((t["host"], t["port"]), timeout=timeout)
+        except OSError as e:
+            return {"ok": False, "ms": None, "code": None, "error": _why(e)}
+        connected = int((time.monotonic() - started) * 1000)
+        cut = _Cut(raw, deadline)
+        sock = raw
         if t["scheme"] == "https":
             context = ssl.create_default_context()
             context.check_hostname = False
             context.verify_mode = ssl.CERT_NONE
-            conn = http.client.HTTPSConnection(t["host"], t["port"], timeout=timeout, context=context)
-        else:
-            conn = http.client.HTTPConnection(t["host"], t["port"], timeout=timeout)
-        try:
-            # The connection on its own first: refused or unreachable is down.
-            sock = socket.create_connection((t["host"], t["port"]), timeout=timeout)
-            sock.close()
-        except OSError as e:
-            return {"ok": False, "ms": None, "code": None, "error": _why(e)}
-        connected = int((time.monotonic() - started) * 1000)
-        conn.request("GET", t["path"], headers={"User-Agent": USER_AGENT, "Accept": "*/*", "Connection": "close"})
+            # The handshake after the TLS socket is in the watchdog's hands:
+            # wrapping takes the descriptor over from raw.
+            sock = context.wrap_socket(raw, server_hostname=t["host"], do_handshake_on_connect=False)
+            cut.use(sock)
+            sock.do_handshake()
+        conn = http.client.HTTPConnection(t["host"], t["port"], timeout=timeout)
+        conn.sock = sock
+        conn.request("GET", t["path"], headers={"Host": _host(t["host"], t["port"], t["scheme"]),
+                                                "User-Agent": USER_AGENT, "Accept": "*/*", "Connection": "close"})
         response = conn.getresponse()
         code = response.status
         response.read(512)
+        if cut.fired.is_set():          # cut short: what was read is not an answer
+            raise socket.timeout("timed out")
         ms = int((time.monotonic() - started) * 1000)
         if code >= 500:
             return {"ok": False, "ms": ms, "code": code, "error": f"HTTP {code}"}
         return {"ok": True, "ms": ms, "code": code, "error": ""}
     except (http.client.HTTPException, ssl.SSLError, OSError) as e:
+        if cut is not None and cut.fired.is_set():
+            e = socket.timeout("timed out")
         # It took the connection but gave no HTTP answer: a database, MQTT, a
         # game server, which close, reset or wait. Unless HTTP was asked for,
         # an accepted connection is an app that answers.
@@ -318,8 +352,63 @@ def probe(t, timeout=TIMEOUT):
             return {"ok": False, "ms": None, "code": None, "error": f"no HTTP answer ({_why(e)})"}
         return {"ok": False, "ms": None, "code": None, "error": _why(e)}
     finally:
+        if cut is not None:
+            cut.cancel()
+            cut.close()
         if conn is not None:
             conn.close()
+
+
+def _host(host, port, scheme):
+    """The Host header: the port only when it is not the scheme's own, as
+    HTTPSConnection would send it (the request goes out on our own socket)."""
+    return host if int(port) == {"http": 80, "https": 443}.get(scheme) else f"{host}:{port}"
+
+
+class _Cut:
+    """Shuts the probe's socket at deadline (time.monotonic()), whatever it
+    is waiting for: http.client's timeout is per wait on the socket, so an
+    answer that trickles in (a TLS handshake, a status line, then up to 100
+    headers of 64 KB) kept a probe, and its thread, going for as long as the
+    far end liked. It holds the socket itself, not conn.sock, which is set
+    late; under TLS, use() hands it the wrapping socket, which owns the
+    descriptor from then on."""
+
+    def __init__(self, sock, deadline):
+        self.fired = threading.Event()
+        self._lock = threading.Lock()
+        self._sock = sock
+        self._timer = threading.Timer(max(0.0, deadline - time.monotonic()), self._fire)
+        self._timer.daemon = True
+        self._timer.start()
+
+    def _shut(self):
+        try:
+            # The plain socket's own shutdown: under TLS it ends the read too.
+            socket.socket.shutdown(self._sock, socket.SHUT_RDWR)
+        except OSError:
+            pass
+
+    def _fire(self):
+        with self._lock:
+            self.fired.set()
+            self._shut()
+
+    def use(self, sock):
+        with self._lock:
+            self._sock = sock
+            if self.fired.is_set():     # it fired while the socket changed hands
+                self._shut()
+
+    def cancel(self):
+        self._timer.cancel()
+
+    def close(self):
+        with self._lock:
+            try:
+                self._sock.close()
+            except OSError:
+                pass
 
 
 def _hour(now):
@@ -374,8 +463,12 @@ def observe(workloads, now=None, ask=probe, vms=None):
     threads = [threading.Thread(target=run, args=(key, t), daemon=True) for key, t, _ in rows if t]
     for thread in threads:
         thread.start()
+    # One wait for the whole round (N stuck checks used to cost N times it),
+    # as long as its slowest target may take: a target with several ports
+    # asked one after another ends by its own bound, not by one probe's.
+    end = time.monotonic() + max((target_bound(t) for _, t, _ in rows if t), default=0) + ROUND_SLACK
     for thread in threads:
-        thread.join(TIMEOUT * 2 + 2)
+        thread.join(max(0, end - time.monotonic()))
     with _lock:
         apps = _load()
         _state["observed_at"] = now
@@ -383,6 +476,8 @@ def observe(workloads, now=None, ask=probe, vms=None):
         for key, t, why in rows:
             app = apps.setdefault(key, {"state": "unknown", "hours": {}})
             app["seen"] = round(now) if not app.get("seen") or now - app["seen"] > 3600 else app["seen"]
+            if not t and why == PORTS_UNREAD:
+                continue
             if not t:
                 if app.get("state") not in ("off", None) or app.get("why") != why:
                     changed = changed or app.get("state") in ("down",)
@@ -407,18 +502,43 @@ def observe(workloads, now=None, ask=probe, vms=None):
             result = {k: v for k, v in result.items() if k not in ("host", "port", "scheme")}
             closing = str(_hour(now)) not in app.get("hours", {})
             changed = _record(app, result, now) or closing or changed
+            kept = _state["closed"].get(key)
+            if kept and not kept["today"] <= _hour(now) < kept["today"] + 86400:
+                _state["closed"].pop(key)       # the clock went back into a day kept as closed
         oldest = _hour(now) - KEEP_HOURS * 3600
         for key in list(apps):
-            apps[key]["hours"] = {h: v for h, v in apps[key].get("hours", {}).items() if int(h) >= oldest}
+            # In place, so what report() keeps of the closed days stays tied to
+            # these hours; forgetting one changes the thirty days' figure.
+            hours = apps[key].setdefault("hours", {})
+            gone = [h for h in hours if int(h) < oldest]
+            for h in gone:
+                del hours[h]
+            if gone:
+                _state["closed"].pop(key, None)
             if now - apps[key].get("seen", now) > FORGET_AFTER:
                 apps.pop(key)
+                _state["closed"].pop(key, None)
         if changed or now - _state["saved_at"] >= SAVE_EVERY:
             _save(now)
         return apps
 
 
-def summary(app, now=None):
-    """What a card shows: state, the last answer, a 24-hour strip, uptime over 24 h and 30 days."""
+def _day_mark(checks, misses, slow):
+    """One day of the strip: down if any check that day missed enough to count
+    (a tenth of them), slow if most were slow."""
+    return None if not checks else "down" if misses * 10 >= checks else "slow" if slow * 2 >= checks \
+        else "dip" if misses else "up"
+
+
+def _share(checks, misses):
+    return None if not checks else round(100 * (checks - misses) / checks, 2)
+
+
+def summary(app, now=None, closed=None):
+    """What a card shows: state, the last answer, a 24-hour strip, uptime over 24 h and 30 days.
+
+    closed is what _closed() kept of the days before today, so only today's
+    hours are added up; without it every hour is, once (#979)."""
     now = now or time.time()
     hours = app.get("hours", {})
     this = _hour(now)
@@ -426,35 +546,82 @@ def summary(app, now=None):
     for i in range(STRIP_HOURS - 1, -1, -1):
         row = hours.get(str(this - i * 3600))
         strip.append(None if not row or not row[0] else "down" if row[1] else "slow" if row[2] * 2 >= row[0] else "up")
-
-    def share(rows):
-        checks = sum(r[0] for r in rows)
-        return None if not checks else round(100 * (checks - sum(r[1] for r in rows)) / checks, 2)
-
-    # The last 30 days, one mark a day: down if any check that day missed
-    # enough to count (a tenth of them), slow if most were slow.
+    # The last 30 days, one mark a day.
     today = int(now // 86400 * 86400)
-    days = []
-    for i in range(29, -1, -1):
-        start = today - i * 86400
-        rows = [v for h, v in hours.items() if start <= int(h) < start + 86400]
+    if closed is not None:
+        rows = [row for row in (hours.get(str(today + i * 3600)) for i in range(24)) if row]
         checks, misses, slow = (sum(r[k] for r in rows) for k in range(3))
-        days.append(None if not checks else "down" if misses * 10 >= checks else "slow" if slow * 2 >= checks
-                    else "dip" if misses else "up")
-    recent = [v for h, v in hours.items() if int(h) > this - STRIP_HOURS * 3600]
+        days = closed["days"] + [_day_mark(checks, misses, slow)]
+        recent = rows + [row for row in (hours.get(str(t)) for t in range(this - (STRIP_HOURS - 1) * 3600, today, 3600)) if row]
+        uptime_24h = _share(sum(r[0] for r in recent), sum(r[1] for r in recent))
+        uptime_30d = _share(closed["checks"] + checks, closed["misses"] + misses)
+    else:
+        first = today - 29 * 86400
+        by_day = [[] for _ in range(30)]
+        recent = []
+        for h, v in hours.items():
+            t = int(h)
+            if first <= t < today + 86400:
+                by_day[(t - first) // 86400].append(v)
+            if t > this - STRIP_HOURS * 3600:
+                recent.append(v)
+        days = [_day_mark(*(sum(r[k] for r in rows) for k in range(3))) for rows in by_day]
+        uptime_24h = _share(sum(r[0] for r in recent), sum(r[1] for r in recent))
+        uptime_30d = _share(sum(r[0] for r in hours.values()), sum(r[1] for r in hours.values()))
     state = app.get("state", "unknown")
     last = app.get("last") or {}
     if state == "up" and last.get("ms") and last["ms"] > SLOW_MS:
         state = "slow"
     return {"state": state, "since": app.get("since"), "why": app.get("why", ""), "target": app.get("target", ""),
             "port": app.get("port"),
-            "last": last, "strip": strip, "days": days, "uptime_24h": share(recent), "uptime_30d": share(list(hours.values()))}
+            "last": last, "strip": strip, "days": days, "uptime_24h": uptime_24h, "uptime_30d": uptime_30d}
+
+
+def _closed(hours, today):
+    """The days before today, which no check adds to any more: their marks and
+    their checks and misses, or None when the hours are not all ones a check
+    writes - a count on the hour, in whole numbers, none after today - and so
+    are added up in full each time."""
+    first = today - 29 * 86400
+    days = [[0, 0, 0] for _ in range(29)]
+    checks = misses = 0
+    for h, v in hours.items():
+        try:
+            t = int(h)
+        except ValueError:
+            return None
+        if (str(t) != h or t % 3600 or t >= today + 86400 or type(v) is not list or len(v) != 3
+                or not all(type(n) is int for n in v)):
+            return None
+        if t < today:
+            checks, misses = checks + v[0], misses + v[1]
+            if t >= first:
+                day = days[(t - first) // 86400]
+                day[0], day[1], day[2] = day[0] + v[0], day[1] + v[1], day[2] + v[2]
+    return {"hours": hours, "today": today, "days": [_day_mark(*day) for day in days],
+            "checks": checks, "misses": misses}
 
 
 def report(now=None):
+    """Every app's summary. What the closed days add up to is kept per app until
+    midnight, until an hour is forgotten, or until the file is read again, so
+    each call adds up only today (#979)."""
     with _lock:
         apps = _load(fresh=time.time() - _state["observed_at"] > 3 * CHECK_EVERY)
-        return {key: summary(app, now) for key, app in apps.items()}
+        at = now or time.time()
+        today = int(at // 86400 * 86400)
+        out = {}
+        for key, app in apps.items():
+            hours = app.get("hours", {})
+            kept = _state["closed"].get(key)
+            if not kept or kept["hours"] is not hours or kept["today"] != today:
+                kept = _closed(hours, today)
+                if kept is None:
+                    _state["closed"].pop(key, None)
+                else:
+                    _state["closed"][key] = kept
+            out[key] = summary(app, at, kept)
+        return out
 
 
 def alert_facts(rep):

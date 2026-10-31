@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.parse
 
+import homestead_kube as KUBE
 import homestead_lhrebuild as LHREBUILD
 import homestead_operations as OPS
 import homestead_rebalance as REBALANCE
@@ -375,15 +376,39 @@ def volume_copies():
     return out
 
 
+FILESYSTEMS_KEY = "volume-filesystems"
+
+
+def _filesystems(active_claims):
+    """VOLUME_USAGE.collect for these claims, kept 20 s under one key. A kept
+    reading for another set of claims is read again, never reused."""
+    identity = repr(sorted((k, p.get("metadata", {}).get("uid"), p.get("spec", {}).get("volumeName"))
+                           for k, p in active_claims.items()))
+
+    def read():
+        return {"claims": identity, "samples": VOLUME_USAGE.collect(kget, active_claims)}
+    held = homestead_routes.cached(FILESYSTEMS_KEY, 20, read)
+    if held.get("claims") != identity:
+        homestead_routes.forget(FILESYSTEMS_KEY)
+        held = homestead_routes.cached(FILESYSTEMS_KEY, 20, read)
+        if held.get("claims") != identity:      # another set won the race
+            held = read()
+    return held["samples"]
+
+
 def get_volumes(pods=None):
+    """Every Longhorn volume, for the Volumes page, the hosts and the overview.
+    No Longhorn is no volumes; a read that failed raises, so nothing reads it
+    as a cluster with none (#1002). A failed replica read leaves each row's
+    copies None: where they are is not known, not that there are none."""
     try:
-        vols = kget("/apis/longhorn.io/v1beta2/volumes").get("items", [])
-    except Exception:
-        return []
+        vols = KUBE.items("/apis/longhorn.io/v1beta2/volumes", optional_group="longhorn.io", read=kget)
+    except Exception as error:
+        raise RuntimeError(f"Longhorn's volumes could not be read: {str(error)[:160] or type(error).__name__}") from error
     try:
         copies = volume_copies()
     except Exception:
-        copies = {}
+        copies = None
     try:
         refs = claim_references(pods)
     except Exception:
@@ -406,10 +431,11 @@ def get_volumes(pods=None):
         claim = pvcs.get(key)
         if status.get("state") == "attached" and claim and claim.get("spec", {}).get("volumeName") == volume["metadata"]["name"]:
             active_claims[key] = claim
-    # Cache only telemetry, keyed by claim identities/bindings; never re-label
-    # an old retained copy with the replacement claim's filesystem usage.
-    usage_key = "volume-filesystems:" + repr(sorted((k, p.get("metadata", {}).get("uid"), p.get("spec", {}).get("volumeName")) for k, p in active_claims.items()))
-    filesystems = homestead_routes.cached(usage_key, 20, lambda: VOLUME_USAGE.collect(kget, active_claims)) if active_claims else {}
+    # Cache only telemetry, for the claim identities/bindings it was read for;
+    # never re-label an old retained copy with the replacement claim's
+    # filesystem usage. One key, whose value names those claims, so attach
+    # sets that come and go do not each leave a key behind (#986).
+    filesystems = _filesystems(active_claims) if active_claims else {}
     # A cached observation must also expire if telemetry stops arriving.
     filesystems = {key: sample for key, sample in filesystems.items()
                    if -5 <= time.time() - sample["sample_at"] <= 120}
@@ -434,7 +460,9 @@ def get_volumes(pods=None):
         if unclaimed or ks.get("lastPodRefAt"):
             wls = []
         filesystem = filesystems.get((ks.get("namespace", ""), ks.get("pvcName", ""))) if not unclaimed and st.get("state") == "attached" else None
-        moving = _moving_copy(v, len({c["node"] for c in copies.get(v["metadata"]["name"], []) if c.get("whole")}))
+        mine = None if copies is None else copies.get(v["metadata"]["name"], [])
+        whole = None if mine is None else len({c["node"] for c in mine if c.get("whole")})
+        moving = _moving_copy(v, whole)
         if moving:
             health_reason = (f"moving a copy to another host: the new one is built first, and the volume keeps its "
                              f"{moving} whole cop{'y' if moving == 1 else 'ies'} meanwhile")
@@ -457,13 +485,14 @@ def get_volumes(pods=None):
             "node": st.get("currentNodeID", ""),
             "size_gb": round(int(sp.get("size", 0) or 0) / 1024**3, 1),
             "replicas": moving or sp.get("numberOfReplicas", 0),
-            "copies": copies.get(v["metadata"]["name"], []),
+            # None when the replicas could not be read.
+            "copies": mine,
             # Detached with fewer whole copies than it asks for: Longhorn
             # repairs that only offline, or while something uses the volume.
-            "copies_short": (lambda whole: {"whole": whole, "wanted": int(sp.get("numberOfReplicas") or 0),
-                                            "offline": sp.get("offlineRebuilding") or "ignored"}
-                             if st.get("state") == "detached" and whole < int(sp.get("numberOfReplicas") or 0) else None)(
-                len({c["node"] for c in copies.get(v["metadata"]["name"], []) if c.get("whole")})),
+            "copies_short": ({"whole": whole, "wanted": int(sp.get("numberOfReplicas") or 0),
+                              "offline": sp.get("offlineRebuilding") or "ignored"}
+                             if whole is not None and st.get("state") == "detached"
+                             and whole < int(sp.get("numberOfReplicas") or 0) else None),
             "engine": str(sp.get("dataEngine") or "v1").lower(),
             "actual_gb": round(int(st.get("actualSize", 0) or 0) / 1024**3, 2),
             "filesystem": filesystem,

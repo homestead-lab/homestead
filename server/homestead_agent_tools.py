@@ -616,7 +616,9 @@ TOOLS = [
          "with ns and name kept and what you need changed: containers (each one's image, env, ports, volumes, "
          "cpu, memory), replicas, placement, node, failover, priority (critical, normal or low, or group to follow its group's tier), monitoring. "
          "Values the app keeps in its Secret (secret_env) are masked unless this key can edit containers; "
-         "a masked value sent back unchanged keeps what the Secret holds.",
+         "a masked value sent back unchanged keeps what the Secret holds. Send each container's secret_env "
+         "back with it: only a variable named there and left out of env is removed; one not named is kept. "
+         "When secret_env_unread is set the Secret could not be read, and a save is refused until it can.",
          {"namespace": NS, "name": NAME_ARG}, ["namespace", "name"], run=_settings),
     Tool("list_events", "Events", "read", READ, "Kubernetes' recent events for a container or VM, newest first.",
          {"namespace": NS, "name": NAME_ARG}, ["namespace", "name"], run=_events),
@@ -806,7 +808,7 @@ TOOLS = [
     Tool("dismiss_job", "Dismiss a job", "containers:control", CHANGE,
          "Takes a finished job off the list, or every finished one with all: true.", {"id": S, "all": B},
          run=_post("/api/operations/dismiss", {"id": "id", "all": "all"})),
-    Tool("list_cluster_events", "Cluster events", "read", READ, "Kubernetes' recent warnings and events across the cluster.",
+    Tool("list_cluster_events", "Cluster events", "read", READ, "Kubernetes' newest warnings and events across the cluster; total: how many it read, limited: it stopped before the end.",
          run=_get("/api/events")),
     Tool("get_change_history", "Change history", "read", READ,
          "What changed in an app and when - each change can be undone with undo_change.", {"namespace": NS, "name": NAME_ARG},

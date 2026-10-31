@@ -47,6 +47,10 @@ UNIFI_MODELS = (("UDM", "router"), ("UDR", "router"), ("UCG", "router"), ("UXG",
                 ("E7", "access-point"), ("UVC", "cctv"), ("UNVR", "nas"), ("UNAS", "nas"), ("UCK", "server"))
 DATA_KEY = "ipam.json"
 MAX_SUBNET_HOSTS = 1024
+# Far more VLANs than a home or small office runs, and it keeps the record (one
+# ConfigMap, at most 1 MiB, which also holds each subnet's last scan) and a
+# save's checks small. An 8 MB request body held about 150k rows before.
+MAX_SUBNETS = 64
 SCAN_PORTS = (22, 53, 80, 443, 445, 554, 1883, 3389, 5000, 5353, 8006, 8080, 8123, 8443, 9000, 9100)
 SCAN_TIMEOUT = 0.5
 _scans = {}
@@ -145,19 +149,33 @@ def _clean_subnet(row):
 
 
 def save_subnets(rows):
-    clean = [_clean_subnet(row) for row in rows or []]
+    rows = rows or []
+    if len(rows) > MAX_SUBNETS:
+        raise ValueError(f"{len(rows)} subnets were sent; at most {MAX_SUBNETS} can be documented, "
+                         f"so remove {len(rows) - MAX_SUBNETS} and save again")
+    clean = [_clean_subnet(row) for row in rows]
     cidrs = [row["cidr"] for row in clean]
     if len(set(cidrs)) != len(cidrs):
         raise ValueError("a subnet is listed twice")
-    for a in clean:
-        for b in clean:
-            if a is not b and ipaddress.ip_network(a["cidr"]).overlaps(ipaddress.ip_network(b["cidr"])):
-                raise ValueError(f"{a['cidr']} and {b['cidr']} overlap")
+    _no_overlaps(cidrs)
 
     def change(data):
         data["subnets"] = clean
         return {"ok": True, "subnets": clean}
     return update(change)
+
+
+def _no_overlaps(cidrs):
+    """Sorted by first address, a subnet overlaps an earlier one only if it
+    starts before the furthest end so far: one pass, not every pair."""
+    ranges = sorted((int(n.network_address), int(n.broadcast_address), str(n))
+                    for n in map(ipaddress.ip_network, cidrs))
+    furthest = None
+    for start, end, cidr in ranges:
+        if furthest is not None and start <= furthest[0]:
+            raise ValueError(f"{furthest[1]} and {cidr} overlap")
+        if furthest is None or end > furthest[0]:
+            furthest = (end, cidr)
 
 
 def suggested_subnets():
@@ -289,6 +307,8 @@ def _cover_nodes(data, facts):
     def change(current):
         have = [ipaddress.ip_network(s["cidr"]) for s in current["subnets"]]
         for cidr in missing:
+            if len(current["subnets"]) >= MAX_SUBNETS:
+                break
             if not any(ipaddress.ip_network(cidr).overlaps(net) for net in have):
                 current["subnets"].append(_clean_subnet({"cidr": cidr, "name": "Cluster LAN", "note": AUTO_NOTE}))
         return {"ok": True}

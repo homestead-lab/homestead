@@ -14,7 +14,6 @@ component disabled with --disable, never after a skipped file - and the
 files themselves are left in place. Each node is done once; what was done is
 kept in /data and logged.
 """
-import json
 import os
 import time
 
@@ -41,12 +40,7 @@ def _path():
 
 
 def _load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            state = json.load(handle)
-        return state if isinstance(state, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_path(), {})
 
 
 def script():
@@ -73,10 +67,15 @@ def servers():
 def tick():
     """Each Ready server node not done yet: mark its installer files. Returns
     {node: [files marked]} for the nodes done now."""
-    p = platform(True) or {}
+    p = platform() or {}
     if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
         return {}
-    state = _load()
+    try:
+        state = _load()
+    except SHARED.Unreadable as error:
+        # Nothing done from a record that cannot be read, nor saved over it.
+        print(f"auto-deploy files: {error}", flush=True)
+        return {}
     done_now = {}
     for node, ready in servers():
         if not ready or node in state:

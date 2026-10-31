@@ -7,10 +7,12 @@ the final review, writer drain and durable local publication.
 """
 import hashlib
 import hmac
+import http.client
 import json
 import re
 import threading
 import time
+import urllib.error
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -35,6 +37,54 @@ DESCRIPTIONS = {
     "done": "Homestead is ready on the new volume. The original volume is retained.",
 }
 
+# How long the Kubernetes API may stay unreachable before the move holds. An
+# API restart or a timeout is retried on the next tick from the durable record;
+# a write whose outcome is unknown still holds at once (its journal says so).
+OUTAGE_LIMIT = 300
+TRANSIENT_CODES = (429, 500, 502, 503, 504)
+# After this long on the new volume without every replica ready, the status
+# says so. It is not a hold: a hold would keep the new pods unready (the
+# fence answers 503 while held), and returning to the original volume is
+# not allowed after cutover anyway.
+READY_WARN = 900
+
+
+def transient(error):
+    """Whether error, or what it was raised from, is the API not answering:
+    a timeout, a refused or reset connection, or a 429/5xx reply. A refusal
+    (403, 404, 409, 422) and every safety check's own Held are not."""
+    seen = set()
+    while error is not None and id(error) not in seen:
+        seen.add(id(error))
+        if isinstance(error, urllib.error.HTTPError):
+            return error.code in TRANSIENT_CODES
+        if getattr(error, "transient", False) is True or isinstance(error, (OSError, http.client.HTTPException)):
+            return True
+        # __context__ too: the move's wrappers raise Held(...) from None, which
+        # keeps only that link. Following it is safe: a hold it wrongly calls
+        # transient is retried at most OUTAGE_LIMIT, each try starting again
+        # from the durable record and rechecking everything, and a write the
+        # API may have applied holds at once in _retry_later().
+        error = error.__cause__ or error.__context__
+    return False
+
+
+RECOVERY_MODULE = "/srv/homestead_self_data_recovery.py"
+
+
+def recovery_command(namespace, state):
+    """The preview command to run for a held move while Homestead is stopped:
+    the worker's status server stays read-only, so recovery is kubectl exec
+    into this move's coordinator (docs/data-move-recovery.md)."""
+    return f"kubectl -n {namespace} exec {state['plan']['worker']['name']} -- python3 {RECOVERY_MODULE} --action resume"
+
+
+def recovery_help(namespace, state):
+    command = recovery_command(namespace, state)
+    cutover = any(e["step"] in ("switch", "start") for e in state["journal"]["ref"]["storage_writes"])
+    return (f" To review recovery, run: {command}" + ("" if cutover else " (or --action return-original)")
+            + ", then run it again with --confirm <fingerprint>. It writes nothing until confirmed.")
+
 
 def unavailable_status(operation):
     return {"operation": operation, "phase": None, "status": "unknown", "stale": True,
@@ -53,7 +103,8 @@ def progress(anchor, now):
     recovering = state.get("recovery", {}).get("action") == "return-original"
     if recovering and state["phase"] == "done" and state.get("runtime", {}).get("state") != "held":
         writes = state["journal"]["ref"]["storage_writes"]
-        if (all(e["state"] == "accepted" for e in writes) and any(e["step"] == "recover-start" for e in writes)
+        # No write at all: held before the stop, so Homestead never stopped.
+        if (all(e["state"] == "accepted" for e in writes) and (not writes or any(e["step"] == "recover-start" for e in writes))
                 and not any(e["step"] in ("switch", "start") for e in writes)):
             return {"operation": state["operation"], "phase": "done", "status": "cancelled", "stale": False,
                     "message": "Homestead is ready on its original volume. Both data volumes are retained.",
@@ -83,6 +134,10 @@ def progress(anchor, now):
                "The worker has not reported recently. The last verified stage is shown; do not assume the move is running." if status == "unknown" else
                "Waiting for confirmation of the current request. It will not be sent again." if pending else
                "Returning Homestead to its original volume; waiting for mount release and verified startup." if recovering else DESCRIPTIONS[phase])
+    help_fields = {}
+    if held and not preparing and state.get("plan", {}).get("worker"):
+        message += recovery_help(anchor.namespace, state)
+        help_fields["recovery_command"] = recovery_command(anchor.namespace, state)
     current = A.PHASES.index(phase)
     stages = [{"id": key, "label": label,
                "state": "complete" if i < current or status == "done" else "current" if i == current else "pending"}
@@ -90,7 +145,7 @@ def progress(anchor, now):
     return {"operation": state["operation"], "phase": phase, "status": status,
             "message": message, "checked_at": stamp, "stale": not fresh and phase != "done",
             "stages": stages, "copy_percent": None, "retention_policy": "keep_both_volumes",
-            "requires_review": held, "can_cancel": False}
+            "requires_review": held, "can_cancel": False, **help_fields}
 
 
 class Runner:
@@ -107,6 +162,8 @@ class Runner:
         self.lock = threading.Lock()
         self.hold = None
         self.held_recovery = None
+        self.outage_since = None
+        self.start_wait = None
         self._maintenance_active = False
 
     def maintenance_ready(self):
@@ -126,9 +183,19 @@ class Runner:
     def snapshot(self):
         """Status polling is read-only, including when the API cannot be reached."""
         try:
-            view = progress(self._load(), self.clock())
+            anchor = self._load()
+            view = progress(anchor, self.clock())
             if self.hold:
                 view.update(status="held", message=self.hold, requires_review=True)
+                if "pointer_receipt" in anchor.state and anchor.state.get("plan", {}).get("worker"):
+                    view.update(message=self.hold + recovery_help(self.namespace, anchor.state),
+                                recovery_command=recovery_command(self.namespace, anchor.state))
+            elif self.outage_since is not None and view["status"] != "done":
+                view.update(message="The Kubernetes API is not answering; the move retries it and repeats no request. " + view["message"])
+            elif (self.start_wait is not None and view["phase"] == "start" and view["status"] != "done"
+                    and self.clock() - self.start_wait >= READY_WARN):
+                view.update(message=f"Homestead has not become ready on the new volume for {READY_WARN // 60} minutes. Both volumes "
+                            "are retained. Check the new pods' logs; the move finishes by itself once they are ready.")
             return view
         except Exception:
             return unavailable_status(self.operation)
@@ -188,17 +255,47 @@ class Runner:
                 engine = C.Coordinator(anchor, self.read, self.send, self.logs, admit,
                                        worker_uid=self.worker_uid, clock=self.clock)
                 result = engine.step()
+                waiting = result["phase"] == "start" and result["message"] == C.READY_WAIT
+                self.start_wait = (self.start_wait or self.clock()) if waiting else None
                 anchor.report(self.worker_uid, int(self.clock()),
                               "done" if result["phase"] == "done" else "running", result["message"])
+                self.outage_since = None
             except Held as error:
-                self.hold = str(error) if 0 < len(str(error)) <= 512 and all(ord(c) >= 32 for c in str(error)) else "The data move needs a recovery review before continuing."
-                self._save_hold()
-            except Exception:
-                self.hold = "The data move worker could not verify its next step. Both volumes are retained; review before continuing."
-                self._save_hold()
+                if not self._retry_later(error):
+                    self.hold = str(error) if 0 < len(str(error)) <= 512 and all(ord(c) >= 32 for c in str(error)) else "The data move needs a recovery review before continuing."
+                    self._save_hold()
+            except Exception as error:
+                if not self._retry_later(error):
+                    self.hold = "The data move worker could not verify its next step. Both volumes are retained; review before continuing."
+                    self._save_hold()
             return self.snapshot()
         finally:
             self.lock.release()
+
+    def _retry_later(self, error):
+        """True when this tick failed only because the API did not answer.
+
+        The next tick starts again from the durable record, as every tick
+        does, so nothing is repeated: a write the API may have applied is in
+        the journal as uncertain, and that holds at once. An outage longer
+        than OUTAGE_LIMIT holds too, saying so."""
+        if not transient(error):
+            return False
+        try:
+            writes = self._load().state["journal"]["ref"]["storage_writes"]
+            if any(e["state"] != "accepted" for e in writes):
+                return False
+        except Exception:
+            pass  # still unreachable; the journal is read again next tick
+        now = self.clock()
+        if self.outage_since is None:
+            self.outage_since = now
+        if now - self.outage_since < OUTAGE_LIMIT:
+            return True
+        self.hold = (f"The Kubernetes API did not answer for {OUTAGE_LIMIT // 60} minutes, so the move stopped here. "
+                     "Both volumes are retained; review the move before continuing.")
+        self._save_hold()
+        return True
 
     def run(self, stop, interval=5):
         """Bounded ticks; Event.wait allows immediate worker shutdown."""

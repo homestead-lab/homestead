@@ -20,6 +20,7 @@ import homestead_baseline as BASELINE
 import homestead_capacity_review as CAPACITY_REVIEW
 import homestead_cluster_shutdown as CLUSTER_SHUTDOWN
 import homestead_container_rebalance as CREBALANCE
+import homestead_helper_sweep as HELPER_SWEEP
 import homestead_host_console as HOST_CONSOLE
 import homestead_image_cache as IMAGES
 import homestead_housekeeping as HOUSEKEEPING
@@ -30,6 +31,7 @@ import homestead_move as MOVE
 import homestead_move_source as MOVE_SOURCE
 import homestead_names as NAMES
 import homestead_nodes as NODES
+import homestead_nodeshell as NODESHELL
 import homestead_onboard as ONBOARD
 import homestead_operations as OPS
 import homestead_os_rollout as OS_ROLLOUT
@@ -206,8 +208,10 @@ def _jobs_loop():
 def _detached_copies_loop():
     """Every minute on the leader, unless the cluster is shutting down:
     offline rebuilding on by default, and Homestead's stand-in for it on
-    Longhorn without one; and the image scans and import clean-up that
-    looking at those pages used to do (#622)."""
+    Longhorn without one; the image scans and import clean-up that
+    looking at those pages used to do (#622); host shell helpers that
+    nobody is connected to any more; and the finished helpers Homestead
+    started, once their result has been read."""
     while True:
         time.sleep(60)
         try:
@@ -225,6 +229,14 @@ def _detached_copies_loop():
             IMAGES.tick()
         except Exception as error:
             print(f"image scans and import clean-up not done: {str(error)[:160]}", flush=True)
+        try:
+            NODESHELL.sweep()
+        except Exception as error:
+            print(f"host shell helpers not checked: {str(error)[:160]}", flush=True)
+        try:
+            HELPER_SWEEP.tick()
+        except Exception as error:
+            print(f"finished helpers not removed: {str(error)[:160]}", flush=True)
 
 
 def allocation_probe_capacity(obj, template):

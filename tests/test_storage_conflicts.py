@@ -82,7 +82,7 @@ class StorageConflictsTests(unittest.TestCase):
                 outcomes.append("conflict")
             finally:
                 finished.set()
-        def restore(body):
+        def restore(body, **_):
             thread = threading.Thread(target=move); workers.append(thread); thread.start()
             self.assertTrue(attempting.wait(2))
             self.assertFalse(finished.wait(.1), "move must wait until restore creation AND its record are complete")

@@ -20,7 +20,6 @@ The node probe is installed by default, including on existing clusters and
 Harvester. It needs no Helm controller. An explicit installer opt-out or a
 probe removed after successful installation stays removed.
 """
-import json
 import os
 import threading
 import time
@@ -63,12 +62,7 @@ def _path():
 
 
 def _load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            state = json.load(handle)
-        return state if isinstance(state, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_path(), {})
 
 
 def _save(state):
@@ -130,7 +124,7 @@ def vip_tick():
     vip = str(_request().get("vip") or "").strip()
     if not vip or vip_setup is None:
         return None
-    p = platform(True) or {}
+    p = platform() or {}
     if p.get("harvester") or p.get("load_balancer") not in ("kube-vip", "metallb"):
         return None
     with _lock:
@@ -172,7 +166,7 @@ def probe_tick():
 
 
 def report():
-    p = platform(True) or {}
+    p = platform(30) or {}
     state = _load()
     if not applies(p):
         return {"applies": False, "parts": [], "missing": [], "distribution": p.get("distribution", ""),
@@ -229,7 +223,7 @@ def tick():
     wanted = requested()
     if not wanted:
         return []
-    p = platform(True) or {}
+    p = platform() or {}
     if not applies(p):
         return []
     done = _load().get("done", {})

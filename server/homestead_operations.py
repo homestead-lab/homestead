@@ -7,6 +7,7 @@ backup. Only identifiers and status are stored; request bodies and credentials
 are deliberately excluded.
 """
 import homestead_job_cadence as CADENCE
+import homestead_job_errors as ERRORS
 import homestead_kube as KUBE
 import homestead_shared as SHARED
 import homestead_vm_power_receipts as POWER_RECEIPTS
@@ -20,6 +21,7 @@ import re
 import contextlib
 import copy
 import os
+import pickle
 import secrets
 import sys
 import threading
@@ -83,21 +85,41 @@ def _initialized(marker=STORE_MARKER):
     return True
 
 
+# The last good parse of each store, for the exact bytes it was parsed from
+# (#986): GET /api/operations is polled by every tab every 3 s while a job
+# runs, and about twenty modules read the store. Every read still reads the
+# file - the data volume is NFS, whose attribute cache can answer stat() from
+# before another copy's write, so no file metadata is trusted - and only the
+# parse and the checks are skipped when the bytes are those of the last read.
+# Kept pickled: each read gets its own copy, as a parse did, and unpickling
+# costs a third of one.
+_memo = {}
+
+
 def _read_store(store, marker):
     initialized = _initialized(marker)
+    path = os.path.join(DATA_DIR, store)
     try:
-        with open(os.path.join(DATA_DIR, store), encoding="utf-8") as handle:
-            value = json.load(handle)
+        with open(path, "rb") as handle:
+            raw = handle.read()
     except FileNotFoundError:
         if not initialized:
             return []
         raise ValueError("Previously initialized job history is missing. Recover the store before changing jobs; missing history is not an empty queue.")
-    except (OSError, ValueError, TypeError) as error:
+    except OSError as error:
+        raise ValueError("Job history could not be read safely. Restore access or recover the store before starting or changing jobs; existing records were not replaced.") from error
+    held = _memo.get(path)
+    if held and held[0] == raw:
+        return pickle.loads(held[1])
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (ValueError, TypeError) as error:
         raise ValueError("Job history could not be read safely. Restore access or recover the store before starting or changing jobs; existing records were not replaced.") from error
     if (not isinstance(value, list) or any(not isinstance(item, dict) or not isinstance(item.get("id"), str)
             or not item["id"] or not isinstance(item.get("ref"), dict) or not isinstance(item.get("status"), str)
             for item in value) or len({item["id"] for item in value}) != len(value)):
         raise ValueError("Job history has invalid records. Recover the store before starting or changing jobs; existing records were not replaced.")
+    _memo[path] = (raw, pickle.dumps(value, pickle.HIGHEST_PROTOCOL))
     return value
 
 
@@ -381,7 +403,7 @@ def checkpoint(item):
 def _public(item):
     out = {key: value for key, value in item.items()
            if key not in ("ref", "cancel_started", "previous_status", "history", "_legacy_store", "cancel_request",
-                          CADENCE.KEY)}
+                          CADENCE.KEY, ERRORS.KEY)}
     # Every job still going can be cancelled unless its kind refuses (the same
     # refusals _plan_for gives; they read only the job). What cancelling does
     # is asked for separately, as it reads Kubernetes and the tray is polled often.
@@ -486,7 +508,7 @@ def _view_copy(item, out):
 def _view_reclass(item, out):
     if "storage_protocol" in item.get("ref", {}):
         out.update(cancellable=False, cleanable=False, resumable=False,
-                   storage_recovery=item["ref"]["storage_protocol"] == 1 and item["ref"].get("handoff_phase") != "done")
+                   storage_recovery=item["ref"]["storage_protocol"] == 1 and item["ref"].get("handoff_phase") not in ("done", "rolled-back"))
 
 
 # What each kind adds to the shared part of the tray's view: kind ->
@@ -888,11 +910,15 @@ def _refresh(item):
     resolver = RESOLVERS.get(item.get("kind"))
     if not resolver:
         return _finish(item, "failed", item.get("progress", 0), "Unknown operation type")
+    if ERRORS.resting(item):
+        return False  # it needs attention: asked again once a minute, not every round
     # A step can move on without its message changing - a new job's name, the
     # next phase - and that has to be written too, or a restart repeats it.
     before = json.dumps(item, sort_keys=True, default=str)
     try:
-        return _finish(item, *resolver(item)) or json.dumps(item, sort_keys=True, default=str) != before
+        # _finish inside: an answer of the wrong shape is this job's error,
+        # not one that stops every other job's round.
+        changed = _finish(item, *resolver(item))
     except urllib.error.HTTPError as error:
         if error.code == 404:
             # Which object, so a job that stops here says what went missing.
@@ -901,13 +927,43 @@ def _refresh(item):
             what = " ".join(parts) if len(parts) == 2 else "the resource it follows"
             return _finish(item, "failed", item.get("progress", 0),
                            f"Kubernetes no longer has {what}")
-        return _finish(item, "running", item.get("progress", 0),
-                       f"Status temporarily unavailable (HTTP {error.code})")
+        return _resolver_failed(item, f"HTTP {error.code}", f"Status temporarily unavailable (HTTP {error.code})",
+                                before)
     except Exception as error:
-        # Monitoring failures are not operation failures. Preserve the active
-        # state and let the next poll recover when Kubernetes is reachable.
-        return _finish(item, "running", item.get("progress", 0),
-                       f"Status temporarily unavailable: {error}")
+        return _resolver_failed(item, error, f"Status temporarily unavailable: {error}", before)
+    ERRORS.clear(item)
+    return changed or json.dumps(item, sort_keys=True, default=str) != before
+
+
+def _resolver_failed(item, error, unavailable, before):
+    """Monitoring failures are not operation failures at first: the job stays
+    active and the next poll recovers once Kubernetes or the host answers. Past
+    its kind's limit (homestead_job_errors) it fails with the last error, or,
+    for a kind that moves data or holds a host or an app, keeps its guards and
+    says it needs attention."""
+    given_up = ERRORS.failed(item, error)
+    progress = item.get("progress", 0)
+    if given_up is None:
+        changed = _finish(item, "running", progress, unavailable)
+    elif given_up[0] == "failed":
+        changed = _finish(item, "failed", progress, given_up[1])
+    else:
+        changed = _finish(item, "running", progress, f"{given_up[1]} {_attention_action(item)}")
+    return changed or json.dumps(item, sort_keys=True, default=str) != before
+
+
+def _attention_action(item):
+    """What a person can do about a job that needs attention, read from the job
+    only (as _public's cancel refusals are)."""
+    block = CANCEL_BLOCKS.get(item.get("kind"))
+    why_not = block(item) if block else ""
+    if why_not:
+        return f"Fix what the error names. {why_not}"
+    if item.get("kind") in CANCELLERS:
+        return "Fix what the error names, or cancel it: the cancel review says what it puts back."
+    # _plan_for's default for a kind with no canceller: Cancel only stops tracking it.
+    return ("Fix what the error names, or stop tracking it here (Cancel); "
+            "what it started carries on in Kubernetes.")
 
 
 def _archived_preparation(item):
@@ -1602,9 +1658,10 @@ def diagnostic_summaries(operation_ids):
 def log(operation_id, see_values=True):
     """A job's steps so far and, where it has one, its own output. A Helm
     pod can print the chart's values: unless see_values (the role that may
-    reveal a Secret), its text is left out and a note says why."""
-    with _lock:
-        item = next((row for row in _read() if row.get("id") == operation_id), None)
+    reveal a Secret), its text is left out and a note says why. Read as
+    snapshot() reads, without the operations lock: the dialog asks every 3 s
+    and the saved files are replaced whole (#985)."""
+    item = next((row for row in _read() if row.get("id") == operation_id), None)
     if not item:
         raise ValueError("operation not found")
     sources, reader = [], LOGGERS.get(item.get("kind"))

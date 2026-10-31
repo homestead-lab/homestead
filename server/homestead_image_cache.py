@@ -10,6 +10,7 @@ import json
 import hashlib
 import os
 import re
+import secrets
 import time
 import urllib.error
 import urllib.parse
@@ -652,13 +653,18 @@ def tick():
     """The leader's minute (#622): what looking at the image cache or the
     imports used to do as it read. Finished scans are saved and their pods
     removed, a host whose scan is old is scanned again, finished pre-pulls are
-    cleared away, and a finished copy gives back the password it borrowed."""
+    cleared away, a finished copy gives back the password it borrowed, and a
+    password no import source names any more is removed."""
     _load_scans()
     if not _collect_scans(tidy=True):
         _rescan_if_stale(I.kget("/api/v1/nodes").get("items", []))
     prepull_status(sweep=True)
     CONTAINER_IMPORT._drop_finished_copies()
     I._bust("imgcache")
+    try:
+        I.sweep_source_secrets()
+    except Exception as error:
+        print(f"unused import source passwords not removed: {str(error)[:160]}", flush=True)
     # Hourly: what is unused, and automatic clean-up when it is on.
     try:
         import homestead_image_cleanup as CLEANUP
@@ -686,13 +692,15 @@ def _rescan_if_stale(nodes):
     if not stale or now - _SCAN_STARTED[0] < SCAN_RETRY:
         return []
     try:
-        return start_image_scan()["nodes"]
+        # Only the stale ones: the others' scans are recent (#976).
+        return start_image_scan(stale)["nodes"]
     except Exception:
         return []
 
 
-def start_image_scan():
-    """One pod per Ready node, printing everything its containerd holds."""
+def start_image_scan(only=None):
+    """One pod per Ready node (only: per node named there), printing
+    everything its containerd holds."""
     started = []
     attempt = format(int(time.time()), "x")[-6:]
     # Counted as started even if a pod cannot be made part way, so the next
@@ -700,7 +708,7 @@ def start_image_scan():
     _SCAN_STARTED[0] = time.time()
     try:
         for node in I.kget("/api/v1/nodes").get("items", []):
-            if not _scannable(node):
+            if not _scannable(node) or (only is not None and node["metadata"]["name"] not in only):
                 continue
             name = node["metadata"]["name"]
             suffix = hashlib.sha256(name.encode()).hexdigest()[:10]
@@ -735,7 +743,11 @@ def _collect_scans(tidy=False):
                 if tidy:
                     _save_scans()
             except Exception:
-                pass
+                # A listing that cannot be read is a failed scan: the host
+                # waits as after any failure, instead of staying stale and
+                # having every host scanned again at each retry (#976).
+                if tidy:
+                    _SCAN_FAILED[node] = time.time()
         if phase in ("Succeeded", "Failed"):
             if not tidy:
                 continue
@@ -784,20 +796,46 @@ def _pullable_nodes():
     return healthy, all_names
 
 
-def prepull(image, nodes=None):
-    """Warm an image onto every healthy node with a DaemonSet-style pull."""
+def _running_click(image, wanted):
+    """An Image cache pull of this image still running onto at least these nodes."""
+    for item in NAMES.find(f"/apis/apps/v1/namespaces/{I.NS}/daemonsets", "task", "prepull"):
+        meta, status = item.get("metadata") or {}, item.get("status") or {}
+        spec = ((item.get("spec") or {}).get("template") or {}).get("spec") or {}
+        desired, ready = int(status.get("desiredNumberScheduled") or 0), int(status.get("numberReady") or 0)
+        terms = (((spec.get("affinity") or {}).get("nodeAffinity") or {}).get(
+            "requiredDuringSchedulingIgnoredDuringExecution") or {}).get("nodeSelectorTerms") or [{}]
+        pinned = set(((terms[0].get("matchExpressions") or [{}])[0]).get("values") or [])
+        if (NAMES.label_of(meta, "pull-by") == "image-cache" and not (desired and ready >= desired)
+                and [c.get("image") for c in spec.get("initContainers") or []] == [image] and set(wanted) <= pinned):
+            return meta.get("name"), sorted(pinned)
+    return None
+
+
+def prepull(image, nodes=None, own=False, reuse=False):
+    """Warm an image onto every healthy node with a DaemonSet-style pull.
+
+    own: a job's pull, under a name of its own, so two jobs pulling the same
+    image never share one DaemonSet - one's cancel, the end of its pulling
+    stage or its next pull would stop the other's. Without it the name is
+    one per image, as before (the start gate's image, pulled once).
+    reuse: an Image cache click; one still pulling the same image onto these
+    nodes is answered with, not started again (a job's pulls never are)."""
     tag = re.sub(r"[^a-z0-9-]", "-", image.split("/")[-1].split(":")[0].lower())[:30]
-    name = f"homestead-pull-{tag}"
+    name = f"homestead-pull-{tag}" + (f"-{secrets.token_hex(4)}" if own else "")
     healthy, every = _pullable_nodes()
     wanted = [node for node in (nodes or every) if node in healthy]
     skipped = sorted(set(nodes or every) - set(wanted))
     if not wanted:
         raise ValueError(f"{', '.join(skipped)} is not ready to take an image pull"
                          if skipped else "no node is ready to take an image pull")
+    running = _running_click(image, wanted) if reuse else None
+    if running:
+        return {"ok": True, "daemonset": running[0], "image": image, "nodes": running[1], "skipped": skipped,
+                "reused": True, "message": f"Already pulling {image}"}
     body = {
         "apiVersion": "apps/v1", "kind": "DaemonSet",
         "metadata": {"name": name, "namespace": I.NS,
-                     "labels": NAMES.labels("prepull", image=tag)},
+                     "labels": NAMES.labels("prepull", image=tag, **({"pull_by": "image-cache"} if reuse else {}))},
         "spec": {"selector": {"matchLabels": {"app": name}},
                  "template": {"metadata": {"labels": {"app": name}},
                               "spec": {"terminationGracePeriodSeconds": 1,
@@ -812,12 +850,14 @@ def prepull(image, nodes=None):
         "requiredDuringSchedulingIgnoredDuringExecution": {"nodeSelectorTerms": [
             {"matchExpressions": [{"key": "kubernetes.io/hostname",
                                    "operator": "In", "values": sorted(wanted)}]}]}}}
-    for previous in (name,):
+    if not own:
+        # One name per image: the last pull of it is replaced. A name of a
+        # job's own is new, with nothing to replace or wait for.
         try:
-            I.ksend("DELETE", f"/apis/apps/v1/namespaces/{I.NS}/daemonsets/{previous}")
+            I.ksend("DELETE", f"/apis/apps/v1/namespaces/{I.NS}/daemonsets/{name}")
         except urllib.error.HTTPError:
             pass
-    time.sleep(1)
+        time.sleep(1)
     I.ksend("POST", f"/apis/apps/v1/namespaces/{I.NS}/daemonsets", body)
     return {"ok": True, "daemonset": name, "image": image, "nodes": sorted(wanted),
             "skipped": skipped,

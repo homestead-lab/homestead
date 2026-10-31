@@ -26,6 +26,7 @@ import homestead_kube_metrics as KUBE_METRICS
 import homestead_host_access as HOSTACCESS
 import homestead_icons as ICONS
 import homestead_lan as LAN
+import homestead_kube as KUBE
 import homestead_lifecycle as LC
 import homestead_workload_edit as WORKLOAD_EDIT
 import homestead_logsearch as LOGSEARCH
@@ -38,6 +39,7 @@ import homestead_value_masks as MASKS
 import homestead_place as PLACE
 import homestead_priority as PRIORITY
 import homestead_privileges as PRIV
+import homestead_read_deadline as DEADLINE
 import homestead_rename as RENAME
 import homestead_restore_test as RESTORE_TEST
 import homestead_restructure as RESTRUCTURE
@@ -52,7 +54,7 @@ import homestead_usage as USAGE
 # server.py's helpers this module calls, bound by name at start.
 NEEDS = ("kget", "ksend", "workload_start_plan", "scale_workload", "restart_workload",
          "guard_managed_smb", "guard_self", "_dns_name", "get_app_settings", "apply_reviewed_edit",
-         "logsearch_read", "rollout_review_context", "hardware_device_paths", "is_self", "is_managed_smb",
+         "logsearch_read", "raw_get", "rollout_review_context", "hardware_device_paths", "is_self", "is_managed_smb",
          "is_managed_nfs", "homestead_part", "own_group", "pod_container_rows", "parse_cpu", "parse_mem",
          "age_secs", "display_icon", "_pull_progress", "_service_listeners")
 # And its values: the API server, where apps go by default, where
@@ -117,15 +119,15 @@ def _tail(ns, pod, container, lines):
     lines: an answer that reaches it is asked for again with half the lines,
     a few times at most, so the newest are kept. A cut says so."""
     wanted = lines
+    path = f"/api/v1/namespaces/{urllib.parse.quote(ns, safe='')}/pods/{urllib.parse.quote(pod, safe='')}/log"
     for _ in range(TAIL_RETRIES + 1):
         query = f"tailLines={lines}&timestamps=true&limitBytes={LOG_BYTES}" + (
             f"&container={urllib.parse.quote(container)}" if container else "")
-        req = urllib.request.Request(f"{API}/api/v1/namespaces/{ns}/pods/{pod}/log?{query}",
-                                     headers={"Authorization": f"Bearer {TOKEN}"})
-        with urllib.request.urlopen(req, context=CTX, timeout=15) as r:
-            raw = r.read(LOG_BYTES + 1)
-        text = raw.decode("utf-8", "replace")
-        if len(raw) < LOG_BYTES:
+        # On a pooled connection (#984), like every other read, and under
+        # the request's read deadline. Encoded again, the text is at least as
+        # long as the bytes read, so an answer that reached LOG_BYTES counts.
+        text = raw_get(f"{path}?{query}", timeout=15, max_bytes=LOG_BYTES)
+        if len(text.encode("utf-8")) < LOG_BYTES:
             if lines == wanted:
                 return text
             return text + f"\n(Log cut: its lines are long, so Homestead is showing the last {lines} lines.)\n"
@@ -145,7 +147,8 @@ def logs(request):
     container = _arg(request, "container")
     # Each goes into an API path as it is: "kube-system/secrets?x=" as a
     # namespace would read another list as Homestead.
-    if any(value and not LOG_NAME.fullmatch(value) for value in (ns, pod, job, container)) or not ns:
+    if not ns or any(value and (not LOG_NAME.fullmatch(value) or ".." in value)
+                     for value in (ns, pod, job, container)):
         return ROUTER.Reply(400, {"error": "That is not a valid namespace, pod, job or container name."})
     if job and not pod:
         matches = kget(f"/api/v1/namespaces/{ns}/pods?labelSelector=job-name%3D{urllib.parse.quote(job)}").get("items", [])
@@ -178,6 +181,10 @@ def logs(request):
     except urllib.error.HTTPError as error:
         return ROUTER.Reply(409 if error.code in (400, 404) else error.code,
                             {"error": logs_refusal(error, pod, container)})
+    except TimeoutError:
+        # The API server is slow or not answering: the same answer as a page
+        # whose reads ran out of time (#984), not a server error.
+        return ROUTER.Reply(503, {"error": DEADLINE.MESSAGE, "unavailable": True})
 
 
 def search_logs(request):
@@ -188,8 +195,14 @@ def search_logs(request):
         regex=_arg(request, "regex") == "1", case=_arg(request, "case") == "1")
 
 
+def _path_names(ns, name):
+    """The namespace and workload a request names, checked before either
+    goes into an API path."""
+    return KUBE.request_name(ns, "namespace", namespace=True), KUBE.request_name(name, "workload name")
+
+
 def edit_form(request):
-    ns, name = request.query["ns"][0], request.query["name"][0]
+    ns, name = _path_names(request.query["ns"][0], request.query["name"][0])
     deployment = kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}")
     payload = workload_edit_payload(ns, name, deployment)
     return payload if may_see_secret_values(request.role, deployment, ns) else ENVSEC.mask(payload)
@@ -222,6 +235,7 @@ def scale(request):
 def set_failover(request):
     b = request.body
     for item in b.get("items") or []:
+        _path_names(item.get("ns"), item.get("name"))
         guard_managed_smb(item.get("ns"), item.get("name"))
     result = FAILOVER.set_many(b.get("items") or [])
     ROUTER.forget("wl")
@@ -230,7 +244,8 @@ def set_failover(request):
 
 def set_primary_port(request):
     b = request.body
-    ns, name = b.get("ns") or DEFAULT_NS, _dns_name(b.get("name"), "workload name")
+    ns = KUBE.request_name(b.get("ns") or DEFAULT_NS, "namespace", namespace=True)
+    name = _dns_name(b.get("name"), "workload name")
     guard_managed_smb(ns, name)
     port = int(b.get("port") or 0)
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
@@ -243,6 +258,7 @@ def set_primary_port(request):
 
 def preview_edit(request):
     b = request.body
+    _path_names(b.get("ns"), b.get("name"))
     guard_managed_smb(b.get("ns", ""), b.get("name", ""))
     prepared, context, plan = edit_capacity_plan(b)
     current = kget(f"/apis/apps/v1/namespaces/{b['ns']}/deployments/{b['name']}")
@@ -261,6 +277,7 @@ def preview_edit(request):
 
 def edit(request):
     b = request.body
+    _path_names(b.get("ns"), b.get("name"))
     guard_managed_smb(b.get("ns", ""), b.get("name", ""))
     # Homestead's manifest sets its own priority on every upgrade.
     if is_self(b.get("ns", ""), b.get("name", "")):
@@ -346,7 +363,7 @@ def move_to_host(request):
         # never be silently overwritten by a second, unreviewed fetch-and-move.
         ksend("PUT", f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}", proposed)
         PLACE._bust("wl", "ov", "flow", "nodes", "impact:")
-    operation = HOST_MOVE.start(b, proposed, capacity, apply)
+    operation = HOST_MOVE.start(b, proposed, capacity, apply, settled=context.get("settled"))
     return {"ok": True, "moved": meta["name"], "to": capacity["move"]["node"] or "any node",
             "mode": capacity["move"]["mode"], "operation": operation}
 
@@ -361,8 +378,14 @@ def get_workloads(pods=None):
     pm = {(m["metadata"]["namespace"], m["metadata"]["name"]): m for m in usage}
     try:
         svcs = kget("/api/v1/services").get("items", [])
-    except Exception:
-        svcs = []
+    except urllib.error.HTTPError as error:
+        svcs = [] if error.code == 404 else None
+        if svcs is None:
+            print(f"Apps: could not read the Services: {str(error)[:160]}", flush=True)
+    except Exception as error:
+        # Unread is not "no listeners": each app's ports are then None.
+        print(f"Apps: could not read the Services: {str(error)[:160]}", flush=True)
+        svcs = None
     tiers = GROUPS.stored(kget)    # each group's tier (#430); None when it can't be read
     hardware_definitions = HW.features()    # one read for every app, not one each (#977)
 
@@ -381,8 +404,8 @@ def get_workloads(pods=None):
                 for c in m.get("containers", []):
                     cpu += parse_cpu(c.get("usage", {}).get("cpu"))
                     mem += parse_mem(c.get("usage", {}).get("memory"))
-        ports = []
-        for s in svcs:
+        ports = [] if svcs is not None else None
+        for s in svcs or []:
             if s["metadata"]["namespace"] != ns: continue
             ssel = s["spec"].get("selector") or {}
             if ssel and all(sel.get(k) == v for k, v in ssel.items()):
@@ -411,7 +434,7 @@ def get_workloads(pods=None):
             primary = int(NAMES.read(annotations, "primary-port") or 0)
         except ValueError:
             primary = 0
-        if primary:
+        if primary and ports:
             ports.sort(key=lambda row: row.get("port") != primary)
             for row in ports:
                 row["primary"] = row.get("port") == primary
@@ -751,13 +774,23 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
     if services is None:
         try:
             services = kget(f"/api/v1/namespaces/{ns}/services").get("items", [])
-        except Exception:
-            services = []
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                raise ValueError(f"{name}'s Services could not be read, so which ports it exposes is not known; "
+                                 f"try again in a moment ({str(error)[:120]})") from error
+            services = []       # a 404 listing a namespace's Services: there are none
+        except Exception as error:
+            # Opened with no Service, every port would show unexposed, and
+            # saving would remove the Service and release its address.
+            raise ValueError(f"{name}'s Services could not be read, so which ports it exposes is not known; "
+                             f"try again in a moment ({str(error)[:120]})") from error
     listeners = _service_listeners(deployment, services)
     annotations = deployment["metadata"].get("annotations", {}) or {}
     definitions = hardware_definitions if hardware_definitions is not None else HW.features()
     # Variables kept in the workload's own Secret are edited like any other.
     kept, own_secret = ENVSEC.values(ns, deployment, kget), ENVSEC.own(deployment)
+    # A Secret that could not be read is said, never shown as "no values" (#1001).
+    unread, kept = kept is None, kept or {}
     volumes = {volume.get("name"): volume for volume in pspec.get("volumes", []) or []}
 
     def source_label(volume):
@@ -878,6 +911,7 @@ def workload_edit_payload(ns, name, deployment, hardware_definitions=None, servi
         "service_links": pspec.get("enableServiceLinks") is not False,
         "replicas": replicas, "autostart": replicas > 0,
         "start_replicas": replicas or parked or 1, "containers": containers,
+        **({"secret_env_unread": ENVSEC.UNREAD} if unread else {}),
         "pod_volumes": reusable,
         "hardware": detected, "icon": NAMES.read(annotations, "icon-source") or NAMES.read(annotations, "icon"),
         # How it is monitored, so Edit shows it rather than Automatic - and

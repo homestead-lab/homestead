@@ -14,7 +14,6 @@ A day keeps its latest sample. The file is written only when a day's figure
 changes by more than a hair, so a quiet hour writes nothing.
 """
 import calendar
-import json
 import os
 import threading
 import time
@@ -51,12 +50,7 @@ def _path():
 
 
 def _load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            data = json.load(handle)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_path(), {})
 
 
 def _day(now):

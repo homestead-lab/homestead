@@ -193,11 +193,14 @@ def forecast(failed, nodes, pods, preview, owner):
     sets = [r for r in preview.get("apps") or [] if r.get("kind") == "set"]
     # One set to wait for its host waits as a Deployment does: not for deletion.
     waiting = sum(1 for r in sets if r.get("outcome") == "waits" and r.get("why") != IMPACT.FAILOVER_WORDS["wait"][1])
-    unchecked = sum(1 for r in sets if r.get("outcome") == "unknown")
+    # Rows that couldn't be checked need no room elsewhere: the sentence says
+    # so, never a bare "It fits" (an app's volumes or a VM's devices unread).
+    unchecked = sum(1 for r in preview.get("apps") or [] if r.get("outcome") == "unknown" and r.get("kind") in ("set", "app"))
+    vms_unchecked = sum(1 for r in preview.get("apps") or [] if r.get("outcome") == "unknown" and r.get("kind") == "vm")
     return {"node": failed, "verdict": verdict, "moving": _apps(moving), "hosts": hosts, "pending": len(pending),
             "waits": _rows(waits), "evicted": _rows(evicted, "on"), "unreserved": unreserved,
             "waiting_for_deletion": waiting,
-            "sentence": sentence(failed, verdict, hosts, stuck, len(moving)) + _deletion_clause(waiting, unchecked, "StatefulSets" in (preview.get("unread") or []))}
+            "sentence": sentence(failed, verdict, hosts, stuck, len(moving)) + _deletion_clause(waiting, unchecked, "StatefulSets" in (preview.get("unread") or []), vms_unchecked)}
 
 
 def _rows(pods, *extra):
@@ -236,7 +239,7 @@ def sentence(failed, verdict, hosts, stuck, moving=1):
             f"would {'wait for room or be evicted' if evicted else 'wait for room'}.")
 
 
-def _deletion_clause(waiting, unchecked, unread=False):
+def _deletion_clause(waiting, unchecked, unread=False, vms_unchecked=0):
     """What "fits" would otherwise hide: StatefulSets that stay down until
     their pod is deleted, those that couldn't be checked, and all of them
     when they couldn't be read (#440)."""
@@ -246,6 +249,8 @@ def _deletion_clause(waiting, unchecked, unread=False):
                      else f"{waiting} apps wait until their pod is deleted")
     if unchecked:
         parts.append(f"{unchecked} app{'' if unchecked == 1 else 's'} couldn't be checked")
+    if vms_unchecked:
+        parts.append(f"{vms_unchecked} VM{'' if vms_unchecked == 1 else 's'} couldn't be checked")
     clause = f" {' and '.join(parts)}; If this host goes down says why." if parts else ""
     return clause + (" StatefulSets couldn't be read, so they aren't counted." if unread else "")
 

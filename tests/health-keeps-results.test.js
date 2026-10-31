@@ -107,7 +107,7 @@ test("a repaint or a new page hides a tooltip whose element is gone, with no poi
   for (const run of ["paint('<p>new</p>')", "resetPaint()"]) {
     const { ctx, core, bubble, owner } = tooltips();
     const host = { dataset: {}, classList: { remove() {} }, innerHTML: "" };
-    Object.assign(ctx, { V: () => host, pageTabs: () => "", filterBar: () => "", PAGE_SNAPSHOT: {}, snapshotKey: String,
+    Object.assign(ctx, { V: () => host, pageTabs: () => "", filterBar: () => "", keepSnapshot() {}, snapshotKey: String,
       STATE: { view: "cluster" }, enhanceActions() {}, loadAppIcons() {} });
     vm.runInContext(between(core, "function paint(html)", "/* ---------------- chart primitives"), ctx);
     host.dataset = {}; vm.runInContext(run, ctx);

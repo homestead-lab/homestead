@@ -102,7 +102,8 @@ class EditCapacityTests(unittest.TestCase):
 
     def test_changed_controller_invalidates_review_before_writes(self):
         config = self.reviewed()
-        self.current["metadata"]["resourceVersion"] = "11"
+        # An edit since the review; a status-only write keeps it (test_review_status_writes).
+        self.current["metadata"].update(resourceVersion="11", annotations={"example.com/edited": "yes"})
         result, send, create, icons = self.call("/api/edit", config)
         self.assertEqual(409, result[0])
         for target in (send, create, icons):

@@ -157,3 +157,19 @@ test("the note for Homestead itself says Longhorn's backups move too", () => {
   ctx.vipAdd();
   assert.match(ctx.html, /Longhorn backs up to it/);
 });
+
+test("Your VIPs that couldn't be read say so, never no saved VIPs or no default", () => {
+  const { ctx } = setup();
+  const data = { registered_vips: null, vips_unread: "Your VIPs could not be read (timed out)", shared_vip: { ip: null, problem: "" },
+    summary: { vips: 0 }, unread: ["VIP registry"] };
+  ctx.STATE.data.network = data;
+  const html = ctx.networkVipsHtml(data);
+  assert.match(html, /Couldn(?:'|&#39;)t read Your VIPs/);
+  assert.match(html, /timed out/);
+  assert.doesNotMatch(html, /No saved VIPs/);
+  assert.doesNotMatch(html, /not configured/);
+  assert.doesNotMatch(html, /1 · Add an address/);
+  assert.match(ctx.networkDefaultVip(data), /unknown/);
+  assert.equal(ctx.networkDefaultVip({ registered_vips: [], shared_vip: { ip: "" } }), "not configured");
+  assert.equal(ctx.networkDefaultVip({ registered_vips: [], shared_vip: { ip: "192.0.2.108" } }), "192.0.2.108");
+});

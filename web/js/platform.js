@@ -307,16 +307,18 @@ window.addonInstall = async key => {
     if (window.refreshOperations) refreshOperations(true);
     addonsPaint();
     // The pages that need it appear once it is there.
-    const watch = setInterval(async () => {
+    // A poll (#983): no read beside a slow one, none in a hidden tab. Not
+    // the dialog's: it outlives closing it.
+    const watch = UI.poll(async () => {
       await loadPlatform(true);
       if (key === "kube-vip" ? STATE.platform?.load_balancer === "kube-vip" : STATE.platform?.[key]) {
-        clearInterval(watch);
         toast(key === "multus" ? "Multus is ready - LAN networks can be made now"
           : key === "kube-vip" ? "kube-vip is ready - apps can be given VIPs now" : `${a.name} is ready - its pages are in the sidebar`, "ok");
         addonsPaint();
+        return false;
       }
-    }, 20000);
-    setTimeout(() => clearInterval(watch), 20 * 60000);
+    }, 20000, { later: true, dialog: false });
+    setTimeout(() => watch.stop(), 20 * 60000);
   } catch (e) { toast(e.message, "bad"); }
 };
 

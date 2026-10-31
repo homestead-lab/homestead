@@ -33,12 +33,21 @@ import homestead_changes as CHANGES
 import homestead_host_access as HOSTACCESS
 import homestead_names as NAMES
 import homestead_operations as OPS
+import homestead_read_deadline as DEADLINE
 import homestead_self as SELF
 import homestead_storage_guard as STORAGE_GUARD
 
 ROUTE_NEEDS = ("cluster_shutdown", "require_self_data_write", "self_data_activity")
 VALUES = ("API", "CTX", "TOKEN")
 KGET_RETRY = (0.5, 1.0, 2.0)  # a busy API server (priority and fairness) answers reads 429 for a moment
+# A read of one object is a few kilobytes: an API server that has not answered
+# it in OBJECT_TIMEOUT is slow or hung, and waiting longer only holds the page
+# (#984). Only a request's reads (a page waiting) are given it; background work
+# (power, host moves, a VM's state) keeps LIST_TIMEOUT, as do a list, a
+# subresource and discovery, which are not known to be small. Either bounds each wait on the socket, not the whole answer, so
+# a big list arriving steadily is never cut; the request's deadline bounds all.
+OBJECT_TIMEOUT = 5
+LIST_TIMEOUT = 10
 # Set once server.py has imported what the cluster shutdown fence reads: a
 # write before then (while server.py is still importing) is not fenced.
 FENCE_READY = False
@@ -58,15 +67,41 @@ def bind_routes(helpers, **values):
 _DOT_SEGMENT = re.compile(r"(^|/)(\.|%2e){1,2}(/|$)", re.I)
 
 
+# A query parameter's name, as Kubernetes' own are (labelSelector, limit...).
+_QUERY_KEY = re.compile(r"[A-Za-z][A-Za-z0-9_.-]*")
+_NAMESPACE = re.compile(r"[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?")
+_OBJECT_NAME = re.compile(r"[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?")
+
+
 def api_path(path):
     """A Kubernetes API path, refused if a name in it could step out of the
     object it names. Names come from requests - ?name=, a body - and the API
-    server is asked as Homestead, so "../" in one must never reach it."""
-    head = str(path).split("?", 1)[0]
-    if (_DOT_SEGMENT.search(head) or "%2f" in head.lower() or "%5c" in head.lower()
+    server is asked as Homestead, so "../" in one must never reach it, nor a
+    "?" or "#" (plain or encoded) that cuts the path short. A backstop on
+    structure only: one "?", no "#", and query parameters with plain names;
+    names are checked where they enter (request_name)."""
+    head, cut, query = str(path).partition("?")
+    if (_DOT_SEGMENT.search(head) or any(code in head.lower() for code in ("%2f", "%5c", "%3f", "%23"))
             or any(c in head for c in ("\\", " ", "\t", "\r", "\n", "#"))):
         raise ValueError("that is not a valid Kubernetes name")
+    if cut and ("?" in query or "#" in query or not all(_query_part(part) for part in query.split("&") if part)):
+        raise ValueError("that is not a valid Kubernetes name")
     return path
+
+
+def _query_part(part):
+    """A query parameter with a plain name. Its value - a selector, a
+    token - is Kubernetes' to read: names are checked where they enter."""
+    return bool(_QUERY_KEY.fullmatch(part.partition("=")[0]))
+
+
+def request_name(value, label="name", namespace=False):
+    """A name from a request, refused unless it is a Kubernetes name (a
+    namespace: a DNS label; an object: a DNS subdomain), before it is put
+    into an API path."""
+    if not isinstance(value, str) or not (_NAMESPACE if namespace else _OBJECT_NAME).fullmatch(value):
+        raise ValueError(f"{label} is not a valid Kubernetes name")
+    return value
 
 
 # Each write guard is guard(method, path, body, proceed): it checks or records
@@ -103,7 +138,7 @@ _SHOWN = re.compile(r"/(deployments|statefulsets|daemonsets|replicasets|cronjobs
                     r"|services|persistentvolumeclaims|persistentvolumes|volumesnapshots|virtualmachines"
                     r"|virtualmachineinstances|virtualmachineinstancemigrations|datavolumes|volumes|replicas"
                     r"|engines|volumeattachments|snapshots|backups)(/|\?|$)")
-SHOWN_KEYS = ("ov", "nodes", "wl", "vms", "vol", "volmap", "volother", "stor")
+SHOWN_KEYS = ("ov", "nodes", "wl", "vms", "vol", "volmap", "volother", "stor", "pods")
 SHOWN_PREFIXES = ("node:", "impact:")
 
 
@@ -163,17 +198,29 @@ def _auth_ksend(method, path, body=None, ctype="application/json", timeout=15):
     return _guarded_ksend(method, path, body, ctype, timeout, shutdown_bypass=True)
 
 
+# Subresources whose writes carry no pod spec: nothing to apply and check.
+_PLAIN_SUBRESOURCES = ("scale", "status")
+
+
 def authorize_workload_write(method, path, body):
     if HOSTACCESS.role() in (None, "admin"):
         return
-    match = re.fullmatch(r"(/(?:api/v1|apis/apps/v1|apis/batch/v1)/namespaces/([^/]+)/(deployments|statefulsets|daemonsets|pods|jobs))(?:/([^/?]+)(?:/[^?]+)?)?", path.split("?", 1)[0])
+    match = re.fullmatch(r"(/(?:api/v1|apis/apps/v1|apis/batch/v1)/namespaces/([^/]+)/(deployments|statefulsets|daemonsets|replicasets|pods|jobs|cronjobs))(?:/([^/?]+)(?:/([^?]+))?)?", path.split("?", 1)[0])
     if not match:
         return
-    base, ns, _, name = match.groups()
+    base, ns, resource, name, sub = match.groups()
+    kind = HOSTACCESS.KINDS[resource]
     if name:
-        HOSTACCESS.require_target(kget(base + "/" + name), ns)
-    if isinstance(body, dict) and (body.get("spec", {}).get("template") or method == "POST"):
-        HOSTACCESS.require_target(body, ns)
+        current = kget(base + "/" + name)
+        HOSTACCESS.require_target(current, ns, kind)
+        # A PATCH is checked on the object it would leave, whatever its format.
+        if method == "PATCH" and sub not in _PLAIN_SUBRESOURCES:
+            HOSTACCESS.require_target(HOSTACCESS.patched(current, body), ns, kind)
+    body_kind = None if sub else kind
+    spec = body.get("spec") if isinstance(body, dict) else None
+    if isinstance(body, dict) and (method in ("POST", "PUT") or isinstance(spec, dict) and (
+            "template" in spec or "jobTemplate" in spec)):
+        HOSTACCESS.require_target(body, ns, body_kind)
 
 
 def age_secs(ts):
@@ -212,13 +259,12 @@ def parse_mem(s):
 
 def logsearch_read(ns, pod, container, since, limit, previous=False):
     """One container's log lines of the last since seconds, with timestamps;
-    with previous, those of the container before its last restart."""
+    with previous, those of the container before its last restart. At most
+    limit + 1 bytes, read on a pooled connection (#984)."""
     query = f"sinceSeconds={int(since)}&limitBytes={int(limit)}&timestamps=true" + (
         f"&container={urllib.parse.quote(container)}" if container else "") + ("&previous=true" if previous else "")
-    req = urllib.request.Request(f"{API}/api/v1/namespaces/{urllib.parse.quote(ns)}/pods/{urllib.parse.quote(pod)}/log?{query}",
-                                 headers={"Authorization": f"Bearer {TOKEN}"})
-    with urllib.request.urlopen(req, context=CTX, timeout=20) as r:
-        return r.read(int(limit) + 1).decode("utf-8", "replace")
+    return raw_get(f"/api/v1/namespaces/{urllib.parse.quote(ns)}/pods/{urllib.parse.quote(pod)}/log?{query}",
+                   max_bytes=int(limit))
 
 
 def _never_started(pod):
@@ -228,21 +274,48 @@ def _never_started(pod):
                and not (cs.get("lastState") or {}).get("terminated") for cs in statuses)
 
 
-def raw_get(path, timeout=20):
-    """Plain-text GET against the API (pod logs and similar)."""
-    return _request("GET", path, None, {}, timeout).decode("utf-8", "replace")
+def raw_get(path, timeout=20, max_bytes=None):
+    """Plain-text GET against the API (pod logs and similar); with max_bytes,
+    at most max_bytes + 1 bytes of it, so a caller can tell it was cut. The
+    path is checked as kget's is (api_path)."""
+    path = api_path(path)
+    return DEADLINE.read(timeout, lambda allowed: _request("GET", path, None, {}, allowed, max_bytes)).decode(
+        "utf-8", "replace")
 
 
 def ktable(path, timeout=20):
     """A list as the API server prints it: the columns kubectl get shows."""
-    return json.loads(_request("GET", path, None, {
-        "Accept": "application/json;as=Table;v=v1;g=meta.k8s.io,application/json"}, timeout).decode())
+    return json.loads(DEADLINE.read(timeout, lambda allowed: _request("GET", path, None, {
+        "Accept": "application/json;as=Table;v=v1;g=meta.k8s.io,application/json"}, allowed)).decode())
 
 
-def kget(path, timeout=10):
+def _one_object(path):
+    """Whether path names one object (no list, subresource or discovery):
+    /api/v1/[namespaces/NS/]KIND/NAME, /apis/GROUP/VERSION/[namespaces/NS/]KIND/NAME
+    or /api/v1/namespaces/NS."""
+    parts = [part for part in str(path).split("?", 1)[0].split("/") if part]
+    if parts[:1] == ["api"]:
+        rest = parts[2:]
+    elif parts[:1] == ["apis"]:
+        rest = parts[3:]
+    else:
+        return False
+    if len(rest) >= 3 and rest[0] == "namespaces":
+        rest = rest[2:]
+    return len(rest) == 2
+
+
+def kget(path, timeout=None):
+    """A read, given OBJECT_TIMEOUT for one object in a request and LIST_TIMEOUT
+    otherwise unless the caller says, at most what is left of the request's
+    time for reads (homestead_read_deadline), and a 429 asked again only while
+    it lasts."""
+    if timeout is None:
+        in_request = DEADLINE.remaining() is not None
+        timeout = OBJECT_TIMEOUT if in_request and _one_object(path) else LIST_TIMEOUT
     for attempt in range(len(KGET_RETRY) + 1):
         try:
-            return transport("GET", api_path(path), timeout=timeout)
+            return DEADLINE.read(timeout, lambda allowed: transport("GET", api_path(path), timeout=allowed))
         except urllib.error.HTTPError as error:
             # A read is safe to ask again; a write's 429 (an eviction a
             # disruption budget refuses) is an answer, and ksend keeps it.
@@ -253,7 +326,10 @@ def kget(path, timeout=10):
             except (TypeError, ValueError):
                 delay = KGET_RETRY[attempt]
             error.close()
-            time.sleep(max(0.1, min(3.0, delay)))
+            pause = max(0.1, min(3.0, delay))
+            if not DEADLINE.allows(pause):
+                raise DEADLINE.spent() from error
+            time.sleep(pause)
 
 
 def ksend(method, path, body=None, ctype="application/json", timeout=15):
@@ -408,6 +484,12 @@ def update_json(path, key, fn, *, replace=False, attempts=4, labels=None, read=N
 
 
 def require_workload_target(ns, name):
+    # An admin's request with no name is let through as before; one that
+    # names a workload names a valid one.
+    if HOSTACCESS.role() in (None, "admin") and not name:
+        return
+    request_name(ns, "namespace", namespace=True)
+    request_name(name, "workload name")
     if HOSTACCESS.role() not in (None, "admin"):
         HOSTACCESS.require_target(kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"), ns)
 
@@ -419,10 +501,51 @@ def _ksend(method, path, body=None, ctype="application/json", timeout=15, *, shu
     # remain available. The shutdown coordinator and the narrowly scoped AUTH
     # binding bypass this fence; authentication still uses the other guards.
     if not shutdown_bypass and FENCE_READY:
-        shutdown = cluster_shutdown().state()
+        shutdown = _fence_state()
         if shutdown and shutdown["phase"] not in ("released", "failed"):
             raise ValueError("Cluster shutdown is active; open Cluster → Shut down cluster for progress or recovery")
-    return transport(method, path, body, ctype, timeout)
+    try:
+        return transport(method, path, body, ctype, timeout)
+    finally:
+        if shutdown_bypass and _journal_write(path, body):
+            forget_fence()          # the coordinator changed the journal: the next write reads it
+
+
+# The fence's last reading (#985): every write asked the journal Secret, and
+# the legacy ConfigMap when it was absent, so the leader's lease renew every
+# 2 s alone cost two reads. A reading stands FENCE_TTL seconds, so a shutdown
+# another copy begins blocks writes here within that; this copy's own journal
+# writes drop it at once. A read that fails is never kept: the write is refused.
+FENCE_TTL = 1.5
+fence_clock = time.monotonic
+_fence = {"until": float("-inf"), "state": None, "source": None, "generation": 0}
+_fence_lock = threading.Lock()
+
+
+def _fence_state():
+    source = cluster_shutdown
+    with _fence_lock:
+        if _fence["source"] is source and fence_clock() < _fence["until"]:
+            return _fence["state"]
+        generation = _fence["generation"]
+    state = source().state()
+    with _fence_lock:
+        # A forget while this read ran (the coordinator wrote the journal):
+        # the reading may predate that write, so it answers this write only.
+        if _fence["generation"] == generation:
+            _fence.update(until=fence_clock() + FENCE_TTL, state=state, source=source)
+    return state
+
+
+def forget_fence():
+    with _fence_lock:
+        _fence.update(until=float("-inf"), state=None, source=None, generation=_fence["generation"] + 1)
+
+
+def _journal_write(path, body):
+    import homestead_cluster_shutdown as CLUSTER_SHUTDOWN
+    name = ((body or {}).get("metadata") or {}).get("name", "") if isinstance(body, dict) else ""
+    return "/secrets" in path and (path.rstrip("/").endswith("/" + CLUSTER_SHUTDOWN.NAME) or name == CLUSTER_SHUTDOWN.NAME)
 
 
 def transport(method, path, body=None, ctype=None, timeout=15):
@@ -438,13 +561,20 @@ def transport(method, path, body=None, ctype=None, timeout=15):
 
 # The API server keeps a connection open between requests (#705): a page that
 # makes thirty reads opens one connection and does one TLS handshake, not thirty.
-# Idle connections wait in a small pool shared by every thread; a thread takes
-# one, or opens one, and gives it back when the answer has been read in full.
-# An idle connection over a minute old is not reused (the API server closes idle
-# ones at 90 s), and any failure of a connection drops the whole idle pool: an
-# API server that went away without a reset would otherwise cost a full timeout
-# for every pooled connection in turn.
-_IDLE_MAX = 8
+# Idle connections wait in a pool shared by every thread; a thread takes one,
+# or opens one, and gives it back when the answer has been read in full. The
+# pool keeps 16 (#984): about forty background threads and 8-worker pools read
+# at once, and with 8 half of each burst reconnected. An idle connection over
+# a minute old is not reused (the API server closes idle ones at 90 s). A
+# connection that fails is closed. One dropped or refused (a reset, a closed
+# connection, an unreachable server), a connect that timed out, and a reused
+# connection that got no answer at all in time drop the whole idle pool too:
+# an API server that went away, with or without a reset (a powered-off host,
+# a moved virtual IP), would otherwise cost a full timeout for every pooled
+# connection in turn. A timeout once the headers came (a slow body), on a new
+# connection that is open, or one the request's deadline cut, drops only its
+# own: the server is there, and that one answer was slow.
+_IDLE_MAX = 16
 _IDLE_SECONDS = 60
 _idle = []
 _idle_lock = threading.Lock()
@@ -495,7 +625,39 @@ def _give_back(connection):
     connection.close()
 
 
-def _request(method, path, data, headers, timeout):
+def _body(connection, response, max_bytes=None):
+    """The answer's body, or with max_bytes its first max_bytes + 1 bytes. A
+    socket timeout bounds each read from the socket, not the whole answer, so
+    under a request's deadline (#984) the body is read a piece at a time, each
+    piece given at most what is left: an API server trickling its answer is
+    cut at the deadline, not after minutes."""
+    if DEADLINE.remaining() is None:
+        return response.read() if max_bytes is None else response.read(max_bytes + 1)
+    # An answer that ends the connection has left it (http.client): its
+    # socket is then only the response's own.
+    sock = connection.sock or getattr(getattr(response, "fp", None) and response.fp.raw, "_sock", None)
+    pieces, size = [], 0
+    while max_bytes is None or size <= max_bytes:
+        left = DEADLINE.remaining()
+        if left <= 0:
+            raise DEADLINE.spent()
+        if sock is not None:
+            sock.settimeout(min(connection.timeout, left))
+        try:
+            piece = response.read1(65536)
+        except TimeoutError as error:
+            if left < connection.timeout:
+                raise DEADLINE.spent() from error
+            raise
+        if not piece:
+            break
+        pieces.append(piece)
+        size += len(piece)
+    payload = b"".join(pieces)
+    return payload if max_bytes is None else payload[:max_bytes + 1]
+
+
+def _request(method, path, data, headers, timeout, max_bytes=None):
     """One request to the API server on a kept-open connection: the answer's
     bytes, or urllib's HTTPError for any answer that is not a success. A
     redirect is an HTTPError too, never followed with the token. A connection
@@ -507,10 +669,16 @@ def _request(method, path, data, headers, timeout):
     the socket's TimeoutError (connecting or reading), and a connection dropped
     mid-answer (RemoteDisconnected, IncompleteRead and other http.client errors)
     is a URLError wrapping it. Every caller catches OSError or Exception, or
-    URLError, TimeoutError and ConnectionError, which cover both."""
+    URLError, TimeoutError and ConnectionError, which cover both.
+
+    With max_bytes, at most max_bytes + 1 bytes of the answer are read; a
+    connection whose answer was not read to its end is closed, not pooled."""
     headers = {**headers, "Authorization": f"Bearer {TOKEN}"}
+    left = DEADLINE.remaining()
+    at_deadline = left is not None and timeout >= left
     pooled = _take(timeout) if method in _READS else None
     connection = pooled or _open(timeout)
+    answered = False
     try:
         try:
             connection.request(method, path, body=data, headers=headers)
@@ -520,18 +688,25 @@ def _request(method, path, data, headers, timeout):
             close_connections()
             if pooled is None:
                 raise
-            connection = _open(timeout)
+            pooled, connection = None, _open(timeout)
             connection.request(method, path, body=data, headers=headers)
             response = connection.getresponse()
-        payload = response.read()
+        answered = True
+        payload = _body(connection, response, max_bytes)
     except BaseException as error:
+        # Whether this connection was open (a connect that timed out leaves it
+        # without a socket) and was a new one: see the pool's comment above.
+        fresh_and_open = pooled is None and connection.sock is not None
         connection.close()
-        close_connections()
+        slow_answer = isinstance(error, DEADLINE.Spent) or isinstance(error, TimeoutError) and (
+            at_deadline or answered or fresh_and_open)
+        if not slow_answer:
+            close_connections()
         if isinstance(error, http.client.HTTPException):
             raise urllib.error.URLError(error) from error
         raise
-    if response.will_close:
-        connection.close()
+    if response.will_close or max_bytes is not None and len(payload) > max_bytes:
+        connection.close()   # the rest of a cut answer was never read
     else:
         _give_back(connection)
     if not 200 <= response.status < 300:

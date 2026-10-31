@@ -163,7 +163,7 @@ class JobStepsTests(unittest.TestCase):
         time.sleep(0.2)
         self.assertEqual(0, self.gate.count(second), "a later move overtook the trim waiting for the first")
         self.gate.released.set()
-        STEPS.wait(5)
+        self.assertTrue(STEPS.wait(60), "a step never finished")
         self.tick()
         self.assertTrue(until(lambda: self.gate.count(trim) == 1), "the trim never stepped")
 
@@ -182,7 +182,7 @@ class JobStepsTests(unittest.TestCase):
         time.sleep(0.2)
         self.assertEqual(STEPS.WORKERS, self.gate.most)
         self.gate.released.set()
-        STEPS.wait(5)
+        self.assertTrue(STEPS.wait(60), "a step never finished")
         self.assertLessEqual(self.gate.most, STEPS.WORKERS)
 
     def test_a_full_pool_takes_the_jobs_that_waited_longest_first(self):
@@ -190,7 +190,7 @@ class JobStepsTests(unittest.TestCase):
         jobs = [self.host_job(f"node-{n}") for n in range(3)]
         for _ in range(6):
             self.tick()
-            STEPS.wait(5)
+            self.assertTrue(STEPS.wait(60), "a step never finished")
         self.assertEqual([2, 2, 2], [self.gate.count(op) for op in jobs], self.gate.calls)
 
     def test_a_stop_waits_for_the_steps_in_flight(self):
@@ -247,7 +247,7 @@ class JobStepsTests(unittest.TestCase):
             return real(job_id)
         with mock.patch.object(OPS, "_resolve_outside", resolve), mock.patch("builtins.print"):
             STEPS.submit(loops, {("host", "node-1")}, lambda: resolve(loops))
-            STEPS.wait(5)
+            self.assertTrue(STEPS.wait(60), "a step never finished")
             with self.assertRaisesRegex(RuntimeError, "my step"):
                 OPS.list_operations()
             OPS.tick(lambda: True, self.beat)
@@ -300,7 +300,9 @@ class JobStepsTests(unittest.TestCase):
         with mock.patch.object(OPS, "_resolve_outside", side_effect=RuntimeError("store unreadable")), \
                 mock.patch("builtins.print"):
             self.tick()
-            STEPS.wait(5)
+            # On a loaded machine the failing step can take longer than a few
+            # seconds to be scheduled: wait for it, and say so if it never ends.
+            self.assertTrue(STEPS.wait(60), "the failing step never finished")
             wait = OPS.tick(lambda: True, self.beat)
         self.assertEqual("store unreadable", str(self.beats[-1]))
         self.assertEqual(OPS.ACTIVE_SECONDS, wait, "one job's failure slowed every job")

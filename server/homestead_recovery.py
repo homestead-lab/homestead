@@ -79,16 +79,11 @@ def _path():
 
 
 def _load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            data = json.load(handle)
-        if isinstance(data, dict):
-            return {"hosts": data.get("hosts") or {}, "worked": data.get("worked") or [],
-                    "returned": data.get("returned") or {}, "suggestion": data.get("suggestion") or {},
-                    "ran": data.get("ran") or ""}
-    except (OSError, ValueError):
-        pass
-    return {"hosts": {}, "worked": [], "returned": {}, "suggestion": {}, "ran": ""}
+    """Raises SHARED.Unreadable for a file that is there but cannot be read."""
+    data = SHARED.read_json(_path(), {})
+    return {"hosts": data.get("hosts") or {}, "worked": data.get("worked") or [],
+            "returned": data.get("returned") or {}, "suggestion": data.get("suggestion") or {},
+            "ran": data.get("ran") or ""}
 
 
 def _save(data):
@@ -334,7 +329,7 @@ def alert_facts(mode=None, maintenance=None):
              "title": f"{who} {'is' if len(hosts) == 1 else 'are'} back: {moves} container{'' if moves == 1 else 's'} could move to even out the hosts",
              "body": f"Containers started elsewhere while {who} {'was' if len(hosts) == 1 else 'were'} away. "
                      f"Balance hosts shows the moves; each restarts its container once. {then}",
-             "resolved": "No containers need to move back now", "href": "/containers", "signals": {"moves": moves}}]
+             "resolved": "No containers need to move back now", "href": "/containers?panel=rebalance", "signals": {"moves": moves}}]
 
 
 def tick(now=None):

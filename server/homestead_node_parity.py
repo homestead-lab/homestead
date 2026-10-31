@@ -43,6 +43,8 @@ import time
 import urllib.error
 
 import homestead_addons as addons
+import homestead_host_reads as READS
+import homestead_hostrun as HOSTRUN
 import homestead_roles as ROLES
 import homestead_shared as SHARED
 
@@ -107,12 +109,7 @@ def _path():
 
 
 def _load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            state = json.load(handle)
-        return state if isinstance(state, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_path(), {})
 
 
 def _get(path):
@@ -160,23 +157,34 @@ def _storage_hosts(ready):
     return [name for name in ready if name in stores]
 
 
+HOST_EVERY = 6 * 3600   # a host that keeps failing is tried this often (#976)
+
+
 def hosts(ready, state, longhorn=True):
-    """Each Ready node's host, once: {node: [what changed]}."""
+    """Each Ready node's host, once: {node: [what changed]}. A few hosts at
+    a time; one that fails READS.TRIES times in a row waits HOST_EVERY."""
     done = state.setdefault("hosts", {})
+    failures = state.setdefault("host_failures", {})
+    now = time.time()
+    due = [node for node in ready if (done.get(node) or {}).get("steps", 1) < HOST_STEPS
+           and READS.due(failures, node, now, HOST_EVERY)]
     changed = {}
-    for node in ready:
-        if (done.get(node) or {}).get("steps", 1) >= HOST_STEPS:
-            continue
-        try:
-            out, err = hostrun.run(node, f"LONGHORN={1 if longhorn else 0}\n" + HOST_SCRIPT, timeout=90,
-                                   change=f"Set {node} up as the other hosts are")
-        except Exception as error:
-            out, err = "", str(error)
+
+    def set_up(node):
+        return hostrun.run(node, f"LONGHORN={1 if longhorn else 0}\n" + HOST_SCRIPT, timeout=90,
+                           change=f"Set {node} up as the other hosts are")
+
+    for node, answer, error in READS.each(due, set_up):
+        out, err = answer if error is None else ("", str(error))
         words = dict(line.split(" ", 1) for line in out.splitlines() if " " in line)
         if "END" not in out.split():
             # Tried again next time; the other nodes are not held up by it.
+            # Busy with another change is not a failure.
+            if not isinstance(error, HOSTRUN.Busy):
+                READS.failed(failures, node, now)
             changed[node] = [f"could not check its host: {(err or out)[:200]}"]
             continue
+        READS.worked(failures, node)
         done[node] = {"at": int(time.time()), "steps": HOST_STEPS, "multipath": words.get("MULTIPATH", ""),
                       "iscsi": words.get("ISCSI", ""), "journal": words.get("JOURNAL", "")}
         notes = ["journal capped at 1 GiB"] if words.get("JOURNAL") == "capped" else []
@@ -189,6 +197,8 @@ def hosts(ready, state, longhorn=True):
                          + ": Longhorn cannot attach volumes there")
         if notes:
             changed[node] = notes
+    if not failures:
+        state.pop("host_failures", None)
     return changed
 
 
@@ -520,10 +530,15 @@ def _copies_note(raised, storing):
 
 def tick():
     """Returns [(node or "", what changed)] for the log."""
-    p = platform(True) or {}
+    p = platform() or {}
     if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
         return []
-    state = _load()
+    try:
+        state = _load()
+    except SHARED.Unreadable as error:
+        # Nothing done from a record that cannot be read, nor saved over it.
+        print(f"node parity: {error}", flush=True)
+        return []
     ready = _ready_nodes()
     out = []
     try:

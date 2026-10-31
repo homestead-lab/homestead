@@ -1,0 +1,220 @@
+"""The Hosts page and the volume list read each kubelet's summary from one
+background reading, all hosts at once, never one after another (#976)."""
+import sys
+import threading
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "server"))
+sys.path.insert(0, str(ROOT / "tests"))
+
+import homestead_kube as K
+import homestead_kubelet_stats as KSTATS
+import homestead_nodes as NODES
+import homestead_node_probes as PROBES
+import homestead_volume_usage as USAGE
+from fakes.kube import Kube
+
+NAMES = ("node-a", "node-b", "node-c")
+GIB = 1024 ** 3
+
+
+def node(name):
+    return {"apiVersion": "v1", "kind": "Node", "metadata": {"name": name, "labels": {}, "annotations": {}},
+            "status": {"capacity": {"cpu": "4", "memory": "8Gi"}, "conditions": [{"type": "Ready", "status": "True"}],
+                       "nodeInfo": {}, "addresses": [], "allocatable": {}}}
+
+
+def summary(rx=0):
+    return {"node": {"network": {"interfaces": [{"name": "eth0", "rxBytes": rx, "txBytes": rx}]},
+                     "fs": {"usedBytes": 10 * GIB, "capacityBytes": 100 * GIB}},
+            "pods": []}
+
+
+class Cluster:
+    """The shared fake API (tests/fakes/kube.py) holding the nodes, with a
+    kubelet summary per node that takes `delay` seconds. Enter `kube` (Base.cluster
+    does) so kget reads through homestead_kube as the app does."""
+
+    def __init__(self, delay=0.0):
+        self.delay, self.down, self.rx, self.calls = delay, set(), 1000, []
+        self.release = threading.Event()
+        self._lock = threading.Lock()
+        self.kube = Kube(*(node(name) for name in NAMES))
+        for name in NAMES:
+            self.kube.react("GET", f"/api/v1/nodes/{name}/proxy/stats/summary", self._summary)
+
+    def _summary(self, method, path, body):
+        if path.split("/")[4] in self.down:
+            raise OSError("kubelet did not answer")
+        return summary(self.rx)
+
+    def kget(self, path, timeout=None):
+        if path.endswith("/proxy/stats/summary"):
+            name = path.split("/")[4]
+            with self._lock:
+                self.calls.append((name, timeout))
+            if self.delay:   # here, not in the fake, which answers one request at a time
+                self.release.wait(self.delay)
+        return K.kget(path) if timeout is None else K.kget(path, timeout=timeout)
+
+
+class Base(unittest.TestCase):
+    def setUp(self):
+        KSTATS.reset()
+        PROBES.reset()
+        self.addCleanup(KSTATS.reset)
+        self.addCleanup(PROBES.reset)
+
+    def cluster(self, delay=0.0):
+        cluster = Cluster(delay)
+        self.enterContext(cluster.kube)
+        return cluster
+
+    def get_nodes(self, cluster):
+        with mock.patch.multiple(NODES, kget=cluster.kget, get_app_settings=lambda *args, **kwargs: {},
+                                 DEFAULT_APP_SETTINGS={"smart": {}}, parse_cpu=lambda value: 0.0,
+                                 parse_mem=lambda value: 1.0, SYS_NS=set(), node_duties=lambda *args, **kwargs: {},
+                                 workload_names=lambda *args, **kwargs: ([], [])), \
+                mock.patch.object(NODES.DISKS, "summary", lambda *args, **kwargs: {}), \
+                mock.patch.object(NODES.HOST_OS, "report", lambda *args, **kwargs: {"hosts": {}}), \
+                mock.patch.object(NODES, "node_temps", lambda **kw: {}), \
+                mock.patch.object(NODES.PROBES, "status", lambda *args, **kwargs: {}), \
+                mock.patch.object(NODES.HW, "reconcile_node", lambda name, labels, *args, **kwargs: (labels, set())), \
+                mock.patch.object(NODES.HW, "inventory",
+                                  lambda *args, **kwargs: [{"id": "igpu", "available": False, "detected": False}]):
+            return {n["name"]: n for n in NODES.get_nodes()}
+
+    def loop_running(self):
+        """As with the loop started, without its thread."""
+        return mock.patch.object(KSTATS, "running", lambda: True)
+
+
+class InPlaceTests(Base):
+    """Before the loop runs, a build reads every host at once."""
+
+    def test_hosts_are_read_at_the_same_time_with_a_short_timeout(self):
+        cluster = self.cluster(delay=0.4)
+        started = time.monotonic()
+        nodes = self.get_nodes(cluster)
+        took = time.monotonic() - started
+        self.assertLess(took, 1.0, "three hosts at 0.4 s each were read one after another")
+        self.assertEqual(sorted(NAMES), sorted(name for name, _ in cluster.calls))
+        self.assertEqual({KSTATS.TIMEOUT}, {timeout for _, timeout in cluster.calls})
+        self.assertEqual(4, KSTATS.TIMEOUT, "off the request path: a busy kubelet should not miss every round")
+        self.assertEqual(10.0, nodes["node-a"]["fs_pct"])
+        self.assertEqual("eth0", nodes["node-a"]["net_iface"])
+
+
+class BackgroundTests(Base):
+    """With the loop running, a build never waits on a kubelet."""
+
+    def test_a_build_does_not_wait_on_slow_kubelets(self):
+        cluster = self.cluster(delay=5.0)
+        self.addCleanup(cluster.release.set)
+        with self.loop_running():
+            started = time.monotonic()
+            nodes = self.get_nodes(cluster)
+            took = time.monotonic() - started
+        self.assertLess(took, 1.0, "the build waited on a kubelet")
+        self.assertEqual([], cluster.calls, "nothing is read on the build's thread")
+        self.assertNotIn("fs_pct", nodes["node-a"], "no reading yet: no figures")
+        self.assertEqual(set(NAMES), set(KSTATS._wanted), "the loop reads the hosts asked about")
+
+    def test_the_loop_reading_is_used_and_unknown_once_a_kubelet_stops(self):
+        cluster = self.cluster()
+        with self.loop_running():
+            self.get_nodes(cluster)
+            KSTATS.run_round(cluster.kget, now=time.time() - 20)
+            cluster.rx = 1000 + 20 * 1_000_000 // 8          # 1 Mbit/s for 20 s
+            KSTATS.run_round(cluster.kget)
+            cluster.calls.clear()
+            nodes = self.get_nodes(cluster)
+            self.assertEqual([], cluster.calls)
+            self.assertEqual(1.0, nodes["node-a"]["rx_mbps"])
+            again = self.get_nodes(cluster)
+            self.assertEqual(1.0, again["node-a"]["rx_mbps"], "asking twice for one reading keeps its rate")
+            cluster.down = {"node-b"}
+            KSTATS.run_round(cluster.kget)
+            nodes = self.get_nodes(cluster)
+        for key in ("rx_mbps", "tx_mbps", "fs_pct", "fs_used_gb"):
+            self.assertNotIn(key, nodes["node-b"], "a kubelet that missed its read is unknown, not its last figures")
+        self.assertEqual(10.0, nodes["node-a"]["fs_pct"])
+
+    def test_a_reading_two_rounds_old_is_unknown(self):
+        cluster = self.cluster()
+        with self.loop_running():
+            self.get_nodes(cluster)
+            KSTATS.run_round(cluster.kget, now=time.time() - 2 * KSTATS.INTERVAL - 1)
+            nodes = self.get_nodes(cluster)
+        self.assertNotIn("fs_pct", nodes["node-a"])
+
+    def test_the_first_rate_after_a_restart_is_unknown(self):
+        cluster = self.cluster()
+        with self.loop_running():
+            self.get_nodes(cluster)
+            cluster.rx = 10 ** 9
+            KSTATS.run_round(cluster.kget, now=time.time() - 15)
+            cluster.rx = 1000                                  # counters started again
+            KSTATS.run_round(cluster.kget)
+            nodes = self.get_nodes(cluster)
+        self.assertIsNone(nodes["node-a"]["rx_mbps"])
+        self.assertIsNone(nodes["node-a"]["tx_mbps"])
+
+    def test_a_reading_too_old_is_dropped(self):
+        cluster = self.cluster()
+        with self.loop_running():
+            self.get_nodes(cluster)
+            KSTATS.run_round(cluster.kget, now=time.time() - KSTATS.DROP_AFTER - 1)
+            nodes = self.get_nodes(cluster)
+        self.assertNotIn("fs_pct", nodes["node-a"])
+
+    def test_hosts_nobody_asks_about_are_not_read(self):
+        cluster = self.cluster()
+        with self.loop_running():
+            self.get_nodes(cluster)
+        cluster.calls.clear()
+        KSTATS.run_round(cluster.kget, now=time.time() + KSTATS.WANTED_FOR + 1)
+        self.assertEqual([], cluster.calls)
+
+
+class SharedReadingTests(Base):
+    """The volume list uses the Hosts page's reading instead of its own."""
+
+    def test_one_summary_read_per_host_for_both(self):
+        cluster = self.cluster()
+        claims = {}
+        with self.loop_running():
+            self.get_nodes(cluster)
+            KSTATS.run_round(cluster.kget)
+            pods = {"items": [{"metadata": {"uid": f"pod-{n}", "namespace": "lab"},
+                               "spec": {"nodeName": n, "volumes": [{"persistentVolumeClaim": {"claimName": "data"}}]},
+                               "status": {"phase": "Running"}} for n in NAMES]}
+            claims = {("lab", "data"): {"metadata": {}, "spec": {}}}
+            get = lambda path, **kw: pods if path == "/api/v1/pods" else cluster.kget(path, **kw)
+            USAGE.collect(get, claims)
+            self.get_nodes(cluster)
+        self.assertEqual(len(NAMES), len(cluster.calls), "one summary read per host for the page and the volumes")
+
+
+    def test_a_kubelet_that_missed_its_last_read_says_nothing_about_volumes(self):
+        cluster = self.cluster()
+        pods = {"items": [{"metadata": {"uid": "pod-a", "namespace": "lab"},
+                           "spec": {"nodeName": "node-a", "volumes": [{"persistentVolumeClaim": {"claimName": "data"}}]},
+                           "status": {"phase": "Running"}}]}
+        claims = {("lab", "data"): {"metadata": {}, "spec": {}}}
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        sample = {"pvcRef": {"namespace": "lab", "name": "data"}, "time": stamp, "usedBytes": GIB, "capacityBytes": 2 * GIB}
+        plain = cluster.kget
+        cluster.kget = lambda path, **kw: ({**plain(path, **kw), "pods": [{"podRef": {"uid": "pod-a"}, "volume": [sample]}]}
+                                           if path.endswith("/stats/summary") else plain(path, **kw))
+        get = lambda path, **kw: pods if path == "/api/v1/pods" else cluster.kget(path, **kw)
+        self.assertIn(("lab", "data"), USAGE.collect(get, claims))
+        cluster.down = {"node-a"}
+        self.assertEqual({}, USAGE.collect(get, claims), "unknown, not the last reading")
+
+if __name__ == "__main__":
+    unittest.main()

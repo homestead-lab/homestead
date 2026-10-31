@@ -11,7 +11,6 @@ On each k3s or RKE2 node the leader raises them once - never lowers them -
 to 8192 instances and 524288 watches, now and in /etc/sysctl.d, so they hold
 after a reboot. The installer writes the same file on a new machine.
 """
-import json
 import os
 import time
 
@@ -35,12 +34,7 @@ def _path():
 
 
 def _load():
-    try:
-        with open(_path(), encoding="utf-8") as handle:
-            state = json.load(handle)
-        return state if isinstance(state, dict) else {}
-    except (OSError, ValueError):
-        return {}
+    return SHARED.read_json(_path(), {})
 
 
 def script():
@@ -56,10 +50,15 @@ echo "RAISED $I $W $NI $NW"
 
 def tick():
     """Each Ready node not done yet. Returns {node: "from -> to"} for those raised now."""
-    p = platform(True) or {}
+    p = platform() or {}
     if p.get("harvester") or p.get("distribution") not in ("k3s", "rke2"):
         return {}
-    state = _load()
+    try:
+        state = _load()
+    except SHARED.Unreadable as error:
+        # Nothing done from a record that cannot be read, nor saved over it.
+        print(f"inotify limits: {error}", flush=True)
+        return {}
     raised = {}
     for node in (kget("/api/v1/nodes") or {}).get("items", []):
         name = node["metadata"]["name"]

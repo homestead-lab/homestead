@@ -41,7 +41,7 @@ _last = {"at": 0, "result": None}
 STORES = [
     ("Monitoring history", ["uptime.json"], "hour by hour for 30 days"),
     ("Long-term stats", ["history.json", "history-live.json"], "live for an hour, five-minutely for 2 days, hourly for 90 days"),
-    ("Change history", ["change-history.json"], "50 changes per app, for 180 days"),
+    ("Change history", ["change-history.json", "change-templates/*"], "50 changes per app, for 180 days"),
     ("Storage forecast", ["storage-forecast.json"], "a figure a day for 90 days"),
     ("Hosts coming back", ["recovery.json"], "which hosts returned in the last week, and whether that was dealt with"),
     ("App usage", ["usage.json"], "a summary a day of each container's CPU and memory, for 14 days"),
@@ -254,7 +254,10 @@ def alert_facts(rep):
     """The volume is filling: name what is using it."""
     vol = (rep or {}).get("volume") or {}
     pct = vol.get("pct")
-    if pct is None or pct < PRESSURE_PCT:
+    if pct is None:
+        # The volume could not be measured: not "has room again".
+        return [{"unknown_key": "housekeeping:volume"}]
+    if pct < PRESSURE_PCT:
         return []
     biggest = ", ".join(f"{s['label']} ({s['size'] / 1024**2:.0f} MiB)" for s in (rep.get("stores") or [])[:3])
     return [{"key": "housekeeping:volume", "category": "outage" if pct >= CRIT_PCT else "degraded",

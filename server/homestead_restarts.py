@@ -32,6 +32,9 @@ import homestead_shared as SHARED
 import homestead_workloads as WORKLOADS
 
 FILE = "restarts.json"
+# Whose each ReplicaSet is, as last read (_owners): the reader, when, and uid ->
+# controller reference.
+_known = {"read": None, "at": 0.0, "owners": {}}
 KEEP = 20
 KEEP_DAYS = 30
 MAX_APPS = 300
@@ -40,6 +43,7 @@ LOG_CHARS = 4000
 LOG_READS = 3            # previous logs read per look; the rest say why not
 EVENT_READS = 5
 HASHES = 5              # templates an app is remembered to have had lately
+OWNERS_FOR = 600        # whose each ReplicaSet is, read again at least this often
 EVENT_WINDOW = 120      # an event this close to an exit may explain it
 PENDING = 600           # how long an ended pod waits for its replacement
 OUTAGE_WINDOW = 120      # an outage restart and the restartedAt it wrote
@@ -246,6 +250,30 @@ def _prefetch(before, current, first, read, tail, outage):
     return got
 
 
+def _owners(pods, read, now):
+    """ReplicaSet uid -> its controller reference, for the ReplicaSets the
+    pods name. The ReplicaSet list is the largest list Homestead reads (each
+    carries a whole pod template, ten old ones per Deployment), and a
+    ReplicaSet's controller is set when it is made (#980): the list is read
+    only when a pod names a ReplicaSet not seen yet, or OWNERS_FOR after the
+    last read, should one have been orphaned and adopted. What was learnt
+    through one reader is not used for another (a test's own cluster)."""
+    named = {ref.get("uid") for pod in (pods or {}).get("items") or []
+             for ref in (pod.get("metadata") or {}).get("ownerReferences") or []
+             if ref.get("controller") and ref.get("kind") == "ReplicaSet"}
+    known = _known
+    if known["read"] != read or now - known["at"] >= OWNERS_FOR or not named <= set(known["owners"]):
+        sets = read("/apis/apps/v1/replicasets").get("items") or []
+        owners = {(r.get("metadata") or {}).get("uid"): next((o for o in (r.get("metadata") or {}).get("ownerReferences") or []
+                                                             if o.get("controller")), None) for r in sets}
+        # A ReplicaSet a pod names but the list has not (made since): asked
+        # again on the next look, not taken as nobody's for good.
+        known = {"read": read, "at": now, "owners": owners}
+        if named <= set(owners):
+            _known.update(known)
+    return known["owners"]
+
+
 def observe(pods, now=None, read=None, tail=None, outage=None, sys_ns=None):
     """One look at the pod list (leader only). Returns how many records it wrote."""
     now = time.time() if now is None else now
@@ -255,14 +283,12 @@ def observe(pods, now=None, read=None, tail=None, outage=None, sys_ns=None):
         tail = lambda ns, pod, container: DIAGNOSTICS.log(ns, pod, container, True, LOG_LINES)  # noqa: E731
     outage = outage or (lambda: OUTAGE._load().get("items") or {})
     try:
-        sets = read("/apis/apps/v1/replicasets").get("items") or []
+        owners = _owners(pods, read, now)
     except Exception as error:
         # Whose pod is whose cannot be told: a look on a guess could call a
         # running app's pods gone. This one changes nothing.
         print(f"restart record skipped: ReplicaSets not read: {str(error)[:160]}", flush=True)
         return 0
-    owners = {(r.get("metadata") or {}).get("uid"): next((o for o in (r.get("metadata") or {}).get("ownerReferences") or []
-                                                         if o.get("controller")), None) for r in sets}
     current = _app_pods(pods, WORKLOADS.SYS_NS if sys_ns is None else sys_ns, owners)
     try:
         before = SHARED.read_json(_path(), {})

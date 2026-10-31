@@ -37,11 +37,15 @@ window.nodeIfDown = async (node, back = null) => {
   const chips = [c.stops && UI.chip(`${c.stops} stop`, "bad"), c.waits && UI.chip(`${c.waits} wait`, "warn"),
     c.unknown && UI.chip(`${c.unknown} unknown`, "neutral"),
     c.moves && UI.chip(`${c.moves} move`, "ok"), c.at_risk && UI.chip(`${c.at_risk} volume${c.at_risk === 1 ? "" : "s"} at risk`, "bad"),
+    // null: Longhorn's copies weren't read, so the risk is unknown, not none (#1002).
+    c.at_risk === null && UI.chip("volume risk unknown", "neutral"),
     c.fewer_copies && UI.chip(`${c.fewer_copies} with fewer copies`, "warn"), c.addresses && UI.chip(`${c.addresses} address${c.addresses === 1 ? "" : "es"} move`, "info")].filter(Boolean);
   $("#mbody").innerHTML = `<div class="ui-stack">
     ${UI.lead(esc(`What becomes of what runs on ${node} if it stops answering - a failure, or a reboot without moving things first. ${p.others_ready.length ? `${p.others_ready.length} other host${p.others_ready.length === 1 ? " is" : "s are"} ready to take work.` : "No other host is ready."}`))}
-    ${chips.length ? `<div class="row impact-chips">${chips.join("")}</div>` : '<div class="ui-empty">Nothing of yours runs here, and no volume keeps a copy here.</div>'}
-    ${(p.unread || []).length ? `<div class="dim xs">Couldn't read ${esc(p.unread.join(", "))}, so none of them is listed.</div>` : ""}
+    ${chips.length ? `<div class="row impact-chips">${chips.join("")}</div>`
+      // With something unread, "nothing here" would be a guess: the line below says what.
+      : (p.unread || []).length ? "" : '<div class="ui-empty">Nothing of yours runs here, and no volume keeps a copy here.</div>'}
+    ${(p.unread || []).length ? `<div class="dim xs">Couldn't read ${esc(p.unread.join(", "))}, so this may not be all of it.</div>` : ""}
     ${section("Stops until it is back", by("stops"), by("stops").map(r => impactApp(r, node)).join(""))}
     ${section("Waits", by("waits"), by("waits").map(r => impactApp(r, node)).join(""))}
     ${section("Couldn't be checked", by("unknown"), by("unknown").map(r => impactApp(r, node)).join(""))}

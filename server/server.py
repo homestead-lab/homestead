@@ -207,7 +207,7 @@ MOVED.update(dict.fromkeys(("_fleet_rename", "enforce_update_policy", "get_app_s
 SETTINGS_HELPERS.bind_routes(_late(*SETTINGS_HELPERS.ROUTE_NEEDS), **{name: globals()[name] for name in SETTINGS_HELPERS.VALUES})
 import homestead_web_paths as WEB_PATHS
 from homestead_web_paths import (
-    is_app_identity, is_asset_path, is_icon_png, is_page_path, is_public_path, is_spa_route,
+    is_app_identity, is_asset_path, is_icon_png, is_page_path, is_spa_route,
     is_vendor_path,
 )
 WEB_PATHS.bind_routes(_late(*WEB_PATHS.ROUTE_NEEDS), **{name: globals()[name] for name in WEB_PATHS.VALUES})
@@ -302,10 +302,7 @@ def _settings_map():
 
 def app_settings_payload():
     settings = json.loads(json.dumps(CACHE.cached(SETTINGS_HELPERS.REVISION_KEY, 15, SETTINGS_HELPERS.app_settings_with_revision)))
-    try:
-        kube = KUBE_HELPERS.kget("/version").get("gitVersion", "")
-    except Exception:
-        kube = ""
+    kube = SETTINGS_HELPERS.kube_version(KUBE_HELPERS.kget)
     settings["info"] = {"version": HOMESTEAD_VERSION, "namespace": DEFAULT_NS,
                         "storage_class": STORAGE_CLASS, "vip": LB_IP,
                         "kubernetes": kube, "node_probe": PROBE.status(),
@@ -1203,12 +1200,9 @@ class H(HTTP.LimitedHandler):
                     "duration": round((time.monotonic() - self._diagnostic_started) * 1000)})
             except Exception:
                 pass  # Recording must never change the result of a cluster action.
-        if code >= 400:
+        if HTTP.closes_after(self, code):
             self.close_connection = True
-        if isinstance(body, (dict, list)):
-            body = json.dumps(body).encode()
-        elif isinstance(body, str):
-            body = body.encode()
+        body = STATIC.answer(self, code, body, ctype)  # bytes; gzipped for the big listed reads (#982)
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
@@ -1407,8 +1401,7 @@ class H(HTTP.LimitedHandler):
             if origin and urllib.parse.urlparse(origin).netloc.lower() != host:
                 self._send(403, {"error": "request origin rejected"})
                 return True
-        if (is_spa_route(path) or is_page_path(path) or is_public_path(path) or is_vendor_path(path) or
-                (path.startswith("/js/") and path.endswith(".js"))):
+        if WEB_PATHS.needs_no_session(path):
             return None
         authorization = self.headers.get("Authorization", "")
         if authorization[:7].lower() == "bearer ":
@@ -1444,7 +1437,7 @@ class H(HTTP.LimitedHandler):
         """An API key: for /api/v1, /mcp and /metrics (every key reads), checked,
         and let through with its scopes, which /api/v1 enforces per endpoint. No cookie
         is involved, so there is no cross-site form to guard against."""
-        if not path.startswith("/api/v1/") and path not in (MCP.PATH, "/metrics"):
+        if not WEB_PATHS.takes_key(path):
             self._send(401, {"error": "API keys work only on /api/v1, /mcp and /metrics; GET /api/v1/openapi.json lists what they can do"})
             return True
         try:
@@ -1479,7 +1472,7 @@ class H(HTTP.LimitedHandler):
         checked the role the module declared for it."""
         route = MODULE_ROUTES.find(method, path)
         if route is not None:
-            MODULE_ROUTES.answer(self, route.handler(MODULE_ROUTES.Request(
+            MODULE_ROUTES.answer(self, MODULE_ROUTES.call(route, MODULE_ROUTES.Request(
                 method, path, query, body, getattr(self, "user", None), getattr(self, "role", None),
                 self._client_ip() if getattr(self, "client_address", None) else "", MODULE_ROUTES.connection(self))), route.module)
         return route is not None
@@ -1506,7 +1499,7 @@ class H(HTTP.LimitedHandler):
 
     def _begin(self):
         """Per request: a connection can carry several, and the handler stays."""
-        REQUEST_SCOPE.unbind()
+        REQUEST_SCOPE.begin(self)
         self.api_key = None
         self._extra_headers = []
         self._raw = None
@@ -1639,8 +1632,8 @@ class H(HTTP.LimitedHandler):
             if is_asset_path(p) and not is_icon_png(p):
                 return self._file(f"{WEBROOT}/assets/{os.path.basename(p)}", "image/svg+xml")
             if is_vendor_path(p):
-                # Vendored paths carry no version, so the browser checks back
-                # each time; the installed app's worker keeps them per release.
+                # Vendored paths carry no version, so the browser checks back each time (a
+                # file named by its content is kept); the installed app's worker keeps them per release.
                 return self._file(f"{WEBROOT}{p}", VENDOR_TYPES[os.path.splitext(p)[1]], cache="no-cache")
             if p == "/app.js":
                 return self._file(f"{WEBROOT}/app.js", "application/javascript")
@@ -1782,22 +1775,22 @@ def start_background_tasks():
 
 def finish_self_data_helpers():
     if _self_data_fence is None: return
-    while True:
+    failures = 0
+    while failures < SELF_DATA_FINISH.ATTEMPTS:
         try:
             with self_data_activity():
                 result = SELF_DATA_FINISH.finish(_self_data_fence, KUBE_HELPERS.kget, KUBE_HELPERS.ksend)
                 if result["done"]:
                     SELF_DATA_EXECUTE.reconcile_completed(OPS, DATA_DIR, SELF.NS, NAMES.BRAND)
             if result["done"]: return
+            failures = 0  # counted in a row; a pass that answered resets it
         except SELF_DATA_FENCE.Held as error:
             print("Data move helper cleanup needs review: " + str(error), flush=True)
             return
-        except Exception:
-            # The verified destination stays usable. Do not replay a delete or
-            # remove either PVC to make cleanup appear successful.
-            print("Data move helper cleanup needs review; both volumes are retained", flush=True)
-            return
-        time.sleep(2)
+        except Exception:  # an API error: the next pass observes a delete, keeps both PVCs
+            failures += 1
+        time.sleep(2 * failures or 2)
+    print("Data move helper cleanup needs review; both volumes are retained", flush=True)
 
 
 def finish_self_data_boot():

@@ -100,9 +100,10 @@ class ViewerReadsTests(Fixture):
             self.assertIn("/api/v1/namespaces/lab/pods/homestead-image-scan-x", deleted)
             self.assertTrue(any("/daemonsets/homestead-pull-frigate" in path for path in deleted))
             self.assertIn("/api/v1/namespaces/media/secrets/homestead-import-b-source", deleted)
-            # node2 has never been scanned, so a scan starts there (and on node1,
-            # whose scan was only just read).
-            self.assertEqual(2, len(started))
+            # node2 has never been scanned, so a scan starts there - and only
+            # there: node1's scan was only just read (#976).
+            self.assertEqual(1, len(started))
+            self.assertEqual("node2", (kube.writes[[m for m, *_ in kube.writes].index("POST")][2]["spec"]["nodeName"]))
         self.assertIn("node1", IMAGES._SCANS)
 
     def test_a_fresh_scan_is_not_asked_again(self):
@@ -135,6 +136,26 @@ class BackgroundScanTests(Fixture):
             self.assertIn("/api/v1/namespaces/lab/pods/homestead-image-scan-x",
                           {path for method, path, *_ in kube.writes if method == "DELETE"})
             self.assertEqual([], self.posts(kube), "a scan that failed just now counts as this round's")
+
+    def test_a_scan_whose_listing_cannot_be_read_counts_as_failed(self):
+        # #976: it was swallowed, so the host stayed stale and every host was
+        # scanned again at each retry.
+        with Kube(node(), finished_scan()) as kube, \
+                mock.patch.object(sys.modules["homestead_shim"], "raw_get", lambda path: "not a listing"):
+            IMAGES.tick()
+            self.assertIn("/api/v1/namespaces/lab/pods/homestead-image-scan-x",
+                          {path for method, path, *_ in kube.writes if method == "DELETE"})
+            self.assertEqual([], self.posts(kube), "the scan that could not be read counts as this round's")
+        self.assertIn("node1", IMAGES._SCAN_FAILED)
+        self.assertNotIn("node1", IMAGES._SCANS)
+
+    def test_only_the_stale_hosts_are_scanned_again(self):
+        IMAGES._SCANS["node1"] = {"at": time.time(), "images": []}
+        IMAGES._SCANS["node2"] = {"at": time.time() - IMAGES.SCAN_FRESH - 60, "images": []}
+        with Kube(node(), node("node2"), node("node3")) as kube:
+            IMAGES.tick()
+            scanned = sorted(body["spec"]["nodeName"] for method, path, body, _ in kube.writes if method == "POST")
+        self.assertEqual(["node2", "node3"], scanned, "node1's scan is fresh")
 
     def test_a_scan_that_fails_part_way_still_counts_as_started(self):
         def pod(name, ns, node_name, *a, **k):

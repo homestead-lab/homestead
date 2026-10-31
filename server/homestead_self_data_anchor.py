@@ -153,11 +153,12 @@ def _validate(state, namespace):
             raise Held("The data move recovery receipt is invalid")
         if recovery["action"] == "return-original":
             entries = state["journal"]["ref"]["storage_writes"]
-            if (state["phase"] not in ("quiesce", "copy", "verify", "switch", "done")
+            if (state["phase"] not in ("prepare", "quiesce", "copy", "verify", "switch", "done")
                     or any(e["step"] in ("switch", "start") for e in entries)):
                 raise Held("Returning to the original volume is prohibited after cutover")
+            # An empty journal: held before the stop, so nothing was restarted.
             if state["phase"] == "done" and (any(e["state"] != "accepted" for e in entries)
-                    or not any(e["step"] == "recover-start" for e in entries)
+                    or entries and not any(e["step"] == "recover-start" for e in entries)
                     or any(e["step"] == "copy-job" for e in entries) and not any(
                         e["step"] in ("release-copy", "recover-release-copy") for e in entries)):
                 raise Held("Original-volume recovery completion has incomplete evidence")
@@ -481,8 +482,9 @@ class Anchor:
     def recovered(self):
         self.handle()
         entries = self.state["journal"]["ref"]["storage_writes"]
+        never_stopped = not entries and self.state["phase"] == "prepare"
         if (self.state.get("recovery", {}).get("action") != "return-original"
-                or not any(e["step"] == "recover-start" for e in entries)
+                or not never_stopped and not any(e["step"] == "recover-start" for e in entries)
                 or any(e["state"] != "accepted" for e in entries)):
             raise Held("Original-volume recovery has no verified restart")
         state = copy.deepcopy(self.state); state["phase"] = "done"

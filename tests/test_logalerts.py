@@ -797,21 +797,12 @@ class Wiring(unittest.TestCase):
         import homestead_kube as KUBE
         urls = []
 
-        class Answer:
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *exc):
-                return False
-
-            def read(self, n):
-                return b""
-
-        def urlopen(request, **kwargs):
-            urls.append(request.full_url)
-            return Answer()
-        with mock.patch.multiple(KUBE, API="https://k.example.com", TOKEN="t", CTX=None, create=True), \
-                mock.patch.object(KUBE.urllib.request, "urlopen", urlopen):
+        def raw_get(path, timeout=20, max_bytes=None):
+            # On the pooled client (#984), bounded at limit + 1 bytes.
+            urls.append(path)
+            self.assertEqual(100, max_bytes)
+            return ""
+        with mock.patch.object(KUBE, "raw_get", raw_get):
             KUBE.logsearch_read("lab", "web-1", "web", 60, 100)
             KUBE.logsearch_read("lab", "web-1", "web", 60, 100, True)
         self.assertNotIn("previous", urls[0])

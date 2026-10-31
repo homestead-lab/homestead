@@ -177,7 +177,9 @@ class Fake:
 
 
 class ShutdownTests(unittest.TestCase):
-    def setUp(self): self.f = Fake()
+    def setUp(self):
+        self.f = Fake()
+        S.Shutdown._legacy_absent.clear()      # each test's cluster is its own (#985)
 
     def test_configmap_writer_cannot_replace_the_approved_image_or_release_the_fence(self):
         c = self.f.start()
@@ -779,5 +781,62 @@ class MaintenanceTests(unittest.TestCase):
         self.H.record(self.overview({"a": "a-2"}), now=back + self.H.RETURN_GRACE + 300)
         event = self.H.maintenance_events("b")[0]
         self.assertEqual(("limit", back + self.H.RETURN_GRACE + 300), (event["outcome"], event["end"]))
+
+
+class RestoreRaceTests(unittest.TestCase):
+    """Node versions move every minute or so (kubelet status, leases): one
+    that moves between restore's read and its patch is read again, so the
+    hosts after it are not left cordoned."""
+
+    RUN = "run-1"
+
+    def node(self, name, cordoned=True, rv_note="1"):
+        return {"apiVersion": "v1", "kind": "Node",
+                "metadata": {"name": name, "uid": name + "-uid", "annotations": {S.ANNOTATION: self.RUN}},
+                "spec": {"unschedulable": cordoned}, "status": {"note": rv_note}}
+
+    def plan(self, *names):
+        return {"nodes": [{"name": n, "uid": n + "-uid", "cordoned": False} for n in names]}
+
+    def shutdown(self):
+        return S.Shutdown(S.KUBE.kget, S.KUBE.ksend, "lab", "homestead", "repo/image@sha256:" + "a" * 64)
+
+    def test_a_host_that_moves_between_read_and_patch_is_read_again_and_the_rest_restored(self):
+        from fakes.kube import Kube
+        with Kube(self.node("node-a"), self.node("node-b")) as kube:
+            moved = []
+
+            def kubelet(method, path, body):
+                if not moved:
+                    moved.append(True)
+                    kube.add(self.node("node-a", rv_note="2"))    # a status write in between
+            kube.react("PATCH", "/api/v1/nodes/node-a", kubelet)
+            self.shutdown().restore(self.plan("node-a", "node-b"), self.RUN)
+            for name in ("node-a", "node-b"):
+                obj = kube.object("/api/v1/nodes/" + name)
+                self.assertFalse(obj["spec"]["unschedulable"], name)
+                self.assertNotIn(S.ANNOTATION, obj["metadata"].get("annotations") or {}, name)
+            self.assertEqual(len([w for w in kube.writes if w[1] == "/api/v1/nodes/node-a"]), 2)
+
+    def test_a_host_that_keeps_moving_is_still_an_error(self):
+        from fakes.kube import Kube
+        with Kube(self.node("node-a")) as kube:
+            kube.fail("/api/v1/nodes/node-a", 409, times=10, method="PATCH")
+            with self.assertRaises(urllib.error.HTTPError):
+                self.shutdown().restore(self.plan("node-a"), self.RUN)
+            self.assertTrue(kube.object("/api/v1/nodes/node-a")["spec"]["unschedulable"])
+
+    def test_a_fresh_read_still_checks_identity_and_the_run(self):
+        from fakes.kube import Kube
+        with Kube(self.node("node-a"), self.node("node-b")) as kube:
+            def replaced(method, path, body):
+                if not kube.writes[:-1]:
+                    kube.add(dict(self.node("node-a"), metadata={"name": "node-a", "uid": "other-uid",
+                                                                  "annotations": {S.ANNOTATION: self.RUN}}))
+            kube.react("PATCH", "/api/v1/nodes/node-a", replaced)
+            with self.assertRaisesRegex(ValueError, "Host identity changed"):
+                self.shutdown().restore(self.plan("node-a", "node-b"), self.RUN)
+            self.assertTrue(kube.object("/api/v1/nodes/node-b")["spec"]["unschedulable"])
+
 
 if __name__ == "__main__": unittest.main()

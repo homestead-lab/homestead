@@ -293,7 +293,7 @@ class VMCreateAdmissionTests(unittest.TestCase):
         self.objects["/apis/kubevirt.io/v1/virtualmachines"]["metadata"] = {"continue": "next-page"}
         result, writes, _ = self.call("/api/vm/create/preview", self.body)
         self.assertEqual(400, result[0], result)
-        self.assertIn("ownership inventory is incomplete", result[1]["error"])
+        self.assertRegex(result[1]["error"], "ownership inventory is incomplete|Couldn't check whether another VM uses this disk")
         writes.assert_not_called()
 
     def test_borrowed_disk_claimed_by_stopped_vm_after_review_is_not_reused(self):

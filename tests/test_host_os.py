@@ -1,5 +1,7 @@
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -246,6 +248,87 @@ class StateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Slow(Host):
+    """A host helper that takes `delay` seconds and counts how many run at once;
+    hosts in `broken` print nothing."""
+
+    def __init__(self, out, delay=0.2, broken=()):
+        super().__init__(out)
+        self.delay, self.broken, self.now, self.most, self.read = delay, set(broken), 0, 0, []
+        self._lock = threading.Lock()
+
+    def run(self, node, script, timeout=60, change="", holder=""):
+        with self._lock:
+            self.now += 1
+            self.most = max(self.most, self.now)
+            self.read.append(node)
+        try:
+            time.sleep(self.delay)
+            return ("" if node in self.broken else self.out), ""
+        finally:
+            with self._lock:
+                self.now -= 1
+
+
+class PoolTests(unittest.TestCase):
+    """Hosts are read a few at a time, and a broken one is not read every round (#976)."""
+
+    def setUp(self):
+        self.data = tempfile.mkdtemp()
+        HOST_OS._FAILED.clear()
+        self.addCleanup(HOST_OS._FAILED.clear)
+        self.nodes = {"items": [{"metadata": {"name": f"node-{i}"},
+                                 "status": {"conditions": [{"type": "Ready", "status": "True"}]}} for i in range(6)]}
+
+    def bind(self, host):
+        HOST_OS.bind(lambda path: self.nodes, host, lambda force=False: {"distribution": "k3s"}, self.data)
+
+    def test_a_round_reads_at_most_three_hosts_at_once(self):
+        host = Slow(UBUNTU)
+        self.bind(host)
+        started = time.monotonic()
+        self.assertEqual(6, len(HOST_OS.tick(now=10 ** 10)))
+        took = time.monotonic() - started
+        self.assertEqual(3, host.most)
+        self.assertLess(took, 0.9, "six hosts at 0.2 s were read one after another")
+
+    def test_check_now_reads_at_most_three_hosts_at_once(self):
+        host = Slow(UBUNTU)
+        self.bind(host)
+        HOST_OS.check_all(wait=True)
+        self.assertEqual(3, host.most)
+        self.assertEqual(6, len(HOST_OS.report()["checking"]["done"]))
+
+    def test_check_now_starts_a_backing_off_host_afresh(self):
+        self.nodes["items"] = self.nodes["items"][:1]
+        host = Slow(UBUNTU, delay=0, broken={"node-0"})
+        self.bind(host)
+        for round_ in range(3):
+            HOST_OS.tick(now=10 ** 10 + round_ * 600)
+        self.assertEqual(3, HOST_OS._FAILED["node-0"]["count"])
+        HOST_OS.check_all(wait=True)
+        self.assertNotIn("node-0", HOST_OS._FAILED, "after Check now the next round tries it again")
+        HOST_OS.tick(now=10 ** 10 + 3 * 600)
+        self.assertEqual(5, len(host.read))
+
+    def test_a_host_that_fails_three_times_waits_for_the_six_hour_cadence(self):
+        self.nodes["items"] = self.nodes["items"][:2]
+        host = Slow(UBUNTU, delay=0, broken={"node-1"})
+        self.bind(host)
+        start = 10 ** 10
+        for round_ in range(5):
+            HOST_OS.tick(now=start + round_ * 600)
+        self.assertEqual(3, host.read.count("node-1"), "tried three times, then left")
+        HOST_OS.tick(now=start + 2 * 600 + HOST_OS.EVERY)
+        self.assertEqual(4, host.read.count("node-1"), "read again at the six-hour cadence")
+        HOST_OS.tick(now=start + 2 * 600 + HOST_OS.EVERY + 600)
+        self.assertEqual(4, host.read.count("node-1"), "failed again: six hours more")
+        host.broken = set()
+        HOST_OS.tick(now=start + 2 * 600 + 2 * HOST_OS.EVERY)
+        self.assertEqual(5, host.read.count("node-1"))
+        self.assertEqual({}, HOST_OS._FAILED, "a read that works starts the count again")
 
 
 class HelperTests(unittest.TestCase):

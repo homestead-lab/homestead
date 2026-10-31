@@ -2,6 +2,7 @@
 browser for good, everything else is revalidated with an ETag, text is sent
 gzipped when the browser accepts it, and demo.js reaches only a demo visit."""
 import gzip
+import hashlib
 import os
 import sys
 import tempfile
@@ -110,6 +111,26 @@ class StaticFileTests(unittest.TestCase):
         _, headers, _ = self.get("/vendor/xterm/xterm.js")
         self.assertEqual("no-cache", headers["cache-control"])
         self.assertTrue(headers.get("etag"))
+
+    def vendor_font(self, name, data):
+        os.makedirs(os.path.join(server.WEBROOT, "vendor", "fonts"), exist_ok=True)
+        Path(server.WEBROOT, "vendor", "fonts", name).write_bytes(data)
+        return "/vendor/fonts/" + name
+
+    def test_a_vendor_file_named_by_its_content_is_kept_for_good(self):
+        data = b"wOF2" + bytes(range(256)) * 8
+        path = self.vendor_font(f"Face-latin.{hashlib.sha256(data).hexdigest()[:10]}.woff2", data)
+        status, headers, body = self.get(path, **{"Accept-Encoding": "gzip"})
+        self.assertEqual(200, status)
+        self.assertEqual("public, max-age=31536000, immutable", headers["cache-control"])
+        self.assertNotIn("content-encoding", headers)  # woff2 is compressed already
+        self.assertEqual(data, body)
+
+    def test_a_content_name_the_bytes_no_longer_match_is_only_revalidated(self):
+        data = b"wOF2" + bytes(range(256)) * 8
+        path = self.vendor_font(f"Face-latin.{hashlib.sha256(b'other').hexdigest()[:10]}.woff2", data)
+        _, headers, _ = self.get(path)
+        self.assertEqual("no-cache", headers["cache-control"])
 
     def test_a_missing_file_is_still_404(self):
         status, _, _ = self.get("/js/missing.js")

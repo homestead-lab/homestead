@@ -79,3 +79,10 @@ test("an image with no path starts at the line's start, with no empty path befor
   const plain = context.workloadHierarchy({ ...app, pods: [{ ...app.pods[0], containers: [{ ...app.pods[0].containers[0], image: "nginx:1.25" }] }] });
   assert.match(plain, /<div class="mono dim tree-image" title="nginx:1.25"><span class="tree-image-name">nginx:1.25<\/span><\/div>/);
 });
+
+test("an app whose Services couldn't be read says so, never no listeners", () => {
+  assert.match(context.accessPorts([]), /—/);
+  const unread = context.accessPorts(null);
+  assert.doesNotMatch(unread, /—/);
+  assert.match(unread, /couldn(?:'|&#39;)t read/i);
+});

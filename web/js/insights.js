@@ -172,7 +172,7 @@ const HealthInsights = (() => {
     const table=rows.length?`<div class="dashboard-resource-scroll" tabindex="0" role="region" aria-label="${titles[id]} list"><div class="dashboard-resource-columns">${groups.map(group=>`<table class="dashboard-resource-table">${header}<tbody>${group.map(row).join("")}</tbody></table>`).join("")}</div></div>`:'<div class="empty small">No '+(id==="vms"?"virtual machines":"app containers")+' match this view.</div>';
     return table+`<div class="dashboard-resource-footer">${rows.length} ${id==="vms"?"VMs":"containers"}<span>${running} running</span></div>`;
   }
-  let data={}, request=null, generation=0, checkedAt=0;
+  let data={}, request=null, requestFor=-1, generation=0, checkedAt=0;
   // A finding about one host or one drive opens that host's page, at the drive.
   const open = route => { if(route==="health")return go("cluster",{params:{section:"health"}});
     if(route.startsWith("node:"))return go("nodes",{params:{node:route.slice(5)}});
@@ -248,19 +248,22 @@ const HealthInsights = (() => {
   const SEED_FRESH=15000;
   function seed(key,value){if(value && typeof value==="object" && !value.error && (key!=="overview" || value.health_issues!==undefined)){data={...data,[key]:value};seeded[key]=Date.now();}}
   async function load(force=false) {
-    if(request){await request;return load(force);}
+    // A load still running waits for its page; one from a page already left
+    // was abandoned (its reads cancelled, #987) and never settles, so it is let go.
+    if(request && requestFor===window.NAV_TOKEN){await request;return load(force);}
     const ids=[...document.querySelectorAll("[data-insight]")].map(el=>el.dataset.insight==="full"?"health":el.dataset.insight);
     const keys=[...new Set([...ids.flatMap(id=>needs[id] || []),...(document.querySelector(".dash-alert[data-health]")?["overview","alerts"]:[])])];if(!keys.length)return;
     if(!force && checkedAt>Date.now()-30000 && keys.every(key=>key in data)){paint();return;}
     const token=window.NAV_TOKEN, epoch=generation;
-    request=(async()=>{
+    requestFor=token;
+    const mine=request=(async()=>{
       // What the page itself just read (the overview, every refresh) is not read twice (#705).
       const results=await Promise.all(keys.filter(key=>!(seeded[key] && Date.now()-seeded[key]<SEED_FRESH)).map(async key=>{
         if(key==="protection" && STATE.platform?.longhorn===false)return [key,{volumes:[]}];
         if(key==="copies" && STATE.platform?.longhorn===false)return [key,{state:"n/a",hosts:0,volumes:[]}];
         if(key==="vms" && STATE.platform?.kubevirt===false)return [key,[]];
         try{
-          const value=await api(sources[key],{keep:true});
+          const value=await api(sources[key]);
           const arrays=["nodes","workloads","vms","jobs"], fields={alerts:"active",overview:"health_issues",cluster:"control_plane",protection:"volumes",self:"api",settings:"thresholds",updates:"workloads",components:"components",copies:"state",leftovers:"released"};
           const valid=arrays.includes(key)?Array.isArray(value):value && typeof value==="object" && !value.error && (!fields[key] || value[fields[key]]!==undefined);
           return [key,valid?value:null];
@@ -268,7 +271,7 @@ const HealthInsights = (() => {
       }));
       if(token!==window.NAV_TOKEN || epoch!==generation)return;
       data={...data,...Object.fromEntries(results)};checkedAt=Date.now();paint();
-    })().finally(()=>{request=null;});return request;
+    })().finally(()=>{if(request===mine)request=null;});return mine;
   }
   function liveJobs(jobs,stale=false) {data.jobs=stale?null:jobs;for(const el of document.querySelectorAll('[data-insight="jobs"]'))el.innerHTML=body("jobs");window.dropOrphanTooltip?.();}
   return {titles,advice,acknowledge,alertKey,backupRows,pairRows,workloadSummary,resourceRows,filteredRows,groups:()=>data.workloads?.filter(w=>!w.platform).map(w=>w.group || ""),widget,load,open,liveJobs,seed,reset(){generation++;data={};seeded={};checkedAt=0;},healthBody,fullBody};

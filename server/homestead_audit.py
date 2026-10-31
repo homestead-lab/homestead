@@ -428,8 +428,11 @@ def alert_facts(now=None):
     now = time.time() if now is None else now
     try:
         first, last = _first_and_last(os.path.join(SHARED.DIR, FILE + ".1"))
+    except FileNotFoundError:
+        return []           # not rotated yet: nothing has filled
     except OSError:
-        return []
+        # There but unreadable (EIO on the data volume): not "its usual pace again".
+        return [{"unknown_key": "audit:filling-fast"}]
     if first is None or last is None or last - first >= ROTATION_ALARM_SECONDS or now - last > ROTATION_ALERT_SECONDS:
         return []
     minutes = max(1, round((last - first) / 60))

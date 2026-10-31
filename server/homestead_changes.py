@@ -27,7 +27,12 @@ name looks like a password or token is "(hidden)". The settings kept for undo
 are the pod template as it was, which is what Kubernetes itself already holds.
 
 The history is a file on the data volume, written only when something changed,
-KEEP entries per app for KEEP_DAYS.
+KEEP entries per app for KEEP_DAYS. It holds each change's rows and, for undo,
+only the digest of the settings from before it: those are kept beside it in
+TEMPLATES, one file each, so the file the Changes tab, the Timeline and the
+minute's look read stays a few kilobytes an app (#981). Entries written before
+that held the settings themselves; they are read as they are and moved out on
+the leader's next look. What was read is kept until the file changes.
 """
 import copy
 import hashlib
@@ -43,6 +48,12 @@ import homestead_routes
 import homestead_shared as SHARED
 
 DATA_DIR = "/data"
+TEMPLATES = "change-templates"      # the settings kept for undo, a file each, named by digest
+_DIGEST = re.compile(r"^[0-9a-f]{32}$")
+# A template no entry points at is removed only once it is this old: a new
+# leader may have written it for an index it has not saved yet (two leaders
+# overlap for a moment at a handover).
+TEMPLATE_GRACE = 3600
 KEEP = 50
 KEEP_DAYS = 180
 SENSITIVE = re.compile(r"pass|secret|token|key|credential|auth|cookie|private|salt", re.I)
@@ -65,6 +76,7 @@ _bound = {"plan": None, "ksend": None, "deployments": None,
 def bind(data_dir="/data", plan=None, ksend=None, deployments=None, is_leader=None, beat=None):
     global DATA_DIR
     DATA_DIR = data_dir
+    _memo.clear()
     if plan:
         _bound.update(plan=plan, ksend=ksend)
     if deployments:
@@ -75,12 +87,114 @@ def _path():
     return os.path.join(DATA_DIR, "change-history.json")
 
 
+_memo = {}      # the index as last read or written here, and the file it came from
+
+
+def _stat():
+    try:
+        st = os.stat(_path())
+    except OSError:
+        return None
+    return st.st_ino, st.st_mtime_ns, st.st_size
+
+
 def _load():
-    return SHARED.read_json(_path(), {})
+    """The index, under _lock. It is parsed again only when the file has changed
+    (#981); only observe() changes what this returns, and it saves what it changes."""
+    stat = _stat()            # before reading: a file replaced meanwhile is read again next time
+    if stat is not None and _memo.get("stat") == stat:
+        return _memo["data"]
+    _memo.clear()
+    data = SHARED.read_json(_path(), {})
+    if stat is not None:
+        _memo.update(stat=stat, data=data)
+    return data
 
 
 def _save(data):
-    SHARED.write_json(_path(), data, separators=(",", ":"), sort_keys=True, mode=0o600)
+    try:
+        SHARED.write_json(_path(), data, separators=(",", ":"), sort_keys=True, mode=0o600)
+    except BaseException:
+        _memo.clear()
+        raise
+    _memo.update(stat=_stat(), data=data)
+
+
+def _template_path(digest):
+    return os.path.join(DATA_DIR, TEMPLATES, f"{digest}.json")
+
+
+def _keep(settings):
+    """Keep the settings for undo once, under their digest, and return it.
+
+    Written durably (only on a change, so rarely): the index that points at it
+    is saved after, and must never outlive it. A file there already is used
+    only if it reads back; one a crash cut short is written again."""
+    text = json.dumps(settings, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(text.encode()).hexdigest()[:32]
+    if _kept(digest) is None:
+        SHARED.write_json(_template_path(digest), settings, durable=True, separators=(",", ":"), sort_keys=True,
+                          mode=0o600)
+    return digest
+
+
+def _kept(ref):
+    """The settings an entry points at: kept in the entry itself before #981, or by digest."""
+    if isinstance(ref, dict):
+        return ref
+    if not isinstance(ref, str) or not _DIGEST.match(ref):
+        return None
+    try:
+        settings = SHARED.read_json(_template_path(ref), {})
+    except ValueError:          # cut short or altered: as good as gone
+        return None
+    return settings if isinstance(settings.get("template"), dict) else None
+
+
+def _can_undo(ref):
+    """Whether an entry's settings are there, from the entry or a look at the
+    folder: the template itself is not opened for a listing."""
+    if isinstance(ref, dict):
+        return True
+    return isinstance(ref, str) and bool(_DIGEST.match(ref)) and os.path.isfile(_template_path(ref))
+
+
+def _compact(app):
+    """Move settings an entry or the app still holds itself out to TEMPLATES; True if any moved."""
+    moved = False
+    if isinstance(app.get("kept"), dict):
+        app["kept"], moved = _keep(app["kept"]), True
+    for entry in app.get("entries", []):
+        if isinstance(entry.get("before"), dict):
+            entry["before"], moved = _keep(entry["before"]), True
+    return moved
+
+
+def _tidy_templates(apps):
+    """Remove the kept settings that neither an app nor any of its entries points at."""
+    wanted = {ref for app in apps.values() for ref in [app.get("kept")] + [e.get("before") for e in app.get("entries", [])]
+              if isinstance(ref, str)}
+    try:
+        names = os.listdir(os.path.join(DATA_DIR, TEMPLATES))
+    except OSError:
+        return
+    now = time.time()
+    for file in names:
+        digest = file[:-5] if file.endswith(".json") else ""
+        if _DIGEST.match(digest) and digest not in wanted:
+            path = _template_path(digest)
+            try:
+                if now - os.path.getmtime(path) < TEMPLATE_GRACE:
+                    continue
+            except OSError:
+                continue
+            with SHARED.write_scope(path):
+                if SHARED.WRITE_GUARD is not None:
+                    SHARED.WRITE_GUARD(path)
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
 
 
 # A Deployment, or its scale: Homestead itself now scales the Deployment (#621),
@@ -389,7 +503,7 @@ def _observe_one(apps, seen, dep, now, since):
     now_summary = summary(dep)
     app = apps.get(key)
     if app is None:                      # first sight: what it is, not a change
-        apps[key] = {"last": now_summary, "kept": _template(dep), "entries": [], "seen": round(now)}
+        apps[key] = {"last": now_summary, "kept": _keep(_template(dep)), "entries": [], "seen": round(now)}
         return True
     changed = False
     rows = diff(app.get("last") or {}, now_summary)
@@ -398,14 +512,18 @@ def _observe_one(apps, seen, dep, now, since):
         if who == BY_SCHEDULE and all(r["field"] == "Copies" for r in rows):
             # Stopped or started on its schedule, twice a day: kept as
             # the app now is, but not an entry crowding out real changes.
-            app["last"], app["kept"] = now_summary, _template(dep)
+            app["last"], app["kept"] = now_summary, _keep(_template(dep))
             return True
+        kept = _keep(_template(dep))
         entry = {"id": hashlib.sha256(f"{key}{now}".encode()).hexdigest()[:12], "at": round(now),
                  "source": source, "by": who, "changes": rows, "before": app.get("kept")}
         app["entries"] = ([entry] + app.get("entries", []))[:KEEP]
-        app["last"], app["kept"] = now_summary, _template(dep)
+        app["last"], app["kept"] = now_summary, kept
         changed = True
-    app["seen"] = app.get("seen") if now - app.get("seen", 0) < 86400 else round(now)
+    if now - app.get("seen", 0) >= 86400:
+        # Saved, not only noted: what was read is kept between looks, so it
+        # must be what the file says.
+        app["seen"], changed = round(now), True
     return changed
 
 
@@ -414,55 +532,68 @@ def observe(deployments, now=None, since=None):
     now = now or time.time()
     since = since if since is not None else now - 70
     with _lock:
-        data = _load()
-        apps = data.setdefault("apps", {})
-        changed = False
-        seen = set()
-        for dep in deployments or []:
-            try:
-                changed = _observe_one(apps, seen, dep, now, since) or changed
-            except Exception:
-                continue    # one app that cannot be read stops no other from being recorded
-        oldest = now - KEEP_DAYS * 86400
-        for key in list(apps):
-            entries = [e for e in apps[key].get("entries", []) if e["at"] >= oldest]
-            if entries != apps[key].get("entries", []):
-                apps[key]["entries"], changed = entries, True
-            if key not in seen and apps[key].get("seen", now) < oldest:
-                apps.pop(key)
-                changed = True
-        if changed:
-            _save(data)
-        return apps
+        try:
+            return _observe(deployments, now, since)
+        except BaseException:
+            _memo.clear()           # what was read may have been changed but not saved
+            raise
+
+
+def _observe(deployments, now, since):
+    data = _load()
+    apps = data.setdefault("apps", {})
+    changed = False
+    for app in apps.values():
+        changed = _compact(app) or changed
+    seen = set()
+    for dep in deployments or []:
+        try:
+            changed = _observe_one(apps, seen, dep, now, since) or changed
+        except Exception:
+            continue    # one app that cannot be read stops no other from being recorded
+    oldest = now - KEEP_DAYS * 86400
+    for key in list(apps):
+        entries = [e for e in apps[key].get("entries", []) if e["at"] >= oldest]
+        if entries != apps[key].get("entries", []):
+            apps[key]["entries"], changed = entries, True
+        if key not in seen and apps[key].get("seen", now) < oldest:
+            apps.pop(key)
+            changed = True
+    if changed:
+        _save(data)
+        _tidy_templates(apps)
+    return apps
 
 
 def history(ns=None, name=None, limit=200):
     """Entries newest first, for one app or all; without the kept settings."""
-    with _lock:
-        apps = _load().get("apps", {})
     out = []
-    for key, app in apps.items():
-        a_ns, a_name = key.split("/", 1)
-        if (ns and a_ns != ns) or (name and a_name != name):
-            continue
-        for e in app.get("entries", []):
-            out.append({**{k: v for k, v in e.items() if k != "before"}, "namespace": a_ns, "name": a_name,
-                        "can_undo": bool(e.get("before"))})
+    with _lock:             # what was read is shared with the minute's look: read it under the lock
+        for key, app in _load().get("apps", {}).items():
+            a_ns, a_name = key.split("/", 1)
+            if (ns and a_ns != ns) or (name and a_name != name):
+                continue
+            for e in app.get("entries", []):
+                out.append({**{k: v for k, v in e.items() if k != "before"}, "namespace": a_ns, "name": a_name,
+                            "can_undo": _can_undo(e.get("before"))})
     return sorted(out, key=lambda e: -e["at"])[:limit]
 
 
 def kept_before(ns, name, entry_id):
-    """The settings from just before one change, for undo."""
+    """The entry for one change, with the settings from just before it, for undo."""
     with _lock:
         app = _load().get("apps", {}).get(f"{ns}/{name}") or {}
-    entry = next((e for e in app.get("entries", []) if e.get("id") == entry_id), None)
-    if not entry or not entry.get("before"):
+        entry = next((dict(e) for e in app.get("entries", []) if e.get("id") == entry_id), None)
+    before = _kept(entry.get("before")) if entry else None
+    if not before:
         raise ValueError("that change is no longer in the history")
-    return entry
+    return {**entry, "before": before}
 
 
 def undo_plan(current, entry):
     """current with the settings from before the change put back: (proposed, rows)."""
+    if not isinstance(entry.get("before"), dict) or not isinstance(entry["before"].get("template"), dict):
+        raise ValueError("the settings from before that change are no longer kept, so it cannot be undone")
     proposed = copy.deepcopy(current)
     proposed["spec"]["template"] = copy.deepcopy(entry["before"]["template"])
     proposed["spec"]["replicas"] = entry["before"].get("replicas", 1)

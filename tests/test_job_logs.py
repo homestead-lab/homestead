@@ -37,6 +37,15 @@ class HistoryTests(unittest.TestCase):
         self.assertTrue(all(h["t"] for h in log["history"]))
         self.assertNotIn("history", OPS.list_operations()[0], "the tray's poll stays small")
 
+    def test_reading_a_log_takes_no_operations_lock(self):
+        op = OPS.start("thing", "Build", {}, "/", {}, "Starting 2 VMs")["id"]
+        class Refused:
+            def __enter__(self):
+                raise AssertionError("the log took the operations lock")
+            __exit__ = lambda self, *exc: False
+        with mock.patch.object(OPS, "_lock", Refused()):
+            self.assertEqual("Starting 2 VMs", OPS.log(op)["history"][0]["m"])
+
     def test_a_reader_that_fails_says_so_rather_than_failing_the_log(self):
         op = OPS.start("thing", "Build", {}, "/", {})["id"]
         OPS.LOGGERS["thing"] = lambda item: 1 / 0
@@ -64,6 +73,39 @@ class ReaderTests(unittest.TestCase):
     def pod(self, name, containers=("compute",), phase="Running"):
         return {"metadata": {"name": name, "creationTimestamp": "2026-09-25T12:00:00Z"},
                 "spec": {"containers": [{"name": c} for c in containers]}, "status": {"phase": phase}}
+
+    def test_a_tail_read_is_bounded_in_bytes(self):
+        # #986: Kubernetes splits lines at 16 KB, so tailLines alone can
+        # return megabytes; only the last 60,000 characters are kept.
+        asked = []
+        JL.bind(lambda path: {}, lambda path: asked.append(path) or "x")
+        JL._tail("lab", "pod-a", "main")
+        self.assertIn(f"limitBytes={JL.LIMIT_BYTES}", asked[0])
+        self.assertLessEqual(JL.LIMIT_BYTES, 1024 * 1024)
+
+    def test_a_tail_too_long_for_the_bound_is_read_again_with_fewer_lines(self):
+        # limitBytes keeps the oldest of the lines asked for: the newest
+        # (often the error) would be lost without a word.
+        asked = []
+
+        def text(path):
+            lines = int(path.split("tailLines=")[1].split("&")[0])
+            asked.append(lines)
+            body = "".join(f"line {n} " + "x" * 2000 + "\n" for n in range(200 - lines, 200))
+            return body[:JL.LIMIT_BYTES]
+        JL.bind(lambda path: {}, text)
+        with mock.patch.object(JL, "LIMIT_BYTES", 120_000):
+            out = JL._tail("lab", "pod-a", "main")
+        self.assertEqual([200, 100, 50], asked)
+        self.assertIn("line 199 ", out)
+        self.assertIn("showing the last 50 lines", out.splitlines()[-1])
+
+    def test_a_tail_that_never_fits_says_its_newest_lines_may_be_cut(self):
+        asked = []
+        JL.bind(lambda path: {}, lambda path: asked.append(path) or "y" * JL.LIMIT_BYTES)
+        out = JL._tail("lab", "pod-a")
+        self.assertLessEqual(len(asked), 5)
+        self.assertIn("newest", out.splitlines()[-1])
 
     def test_a_k3s_node_shows_its_console_and_a_node_not_running_says_so(self):
         sel = lambda vm: JL._q(f"vm.kubevirt.io/name={vm}")
@@ -167,6 +209,41 @@ class ReaderTests(unittest.TestCase):
             out = JL.node_power({"ref": {"helper_pod": "helper", "helper_uid": "uid"}})
         self.assertIn("unavailable", out[0]["note"])
         self.assertEqual("systemctl output", out[1]["text"])
+
+
+class RemovedHelperTests(unittest.TestCase):
+    """A helper the leader removed a while after its job ended (homestead_helper_sweep)
+    is said to be removed, not missing or unreadable."""
+    LONG_AGO, LATELY = "2026-01-01T00:00:00Z", None
+
+    def setUp(self):
+        def gone(path, *args, **kwargs):
+            raise urllib.error.HTTPError(path, 404, "missing", {}, None)
+        self.addCleanup(JL.bind, JL.kget, JL.ktext)
+        JL.bind(gone, gone)
+
+    def item(self, ref, finished):
+        import time
+        return {"status": "succeeded", "ref": ref,
+                "finished_at": finished or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+    def test_a_power_helper_removed_after_its_bound_says_so(self):
+        ref = {"helper_pod": "homestead-reboot-node-a-1", "helper_uid": "uid", "helper_namespace": "lab"}
+        out = JL.node_power(self.item(ref, self.LONG_AGO))
+        self.assertIn("removed automatically 7 days after it finished; the steps above are the record", out[0]["note"])
+        self.assertNotIn("does not confirm shutdown", out[0]["note"])
+        recent = JL.node_power(self.item(ref, self.LATELY))
+        self.assertIn("does not confirm shutdown", recent[0]["note"], "a helper missing early still warns")
+
+    def test_a_copy_job_removed_after_its_bound_says_so(self):
+        ref = {"namespace": "apps", "job": "app-restructure-a1b2c3", "job_uid": "uid"}
+        out = JL.copy_job(self.item(ref, self.LONG_AGO))
+        self.assertIn("removed automatically 7 days after it finished; the steps above are the record", out[0]["note"])
+        with self.assertRaises(urllib.error.HTTPError):
+            JL.copy_job(self.item(ref, self.LATELY))
+        running = dict(self.item(ref, self.LONG_AGO), status="running")
+        with self.assertRaises(urllib.error.HTTPError):
+            JL.copy_job(running)
 
 
 if __name__ == "__main__":

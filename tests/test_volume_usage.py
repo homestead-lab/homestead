@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_kube as K
+import homestead_kubelet_stats as KSTATS
 import homestead_volume_usage as usage
 import server
 import homestead_storage as STORAGE
@@ -55,12 +56,18 @@ class Scene:
 
 
 class FilesystemUsageTests(unittest.TestCase):
+    def setUp(self):
+        # Each test's kubelet answers on its own, not from an earlier test's
+        # reading (homestead_kubelet_stats keeps the last one, #976).
+        KSTATS.reset()
+        self.addCleanup(KSTATS.reset)
+
     def test_reports_filesystem_bytes_not_snapshot_footprint(self):
         c = Scene()
         result = c.collect()[KEY]
         self.assertEqual((180, 196, 91.8, "kubelet"),
                          (result["used_gb"], result["capacity_gb"], result["used_pct"], result["source"]))
-        self.assertEqual(("/api/v1/nodes/node1/proxy/stats/summary", {"timeout": 4}), c.calls[-1])
+        self.assertEqual(("/api/v1/nodes/node1/proxy/stats/summary", {"timeout": KSTATS.TIMEOUT}), c.calls[-1])
 
     def test_empty_filesystem_is_a_real_zero(self):
         c = Scene()
@@ -140,6 +147,8 @@ class FilesystemUsageTests(unittest.TestCase):
 
 class VolumeUsageIntegrationTests(unittest.TestCase):
     def setUp(self):
+        KSTATS.reset()
+        self.addCleanup(KSTATS.reset)
         self.cluster = Scene()
         self.claim = self.cluster.claims[KEY]
         self.claim.update(apiVersion="v1", kind="PersistentVolumeClaim")
@@ -180,6 +189,51 @@ class VolumeUsageIntegrationTests(unittest.TestCase):
         collect.assert_not_called()
         self.assertTrue(row["unclaimed"])
         self.assertIsNone(row["filesystem"])
+
+
+class OneFilesystemsKeyTests(unittest.TestCase):
+    """#986 §2: the filesystem figures are kept under one key whose value
+    names the attached claims, so attach sets that come and go do not each
+    leave a key behind until a restart."""
+
+    def setUp(self):
+        import homestead_routes
+        self.routes = homestead_routes
+        homestead_routes.forget_prefix("volume-filesystems")
+        self.addCleanup(homestead_routes.forget_prefix, "volume-filesystems")
+
+    def keys(self):
+        return [k for k in self.routes._store[0] if k.startswith("volume-filesystems")]
+
+    def read(self, uid):
+        claim = {"metadata": {"uid": uid, "namespace": KEY[0], "name": KEY[1]}, "spec": {"volumeName": "pvc-1"}}
+        volume = {"metadata": {"name": "pvc-1"}, "spec": {"size": str(200 * GIB)},
+                  "status": {"state": "attached", "actualSize": str(20 * GIB),
+                             "kubernetesStatus": {"namespace": KEY[0], "pvcName": KEY[1]}}}
+        metrics = {KEY: dict(used_gb=int(uid[-1]), capacity_gb=196, used_pct=1.0, sample_at=time.time())}
+
+        def get(path):
+            if path.endswith("/volumes"):
+                return {"items": [volume]}
+            if path == "/api/v1/persistentvolumeclaims":
+                return {"items": [claim]}
+            return {"items": []}
+        with patch.object(STORAGE, "kget", get), patch.object(STORAGE, "claim_references", return_value={}), \
+             patch.object(server.VOLUME_USAGE, "collect", return_value=metrics) as collect:
+            return STORAGE.get_volumes()[0], collect.call_count
+
+    def test_two_attach_sets_in_a_row_leave_one_key(self):
+        self.read("claim-1")
+        self.read("claim-2")
+        self.assertEqual(1, len(self.keys()))
+
+    def test_a_new_attach_set_is_read_again_and_the_same_one_is_not(self):
+        row, calls = self.read("claim-1")
+        self.assertEqual((1, 1), (row["filesystem"]["used_gb"], calls))
+        row, calls = self.read("claim-1")
+        self.assertEqual((1, 0), (row["filesystem"]["used_gb"], calls))
+        row, calls = self.read("claim-2")
+        self.assertEqual((2, 1), (row["filesystem"]["used_gb"], calls))
 
 
 if __name__ == "__main__":

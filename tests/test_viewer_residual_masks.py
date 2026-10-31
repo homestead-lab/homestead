@@ -14,7 +14,6 @@ An admin and the reveal route see everything as before."""
 import base64
 import copy
 import gzip
-import io
 import json
 import sys
 import tempfile
@@ -339,11 +338,12 @@ class Logs(unittest.TestCase):
         self.addCleanup(self.kube.__exit__, None, None, None)
         self.read = []
 
-        def urlopen(request, **kwargs):
-            self.read.append(request.full_url)
-            return io.BytesIO(LOG_TEXT.encode())
-        # server.py binds the workloads module to homestead_kube, which the fake answers.
-        patch = mock.patch.object(WL.urllib.request, "urlopen", urlopen)
+        def raw_get(path, timeout=20, max_bytes=None):
+            self.read.append(path)
+            return LOG_TEXT if max_bytes is None else LOG_TEXT.encode()[:max_bytes + 1].decode()
+        # The log itself is read on the pooled client (#984), which the fake
+        # transport does not answer: only its pod reads go through the fake.
+        patch = mock.patch.object(WL, "raw_get", raw_get)
         patch.start()
         self.addCleanup(patch.stop)
 

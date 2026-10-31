@@ -302,6 +302,8 @@ function volumeUse(x) {
 
 /* Where a volume's copies are: host and disk, grouped by host. */
 function volumeCopiesLine(x) {
+  // null: Longhorn's replicas could not be read (#1002).
+  if (x.copies === null) return `<span class="dim xs vol-copies" data-tip="${esc(volumeCopiesTip(x))}">copies unknown</span>`;
   const copies = x.copies || [];
   if (!copies.length) return "";
   const hosts = {};
@@ -310,6 +312,7 @@ function volumeCopiesLine(x) {
     `${esc(node.replace(/^harvester-/, ""))}: ${rows.map(c => `<span class="${c.healthy ? "" : "warn"}">${esc(c.disk)}</span>`).join(" + ")}`).join(" · ")}</span>`;
 }
 function volumeCopiesTip(x) {
+  if (x.copies === null) return "Where its copies are could not be read from Longhorn just now";
   const copies = x.copies || [], want = +x.replicas || 0;
   const where = copies.map(c => `${c.node} · ${c.disk}${c.healthy ? (c.detached ? " (stopped while the volume is detached)" : "") : ` (${c.state || "not running"})`}`).join(", ");
   if (!copies.length) return want === 1 ? "One copy: if its host or disk fails, this volume is gone until they come back" : `${want} copies`;
@@ -446,6 +449,9 @@ function volumeProgressWatch() {
   if (!(STATE.data.vols || []).some(volumeBusy)) return;
   window.__volProgressTimer = setTimeout(async () => {
     if (STATE.view !== "storage") return;
+    // A hidden tab reads nothing (#983): a rebuild can last hours. Showing
+    // the tab starts the watch again.
+    if (document.hidden) return document.addEventListener("visibilitychange", volumeProgressResume);
     let vols;
     try { vols = await api("/api/volumes"); } catch (e) { return volumeProgressWatch(); }
     if (STATE.view !== "storage") return;
@@ -465,6 +471,11 @@ function volumeProgressWatch() {
     }
     volumeProgressWatch();
   }, 4000);
+}
+function volumeProgressResume() {
+  if (document.hidden) return;
+  document.removeEventListener("visibilitychange", volumeProgressResume);
+  if (STATE.view === "storage") volumeProgressWatch();
 }
 
 /* Claims on classes that are not Longhorn - k3s's local-path, NFS - which
@@ -1605,6 +1616,13 @@ function eventRowHtml(x) {
     <td class="dim xs mono nowrap" data-sm-hide title="${esc(fmtAt(x.time))}">${esc(ago)}</td></tr>`;
 }
 
+/* Kubernetes kept more events than the page shows: say so (#988). */
+function eventsCut(all) {
+  const total = STATE.data.eventTotal || 0;
+  if (STATE.data.eventLimited) return ` · the newest ${all.length} of the first ${total} read`;
+  return total > all.length ? ` · the newest ${all.length} of ${total}` : "";
+}
+
 /* The table and the count, from the rows already read. */
 function eventsRender() {
   const all = STATE.data.eventRows || [];
@@ -1614,10 +1632,11 @@ function eventsRender() {
   const body = $("#evRows"), count = $("#evCount"), clear = $("#evClear");
   if (count) count.textContent = eventTab() === "signins"
     ? `${rows.length} of ${all.length} sign-ins and account changes · newest first`
-    : `${rows.length} of ${all.length} recent events · newest first`;
+    : `${rows.length} of ${all.length} recent events · newest first${eventsCut(all)}`;
   if (clear) clear.hidden = !filtered;
   if (body) body.innerHTML = rows.map(eventRowHtml).join("")
-    || `<tr><td colspan=4 class="empty">${filtered ? "Nothing matches these filters." : eventTab() === "signins" ? "No sign-ins recorded yet." : "No events."}</td></tr>`;
+    || `<tr><td colspan=4 class="empty">${filtered ? "Nothing matches these filters." : eventTab() === "signins" ? "No sign-ins recorded yet."
+      : STATE.data.eventError ? `Could not read the cluster's events: ${esc(STATE.data.eventError)}` : "No events."}</td></tr>`;
 }
 
 window.eventFilterSet = (key, value) => { eventFilter()[key] = value; eventsRender(); };
@@ -1730,10 +1749,14 @@ async function viewEvents() {
   const tab = eventTab();
   if (tab === "audit") return viewAudit();
   const rows = await api(tab === "signins" ? "/api/auth/history" : "/api/events");
-  STATE.data.eventRows = rows;
+  // Cluster events come with how many there were: only the newest are sent (#988).
+  STATE.data.eventRows = Array.isArray(rows) ? rows : rows.events || [];
+  STATE.data.eventTotal = Array.isArray(rows) ? STATE.data.eventRows.length : rows.total || 0;
+  STATE.data.eventLimited = !Array.isArray(rows) && !!rows.limited;
+  STATE.data.eventError = Array.isArray(rows) ? "" : rows.error || "";
   const heads = tab === "signins" ? ["Who", "What", "From", "When"] : ["Object", "Reason", "Message", "When"];
   paint(`${UI.pageHeader(`Events`, ``, `${eventTabs(tab)}`, {descriptionAttrs:`id="evCount"`})}
-  ${eventFilterBar(rows)}
+  ${eventFilterBar(STATE.data.eventRows)}
   <div class="card flat pad0 eventtable"><div class="tblwrap"><table data-sort="${tab === "signins" ? "signins" : "events"}" class="tbl stack compact evtable"><thead><tr>
     ${heads.map((h, i) => `<th${i === 3 ? " data-nosort" : ""}>${h}</th>`).join("")}</tr></thead><tbody id="evRows"></tbody></table></div></div>`);
   eventsRender();
@@ -2423,11 +2446,12 @@ window.reclassWatch = async id => {
     if (window.applyRole) applyRole();
   };
   modal("Changing storage class", '<div class="empty"><span class="spin2"></span></div>', true);
-  clearInterval(window.__reclassTimer);
-  const tick = async () => {
-    if ($("#modal").classList.contains("hidden")) return clearInterval(window.__reclassTimer);
-    const ops = await api("/api/operations", { keep: true }).catch(e => ({ unread: e.message }));
-    if (window.__reclassWatchToken !== watchToken || $("#modal").classList.contains("hidden")) return;
+  window.__reclassTimer?.stop?.();
+  const tick = async signal => {
+    if ($("#modal").classList.contains("hidden")) return false;
+    const ops = await api("/api/operations", { keep: true, signal }).catch(e => ({ unread: e.message }));
+    if (UI.pollCancelled(signal)) return false;
+    if (window.__reclassWatchToken !== watchToken || $("#modal").classList.contains("hidden")) return false;
     if (ops.unread) {
       // A failed poll keeps what was last shown and says so; the next tick tries again (#620).
       const note = `<div id="rc_unread" class="dim small" style="margin-top:8px">Could not read the job: ${esc(ops.unread)} · still trying</div>`;
@@ -2445,10 +2469,9 @@ window.reclassWatch = async id => {
     if (!op) return;
     $("#mtitle").textContent = op.title;
     paint(op);
-    if (op.status !== "running") { clearInterval(window.__reclassTimer); if (STATE.view === "storage") refresh(true); }
+    if (op.status !== "running") { if (STATE.view === "storage") refresh(true); return false; }
   };
-  tick();
-  window.__reclassTimer = setInterval(tick, 2500);
+  window.__reclassTimer = UI.poll(tick, 2500);
 };
 
 window.reclassRemoveOld = async pv => {

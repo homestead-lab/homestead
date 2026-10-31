@@ -18,6 +18,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import homestead_fetch as FETCH
+
 
 MANIFEST_ACCEPT = ", ".join((
     "application/vnd.oci.image.index.v1+json",
@@ -27,6 +29,11 @@ MANIFEST_ACCEPT = ", ".join((
 ))
 _CACHE = {}
 _CACHE_LOCK = threading.Lock()
+# A key per image base:tag seen, so every new version an update check meets
+# adds one: past _CACHE_MAX the expired go, then the oldest. 512 covers a few
+# hundred images; a tag list is tens of KiB at most.
+_CACHE_MAX = 512
+_CACHE_SECONDS = {"manifest:": 300, "tags:": 900}
 def parse_image(ref):
     """Normalize a Docker/OCI reference without accepting URL syntax."""
     ref = (ref or "").strip()
@@ -135,7 +142,8 @@ def _open(req, credential=None, timeout=12):
             token_req.add_unredirected_header("Authorization", "Basic " + raw)
         opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), _NoAuthRedirect())
         with opener.open(token_req, timeout=timeout) as response:
-            token_body = json.loads(response.read().decode())
+            token_body = json.loads(FETCH.read(response, TOKEN_MAX_BYTES, time.monotonic() + timeout,
+                                               "the registry's token").decode())
         token = token_body.get("token") or token_body.get("access_token")
         if not token:
             raise PermissionError("registry authentication did not return a token")
@@ -156,31 +164,48 @@ def _retry_after(error, default):
         return max(0.0, min(5.0, float((error.headers or {}).get("Retry-After", default))))
     except (TypeError, ValueError):
         return default
-def _read_capped(response, limit):
-    """The answer's body; with a limit, never more than that many bytes,
-    whatever its Content-Length says."""
-    if limit is None:
-        return response.read()
+# A manifest, an index or a tag list is small: the distribution spec caps a
+# manifest at 4 MiB, and 1,000 tags are tens of KiB. A token answer is a few KiB.
+ANSWER_MAX_BYTES = 4 << 20
+TOKEN_MAX_BYTES = 1 << 20
+# The whole read - connecting, any token exchange, 429 pauses and the body -
+# ends by then: urllib's timeout is per wait, so a trickling registry had none.
+READ_DEADLINE = 30.0
+def _read_capped(response, limit, deadline=None):
+    """The answer's body; never more than limit bytes (ANSWER_MAX_BYTES when
+    None), whatever its Content-Length says, and none of it after deadline."""
     try:
-        declared = int((response.headers or {}).get("Content-Length") or 0)
-    except (TypeError, ValueError):
-        declared = 0
-    body = b"" if declared > limit else response.read(limit + 1)
-    if declared > limit or len(body) > limit:
-        raise ValueError("the registry's answer is larger than expected")
-    return body
-def _registry_json(parsed, path, auths, accept="application/json", limit=None):
+        return FETCH.read(response, ANSWER_MAX_BYTES if limit is None else limit, deadline, "the registry's answer")
+    except FETCH.TooLarge:
+        raise ValueError("the registry's answer is larger than expected") from None
+def _registry_json(parsed, path, auths, accept="application/json", limit=None, deadline=None):
     url = f"https://{parsed['endpoint']}/v2/{parsed['repo']}/{path}"
+    deadline = time.monotonic() + READ_DEADLINE if deadline is None else deadline
     for attempt in range(len(RATE_LIMIT_WAITS) + 1):
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise TimeoutError("the registry took too long to answer")
         req = urllib.request.Request(url, headers={"Accept": accept, "User-Agent": "Homestead/2.0"})
         try:
-            with _open(req, _credential(auths, parsed)) as response:
-                body = _read_capped(response, limit)
+            with _open(req, _credential(auths, parsed), min(12, left)) as response:
+                body = _read_capped(response, limit, deadline)
                 return body, response.headers
         except urllib.error.HTTPError as error:
-            if error.code != 429 or attempt == len(RATE_LIMIT_WAITS):
+            pause = _retry_after(error, RATE_LIMIT_WAITS[min(attempt, len(RATE_LIMIT_WAITS) - 1)])
+            if error.code != 429 or attempt == len(RATE_LIMIT_WAITS) or time.monotonic() + pause >= deadline:
                 raise
-            time.sleep(_retry_after(error, RATE_LIMIT_WAITS[attempt]))
+            time.sleep(pause)
+def _remember(key, value):
+    now = time.time()
+    with _CACHE_LOCK:
+        _CACHE.pop(key, None)                  # re-added last: the dict stays oldest first
+        if len(_CACHE) >= _CACHE_MAX:
+            for old in [k for k, (at, _) in _CACHE.items()
+                        if now - at >= next((s for p, s in _CACHE_SECONDS.items() if k.startswith(p)), 0)]:
+                del _CACHE[old]
+        while len(_CACHE) >= _CACHE_MAX:
+            _CACHE.pop(next(iter(_CACHE)))
+        _CACHE[key] = (now, value)
 def manifest_info(ref, auths=None, force=False):
     parsed = parse_image(ref)
     if parsed["digest"]:
@@ -200,8 +225,7 @@ def manifest_info(ref, auths=None, force=False):
     except (UnicodeDecodeError, json.JSONDecodeError):
         pass
     info = {"digest": digest, "children": children}
-    with _CACHE_LOCK:
-        _CACHE[key] = (time.time(), info)
+    _remember(key, info)
     return info
 def image_layers(ref, arch="amd64", auths=None):
     """The layers an image is pulled as on this architecture, with their
@@ -229,8 +253,7 @@ def registry_tags(ref, auths=None, force=False):
         return cached[1]
     body, _ = _registry_json(parsed, "tags/list?n=1000", auths or {})
     tags = json.loads(body.decode()).get("tags") or []
-    with _CACHE_LOCK:
-        _CACHE[key] = (time.time(), tags)
+    _remember(key, tags)
     return tags
 def semver(tag):
     match = re.fullmatch(r"(v?)(\d+)\.(\d+)\.(\d+)", tag or "")

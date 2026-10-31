@@ -19,6 +19,7 @@ from fakes.kube import Kube
 
 DEPLOYMENTS = "/apis/apps/v1/namespaces/{ns}/deployments"
 CONFIGMAPS = "/api/v1/namespaces/lab/configmaps"
+CRONJOBS = "/apis/batch/v1/namespaces/lab/cronjobs"
 
 
 def deployment(name, ns="lab", **pod):
@@ -26,6 +27,14 @@ def deployment(name, ns="lab", **pod):
             "spec": {"selector": {"matchLabels": {"app": name}},
                      "template": {"metadata": {"labels": {"app": name}},
                                   "spec": {"containers": [{"name": name, "image": "example.com/app:1"}], **pod}}}}
+
+
+def cronjob(name, **pod):
+    return {"apiVersion": "batch/v1", "kind": "CronJob", "metadata": {"name": name, "namespace": "lab"},
+            "spec": {"schedule": "0 3 * * *", "jobTemplate": {"spec": {"template": {
+                "metadata": {"labels": {"app": name}},
+                "spec": {"restartPolicy": "Never",
+                         "containers": [{"name": "task", "image": "example.com/task:1"}], **pod}}}}}}
 
 
 class WriteGateTests(unittest.TestCase):
@@ -91,6 +100,180 @@ class WriteGateTests(unittest.TestCase):
             K.send("POST", CONFIGMAPS, {"apiVersion": "v1", "kind": "ConfigMap",
                                         "metadata": {"name": "notes", "namespace": "lab"}, "data": {"a": "1"}})
             self.assertEqual(1, len(self.written(kube, "POST")))
+
+    def test_an_operator_cannot_change_a_cronjob_that_runs_with_host_access(self):
+        for pod in ({"serviceAccountName": "backup-runner"},
+                    {"volumes": [{"name": "root", "hostPath": {"path": "/"}}]},
+                    {"hostPID": True}):
+            with self.subTest(pod=pod), Kube(cronjob("nightly", **pod)) as kube:
+                edited = cronjob("nightly", **pod)
+                edited["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["command"] = ["sh", "-c", "id"]
+                HOST.set_role("operator")
+                with self.assertRaisesRegex(PermissionError, "only an admin"):
+                    K.send("PUT", CRONJOBS + "/nightly", edited)
+                with self.assertRaises(PermissionError):
+                    K.send("DELETE", CRONJOBS + "/nightly")
+                self.assertEqual([], kube.writes, "nothing reached the API server")
+
+    def test_an_operator_cannot_give_a_cronjob_host_access(self):
+        privileged = cronjob("nightly")
+        privileged["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["securityContext"] = {"privileged": True}
+        for method, path in (("POST", CRONJOBS), ("PUT", CRONJOBS + "/nightly")):
+            with self.subTest(method=method), Kube(cronjob("nightly")) as kube:
+                HOST.set_role("operator")
+                with self.assertRaises(PermissionError):
+                    K.send(method, path, privileged)
+                self.assertEqual([], kube.writes)
+
+    def test_an_operator_can_change_an_ordinary_cronjob(self):
+        with Kube(cronjob("nightly")) as kube:
+            edited = cronjob("nightly")
+            edited["spec"]["schedule"] = "0 4 * * *"
+            HOST.set_role("operator")
+            K.send("PUT", CRONJOBS + "/nightly", edited)
+            self.assertEqual("0 4 * * *", kube.object(CRONJOBS + "/nightly")["spec"]["schedule"])
+
+    def test_an_admin_can_change_a_cronjob_that_runs_with_host_access(self):
+        with Kube(cronjob("nightly", hostPID=True)) as kube:
+            HOST.set_role("admin")
+            K.send("PUT", CRONJOBS + "/nightly", cronjob("nightly", hostPID=True))
+            self.assertEqual(1, len(self.written(kube, "PUT")))
+
+    def test_a_deployment_is_checked_on_the_pod_template_it_runs(self):
+        body = deployment("tools")
+        body["spec"]["template"]["spec"]["containers"][0]["securityContext"] = {"privileged": True}
+        body["spec"]["jobTemplate"] = cronjob("decoy")["spec"]["jobTemplate"]
+        self.assertIn("privileged mode", HOST.grants(body))
+        with Kube() as kube:
+            HOST.set_role("operator")
+            with self.assertRaises((PermissionError, ValueError)):
+                K.send("POST", DEPLOYMENTS.format(ns="lab"), body)
+            self.assertEqual([], kube.writes)
+
+    def test_a_cronjob_is_checked_on_its_job_template(self):
+        body = cronjob("nightly", hostPID=True)
+        body["spec"]["template"] = deployment("decoy")["spec"]["template"]
+        self.assertIn("the host's processes", HOST.grants(body))
+        with Kube() as kube:
+            HOST.set_role("operator")
+            with self.assertRaises((PermissionError, ValueError)):
+                K.send("POST", CRONJOBS, body)
+            self.assertEqual([], kube.writes)
+
+    def test_a_pod_is_checked_on_its_own_spec(self):
+        pods = "/api/v1/namespaces/lab/pods"
+        plain = {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "tools", "namespace": "lab"},
+                 "spec": {"hostNetwork": True, "containers": [{"name": "tools", "image": "example.com/t:1"}]}}
+        decoyed = {**plain, "spec": {**plain["spec"], "template": deployment("decoy")["spec"]["template"]}}
+        for body in (plain, decoyed):
+            with self.subTest(decoy="template" in body["spec"]), Kube() as kube:
+                self.assertIn("the host's network", HOST.grants(body))
+                HOST.set_role("operator")
+                with self.assertRaises((PermissionError, ValueError)):
+                    K.send("POST", pods, body)
+                self.assertEqual([], kube.writes)
+
+    def test_a_template_that_does_not_belong_to_the_kind_is_refused(self):
+        cases = (("POST", DEPLOYMENTS.format(ns="lab"), {**deployment("web"), "spec": {
+                     **deployment("web")["spec"], "jobTemplate": cronjob("web")["spec"]["jobTemplate"]}}),
+                 ("POST", CRONJOBS, {**cronjob("web"), "spec": {
+                     **cronjob("web")["spec"], "template": deployment("web")["spec"]["template"]}}))
+        for method, path, body in cases:
+            with self.subTest(path=path), Kube() as kube:
+                HOST.set_role("operator")
+                with self.assertRaisesRegex(ValueError, "has no"):
+                    K.send(method, path, body)
+                self.assertEqual([], kube.writes)
+
+    def test_either_service_account_field_needs_an_admin(self):
+        for field in ("serviceAccountName", "serviceAccount"):
+            with self.subTest(field=field), Kube() as kube:
+                HOST.set_role("operator")
+                with self.assertRaisesRegex(PermissionError, "only an admin"):
+                    K.send("POST", DEPLOYMENTS.format(ns="lab"), deployment("tools", **{field: "builder"}))
+                with self.assertRaisesRegex(PermissionError, "only an admin"):
+                    K.send("POST", CRONJOBS, cronjob("nightly", **{field: "builder"}))
+                self.assertEqual([], kube.writes)
+
+    def test_a_json_patch_adding_a_privileged_container_is_refused(self):
+        path = DEPLOYMENTS.format(ns="lab") + "/frigate"
+        patch = [{"op": "add", "path": "/spec/template/spec/containers/-",
+                  "value": {"name": "x", "image": "example.com/x:1", "securityContext": {"privileged": True}}}]
+        with Kube(deployment("frigate")) as kube:
+            HOST.set_role("operator")
+            with self.assertRaisesRegex(PermissionError, "only an admin"):
+                K.send("PATCH", path, patch, ctype="application/json-patch+json")
+            self.assertEqual([], kube.writes)
+
+    def test_a_merge_patch_setting_a_service_account_is_refused(self):
+        path = DEPLOYMENTS.format(ns="lab") + "/frigate"
+        for patch in ({"spec": {"template": {"spec": {"serviceAccount": "builder"}}}},
+                      {"spec": {"template": {"spec": {"serviceAccountName": "builder"}}}}):
+            with self.subTest(patch=patch), Kube(deployment("frigate")) as kube:
+                HOST.set_role("operator")
+                with self.assertRaisesRegex(PermissionError, "only an admin"):
+                    K.send("PATCH", path, patch, ctype="application/merge-patch+json")
+                self.assertEqual([], kube.writes)
+
+    def test_a_patch_adding_a_privileged_debug_container_is_refused(self):
+        path = "/api/v1/namespaces/lab/pods/tools"
+        pod = {"apiVersion": "v1", "kind": "Pod", "metadata": {"name": "tools", "namespace": "lab"},
+               "spec": {"containers": [{"name": "tools", "image": "example.com/t:1"}]}}
+        patch = {"spec": {"ephemeralContainers": [{"name": "debug", "image": "example.com/d:1",
+                                                   "securityContext": {"privileged": True}}]}}
+        with Kube(pod) as kube:
+            HOST.set_role("operator")
+            with self.assertRaises(PermissionError):
+                K.send("PATCH", path, patch, ctype="application/strategic-merge-patch+json")
+            self.assertEqual([], kube.writes)
+
+    def test_a_patch_that_cannot_be_applied_is_refused(self):
+        path = DEPLOYMENTS.format(ns="lab") + "/frigate"
+        for patch in ([{"op": "replace", "path": "/spec/nothing/here", "value": 1}],
+                      [{"op": "unknown", "path": "/spec"}], "not a patch"):
+            with self.subTest(patch=patch), Kube(deployment("frigate")) as kube:
+                HOST.set_role("operator")
+                with self.assertRaises(ValueError):
+                    K.send("PATCH", path, patch, ctype="application/json-patch+json")
+                self.assertEqual([], kube.writes)
+
+    def test_homesteads_own_patches_still_pass_for_an_operator(self):
+        path = DEPLOYMENTS.format(ns="lab") + "/frigate"
+        patches = (({"spec": {"replicas": 0}}, "application/merge-patch+json"),
+                   ({"metadata": {"annotations": {"example.com/primary-port": "8080"}}}, "application/merge-patch+json"),
+                   ({"spec": {"template": {"spec": {"priorityClassName": "low"}}}}, "application/strategic-merge-patch+json"),
+                   ([{"op": "test", "path": "/metadata/name", "value": "frigate"},
+                     {"op": "add", "path": "/metadata/labels", "value": {"tier": "low"}},
+                     {"op": "replace", "path": "/spec/template/spec/containers/0/image", "value": "example.com/app:2"}],
+                    "application/json-patch+json"))
+        for patch, ctype in patches:
+            with self.subTest(patch=patch), Kube(deployment("frigate")) as kube:
+                HOST.set_role("operator")
+                K.send("PATCH", path, patch, ctype=ctype)
+                self.assertEqual(1, len(self.written(kube, "PATCH")))
+
+    def test_a_cronjob_whose_job_template_carries_homesteads_labels_needs_an_admin(self):
+        import homestead_names as NAMES
+        for labels in ({"app": NAMES.BRAND}, {NAMES.key("task"): "backup"}):
+            body = cronjob("nightly")
+            body["spec"]["jobTemplate"]["metadata"] = {"labels": labels}
+            with self.subTest(labels=labels), Kube() as kube:
+                HOST.set_role("operator")
+                with self.assertRaisesRegex(PermissionError, "only an admin"):
+                    K.send("POST", CRONJOBS, body)
+                self.assertEqual([], kube.writes)
+
+    def test_a_patch_leaving_containers_or_volumes_unreadable_is_refused(self):
+        path = DEPLOYMENTS.format(ns="lab") + "/frigate"
+        for patch in ({"spec": {"template": {"spec": {"containers": ["not-a-container"]}}}},
+                      {"spec": {"template": {"spec": {"volumes": "not-a-list"}}}},
+                      {"spec": {"template": {"spec": {"volumes": [{"name": "v", "hostPath": "x"}]}}}},
+                      [{"op": "add", "path": "/spec/template/spec/initContainers", "value": [7]}]):
+            with self.subTest(patch=patch), Kube(deployment("frigate")) as kube:
+                HOST.set_role("operator")
+                with self.assertRaises(ValueError):
+                    K.send("PATCH", path, patch, ctype="application/merge-patch+json")
+                self.assertEqual([], kube.writes)
 
     def test_the_self_data_fence_stops_a_write_while_homesteads_data_is_moved(self):
         held = []

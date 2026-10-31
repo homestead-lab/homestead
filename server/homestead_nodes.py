@@ -8,7 +8,6 @@ cluster, its cache and the few collectors it shares with other pages
 and watch ports stay there and call in here.
 """
 import json
-import time
 import urllib.parse
 
 import homestead_disks as DISKS
@@ -16,6 +15,8 @@ import homestead_hardware as HW
 import homestead_kube_metrics as KUBE_METRICS
 import homestead_host_os as HOST_OS
 import homestead_impact as IMPACT
+import homestead_kube as KUBE
+import homestead_kubelet_stats as KSTATS
 import homestead_lhcapacity as LHCAP
 import homestead_node_actions as NODE_ACTIONS
 import homestead_names as NAMES
@@ -49,18 +50,6 @@ def bind(_kget, _ksend, namespace, system_namespaces, settings, default_settings
     get_workloads, get_volumes, parse_cpu, parse_mem, _dns_name = workloads, volumes, cpu, memory, dns_name
 
 
-_RATE = {}   # key -> (counter, timestamp) for per-node byte counters
-
-
-def rate(key, value, now=None):
-    now = now or time.time()
-    prev = _RATE.get(key)
-    _RATE[key] = (value, now)
-    if not prev or now <= prev[1] or value < prev[0]:
-        return 0.0
-    return (value - prev[0]) / (now - prev[1])
-
-
 def node_temps(wait=True, unreachable=False):
     """Each host's last reading from the optional homestead-nodeprobe DaemonSet.
 
@@ -73,10 +62,11 @@ def node_temps(wait=True, unreachable=False):
 
 
 def start_probes():
-    """This replica's background loops: the node probes (#705) and
-    metrics-server (#906)."""
+    """This replica's background loops: the node probes (#705),
+    metrics-server (#906) and the kubelet summaries (#976)."""
     PROBES.start(DEFAULT_NS)
     KUBE_METRICS.start(lambda path, **options: kget(path, **options))
+    KSTATS.start(kget)
 
 
 def reconcile_hardware(fresh=False):
@@ -115,23 +105,32 @@ def reconcile_hardware(fresh=False):
 
 
 def node_stats(name):
-    """Per-node network + filesystem counters from the kubelet summary API."""
-    try:
-        s = kget(f"/api/v1/nodes/{name}/proxy/stats/summary", timeout=8)
-    except Exception:
+    """Per-node network + filesystem counters from the kubelet summary API,
+    as homestead_kubelet_stats last read it: nothing is read here, and the
+    rates come from that reading and the one before it. A kubelet that
+    missed its last read, or whose reading is older than two rounds, is
+    unknown ({}), as when it was read here and did not answer: its last
+    figures are not shown as current."""
+    reading = KSTATS.latest([name]).get(name)
+    if not reading or reading["stale"]:
         return {}
-    nd = s.get("node", {}) or {}
-    net = nd.get("network", {}) or {}
-    ifaces = net.get("interfaces") or []
-    pick = next((i for i in ifaces if i.get("name") == "mgmt-br"), None) or            next((i for i in ifaces if (i.get("rxBytes") or 0) > 0), None) or {}
-    rx, tx = pick.get("rxBytes") or 0, pick.get("txBytes") or 0
-    now = time.time()
+    pick, rx, tx = _interface(reading["summary"])
+    before = reading["before"]
+    rx_rate = tx_rate = 0.0
+    if before and reading["at"] > before["at"]:
+        _, rx0, tx0 = _interface(before["summary"], pick.get("name"))
+        span = reading["at"] - before["at"]
+        # Counters that went down: the host restarted, the rate is unknown.
+        rx_rate = (rx - rx0) / span if rx >= rx0 else None
+        tx_rate = (tx - tx0) / span if tx >= tx0 else None
+    mbps = lambda value: None if value is None else round(value * 8 / 1e6, 2)
+    nd = reading["summary"].get("node", {}) or {}
     fs = nd.get("fs", {}) or {}
-    runtime = (s.get("node", {}).get("runtime", {}) or {}).get("imageFs", {}) or {}
+    runtime = (nd.get("runtime", {}) or {}).get("imageFs", {}) or {}
     return {
         "net_iface": pick.get("name", ""),
-        "rx_mbps": round(rate(f"{name}:rx", rx, now) * 8 / 1e6, 2),
-        "tx_mbps": round(rate(f"{name}:tx", tx, now) * 8 / 1e6, 2),
+        "rx_mbps": mbps(rx_rate),
+        "tx_mbps": mbps(tx_rate),
         "rx_total_gb": round(rx / 1024**3, 1),
         "tx_total_gb": round(tx / 1024**3, 1),
         "fs_used_gb": round((fs.get("usedBytes") or 0) / 1024**3, 1),
@@ -139,6 +138,18 @@ def node_stats(name):
         "fs_pct": round((fs.get("usedBytes") or 0) / (fs.get("capacityBytes") or 1) * 100, 1),
         "img_used_gb": round((runtime.get("usedBytes") or 0) / 1024**3, 1),
     }
+
+
+def _interface(summary, name=None):
+    """The interface the Hosts page shows (mgmt-br, else the first with
+    traffic; name: that one), and its received and sent bytes."""
+    ifaces = (((summary or {}).get("node", {}) or {}).get("network", {}) or {}).get("interfaces") or []
+    if name is not None:
+        pick = next((i for i in ifaces if i.get("name") == name), None) or {}
+    else:
+        pick = next((i for i in ifaces if i.get("name") == "mgmt-br"), None) or \
+               next((i for i in ifaces if (i.get("rxBytes") or 0) > 0), None) or {}
+    return pick, pick.get("rxBytes") or 0, pick.get("txBytes") or 0
 
 
 def smart_disk_issues(report, settings=None):
@@ -351,6 +362,9 @@ def get_nodes(pods=None, vols=None):
         host_os = HOST_OS.report()["hosts"]
     except Exception:
         host_os = {}
+    # Each host's kubelet summary, as the background loop last read it: the
+    # build never waits on a kubelet once that loop runs (#976).
+    KSTATS.readings(kget, [n["metadata"]["name"] for n in nodes.get("items", [])], wait=False)
     out = []
     hardware_definitions = HW.features()    # one read for every host, not two each (#977)
     for n in nodes.get("items", []):
@@ -494,13 +508,15 @@ def _impact_sources():
     A read that fails is None, never empty or a default."""
     deployments = [d for d in kget("/apis/apps/v1/deployments").get("items", []) if d["metadata"]["namespace"] not in SYS_NS]
     try:
-        raw_vms = kget("/apis/kubevirt.io/v1/virtualmachines").get("items", [])
+        # No KubeVirt installed is no VMs; any other failure is unread.
+        raw_vms = KUBE.items("/apis/kubevirt.io/v1/virtualmachines", optional_group="kubevirt.io", read=kget)
     except Exception:
-        raw_vms = []
+        raw_vms = None          # the preview says the VMs couldn't be checked, never that none has a device
     return {"deployments": deployments, "raw_vms": raw_vms, "sets": _statefulsets(), "pvs": _pinned_volumes(),
             "node_down": LHCAP.node_down(kget)}
 
 
+@ROUTER.fresh
 def node_impact(node, sources=None):
     """If this host goes down: what stops, moves and is at risk (homestead_impact).
     sources: _impact_sources(), when several hosts are previewed at once."""
@@ -514,13 +530,17 @@ def node_impact(node, sources=None):
         places = (cached("network", 5, INV.inventory) or {}).get("addresses") or {}
         addresses = (places.get("addresses") or []) if isinstance(places, dict) else list(places)
     except Exception:
-        addresses = []
+        addresses = None        # the preview says the addresses are unknown, never that none moves
     try:
         placement = cached("impact:" + node, 5, lambda: PLACE.impact(node))
     except Exception:
         placement = None
+    try:
+        volumes = cached("vol", 8, get_volumes)
+    except Exception:
+        volumes = None          # the preview says the risk is unknown, never none (#1002)
     return IMPACT.preview(node, cached("wl", 5, get_workloads), src["deployments"], cached("vms", 5, VM_LIST.list_vms), src["raw_vms"],
-                          cached("vol", 8, get_volumes), addresses, nodes, placement,
+                          volumes, addresses, nodes, placement,
                           sets=src["sets"], pvs=src["pvs"], node_down=src["node_down"])
 
 

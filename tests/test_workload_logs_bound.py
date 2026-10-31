@@ -1,6 +1,5 @@
 """GET /api/workloads/logs asks Kubernetes for at most LOG_BYTES (#986 §7):
 the kubelet splits lines at 16 KB, so 1,000 lines can be 16 MB."""
-import io
 import sys
 import unittest
 from pathlib import Path
@@ -11,30 +10,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 import homestead_workloads as WL
 
 
-class Answer(io.BytesIO):
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        return False
-
-
 class LogBoundTests(unittest.TestCase):
     def read(self, body=b"line\n"):
-        """body: bytes, or a function of the lines asked for."""
+        """body: bytes, or a function of the lines asked for. The Logs view
+        reads through raw_get, the pooled client (#984)."""
         asked = self.asked = []
 
-        def urlopen(request, **kw):
-            asked.append(request.full_url)
-            lines = int(request.full_url.split("tailLines=")[1].split("&")[0])
-            return Answer(body(lines) if callable(body) else body)
+        def raw_get(path, timeout=20, max_bytes=None):
+            asked.append(path)
+            lines = int(path.split("tailLines=")[1].split("&")[0])
+            raw = body(lines) if callable(body) else body
+            return (raw if max_bytes is None else raw[:max_bytes + 1]).decode("utf-8", "replace")
         request = SimpleNamespace(query={"ns": ["lab"], "pod": ["web-1"], "container": ["web"], "tail": ["1000"]},
                                   role="admin", user="alice")
-        with mock.patch.object(WL.urllib.request, "urlopen", urlopen), \
+        with mock.patch.object(WL, "raw_get", raw_get, create=True), \
              mock.patch.object(WL, "kget", lambda path: {"metadata": {"name": "web-1"}, "spec": {"containers": [{"name": "web"}]}},
-                               create=True), \
-             mock.patch.object(WL, "API", "https://192.0.2.1", create=True), \
-             mock.patch.object(WL, "TOKEN", "t", create=True), mock.patch.object(WL, "CTX", None, create=True):
+                               create=True):
             reply = WL.logs(request)
         return asked[0], reply
 

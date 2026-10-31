@@ -3,9 +3,10 @@
 Longhorn actualSize is a block/snapshot footprint, not bytes used by files.
 Missing, stale, raw-block and inconsistent samples deliberately remain unknown.
 """
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import math
+
+import homestead_kubelet_stats as KSTATS
 
 
 def timestamp(value):
@@ -51,37 +52,35 @@ def collect(get, claims, now=None):
         if wanted:
             hosts.setdefault(spec["nodeName"], {})[meta["uid"]] = wanted
 
-    def read(host):
-        try:
-            summary = get(f"/api/v1/nodes/{host}/proxy/stats/summary", timeout=4)
-            return host, summary if isinstance(summary, dict) else {}
-        except Exception:
-            return host, {}
-
     result = {}
     if not hosts:
         return result
-    with ThreadPoolExecutor(max_workers=min(4, len(hosts))) as pool:
-        for host, summary in pool.map(read, hosts):
-            for pod in objects(summary.get("pods")):
-                allowed = hosts[host].get(fields(pod.get("podRef")).get("uid"), set())
-                for sample in objects(pod.get("volume")):
-                    ref = fields(sample.get("pvcRef"))
-                    key = (ref.get("namespace"), ref.get("name"))
-                    at = timestamp(sample.get("time"))
-                    if key not in allowed or at is None or not -5 <= now - at <= 120:
-                        continue
-                    used, capacity = sample.get("usedBytes"), sample.get("capacityBytes")
-                    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in (used, capacity)):
-                        continue
-                    if capacity <= 0 or used < 0 or used > capacity:
-                        continue
-                    # Shared mounts are observations of one filesystem, not
-                    # additive usage. Keep the newest; prefer larger on a tie.
-                    if key in result and (at, used) <= (result[key]["sample_at"], result[key]["used_bytes"]):
-                        continue
-                    result[key] = {"used_bytes": used, "capacity_bytes": capacity,
-                                   "used_gb": round(used / 1024**3, 2), "capacity_gb": round(capacity / 1024**3, 2),
-                                   "used_pct": round(used / capacity * 100, 1),
-                                   "sample_at": at, "source": "kubelet"}
+    # The Hosts page's reading of each kubelet, not a second one of its own
+    # (#976); each sample's own time still has to be recent, below. A kubelet
+    # whose last read failed says nothing, as when it was read here.
+    summaries = KSTATS.readings(get, hosts)
+    for host in hosts:
+        reading = summaries.get(host) or {}
+        summary = {} if reading.get("missed") else reading.get("summary") or {}
+        for pod in objects(summary.get("pods")):
+            allowed = hosts[host].get(fields(pod.get("podRef")).get("uid"), set())
+            for sample in objects(pod.get("volume")):
+                ref = fields(sample.get("pvcRef"))
+                key = (ref.get("namespace"), ref.get("name"))
+                at = timestamp(sample.get("time"))
+                if key not in allowed or at is None or not -5 <= now - at <= 120:
+                    continue
+                used, capacity = sample.get("usedBytes"), sample.get("capacityBytes")
+                if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in (used, capacity)):
+                    continue
+                if capacity <= 0 or used < 0 or used > capacity:
+                    continue
+                # Shared mounts are observations of one filesystem, not
+                # additive usage. Keep the newest; prefer larger on a tie.
+                if key in result and (at, used) <= (result[key]["sample_at"], result[key]["used_bytes"]):
+                    continue
+                result[key] = {"used_bytes": used, "capacity_bytes": capacity,
+                               "used_gb": round(used / 1024**3, 2), "capacity_gb": round(capacity / 1024**3, 2),
+                               "used_pct": round(used / capacity * 100, 1),
+                               "sample_at": at, "source": "kubelet"}
     return result

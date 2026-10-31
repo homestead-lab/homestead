@@ -228,5 +228,140 @@ class HarvesterMaintenanceTests(UptimeCase):
         self.assertEqual((self.start + 300, "ended"), (event["end"], event["outcome"]), "closed when it was last seen")
 
 
+# uptime() as it was before #979, kept as the reference the faster one must
+# match exactly: two whole passes over a node's rows for each of 90 days.
+def _reference_ready_rows(data, name):
+    fine = [(r["t"], H.STEP, r["nodes"][name][2]) for r in data["fine"] if name in (r.get("nodes") or {})]
+    first_fine = fine[0][0] if fine else float("inf")
+    coarse = [(r["t"], 3600, r["nodes"][name][2]) for r in data["coarse"]
+              if name in (r.get("nodes") or {}) and r["t"] + 3600 <= first_fine]
+    return coarse + fine
+
+
+def _reference_share(rows, since):
+    rows = [(row[0], row[1], row[2]) for row in rows if row[0] + row[1] > since]
+    total = sum(span for _, span, _ in rows)
+    return round(100 * sum(span * up for _, span, up in rows) / total, 3) if total else None
+
+
+def _reference_pieces(rows, spans):
+    out = []
+    for t, span, up in rows:
+        cuts = {t, t + span}
+        for a, b, _ in spans:
+            if a < t + span and b > t:
+                cuts.update((max(a, t), min(b, t + span)))
+        edges = sorted(cuts)
+        cut = [(a, b - a, next((r for s, e, r in spans if s <= a and b <= e), None)) for a, b in zip(edges, edges[1:])]
+        down = span * (1 - up)
+        overlap = sum(length for _, length, reason in cut if reason)
+        inside = min(down, overlap + 2 * H.STEP) if overlap else 0
+        rest, outside_len = down - inside, span - overlap
+        for a, length, reason in cut:
+            share = (inside * length / overlap) if reason else (rest * length / outside_len if outside_len else 0)
+            out.append((a, length, share, reason, span))
+    return out
+
+
+def _reference_uptime(data, now):
+    names = sorted({n for r in data["fine"] + data["coarse"] for n in (r.get("nodes") or {})})
+    out = {}
+    maintenance = H._expire(data["maintenance"], now)
+    for name in names:
+        rows = _reference_ready_rows(data, name)
+        events = [e for e in maintenance if e["node"] == name]
+        spans = H._spans(events, now)
+        pieces = _reference_pieces(rows, spans)
+        outside = [(t, length, 1 - down / length) for t, length, down, reason, _ in pieces if reason is None and length]
+        days = []
+        for back in range(89, -1, -1):
+            start = now - now % 86400 - back * 86400
+            share = _reference_share([(t, span, up) for t, span, up in rows if t < start + 86400], start)
+            days.append({"day": start, "up": share,
+                         "up_excluding_maintenance": _reference_share([p for p in outside if p[0] < start + 86400], start),
+                         "maintenance": any(a < start + 86400 and b > start for a, b, _ in spans)})
+        planned = lambda t: any(a <= t <= b + H.STEP for a, b, _ in spans)
+        out[name] = {"windows": {label: _reference_share(rows, now - span) for label, span in H.WINDOWS},
+                     "windows_excluding_maintenance": {label: _reference_share(outside, now - span) for label, span in H.WINDOWS},
+                     "maintenance_s": {label: H._covered(spans, now - span, now) for label, span in H.WINDOWS},
+                     "days": days, "outages": H._outages(pieces, now)[-50:],
+                     "reboots": [{"t": e["t"], "planned": planned(e["t"])} for e in data.get("events") or []
+                                 if e.get("node") == name and e.get("kind") == "reboot"][-50:],
+                     "maintenance": [{"start": e["start"], "end": e["end"], "reason": e["reason"], "job": e["job"],
+                                      "ongoing": e["end"] is None} for e in sorted(events, key=lambda e: e["start"])][-50:],
+                     "since": rows[0][0] if rows else None}
+    return {"nodes": out, "step": H.STEP}
+
+
+def _random_history(rnd, now):
+    """Months of samples with gaps, odd timestamps, partial hours, nodes that
+    come and go, and maintenance open, closed, overlapping and overrun."""
+    names = ["node-a", "node-b", "node-c"]
+    hour = now - now % 3600
+    coarse = []
+    for back in range(rnd.choice((30, 91, 95)) * 24, 0, -1):
+        if rnd.random() < 0.3:
+            continue
+        t = hour - back * 3600 + (rnd.choice((0, 0, 0, 1800, 7)) if rnd.random() < 0.05 else 0)
+        nodes = {n: [1.0, 2.0, rnd.choice((1, 1, 1, 0, 0.5, round(rnd.random(), 3)))] for n in names if rnd.random() < 0.9}
+        coarse.append({"t": t, "n": 12, "nodes": nodes})
+    fine = []
+    for back in range(2 * 288, -1, -1):
+        if rnd.random() < 0.2:
+            continue
+        nodes = {n: [1, 2, rnd.choice((1, 1, 1, 1, 0))] for n in names if rnd.random() < 0.9}
+        fine.append({"t": now - now % 300 - back * 300, "nodes": nodes})
+    if rnd.random() < 0.4:              # a hand-edited file: samples out of order
+        i, j = rnd.randrange(len(fine)), rnd.randrange(len(fine))
+        fine[i], fine[j] = fine[j], fine[i]
+    maintenance = []
+    for i in range(rnd.randint(0, 12)):
+        start = now - rnd.randint(0, 92 * DAY)
+        end = rnd.choice((None, start + rnd.randint(0, 3 * DAY), start + rnd.randint(0, 3600) + 0.5))
+        maintenance.append({"id": f"j{i}", "job": f"j{i}", "node": rnd.choice(names), "start": start, "end": end,
+                            "reason": rnd.choice(("OS update", "host reboot", "drain", "Harvester maintenance")),
+                            "outcome": None})
+    events = [{"t": now - rnd.randint(0, 90 * DAY), "node": rnd.choice(names), "kind": "reboot"} for _ in range(5)]
+    return {"fine": fine, "coarse": coarse, "boots": {}, "events": events, "maintenance": maintenance}
+
+
+class DayStripTests(UptimeCase):
+    """#979: the 90-day strip comes from one pass over each node's rows, and the
+    whole answer is exactly what two passes a day gave before."""
+
+    def test_the_answer_matches_the_full_computation_on_varied_histories(self):
+        import json, os, random
+        rnd = random.Random(979)
+        for case in range(16):
+            now = self.start + rnd.randint(0, 3 * DAY) + rnd.choice((0, 1, 299, 3599, DAY - 1))
+            data = _random_history(rnd, now)
+            with open(os.path.join(self.tmp.name, H.FILE), "w", encoding="utf-8") as handle:
+                json.dump(data, handle)
+            want = _reference_uptime(H._read(), now)
+            self.assertTrue(want["nodes"])
+            self.assertEqual(want, H.uptime(now), f"case {case}")
+
+    def test_it_is_several_times_quicker_than_the_full_computation(self):
+        import json, os, time
+        names = [f"node-{i}" for i in range(8)]
+        now = self.start + 13 * 3600
+        coarse = [{"t": now - now % 3600 - back * 3600, "n": 12, "nodes": {n: [1.0, 2.0, 1] for n in names}}
+                  for back in range(90 * 24, 0, -1)]
+        fine = [{"t": now - now % 300 - back * 300, "nodes": {n: [1, 2, 1] for n in names}} for back in range(576, -1, -1)]
+        maintenance = [{"id": f"j{i}", "job": f"j{i}", "node": names[i % 8], "start": now - i * 7 * DAY, "end": now - i * 7 * DAY + 3600,
+                        "reason": "OS update", "outcome": "ended"} for i in range(1, 13)]
+        with open(os.path.join(self.tmp.name, H.FILE), "w", encoding="utf-8") as handle:
+            json.dump({"fine": fine, "coarse": coarse, "maintenance": maintenance}, handle)
+        started = time.process_time()
+        want = _reference_uptime(H._read(), now)
+        before = time.process_time() - started
+        started = time.process_time()
+        got = H.uptime(now)
+        after = time.process_time() - started
+        self.assertEqual(want, got)
+        # Relative, so a busy machine slows both alike: 20 nodes took 0.8 s before #979.
+        # A generous ratio: about 6 times on a quiet machine, never under 3 seen on a loaded one.
+        self.assertLess(after * 2, before, f"{after:.3f} s against {before:.3f} s before #979")
+
 if __name__ == "__main__":
     unittest.main()

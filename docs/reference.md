@@ -1650,8 +1650,11 @@ copies take room until then. A VM on a DataVolume is switched to
 the plain volume, as a moved VM is; a DaemonSet, a bare pod, or a volume a
 StatefulSet's template made cannot be stopped or recreated safely, and is
 said so up front. Homestead's own data moves from Settings › Redundancy.
-Held moves before cutover have administrator-reviewed resume and
-return-to-original actions; see [Homestead data move recovery](data-move-recovery.md).
+Held moves have administrator-reviewed actions: resume and return-to-original
+until the switch to the new volume, then resume forward only; see
+[Homestead data move recovery](data-move-recovery.md). A failed preparation, or
+a move whose setup stopped before recording its control record, can be closed
+with Close recovery once what it made is gone.
 
 Completed destination preparations can be archived from Move data or Jobs.
 Archiving hides the record while retaining both volumes and their creation
@@ -2252,6 +2255,7 @@ scripts/render_icons.py       regenerate web/icons/ from the mark's geometry
 scripts/bump_version.py       move every file that names the release to a new version
 scripts/render_rbac.py        regenerate deploy/rbac.yaml, the permissions alone
 scripts/render_chart.py       regenerate charts/homestead from the manifests
+scripts/render_route_roles.py regenerate docs/route-roles.md, which role each route needs
 scripts/capture_screenshots.mjs  the release screenshots, from demo data
 scripts/capture_mobile.mjs    the README's phone pictures, in phone frames
 scripts/audit_dialogs.mjs     every dialog, desktop and phone, checked against docs/design.md

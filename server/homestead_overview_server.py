@@ -20,6 +20,7 @@ import homestead_app_copies as APP_COPIES
 import homestead_api_v1 as API_V1
 import homestead_audit as AUDIT_LOG
 import homestead_auth as AUTH
+import homestead_cache as CACHE
 import homestead_changes as CHANGES
 import homestead_cluster as CLUSTER
 import homestead_diagnostics as DIAGNOSTICS
@@ -31,9 +32,12 @@ import homestead_history as HISTORY
 import homestead_host_access as HOSTACCESS
 import homestead_host_os as HOST_OS
 import homestead_housekeeping as HOUSEKEEPING
+import homestead_kube as KUBE
 import homestead_leader as LEADER
+import homestead_longhorn as LH
 import homestead_longhorn_target as BACKUP_TARGET
 import homestead_longhorn_jobs as JOBS
+import homestead_kube as KUBE
 import homestead_lhcapacity as LHCAP
 import homestead_lhrebuild as LHREBUILD
 import homestead_logalerts as LOGALERTS
@@ -290,6 +294,7 @@ def _alert_sources():
             results[name] = None
 
     take("health", lambda: ALERTS.health_facts(MODULE_ROUTES.page("ov", get_overview)))
+    take("longhorn", lambda: ALERTS.longhorn_facts(MODULE_ROUTES.page("ov", get_overview)))
     take("jobs", lambda: ALERTS.job_facts(OPS.snapshot()))
     take("joins", lambda: ALERTS.join_facts(kget("/api/v1/nodes").get("items", [])))
     take("addresses", lambda: VIPS.alert_facts(cached("network", 5, INV.inventory).get("addresses")))
@@ -316,7 +321,7 @@ def _alert_sources():
     take("rootguard", ROOT_GUARD.alert_facts)
     take("audit", AUDIT_LOG.alert_facts)
     take("platform", lambda: ALERTS.upgrade_facts(UPGRADES.report(
-        ((cached("cluster", 15, CLUSTER.inventory) or {}).get("versions") or {}).get("harvester", ""))))
+        cached(CLUSTER.VERSION_KEY, 15, CLUSTER.harvester_version))))
     # Twice a day whether or not anyone is looking - the Containers header and
     # the update notifications both read the result.
     if time.time() - _last_update_scan[0] > UPDATE_SCAN_EVERY:
@@ -426,7 +431,16 @@ def outage_tick():
                 api_vm_power(item["ns"], item["name"], "restart")
             _cache.pop("wl" if item["kind"] == "app" else "vms", None)
 
-        did = OUTAGE.tick(found, UPTIME.report(), restart, lambda item: (item["ns"], item["name"]) in working, operations)
+        try:
+            did = OUTAGE.tick(found, UPTIME.report(), restart, lambda item: (item["ns"], item["name"]) in working, operations)
+        except Exception as error:
+            # Its own beat, so Homestead's health shows outage actions failing;
+            # the carry-over below still runs.
+            beat("outage-actions", UPTIME.CHECK_EVERY, error, leader_only=True)
+            print(f"outage actions: {str(error)[:160]}", flush=True)
+            did = None
+    if did is not None:
+        beat("outage-actions", UPTIME.CHECK_EVERY, leader_only=True)
     try:
         OUTAGE.migrate(found)       # webhook addresses still on an annotation go into their Secret (#931)
     except Exception as error:
@@ -439,7 +453,7 @@ def outage_tick():
         OUTAGE_CARRY.carry_lan()    # reads its own lists: these cached ones cannot tell a failed VM list from none
     except Exception as error:
         print(f"outage actions: carry-over: {type(error).__name__}", flush=True)
-    return did
+    return did or []
 
 
 def scheduled_items():
@@ -638,6 +652,7 @@ def guard_managed_smb(ns, name):
 
 
 def workload_start_plan(ns, name, replicas=1):
+    _path_names(ns, name)
     ns, name = _dns_name(ns, "namespace"), _dns_name(name, "workload name")
     threshold = get_app_settings()["thresholds"]["memory"]["critical"]
     plan = PLACE.start_plan(ns, name, replicas, threshold)
@@ -656,6 +671,7 @@ def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
     """A Deployment to n replicas, after the checks the app makes: never the
     SMB server's, never Homestead's own unless confirmed, and a start only
     where the capacity check allows it."""
+    _path_names(ns, name)
     if n < 0 or n > 100:
         raise ValueError("replicas must be between 0 and 100")
     guard_managed_smb(ns, name)
@@ -680,7 +696,15 @@ def scale_workload(ns, name, n, *, confirm_capacity=False, confirm_self=False):
     return {"ok": True, "plan": plan}
 
 
+def _path_names(ns, name):
+    """The namespace and workload a request names, checked before either
+    goes into an API path."""
+    KUBE.request_name(ns, "namespace", namespace=True)
+    KUBE.request_name(name, "workload name")
+
+
 def restart_workload(ns, name):
+    _path_names(ns, name)
     guard_managed_smb(ns, name)
     require_workload_target(ns, name)
     ksend("PATCH", f"/apis/apps/v1/namespaces/{ns}/deployments/{name}",
@@ -714,23 +738,64 @@ def guard_self(ns, name, stopping=False, confirmed=False, renaming=False, deleti
         raise ValueError(self_stop_warning())
 
 
+# What the snapshot hands get_overview when its volumes part failed, so the
+# overview neither reads Longhorn again nor takes the failure for no volumes.
+VOLUMES_UNREAD = object()
+
+
+def _jobs_read():
+    """Longhorn's recurring jobs, read strictly; a cluster without Longhorn
+    (a 404 with its API group absent) has none to fail."""
+    try:
+        return JOBS.list_jobs(strict=True)
+    except urllib.error.HTTPError as error:
+        if error.code == 404 and KUBE.items(f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs",
+                                            optional_group="longhorn.io", read=LH.kget) == []:
+            return []
+        raise
+
+
+def _protection():
+    """The Dashboard's Backup and Trim health issues, and by kind what could
+    not be read: those issues are unknown, not gone, and the alerts keep them
+    open ("health:Backup:" / "health:Trim:" held in ALERTS.health_facts)."""
+    unread, jobs, target, trim = {}, [], None, {}
+    try:
+        jobs = cached("lhjobs-health", 60, _jobs_read)
+        target = cached("lhtarget-health", 60, BACKUP_TARGET.backup_target)
+    except Exception as error:
+        jobs, unread["Backup"] = [], f"Backup protection could not be checked: {str(error)[:200]}"
+    try:
+        trim = cached("trim-health", 60, lambda: WEEKLY_TRIM.last_state(strict=True))
+    except Exception as error:
+        trim, unread["Trim"] = {}, f"The weekly trim could not be checked: {str(error)[:200]}"
+    try:
+        return protection_issues(jobs, target, trim), unread
+    except Exception as error:
+        why = f"Data protection could not be checked: {str(error)[:200]}"
+        return [], {"Backup": unread.get("Backup", why), "Trim": unread.get("Trim", why)}
+
+
 def get_overview(nodes=None, wl=None, vols=None, pods=None):
     """The Dashboard's summary. The leader's page snapshot passes in what its
     cycle has read already; each one left out is read here."""
     nodes = NODES.get_nodes() if nodes is None else nodes
     wl = WORKLOADS.get_workloads() if wl is None else wl
-    vols = STORAGE.get_volumes() if vols is None else vols
+    if vols is None:
+        try:
+            vols = STORAGE.get_volumes()
+        except Exception:
+            vols = VOLUMES_UNREAD
+    # Longhorn that did not answer is not a cluster with no volume issues: the
+    # overview says so, and the alerts keep the volume ones open (#1002).
+    volumes_unread = vols is VOLUMES_UNREAD
+    vols = [] if volumes_unread else vols
     pods = (kget("/api/v1/pods") if pods is None else pods).get("items", [])
     sysp = [p for p in pods if p["metadata"]["namespace"] in SYS_NS]
     usrp = [p for p in pods if p["metadata"]["namespace"] not in SYS_NS]
     deg = [v for v in vols if v["robustness"] == "degraded"]
     flt = [v for v in vols if v["robustness"] == "faulted"]
-    try:
-        protection = protection_issues(cached("lhjobs-health", 60, JOBS.list_jobs),
-                                       cached("lhtarget-health", 60, BACKUP_TARGET.backup_target),
-                                       cached("trim-health", 60, WEEKLY_TRIM.last_state))
-    except Exception:
-        protection = []
+    protection, protection_unread = _protection()
     # On one host, the degraded volumes Match copies to hosts offers to lower
     # (#841) say why; read only then, and a failed read says nothing new.
     short = set()
@@ -748,10 +813,17 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
     # the alerts' hold (#941).
     health = CLUSTER.HOLD.apply(CLUSTER.classify_cluster_health(
         nodes, wl, vols, protection=protection, maintenance=in_maintenance, overran=overran, short_of_hosts=short))
+    health = CLUSTER.unknown_when_unread(
+        health, [*(["Longhorn's volumes could not be read, so their health is not known"] if volumes_unread else []),
+                 *protection_unread.values()])
     tcap = sum(n["cpu_cap"] for n in nodes) or 1
     tuse = sum(n["cpu_used"] for n in nodes)
     mcap = sum(n["mem_cap_gb"] for n in nodes) or 1
     muse = sum(n["mem_used_gb"] for n in nodes)
+    try:
+        lb_ip = REG.shared_vip()
+    except Exception:
+        lb_ip = None    # Your VIPs unread: no address, never the shared fallback
     return {
         **health,
         "nodes": nodes,
@@ -762,13 +834,15 @@ def get_overview(nodes=None, wl=None, vols=None, pods=None):
         "system_pods": len(sysp),
         "volumes": len(vols), "vol_degraded": len(deg), "vol_faulted": len(flt),
         "vol_one_host": sum(1 for issue in health["health_issues"] if issue.get("one_host")),
+        "volumes_unread": volumes_unread,
+        "protection_unread": protection_unread,
         "cpu_pct": round(tuse / tcap * 100, 1),
         "mem_pct": round(muse / mcap * 100, 1),
         "cpu_used": round(tuse, 2), "cpu_cap": tcap,
         "mem_used_gb": round(muse, 1), "mem_cap_gb": round(mcap, 1),
         "top_cpu": sorted(wl, key=lambda x: -x["cpu"])[:6],
         "top_mem": sorted(wl, key=lambda x: -x["mem_mb"])[:6],
-        "lb_ip": REG.shared_vip(),
+        "lb_ip": lb_ip,
     }
 
 
@@ -782,7 +856,9 @@ def _pods_seen():
     """The cycle's pod list, which the leader also notes restarts from
     (#740), on a thread of its own: the pages never wait for it, and a
     failed note never costs them their pods."""
-    pods = kget("/api/v1/pods")
+    # Kept for the Cluster page's system services (#980), unless a write to
+    # pods came while it was read.
+    pods = CACHE.refresh(CLUSTER.PODS_KEY, lambda: kget("/api/v1/pods"))
     try:
         RESTARTS.observe_later(pods)
     except Exception as error:
@@ -800,7 +876,8 @@ def page_builders():
         ("wl", lambda got: WORKLOADS.get_workloads(pods=got["pods"])),
         ("stor", lambda got: STORAGE.get_storage(vols=got["vol"])),
         ("lhcap", lambda got: LHCAP.status()),
-        ("ov", lambda got: get_overview(nodes=got["nodes"], wl=got["wl"], vols=got["vol"], pods=got["pods"])),
+        ("ov", lambda got: get_overview(nodes=got["nodes"], wl=got["wl"], vols=got.get("vol", VOLUMES_UNREAD),
+                                        pods=got["pods"])),
     ]
 
 

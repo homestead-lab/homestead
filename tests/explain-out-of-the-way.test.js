@@ -45,3 +45,14 @@ test("a setup step doesn't repeat that Next leaves it unchecked; the intro says 
   assert.doesNotMatch(src, /<p class="small dim">Next does not mark this step complete\.<\/p>/);
   assert.match(src, /Next moves to the following step without marking the current one complete/);
 });
+
+test("Settings › About says the cluster VIP is unknown when Your VIPs couldn't be read (fix/unread-inventory)", () => {
+  const src = read("web/js/views-settings.js");
+  const fn = src.match(/function clusterVipText\([^]*?\n}/);
+  assert.ok(fn, "clusterVipText is defined");
+  const text = new Function(`${fn[0]}; return clusterVipText;`)();
+  assert.equal(text({ lb_ip: null }, { vip: "192.0.2.5" }, ""), "unknown");
+  assert.equal(text({ lb_ip: "192.0.2.9" }, { vip: "192.0.2.5" }, ""), "192.0.2.9");
+  assert.equal(text({ lb_ip: "" }, { vip: "192.0.2.5" }, ""), "192.0.2.5");
+  assert.equal(text({ lb_ip: "192.0.2.9" }, { vip: "" }, "hosts unread"), "—");
+});

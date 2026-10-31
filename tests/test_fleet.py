@@ -294,6 +294,18 @@ class RelayTests(unittest.TestCase):
         self.assertIn("Content-Length: 2", head)
         self.assertIn("X-Homestead-Fleet-User: robin", head)
 
+    def test_the_callers_own_credentials_are_not_passed_on(self):
+        head = self.a.fleet.request_head(
+            "GET", "/api/overview", "10.0.0.2:8088",
+            {"Authorization": "Bearer hsk_secret", "authorization": "Basic dXNlcjpwdw==",
+             "Proxy-Authorization": "Basic x", "Accept": "application/json"},
+            b"", self.a.fleet.sign("GET", "/api/overview", b"", "robin", "viewer")).decode()
+        self.assertNotIn("hsk_secret", head)
+        self.assertNotIn("dXNlcjpwdw", head)
+        self.assertNotIn("uthorization:", head)
+        self.assertIn("Accept: application/json", head)
+        self.assertIn("X-Homestead-Fleet-User: robin", head, "the signature says who is asking instead")
+
     def test_a_console_keeps_its_upgrade(self):
         head = self.a.fleet.request_head("GET", "/api/console?pod=x", "h", {"Upgrade": "websocket",
                                          "Sec-WebSocket-Key": "k"}, b"", {}, websocket=True).decode()
@@ -557,3 +569,130 @@ class PlainHttpConsentTests(unittest.TestCase):
     def test_https_only_needs_no_consent(self):
         self.a.fleet.join(self.c.url, "admin", "secret")
         self.a.fleet.remove(self.c.fleet.self_id())
+
+
+class _Trickle(__import__("http.server").server.BaseHTTPRequestHandler):
+    """Headers at once, then the body a byte every 0.1 s (or all of it)."""
+    body = b'{"ok": true}'
+    drip = True
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        if not self.drip:
+            self.wfile.write(self.body)
+            return
+        try:
+            while not self.server.stop.wait(0.1):
+                self.wfile.write(b" ")
+                self.wfile.flush()
+        except OSError:
+            pass
+
+    def log_message(self, *args):
+        pass
+
+
+class MemberAnswerBoundTests(unittest.TestCase):
+    """A linked member's answer was read whole, with a per-wait timeout."""
+
+    def serve(self, **kind):
+        import http.server
+        handler = type("H", (_Trickle,), kind)
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        server.daemon_threads = True
+        server.stop = threading.Event()
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        self.addCleanup(server.stop.set)
+        return f"http://127.0.0.1:{server.server_address[1]}"
+
+    def test_a_trickling_answer_ends_at_one_deadline(self):
+        fleet = fresh_module("fleet_trickle")
+        url = self.serve()
+        started = time.monotonic()
+        with self.assertRaises(fleet.Unreachable):
+            fleet._json(url, "GET", "/api/fleet/hello", timeout=0.5)
+        self.assertLess(time.monotonic() - started, 2.0)
+
+    def test_an_answer_past_the_cap_is_refused(self):
+        fleet = fresh_module("fleet_large")
+        url = self.serve(drip=False, body=b'{"rows": "' + b"x" * 5000 + b'"}')
+        with mock.patch.object(fleet, "ANSWER_MAX_BYTES", 1000), self.assertRaises(ValueError) as caught:
+            fleet._json(url, "GET", "/api/workloads", timeout=2)
+        self.assertIn("larger than", str(caught.exception))
+        self.assertEqual({"ok": True}, fleet._json(self.serve(drip=False), "GET", "/api/fleet/hello", timeout=2)[0])
+
+    def test_the_fleet_page_waits_once_for_all_members_not_once_each(self):
+        a = Cluster("loft", "https://10.0.0.1:8088", {})
+        b = Cluster("shed", "https://10.0.0.2:8088", {})
+        c = Cluster("garage", "https://10.0.0.3:8088", {})
+        wire([a, b, c])
+        a.fleet.join(b.url, "admin", "secret")
+        a.fleet.join(c.url, "admin", "secret")
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def stuck(target):
+            release.wait(30)
+            return {}
+        started = time.monotonic()
+        with mock.patch.object(a.fleet, "check", stuck), mock.patch.object(a.fleet, "SUMMARY_WAIT", 0.3):
+            view = a.fleet.summary()
+        self.assertLess(time.monotonic() - started, 0.55, "joined one after another")
+        self.assertEqual(3, len(view["members"]))
+
+
+class SummaryStragglerTests(unittest.TestCase):
+    """Members checked after a newer list was brought in were asked one by one
+    on the request thread; a member whose check still runs was asked again."""
+
+    def setUp(self):
+        self.a = Cluster("loft", "https://10.0.0.1:8088", {})
+        self.b = Cluster("shed", "https://10.0.0.2:8088", {})
+        self.c = Cluster("garage", "https://10.0.0.3:8088", {})
+        wire([self.a, self.b, self.c])
+        self.release = threading.Event()
+        self.addCleanup(self.release.set)
+
+    def slow_for(self, fleet, slow_ids):
+        real, asked = fleet.check, []
+
+        def check(target):
+            asked.append(target["id"])
+            if target["id"] in slow_ids:
+                self.release.wait(5)
+                return {"at": time.time(), "reachable": True, "version": "late", "name": target.get("name"),
+                        "revision": 0, "protocol": 0, "error": ""}
+            return real(target)
+        return check, asked
+
+    def test_members_brought_in_by_a_newer_list_share_the_same_wait(self):
+        self.a.fleet.join(self.b.url, "admin", "secret")
+        self.b.down = True
+        self.a.fleet.join(self.c.url, "admin", "secret")
+        self.b.down = False
+        self.b.fleet._status.clear()
+        garage = self.c.fleet.self_id()
+        check, _ = self.slow_for(self.b.fleet, {garage})
+        started = time.monotonic()
+        with mock.patch.object(self.b.fleet, "check", check), mock.patch.object(self.b.fleet, "SUMMARY_WAIT", 0.3):
+            view = self.b.fleet.summary()
+        self.assertLess(time.monotonic() - started, 1.5, "the newcomer was asked on the request thread")
+        row = next(m for m in view["members"] if m["id"] == garage)
+        self.assertEqual((True, "still checking"), (row["checking"], row["error"]))
+
+    def test_a_check_still_running_is_not_started_again(self):
+        self.a.fleet.join(self.b.url, "admin", "secret")
+        shed = self.b.fleet.self_id()
+        check, asked = self.slow_for(self.a.fleet, {shed})
+        with mock.patch.object(self.a.fleet, "check", check), mock.patch.object(self.a.fleet, "SUMMARY_WAIT", 0.1):
+            first = self.a.fleet.summary()
+            second = self.a.fleet.summary()
+        self.assertEqual(1, asked.count(shed))
+        for view in (first, second):
+            row = next(m for m in view["members"] if m["id"] == shed)
+            self.assertTrue(row["checking"])
+        self.release.set()

@@ -47,7 +47,7 @@ class HostMoveTests(unittest.TestCase):
         for patch in (mock.patch.object(W, "kget", K.kget, create=True), mock.patch.object(W, "ksend", K.ksend, create=True),
                       mock.patch.object(MOVE.OPS, "start", side_effect=lambda kind, title, res, href, ref, *a, **k:
                                         self.started.append({"kind": kind, "title": title, "ref": ref}) or {"id": "op"}),
-                      mock.patch.object(IMAGES, "prepull", side_effect=lambda image, nodes: {"daemonset": "homestead-pull-frigate"}),
+                      mock.patch.object(IMAGES, "prepull", side_effect=lambda image, nodes, **kw: {"daemonset": "homestead-pull-frigate"}),
                       mock.patch.object(IMAGES, "stop_prepull", return_value={}),
                       mock.patch.object(IMAGES, "I", mock.Mock(NS="lab"))):
             patch.start()
@@ -61,7 +61,7 @@ class HostMoveTests(unittest.TestCase):
 
     def test_an_image_the_host_lacks_is_pulled_there_before_the_app_moves(self):
         item = self.move()
-        IMAGES.prepull.assert_called_once_with(IMAGE, ["k3s-3"])
+        IMAGES.prepull.assert_called_once_with(IMAGE, ["k3s-3"], own=True)
         self.assertEqual([], self.applied, "the app keeps running where it is while its image is pulled")
         self.kube.add(pull_daemonset(0))
         self.assertEqual("running", MOVE.status(item)[0])

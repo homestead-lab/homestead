@@ -1,4 +1,6 @@
 import sys
+import tempfile
+import urllib.error
 import unittest
 from pathlib import Path
 
@@ -106,6 +108,68 @@ class UpgradeTests(unittest.TestCase):
         self.assertIn("platform:release:v1.5.1", keys)
         self.assertFalse(any(key.endswith(":failed") for key in keys))
         self.assertTrue(all(fact["event"] for fact in facts))
+
+
+def http_error(code):
+    return urllib.error.HTTPError("https://192.0.2.1/x", code, "failed", {}, None)
+
+
+class UnreadUpgradesTests(unittest.TestCase):
+    """Harvester's versions and upgrades that cannot be read are not "none" (sweep unknown-as-fine, row 16)."""
+
+    def setUp(self):
+        self.failing = True
+        self.groups = [{"name": "harvesterhci.io"}]
+
+        def get(path):
+            if path == "/apis":
+                return {"groups": self.groups}
+            if self.failing:
+                raise http_error(500)
+            return {"items": [UPGRADE] if path.endswith("/upgrades") else
+                    [{"metadata": {"name": "v1.5.1"}, "spec": {"releaseDate": "20260801"}}]}
+
+        UPGRADES._releases.update(at=0.0, value=[], error="")
+        UPGRADES.bind(get, lambda url: RELEASES)
+
+    def test_a_failed_read_raises_and_the_report_says_it_could_not_read(self):
+        for fn in (UPGRADES.offered, UPGRADES.upgrades):
+            with self.assertRaises(urllib.error.HTTPError):
+                fn()
+        report = UPGRADES.report("1.5.0")
+        self.assertEqual((None, None, None, None), (report["history"], report["offered"], report["active"], report["last"]))
+        self.assertIn("could not read", report["unread"])
+        self.assertEqual("v1.5.1", report["stable"]["tag"], "the releases from GitHub still show")
+        self.assertIsNone(report["stable"]["offered"], "not known whether Harvester offers it")
+
+    def test_a_cluster_without_harvester_has_no_upgrades_and_no_error(self):
+        self.groups = [{"name": "apps"}]
+
+        def get(path):
+            if path == "/apis":
+                return {"groups": self.groups}
+            raise http_error(404)
+        UPGRADES.bind(get, lambda url: RELEASES)
+        report = UPGRADES.report("")
+        self.assertEqual(([], [], ""), (report["history"], report["offered"], report["unread"]))
+        self.assertEqual([], ALERTS.upgrade_facts(report))
+
+    def test_its_alerts_stay_in_the_bell_and_are_not_pushed_again(self):
+        before = ALERTS.DATA_DIR
+        self.addCleanup(ALERTS.bind, before)
+        ALERTS.bind(tempfile.mkdtemp())
+        self.failing = False
+        ALERTS.observe({"platform": []}, now=900)       # a source already watched: its events are news
+        first = ALERTS.observe({"platform": ALERTS.upgrade_facts(UPGRADES.report("1.5.0"))}, now=1000)
+        self.assertIn("platform:hvst-upgrade-x:started", {e["key"] for e in first})
+        self.failing = True
+        for later in (1100, 1300, 5000):
+            facts = ALERTS.upgrade_facts(UPGRADES.report("1.5.0"))
+            self.assertIsNone(facts, "the platform source could not look")
+            self.assertEqual([], ALERTS.observe({"platform": facts}, now=later))
+        self.failing = False
+        self.assertEqual([], ALERTS.observe({"platform": ALERTS.upgrade_facts(UPGRADES.report("1.5.0"))}, now=6000),
+                         "nothing is announced twice when the read works again")
 
 
 if __name__ == "__main__":

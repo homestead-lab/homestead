@@ -220,18 +220,61 @@ def cleanup():
                 or ((pvc or {}).get("status") or {}).get("phase") != "Bound"
                 or source.get("name") != ref.get("name") or source.get("kind") != "VolumeSnapshot"):
             continue
-        snapshot_path = f"{API}/namespaces/{namespace}/volumesnapshots/{ref['name']}"
-        snapshot = KUBE.get_optional(snapshot_path, read=kget)
-        if snapshot:
-            if not _owned(snapshot) or (snapshot.get("spec", {}).get("source") or {}).get("volumeSnapshotContentName") != content["metadata"]["name"]:
-                continue
-            if ref.get("uid") and ref["uid"] != snapshot.get("metadata", {}).get("uid"):
-                continue
-            _delete(snapshot_path, snapshot)
-        # Retain prevents CSI DeleteSnapshot even while Kubernetes waits for
-        # snapshot-protection finalizers. Do not remove those finalizers.
-        _delete(f"{API}/volumesnapshotcontents/{content['metadata']['name']}", content)
-        removed.append(content["metadata"]["name"])
+        if _remove_pair(content, namespace, ref):
+            removed.append(content["metadata"]["name"])
+    return removed
+
+
+def _remove_pair(content, namespace, ref):
+    """Delete one restore's snapshot (when it still pairs with content) and
+    then its content; False when the snapshot is not that pair's."""
+    snapshot_path = f"{API}/namespaces/{namespace}/volumesnapshots/{ref['name']}"
+    snapshot = KUBE.get_optional(snapshot_path, read=kget)
+    if snapshot:
+        if not _owned(snapshot) or (snapshot.get("spec", {}).get("source") or {}).get("volumeSnapshotContentName") != content["metadata"]["name"]:
+            return False
+        if ref.get("uid") and ref["uid"] != snapshot.get("metadata", {}).get("uid"):
+            return False
+        _delete(snapshot_path, snapshot)
+    # Retain prevents CSI DeleteSnapshot even while Kubernetes waits for
+    # snapshot-protection finalizers. Do not remove those finalizers.
+    _delete(f"{API}/volumesnapshotcontents/{content['metadata']['name']}", content)
+    return True
+
+
+def discard(namespace, pvc_name, snapshot_name=None):
+    """Remove the import metadata of a restore into namespace/pvc_name that
+    did not go ahead: its claim could not be made, or it was cancelled and
+    its claim deleted. cleanup() removes it only once a claim binds, so
+    nothing else would. Only snapshot_name, when given. Kept while a live
+    claim of that name restores from it (a reply lost after its create); a
+    move's own (its move-id) are left to cleanup_transfer. Never deletes a
+    backup: the content is Retain."""
+    if KUBE.get_optional(API, read=kget) is None:
+        return []
+    if snapshot_name:
+        found = KUBE.get_optional(f"{API}/volumesnapshotcontents/{snapshot_name}", read=kget)
+        contents = [found] if found else []
+    else:
+        contents = _items(f"{API}/volumesnapshotcontents?labelSelector={LABEL}%3Dtrue")
+    claim = KUBE.get_optional(f"/api/v1/namespaces/{namespace}/persistentvolumeclaims/{pvc_name}", read=kget)
+    live = claim if claim and not (claim.get("metadata") or {}).get("deletionTimestamp") else None
+    source = ((live or {}).get("spec") or {}).get("dataSource") or {}
+    removed = []
+    for content in contents:
+        spec = content.get("spec") or {}
+        annotations = (content.get("metadata") or {}).get("annotations") or {}
+        ref = spec.get("volumeSnapshotRef") or {}
+        if (not _owned(content) or spec.get("driver") != "driver.longhorn.io" or spec.get("deletionPolicy") != "Retain"
+                or annotations.get("homestead.io/restore-namespace") != namespace
+                or annotations.get("homestead.io/restore-pvc") != pvc_name or annotations.get(NAMES.key("move-id"))
+                or ref.get("namespace") != namespace or not ref.get("name")):
+            continue
+        if (source.get("apiGroup") == "snapshot.storage.k8s.io" and source.get("kind") == "VolumeSnapshot"
+                and source.get("name") == ref["name"]):
+            continue
+        if _remove_pair(content, namespace, ref):
+            removed.append(content["metadata"]["name"])
     return removed
 
 

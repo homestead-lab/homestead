@@ -12,7 +12,6 @@ import time
 import urllib.request, urllib.parse, urllib.error
 import homestead_app_settings as APP_SETTINGS
 import homestead_auth as AUTH
-import homestead_cache as CACHE
 import homestead_config_backup as CONFIG
 import homestead_fleet as FLEET
 import homestead_hardware as HW
@@ -30,6 +29,28 @@ DEFAULT_APP_SETTINGS = APP_SETTINGS.DEFAULTS
 # The settings page's read is cached apart from the "settings" the rest of the
 # server caches, since those carry no revision; _forget() drops both.
 REVISION_KEY = "settings-revision"
+
+
+# The API server's version for Settings: it changes only with an upgrade, so
+# it is asked at most every KUBE_VERSION_TTL seconds; a failed read is not kept.
+KUBE_VERSION_TTL = 600
+version_clock = time.monotonic
+_kube_version = {"until": float("-inf"), "value": ""}
+
+
+def kube_version(read):
+    if version_clock() < _kube_version["until"]:
+        return _kube_version["value"]
+    try:
+        value = read("/version").get("gitVersion", "")
+    except Exception:
+        return ""
+    _kube_version.update(until=version_clock() + KUBE_VERSION_TTL, value=value)
+    return value
+
+
+def forget_kube_version():
+    _kube_version.update(until=float("-inf"), value="")
 
 
 def bind_routes(helpers, **values):
@@ -71,8 +92,8 @@ def save_app_settings(value):
     _forget()
     CHECKS.invalidate()
     PLACEMODE.saved(settings["placement"])
-    # A different catalogue source is a different catalogue.
-    CACHE.drop_where(_cache, lambda key: key.startswith("appstore"))
+    # A different catalogue address is a different catalogue: the App Store's
+    # next read sees the new one (homestead_deploy_appstore._start_refresh).
     # A renamed site is carried to the linked clusters, for their switches.
     threading.Thread(target=_fleet_rename, daemon=True).start()
     return settings

@@ -313,7 +313,7 @@ window.resumeOperation = async id => {
 let STORAGE_RECOVERY = null, STORAGE_RECOVERY_SEQ = 0, STORAGE_RECOVERY_BUSY = false;
 window.storageRecoveryReview = async id => {
   if (STORAGE_RECOVERY_BUSY) return;
-  clearInterval(window.__reclassTimer); window.__reclassWatchToken = null;
+  window.__reclassTimer?.stop?.(); window.__reclassWatchToken = null;
   STORAGE_RECOVERY = null;
   const sequence = ++STORAGE_RECOVERY_SEQ;
   modal("Review storage move", '<div id="storageRecoveryContent"><div class="empty"><span class="spin2"></span>Checking this move…</div></div>', true, "operation-review");
@@ -324,40 +324,62 @@ window.storageRecoveryReview = async id => {
     const p = response.plan, tokens = response.tokens || {};
     if (!p || p.id !== id || typeof p.can_continue !== "boolean" || typeof p.can_pause !== "boolean" ||
         !Array.isArray(p.resources) || !Array.isArray(p.warnings) || !Array.isArray(p.blockers) ||
-        (p.can_continue && !tokens.continue) || (p.can_pause && !tokens.pause)) throw new Error("The review is incomplete. Refresh it before taking action.");
-    const action = p.can_continue ? "continue" : p.can_pause ? "pause" : null;
+        ["continue","retry","finish","rollback","pause"].some(a => p["can_" + a] === true && !tokens[a])) throw new Error("The review is incomplete. Refresh it before taking action.");
+    // Forward first (finish a verified copy, or retry the held step), then roll back.
+    const forward = ["finish","retry","continue"].find(a => p["can_" + a] === true) || null;
+    const action = forward || (p.can_rollback === true ? "rollback" : p.can_pause ? "pause" : null);
+    const rollback = !!forward && p.can_rollback === true;
     STORAGE_RECOVERY = {id, action, tokens, host};
     const phases = {stop:"Stopping apps and VMs",copy:"Copying and checking",cutover:"Switching storage",restart:"Restarting apps and VMs",done:"Complete"};
     const leads = {stop:"Continue stopping the affected apps and VMs before copying their data.",
       copy:"Continue copying and checking the data. Apps and VMs remain stopped during the copy.",
       cutover:"Switch the verified copy into place. Restarting apps and VMs gets its own capacity review.",
       restart:"Restart apps and VMs on the copied volume after fresh capacity checks. The original data is retained."};
+    const rollbackAck = "Roll back: restart on the original volume and keep the copy as an old copy under Volumes, to remove later";
+    const labels = {continue:"Continue move", retry:"Retry this step", finish:"Finish the move", rollback:"Roll back to the original", pause:"Pause move"};
     const issues = p.blockers.length ? p.blockers : p.warnings;
     const writeNames = {accepted:"Confirmed",intent:"No receipt",uncertain:"Response lost",unverified:"Unverified receipt",refused:"Rejected"};
-    host.innerHTML = UI.lead(action === "continue" ? leads[p.phase] || "Continue from the confirmed steps after fresh safety checks." :
+    const lead = action === "continue" ? leads[p.phase] || "Continue from the confirmed steps after fresh safety checks." :
+      action === "retry" ? "Retry the held step with fresh safety checks and a new time limit. Nothing that has no confirmed outcome is sent again." :
+      action === "finish" ? "The copy is verified. Finish the move: switch to the copied volume and start apps and VMs there, after fresh capacity checks. The original data is retained." :
+      action === "rollback" ? "This move cannot carry on as it is. Roll it back: what it stopped starts again on the original volume, which was never released. The copy volume is kept." :
       action === "pause" ? "Pause the next steps without deleting data or rolling back. A copy job already running can still finish." :
-      "This move needs inspection before it can continue. Its apps and VMs and data have been left in place.") +
+      "This move needs inspection before it can continue. Its apps and VMs and data have been left in place.";
+    host.innerHTML = UI.lead(lead + (rollback ? " Or roll it back: what it stopped starts again on the original volume, which was never released. The copy volume is kept." : "")) +
       (issues.length ? UI.callout(p.blockers.length ? "bad" : "warn", p.blockers.length ? "Needs attention" : "Before you continue", `<ul>${issues.map(x=>`<li>${esc(x)}</li>`).join("")}</ul>`) : "") +
-      UI.facts([["Volume",esc(p.claim)],["Stage",esc(phases[p.phase] || p.phase)],["Storage",`${esc(p.from_class || "—")} → ${esc(p.to_class || "—")}`]]) +
+      UI.facts([["Volume",esc(p.claim)],["Stage",esc(phases[p.phase] || p.phase)],["Storage",`${esc(p.from_class || "—")} → ${esc(p.to_class || "—")}`],
+        ...(p.status === "failed" && p.can_rollback === false && p.rollback?.blockers?.length ? [["Roll back",esc(p.rollback.blockers.join(" "))]] : [])]) +
       UI.section("Current position", `<p>${esc(p.message || "Waiting for the next step")}</p>`) +
       UI.more("Apps and VMs and retained resources", UI.table(["App or VM","Type"], (p.workloads || []).map(c=>[esc(c.name),esc(c.kind)])) +
         UI.table(["Resource","Last request","Observed now"], p.resources.map(r=>[esc(r.resource?.name || "—"),esc(writeNames[r.receipt] || r.receipt),esc(r.relationship)]))) +
-      (action ? UI.ack("storageRecoveryAck", action === "continue" ? "Continue despite the warnings" : "Pause it; a copy already running still finishes", {onchange:"storageRecoveryReady()"}) : "") +
+      (action ? UI.ack("storageRecoveryAck", action === "pause" ? "Pause it; a copy already running still finishes" :
+        action === "rollback" ? rollbackAck : "Continue despite the warnings", {onchange:"storageRecoveryReady()"}) : "") +
+      (rollback ? UI.ack("storageRecoveryRollbackAck", rollbackAck, {onchange:"storageRecoveryReady()"}) : "") +
       UI.actions(UI.cancel("Close") + UI.button("Refresh review", `storageRecoveryReview(${jsArg(id)})`) +
-        (action ? UI.button(action === "continue" ? "Continue move" : "Pause move", "storageRecoveryApply()", {kind:"pri",id:"storageRecoveryApply",disabled:true}) : ""));
+        (rollback ? UI.button(labels.rollback, "storageRecoveryApply('rollback')", {id:"storageRecoveryRollback",disabled:true}) : "") +
+        (action ? UI.button(labels[action], "storageRecoveryApply()", {kind:"pri",id:"storageRecoveryApply",disabled:true}) : ""));
   } catch (error) {
     if (sequence === STORAGE_RECOVERY_SEQ && $("#storageRecoveryContent") === host)
       host.innerHTML = UI.callout("bad","Review unavailable",esc(error.message)) + UI.actions(UI.cancel("Close"));
   }
 };
-window.storageRecoveryReady = () => {
-  const ready = !!(STORAGE_RECOVERY?.action && $("#storageRecoveryAck")?.checked && !STORAGE_RECOVERY_BUSY);
-  if ($("#storageRecoveryApply")) $("#storageRecoveryApply").disabled = !ready;
-  return ready;
+// Each action has its own acknowledgement: the primary one, and roll back's
+// when it is offered beside a way forward.
+window.storageRecoveryReady = (choice = null) => {
+  const open = !!(STORAGE_RECOVERY?.action && !STORAGE_RECOVERY_BUSY);
+  const primary = open && !!$("#storageRecoveryAck")?.checked;
+  const rollback = open && !!$("#storageRecoveryRollbackAck")?.checked;
+  if ($("#storageRecoveryApply")) $("#storageRecoveryApply").disabled = !primary;
+  if ($("#storageRecoveryRollback")) $("#storageRecoveryRollback").disabled = !rollback;
+  return choice && choice !== STORAGE_RECOVERY?.action ? rollback && choice === "rollback" : primary;
 };
-window.storageRecoveryApply = async () => {
-  if (!storageRecoveryReady()) return;
-  const pending = STORAGE_RECOVERY;
+window.storageRecoveryApply = async choice => {
+  if (!storageRecoveryReady(choice)) return;
+  const pending = {...STORAGE_RECOVERY};
+  if (choice) {
+    if (!pending.tokens[choice]) return;
+    pending.action = choice;
+  }
   STORAGE_RECOVERY = null; STORAGE_RECOVERY_BUSY = true; storageRecoveryReady();
   try {
     const result = await api("/api/operations/storage-recovery/act", {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
@@ -538,7 +560,7 @@ window.cancelOperationGo = async id => {
    some - the output of what does its work: an import's copy, a rollout's
    newest pod, a k3s node's console. Follows along while the job runs. */
 window.operationLog = async id => {
-  if (window.__logTimer) clearInterval(window.__logTimer);
+  window.__logTimer?.stop?.(); window.__logTimer = null;
   operationPanelOpen = false;
   renderOperations();
   const title = (STATE.data.operations || []).find(o => o.id === id)?.title || "Job";
@@ -555,13 +577,14 @@ window.operationLog = async id => {
   };
   $("#oplogFollow").onchange = followLatest;
   let polling = false, active = true;
-  const poll = async () => {
-    if ($("#modal").classList.contains("hidden") || !$("#oplogBody")) return clearInterval(window.__logTimer);
-    if (polling || window.__logSequence !== sequence) return;
+  // The dialog's own read (`keep`, not the page's): closing it cancels it.
+  const poll = async signal => {
+    if ($("#modal").classList.contains("hidden") || !$("#oplogBody")) return false;
+    if (polling || window.__logSequence !== sequence) return window.__logSequence === sequence;
     polling = true;
     let d;
-    try { d = await api(`/api/operations/log?id=${encodeURIComponent(id)}`); }
-    catch (e) { if (window.__logSequence === sequence && $("#oplogState")) $("#oplogState").textContent = e.message; return; }
+    try { d = await api(`/api/operations/log?id=${encodeURIComponent(id)}`, signal ? { keep: true, signal } : undefined); }
+    catch (e) { if (!UI.pollCancelled(signal) && window.__logSequence === sequence && $("#oplogState")) $("#oplogState").textContent = e.message; return; }
     finally { polling = false; }
     if (window.__logSequence !== sequence || $("#modal").classList.contains("hidden") || !$("#oplogBody")) return;
     const follow = $("#oplogFollow")?.checked;
@@ -585,10 +608,10 @@ window.operationLog = async id => {
     if (box) box.scrollTop = outerScroll;
     active = operationActive(d);
     $("#oplogState").innerHTML = active ? '<span class="ld"></span> live · refreshes every 3s' : `${esc(d.status)} · ${esc(stamp(d.finished_at || d.updated_at))}`;
-    if (!active) clearInterval(window.__logTimer);
+    if (!active) return false;
   };
   await poll();
-  if (active && window.__logSequence === sequence && $("#oplogBody")) window.__logTimer = setInterval(poll, 3000);
+  if (active && window.__logSequence === sequence && $("#oplogBody")) window.__logTimer = UI.poll(poll, 3000, { later: true });
 };
 
 function operationCopyProgress(progress, active) {

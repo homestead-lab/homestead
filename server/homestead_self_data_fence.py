@@ -333,7 +333,9 @@ class Fence:
         if state.get("recovery", {}).get("action") == "return-original":
             starts = [e for e in entries if e["step"] == "recover-start" and e["method"] == "PUT"
                       and e["target"]["path"] == f"/apis/apps/v1/namespaces/{self.namespace}/deployments/{self.deployment}"]
-            if len(starts) != 1 or any(e["step"] in ("switch", "start") for e in entries):
+            # No entry at all: held before the stop, so Homestead never stopped.
+            if (len(starts) != 1 if entries else state["phase"] not in ("prepare", "done")) or any(
+                    e["step"] in ("switch", "start") for e in entries):
                 raise Held("Original-volume recovery has no verified restart or has crossed cutover")
             if any(e["step"] == "copy-job" for e in entries) and not any(
                     e["step"] in ("release-copy", "recover-release-copy") and e["method"] == "DELETE" for e in entries):
@@ -341,7 +343,7 @@ class Fence:
             dep = self.read(f"/apis/apps/v1/namespaces/{self.namespace}/deployments/{self.deployment}")
             if identity(dep)["uid"] != state["deployment"]["uid"] or dep["metadata"].get("deletionTimestamp"):
                 raise Held("Original-volume recovery Deployment was replaced")
-            if state["phase"] != "done" and shape(dep) != starts[0]["shape"]:
+            if state["phase"] != "done" and shape(dep) != (starts[0]["shape"] if starts else plan["deployment_shape"]):
                 raise Held("Homestead changed before original-volume recovery was verified")
             binding = {"data_volume": plan["data_volume"], "destination_pvc": {"name": state["source"]["name"], "uid": state["source"]["uid"]},
                        "destination_pv": {k: plan["source_pv"][k] for k in ("name", "uid")}}

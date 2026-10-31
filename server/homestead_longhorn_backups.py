@@ -133,14 +133,17 @@ def backup_volumes():
     """Every volume that has backups, the deleted ones included.
 
     A backup outlives its volume - that is its point - so this lists what
-    the backup target holds, not what the cluster still has."""
+    the backup target holds, not what the cluster still has. No Longhorn is
+    none; a read that failed raises, so Data protection says it could not
+    read them, never "No backups on the target yet"."""
     try:
-        items = LH.kget(f"{LH.API}/namespaces/{LH.LHNS}/backupvolumes").get("items", [])
-    except Exception:
-        return []
-    live = {v["name"]: v for v in VOLUMES._volumes()}
+        items = KUBE.items(f"{LH.API}/namespaces/{LH.LHNS}/backupvolumes", optional_group="longhorn.io", read=LH.kget)
+        taken = backups(strict=True) if items else []
+        live = {v["name"]: v for v in VOLUMES._volumes(strict=True)} if items else {}
+    except Exception as error:
+        raise RuntimeError(f"Longhorn's backups could not be read: {str(error)[:160] or type(error).__name__}") from error
     counts = {}
-    for b in backups():
+    for b in taken:
         counts[b["volume"]] = counts.get(b["volume"], 0) + 1
     out = []
     for item in items:

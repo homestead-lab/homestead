@@ -223,3 +223,95 @@ class PrepullTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "not an image pre-pull"):
                     IMAGES.stop_prepull(name)
 
+
+    def test_two_jobs_pulling_the_same_image_each_get_their_own_pull(self):
+        """One job's cancel, or the end of its pulling stage, deletes its own
+        DaemonSet only, and a second job's pull does not replace the first."""
+        first = IMAGES.prepull("ghcr.io/x/frigate:0.18.0", ["node1"], own=True)["daemonset"]
+        self.sent.clear()
+        second = IMAGES.prepull("ghcr.io/x/frigate:0.18.0", ["node1"], own=True)["daemonset"]
+        self.assertNotEqual(first, second)
+        for name in (first, second):
+            self.assertRegex(name, r"^homestead-pull-frigate-[0-9a-f]{8}$")
+        self.assertEqual([], [path for method, path in self.sent
+                              if method == "DELETE" and path.rsplit("/", 1)[-1].split("?")[0] == first])
+        apps = [body["spec"]["template"]["metadata"]["labels"]["app"] for body in self.posted]
+        self.assertEqual([first, second], apps)
+        self.assertEqual([first, second], [body["spec"]["selector"]["matchLabels"]["app"] for body in self.posted])
+        self.sent.clear()
+        IMAGES.stop_prepull(second)
+        self.assertEqual([("DELETE", f"/apis/apps/v1/namespaces/lab/daemonsets/{second}?propagationPolicy=Background")],
+                         self.sent)
+
+    def test_a_job_pull_name_stays_a_valid_label_for_a_long_image_name(self):
+        name = IMAGES.prepull("ghcr.io/x/" + "a" * 80 + ":1", ["node1"], own=True)["daemonset"]
+        self.assertLessEqual(len(name), 63)
+
+    def test_a_pull_without_a_job_keeps_its_one_name_per_image(self):
+        self.assertEqual("homestead-pull-frigate", IMAGES.prepull("ghcr.io/x/frigate:0.18.0")["daemonset"])
+
+    def test_an_old_per_image_pull_from_a_job_can_still_be_stopped_and_swept(self):
+        IMAGES.stop_prepull("homestead-pull-frigate")
+        self.assertIn(("DELETE", "/apis/apps/v1/namespaces/lab/daemonsets/"
+                       "homestead-pull-frigate?propagationPolicy=Background"), self.sent)
+        self.daemonsets = [self._pull("homestead-pull-frigate"), self._pull("homestead-pull-frigate-0a1b2c3d")]
+        self.assertEqual(["homestead-pull-frigate", "homestead-pull-frigate-0a1b2c3d"],
+                         [row["name"] for row in IMAGES.prepull_status()["finished"]])
+
+    def test_a_pull_started_from_image_cache_is_its_own_job(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        started = []
+        with mock.patch.object(imports.OPS, "start", side_effect=lambda *a: started.append(a) or {"id": "op"}):
+            first = imports._prepull(SimpleNamespace(body={"image": "ghcr.io/x/frigate:0.18.0", "nodes": ["node1"]}))
+            second = imports._prepull(SimpleNamespace(body={"image": "ghcr.io/x/frigate:0.18.0", "nodes": ["node1"]}))
+        self.assertNotEqual(first["daemonset"], second["daemonset"])
+        self.assertEqual([first["daemonset"], second["daemonset"]], [a[4]["name"] for a in started])
+
+    def test_a_job_pull_deletes_nothing_and_does_not_wait_first(self):
+        slept = []
+        imports.time.sleep = slept.append
+        name = IMAGES.prepull("ghcr.io/x/frigate:0.18.0", ["node1"], own=True)["daemonset"]
+        self.assertEqual([], [x for x in self.sent if x[0] == "DELETE"], "a name of its own has nothing to replace")
+        self.assertEqual([], slept)
+        self.assertEqual([("POST", "/apis/apps/v1/namespaces/lab/daemonsets")], self.sent)
+        self.assertTrue(name.startswith("homestead-pull-frigate-"))
+
+    def running(self, body):
+        """A posted pull as the API would list it, still pulling."""
+        return {**body, "status": {"desiredNumberScheduled": 1, "numberReady": 0}}
+
+    def click(self, image="ghcr.io/x/frigate:0.18.0"):
+        from types import SimpleNamespace
+        from unittest import mock
+        with mock.patch.object(imports.OPS, "start", side_effect=lambda *a: self.started.append(a) or {"id": "op"}):
+            return imports._prepull(SimpleNamespace(body={"image": image}))
+
+    def test_a_second_pre_pull_click_of_the_same_image_reuses_the_running_one(self):
+        self.started = []
+        first = self.click()
+        self.daemonsets = [self.running(self.posted[-1])]
+        second = self.click()
+        self.assertEqual(first["daemonset"], second["daemonset"])
+        self.assertTrue(second["reused"])
+        self.assertEqual(1, len(self.posted), "no second DaemonSet")
+        self.assertEqual(1, len(self.started), "no second job")
+        self.assertIn("Already pulling", second["message"])
+
+    def test_a_job_s_pull_of_the_same_image_is_not_reused_by_a_click(self):
+        self.started = []
+        job = IMAGES.prepull("ghcr.io/x/frigate:0.18.0", ["node1"], own=True)["daemonset"]
+        self.daemonsets = [self.running(self.posted[-1])]
+        clicked = self.click()
+        self.assertNotEqual(job, clicked["daemonset"])
+        self.assertNotIn("reused", clicked)
+        self.assertEqual(1, len(self.started))
+
+    def test_a_finished_or_other_image_pull_is_not_reused(self):
+        self.started = []
+        self.click()
+        done = {**self.posted[-1], "status": {"desiredNumberScheduled": 1, "numberReady": 1}}
+        self.daemonsets = [done]
+        self.assertNotIn("reused", self.click())
+        self.daemonsets = [self.running(self.posted[-1])]
+        self.assertNotIn("reused", self.click("ghcr.io/x/frigate:0.19.0"))

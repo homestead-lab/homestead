@@ -62,12 +62,21 @@ def required_hosts(podspec):
     return hosts
 
 
+# Said when Longhorn's volumes or their copies could not be read (#1002).
+COPIES_UNREAD = "Longhorn's volume copies"
+# Said when the VMs' own definitions (devices, placement rules) or the
+# service addresses could not be read: unknown, never "none".
+VMS_UNREAD = "the VMs' devices and placement rules"
+ADDRESSES_UNREAD = "service addresses"
+
+
 def _volume_for(volumes, ns, claim):
-    return next((v for v in volumes if v.get("namespace") == ns and v.get("pvc_name") == claim), None)
+    return next((v for v in volumes or [] if v.get("namespace") == ns and v.get("pvc_name") == claim), None)
 
 
 def _storage_stops(volumes, ns, claims, node, others, pvs=None):
-    """Why the storage keeps it from moving to any of others, or ""; and notes.
+    """Why the storage keeps it from moving to any of others, "", or None when
+    that is not known: Longhorn's volumes or copies were not read; and notes.
     pvs: (namespace, claim) -> the hosts its PersistentVolume is pinned to,
     or None when they couldn't be read. A claim pinned to node alone is stored
     on it (local-path) and never moves (#440)."""
@@ -75,16 +84,19 @@ def _storage_stops(volumes, ns, claims, node, others, pvs=None):
         for claim in claims or []:
             if pvs.get((ns, claim)) == [node]:
                 return f"its volume {claim} is stored on {node}", []
-    notes = []
+    notes, unknown = [], False
     for claim in claims or []:
         v = _volume_for(volumes, ns, claim)
+        if volumes is None or (v is not None and v.get("copies") is None):
+            unknown = True
+            continue
         if v is None:
             notes.append(f"{claim} is not a Longhorn volume: whether other hosts can reach it is not known")
             continue
         elsewhere = {c["node"] for c in v.get("copies") or [] if c.get("healthy") and c.get("node") != node}
         if not elsewhere:
             return f"its volume {claim} has its only healthy copy on {node}", notes
-    return "", notes
+    return (None if unknown else ""), notes
 
 
 def _tolerated(node, spec):
@@ -134,6 +146,8 @@ def _set_row(s, node, nodes, others_ready, volumes, pvs, node_down):
         unread.append("where its volumes are stored")
     if node_down is None and all_longhorn:
         unread.append("Longhorn's Pods on a failed node setting")
+    if stop is None:
+        unread.append("where its volumes' copies are")
     if allowed is not None and not [h for h in allowed if h != node]:
         row.update(outcome="stops", why=f"it may only run on {', '.join(sorted(allowed))}")
     elif stop:
@@ -162,6 +176,8 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
     impact for node - its hardware, device and label checks decide where each
     app could go - when there is one; else the hardware features and placement
     rules here do.
+    raw_vms and addresses are None when they couldn't be read: a running VM
+    is then "unknown", and the addresses that move are not counted.
     sets: each StatefulSet with its pods (homestead_nodes._impact_sources),
     None when they couldn't be read; pvs: where each claim's PersistentVolume
     is pinned; node_down: Longhorn's policy for a host that is down, None when
@@ -201,6 +217,8 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
         elif not hosts:
             missing = [f for f in w.get("hardware") or [] if not any((n.get("hardware") or {}).get(f) for n in nodes if n["name"] != node)]
             row.update(outcome="stops", why=(f"no other host has its {', '.join(missing)}" if missing else "no other host is ready"))
+        elif stop is None:
+            row.update(outcome="unknown", why="couldn't be checked: where its volumes' copies are")
         else:
             verb, when = FAILOVER_WORDS.get(w.get("failover") or "default", FAILOVER_WORDS["default"])
             row.update(outcome=verb, why=when, to=hosts)
@@ -227,6 +245,10 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
             row.update(outcome="stops", why=stop)
         elif not hosts:
             row.update(outcome="stops", why=f"it may only run on {', '.join(sorted(allowed))}" if allowed else "no other host is ready")
+        elif raw_vms is None:
+            row.update(outcome="unknown", why=f"couldn't be checked: whether it has a device passed through from {node}, or may only run here")
+        elif stop is None:
+            row.update(outcome="unknown", why="couldn't be checked: where its volumes' copies are")
         else:
             row.update(outcome="moves", to=hosts,
                        why="restarts on another host once this one is declared down" +
@@ -235,9 +257,14 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
     for s in sets or []:
         if any(p.get("node") == node for p in s.get("pods") or []):
             apps.append(_set_row(s, node, nodes, others_ready, volumes, pvs, node_down))
+    # Copies not read are no evidence that nothing is at risk: the counts
+    # are None then, never 0 (#1002).
+    copies_unread = volumes is None or any(v.get("copies") is None for v in volumes)
     at_risk, fewer = [], []
     for v in volumes or []:
-        copies = v.get("copies") or []
+        if v.get("copies") is None:
+            continue
+        copies = v["copies"]
         if not any(c.get("node") == node for c in copies):
             continue
         healthy_elsewhere = [c for c in copies if c.get("healthy") and c.get("node") != node]
@@ -248,6 +275,10 @@ def preview(node, workloads, deployments, vms, raw_vms, volumes, addresses, node
                        for a in addresses or [] if a.get("node") == node and a.get("kind") != "node"]
     apps.sort(key=lambda r: (ORDER.get(r["outcome"], len(ORDER)), r["kind"], r["name"]))
     return {"node": node, "apps": apps, "at_risk": at_risk, "fewer_copies": fewer, "addresses": moved_addresses,
-            "others_ready": others_ready, "unread": [] if sets is not None else ["StatefulSets"],
+            "others_ready": others_ready,
+            "unread": ([] if sets is not None else ["StatefulSets"]) + ([COPIES_UNREAD] if copies_unread else [])
+                      + ([VMS_UNREAD] if raw_vms is None else []) + ([ADDRESSES_UNREAD] if addresses is None else []),
             "counts": {**{o: sum(1 for r in apps if r["outcome"] == o) for o in ORDER},
-                       "at_risk": len(at_risk), "fewer_copies": len(fewer), "addresses": len(moved_addresses)}}
+                       "at_risk": None if copies_unread else len(at_risk),
+                       "fewer_copies": None if copies_unread else len(fewer),
+                       "addresses": None if addresses is None else len(moved_addresses)}}

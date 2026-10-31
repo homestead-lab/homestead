@@ -14,6 +14,8 @@ import homestead_self_data_anchor as A
 from homestead_self_data_fence import require_app_readiness, pin_app_image
 from homestead_storage_journal import Held, Journal, identity, settled, shape
 
+READY_WAIT = "Waiting for every Homestead replica to become ready on the new volume"
+
 
 def owner(obj, kind, uid):
     return any(o.get("controller") is True and o.get("kind") == kind and o.get("uid") == uid
@@ -90,8 +92,41 @@ class Coordinator:
             raise Held("A data volume is no longer bound to its reviewed claim")
         return pvc
 
+    def _involved(self):
+        """The hosts that can hold a writer or a mount of either volume: the
+        copy host, the nodes of every pod in the namespace that mounts either
+        claim, is Homestead's own or is this coordinator, and the nodes either
+        PV is pinned to. A reboot elsewhere proves nothing about this move's
+        writers. A pod that left the API was removed normally (nothing here
+        force-deletes), so its writer stopped. A PV pinned by a hostname
+        that names no reviewed node checks every reviewed node, as before."""
+        names = {n["name"] for n in self.plan["nodes"]}
+        involved = {self.plan.get("copy_node")} - {None}
+        claims_ = {self.state["source"]["name"], self.state["destination"]}
+        sets = {identity(r)["uid"] for r in self._sets()}
+        for pod in self._pods():
+            if (claims(pod) & claims_ or pod.get("metadata", {}).get("name") == self.plan["worker"]["name"]
+                    or any(owner(pod, "ReplicaSet", uid) for uid in sets)):
+                if pod.get("spec", {}).get("nodeName"):
+                    involved.add(pod["spec"]["nodeName"])
+        if involved - names:
+            raise Held("A host this data move uses was not reviewed; review the move again")
+        for fact in (self.plan["source_pv"], self.plan["destination_pv"]):
+            pv = self.read("/api/v1/persistentvolumes/" + fact["name"])
+            terms = pv.get("spec", {}).get("nodeAffinity", {}).get("required", {}).get("nodeSelectorTerms", [])
+            for term in terms:
+                for rule in term.get("matchExpressions", []) + term.get("matchFields", []):
+                    values = set(rule.get("values", []))
+                    if rule.get("key") not in ("kubernetes.io/hostname", "metadata.name") or rule.get("operator") != "In" or values - names:
+                        return names  # a topology this can't map to reviewed hosts: check them all
+                    involved |= values
+        return involved
+
     def _hosts(self):
+        involved = self._involved()
         for pinned in self.plan["nodes"]:
+            if pinned["name"] not in involved:
+                continue
             node = self.read("/api/v1/nodes/" + pinned["name"])
             if (identity(node)["uid"] != pinned["uid"] or node["metadata"].get("deletionTimestamp")
                     or node.get("status", {}).get("nodeInfo", {}).get("bootID") != pinned["boot_id"]
@@ -360,7 +395,7 @@ class Coordinator:
                 self._update_dep("start", dep, proposed, built_from)
                 return self._result("Homestead is starting on the new data volume")
             if not self._ready(dep):
-                return self._result("Waiting for every Homestead replica to become ready on the new volume")
+                return self._result(READY_WAIT)
             self.anchor.advance("done")
             return self._result("Homestead is ready on the new data volume; the original is retained")
         return self._result("Homestead's data move is complete; the original volume is retained")
@@ -371,6 +406,16 @@ class Coordinator:
             return self._result("Homestead is ready on its original volume; both volumes are retained")
         if any(e["step"] in ("switch", "start") for e in self.writer.entries):
             raise Held("Original-volume recovery is prohibited after cutover")
+        if not self.writer.entries:
+            # Held before the stop request: Homestead still runs its reviewed
+            # Deployment (_environment pinned its shape) on the original
+            # volume, so there is nothing to restart and nothing is written.
+            volumes = [v for v in dep["spec"]["template"]["spec"].get("volumes", []) if v.get("name") == self.plan["data_volume"]]
+            if (self.state["phase"] != "prepare" or dep["spec"].get("replicas") != self.state["replicas"]
+                    or len(volumes) != 1 or volumes[0].get("persistentVolumeClaim", {}).get("claimName") != self.state["source"]["name"]):
+                raise Held("Recovery can keep only the unchanged original Deployment")
+            self.anchor.recovered()
+            return self._result("Homestead was never stopped and keeps its original volume; both volumes are retained")
         if self._entry("recover-start"):
             if self._ready(dep, original=True): self.anchor.recovered()
             return self._result("Checking Homestead on its original volume; both volumes are retained")

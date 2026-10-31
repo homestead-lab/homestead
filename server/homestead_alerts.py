@@ -13,6 +13,14 @@ import homestead_shared as SHARED
 
 DATA_DIR = "/data"
 HOLD = 60
+# Longhorn not answering for this long is news of its own (#1002 follow-up).
+# Longhorn's manager restarts in a minute or three on an upgrade or a node
+# reboot; ten minutes is well past that, and well before held alerts go stale.
+LONGHORN_QUIET = 600
+# An alert held this long because its source could not be read says it is
+# the last known state. It stays open: only a read that no longer finds it
+# resolves it.
+STALE = 3600
 LOG_SIZE = 300
 WITHDRAWN_KEEP = 600            # seconds a withdrawn key outranks facts taken before it
 _lock = SHARED.SharedLock("alerts")
@@ -112,18 +120,27 @@ def observe(results, now=None):
                         seen.add(k)
                         row["missing"] = 0
                         row.pop("worsening_since", None)
+                        row.setdefault("held_since", now)
                         if not row["announced"]:
                             row["since"] = now
                 continue
             seeding = source not in watched
             watched.add(source)
             for fact in facts:
-                if "unknown_prefix" in fact or "unknown_key" in fact:
+                # unknown_key/unknown_prefix: not read, so held and, after
+                # STALE, last known. keep_key: read, and nothing new about
+                # it (a run still going): kept as current.
+                if "unknown_prefix" in fact or "unknown_key" in fact or "keep_key" in fact:
                     for k, row in active.items():
-                        if k == fact.get("unknown_key") or ("unknown_prefix" in fact and k.startswith(fact["unknown_prefix"])):
+                        if k in (fact.get("unknown_key"), fact.get("keep_key")) or (
+                                "unknown_prefix" in fact and k.startswith(fact["unknown_prefix"])):
                             seen.add(k)
                             row["missing"] = 0
                             row.pop("worsening_since", None)
+                            if "keep_key" in fact:
+                                row.pop("held_since", None)
+                            else:
+                                row.setdefault("held_since", now)
                             if not row["announced"]:
                                 row["since"] = now
                     continue
@@ -144,6 +161,7 @@ def observe(results, now=None):
                                    if "signals" not in row and "signals" in fact else _snapshot(row))
                     row.update(fact)
                 row["source"], row["missing"] = source, 0
+                row.pop("held_since", None)
                 if row["announced"]:
                     if row.get("event"):
                         continue
@@ -278,14 +296,19 @@ def for_user(entries, user):
             or not _acknowledged(state, user, state["active"].get(e["key"], e))]
 
 
-def active(categories=None, user=None):
+def active(categories=None, user=None, now=None):
+    now = time.time() if now is None else now
     with _lock:
         state = _load()
     rows = []
     for row in state["active"].values():
         if row.get("event") or (categories is not None and row["category"] not in categories):
             continue
-        result = {k: v for k, v in row.items() if k not in ("missing", "notice", "worsening_since")}
+        result = {k: v for k, v in row.items() if k not in ("missing", "notice", "worsening_since", "held_since")}
+        result["stale"] = now - row.get("held_since", now) >= STALE
+        if result["stale"]:
+            result["body"] = ("Last known, not current: Homestead has not been able to check this for over an hour. "
+                              + (row.get("body") or ""))
         if user is not None:
             result.update(acknowledged=_acknowledged(state, user, row), version=_version(row))
         rows.append(result)
@@ -341,6 +364,12 @@ def health_facts(overview):
                       "severity": "critical" if critical else "degraded", "title": title,
                       "resolved": resolved, "body": "; ".join(dict.fromkeys(i.get("reason", "") for i in issues)),
                       "signals": signals, "href": href})
+    # Longhorn's volumes not read cannot prove that a volume warning cleared (#1002).
+    if overview.get("volumes_unread"):
+        facts.append({"unknown_prefix": "health:Volume:"})
+    # Backup jobs or the weekly trim's state not read: their warnings stay open.
+    for kind in sorted(overview.get("protection_unread") or {}):
+        facts.append({"unknown_prefix": f"health:{kind}:"})
     # Missing SMART observations cannot prove that a disk warning cleared.
     for node in overview.get("nodes") or []:
         prefix = f"health:Disk:{node.get('name', 'unknown')}/"
@@ -354,6 +383,18 @@ def health_facts(overview):
                 if not smart.get("available") or (smart.get("asleep") and not smart.get("read_at")):
                     facts.append({"unknown_key": prefix + disk.get("name", "unknown")})
     return facts
+
+
+def longhorn_facts(overview):
+    """Longhorn installed but its volumes not read: raised after LONGHORN_QUIET."""
+    if not overview.get("volumes_unread"):
+        return []
+    return [{"key": "longhorn:unread", "category": "degraded", "severity": "degraded",
+             "title": "Longhorn is not answering", "resolved": "Longhorn is answering again",
+             "body": ("Homestead has not been able to read Longhorn's volumes for at least "
+                      f"{LONGHORN_QUIET // 60} minutes. Volume and disk alerts keep their last known state "
+                      "until it answers."),
+             "signals": {"condition": 1}, "href": "/volumes", "hold": LONGHORN_QUIET}]
 
 
 def job_facts(operations):
@@ -383,7 +424,10 @@ def join_facts(nodes):
 
 def upgrade_facts(report):
     """A Harvester upgrade starting, finishing or failing, and a new stable
-    release to upgrade to. Each is said once."""
+    release to upgrade to. Each is said once. None when Harvester's upgrades
+    could not be read: the source could not look, so its events are kept."""
+    if report is not None and report.get("history") is None:
+        return None
     facts = []
     for up in (report or {}).get("history") or []:
         name, version = up.get("name", ""), up.get("version", "")

@@ -45,6 +45,14 @@ class HistoryTests(unittest.TestCase):
         self.assertEqual("Safari on iOS", signins.device("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Version/17.0 Mobile/15E148 Safari/604.1"))
         self.assertEqual("curl", signins.device("curl/8.4.0"))
 
+    def test_a_history_that_cannot_be_read_is_an_error_not_no_sign_ins(self):
+        """Sweep unknown-as-fine, row 15: not "No sign-ins recorded yet"."""
+        self.assertEqual([], signins.history(), "no file yet is no sign-ins")
+        signins.record("signin", "robin")
+        with mock.patch("builtins.open", side_effect=OSError(5, "Input/output error")):
+            with self.assertRaises(OSError):
+                signins.history()
+
     def test_a_disk_that_cannot_be_written_does_not_stop_a_sign_in(self):
         signins.bind(str(Path(self.dir.name) / "file-not-dir" / "x"))
         (Path(self.dir.name) / "file-not-dir").write_text("")

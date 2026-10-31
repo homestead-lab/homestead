@@ -10,6 +10,7 @@ missing is said, with how to add it, rather than failing.
 import json
 import re
 import shlex
+import threading
 import time
 import urllib.error
 import homestead_forced as FORCED
@@ -20,7 +21,9 @@ from homestead_version import VERSION
 
 kget = None
 _cached = {"at": 0.0, "value": None, "failed_at": 0.0}
+_reading = threading.Lock()
 TTL = 300
+RECENT = 30         # what a page that shows what the cluster has takes (detect(RECENT))
 RETRY = 15          # after a failed read, the last good answer is used this long before asking again
 
 
@@ -112,22 +115,38 @@ def detect(force=False):
     that fails is never kept as the answer: the last good one is used, and
     the cluster is asked again after RETRY seconds. With no good answer yet
     it raises, rather than guess that KubeVirt, Longhorn or a load balancer
-    is not there."""
-    now, good = time.time(), _cached["value"]
-    if not force and good is not None and now - _cached["at"] < TTL:
+    is not there.
+
+    force=True reads again: only for a step about to change the cluster from
+    what it has (tests/test_platform_forced.py keeps the list). A number is
+    the oldest answer the caller takes, for a page that should show a change
+    soon (RECENT). Callers that miss together share one read (#985)."""
+    asked = time.time()
+    if force is True:
+        oldest = 0.0
+    else:
+        oldest = TTL if isinstance(force, bool) or not force else min(float(force), TTL)
+    good = _cached["value"]
+    if force is not True and good is not None and (asked - _cached["at"] < oldest or asked - _cached["failed_at"] < RETRY):
         return good
-    if not force and good is not None and now - _cached["failed_at"] < RETRY:
-        return good
-    try:
-        value = _read()
-    except Exception as error:
-        _cached["failed_at"] = time.time()      # when it failed: a read can hang for a while first
-        if good is not None:
+    with _reading:
+        good = _cached["value"]
+        if good is not None and _cached["at"] >= asked:
+            return good             # a read that began after this call asked has just finished
+        if force is not True and good is not None and (time.time() - _cached["at"] < oldest
+                                                      or time.time() - _cached["failed_at"] < RETRY):
             return good
-        raise ValueError(f"Homestead could not read what this cluster runs ({str(error)[:160]}); "
-                         "try again in a moment") from error
-    _cached.update(at=now, value=value, failed_at=0.0)
-    return value
+        now = time.time()
+        try:
+            value = _read()
+        except Exception as error:
+            _cached["failed_at"] = time.time()      # when it failed: a read can hang for a while first
+            if good is not None:
+                return good
+            raise ValueError(f"Homestead could not read what this cluster runs ({str(error)[:160]}); "
+                             "try again in a moment") from error
+        _cached.update(at=now, value=value, failed_at=0.0)
+        return value
 
 
 def _read():
