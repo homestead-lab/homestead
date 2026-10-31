@@ -726,7 +726,7 @@ def _jobs_read():
     """Longhorn's recurring jobs, read strictly; a cluster without Longhorn
     (a 404 with its API group absent) has none to fail."""
     try:
-        return LH.list_jobs(strict=True)
+        return JOBS.list_jobs(strict=True)
     except urllib.error.HTTPError as error:
         if error.code == 404 and KUBE.items(f"{LH.API}/namespaces/{LH.LHNS}/recurringjobs",
                                             optional_group="longhorn.io", read=LH.kget) == []:
@@ -741,7 +741,7 @@ def _protection():
     unread, jobs, target, trim = {}, [], None, {}
     try:
         jobs = cached("lhjobs-health", 60, _jobs_read)
-        target = cached("lhtarget-health", 60, LH.backup_target)
+        target = cached("lhtarget-health", 60, BACKUP_TARGET.backup_target)
     except Exception as error:
         jobs, unread["Backup"] = [], f"Backup protection could not be checked: {str(error)[:200]}"
     try:

@@ -155,7 +155,7 @@ class ProtectionHealthTests(ProtectionFixture):
                                "status": {"lastScheduleTime": "2026-10-30T02:00:00Z",
                                           "lastSuccessfulTime": "2026-10-29T02:00:00Z"}})
         # A backup job needs a backup target that answers, or that is an issue of its own.
-        self.enterContext(mock.patch.object(self.LH, "backup_target", lambda: {"configured": True, "available": True}))
+        self.enterContext(mock.patch.object(self.OV.BACKUP_TARGET, "backup_target", lambda: {"configured": True, "available": True}))
         # The weekly trim failed on one volume: a Trim issue.
         self.TRIM = self.OV.WEEKLY_TRIM
         folder = self.enterContext(tempfile.TemporaryDirectory())
@@ -310,7 +310,7 @@ class HealthCardTests(LonghornFixture):
                             ("heartbeats", lambda: {}), ("data_copies", lambda: {})):
             self.enterContext(mock.patch.object(S, name, value))
         self.enterContext(mock.patch.object(S.LEADER, "is_leader", lambda: True))
-        self.enterContext(mock.patch.object(S.NETWORK, "inventory", lambda: {}))
+        self.enterContext(mock.patch.object(S.INV, "inventory", lambda: {}))
         self.enterContext(mock.patch.object(S.NAMES, "NODEPROBE", "homestead-nodeprobe"))
         self.enterContext(mock.patch.object(S, "NAMESPACE", "lab"))
 
