@@ -45,10 +45,15 @@ platform = lambda force=False: {}
 BOND = "bond0"
 ROLLBACK_SECONDS = 240
 LACP_WAIT = 60
+# How long the host has to be Ready again after k3s or RKE2 restarts on the
+# new interface. A host the new network cut off from the cluster never is, so
+# the job fails then, naming the host, instead of running (and holding every
+# other host's network change back) for ever.
+RESTART_SECONDS = 600
 # How long a change holds its host (homestead_hostrun.hold) if its job never
 # ends: past the rollback, the LACP wait and a k3s restart. The job lets go
 # when it ends (#597).
-HOLD_SECONDS = ROLLBACK_SECONDS + LACP_WAIT + 600
+HOLD_SECONDS = ROLLBACK_SECONDS + LACP_WAIT + RESTART_SECONDS
 BACKUP_ROOT = "/var/lib/homestead"
 KIND = "host-bond"
 UNIT = "homestead-bond-rollback"
@@ -552,6 +557,17 @@ def _held(ref):
     return {"change": ref.get("change") or f"Network change on {ref['node']}", "holder": ref.get("lease", "")}
 
 
+def _not_back(ref, interface):
+    """Why a change failed whose host was not Ready again in time after k3s or
+    RKE2 restarted on its new interface, and what to check on that host."""
+    node = ref["node"]
+    service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "k3s")
+    return (f"{node} was not Ready again {RESTART_SECONDS // 60} minutes after {service} restarted on {interface}. "
+            f"On {node}, check `journalctl -u {service}` and that {interface} carries {ref['address']}. "
+            "If it becomes Ready later, nothing more is needed: the new network is kept. "
+            f"The old configuration is in {ref['backup']}")
+
+
 def _step(item, now=None):
     ref, now = item["ref"], time.time() if now is None else now
     node, elapsed = ref["node"], now - ref.get("since", now)
@@ -625,6 +641,8 @@ def _step(item, now=None):
         if ready and elapsed > 30:
             ref.update(stage="done")
             return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
+        if elapsed > RESTART_SECONDS:
+            return "failed", 100, _not_back(ref, ref["carries_on"])
         return "running", 92, f"Waiting for {node} to be Ready again"
     return "succeeded", 100, f"{node} carries its network on {ref['carries_on']}"
 

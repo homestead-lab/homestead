@@ -35,9 +35,12 @@ import homestead_routes as ROUTER
 hostrun = kget = ksend = None
 BRIDGE = "br0"
 ROLLBACK_SECONDS = 240
+# How long the host has to be Ready again after k3s or RKE2 restarts on the
+# bridge; past it the job fails, naming the host (as homestead_host_bonds).
+RESTART_SECONDS = 600
 # How long the move holds its host (homestead_hostrun.hold) if its job never
 # ends: past the rollback and a k3s restart. The job lets go when it ends.
-HOLD_SECONDS = ROLLBACK_SECONDS + 600
+HOLD_SECONDS = ROLLBACK_SECONDS + RESTART_SECONDS
 BACKUP_ROOT = "/var/lib/homestead"
 NAME = re.compile(r"[A-Za-z0-9_.:-]{1,15}")
 MAC = re.compile(r"[0-9a-f]{2}(?::[0-9a-f]{2}){5}")
@@ -282,6 +285,17 @@ def _held(ref):
     return {"change": ref.get("change") or f"Move {ref['node']} into {BRIDGE}", "holder": ref.get("lease", "")}
 
 
+def _not_back(ref, interface):
+    """Why a change failed whose host was not Ready again in time after k3s or
+    RKE2 restarted on its new interface, and what to check on that host."""
+    node = ref["node"]
+    service = next((s for s in ref.get("services") or [] if s.startswith(("k3s", "rke2"))), "k3s")
+    return (f"{node} was not Ready again {RESTART_SECONDS // 60} minutes after {service} restarted on {interface}. "
+            f"On {node}, check `journalctl -u {service}` and that {interface} carries {ref['address']}. "
+            "If it becomes Ready later, nothing more is needed: the new network is kept. "
+            f"The old configuration is in {ref['backup']}")
+
+
 def _step(item, now=None):
     ref, now = item["ref"], time.time() if now is None else now
     node, elapsed = ref["node"], now - ref.get("since", now)
@@ -329,6 +343,8 @@ def _step(item, now=None):
         if ready and elapsed > 30:
             ref.update(stage="done")
             return "succeeded", 100, f"{node} is on {BRIDGE}: make a LAN network on {BRIDGE} for VMs and containers"
+        if elapsed > RESTART_SECONDS:
+            return "failed", 100, _not_back(ref, BRIDGE)
         return "running", 90, f"Waiting for {node} to be Ready again"
     return "succeeded", 100, f"{node} is on {BRIDGE}"
 
