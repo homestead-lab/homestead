@@ -13,7 +13,7 @@ import homestead_storage_journal as JOURNAL
 import homestead_storage_guard as GUARD
 
 PROTOCOL = 1
-PHASES = ("stop", "copy", "cutover", "restart", "done")
+PHASES = ("stop", "copy", "cutover", "restart", "done", "rollback", "rolled-back")
 
 
 def _initial_review(body, actor, ops):
@@ -71,11 +71,30 @@ def _approved(item, decision):
 
 
 def step(item, checkpoint, helper_admission, restart_admission, *, inspecting=False, decisions=None, runtime_check=None):
+    """One stage; a wait that outlives its deadline becomes a named hold.
+
+    Inspection never holds on a deadline: it shows what a retry would do."""
+    item.pop("_waited", None)
+    try:
+        result = _stage(item, checkpoint, helper_admission, restart_admission, inspecting=inspecting,
+                        decisions=decisions, runtime_check=runtime_check)
+    finally:
+        waited = item.pop("_waited", None)
+    if waited is None:
+        item["ref"].pop("storage_wait", None)   # the move made progress
+    elif not inspecting:
+        late = HANDOFF.overdue(item, waited)
+        if late:
+            raise JOURNAL.Held(late)
+    return result
+
+
+def _stage(item, checkpoint, helper_admission, restart_admission, *, inspecting=False, decisions=None, runtime_check=None):
     check(item)
     ref, phase = item["ref"], item["ref"]["handoff_phase"]
     if ref.get("storage_hold") and not inspecting:
         raise JOURNAL.Held("Storage move is held; review it before continuing")
-    if runtime_check is not None and phase != "done":
+    if runtime_check is not None and phase not in ("done", "rolled-back"):
         runtime_check()
     def journal_factory(work, read, send, save):
         return JOURNAL.Journal(work, read, None if inspecting else send, None if inspecting else save,
@@ -116,6 +135,10 @@ def step(item, checkpoint, helper_admission, restart_admission, *, inspecting=Fa
         return result
     if phase == "restart":
         return HANDOFF.restart_stage(item, checkpoint, restart, journal_factory=journal_factory)
+    if phase == "rollback":
+        return HANDOFF.rollback_stage(item, checkpoint, restart, journal_factory=journal_factory)
+    if phase == "rolled-back":
+        return "cancelled", 100, "Move rolled back; workloads run on the original volume"
     return "succeeded", 100, "Storage move completed; the original copy is retained"
 
 
@@ -127,7 +150,8 @@ def resolve(item, checkpoint, helper_admission, restart_admission, *, runtime_ch
         phase = item["ref"]["handoff_phase"]
         ui_phase = {"stop": "stop", "copy": "stop" if result[1] <= 8 else "verify" if item.get("copy", {}).get("verifying") else
                     "create" if not HANDOFF._receipt(item, "copy-job") else "copy",
-                    "cutover": "swap", "restart": "start", "done": "done"}[phase]
+                    "cutover": "swap", "restart": "start", "done": "done",
+                    "rollback": "start", "rolled-back": "done"}[phase]
         RC._steps(item, ui_phase)
         if phase == "done":
             item["old_pv"] = item["ref"]["old_pv"]
@@ -152,7 +176,7 @@ def inspect(item, helper_admission, restart_admission, *, runtime_check=None):
             outcome = step(work, lambda _: None, helper_admission, restart_admission, inspecting=True,
                            decisions=decisions, runtime_check=runtime_check)
             result["message"] = outcome[2]
-            if work["ref"]["handoff_phase"] == phase or outcome[0] == "succeeded":
+            if work["ref"]["handoff_phase"] == phase or outcome[0] in ("succeeded", "cancelled"):
                 break
     except JOURNAL.NextWrite as proposed:
         result.update(next_write=proposed.plan, message="The next step is ready for review")
