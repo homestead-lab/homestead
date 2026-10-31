@@ -61,10 +61,6 @@ ALLOWED = {
                       "cluster's Deployments, but a failed read raises and the last report is kept, so "
                       "a failed read clears nothing",
     ("uptime", "*"): "the uptime monitors' state, in memory",
-    # A read that fails but that the source's alerts do not use.
-    ("platform", "Longhorn"): "the cluster inventory reads Longhorn, but only its Harvester version is "
-                              "used, and the upgrades are read from Harvester, which still works",
-    ("platform", "KubeVirt"): "as for Longhorn: the inventory's VM reads are not used",
 }
 
 # Sources that answer None on the healthy fake cluster too, and why. Such a
