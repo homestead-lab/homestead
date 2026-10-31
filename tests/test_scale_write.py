@@ -64,8 +64,6 @@ class ScaleTests(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         CH.bind(directory.name)
-        CH._notes.clear()
-        self.addCleanup(CH._notes.clear)
         CH._known.clear()
         self.addCleanup(CH._known.clear)
         self.addCleanup(setattr, CH.REQUEST, "user", None)

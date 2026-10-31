@@ -6,18 +6,19 @@ copies, command, host network, LAN attachment and placement. When that differs
 from what it saw last, the difference is a change, recorded with the settings
 from before it so it can be undone.
 
-Who made it: every write Homestead sends to a Deployment is noted with the
-person whose request sent it (a job of Homestead's own has none). The write
-also carries it, as an annotation on the app's own metadata (never its pod
-template, which would restart it), so the leader credits a change whichever
-copy of Homestead served it. Every write means every one: a whole object or a
-merge patch takes it as a field, a JSON patch as one more op of its own, and
+Who made it: every write Homestead sends to a Deployment carries the person
+whose request sent it (a job of Homestead's own has none), as an annotation on
+the app's own metadata (never its pod template, which would restart it), so the
+leader credits a change the same whichever copy of Homestead served it. The
+write is the only record: no copy keeps a note of its own in memory (#621).
+Every write means every one: a whole object or a merge patch takes it as a
+field, a JSON patch as one more op of its own, and
 Stop, Start and schedules write the Deployment itself rather than its scale,
 which has no metadata to carry it. The annotation names nobody: it holds a keyed
 digest of the app, the moment and the person, which the leader checks against
 the accounts and API keys. A mark that does not check out for that app -
 copied from another app, or altered - is ignored. A change
-with no such note or mark in the minute before it was made outside Homestead
+with no such mark from the minute before it was made outside Homestead
 - kubectl, Helm, GitOps - and says so.
 
 Values that may be secret are never kept in the readable summary: an
@@ -44,11 +45,8 @@ import homestead_shared as SHARED
 DATA_DIR = "/data"
 KEEP = 50
 KEEP_DAYS = 180
-NOTE_WINDOW = 150           # a write noted this long before a change made it
 SENSITIVE = re.compile(r"pass|secret|token|key|credential|auth|cookie|private|salt", re.I)
 _lock = threading.Lock()
-_notes = []                 # (at, ns, name, who) of Homestead's own writes
-_notes_lock = threading.Lock()
 REQUEST = threading.local() # who the request on this thread is for
 BY_SCHEDULE = "schedule"    # a power schedule's stop or start: not a change to record
 AUTHOR = NAMES.key("changedBy")   # on an app's own metadata: who last wrote it, and when
@@ -86,7 +84,7 @@ def _save(data):
 
 
 # A Deployment, or its scale: Homestead itself now scales the Deployment (#621),
-# but a write to /scale is still noted.
+# but a write to /scale is still a write to the app (one that cannot carry the mark).
 _DEPLOYMENT = re.compile(r"^/apis/apps/v1/namespaces/([a-z0-9-]+)/deployments(?:/([a-z0-9.-]+)(?:/scale)?)?(?:\?.*)?$")
 
 
@@ -195,8 +193,8 @@ def _mark(ns, name, who, now):
 def _carry(path, body, ns, name, who, now):
     """Put the mark on the app's own metadata, when this body can hold it.
 
-    A Scale has no app metadata to put it on (Homestead no longer sends one);
-    it is only noted on this copy, as before."""
+    A Scale has no app metadata to put it on (Homestead no longer sends one),
+    so one is credited as made outside Homestead."""
     if "/scale" in path.split("?")[0]:
         return
     if isinstance(body, list):
@@ -212,7 +210,7 @@ def _carry(path, body, ns, name, who, now):
         try:
             meta["annotations"][AUTHOR] = _mark(ns, name, who, now)
         except Exception:
-            pass    # the credentials could not be read: the note on this copy still says who
+            pass    # the credentials could not be read: marking never refuses a write
 
 
 def _carry_patch(ops, ns, name, who, now):
@@ -249,8 +247,7 @@ def _marked_by(dep, ns, name, since, now):
 
     The mark's time is the writing copy's clock and the window the leader's; with
     the clocks set by NTP the few seconds of slack cover the difference. A mark
-    kept on this app over another edit within one look is credited, as the note
-    in memory always was."""
+    kept on this app over another edit within one look is credited."""
     raw = (((dep or {}).get("metadata") or {}).get("annotations") or {}).get(AUTHOR)
     if not isinstance(raw, str) or len(raw) > MARK_MAX:
         return None
@@ -268,7 +265,7 @@ def _marked_by(dep, ns, name, since, now):
 
 
 def note_write(method, path, body=None, now=None):
-    """Homestead is about to write a Deployment: remember who for, and say so on the write.
+    """Homestead is about to write a Deployment: say who for, on the write itself.
     A write to a Longhorn Setting or Volume goes to _note_object instead."""
     if method not in ("POST", "PUT", "PATCH"):
         return
@@ -276,25 +273,15 @@ def note_write(method, path, body=None, now=None):
     if not m:
         _note_object(path, body)
         return
-    _strip(body)            # before anything else: a refused patch is not noted
+    _strip(body)            # before anything else: a refused patch carries nobody's mark
     name = m.group(2) or ((body or {}).get("metadata") or {}).get("name") or ""
     who = getattr(REQUEST, "user", None) or ""
-    now = now or time.time()
-    with _notes_lock:
-        _notes.append((now, m.group(1), name, who))
-        cutoff = now - NOTE_WINDOW * 4
-        while _notes and _notes[0][0] < cutoff:
-            _notes.pop(0)
-    _carry(path, body, m.group(1), name, who, now)
+    _carry(path, body, m.group(1), name, who, now or time.time())
 
 
 def _attribution(ns, name, since, now, dep=None):
-    """Who made a change seen now: the latest note for this app since the last look,
-    or else the mark the write left on the app, if it is that recent and checks out."""
-    with _notes_lock:
-        found = [n for n in _notes if n[1] == ns and n[2] == name and since - 5 <= n[0] <= now]
-    if found:
-        return "homestead", found[-1][3]
+    """Who made a change seen now: the mark the write left on the app, if it is
+    from since the last look and checks out; otherwise it was made outside."""
     who = _marked_by(dep, ns, name, since, now)
     return ("outside", "") if who is None else ("homestead", who)
 
