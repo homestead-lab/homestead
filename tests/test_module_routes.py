@@ -204,6 +204,50 @@ class ModuleList(unittest.TestCase):
                 self.assertIs(declares, declares_routes(SS.code(source)))
 
 
+def cookie_calls(source):
+    """The names a module calls that make or write one of Homestead's cookies:
+    Cookie(...) or cookie_header(...), bare or through a module."""
+    return sorted({node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+                   for node in ast.walk(SS.tree(source)) if isinstance(node, ast.Call)
+                   and (getattr(node.func, "id", None) or getattr(node.func, "attr", None)) in ("Cookie", "cookie_header")})
+
+
+class CookieOwnersInSource(unittest.TestCase):
+    """Every cookie a module sets is one it owns (#936): the module that makes
+    a Cookie declares OWN_COOKIES and is in MODULES, where table() reads it, and
+    only server.py writes a Set-Cookie line itself (cookie_header)."""
+
+    def test_every_module_that_sets_a_cookie_owns_one(self):
+        setters = {path.stem for path in SS.server_modules()
+                   if path.stem != "homestead_routes" and "Cookie" in cookie_calls(path)}
+        self.assertTrue(setters, "no module makes a Cookie: the scan has stopped seeing them")
+        self.assertEqual(setters, set(ROUTES.owners().values()),
+                         "a module that makes a Cookie must own it (OWN_COOKIES), and an owner must set it")
+        self.assertEqual([], sorted(setters - set(ROUTES.MODULES)), "a module that sets a cookie must be in MODULES")
+
+    def test_only_server_py_writes_a_set_cookie_line_itself(self):
+        writers = [path.stem for path in SS.server_modules()
+                   if path.stem != "homestead_routes" and "cookie_header" in cookie_calls(path)]
+        self.assertEqual([], writers, "a module returns a Reply with cookies=(Cookie(...),); answer() checks its owner")
+
+    def test_the_data_move_cookie_is_named_once(self):
+        """Its name is written only in homestead_self_data_cookie; the route that
+        sets it, the status server that reads it and the route table take it from there."""
+        import homestead_self_data_cookie as MOVE
+        holders = sorted(p.stem for p in [*SS.server_modules(), SS.SERVER_PY]
+                         if p.stem != "homestead_self_data_cookie" and MOVE.NAME in p.read_text(encoding="utf-8"))
+        self.assertEqual([], holders, "take the cookie's name from homestead_self_data_cookie")
+        self.assertEqual(MOVE.PATH, ROUTES.COOKIES[MOVE.NAME])
+        self.assertEqual("homestead_self_data_server", ROUTES.owners()[MOVE.NAME])
+
+    def test_the_scan_sees_each_written_form(self):
+        for source, found in (("Cookie(A, b)", ["Cookie"]), ("ROUTES.Cookie(A, b)", ["Cookie"]),
+                              ("X.cookie_header(c, tls)", ["cookie_header"]), ("SimpleCookie()", []),
+                              ("# Cookie(a)", []), ("'Cookie(a)'", [])):
+            with self.subTest(source=source):
+                self.assertEqual(found, cookie_calls(SS.code(source)))
+
+
 class ServedMethods(unittest.TestCase):
     """A route is only reached through server.py's handler H, which answers a
     method only with a do_<METHOD> of its own (#870): any other method gets

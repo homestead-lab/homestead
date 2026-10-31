@@ -1480,7 +1480,7 @@ class H(HTTP.LimitedHandler):
         if route is not None:
             MODULE_ROUTES.answer(self, route.handler(MODULE_ROUTES.Request(
                 method, path, query, body, getattr(self, "user", None), getattr(self, "role", None),
-                self._client_ip() if getattr(self, "client_address", None) else "", MODULE_ROUTES.connection(self))))
+                self._client_ip() if getattr(self, "client_address", None) else "", MODULE_ROUTES.connection(self))), route.module)
         return route is not None
 
     def _send_stream(self, stream):

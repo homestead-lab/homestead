@@ -151,6 +151,8 @@ def remove_user(request):
     return {"ok": True, "users": AUTH.list_users()}
 
 
+# The cookie only these routes set (homestead_routes.answer refuses it from any other).
+OWN_COOKIES = (AUTH.COOKIE,)
 # Its routes and who may use them (homestead_routes.py). Setup and sign-in are
 # public paths: the guard lets them through before it reads a session.
 ROUTES = {

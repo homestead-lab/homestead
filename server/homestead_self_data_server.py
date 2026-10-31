@@ -24,6 +24,7 @@ import homestead_operations as OPS
 import homestead_routes as MODULE_ROUTES
 import homestead_self as SELF
 import homestead_self_address as SELF_ADDRESS
+import homestead_self_data_cookie as SELF_DATA_COOKIE
 import homestead_self_data_execute as SELF_DATA_EXECUTE
 import homestead_self_data_fence as SELF_DATA_FENCE
 import homestead_self_data_prepare as SELF_DATA_PREPARE
@@ -313,7 +314,7 @@ def _move(request):
     except SELF_DATA_FENCE.Held as error:
         return MODULE_ROUTES.Reply(409, {"error": str(error), "review_required": True})
     return MODULE_ROUTES.Reply(202, result, cookies=(MODULE_ROUTES.Cookie(
-        "homestead-data-move", token, path="/api/self/data/handoff/", max_age=86400),))
+        SELF_DATA_COOKIE.NAME, token, path=SELF_DATA_COOKIE.PATH, max_age=86400),))
 
 
 def _handoff(request):
@@ -329,6 +330,8 @@ def _handoff(request):
     return MODULE_ROUTES.Reply(503 if status["status"] == "unknown" else 200, status)
 
 
+# The cookie only these routes set (homestead_routes.answer refuses it from any other).
+OWN_COOKIES = (SELF_DATA_COOKIE.NAME,)
 ROUTES = {
     ("GET", "/api/self/data/prepare"): ("viewer", _preparation_state),
     ("GET", "/api/self/data/handoff/*"): ("viewer", _handoff),

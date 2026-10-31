@@ -35,7 +35,7 @@ Proxy-Authorization, Cf-Access-Jwt-Assertion and the fleet signature; Homestead'
 own cookies; whether it came over TLS or through Cloudflare; and who the guard
 found - the Access sign-in, the linked Homestead, the API key - with `who()` for
 the session. A Reply sets Homestead's own cookies (`cookies=(Cookie(...),)`, each
-at its own path) and only the ROUTE_HEADERS (`headers=(("Location", "/"),)`); its
+at its own path and only from the module whose OWN_COOKIES names it, #936) and only the ROUTE_HEADERS (`headers=(("Location", "/"),)`); its
 status and type are checked too, all before anything is written: one that is
 refused (`Refused`) is answered 500, with none of them. A path ending "/*" is a
 prefix route: it answers the plain paths under it (no ., .., // or %).
@@ -57,6 +57,7 @@ import urllib.parse
 import homestead_agent_audit as AUDIT
 import homestead_cache as CACHE
 import homestead_http as HTTP
+import homestead_self_data_cookie as MOVE_COOKIE
 
 MODULES = (
     "homestead_addons",
@@ -213,7 +214,8 @@ Reply = collections.namedtuple("Reply", "code body ctype headers cookies", defau
 # max_age None: a cookie that lasts as long as the browser keeps it.
 Cookie = collections.namedtuple("Cookie", "name value path max_age", defaults=("/", None))
 # The only cookies a route may read or set, each with the one path it is set at.
-COOKIES = {"homestead_session": "/", "homestead_cluster": "/", "homestead-data-move": "/api/self/data/handoff/"}
+# Each is set by one module only, the one whose OWN_COOKIES names it (#936).
+COOKIES ={"homestead_session": "/", "homestead_cluster": "/", MOVE_COOKIE.NAME: MOVE_COOKIE.PATH}
 # The only response headers a route may set: everything else (framing,
 # encoding, caching, security, cross-origin, cookies) is the server's own.
 ROUTE_HEADERS = ("location", "content-disposition", "retry-after", "etag", "last-modified", "vary",
@@ -356,9 +358,20 @@ def connection(handler):
                       getattr(handler, "_fleet_from", None), getattr(handler, "api_key", None), handler._who)
 
 
-def answer(handler, answer):
-    """Send what a route returned. A Reply's cookies and headers are all checked
-    before any is added, after what the guard already set (a refreshed session)."""
+def _owned(cookie, module, owned):
+    """cookie, when module owns it (owners()); Refused when another module
+    does. A name that is none of Homestead's is cookie_header's to refuse."""
+    owner = owned.get(cookie.name)
+    if cookie.name in COOKIES and owner != module:
+        raise Refused(f"a route in {module} may not set cookie {cookie.name}: "
+                      + (f"only {owner} sets it (OWN_COOKIES)" if owner else "no module owns it (OWN_COOKIES)"))
+    return cookie
+
+
+def answer(handler, answer, module):
+    """Send what the route in module returned. A Reply's cookies and headers are
+    all checked before any is added, after what the guard already set (a
+    refreshed session): each cookie must be one module owns (OWN_COOKIES)."""
     if isinstance(answer, Stream):
         check_answer(200, answer.ctype)
         handler._send_stream(answer)
@@ -368,8 +381,9 @@ def answer(handler, answer):
         handler._send(200, answer.body, answer.ctype)
     elif isinstance(answer, Reply):
         check_answer(answer.code, answer.ctype)
-        tls = _tls(handler) if answer.cookies else False
-        lines = ([("Set-Cookie", cookie_header(Cookie(*cookie), tls)) for cookie in answer.cookies] +
+        tls, owned = (_tls(handler), owners()) if answer.cookies else (False, {})
+        lines = ([("Set-Cookie", cookie_header(_owned(Cookie(*cookie), module, owned), tls))
+                  for cookie in answer.cookies] +
                  [check_header(*header) for header in answer.headers])
         handler._extra_headers += lines
         handler._send(answer.code, answer.body, answer.ctype)
@@ -377,6 +391,8 @@ def answer(handler, answer):
         handler._send(200, answer)
 
 _table = {}
+# The table the cookies' owners were read with, and the owners (owners()).
+_owned_by = [None, {}]
 # How long the pages' main reads (overview, hosts, apps, VMs, volumes,
 # storage) are kept for the UI: longer than its 15 s refresh, so a refresh can
 # be served from the last one (#705). A write Homestead makes to what they show
@@ -460,12 +476,14 @@ def page_aged(key, fn, seconds=PAGE_SECONDS):
 def table():
     """Every declared route, by (method, path). Read once; a module that
     declares a route twice, or one another module declares, or one with a
-    method H does not answer (METHODS), is refused."""
+    method H does not answer (METHODS), is refused; so is a module that owns a
+    cookie that is not Homestead's, or one another module owns (#936)."""
     if _table:
         return _table
-    found = {}
+    found, owned = {}, {}
     for name in MODULES:
         module = importlib.import_module(name)
+        _claim(owned, name, module)
         for (method, path), (role, handler) in getattr(module, "ROUTES", {}).items():
             key = (method.upper(), path)
             if key[0] not in METHODS:
@@ -484,7 +502,34 @@ def table():
                 raise ValueError(f"{method} {path} in {name} covers a path answered elsewhere")
             found[key] = Route(key[0], path, role, handler, name)
     _table.update(found)
+    _owned_by[:] = [_table, owned]
     return _table
+
+
+def _claim(owned, name, module):
+    """Add the cookies module (called name) owns to owned, cookie: module;
+    ValueError for one that is not Homestead's or that another owns."""
+    cookies = getattr(module, "OWN_COOKIES", ())
+    if not isinstance(cookies, tuple) or len(set(cookies)) != len(cookies):
+        raise ValueError(f"OWN_COOKIES in {name} names each cookie it sets once, in a tuple, not {cookies!r}")
+    for cookie in cookies:
+        if cookie not in COOKIES:
+            raise ValueError(f"{name} owns {cookie!r}, which is not one of Homestead's cookies: {', '.join(COOKIES)}")
+        if cookie in owned:
+            raise ValueError(f"cookie {cookie} is owned by {owned[cookie]} and {name}: one module sets it")
+        owned[cookie] = name
+
+
+def owners():
+    """Each cookie a module owns, by name, with that module: only it may set
+    the cookie (answer()). Read with the table, once."""
+    routes = table()
+    if _owned_by[0] is not routes:     # a table put in place without table() reading it (a test's)
+        owned = {}
+        for name in MODULES:
+            _claim(owned, name, importlib.import_module(name))
+        _owned_by[:] = [routes, owned]
+    return dict(_owned_by[1])
 
 
 def _covers(method, stem):
