@@ -446,6 +446,9 @@ function volumeProgressWatch() {
   if (!(STATE.data.vols || []).some(volumeBusy)) return;
   window.__volProgressTimer = setTimeout(async () => {
     if (STATE.view !== "storage") return;
+    // A hidden tab reads nothing (#983): a rebuild can last hours. Showing
+    // the tab starts the watch again.
+    if (document.hidden) return document.addEventListener("visibilitychange", volumeProgressResume);
     let vols;
     try { vols = await api("/api/volumes"); } catch (e) { return volumeProgressWatch(); }
     if (STATE.view !== "storage") return;
@@ -465,6 +468,11 @@ function volumeProgressWatch() {
     }
     volumeProgressWatch();
   }, 4000);
+}
+function volumeProgressResume() {
+  if (document.hidden) return;
+  document.removeEventListener("visibilitychange", volumeProgressResume);
+  if (STATE.view === "storage") volumeProgressWatch();
 }
 
 /* Claims on classes that are not Longhorn - k3s's local-path, NFS - which
@@ -2435,11 +2443,12 @@ window.reclassWatch = async id => {
     if (window.applyRole) applyRole();
   };
   modal("Changing storage class", '<div class="empty"><span class="spin2"></span></div>', true);
-  clearInterval(window.__reclassTimer);
-  const tick = async () => {
-    if ($("#modal").classList.contains("hidden")) return clearInterval(window.__reclassTimer);
-    const ops = await api("/api/operations", { keep: true }).catch(e => ({ unread: e.message }));
-    if (window.__reclassWatchToken !== watchToken || $("#modal").classList.contains("hidden")) return;
+  window.__reclassTimer?.stop?.();
+  const tick = async signal => {
+    if ($("#modal").classList.contains("hidden")) return false;
+    const ops = await api("/api/operations", { keep: true, signal }).catch(e => ({ unread: e.message }));
+    if (UI.pollCancelled(signal)) return false;
+    if (window.__reclassWatchToken !== watchToken || $("#modal").classList.contains("hidden")) return false;
     if (ops.unread) {
       // A failed poll keeps what was last shown and says so; the next tick tries again (#620).
       const note = `<div id="rc_unread" class="dim small" style="margin-top:8px">Could not read the job: ${esc(ops.unread)} · still trying</div>`;
@@ -2457,10 +2466,9 @@ window.reclassWatch = async id => {
     if (!op) return;
     $("#mtitle").textContent = op.title;
     paint(op);
-    if (op.status !== "running") { clearInterval(window.__reclassTimer); if (STATE.view === "storage") refresh(true); }
+    if (op.status !== "running") { if (STATE.view === "storage") refresh(true); return false; }
   };
-  tick();
-  window.__reclassTimer = setInterval(tick, 2500);
+  window.__reclassTimer = UI.poll(tick, 2500);
 };
 
 window.reclassRemoveOld = async pv => {

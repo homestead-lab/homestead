@@ -1769,7 +1769,7 @@ window.wlDeleteNow = async (ns, name, button) => {
 /* Logs for one container of one pod. A workload with several replicas, or a
    pod with sidecars, gets pickers saying exactly whose output this is. */
 function openLogs(title, path, pods = null, ns = "") {
-  if (window.__logTimer) clearInterval(window.__logTimer);
+  window.__logTimer?.stop?.();
   const LOG = window.__logView = { path, pods: pods || [], ns };
   const multi = LOG.pods.length > 1 || LOG.pods.some(p => (p.containers || []).filter(c => c.kind === "app").length > 1);
   modal("Logs · " + title, `<div class="logtools">
@@ -1781,21 +1781,25 @@ function openLogs(title, path, pods = null, ns = "") {
     <div class="dim xs mono logsource" id="logSource"></div>
     <pre class="logview">waiting for log output…</pre>`, true);
   if (multi) logPodChanged(); else logShowSource();
-  const poll = async () => {
-    if ($("#modal").classList.contains("hidden")) return clearInterval(window.__logTimer);
+  // The dialog's own read (`keep`, not the page's): closing it cancels it.
+  const poll = async signal => {
+    if ($("#modal").classList.contains("hidden")) return false;
     try {
-      const t = await api(LOG.path + (LOG.path.includes("?") ? "&" : "?") + "tail=500");
+      const t = await api(LOG.path + (LOG.path.includes("?") ? "&" : "?") + "tail=500", { keep: true, signal });
+      if (UI.pollCancelled(signal)) return;
       const pre = $("#mbody .logview"); if (!pre) return;
       pre.textContent = t || "(the container is running but has not written any logs yet)";
       $("#logstate").innerHTML = '<span class="ld"></span> live · refreshes every 2s';
       if ($("#logfollow")?.checked) pre.scrollTop = pre.scrollHeight;
     } catch (e) {
+      if (UI.pollCancelled(signal)) return;
       const pre = $("#mbody .logview"); if (pre) pre.textContent = e.message;
       if ($("#logstate")) $("#logstate").innerHTML = '<span class="cd badbg"></span> no logs';
     }
   };
-  LOG.poll = poll;
-  poll(); window.__logTimer = setInterval(poll, 2000);
+  const timer = window.__logTimer = UI.poll(poll, 2000);
+  // Another pod or container: the old one's read is cancelled, so its output never paints here.
+  LOG.poll = () => timer.restart();
 }
 
 window.logPodChanged = () => {
@@ -2203,17 +2207,18 @@ function batchUpdateMarkup(items, states, startFailures = [], reconnecting = fal
 window.imageUpdateBatchApply = () => imageReviewedApply();
 
 window.monitorImageRollouts = (items, startFailures = [], initialStates = {}, allItems = items) => {
-  if (window.__updateTimer) clearInterval(window.__updateTimer);
+  window.__updateTimer?.stop?.();
   const states = { ...initialStates };
   let misses = 0;
-  const poll = async () => {
-    if ($("#modal").classList.contains("hidden")) return clearInterval(window.__updateTimer);
+  const poll = async signal => {
+    if ($("#modal").classList.contains("hidden")) return false;
     const results = await Promise.all(items.map(async item => {
       try {
-        const state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(item.ns)}&name=${encodeURIComponent(item.name)}`);
+        const state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(item.ns)}&name=${encodeURIComponent(item.name)}`, { keep: true, signal });
         return { item, state };
       } catch (error) { return { item, error }; }
     }));
+    if (UI.pollCancelled(signal)) return false;
     const successful = results.filter(result => result.state);
     misses = results.some(result=>result.error) ? misses + 1 : 0;
     successful.forEach(result => { states[rolloutKey(result.item)] = result.state; });
@@ -2221,11 +2226,12 @@ window.monitorImageRollouts = (items, startFailures = [], initialStates = {}, al
     if (window.applyRole) window.applyRole();
     const terminal = items.every(item => ["ready", "failed"].includes(states[rolloutKey(item)]?.phase));
     if (terminal && !misses) {
-      clearInterval(window.__updateTimer); window.__updateTimer = null;
+      window.__updateTimer = null;
       setTimeout(() => loadImageUpdates(true, true), 1000);
+      return false;
     }
   };
-  poll(); window.__updateTimer = setInterval(poll, 2000);
+  window.__updateTimer = UI.poll(poll, 2000);
 };
 
 function pullElapsed(seconds) {
@@ -2275,25 +2281,27 @@ function rolloutMarkup(s) {
 }
 
 window.monitorImageRollout = (ns, name) => {
-  if (window.__updateTimer) clearInterval(window.__updateTimer);
+  window.__updateTimer?.stop?.();
   modal("Rollout · " + name, '<div class="empty"><span class="spin2"></span> waiting for Kubernetes…</div>', true);
   let misses = 0, lastState = null;
-  const poll = async () => {
-    if ($("#modal").classList.contains("hidden")) return clearInterval(window.__updateTimer);
+  const poll = async signal => {
+    if ($("#modal").classList.contains("hidden")) return false;
     try {
-      const s = await api(`/api/image-updates/progress?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`);
+      const s = await api(`/api/image-updates/progress?ns=${encodeURIComponent(ns)}&name=${encodeURIComponent(name)}`, { keep: true, signal });
       misses = 0; lastState = s; paintRollout($("#mbody"),rolloutMarkup(s));
       if (window.applyRole) window.applyRole();
       if (s.phase === "ready" || s.phase === "failed") {
-        clearInterval(window.__updateTimer); window.__updateTimer = null;
+        window.__updateTimer = null;
         setTimeout(() => loadImageUpdates(true, true), 1000);
+        return false;
       }
     } catch (e) {
+      if (UI.pollCancelled(signal)) return false;
       misses++;
       paintRollout($("#mbody"), UI.callout("warn","Connection lost","Retrying automatically. The update may still be running; showing the last known progress.") + (lastState ? rolloutMarkup(lastState) : UI.actions(UI.cancel("Monitor in background"))));
     }
   };
-  poll(); window.__updateTimer = setInterval(poll, 2000);
+  window.__updateTimer = UI.poll(poll, 2000);
 };
 
 window.imageRollback = (ns, name) => reviewImageActions([{ns, name}], "rollback");

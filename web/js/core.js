@@ -606,8 +606,9 @@ function closeModal(updateRoute = true) {
   paintModalBack();
   $("#modal").classList.add("hidden");
   const opener = MODAL_OPENER; MODAL_OPENER = null; restoreFocus(opener);
-  if (window.__logTimer) { clearInterval(window.__logTimer); window.__logTimer = null; }
-  if (window.__updateTimer) { clearInterval(window.__updateTimer); window.__updateTimer = null; }
+  // Its polls (logs, a job, a rollout) stop, and the read each has running is cancelled (#983).
+  window.UI?.stopPolls?.();
+  window.__logTimer = null; window.__updateTimer = null; window.__reclassTimer = null;
   if (window.__consoleSocket) { window.__consoleSocket.close(); window.__consoleSocket = null; }
   if (window.__consoleResize) { window.__consoleResize.disconnect(); window.__consoleResize = null; }
   // A node's terminal: closing it ends the session, and its helper goes.
@@ -888,14 +889,22 @@ document.addEventListener("click", event => {
 /* A page opens at once. One seen before shows what it showed last time until
    its data arrives, and is then brought up to date in place; one not seen yet
    shows its shape - panels with a passing glint - rather than a spinner. */
-const PAGE_SNAPSHOT = {};
+const PAGE_SNAPSHOT = new Map();
+/* Only the most recent 20 are kept (#987): each host or app page is an
+   address of its own, and a tab left open for days visits many. */
+const PAGE_SNAPSHOT_KEEP = 20;
+function keepSnapshot(key, html) {
+  PAGE_SNAPSHOT.delete(key);
+  PAGE_SNAPSHOT.set(key, html);
+  while (PAGE_SNAPSHOT.size > PAGE_SNAPSHOT_KEEP) PAGE_SNAPSHOT.delete(PAGE_SNAPSHOT.keys().next().value);
+}
 /* Kept by address, not by page: the Nodes list and one node's page are the
    same page, and the list opened showing the node just left - for as long
    as the list took to load, which on a real cluster is seconds. */
 const snapshotKey = view => `${view}${window.location.search || ""}`;
 function pagePlaceholder(view) {
   const host = V();
-  const snapshot = PAGE_SNAPSHOT[snapshotKey(view)];
+  const snapshot = PAGE_SNAPSHOT.get(snapshotKey(view));
   if (snapshot) {
     host.innerHTML = snapshot;
     enhanceActions(host);
@@ -955,7 +964,7 @@ function paint(html) {
   const tabs = pageTabs(STATE.view);
   if (tabs) html = html.replace(/<div class="phead">\s*<div>/, match => `${match}${tabs}`);
   html = filterBar() + html;
-  PAGE_SNAPSHOT[snapshotKey(STATE.view)] = html;
+  keepSnapshot(snapshotKey(STATE.view), html);
   host.classList.remove("refreshing");
   if (!host.dataset.painted) {
     host.innerHTML = html;
