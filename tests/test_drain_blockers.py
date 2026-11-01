@@ -264,6 +264,24 @@ class DrainBlockerTests(unittest.TestCase):
         self.assertIn("pv-1", row["what"])
         self.assertIn("no pod", row["what"])
 
+    def test_an_attachment_a_generic_ephemeral_volume_uses_is_not_stuck(self):
+        # A pod's ephemeral volume is never listed under persistentVolumeClaim:
+        # its claim is "<pod name>-<volume name>".
+        running = pod(phase="Running")
+        running["spec"]["volumes"] = [{"name": "scratch", "ephemeral": {"volumeClaimTemplate": {
+            "spec": {"accessModes": ["ReadWriteOnce"], "storageClassName": "longhorn",
+                     "resources": {"requests": {"storage": "1Gi"}}}}}}]
+        with Kube(running, claim(name="app-0-scratch", volume="pv-2"), attachment(volume="pv-2")):
+            self.assertEqual([], BLOCKERS.for_host("node-a", now=NOW))
+
+    def test_an_attachment_already_detaching_is_not_stuck(self):
+        # A normal pod move: the attachment carries deletionTimestamp while
+        # the CSI driver detaches.
+        detaching = attachment()
+        detaching["metadata"].update(deletionTimestamp=stamp(NOW - 5), finalizers=["external-attacher/driver-longhorn-io"])
+        with Kube(claim(), detaching):
+            self.assertEqual([], BLOCKERS.for_host("node-a", now=NOW))
+
     def test_an_attachment_a_running_pod_uses_is_not_stuck(self):
         with Kube(pod(phase="Running"), claim(), attachment()):
             self.assertEqual([], BLOCKERS.for_host("node-a", now=NOW))

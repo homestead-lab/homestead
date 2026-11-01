@@ -257,14 +257,24 @@ def _elsewhere_row(node, managers, engines, named):
 
 
 def _claims_of(pod):
-    return [(v.get("persistentVolumeClaim") or {}).get("claimName")
-            for v in (pod.get("spec") or {}).get("volumes") or [] if v.get("persistentVolumeClaim")]
+    """The claims pod's volumes use; a generic ephemeral volume's claim is
+    named "<pod name>-<volume name>" (Kubernetes ephemeral.VolumeClaimName)."""
+    claims = []
+    for v in (pod.get("spec") or {}).get("volumes") or []:
+        if v.get("persistentVolumeClaim"):
+            claims.append((v.get("persistentVolumeClaim") or {}).get("claimName"))
+        elif v.get("ephemeral") and v.get("name"):
+            claims.append(f"{(pod.get('metadata') or {}).get('name', '')}-{v['name']}")
+    return claims
 
 
-def _attached_here(node, attachments):
-    """{volume name: attachment name} of the attachments to node."""
+def _attached_here(node, attachments, detaching=True):
+    """{volume name: attachment name} of the attachments to node; without
+    those already being detached (deletionTimestamp set) when not detaching."""
     found = {}
     for a in attachments:
+        if not detaching and _terminating(a):
+            continue
         spec = a.get("spec") or {}
         volume = (spec.get("source") or {}).get("persistentVolumeName")
         if spec.get("nodeName") == node and volume:
@@ -284,7 +294,8 @@ def _unused_attachment_rows(node, pods, claims, attachments):
     used = {volume_of.get(((p.get("metadata") or {}).get("namespace"), c))
             for p in pods if (p.get("spec") or {}).get("nodeName") == node for c in _claims_of(p)}
     rows = []
-    for volume, name in sorted(_attached_here(node, attachments).items()):
+    # An attachment already being detached is a normal pod move, not stuck.
+    for volume, name in sorted(_attached_here(node, attachments, detaching=False).items()):
         if volume in used:
             continue
         rows.append(_row(
