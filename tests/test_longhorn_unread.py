@@ -303,10 +303,15 @@ class NodeImpactTests(LonghornFixture):
         self.assertIsNone(p["counts"]["at_risk"])
 
 
-class NotAnsweringTests(LonghornFixture):
-    """While Longhorn cannot be read its alerts are held. After ten minutes
-    an alert says Longhorn is not answering; after an hour the held alerts
-    say they are the last known state, not the current one."""
+class VolumesUnreadAlertTests(LonghornFixture):
+    """While Longhorn's volumes cannot be read its alerts are held. After ten
+    minutes an alert says the volumes can't be read; after an hour the held
+    alerts say they are the last known state, not the current one.
+
+    The read fails when the cluster's API does not answer: Longhorn's volumes
+    are custom resources the API server serves itself, readable while
+    longhorn-manager is down (#1082). So the alert names the failed read and
+    its error, not Longhorn."""
     KEY = "disks:node-a:d1"
 
     def sources(self):
@@ -332,7 +337,7 @@ class NotAnsweringTests(LonghornFixture):
         self.assertIn(self.KEY, ALERTS._load()["active"])
         return read
 
-    def test_longhorn_not_answering_is_raised_after_ten_minutes_not_before(self):
+    def test_volumes_unread_is_raised_after_ten_minutes_not_before(self):
         self.assertEqual(600, ALERTS.LONGHORN_QUIET)
         self.break_read(VOLUMES)
         unread = self.sources()
@@ -341,10 +346,10 @@ class NotAnsweringTests(LonghornFixture):
         for at in (1000, 1000 + ALERTS.HOLD, 1000 + ALERTS.LONGHORN_QUIET - 1):
             fresh += ALERTS.observe(unread, now=at)
         self.assertEqual([], self.longhorn(fresh))
-        self.assertEqual([("raised", "Longhorn is not answering")],
+        self.assertEqual([("raised", "Longhorn's volumes can't be read")],
                          self.longhorn(ALERTS.observe(unread, now=1000 + ALERTS.LONGHORN_QUIET)))
 
-    def test_longhorn_answering_again_clears_the_alert(self):
+    def test_volumes_read_again_clears_the_alert(self):
         self.break_read(VOLUMES)
         unread = self.sources()
         ALERTS.observe(unread, now=1000)
@@ -353,7 +358,27 @@ class NotAnsweringTests(LonghornFixture):
         read = self.sources()
         self.assertEqual([], read["longhorn"])
         fresh = ALERTS.observe(read, now=2000) + ALERTS.observe(read, now=2000 + ALERTS.HOLD)
-        self.assertEqual([("resolved", "Longhorn is answering again")], self.longhorn(fresh))
+        self.assertEqual([("resolved", "Longhorn's volumes can be read again")], self.longhorn(fresh))
+
+    def test_the_alert_says_the_cluster_s_api_did_not_answer_and_gives_its_error(self):
+        self.cluster.kube.fail(VOLUMES, 429, times=999)
+        fact, = self.sources()["longhorn"]
+        self.assertIn("the cluster's API did not answer", fact["body"])
+        self.assertIn("429", fact["body"])
+        self.assertNotIn("Longhorn is", fact["title"] + fact["body"] + fact["resolved"])
+
+    def test_the_snapshot_s_overview_carries_the_error_to_the_alert(self):
+        """The leader's page snapshot reads the volumes once, in its own part;
+        the overview it builds, which every replica serves, says why."""
+        self.cluster.kube.fail(VOLUMES, 429, times=999)
+        done = self.PAGES.cycle(self.OV.page_inputs(), self.OV.page_builders())
+        self.assertFalse(done["vol"])
+        overview = self.PAGES.read("ov")[1]
+        self.assertIn("429", overview["volumes_unread_reason"])
+        self.assertIn("429", ALERTS.longhorn_facts(overview)[0]["body"])
+
+    def test_a_read_volumes_overview_has_no_reason(self):
+        self.assertEqual("", self.OV.get_overview()["volumes_unread_reason"])
 
     def test_a_cluster_without_longhorn_has_no_longhorn_alert(self):
         self.cluster.kube.absent_groups.add("longhorn.io")

@@ -13,9 +13,11 @@ import homestead_shared as SHARED
 
 DATA_DIR = "/data"
 HOLD = 60
-# Longhorn not answering for this long is news of its own (#1002 follow-up).
-# Longhorn's manager restarts in a minute or three on an upgrade or a node
-# reboot; ten minutes is well past that, and well before held alerts go stale.
+# Longhorn's volumes not read for this long is news of its own (#1002 follow-up).
+# The read fails when the cluster's API does not answer (the volumes are
+# custom resources the API server serves itself, #1082): a slow or restarting
+# API server, an upgrade or a reboot settles within minutes; ten minutes is
+# well past that, and well before held alerts go stale.
 LONGHORN_QUIET = 600
 # An alert held this long because its source could not be read says it is
 # the last known state. It stays open: only a read that no longer finds it
@@ -386,14 +388,17 @@ def health_facts(overview):
 
 
 def longhorn_facts(overview):
-    """Longhorn installed but its volumes not read: raised after LONGHORN_QUIET."""
+    """Longhorn installed but its volumes not read: raised after LONGHORN_QUIET.
+    It says what is known: the read failed, with its error. Longhorn itself
+    may well be running (#1082)."""
     if not overview.get("volumes_unread"):
         return []
+    reason = overview.get("volumes_unread_reason") or ""
     return [{"key": "longhorn:unread", "category": "degraded", "severity": "degraded",
-             "title": "Longhorn is not answering", "resolved": "Longhorn is answering again",
-             "body": ("Homestead has not been able to read Longhorn's volumes for at least "
-                      f"{LONGHORN_QUIET // 60} minutes. Volume and disk alerts keep their last known state "
-                      "until it answers."),
+             "title": "Longhorn's volumes can't be read", "resolved": "Longhorn's volumes can be read again",
+             "body": (f"Homestead has not been able to read Longhorn's volumes for at least {LONGHORN_QUIET // 60} "
+                      "minutes: the cluster's API did not answer" + (f" ({reason})" if reason else "")
+                      + ". Volume and disk alerts keep their last known state until the volumes can be read again."),
              "signals": {"condition": 1}, "href": "/volumes", "hold": LONGHORN_QUIET}]
 
 
