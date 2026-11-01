@@ -5,6 +5,7 @@ can never succeed (a typo in the name, a private registry without
 credentials) has to be read from its pods: every pod still waiting failing
 its pull for PULL_STUCK_FOR ends the job, with the error, and stops the
 pull."""
+import json
 import sys
 import tempfile
 import unittest
@@ -36,17 +37,37 @@ def daemonset(desired, ready):
                        "numberUnavailable": desired - ready}}
 
 
-def pod(node, waiting=None, message="", ready=False):
-    """One pull pod on node: ready, or its pull container waiting for a reason."""
-    init = {"name": "pull", "ready": ready,
-            "state": {"terminated": {"exitCode": 0}} if ready else
+def pod(node, waiting=None, message="", ready=False, name=None, terminating=False, pause=None):
+    """One pull pod on node: ready, or its pull container waiting for a reason
+    (pause: the pull has run and the pause container waits for that reason)."""
+    init = {"name": "pull", "image": IMAGE, "ready": ready or bool(pause),
+            "state": {"terminated": {"exitCode": 0}} if ready or pause else
                      {"waiting": {"reason": waiting or "PodInitializing", "message": message}}}
-    return {"apiVersion": "v1", "kind": "Pod",
-            "metadata": {"name": f"{NAME}-{node}", "namespace": "lab", "labels": {"app": NAME}},
-            "spec": {"nodeName": node},
-            "status": {"phase": "Running" if ready else "Pending",
-                       "conditions": [{"type": "Ready", "status": "True" if ready else "False"}],
-                       "initContainerStatuses": [init]}}
+    meta = {"name": name or f"{NAME}-{node}", "namespace": "lab", "labels": {"app": NAME}}
+    if terminating:
+        meta["deletionTimestamp"] = "2026-11-01T10:00:00Z"
+    status = {"phase": "Running" if ready else "Pending",
+              "conditions": [{"type": "Ready", "status": "True" if ready else "False"}],
+              "initContainerStatuses": [init]}
+    if pause:
+        status["containerStatuses"] = [{"name": "pause", "image": PAUSE, "ready": False,
+                                        "state": {"waiting": {"reason": pause, "message": message}}}]
+    return {"apiVersion": "v1", "kind": "Pod", "metadata": meta, "spec": {"nodeName": node}, "status": status}
+
+
+PAUSE = "registry.k8s.io/pause:3.9"
+_EVENTS = iter(range(1, 10_000))
+
+
+def event(node, reason, at, message=""):
+    """A kubelet event on node's pull pod: Pulling, Failed or BackOff, at a
+    time of day given as HH:MM:SS."""
+    return {"apiVersion": "v1", "kind": "Event",
+            "metadata": {"name": f"{NAME}-{node}.{next(_EVENTS):x}", "namespace": "lab"},
+            "involvedObject": {"kind": "Pod", "name": f"{NAME}-{node}", "namespace": "lab",
+                               "fieldPath": "spec.initContainers{pull}"},
+            "reason": reason, "message": message, "type": "Normal" if reason == "Pulling" else "Warning",
+            "lastTimestamp": f"2026-11-01T{at}Z"}
 
 
 NOT_FOUND = 'failed to resolve reference "ghcr.example.com/x/frigate:0.18.0": not found'
@@ -102,13 +123,79 @@ class PrepullJobTests(PullCase):
         self.assertIn("1/2", failed["message"])
 
     def test_a_pull_that_recovers_starts_its_wait_again(self):
-        self.start(daemonset(1, 0), pod("node-a", "ImagePullBackOff", "Back-off pulling image"))
+        self.start(daemonset(1, 0), pod("node-a", "ErrImagePull", NOT_FOUND))
         self.step()
         self.kube.add(pod("node-a"))                    # pulling again, the registry answered
         self.assertEqual("running", self.step(IMAGES.PULL_STUCK_FOR - 10)["status"])
-        self.kube.add(pod("node-a", "ErrImagePull", NOT_FOUND))
-        self.assertEqual("running", self.step(20)["status"], "the wait starts again from the new error")
+        self.kube.add(pod("node-a", "ImagePullBackOff", "Back-off pulling image"))
+        again = self.step(20)
+        self.assertEqual("running", again["status"], "the wait starts again from the new error")
+        self.assertNotIn("not found", again["message"], "an error from before the recovery is not quoted")
         self.assertEqual("failed", self.step(IMAGES.PULL_STUCK_FOR + 1)["status"])
+
+    def test_flapping_between_the_two_pull_errors_keeps_the_clock(self):
+        self.start(daemonset(1, 0), pod("node-a", "ErrImagePull", NOT_FOUND))
+        self.step()
+        self.kube.add(pod("node-a", "ImagePullBackOff", "Back-off pulling image"))
+        self.assertEqual("running", self.step(IMAGES.PULL_STUCK_FOR - 10)["status"])
+        self.kube.add(pod("node-a", "ErrImagePull", NOT_FOUND))
+        self.assertEqual("failed", self.step(20)["status"])
+
+    def test_the_wait_survives_a_restart(self):
+        self.start(daemonset(1, 0), pod("node-a", "ErrImagePull", NOT_FOUND))
+        self.step()
+        stored = json.loads((Path(operations.DATA_DIR) / operations.STORE).read_text())
+        self.assertEqual(self.now[0], stored[0]["ref"]["pull_failing_since"])
+        operations._memo.clear()                        # a new process reads the file afresh
+        self.assertEqual("failed", self.step(IMAGES.PULL_STUCK_FOR + 1)["status"])
+
+    def test_a_retry_that_is_pulling_again_is_not_failed_however_long_it_takes(self):
+        """The kubelet keeps showing the last pull error while a retry pulls:
+        its events say which came last."""
+        self.start(daemonset(1, 0), pod("node-a", "ImagePullBackOff", "Back-off pulling image"),
+                   event("node-a", "Pulling", "10:00:00"), event("node-a", "Failed", "10:00:01", NOT_FOUND),
+                   event("node-a", "BackOff", "10:00:05"), event("node-a", "Pulling", "10:00:20"))
+        self.step()
+        slow = self.step(10 * IMAGES.PULL_STUCK_FOR)
+        self.assertEqual("running", slow["status"])
+        self.assertIsNotNone(self.kube.object(DS_PATH))
+        self.kube.add(event("node-a", "Failed", "11:00:00", NOT_FOUND))  # that retry failed too
+        self.assertEqual("running", self.step(1)["status"])
+        self.assertEqual("failed", self.step(IMAGES.PULL_STUCK_FOR + 1)["status"])
+
+    def test_a_pod_list_that_cannot_be_read_keeps_the_clock(self):
+        self.start(daemonset(1, 0), pod("node-a", "ErrImagePull", NOT_FOUND))
+        self.step()
+        self.kube.fail("/api/v1/namespaces/lab/pods", 500)
+        self.assertEqual("running", self.step(IMAGES.PULL_STUCK_FOR - 10)["status"])
+        self.assertEqual("failed", self.step(20)["status"], "one unreadable list does not start the wait again")
+
+    def test_a_terminating_pod_is_not_counted(self):
+        self.start(daemonset(1, 0), pod("node-a", "ErrImagePull", NOT_FOUND, name=f"{NAME}-old", terminating=True))
+        self.step()
+        self.assertEqual("running", self.step(IMAGES.PULL_STUCK_FOR + 1)["status"])
+
+    def test_the_failing_container_s_own_image_is_named(self):
+        self.start(daemonset(1, 0), pod("node-a", pause="ErrImagePull", message="dial tcp: i/o timeout"))
+        self.step()
+        failed = self.step(IMAGES.PULL_STUCK_FOR + 1)
+        self.assertEqual("failed", failed["status"])
+        self.assertIn(f"Could not pull {PAUSE}", failed["message"])
+
+    def test_no_credentials_from_the_registry_s_words_are_kept_or_shown(self):
+        # Built in pieces: push protection refuses token-shaped strings even when fake.
+        signed = ("https://blob.example.com/sha256/abc?X-Amz-Credential=" + "AKIA" + "EXAMPLEEXAMPLE1"
+                  + "&X-Amz-Security-Token=" + "tok" + "en123" + "&X-Amz-Signature=" + "f" * 40)
+        userinfo = "https://robot:" + "hunter" + "2pass@mirror.example.com/v2/x/frigate/manifests/0.18.0"
+        words = f'failed to pull: GET "{signed}": 403 Forbidden; fallback {userinfo}: unauthorized'
+        self.start(daemonset(1, 0), pod("node-a", "ErrImagePull", words))
+        shown = [self.step()["message"], self.step(IMAGES.PULL_STUCK_FOR + 1)["message"]]
+        stored = (Path(operations.DATA_DIR) / operations.STORE).read_text()
+        for text in shown + [stored]:
+            for secret in ("X-Amz", "en123", "f" * 40, "hunter", "robot:"):
+                self.assertNotIn(secret, text)
+        self.assertIn("blob.example.com/sha256/abc", shown[-1], "the place is still named")
+        self.assertIn("mirror.example.com/v2/", shown[-1])
 
     def test_a_slow_pull_is_never_failed_for_taking_long(self):
         self.start(daemonset(2, 1), pod("node-a", ready=True), pod("node-b"))
@@ -151,6 +238,23 @@ class PullSweepTests(PullCase):
         with mock.patch.object(operations, "stored", side_effect=ValueError("store damaged")):
             IMAGES.prepull_status(sweep=True)
         self.assertIsNotNone(self.kube.object(DS_PATH), "what a job follows is not known")
+
+
+class ImageCleanupJobTests(PullCase):
+    def test_a_cleaner_that_ran_out_of_time_says_so(self):
+        name = "homestead-image-clean-0123456789-abc"
+        self.kube.add({"apiVersion": "v1", "kind": "Pod", "metadata": {"name": name, "namespace": "lab"},
+                       "spec": {"activeDeadlineSeconds": 600},
+                       "status": {"phase": "Failed", "reason": "DeadlineExceeded",
+                                  "message": "Pod was active on the node longer than the specified deadline",
+                                  "containerStatuses": [{"name": "runtime", "state": {"terminated": {
+                                      "exitCode": 137, "reason": "Error", "message": "removing image"}}}]}})
+        self.enterContext(mock.patch.dict(operations.RESOLVERS, {"image-cleanup": operations._image_cleanup}))
+        operations.start("image-cleanup", "Clean cached image", {"kind": "Image", "name": IMAGE, "namespace": "lab"},
+                         "/image-cache", {"namespace": "lab", "pods": [name]})
+        done = operations.list_operations()[0]
+        self.assertEqual("failed", done["status"])
+        self.assertIn("longer than 10 minutes", done["message"])
 
 
 if __name__ == "__main__":

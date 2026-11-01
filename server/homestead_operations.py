@@ -817,6 +817,11 @@ def _image_cleanup(item):
         states = [row.get("state", {}) for row in status.get("containerStatuses", []) or []]
         failed = next((state.get("terminated") for state in states
                        if (state.get("terminated") or {}).get("exitCode", 0) != 0), None)
+        if status.get("reason") == "DeadlineExceeded":
+            # Killed at its deadline: its own last words are not why it stopped.
+            limit = int((pod.get("spec") or {}).get("activeDeadlineSeconds") or 0)
+            return "failed", round(complete / max(1, len(pods)) * 100), (
+                f"The removal took longer than {max(1, limit // 60)} minutes and was stopped")
         if phase == "Failed" or failed:
             detail = (failed or {}).get("message") or (failed or {}).get("reason") or status.get("message")
             return "failed", round(complete / max(1, len(pods)) * 100), detail or "Image cleanup failed"
