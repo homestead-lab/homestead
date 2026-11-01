@@ -144,7 +144,12 @@ def image_update_capacity_plan(body, action):
     guard_managed_smb(ns, name)
     if action == "update":
         enforce_update_policy(body)
-    prepared = (ROLLOUTS.prepare_update if action == "update" else ROLLOUTS.prepare_rollback)(ns, name)
+    version = body.get("version")
+    if version is not None and (action != "update" or not isinstance(version, str)):
+        raise ValueError("a release can be named only for an update")
+    # A release named for Homestead itself (ROLLOUTS._named_release), else
+    # what its update check found.
+    prepared = ROLLOUTS.prepare_update(ns, name, version) if action == "update" else ROLLOUTS.prepare_rollback(ns, name)
     current, proposed = prepared["current"], prepared["proposed"]
     if current["spec"].get("paused"):
         raise ValueError("resume this paused workload before reviewing an image rollout")
@@ -190,8 +195,11 @@ def preview_image_update(body):
                "rollback": prepared["before"].get(c["name"], "")}
               for c in ROLLOUTS._pod_containers(prepared["proposed"])
               if c.get("image", "") != old.get(c["name"], "")]
-    return {"capacity": capacity, "capacity_token": CAPACITY_REVIEW.issue(body, context),
-            "images": images, "action": action}
+    answer = {"capacity": capacity, "capacity_token": CAPACITY_REVIEW.issue(body, context),
+              "images": images, "action": action}
+    if prepared.get("unread"):
+        answer["unread"] = prepared["unread"]
+    return answer
 
 
 def _jobs_loop():

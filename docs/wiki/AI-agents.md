@@ -150,7 +150,7 @@ Tools come in three classes:
 | `preview_undo_change` | What undoing a change from get_change_history would restore | `containers:manage` | change |
 | `undo_change` | Restores an app's settings from before a change, as preview_undo_change reviewed it | `containers:manage` | change |
 | `list_image_updates` | Which apps have a newer image, and how each is updated (automatically, in the window, or by hand) | `read` | read |
-| `update_container_image` | Updates an app to its newer image, after the capacity review | `containers:manage` | change |
+| `update_container_image` | Updates an app to its newer image, after the capacity review; the update policy has a person approve each install, so it waits as a request | `containers:manage` | change |
 | `rollback_container_image` | Puts an app back on the image it had before its last update, after the capacity review, as update_container_image | `containers:manage` | change |
 | `get_image_update_progress` | How an app's image update or rollback is going | `read` | read |
 | `set_image_update_mode` | How an app's image updates are made: settings with ns, name and mode, as list_image_updates shows the modes | `containers:manage` | change |

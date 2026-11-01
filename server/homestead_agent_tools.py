@@ -497,6 +497,13 @@ def _image_update(action):
             body.update(capacity_token=review.get("capacity_token"), confirm_capacity=True)
         else:
             body.update(capacity_token=args["capacity_token"], confirm_capacity=bool(args.get("confirm_capacity")))
+        if action == "update":
+            # The update policy has a person approve every install, as the
+            # Updates dialog does. One who approved this request has; an agent
+            # on its own has not, so its update waits for one.
+            if not ctx.get("fresh"):
+                raise NeedsApproval("operator", "the update policy needs a person to approve each image update")
+            body["approved"] = True
         return call("POST", "/api/image-updates/apply" if action == "update" else "/api/image-updates/rollback",
                     body=body, **_as(ctx))
     return _guarded(run)
@@ -843,7 +850,8 @@ TOOLS = [
          run=_get("/api/image-updates", {"force": "refresh"})),
     Tool("update_container_image", "Update a container's image", "containers:manage", CHANGE,
          "Updates an app to its newer image, after the capacity review. Without capacity_token it reviews first and "
-         "answers needs_confirmation when the review has warnings; call again with the token and confirm_capacity: true.",
+         "answers needs_confirmation when the review has warnings; call again with the token and confirm_capacity: true. "
+         "The update policy has a person approve every install, so it then becomes a request: follow it with get_agent_request.",
          {"namespace": NS, "name": NAME_ARG, "capacity_token": S, "confirm_capacity": B}, ["namespace", "name"],
          run=_image_update("update")),
     Tool("rollback_container_image", "Roll back a container's image", "containers:manage", CHANGE,

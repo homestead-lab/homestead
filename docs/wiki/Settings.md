@@ -140,6 +140,13 @@ opens the same reviewed rollout an app gets, helpers first and Homestead last;
 the page reconnects when Homestead is back. **Check now** asks the registries
 again. How updates are approved is set under **Updates**.
 
+**Install a release…** (admin) puts Homestead on a release you name, such as
+`2.8.334` or `2.8.334-dev.1`, through the same review. It is for when Homestead
+cannot offer the release itself - its release check failing, say. When the
+registry cannot be read either, the release is installed by its tag rather than
+an exact build: the cluster pulls it and checks it, and if the tag does not
+exist the new pod waits while the old one keeps serving.
+
 **Linked clusters** are listed below this one's parts, each with the version
 it runs and whether an update is waiting, asked through this Homestead's
 relay. Tick **Include** on the ones to update as well: the same review then

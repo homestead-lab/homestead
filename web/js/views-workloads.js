@@ -1978,7 +1978,7 @@ async function reviewImageActions(items, action = "update") {
     for (const item of HomesteadUpdateState.orderApply(items)) {
       const config = {ns: item.ns, name: item.name, action, approved: true,
         ...(item.cluster ? {cluster: item.cluster, clusterName: item.clusterName || item.cluster} : {}),
-        ...(item.part ? {part: item.part} : {})};
+        ...(item.part ? {part: item.part} : {}), ...(item.version ? {version: item.version} : {})};
       const preview = await api("/api/image-updates/preview", {method: "POST",
         headers: {"Content-Type": "application/json", ...clusterHeaders(config)}, body: JSON.stringify(rolloutBody(config))});
       if (sequence !== IMAGE_REVIEW_SEQUENCE || !$("#imageReviewLoading")) return;
@@ -2015,6 +2015,8 @@ async function reviewImageActions(items, action = "update") {
       <p class="ui-lead">${many ? "Apps update one at a time, with Homestead last. " : ""}${items.some(restartsHomestead) ? "Homestead will be briefly unavailable while it restarts. " : ""}${many ? "Each app restarts" : "The app restarts"} to ${rollback ? "return to its previous image" : "use the new image"}.</p>
       ${blocked ? UI.callout("bad", "Update blocked", list)
         : concerns.length ? UI.callout("warn", "Check first", list) : ""}
+      ${rows.filter(r => r.preview.unread).map(({config, preview}) => UI.callout("warn", "Installed by its tag",
+        `Homestead could not read the registry (${esc(preview.unread)}), so ${esc(config.version)} is not pinned to an exact build: the cluster pulls it by its tag and checks it. If the tag does not exist, the new pod waits and the old one keeps serving.`)).join("")}
       <ul class="upd-apps">${apps}</ul>
       ${rollback ? "" : '<div id="updNotes"></div>'}
       ${UI.more("Details", `${details}
@@ -2075,17 +2077,27 @@ window.imageReviewedApply = async () => {
           // Never start the next workload until this exact accepted generation is ready.
           if (!result.uid || !Number.isInteger(result.generation)) throw new Error("Rollout identity unavailable; check its job before continuing");
           const deadline = Date.now() + 15 * 60 * 1000;
+          let misses = 0;
           while (true) {
             if (!active()) return;
             let state;
             try {
               state = await api(`/api/image-updates/progress?ns=${encodeURIComponent(config.ns)}&name=${encodeURIComponent(config.name)}`,
                 {timeout: 10000, headers: clusterHeaders(config)});
+              misses = 0;
             } catch (error) {
               // Homestead is replacing itself - here, or on a linked cluster the
               // relay cannot reach for that minute: wait for it to answer again.
-              if (!restartsHomestead(config) || Date.now() > deadline) throw error;
-              states[key] = {...(states[key] || {}), phase: "restarting"}; paint();
+              // For any other app, no answer at all (a dropped connection, a
+              // proxy giving up on a long pull, a gateway error) says nothing
+              // about the rollout: ask again, and stop only once it has been
+              // gone a while. An answer that is an error still stops the queue.
+              const unanswered = !error.status || error.status >= 502;
+              misses += 1;
+              if (Date.now() > deadline || !(restartsHomestead(config) || (unanswered && misses <= PROGRESS_MISSES))) {
+                throw unanswered && !restartsHomestead(config) ? new Error(`Homestead stopped answering while ${config.name} updated (${error.message})`) : error;
+              }
+              states[key] = {...(states[key] || {}), phase: restartsHomestead(config) ? "restarting" : "reconnecting"}; paint();
               await new Promise(resolve => setTimeout(resolve, 3000));
               continue;
             }
@@ -2131,6 +2143,9 @@ window.imageReviewedApply = async () => {
   await run(0);
 };
 let IMAGE_QUEUE = null;     // the stopped queue, while Skip and continue can resume it
+// Progress reads in a row with no answer before the queue stops: about a
+// minute and a half, with each read's own 10 s timeout and 3 s pause.
+const PROGRESS_MISSES = 20;
 
 /* After a rollout: the list and the waiting updates as they are now, so the
    page shows the new image without a refresh. The server has re-asked about
