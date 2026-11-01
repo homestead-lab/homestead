@@ -409,7 +409,7 @@ def _status(item):
         # once it has gone, the leader carries the job on.
         worker = ref.get("worker")
         if worker and WORKER_GONE and RESUME and WORKER_GONE(worker, ref.get("worker_restarts")) and RESUME(item):
-            return "running", item.get("progress", 0), "Homestead moved while preparing this host; carrying on from another replica"
+            return "running", item.get("progress", 0), "Homestead restarted or moved while preparing this host; carrying on"
         # A live worker can wait a long time for Longhorn; one that recorded
         # nothing for half an hour, or an older job with no worker named, stopped.
         limit = 1800 if worker else 240

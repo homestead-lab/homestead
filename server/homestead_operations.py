@@ -351,18 +351,24 @@ class Superseded(ValueError):
     """Another replica has taken this job over; this one must stop quietly."""
 
 
-def record_phase(operation_id, phase, progress, message, owner=None, **ref_updates):
+def record_phase(operation_id, phase, progress, message, owner=None, expect_worker=None, before=None, **ref_updates):
     """Persist synchronous maintenance progress before irreversible steps.
 
     owner: the replica writing. A job that names another worker has been
     carried on elsewhere, so this replica's progress - and the send that
-    follows it - is refused rather than run twice."""
+    follows it - is refused rather than run twice. expect_worker and before
+    guard a replica taking a job over: only while it still names the worker
+    that went, and is still in one of the phases before."""
     with _lock:
         items = _read()
         item = next(i for i in items if i["id"] == operation_id)
         worker = (item.get("ref") or {}).get("worker")
         if owner and worker and worker != owner:
             raise Superseded(f"{worker} carries this job on now")
+        if expect_worker is not None and worker != expect_worker:
+            raise Superseded(f"{worker} carries this job on now")
+        if before is not None and (item.get("ref") or {}).get("phase") not in before:
+            raise Superseded("this job has gone past the step it was taken over at")
         if item.get("status") in TERMINAL or (POWER_RECEIPTS.protected(item.get("kind"), item.get("ref") or {}) and item.get("status") == CANCELLING):
             raise ValueError("Maintenance job has ended; refusing further actions")
         item["ref"].update(ref_updates, phase=phase, phase_at=time.time())
