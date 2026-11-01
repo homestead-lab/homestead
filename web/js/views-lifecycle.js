@@ -876,7 +876,16 @@ let NODE_POWER_REVIEW_SEQUENCE = 0;
 // What would keep the host from draining: each one ticked ("drain anyway")
 // before the normal cordon and drain. Force and a planned outage send no drain.
 const nodePowerDrainBlockers = plan => plan && !plan.force && !plan.planned_outage ? plan.drain_blockers || [] : [];
-const nodePowerBlockersTicked = plan => nodePowerDrainBlockers(plan).every((_, i) => $(`#pw_blocker_${i}`)?.checked);
+// Each tick carries its row's id: what counts is which rows the open dialog
+// has ticked, so a stale review brought back by Back acknowledges nothing
+// next to other text, and the server's exact-set check sees any mismatch.
+const nodePowerTickedIds = () => $$("input[data-drain-ack]").filter(x => x.checked).map(x => x.dataset.drainAck);
+const nodePowerBlockersTicked = plan => {
+  const rows = nodePowerDrainBlockers(plan);
+  if (!rows.length) return true;
+  const ticked = new Set(nodePowerTickedIds());
+  return rows.every(b => ticked.has(b.id));
+};
 window.nodePowerReady = () => {
   const button = $("#pw_execute");
   if (button) button.disabled = !typedConfirmMatches("pw_confirm") || !nodePowerBlockersTicked(window.__nodePowerPlan);
@@ -901,15 +910,22 @@ window.nodePowerRemoveOrphansConfirm = async i => {
   const row = nodePowerDrainBlockers(plan)[i];
   if (!row || !row.can_remove) return toast("Review the host impact again", "bad");
   const button = $("#pw_orphans_remove");
+  const label = button?.textContent;
   if (button) { button.disabled = true; button.textContent = "Removing…"; }
   let r;
   try {
     r = await api("/api/node/orphans/remove", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node: plan.node, records: (row.records || []).map(x => ({ name: x.name, uid: x.uid, resourceVersion: x.resourceVersion })) }) });
-  } catch (e) { return toast(`Could not remove the orphan records: ${e.message}`, "bad"); }
+  } catch (e) {
+    if (button) { button.disabled = false; button.textContent = label; }
+    return toast(`Could not remove the orphan records: ${e.message}`, "bad");
+  }
   const refused = r.refused || [];
   toast(refused.length ? `Removed ${r.removed.length}; kept ${refused.length}: ${refused.map(x => `${x.name} (${x.why})`).join("; ")}`
     : `Removed ${plural(r.removed.length, "orphan record")}`, refused.length ? "warn" : "ok");
+  // Back to the review before it is drawn again, so Back can't bring back
+  // the old review (its ticks) or this spent dialog.
+  modalBack();
   return window.nodePowerReview(plan.node, plan.action, !!plan.force);
 };
 window.nodePowerReview = async (node, action, force = false) => {
@@ -977,9 +993,10 @@ window.nodePowerReview = async (node, action, force = false) => {
     : `<div class="ui-empty">No Longhorn replica on this host was found.</div>`;
   // A removable row's button opens its own review (nodePowerRemoveOrphans).
   const blockersHtml = `<p class="ui-help">Each can stall the drain: fix it and review again, or drain anyway.</p>`
-    + drainBlockers.map((b, i) => `<div>${UI.ack(`pw_blocker_${i}`, `Drain anyway: ${b.what}`, { onchange: "nodePowerReady()" })}
-      ${UI.more("Why, and what to do", `${esc(b.why)} ${esc(b.fix)}`, false, `pw_blocker_fix_${i}`)}${b.can_remove ? UI.button("Remove orphan records", `nodePowerRemoveOrphans(${i})`,
-        { id: `pw_blocker_remove_${i}`, attrs: `data-drain-blocker="${esc(b.id)}"` }) : ""}</div>`).join("");
+    + drainBlockers.map((b, i) => `<div>${UI.ack(`pw_blocker_${i}`, `Drain anyway: ${b.what}`, { onchange: "nodePowerReady()", attrs: `data-drain-ack="${esc(b.id)}"` })}
+      ${UI.more("Why, and what to do", `${esc(b.why)} ${esc(b.fix)}`, false, `pw_blocker_fix_${i}`)}${!b.can_remove ? ""
+        : can("admin") ? UI.button("Remove orphan records", `nodePowerRemoveOrphans(${i})`, { id: `pw_blocker_remove_${i}`, attrs: `data-drain-blocker="${esc(b.id)}"` })
+        : `<p class="ui-help">An admin can remove these orphan records here.</p>`}</div>`).join("");
   const sections = [
     { key: "summary", title: "Summary", html: summary },
     drainBlockers.length ? { key: "drain", title: `Before draining · ${drainBlockers.length}`, html: blockersHtml } : null,
@@ -1026,7 +1043,7 @@ window.nodePower = async (node, action) => {
     const r = await api("/api/node/power", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ node, action, confirm: c, review_token: plan.review_token, force: !!plan.force, choices,
         allow_cluster_outage: !!$("#pw_outage")?.checked, allow_stranded: plan.planned_outage ? !!$("#pw_outage")?.checked : !!$("#pw_allow")?.checked, allow_data_risk: !!$("#pw_data")?.checked,
-        allow_drain_blockers: drainBlockers.map(b => b.id) }) });
+        allow_drain_blockers: drainBlockers.length ? nodePowerTickedIds() : [] }) });
     if (r.operation) window.noteOperation?.(r.operation);
     if (r.operation?.id) return window.nodePowerFollow(r.operation.id, plan.planned_outage
       ? "Homestead will go offline during this host's maintenance. This view reconnects automatically. Scheduling was left unchanged."
