@@ -214,6 +214,53 @@ class DrainBlockerTests(unittest.TestCase):
         with Kube(absent_groups=("longhorn.io",)):
             self.assertEqual([], BLOCKERS.for_host("node-a", now=NOW))
 
+    def test_an_engine_listed_here_with_no_engine_record_is_named(self):
+        # A process the instance-manager lists whose Engine CR is gone keeps
+        # its budget at 0 as well, until Longhorn records it as an orphan.
+        with Kube(instance_manager("node-a", engines=["vol-gone-e-0"]), engine("vol", "node-a")):
+            rows = BLOCKERS.for_host("node-a", now=NOW)
+        self.assertEqual(["engines-elsewhere"], self.kinds(rows))
+        self.assertFalse(rows[0]["can_remove"])
+        self.assertIn("vol-gone-e-0 (no engine record)", rows[0]["what"])
+
+    def test_a_404_on_pods_claims_or_attachments_is_unread_not_absent(self):
+        for key, path in (("pods", "/api/v1/pods"), ("claims", "/api/v1/persistentvolumeclaims"),
+                          ("attachments", "/apis/storage.k8s.io/v1/volumeattachments")):
+            with self.subTest(key), Kube(pod(phase="Running"), claim(), attachment()) as kube:
+                kube.fail(path, 404)
+                rows = BLOCKERS.for_host("node-a", now=NOW)
+                self.assertEqual([f"unread:{key}"], [row["id"] for row in rows])
+
+    def test_an_attachment_with_a_null_source_does_not_break_the_check(self):
+        bare = attachment()
+        bare["spec"]["source"] = None
+        with Kube(pod(deleting_at=NOW - 20 * 60), claim(), bare):
+            rows = BLOCKERS.for_host("node-a", now=NOW)
+        self.assertEqual(["stuck-pod"], self.kinds(rows))
+
+    def test_an_attachment_here_whose_pod_is_gone_is_named(self):
+        with Kube(claim(), attachment(), pod(name="other", phase="Running", claim="something-else")):
+            rows = BLOCKERS.for_host("node-a", now=NOW)
+        self.assertEqual(["stuck-attachment"], self.kinds(rows))
+        row = rows[0]
+        self.assertEqual("stuck-attachment:csi-pv-1", row["id"])
+        self.assertFalse(row["can_remove"])
+        self.assertIn("pv-1", row["what"])
+        self.assertIn("no pod", row["what"])
+
+    def test_an_attachment_a_running_pod_uses_is_not_stuck(self):
+        with Kube(pod(phase="Running"), claim(), attachment()):
+            self.assertEqual([], BLOCKERS.for_host("node-a", now=NOW))
+
+    def test_a_stuck_pod_says_when_its_volumes_could_not_be_checked(self):
+        for path in ("/api/v1/persistentvolumeclaims", "/apis/storage.k8s.io/v1/volumeattachments"):
+            with self.subTest(path), Kube(pod(deleting_at=NOW - 20 * 60), claim(), attachment()) as kube:
+                kube.fail(path, 500)
+                rows = BLOCKERS.for_host("node-a", now=NOW)
+                stuck = [row for row in rows if row["kind"] == "stuck-pod"]
+                self.assertEqual(1, len(stuck))
+                self.assertIn("its volumes couldn't be checked", stuck[0]["what"])
+
     def test_a_clean_host_has_no_rows(self):
         with Kube(instance_manager("node-a", engines=[]), engine("vol", "node-a"),
                   pod(phase="Running"), claim(), attachment()):
