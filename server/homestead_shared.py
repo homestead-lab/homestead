@@ -166,16 +166,28 @@ def read_json(path, default):
     """A JSON store on the data volume. A missing file is a fresh copy of
     default; a file that is there but cannot be read, is not JSON or holds
     another kind of value raises Unreadable, so nothing is saved over it."""
-    name = os.path.basename(path)
     try:
         with open(path, encoding="utf-8") as handle:
-            value = json.load(handle)
+            return parse_json(handle, path, default)
     except FileNotFoundError:
         return copy.deepcopy(default)
+    except OSError as error:
+        raise _unreadable(path, error) from error
+
+
+def _unreadable(path, error):
+    reason = getattr(error, "strerror", None) or "it is not valid JSON"
+    return Unreadable(f"Homestead could not read {os.path.basename(path)} on its data volume ({reason}), "
+                      "so it changed nothing; the saved data is kept")
+
+
+def parse_json(handle, path, default):
+    """read_json for a file already open, as read_json judges it."""
+    name = os.path.basename(path)
+    try:
+        value = json.load(handle)
     except (OSError, ValueError) as error:
-        reason = getattr(error, "strerror", None) or "it is not valid JSON"
-        raise Unreadable(f"Homestead could not read {name} on its data volume ({reason}), so it changed nothing; "
-                         "the saved data is kept") from error
+        raise _unreadable(path, error) from error
     if not isinstance(value, type(default)):
         raise Unreadable(f"{name} on Homestead's data volume does not hold what Homestead saved there, "
                          "so it changed nothing; the saved data is kept")
