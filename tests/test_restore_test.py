@@ -1,3 +1,4 @@
+import io
 import json
 import sys
 import tempfile
@@ -262,8 +263,10 @@ class JobTests(Base):
         self.c.kube.fail("/apis/apps/v1/namespaces/lab/deployments", 403, times=99, method="POST")
         status, _, message = self.step(1100)
         self.assertEqual("failed", status, "a refusal is final: the next test can run")
-        self.assertIn("Kubernetes refused the copy", message)
+        self.assertIn("Kubernetes refused the test's copy of the app", message)
         self.assertIn(("DELETE", "/api/v1/namespaces/lab/persistentvolumeclaims/restore-test-abcdef0123-0", None), self.c.sent)
+        self.assertIn(("DELETE", "/apis/networking.k8s.io/v1/namespaces/lab/networkpolicies/restore-test-abcdef0123", None), self.c.sent,
+                      "the fence made before the refusal goes too")
         result = json.loads([b for m, p, b in self.c.sent if m == "PATCH"][-1]["metadata"]["annotations"]["homestead.io/restore-tested"])
         self.assertFalse(result["ok"])
 
@@ -306,6 +309,55 @@ class JobTests(Base):
         with self.assertRaises(ValueError) as caught:
             ops.CANCELLERS[RT.KIND][1](self.item, [])
         self.assertIn("restore-test-abcdef0123-0", str(caught.exception))
+
+    def test_kubernetes_reason_is_shown_with_any_address_credentials_masked(self):
+        self.step(1000)
+        reason = "admission webhook denied: env DB_URL=postgres://app:" + "hunter2" + "@db.example.com/x is not allowed"
+        self.c.kube.react("POST", "/apis/apps/v1/namespaces/lab/deployments", lambda m, p, b: (_ for _ in ()).throw(
+            RT.urllib.error.HTTPError(p, 403, "Forbidden", {}, io.BytesIO(json.dumps({"message": reason}).encode()))))
+        status, _, message = self.step(1100)
+        self.assertEqual("failed", status)
+        self.assertIn("admission webhook denied", message)
+        self.assertNotIn("hunter2", message)
+        result = [b for m, p, b in self.c.sent if m == "PATCH"][-1]["metadata"]["annotations"]["homestead.io/restore-tested"]
+        self.assertNotIn("hunter2", result)
+
+    def test_a_refused_fence_is_named(self):
+        self.step(1000)
+        self.c.kube.fail("/apis/networking.k8s.io/v1/namespaces/lab/networkpolicies", 403, times=99, method="POST")
+        status, _, message = self.step(1100)
+        self.assertEqual("failed", status)
+        self.assertIn("Kubernetes refused the test's network fence", message)
+
+    def test_homesteads_own_token_refused_is_tried_again(self):
+        self.step(1000)
+        self.c.kube.fail("/apis/apps/v1/namespaces/lab/deployments", 401, times=99, method="POST")
+        self.assertEqual("running", self.step(1100)[0], "a 401 is Homestead's token, not the copy")
+
+    def test_a_refusal_when_the_copy_is_made_again_after_a_restart_ends_the_test(self):
+        self.step(1000)
+        self.item["ref"].update(phase="checking", copy_at=1100, ports=[8000])
+        self.c.kube.fail("/apis/apps/v1/namespaces/lab/deployments", 422, times=99, method="POST")
+        status, _, message = self.step(1110)
+        self.assertEqual("failed", status)
+        self.assertIn("Kubernetes refused", message)
+
+    def test_a_cancel_that_failed_part_way_only_finishes_removing_and_records_nothing(self):
+        ops = type("Ops", (), {"RESOLVERS": {}, "CANCELLERS": {}, "checkpoint": staticmethod(lambda item: None)})
+        RT.register(ops)
+        self.step(1000)
+        self.step(1100)
+        self.c.kube.fail("/api/v1/namespaces/lab/persistentvolumeclaims/restore-test-abcdef0123-0", 500, times=1, method="DELETE")
+        with self.assertRaises(ValueError):
+            ops.CANCELLERS[RT.KIND][1](self.item, [])
+        before = len(self.c.sent)
+        status, _, message = self.step(1200)          # the job store put it back to running
+        self.assertEqual("cancelled", status)
+        self.assertIn("Cancelled", message)
+        writes = [(m, p) for m, p, _ in self.c.sent[before:]]
+        self.assertIn(("DELETE", "/api/v1/namespaces/lab/persistentvolumeclaims/restore-test-abcdef0123-0"), writes)
+        self.assertNotIn("POST", [m for m, _ in writes], "the test is not carried on")
+        self.assertNotIn("PATCH", [m for m, _ in writes], "and no result is recorded on the app")
 
     def test_an_app_with_nothing_to_restore_is_not_a_failure(self):
         self.c.change_deployment(lambda dep: dep["spec"]["template"]["spec"].update(volumes=[]))

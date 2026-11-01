@@ -33,6 +33,7 @@ import urllib.error
 import homestead_cache as CACHE
 import homestead_kube as KUBE
 import homestead_operations as OPS
+import homestead_value_masks as MASKS
 
 KIND = "restore-test"
 EVERY = 30 * 86400
@@ -258,6 +259,13 @@ def resolve(item, checkpoint, now=None):
         ref.update(changes, phase=next_phase, phase_at=now)
         checkpoint(item)
 
+    if ref.get("cancelled"):
+        left = _remove_made(item)
+        forget_plans()
+        if left:
+            return "running", item.get("progress", 0), "Cancelling: could not remove " + ", ".join(left) + " yet; trying again"
+        return "cancelled", 100, "Cancelled; the test's copy and its restored volumes were removed"
+
     if phase == "plan":
         dep = KUBE.get_optional(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}", read=kget)
         if not dep:
@@ -348,33 +356,41 @@ def _make_copy(item, ns, dep):
     why not and whether that is final. Kubernetes refusing one (an admission
     policy, a quota, a bad field: a 4xx other than a conflict or too many
     requests) will refuse it again; anything else may pass on a later round."""
-    try:
-        _send("POST", f"/apis/networking.k8s.io/v1/namespaces/{ns}/networkpolicies", fence(item, ns))
-        _send("POST", f"/apis/apps/v1/namespaces/{ns}/deployments", copy_of(dep, item, item["ref"]["rows"]))
-        return "", False
-    except urllib.error.HTTPError as error:
-        return _said(error), 400 <= error.code < 500 and error.code not in (408, 429)
-    except (OSError, ValueError) as error:          # no answer, a timeout, a reply that was not JSON
-        return str(error)[:160] or type(error).__name__, False
+    for what, path, body in (("network fence", f"/apis/networking.k8s.io/v1/namespaces/{ns}/networkpolicies", lambda: fence(item, ns)),
+                             ("copy of the app", f"/apis/apps/v1/namespaces/{ns}/deployments",
+                              lambda: copy_of(dep, item, item["ref"]["rows"]))):
+        try:
+            _send("POST", path, body())
+        except urllib.error.HTTPError as error:
+            # 401: Homestead's own token was refused, not the object - try again.
+            if 400 <= error.code < 500 and error.code not in (401, 408, 429):
+                return f"Kubernetes refused the test's {what}: {_said(error)}", True
+            return f"the test's {what} could not be made yet: {_said(error)}", False
+        except (KeyError, TypeError) as error:      # the app's spec is not what a copy can be built from
+            return f"the test's {what} could not be built from the app ({type(error).__name__}: {error})"[:200], True
+        except (OSError, ValueError) as error:      # no answer, a timeout, a reply that was not JSON
+            return f"the test's {what} could not be made yet: {str(error)[:160] or type(error).__name__}", False
+    return "", False
 
 
 def _said(error):
-    """Kubernetes' own reason for refusing a write, or the HTTP status."""
+    """Kubernetes' own reason for refusing a write, or the HTTP status. An
+    admission policy's or webhook's message can quote the copy's fields, so
+    any address in it has its credentials masked before it is shown or kept."""
     try:
-        return (json.loads(error.read() or b"{}").get("message") or str(error))[:200]
+        said = json.loads(error.read() or b"{}").get("message") or str(error)
     except Exception:
-        return str(error)[:200]
+        said = str(error)
+    return MASKS.strip_url_secrets(str(said))[:200]
 
 
 def _not_made(item, to, why, final, now):
     """The copy could not be made: a refusal ends the test at once, freeing its
     restored volumes for the next one; anything else is tried again until the
     copy's READY_WAIT is up."""
-    if final:
-        return _finish(item, to, False, f"Kubernetes refused the copy: {why}")
-    if now - item["ref"]["copy_at"] > READY_WAIT:
-        return _finish(item, to, False, f"the copy could not be made: {why}")
-    return "running", 70, f"The copy could not be made yet ({why}); trying again"
+    if final or now - item["ref"]["copy_at"] > READY_WAIT:
+        return _finish(item, to, False, why)
+    return "running", 70, f"{why[:1].upper()}{why[1:]}; trying again"
 
 
 def _remove_made(item):
@@ -398,6 +414,10 @@ def cancel_plan(item):
 
 
 def cancel_run(item, chosen):
+    # Marked first: if something can't be removed the job store puts the job
+    # back to running, and the next round only finishes removing - the test
+    # is not carried on and records nothing on the app.
+    item["ref"]["cancelled"] = True
     left = _remove_made(item)
     forget_plans()
     if left:

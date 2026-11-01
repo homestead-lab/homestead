@@ -298,7 +298,9 @@ volumes, and the next test can run. If the copy can't be made for another
 reason (no answer from the cluster), the test keeps trying for 10 minutes, then
 fails the same way. A running test can be cancelled from **Jobs** (admin): its
 copy, fence and restored volumes are removed, the app is not touched, and no
-result is recorded on it.
+result is recorded on it. If one of them can't be removed straight away, the
+job keeps trying to remove it and the test does not carry on. Kubernetes'
+reason is shown with any password in an address masked.
 
 ## Restoring
 
