@@ -4,6 +4,7 @@ import base64
 import json
 import socket
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -12,6 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "server"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import homestead_auth as AUTH
+import homestead_api_keys as API_KEYS
 import homestead_kube as K
 from fakes.kube import Kube
 
@@ -83,14 +85,34 @@ class Clock:
         return getattr(time, name)
 
 
+KEY_ID, KEY_SECRET = "0123456789ab", "s" * 43
+
+
+def with_key(store):
+    """The store with one API key of robin's (built here, never a real key)."""
+    store = json.loads(json.dumps(store))
+    store["api_keys"] = {KEY_ID: {"name": "Home Assistant", "owner": "robin", "scopes": ["read"], "networks": [],
+                                  "created": 0, "expires": int(time.time()) + 86400,
+                                  "hash": API_KEYS._digest(KEY_SECRET), "mcp": False}}
+    return store
+
+
+def reset_store():
+    AUTH._store_cache.clear()
+    AUTH._store_cache.update(at=0, data=None)
+    AUTH._store_read = None
+
+
 class StoreReadTests(unittest.TestCase):
     """How often the accounts Secret is read when the copy has expired (#978):
     once for a burst of requests, and while the cluster is failing at most once
     per AUTH.RETRY seconds - never more refusals than before, never fewer."""
-    STORE = AccountStoreTests.STORE
+    STORE = with_key(AccountStoreTests.STORE)
+    KEY = API_KEYS.PREFIX + KEY_ID + "_" + KEY_SECRET
 
     def setUp(self):
-        AUTH._store_cache.update(at=0, data=None)
+        reset_store()
+        API_KEYS.bind(self.enterContext(tempfile.TemporaryDirectory()))
         self.saved = (AUTH.kget, AUTH.ksend, AUTH.SECRET_NAME, AUTH.time)
         self.kube = self.enterContext(Kube(store_secret(self.STORE)))
         self.path = f"/api/v1/namespaces/{AUTH.NS}/secrets/homestead-auth"
@@ -115,7 +137,7 @@ class StoreReadTests(unittest.TestCase):
 
     def tearDown(self):
         AUTH.kget, AUTH.ksend, AUTH.SECRET_NAME, AUTH.time = self.saved
-        AUTH._store_cache.update(at=0, data=None)
+        reset_store()
 
     def burst(self, n, call):
         """n requests at once; the first read is held until n reads have
@@ -148,6 +170,11 @@ class StoreReadTests(unittest.TestCase):
         """Another replica signs robin out everywhere."""
         store = json.loads(json.dumps(self.STORE))
         store["users"]["robin"]["ver"] = 2
+        self.kube.add(store_secret(store))
+
+    def revoke_key_elsewhere(self):
+        store = json.loads(json.dumps(self.STORE))
+        store["api_keys"] = {}
         self.kube.add(store_secret(store))
 
     def test_a_burst_after_expiry_reads_the_secret_once(self):
@@ -236,7 +263,7 @@ class StoreReadTests(unittest.TestCase):
         first.join(5)
         self.assertEqual(2, len(self.reads))
 
-    def test_a_short_max_age_does_not_take_a_read_that_began_too_long_ago(self):
+    def test_an_api_key_check_does_not_take_a_read_that_began_too_long_ago(self):
         # API keys ask for a copy at most 2 s old (homestead_api_keys.FRESH_FOR).
         self.clock.now += 11
         held, release = threading.Event(), threading.Event()
@@ -246,15 +273,29 @@ class StoreReadTests(unittest.TestCase):
                 held.set()
                 release.wait(5)
         self.gate = gate
-        first = threading.Thread(target=AUTH._load)
+        first = threading.Thread(target=AUTH.verify_token, args=(self.token,))
         first.start()
         self.assertTrue(held.wait(5))
-        self.clock.now += 3
-        AUTH._load(max_age=2)
+        self.clock.now += API_KEYS.FRESH_FOR + 1
+        self.revoke_key_elsewhere()
+        with self.assertRaisesRegex(PermissionError, "not valid"):
+            API_KEYS.verify(self.KEY, "192.0.2.5")
         release.set()
         first.join(5)
         self.assertEqual(2, len(self.reads))
 
+    def test_an_api_key_check_asks_the_cluster_even_right_after_a_failed_read(self):
+        # A failed read lets ordinary requests use the copy for RETRY; an API key
+        # wants its copy within 2 s, so it asks the cluster as before.
+        self.clock.now += 11
+        self.failing = True
+        self.assertEqual("robin", AUTH.verify_token(self.token)["user"])
+        self.failing = False
+        self.revoke_key_elsewhere()
+        self.clock.now += 0.5
+        with self.assertRaisesRegex(PermissionError, "not valid"):
+            API_KEYS.verify(self.KEY, "192.0.2.5")
+        self.assertEqual(2, len(self.reads))
 
 if __name__ == "__main__":
     unittest.main()
