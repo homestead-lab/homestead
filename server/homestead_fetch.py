@@ -32,8 +32,13 @@ def chunks(response, limit, deadline=None, what="the answer"):
     sock = _socket(response) if deadline is not None else None
     patience = sock.gettimeout() if sock is not None else None
     read = getattr(response, "read1", None) or response.read
+    # http.client closes the answer, and with it the socket, once the whole
+    # body is in: a timeout set on it then fails with EBADF.
+    closed = getattr(response, "isclosed", None) or (lambda: False)
     total = 0
     while True:
+        if closed():
+            return
         if deadline is not None:
             left = deadline - time.monotonic()
             if left <= 0:

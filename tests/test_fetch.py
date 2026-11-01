@@ -1,6 +1,10 @@
 """Outbound answers read with a size cap and one deadline over the whole body."""
+import http.server
 import sys
+import threading
+import time
 import unittest
+import urllib.request
 from pathlib import Path
 from unittest import mock
 
@@ -98,6 +102,45 @@ class CappedReadTests(unittest.TestCase):
                 return self.left.pop(0)
 
         self.assertEqual(b"xy", FETCH.read(Plain(), 10))
+
+
+class RealAnswerTests(unittest.TestCase):
+    """http.client closes the socket once the body is in; the fakes above have none."""
+
+    @classmethod
+    def setUpClass(cls):
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b'{"ok": true}' * (1 if self.path == "/small" else 20000)
+                self.send_response(200)
+                if self.path != "/chunked":
+                    self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+        cls.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def fetch(self, path):
+        with urllib.request.urlopen(f"http://127.0.0.1:{self.server.server_port}{path}", timeout=5) as response:
+            return FETCH.read(response, 1 << 20, time.monotonic() + 5)
+
+    def test_a_whole_answer_is_read_under_a_deadline(self):
+        self.assertEqual(b'{"ok": true}', self.fetch("/small"))
+
+    def test_an_answer_of_many_pieces_is_read_under_a_deadline(self):
+        self.assertEqual(12 * 20000, len(self.fetch("/large")))
+
+    def test_an_answer_without_a_length_is_read_under_a_deadline(self):
+        self.assertEqual(12 * 20000, len(self.fetch("/chunked")))
 
 
 if __name__ == "__main__":
