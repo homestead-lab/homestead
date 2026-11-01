@@ -1,0 +1,46 @@
+{
+  "_source": [
+    "Shape of an engine-instance Orphan as Longhorn v1.13.0 creates it. No live orphan existed to copy, so it is built from Longhorn's own code at tag v1.13.0:",
+    "https://github.com/longhorn/longhorn-manager/blob/v1.13.0/k8s/pkg/apis/longhorn/v1beta2/orphan.go (OrphanSpec json keys nodeID, orphanType, dataEngine, parameters; OrphanTypeEngineInstance = \"engine-instance\"; parameter keys OrphanInstanceName = \"InstanceName\", OrphanInstanceUUID = \"InstanceUUID\", OrphanInstanceManager = \"InstanceManager\"; condition types InstanceExist, Error)",
+    "https://github.com/longhorn/longhorn-manager/blob/v1.13.0/controller/instance_manager_controller.go (InstanceManagerMonitor.createOrphan: NodeID = the monitoring manager's node, Parameters = {InstanceName: the engine process name, which is the Engine CR's name (isEngineOrphaned looks the CR up by it), InstanceUUID, InstanceManager: the IM's name}; name from types.GetOrphanChecksumNameForOrphanedInstance)",
+    "https://github.com/longhorn/longhorn-manager/blob/v1.13.0/types/types.go (GetOrphanLabelsForOrphanedEngineInstance: the labels the mutating webhook attaches; orphanPrefix = \"orphan-\")",
+    "Names, uids and timestamps are placeholders."
+  ],
+  "object": {
+    "apiVersion": "longhorn.io/v1beta2",
+    "kind": "Orphan",
+    "metadata": {
+      "name": "orphan-3b2f6c1d9e8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c",
+      "namespace": "longhorn-system",
+      "uid": "11111111-1111-4111-8111-111111111111",
+      "resourceVersion": "5001",
+      "creationTimestamp": "2026-11-01T09:00:00Z",
+      "finalizers": ["longhorn.io"],
+      "labels": {
+        "longhorn.io/managed-by": "longhorn-manager",
+        "longhorn.io/component": "orphan",
+        "longhorn.io/orphan-type": "engine-instance",
+        "longhornnode": "node-a",
+        "longhorninstancemanager": "instance-manager-0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+        "longhornengine": "vol-a-e-0"
+      }
+    },
+    "spec": {
+      "nodeID": "node-a",
+      "orphanType": "engine-instance",
+      "dataEngine": "v1",
+      "parameters": {
+        "InstanceName": "vol-a-e-0",
+        "InstanceUUID": "6f1e2d3c-4b5a-4968-8776-655443322110",
+        "InstanceManager": "instance-manager-0a1b2c3d4e5f60718293a4b5c6d7e8f9"
+      }
+    },
+    "status": {
+      "ownerID": "node-a",
+      "conditions": [
+        {"type": "InstanceExist", "status": "True", "reason": "", "message": "", "lastProbeTime": "", "lastTransitionTime": "2026-11-01T09:00:00Z"},
+        {"type": "Error", "status": "False", "reason": "", "message": "", "lastProbeTime": "", "lastTransitionTime": "2026-11-01T09:00:00Z"}
+      ]
+    }
+  }
+}

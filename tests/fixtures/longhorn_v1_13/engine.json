@@ -1,0 +1,37 @@
+{
+  "_source": [
+    "Shape of a v1 Engine as Longhorn v1.13.0 stores it, built from Longhorn's own code at tag v1.13.0:",
+    "https://github.com/longhorn/longhorn-manager/blob/v1.13.0/k8s/pkg/apis/longhorn/v1beta2/engine.go (Engine spec embeds InstanceSpec, status embeds InstanceStatus)",
+    "https://github.com/longhorn/longhorn-manager/blob/v1.13.0/k8s/pkg/apis/longhorn/v1beta2/instancemanager.go (InstanceSpec json keys volumeName, nodeID, desireState, dataEngine, image; InstanceStatus json keys ownerID, instanceManagerName, currentState; InstanceStateRunning = \"running\")",
+    "Names, uids and timestamps are placeholders."
+  ],
+  "object": {
+    "apiVersion": "longhorn.io/v1beta2",
+    "kind": "Engine",
+    "metadata": {
+      "name": "vol-e-0",
+      "namespace": "longhorn-system",
+      "uid": "55555555-5555-4555-8555-555555555555",
+      "resourceVersion": "5005",
+      "labels": {"longhornvolume": "vol", "longhornnode": "node-b"}
+    },
+    "spec": {
+      "volumeName": "vol",
+      "volumeSize": "10737418240",
+      "nodeID": "node-b",
+      "image": "longhornio/longhorn-engine:v1.13.0",
+      "desireState": "running",
+      "dataEngine": "v1",
+      "frontend": "blockdev",
+      "replicaAddressMap": {}
+    },
+    "status": {
+      "ownerID": "node-b",
+      "instanceManagerName": "instance-manager-9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+      "currentState": "running",
+      "started": true,
+      "ip": "192.0.2.11",
+      "port": 10000
+    }
+  }
+}
