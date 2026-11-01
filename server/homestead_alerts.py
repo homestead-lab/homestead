@@ -9,8 +9,6 @@ import http.client
 import json
 import os
 import re
-import socket
-import ssl
 import time
 import urllib.error
 import homestead_history as HISTORY
@@ -398,6 +396,7 @@ _PLAIN = [
     (re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.I), "<address>"),
     (re.compile(r"\b(host|server|address)=(['\"])[^'\"]*\2", re.I), r"\1=<address>"),
     (re.compile(r"(['\"])[a-z0-9-]+(?:\.[a-z0-9-]+)+\1", re.I), "<address>"),     # 'kube.example.com'
+    (re.compile(r"(?<![\w.-])[a-z0-9-]+(?:\.[a-z0-9-]+)+:\d{1,5}\b", re.I), "<address>"),  # kube.internal:6443
     (re.compile(r"\bport=\d+", re.I), "port=<hidden>"),
     (re.compile(r"\bBearer\s+\S+", re.I), "Bearer <hidden>"),
     (re.compile(r"\[[0-9a-f:.]*:[0-9a-f:.]*\](?::\d+)?", re.I), "<address>"),
@@ -417,9 +416,12 @@ def plain_error(text, limit=160):
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
-# Failures that mean the API server did not answer: a timeout, a connection
-# refused, reset or closed early, a name not found, a TLS handshake that failed.
-_NO_ANSWER = (TimeoutError, ConnectionError, socket.gaierror, ssl.SSLError, http.client.HTTPException)
+# Failures that mean the API server did not answer: on this path every
+# OSError is the network's - a timeout, a connection refused, reset or closed
+# early, a host or network that cannot be reached (homestead_kube passes a
+# socket's OSError on as it is), a name not found, a TLS error - and so is a
+# broken HTTP answer.
+_NO_ANSWER = (OSError, http.client.HTTPException)
 
 
 def read_failure(error):
@@ -434,7 +436,7 @@ def read_failure(error):
     text = str(cause)
     if not text or isinstance(cause, KeyError):
         text = f"{type(cause).__name__} {text}".strip()
-    if isinstance(cause, _NO_ANSWER) or isinstance(cause, urllib.error.URLError):
+    if isinstance(cause, _NO_ANSWER):                   # URLError is an OSError too
         return f"the cluster's API did not answer ({plain_error(text)})"
     return f"the read failed ({plain_error(text)})"
 

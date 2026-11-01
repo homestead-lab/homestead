@@ -5,8 +5,10 @@ alert says which kind of failure it was: the cluster's API did not answer, it
 answered with an error, or the read failed otherwise. Built on real
 exceptions and on homestead_kube's own client against a local server, not on
 hand-written strings only."""
+import errno
 import http.client
 import http.server
+import os
 import socket
 import ssl
 import sys
@@ -181,6 +183,37 @@ class ThroughTheClientTests(unittest.TestCase):
         self.assertTrue(text.startswith("the cluster's API did not answer ("), text)
         for part in (host, str(port), TOKEN):
             self.assertNotIn(part, text)
+
+    def test_a_host_that_cannot_be_reached_did_not_answer(self):
+        """A powered-off host or a moved virtual IP: the connect itself fails
+        with a socket OSError, which homestead_kube passes on as it is."""
+        host, port = self.serve("forbidden")
+        for code in (errno.EHOSTUNREACH, errno.ENETUNREACH):
+            with self.subTest(code=errno.errorcode[code]):
+                KUBE.close_connections()
+                with mock.patch.object(socket, "create_connection", side_effect=OSError(code, os.strerror(code))):
+                    with self.assertRaises(RuntimeError) as caught:
+                        STORAGE.get_volumes()
+                self.assertIs(type(caught.exception.__cause__), OSError, "unwrapped, as on a cluster")
+                text = ALERTS.read_failure(caught.exception)
+                self.assertEqual(f"the cluster's API did not answer ([Errno {code}] {os.strerror(code)})", text)
+
+
+class HostPortTests(unittest.TestCase):
+    def test_a_host_name_with_a_port_is_hidden(self):
+        for raw in ("connect to kube.internal:6443 failed", "dial tcp api.example.com:443: i/o timeout",
+                    "node-a.cluster.example.com:10250 refused"):
+            with self.subTest(raw=raw):
+                text = ALERTS.plain_error(raw)
+                self.assertIn("<address>", text)
+                for part in ("internal", "example.com", "6443", "10250", ":443"):
+                    self.assertNotIn(part, text)
+
+    def test_versions_times_and_paths_pass_unchanged(self):
+        for plain in ("Longhorn 1.37.1 is running", "k3s v1.31.4+k3s1", "at 2026-11-01T12:30:45Z the list was cut short",
+                      "12:30:45", "/apis/longhorn.io/v1beta2/volumes", "longhorn.io/v1beta2", "python3.12:latest"):
+            with self.subTest(plain=plain):
+                self.assertEqual(plain, ALERTS.plain_error(plain))
 
 
 if __name__ == "__main__":
