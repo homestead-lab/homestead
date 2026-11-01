@@ -65,6 +65,16 @@ class Cluster:
         return K.kget(path) if timeout is None else K.kget(path, timeout=timeout)
 
 
+class Clock:
+    """A fake clock for homestead_kubelet_stats: time.time() is `now`."""
+
+    def __init__(self, now=1_000_000.0):
+        self.now = now
+
+    def time(self):
+        return self.now
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         KSTATS.reset()
@@ -143,9 +153,10 @@ class BackgroundTests(Base):
 
     def test_the_loop_reading_is_used_and_unknown_once_a_kubelet_stops(self):
         cluster = self.cluster()
-        with self.loop_running():
-            self.get_nodes(cluster)
-            KSTATS.run_round(cluster.kget, now=time.time() - 20)
+        clock = Clock()
+        with self.loop_running(), mock.patch.object(KSTATS, "time", clock):
+            self.get_nodes(cluster)                           # the first reading, in place
+            clock.now += 20
             cluster.rx = 1000 + 20 * 1_000_000 // 8          # 1 Mbit/s for 20 s
             KSTATS.run_round(cluster.kget)
             cluster.calls.clear()
@@ -163,18 +174,20 @@ class BackgroundTests(Base):
 
     def test_a_reading_two_rounds_old_is_unknown(self):
         cluster = self.cluster()
-        with self.loop_running():
+        clock = Clock()
+        with self.loop_running(), mock.patch.object(KSTATS, "time", clock):
             self.get_nodes(cluster)
-            KSTATS.run_round(cluster.kget, now=time.time() - 2 * KSTATS.INTERVAL - 1)
+            clock.now += 2 * KSTATS.INTERVAL + 1              # asked since, so the loop has the host
             nodes = self.get_nodes(cluster)
         self.assertNotIn("fs_pct", nodes["node-a"])
 
     def test_the_first_rate_after_a_restart_is_unknown(self):
         cluster = self.cluster()
-        with self.loop_running():
-            self.get_nodes(cluster)
+        clock = Clock()
+        with self.loop_running(), mock.patch.object(KSTATS, "time", clock):
             cluster.rx = 10 ** 9
-            KSTATS.run_round(cluster.kget, now=time.time() - 15)
+            self.get_nodes(cluster)
+            clock.now += 15
             cluster.rx = 1000                                  # counters started again
             KSTATS.run_round(cluster.kget)
             nodes = self.get_nodes(cluster)
@@ -183,11 +196,11 @@ class BackgroundTests(Base):
 
     def test_a_reading_too_old_is_dropped(self):
         cluster = self.cluster()
-        with self.loop_running():
+        clock = Clock()
+        with self.loop_running(), mock.patch.object(KSTATS, "time", clock):
             self.get_nodes(cluster)
-            KSTATS.run_round(cluster.kget, now=time.time() - KSTATS.DROP_AFTER - 1)
-            nodes = self.get_nodes(cluster)
-        self.assertNotIn("fs_pct", nodes["node-a"])
+            clock.now += KSTATS.DROP_AFTER + 1
+            self.assertEqual({}, KSTATS.latest(NAMES))
 
     def test_hosts_nobody_asks_about_are_not_read(self):
         cluster = self.cluster()
@@ -196,16 +209,6 @@ class BackgroundTests(Base):
         cluster.calls.clear()
         KSTATS.run_round(cluster.kget, now=time.time() + KSTATS.WANTED_FOR + 1)
         self.assertEqual([], cluster.calls)
-
-
-class Clock:
-    """A fake clock for homestead_kubelet_stats: time.time() is `now`."""
-
-    def __init__(self, now=1_000_000.0):
-        self.now = now
-
-    def time(self):
-        return self.now
 
 
 class FollowerTests(Base):
@@ -228,6 +231,44 @@ class FollowerTests(Base):
             nodes = self.get_nodes(cluster)
         self.assertEqual(sorted(NAMES), sorted(name for name, _ in cluster.calls))
         self.assertEqual(10.0, nodes["node-a"]["fs_pct"], "fresh figures, not unknown")
+
+    def test_a_host_the_last_round_missed_is_read_again_after_the_lapse(self):
+        cluster = self.cluster()
+        clock = Clock()
+        start = clock.now
+        with self.loop_running(), mock.patch.object(KSTATS, "time", clock):
+            self.get_nodes(cluster)
+            for step in range(1, 4):                     # good readings up to +45
+                clock.now = start + step * KSTATS.INTERVAL
+                KSTATS.run_round(cluster.kget)
+            cluster.down = {"node-a"}
+            clock.now = start + KSTATS.WANTED_FOR        # the last round before the lapse misses it
+            KSTATS.run_round(cluster.kget)
+            cluster.down = set()
+            clock.now = start + KSTATS.WANTED_FOR + 5    # good reading 20 s old, under FRESH
+            cluster.calls.clear()
+            nodes = self.get_nodes(cluster)
+        self.assertIn("node-a", [name for name, _ in cluster.calls], "a missed host the loop stopped reading")
+        self.assertEqual(10.0, nodes["node-a"]["fs_pct"])
+
+    def test_a_read_that_ends_after_a_newer_loop_reading_does_not_replace_it(self):
+        cluster = self.cluster()
+        clock = Clock()
+        start = clock.now
+        plain = cluster.kget
+        round_ran = []
+
+        def kget(path, timeout=None):
+            if path.endswith("/node-a/proxy/stats/summary") and not round_ran:
+                round_ran.append(True)                   # the loop's round lands while this read runs
+                KSTATS.run_round(plain, now=start + 10)
+            return plain(path, timeout=timeout)
+
+        cluster.kget = kget
+        with self.loop_running(), mock.patch.object(KSTATS, "time", clock):
+            self.get_nodes(cluster)
+        self.assertEqual(start + 10, KSTATS.latest(["node-a"], now=start + 10)["node-a"]["at"],
+                         "the newer reading is kept")
 
     def test_a_build_inside_the_ask_reads_nothing(self):
         cluster = self.cluster()

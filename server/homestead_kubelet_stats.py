@@ -17,8 +17,10 @@ A host the loop is not reading (never read, or nobody asked about it for
 WANTED_FOR and its summary is no longer fresh) is read in place too, all
 such hosts at once, so a page built only now and then (the follower
 replica, which mostly serves the leader's copy) does not show every host
-as unknown (#1076). That costs a build at most one TIMEOUT, and only once:
-the loop reads the host from then on.
+as unknown (#1076). That costs a build about one TIMEOUT for up to
+MAX_WORKERS hosts, once per lapse: a build that comes WANTED_FOR or more
+after the one before it waits that long for a kubelet that does not
+answer; builds closer together leave the host to the loop.
 """
 import threading
 import time
@@ -60,6 +62,8 @@ def _read_all(get, nodes, now=None):
     with _lock:
         for node, summary in found:
             entry = _state.setdefault(node, {"summary": None, "at": 0.0, "misses": 0, "before": None})
+            if now < entry["at"]:
+                continue     # a read that ended after a newer one (the loop's): keep the newer
             if summary is None:
                 entry["misses"] += 1
             else:
@@ -97,10 +101,11 @@ def readings(get, nodes, wait=True, now=None):
 
 def _lapsed(node, now):
     """The loop is not reading node (nobody asked for WANTED_FOR) and its
-    summary is no longer fresh. Called with _lock held."""
+    summary is stale as latest() counts it: it missed its last read, or it
+    is older than FRESH. Called with _lock held."""
     asked = _wanted.get(node)
     entry = _state[node]
-    return (asked is None or now - asked > WANTED_FOR) and now - entry["at"] > FRESH
+    return (asked is None or now - asked > WANTED_FOR) and (bool(entry["misses"]) or now - entry["at"] > FRESH)
 
 
 def latest(nodes, now=None):
