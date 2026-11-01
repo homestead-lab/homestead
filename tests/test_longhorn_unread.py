@@ -360,12 +360,21 @@ class VolumesUnreadAlertTests(LonghornFixture):
         fresh = ALERTS.observe(read, now=2000) + ALERTS.observe(read, now=2000 + ALERTS.HOLD)
         self.assertEqual([("resolved", "Longhorn's volumes can be read again")], self.longhorn(fresh))
 
-    def test_the_alert_says_the_cluster_s_api_did_not_answer_and_gives_its_error(self):
+    def test_the_alert_says_what_the_cluster_s_api_answered(self):
         self.cluster.kube.fail(VOLUMES, 429, times=999)
         fact, = self.sources()["longhorn"]
-        self.assertIn("the cluster's API did not answer", fact["body"])
-        self.assertIn("429", fact["body"])
+        self.assertIn("the cluster's API answered 429", fact["body"])
         self.assertNotIn("Longhorn is", fact["title"] + fact["body"] + fact["resolved"])
+
+    def test_the_reason_is_cleared_once_the_volumes_are_read(self):
+        self.break_read(VOLUMES)
+        self.assertIn("500", self.OV.get_overview()["volumes_unread_reason"])
+        self.assertIn("500", self.OV._volumes_failed["reason"])
+        self.mend()
+        done = self.PAGES.cycle(self.OV.page_inputs(), self.OV.page_builders())
+        self.assertTrue(done["vol"])
+        self.assertEqual("", self.OV._volumes_failed["reason"], "a read that worked leaves no reason behind")
+        self.assertEqual("", self.PAGES.read("ov")[1]["volumes_unread_reason"])
 
     def test_the_snapshot_s_overview_carries_the_error_to_the_alert(self):
         """The leader's page snapshot reads the volumes once, in its own part;

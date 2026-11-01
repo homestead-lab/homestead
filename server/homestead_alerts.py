@@ -5,10 +5,14 @@ finding. New signals, higher severity or worse measurements re-arm an incident.
 Source failures retain prior observations; only confirmed absence resolves it.
 """
 import hashlib
+import http.client
 import json
 import os
 import re
+import socket
+import ssl
 import time
+import urllib.error
 import homestead_history as HISTORY
 import homestead_shared as SHARED
 
@@ -393,6 +397,7 @@ def health_facts(overview):
 _PLAIN = [
     (re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.I), "<address>"),
     (re.compile(r"\b(host|server|address)=(['\"])[^'\"]*\2", re.I), r"\1=<address>"),
+    (re.compile(r"(['\"])[a-z0-9-]+(?:\.[a-z0-9-]+)+\1", re.I), "<address>"),     # 'kube.example.com'
     (re.compile(r"\bport=\d+", re.I), "port=<hidden>"),
     (re.compile(r"\bBearer\s+\S+", re.I), "Bearer <hidden>"),
     (re.compile(r"\[[0-9a-f:.]*:[0-9a-f:.]*\](?::\d+)?", re.I), "<address>"),
@@ -412,18 +417,42 @@ def plain_error(text, limit=160):
     return text if len(text) <= limit else text[:limit - 1] + "…"
 
 
+# Failures that mean the API server did not answer: a timeout, a connection
+# refused, reset or closed early, a name not found, a TLS handshake that failed.
+_NO_ANSWER = (TimeoutError, ConnectionError, socket.gaierror, ssl.SSLError, http.client.HTTPException)
+
+
+def read_failure(error):
+    """What a failed read of the cluster says, for an alert: whether the
+    cluster's API did not answer, answered with an error, or the read failed
+    otherwise (a list cut short, an answer not understood), with the error
+    made plain. error may be the read's own or one raised from it."""
+    cause = error.__cause__ or error
+    if isinstance(cause, urllib.error.HTTPError):
+        said = f"the cluster's API answered {cause.code} {plain_error(cause.reason)}".rstrip()
+        return said + (": Homestead may be missing a permission" if cause.code == 403 else "")
+    text = str(cause)
+    if not text or isinstance(cause, KeyError):
+        text = f"{type(cause).__name__} {text}".strip()
+    if isinstance(cause, _NO_ANSWER) or isinstance(cause, urllib.error.URLError):
+        return f"the cluster's API did not answer ({plain_error(text)})"
+    return f"the read failed ({plain_error(text)})"
+
+
 def longhorn_facts(overview):
     """Longhorn installed but its volumes not read: raised after LONGHORN_QUIET.
     It says what is known: the read failed, with its error. Longhorn itself
     may well be running (#1082)."""
     if not overview.get("volumes_unread"):
         return []
-    reason = plain_error(overview.get("volumes_unread_reason"))
+    # Already plain from read_failure; made plain again for an overview an
+    # older copy of Homestead wrote.
+    reason = plain_error(overview.get("volumes_unread_reason"), limit=240) or "the read failed"
     return [{"key": "longhorn:unread", "category": "degraded", "severity": "degraded",
              "title": "Longhorn's volumes can't be read", "resolved": "Longhorn's volumes can be read again",
              "body": (f"Homestead has not been able to read Longhorn's volumes for at least {LONGHORN_QUIET // 60} "
-                      "minutes: the cluster's API did not answer" + (f" ({reason})" if reason else "")
-                      + ". Volume and disk alerts keep their last known state until the volumes can be read again."),
+                      f"minutes: {reason}. Volume and disk alerts keep their last known state until the volumes "
+                      "can be read again."),
              "signals": {"condition": 1}, "href": "/volumes", "hold": LONGHORN_QUIET}]
 
 

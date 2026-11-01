@@ -763,11 +763,12 @@ _volumes_failed = {"reason": ""}    # why the last read of Longhorn's volumes he
 def _volumes(**pods):
     """STORAGE.get_volumes, keeping why it failed for the overview to say (#1082)."""
     try:
-        return STORAGE.get_volumes(**pods)
+        vols = STORAGE.get_volumes(**pods)
     except Exception as error:
-        cause = error.__cause__ or error
-        _volumes_failed["reason"] = ALERTS.plain_error(str(cause) or type(cause).__name__)
+        _volumes_failed["reason"] = ALERTS.read_failure(error)
         raise
+    _volumes_failed["reason"] = ""
+    return vols
 
 
 def _jobs_read():
