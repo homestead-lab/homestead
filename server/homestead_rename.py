@@ -181,6 +181,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
         nothing could start the replacement, and the original fits.
         Returns (restored, outcome); any doubt writes nothing, for a person to decide."""
         refused = f"{old} was not put back to {_count(count)}"
+        edited = f"{old} was edited by someone else while it was being put back, so nothing was written over it"
 
         def original(changed="it changed outside this rename"):
             obj = read(source_path)
@@ -204,6 +205,25 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
                 raise Stopped("its old pods are still stopping")
             return obj
 
+        def checks(obj):
+            # The same pre-write checks for every try: never looser on a retry.
+            guards(obj, new, read)
+            back = copy.deepcopy(obj)
+            back["spec"]["replicas"] = count
+            check = admission(back)
+            if not isinstance(check, dict) or check.get("blocked") is not False:
+                raise Stopped(f"{old} no longer fits")
+
+        def status_only(before, after):
+            # Only what controllers write on their own may differ: status,
+            # resourceVersion and managedFields. Labels, annotations, owners,
+            # generation, uid and spec are someone else's change.
+            def kept(obj):
+                meta = {k: v for k, v in (obj.get("metadata") or {}).items() if k not in ("resourceVersion", "managedFields")}
+                return meta, obj.get("spec")
+            if kept(before) != kept(after):
+                raise Stopped(edited)
+
         try:
             # The stop wait has just seen old pods: give them a little longer.
             polls = int(settle // 2)
@@ -214,13 +234,9 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
                 if attempt == polls:
                     return None, f"{refused}: its old pods are still stopping"
                 sleep(2)
-            guards(obj, new, read)
-            back = copy.deepcopy(obj)
-            back["spec"]["replicas"] = count
-            check = admission(back)
-            if not isinstance(check, dict) or check.get("blocked") is not False:
-                return None, f"{refused}: {old} no longer fits"
-            obj = last_looks()
+            checks(obj)
+            checked, obj = obj, last_looks()
+            status_only(checked, obj)
         except Stopped as error:
             return None, f"{refused}: {error}"
         except Exception:
@@ -234,9 +250,16 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
                 # goes, which moves resourceVersion between our read and the
                 # write. Read again: when the spec is still the stopped one we
                 # wrote, send it once more against the fresh resourceVersion.
-                # A spec someone else changed is never written over.
+                # Anything else that changed is never written over, and the
+                # fresh object goes through every check the first try did.
                 try:
-                    obj = last_looks(f"{old} was edited by someone else while it was being put back, so nothing was written over it")
+                    fresh, gone = original(edited)
+                    if not gone:
+                        raise Stopped("its old pods are still stopping")
+                    status_only(obj, fresh)
+                    checks(fresh)
+                    obj = last_looks(edited)
+                    status_only(fresh, obj)
                 except Stopped as error:
                     return None, f"{refused}: {error}"
                 except Exception:

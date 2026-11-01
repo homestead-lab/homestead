@@ -353,6 +353,7 @@ class RenameTests(unittest.TestCase):
         self.assertEqual("written", self.status_write, "the controller's status write landed between the read and the PATCH")
         self.assertEqual(["refused", "accepted"], [row["phase"] for row in ops.stored()[0]["ref"]["writes"][-2:]])
         self.assertNotIn("not confirmed", ops.stored()[0]["message"])
+        self.assertEqual(2, self.admission.call_count, "the retry is checked again at the count it goes back to")
 
     def test_an_edit_while_it_was_being_put_back_is_not_written_over(self):
         # Someone changed the original's spec in that moment: the refused write
@@ -366,6 +367,45 @@ class RenameTests(unittest.TestCase):
         self.assertEqual(0, self.objects["old"]["spec"]["replicas"])
         self.assertEqual("refused", ops.stored()[0]["ref"]["writes"][-1]["phase"])
         self.assertNotIn("not confirmed", ops.stored()[0]["message"])
+
+    def assert_edit_in_that_moment_refused(self, edit):
+        # Labels, annotations, owners and generation are not status: a change
+        # to any of them in that moment is someone else's, and is refused.
+        self.old_pods_outlast_the_wait(2)
+        self.on_status_write = lambda: edit(self.objects["old"]["metadata"])
+        with self.assertRaisesRegex(ValueError, "old was not put back to 2 replicas: old was edited by someone else while it was being put back"):
+            self.dispatch()
+        self.assert_not_put_back("nothing was written over it", 2, both_stopped=True, writes=("POST", "PATCH", "PATCH"))
+        self.assertEqual(0, self.objects["old"]["spec"]["replicas"])
+
+    def test_an_annotation_added_in_that_moment_is_not_written_over(self):
+        self.assert_edit_in_that_moment_refused(lambda meta: meta.setdefault("annotations", {}).update({"example.com/note": "x"}))
+
+    def test_a_label_changed_in_that_moment_is_not_written_over(self):
+        self.assert_edit_in_that_moment_refused(lambda meta: meta.setdefault("labels", {}).update(team="b"))
+
+    def test_an_owner_added_in_that_moment_is_not_written_over(self):
+        self.assert_edit_in_that_moment_refused(lambda meta: meta.update(ownerReferences=[{"kind": "Example", "uid": "o", "controller": True}]))
+
+    def test_a_generation_bump_in_that_moment_is_not_written_over(self):
+        self.assert_edit_in_that_moment_refused(lambda meta: meta.update(generation=meta["generation"] + 1))
+
+    def test_the_retry_runs_the_same_checks_as_the_first_try(self):
+        # The original no longer fits when it is read again: no second PATCH.
+        self.old_pods_outlast_the_wait(2)
+        self.admission.side_effect = [{"blocked": False}, {"blocked": True}]
+        with self.assertRaisesRegex(ValueError, "old was not put back to 2 replicas: old no longer fits"):
+            self.dispatch()
+        self.assert_not_put_back("old no longer fits", 2, both_stopped=True, writes=("POST", "PATCH", "PATCH"))
+        self.assertEqual(2, self.admission.call_count)
+        self.assertEqual(2, self.admission.call_args.args[0]["spec"]["replicas"])
+
+    def test_an_autoscaler_on_the_original_in_that_moment_stops_the_retry(self):
+        self.old_pods_outlast_the_wait(2)
+        self.on_status_write = lambda: self.hpas.append({"spec": {"scaleTargetRef": {"kind": "Deployment", "name": "old"}}})
+        with self.assertRaisesRegex(ValueError, "old was not put back to 2 replicas: Remove autoscaling"):
+            self.dispatch()
+        self.assert_not_put_back("autoscaling", 2, both_stopped=True, writes=("POST", "PATCH", "PATCH"))
 
     def test_a_put_back_refused_twice_is_not_tried_a_third_time(self):
         self.old_pods_outlast_the_wait()
