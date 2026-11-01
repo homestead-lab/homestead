@@ -430,7 +430,10 @@ def _system_host_path(row):
 def rollout_reboot(node, allow_single_copy=False):
     """A restart for an OS update: the same review Host actions shows, with
     nobody to accept its warnings - so what a person would have to accept
-    stops it, except a volume's only copy when the settings accept that."""
+    stops it, except a volume's only copy when the settings accept that.
+    Caveat: drain blockers (plan's drain_blockers) are not checked here yet,
+    though a person must acknowledge each one; whether a rollout refuses
+    them or drains anyway is an open decision."""
     power_plan = POWER.plan(node, "reboot")
     if power_plan.get("planned_outage"):
         raise ValueError("A single-host cluster outage needs a manual review and acknowledgement in Host actions")
