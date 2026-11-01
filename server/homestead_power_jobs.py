@@ -301,7 +301,7 @@ def send_reviewed_power(power_plan, force=False, background=False):
          "volumes": [v["name"] for v in power_plan["volumes"]],
          "planned_outage": planned_outage, "forced": bool(force),
          # What a resumed job needs: the reviewed plan, and which replica runs it.
-         "plan": power_plan, "worker": POD_NAME,
+         "plan": power_plan, "worker": POD_NAME, "worker_restarts": own_restarts(),
          "phase": "reviewed", "phase_at": time.time(), "started_epoch": time.time()},
         "Planned whole-cluster outage; sending without cordon or drain" if planned_outage else
         "Forced by an admin; sending without cordon or drain" if force else "Host impact reviewed; preparing cordon and drain")
@@ -315,8 +315,24 @@ def send_reviewed_power(power_plan, force=False, background=False):
     return {"operation": operation, "steps": [], "background": True}
 
 
-def power_worker_gone(pod):
-    """Whether the replica a power job named has gone - evicted by the drain."""
+def _restarts(pod):
+    return sum(int(c.get("restartCount") or 0) for c in ((pod or {}).get("status") or {}).get("containerStatuses") or [])
+
+
+def own_restarts():
+    """How often this replica's containers have restarted, recorded on a power
+    job when its worker starts it: a higher count later means the process
+    running the job died with its container, though the pod lives on. None
+    when it can't be read, and the job keeps the pod-only check."""
+    try:
+        return _restarts(kget(f"/api/v1/namespaces/{SELF.NS}/pods/{urllib.parse.quote(POD_NAME, safe='')}"))
+    except Exception:
+        return None
+
+
+def power_worker_gone(pod, restarts=None):
+    """Whether the replica a power job named has gone - evicted by the drain,
+    or its container restarted since the job recorded restarts."""
     try:
         found = kget(f"/api/v1/namespaces/{SELF.NS}/pods/{urllib.parse.quote(pod, safe='')}")
     except urllib.error.HTTPError as error:
@@ -325,6 +341,8 @@ def power_worker_gone(pod):
         return False  # unknown is not gone
     if (found.get("metadata") or {}).get("deletionTimestamp") or \
             (found.get("status") or {}).get("phase") in ("Succeeded", "Failed"):
+        return True
+    if restarts is not None and _restarts(found) > restarts:
         return True
     # A host shut down or lost leaves its pods listed for minutes; one whose
     # node is not Ready is not running anything.
@@ -354,7 +372,8 @@ def resume_power_job(item):
     def claim_then_run():
         try:
             OPS.record_phase(item["id"], ref.get("phase", "draining"), item.get("progress", 10),
-                             "Homestead moved while preparing this host; carrying on from another replica", worker=POD_NAME)
+                             "Homestead moved while preparing this host; carrying on from another replica", worker=POD_NAME,
+                             worker_restarts=own_restarts())
         except Exception:
             with _POWER_RESUME_LOCK:
                 _POWER_RESUMING.discard(item["id"])
