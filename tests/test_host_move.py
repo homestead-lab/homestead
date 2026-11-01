@@ -3,6 +3,7 @@
 Frigate was moved to k3s-3 twice and restarted on k3s-1 both times: the move
 only preferred k3s-3, and k3s-1 already held its 2.2 GB image. On the shared
 fake API (tests/fakes/kube.py)."""
+import copy
 import json
 import sys
 import tempfile
@@ -16,6 +17,7 @@ import homestead_host_move as MOVE
 import homestead_image_cache as IMAGES
 import homestead_kube as K
 import homestead_operations as OPS
+import homestead_place as PLACE
 import homestead_workloads as W
 from fakes.kube import Kube
 
@@ -146,6 +148,29 @@ class HostMoveTests(unittest.TestCase):
         self.assertNotIn("nothing was moved", message)
         self.assertEqual("rolling", item["ref"]["stage"])
         self.assertNotIn("proposed", item["ref"])
+
+    def test_a_lost_reply_on_a_manifest_reviewed_from_the_live_app_lands(self):
+        # The real caller (homestead_workloads.move_capacity_plan) reviews a deep
+        # copy of the live GET with only the placement changed, so every field the
+        # API server defaulted is in it. Here the live app carries such fields.
+        path = "/apis/apps/v1/namespaces/lab/deployments/frigate"
+        live = deployment()
+        live["spec"].update(replicas=1, revisionHistoryLimit=10, progressDeadlineSeconds=600,
+                            strategy={"type": "RollingUpdate", "rollingUpdate": {"maxSurge": "25%", "maxUnavailable": "25%"}})
+        live["spec"]["template"]["spec"].update(restartPolicy="Always", dnsPolicy="ClusterFirst", schedulerName="default-scheduler")
+        live["spec"]["template"]["spec"]["containers"][0].update(imagePullPolicy="Always", terminationMessagePath="/dev/termination-log")
+        self.kube.add(live)
+        proposed = copy.deepcopy(self.kube.object(path))
+        mode = PLACE.apply_node_placement(proposed, "k3s-3")
+        MOVE.start({}, proposed, {"move": {"node": "k3s-3", "mode": mode}}, lambda: self.applied.append(True))
+        self.kube.add(pull_daemonset(1))
+        item = {"ref": json.loads(json.dumps(self.started[-1]["ref"]))}
+        self.kube.fail(path, TimeoutError("timed out"), method="PUT", applied=True)
+        with self.assertRaises(TimeoutError):
+            MOVE.status(item)
+        self.assertIn("affinity", self.kube.object(path)["spec"]["template"]["spec"], "the write stands")
+        state, _, message = MOVE.status(item)
+        self.assertEqual(("running", "rolling"), (state, item["ref"]["stage"]), message)
 
     def test_an_app_edited_another_way_after_a_lost_reply_is_not_moved(self):
         item = self.moved_to_k3s_3()

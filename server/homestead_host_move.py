@@ -155,8 +155,11 @@ def _put_reviewed(proposed, settled, retries=3):
 def _landed(proposed):
     """Whether the app already carries the reviewed spec: an earlier PUT that
     committed but lost its reply (a timeout, a dropped connection) makes the
-    retry conflict on the old resourceVersion. replicas is left out, as an
-    autoscaler may have written it since."""
+    retry conflict on the old resourceVersion. A whole-spec comparison holds
+    because the reviewed manifest is a copy of a live read with only its
+    placement changed (homestead_workloads.move_capacity_plan), so the API
+    server's defaults are in it. replicas is left out, as an autoscaler may
+    have written it since."""
     kget, _ = _api()
     meta = proposed["metadata"]
     try:
