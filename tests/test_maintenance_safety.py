@@ -202,7 +202,7 @@ class MaintenanceSafetyTests(unittest.TestCase):
                 mock.patch.object(lifecycle, "ksend", side_effect=urllib.error.HTTPError("eviction", 429, "budget", {}, None)) as send, \
                 mock.patch.object(lifecycle.time, "sleep") as sleep:
             result = NODE_ACTIONS.drain("node1", wait=True)
-        self.assertEqual(["lab/app-a (HTTP 429)"], result["skipped"])
+        self.assertEqual(["lab/app-a (HTTP 429: couldn't read why)"], result["skipped"])
         send.assert_called_once()
         sleep.assert_not_called()
 

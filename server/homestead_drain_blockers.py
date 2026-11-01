@@ -31,6 +31,8 @@ instancemanager.go, engine.go; controller/instance_manager_controller.go
 createOrphan and controller/node_controller.go createOrphan)."""
 import calendar
 import concurrent.futures
+import json
+import re
 import time
 import urllib.error
 import urllib.parse
@@ -73,12 +75,14 @@ def _pods_path(node):
     return "/api/v1/pods?" + urllib.parse.urlencode({"fieldSelector": f"spec.nodeName={node}"})
 
 
-def _read_all(paths):
+def _read_all(paths, read=None):
     """Each name's items, None when Longhorn is not there, or the exception
-    reading it raised; read at the same time."""
+    reading it raised; read at the same time, through read (kget)."""
+    read = read or kget
+
     def one(path):
         try:
-            return (kget(path) or {}).get("items") or []
+            return (read(path) or {}).get("items") or []
         except urllib.error.HTTPError as error:
             # No Longhorn: nothing of its kinds holds the host. A 404 on a
             # core list is no such answer, so it is unread like any failure.
@@ -187,8 +191,11 @@ def _orphan_rows(node, orphans, engines):
     return rows
 
 
-def _elsewhere_row(node, managers, engines, named):
-    stale = []
+def _listed(node, managers, engines, named):
+    """The engines node's instance-manager lists: (those that still run on
+    node or are stopping there, those that no longer do and no orphan record
+    in named names, said)."""
+    live, stale = [], []
     for im in managers:
         if (im.get("spec") or {}).get("nodeID") != node:
             continue
@@ -201,6 +208,13 @@ def _elsewhere_row(node, managers, engines, named):
             where = _engine_node(engines[name])
             if where and where != node:
                 stale.append(f"{name} (now on {where})")
+            else:
+                live.append(name)
+    return live, stale
+
+
+def _elsewhere_row(node, managers, engines, named):
+    _, stale = _listed(node, managers, engines, named)
     if not stale:
         return []
     return [_row(
@@ -293,9 +307,13 @@ def _stuck_rows(node, pods, claims, attachments, now):
 def for_host(node, now=None):
     """What on node would keep its drain from finishing, as rows (see the
     module docstring); [] when nothing does."""
+    return _for_host(node, now)
+
+
+def _for_host(node, now=None, read=None):
     now = time.time() if now is None else now
     got = _read_all({"orphans": ORPHANS, "instancemanagers": INSTANCE_MANAGERS, "engines": ENGINES,
-                     "pods": _pods_path(node), "claims": CLAIMS, "attachments": ATTACHMENTS})
+                     "pods": _pods_path(node), "claims": CLAIMS, "attachments": ATTACHMENTS}, read)
     unread = [key for key, value in got.items() if isinstance(value, Exception)]
 
     def items(key, absent=()):
@@ -329,3 +347,97 @@ def _reason(error):
     if isinstance(error, urllib.error.HTTPError):
         return f"HTTP {error.code}"
     return type(error).__name__
+
+
+# ------------------------------------------------------- while it drains
+# How long the drain waits on a disruption budget whose copies are still
+# starting, from its first refusal.
+BUDGET_WAIT = 300
+# How long node's instance-manager may be held by nothing but engines that
+# run elsewhere (and their orphan records) before the drain stops waiting:
+# an engine that just moved can be listed here for a moment.
+STALE_GRACE = 30
+
+PDB = "/apis/policy/v1/namespaces/{ns}/poddisruptionbudgets/{name}"
+# The cause Kubernetes gives an eviction a budget refuses
+# (pkg/registry/core/pod/storage/eviction.go: checkAndDecrement and
+# createTooManyRequestsError, cause type policyv1.DisruptionBudgetCause).
+BUDGET_CAUSE = "DisruptionBudget"
+_BUDGET_NAMED = re.compile(r"^The disruption budget (\S+) (?:needs \d+ healthy pods|is still being processed)")
+UNREAD_WHY = "couldn't read why"
+
+
+def refusal(error, pod, read=None):
+    """Why an eviction of pod was refused with 429, from the refusal's own
+    Status body and the budget it names: {budget, passing, starting,
+    expected, why}. passing: the budget has copies still starting
+    (expectedPods > currentHealthy), or Kubernetes has not processed its
+    latest change yet, so waiting can let the eviction through. A body or
+    budget that can't be read is not passing, with why "couldn't read why"."""
+    unknown = {"budget": None, "passing": False, "starting": 0, "expected": 0, "why": UNREAD_WHY}
+    try:
+        status = json.loads(error.read() or b"null")
+        causes = ((status or {}).get("details") or {}).get("causes") or []
+    except Exception:  # no body, not JSON, not a Status: why is unknown
+        return unknown
+    named = [_BUDGET_NAMED.match(c.get("message") or "") for c in causes
+             if isinstance(c, dict) and c.get("reason") == BUDGET_CAUSE]
+    named = [m.group(1) for m in named if m]
+    ns = (pod.get("metadata") or {}).get("namespace") or ""
+    if not named or not ns:
+        return unknown
+    try:
+        pdb = (read or kget)(PDB.format(ns=ns, name=named[0])) or {}
+        st, meta = pdb.get("status") or {}, pdb.get("metadata") or {}
+        expected, healthy = int(st.get("expectedPods") or 0), int(st.get("currentHealthy") or 0)
+        desired = int(st.get("desiredHealthy") or 0)
+        processing = int(st.get("observedGeneration") or 0) < int(meta.get("generation") or 0)
+    except Exception:
+        return unknown
+    budget = f"{ns}/{named[0]}"
+    starting = max(0, expected - healthy)
+    if starting:
+        why = (f"disruption budget {budget}, which has {healthy} of {expected} copies healthy and needs "
+               f"{desired} ({starting} still starting)")
+    elif processing:
+        why = f"disruption budget {budget}, which Kubernetes has not caught up with since it was changed"
+    else:
+        why = (f"disruption budget {budget} allows no disruption: {healthy} of {expected} copies are healthy, "
+               f"it needs {desired}, and none is starting")
+    return {"budget": budget, "passing": bool(starting or processing), "starting": starting,
+            "expected": expected, "why": why}
+
+
+def engines_here(node, read=None):
+    """What holds node's instance-manager: (how many engines it lists that
+    still run on node or are stopping there, the rows - engine-orphans and
+    engines-elsewhere - naming the ones that no longer do). None when Longhorn
+    could not be read."""
+    got = _read_all({"orphans": ORPHANS, "instancemanagers": INSTANCE_MANAGERS, "engines": ENGINES}, read)
+    if any(isinstance(value, Exception) for value in got.values()):
+        return None
+    orphans, managers = got["orphans"] or [], got["instancemanagers"] or []
+    engines = _engines_by_name(got["engines"] or [])
+    rows = [row for row in _orphan_rows(node, orphans, engines) if row["kind"] == "engine-orphans"]
+    named = {r["engine"] for row in rows for r in row["records"]}
+    rows += _elsewhere_row(node, managers, engines, named)
+    live, _ = _listed(node, managers, engines, named)
+    return len(live), rows
+
+
+def say(node, rows):
+    """rows (for_host's) as the end of one sentence for a stalled drain's
+    message; "" when none names a blocker."""
+    found = [row["what"] for row in rows if row["kind"] != "unread"]
+    if not found:
+        return ""
+    return f"what holds {node}: " + "; ".join(found) + "; review the restart again for what to do"
+
+
+def stall_reason(node, read=None):
+    """What holds node, read now, for the message of a drain that stalled;
+    "" when nothing is found."""
+    try:
+        return say(node, _for_host(node, read=read))
+    except Exception:  # the message falls back to its general advice
+        return ""
