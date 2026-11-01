@@ -113,7 +113,11 @@ def _load():
         _memo.clear()
         return SHARED.read_json(path, {})     # says why it cannot be read
     with handle:
-        version = _version(handle)
+        try:
+            version = _version(handle)
+        except OSError as error:            # a stale NFS handle, say: as unreadable as a failed read
+            _memo.clear()
+            raise SHARED._unreadable(path, error) from error
         if _memo.get("version") == version:
             return _memo["data"]
         _memo.clear()
@@ -123,13 +127,18 @@ def _load():
 
 
 def _save(data):
+    """Save the index and keep it as read, keyed on the file as it now is,
+    but only if that is still the file this wrote: another leader's save in
+    between (a handover) is read on the next look, never taken for this one."""
     _memo.clear()
-    SHARED.write_json(_path(), data, separators=(",", ":"), sort_keys=True, mode=0o600)
+    written = SHARED.write_json(_path(), data, separators=(",", ":"), sort_keys=True, mode=0o600)
     try:
         with open(_path(), encoding="utf-8") as handle:
-            _memo.update(version=_version(handle), data=data)
+            version = _version(handle)
     except OSError:
-        pass                                    # read again next time
+        return                                  # read again next time
+    if written is not None and version[0] == written:
+        _memo.update(version=version, data=data)
 
 
 def _template_path(digest):

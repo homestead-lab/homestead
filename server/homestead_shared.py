@@ -216,8 +216,11 @@ def update_file(path, fn, lock, default, **dump):
 
 
 def write_json(path, value, *, durable=False, mode=None, **dump):
+    """Save value at path, replacing the file. Returns the inode of the file
+    it wrote, so a caller can tell it from one another writer put there
+    after; None when the file already held exactly this and was left."""
     with write_scope(path):
-        _write_json(path, value, durable=durable, mode=mode, **dump)
+        return _write_json(path, value, durable=durable, mode=mode, **dump)
 
 
 def _same(path, text):
@@ -238,7 +241,7 @@ def _write_json(path, value, *, durable=False, mode=None, **dump):
         WRITE_GUARD(path)
     text = json.dumps(value, **dump)
     if not durable and mode is None and _same(path, text):
-        return                       # loops save each round; what has not changed is not written again
+        return None                  # loops save each round; what has not changed is not written again
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
@@ -250,6 +253,7 @@ def _write_json(path, value, *, durable=False, mode=None, **dump):
         handle.write(text)
         handle.flush()
         os.fsync(handle.fileno())
+        inode = os.fstat(handle.fileno()).st_ino
     os.replace(tmp, path)
     if durable and os.name == "posix":
         # fsync(file) alone does not make the replacement directory entry
@@ -259,3 +263,4 @@ def _write_json(path, value, *, durable=False, mode=None, **dump):
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+    return inode

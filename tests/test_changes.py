@@ -399,6 +399,44 @@ class SharedVolumeTests(Base):
             self.assertEqual(1, len(parsed))
 
 
+    def test_a_save_replaced_before_it_is_looked_at_again_is_read_again(self):
+        """A handover: another leader's save lands between this copy's write
+        and its look at what it wrote. That file is not kept as this copy's."""
+        import json
+        CH.observe([dep()], now=1000)
+        real = CH.SHARED.write_json
+        other = {}
+
+        def write_then_replaced(path, value, **kwargs):
+            written = real(path, value, **kwargs)
+            if path == self.path() and not other:
+                other.update(json.loads(json.dumps(value)))
+                other["apps"]["lab/sonarr"]["entries"][0]["by"] = "someone"
+                real(path, other, separators=(",", ":"), sort_keys=True, mode=0o600)
+            return written
+        with mock.patch.object(CH.SHARED, "write_json", side_effect=write_then_replaced):
+            CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+        self.assertTrue(other, "the save was replaced")
+        self.assertEqual("someone", CH.history("lab", "sonarr")[0]["by"])
+
+    def test_a_save_that_was_not_replaced_is_still_not_read_again(self):
+        import json
+        CH.observe([dep()], now=1000)
+        with mock.patch("json.load", wraps=json.load) as load:
+            CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+            CH.history("lab", "sonarr")
+            self.assertEqual(0, sum(1 for c in load.call_args_list if getattr(c.args[0], "name", "") == self.path()))
+
+    def test_an_fstat_that_fails_says_the_history_cannot_be_read(self):
+        import errno
+        CH.observe([dep()], now=1000)
+        CH.observe([dep(image="example/sonarr:5.0")], now=1060)
+        stale = OSError(errno.ESTALE, "Stale file handle")
+        with mock.patch.object(CH.os, "fstat", side_effect=stale):
+            with self.assertRaisesRegex(CH.SHARED.Unreadable, "change-history.json.*Stale file handle"):
+                CH.history("lab", "sonarr")
+        self.assertEqual(1, len(CH.history("lab", "sonarr")), "read again once it can be")
+
 class RouteTests(Base):
     def setUp(self):
         # Importing server binds the history to /data the first time; bind it
