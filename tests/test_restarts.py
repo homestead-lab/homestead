@@ -1,4 +1,5 @@
 import copy
+import json
 import os
 import sys
 import tempfile
@@ -488,14 +489,16 @@ class DirtyFlagTests(RestartBase):
         return path
 
     def dumped(self, fn):
-        sizes, real = [], R.json.dumps
+        sizes, real = [], json.dumps
 
         def counting(value, *a, **k):
             text = real(value, *a, **k)
             sizes.append(len(text))
             return text
 
-        with mock.patch.object(R, "json", mock.Mock(wraps=R.json, dumps=counting)):
+        # Counts the module's own dumps and the shared store's (update_file -> write_json).
+        with mock.patch.object(R, "json", mock.Mock(wraps=json, dumps=counting)), \
+                mock.patch.object(SHARED, "json", mock.Mock(wraps=json, dumps=counting)):
             fn()
         return sum(sizes)
 
@@ -505,6 +508,14 @@ class DirtyFlagTests(RestartBase):
         total = self.dumped(lambda: self.look(pod(), now=T0 + 20))
         self.assertLess(total, 5000, "the 2 MB of app records were serialised")
         self.assertEqual(before, os.stat(path).st_mtime_ns, "a quiet look writes nothing")
+
+    def test_a_look_older_than_the_last_writes_nothing_and_answers_zero(self):
+        path = self.big_store()
+        self.look(pod(restarts=1, last=oom()), now=T0 + 50)
+        text = open(path).read()
+        total = self.dumped(lambda: self.assertEqual(0, self.look(pod(restarts=2, last=oom()), now=T0 + 20)))
+        self.assertLess(total, 5000)
+        self.assertEqual(text, open(path).read())
 
     def test_a_new_record_and_a_trim_still_write(self):
         path = self.big_store("2026-09-01T00:00:00Z")

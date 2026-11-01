@@ -312,7 +312,7 @@ def observe(pods, now=None, read=None, tail=None, outage=None, sys_ns=None):
         # leader's thread finishing late - would put counts and templates
         # back; it changes nothing.
         if now < state.get("looked", 0):
-            return 0
+            return SHARED.Unchanged(0)
         # What changed is told without serialising the whole record (#980): the
         # app records, by far the biggest part, change only in _add and _trim,
         # which mark `dirty`; the small rest (seen, templates) is compared.
@@ -429,7 +429,8 @@ def observe(pods, now=None, read=None, tail=None, outage=None, sys_ns=None):
         _trim(state, now, dirty)
         if dirty[0] or json.dumps({k: state.get(k) for k in small}, sort_keys=True) != was:
             state["looked"] = now
-        return written[0]
+            return written[0]
+        return SHARED.Unchanged(written[0])   # a quiet look writes nothing, and serialises nothing more
 
     try:
         return SHARED.update_file(_path(), change, _lock, {})

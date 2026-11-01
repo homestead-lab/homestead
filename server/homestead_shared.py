@@ -182,6 +182,13 @@ def read_json(path, default):
     return value
 
 
+class Unchanged:
+    """What fn returns from update_file when it changed nothing: the value is
+    handed back as the answer and the store is not serialised or written."""
+    def __init__(self, result=None):
+        self.result = result
+
+
 def update_file(path, fn, lock, default, **dump):
     """Read, change and save one JSON store on the data volume as one step:
     under lock (a SharedLock, which every copy of Homestead takes), read it
@@ -190,6 +197,8 @@ def update_file(path, fn, lock, default, **dump):
     with lock:
         value = read_json(path, default)
         result = fn(value)
+        if isinstance(result, Unchanged):
+            return result.result
         write_json(path, value, **dump)
         return result
 
