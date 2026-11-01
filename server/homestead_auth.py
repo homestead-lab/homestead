@@ -82,6 +82,12 @@ MAX_USER_ATTEMPTS = 20
 ATTEMPT_WINDOW = 300
 MAX_TRACKED = 10000
 MAX_STALE_SECONDS = 30
+# After a failed read the last good copy is used, without asking the cluster
+# again, for this long - and never past MAX_STALE_SECONDS. A restarting API
+# server would otherwise hold every request for its own timeout.
+RETRY = 3
+_store_reads = threading.Lock()
+_store_read = None      # the read under way, which requests that find the copy expired wait for
 _rate_lock = threading.RLock()
 _password_slots = threading.BoundedSemaphore(4)
 
@@ -100,11 +106,19 @@ class StoreUnavailable(Exception):
     would replace every real account."""
 
 
+def _usable_stale():
+    """The last good read, while it is young enough to stand in for one."""
+    data = _store_cache["data"]
+    if data is not None and time.time() - _store_cache["at"] <= MAX_STALE_SECONDS:
+        return data
+    return None
+
+
 def _unavailable(error, allow_stale=True):
     # The last good read stands in while the cluster is slow to answer; its
-    # time is left alone, so the next request tries the cluster again.
-    if (allow_stale and _store_cache["data"] is not None and
-            time.time() - _store_cache["at"] <= MAX_STALE_SECONDS):
+    # time is left alone, so it stops standing in MAX_STALE_SECONDS after it
+    # was read, and the cluster is asked again after RETRY (_load).
+    if allow_stale and _usable_stale() is not None:
         return _store_cache["data"]
     unavailable = StoreUnavailable("Homestead cannot read its accounts from the cluster right now. "
                                    "The Kubernetes API may be slow or unreachable.")
@@ -129,9 +143,53 @@ class StoreConflict(ValueError):
     """The accounts changed on another replica between reading and saving."""
 
 
+class _Read:
+    """One read of the Secret, shared by everyone who asked while it ran."""
+    def __init__(self, started):
+        self.started, self.done = started, threading.Event()
+        self.data = self.error = None
+
+
 def _load(force=False, max_age=10, allow_stale=True):
-    if not force and _store_cache["data"] is not None and time.time() - _store_cache["at"] < max_age:
-        return _store_cache["data"]
+    global _store_read
+    now = time.time()
+    if not force:
+        if _store_cache["data"] is not None and now - _store_cache["at"] < max_age:
+            return _store_cache["data"]
+        # Within RETRY of a failed read the copy answers without a new read;
+        # once the copy is too old to use, the cluster is always asked.
+        if (allow_stale and now - _store_cache.get("failed_at", 0) < RETRY
+                and _usable_stale() is not None):
+            return _store_cache["data"]
+    with _store_reads:
+        read = _store_read
+        # A read already under way is as good as a copy dated when it began.
+        # A forced read never takes one: it must see what is there now.
+        joined = not force and read is not None and now - read.started < max_age
+        if not joined:
+            read = _store_read = _Read(now)
+    if joined:
+        read.done.wait()
+    else:
+        try:
+            read.data = _read_store()
+        except BaseException as e:
+            read.error = e
+            if not isinstance(e, Exception):
+                raise
+        finally:
+            with _store_reads:
+                if read.error is not None:
+                    _store_cache["failed_at"] = time.time()
+                if _store_read is read:
+                    _store_read = None
+            read.done.set()
+    if read.data is not None:
+        return read.data
+    return _unavailable(read.error, allow_stale)
+
+
+def _read_store():
     try:
         sec = kget(f"/api/v1/namespaces/{NS}/secrets/{SECRET_NAME()}")
         raw = base64.b64decode(sec.get("data", {}).get("store.json", "") or "e30=")
@@ -141,13 +199,11 @@ def _load(force=False, max_age=10, allow_stale=True):
         data["_rv"] = (sec.get("metadata") or {}).get("resourceVersion")
     except urllib.error.HTTPError as e:
         if e.code != 404:
-            return _unavailable(e, allow_stale)
+            raise
         data = {}                       # no Secret yet: genuinely a fresh install
-    except Exception as e:
-        return _unavailable(e, allow_stale)
     data.setdefault("users", {})
     data.setdefault("signing_key", "")
-    _store_cache.update(at=time.time(), data=data)
+    _store_cache.update(at=time.time(), data=data, failed_at=0)
     return data
 
 
@@ -169,7 +225,7 @@ def _save(data):
             raise StoreConflict("the accounts were changed elsewhere at the same moment; try again") from None
         raise
     data["_rv"] = ((answer or {}).get("metadata") or {}).get("resourceVersion")
-    _store_cache.update(at=time.time(), data=data)
+    _store_cache.update(at=time.time(), data=data, failed_at=0)
 
 
 def _signing_key(data=None):
