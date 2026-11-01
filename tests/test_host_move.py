@@ -219,7 +219,7 @@ class HostMoveTests(unittest.TestCase):
         self.kube.fail(self.APP, 404, method="GET")
         state, _, message = MOVE.status(item)
         self.assertEqual("failed", state, message)
-        self.assertIn("so Homestead stopped; check where it runs now", message)
+        self.assertEqual("frigate was removed while its image was being pulled, so there is nothing left to move", message)
         self.assertNotIn("proposed", item["ref"], "nothing is left to retry")
 
     def test_an_app_scaled_after_a_lost_reply_still_rolls(self):

@@ -152,6 +152,10 @@ def _put_reviewed(proposed, settled, retries=3):
             meta.pop("managedFields", None)
 
 
+class Gone(Exception):
+    """The app was removed: there is nothing left to move."""
+
+
 def _landed(proposed):
     """Whether the app already carries the reviewed spec: an earlier PUT that
     committed but lost its reply (a timeout, a dropped connection) makes the
@@ -166,7 +170,7 @@ def _landed(proposed):
         fresh = kget(f"/apis/apps/v1/namespaces/{meta['namespace']}/deployments/{meta['name']}")
     except urllib.error.HTTPError as error:
         if error.code == 404:
-            return False
+            raise Gone() from error
         raise    # says nothing about the app: the next round asks again
     now = fresh.get("metadata") or {}
     if now.get("deletionTimestamp") or (meta.get("uid") and now.get("uid") != meta.get("uid")):
@@ -194,7 +198,13 @@ def status(item):
         except urllib.error.HTTPError as error:
             if error.code != 409:
                 raise
-            if not _landed(ref["proposed"]):
+            try:
+                landed = _landed(ref["proposed"])
+            except Gone:
+                ref.pop("proposed", None)
+                ref.pop("settled", None)
+                return "failed", 100, f"{name} was removed while its image was being pulled, so there is nothing left to move"
+            if not landed:
                 ref.pop("proposed", None)
                 ref.pop("settled", None)
                 return "failed", 100, f"{name} changed while its image was being pulled, so Homestead stopped; check where it runs now, then review the move again"
