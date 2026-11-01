@@ -44,6 +44,7 @@ import re
 import socket
 import ssl
 import threading
+from concurrent.futures import ThreadPoolExecutor, wait
 import time
 
 import homestead_outage as OUTAGE
@@ -62,6 +63,8 @@ HTTPS_PORTS = (443, 8443, 9443, 5001)
 MAX_PORTS = 4
 # What a round waits beyond its slowest target's bound (target_bound).
 ROUND_SLACK = 2
+WORKERS = 16                # targets asked at once in a round, not one thread per app (#979)
+ROUND_CAP = 45              # a round never waits longer than this (it runs every minute)
 VM_PORTS = (22, 3389, 443, 80, 8006, 8123, 9443)
 DISCOVER_TIMEOUT = 1.2
 PATH = re.compile(r"^/[A-Za-z0-9._~!$&'()*+,;=:@%/?-]{0,199}$")
@@ -460,15 +463,22 @@ def observe(workloads, now=None, ask=probe, vms=None):
         except Exception as e:      # a check never stops the round
             results[key] = {"ok": False, "ms": None, "code": None, "error": _why(e)}
 
-    threads = [threading.Thread(target=run, args=(key, t), daemon=True) for key, t, _ in rows if t]
-    for thread in threads:
-        thread.start()
-    # One wait for the whole round (N stuck checks used to cost N times it),
-    # as long as its slowest target may take: a target with several ports
-    # asked one after another ends by its own bound, not by one probe's.
-    end = time.monotonic() + max((target_bound(t) for _, t, _ in rows if t), default=0) + ROUND_SLACK
-    for thread in threads:
-        thread.join(max(0, end - time.monotonic()))
+    work = [(key, t) for key, t, _ in rows if t]
+    # One wait for the whole round, as long as its slowest target may take
+    # (a target with several ports asked one after another ends by its own
+    # bound) times the waves WORKERS make of the round, up to ROUND_CAP - but
+    # never shorter than one wave. A check still queued then is not started:
+    # its app is left as it was this round rather than counted as a miss.
+    bound = max((target_bound(t) for _, t in work), default=0)
+    waves = -(-len(work) // WORKERS)
+    end = time.monotonic() + min(waves * bound + ROUND_SLACK, max(bound + ROUND_SLACK, ROUND_CAP))
+    not_asked = set()
+    if work:
+        pool = ThreadPoolExecutor(max_workers=min(WORKERS, len(work)), thread_name_prefix="uptime")
+        futures = {pool.submit(run, key, t): key for key, t in work}
+        wait(futures, timeout=max(0, end - time.monotonic()))
+        not_asked = {key for future, key in futures.items() if future.cancel()}
+        pool.shutdown(wait=False)
     with _lock:
         apps = _load()
         _state["observed_at"] = now
@@ -476,7 +486,7 @@ def observe(workloads, now=None, ask=probe, vms=None):
         for key, t, why in rows:
             app = apps.setdefault(key, {"state": "unknown", "hours": {}})
             app["seen"] = round(now) if not app.get("seen") or now - app["seen"] > 3600 else app["seen"]
-            if not t and why == PORTS_UNREAD:
+            if (not t and why == PORTS_UNREAD) or key in not_asked:
                 continue
             if not t:
                 if app.get("state") not in ("off", None) or app.get("why") != why:

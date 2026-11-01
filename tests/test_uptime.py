@@ -649,3 +649,40 @@ class PortalTests(unittest.TestCase):
                          "the port takes connections, but the app answers 502")
         self.assertEqual({"up": False, "ms": None}, status["b"], "a router is not an app: its connection check stays")
         self.assertEqual({"up": True, "ms": 3}, status["c"], "an app not being checked keeps the connection check")
+
+
+class PoolTests(Base):
+    """observe() asks at most WORKERS targets at once, not one thread per app (#979)."""
+    def track(self, result=OK, pause=0.02):
+        lock, state = threading.Lock(), {"now": 0, "most": 0, "asked": 0}
+        def ask(t):
+            with lock:
+                state["now"] += 1; state["asked"] += 1
+                state["most"] = max(state["most"], state["now"])
+            time.sleep(pause)
+            with lock:
+                state["now"] -= 1
+            return result
+        return ask, state
+
+    def test_forty_apps_are_asked_sixteen_at_a_time_and_all_answer(self):
+        ask, state = self.track()
+        UP.observe([app(name=f"a{i}", port=8000 + i) for i in range(40)], now=1000, ask=ask)
+        self.assertEqual(40, state["asked"])
+        self.assertLessEqual(state["most"], UP.WORKERS)
+        self.assertGreater(state["most"], 1, "still in parallel")
+        with UP._lock:
+            apps = UP._load()
+        self.assertEqual({"up"}, {apps[f"lab/a{i}"]["state"] for i in range(40)})
+
+    def test_a_check_that_never_started_by_the_round_cap_is_not_counted_as_a_miss(self):
+        ask, state = self.track(result=OK, pause=0.3)
+        with mock.patch.object(UP, "WORKERS", 1), mock.patch.object(UP, "ROUND_CAP", 0.05), mock.patch.object(UP, "TIMEOUT", 0.05), \
+             mock.patch.object(UP, "ROUND_SLACK", 0):
+            UP.observe([app(name=f"a{i}", port=8000 + i) for i in range(3)], now=1000, ask=ask)
+        self.assertEqual(1, state["asked"], "only the first was asked before the cap")
+        with UP._lock:
+            apps = UP._load()
+        untouched = [k for k in ("lab/a1", "lab/a2") if apps.get(k, {}).get("misses", 0) == 0
+                     and apps.get(k, {}).get("state", "unknown") == "unknown"]
+        self.assertEqual(["lab/a1", "lab/a2"], untouched, "not asked this round: no change, no false outage")
