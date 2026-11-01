@@ -1,3 +1,5 @@
+import json
+import os
 import sys
 import tempfile
 import time
@@ -101,6 +103,60 @@ class ObserveTests(unittest.TestCase):
         rows[0]["days_left"] = 2
         self.assertEqual("critical", F.alert_facts(rows)[0]["severity"])
 
+
+
+class ReportOnceTests(unittest.TestCase):
+    """The page and the alerts loop ask every 20 s; the file changes hourly."""
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        F.bind(self.dir.name)
+        for i in range(10):
+            F.observe([{"name": "pvc-1", "pvc_name": "media", "filesystem": {"used_bytes": (50 + 2 * i) * GB, "capacity_bytes": 100 * GB}}],
+                      {}, NOW - (9 - i) * 86400)
+
+    def test_repeated_reports_read_and_fit_once(self):
+        with mock.patch.object(F.SHARED, "read_json", wraps=F.SHARED.read_json) as read, \
+                mock.patch.object(F, "fit", wraps=F.fit) as fit:
+            first = [F.report(NOW + n * 20) for n in range(6)]
+        self.assertEqual(1, read.call_count)
+        self.assertEqual(1, fit.call_count)
+        self.assertEqual(first[0], first[5])
+
+    def test_answers_match_an_uncached_report(self):
+        cached = F.report(NOW)
+        F._kept[0] = None
+        self.assertEqual(cached, F.report(NOW))
+
+    def test_full_on_follows_the_clock_within_a_day(self):
+        early = F.report(NOW)[0]
+        late = F.report(NOW + 20 * 3600)[0]
+        self.assertEqual(F._day(NOW + early["days_left"] * 86400), early["full_on"])
+        self.assertEqual(F._day(NOW + 20 * 3600 + late["days_left"] * 86400), late["full_on"])
+
+    def test_a_caller_changing_its_rows_does_not_change_the_next_answer(self):
+        F.report(NOW)[0]["days_left"] = 1
+        self.assertAlmostEqual(16, F.report(NOW)[0]["days_left"], delta=0.3)
+
+    def test_a_new_sample_or_a_new_day_is_fitted_again(self):
+        F.report(NOW)
+        F.observe([{"name": "pvc-1", "pvc_name": "media", "filesystem": {"used_bytes": 90 * GB, "capacity_bytes": 100 * GB}}], {}, NOW)
+        self.assertEqual(90 * GB, F.report(NOW)[0]["used"])
+        with mock.patch.object(F, "fit", wraps=F.fit) as fit:
+            F.report(NOW + 86400)
+        self.assertEqual(1, fit.call_count, "the fitted window moves with the day")
+
+    def test_another_copy_writing_the_file_is_noticed(self):
+        """A follower never calls observe(): the leader replaces the file on the shared volume."""
+        F.report(NOW)
+        path = F._path()
+        data = F.SHARED.read_json(path, {})
+        data["series"]["volume:pvc-1"]["days"] = {F._day(NOW): GB}
+        with open(path + ".new", "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+        os.replace(path + ".new", path)
+        self.assertEqual(GB, F.report(NOW)[0]["used"])
 
 
 class LoopTests(unittest.TestCase):

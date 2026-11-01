@@ -50,6 +50,50 @@ class ReportTests(Base):
         self.assertEqual(4510, rep["total"])
 
 
+class ReportOnceTests(Base):
+    """The page and the alerts loop ask every minute; walking the volume is a round trip per file."""
+
+    def test_the_volume_is_walked_once_in_ten_minutes(self):
+        self.put("uptime.json", "u" * 100)
+        clock = [1000.0]
+        with mock.patch.object(HK.time, "monotonic", lambda: clock[0]), \
+                mock.patch.object(HK, "_all_files", wraps=HK._all_files) as walk:
+            first = HK.report()
+            for _ in range(9):
+                clock[0] += 60
+                HK.report()
+            self.assertEqual(1, walk.call_count, "ten reports in nine minutes")
+            clock[0] += 61
+            self.put("uptime.json", "u" * 400)
+            later = HK.report()
+        self.assertEqual(2, walk.call_count)
+        self.assertEqual(100, {s["label"]: s for s in first["stores"]}["Monitoring history"]["size"])
+        self.assertEqual(400, {s["label"]: s for s in later["stores"]}["Monitoring history"]["size"])
+
+    def test_the_tidy_makes_the_next_report_fresh(self):
+        self.put("uptime.json", "u" * 100)
+        HK.report()
+        self.put("setup.json", "s" * 10)
+        HK.tidy_unused()
+        self.assertEqual(10, {s["label"]: s for s in HK.report()["stores"]}["Settings and other state"]["size"])
+
+    def test_the_volume_and_last_tidy_stay_current_between_walks(self):
+        HK.report()
+        with mock.patch.object(HK, "volume", return_value={"size": 1, "used": 1, "free": 0, "pct": 100.0}), \
+                mock.patch.object(HK, "_last", {"at": 5, "result": "done"}):
+            rep = HK.report()
+        self.assertEqual((100.0, 5, "done"), (rep["volume"]["pct"], rep["last_at"], rep["last"]))
+
+    def test_the_answer_is_what_an_uncached_walk_gives(self):
+        self.put("uptime.json", "u" * 3000)
+        self.put("icons/a.png", "p" * 500)
+        cached = HK.report()
+        HK.report()
+        HK._scan_kept[0] = None
+        fresh = HK.report()
+        self.assertEqual((cached["stores"], cached["total"]), (fresh["stores"], fresh["total"]))
+
+
 class TidyTests(Base):
     def test_logs_keep_a_year_and_at_most_so_many_lines(self):
         old, recent = NOW - 400 * 86400, NOW - 10 * 86400

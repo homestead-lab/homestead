@@ -105,6 +105,7 @@ def tidy_unused():
         # Not knowing what is in use, keep every logo; the rest still runs.
         refs = {f"/api/icons/{os.path.basename(p)}" for p in _files("icons/*")}
     result = tidy(refs)
+    _scan_kept[0] = None
     homestead_routes.forget("housekeeping")
     return result
 
@@ -150,8 +151,17 @@ def volume():
     return {"size": size, "used": used, "free": free, "pct": round(used / size * 100, 1) if size else None}
 
 
-def report():
-    """Each store: what it is, its size, how many files, how long it keeps."""
+SCAN_SECONDS = 600
+_scan_kept = [None]       # one entry: (data dir, taken at, rows)
+
+
+def _scan():
+    """The stores with their sizes. Walking the volume costs a round trip per
+    file on NFS or Longhorn, and the sizes move slowly: kept for SCAN_SECONDS,
+    or until a tidy."""
+    hit = _scan_kept[0]
+    if hit and hit[0] == DATA_DIR and time.monotonic() - hit[1] < SCAN_SECONDS:
+        return hit[2]
     claimed, rows = set(), []
     for label, patterns, kept in STORES:
         paths = sorted({p for pattern in patterns for p in _files(pattern)})
@@ -161,6 +171,13 @@ def report():
     other = [p for p in everything if p not in claimed]
     rows.append({"label": "Settings and other state", "size": _size(other), "files": len(other), "kept": "as long as it is needed"})
     rows.sort(key=lambda r: -r["size"])
+    _scan_kept[0] = (DATA_DIR, time.monotonic(), rows)
+    return rows
+
+
+def report():
+    """Each store: what it is, its size, how many files, how long it keeps."""
+    rows = [dict(r) for r in _scan()]
     # The tidy runs on the leader: another replica shows the leader's.
     shared, _ = LEADER_STATE.get("housekeeping")
     last = shared if isinstance(shared, dict) and shared.get("at", 0) > _last["at"] else _last
