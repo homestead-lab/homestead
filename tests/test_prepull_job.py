@@ -43,7 +43,8 @@ def pod(node, waiting=None, message="", ready=False, name=None, terminating=Fals
     init = {"name": "pull", "image": IMAGE, "ready": ready or bool(pause),
             "state": {"terminated": {"exitCode": 0}} if ready or pause else
                      {"waiting": {"reason": waiting or "PodInitializing", "message": message}}}
-    meta = {"name": name or f"{NAME}-{node}", "namespace": "lab", "labels": {"app": NAME}}
+    meta = {"name": name or f"{NAME}-{node}", "namespace": "lab", "labels": {"app": NAME},
+            "uid": f"uid-{name or node}"}
     if terminating:
         meta["deletionTimestamp"] = "2026-11-01T10:00:00Z"
     status = {"phase": "Running" if ready else "Pending",
@@ -59,12 +60,12 @@ PAUSE = "registry.k8s.io/pause:3.9"
 _EVENTS = iter(range(1, 10_000))
 
 
-def event(node, reason, at, message=""):
+def event(node, reason, at, message="", uid=None):
     """A kubelet event on node's pull pod: Pulling, Failed or BackOff, at a
     time of day given as HH:MM:SS."""
     return {"apiVersion": "v1", "kind": "Event",
             "metadata": {"name": f"{NAME}-{node}.{next(_EVENTS):x}", "namespace": "lab"},
-            "involvedObject": {"kind": "Pod", "name": f"{NAME}-{node}", "namespace": "lab",
+            "involvedObject": {"kind": "Pod", "name": f"{NAME}-{node}", "namespace": "lab", "uid": uid or f"uid-{node}",
                                "fieldPath": "spec.initContainers{pull}"},
             "reason": reason, "message": message, "type": "Normal" if reason == "Pulling" else "Warning",
             "lastTimestamp": f"2026-11-01T{at}Z"}
@@ -162,6 +163,21 @@ class PrepullJobTests(PullCase):
         self.kube.add(event("node-a", "Failed", "11:00:00", NOT_FOUND))  # that retry failed too
         self.assertEqual("running", self.step(1)["status"])
         self.assertEqual("failed", self.step(IMAGES.PULL_STUCK_FOR + 1)["status"])
+
+    def test_an_earlier_pod_s_events_of_the_same_name_are_not_read_as_this_one_s(self):
+        self.start(daemonset(1, 0), pod("node-a", "ImagePullBackOff", "Back-off pulling image"),
+                   event("node-a", "Failed", "10:00:01", NOT_FOUND),
+                   event("node-a", "Pulling", "10:00:20", uid="uid-replaced-pod"))
+        self.step()
+        self.assertEqual("failed", self.step(IMAGES.PULL_STUCK_FOR + 1)["status"])
+
+    def test_events_that_stay_unreadable_fall_back_to_the_pod_status(self):
+        self.start(daemonset(1, 0), pod("node-a", "ErrImagePull", NOT_FOUND))
+        self.kube.fail("/api/v1/namespaces/lab/events", 500, times=100)
+        self.assertEqual("running", self.step()["status"])
+        failed = self.step(IMAGES.PULL_STUCK_FOR + 1)
+        self.assertEqual("failed", failed["status"], "an events outage does not keep a bad pull going for ever")
+        self.assertIn("pull events could not be read", failed["message"])
 
     def test_a_pod_list_that_cannot_be_read_keeps_the_clock(self):
         self.start(daemonset(1, 0), pod("node-a", "ErrImagePull", NOT_FOUND))
