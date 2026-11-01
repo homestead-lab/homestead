@@ -194,12 +194,14 @@ class ProbeLoopTests(Base):
 
     def test_the_probe_loops_reading_feeds_the_page(self):
         PROBES.run_round(now=1000, smart=True)
+        PROBES.smart_settled(5)
         self.assertEqual(1, self.helper.calls)
         self.assertEqual(["sda", "sdb"], [row["name"] for row in SMART.latest("node-1")["disks"]])
         self.assertEqual(1, self.helper.calls)
 
     def test_the_probe_loops_reading_lasts_until_its_next_one_has_had_time_to_land(self):
         PROBES.run_round(now=1000, smart=True)
+        PROBES.smart_settled(5)
         self.now[0] += PROBES.SMART_EVERY + PROBES.SMART_TIMEOUT + PROBES.INTERVAL - 1
         SMART.latest("node-1")
         self.assertEqual(1, self.helper.calls, "the page read every drive before the loop's next reading was due")
@@ -209,6 +211,7 @@ class ProbeLoopTests(Base):
 
     def test_the_probe_loops_smart_read_is_signed(self):
         PROBES.run_round(now=1000, smart=True)
+        PROBES.smart_settled(5)
         request = next(r for r in self.helper.requests if ":9100/" in getattr(r, "full_url", r))
         headers = dict(request.header_items())
         stamp = headers["X-homestead-time"]

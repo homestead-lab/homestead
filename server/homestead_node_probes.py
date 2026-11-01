@@ -33,14 +33,16 @@ SMART_RETRY = 60         # after a failed SMART read, try again sooner
 UNREACHABLE_AFTER = 3    # misses in a row before a host's probe is called unreachable
 GONE_AFTER = 4           # listings in a row without the host's probe pod before its state is dropped
 FIRST_WAIT = 5           # how long a caller that wants data waits for the first round
-MAX_WORKERS = 8          # one round at a time, so this is the cap for the whole replica
+MAX_WORKERS = 8          # per pool: one temperature round and one SMART pass at a time, so 2x this per replica
 LIMIT = 4 * 1024**2
 SMART_UNAVAILABLE = "SMART helper unavailable; install or update deploy/nodeprobe.yaml"
 
 _lock = threading.Lock()         # the state
-_single = threading.Lock()       # one round at a time
+_single = threading.Lock()       # one round at a time (the temperatures)
+_smart_single = threading.Lock() # one SMART pass at a time, on its own thread (#974)
 _state = {}                      # node -> {"payload", "at", "misses", "last_ok", "smart", "smart_at", "smart_stale", "absent"}
 _round = {"at": 0.0, "read": None, "done": threading.Event(), "thread": None, "stop": threading.Event()}
+_smart_pass = {"thread": None, "asked": 0}   # the running SMART pass; read_smart_again() calls so far
 _namespace = ["lab"]
 
 
@@ -159,11 +161,42 @@ def _run(now, smart):
                and (smart or now - _state[node]["smart_at"] >= SMART_EVERY)}
         _round["at"] = now
         _round["read"] = time.monotonic()
+        asked = _smart_pass["asked"]
     for node in gone:
         SMART.drop_host(node)        # its kept SMART readings too, on the data volume
     # The temperatures are recorded before SMART is read, so nobody waits on it.
     _round["done"].set()
-    rows = _pool({node: (lambda p=pod: _smart(p)) for node, pod in due.items()})
+    if due:
+        _start_smart(due, readings, now, asked)
+
+
+def _start_smart(due, readings, now, asked):
+    """Read SMART for the due hosts on a thread of its own, so _single (and the
+    next temperature round, and a caller running one inline) never waits on a
+    helper that takes up to SMART_TIMEOUT (#974). One pass at a time: while
+    one runs, hosts that are due stay due and are read on a later round."""
+    if not _smart_single.acquire(blocking=False):
+        return
+    try:
+        thread = threading.Thread(target=_read_smart, args=(due, readings, now, asked),
+                                  name="node-probes-smart", daemon=True)
+        thread.start()
+        _smart_pass["thread"] = thread
+    except BaseException:
+        _smart_single.release()
+        raise
+
+
+def _read_smart(due, readings, now, asked):
+    try:
+        _record_smart(_pool({node: (lambda p=pod: _smart(p)) for node, pod in due.items()}), readings, now, asked)
+    except Exception as error:
+        print(f"node probes: SMART: {str(error)[:160]}", flush=True)
+    finally:
+        _smart_single.release()
+
+
+def _record_smart(rows, readings, now, asked):
     # A drive the host has put to sleep is left asleep by the helper; its last
     # reading stands in. That may touch the data volume, so it happens outside
     # _lock: a stalled volume must not hold up the pages reading the probe state.
@@ -174,6 +207,9 @@ def _run(now, smart):
             rows[node] = SMART.keep_last(node, found, serials=serials)
     remembered = {}
     with _lock:
+        # A SMART test started while this pass ran: its reading may predate
+        # the test, so the next round reads again.
+        again = _smart_pass["asked"] != asked
         for node, found in rows.items():
             entry = _state.get(node)
             if entry is None:
@@ -185,6 +221,8 @@ def _run(now, smart):
             else:
                 entry.update(smart=found, smart_at=now, smart_stale=False)
                 remembered[node] = found
+            if again:
+                entry["smart_at"] = 0
     for node, found in remembered.items():
         # The SMART page answers from this reading until the next one has had time to land.
         SMART.remember(node, found, keep=SMART_EVERY + SMART_TIMEOUT + INTERVAL)
@@ -259,7 +297,16 @@ def read_smart_again():
     with _lock:
         for entry in _state.values():
             entry["smart_at"] = 0
+        _smart_pass["asked"] += 1
         _round["read"] = None
+
+
+def smart_settled(timeout=None):
+    """Wait for the running SMART pass, if any; whether none is running now."""
+    thread = _smart_pass["thread"]
+    if thread is not None:
+        thread.join(timeout)
+    return not (thread and thread.is_alive())
 
 
 def _loop():
@@ -291,7 +338,9 @@ def stop():
 
 
 def reset():
-    """Forget everything (tests)."""
+    """Forget everything (tests). A SMART pass still running finishes first,
+    so it cannot land in the next test's state."""
+    smart_settled(SMART_TIMEOUT + 1)
     with _lock:
         _state.clear()
         _round["at"] = 0
