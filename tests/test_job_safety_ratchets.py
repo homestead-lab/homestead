@@ -81,27 +81,6 @@ STOP_NOT_JOBS = {
     "homestead_objectstore.py",   # a person's switch-off of the backup store, in the request that asks for it
     "homestead_workload_edit.py", # a person's edit of a workload; restructure (a job) is counted in its own module
 }
-WALKS = {
-    "homestead_copy_job.py": 1,
-    "homestead_deploy.py": 1,
-    "homestead_power_hold.py": 1,
-    "homestead_reclass.py": 3,
-    "homestead_rename.py": 5,
-    "homestead_revert.py": 4,
-    "homestead_self_data_review.py": 1,
-    "homestead_storage_admission.py": 1,
-    "homestead_update_rollouts.py": 1,
-    "homestead_workloads.py": 1,
-}
-
-CORDON_FREE = {"homestead_cordon.py", "homestead_node_actions.py"}
-STOP_FREE = {"homestead_app_hold.py"}
-WALK_FREE = {"homestead_app_hold.py", "homestead_rollout_capacity.py"}
-# Job modules with no top-level KIND: the kind is named elsewhere (platform-upgrade,
-# node-power, move-origin, share-remove ...) or by a literal in the module.
-KIND_OWNERS = {"homestead_components.py", "homestead_power_jobs.py", "homestead_power_hold.py",
-               "homestead_reclass.py", "homestead_revert.py", "homestead_move_source.py",
-               "homestead_share_servers.py"}
 WALKS = {"owned_pods", "_held_pod", "_using_pods", "_ancestors"}
 
 
@@ -205,6 +184,7 @@ def judge(test, counts, allowed, rule, helper):
 class JobSafetyRatchets(unittest.TestCase):
     def test_cordons_go_through_homestead_cordon(self):
         counts = scan(cordon_sites, CORDON_FREE)
+        self.assertGreaterEqual(sum(counts.values()), 3, "the cordon scan found too little to trust")
         judge(self, counts, CORDONS, "hand-rolled cordons", "homestead_cordon.cordon / release")
 
     def test_stops_go_through_homestead_app_hold(self):
