@@ -12,9 +12,15 @@ started by an older Homestead can still be running: cluster-shutdown=<run id>,
 upgrade-cordon=<job id>, and a cordoned-by value with no ":" (the Longhorn V2
 clean-up's job id). New writes only ever use cordoned-by.
 
-Every write tests the Node's uid and resourceVersion; a conflict is read
-again and retried, up to WRITE_ATTEMPTS. A read that fails is never taken
-as "free to uncordon"."""
+A holder whose job has ended, or is not in the job list, is stale: it holds
+nothing, and any write to the Node takes it away. A cordon only stale holders
+keep was left by a job that ended - often for a person to look at - so, like
+a person's, no job takes it over. When the job list cannot be read, every
+holder counts and nothing is joined or released.
+
+Every write tests the Node's uid and resourceVersion. A conflict is read again
+and retried, up to WRITE_ATTEMPTS; a write refused while the Node had not
+changed is not asked again. A read that fails is never "free to uncordon"."""
 import urllib.error
 from typing import NamedTuple
 
@@ -29,12 +35,16 @@ OLD_MARKS = {NAMES.key("cluster-shutdown"): "cluster-shutdown", NAMES.key("upgra
 # An old cordoned-by value with no kind in it was written by this kind.
 BARE_MARK_KIND = "longhorn-v2-cleanup"
 WRITE_ATTEMPTS = 4
-# Kinds that work on every host at once, whatever host their job names.
-EVERY_HOST = ("os-rollout", "cluster-shutdown", "longhorn-v2-cleanup")
+# Kinds that hold a host only through a mark - their own, or that of the
+# node-power job they run - never just by being active.
+BY_MARK_ONLY = ("os-rollout", "cluster-shutdown", "longhorn-v2-cleanup")
 
+# cordon() reasons that mean the host was cordoned before this job.
 PERSON = "cordoned by a person"
+LEFT = "cordoned before, by a job that has ended"
 GONE = "host is gone"
 MISSING = "no such host"
+UNREAD_JOBS = "Homestead could not read its job list"
 
 
 class Outcome(NamedTuple):
@@ -65,36 +75,71 @@ def _marked(node):
     return out
 
 
-def holders(node):
-    """Every job holding this host: from the cordon mark and the older marks."""
-    found = set(_marked(node))
-    for key, kind in OLD_MARKS.items():
-        value = _annotations(node).get(key)
-        if value:
-            found.add(f"{kind}:{value}")
-    return found
+def _old(node):
+    """{older mark key: its holder} for the older marks on this Node."""
+    return {key: f"{kind}:{_annotations(node)[key]}" for key, kind in OLD_MARKS.items() if _annotations(node).get(key)}
 
 
-def busy_with(node, own):
-    """The first job not ended, of a kind that holds hosts, working on this
-    host (or on every host), other than own - by its title - or "". Fails
-    closed: a job list that cannot be read says the host may be busy."""
+def holders(node, live=None):
+    """Every job holding this host, from the cordon mark and the older marks.
+    live: the holders whose job is still going (live_holders()); given, the
+    stale ones are left out. None counts every holder."""
+    found = set(_marked(node)) | set(_old(node).values())
+    return found if live is None else found & live
+
+
+def _jobs():
     try:
-        jobs = OPS.stored()
+        return OPS.stored()
     except Exception:
+        return None
+
+
+def _live(jobs):
+    if jobs is None:
+        return None
+    out = set()
+    for item in jobs:
+        if item.get("status") in OPS.TERMINAL:
+            continue
+        kind = item.get("kind")
+        out.add(f"{kind}:{item.get('id')}")
+        run = (item.get("ref") or {}).get("run")
+        if kind == "cluster-shutdown" and run:
+            out.add(f"{kind}:{run}")  # its mark holds the run id
+    return out
+
+
+def live_holders():
+    """The holders whose job has not ended, as <kind>:<id>; None when the job
+    list cannot be read."""
+    return _live(_jobs())
+
+
+def _busy(node, own, jobs):
+    if jobs is None:
         return "a job Homestead could not read"
     for item in jobs:
         kind, ref = item.get("kind"), item.get("ref") or {}
-        if item.get("id") == own or kind not in JOB_KINDS.HOST_CORDON_KINDS or item.get("status") in OPS.TERMINAL:
+        if (item.get("id") == own or kind not in JOB_KINDS.HOST_CORDON_KINDS or kind in BY_MARK_ONLY
+                or item.get("status") in OPS.TERMINAL):
             continue
         resource = item.get("resource") or {}
         named = [ref.get("node"), *(n.get("node") if isinstance(n, dict) else n for n in ref.get("nodes") or [])]
         if resource.get("kind") == "Node":
             named.append(resource.get("name"))
-        every = kind in EVERY_HOST or (kind == "platform-upgrade" and ref.get("component") == "cluster")
-        if every or node in named:
+        if (kind == "platform-upgrade" and ref.get("component") == "cluster") or node in named:
             return item.get("title") or kind
     return ""
+
+
+def busy_with(node, own):
+    """The first job not ended, of a kind that holds hosts, working on this
+    host (a cluster upgrade: on every host), other than own - by its title -
+    or "". Kinds in BY_MARK_ONLY hold a host only where a mark says so, which
+    holders() reads. Fails closed: a job list that cannot be read says the
+    host may be busy."""
+    return _busy(node, own, _jobs())
 
 
 def _path(name):
@@ -121,94 +166,119 @@ def _fence(node):
             {"op": "test", "path": "/metadata/resourceVersion", "value": meta.get("resourceVersion")}]
 
 
-def _set_mark(node, entries):
-    """Ops that make the cordon mark these holders (removed when none)."""
-    present = MARK in _annotations(node)
+def _marks(node, entries, drop):
+    """Ops that make the cordon mark these holders (removed when none) and
+    take away the older marks named in drop."""
+    ops = [{"op": "remove", "path": _pointer(key)} for key in drop]
     if entries:
         value = ",".join(entries)
         if (node.get("metadata") or {}).get("annotations") is None:
             return [{"op": "add", "path": "/metadata/annotations", "value": {MARK: value}}]
-        return [{"op": "add", "path": _pointer(MARK), "value": value}]
-    return [{"op": "remove", "path": _pointer(MARK)}] if present else []
+        return ops + [{"op": "add", "path": _pointer(MARK), "value": value}]
+    return ops + ([{"op": "remove", "path": _pointer(MARK)}] if MARK in _annotations(node) else [])
 
 
-def _retry(error):
-    # 409: changed under us; 422: a test op failed, so it changed since the read.
-    return isinstance(error, urllib.error.HTTPError) and error.code in (409, 422)
-
-
-def _patch(name, ops):
-    KUBE.ksend("PATCH", _path(name), ops, ctype="application/json-patch+json")
-
-
-def cordon(node, kind, job_id):
-    """Cordon the host for this job and mark it as one of its holders.
-    A host a person cordoned is left to them: Outcome(False, ..., PERSON),
-    and the caller records that it was cordoned before. -> Outcome."""
-    holder = f"{kind}:{job_id}"
+def _change(node, decide, doing, missing):
+    """Read the Node fresh and write what decide(node) says, fenced, until it
+    applies: decide returns an Outcome to stop, or (ops, Outcome on success).
+    409 is a conflict: read again. 422 is a test op that failed - a conflict
+    when the Node has changed since, else a refusal not worth asking again."""
+    refused = None
     for _ in range(WRITE_ATTEMPTS):
         try:
             obj = _read(node)
         except Exception as error:
             return Outcome(False, node, f"Homestead could not read it ({str(error)[:80]})")
         if obj is None:
-            return Outcome(False, node, MISSING)
+            return missing
+        rv = obj["metadata"].get("resourceVersion")
+        if refused and refused[0] == rv:
+            return Outcome(False, node, f"Kubernetes refused {doing} it ({refused[1]})")
+        step = decide(obj)
+        if isinstance(step, Outcome):
+            return step
+        ops, success = step
+        try:
+            KUBE.ksend("PATCH", _path(node), _fence(obj) + ops, ctype="application/json-patch+json")
+            return success
+        except Exception as error:
+            code = getattr(error, "code", None) if isinstance(error, urllib.error.HTTPError) else None
+            if code == 409:
+                continue
+            if code == 422:
+                refused = (rv, str(error)[:80])
+                continue
+            return Outcome(False, node, f"{doing} it failed ({str(error)[:80]})")
+    return Outcome(False, node, f"it kept changing while Homestead was {doing} it")
+
+
+def cordon(node, kind, job_id):
+    """Cordon the host for this job and mark it as one of its holders. A host
+    cordoned before - by a person (PERSON) or left by a job that ended (LEFT) -
+    is left as it is, and the caller records that it was cordoned before.
+    -> Outcome."""
+    holder = f"{kind}:{job_id}"
+
+    def decide(obj):
         is_cordoned = bool((obj.get("spec") or {}).get("unschedulable"))
         held = holders(obj)
         if is_cordoned and holder in held:
             return Outcome(True, node, "cordoned")  # done already: a reply lost, or asked twice
         if is_cordoned and not held:
             return Outcome(False, node, PERSON)
-        # On a host not cordoned, a mark left behind holds nothing: start it afresh.
-        ops = _fence(obj) + _set_mark(obj, (_marked(obj) if is_cordoned else []) + [holder]) + [
-            {"op": "add", "path": "/spec/unschedulable", "value": True} if "spec" in obj
-            else {"op": "add", "path": "/spec", "value": {"unschedulable": True}}]
-        try:
-            _patch(node, ops)
-            return Outcome(True, node, "cordoned")
-        except Exception as error:
-            if not _retry(error):
-                return Outcome(False, node, f"cordoning it failed ({str(error)[:80]})")
-    return Outcome(False, node, "it kept changing while Homestead cordoned it")
+        if is_cordoned:
+            live = live_holders()
+            if live is None:
+                return Outcome(False, node, UNREAD_JOBS)
+            if not held & live:
+                return Outcome(False, node, LEFT)
+            entries = [h for h in _marked(obj) if h in live] + [holder]
+            drop = [key for key, h in _old(obj).items() if h not in live]
+        else:
+            # On a host not cordoned, every mark left behind holds nothing.
+            entries, drop = [holder], list(_old(obj))
+        cordoning = ({"op": "add", "path": "/spec/unschedulable", "value": True} if "spec" in obj
+                     else {"op": "add", "path": "/spec", "value": {"unschedulable": True}})
+        return _marks(obj, entries, drop) + [cordoning], Outcome(True, node, "cordoned")
+
+    return _change(node, decide, "cordoning", Outcome(False, node, MISSING))
 
 
 def release(node, kind, job_id, uid=""):
-    """Give the host back for this job: take it off the holders and, when it
-    was the last and no other host-holding job is on the host, uncordon it.
-    uid: the Node this job cordoned, when known; a Node by that name with
-    another uid is a new host, so nothing of this job's is there.
-    -> Outcome; done False with the reason while the host stays cordoned
-    because of something else, or Homestead could not tell."""
+    """Give the host back for this job: take it off the holders (with any
+    stale ones) and, when no live holder is left and no other host-holding job
+    is on the host, uncordon it. uid: the Node this job cordoned, when known;
+    a Node by that name with another uid is a new host, with nothing of this
+    job's on it. -> Outcome; done False with the reason while the host stays
+    cordoned because of something else, or Homestead could not tell."""
     holder = f"{kind}:{job_id}"
-    for _ in range(WRITE_ATTEMPTS):
-        try:
-            obj = _read(node)
-        except Exception as error:
-            return Outcome(False, node, f"Homestead could not read it ({str(error)[:80]})")
-        if obj is None or (uid and obj["metadata"].get("uid") != uid):
-            return Outcome(True, node, GONE)
+    gone = Outcome(True, node, GONE)
+
+    def decide(obj):
+        if uid and obj["metadata"].get("uid") != uid:
+            return gone
         held = holders(obj)
         if holder not in held:
             return Outcome(True, node, "not held by this job")
-        old = [key for key, k in OLD_MARKS.items() if f"{k}:{_annotations(obj).get(key)}" == holder]
-        others = sorted(held - {holder})
-        busy = "" if others else busy_with(node, job_id)
-        if busy:
-            # Kept marked: with no mark the cordon would read as a person's,
-            # and nothing would ever give the host back.
-            return Outcome(False, node, f"still held by {busy}")
-        ops = _fence(obj) + _set_mark(obj, [h for h in _marked(obj) if h != holder]) + [
-            {"op": "remove", "path": _pointer(key)} for key in old]
+        jobs = _jobs()
+        live = _live(jobs)
+        if live is None:
+            return Outcome(False, node, UNREAD_JOBS)
+        others = sorted((held - {holder}) & live)
+        if not others:
+            busy = _busy(node, job_id, jobs)
+            if busy:
+                # Kept marked: with no mark the cordon would read as a person's,
+                # and nothing would ever give the host back.
+                return Outcome(False, node, f"still held by {busy}")
+        entries = [h for h in _marked(obj) if h != holder and h in live]
+        drop = [key for key, h in _old(obj).items() if h == holder or h not in live]
+        ops = _marks(obj, entries, drop)
         is_cordoned = bool((obj.get("spec") or {}).get("unschedulable"))
-        if is_cordoned and not others:
-            ops.append({"op": "replace", "path": "/spec/unschedulable", "value": False})
-        try:
-            _patch(node, ops)
-        except Exception as error:
-            if _retry(error):
-                continue
-            return Outcome(False, node, f"releasing it failed ({str(error)[:80]})")
         if others:
-            return Outcome(False, node, f"still held by {others[0]}")
-        return Outcome(True, node, "uncordoned" if is_cordoned else "released")
-    return Outcome(False, node, "it kept changing while Homestead released it")
+            return ops, Outcome(False, node, f"still held by {others[0]}")
+        if is_cordoned:
+            ops.append({"op": "replace", "path": "/spec/unschedulable", "value": False})
+        return ops, Outcome(True, node, "uncordoned" if is_cordoned else "released")
+
+    return _change(node, decide, "releasing", gone)
