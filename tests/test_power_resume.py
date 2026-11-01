@@ -93,7 +93,7 @@ class ResumeTests(unittest.TestCase):
         kwargs = claim.call_args.kwargs
         self.assertEqual(6, kwargs["worker_restarts"])
         self.assertEqual("homestead-old", kwargs["expect_worker"], "only while the job still names the worker that went")
-        self.assertEqual(POWER.BEFORE_SEND, kwargs["before"], "and only before power was sent")
+        self.assertEqual(POWER.BEFORE_SEND, kwargs["expect_phase"], "and only before power was sent")
 
     def test_a_job_running_here_is_never_started_a_second_time_here(self):
         # An OS-update reboot runs its power job in the leader's own tick, not in the background.
@@ -112,6 +112,21 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual([True], inside, "asked while it runs, it is the same run")
         again.assert_not_called()
         self.assertNotIn("job-1", server.POWER_JOBS._POWER_RESUMING, "and it is let go when the run ends")
+
+    def test_a_run_inside_a_background_run_leaves_the_mark_to_its_starter(self):
+        # The background runner marked the job; the run ending inside it must not
+        # free the mark before the runner has recorded how it ended.
+        def node_power(*args, progress=None, **kwargs):
+            raise server.POWER_JOBS.PowerNotSent("stop here")
+        with mock.patch.object(server.OPS, "record_phase"), \
+             mock.patch.object(NODE_ACTIONS, "node_power", side_effect=node_power):
+            server.POWER_JOBS._POWER_RESUMING.clear()
+            server.POWER_JOBS._POWER_RESUMING.add("job-1")
+            with self.assertRaises(server.POWER_JOBS.PowerNotSent):
+                server.POWER_JOBS.run_power_job("job-1", {"node": "k3s-1", "action": "reboot", "drain_pods": [],
+                                                          "planned_outage": False})
+            self.assertIn("job-1", server.POWER_JOBS._POWER_RESUMING)
+        server.POWER_JOBS._POWER_RESUMING.clear()
 
     def test_a_job_saved_without_its_plan_is_not_resumed(self):
         with mock.patch.object(server.LEADER, "is_leader", return_value=True):
@@ -133,11 +148,11 @@ class OneOwnerTests(unittest.TestCase):
     def test_a_claim_refuses_a_job_another_worker_took_or_that_has_sent(self):
         with self.assertRaises(server.OPS.Superseded):
             server.OPS.record_phase("job-1", "draining", 10, "carrying on", expect_worker="homestead-old",
-                                    before=POWER.BEFORE_SEND)
+                                    expect_phase=POWER.BEFORE_SEND)
         server.OPS.record_phase("job-1", "sending", 20, "Submitting power helper", owner="homestead-new")
         with self.assertRaises(server.OPS.Superseded):
             server.OPS.record_phase("job-1", "sending", 20, "carrying on", expect_worker="homestead-new",
-                                    before=POWER.BEFORE_SEND)
+                                    expect_phase=POWER.BEFORE_SEND)
 
     def test_a_superseded_worker_records_nothing_and_never_sends(self):
         plan = {"node": "k3s-1", "action": "reboot", "drain_pods": [], "planned_outage": False}

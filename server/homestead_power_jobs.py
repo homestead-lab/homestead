@@ -78,12 +78,14 @@ def run_power_job(operation_id, power_plan, force=False, resumed=False):
     (in the background, or in the leader's own OS-update tick), so the leader
     never resumes it a second time in this process."""
     with _POWER_RESUME_LOCK:
+        mine = operation_id not in _POWER_RESUMING      # a background runner's mark stays its own to free
         _POWER_RESUMING.add(operation_id)
     try:
         return _run_power_job(operation_id, power_plan, force, resumed)
     finally:
-        with _POWER_RESUME_LOCK:
-            _POWER_RESUMING.discard(operation_id)
+        if mine:
+            with _POWER_RESUME_LOCK:
+                _POWER_RESUMING.discard(operation_id)
 
 
 def _run_power_job(operation_id, power_plan, force=False, resumed=False):
@@ -393,7 +395,7 @@ def resume_power_job(item):
         try:
             OPS.record_phase(item["id"], ref.get("phase", "draining"), item.get("progress", 10),
                              "Homestead restarted or moved while preparing this host; carrying on", worker=POD_NAME,
-                             worker_restarts=own_restarts(), expect_worker=ref.get("worker"), before=POWER.BEFORE_SEND)
+                             worker_restarts=own_restarts(), expect_worker=ref.get("worker"), expect_phase=POWER.BEFORE_SEND)
         except Exception:
             with _POWER_RESUME_LOCK:
                 _POWER_RESUMING.discard(item["id"])
