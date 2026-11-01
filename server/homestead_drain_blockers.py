@@ -390,9 +390,11 @@ UNREAD_WHY = "couldn't read why"
 def refusal(error, pod, read=None):
     """Why an eviction of pod was refused with 429, from the refusal's own
     Status body and the budget it names: {budget, passing, starting,
-    expected, why}. passing: the budget has copies still starting
-    (expectedPods > currentHealthy), or Kubernetes has not processed its
-    latest change yet, so waiting can let the eviction through. A body or
+    expected, why}. passing: the budget has copies not yet healthy
+    (expectedPods > currentHealthy), Kubernetes has not processed its latest
+    change yet, or its status is behind an eviction just made (disruptedPods
+    set, or currentHealthy above desiredHealthy with no disruption allowed),
+    so waiting can let the eviction through. A body or
     budget that can't be read is not passing, with why "couldn't read why"."""
     unknown = {"budget": None, "passing": False, "starting": 0, "expected": 0, "why": UNREAD_WHY}
     try:
@@ -412,19 +414,27 @@ def refusal(error, pod, read=None):
         expected, healthy = int(st.get("expectedPods") or 0), int(st.get("currentHealthy") or 0)
         desired = int(st.get("desiredHealthy") or 0)
         processing = int(st.get("observedGeneration") or 0) < int(meta.get("generation") or 0)
+        # Right after an eviction Kubernetes (eviction.go checkAndDecrement)
+        # sets disruptionsAllowed to 0 and names the pod in disruptedPods;
+        # currentHealthy stays as it was until the budget controller resyncs.
+        behind = bool(st.get("disruptedPods")) or (
+            healthy > desired and int(st.get("disruptionsAllowed") or 0) == 0)
     except Exception:
         return unknown
     budget = f"{ns}/{named[0]}"
     starting = max(0, expected - healthy)
     if starting:
         why = (f"disruption budget {budget}, which has {healthy} of {expected} copies healthy and needs "
-               f"{desired} ({starting} still starting)")
+               f"{desired} ({starting} not yet healthy)")
     elif processing:
         why = f"disruption budget {budget}, which Kubernetes has not caught up with since it was changed"
+    elif behind:
+        why = (f"disruption budget {budget}, which Kubernetes has not caught up with since a copy was evicted "
+               f"({healthy} of {expected} copies counted healthy, it needs {desired})")
     else:
         why = (f"disruption budget {budget} allows no disruption: {healthy} of {expected} copies are healthy, "
                f"it needs {desired}, and none is starting")
-    return {"budget": budget, "passing": bool(starting or processing), "starting": starting,
+    return {"budget": budget, "passing": bool(starting or processing or behind), "starting": starting,
             "expected": expected, "why": why}
 
 

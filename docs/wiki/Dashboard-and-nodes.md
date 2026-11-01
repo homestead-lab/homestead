@@ -286,9 +286,10 @@ Each has its own **Drain anyway** tick: the normal cordon and drain still run.
 A forced restart sends no drain and doesn't ask.
 
 **During the drain.** When a disruption budget refuses an eviction because its
-other copies are still starting, the drain keeps trying for up to 5 minutes and
-says which budget and how many copies it waits for. A budget with nothing
-starting stops the drain at once, naming it. For Longhorn's instance-manager the
+other copies are not yet healthy, or because Kubernetes hasn't yet counted an
+eviction it just allowed, the drain keeps trying for up to 5 minutes and says
+which budget it waits for. A budget with nothing pending stops the drain at
+once, naming it. For Longhorn's instance-manager the
 drain waits while its engines leave the host (up to 5 minutes), and stops early,
 naming the orphan records or engines that keep it there, once only those are
 left.

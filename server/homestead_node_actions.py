@@ -118,8 +118,9 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
                 if wait and e.code == 429 and MAINTENANCE.longhorn_instance_manager(p):
                     retrying.append(identity)
                 elif wait and e.code == 429:
-                    # A budget whose copies are still starting lets go once
-                    # they are healthy: waited on. One with none starting
+                    # A budget whose copies are not yet healthy, or whose
+                    # status is behind an eviction just made, lets go once
+                    # it catches up: waited on. One with nothing pending
                     # never will: refused now, naming it.
                     why = BLOCKERS.refusal(e, p, read=L.kget)
                     if why["passing"]:

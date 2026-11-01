@@ -154,6 +154,34 @@ class DrainNamesItsBlockerTests(unittest.TestCase):
         self.assertIn("lab/keep-ready", said)
         self.assertIn("1 of 2 copies", said)
 
+    def test_a_budget_behind_after_the_first_eviction_is_waited_out(self):
+        # Two copies under minAvailable 1, both on this host. The first
+        # eviction goes through: Kubernetes' checkAndDecrement sets
+        # disruptionsAllowed to 0 and records the pod in disruptedPods, but
+        # currentHealthy stays 2 until the budget controller resyncs. The
+        # second eviction, a moment later, is refused with "needs 1 healthy
+        # pods and has 2 currently"; once the controller catches up it goes.
+        first = workload("app-a", labels={"app": "app-a"})
+        second = workload("app-b", labels={"app": "app-a"})
+        pdb = budget("keep-one", expected=2, healthy=2, desired=1, allowed=1)
+        with Kube(first, second, pdb) as kube:
+            pdb_path = kube.path_of(pdb)
+
+            def evicted(method, path, sent):
+                current = kube.object(pdb_path)
+                current["status"].update(disruptionsAllowed=0, disruptedPods={"app-a": "2026-11-01T12:00:00Z"})
+                kube.add(current)
+                return None
+            kube.react("POST", eviction(first), evicted)
+            asked = self.refuse(kube, second, pdb, times=3)
+            result = self.run_drain(kube)
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(4, len(asked))
+        self.assertEqual(["lab/app-a", "lab/app-b"], sorted(result["evicted"]))
+        said = " ".join(row[2] for row in self.phases)
+        self.assertIn("lab/keep-one", said)
+        self.assertNotIn("none is starting", said)
+
     def test_a_budget_with_nothing_starting_fails_at_once_naming_it(self):
         pod, pdb = workload(), budget("keep-ready", expected=1, healthy=1, desired=1, allowed=0)
         with Kube(pod, pdb) as kube:
@@ -298,6 +326,27 @@ class RefusalTests(unittest.TestCase):
                 said = BLOCKERS.refusal(error, pod)
                 self.assertEqual({"budget": None, "passing": False, "why": "couldn't read why"},
                                  {k: said[k] for k in ("budget", "passing", "why")})
+
+    def test_a_budget_the_controller_has_not_caught_up_with_is_passing(self):
+        # Right after an eviction: disruptedPods names the evicted pod, or
+        # currentHealthy is still above desiredHealthy with nothing allowed.
+        pod = workload()
+        for pdb in (budget("keep-one", expected=2, healthy=2, desired=1, allowed=0),
+                    budget("keep-one", expected=2, healthy=1, desired=1, allowed=0)):
+            if pdb["status"]["currentHealthy"] == 1:
+                pdb["status"]["disruptedPods"] = {"app-z": "2026-11-01T12:00:00Z"}
+            with self.subTest(pdb["status"]), Kube(pdb):
+                said = BLOCKERS.refusal(too_many_requests("eviction", pdb), pod)
+            self.assertTrue(said["passing"], said)
+            self.assertIn("lab/keep-one", said["why"])
+            self.assertNotIn("none is starting", said["why"])
+
+    def test_copies_not_yet_healthy_are_said_so(self):
+        pod, pdb = workload(), budget("keep-ready", expected=2, healthy=1, desired=1)
+        with Kube(pdb):
+            said = BLOCKERS.refusal(too_many_requests("eviction", pdb), pod)
+        self.assertIn("1 not yet healthy", said["why"])
+        self.assertNotIn("still starting", said["why"])
 
     def test_a_budget_not_yet_processed_is_passing(self):
         # observedGeneration < generation: Kubernetes answers "is still being
