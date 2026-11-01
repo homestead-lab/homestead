@@ -14,6 +14,7 @@ where a disk is already mounted, or - for the V2 engine - the raw device.
 Taking a disk out goes the other way, and only once nothing is on it:
 scheduling stops, replicas are moved off, then the disk is removed.
 """
+import copy
 import json
 import posixpath
 import hashlib
@@ -418,7 +419,10 @@ def _usage_filesystems(disks):
 def summary():
     """A line per disk for the node cards: its name or device, and - for a
     Longhorn disk on the system drive - that it is both."""
-    inv = _named(inventory())
+    # The reading the Disks page and the alert source keep under "disks" (a disk
+    # write forgets it): one inventory a cycle, not one per Hosts build (#978).
+    # A copy, since naming writes into the rows.
+    inv = _named(copy.deepcopy(homestead_routes.cached("disks", homestead_routes.PAGE_SECONDS, inventory)))
     return {node: [_disk_summary(d) for d in disks] for node, disks in inv["nodes"].items()}
 
 
