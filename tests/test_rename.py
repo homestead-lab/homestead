@@ -33,6 +33,11 @@ class RenameTests(unittest.TestCase):
         self.hpas, self.pods, self.sets, self.sent = [], [], [], []
         self.extra, self.after_send, self.unreadable = {}, lambda *args: None, set()
         self.pod_reads, self.pods_gone_after, self.slept = 0, None, []
+        # The Deployment controller rewrites the original's status once its last
+        # old pod has gone (terminatingReplicas), a moment after: it lands just
+        # after the next read of the original, so that read's resourceVersion
+        # is stale. status_lags=False: the write landed before any read.
+        self.status_lags, self.status_write, self.on_status_write = True, None, lambda: None
         self.admission = mock.Mock(return_value={"blocked": False})
         self.body = {"ns": "lab", "name": "old", "workload_name": "new"}
         for patch in (mock.patch.object(review, "_key", return_value=b"rename-tests"),
@@ -60,13 +65,29 @@ class RenameTests(unittest.TestCase):
         if path == "/api/v1/pods":
             self.pod_reads += 1
             if self.pods_gone_after is not None and self.pod_reads > self.pods_gone_after:
+                if self.status_write is None:
+                    self.status_write = "pending"
+                    if not self.status_lags:
+                        self.controller_status_write()
                 return {"items": []}
             return {"items": copy.deepcopy(self.pods)}
         if path.endswith("/replicasets"):
             return {"items": copy.deepcopy(self.sets)}
         if "/deployments/" in path and path.rsplit("/", 1)[-1] in self.objects:
-            return copy.deepcopy(self.objects[path.rsplit("/", 1)[-1]])
+            obj = copy.deepcopy(self.objects[path.rsplit("/", 1)[-1]])
+            if path.endswith("/old") and self.status_write == "pending":
+                self.controller_status_write()
+            return obj
         raise urllib.error.HTTPError(path, 404, "not found", {}, None)
+
+    def controller_status_write(self):
+        """What the Deployment controller does as the last old pod goes: a status
+        write, which bumps resourceVersion and leaves the spec alone."""
+        self.status_write = "written"
+        obj = self.objects["old"]
+        obj["metadata"]["resourceVersion"] = str(int(obj["metadata"]["resourceVersion"]) + 1)
+        obj["status"] = dict(obj.get("status") or {}, terminatingReplicas=0)
+        self.on_status_write()
 
     def send(self, method, path, payload, **kwargs):
         self.sent.append((method, path, copy.deepcopy(payload)))
@@ -82,8 +103,11 @@ class RenameTests(unittest.TestCase):
             obj = self.objects[name]
             if method == "PATCH":
                 self.assertEqual("application/json-patch+json", kwargs["ctype"])
-                self.assertEqual({"op": "test", "path": "/metadata/uid", "value": obj["metadata"]["uid"]}, payload[0])
-                self.assertEqual({"op": "test", "path": "/metadata/resourceVersion", "value": obj["metadata"]["resourceVersion"]}, payload[1])
+                self.assertEqual(["test", "/metadata/uid"], [payload[0]["op"], payload[0]["path"]])
+                self.assertEqual(["test", "/metadata/resourceVersion"], [payload[1]["op"], payload[1]["path"]])
+                if (payload[0]["value"], payload[1]["value"]) != (obj["metadata"]["uid"], obj["metadata"]["resourceVersion"]):
+                    # The API server's answer to a JSON-patch test op that does not hold.
+                    raise urllib.error.HTTPError(path, 422, "Unprocessable Entity", {}, None)
                 obj["spec"]["replicas"] = payload[2]["value"]
                 obj["metadata"]["generation"] += 1
                 obj["metadata"]["resourceVersion"] = str(int(obj["metadata"]["resourceVersion"]) + 1)
@@ -180,10 +204,10 @@ class RenameTests(unittest.TestCase):
                 change()
         self.after_send = hook
 
-    def assert_original_back(self, count, writes=("POST", "PATCH", "PATCH")):
+    def assert_original_back(self, count, writes=("POST", "PATCH", "PATCH", "PATCH")):
         """The original is at its earlier replica count again; the replacement was kept, stopped."""
         self.assertEqual(list(writes), [row[0] for row in self.sent])
-        self.assertEqual("/apis/apps/v1/namespaces/lab/deployments/old", self.sent[2][1])
+        self.assertEqual("/apis/apps/v1/namespaces/lab/deployments/old", self.sent[-1][1])
         self.assertEqual(count, self.objects["old"]["spec"]["replicas"])
         self.assertEqual(0, self.objects["new"]["spec"]["replicas"])
         job = ops.stored()[0]
@@ -194,9 +218,9 @@ class RenameTests(unittest.TestCase):
         self.assertTrue(job["ref"]["retain_resources"], "the stopped replacement is still there")
         self.assertTrue(ops.list_operations()[0]["cleanable"])
 
-    def assert_not_put_back(self, why, count=1, says=(), both_stopped=False):
+    def assert_not_put_back(self, why, count=1, says=(), both_stopped=False, writes=("POST", "PATCH")):
         """No put-back. The job says why, what each workload is now, and the way back."""
-        self.assertEqual(["POST", "PATCH"], [row[0] for row in self.sent])
+        self.assertEqual(list(writes), [row[0] for row in self.sent])
         job = ops.stored()[0]
         self.assertEqual("failed", job["status"])
         self.assertNotIn("restored", job["ref"])
@@ -220,9 +244,10 @@ class RenameTests(unittest.TestCase):
 
     def test_old_pods_outlasting_the_stop_wait_put_the_original_back_once_gone(self):
         self.old_pods_outlast_the_wait(2)
+        self.status_lags = False  # the controller's status write landed before the put-back's reads
         with self.assertRaisesRegex(ValueError, "did not finish stopping.*old was put back to 2 replicas"):
             self.dispatch()
-        self.assert_original_back(2)
+        self.assert_original_back(2, ("POST", "PATCH", "PATCH"))
         # Checked again at the count it goes back to, before the write.
         self.assertEqual(1, self.admission.call_count)
         self.assertEqual("old", self.admission.call_args.args[0]["metadata"]["name"])
@@ -291,12 +316,12 @@ class RenameTests(unittest.TestCase):
         self.old_pods_outlast_the_wait()
         def lost_restore(method, path, payload, **kwargs):
             result = self.send(method, path, payload, **kwargs)
-            if method == "PATCH" and len([row for row in self.sent if row[0] == "PATCH"]) == 2:
+            if method == "PATCH" and path.endswith("/old") and payload[2]["value"]:
                 raise TimeoutError("do-not-journal")
             return result
         with self.assertRaisesRegex(ValueError, "did not finish stopping.*old could not be put back to 1 replica"):
             self.dispatch(send=lost_restore)
-        self.assertEqual(["POST", "PATCH", "PATCH"], [row[0] for row in self.sent])
+        self.assertEqual(["POST", "PATCH", "PATCH", "PATCH"], [row[0] for row in self.sent])
         job = ops.stored()[0]
         self.assertEqual("failed", job["status"])
         self.assertEqual("uncertain", job["ref"]["writes"][-1]["phase"])
@@ -314,6 +339,45 @@ class RenameTests(unittest.TestCase):
             self.dispatch()
         self.assertNotIn("restored", ops.stored()[0]["ref"])
         self.assertNotIn("both are stopped", ops.stored()[0]["message"])
+
+    def test_a_status_write_as_the_last_old_pod_goes_still_puts_the_original_back(self):
+        # The controller's status write moves resourceVersion between the last
+        # read and the PATCH: the test op fails (422) and nothing is written.
+        # The spec is still the stopped one, so it is read again and sent once more.
+        self.old_pods_outlast_the_wait(2)
+        with self.assertRaisesRegex(ValueError, "did not finish stopping.*old was put back to 2 replicas"):
+            self.dispatch()
+        self.assert_original_back(2)
+        refused, written = self.sent[2][2], self.sent[3][2]
+        self.assertEqual(int(refused[1]["value"]) + 1, int(written[1]["value"]), "the second try tests the fresh resourceVersion")
+        self.assertEqual("written", self.status_write, "the controller's status write landed between the read and the PATCH")
+        self.assertEqual(["refused", "accepted"], [row["phase"] for row in ops.stored()[0]["ref"]["writes"][-2:]])
+        self.assertNotIn("not confirmed", ops.stored()[0]["message"])
+
+    def test_an_edit_while_it_was_being_put_back_is_not_written_over(self):
+        # Someone changed the original's spec in that moment: the refused write
+        # is not sent again over their change, and the job says what happened.
+        self.old_pods_outlast_the_wait(2)
+        self.on_status_write = lambda: self.objects["old"]["spec"]["template"]["spec"]["containers"][0].update(image="example/test:2")
+        with self.assertRaisesRegex(ValueError, "old was not put back to 2 replicas: old was edited by someone else while it was being put back"):
+            self.dispatch()
+        self.assert_not_put_back("nothing was written over it", 2, both_stopped=True, writes=("POST", "PATCH", "PATCH"))
+        self.assertEqual("example/test:2", self.objects["old"]["spec"]["template"]["spec"]["containers"][0]["image"])
+        self.assertEqual(0, self.objects["old"]["spec"]["replicas"])
+        self.assertEqual("refused", ops.stored()[0]["ref"]["writes"][-1]["phase"])
+        self.assertNotIn("not confirmed", ops.stored()[0]["message"])
+
+    def test_a_put_back_refused_twice_is_not_tried_a_third_time(self):
+        self.old_pods_outlast_the_wait()
+        def refuse_restores(method, path, payload, **kwargs):
+            if method == "PATCH" and path.endswith("/old") and payload[2]["value"]:
+                self.sent.append((method, path, copy.deepcopy(payload)))
+                raise urllib.error.HTTPError(path, 422, "Unprocessable Entity", {}, None)
+            return self.send(method, path, payload, **kwargs)
+        with self.assertRaisesRegex(ValueError, "old was not put back to 1 replica: the API server refused the write twice; nothing was written"):
+            self.dispatch(send=refuse_restores)
+        self.assert_not_put_back("refused the write twice", both_stopped=True, writes=("POST", "PATCH", "PATCH", "PATCH"))
+        self.assertEqual(["refused", "refused"], [row["phase"] for row in ops.stored()[0]["ref"]["writes"][-2:]])
 
     def test_the_count_before_the_rename_is_kept_for_recovery(self):
         self.source["spec"]["replicas"] = 3

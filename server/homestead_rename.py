@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import time
+import urllib.error
 
 import homestead_capacity_review as REVIEW
 import homestead_import_guard as IMPORT
@@ -18,6 +19,10 @@ class Stopped(ValueError):
 
 class StopTimedOut(Stopped):
     """The original's pods outlasted the stop wait: the only failure that may put it back."""
+
+
+class Refused(Stopped):
+    """The API server refused a guarded write (409/422, a test op that did not hold): nothing was written."""
 
 
 def identity(obj):
@@ -108,7 +113,7 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
         progress = percent
         return ops.record_phase(ident, name, percent, message, **updates)
 
-    def mutation(method, path, payload, label, percent, expected=None):
+    def mutation(method, path, payload, label, percent, expected=None, refusable=False):
         # Only identifiers, never pod specs, env values or API errors, are stored.
         entry = {"method": method, "name": label, "phase": "intent", "before": expected}
         writes.append(entry)
@@ -125,7 +130,13 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
             entry["phase"] = "accepted"
             phase("writing", percent, f"{method} {label}: acknowledged", writes=copy.deepcopy(writes))
             return result
-        except Exception:
+        except Exception as error:
+            if refusable and isinstance(error, urllib.error.HTTPError) and error.code in (409, 422):
+                # A definite refusal: the test ops failed, so nothing was written.
+                error.close()
+                entry["phase"] = "refused"
+                phase("writing", percent, f"{method} {label}: refused, nothing was written", writes=copy.deepcopy(writes))
+                raise Refused(f"The {method} for {label} was refused") from None
             entry["phase"] = "uncertain"
             # If storage itself failed, the preceding durable intent remains
             # authoritative. Never perform another cluster write to undo it.
@@ -141,12 +152,12 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
             raise Stopped("Workload was replaced; rename stopped")
         return obj
 
-    def scale(obj, count, percent):
+    def scale(obj, count, percent, refusable=False):
         meta = identity(obj)
         patch = [{"op": "test", "path": "/metadata/uid", "value": meta["uid"]},
                  {"op": "test", "path": "/metadata/resourceVersion", "value": meta["resourceVersion"]},
                  {"op": "add", "path": "/spec/replicas", "value": count}]
-        result = mutation("PATCH", base(ns) + "/" + meta["name"], patch, meta["name"], percent, meta)
+        result = mutation("PATCH", base(ns) + "/" + meta["name"], patch, meta["name"], percent, meta, refusable)
         expected_spec = copy.deepcopy(obj["spec"])
         expected_spec["replicas"] = count
         if result.get("spec") != expected_spec:
@@ -171,12 +182,27 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
         Returns (restored, outcome); any doubt writes nothing, for a person to decide."""
         refused = f"{old} was not put back to {_count(count)}"
 
-        def original():
+        def original(changed="it changed outside this rename"):
             obj = read(source_path)
             if identity(obj)["uid"] != stopped_id["uid"] or obj.get("spec") != stopped_spec:
-                raise Stopped("it changed outside this rename")
+                raise Stopped(changed)
             pods, known = ROLLOUT.owned_pods(obj, ROLLOUT.items(read, "/api/v1/pods"), read, ns)
             return obj, known and not pods
+
+        def last_looks(changed="it changed outside this rename"):
+            # Right before the write: the replacement must be unstartable, and
+            # new pods beside a terminating old one could be two writers on the
+            # same volume. Returns the original as read last, for its write.
+            twin = read(target_path)
+            twin_pods, known = ROLLOUT.owned_pods(twin, ROLLOUT.items(read, "/api/v1/pods"), read, ns)
+            if (identity(twin)["uid"] != target_id["uid"] or twin.get("spec") != target_spec or
+                    twin["spec"].get("replicas") != 0 or not known or twin_pods):
+                raise Stopped(f"{new} changed outside this rename")
+            guards(twin, old, read)
+            obj, gone = original(changed)
+            if not gone:
+                raise Stopped("its old pods are still stopping")
+            return obj
 
         try:
             # The stop wait has just seen old pods: give them a little longer.
@@ -194,24 +220,30 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
             check = admission(back)
             if not isinstance(check, dict) or check.get("blocked") is not False:
                 return None, f"{refused}: {old} no longer fits"
-            # Last looks, right before the write: the replacement must be
-            # unstartable, and new pods beside a terminating old one could
-            # be two writers on the same volume.
-            twin = read(target_path)
-            twin_pods, known = ROLLOUT.owned_pods(twin, ROLLOUT.items(read, "/api/v1/pods"), read, ns)
-            if (identity(twin)["uid"] != target_id["uid"] or twin.get("spec") != target_spec or
-                    twin["spec"].get("replicas") != 0 or not known or twin_pods):
-                return None, f"{refused}: {new} changed outside this rename"
-            guards(twin, old, read)
-            obj, gone = original()
-            if not gone:
-                return None, f"{refused}: its old pods are still stopping"
+            obj = last_looks()
         except Stopped as error:
             return None, f"{refused}: {error}"
         except Exception:
             return None, f"{refused}: the workloads could not be checked"
         try:
-            scale(obj, count, progress)
+            try:
+                scale(obj, count, progress, refusable=True)
+            except Refused:
+                # Nothing was written. The Deployment controller rewrites the
+                # original's status (terminatingReplicas) as its last old pod
+                # goes, which moves resourceVersion between our read and the
+                # write. Read again: when the spec is still the stopped one we
+                # wrote, send it once more against the fresh resourceVersion.
+                # A spec someone else changed is never written over.
+                try:
+                    obj = last_looks(f"{old} was edited by someone else while it was being put back, so nothing was written over it")
+                except Stopped as error:
+                    return None, f"{refused}: {error}"
+                except Exception:
+                    return None, f"{refused}: its write was refused and the workloads could not be checked again; nothing was written"
+                scale(obj, count, progress, refusable=True)
+        except Refused:
+            return None, f"{refused}: the API server refused the write twice; nothing was written"
         except Exception:
             # The write is journalled by mutation(); it is never retried.
             if writes and writes[-1]["phase"] == "accepted":
