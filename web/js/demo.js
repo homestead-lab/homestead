@@ -12,12 +12,12 @@
     const there = "harvester-node2", row = (id, kind, what, why, fix, extra = {}) =>
       ({ id, kind, what, why, fix, can_remove: false, records: [], ...extra });
     return [
-      row(`engine-orphans:${node}`, "engine-orphans",
+      ...(window.__demoOrphansRemoved ? [] : [row(`engine-orphans:${node}`, "engine-orphans",
         `2 Longhorn orphan records on ${node} for volumes pvc-demo-frigate, pvc-demo-ha, now running on ${there}`,
         `Each record keeps a leftover engine process on ${node}'s instance-manager. Longhorn keeps the instance-manager, and its disruption budget at 0, while it still runs engines, so the drain cannot evict it.`,
         `Remove these orphan records in the restart review: Longhorn then stops the leftover processes. The volumes keep running on ${there}.`,
         { can_remove: true, records: ["pvc-demo-frigate", "pvc-demo-ha"].map((volume, i) => ({ name: `orphan-demo-${i + 1}`,
-          uid: `demo-orphan-uid-${i + 1}`, resourceVersion: String(6001 + i), engine: `${volume}-e-0`, engine_node: there })) }),
+          uid: `demo-orphan-uid-${i + 1}`, resourceVersion: String(6001 + i), engine: `${volume}-e-0`, engine_node: there })) })]),
       row(`other-orphans:${node}`, "other-orphans", `1 other Longhorn orphan record on ${node}: replica-data pvc-demo-paperless-a1b2c3d4`,
         `Longhorn keeps what an orphan record names on ${node} until the record is removed; an instance record can keep ${node}'s instance-manager from stopping.`,
         "Check each in Longhorn before removing it. An instance record whose volume runs elsewhere and is healthy can go; removing a replica-data record deletes an on-disk copy of the volume's data, which may be its last copy, so remove one only once the volume is healthy on other hosts."),
@@ -1870,6 +1870,13 @@ ssh_pwauth: true
     "/api/workloads": workloads, "/api/network": network,
     // Rebooting a host: one app has nowhere else to go, one volume keeps a
     // single copy elsewhere while the host is down.
+    // Removing Longhorn's leftover engine records from the restart review:
+    // the demo removes them all, and the next review no longer lists them.
+    "/api/node/orphans/remove": (url, init) => {
+      const body = JSON.parse(init?.body || "{}");
+      window.__demoOrphansRemoved = true;
+      return { removed: (body.records || []).map(r => r.name), refused: [] };
+    },
     // A reviewed reboot or shutdown: a job that walks through the real phases.
     "/api/node/power": (url, init) => {
       const body = JSON.parse(init?.body || "{}"), reboot = body.action === "reboot";

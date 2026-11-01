@@ -471,3 +471,103 @@ def stall_reason(node, read=None):
         return say(node, _for_host(node, read=read))
     except Exception:  # the message falls back to its general advice
         return ""
+
+
+# ------------------------------------------------- removing engine orphan records
+# The restart review offers one fix: removing Longhorn's engine-instance orphan
+# records on the host whose engine already runs on another host. Longhorn then
+# stops the leftover engine process, the instance-manager can go, and the drain
+# can finish. Nothing else is removed here: a replica-data record ("replica" in
+# v1.13.0) names an on-disk copy of a volume, which removing it deletes.
+REMOVE_AT_ONCE = 50
+_NODE = re.compile(r"[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?")
+_NAME = re.compile(r"[a-z0-9]([-a-z0-9.]{0,251}[a-z0-9])?")
+
+
+def remove_request(body):
+    """The checked request body: (node, records), or ValueError."""
+    if not isinstance(body, dict):
+        raise ValueError("the request must be an object")
+    node, records = body.get("node"), body.get("records")
+    if not isinstance(node, str) or not _NODE.fullmatch(node):
+        raise ValueError("node must be a host name")
+    if not isinstance(records, list) or not records or len(records) > REMOVE_AT_ONCE:
+        raise ValueError(f"records must list 1 to {REMOVE_AT_ONCE} orphan records")
+    checked = []
+    for item in records:
+        if not isinstance(item, dict) or not all(isinstance(item.get(k), str) and item.get(k)
+                                                 for k in ("name", "uid", "resourceVersion")):
+            raise ValueError("each record names its name, uid and resourceVersion")
+        if not _NAME.fullmatch(item["name"]):
+            raise ValueError("a record name is not a Kubernetes name")
+        checked.append({k: item[k] for k in ("name", "uid", "resourceVersion")})
+    return node, checked
+
+
+def _remove_one(node, item, read, send):
+    """Remove one engine-instance orphan record, or why not."""
+    name = item["name"]
+    try:
+        orphan = read(f"{ORPHANS}/{urllib.parse.quote(name, safe='')}")
+    except urllib.error.HTTPError as error:
+        return "it is gone already" if error.code == 404 else f"it couldn't be read ({_reason(error)})"
+    except Exception as error:
+        return f"it couldn't be read ({_reason(error)})"
+    meta, spec = orphan.get("metadata") or {}, orphan.get("spec") or {}
+    if meta.get("uid") != item["uid"] or meta.get("resourceVersion") != item["resourceVersion"]:
+        return "it changed since the review; review the restart again"
+    if spec.get("orphanType") != ENGINE_INSTANCE:
+        return "it is not an engine-instance record; Homestead removes only those"
+    if spec.get("nodeID") != node:
+        return f"it is not on {node}"
+    engine_name = (spec.get("parameters") or {}).get(INSTANCE_NAME) or ""
+    if not engine_name:
+        return "it names no engine"
+    try:
+        where = _engine_node(read(f"{ENGINES}/{urllib.parse.quote(engine_name, safe='')}"))
+    except Exception as error:
+        return f"its engine {engine_name} couldn't be read ({_reason(error)})"
+    if not where:
+        return f"its engine {engine_name} is not running anywhere Homestead can see"
+    if where == node:
+        return f"its engine {engine_name} runs on {node} now"
+    try:
+        send("DELETE", f"{ORPHANS}/{urllib.parse.quote(name, safe='')}",
+             {"apiVersion": "v1", "kind": "DeleteOptions",
+              "preconditions": {"uid": item["uid"], "resourceVersion": item["resourceVersion"]}})
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return "it is gone already"
+        if error.code == 409:
+            return "it changed since the review; review the restart again"
+        return f"Kubernetes refused to remove it ({_reason(error)})"
+    except Exception as error:
+        return f"it couldn't be removed ({_reason(error)})"
+    return None
+
+
+def remove_engine_orphans(node, records, read=None, send=None):
+    """Remove the reviewed engine-instance orphan records on node whose engine
+    runs on another host: {"removed": [name], "refused": [{"name", "why"}]}.
+    Each is read again first, and deleted only with its uid and resourceVersion
+    as preconditions."""
+    read, send = read or kget, send or KUBE.ksend
+    removed, refused = [], []
+    for item in records:
+        why = _remove_one(node, item, read, send)
+        if why is None:
+            removed.append(item["name"])
+        else:
+            refused.append({"name": item["name"], "why": why})
+    return {"removed": removed, "refused": refused}
+
+
+def _remove_route(request):
+    node, records = remove_request(request.body)
+    return remove_engine_orphans(node, records)
+
+
+# Its routes and who may use them (homestead_routes.py).
+ROUTES = {
+    ("POST", "/api/node/orphans/remove"): ("admin", _remove_route),
+}

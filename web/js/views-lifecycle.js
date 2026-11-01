@@ -881,6 +881,37 @@ window.nodePowerReady = () => {
   const button = $("#pw_execute");
   if (button) button.disabled = !typedConfirmMatches("pw_confirm") || !nodePowerBlockersTicked(window.__nodePowerPlan);
 };
+// Longhorn's leftover engine records on this host whose engine runs on another
+// host: reviewed one by one (record, engine, where it runs), removed by an
+// admin, then the restart is reviewed again so the row goes.
+window.nodePowerRemoveOrphans = i => {
+  const plan = window.__nodePowerPlan;
+  const row = nodePowerDrainBlockers(plan)[i];
+  if (!row || !row.can_remove) return toast("Review the host impact again", "bad");
+  const records = row.records || [];
+  childModal(`Remove orphan records · ${plan.node}`, UI.lead(`Longhorn then stops the leftover engine processes on ${esc(plan.node)}. `
+    + "The volumes keep running where their engines are. Homestead checks each record again before removing it.")
+    + UI.table([{ label: "Orphan record" }, { label: "Engine" }, { label: "Runs on" }],
+      records.map(r => [`<span class="mono">${esc(r.name)}</span>`, `<span class="mono">${esc(r.engine)}</span>`, esc(r.engine_node)]))
+    + UI.actions(UI.button(`Remove ${plural(records.length, "orphan record")}`, `nodePowerRemoveOrphansConfirm(${i})`, { kind: "danger", id: "pw_orphans_remove" })
+      + UI.cancel("Back")), true);
+};
+window.nodePowerRemoveOrphansConfirm = async i => {
+  const plan = window.__nodePowerPlan;
+  const row = nodePowerDrainBlockers(plan)[i];
+  if (!row || !row.can_remove) return toast("Review the host impact again", "bad");
+  const button = $("#pw_orphans_remove");
+  if (button) { button.disabled = true; button.textContent = "Removing…"; }
+  let r;
+  try {
+    r = await api("/api/node/orphans/remove", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ node: plan.node, records: (row.records || []).map(x => ({ name: x.name, uid: x.uid, resourceVersion: x.resourceVersion })) }) });
+  } catch (e) { return toast(`Could not remove the orphan records: ${e.message}`, "bad"); }
+  const refused = r.refused || [];
+  toast(refused.length ? `Removed ${r.removed.length}; kept ${refused.length}: ${refused.map(x => `${x.name} (${x.why})`).join("; ")}`
+    : `Removed ${plural(r.removed.length, "orphan record")}`, refused.length ? "warn" : "ok");
+  return window.nodePowerReview(plan.node, plan.action, !!plan.force);
+};
 window.nodePowerReview = async (node, action, force = false) => {
   window.__nodePowerPlan = null;
   const sequence = ++NODE_POWER_REVIEW_SEQUENCE;
@@ -944,11 +975,11 @@ window.nodePowerReview = async (node, action, force = false) => {
   const copies = volumes.length
     ? UI.table([{ label: "Volume" }, { label: "Copies" }], volumes.map(v => [`<span class="mono">${esc(v.claim)}</span>`, UI.chip(...(risk[v.risk] || risk.resync))]))
     : `<div class="ui-empty">No Longhorn replica on this host was found.</div>`;
-  // Task 4 wires the removal button of a removable row (data-drain-blocker: the row's id).
+  // A removable row's button opens its own review (nodePowerRemoveOrphans).
   const blockersHtml = `<p class="ui-help">Each can stall the drain: fix it and review again, or drain anyway.</p>`
     + drainBlockers.map((b, i) => `<div>${UI.ack(`pw_blocker_${i}`, `Drain anyway: ${b.what}`, { onchange: "nodePowerReady()" })}
       ${UI.more("Why, and what to do", `${esc(b.why)} ${esc(b.fix)}`, false, `pw_blocker_fix_${i}`)}${b.can_remove ? UI.button("Remove orphan records", `nodePowerRemoveOrphans(${i})`,
-        { id: `pw_blocker_remove_${i}`, attrs: `data-drain-blocker="${esc(b.id)}"`, disabled: true }) : ""}</div>`).join("");
+        { id: `pw_blocker_remove_${i}`, attrs: `data-drain-blocker="${esc(b.id)}"` }) : ""}</div>`).join("");
   const sections = [
     { key: "summary", title: "Summary", html: summary },
     drainBlockers.length ? { key: "drain", title: `Before draining · ${drainBlockers.length}`, html: blockersHtml } : null,
