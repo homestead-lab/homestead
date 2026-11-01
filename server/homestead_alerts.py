@@ -7,6 +7,7 @@ Source failures retain prior observations; only confirmed absence resolves it.
 import hashlib
 import json
 import os
+import re
 import time
 import homestead_history as HISTORY
 import homestead_shared as SHARED
@@ -387,13 +388,37 @@ def health_facts(overview):
     return facts
 
 
+# What an error may carry that a notification channel must not (#1082):
+# addresses, URLs and token-shaped strings, each with what names it.
+_PLAIN = [
+    (re.compile(r"\b[a-z][a-z0-9+.-]*://\S+", re.I), "<address>"),
+    (re.compile(r"\b(host|server|address)=(['\"])[^'\"]*\2", re.I), r"\1=<address>"),
+    (re.compile(r"\bport=\d+", re.I), "port=<hidden>"),
+    (re.compile(r"\bBearer\s+\S+", re.I), "Bearer <hidden>"),
+    (re.compile(r"\[[0-9a-f:.]*:[0-9a-f:.]*\](?::\d+)?", re.I), "<address>"),
+    (re.compile(r"(?<![\w:])(?:[0-9a-f]{1,4}:){3,7}[0-9a-f]{1,4}(?![\w:])"
+                r"|(?<![\w:])(?:[0-9a-f]{1,4}:)+:(?:[0-9a-f]{1,4}(?::[0-9a-f]{1,4})*)?(?![\w:])", re.I), "<address>"),
+    (re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b"), "<address>"),
+    (re.compile(r"(?<![A-Za-z0-9+_=-])(?=[A-Za-z0-9+_=-]*\d)[A-Za-z0-9+_=-]{20,}"), "<hidden>"),
+]
+
+
+def plain_error(text, limit=160):
+    """An error as it may go to a notification channel: one short line,
+    addresses, URLs and token-shaped strings replaced, cut at limit."""
+    text = " ".join(str(text or "").split())
+    for pattern, word in _PLAIN:
+        text = pattern.sub(word, text)
+    return text if len(text) <= limit else text[:limit - 1] + "…"
+
+
 def longhorn_facts(overview):
     """Longhorn installed but its volumes not read: raised after LONGHORN_QUIET.
     It says what is known: the read failed, with its error. Longhorn itself
     may well be running (#1082)."""
     if not overview.get("volumes_unread"):
         return []
-    reason = overview.get("volumes_unread_reason") or ""
+    reason = plain_error(overview.get("volumes_unread_reason"))
     return [{"key": "longhorn:unread", "category": "degraded", "severity": "degraded",
              "title": "Longhorn's volumes can't be read", "resolved": "Longhorn's volumes can be read again",
              "body": (f"Homestead has not been able to read Longhorn's volumes for at least {LONGHORN_QUIET // 60} "

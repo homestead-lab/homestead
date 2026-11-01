@@ -757,7 +757,7 @@ def guard_self(ns, name, stopping=False, confirmed=False, renaming=False, deleti
 # What the snapshot hands get_overview when its volumes part failed, so the
 # overview neither reads Longhorn again nor takes the failure for no volumes.
 VOLUMES_UNREAD = object()
-_volumes_failed = {"reason": ""}    # why the last read of Longhorn's volumes here failed
+_volumes_failed = {"reason": ""}    # why the last read of Longhorn's volumes here failed, plain (no address)
 
 
 def _volumes(**pods):
@@ -766,7 +766,7 @@ def _volumes(**pods):
         return STORAGE.get_volumes(**pods)
     except Exception as error:
         cause = error.__cause__ or error
-        _volumes_failed["reason"] = str(cause)[:160] or type(cause).__name__
+        _volumes_failed["reason"] = ALERTS.plain_error(str(cause) or type(cause).__name__)
         raise
 
 

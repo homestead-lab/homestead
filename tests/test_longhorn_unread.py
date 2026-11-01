@@ -380,6 +380,47 @@ class VolumesUnreadAlertTests(LonghornFixture):
     def test_a_read_volumes_overview_has_no_reason(self):
         self.assertEqual("", self.OV.get_overview()["volumes_unread_reason"])
 
+    def test_the_alert_s_error_has_no_address_url_or_token(self):
+        """Alerts go to notification channels: the error is kept short, with
+        addresses, URLs and token-shaped strings taken out (#1082)."""
+        token = "eyJhbGciOi" + "JSUzI1NiIs" + "InR5cCI6Ik" + "pXVCJ9"      # built in pieces: push protection
+        cases = {
+            "HTTPSConnectionPool(host='192.0.2.10', port=6443): Read timed out. (read timeout=15)":
+                ("Read timed out", ["192.0.2.10", "6443"]),
+            "<urlopen error https://198.51.100.7:6443/apis/longhorn.io/v1beta2/volumes?token=" + token + ">":
+                ("urlopen error", ["198.51.100.7", "https://", "token=", token]),
+            "connect to [2001:db8::1]:6443 refused; also fe80:0:0:0:1:2:3:4 and 2001:db8::5":
+                ("refused", ["2001:db8", "fe80", "6443"]),
+            "HTTP Error 401: Bearer " + token + " is not valid":
+                ("HTTP Error 401", [token, "Bearer e"]),
+            "HTTPSConnectionPool(host='kube.example.com', port=6443): Max retries exceeded":
+                ("Max retries exceeded", ["kube.example.com", "6443"]),
+        }
+        for raw, (kept, gone) in cases.items():
+            with self.subTest(raw=raw):
+                text = ALERTS.plain_error(raw)
+                self.assertIn(kept, text)
+                for part in gone:
+                    self.assertNotIn(part, text)
+                body = ALERTS.longhorn_facts({"volumes_unread": True, "volumes_unread_reason": raw})[0]["body"]
+                for part in gone:
+                    self.assertNotIn(part, body)
+        self.assertLessEqual(len(ALERTS.plain_error("Read timed out " * 40)), 160)
+
+    def test_a_plain_error_passes_through_unchanged(self):
+        for plain in ("429 Too Many Requests", "read timed out after 15 s", "HTTP Error 500: Internal Server Error",
+                      "HTTPSConnectionPool", "at 12:30:45 the list was cut short",
+                      "list /apis/longhorn.io/v1beta2/namespaces/longhorn-system/replicas was cut short"):
+            with self.subTest(plain=plain):
+                self.assertEqual(plain, ALERTS.plain_error(plain))
+
+    def test_the_overview_s_reason_is_already_plain(self):
+        with mock.patch.object(self.STORAGE, "get_volumes", side_effect=RuntimeError(
+                "HTTPSConnectionPool(host='192.0.2.10', port=6443): Read timed out")):
+            reason = self.OV.get_overview()["volumes_unread_reason"]
+        self.assertIn("Read timed out", reason)
+        self.assertNotIn("192.0.2.10", reason)
+
     def test_a_cluster_without_longhorn_has_no_longhorn_alert(self):
         self.cluster.kube.absent_groups.add("longhorn.io")
         self.assertEqual([], self.sources()["longhorn"])
