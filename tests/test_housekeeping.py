@@ -22,6 +22,8 @@ class Base(unittest.TestCase):
         self.dir = tempfile.TemporaryDirectory()
         self.d = Path(self.dir.name)
         HK.bind(self.dir.name)
+        HK._last.update(at=0, result=None)
+        self.addCleanup(HK._last.update, at=0, result=None)
         (self.d / "icons").mkdir()
 
     def tearDown(self):
@@ -83,6 +85,26 @@ class ReportOnceTests(Base):
                 mock.patch.object(HK, "_last", {"at": 5, "result": "done"}):
             rep = HK.report()
         self.assertEqual((100.0, 5, "done"), (rep["volume"]["pct"], rep["last_at"], rep["last"]))
+
+    def test_a_scan_that_began_before_a_tidy_is_not_kept(self):
+        real = HK._all_files
+
+        def walk_then_tidy():
+            HK._scan_gen[0] += 1       # what tidy_unused does while this walk is running
+            HK._scan_kept[0] = None
+            return real()
+        with mock.patch.object(HK, "_all_files", walk_then_tidy):
+            HK.report()
+        self.assertIsNone(HK._scan_kept[0])
+
+    def test_the_leaders_newer_tidy_drops_the_kept_scan(self):
+        with mock.patch.object(HK, "_all_files", wraps=HK._all_files) as walk:
+            HK.report()
+            HK.report()
+            self.assertEqual(1, walk.call_count)
+            with mock.patch.object(HK, "_last", {"at": round(time.time()) + 5, "result": "done"}):
+                HK.report()
+        self.assertEqual(2, walk.call_count)
 
     def test_the_answer_is_what_an_uncached_walk_gives(self):
         self.put("uptime.json", "u" * 3000)

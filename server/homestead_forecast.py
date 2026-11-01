@@ -164,6 +164,7 @@ def _fitted(now):
     """Every series with its fit, soonest first, but not yet dated: the file
     changes about hourly and the fit moves only with the day, so this is
     kept until either does."""
+    # No lock for the key: a write that lands after this stat is seen by the next call, and the rows below are only replaced whole.
     key = (_path(), _file_version(), _day(now))
     hit = _kept[0]
     if hit and hit[0] == key:
