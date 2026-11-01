@@ -10,12 +10,18 @@ Three rules, each a count per server module that may only shrink:
 - R2 stops: a job stops an app with homestead_app_hold.hold / stop / restart,
   which record what was running and who stopped it. Counted: a write of
   replicas 0, suspend True or runStrategy "Halted" (in a dict, or as a
-  subscript assignment) in a module that owns a job kind (a top-level KIND, or
-  one of KIND_OWNERS, whose kind is named elsewhere), outside homestead_app_hold.
+  subscript assignment, or a keyword: dict(replicas=0), x.update(suspend=True))
+  in any server module outside homestead_app_hold, except the STOP_NOT_JOBS
+  modules, which write a stop as a person's action or only look like one. The
+  list opts out, so a new job module is counted by default. job_owners() finds
+  the job modules from the registry (top-level KIND, register(ops), a write to
+  RESOLVERS[...], ops.start(...)); a STOP_NOT_JOBS entry that is one of them
+  fails, and so does one that no longer writes a stop.
 - R3 pod walks: finding the pods an app owns goes through
   homestead_app_hold.pods_of. Counted: calls of owned_pods, _held_pod,
   _using_pods and _ancestors outside homestead_app_hold and
-  homestead_rollout_capacity (which defines owned_pods).
+  homestead_rollout_capacity (which defines owned_pods). Calls only: a function
+  passed on by name (map(owned_pods, ...)) is not seen.
 
 The allowlists are the sites on the base when the ratchets came in (several
 are fixes that landed hand-rolled before the helpers). A count may go down
@@ -38,19 +44,44 @@ CORDONS = {
     "homestead_promote.py": 1,
 }
 
-# module -> hand-rolled stops, in modules owning a job kind.
+# module -> hand-rolled stops (job modules, and the helpers they call).
 STOPS = {
     "homestead_move_source.py": 4,
     "homestead_power_hold.py": 1,
     "homestead_power_jobs.py": 1,
     "homestead_reclass.py": 3,
     "homestead_rename.py": 1,
+    "homestead_restructure.py": 1,
     "homestead_revert.py": 4,
+    "homestead_self_data_coordinator.py": 1,
     "homestead_share_servers.py": 6,
 }
 
 # module -> calls of the private pod walks.
 POD_WALKS = {
+    "homestead_copy_job.py": 1,
+    "homestead_deploy.py": 1,
+    "homestead_power_hold.py": 1,
+    "homestead_reclass.py": 3,
+    "homestead_rename.py": 5,
+    "homestead_revert.py": 4,
+    "homestead_self_data_review.py": 1,
+    "homestead_storage_admission.py": 1,
+    "homestead_update_rollouts.py": 1,
+    "homestead_workloads.py": 1,
+}
+
+CORDON_FREE = {"homestead_cordon.py", "homestead_node_actions.py"}
+STOP_FREE = {"homestead_app_hold.py"}
+WALK_FREE = {"homestead_app_hold.py", "homestead_rollout_capacity.py"}
+# Modules that write a stop but are not jobs, each with its reason.
+STOP_NOT_JOBS = {
+    "homestead_data_copies.py",   # "replicas": 0 is a field of a report on a Longhorn volume, not a write
+    "homestead_disk_setup.py",    # same: "replicas": 0 is a field of a disk report
+    "homestead_objectstore.py",   # a person's switch-off of the backup store, in the request that asks for it
+    "homestead_workload_edit.py", # a person's edit of a workload; restructure (a job) is counted in its own module
+}
+WALKS = {
     "homestead_copy_job.py": 1,
     "homestead_deploy.py": 1,
     "homestead_power_hold.py": 1,
@@ -93,7 +124,8 @@ def cordon_sites(path):
     found = 0
     for node in ast.walk(SS.tree(path)):
         if isinstance(node, ast.Call) and _last(node.func) == "set_cordon" \
-                and any(_is(a, True) for a in node.args[1:2]):
+                and (any(_is(a, True) for a in node.args[1:2])
+                     or any(_is(k.value, True) for k in node.keywords if k.arg in ("cordon", "value", "on"))):
             found += 1
         elif isinstance(node, ast.Dict):
             pairs = {_key(k): v for k, v in zip(node.keys, node.values) if _key(k)}
@@ -105,10 +137,20 @@ def cordon_sites(path):
     return found
 
 
-def owns_a_kind(path):
-    return path.name in KIND_OWNERS or any(
-        isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "KIND" for t in n.targets)
-        for n in SS.tree(path).body)
+def job_owners(path):
+    """Whether a module is a job module by the registry: a top-level KIND, a
+    register(ops), a write to RESOLVERS[...], or a call of ops.start(...)."""
+    for node in SS.tree(path).body:
+        if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "KIND" for t in node.targets):
+            return True
+        if isinstance(node, ast.FunctionDef) and node.name == "register":
+            return True
+    for node in ast.walk(SS.tree(path)):
+        if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store) and _last(node.value) == "RESOLVERS":
+            return True
+        if isinstance(node, ast.Call) and (SS.dotted(node.func) or "").lower() in ("ops.start", "operations.start"):
+            return True
+    return False
 
 
 def stop_sites(path):
@@ -120,6 +162,8 @@ def stop_sites(path):
             for k, v in zip(node.keys, node.values):
                 if any(_key(k) == name and _is(v, value) for name, value in writes):
                     found += 1
+        elif isinstance(node, ast.Call):
+            found += sum(1 for k in node.keywords if any(k.arg == name and _is(k.value, value) for name, value in writes))
         elif isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Subscript) and any(
@@ -145,6 +189,8 @@ def scan(sites, free, only=lambda path: True):
 
 
 def judge(test, counts, allowed, rule, helper):
+    test.assertGreaterEqual(sum(counts.values()), sum(allowed.values()) // 2,
+                            f"the {rule} scan found too little to trust")
     for name, n in sorted(counts.items()):
         have = allowed.get(name, 0)
         if n > have:
@@ -159,17 +205,18 @@ def judge(test, counts, allowed, rule, helper):
 class JobSafetyRatchets(unittest.TestCase):
     def test_cordons_go_through_homestead_cordon(self):
         counts = scan(cordon_sites, CORDON_FREE)
-        self.assertGreaterEqual(sum(counts.values()), 3, "the cordon scan found too little to trust")
         judge(self, counts, CORDONS, "hand-rolled cordons", "homestead_cordon.cordon / release")
 
     def test_stops_go_through_homestead_app_hold(self):
-        counts = scan(stop_sites, STOP_FREE, owns_a_kind)
-        self.assertGreater(sum(counts.values()), 3, "the stop scan found too little to trust")
+        counts = scan(stop_sites, STOP_FREE | STOP_NOT_JOBS)
+        for name in sorted(STOP_NOT_JOBS):
+            path = SS.SERVER / name
+            self.assertTrue(stop_sites(path), f"{name} no longer writes a stop: remove it from STOP_NOT_JOBS")
+            self.assertFalse(job_owners(path), f"{name} is a job module: its stops belong in STOPS, not STOP_NOT_JOBS")
         judge(self, counts, STOPS, "hand-rolled stops", "homestead_app_hold.hold / stop / restart")
 
     def test_owned_pods_go_through_pods_of(self):
         counts = scan(walk_sites, WALK_FREE)
-        self.assertGreater(sum(counts.values()), 3, "the pod-walk scan found too little to trust")
         judge(self, counts, POD_WALKS, "private pod walks", "homestead_app_hold.pods_of")
 
 
