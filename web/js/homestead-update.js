@@ -238,7 +238,8 @@ function homesteadUpdateBody(inCard = false) {
     ${label || picking ? `<p class="dim small hs-note">${picking ? "Ticked clusters update one after another, linked ones first and this one last, so every linked Homestead stays on one release. " : ""}${inCard ? "" : "Each part restarts while it changes; this page reconnects. "}Nothing changes until you review it.</p>` : ""}
     ${(() => {
       const main = label ? `<button class="btn pri" data-need="operator" onclick="homesteadUpdateReview()" ${HOMESTEAD_CHANNEL_SAVING ? "disabled" : ""}>${esc(label)}</button>` : "";
-      const check = `<button class="btn" onclick="homesteadUpdateCheck(this)" ${HOMESTEAD_CHANNEL_SAVING || FLEET_UPDATES.loading ? "disabled" : ""}>${FLEET_UPDATES.loading ? "Checking…" : `${icon("refresh")}Check now`}</button>`;
+      const check = `<button class="btn" onclick="homesteadUpdateCheck(this)" ${HOMESTEAD_CHANNEL_SAVING || FLEET_UPDATES.loading ? "disabled" : ""}>${FLEET_UPDATES.loading ? "Checking…" : `${icon("refresh")}Check now`}</button>`
+        + (self ? `<button class="btn" data-need="admin" onclick="homesteadReleaseAsk()">Install a release…</button>` : "");
       // In the dialog the update is the footer's main action, so it stays in reach on a phone.
       return inCard ? `<div class="row hs-actions">${main}${check}</div><div class="hs-channel">${picker}</div>`
         : `<div class="row hs-actions">${check}</div><div class="hs-channel">${picker}</div>${UI.actions(UI.cancel("Close") + main)}`;
@@ -271,6 +272,25 @@ window.homesteadUpdateReview = () => {
   const items = [...pickedFleetItems(), ...(localPicked(waiting) ? waiting.map(w => ({ ns: w.ns, name: w.name, part: w.homestead })) : [])];
   if (!items.length) return toast("Tick a cluster to update", "bad");
   return reviewImageActions(items);
+};
+
+/* Homestead on a release you name, for when its own check cannot offer one:
+   in 2.8.333 a broken registry reader failed every check, its own included,
+   so it could not find its own fix (#1077). Reviewed like any update. */
+window.homesteadReleaseAsk = () => {
+  const { self, failed } = homesteadUpdates();
+  if (!self) return toast("Homestead itself is not in the update report yet: check again", "bad");
+  modal("Install a Homestead release", `<div class="ui-stack">
+    <p class="ui-lead">For when Homestead cannot offer the release you want${failed.length ? ", as now: its release check failed" : ""}. Name a release from the <a href="${safeHref(HOMESTEAD_RELEASES)}" target="_blank" rel="noopener">releases page ${icon("ext")}</a>; it is reviewed before anything changes.</p>
+    ${UI.field("Release", `<input id="hsReleaseName" placeholder="2.8.334" autocomplete="off" spellcheck="false" onkeydown="if(event.key==='Enter')homesteadReleaseReview()">`, { help: `This Homestead runs v${esc(HOMESTEAD_VERSION)}. A preview is named like 2.8.334-dev.1.` })}
+    ${UI.actions(UI.button("Review", "homesteadReleaseReview()", { kind: "pri" }), UI.cancel())}</div>`);
+  setTimeout(() => $("#hsReleaseName")?.focus(), 0);
+};
+window.homesteadReleaseReview = () => {
+  const { self } = homesteadUpdates();
+  const version = ($("#hsReleaseName")?.value || "").trim().replace(/^v/, "");
+  if (!/^\d+\.\d+\.\d+(-dev\.\d+)?$/.test(version)) return toast("Name a release, such as 2.8.334 or 2.8.334-dev.1", "bad");
+  return reviewImageActions([{ ns: self.ns, name: self.name, part: "self", version }]);
 };
 
 window.homesteadUpdateCheck = async button => {

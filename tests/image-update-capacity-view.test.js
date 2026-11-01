@@ -25,6 +25,9 @@ function setup({blocked = false, fail = "", missing = false, capacity = null} = 
         capacity_token:"signed-"+body.name,images:[{container:"app",before:"old",after:"new@digest",rollback:"old@digest"}]};
       if(path.includes("/progress")) {
         if(fail==="contact") throw new Error("connection lost");
+        // A dropped connection twice (no answer, so no status), then answers.
+        if(fail==="blip" && sent.filter(s=>s.path.includes("/progress")).length<=2) throw new TypeError("Failed to fetch");
+        if(fail==="refused") throw Object.assign(new Error("your role (viewer) cannot do this"), {status:403});
         return {uid: fail==="replacement" ? "different" : "workload-uid",generation:4,phase:fail==="rollout" ? "failed" : "ready",ready:1,desired:1};
       }
       if(fail==="apply") throw new Error("changed target");
@@ -112,6 +115,22 @@ test("batch waits for readiness, updates Homestead last and stops on any uncerta
       const secondApply=t.sent.findIndex(s=>s.path.endsWith("/apply")&&s.body.name==="homestead");
       assert.ok(firstProgress<secondApply);
     } else assert.match(t.fields["#imageQueue"].innerHTML,/not started/);
+  }
+});
+
+test("a dropped connection while an app updates is asked again; an answer that refuses still stops the queue",async()=>{
+  // home-assistant-core: the browser lost its connection mid-pull and the
+  // queue called a finished update failed.
+  for(const [fail, applies] of [["blip", 2], ["refused", 1], ["contact", 1]]){
+    const t=setup({fail});
+    await t.ctx.reviewImageActions([{ns:"lab",name:"app"},{ns:"lab",name:"other"}]);
+    t.fields["#imageCapacityApprove"].checked=true;
+    await t.ctx.imageReviewedApply();
+    assert.equal(t.sent.filter(s=>s.path.endsWith("/apply")).length, applies, fail);
+    const html=t.fields["#imageQueue"].innerHTML;
+    if(fail==="blip") assert.doesNotMatch(html, /failed|not started/);
+    if(fail==="refused") assert.match(html, /cannot do this/);
+    if(fail==="contact") assert.match(html, /Homestead stopped answering while app updated/);
   }
 });
 

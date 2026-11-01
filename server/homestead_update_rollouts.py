@@ -95,8 +95,40 @@ def _previous_image(dep, container, pods, fallback_digest=""):
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest or ""):
         raise ValueError(f"immutable recovery image is unavailable for {name}; no image change was applied")
     return _immutable(ref, digest)
-def prepare_update(ns, name):
-    """Build the exact rollout without writing workload metadata or history."""
+def _named_release(dep, pods, version):
+    """Homestead's own containers on a release an admin names, for when its
+    update check cannot offer one: in 2.8.333 a broken registry reader failed
+    every check, Homestead's own included, so it could not find its own fix.
+    Pinned to the release's digest when the registry answers; when it cannot
+    be read, the release's tag, which the cluster pulls and checks itself."""
+    ns, name = dep["metadata"]["namespace"], dep["metadata"]["name"]
+    if U.PART(ns, name) != "self":
+        raise ValueError("only Homestead itself can be put on a release you name")
+    if not REGISTRY.release_key(version):
+        raise ValueError("name a Homestead release, such as 2.8.334 or 2.8.334-dev.1")
+    tracked = U._annotation_json(dep, U.TRACKED)
+    containers = dep["spec"]["template"]["spec"].get("containers", [])
+    own = next((c for c in containers if c["name"] == NAMES.BRAND), containers[0] if containers else None)
+    if own is None:
+        raise ValueError("Homestead's container was not found")
+    base = parse_image(CHECKS.followed(tracked.get(own["name"]), own.get("image", "")))["base"]
+    auths = REGISTRY._secret_credentials(ns, dep)
+    candidate = base + ":" + version
+    try:
+        digest, unread = REGISTRY.manifest_digest(candidate, auths, force=True), ""
+    except Exception as error:
+        digest, unread = "", str(error)[:180] or type(error).__name__
+    chosen = {}
+    for container in containers:
+        if parse_image(CHECKS.followed(tracked.get(container["name"]), container.get("image", "")))["base"] == base:
+            chosen[container["name"]] = {"container": container["name"], "candidate": candidate, "remote_digest": digest,
+                                         "current_digest": CHECKS._pod_digest(pods, container["name"]), "unread": unread}
+    return chosen
+
+
+def prepare_update(ns, name, version=None):
+    """Build the exact rollout without writing workload metadata or history.
+    version: Homestead itself only, the release to install (_named_release)."""
     if U._managed_smb(ns, name):
         raise ValueError("SMB is managed from Network Shares")
     current = copy.deepcopy(U.kget(f"/apis/apps/v1/namespaces/{ns}/deployments/{name}"))
@@ -104,10 +136,15 @@ def prepare_update(ns, name):
         raise ValueError(U.managed_message(ns, name, U.managed_by(current)))
     dep = copy.deepcopy(current)
     pods = _review_pods(current)
-    check = CHECKS._check_deployment(dep, pods, True, persist=False)
-    chosen = {x["container"]: x for x in check["images"] if x["available"]}
+    if version:
+        chosen = _named_release(dep, pods, version)
+    else:
+        check = CHECKS._check_deployment(dep, pods, True, persist=False)
+        chosen = {x["container"]: x for x in check["images"] if x["available"]}
     if not chosen:
         raise ValueError("no image update is currently available")
+    # A named release the registry could not be read for goes by its tag.
+    pin = lambda update: _immutable(update["candidate"], update["remote_digest"]) if update["remote_digest"] else update["candidate"]
     annotations = dep["metadata"].setdefault("annotations", {})
     tracked = U._annotation_json(dep, U.TRACKED)
     before = {c["name"]: c.get("image", "") for c in _pod_containers(dep)}
@@ -117,7 +154,7 @@ def prepare_update(ns, name):
             continue
         tracked[container["name"]] = update["candidate"]
         before[container["name"]] = _previous_image(current, container, pods, update.get("current_digest", ""))
-        container["image"] = _immutable(update["candidate"], update["remote_digest"])
+        container["image"] = pin(update)
         container["imagePullPolicy"] = "IfNotPresent"
         _drop_pinned_version(container)
     # An init container built from the same image is the same release, so it
@@ -133,7 +170,7 @@ def prepare_update(ns, name):
         update = matches[0]
         before[init["name"]] = _previous_image(current, init, pods)
         tracked[init["name"]] = update["candidate"]
-        init["image"] = _immutable(update["candidate"], update["remote_digest"])
+        init["image"] = pin(update)
         init["imagePullPolicy"] = "IfNotPresent"
         _drop_pinned_version(init)
     # Immutable targets are checked before the prepared object can be committed.
@@ -143,13 +180,17 @@ def prepare_update(ns, name):
             old = before[container["name"]]
             if not re.fullmatch(r"sha256:[0-9a-f]{64}", parse_image(old).get("digest", "")):
                 raise ValueError(f"immutable rollback image is unavailable for {container['name']}; no update was applied")
-            if not re.fullmatch(r"sha256:[0-9a-f]{64}", parse_image(container["image"]).get("digest", "")):
+            if not re.fullmatch(r"sha256:[0-9a-f]{64}", parse_image(container["image"]).get("digest", ""))                     and not (version and container["image"] == next(iter(chosen.values()))["candidate"]):
                 raise ValueError("registry returned an invalid image digest")
     # Init rollback references were resolved after the initial app mapping.
     U._write(annotations, U.PREVIOUS, json.dumps({"images": before, "sources": U._annotation_json(current, U.TRACKED)},
                                            separators=(",", ":")))
     U._write(annotations, U.TRACKED, json.dumps(tracked, separators=(",", ":")))
-    return {"current": current, "proposed": dep, "before": before, "action": "update"}
+    prepared = {"current": current, "proposed": dep, "before": before, "action": "update"}
+    unread = next((u.get("unread") for u in chosen.values() if u.get("unread")), "")
+    if unread:
+        prepared["unread"] = unread
+    return prepared
 def prepare_rollback(ns, name):
     if U._managed_smb(ns, name):
         raise ValueError("SMB is managed from Network Shares")
@@ -428,3 +469,4 @@ from homestead_update_registry import parse_image  # noqa: E402
 import homestead_updates as U  # noqa: E402
 import homestead_update_registry as REGISTRY  # noqa: E402
 import homestead_update_checks as CHECKS  # noqa: E402
+import homestead_names as NAMES  # noqa: E402

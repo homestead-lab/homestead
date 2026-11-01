@@ -377,6 +377,57 @@ class ImageUpdateTests(unittest.TestCase):
                          "rollback pins the init container to the exact previous digest")
         self.assertEqual("busybox:1.36", spec["initContainers"][1]["image"])
 
+    def homestead_on(self, tag):
+        """This workload as Homestead itself, running tag's build, with its
+        data-permissions init container on the same image."""
+        old = "sha256:" + "f" * 64
+        spec = self.dep["spec"]["template"]["spec"]
+        spec["containers"] = [{"name": "homestead", "image": "ghcr.io/homestead-lab/homestead:" + tag}]
+        spec["initContainers"] = [{"name": "data-permissions", "image": "ghcr.io/homestead-lab/homestead@" + old}]
+        self.pods = [{"metadata": {"name": "demo-pod", "namespace": "lab", "labels": {"app": "demo"},
+                      "ownerReferences": [{"kind": "ReplicaSet", "uid": "rs-demo", "controller": True}]},
+                      "spec": copy.deepcopy(spec), "status": {"phase": "Running",
+                      "containerStatuses": [{"name": "homestead", "state": {"running": {}},
+                                             "imageID": "ghcr.io/homestead-lab/homestead@" + old}]}}]
+        self.enterContext(mock.patch.object(updates, "PART", lambda ns, name: "self"))
+        self.enterContext(mock.patch.object(REGISTRY, "_secret_credentials", return_value={}))
+        return old
+
+    def test_homestead_goes_on_a_release_an_admin_names_pinned_to_its_digest(self):
+        """Its own update check can be what is broken (2.8.333): the release
+        is named, not found, and is still pinned when the registry answers."""
+        self.homestead_on("2.8.333-dev.4")
+        new = "sha256:" + "e" * 64
+        with mock.patch.object(REGISTRY, "manifest_digest", return_value=new) as asked,                 mock.patch.object(checks, "_check_deployment", side_effect=AssertionError("the check is not asked")):
+            prepared = ROLLOUTS.prepare_update("lab", "demo", "2.8.333-dev.5")
+        asked.assert_called_once_with("ghcr.io/homestead-lab/homestead:2.8.333-dev.5", {}, force=True)
+        spec = prepared["proposed"]["spec"]["template"]["spec"]
+        self.assertEqual("ghcr.io/homestead-lab/homestead@" + new, spec["containers"][0]["image"])
+        self.assertEqual("ghcr.io/homestead-lab/homestead@" + new, spec["initContainers"][0]["image"],
+                         "the init container goes with it, as kubectl set image left it behind")
+        tracked = json.loads(prepared["proposed"]["metadata"]["annotations"][updates.TRACKED])
+        self.assertEqual("ghcr.io/homestead-lab/homestead:2.8.333-dev.5", tracked["homestead"])
+        self.assertNotIn("unread", prepared)
+        self.assertEqual([], self.sent, "a review writes nothing")
+
+    def test_a_named_release_the_registry_cannot_be_read_for_goes_by_its_tag(self):
+        old = self.homestead_on("2.8.333-dev.4")
+        with mock.patch.object(REGISTRY, "manifest_digest", side_effect=OSError(9, "Bad file descriptor")):
+            prepared = ROLLOUTS.prepare_update("lab", "demo", "2.8.333-dev.5")
+        spec = prepared["proposed"]["spec"]["template"]["spec"]
+        self.assertEqual("ghcr.io/homestead-lab/homestead:2.8.333-dev.5", spec["containers"][0]["image"],
+                         "the cluster pulls the tag and checks it itself")
+        self.assertIn("Bad file descriptor", prepared["unread"])
+        self.assertEqual("ghcr.io/homestead-lab/homestead@" + old, prepared["before"]["homestead"],
+                         "rollback still goes to the exact build that ran")
+
+    def test_only_homestead_and_only_a_release_can_be_named(self):
+        self.homestead_on("2.8.333-dev.4")
+        with self.assertRaisesRegex(ValueError, "name a Homestead release"):
+            ROLLOUTS.prepare_update("lab", "demo", "latest")
+        with mock.patch.object(updates, "PART", lambda ns, name: ""),                 self.assertRaisesRegex(ValueError, "only Homestead itself"):
+            ROLLOUTS.prepare_update("lab", "demo", "2.8.334")
+
     def test_a_digest_with_no_recorded_tag_says_so_rather_than_up_to_date(self):
         self.dep["spec"]["template"]["spec"]["containers"] = [
             {"name": "demo", "image": "ghcr.io/x/demo@sha256:" + "f" * 64}]

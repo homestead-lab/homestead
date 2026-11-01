@@ -411,10 +411,28 @@ class WiderCatalogueTests(Base):
             first = self.call("update_container_image", {"namespace": "lab", "name": "web"}, k)["structuredContent"]
             self.assertTrue(first["needs_confirmation"])
             self.assertEqual(["/api/image-updates/preview"], [p for p, _ in seen])
-            self.call("update_container_image", {"namespace": "lab", "name": "web", "capacity_token": "t1",
-                                                 "confirm_capacity": True}, k)
+            second = self.call("update_container_image", {"namespace": "lab", "name": "web", "capacity_token": "t1",
+                                                          "confirm_capacity": True}, k)["structuredContent"]
+            # The update policy has a person approve every install: the agent's
+            # own call is a request, and nothing is applied until one does.
+            self.assertEqual("pending_approval", second["status"])
+            self.assertNotIn("/api/image-updates/apply", [p for p, _ in seen])
+            seen.clear()
+            self.assertEqual("done", REQUESTS.approve(second["request"], "ada", "operator")["status"])
+        # Approving counts as the approval the policy asks for (it was refused
+        # with "explicit approval is required" even once a person approved).
+        self.assertEqual("/api/image-updates/preview", seen[0][0], "reviewed again as the approver")
         self.assertEqual(("/api/image-updates/apply", {"ns": "lab", "name": "web", "action": "update",
-                                                      "capacity_token": "t1", "confirm_capacity": True}), seen[-1])
+                                                      "capacity_token": "t1", "confirm_capacity": True,
+                                                      "approved": True}), seen[-1])
+
+    def test_a_rollback_needs_no_update_approval(self):
+        k = key(["read", "containers:manage"], role="operator")
+        with mock.patch.object(TOOLS, "call", return_value={"ok": True, "capacity": {}, "capacity_token": "t1"}) as call:
+            self.call("rollback_container_image", {"namespace": "lab", "name": "web", "capacity_token": "t1",
+                                                   "confirm_capacity": True}, k)
+        self.assertEqual("/api/image-updates/rollback", call.call_args[0][1])
+        self.assertNotIn("approved", call.call_args[1]["body"])
 
     def test_deleting_a_schedule_waits_for_a_person_then_runs(self):
         k = key(["read", "containers:manage"], role="operator")
