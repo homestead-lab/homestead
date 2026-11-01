@@ -294,17 +294,17 @@ class GuardTests(unittest.TestCase):
         self.assertGreater(len(named), 10, "the page scan found too little to trust")
         self.assertEqual([], sorted(f"{kind} ({where})" for where, kind in named if kind not in self.kinds))
 
-
     def test_host_cordon_kinds_are_real_kinds(self):
         self.assertEqual([], sorted(k for k in KINDS.HOST_CORDON_KINDS if k not in self.kinds))
 
     def test_every_module_that_cordons_a_host_has_its_kind_listed(self):
         cordons = re.compile(r"""set_cordon\([^)]*,\s*True\)|unschedulable['"],\s*['"]value['"]:\s*True""")
         # Modules with no KIND of their own: the kind whose job runs the cordon.
-        kinds = {"homestead_components.py": "platform-upgrade"}
+        # node_actions' power_node is the node-power job's cordon step.
+        kinds = {"homestead_components.py": "platform-upgrade", "homestead_node_actions.py": "node-power"}
         # The Hosts page's Cordon is a person's own; homestead_cordon is the shared helper
         # that jobs call (each job's own module is the one that must name its kind).
-        people = {"homestead_node_actions.py", "homestead_cordon.py", "homestead_lifecycle.py"}
+        people = {"homestead_cordon.py", "homestead_lifecycle.py"}
         found_any = 0
         for path in SS.server_files():
             text = path.read_text()

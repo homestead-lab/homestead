@@ -5,15 +5,17 @@ Three rules, each a count per server module that may only shrink:
 - R1 cordons: a job cordons a host with homestead_cordon.cordon / release /
   busy_with, which record who holds the cordon, so two jobs never release each
   other's. Counted: set_cordon(..., True) and a write of unschedulable True
-  (a patch op or a spec dict), outside homestead_cordon (the helper) and
-  homestead_node_actions (a person's own Cordon on the Hosts page).
+  (a patch op or a spec dict), outside homestead_cordon (the helper). The
+  Hosts page's own Cordon (homestead_lifecycle) passes a value, not True, so
+  is not counted; node_actions' power_node (the node-power job) is.
 - R2 stops: a job stops an app with homestead_app_hold.hold / stop / restart,
   which record what was running and who stopped it. Counted: a write of
-  replicas 0, suspend True or runStrategy "Halted" (in a dict, or as a
-  subscript assignment, or a keyword: dict(replicas=0), x.update(suspend=True))
-  in any server module outside homestead_app_hold, except the STOP_NOT_JOBS
-  modules, which write a stop as a person's action or only look like one. The
-  list opts out, so a new job module is counted by default. job_owners() finds
+  replicas 0, suspend True or runStrategy "Halted" (in a dict, a json-patch op
+  on /spec/<field> that is not a test, a subscript assignment, or a keyword:
+  dict(replicas=0), x.update(suspend=True)), and a call on a VM's KubeVirt
+  /stop subresource, in any server module outside homestead_app_hold, except
+  the STOP_NOT_JOBS modules, which write a stop as a person's action or only
+  look like one. The list opts out, so a new job module is counted by default. job_owners() finds
   the job modules from the registry (top-level KIND, register(ops), a write to
   RESOLVERS[...], ops.start(...)); a STOP_NOT_JOBS entry that is one of them
   fails, and so does one that no longer writes a stop.
@@ -41,13 +43,15 @@ import source_scan as SS
 CORDONS = {
     "homestead_cluster_shutdown.py": 1,
     "homestead_lhv2_cleanup.py": 1,
+    "homestead_node_actions.py": 1,   # power_node, the node-power job's cordon step
     "homestead_promote.py": 1,
 }
 
 # module -> hand-rolled stops (job modules, and the helpers they call).
 STOPS = {
+    "homestead_cluster_shutdown.py": 1,
     "homestead_move_source.py": 4,
-    "homestead_power_hold.py": 1,
+    "homestead_power_hold.py": 2,
     "homestead_power_jobs.py": 1,
     "homestead_reclass.py": 3,
     "homestead_rename.py": 1,
@@ -55,6 +59,7 @@ STOPS = {
     "homestead_revert.py": 4,
     "homestead_self_data_coordinator.py": 1,
     "homestead_share_servers.py": 6,
+    "homestead_vms.py": 2,               # a person's VM stop and stop of boot retries, in a module that also runs jobs
 }
 
 # module -> calls of the private pod walks.
@@ -71,7 +76,7 @@ POD_WALKS = {
     "homestead_workloads.py": 1,
 }
 
-CORDON_FREE = {"homestead_cordon.py", "homestead_node_actions.py"}
+CORDON_FREE = {"homestead_cordon.py"}
 STOP_FREE = {"homestead_app_hold.py"}
 WALK_FREE = {"homestead_app_hold.py", "homestead_rollout_capacity.py"}
 # Modules that write a stop but are not jobs, each with its reason.
@@ -132,8 +137,25 @@ def job_owners(path):
     return False
 
 
+def _text(node):
+    """The literal text of a path argument (a string, an f-string or a + of
+    them), with a hole for each part that is not literal."""
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _text(node.left) + _text(node.right)
+    if isinstance(node, ast.JoinedStr):
+        return "".join(_text(part) for part in node.values)
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else "\x00"
+
+
+def _ends_stop(node):
+    """A path argument on KubeVirt's stop subresource for a VM."""
+    path = _text(node)
+    return path.endswith("/stop") and "virtualmachines/" in path
+
+
 def stop_sites(path):
-    """Writes of replicas 0, suspend True, runStrategy "Halted"."""
+    """Writes of replicas 0, suspend True, runStrategy "Halted" (as a field, or
+    as a json-patch op that is not a test), and calls on KubeVirt's /stop."""
     writes = (("replicas", 0), ("suspend", True), ("runStrategy", "Halted"))
     found = 0
     for node in ast.walk(SS.tree(path)):
@@ -141,8 +163,14 @@ def stop_sites(path):
             for k, v in zip(node.keys, node.values):
                 if any(_key(k) == name and _is(v, value) for name, value in writes):
                     found += 1
+            pairs = {_key(k): v for k, v in zip(node.keys, node.values) if _key(k)}
+            target = _key(pairs.get("path")) or ""
+            if _key(pairs.get("op")) != "test" and any(
+                    target.endswith("/spec/" + name) and _is(pairs.get("value"), value) for name, value in writes):
+                found += 1
         elif isinstance(node, ast.Call):
             found += sum(1 for k in node.keywords if any(k.arg == name and _is(k.value, value) for name, value in writes))
+            found += any(_ends_stop(arg) for arg in node.args)
         elif isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Subscript) and any(
@@ -194,6 +222,19 @@ class JobSafetyRatchets(unittest.TestCase):
             self.assertTrue(stop_sites(path), f"{name} no longer writes a stop: remove it from STOP_NOT_JOBS")
             self.assertFalse(job_owners(path), f"{name} is a job module: its stops belong in STOPS, not STOP_NOT_JOBS")
         judge(self, counts, STOPS, "hand-rolled stops", "homestead_app_hold.hold / stop / restart")
+
+    def test_the_stop_scan_sees_json_patches_and_kubevirt_stops(self):
+        source = SS.code(
+            "send('PATCH', p, [{'op': 'test', 'path': '/spec/runStrategy', 'value': 'Halted'},\n"
+            "                   {'op': 'replace', 'path': '/spec/runStrategy', 'value': 'Halted'},\n"
+            "                   {'op': 'add', 'path': '/spec/replicas', 'value': 0},\n"
+            "                   {'op': 'add', 'path': '/spec/replicas', 'value': 2},\n"
+            "                   {'op': 'replace', 'path': '/spec/suspend', 'value': True}])\n"
+            "send('PUT', f'{SUB}/namespaces/{ns}/virtualmachines/{name}/stop', {})\n"
+            "send('PUT', SUB + '/virtualmachines/vm1/stop', {})\n"
+            "send('PUT', f'{SUB}/virtualmachines/{name}/start', {})\n"
+            "send('POST', '/api/images/prepull/stop', {})\n")
+        self.assertEqual(stop_sites(source), 5)
 
     def test_owned_pods_go_through_pods_of(self):
         counts = scan(walk_sites, WALK_FREE)
