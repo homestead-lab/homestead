@@ -257,6 +257,56 @@ class JobTests(Base):
         self.step(1110)
         self.assertIn("/apis/apps/v1/namespaces/lab/deployments", [p for m, p, _ in self.c.sent if m == "POST"])
 
+    def test_a_copy_an_admission_policy_refuses_fails_and_frees_its_disk(self):
+        self.step(1000)
+        self.c.kube.fail("/apis/apps/v1/namespaces/lab/deployments", 403, times=99, method="POST")
+        status, _, message = self.step(1100)
+        self.assertEqual("failed", status, "a refusal is final: the next test can run")
+        self.assertIn("Kubernetes refused the copy", message)
+        self.assertIn(("DELETE", "/api/v1/namespaces/lab/persistentvolumeclaims/restore-test-abcdef0123-0", None), self.c.sent)
+        result = json.loads([b for m, p, b in self.c.sent if m == "PATCH"][-1]["metadata"]["annotations"]["homestead.io/restore-tested"])
+        self.assertFalse(result["ok"])
+
+    def test_a_copy_that_cannot_be_made_for_now_waits_only_until_the_deadline(self):
+        self.step(1000)
+        self.c.kube.fail("/apis/apps/v1/namespaces/lab/deployments", 503, times=99, method="POST")
+        status, _, message = self.step(1100)
+        self.assertEqual("running", status)
+        self.assertIn("could not be made yet", message)
+        self.assertEqual("running", self.step(1200)[0])
+        status, _, message = self.step(1100 + RT.READY_WAIT + 1)
+        self.assertEqual("failed", status)
+        self.assertIn("could not be made", message)
+        self.assertIn(("DELETE", "/api/v1/namespaces/lab/persistentvolumeclaims/restore-test-abcdef0123-0", None), self.c.sent)
+
+    def test_a_running_test_can_be_cancelled_and_removes_only_what_it_made(self):
+        ops = type("Ops", (), {"RESOLVERS": {}, "CANCELLERS": {}, "checkpoint": staticmethod(lambda item: None)})
+        RT.register(ops)
+        cancel_plan, cancel_run = ops.CANCELLERS[RT.KIND]
+        self.step(1000)
+        self.step(1100)
+        plan = cancel_plan(self.item)
+        self.assertEqual(("stop", "admin"), (plan["mode"], plan["needs"]))
+        self.assertTrue(any("app itself is not touched" in line for line in plan["keeps"]))
+        before = len(self.c.sent)
+        message = cancel_run(self.item, [])
+        deleted = {p for m, p, _ in self.c.sent[before:] if m == "DELETE"}
+        self.assertEqual({"/apis/apps/v1/namespaces/lab/deployments/restore-test-abcdef0123",
+                          "/apis/networking.k8s.io/v1/namespaces/lab/networkpolicies/restore-test-abcdef0123",
+                          "/api/v1/namespaces/lab/persistentvolumeclaims/restore-test-abcdef0123-0"}, deleted)
+        self.assertNotIn(DEPLOYMENT, deleted)
+        self.assertNotIn("PATCH", [m for m, _, _ in self.c.sent[before:]], "a cancelled test records no result on the app")
+        self.assertIn("Cancelled", message)
+
+    def test_a_cancel_that_cannot_remove_something_says_what_is_left(self):
+        ops = type("Ops", (), {"RESOLVERS": {}, "CANCELLERS": {}, "checkpoint": staticmethod(lambda item: None)})
+        RT.register(ops)
+        self.step(1000)
+        self.c.kube.fail("/api/v1/namespaces/lab/persistentvolumeclaims/restore-test-abcdef0123-0", 500, times=99, method="DELETE")
+        with self.assertRaises(ValueError) as caught:
+            ops.CANCELLERS[RT.KIND][1](self.item, [])
+        self.assertIn("restore-test-abcdef0123-0", str(caught.exception))
+
     def test_an_app_with_nothing_to_restore_is_not_a_failure(self):
         self.c.change_deployment(lambda dep: dep["spec"]["template"]["spec"].update(volumes=[]))
         self.assertEqual("succeeded", self.step(1000)[0])
