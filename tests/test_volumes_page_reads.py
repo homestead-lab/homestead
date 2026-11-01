@@ -54,6 +54,13 @@ class VolumesPage(unittest.TestCase):
         self.cluster = Cluster(self)
         clean_snapshot(self)
         self.server = self.cluster.server
+        # Other test files bind these modules to fakes of their own and leave
+        # them so (test_reclass.Cluster binds homestead_reclass): read through
+        # this cluster whatever ran before, as Cluster does for LHCAP.
+        import homestead_storage_classes as SC
+        for module in (RECLASS, SC):
+            for name in ("kget", "ksend"):
+                self.enterContext(mock.patch.object(module, name, getattr(K, name)))
         v2_off = {"apiVersion": "longhorn.io/v1beta2", "kind": "Setting", "value": "false",
                   "metadata": {"namespace": "longhorn-system", "name": "v2-data-engine"}}
         for obj in (storage_class("longhorn-r2", default=True), storage_class("fast"), old_copy("pv-old"), v2_off):
