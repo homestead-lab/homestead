@@ -304,10 +304,30 @@ def _stuck_rows(node, pods, claims, attachments, now):
     return sorted(rows, key=lambda row: row["id"])
 
 
-def for_host(node, now=None):
+def for_host(node, now=None, read=None):
     """What on node would keep its drain from finishing, as rows (see the
-    module docstring); [] when nothing does."""
-    return _for_host(node, now)
+    module docstring); [] when nothing does. read: the caller's own reader
+    (kget), so a module bound to one keeps reading through it."""
+    return _for_host(node, now, read)
+
+
+def failed(error):
+    """The one row for a check that failed as a whole: unread, never skipped."""
+    return _row("unread:drain-blockers", "unread",
+                f"Homestead couldn't check what would keep this host from draining: {_reason(error)}",
+                "What it would show was not checked, so something there may still hold this host.",
+                "Review the restart again; if this stays, check Homestead's access to the cluster.")
+
+
+# How long a pod has been stuck is said, not compared: the same pod a minute
+# later is the same thing to acknowledge.
+_STUCK_FOR = re.compile(r" for \d+ (?:min|h|days) past its grace period")
+
+
+def review(rows):
+    """rows as the restart review's token sees them: each row's id and what,
+    without the time a pod has been stuck."""
+    return [(row["id"], _STUCK_FOR.sub(" past its grace period", row["what"])) for row in rows]
 
 
 def _for_host(node, now=None, read=None):

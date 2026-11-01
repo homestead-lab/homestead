@@ -515,6 +515,12 @@ def _send_power(request):
         return ROUTER.Reply(409, {"error": "some workloads have no eligible failover host", "plan": power_plan})
     if power_plan["requires_data_ack"] and not b.get("allow_data_risk"):
         return ROUTER.Reply(409, {"error": "acknowledge the volume risk before host power control", "plan": power_plan})
+    # Each drain blocker the review named, acknowledged by its id: no more, no fewer.
+    given = b.get("allow_drain_blockers") or []
+    if (not isinstance(given, list) or
+            set(map(str, given)) != {row["id"] for row in power_plan.get("drain_blockers") or []}):
+        return ROUTER.Reply(409, {"error": "acknowledge each drain blocker (or remove the orphan records) before host power control",
+                                  "plan": power_plan})
     # Cordon and drain can take many minutes: the request returns the job at
     # once and the browser follows its phases.
     return ROUTER.Reply(202, send_reviewed_power(power_plan, force, background=True))

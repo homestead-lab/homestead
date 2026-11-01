@@ -7,6 +7,37 @@
   const requestedScenario = new URLSearchParams(location.search).get("demo-scenario");
   const scenario = ["incidents", "critical"].includes(requestedScenario) ? requestedScenario : "healthy";
   window.HOMESTEAD_DEMO_SCENARIO = scenario;
+  // What would keep a host from draining (homestead_drain_blockers' rows), one of each kind.
+  const demoDrainBlockers = node => {
+    const there = "harvester-node2", row = (id, kind, what, why, fix, extra = {}) =>
+      ({ id, kind, what, why, fix, can_remove: false, records: [], ...extra });
+    return [
+      row(`engine-orphans:${node}`, "engine-orphans",
+        `2 Longhorn orphan records on ${node} for volumes pvc-demo-frigate, pvc-demo-ha, now running on ${there}`,
+        `Each record keeps a leftover engine process on ${node}'s instance-manager. Longhorn keeps the instance-manager, and its disruption budget at 0, while it still runs engines, so the drain cannot evict it.`,
+        `Remove these orphan records in the restart review: Longhorn then stops the leftover processes. The volumes keep running on ${there}.`,
+        { can_remove: true, records: ["pvc-demo-frigate", "pvc-demo-ha"].map((volume, i) => ({ name: `orphan-demo-${i + 1}`,
+          uid: `demo-orphan-uid-${i + 1}`, resourceVersion: String(6001 + i), engine: `${volume}-e-0`, engine_node: there })) }),
+      row(`other-orphans:${node}`, "other-orphans", `1 other Longhorn orphan record on ${node}: replica-data pvc-demo-paperless-a1b2c3d4`,
+        `Longhorn keeps what an orphan record names on ${node} until the record is removed; an instance record can keep ${node}'s instance-manager from stopping.`,
+        "Check each in Longhorn before removing it. An instance record whose volume runs elsewhere and is healthy can go; removing a replica-data record deletes an on-disk copy of the volume's data, which may be its last copy, so remove one only once the volume is healthy on other hosts."),
+      row(`engines-elsewhere:${node}`, "engines-elsewhere",
+        `${node}'s Longhorn instance-manager still lists engine pvc-demo-paperless-e-0 (now on ${there}), which no longer runs on ${node}`,
+        `Longhorn keeps ${node}'s instance-manager, and its disruption budget at 0, while it lists engines, so the drain cannot evict it.`,
+        "Longhorn normally records these as orphans within minutes; review the restart again then. If they stay, check the instance-manager in Longhorn."),
+      row("stuck-pod:lab/paperless-5c9d", "stuck-pod",
+        `Pod lab/paperless-5c9d on ${node} has been terminating for 17 min past its grace period and still holds volume pvc-demo-paperless attached there`,
+        `Its phase is Running. While it exists its volumes stay attached to ${node}, so their storage cannot leave the host.`,
+        "Find out why it does not stop (its events, the host's kubelet) before force-deleting it: a force delete of a pod whose containers still run can leave two writers on one volume."),
+      row("stuck-attachment:csi-demo-old", "stuck-attachment",
+        `Volume pvc-demo-old is still attached to ${node} (attachment csi-demo-old), but no pod on ${node} uses it`,
+        `While it is attached its storage stays on ${node}, so Longhorn keeps its engine there and the drain cannot finish.`,
+        "Check why it was not detached: a pod that was force-deleted, or the host still has it mounted. Homestead does not detach it."),
+      row("unread:attachments", "unread", "Homestead couldn't check the volume attachments: HTTP 403",
+        "What it would show was not checked, so something there may still hold this host.",
+        "Review the restart again; if this stays, check Homestead's access to the cluster."),
+    ];
+  };
   const demoV2Region = (force=false) => (force || window.__demoDiskV2Region) ? {
     mountpoint:'/var/lib/longhorn',stable_device:'/dev/disk/by-id/dm-uuid-LVM-example-storage-volume',
     layout:{path:'/dev/nvme0n1',kind:'disk',size_bytes:2147483648000,children:[
@@ -1909,6 +1940,9 @@ ssh_pwauth: true
       boot_id: "demo", pods: 14, vms: [], storage_unknown: false, ready: true, requires_data_ack: true, blockers: [],
       overridable: [], hard_blockers: [], force: url.searchParams.get("force") === "1",
       planned_outage: plannedOutage,
+      // The incidents scenario: one of each thing that would keep the host from draining.
+      drain_blockers: scenario === "incidents" && !plannedOutage && url.searchParams.get("force") !== "1"
+        ? demoDrainBlockers(url.searchParams.get("node")) : [],
       workloads: [{ ns: "lab", name: "frigate", stranded: true, eligible: [] },
         { ns: "lab", name: "home-assistant", stranded: false, eligible: ["harvester-node2", "harvester-node3"] },
         { ns: "lab", name: "paperless", stranded: false, eligible: ["harvester-node2"] }],
@@ -1925,6 +1959,7 @@ ssh_pwauth: true
       maintenance: { budgets: [{ pod: "lab/paperless-5c9d", budget: "minAvailable 1", allowed: 1 }], local_storage: [] },
       warnings: ["DaemonSets and static pods remain on the host; their services stop during the outage.",
         "1 workload(s) have no eligible failover host", "2 volume(s) lose a replica until this host returns or Longhorn rebuilds"] };
+      plan.requires_blocker_ack = plan.drain_blockers.length > 0;
       if (plannedOutage) {
         plan.workloads = [{ns:"lab",name:"homestead",stranded:true,eligible:[]}];
         plan.stranded = [{ns:"lab",name:"homestead"}];
