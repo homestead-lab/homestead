@@ -777,6 +777,34 @@ class ProtectTests(unittest.TestCase):
             P.protect()
         self.assertEqual(2, self.pod_reads)
 
+    def test_protect_never_acts_on_an_old_kept_list_after_a_failed_read(self):
+        self.app(100000)
+        clock = [1000.0]
+        with mock.patch("homestead_cache.time.time", side_effect=lambda: clock[0]), \
+                mock.patch("homestead_priority.time.time", side_effect=lambda: clock[0]):
+            P.protect()
+            self.assertEqual(1, len(self.patched))
+            clock[0] += 60
+            real = P.kget
+            def failing(path):
+                if path == "/api/v1/pods":
+                    raise urllib.error.HTTPError(path, 500, "busy", {}, None)
+                return real(path)
+            P.kget = failing
+            P._LADDER.update(at=0, value=None)
+            with self.assertRaisesRegex(RuntimeError, "too old"):
+                P.protect()
+        self.assertEqual(1, len(self.patched), "no second write on the old list")
+
+    def test_a_write_to_pods_makes_the_guard_read_again(self):
+        import homestead_kube as KUBE
+        self.app(100000)
+        with mock.patch("homestead_cache.time.time", side_effect=lambda: 1000.0):
+            P.protect()
+            KUBE.fresh_reads("DELETE", "/api/v1/namespaces/lab/pods/x", None, lambda: None)
+            P.protect()
+        self.assertEqual(2, self.pod_reads)
+
     def test_protect_does_nothing_until_an_app_ranks_above_normal(self):
         self.app(10000)
         self.assertIsNone(P.protect())
