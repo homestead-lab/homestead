@@ -77,6 +77,7 @@ class Kube:
         self.groups = set(groups)
         self.absent_groups = set(absent_groups)
         self.writes = []  # (method, path, body, ctype) of every write that reached the fake
+        self.reads = []   # (path, accept) of every read that reached the fake
         self._failures = []  # [path, method, code, times left]
         self._reactions = []
         self._stack = None
@@ -150,12 +151,14 @@ class Kube:
 
     # The transport ----------------------------------------------------------
 
-    def __call__(self, method, path, body=None, ctype=None, timeout=15):
+    def __call__(self, method, path, body=None, ctype=None, timeout=15, accept=None):
         path_only, _, query = path.partition("?")
         body = copy.deepcopy(body)
         with self._lock:
             if method != "GET":
                 self.writes.append((method, path, copy.deepcopy(body), ctype))
+            else:
+                self.reads.append((path, accept))
             lost = None
             for failure in self._failures:
                 if failure[0] == path_only and failure[1] in (None, method) and failure[3] > 0:
@@ -185,6 +188,12 @@ class Kube:
             done = copy.deepcopy(handler(req, body, ctype, path))
             if lost:
                 raise self._failed(lost, path)
+            if method == "GET" and req["name"] is None and accept and "as=PartialObjectMetadataList" in accept:
+                # As the API server answers a list asked metadata-only.
+                done = {"kind": "PartialObjectMetadataList", "apiVersion": "meta.k8s.io/v1",
+                        "metadata": done.get("metadata") or {},
+                        "items": [{"kind": "PartialObjectMetadata", "apiVersion": "meta.k8s.io/v1",
+                                   "metadata": item.get("metadata") or {}} for item in done.get("items") or []]}
             return done
 
     # Requests ---------------------------------------------------------------
