@@ -864,5 +864,5 @@ ROUTES = {
 
 def register(ops):
     """The job store's entry for a platform upgrade (#622)."""
-    ops.RESOLVERS["platform-upgrade"] = status
+    ops.RESOLVERS["platform-upgrade"] = homestead_routes.drops_when_ended(status, "helm")
     ops.CANCELLERS["platform-upgrade"] = (cancel_plan, cancel_run)

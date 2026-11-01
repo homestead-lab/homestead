@@ -6,6 +6,7 @@ import homestead_hardware as HW
 import homestead_longhorn_jobs as JOBS
 import homestead_names as NAMES
 import homestead_network_inventory as INV
+import homestead_cache as CACHE
 import homestead_routes
 import homestead_start_order as START_ORDER
 import homestead_vms as VMS
@@ -322,6 +323,18 @@ def get_flow2():
                      tuple(int(x) if x.isdigit() else 999 for x in item[0].split("."))))],
         "metrics": metrics_state,
     }
+
+
+def _network_forgotten(keys):
+    if "network" in keys:
+        homestead_routes.forget("flow2")
+
+
+# The picture is built from the addresses' reading (above): a change that
+# drops that reading drops the picture too, or a refresh between the two
+# would keep the old addresses for PAGE_SECONDS (#978).
+CACHE.on_forget(_network_forgotten)
+CACHE.on_pop(lambda key, when: _network_forgotten((key,)))
 
 
 def view():

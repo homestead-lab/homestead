@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from decimal import Decimal, InvalidOperation
 
 import homestead_capacity_review as REVIEW
+import homestead_routes
 import homestead_hostrun as HOST
 
 KIND = 'disk-allocation'
@@ -561,16 +562,23 @@ def logs(item):
 
 
 def register(operations):
-    operations.RESOLVERS[KIND] = progress
+    operations.RESOLVERS[KIND] = homestead_routes.drops_when_ended(progress, "disks")
     operations.LOGGERS[KIND] = logs
     operations.CANCEL_BLOCKS[KIND] = lambda item: 'Storage growth cannot be interrupted safely. Let the helper finish, then recheck its saved outcome.'
     operations.VIEWS[KIND] = lambda item, out: out.update(cancellable=False, cleanable=False, allocation=True)
 
 
+def _disks_changed(result):
+    """The Disks page shows the job under way: kept PAGE_SECONDS, it is
+    dropped (#978)."""
+    homestead_routes.forget("disks")
+    return result
+
+
 ROUTES = {
     ('POST','/api/disks/allocation/review'):('admin', lambda request: review(request.body)),
-    ('POST','/api/disks/allocation/start'):('admin', lambda request: start(request.body)),
+    ('POST','/api/disks/allocation/start'):('admin', lambda request: _disks_changed(start(request.body))),
     ('POST','/api/disks/allocation/recheck'):('admin', lambda request: recheck(request.body.get('id'))),
-    ('POST','/api/disks/allocation/finish'):('admin', lambda request: finish(request.body)),
+    ('POST','/api/disks/allocation/finish'):('admin', lambda request: _disks_changed(finish(request.body))),
     ('GET','/api/disks/allocation/status'):('admin', lambda request: status(request.query.get('id',[''])[0])),
 }

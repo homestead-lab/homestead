@@ -75,11 +75,30 @@ class TellTests(Forgets):
         CACHE._cache.pop("ov", None)
         self.assertTrue(self.PAGES._wake.is_set())
 
-    def test_only_the_page_parts_are_told(self):
+    def test_only_the_page_parts_and_the_pages_kept_as_long_are_told(self):
         CACHE.forget_where(lambda key: key == "network")
-        CACHE._cache.pop("helm", None)
+        CACHE._cache.pop("helmsearch", None)
         self.follow()
         self.assertEqual({}, self.told())
+
+    def test_the_pages_kept_as_long_as_the_parts_are_told_and_heard(self):
+        # Data protection, Flow, Helm and Disks keep PAGE_SECONDS (#978): a
+        # write on another replica drops them here too.
+        for key in ("lhov", "flow2", "helm", "disks"):
+            CACHE.forget_where(lambda k, key=key: k == key)
+        self.follow()
+        self.assertEqual({"lhov", "flow2", "helm", "disks"}, set(self.told()))
+        CACHE._cache["helm"] = (time.time() - 1, "kept")
+        self.another_replica_forgot(helm=time.time())
+        self.follow()
+        self.assertIsNone(CACHE.kept_at("helm"), "heard here")
+
+    def test_a_kept_page_s_forget_asks_for_no_cycle(self):
+        self.PAGES.sleep(0)
+        self.PAGES._wanted.clear()
+        CACHE.forget_where(lambda key: key == "lhov")
+        self.assertTrue(self.PAGES._wake.is_set(), "told on the next turn")
+        self.assertFalse(self.PAGES._wanted.is_set(), "no part to read again")
 
     def test_the_other_replicas_forgets_are_kept(self):
         self.another_replica_forgot(ov=time.time() - 5)
@@ -197,10 +216,10 @@ class UntoldWritesTests(Forgets):
     here, so it told nothing on a replica that never read the page."""
 
     def test_a_cache_clear_tells_every_part_though_none_was_read_here(self):
-        self.assertFalse(set(self.PAGES.PARTS) & set(CACHE._cache))
+        self.assertFalse(set(self.PAGES.TOLD) & set(CACHE._cache))
         CACHE._cache.clear()        # what a config restore does
         self.follow()
-        self.assertEqual(set(self.PAGES.PARTS), set(self.told()))
+        self.assertEqual(set(self.PAGES.TOLD), set(self.told()))
 
     def test_a_cache_clear_drops_a_read_started_before_it(self):
         # A leader cycle running during a config restore must not keep its
@@ -212,7 +231,7 @@ class UntoldWritesTests(Forgets):
 
     def test_a_bust_of_keys_never_read_here_is_told(self):
         self.assertNotIn("wl", CACHE._cache)
-        CACHE.drop_where(CACHE._cache, lambda key: key.startswith(("wl", "ov", "helm")))
+        CACHE.drop_where(CACHE._cache, lambda key: key.startswith(("wl", "ov", "helmsearch")))
         self.follow()
         self.assertEqual({"wl", "ov"}, set(self.told()))
 
@@ -233,8 +252,8 @@ class UntoldWritesTests(Forgets):
         import homestead_lifecycle as LC
         import homestead_longhorn as LH
         import homestead_place as PLACE
-        for module, keys, told in ((HW, (), {"nodes", "ov", "wl"}), (IMP, ("vol", "stor"), {"vol", "stor"}),
-                                   (LC, ("wl", "ov"), {"wl", "ov"}), (LH, ("vol",), {"vol"}),
+        for module, keys, told in ((HW, (), {"nodes", "ov", "wl", "flow2"}), (IMP, ("vol", "stor"), {"vol", "stor"}),
+                                   (LC, ("wl", "ov"), {"wl", "ov"}), (LH, ("vol",), {"vol", "lhov"}),
                                    (PLACE, ("wl", "nodes"), {"wl", "nodes"})):
             with self.subTest(module=module.__name__), mock.patch.object(module, "_cache", CACHE._cache):
                 self.PAGES.reset()

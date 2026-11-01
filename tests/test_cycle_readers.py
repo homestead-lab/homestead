@@ -489,11 +489,10 @@ class PageRouteKeepTests(unittest.TestCase):
         self.assertIsNone(CACHE.kept_at("lhov"))
 
     def helm_job(self, status):
-        import homestead_helm as HELM
         self.cluster.kube.add({"apiVersion": "batch/v1", "kind": "Job", "status": status,
                                "metadata": {"namespace": "kube-system", "name": "helm-install-web"}})
         self.get("/api/helm", "homestead_helm", "releases")
-        return HELM.job_status({"ref": {"namespace": "kube-system", "name": "helm-install-web"}})
+        return self.cluster.server.OPS.RESOLVERS["helm"]({"ref": {"namespace": "kube-system", "name": "helm-install-web"}})
 
     def test_a_helm_job_that_ends_drops_the_helm_page(self):
         for status in ({"succeeded": 1}, {"failed": 1}):
@@ -503,6 +502,104 @@ class PageRouteKeepTests(unittest.TestCase):
     def test_a_helm_job_still_running_keeps_the_helm_page(self):
         self.helm_job({"active": 1})
         self.assertIsNotNone(CACHE.kept_at("helm"))
+
+
+class WhatDropsTheKeptPagesTests(unittest.TestCase):
+    """Each change Homestead makes to what Data protection, Flow, Helm or
+    Disks show drops the reading those pages keep PAGE_SECONDS (#978)."""
+
+    def setUp(self):
+        clean_cache(self)
+        self.clock = Clock(self)
+        self.cluster = Cluster(self)
+        clean_snapshot(self)
+        self.table = self.cluster.server.MODULE_ROUTES.table()
+        self.OPS = self.cluster.server.OPS
+
+    def keep(self, *keys):
+        for key in keys:
+            CACHE.cached(key, ROUTER.PAGE_SECONDS, lambda: {})
+
+    def dropped(self, *keys):
+        return all(CACHE.kept_at(key) is None for key in keys)
+
+    def test_moving_or_switching_off_the_weekly_trim_drops_data_protection(self):
+        import homestead_weekly_trim as WT
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.enterContext(mock.patch.object(WT, "DATA_DIR", folder.name))
+        for body in ({"weekday": 2, "hour": 22}, {"enabled": False}):
+            self.keep("lhov")
+            WT.settings(body)
+            self.assertTrue(self.dropped("lhov"), body)
+
+    def test_leaving_a_volume_out_of_the_weekly_trim_drops_data_protection(self):
+        import homestead_weekly_trim as WT
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.enterContext(mock.patch.object(WT, "DATA_DIR", folder.name))
+        self.keep("lhov")
+        WT.leave_out({"volume": "pvc-1", "left_out": False})
+        self.assertTrue(self.dropped("lhov"))
+
+    def test_a_write_to_a_longhorn_node_drops_the_disks_page(self):
+        self.keep("disks")
+        K.fresh_reads("PATCH", "/apis/longhorn.io/v1beta2/namespaces/longhorn-system/nodes/node-a", {}, lambda: None)
+        self.assertTrue(self.dropped("disks"))
+
+    def test_starting_a_disk_job_drops_the_disks_page(self):
+        import homestead_disk_allocation as ALLOCATION
+        import homestead_disk_v2 as DISK_V2
+        for module, name, path in ((DISK_V2, "start", "/api/disks/v2/start"),
+                                   (DISK_V2, "prepare", "/api/disks/v2/prepare"),
+                                   (ALLOCATION, "start", "/api/disks/allocation/start"),
+                                   (ALLOCATION, "finish", "/api/disks/allocation/finish")):
+            self.keep("disks")
+            with mock.patch.object(module, name, lambda body: {"ok": True}):
+                self.table[("POST", path)].handler(mock.Mock(body={}))
+            self.assertTrue(self.dropped("disks"), path)
+
+    def ended(self, kind, keys, answer=("succeeded", 100, "Done")):
+        resolver = self.OPS.RESOLVERS[kind]
+        inner = getattr(resolver, "__wrapped__", None)
+        self.assertIsNotNone(inner, f"{kind}: its resolver drops nothing when its job ends")
+        with mock.patch.object(resolver, "__wrapped__", lambda item: answer):
+            self.keep(*keys)
+            resolver({"id": "j1", "kind": kind, "ref": {}})
+        return self.dropped(*keys)
+
+    def test_a_disk_job_that_ends_drops_the_disks_page(self):
+        for kind in ("disk-retire", "disk-v2-convert", "disk-allocation", "longhorn-v2-prepare"):
+            self.assertTrue(self.ended(kind, ("disks",)), kind)
+            self.assertFalse(self.ended(kind, ("disks",), ("running", 50, "Working")), kind)
+
+    def test_a_job_that_changes_helm_releases_drops_the_helm_page_when_it_ends(self):
+        for kind in ("helm", "multus", "platform-upgrade"):
+            for status in ("succeeded", "failed"):
+                self.assertTrue(self.ended(kind, ("helm",), (status, 100, "Done")), (kind, status))
+            self.assertFalse(self.ended(kind, ("helm",), ("running", 40, "Helm is running")), kind)
+
+    def test_a_macvtap_chart_change_drops_the_helm_page(self):
+        import homestead_macvtap as MACVTAP
+        sent = []
+        chart = {"metadata": {"name": MACVTAP.CHART}, "spec": {}}
+        with mock.patch.object(MACVTAP, "kget", lambda path: copy.deepcopy(chart)), \
+                mock.patch.object(MACVTAP, "ksend", lambda *a, **k: sent.append(a)), \
+                mock.patch.object(MACVTAP, "platform", lambda *a: {}), \
+                mock.patch.object(MACVTAP, "addons", mock.Mock(chart_archive=lambda *a: "")), \
+                mock.patch.object(MACVTAP, "manifests", lambda *a: ""):
+            self.keep("helm")
+            MACVTAP.upgrade("v1.2.3")
+        self.assertTrue(sent)
+        self.assertTrue(self.dropped("helm"))
+
+    def test_a_change_of_addresses_drops_the_flow_picture_built_from_them(self):
+        self.keep("network", "flow2")
+        ROUTER.forget("network")
+        self.assertTrue(self.dropped("flow2"), "a forget")
+        self.keep("network", "flow2")
+        CACHE._cache.pop("network", None)
+        self.assertTrue(self.dropped("flow2"), "a pop")
 
 
 if __name__ == "__main__":

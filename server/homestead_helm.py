@@ -399,10 +399,6 @@ def job_status(item):
             return "running", 5, "Waiting for the Helm controller"
         raise
     status = job.get("status") or {}
-    if status.get("succeeded") or (status.get("failed") and not status.get("active")):
-        # The release has its new revision now, or a failed one: the Helm
-        # page, kept PAGE_SECONDS, shows it on its next refresh (#978).
-        homestead_routes.forget("helm")
     if status.get("succeeded"):
         return "succeeded", 100, "Helm finished"
     if status.get("failed") and not status.get("active"):
@@ -422,4 +418,6 @@ ROUTES = {
 
 def register(ops):
     """The job store's entry for a Helm install or upgrade (#622)."""
-    ops.RESOLVERS["helm"] = job_status
+    # The release has its new revision once the job ends: the Helm page,
+    # kept PAGE_SECONDS, shows it on its next refresh (#978).
+    ops.RESOLVERS["helm"] = homestead_routes.drops_when_ended(job_status, "helm")

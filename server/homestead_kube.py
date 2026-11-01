@@ -138,9 +138,9 @@ _SHOWN = re.compile(r"/(deployments|statefulsets|daemonsets|replicasets|cronjobs
                     r"|services|persistentvolumeclaims|persistentvolumes|volumesnapshots|virtualmachines"
                     r"|virtualmachineinstances|virtualmachineinstancemigrations|datavolumes|volumes|replicas"
                     r"|engines|volumeattachments|snapshots|backups)(/|\?|$)")
-# Flow ("flow2") and Data protection ("lhov") draw the same objects and are
-# kept as long (#978).
-SHOWN_KEYS = ("ov", "nodes", "wl", "vms", "vol", "volmap", "volother", "stor", "pods", "flow2", "lhov")
+# Flow ("flow2"), Data protection ("lhov") and Disks ("disks", Longhorn's
+# nodes) draw the same objects and are kept as long (#978).
+SHOWN_KEYS = ("ov", "nodes", "wl", "vms", "vol", "volmap", "volother", "stor", "pods", "flow2", "lhov", "disks")
 SHOWN_PREFIXES = ("node:", "impact:")
 
 

@@ -284,10 +284,12 @@ _last_update_scan = [0.0]
 # The loop looks every LOOK_SECONDS, and what a look takes.
 LOOK_SECONDS = 20
 # The sources that keep a reading of their own (addresses, disks, ports,
-# CronJobs) take one made since the previous look began, never older than
-# KEPT_SECONDS: each reading serves its own look and at most the next one, so
-# an alert is raised or resolved at most one look later than a fresh read
-# would have it, against a HOLD of three looks (#978). Before, each kept its
+# CronJobs) take one no older than the time since the previous look began,
+# counted back from each source's own read (so a little after that start),
+# and never older than KEPT_SECONDS: each reading serves its own look and at
+# most the next one, so an alert is raised or resolved at most one look later
+# than a fresh read would have it, against a HOLD of three looks (#978). The
+# first look as leader takes one up to KEPT_SECONDS old. Before, each kept its
 # reading 5-20 s, less than a look, and read again on every one.
 KEPT_SECONDS = 30
 _looked = [0.0]

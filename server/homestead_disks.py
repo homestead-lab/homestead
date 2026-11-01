@@ -1014,5 +1014,5 @@ ROUTES = {
 
 def register(ops):
     """The job store's entries for retiring a disk (#622)."""
-    ops.RESOLVERS["disk-retire"] = retire_step
+    ops.RESOLVERS["disk-retire"] = homestead_routes.drops_when_ended(retire_step, "disks")
     ops.RESUMABLE["disk-retire"] = retire_resumable
