@@ -189,7 +189,7 @@ def drain(node, grace=30, include_system=False, reviewed_pods=None, wait=False, 
         deadline, limit, reason, late = min(deadlines, key=lambda row: row[0])
         names = ", ".join(sorted(late)[:6])
         if now >= deadline:
-            stall = BLOCKERS.stall_reason(node, read=L.kget) or "inspect Longhorn volumes, disruption budgets and pod events"
+            stall = BLOCKERS.stall_reason(node, read=L.kget) or BLOCKERS.GENERAL_ADVICE
             raise ValueError(f"Host remains cordoned; drain timed out after {limit // 60} minutes. {reason}: {names}. "
                              f"Power was not sent; {stall}")
         if progress:
@@ -267,7 +267,7 @@ def node_power(node, action, drain_first=True, before_send=None, reviewed_pods=N
         refused = [item for item in d["skipped"] if "(HTTP " in item]
         if refused:
             raise ValueError("Host remains cordoned; drain was refused for " + ", ".join(refused[:6]) +
-                             ". Resolve the pod or disruption budget before retrying power control")
+                             ". Power was not sent; resolve the pod or disruption budget before retrying power control")
 
     # A long drain can outlive the reviewed quorum, VM and replica state.
     report("verifying", 15, "Drain completed; rechecking quorum, VMs, pods and volume replicas before power")

@@ -68,14 +68,20 @@ def budget(name, ns="lab", expected=2, healthy=1, desired=1, allowed=0, generati
                        "desiredHealthy": desired, "disruptionsAllowed": allowed}}
 
 
-def too_many_requests(path, pdb=None, body=True):
-    """The eviction 429 as Kubernetes sends it (see the module docstring)."""
+def too_many_requests(path, pdb=None, body=True, processing=False):
+    """The eviction 429 as Kubernetes sends it (see the module docstring).
+    processing: the one createTooManyRequestsError builds while the budget's
+    latest change is not observed yet (retryAfterSeconds 10)."""
+    name = pdb["metadata"]["name"]
+    cause = (f"The disruption budget {name} is still being processed by the server." if processing else
+             f"The disruption budget {name} needs {pdb['status']['desiredHealthy']} "
+             f"healthy pods and has {pdb['status']['currentHealthy']} currently")
+    details = {"causes": [{"reason": "DisruptionBudget", "message": cause}]}
+    if processing:
+        details["retryAfterSeconds"] = 10
     status = {"kind": "Status", "apiVersion": "v1", "metadata": {}, "status": "Failure",
               "message": "Cannot evict pod as it would violate the pod's disruption budget.",
-              "reason": "TooManyRequests", "code": 429,
-              "details": {"causes": [{"reason": "DisruptionBudget", "message":
-                  f"The disruption budget {pdb['metadata']['name']} needs {pdb['status']['desiredHealthy']} "
-                  f"healthy pods and has {pdb['status']['currentHealthy']} currently"}]}}
+              "reason": "TooManyRequests", "code": 429, "details": details}
     raw = json.dumps(status).encode() if body else b""
     return urllib.error.HTTPError(path, 429, "Too Many Requests", {}, io.BytesIO(raw))
 
@@ -157,6 +163,7 @@ class DrainNamesItsBlockerTests(unittest.TestCase):
         message = str(caught.exception)
         self.assertIn("lab/keep-ready", message)
         self.assertIn("Host remains cordoned", message)
+        self.assertIn("Power was not sent", message)
         self.assertLess(self.clock.now, BLOCKERS.BUDGET_WAIT)
         self.assertEqual(0, self.clock.now)
         self.assertFalse(self.sent)
@@ -228,7 +235,12 @@ class DrainNamesItsBlockerTests(unittest.TestCase):
             with self.assertRaises(ValueError) as caught:
                 self.run_drain(kube, power=True)
         self.assertGreaterEqual(self.clock.now, NODE_ACTIONS.LONGHORN_DRAIN_WAIT)
-        self.assertIn("after 5 minutes. Longhorn still prevents eviction", str(caught.exception))
+        message = str(caught.exception)
+        self.assertIn("after 5 minutes. Longhorn still prevents eviction", message)
+        # What could not be read is said, not left out, with today's advice.
+        self.assertIn("Homestead couldn't check Longhorn instance-managers: HTTP 500", message)
+        self.assertIn("Homestead couldn't check Longhorn orphan records: HTTP 500", message)
+        self.assertIn("inspect Longhorn volumes, disruption budgets and pod events", message)
         # Any other pod: refused at once as today, and the message says why is unknown.
         self.clock, pod, pdb = Clock(), workload(), budget("keep-ready", expected=2, healthy=1)
         with Kube(pod, pdb) as kube:
@@ -240,6 +252,32 @@ class DrainNamesItsBlockerTests(unittest.TestCase):
         self.assertEqual(0, self.clock.now)
         self.assertIn("drain was refused for lab/app-a (HTTP 429", message)
         self.assertIn("couldn't read why", message)
+
+
+    def test_a_stale_only_moment_shorter_than_the_grace_keeps_waiting(self):
+        # An engine that just moved is listed on the old instance-manager for
+        # a reconcile or two: that alone must not fail a healthy drain.
+        im_pod = manager_pod()
+        im_budget = budget(im_pod["metadata"]["name"], ns="longhorn-system", expected=1, healthy=1, desired=1)
+        objects = [workload(), im_pod, im_budget, SHAPES.instance_manager(NODE, engines=["vol-a-e-0"]),
+                   SHAPES.engine("vol-a", "node-b")]
+        with Kube(*objects) as kube:
+            asked = self.refuse(kube, im_pod, im_budget, times=10)  # about 20 s
+            result = self.run_drain(kube)
+        self.assertTrue(result["ok"])
+        self.assertEqual(11, len(asked))
+        self.assertLess(self.clock.now, BLOCKERS.STALE_GRACE)
+
+    def test_malformed_longhorn_data_mid_wait_is_waited_on_as_unread(self):
+        im_pod = manager_pod()
+        im_budget = budget(im_pod["metadata"]["name"], ns="longhorn-system", expected=1, healthy=1, desired=1)
+        im = SHAPES.instance_manager(NODE)
+        im["status"]["instanceEngines"] = [1, "vol-a-e-0"]  # not the map Longhorn writes
+        with Kube(workload(), im_pod, im_budget, im) as kube:
+            asked = self.refuse(kube, im_pod, im_budget, times=20)
+            result = self.run_drain(kube)
+        self.assertTrue(result["ok"])
+        self.assertEqual(21, len(asked))
 
 
 class RefusalTests(unittest.TestCase):
@@ -260,6 +298,24 @@ class RefusalTests(unittest.TestCase):
                 said = BLOCKERS.refusal(error, pod)
                 self.assertEqual({"budget": None, "passing": False, "why": "couldn't read why"},
                                  {k: said[k] for k in ("budget", "passing", "why")})
+
+    def test_a_budget_not_yet_processed_is_passing(self):
+        # observedGeneration < generation: Kubernetes answers "is still being
+        # processed" and the refusal clears on its own.
+        pod, pdb = workload(), budget("keep-ready", expected=1, healthy=1, desired=1, generation=3, observed=2)
+        with Kube(pdb):
+            said = BLOCKERS.refusal(too_many_requests("eviction", pdb, processing=True), pod)
+        self.assertEqual({"budget": "lab/keep-ready", "passing": True, "starting": 0},
+                         {k: said[k] for k in ("budget", "passing", "starting")})
+        self.assertIn("lab/keep-ready", said["why"])
+
+    def test_a_partly_unread_host_says_what_was_found_and_what_could_not_be_checked(self):
+        with Kube(SHAPES.fixture("orphan_replica_data")) as kube:
+            kube.fail(BLOCKERS.CLAIMS, 500, times=10)
+            said = BLOCKERS.stall_reason(NODE)
+        self.assertIn("other Longhorn orphan record", said)
+        self.assertIn("Homestead couldn't check the volume claims: HTTP 500", said)
+        self.assertIn("review the restart again", said)
 
     def test_stall_reason_is_empty_when_nothing_is_found(self):
         with Kube():

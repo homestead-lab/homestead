@@ -416,22 +416,32 @@ def engines_here(node, read=None):
     got = _read_all({"orphans": ORPHANS, "instancemanagers": INSTANCE_MANAGERS, "engines": ENGINES}, read)
     if any(isinstance(value, Exception) for value in got.values()):
         return None
-    orphans, managers = got["orphans"] or [], got["instancemanagers"] or []
-    engines = _engines_by_name(got["engines"] or [])
-    rows = [row for row in _orphan_rows(node, orphans, engines) if row["kind"] == "engine-orphans"]
-    named = {r["engine"] for row in rows for r in row["records"]}
-    rows += _elsewhere_row(node, managers, engines, named)
-    live, _ = _listed(node, managers, engines, named)
+    try:
+        orphans, managers = got["orphans"] or [], got["instancemanagers"] or []
+        engines = _engines_by_name(got["engines"] or [])
+        rows = [row for row in _orphan_rows(node, orphans, engines) if row["kind"] == "engine-orphans"]
+        named = {r["engine"] for row in rows for r in row["records"]}
+        rows += _elsewhere_row(node, managers, engines, named)
+        live, _ = _listed(node, managers, engines, named)
+    except Exception:  # data not shaped as Longhorn writes it: couldn't check, as unread
+        return None
     return len(live), rows
+
+
+GENERAL_ADVICE = "inspect Longhorn volumes, disruption budgets and pod events"
 
 
 def say(node, rows):
     """rows (for_host's) as the end of one sentence for a stalled drain's
-    message; "" when none names a blocker."""
+    message: what holds node and what couldn't be checked, never left out;
+    only what couldn't be checked, with the general advice; "" for no rows."""
     found = [row["what"] for row in rows if row["kind"] != "unread"]
-    if not found:
-        return ""
-    return f"what holds {node}: " + "; ".join(found) + "; review the restart again for what to do"
+    unread = [row["what"] for row in rows if row["kind"] == "unread"]
+    if found:
+        return f"what holds {node}: " + "; ".join(found + unread) + "; review the restart again for what to do"
+    if unread:
+        return "; ".join(unread) + "; " + GENERAL_ADVICE
+    return ""
 
 
 def stall_reason(node, read=None):
