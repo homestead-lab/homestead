@@ -242,3 +242,34 @@ jobs:
             --env HOMESTEAD_TEST_SERVER_DIR=/srv \
             --mount "type=bind,source=$PWD,target=/repo,readonly" \
             --entrypoint python3 homestead:ci -m unittest discover -s /repo/tests -p 'test_shares_filesystem.py' -v
+      - name: Read real answers over TLS in the built Linux image
+        # Registries, Artifact Hub, the app feed and linked clusters, read by
+        # the image's own Python (#1077). The image has no openssl.
+        run: |
+          tls=$(mktemp -d)
+          openssl req -x509 -newkey rsa:2048 -nodes -keyout "$tls/key.pem" -out "$tls/cert.pem" -days 1 \
+            -subj /CN=127.0.0.1 -addext subjectAltName=IP:127.0.0.1 2>/dev/null
+          chmod 644 "$tls"/*.pem
+          docker run --rm --network none --read-only --tmpfs /tmp \
+            --env HOMESTEAD_TEST_SERVER_DIR=/srv --env HOMESTEAD_TEST_TLS_DIR=/tls --env CI=true \
+            --mount "type=bind,source=$tls,target=/tls,readonly" \
+            --mount "type=bind,source=$PWD,target=/repo,readonly" \
+            --entrypoint python3 homestead:ci -m unittest discover -s /repo/tests -p 'test_real_answers.py' -v
+      - name: Read a public registry from the built Linux image
+        # The same check against GHCR itself: its token exchange and TLS, as
+        # an update check meets them. Three tries, for a network blip.
+        run: |
+          for attempt in 1 2 3; do
+            docker run --rm --read-only --tmpfs /tmp --entrypoint python3 homestead:ci -c '
+          import sys; sys.path.insert(0, "/srv")
+          import homestead_update_registry as R
+          ref = "ghcr.io/homestead-lab/homestead:2.8.333"
+          tags = R.registry_tags(ref, force=True)
+          assert tags, "GHCR answered with no tags"
+          digest = R.manifest_digest(ref, force=True)
+          assert digest.startswith("sha256:"), digest
+          print(len(tags), "tags;", ref, digest)
+          ' && exit 0
+            sleep 20
+          done
+          exit 1
