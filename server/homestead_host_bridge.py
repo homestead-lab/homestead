@@ -29,6 +29,7 @@ import re
 import time
 import urllib.error
 
+import homestead_host_bonds as HOST_BONDS
 import homestead_operations as OPS
 import homestead_routes as ROUTER
 
@@ -296,6 +297,7 @@ def _not_back(ref, interface):
             f"The old configuration is in {ref['backup']}")
 
 
+
 def _step(item, now=None):
     ref, now = item["ref"], time.time() if now is None else now
     node, elapsed = ref["node"], now - ref.get("since", now)
@@ -333,14 +335,12 @@ def _step(item, now=None):
         if service and _node_count() > 1:
             hostrun.run(node, f"systemd-run --on-active=2 systemctl restart {service} >/dev/null && echo OK", timeout=45,
                         **_held(ref))
-            ref.update(stage="restarting", since=now)
+            ref.update(stage="restarting", since=now, **HOST_BONDS.restart_baseline(kget, node))
             return "running", 80, f"Restarting {service} on {node}, so flannel carries pod traffic by {BRIDGE}"
         ref.update(stage="done")
         return "succeeded", 100, f"{node} is on {BRIDGE}: make a LAN network on {BRIDGE} for VMs and containers"
     if ref["stage"] == "restarting":
-        node_obj = kget(f"/api/v1/nodes/{node}")
-        ready = any(c.get("type") == "Ready" and c.get("status") == "True" for c in (node_obj.get("status") or {}).get("conditions") or [])
-        if ready and elapsed > 30:
+        if elapsed > 30 and HOST_BONDS.kubelet_back(kget, node, ref):
             ref.update(stage="done")
             return "succeeded", 100, f"{node} is on {BRIDGE}: make a LAN network on {BRIDGE} for VMs and containers"
         if elapsed > RESTART_SECONDS:
