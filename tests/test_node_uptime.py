@@ -355,6 +355,7 @@ class DayStripTests(UptimeCase):
         # A full collection inside one timed call costs it a few tenths of a second
         # once earlier test files have left ~1.5 M objects alive (source_scan keeps
         # every parsed file): collect first, and time neither call with GC on.
+        was = gc.isenabled()
         gc.collect()
         gc.disable()
         try:
@@ -365,7 +366,8 @@ class DayStripTests(UptimeCase):
             got = H.uptime(now)
             after = time.process_time() - started
         finally:
-            gc.enable()
+            if was:
+                gc.enable()
         self.assertEqual(want, got)
         # Relative, so a busy machine slows both alike: 20 nodes took 0.8 s before #979.
         # A generous ratio: about 6 times on a quiet machine, never under 3 seen on a loaded one.

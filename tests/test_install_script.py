@@ -77,14 +77,14 @@ class InstallerTests(unittest.TestCase):
 
     def test_join_without_a_storage_path_asks_instead_of_guessing(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "192.0.2.6",
-                                                          "HS_SERVER": "192.0.2.5", "HS_TOKEN": "example", "HS_YES": "1"})
+                                                          "HS_SERVER": "192.0.2.5", "HS_TOKEN": "example-token", "HS_YES": "1"})
         self.assertNotEqual(0, code)
         self.assertIn("HS_LONGHORN_DATA_PATH", out)
         self.assertNotIn("bootstrap-k3s.sh agent", out)
 
     def test_custom_join_storage_stops_before_installing(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "agent", "HS_NODE_IP": "192.0.2.6",
-                       "HS_SERVER": "192.0.2.5", "HS_TOKEN": "example", "HS_YES": "1",
+                       "HS_SERVER": "192.0.2.5", "HS_TOKEN": "example-token", "HS_YES": "1",
                        "HS_LONGHORN_DATA_PATH": "/custom/data"})
         self.assertNotEqual(0, code)
         self.assertIn("Custom storage folders need manual setup", out)
@@ -140,6 +140,13 @@ class InstallerTests(unittest.TestCase):
                                                           "HS_LONGHORN_DATA_PATH": "/var/lib/longhorn", "TMPDIR": work},
                         path_extra=bin_dir)
         self.assertIn("+ sh /tmp/homestead-private/bootstrap-k3s.sh join https://10.0.0.5:9345 [token hidden] --node-ip 10.0.0.6 --rke2", out)
+
+    def test_every_token_here_has_a_character_mktemp_never_picks(self):
+        """The cause above, for the whole file: a token of letters and digits
+        only can turn up in the work folder's random suffix."""
+        tokens = re.findall(r'"HS_TOKEN": "([^"]*)"', Path(__file__).read_text(encoding="utf-8"))
+        self.assertTrue(tokens)
+        self.assertEqual([], [t for t in tokens if re.fullmatch(r"[A-Za-z0-9]*", t)])
 
     def test_an_unknown_kubernetes_is_refused(self):
         code, out = run(["--dry-run", "--skip-checks"], {"HS_ROLE": "new", "HS_DIST": "k0s", "HS_NODE_IP": "10.0.0.5", "HS_YES": "1"})

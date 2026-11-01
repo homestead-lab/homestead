@@ -364,8 +364,10 @@ class FollowerPagesTests(unittest.TestCase):
         restarts.json into the folder its cleanup is removing ("Directory not
         empty"): the shared Cluster keeps it from starting."""
         import threading
+        # Only threads this tick started: one an earlier file left running is not this test's.
+        earlier = {t for t in threading.enumerate() if t.name == "restart-record"}
         self.PAGES.tick(LEADER, self.OV.page_inputs(), self.OV.page_builders(), now=100)
-        started = [t for t in threading.enumerate() if t.name == "restart-record"]
+        started = [t for t in threading.enumerate() if t.name == "restart-record" and t not in earlier]
         for thread in started:
             thread.join(10)
         self.assertEqual([], [t.name for t in started])
