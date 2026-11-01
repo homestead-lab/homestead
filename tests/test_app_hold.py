@@ -18,6 +18,7 @@ from fakes.kube import Kube
 NS = "apps"
 PODS = f"/api/v1/namespaces/{NS}/pods"
 WEB = f"/apis/apps/v1/namespaces/{NS}/deployments/web"
+START = f"/apis/subresources.kubevirt.io/v1/namespaces/{NS}/virtualmachines/vm1/start"
 SECRET = "very-secret-password-value"
 FITS = {"blocked": False}
 
@@ -113,10 +114,24 @@ class AppHoldTest(unittest.TestCase):
         for _, _, body, _ in self.patches(kube):
             self.assertNotIn(SECRET, json.dumps(body))
 
+    def test_the_template_secrets_owner_doesnt_need_the_rows_api_version(self):
+        # A row from a list has no apiVersion (nor kind, which the caller sets).
+        kube = self.kube(web())
+        row = kube.object(WEB)
+        row.pop("apiVersion")
+        record = HOLD.hold(row, "node-power", "j1", keep_template=True)
+        secret = kube.object(f"/api/v1/namespaces/{NS}/secrets/{record.template_secret}")
+        self.assertEqual(secret["metadata"]["ownerReferences"][0]["apiVersion"], "apps/v1")
+
     def test_stop_is_one_fenced_write(self):
-        kube, record = self.held(web())
+        kube = self.kube(web())
+        held_rv = kube.object(WEB)["metadata"]["resourceVersion"]
+        record = HOLD.hold(kube.object(WEB), "node-power", "j1")
+        HOLD.stop(record, "node-power", "j1")
         [(method, path, body, ctype)] = kube.writes
         self.assertEqual((method, path, ctype), ("PATCH", WEB, "application/json-patch+json"))
+        self.assertEqual(body[:2], [{"op": "test", "path": "/metadata/uid", "value": "d-web"},
+                                    {"op": "test", "path": "/metadata/resourceVersion", "value": held_rv}])
         self.assertIn({"op": "test", "path": "/metadata/uid", "value": "d-web"}, body)
         self.assertIn({"op": "test", "path": "/metadata/resourceVersion", "value": record.resource_version}, body)
 
@@ -132,6 +147,8 @@ class AppHoldTest(unittest.TestCase):
 
     def test_restart_starts_at_the_earlier_count(self):
         kube, record = self.held(web())
+        stopped_rv = kube.object(WEB)["metadata"]["resourceVersion"]
+        self.assertNotEqual(stopped_rv, record.resource_version)
         self.assertEqual(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.Started("3"))
         now = kube.object(WEB)
         self.assertEqual(now["spec"]["replicas"], 3)
@@ -139,8 +156,48 @@ class AppHoldTest(unittest.TestCase):
         self.assertNotIn(HOLD.HELD_AS, now["metadata"].get("annotations") or {})
         self.assertEqual(self.admit.call_args.args[0]["spec"]["replicas"], 3)
         restart = self.patches(kube)[-1][2]
-        self.assertEqual(restart[0]["op"], "test")
-        self.assertEqual(restart[1]["path"], "/metadata/resourceVersion")
+        self.assertEqual(restart[:2], [{"op": "test", "path": "/metadata/uid", "value": "d-web"},
+                                       {"op": "test", "path": "/metadata/resourceVersion", "value": stopped_rv}])
+
+    def test_a_statefulset_restarts_at_its_earlier_count(self):
+        db = obj("StatefulSet", "db", "s-db", spec={"replicas": 2, "template": template()})
+        kube, record = self.held(db)
+        path = kube.path_of(db)
+        self.assertEqual(kube.object(path)["spec"]["replicas"], 0)
+        self.assertEqual(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.Started("2"))
+        self.assertEqual(kube.object(path)["spec"]["replicas"], 2)
+        self.assertEqual(self.admit.call_args.args[0]["kind"], "StatefulSet")
+
+    def test_a_helm_managed_app_restarts_by_default(self):
+        kube, record = self.held(web(annotations={"meta.helm.sh/release-name": "web"},
+                                     labels={"app.kubernetes.io/managed-by": "Helm"}))
+        self.assertEqual(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.Started("3"))
+        self.assertEqual(kube.object(WEB)["spec"]["replicas"], 3)
+
+    def test_a_guard_passed_in_that_refuses_keeps_it_stopped(self):
+        kube, record = self.held(web())
+        result = HOLD.restart(record, "node-power", "j1", wait_seconds=0,
+                              guard=lambda app: f"{app['metadata']['name']} is managed elsewhere")
+        self.assertEqual(result, HOLD.KeptStopped("web is managed elsewhere", "Containers → web → Start with 3 replicas"))
+        self.assertEqual(kube.object(WEB)["spec"]["replicas"], 0)
+        self.assertEqual(HOLD.restart(record, "node-power", "j1", wait_seconds=0, guard=lambda app: None),
+                         HOLD.Started("3"))
+
+    def test_a_copy_hold_keeps_it_stopped(self):
+        kube, record = self.held(web())
+        kube("PATCH", WEB, {"metadata": {"annotations": {"homestead.io/storage-copy-job": "copy-1"}}},
+             "application/merge-patch+json")
+        result = HOLD.restart(record, "node-power", "j1", wait_seconds=0)
+        self.assertIsInstance(result, HOLD.KeptStopped)
+        self.assertIn("storage copy", result.reason)
+
+    def test_an_import_job_that_cant_be_read_waits(self):
+        kube, record = self.held(web())
+        kube("PATCH", WEB, {"metadata": {"annotations": {"homestead.io/import-job": "import-1"}}},
+             "application/merge-patch+json")
+        kube.fail(f"/apis/batch/v1/namespaces/{NS}/jobs/import-1", 500, times=20)
+        self.assertIsInstance(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.Wait)
+        self.assertEqual(kube.object(WEB)["spec"]["replicas"], 0)
 
     def test_an_app_at_zero_is_never_started(self):
         kube, record = self.held(web(0))
@@ -223,32 +280,88 @@ class AppHoldTest(unittest.TestCase):
     def test_a_claim_used_elsewhere_keeps_it_stopped(self):
         other = obj("StatefulSet", "other", "s-other")
         claim = obj("PersistentVolumeClaim", "data", "pvc-data", api="v1", spec={"volumeName": "pv-data"})
-        attached = {"apiVersion": "storage.k8s.io/v1", "kind": "VolumeAttachment", "metadata": {"name": "csi-1"},
-                    "spec": {"attacher": "driver.example.com", "nodeName": "host-b",
-                             "source": {"persistentVolumeName": "pv-data"}},
-                    "status": {"attached": True}}
-        for what, extra, words in (("a pod of another app", (other, pod("other-0", other, claim="data")), "other-0"),
-                                   ("attached on a host", (attached,), "host-b")):
-            with self.subTest(what), Kube(web(), claim, *extra) as kube:
+        kube = self.kube(web(), claim, other, pod("other-0", other, claim="data"))
+        record = HOLD.hold(kube.object(WEB), "node-power", "j1")
+        HOLD.stop(record, "node-power", "j1")
+        result = HOLD.restart(record, "node-power", "j1", wait_seconds=0, claims=("data",))
+        self.assertIsInstance(result, HOLD.KeptStopped)
+        self.assertIn("other-0", result.reason)
+        self.assertEqual(kube.object(WEB)["spec"]["replicas"], 0)
+
+    def test_a_claim_attached_or_still_detaching_waits(self):
+        claim = obj("PersistentVolumeClaim", "data", "pvc-data", api="v1", spec={"volumeName": "pv-data"})
+        for what, meta in (("attached", {"name": "csi-1"}),
+                           ("detaching", {"name": "csi-1", "deletionTimestamp": "2026-11-01T00:00:00Z",
+                                          "finalizers": ["external-attacher/driver-example-com"]})):
+            attachment = {"apiVersion": "storage.k8s.io/v1", "kind": "VolumeAttachment", "metadata": meta,
+                          "spec": {"attacher": "driver.example.com", "nodeName": "host-b",
+                                   "source": {"persistentVolumeName": "pv-data"}},
+                          "status": {"attached": True}}
+            with self.subTest(what), Kube(web(), claim, attachment) as kube:
                 record = HOLD.hold(kube.object(WEB), "node-power", "j1")
                 HOLD.stop(record, "node-power", "j1")
                 result = HOLD.restart(record, "node-power", "j1", wait_seconds=0, claims=("data",))
-                self.assertIsInstance(result, HOLD.KeptStopped)
-                self.assertIn(words, result.reason)
+                self.assertIsInstance(result, HOLD.Wait)
+                self.assertIn("host-b", result.reason)
                 self.assertEqual(kube.object(WEB)["spec"]["replicas"], 0)
 
-    def test_a_claim_still_detaching_waits(self):
+    def test_a_claim_gone_keeps_it_stopped(self):
+        kube, record = self.held(web())
+        result = HOLD.restart(record, "node-power", "j1", wait_seconds=0, claims=("data",))
+        self.assertIsInstance(result, HOLD.KeptStopped)
+        self.assertIn("data is gone", result.reason)
+        self.assertEqual(kube.object(WEB)["spec"]["replicas"], 0)
+
+    def test_a_claim_that_cant_be_read_waits(self):
         claim = obj("PersistentVolumeClaim", "data", "pvc-data", api="v1", spec={"volumeName": "pv-data"})
-        detaching = {"apiVersion": "storage.k8s.io/v1", "kind": "VolumeAttachment",
-                     "metadata": {"name": "csi-1", "deletionTimestamp": "2026-11-01T00:00:00Z",
-                                  "finalizers": ["external-attacher/driver-example-com"]},
-                     "spec": {"attacher": "driver.example.com", "nodeName": "host-b",
-                              "source": {"persistentVolumeName": "pv-data"}},
-                     "status": {"attached": True}}
-        kube = self.kube(web(), claim, detaching)
+        kube = self.kube(web(), claim)
         record = HOLD.hold(kube.object(WEB), "node-power", "j1")
         HOLD.stop(record, "node-power", "j1")
+        kube.fail(kube.path_of(claim), 500, times=20)
         self.assertIsInstance(HOLD.restart(record, "node-power", "j1", wait_seconds=0, claims=("data",)), HOLD.Wait)
+        self.assertEqual(kube.object(WEB)["spec"]["replicas"], 0)
+
+    def old_pod(self, kube):
+        rs = obj("ReplicaSet", "web-abc12", "rs-web", owner=kube.object(WEB))
+        kube.add(rs)
+        return kube.add(pod("web-abc12-x", rs, deletionTimestamp="2026-11-01T00:00:00Z"))
+
+    def test_restart_waits_a_while_for_old_pods_to_go(self):
+        self.enterContext(mock.patch.object(HOLD, "POLL_SECONDS", 0.01))
+        kube, record = self.held(web())
+        old = self.old_pod(kube)
+        looks = []
+
+        def pods(method, path, body):
+            looks.append(path)
+            if len(looks) == 2:
+                kube.discard(old)  # gone while restart waits
+        kube.react("GET", PODS, pods)
+        self.assertEqual(HOLD.restart(record, "node-power", "j1", wait_seconds=30), HOLD.Started("3"))
+        self.assertGreaterEqual(len(looks), 2)
+
+    def test_restart_waits_only_so_long(self):
+        self.enterContext(mock.patch.object(HOLD, "POLL_SECONDS", 0.01))
+        kube, record = self.held(web())
+        self.old_pod(kube)
+        looks = []
+        kube.react("GET", PODS, lambda method, path, body: looks.append(path))
+        self.assertIsInstance(HOLD.restart(record, "node-power", "j1", wait_seconds=0.1), HOLD.Wait)
+        self.assertGreater(len(looks), 1)
+        self.assertEqual(kube.object(WEB)["spec"]["replicas"], 0)
+
+    def test_a_refused_stop_gives_the_real_reason(self):
+        kube = self.kube(web())
+        record = HOLD.hold(kube.object(WEB), "node-power", "j1")
+        kube("PATCH", WEB, {"spec": {"replicas": 5}}, "application/merge-patch+json")
+        with self.assertRaises(HOLD.Refused):
+            HOLD.stop(record, "node-power", "j1")
+        result = HOLD.restart(record, "node-power", "j1", wait_seconds=0)
+        self.assertIsInstance(result, HOLD.KeptStopped)
+        self.assertNotIn("taken away", result.reason)
+        self.assertIn("isn't held by this job", result.reason)
+        self.assertIn("5 rather than 3", result.reason)
+        self.assertEqual(kube.object(WEB)["spec"]["replicas"], 5)
 
     def test_a_free_claim_lets_it_start(self):
         claim = obj("PersistentVolumeClaim", "data", "pvc-data", api="v1", spec={"volumeName": "pv-data"})
@@ -293,6 +406,56 @@ class AppHoldTest(unittest.TestCase):
         self.assertEqual(record.earlier, {"runStrategy": "Always"})
         self.assertEqual(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.Started("Always"))
         self.assertEqual(kube.object(path)["spec"]["runStrategy"], "Always")
+
+    def manual_vm(self, running=True):
+        vm = obj("VirtualMachine", "vm1", "vm-1", api="kubevirt.io/v1",
+                 spec={"runStrategy": "Manual", "template": template()})
+        objects = [vm]
+        if running:
+            objects.append(obj("VirtualMachineInstance", "vm1", "vmi-1", api="kubevirt.io/v1", owner=vm,
+                               status={"phase": "Running"}))
+        return vm, objects
+
+    def test_a_manual_vm_is_started_again_through_kubevirt(self):
+        vm, objects = self.manual_vm()
+        kube = self.kube(*objects)
+        path, vmi = kube.path_of(vm), kube.path_of(objects[1])
+        record = HOLD.hold(kube.object(path), "node-power", "j1")
+        HOLD.stop(record, "node-power", "j1")
+        self.assertEqual(kube.object(path)["spec"]["runStrategy"], "Halted")
+        kube.discard(vmi)  # KubeVirt stops it
+        starts = []
+
+        def start(method, path_, body):
+            starts.append(path_)
+            kube.add(obj("VirtualMachineInstance", "vm1", "vmi-2", api="kubevirt.io/v1", owner=kube.object(path)))
+            return {}
+        kube.react("PUT", START, start)
+        kube.fail(START, 500, method="PUT")
+        # Set to Manual, but the start failed: not Started, still held.
+        self.assertIsInstance(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.Wait)
+        self.assertEqual(kube.object(path)["spec"]["runStrategy"], "Manual")
+        self.assertEqual(kube.object(path)["metadata"]["annotations"][HOLD.HELD_BY], "node-power:j1")
+        self.assertEqual(starts, [])
+        self.assertEqual(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.Started("Manual"))
+        now = kube.object(path)
+        self.assertEqual(now["spec"]["runStrategy"], "Manual")
+        self.assertNotIn(HOLD.HELD_BY, now["metadata"].get("annotations") or {})
+        self.assertEqual(starts, [START])
+        self.assertIsNotNone(kube.object(vmi))
+        # Asked again once done: nothing more is sent.
+        self.assertEqual(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.Started("Manual"))
+        self.assertEqual(starts, [START])
+
+    def test_a_manual_vm_that_was_off_is_never_started(self):
+        vm, objects = self.manual_vm(running=False)
+        kube = self.kube(*objects)
+        record = HOLD.hold(kube.object(kube.path_of(vm)), "node-power", "j1")
+        HOLD.stop(record, "node-power", "j1")
+        kube.react("PUT", START, lambda *a: self.fail("started a VM that was off"))
+        self.assertIsInstance(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.Started)
+        self.assertEqual(kube.writes, [])
+        self.assertEqual(kube.object(kube.path_of(vm))["spec"]["runStrategy"], "Manual")
 
     # how_to ----------------------------------------------------------------
 
