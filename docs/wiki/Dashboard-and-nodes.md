@@ -267,6 +267,32 @@ evicting a replacement under a reused name. Before power, Homestead rechecks
 quorum, VMs, replicas and remaining pods. A changed risk or incomplete drain
 leaves the host cordoned, with no power command sent.
 
+**Before draining.** The review also lists what would keep the drain from
+finishing, before anything is cordoned:
+
+- Longhorn orphan records on the host. A record for an engine that already runs
+  on another host keeps a leftover engine process on this host's
+  instance-manager, so Longhorn won't let it go. **Remove orphan records**
+  (admins) lists each one with its engine and where the engine runs; each is
+  checked again before it is removed, and the review then runs again. Records
+  for a volume's data copy are only explained: removing one deletes that copy.
+- Engines the host's instance-manager still lists that run elsewhere, or have
+  no engine record.
+- Pods stuck terminating more than 15 minutes past their grace period, and
+  volumes still attached to the host that no pod there uses.
+- What Homestead couldn't check ("Homestead couldn't check …"), never left out.
+
+Each has its own **Drain anyway** tick: the normal cordon and drain still run.
+A forced restart sends no drain and doesn't ask.
+
+**During the drain.** When a disruption budget refuses an eviction because its
+other copies are still starting, the drain keeps trying for up to 5 minutes and
+says which budget and how many copies it waits for. A budget with nothing
+starting stops the drain at once, naming it. For Longhorn's instance-manager the
+drain waits while its engines leave the host (up to 5 minutes), and stops early,
+naming the orphan records or engines that keep it there, once only those are
+left.
+
 **Single-host clusters.** Normal **Reboot** and **Shut down** use a planned
 whole-cluster outage. Type the host name and acknowledge that all applications,
 storage and Homestead will go offline. To start a shut-down host again you need
