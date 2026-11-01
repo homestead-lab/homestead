@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Narrow HTTP wrapper around smartctl for Homestead's optional helper."""
-import hashlib, hmac, json, os, re, subprocess, time
+import hashlib, hmac, json, os, re, subprocess, threading, time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 from homestead_http import BoundedHTTPServer, LimitedHandler, deadline, BODY_SECONDS
@@ -278,6 +279,61 @@ def one(name):
         raise ValueError("disk was not found on this host")
     return report(*match)
 
+# The regular read of every drive (#974). The drives are read side by side, so
+# a host's read takes as long as its slowest drive rather than all of them in
+# turn, and each drive's reading is kept for KEEP_SECONDS: another Homestead
+# copy, or a page, asking within that time is answered from it and the drive
+# is not touched again. That is under the probe loop's five minutes, so one
+# copy on its own still gets a fresh reading every round. A drive running a
+# self-test is not kept, so its progress moves; starting or aborting a test
+# drops the drive's reading.
+KEEP_SECONDS = 240
+READERS = 8              # drives read at once on one host
+_clock = time.monotonic
+_kept = {}               # name -> (path, _clock() when read, report)
+_kept_lock = threading.Lock()
+_drive_locks = {}        # name -> Lock: one regular smartctl run per drive at a time
+
+def _drive_lock(name):
+    with _kept_lock:
+        return _drive_locks.setdefault(name, threading.Lock())
+
+def regular(name, path):
+    """One drive's regular reading, the kept one while it is fresh. A caller
+    arriving while the drive is being read waits for that read and shares it."""
+    with _drive_lock(name):
+        with _kept_lock:
+            kept = _kept.get(name)
+        if kept and kept[0] == path and _clock() - kept[1] < KEEP_SECONDS:
+            return dict(kept[2])
+        row = report(name, path, wake=False)
+        with _kept_lock:
+            if (row.get("test") or {}).get("active"):
+                _kept.pop(name, None)
+            else:
+                _kept[name] = (path, _clock(), row)
+        return dict(row)
+
+def every_drive():
+    found = disks()
+    names = {name for name, _ in found}
+    with _kept_lock:
+        for name in [name for name in _kept if name not in names]:
+            del _kept[name]
+        for name in [name for name, lock in _drive_locks.items()
+                     if name not in names and not lock.locked()]:
+            del _drive_locks[name]
+    if not found:
+        return []
+    with ThreadPoolExecutor(max_workers=min(READERS, len(found)),
+                            thread_name_prefix="smart-read") as pool:
+        return list(pool.map(lambda drive: regular(*drive), found))
+
+def drop_kept(name):
+    """A self-test started or ended on a drive: its next regular read is fresh."""
+    with _kept_lock:
+        _kept.pop(name, None)
+
 def signature_ok(raw, stamp, supplied):
     try:
         if abs(time.time() - int(stamp)) > 30:
@@ -312,10 +368,9 @@ class H(LimitedHandler):
             name = (parse_qs(urlparse(self.path).query).get("disk") or [""])[0]
             if name:
                 return self.send_json(200, {"node": NODE, "disk": one(name)})
-            # Every drive in turn is the regular read (the probe loop, a
-            # page): it leaves sleeping drives asleep.
-            return self.send_json(200, {"node": NODE,
-                "disks": [report(name, path, wake=False) for name, path in disks()]})
+            # Every drive is the regular read (the probe loop, a page): it
+            # leaves sleeping drives asleep and answers from kept readings.
+            return self.send_json(200, {"node": NODE, "disks": every_drive()})
         except Exception as error:
             return self.send_json(400, {"error": str(error)[:500]})
     def do_POST(self):
@@ -339,6 +394,7 @@ class H(LimitedHandler):
                 if not path:
                     raise ValueError("disk was not found on this host")
                 code, _, message = run(["-d", device_type(name), "-X", "-j", path], timeout=20)
+                drop_kept(name)
                 if code & 3:
                     raise ValueError(message or "smartctl could not abort the test")
                 return self.send_json(200, {"ok": True, "node": NODE, "disk": name,
@@ -353,6 +409,7 @@ class H(LimitedHandler):
             path = next(path for disk, path in disks() if disk == name)
             code, data, message = run(
                 ["-d", device_type(name), "-t", test, "-j", path], timeout=20)
+            drop_kept(name)
             if code & 3:
                 raise ValueError(message or "smartctl could not start the test")
             expected = int((before.get("expected_seconds") or {}).get(test, 0) or 0)
