@@ -3,9 +3,11 @@
 hold() records how the app runs - kind, namespace, name, uid, resourceVersion
 and its replicas, suspend or runStrategy - and, asked to, keeps its pod
 template in a Secret the app owns (never in an annotation: anyone who can see
-the app sees those, and a template carries env values). It writes nothing to
-the app: the caller saves the Record with the job first, then stop() stops it
-in one write fenced on that uid and resourceVersion, marking it HELD_BY
+the app sees those, and a template carries env values), marked with the
+job that kept it: another job never takes it, and restart() removes it once
+the app has started. It writes nothing to the app: the caller saves the
+Record with the job first, then stop() stops it in one write fenced on that
+uid and resourceVersion, marking it HELD_BY
 <kind>:<job id> and HELD_AS how it ran. An app held by another job is refused;
 one already stopped (0 replicas, suspended, Halted) is recorded so and never
 written to, or started.
@@ -237,14 +239,18 @@ def _vm_running(ns, name):
     return vmi is not None and _live(vmi)
 
 
-def _keep_template(obj):
-    """Keep the pod template in a Secret the app owns, so it goes with the
-    app; one kept already (a hold asked again) is the earlier one, and stays."""
+def _keep_template(obj, holder):
+    """Keep the pod template in a Secret the app owns (its data only: the
+    template carries env values), marked with the job holding it. One this
+    job kept already (a hold asked again) is the earlier one, and stays; one
+    another job kept is never taken: the hold is refused. restart() removes it
+    once the app has started."""
     meta = _meta(obj)
     name = f"homestead-held-{meta['uid']}"
     path = f"/api/v1/namespaces/{_q(meta['namespace'])}/secrets"
     body = {"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
             "metadata": {"name": name, "namespace": meta["namespace"], "labels": {HELD_LABEL: "true"},
+                         "annotations": {HELD_BY: holder},
                          "ownerReferences": [{"apiVersion": API_VERSION[obj["kind"]], "kind": obj["kind"],
                                               "name": meta["name"], "uid": meta["uid"]}]},
             "data": {"template": base64.b64encode(json.dumps(_template(obj)).encode()).decode()}}
@@ -256,6 +262,10 @@ def _keep_template(obj):
         kept = KUBE.kget(f"{path}/{_q(name)}")
         if not any(ref.get("uid") == meta["uid"] for ref in _meta(kept).get("ownerReferences") or []):
             raise Refused(f"a Secret named {name} is already there and is not {meta['name']}'s") from None
+        other = _notes(kept).get(HELD_BY) or "an earlier job"
+        if other != holder:
+            raise Refused(f"{meta['name']} already has a template kept by {other}; "
+                          f"Homestead never takes another job's, so this hold waits until it is gone") from None
     return name
 
 
@@ -282,7 +292,7 @@ def hold(obj, job_kind, job_id, keep_template=False):
                 earlier["running"] = False
         except Exception as error:
             raise Refused(f"Homestead could not tell whether {meta['name']} is running ({_why(error)})") from None
-    secret = _keep_template(obj) if keep_template else ""
+    secret = _keep_template(obj, f"{job_kind}:{job_id}") if keep_template else ""
     return Record(kind, meta["namespace"], meta["name"], meta["uid"], meta["resourceVersion"], earlier, secret)
 
 
@@ -346,7 +356,7 @@ def _claim_use(ns, claim):
         volumes = (pod.get("spec") or {}).get("volumes") or []
         if _live(pod) and any((v.get("persistentVolumeClaim") or {}).get("claimName") == claim for v in volumes):
             return f"{claim} is in use by {_meta(pod).get('name')}", True
-    volume = pvc["spec"].get("volumeName")
+    volume = (pvc.get("spec") or {}).get("volumeName")
     for row in attachments:
         spec = row.get("spec") or {}
         if (spec.get("source") or {}).get("persistentVolumeName") == volume and (row.get("status") or {}).get("attached"):
@@ -414,13 +424,49 @@ def _unmark(record, job_kind, job_id):
     return Started(MANUAL)
 
 
+def _drop_template(record, job_kind, job_id):
+    """Remove the template Secret this job kept, once the app has started:
+    "" when it is gone (or not this job's), else why it is still there."""
+    path = f"/api/v1/namespaces/{_q(record.namespace)}/secrets/{_q(record.template_secret)}"
+    try:
+        kept = KUBE.get_optional(path, read=KUBE.kget)
+        if kept is None or not _ours(_notes(kept).get(HELD_BY) or "", job_kind, job_id) or not any(
+                ref.get("uid") == record.uid for ref in _meta(kept).get("ownerReferences") or []):
+            return ""
+        KUBE.ksend("DELETE", path, {"preconditions": {"uid": _meta(kept).get("uid")}})
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return ""
+        return f"{record.name} started; its kept template could not be removed yet ({_why(error)}); it tries again"
+    except Exception as error:
+        return f"{record.name} started; its kept template could not be removed yet ({_why(error)}); it tries again"
+    return ""
+
+
 def restart(record, job_kind, job_id, wait_seconds=60, claims=(), guard=None):
     """Start again what this job stopped, as it ran, once that is safe (see
-    the top of this file). guard(obj) -> reason to keep it stopped, or None/"";
-    holds_on (import and storage-copy holds) when not given. A Manual VM is
-    set back to Manual and started through KubeVirt, and stays marked until
-    that start is asked for. -> Started, Wait (try again on a later round) or
-    KeptStopped (a person decides; how_to says how). Never raises."""
+    the top of this file), and then remove the template Secret this job kept
+    (one that can't be removed yet is a Wait; the next round, seeing the app
+    started, tries again). guard(obj) -> reason to keep it stopped, or
+    None/""; holds_on (import and storage-copy holds) when not given.
+    -> Started, Wait (try again on a later round) or KeptStopped (a person
+    decides; how_to says how). Never raises: what it can't make sense of is
+    a Wait."""
+    try:
+        result = _restart(record, job_kind, job_id, wait_seconds, claims, guard)
+    except Exception as error:
+        return Wait(f"Homestead could not tell whether {record.name} can start ({_why(error)})")
+    if isinstance(result, Started) and record.template_secret:
+        why = _drop_template(record, job_kind, job_id)
+        if why:
+            return Wait(why)
+    return result
+
+
+def _restart(record, job_kind, job_id, wait_seconds, claims, guard):
+    """restart() without the template clean-up or its catch-all. A Manual VM
+    is set back to Manual and started through KubeVirt, and stays marked
+    until that start is asked for."""
     field, name = FIELD[record.kind], record.name
     earlier = record.earlier[field]
     manual = field == "runStrategy" and earlier == MANUAL
@@ -526,6 +572,8 @@ def how_to(record):
     if record.kind == "VirtualMachine":
         return f"Virtual machines → {record.name} → Start"
     if record.kind == "CronJob":
-        return f"Schedules → {record.name} → Resume"
+        # Homestead shows a paused schedule but has no control to resume one.
+        return (f"Scheduled jobs shows {record.name} as paused; resume it by setting its spec.suspend back to false "
+                f"(kubectl, or the Git source it comes from)")
     n = record.earlier.get("replicas", 1)
     return f"Containers → {record.name} → Start with {n} replica" + ("" if n == 1 else "s")

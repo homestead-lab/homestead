@@ -113,6 +113,44 @@ class AppHoldTest(unittest.TestCase):
             self.assertNotIn(SECRET, json.dumps(kube.object(path)["metadata"].get("annotations") or {}))
         for _, _, body, _ in self.patches(kube):
             self.assertNotIn(SECRET, json.dumps(body))
+        self.assertEqual(secret["metadata"]["annotations"][HOLD.HELD_BY], "node-power:j1")
+
+    def test_the_same_job_holding_again_keeps_its_template(self):
+        kube = self.kube(web())
+        first = HOLD.hold(kube.object(WEB), "node-power", "j1", keep_template=True)
+        again = HOLD.hold(kube.object(WEB), "node-power", "j1", keep_template=True)
+        self.assertEqual(again.template_secret, first.template_secret)
+
+    def test_a_template_kept_by_another_job_is_never_taken(self):
+        kube = self.kube(web())
+        HOLD.hold(kube.object(WEB), "node-power", "j1", keep_template=True)
+        path = f"/api/v1/namespaces/{NS}/secrets/homestead-held-d-web"
+        before = kube.object(path)
+        kube("PATCH", WEB, {"spec": {"template": {"metadata": {"labels": {"app": "web", "v": "2"}}}}},
+             "application/merge-patch+json")
+        with self.assertRaisesRegex(HOLD.Refused, "node-power:j1"):
+            HOLD.hold(kube.object(WEB), "cluster-shutdown", "run9", keep_template=True)
+        self.assertEqual(kube.object(path)["data"], before["data"])
+
+    def test_the_kept_template_goes_once_started(self):
+        kube, record = self.held(web(), keep_template=True)
+        path = f"/api/v1/namespaces/{NS}/secrets/{record.template_secret}"
+        self.assertIsNotNone(kube.object(path))
+        self.assertEqual(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.Started("3"))
+        self.assertIsNone(kube.object(path))
+        [(_, _, options, _)] = [w for w in kube.writes if w[0] == "DELETE"]
+        self.assertEqual(options["preconditions"]["uid"][:4], "uid-")
+
+    def test_a_kept_template_that_cant_be_removed_waits_then_goes(self):
+        kube, record = self.held(web(), keep_template=True)
+        path = f"/api/v1/namespaces/{NS}/secrets/{record.template_secret}"
+        kube.fail(path, 500, method="DELETE")
+        result = HOLD.restart(record, "node-power", "j1", wait_seconds=0)
+        self.assertIsInstance(result, HOLD.Wait)
+        self.assertIn("kept template", result.reason)
+        self.assertEqual(kube.object(WEB)["spec"]["replicas"], 3)  # started all the same
+        self.assertEqual(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.Started("3"))
+        self.assertIsNone(kube.object(path))
 
     def test_the_template_secrets_owner_doesnt_need_the_rows_api_version(self):
         # A row from a list has no apiVersion (nor kind, which the caller sets).
@@ -312,6 +350,20 @@ class AppHoldTest(unittest.TestCase):
         self.assertIn("data is gone", result.reason)
         self.assertEqual(kube.object(WEB)["spec"]["replicas"], 0)
 
+    def test_a_claim_with_no_spec_never_raises(self):
+        claim = obj("PersistentVolumeClaim", "data", "pvc-data", api="v1")
+        kube = self.kube(web(), claim)
+        record = HOLD.hold(kube.object(WEB), "node-power", "j1")
+        HOLD.stop(record, "node-power", "j1")
+        self.assertEqual(HOLD.restart(record, "node-power", "j1", wait_seconds=0, claims=("data",)),
+                         HOLD.Started("3"))
+
+    def test_rows_it_cant_make_sense_of_wait_never_raise(self):
+        kube, record = self.held(web())
+        kube.react("GET", PODS, lambda method, path, body: {"kind": "PodList", "metadata": {}, "items": [{"metadata": "junk"}]})
+        self.assertIsInstance(HOLD.restart(record, "node-power", "j1", wait_seconds=0), HOLD.Wait)
+        self.assertEqual(kube.object(WEB)["spec"]["replicas"], 0)
+
     def test_a_claim_that_cant_be_read_waits(self):
         claim = obj("PersistentVolumeClaim", "data", "pvc-data", api="v1", spec={"volumeName": "pv-data"})
         kube = self.kube(web(), claim)
@@ -465,7 +517,8 @@ class AppHoldTest(unittest.TestCase):
         self.assertEqual(HOLD.how_to(record("Deployment", {"replicas": 3})), "Containers → x → Start with 3 replicas")
         self.assertEqual(HOLD.how_to(record("StatefulSet", {"replicas": 1})), "Containers → x → Start with 1 replica")
         self.assertEqual(HOLD.how_to(record("VirtualMachine", {"runStrategy": "Always"})), "Virtual machines → x → Start")
-        self.assertEqual(HOLD.how_to(record("CronJob", {"suspend": False})), "Schedules → x → Resume")
+        self.assertEqual(HOLD.how_to(record("CronJob", {"suspend": False})), ("Scheduled jobs shows x as paused; resume it by setting its spec.suspend back to false "
+                          "(kubectl, or the Git source it comes from)"))
 
 
 if __name__ == "__main__":
