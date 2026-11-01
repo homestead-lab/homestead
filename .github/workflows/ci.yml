@@ -249,7 +249,7 @@ jobs:
           tls=$(mktemp -d)
           openssl req -x509 -newkey rsa:2048 -nodes -keyout "$tls/key.pem" -out "$tls/cert.pem" -days 1 \
             -subj /CN=127.0.0.1 -addext subjectAltName=IP:127.0.0.1 2>/dev/null
-          chmod 644 "$tls"/*.pem
+          chmod 755 "$tls"; chmod 644 "$tls"/*.pem   # read by the image's own user
           docker run --rm --network none --read-only --tmpfs /tmp \
             --env HOMESTEAD_TEST_SERVER_DIR=/srv --env HOMESTEAD_TEST_TLS_DIR=/tls --env CI=true \
             --mount "type=bind,source=$tls,target=/tls,readonly" \

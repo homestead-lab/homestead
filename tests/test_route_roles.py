@@ -123,6 +123,7 @@ class TheTableAndTheGuardShareTheirRules(unittest.TestCase):
         for patch in (mock.patch.object(server, "_self_data_boot_pending", False),
                       mock.patch.object(server.CFACCESS, "enabled", return_value=False)):
             patch.start(); self.addCleanup(patch.stop)
+        self.addCleanup(server.REQUEST_SCOPE.unbind)   # the guard binds the role; no request ends here
 
     def handler(self, path, headers=None):
         h = object.__new__(server.H)

@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import urllib.request
 from pathlib import Path
 from unittest import mock
 
@@ -132,8 +133,11 @@ class Served(unittest.TestCase):
         # Trusted as a public CA would be: the readers' own TLS setup is kept.
         made = ssl.create_default_context
         trusting = lambda *args, **kwargs: made(cafile=cert)
+        # urllib keeps one opener, with the TLS context of the first urlopen in
+        # this process: dropped, so the readers that pass none get this one.
         cls.patches = [mock.patch.object(ssl, "create_default_context", trusting),
-                       mock.patch.object(ssl, "_create_default_https_context", trusting)]
+                       mock.patch.object(ssl, "_create_default_https_context", trusting),
+                       mock.patch.object(urllib.request, "_opener", None)]
         for patch in cls.patches:
             patch.start()
 
