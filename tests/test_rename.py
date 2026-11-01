@@ -22,7 +22,8 @@ class RenameTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.source = {"apiVersion": "apps/v1", "kind": "Deployment",
-            "metadata": {"namespace": "lab", "name": "old", "uid": "uid-old", "resourceVersion": "1", "generation": 1},
+            "metadata": {"namespace": "lab", "name": "old", "uid": "uid-old", "resourceVersion": "1", "generation": 1,
+                         "managedFields": [self.status_fields("2026-11-01T10:00:00Z", {})]},
             "spec": {"replicas": 1, "selector": {"matchLabels": {"app": "old", "homestead.io/workload": "old"}},
                      "template": {"metadata": {"labels": {"app": "old", "homestead.io/workload": "old"}},
                                   "spec": {"containers": [{"name": "main", "image": "example/test:1",
@@ -80,14 +81,31 @@ class RenameTests(unittest.TestCase):
             return obj
         raise urllib.error.HTTPError(path, 404, "not found", {}, None)
 
+    @staticmethod
+    def status_fields(time, more):
+        """The controller's managedFields entry for status, as k3s writes it."""
+        return {"manager": "k3s", "operation": "Update", "apiVersion": "apps/v1", "time": time,
+                "fieldsType": "FieldsV1", "subresource": "status",
+                "fieldsV1": {"f:status": {"f:observedGeneration": {}, "f:replicas": {}, **more}}}
+
     def controller_status_write(self):
         """What the Deployment controller does as the last old pod goes: a status
-        write, which bumps resourceVersion and leaves the spec alone."""
+        write, which bumps resourceVersion, rewrites its managedFields entry
+        and leaves the spec alone."""
         self.status_write = "written"
         obj = self.objects["old"]
         obj["metadata"]["resourceVersion"] = str(int(obj["metadata"]["resourceVersion"]) + 1)
+        obj["metadata"]["managedFields"] = [row for row in obj["metadata"].get("managedFields", [])
+                                            if row.get("subresource") != "status"] + [
+            self.status_fields("2026-11-01T10:00:07Z", {"f:terminatingReplicas": {}})]
         obj["status"] = dict(obj.get("status") or {}, terminatingReplicas=0)
         self.on_status_write()
+
+    def someone_labels_the_original(self):
+        """Someone else's edit: a label, with the resourceVersion bump any write makes."""
+        meta = self.objects["old"]["metadata"]
+        meta.setdefault("labels", {})["team"] = "b"
+        meta["resourceVersion"] = str(int(meta["resourceVersion"]) + 1)
 
     def send(self, method, path, payload, **kwargs):
         self.sent.append((method, path, copy.deepcopy(payload)))
@@ -351,6 +369,7 @@ class RenameTests(unittest.TestCase):
         refused, written = self.sent[2][2], self.sent[3][2]
         self.assertEqual(int(refused[1]["value"]) + 1, int(written[1]["value"]), "the second try tests the fresh resourceVersion")
         self.assertEqual("written", self.status_write, "the controller's status write landed between the read and the PATCH")
+        self.assertIn("f:terminatingReplicas", json.dumps(self.objects["old"]["metadata"]["managedFields"]))
         self.assertEqual(["refused", "accepted"], [row["phase"] for row in ops.stored()[0]["ref"]["writes"][-2:]])
         self.assertNotIn("not confirmed", ops.stored()[0]["message"])
         self.assertEqual(2, self.admission.call_count, "the retry is checked again at the count it goes back to")
@@ -389,6 +408,42 @@ class RenameTests(unittest.TestCase):
 
     def test_a_generation_bump_in_that_moment_is_not_written_over(self):
         self.assert_edit_in_that_moment_refused(lambda meta: meta.update(generation=meta["generation"] + 1))
+
+    def edit_at_admission(self, call):
+        """Someone labels the original right after admission call `call` (1: the first try's checks, 2: the retry's)."""
+        calls = []
+        def check(dep):
+            calls.append(dep)
+            if len(calls) == call:
+                self.someone_labels_the_original()
+            return {"blocked": False}
+        self.admission.side_effect = check
+
+    def test_an_edit_between_the_first_checks_and_the_write_is_not_written_over(self):
+        self.old_pods_outlast_the_wait(2)
+        self.edit_at_admission(1)
+        with self.assertRaisesRegex(ValueError, "old was not put back to 2 replicas: old was edited by someone else while it was being put back"):
+            self.dispatch()
+        self.assert_not_put_back("nothing was written over it", 2, both_stopped=True, writes=("POST", "PATCH"))
+        self.assertEqual("b", self.objects["old"]["metadata"]["labels"]["team"])
+        self.assertEqual(0, self.objects["old"]["spec"]["replicas"])
+
+    def test_an_edit_between_the_retry_checks_and_its_write_is_not_written_over(self):
+        self.old_pods_outlast_the_wait(2)
+        self.edit_at_admission(2)
+        with self.assertRaisesRegex(ValueError, "old was not put back to 2 replicas: old was edited by someone else while it was being put back"):
+            self.dispatch()
+        self.assert_not_put_back("nothing was written over it", 2, both_stopped=True, writes=("POST", "PATCH", "PATCH"))
+        self.assertEqual("b", self.objects["old"]["metadata"]["labels"]["team"])
+        self.assertEqual(0, self.objects["old"]["spec"]["replicas"])
+
+    def test_an_original_replaced_in_that_moment_is_named_as_replaced(self):
+        self.old_pods_outlast_the_wait(2)
+        self.on_status_write = lambda: self.objects["old"]["metadata"].update(uid="uid-other")
+        with self.assertRaisesRegex(ValueError, "old was not put back to 2 replicas: old was replaced by another object of the same name"):
+            self.dispatch()
+        self.assert_not_put_back("replaced by another object of the same name", 2, writes=("POST", "PATCH", "PATCH"))
+        self.assertNotIn("edited by someone else", ops.stored()[0]["message"])
 
     def test_the_retry_runs_the_same_checks_as_the_first_try(self):
         # The original no longer fits when it is read again: no second PATCH.

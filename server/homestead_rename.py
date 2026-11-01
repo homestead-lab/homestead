@@ -182,10 +182,13 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
         Returns (restored, outcome); any doubt writes nothing, for a person to decide."""
         refused = f"{old} was not put back to {_count(count)}"
         edited = f"{old} was edited by someone else while it was being put back, so nothing was written over it"
+        replaced = f"{old} was replaced by another object of the same name, so nothing was written over it"
 
         def original(changed="it changed outside this rename"):
             obj = read(source_path)
-            if identity(obj)["uid"] != stopped_id["uid"] or obj.get("spec") != stopped_spec:
+            if identity(obj)["uid"] != stopped_id["uid"]:
+                raise Stopped(replaced)
+            if obj.get("spec") != stopped_spec:
                 raise Stopped(changed)
             pods, known = ROLLOUT.owned_pods(obj, ROLLOUT.items(read, "/api/v1/pods"), read, ns)
             return obj, known and not pods
@@ -221,6 +224,8 @@ def dispatch(body, context, proposed, read, send, ops, admission, *, timeout=120
             def kept(obj):
                 meta = {k: v for k, v in (obj.get("metadata") or {}).items() if k not in ("resourceVersion", "managedFields")}
                 return meta, obj.get("spec")
+            if identity(before)["uid"] != identity(after)["uid"]:
+                raise Stopped(replaced)
             if kept(before) != kept(after):
                 raise Stopped(edited)
 
