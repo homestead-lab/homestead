@@ -162,13 +162,15 @@ def status(item):
         if waited >= PULL_WAIT:
             ref["pull_note"] = f"its image was still being pulled onto {node} after {PULL_WAIT // 60} minutes"
         _clear(ref.get("pulls") or [])
-        proposed = ref.pop("proposed")
+        # Keep both until the PUT lands: a failed one leaves the job to try again.
         try:
-            _put_reviewed(proposed, ref.pop("settled", None))
+            _put_reviewed(ref["proposed"], ref.get("settled"))
         except urllib.error.HTTPError as error:
             if error.code == 409:
                 return "failed", 100, f"{name} changed while its image was being pulled; nothing was moved. Review the move again"
             raise
+        ref.pop("proposed", None)
+        ref.pop("settled", None)
         ref["stage"] = "rolling"
         return "running", 10, f"Image on {node}; moving {name}"
     state, progress, message = OPS._deployment(item)

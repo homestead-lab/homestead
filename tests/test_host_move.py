@@ -90,6 +90,20 @@ class HostMoveTests(unittest.TestCase):
         self.assertEqual("failed", state)
         self.assertIn("nothing was moved", message)
 
+    def test_a_failed_put_keeps_the_reviewed_move_for_the_next_round(self):
+        item = self.move()
+        self.kube.add(pull_daemonset(1))
+        def broken(*a, **k):
+            raise urllib.error.HTTPError("", 500, "boom", {}, None)
+        with mock.patch.object(W, "ksend", side_effect=broken, create=True):
+            with self.assertRaises(urllib.error.HTTPError):
+                MOVE.status(item)
+        self.assertIn("proposed", item["ref"], "the reviewed manifest survives a failed PUT")
+        state, _, _ = MOVE.status(item)
+        self.assertEqual(("running", "PUT"), (state, self.kube.writes[0][0]))
+        self.assertNotIn("proposed", item["ref"])
+        self.assertEqual("rolling", item["ref"]["stage"])
+
     def test_a_move_that_lands_elsewhere_fails_and_says_where(self):
         self.setUp(held=[IMAGE])
         item = self.move()
