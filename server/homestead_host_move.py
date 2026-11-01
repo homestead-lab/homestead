@@ -163,10 +163,14 @@ def status(item):
             ref["pull_note"] = f"its image was still being pulled onto {node} after {PULL_WAIT // 60} minutes"
         _clear(ref.get("pulls") or [])
         # Keep both until the PUT lands: a failed one leaves the job to try again.
+        if "proposed" not in ref:
+            return "failed", 100, f"{name} has no reviewed move left to apply; nothing was moved. Review the move again"
         try:
             _put_reviewed(ref["proposed"], ref.get("settled"))
         except urllib.error.HTTPError as error:
             if error.code == 409:
+                ref.pop("proposed", None)
+                ref.pop("settled", None)
                 return "failed", 100, f"{name} changed while its image was being pulled; nothing was moved. Review the move again"
             raise
         ref.pop("proposed", None)

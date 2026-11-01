@@ -3,6 +3,7 @@
 Frigate was moved to k3s-3 twice and restarted on k3s-1 both times: the move
 only preferred k3s-3, and k3s-1 already held its 2.2 GB image. On the shared
 fake API (tests/fakes/kube.py)."""
+import json
 import sys
 import tempfile
 import unittest
@@ -89,6 +90,16 @@ class HostMoveTests(unittest.TestCase):
             state, _, message = MOVE.status(item)
         self.assertEqual("failed", state)
         self.assertIn("nothing was moved", message)
+        self.assertNotIn("proposed", item["ref"])
+        self.assertNotIn("settled", item["ref"])
+
+    def test_a_job_stuck_by_the_old_bug_fails_with_a_message(self):
+        item = self.move()
+        self.kube.add(pull_daemonset(1))
+        item["ref"].pop("proposed")
+        state, _, message = MOVE.status(item)
+        self.assertEqual("failed", state)
+        self.assertIn("Review the move again", message)
 
     def test_a_failed_put_keeps_the_reviewed_move_for_the_next_round(self):
         item = self.move()
@@ -99,6 +110,9 @@ class HostMoveTests(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError):
                 MOVE.status(item)
         self.assertIn("proposed", item["ref"], "the reviewed manifest survives a failed PUT")
+        item["ref"]["settled"] = "s"
+        item = {"ref": json.loads(json.dumps(item["ref"]))}
+        self.assertIn("settled", item["ref"])
         state, _, _ = MOVE.status(item)
         self.assertEqual(("running", "PUT"), (state, self.kube.writes[0][0]))
         self.assertNotIn("proposed", item["ref"])
