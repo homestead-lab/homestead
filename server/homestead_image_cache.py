@@ -773,6 +773,81 @@ def _scanned_images(node):
 
 
 PREPULL_NAMES = ("homestead-pull-",)
+# The kubelet's reasons for a pull that failed and is being retried, or can
+# never start: a pod waiting for one of these gets no further by itself.
+PULL_ERRORS = {"ErrImagePull", "ImagePullBackOff", "InvalidImageName", "ErrImageNeverPull",
+               "ErrImageInspect", "RegistryUnavailable", "SignatureValidationFailed"}
+# How long every pod of a pull still waiting has to be failing its pull before
+# the job ends failed: long enough for a registry that is down for a moment.
+PULL_STUCK_FOR = 300
+_clock = time.time
+
+
+def pull_progress(read, ref):
+    """A pre-pull job's step: (status, progress, message); read is the job
+    loop's Kubernetes reader.
+
+    A DaemonSet gets no Progressing or Available conditions, so a pull that can
+    never succeed - a typo in the image, a private registry without
+    credentials - used to wait for ever, its pods asking the registry again
+    and again. It is read from the pods instead: when every pod still waiting
+    has failed its pull, and has for PULL_STUCK_FOR, the job fails with the
+    error and the pull is stopped. A slow pull is never failed for its time,
+    and a pod not made yet can still pull."""
+    ds = read(f"/apis/apps/v1/namespaces/{ref['namespace']}/daemonsets/{ref['name']}")
+    status = ds.get("status", {}) or {}
+    desired = int(status.get("desiredNumberScheduled", 0) or 0)
+    ready = int(status.get("numberReady", 0) or 0)
+    unavailable = int(status.get("numberUnavailable", 0) or 0)
+    if desired and ready >= desired and unavailable == 0:
+        ref.pop("pull_failing_since", None)
+        return "succeeded", 100, f"Image cached on {ready}/{desired} nodes"
+    progress = min(95, round(ready / desired * 100)) if desired else 5
+    counted = f"Image cached on {ready}/{desired or '?'} nodes"
+    failing = _pull_errors(read, ref)
+    if not failing:
+        ref.pop("pull_failing_since", None)
+        return "running", progress, counted
+    for _node, reason, message in failing:
+        if message and reason != "ImagePullBackOff":
+            # Back-off says only that it waits; the pull's own error says why.
+            ref["pull_error"] = message[:300]
+    said = "; ".join(f"{node or 'a node'}: {reason}" for node, reason, _ in failing[:3])
+    why = f" ({ref['pull_error']})" if ref.get("pull_error") else ""
+    if len(failing) < desired - ready:
+        ref.pop("pull_failing_since", None)     # a pod not made yet, or still pulling, can get there
+        return "running", progress, f"{counted}; {said}{why}"[:400]
+    since = ref.setdefault("pull_failing_since", _clock())
+    if _clock() - since < PULL_STUCK_FOR:
+        return "running", progress, f"{counted}; {said}{why}; retrying"[:400]
+    image = next((c.get("image") for c in ((ds.get("spec") or {}).get("template") or {}).get(
+        "spec", {}).get("initContainers") or [] if c.get("image")), "the image")
+    stop_prepull(ref["name"])
+    return "failed", progress, (f"Could not pull {image}: {said}{why}. {counted}; "
+                                "the pull was stopped")[:500]
+
+
+def _pull_errors(read, ref):
+    """(node, reason, message) for each pod of the pull not ready because its
+    pull failed; [] when the pods cannot be read (the counts still show
+    progress)."""
+    selector = urllib.parse.quote(f"app={ref['name']}")
+    try:
+        pods = read(f"/api/v1/namespaces/{ref['namespace']}/pods?labelSelector={selector}").get("items") or []
+    except Exception:
+        return []
+    found = []
+    for pod in pods:
+        status = pod.get("status") or {}
+        if any(c.get("type") == "Ready" and c.get("status") == "True" for c in status.get("conditions") or []):
+            continue
+        for row in (status.get("initContainerStatuses") or []) + (status.get("containerStatuses") or []):
+            waiting = (row.get("state") or {}).get("waiting") or {}
+            if waiting.get("reason") in PULL_ERRORS:
+                found.append(((pod.get("spec") or {}).get("nodeName", ""), waiting["reason"],
+                              str(waiting.get("message") or "")))
+                break
+    return sorted(found)
 
 
 def _pullable_nodes():

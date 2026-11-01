@@ -639,19 +639,8 @@ def _deployment(item):
 
 
 def _prepull(item):
-    ref = item["ref"]
-    ds = kget(f"/apis/apps/v1/namespaces/{ref['namespace']}/daemonsets/{ref['name']}")
-    status = ds.get("status", {}) or {}
-    desired = int(status.get("desiredNumberScheduled", 0) or 0)
-    ready = int(status.get("numberReady", 0) or 0)
-    unavailable = int(status.get("numberUnavailable", 0) or 0)
-    for condition in status.get("conditions", []) or []:
-        if condition.get("status") == "False" and condition.get("type") in ("Progressing", "Available"):
-            return "failed", 0, condition.get("message") or condition.get("reason") or "Image pull failed"
-    if desired and ready >= desired and unavailable == 0:
-        return "succeeded", 100, f"Image cached on {ready}/{desired} nodes"
-    progress = min(95, round(ready / desired * 100)) if desired else 5
-    return "running", progress, f"Image cached on {ready}/{desired or '?'} nodes"
+    import homestead_image_cache as IMAGES  # imports this module, by way of homestead_imports
+    return IMAGES.pull_progress(kget, item["ref"])
 
 
 def _job(item):
