@@ -78,6 +78,8 @@ class SmartHelperBase(unittest.TestCase):
         self.smart.device_type = lambda name: "sat"
         self.smart.disks = lambda: list(self.DRIVES)
         self.smart.signature_ok = lambda *_: True
+        # The test paths are not real device nodes; each stands for one drive.
+        self.real_identity, self.smart.identity = self.smart.identity, lambda path: (path,)
         self.clock = Clock()
         self.smart._clock = self.clock
         self.smartctl = Smartctl()
@@ -177,9 +179,13 @@ class SharedReadingTests(SmartHelperBase):
         self.assertEqual(2, len(self.smartctl.reads("sdb")))
 
     def test_the_probe_loops_own_cadence_always_gets_a_fresh_reading(self):
-        # One Homestead copy asks every five minutes; the kept reading must be
-        # gone by then, or a copy on its own would read every other round.
-        self.assertLess(self.smart.KEEP_SECONDS, 300)
+        # One Homestead copy asks every SMART_EVERY seconds; the kept reading
+        # must be gone by then, or a copy on its own would read every other round.
+        import homestead_node_probes as PROBES
+        self.get()
+        self.clock.now += PROBES.SMART_EVERY
+        self.get()
+        self.assertEqual(2, len(self.smartctl.reads("sda")))
 
     def test_callers_at_the_same_moment_share_one_read_over_real_sockets(self):
         self.smartctl.delay = 0.3
@@ -239,7 +245,139 @@ class SharedReadingTests(SmartHelperBase):
         self.get()
         self.DRIVES = [("sda", "/host/dev/sda")]
         self.get()
-        self.assertNotIn("sdb", self.smart._kept)
+        self.DRIVES = SmartHelperBase.DRIVES
+        self.get()                          # back again: read afresh
+        self.assertEqual(1, len(self.smartctl.reads("sda")))
+        self.assertEqual(2, len(self.smartctl.reads("sdb")))
+
+    def test_a_drive_swapped_in_the_same_slot_is_read_afresh(self):
+        # A replaced drive comes back at the same /dev path but as a new
+        # device node; its old reading must not be served as the new drive's.
+        nodes = {"/host/dev/sda": (2048, 11), "/host/dev/sdb": (2064, 12)}
+        self.smart.identity = lambda path: nodes[path]
+        self.get()
+        nodes["/host/dev/sdb"] = (2064, 99)
+        self.clock.now += 10
+        self.get()
+        self.assertEqual(1, len(self.smartctl.reads("sda")))
+        self.assertEqual(2, len(self.smartctl.reads("sdb")))
+
+    def test_the_identity_of_a_real_device_node_comes_from_stat(self):
+        with tempfile.NamedTemporaryFile() as one, tempfile.NamedTemporaryFile() as other:
+            self.assertEqual(self.real_identity(one.name), self.real_identity(one.name))
+            self.assertIsNotNone(self.real_identity(one.name))
+            self.assertNotEqual(self.real_identity(one.name), self.real_identity(other.name))
+        self.assertIsNone(self.real_identity("/nonexistent/sdz"))
+
+    def test_a_read_in_flight_when_a_test_starts_is_not_kept(self):
+        # The read began before the self-test was started; its "no test
+        # running" row must not stand for the next 240 s.
+        answer = self.smartctl
+
+        def racing(argv, **kwargs):
+            done = answer(argv, **kwargs)
+            if "-a" in argv and argv[-1].endswith("/sda") and len(answer.reads("sda")) == 1:
+                self.smart.drop_kept("sda")        # a POST start landing mid-read
+            return done
+        with mock.patch.object(self.smart.subprocess, "run", racing):
+            self.get()
+            self.get()
+        self.assertEqual(2, len(self.smartctl.reads("sda")))
+        self.assertEqual(1, len(self.smartctl.reads("sdb")))
+
+    def test_a_drive_that_could_not_be_opened_is_not_kept(self):
+        def unopenable(argv, **kwargs):
+            if argv[-1].endswith("/sda"):
+                answer.argvs.append(list(argv))
+                return SimpleNamespace(returncode=2, stdout="", stderr="open failed")
+            return answer(argv, **kwargs)
+        answer = self.smartctl
+        with mock.patch.object(self.smart.subprocess, "run", unopenable):
+            _, value = self.get()
+            self.assertEqual("open failed", value["disks"][0]["unavailable_reason"])
+            self.get()
+        self.assertEqual(2, len(self.smartctl.reads("sda")))
+        self.assertEqual(1, len(self.smartctl.reads("sdb")))
+
+    def test_a_drive_stuck_in_an_earlier_read_answers_unavailable_not_never(self):
+        # A smartctl hung on one drive must not hold every later read of the host.
+        self.smart.LOCK_SECONDS = 0.2
+        release, started, answer = threading.Event(), threading.Event(), self.smartctl
+
+        def stuck(argv, **kwargs):
+            if "-a" in argv and argv[-1].endswith("/sda") and not release.is_set():
+                started.set()
+                release.wait(10)
+            return answer(argv, **kwargs)
+        with mock.patch.object(self.smart.subprocess, "run", stuck):
+            first = threading.Thread(target=self.get)
+            first.start()
+            self.assertTrue(started.wait(5))
+            code, value = self.get()
+            release.set()
+            first.join(10)
+        self.assertEqual(200, code)
+        sda, sdb = value["disks"]
+        self.assertFalse(sda["available"])
+        self.assertIn("still being read", sda["unavailable_reason"])
+        self.assertTrue(sdb["available"])
+
+
+def _usb_tree(root, drives):
+    """A fake /sys: each drive's device link points where the kernel would put it."""
+    devices = Path(root, "devices")
+    block = Path(root, "class", "block")
+    block.mkdir(parents=True)
+    for name, where in drives.items():
+        target = devices / where
+        target.mkdir(parents=True)
+        (block / name).mkdir()
+        (block / name / "device").symlink_to(target)
+
+
+class UsbBridgeTests(SmartHelperBase):
+    DRIVES = [("sda", "/host/dev/sda"), ("sdb", "/host/dev/sdb"), ("sdc", "/host/dev/sdc"),
+              ("nvme0n1", "/host/dev/nvme0n1")]
+    TREE = {"sda": "pci0000:00/0000:00:14.0/usb2/2-1/2-1:1.0/host6/target6:0:0/6:0:0:0",
+            "sdb": "pci0000:00/0000:00:14.0/usb2/2-1/2-1:1.0/host6/target6:0:0/6:0:0:1",
+            "sdc": "pci0000:00/0000:00:17.0/ata1/host0/target0:0:0/0:0:0:0",
+            "nvme0n1": "pci0000:00/0000:00:1d.0/0000:03:00.0/nvme/nvme0"}
+
+    def setUp(self):
+        super().setUp()
+        root = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(root, ignore_errors=True))
+        _usb_tree(root, self.TREE)
+        self.smart.SYS = root
+
+    def test_drives_behind_one_usb_bridge_are_read_one_at_a_time(self):
+        lock, busy, overlap = threading.Lock(), set(), []
+        answer = self.smartctl
+
+        def watching(argv, **kwargs):
+            name = argv[-1].rsplit("/", 1)[1]
+            with lock:
+                busy.add(name)
+                overlap.append(set(busy))
+            try:
+                time.sleep(0.1)
+                return answer(argv, **kwargs)
+            finally:
+                with lock:
+                    busy.discard(name)
+        with mock.patch.object(self.smart.subprocess, "run", watching):
+            code, value = self.get()
+        self.assertEqual(200, code)
+        self.assertEqual(["sda", "sdb", "sdc", "nvme0n1"], [row["name"] for row in value["disks"]])
+        self.assertFalse(any({"sda", "sdb"} <= seen for seen in overlap), overlap)
+        # Drives on other transports are still read side by side.
+        self.assertTrue(any(len(seen) >= 2 for seen in overlap), overlap)
+
+    def test_the_usb_bridge_is_the_device_on_the_root_port(self):
+        self.assertEqual(self.smart.usb_bridge("sda"), self.smart.usb_bridge("sdb"))
+        self.assertIsNotNone(self.smart.usb_bridge("sda"))
+        self.assertIsNone(self.smart.usb_bridge("sdc"))
+        self.assertIsNone(self.smart.usb_bridge("nvme0n1"))
 
 
 def _diskstats(root, sectors):
