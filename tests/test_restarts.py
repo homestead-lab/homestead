@@ -37,7 +37,7 @@ def oom(code=137):
     return {"reason": "OOMKilled", "exitCode": code, "finishedAt": "2026-10-22T09:00:00Z"}
 
 
-class RestartRecordTests(unittest.TestCase):
+class RestartBase(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -82,6 +82,8 @@ class RestartRecordTests(unittest.TestCase):
     def records(self, ns="apps", name="game", kind="Deployment", uid=None):
         return R.for_app(ns, name, kind, uid or self.dep_uids.get(name) or f"{UID_PREFIX[kind]}-{name}")["records"]
 
+
+class RestartRecordTests(RestartBase):
     def test_the_first_look_only_takes_a_baseline(self):
         self.look(pod(restarts=8, last=oom()))
         self.assertEqual([], self.records())
@@ -471,6 +473,49 @@ class LaterTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 R.observe_later({"items": []})
         self.assertFalse(R._busy.locked())
+
+class DirtyFlagTests(RestartBase):
+    """A look finds out whether it changed anything without serialising the
+    whole record twice (#980). Same writes, fewer serialisations."""
+    def big_store(self, at="2099-01-01T00:00:00Z"):
+        self.look(pod())
+        path = os.path.join(self.dir, R.FILE)
+        state = SHARED.read_json(path, {})
+        for i in range(50):
+            state["apps"][f"apps/Deployment/other{i}"] = {"updated": T0, "records": [
+                {"at": at, "kind": "restart", "log_tail": "x" * 2000} for _ in range(R.KEEP)]}
+        SHARED.write_json(path, state)
+        return path
+
+    def dumped(self, fn):
+        sizes, real = [], R.json.dumps
+
+        def counting(value, *a, **k):
+            text = real(value, *a, **k)
+            sizes.append(len(text))
+            return text
+
+        with mock.patch.object(R, "json", mock.Mock(wraps=R.json, dumps=counting)):
+            fn()
+        return sum(sizes)
+
+    def test_a_quiet_look_does_not_serialise_the_app_records(self):
+        path = self.big_store()
+        before = os.stat(path).st_mtime_ns
+        total = self.dumped(lambda: self.look(pod(), now=T0 + 20))
+        self.assertLess(total, 5000, "the 2 MB of app records were serialised")
+        self.assertEqual(before, os.stat(path).st_mtime_ns, "a quiet look writes nothing")
+
+    def test_a_new_record_and_a_trim_still_write(self):
+        path = self.big_store("2026-09-01T00:00:00Z")
+        self.look(pod(restarts=1, last=oom()), now=T0 + 20)
+        self.assertEqual(1, len(self.records()))
+        self.assertEqual(T0 + 20, SHARED.read_json(path, {})["looked"])
+        later = T0 + R.KEEP_DAYS * 86400 + 600
+        self.look(pod(restarts=1, last=oom()), now=later)
+        apps = SHARED.read_json(path, {})["apps"]
+        self.assertFalse([a for a in apps if a.startswith("apps/Deployment/other")], "old records dropped and written")
+        self.assertEqual(later, SHARED.read_json(path, {})["looked"])
 
 
 if __name__ == "__main__":
